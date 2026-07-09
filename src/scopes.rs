@@ -3540,7 +3540,22 @@ impl Scopes {
                 self.ret_temp_counter += 1;
                 let name = format!("__blk_{}", self.ret_temp_counter);
                 let tmp = function.add_temp_var(&name, tp);
-                self.var_scope.insert(tmp, self.scope);
+                // @PLN85 n3 — register the hoist temp at the FUNCTION BODY scope
+                // (1), not `self.scope` (this nested block's scope, where `__blk_N`
+                // is the tail value and so is EXCLUDED from `get_free_vars` as the
+                // block's `ret_var` → its owned String leaked, e.g.
+                // `test_value = { a = Item{name:"x"}; b = a; a.name }`).  The block
+                // value is delivered to the outer consumer by COPY (OpAppendText),
+                // never moved, so the temp stays owned and must be freed.  Its
+                // `InitText` is hoisted to the function root (the `lift_texts`
+                // mechanism below), so its `OpFreeText` must fire exactly ONCE at
+                // function exit — registering at scope 1 makes the function-exit
+                // sweep (`get_free_vars(to_scope = 1)`) emit it, matching the
+                // root-level init and avoiding a per-iteration double-free in loops.
+                // The hoist only fires for `!is_return` blocks (always nested,
+                // scope >= 2), so `__blk_N` is never a function return value — the
+                // function-exit free can never free a value the caller adopts.
+                self.var_scope.insert(tmp, 1);
                 self.var_order.push(tmp);
                 self.lift_texts.push(tmp);
                 let mut result = Vec::with_capacity(ls.len() + 2);

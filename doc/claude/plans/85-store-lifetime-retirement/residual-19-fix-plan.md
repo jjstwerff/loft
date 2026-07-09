@@ -272,7 +272,20 @@ but a real correctness bug: a probe crashes it today
    onto the tail bind. Value+length+leak oracle on both backends (a doubled vector
    reads leak-free — length is load-bearing here).
 
-## Slice 5 — two isolated block-RHS delivery bugs (`n3`, `p241`)
+## Slice 5 — block-RHS delivery bugs (`n3`, `p241`) — ✅ FIXED 2026-07-10
+
+**FIXED (`n3` + `p241`, ONE line in `scopes.rs`).** Both turned out to be the SAME
+root — NOT two distinct bugs, and NOT the diagnoses guessed below (`OpCopyRecord` /
+`free_ref_db` for `n3`; generic-monomorph for `p241`). The real cause: the block-VALUE
+`__blk_N` text hoist (`scopes.rs` `free_vars`) registered its temp at the nested block
+scope, where it is the tail `ret_var` and so is excluded from `get_free_vars` — the
+temp's owned `String` was never freed. Fix: register `__blk_N` at the function body
+scope (1), matching its function-root `InitText`, so the function-exit sweep emits its
+`OpFreeText` once. The `b = a` copy / genericness / index were all red herrings — the
+load-bearing axes are just **a view/field-read text tail + an intervening owned free
+that blocks collapse**. Verified leak-0 + correct on both backends, 14-cell boundary
+matrix clean. Full write-up: [`residual-19-analysis.md`](residual-19-analysis.md)
+Group 5. The historical (refuted) analysis follows.
 
 **Closes:** `n3_reference_assignment_emits_copy_record`, `p241_singleton_text`.
 

@@ -266,32 +266,54 @@ The harness wraps `.expr("X")` as `test_value = {X}` (`tests/testing.rs:209`), s
 leak in a block-RHS delivery — NOT the eval-wrapper return first guessed. Two DISTINCT
 bugs:
 
-- **`p241` (`g5_p241_generic_index_block`)** — leak needs generic + index + `{ }`
-  block-RHS together. A generic `vector<T>` element (`s<T>("hello")[0]`) delivered into
-  a block-value assignment; the copied element is unfreed. (Likely shares 1b's
-  monomorph root — the generic vector element delivery.)
-- **`n3` (`g5_n3_copyrecord_block`)** — leak needs `OpCopyRecord` (`b = a`) + `{ }`
-  block-RHS; WITHOUT the copy it is clean; mutation is NOT required. So `OpCopyRecord`'s
-  scope-exit free does not recurse into the copy's embedded text. Matches the test's own
-  `src.contains("OpCopyRecord(cell,")` assertion.
-  **Chokepoint pinned (2026-07-10):** `OpFreeRef(b)` → `State::free_ref_db` →
-  `database.free(&db)` frees the record's STORE SLOT ONLY — it never walks the record's
-  field types, so `b`'s deep-copied `"hello"` (a separate allocation minted by
-  `OpCopyRecord` via `append_text`) is never freed. **NOT a safe minimal fix:** a
-  blanket "free embedded texts on record free" would double-free texts that are
-  borrowed/aliased elsewhere; a correct fix needs a type-directed, ownership-aware field
-  walk. This is the Class-B composite-embedded-text-free arc (doc Session 5), which also
-  covers `issue_437` (vector elements) and `p241` — delicate free-emission, route it,
-  do not blind-patch `database.free`.
-  **Comparative read (2026-07-10, n_nocopy vs n3):** the CLEAN case has NO per-field
-  text free — the single `"hello"` is THREADED OUT (moved into `test_value`) and freed
-  once; loft frees embedded texts by threading them to a consumer, not by walking on
-  record-free. The leak is an owned COPY (`b`) neither threaded out nor freed. Sharp
-  constraint this exposes: **the leak is interpreter-only (native drops the `String`),
-  so a codegen-level free-emission would DOUBLE-FREE native.** The fix must be
-  INTERPRETER-ONLY (`free_ref_db`/`database.free`) AND type-directed + ownership-aware
-  (walk the record's text offsets, free only OWNED — not aliased — ones). That is the
-  OWNERSHIP-MODEL arc (the PLN85 north-star), not a quick patch.
+- **`p241` (`g5_p241_generic_index_block`) — FIXED 2026-07-10** by the `n3` `__blk_N`
+  scope fix below (same block-RHS text-hoist root; the `{ }` is load-bearing exactly
+  because it triggers the `__blk_N` hoist). NOT the generic-monomorph root first
+  guessed — de-genericising was incidental. Now leak-0 + correct on both backends.
+- **`n3` (`g5_n3_copyrecord_block`) — FIXED 2026-07-10 (`scopes.rs`, one line).**
+  ROOT CAUSE was **NOT** `OpCopyRecord` / `free_ref_db` — that earlier diagnosis is
+  REFUTED by the boundary matrix below. The `b = a` copy is a **red herring**; it is
+  freed correctly by `OpFreeRef(b)`.
+
+  **Boundary matrix (14 cells, ASan `append_text` oracle) — the real story:**
+  | tail | intervening owned free? | leak |
+  |---|---|---|
+  | `a.name` (field read / view) | none | 0 (block COLLAPSES — no temp) |
+  | `a.name` | `b = a` (record) | **1** |
+  | `a.name` | `c = "z"+"q"` (text) | **1** |
+  | `a.name` | `d = Item{…}` (record) | **1** |
+  | `a.name` | `e = 5` (no owned free) | 0 (collapses) |
+  | `7` (int) | `b = a` | 0 |
+  | `"aa"+"bb"` (fresh concat) | `d = Item{…}` | 0 (uses `__work_N`, freed) |
+  | `y` (plain Var) | any | 0 (Var tail not hoisted) |
+
+  So the leak needs: **a non-trivial text tail that is a VIEW/field-read (`a.name`),
+  hoisted into a block-VALUE `__blk_N` temp, AND an intervening owned scope-exit free
+  that prevents the block from collapsing.** Neither the copy nor `OpCopyRecord` is
+  load-bearing — ANY intervening owned free triggers it.
+
+  **True chokepoint:** the poison-green block-VALUE hoist (`scopes.rs` `free_vars`,
+  the `!is_return && !ls.is_empty() && Type::Text` arm) mints `__blk_N`, deep-copies the
+  view tail into it (`Set(__blk_N, a.name)` → `OpAppendText`), delivers `Var(__blk_N)`
+  to the outer consumer by COPY, but registered `__blk_N` at `self.scope` — the nested
+  block's own scope, where `__blk_N` IS the tail value and so is EXCLUDED from
+  `get_free_vars` as the block's `ret_var`. No outer sweep owned it → its `String`
+  leaked. The mature `__work_N` sibling (fresh-owned tails, e.g. `"aa"+"bb"`) does NOT
+  leak because it carries a normal scope-exit `OpFreeText`; `__blk_N` was the only text
+  temp missing one.
+
+  **Fix:** register `__blk_N` at the **function body scope (1)** instead of `self.scope`.
+  Its `InitText` is already hoisted to the function root (`lift_texts`), so the
+  function-exit `get_free_vars(to_scope = 1)` now emits its `OpFreeText` exactly once —
+  matching the root-level init and avoiding a per-iteration double-free in loops. Safe
+  by construction: the hoist only fires for `!is_return` blocks (always nested), so
+  `__blk_N` is never a function return value and the function-exit free can never free a
+  value the caller adopts. Verified leak-0 + correct on BOTH backends; the 14-cell matrix
+  is clean. **Also incidentally cleared `p241`** (its `{ s("hello")[0] }` is the same
+  block-RHS text hoist), so this single line closed two residual leakers. The
+  interpreter-only / native-double-free worry in the old diagnosis does not apply — this
+  is a scope-registration fix, and native's `__blk_N` `OpFreeText` is the identical
+  clear+shrink the working `__work_N` already uses.
 
 ## p54_b6 — view-through-forward-borrow (regrouped out of "UserCall")
 
