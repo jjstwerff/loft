@@ -24,13 +24,18 @@ right now.
   loft runs real `par`/`par_light` parallel workloads under store-isolation
   (THREADING.md) with **zero data-race coverage** (Miri runs
   stacked-borrows-off; ASan/`stack_align_guard` are not race detectors).
-- **S3 (`LOFT_POISON`) — partial but NOW UNBLOCKED.** The store-record half is
-  built (@PLN85: `keys.rs::poison_enabled` + the `allocation.rs::free_named`
-  poison block, both backends).  Its blocker — a green `LOFT_POISON=1 cargo
-  test` waiting on the over-free class to land — **cleared** (@PLN85/@PLN90
-  drove the ownership register to 0).  Remaining is cheap: poison freed STACK
-  slots, confirm `LOFT_POISON=1 cargo test` green, add a CI gate (no workflow
-  runs it today).  Highest value-per-effort.
+- **S3 (`LOFT_POISON`) — store half DONE + suite GREEN (2026-07-03); only the
+  CI gate + stack-slot half remain.** The store-record poison-on-free is built
+  (`keys.rs::poison_enabled` + `allocation.rs::free_named`, both backends) AND
+  the 23-bug poison campaign already drove `LOFT_POISON=1 cargo test` **fully
+  green** (2600/2602, 2026-07-03 — the 2 fails are chrome-harness flakes; see
+  [fuzz-proof-gate.md § Increment 3–4](../85-store-lifetime-retirement/fuzz-proof-gate.md)).
+  So the "drive it green" criterion was already MET; what actually remains is
+  small and concrete: **(a)** re-verify green on current `main` (it has moved
+  ~15 commits since, incl. the @PLN97 store loaders), **(b)** add the missing
+  CI gate — no workflow runs `LOFT_POISON=1` today, so that green is an
+  un-defended one-off, and **(c)** poison freed STACK slots (S3's unpoisoned
+  second half).  Highest value-per-effort — recipe in § Concrete steps below.
 - **S9 (cdylib mixed-boundary ASan) — unstarted; high heap-trust value.** The
   C71 path (an interpreted script sharing its `*mut Stores` with a compiled
   cdylib by raw pointer) is **the one cross-boundary surface no sanitizer
@@ -72,14 +77,117 @@ deferred with a one-line reason.
 | **S8** | **MSan (MemorySanitizer) corpus-wide** — uninitialised-read detection beyond what Miri covers.  Painful setup (needs a fully instrumented std); lower priority. | MSan job passes the interpreter subset or deferred with a one-line setup-cost note. | Low |
 | **S9** | **Mixed-boundary (C71) cdylib ASan** — instrument the auto-built native-library cdylib *and* the interpreter host under ASan together, covering the [@PLN11](../11-data-as-store/README.md) C71 mixed path: an interpreted script shares its `*mut Stores` with a compiled library cdylib by **raw pointer** (zero-marshalling) — the one cross-boundary surface no current sanitizer sees (ASan = interpreter targets only; the `stack_align_guard` sweep can't see spawned binaries; Miri can't `dlopen` a cdylib).  Propagate `-Zsanitizer=address` into `build_shared_cdylib` when the host is ASan-instrumented, + a nightly job.  **Routed in from @PLN11 N5** (mixed-boundary soundness — the D + E legs landed there, this A leg was tooling-blocked).  Shares the ASan-on-a-generated-build mechanism with **S6**. | the interp-script + native-lib mixed corpus (the `tests/n3_parity.rs` shapes) passes under ASan; a cross-boundary UAF/OOB on the shared store is caught, not silent. | Medium |
 
-## Phase ordering
+## Concrete steps to finish
 
-1. **S1 first** — the platform blind spot (macOS-ARM) is the founding motivation; cheapest win (add a runner, no code changes).
-2. **S2** — TSan is the standout new tool-class gap; independent of S1.
-3. **S3** — `LOFT_POISON` is high value-per-effort and unblocks @PLN53 F4; implement early.
-4. **S4 + S5** — corpus hygiene; can proceed in parallel with S1-S3.
-5. **S6 + S9** — ASan over a generated build (the `--native` binary for S6, the auto-built cdylib + host for the C71 mixed path in S9); both need the `-Zsanitizer` build-pipeline coordination, so do them together after the above are stable.
-6. **S7 + S8** — stretch items; S7 is a workflow change, S8 has heavy upstream setup cost.
+Ordered by value-per-effort. Each step names the exact file, command, and
+acceptance check. **CI convention** (established by @PLAN53): nightly
+tool-class sanitizers live in [`.github/workflows/miri.yml`](../../../../.github/workflows/miri.yml)
+(non-blocking — a red nightly never blocks a merge); the one cheap per-PR
+sanitizer is the `guard` job in [`.github/workflows/ci.yml`](../../../../.github/workflows/ci.yml).
+The in-process interpreter suites `--lib --test issues --test wrap --test
+strings --test frame_vars` are the sanitizer-relevant surface (native / wasm /
+html tests spawn separate uninstrumented binaries and add no coverage — mirror
+the existing `asan` / `guard` job filters).
+
+### S3 — `LOFT_POISON` keystone (do FIRST; ~½ day) — nearly done
+
+1. **Re-verify green on current `main`.** ✅ **Done 2026-07-09 — GREEN
+   (1498/1498).** `LOFT_POISON=1 cargo test --release --no-fail-fast --lib
+   --test issues --test wrap --test strings --test frame_vars` → 0 failures
+   across lib + issues + wrap + strings + frame_vars, re-confirming the
+   2026-07-03 green still holds after the ~15 intervening commits (incl. the
+   @PLN97 store loaders). *Known non-poison noise on a dev box:*
+   `codegen_emitter::p310_*` fails on a STALE cached native cdylib (`loft_ffi`
+   StableCrateId collision) — it fails identically WITHOUT poison, is
+   environmental (a build/toolchain limitation, not a memory bug), and CI's
+   clean build does not hit it; clear locally with `make rebuild-native-cdylibs`.
+2. **Add the CI gate** (the biggest remaining S3 gap — nothing runs
+   `LOFT_POISON=1` today). Add a `poison` job to `miri.yml`, modelled on the
+   `guard` job: stable toolchain, mold, cache, `cargo nextest run --profile ci
+   --release --lib --test issues --test wrap --test strings --test frame_vars
+   -E 'not test(library_suite)'` with `env: LOFT_POISON: '1'`. Nightly first
+   (full interpreter corpus); promote to a per-PR `ci.yml` job once its
+   wall-clock is measured acceptable. **Acceptance:** job green on `main`; a
+   deliberately reintroduced store-UAF (revert one `OpFreeRefIfDistinct` guard
+   from fuzz-proof-gate.md) turns it red.
+3. **Poison freed STACK slots** (S3's unpoisoned second half). Today
+   `poison_enabled()` only overwrites freed *store records*
+   (`allocation.rs::free_named`); freed eval-stack / frame slots are not
+   sentinel-filled, so a stale-slot read stays silent. Locate the scope-exit
+   slot-release path (`src/state/`, `src/fill.rs`; trace with `LOFT_LOG=slots`),
+   overwrite released slots with a sentinel under `keys::poison_enabled()`, then
+   re-drive the step-1 suite green. Per the stability rule, any latent stale-slot
+   read this surfaces is FIXED in-session with a graduated
+   `tests/scripts/85-*.loft` guard — not filed. **Acceptance:** stack-slot poison
+   on + suite green + a new guard proving the sentinel fires on a stale-slot read.
+
+### S2 — ThreadSanitizer (biggest new tool-class gap; ~1 day)
+
+1. Add a `tsan` job to `miri.yml` (nightly, `dtolnay/rust-toolchain@nightly`,
+   explicit `--target x86_64-unknown-linux-gnu` so `RUSTFLAGS` instruments the
+   whole build): `RUSTFLAGS: '-Zsanitizer=thread'` running the parallel surface
+   — `cargo +nightly nextest run --profile ci --release --target
+   x86_64-unknown-linux-gnu --test threading --test threading_chars --test
+   parallel_rebase`.
+2. **Triage findings against the model:** loft's `par`/`par_light` gives each
+   worker DISJOINT stores (THREADING.md), so a TSan report on a shared store
+   write is a REAL race; a report inside the runtime's own bookkeeping is either
+   a real race or an accepted-and-annotated benign one. Catalogue or fix each.
+   **Acceptance:** `tsan` job green on `main`; every finding fixed or annotated.
+
+### S4 — LeakSanitizer triage (~1 day; unblocks a stricter ASan)
+
+1. Reproduce the baseline: build the `asan` job's target locally with
+   `ASAN_OPTIONS='detect_leaks=1'` and capture the ~108 live-at-exit stacks.
+2. Classify each allocation class (intentional `OnceLock`/lazy-static/interner
+   vs avoidable store/String leak). Fix the avoidable ones.
+3. Add `lsan_suppressions.txt` for the accepted classes; flip the `asan` job in
+   `miri.yml` from `detect_leaks=0` to `detect_leaks=1` +
+   `LSAN_OPTIONS=suppressions=lsan_suppressions.txt`. **Acceptance:** ASan
+   `detect_leaks=1` passes corpus-wide, or each survivor has a one-line
+   accepted-leak annotation.
+
+### S6 + S9 — ASan over a generated build (do together; ~2 days)
+
+Both need the same mechanism: propagate `-Zsanitizer=address` into the rustc
+that loft spawns (`src/native_utils.rs`) when the HOST is ASan-instrumented.
+
+- **S6 (native ASan):** thread the sanitizer flag into the `--native` codegen
+  rustc invocation; add a native-mode ASan job running a native test corpus.
+- **S9 (C71 cdylib mixed-boundary):** propagate the flag into
+  `build_shared_cdylib` (`src/native_utils.rs`) so the auto-built cdylib AND the
+  interpreter host are instrumented together; add a nightly job running the
+  `tests/n3_parity.rs` mixed corpus (interp script sharing `*mut Stores` with a
+  compiled cdylib by raw pointer). **Acceptance (each):** at least one native /
+  mixed corpus passes under ASan; a cross-boundary UAF/OOB on the shared store
+  is caught, not silent.
+
+### S5 — grow the Miri curated set (~½ day)
+
+Extend the `--exact` list in `miri.yml`'s `miri` job beyond the current 4 tests
+(p213 + clusters 3/4/5) with cluster-1/2 reproducers + representative
+text/fn-ref/par shapes, each Miri-validated first. **Acceptance:** curated set
+≥ 8 tests; `miri` job runtime ≤ 20 min.
+
+### S1 — macOS-ARM sanitizer leg (mostly moot; ~½ day or DEFER)
+
+`v2-validation.yml` already runs the full suite on macOS-ARM; only the
+*sanitizer* leg is ubuntu-only. Either add `macos-latest` to the `asan`/`miri`
+jobs (ASan + Miri both run on macOS-ARM) or **defer with a one-line note** that
+the founding @P383 platform risk is already covered by the full-suite macOS-ARM
+run. **Acceptance:** macOS-ARM sanitizer leg green, or the deferral note landed.
+
+### S7 — nightly failure→issue notifier (~½ day)
+
+Add a `notify` job to `miri.yml` that reads per-*job* conclusions (not the
+overall run status — `continue-on-error`/`fail-fast:false` hold it green) via
+the GitHub API and opens/updates a deduped issue on any red leg.
+**Acceptance:** a forced nightly failure surfaces as a tracked issue within 24 h.
+
+### S8 — MSan (stretch; DEFER)
+
+Needs a fully instrumented std (heavy upstream setup). Keep deferred with the
+one-line setup-cost note until the above land.
 
 ## Cross-arc dependencies
 
