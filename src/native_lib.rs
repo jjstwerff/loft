@@ -1061,6 +1061,16 @@ pub fn build_shared_cdylib(
         args.push("-L".to_string());
         args.push(dir.display().to_string());
     }
+    // @PLN54 S9 — mixed-boundary (C71) AddressSanitizer.  When the interpreter
+    // HOST is ASan-instrumented (LOFT_NATIVE_ASAN=1), instrument the auto-built
+    // cdylib too, so an out-of-bounds / use-after-free on the `*mut Stores` the
+    // host shares with this cdylib BY RAW POINTER is caught on BOTH sides of the
+    // boundary — the one cross-boundary surface no in-process sanitizer sees
+    // (ASan sees only the host's own accesses; Miri cannot `dlopen` a cdylib).
+    // Needs nightly rustc (set on the Command below).  Opt-in, off by default.
+    if std::env::var_os("LOFT_NATIVE_ASAN").is_some() {
+        args.push("-Zsanitizer=address".to_string());
+    }
     // One arg per line; quote any containing whitespace (rustc's argfile parser is
     // whitespace-separated, newline-separated is a strict subset).
     let argfile = out_dir.join(format!("{stem}.args"));
@@ -1076,8 +1086,15 @@ pub fn build_shared_cdylib(
         .collect::<Vec<_>>()
         .join("\n");
     std::fs::write(&argfile, contents).map_err(|e| format!("write {}: {e}", argfile.display()))?;
-    let output = std::process::Command::new("rustc")
-        .arg(format!("@{}", argfile.display()))
+    let mut rustc = std::process::Command::new("rustc");
+    rustc.arg(format!("@{}", argfile.display()));
+    // @PLN54 S9 — the ASan cdylib (above) needs nightly rustc for `-Zsanitizer`.
+    if std::env::var_os("LOFT_NATIVE_ASAN").is_some()
+        && std::env::var_os("RUSTUP_TOOLCHAIN").is_none()
+    {
+        rustc.env("RUSTUP_TOOLCHAIN", "nightly");
+    }
+    let output = rustc
         .output()
         .map_err(|e| format!("launch rustc: {e} (is the Rust toolchain installed?)"))?;
     if !output.status.success() {

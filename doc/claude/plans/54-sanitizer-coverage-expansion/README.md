@@ -44,13 +44,19 @@ right now.
   silent): within-scope zone-1 slot reuse needs an interval-end hook with no
   runtime event; the non-`reserve_frame` reserve paths (par/coroutine/reenter);
   both complementary to `LOFT_UAF_GEN` (stale-DbRef gen-stamping).
-- **S9 (cdylib mixed-boundary ASan) — unstarted; high heap-trust value.** The
-  C71 path (an interpreted script sharing its `*mut Stores` with a compiled
-  cdylib by raw pointer) is **the one cross-boundary surface no sanitizer
-  sees**.  `win-cdylib.yml` builds cdylibs but does not ASan them.
-- **S6 (native ASan) — unstarted.** ASan instruments only the in-process
-  interpreter (`detect_leaks=0`); the `--native` codegen path is
-  uninstrumented.  Shares the ASan-on-a-generated-build mechanism with S9.
+- **S6 (native ASan) — ✅ DONE (2026-07-09).** `LOFT_NATIVE_ASAN=1` compiles the
+  `--native` generated binary with `-Zsanitizer=address`; the in-process
+  interpreter `asan` job was blind to that separate process. Validated 14/14
+  curated corpus + positive control; nightly `native-asan` job in `miri.yml`.
+  ASan tolerates the uninstrumented libloft (no `-Zbuild-std`). See
+  [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md).
+- **S9 (cdylib mixed-boundary ASan) — mechanism landed, end-to-end BLOCKED.** The
+  C71 path (an interpreted script sharing its `*mut Stores` with a compiled cdylib
+  by raw pointer) is the one cross-boundary surface no in-process sanitizer sees.
+  Cdylib injection shares S6's `LOFT_NATIVE_ASAN` gate; blocked on the
+  curve25519-proc-macro `E0463` in the cross-target ASan cdylib build (host
+  proc-macro not on the target `-L`). Fix + CI-job design in
+  [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md).
 - **S4 (LSan triage) — unstarted.** CI pins `detect_leaks=0` explicitly pending
   the ~108 live-at-exit baseline triage; flipping to `=1` is the deliverable.
 - **S1 (macOS-ARM leg) — mostly moot.** `v2-validation.yml` already runs the
@@ -59,11 +65,12 @@ right now.
 - **S5 / S7 / S8 — low priority.** Grow the Miri curated set; add a nightly
   failure→issue notifier; MSan (heavy upstream setup).
 
-**Recommended entry point (updated 2026-07-09):** **S3 and S2 are DONE** (both
-poison halves + CI gate; TSan data-race gate clean). The next highest-value slice
-is **S9 + S6** (ASan over a generated build — one shared mechanism: thread
-`-Zsanitizer=address` into the rustc loft spawns for `--native` and the auto-built
-cdylib), then **S4** (LSan triage → `detect_leaks=1`).
+**Recommended entry point (updated 2026-07-09):** **S3, S2, S6 are DONE**
+(poison halves + CI gate; TSan data-race gate; native-backend ASan gate). **S9**
+mechanism is landed but end-to-end is blocked on one localized proc-macro `-L`
+fix (NATIVE_ASAN_DESIGN.md) — the smallest remaining unblock. Otherwise the next
+slice is **S4** (LSan triage → `detect_leaks=1`), then **S5** (grow the Miri set)
+and **S1/S7** (macOS-ARM sanitizer leg / nightly notifier).
 
 ## Goal
 
@@ -81,10 +88,10 @@ deferred with a one-line reason.
 | **S3** | **`LOFT_POISON=1` arena poison-on-free keystone — ✅ STORE-RECORD HALF BUILT** (2026-06-29, @PLN85 fuzz-proof: `keys.rs::poison_enabled` + the `allocation.rs::free_named` poison block; both backends — native calls the same `free_named`; positive control proven — exposed a SILENT use-after-free (`elem_accumulate-none`) the cross-backend differential alone missed. **✅ FULLY CLOSED (2026-07-09):** store half + nightly `poison` CI gate in `miri.yml` + stack half. Stack half = poison at **reserve** not free ([STACK_POISON_DESIGN.md](STACK_POISON_DESIGN.md)): `reserve_frame` sentinel-fills its provably-dead reserved region (interpreter-only); green-drive 1498/1498 + positive control fires. See § Concrete steps S3.3.) Fill freed store records + freed stack slots with a sentinel value on free, turning silent store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) into loud, deterministic garbage at the dangling read — on any rustc, no nightly.  This is the blind spot Miri/ASan/Valgrind all share (loft's arena "free" is not a libc `free()`). | `LOFT_POISON=1 cargo test` green; @P377/@P378-class reads produce sentinel-value panics rather than silent stale data.  **Also unblocks @PLN53 F4.** | ✅ Done |
 | **S4** | **Triage the LeakSanitizer baseline** (~108 live-at-exit allocations) — understand each allocation class, fix the avoidable leaks, and turn `detect_leaks=1` on in `miri.yml` for the corpus.  Cluster 5 was a leak; there are likely others. | ASan `detect_leaks=1` passes corpus-wide in CI, or each surviving allocation class has a one-line accepted-leak annotation. | Medium |
 | **S5** | **Grow the Miri curated set** beyond the current 4 tests (p213 + clusters 3/4/5) — add cluster 1/2 reproducers + representative text/fn-ref/par shapes so the Miri gate covers more of the hard-UB surface without unbearable runtime. | Miri curated set ≥ 8 tests; job runtime ≤ 20 min on ubuntu. | Medium |
-| **S6** | **Native-backend ASan** — instrument the `--native` codegen runtime under ASan (currently ASan instruments only the in-process interpreter; the `--native` path is uninstrumented). | At least one native-mode test corpus passes under ASan; any findings catalogued or fixed. | Medium |
+| **S6** | **Native-backend ASan** — instrument the `--native` codegen runtime under ASan (currently ASan instruments only the in-process interpreter; the `--native` path is uninstrumented).  **✅ DONE 2026-07-09: `LOFT_NATIVE_ASAN=1` → `-Zsanitizer=address` on the generated binary; nightly `native-asan` job; 14/14 curated corpus clean + positive control fires; ASan tolerates the uninstrumented libloft (no -Zbuild-std). See NATIVE_ASAN_DESIGN.md.** | At least one native-mode test corpus passes under ASan; any findings catalogued or fixed. | ✅ Done |
 | **S7** | **Failure→issue notifier for the nightly** — a CI job that opens/updates a deduped GitHub issue when the nightly fails, reading per-*job* conclusions (not the overall run status, which `continue-on-error` holds green even when matrix legs are red). | Nightly failure automatically surfaces as a tracked GitHub issue within 24 h of the failing run. | Low |
 | **S8** | **MSan (MemorySanitizer) corpus-wide** — uninitialised-read detection beyond what Miri covers.  Painful setup (needs a fully instrumented std); lower priority. | MSan job passes the interpreter subset or deferred with a one-line setup-cost note. | Low |
-| **S9** | **Mixed-boundary (C71) cdylib ASan** — instrument the auto-built native-library cdylib *and* the interpreter host under ASan together, covering the [@PLN11](../11-data-as-store/README.md) C71 mixed path: an interpreted script shares its `*mut Stores` with a compiled library cdylib by **raw pointer** (zero-marshalling) — the one cross-boundary surface no current sanitizer sees (ASan = interpreter targets only; the `stack_align_guard` sweep can't see spawned binaries; Miri can't `dlopen` a cdylib).  Propagate `-Zsanitizer=address` into `build_shared_cdylib` when the host is ASan-instrumented, + a nightly job.  **Routed in from @PLN11 N5** (mixed-boundary soundness — the D + E legs landed there, this A leg was tooling-blocked).  Shares the ASan-on-a-generated-build mechanism with **S6**. | the interp-script + native-lib mixed corpus (the `tests/n3_parity.rs` shapes) passes under ASan; a cross-boundary UAF/OOB on the shared store is caught, not silent. | Medium |
+| **S9** | **Mixed-boundary (C71) cdylib ASan** — instrument the auto-built native-library cdylib *and* the interpreter host under ASan together, covering the [@PLN11](../11-data-as-store/README.md) C71 mixed path: an interpreted script shares its `*mut Stores` with a compiled library cdylib by **raw pointer** (zero-marshalling) — the one cross-boundary surface no current sanitizer sees (ASan = interpreter targets only; the `stack_align_guard` sweep can't see spawned binaries; Miri can't `dlopen` a cdylib).  Propagate `-Zsanitizer=address` into `build_shared_cdylib` when the host is ASan-instrumented, + a nightly job.  **Routed in from @PLN11 N5** (mixed-boundary soundness — the D + E legs landed there, this A leg was tooling-blocked).  Shares the ASan-on-a-generated-build mechanism with **S6**.  **Mechanism landed (build_shared_cdylib ASan injection, LOFT_NATIVE_ASAN gate); end-to-end BLOCKED on the curve25519-proc-macro E0463 in the cross-target ASan cdylib build (host proc-macro not on the target -L); fix + CI-job design in NATIVE_ASAN_DESIGN.md.** | the interp-script + native-lib mixed corpus (the `tests/n3_parity.rs` shapes) passes under ASan; a cross-boundary UAF/OOB on the shared store is caught, not silent. | Mechanism✅ blocked |
 
 ## Concrete steps to finish
 
@@ -177,20 +184,33 @@ the rebase machinery (no `run_parallel_*` yet), so it adds no race coverage.
    `detect_leaks=1` passes corpus-wide, or each survivor has a one-line
    accepted-leak annotation.
 
-### S6 + S9 — ASan over a generated build (do together; ~2 days)
+### S6 + S9 — ASan over a generated build (design + status: [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md))
 
-Both need the same mechanism: propagate `-Zsanitizer=address` into the rustc
-that loft spawns (`src/native_utils.rs`) when the HOST is ASan-instrumented.
+One shared mechanism: `LOFT_NATIVE_ASAN=1` threads `-Zsanitizer=address` (+
+nightly rustc) into the two rustc sites that compile generated native code.
+Opt-in, off by default.
 
-- **S6 (native ASan):** thread the sanitizer flag into the `--native` codegen
-  rustc invocation; add a native-mode ASan job running a native test corpus.
-- **S9 (C71 cdylib mixed-boundary):** propagate the flag into
-  `build_shared_cdylib` (`src/native_utils.rs`) so the auto-built cdylib AND the
-  interpreter host are instrumented together; add a nightly job running the
-  `tests/n3_parity.rs` mixed corpus (interp script sharing `*mut Stores` with a
-  compiled cdylib by raw pointer). **Acceptance (each):** at least one native /
-  mixed corpus passes under ASan; a cross-boundary UAF/OOB on the shared store
-  is caught, not silent.
+- **S6 (native ASan) — ✅ DONE 2026-07-09.** Injection at the standalone native
+  binary compile (`src/main.rs`, `loft_native_bin_<pid>` — per-PID, uncached).
+  Key finding: **ASan tolerates linking the generated crate against the
+  uninstrumented `libloft.rlib`** (no `-Zbuild-std`, unlike TSan), so it's a
+  ~10-line flag injection. Validated: ASan runtime active on the generated binary
+  (verbosity banner); **green-drive 14/14 curated store-heavy scripts** (incl. the
+  `131`/`132` UAF regression scripts) ASan-clean; positive control (raw-pointer
+  OOB) fires. CI: the nightly `native-asan` job in `miri.yml`.
+- **S9 (C71 cdylib mixed-boundary) — mechanism landed; end-to-end BLOCKED.**
+  Injection into `native_lib::build_shared_cdylib` (same `LOFT_NATIVE_ASAN` gate).
+  Architecture validated (an ASan loft binary — 870 `__asan` symbols — drives the
+  `datalib` mixed path up to the cdylib build), but the ASan cdylib build fails
+  **`E0463: can't find crate for curve25519_dalek_derive`**: libloft's proc-macro
+  dep is a HOST artifact in `target/release/deps`, while the cross-target ASan
+  cdylib's `-L dependency` points at `target/<triple>/release/deps` which lacks
+  it (the same curve25519-proc-macro class the interpreter `asan` job sidesteps).
+  **Fix (routed):** add the host `deps/` to the ASan cdylib `-L` search, then wire
+  the S9 job (ASan loft binary + `default/` symlink + `datalib` mixed corpus).
+  Deferred from CI until that lands (would else go red on E0463).
+  **Acceptance:** S6 met; S9 = cross-boundary UAF/OOB on the shared store caught
+  once the proc-macro `-L` fix lands.
 
 ### S5 — grow the Miri curated set (~½ day)
 

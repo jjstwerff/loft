@@ -27,6 +27,12 @@
 #     (Miri is single-threaded; ASan/guard are not race detectors).  Needs an
 #     instrumented std (-Zbuild-std), sanitizer flag target-scoped so host
 #     proc-macros stay clean.
+#   - native-asan — ASan over the `--native` GENERATED binary (@PLN54 S6): the
+#     in-process interpreter ASan job is blind to `--native` (a separate,
+#     uninstrumented process).  LOFT_NATIVE_ASAN=1 compiles the generated binary
+#     with -Zsanitizer=address so an OOB / UAF store access the codegen emits is
+#     caught, not silent.  (S9's mixed-boundary cdylib shares the mechanism —
+#     blocked on a proc-macro -L fix; see plans/54-.../NATIVE_ASAN_DESIGN.md.)
 #   - toolchain-matrix — the suite under beta + nightly rustc, the early-warning
 #     for toolchain-sensitivity (the @P383 trigger).  Non-blocking: nightly/beta
 #     std/lint churn must never page us.
@@ -282,6 +288,65 @@ jobs:
           --target x86_64-unknown-linux-gnu
           --config 'target.x86_64-unknown-linux-gnu.rustflags=["-Zsanitizer=thread"]'
           --release --no-fail-fast --test threading --test threading_chars
+
+  native-asan:
+    name: Native-backend ASan (--native codegen)
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+
+      # Stable builds the loft HOST binary; nightly is only needed for the
+      # `-Zsanitizer=address` on the GENERATED native binary (loft picks it up via
+      # RUSTUP_TOOLCHAIN=nightly in the sweep step).
+      - name: Install Rust stable + nightly
+        uses: dtolnay/rust-toolchain@stable
+      - uses: dtolnay/rust-toolchain@nightly
+
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-native-asan-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ubuntu-native-asan-cargo-
+
+      - name: Build loft host binary + runtime rlib
+        run: cargo build --release --bin loft --lib
+
+      # @PLN54 S6 — loft's `--native` codegen emits Rust that accesses the store by
+      # raw pointer; a codegen bug producing an out-of-bounds / use-after-free store
+      # access runs SILENT today because `--native` is a separate, uninstrumented
+      # process the in-process interpreter `asan` job cannot see.  LOFT_NATIVE_ASAN=1
+      # makes loft compile the generated binary with `-Zsanitizer=address` (nightly),
+      # so that class is caught.  ASan tolerates linking the generated crate against
+      # the uninstrumented libloft.rlib (no -Zbuild-std needed, unlike TSan).  The
+      # curated corpus is the store-heavy shapes (vectors/structs/enums/collections/
+      # text/match) + the 131/132 UAF regression scripts — the exact class ASan
+      # catches.  detect_leaks=0: the interpreter has known live-at-exit allocations
+      # (S4 owns that triage).  Validated locally + a raw-pointer-OOB positive control
+      # confirms ASan fires here.  (S9's mixed-boundary cdylib ASan shares this
+      # mechanism but is blocked on a proc-macro `-L` fix — NATIVE_ASAN_DESIGN.md.)
+      - name: Native ASan sweep (curated --native corpus)
+        env:
+          LOFT_NATIVE_ASAN: '1'
+          RUSTUP_TOOLCHAIN: nightly
+          ASAN_OPTIONS: 'detect_leaks=0'
+        run: |
+          set -euo pipefail
+          for s in 01-integers 02-floats 03-text 04-booleans 05-enums 06-structs \
+                   10-match 11-vectors 12-collections 13-map-filter-reduce \
+                   124-vector-amortised-growth 131-keyed-nested-struct-uaf \
+                   132-vector-elemset-inline-literal-uaf 138-vector-of-vector-single; do
+            echo "::group::--native ASan $s"
+            ./target/release/loft --native "tests/scripts/$s.loft"
+            echo "::endgroup::"
+          done
 
   toolchain-matrix:
     name: Suite under ${{ matrix.toolchain }}
