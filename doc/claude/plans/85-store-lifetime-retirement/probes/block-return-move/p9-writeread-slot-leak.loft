@@ -1,7 +1,12 @@
-// SEPARATE RESIDUAL (not block-return-move): `f += struct` then `f#read as
-// struct` in one program leaks the WRITE's copy-temp on INTERP only (native
-// clean) via slot reuse when a struct read follows. Pre-existing; struct-
-// specific (scalar write+read is clean). Documented for a follow-up cluster.
+// SEPARATE @PLN85 residual (NOT block-return-move) — OPEN.
+// `f += struct` then `f#read as struct` in one program leaks the READ buffer on
+// INTERP only (native clean), struct-specific, pre-existing. Root cause (traced
+// cache-off): slot aliasing. The write copies `p` into a `_wf` temp; both freed.
+// The read's `_read_1` reuses the write's slot and allocates a fresh record #2
+// that `q` adopts — but `q` is assigned the SAME stack slot `_wf` used, so `q`'s
+// slot still holds `_wf`'s already-freed DbRef; `OpFreeRef(q)` no-ops on the dead
+// store while the read buffer #2 leaks. A write-path + interp slot-allocator
+// (SLOTS.md) residual, not the block-return borrow. Scalar write+read is clean.
 #cwd
 struct P { x: integer, y: integer }
 fn main() {
