@@ -36,9 +36,12 @@ Investigating the "struct read leaks" note here reopened
    (read-only) never had this — the read block is empty-dep, so the consumer
    already adopts. See
    [@PLN85 block-return-move.md](../85-store-lifetime-retirement/block-return-move.md).
-2. **Write+read struct leak — OPEN (`p9`).** `f += s` then `f#read as S` in one
-   program leaks the WRITE's copy-temp on **interp only** (native clean),
-   struct-specific — a write-path slot residual, a separate @PLN85 cluster.
+2. **Write+read struct leak — FIXED (`p9`, 2026-07-09).** `f += s` then
+   `f#read as S` was interp-only broken (both write+read mis-targeted the eval
+   stack instead of the record). Fixed by derefing the slot to the record in
+   `assemble_write_data` + `dispatch_read_data` (mirroring the vector arm);
+   validated by a poison + cross-mode oracle. See
+   [@PLN85 writeread-slot-leak.md](../85-store-lifetime-retirement/writeread-slot-leak.md).
 
 The struct cells therefore use `run_cross_mode` (value round-trip, both
 backends) rather than the leak-free harness (which trips on residual 2).

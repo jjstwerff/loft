@@ -164,7 +164,7 @@ unconditional and `use_analysis::move_block_return` is deleted — single owner,
 one code path. Suite re-run green (2721/2721) with the switch gone. Regression
 `tests/scripts/85-block-return-move.loft` still passes both backends.
 
-## `p9` — separate write+read struct residual (OPEN, its own cluster)
+## `p9` — separate write+read struct residual (✅ FIXED — see [writeread-slot-leak.md](writeread-slot-leak.md))
 
 `f += s; f#read as S` in one program leaks the read buffer on **interp only**
 (native clean), struct-specific, pre-existing. **Not** block-return-move (the
