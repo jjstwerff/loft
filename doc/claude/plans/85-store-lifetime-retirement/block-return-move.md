@@ -187,8 +187,9 @@ read block-return in isolation is clean). A 13-probe boundary matrix —
   vs `5` native); `c1` one-field struct read returns `null` on interp (vs `42`).
 
 Deferred to its own focused investigation (loft debugger on the read-buffer
-free); a naive write-path fix CORRUPTS the write, so it is not rushed. See the
-matrix README for full analysis.
+free); a naive write-path fix CORRUPTS the write, so it is not rushed. Full
+analysis in the matrix README; **stepped implementation plan in
+[writeread-slot-leak.md](writeread-slot-leak.md)**.
 
 ## Acceptance
 
