@@ -161,6 +161,35 @@ program and swamps the ~2/call signal. Three layered oracles instead:
    though the `ir_read` line is suppressed — the gate asserts "zero non-`ir_read`
    store-text leaks," which is the invariant, not "zero total allocations."
 
+## Attempt 1 (2026-07-09) — REVERTED; refines the fix site
+
+Tried the localized free at the suppression site: in `scopes.rs::get_free_vars`,
+lift the `v == ret_var` free-exemption for a `__work_N` text (since a work_text is
+copied, not transferred). It emitted the **exact target bytecode** for the isolated
+case — mc1's `n_run` gained `FreeText(__work_1)` *after* the `AppendText` copy and
+before `Return __ret_1`, output correct (`{"name":"Alice"}`), no UAF — BUT regressed
+one test: **`plan17_b_bounded_method_return_type_propagates`** (`fn label<T>(x) ->
+text { x.to_text() + "!" }`) returned **empty** (`"" != "42!"`).
+
+**Why:** that shape does NOT copy the work_text — `x.to_text()` fills `__work_1`,
+`+ "!"` appends **in place**, and `__work_1` is **transferred directly** to the
+caller (caller frees). Freeing it at scope exit emptied the return. So a
+work_text-as-`ret_var` is EITHER copied into `__ret_N` (mc1 → must free) OR
+transferred in place (plan17_b → must NOT free), and **`get_free_vars` runs before
+the copy-vs-transfer decision, so it cannot tell them apart.** Reverted per the
+loft-codegen stop-condition (regressed the suite).
+
+**Refined fix site:** emit the free at the `__ret_N` **copy** site itself — i.e., in
+the B5-L3 text hoist(s) in `scopes.rs::insert_free` that produce `Set(__ret_N,
+expr)` where `expr` reads a work_text (text `Set` = `AppendText` = a copy). Right
+after that copy, free the work_text source(s) `expr` read. The direct-transfer path
+(fast-path `Return(Var(__work_1))`, no `__ret_N`) emits no such free and correctly
+leaves `__work_1` for the caller. This makes the free conditional on a copy actually
+happening — the distinction `get_free_vars` lacked. Open sub-question to resolve at
+the copy site: exactly which hoist emits mc1's `__ret_1 = AppendText(__work_1)` copy
+(trace with `LOFT_LOG` on a clean binary — the synth Block recursion at line ~3349
+vs the B5-L3 text branch at ~3380), and free the work_text there.
+
 ## Why not fixed in the surfacing session
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit
