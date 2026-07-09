@@ -625,10 +625,25 @@ impl Parser {
         // (accidentally pass-2-only) `to_json` case already did.  This mirrors
         // `wrap_value_text_dest`, also `!first_pass`; fn-ref call sites stay adaptive
         // (@P387).
+        // @PLN85 composite/view-return text — a text field/index VIEW of a
+        // LOCAL composite built in this body (`a.v.0`, `d.ts[0]`) leaks: the
+        // composite is freed at scope exit but its returned embedded text is
+        // exempted and the caller COPIES it.  Promote it exactly like the
+        // native-call tail (bind to `__tret`).  `var_built_in_block` gates OUT
+        // genuine caller-owned arguments (`fn f(b) { b.name }`), whose borrow
+        // return is freed by the caller and is already clean.
+        let promote_view = !self.first_pass
+            && context == "return from block"
+            && matches!(result.base(), Type::Text(_))
+            && l.last()
+                .and_then(|t| self.text_view_root(t))
+                .is_some_and(|root| self.var_built_in_block(&l, root));
         if !self.first_pass
             && context == "return from block"
             && matches!(result.base(), Type::Text(_))
-            && l.last().is_some_and(|tail| self.native_text_call_tail(tail))
+            && (promote_view
+                || l.last()
+                    .is_some_and(|tail| self.native_text_call_tail(tail)))
         {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
@@ -5046,6 +5061,58 @@ impl Parser {
                     || crate::state::codegen::is_cdylib_text_call(def)
             }
             Value::Return(inner) => self.native_text_call_tail(inner),
+            _ => false,
+        }
+    }
+
+    /// The root local var of a TEXT field/index view tail (`OpGetText` over a
+    /// `OpGetText`/`OpGetVector`/`OpGetField` chain), or `None` if the tail is
+    /// not such a view.  Peels `Return`.  The root is NOT filtered by
+    /// `is_argument` here — a genuine caller-owned parameter and an
+    /// NRVO-promoted LOCAL composite both read as arguments at this point; the
+    /// gate distinguishes them with `var_built_in_block`.
+    fn text_view_root(&self, tail: &Value) -> Option<u16> {
+        let get_text = self.data.def_nr("OpGetText");
+        let get_vec = self.data.def_nr("OpGetVector");
+        let get_field = self.data.def_nr("OpGetField");
+        fn root_var(v: &Value, gt: u32, gv: u32, gf: u32) -> Option<u16> {
+            match v.unspan() {
+                Value::Var(x) => Some(*x),
+                Value::Call(d, args) if *d == gt || *d == gv || *d == gf => {
+                    args.first().and_then(|a| root_var(a, gt, gv, gf))
+                }
+                _ => None,
+            }
+        }
+        match tail.unspan() {
+            Value::Return(inner) => self.text_view_root(inner),
+            Value::Call(d, _) if *d == get_text => root_var(tail, get_text, get_vec, get_field),
+            _ => None,
+        }
+    }
+
+    /// True when `var` is CONSTRUCTED (born) inside this block — the target of
+    /// a `Set` or an `OpDatabase(var, …)` construction anywhere in `ops`
+    /// (recursively through `Block`/`Insert`/`Span`).  Distinguishes an
+    /// NRVO-promoted LOCAL composite (built here → its embedded texts leak on a
+    /// view-return) from a genuine caller-owned parameter (born outside → its
+    /// view-return borrow is freed by the caller, clean).
+    fn var_built_in_block(&self, ops: &[Value], var: u16) -> bool {
+        let db = self.data.def_nr("OpDatabase");
+        ops.iter().any(|op| self.op_builds_var(op, var, db))
+    }
+
+    fn op_builds_var(&self, op: &Value, var: u16, db: u32) -> bool {
+        match op.unspan() {
+            Value::Set(v, _) => *v == var,
+            // `OpDatabase(Var(var), kt)` allocates a fresh composite record for
+            // `var` — the construction that makes it a LOCAL born here.
+            Value::Call(d, args) if *d == db => {
+                matches!(args.first().map(Value::unspan), Some(Value::Var(v)) if *v == var)
+            }
+            Value::Block(bl) => self.var_built_in_block(&bl.operators, var),
+            Value::Insert(ops) => self.var_built_in_block(ops, var),
+            Value::Call(_, args) => args.iter().any(|a| self.op_builds_var(a, var, db)),
             _ => false,
         }
     }
