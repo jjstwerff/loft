@@ -137,11 +137,13 @@ pub mod wasm_debug;
 // `use loft::native_call;` without coupling to the extensions module.
 #[cfg(feature = "native-extensions")]
 pub use extensions::native_call;
-#[cfg(feature = "registry")]
-// @PLN53 F1 — raw-source fuzz oracle; available under cargo-fuzz (feature) and
-// under `cargo test` (the seed-corpus replay).
+// @PLN53 F1/F2 — raw-source fuzz oracle + keyed-container generator; available
+// under cargo-fuzz (the `fuzzing` feature) and under `cargo test`.
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod fuzz_keyed;
 #[cfg(any(test, feature = "fuzzing"))]
 pub mod fuzz_oracle;
+#[cfg(feature = "registry")]
 pub mod install;
 pub mod introspect;
 pub mod libscan;
