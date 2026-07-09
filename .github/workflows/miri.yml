@@ -502,3 +502,54 @@ jobs:
           { echo '```'; echo "$out"; echo '```'; } >> "$GITHUB_STEP_SUMMARY"
           echo "$out" | grep -q "NOT GREEN" && \
             echo "::warning::library audit not green — orphaned branches / drift / correctness (see job summary)" || true
+
+  # @PLN54 S7 — the nightly's own smoke alarm.  Nothing gates on this workflow, and
+  # `continue-on-error` / `fail-fast: false` legs keep the OVERALL run green even
+  # when a matrix leg is red — so a real regression can sit unnoticed for days.
+  # This job reads per-JOB conclusions (not the run status) and opens/updates ONE
+  # deduped GitHub issue on any red gate, so a week of red nightlies is a single
+  # tracked issue, not seven (and auto-resolves it when the gates go green again).
+  notify:
+    name: Nightly gate failure → tracked issue
+    needs: [miri, asan, poison, tsan, native-asan, toolchain-matrix, index-hygiene]
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      issues: write
+      contents: read
+    steps:
+      - name: Open / update / close the deduped failure issue
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RESULTS: ${{ toJSON(needs) }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Per-JOB conclusions from the needs context — failure OR timed_out counts
+          # (a matrix leg that timed out is a real regression signal).
+          failed=$(printf '%s' "$RESULTS" | jq -r '
+            to_entries[] | select(.value.result=="failure" or .value.result=="timed_out") | .key' \
+            | paste -sd, - || true)
+          # Idempotent dedup label; find any OPEN prior issue.
+          gh label create nightly-failure --color b60205 \
+            --description "Auto-filed nightly UB/sanitizer gate failure" --force >/dev/null 2>&1 || true
+          existing=$(gh issue list --state open --label nightly-failure \
+            --json number --jq '.[0].number // empty' 2>/dev/null || true)
+          if [ -z "$failed" ]; then
+            echo "all watched nightly gates green"
+            if [ -n "$existing" ]; then
+              gh issue comment "$existing" --body "✅ Nightly gates green again as of $RUN_URL — closing." || true
+              gh issue close "$existing" --reason completed || true
+            fi
+            exit 0
+          fi
+          echo "::warning::nightly gate(s) failed: $failed"
+          body=$(printf 'Nightly UB/sanitizer gate(s) failed: **%s**\n\nRun: %s\n\nFiled from per-JOB conclusions (the overall run can read green while a matrix leg is red). This issue auto-updates on repeat failures and auto-closes when the gates go green.' "$failed" "$RUN_URL")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+            echo "updated existing issue #$existing"
+          else
+            gh issue create --title "Nightly UB/sanitizer gate failure" \
+              --label nightly-failure --body "$body"
+            echo "opened a new tracking issue"
+          fi
