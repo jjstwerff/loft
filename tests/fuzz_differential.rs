@@ -22,41 +22,43 @@ mod common;
 
 use loft::fuzz_keyed::{KeyedSpec, Kind, generate_keyed_summary};
 
+/// F3.1 + F3.2 — the differential over generated keyed programs. A programmatic
+/// corpus (all three types × several sizes × remove patterns × closures on/off,
+/// including an emptied collection) run on `--interpret` and `--native`; each
+/// must succeed and print byte-identical normalised stdout. Bounded because
+/// native shells out to rustc per program (the coverage cap F3-DESIGN.md §
+/// failure path 3 names). The closures axis puts the slot-allocator path in the
+/// cross-backend diff (F3.2).
 #[test]
-#[ignore = "F3.1 differential (rustc per program) — run with --features fuzzing --ignored"]
+#[ignore = "F3 differential (rustc per program) — run with --features fuzzing --ignored"]
 fn keyed_generated_agree_across_backends() {
-    // A small curated corpus — bounded because native shells out to rustc per
-    // program (the coverage cap F3-DESIGN.md § failure path 3 names). Covers
-    // all three types × a few sizes × remove patterns, including an emptied
-    // collection.
-    let corpus: &[KeyedSpec] = &[
-        spec(Kind::Hash, 5, &[]),
-        spec(Kind::Hash, 6, &[2]),
-        spec(Kind::Hash, 8, &[7]),
-        spec(Kind::Sorted, 5, &[]),
-        spec(Kind::Sorted, 7, &[0, 3]),
-        spec(Kind::Sorted, 3, &[0, 1, 2]), // emptied
-        spec(Kind::Index, 5, &[]),
-        spec(Kind::Index, 6, &[1, 4]),
-    ];
+    let mut corpus: Vec<KeyedSpec> = Vec::new();
+    for closures in [false, true] {
+        for kind in [Kind::Hash, Kind::Sorted, Kind::Index] {
+            corpus.push(spec(kind, 5, &[], closures)); // no removes
+            corpus.push(spec(kind, 6, &[2], closures)); // one remove
+            corpus.push(spec(kind, 8, &[0, 3, 7], closures)); // several removes
+            corpus.push(spec(kind, 3, &[0, 1, 2], closures)); // emptied
+        }
+    }
 
     for (i, s) in corpus.iter().enumerate() {
         let body = generate_keyed_summary(s);
         // run_cross_mode appends `fn main() { test(); }`, runs both backends,
         // and panics on failure or a normalised-stdout divergence.
-        common::cross_mode::run_cross_mode(&format!("f31_keyed_{i}"), &body);
+        common::cross_mode::run_cross_mode(&format!("f3_keyed_{i}"), &body);
     }
     eprintln!(
-        "F3.1: {} generated keyed programs agree interp==native",
+        "F3: {} generated keyed programs agree interp==native",
         corpus.len()
     );
 }
 
-fn spec(kind: Kind, n_keys: u32, remove: &[u32]) -> KeyedSpec {
+fn spec(kind: Kind, n_keys: u32, remove: &[u32], closures: bool) -> KeyedSpec {
     KeyedSpec {
         kind,
         n_keys,
         remove: remove.to_vec(),
-        closures: false,
+        closures,
     }
 }

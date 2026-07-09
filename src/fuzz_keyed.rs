@@ -215,7 +215,19 @@ pub fn generate_keyed_summary(spec: &KeyedSpec) -> String {
         Kind::Index => s.push_str("  for e in c.m { cnt += 1; out += \"{e.n}={e.v};\"; }\n"),
         _ => s.push_str("  for e in c.m { cnt += 1; out += \"{e.k}={e.v};\"; }\n"),
     }
-    s.push_str("  print(\"pop={cnt};{out}\");\n");
+    if spec.closures {
+        // Fold through lambdas and print the deterministic sum/max — puts the
+        // closure / slot-allocator path in the cross-backend diff too (F3.2).
+        s.push_str("  sumfn = fn(a: integer, b: integer) -> integer { a + b };\n");
+        s.push_str(
+            "  maxfn = fn(a: integer, b: integer) -> integer { if a > b { a } else { b } };\n",
+        );
+        s.push_str("  total: integer = 0;\n  peak: integer = 0;\n");
+        s.push_str("  for e in c.m { total = sumfn(total, e.v); peak = maxfn(peak, e.v); }\n");
+        s.push_str("  print(\"pop={cnt};{out}fold={total},{peak};\");\n");
+    } else {
+        s.push_str("  print(\"pop={cnt};{out}\");\n");
+    }
     s.push_str("}\n");
     s
 }
