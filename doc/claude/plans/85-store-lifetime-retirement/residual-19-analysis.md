@@ -274,6 +274,15 @@ bugs:
   block-RHS; WITHOUT the copy it is clean; mutation is NOT required. So `OpCopyRecord`'s
   scope-exit free does not recurse into the copy's embedded text. Matches the test's own
   `src.contains("OpCopyRecord(cell,")` assertion.
+  **Chokepoint pinned (2026-07-10):** `OpFreeRef(b)` → `State::free_ref_db` →
+  `database.free(&db)` frees the record's STORE SLOT ONLY — it never walks the record's
+  field types, so `b`'s deep-copied `"hello"` (a separate allocation minted by
+  `OpCopyRecord` via `append_text`) is never freed. **NOT a safe minimal fix:** a
+  blanket "free embedded texts on record free" would double-free texts that are
+  borrowed/aliased elsewhere; a correct fix needs a type-directed, ownership-aware field
+  walk. This is the Class-B composite-embedded-text-free arc (doc Session 5), which also
+  covers `issue_437` (vector elements) and `p241` — delicate free-emission, route it,
+  do not blind-patch `database.free`.
 
 ## p54_b6 — view-through-forward-borrow (regrouped out of "UserCall")
 

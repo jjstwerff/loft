@@ -202,6 +202,21 @@ TEMPLATE (`first<T>`) classify as promotable, and can its promotion be stamped s
 generic instantiation path (`parse_call` pass-2 monomorphisation, `t_<LEN><Type>_<fn>`
 mint) + `substitute_type`. Distinct ABI arc — its own probe + both-backend gate.
 
+**Feasibility probed (2026-07-10) — blocked on the pass-2 monomorph forward-ref, NOT
+a quick win.** Instrumented the slice-1c gate on `plan17_printable`:
+```
+GATE n_first ctx=630 op=631 callee=to_text  backward=false   (to_text minted at 631, just after first)
+GATE run     ctx=632 op=634 callee=first     backward=false   (run calls the pass-2 MONOMORPH at 634)
+```
+`first` classifies `Owned:UserCall`, but `run → first` resolves to the **monomorph
+def_nr 634, minted pass-2 AFTER run (632)** — a genuine forward reference, so the
+def_nr gate (correctly) skips it. Both `first` AND `run` would need promoting for the
+test to clear, and `run → monomorph` is unavoidably the pass-2 forward case: run
+cannot pass a buffer to a callee that does not exist when run compiles. So generics are
+blocked on **the same forward-ref-ABI problem as the pre-pass**, one level down — a
+better safety signal than raw def_nr won't help, because the monomorph genuinely isn't
+there yet. Confirms this is the pre-pass arc, not a standalone slice.
+
 ## Slice 2 — retire the latent native forward-ref bug (rides on slice 0)
 
 **Closes:** no current harness test (the suite has no forward-ref-to-native-tail),
