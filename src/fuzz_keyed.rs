@@ -293,4 +293,42 @@ mod tests {
             failures.join("\n")
         );
     }
+
+    /// F2.2 — prove the self-check CAN fail (non-vacuity). A correct program
+    /// passes, but corrupting a baked expectation — exactly what a real
+    /// collection miscompile would produce — makes `check_generated` report a
+    /// FINDING. Without this, a green F2.1 sweep could mean "the assertions
+    /// never actually fire". The corruption edits the emitted source directly,
+    /// leaving `generate_keyed` (the production path) untouched.
+    #[test]
+    fn corrupted_expectation_is_reported_as_a_finding() {
+        // Hash, 5 keys, remove index 2 → survivors {0,1,3,4}, population 4.
+        let spec = KeyedSpec {
+            kind: Kind::Hash,
+            n_keys: 5,
+            remove: vec![2],
+        };
+        let good = generate_keyed(&spec);
+        assert!(check_generated(&good).is_ok(), "baseline program must pass");
+
+        // (a) wrong population: really 4, claim 7 → the `cnt == N` self-check fails.
+        let bad_pop = good.replace("cnt == 4", "cnt == 7");
+        assert_ne!(
+            bad_pop, good,
+            "population corruption must change the source"
+        );
+        let r = check_generated(&bad_pop);
+        assert!(
+            r.as_ref().is_err_and(|m| m.contains("FINDING")),
+            "corrupted population must be a FINDING, got {r:?}"
+        );
+
+        // (b) wrong lookup value: key k000 maps to 1, claim 999.
+        let bad_val = good.replacen("[\"k000\"].v == 1", "[\"k000\"].v == 999", 1);
+        assert_ne!(bad_val, good, "value corruption must change the source");
+        assert!(
+            check_generated(&bad_val).is_err(),
+            "corrupted lookup value must be a finding"
+        );
+    }
 }
