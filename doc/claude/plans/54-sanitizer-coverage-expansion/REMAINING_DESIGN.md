@@ -131,6 +131,33 @@ went from ~108 to 0-modulo-suppressions.
 survivor has a one-line accepted-leak annotation. **Effort:** ~1 day. **Risk:**
 low — worst case the suppression file is larger than hoped.
 
+### S4 — baseline captured 2026-07-09 (post-#537 rebase); root-cause BLOCKED on inlining
+
+`RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=1 cargo +nightly test
+--release --target … --test issues -- --test-threads=1` → **2389 B leaked in 215
+allocations, essentially ONE class**: `RawVecInner::finish_grow` ← `State::static_call`
+← `execute_argv` ← `issues::testing::Test::drop`. Not the ~108 the doc guessed;
+LSan does REACHABILITY, so `OnceLock`/cached-stdlib allocations are NOT leaks.
+The 2 "failed" tests under leaks-on (`fill_rs_up_to_date`, `n9_generated_fill_matches_src`)
+are the generated-code-freshness meta-tests the `asan` job already excludes — not bugs.
+
+**Root-cause is BLOCKED, and must NOT be blind-suppressed.** `static_call`'s own
+`Vec` allocations are all in the snapshot branch (`if call == stack_trace_lib_nr`),
+which no `--test issues` test reaches — so the leaking `Vec` is in a NATIVE FUNCTION
+the optimizer **inlined into `static_call`** (`--release`, so the frame is
+collapsed; `-C debuginfo=2` still gives `??:?`). The allocations are tiny (~11 B —
+small `String`/`Vec`), 122 + 93 of them, from a subset of `issues` tests. This
+could be a real **store/heap leak in a native call** (PLN54's exact target), so a
+broad `leak:static_call` suppression is WRONG — it would mask the very class the
+gate exists to catch.
+
+**Next (a focused step):** defeat inlining to name the native fn — a DEBUG ASan
+build (`-C opt-level=0`, no inlining) over the leaking subset, OR bisect the
+`issues` corpus by test-group under `detect_leaks=1` to find the leaking tests →
+read their loft to name the native call → fix it at the owner. THEN flip the
+`asan` job to `detect_leaks=1` (+ a narrow, documented suppression only for any
+genuinely-intentional residual). Do NOT flip the gate until the leak is named.
+
 ---
 
 ## S5 — grow the Miri curated set (≥ 8 tests, ≤ 20 min)

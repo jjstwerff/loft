@@ -58,8 +58,14 @@ right now.
   `-L host deps` fix was **probed + falsified** (double-std / ABI cascade); a
   probe-grounded candidate exists but is unvalidated — the genuinely hard, unfinished
   part of S6+S9. See [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md) § S9.
-- **S4 (LSan triage) — unstarted.** CI pins `detect_leaks=0` explicitly pending
-  the ~108 live-at-exit baseline triage; flipping to `=1` is the deliverable.
+- **S4 (LSan triage) — baseline captured; root-cause BLOCKED on inlining.** Real
+  baseline (post-#537 rebase): **2389 B / 215 allocations, one class** —
+  `finish_grow` ← `State::static_call` ← a native fn the optimizer INLINED into it
+  (not the ~108 the doc guessed; LSan does reachability, so OnceLock caches aren't
+  leaks). Could be a real store leak in a native call, so it must NOT be
+  blind-suppressed. Naming it needs a debug (no-inline) ASan build or a test
+  bisection — a focused step; then flip `detect_leaks=1`. See
+  [REMAINING_DESIGN.md](REMAINING_DESIGN.md) § S4.
 - **S1 (macOS-ARM sanitizer leg) — routed to a native Mac session.** The full
   suite already runs on macOS-ARM (`v2-validation.yml`); only the *sanitizer*
   (Miri/ASan) leg is ubuntu-only. This Linux box cannot validate a macOS
