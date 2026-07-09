@@ -202,6 +202,35 @@ the copy site: exactly which hoist emits mc1's `__ret_1 = AppendText(__work_1)` 
 (trace with `LOFT_LOG` on a clean binary — the synth Block recursion at line ~3349
 vs the B5-L3 text branch at ~3380), and free the work_text there.
 
+## Attempt 2 (2026-07-09) — LANDED, partial: callee `__work_N` orphan + UAF fixed
+
+Relocated the free to the copy site per Attempt 1's refinement: a new
+`free_copied_work_texts(result, expr, function, data)` called right after the B5-L3
+`__ret_N` copy `Set` in `scopes.rs::insert_free` (both the value-hoist and
+text-hoist arms). It `collect_return_sources(expr)` and emits `OpFreeText` for each
+`__work_N` text source — so the free exists ONLY when a copy actually happened; the
+direct-transfer path emits neither copy nor free and correctly leaves the work_text
+for the caller (this is why it does NOT regress `plan17_b`/`concat_suffix`, which
+attempt 1 emptied). mc1 bytecode now: `AppendText(__ret_1, __work_1)` →
+`FreeText(__work_1)` → `Return __ret_1`.
+
+**Validated (both backends):** suite 749/0 (no regression); the oracle matrix VALUE
+= ok on every cell on `--interpret` AND `--native`; `optional_uaf` goes
+**USE-AFTER-FREE → (no UAF)** — the safety bug is eliminated; `tail_to_json` &c go
+from **2 leaked allocs/call → 1**.
+
+**Remaining (a distinct slice — the OTHER half of the ~2/call):** the returned
+owned text itself (the `__ret_N` copy, `skip_free`'d in the callee by the
+`-> text` "caller consumes it" contract) still leaks **1/call** — the CALLER
+consumes it (`r = drive()` → `OpAppendText` into `r`) but never frees the returned
+temp. Stack: `append_text` ← `execute_argv` (the copy that built `__ret_N`), freed
+by neither side. The `rebind` shape is clean because it returns via a promoted
+CALLER buffer (no per-call owned-text temp) — which is also the candidate FULL fix
+(promote the tail native-text return to a caller buffer, @P387-adaptive so fn-refs
+still work), superseding both halves. Next slice: either free the consumed
+return-temp at the caller's `Set(local, <owned-text call>)`, or promote. Guard: the
+matrix must reach 0 runtime-owner frames on every cell (not just `optional_uaf`).
+
 ## Why not fixed in the surfacing session
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit

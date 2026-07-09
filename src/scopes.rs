@@ -3374,6 +3374,7 @@ impl Scopes {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
+            free_copied_work_texts(&mut result, expr, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -3402,6 +3403,7 @@ impl Scopes {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
+            free_copied_work_texts(&mut result, expr, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -4406,6 +4408,30 @@ fn needs_pre_init(tp: &Type) -> bool {
         tp,
         Type::Text(_) | Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
     )
+}
+
+/// @PLN85 text-tail-return-leak — after a B5-L3 `__ret_N` COPY hoist
+/// (`Set(__ret_N, expr)` lowers to `OpAppendText`, a deep copy), any `__work_N`
+/// text temp that `expr` reads is now dead: the caller consumes the `__ret_N`
+/// copy, not `__work_N`.  `wrap_value_text_dest` synthesises that work-text
+/// precisely so it CAN be freed, but as the return terminal its scope-exit free
+/// is suppressed (it looked like the returned value — `ret_var`).  Emit the free
+/// HERE, at the copy, so it fires ONLY when a copy actually happened; the
+/// direct-transfer path (fast-path `Return(Var(__work_N))`, no `__ret_N`) reaches
+/// neither this nor a free and correctly leaves `__work_N` for the caller.  Fixes
+/// the tail native-text-CALL leak (and the `-> text?` freed-then-read UAF) without
+/// touching the direct-transfer shapes attempt 1 broke.  See
+/// plans/85-store-lifetime-retirement/text-tail-return-leak.md.
+fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Function, data: &Data) {
+    let mut srcs = Vec::new();
+    collect_return_sources(expr, &mut srcs);
+    for w in srcs {
+        if function.name(w).starts_with("__work_")
+            && matches!(function.tp(w).base(), Type::Text(_))
+        {
+            result.push(call("OpFreeText", w, data));
+        }
+    }
 }
 
 fn call(to: &'static str, v: u16, data: &Data) -> Value {
