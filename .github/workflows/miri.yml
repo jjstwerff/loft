@@ -230,14 +230,15 @@ jobs:
       # native/wasm/html tests spawn separate uninstrumented binaries and add no
       # ASan coverage.  An explicit --target makes RUSTFLAGS instrument the whole
       # build.  detect_leaks=0 keeps this a clean UAF/OOB gate.  The LeakSanitizer
-      # baseline is now TRIAGED (@PLN54 S4, plans/54-.../REMAINING_DESIGN.md § S4):
-      # two bounded benign classes — (1) production's intentional documented
-      # `ir_read` Box::leak of &'static str IR names (interner-style), (2) a
-      # test-harness teardown artifact (live entry-frame texts unfreed on State
-      # drop) that does NOT reproduce standalone.  The flip to detect_leaks=1 is
-      # deferred behind a harness-teardown fix (so it flips clean, no suppression)
-      # + Linux-side validation — a fragile cross-platform suppression is avoided
-      # (Linux inlines the harness class into static_call; macOS shows real owners).
+      # baseline is now ROOT-CAUSED (@PLN54 S4, plans/54-.../REMAINING_DESIGN.md § S4):
+      # (1) the intentional documented `ir_read` Box::leak of &'static str IR names
+      # (interner-style, bounded), and (2) a REAL GROWING production leak — a native
+      # fn's `text` result used as a user function's implicit tail-return is never
+      # registered as owned (~2 allocs/call, grows; rebinding to a local fixes it;
+      # likely a caller-bind/OpReturn owned-placeholder gap in state/codegen.rs).
+      # detect_leaks stays 0 until (2) is FIXED (stability policy: fix + regression
+      # test, not suppress); the flip then adds a narrow Class-1 `leak:ir_read`
+      # exclusion for the ~16 ir_read/ir_schema/ir_store round-trip lib tests.
       #
       # nextest (not `cargo test`): it does NOT build doctests, which under
       # `--target` + `-Zsanitizer` fail to resolve the curve25519 proc-macro

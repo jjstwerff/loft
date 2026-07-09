@@ -153,39 +153,59 @@ live for the whole process anyway"). Interner-style: bounded by the program+stdl
 name set, does **not** grow at runtime (a 1000-iteration loop leaks the same 311 as
 a 1-line body), freed by process exit. Standard compiler technique, not a bug.
 
-**Class 2 — TEST-HARNESS only (what the `asan` gate would see): a teardown
-artifact.** The `--test issues` baseline (**4181 B / 229 allocs on ARM**; 2389/215
-on Linux) is owned by RUNTIME text fns — `append_text` (110), `n_kind_dest` (38),
-`n_to_json_dest`/`_pretty`/`struct_to_json_dispatch` (49), `n_as_text_dest` (5).
-These do **NOT** reproduce in production: the same `+=`, `kind`, `to_json` ops in a
-standalone binary leak **zero** runtime buffers. The harness (`Test::drop` →
-`byte_code` + `execute` + drop `State`) leaves live entry-frame texts unfreed at
-`State` teardown, whereas production's store-IR-roundtrip bytecode frees them. It is
-bounded per test and test-only.
+**Class 2 — a REAL, GROWING PRODUCTION leak (corrects an earlier wrong reading).**
+The `--test issues` baseline (**4181 B / 229 allocs on ARM**) is owned by RUNTIME
+text fns — `append_text`, `n_kind_dest`, `n_to_json_dest`/`_pretty`/
+`struct_to_json_dispatch`, `n_as_text_dest`, `n_env_variable_dest`,
+`t_4text_to_upper/lower_dest`. An early note guessed this was "test-harness only /
+freed in production," but that rested on **unrepresentative probes** (`s += …` and a
+str-view `[0]`), neither of which hits the leaking shape. A representative probe
+falsifies it.
 
-**`free_text` is confirmed working** (the feared @PLAN53-cluster-5 regression is
-refuted): `probe_A` created + scope-freed 1000 texts and leaked the *same* count as
-the 1-text `probe_B` — the runtime free path does not accumulate.
+**Root cause (isolated with a boundary matrix, both cells output-verified):** a
+native fn's `text` result used as the **implicit tail-return** (the last expression)
+of a user function is never registered as an owned text, so it — and its
+return-copy — are never freed. ~**2 allocations leak per call, and it GROWS**:
 
-**Decision — do NOT flip `detect_leaks=1` this session (and why):**
-1. The `asan` job now runs on **both** ubuntu + macOS-ARM (S1). A clean flip needs
-   Class 2 gone on BOTH; this Mac cannot validate the Linux leg, and shipping an
-   unvalidated gate breaks the plan's "validate what you ship" bar (the same bar S1
-   just honoured).
-2. A suppression is **cross-platform fragile**: Linux inlines Class 2 into
-   `static_call` (the broad frame the design forbids suppressing), while macOS shows
-   the real `append_text`/`_dest` owners — no single `leak:` line matches both
-   without also masking real runtime leaks.
-3. Class 1 is intentional (accept/annotate); Class 2 is test-infra, benign, and its
-   proper fix (align the harness `byte_code` teardown with production's store-IR
-   path so entry-frame texts are freed) is a focused test-infra change, not a
-   production correctness fix.
+    fn run() -> text { u = U{…}; u.to_json() }        // C1: implicit tail return
+    while i < N { t = run(); i += 1 }                 //     N=10 → 20 leaked; N=100 → 200 (2/call)
 
-**Remaining to close S4 (a focused follow-up):** fix the Class-2 harness teardown so
-the gate flips to `detect_leaks=1` **clean, no suppression, on both platforms** —
-then annotate Class 1 with a narrow `lsan_suppressions.txt` line (`leak:read_block`
-+ rationale) since the intentional `Box::leak` is the only expected residual. The
-hard, previously-blocked part — NAMING the classes — is now done.
+    fn run() -> text { u = U{…}; r = u.to_json(); return r; }   // C2: rebind to a local first
+    while i < N { t = run(); i += 1 }                 //     N=10 → 0;  N=100 → 0
+
+Rebinding to a named local before `return` (C2) gives the value proper ownership
+tracking → 0 leaks. `to_uppercase()` bound *directly* to a local (`t = x.to_upper()`)
+is also clean — so it is NOT "all native text fns," it is specifically the native
+result **flowing straight into the return slot**. This explains every harness owner:
+the JSON/text tests use `fn helper() -> text { …native_call() }` and run per test, so
+the per-call leak accumulates across the ~129 text/JSON cases. `free_text` itself
+works (`probe_A`: 1000 scope-freed texts leak the same as 1). A long-running program
+calling `to_json`/`kind`/`as_text` via such a helper in a loop leaks unboundedly —
+exactly the class the leak gate exists to catch.
+
+**Likely fix site:** the caller-side bind of a Call's `text` result and the
+function-tail `OpReturn` path in `state/codegen.rs` (the owned-placeholder logic
+around the return slot — cf. the `nrvo_collapse_tail_set` / "owned/freed ELSEWHERE"
+comments): a native-call result in tail position must be registered as an owned text
+the caller frees at scope exit, the same way a `return <local>` already is. This is
+codegen/ownership work — do it under the **loft-codegen** discipline (introspect
+BOTH backends first) with a `--native` cross-check, and add a regression test
+(the C1 shape) that leaks pre-fix.
+
+**Decision — gate stays at `detect_leaks=0` until the bug is FIXED (not
+suppressed).** This is a genuine growing production leak, so per stability policy it
+must be fixed with a regression test, not annotated away. Two residuals then gate the
+flip: (a) this Class-2 codegen fix; (b) the intentional Class-1 `ir_read` `Box::leak`
+— 16 `ir_read`/`ir_schema`/`ir_store` round-trip lib tests deliberately materialize
+IR, so they get a narrow, documented exclusion or `leak:ir_read` suppression. Only
+after (a) lands does `detect_leaks=1` become a meaningful gate. Both the S1 caveat
+(Linux leg unvalidatable from a Mac) and the fix belong to a focused follow-up.
+
+**Status of the attempted harness "fix" (rejected):** a `fn main(){ test(); }`
+wrapper in `tests/testing.rs` (to make `test` return so entry frees fire) was tried
+and REVERTED — it did NOT reduce the leak (159 tests still leaked under
+`detect_leaks=1`), confirming the cause is the codegen ownership gap above, not the
+harness entry shape.
 
 ---
 
