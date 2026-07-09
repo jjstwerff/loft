@@ -5535,7 +5535,10 @@ fn main() {
         };
         let wasm_out = &wasm_out;
         let end_def = p.data.definitions();
-        let rs_path = std::env::temp_dir().join("loft_wasm.rs");
+        // Per-process scratch so parallel `--native-wasm` runs never share the
+        // generated source (a shared path let one rustc read another's program).
+        let build_dir = platform::build_scratch_dir("wasm");
+        let rs_path = build_dir.join("prog.rs");
         {
             let mut f = match std::fs::File::create(&rs_path) {
                 Ok(f) => f,
@@ -5638,7 +5641,13 @@ fn main() {
             html_path.clone()
         };
         let end_def = p.data.definitions();
-        let rs_path = std::env::temp_dir().join("loft_html.rs");
+        // Per-process scratch dir for EVERY intermediate of this --html build
+        // (generated .rs, the wasm output + its objects, bridge rlibs, wasm-opt
+        // output).  One isolation point: routing all paths through `build_dir`
+        // keeps concurrent `loft --html` runs (nextest, a parallel page build)
+        // from racing on the old shared scratch/loft_html.{rs,wasm}.
+        let build_dir = platform::build_scratch_dir("html");
+        let rs_path = build_dir.join("prog.rs");
         {
             let mut f = match std::fs::File::create(&rs_path) {
                 Ok(f) => f,
@@ -5684,7 +5693,7 @@ fn main() {
         let html_runtime_dir =
             native_utils::ensure_loft_runtime_rlib(native_utils::WasmRuntimeShape::Html);
         // Compile to wasm32-unknown-unknown cdylib
-        let wasm_path = std::env::temp_dir().join("loft_html.wasm");
+        let wasm_path = build_dir.join("prog.wasm");
         let mut cmd = std::process::Command::new("rustc");
         cmd.arg("--edition=2024")
             .arg("--target")
@@ -5742,7 +5751,7 @@ fn main() {
                 continue;
             }
             let crate_ident = bridge_crate.replace('-', "_");
-            let bridge_rlib = std::env::temp_dir().join(format!("lib{crate_ident}.rlib"));
+            let bridge_rlib = build_dir.join(format!("lib{crate_ident}.rlib"));
             // Build-extension (@PLN84 ZT-B): when the bridge crate declares Cargo
             // dependencies beyond `loft` (the vetted dalek/RustCrypto stack the SHARED
             // ed25519/x25519/aes modules use), build those deps for wasm32 to produce
@@ -5779,8 +5788,7 @@ fn main() {
             let mut bridge_externs: Vec<(String, std::path::PathBuf)> = Vec::new();
             if !nonloft_deps.is_empty() {
                 // Stage the deps-only crate under a per-bridge temp dir, then build it.
-                let synth_dir =
-                    std::env::temp_dir().join(format!("loft_html_bridge_deps_{crate_ident}"));
+                let synth_dir = build_dir.join(format!("bridge_deps_{crate_ident}"));
                 let synth_src = synth_dir.join("src");
                 let manifest = synth_bridge_deps_manifest(&nonloft_deps);
                 let staged = std::fs::create_dir_all(&synth_src).is_ok()
@@ -5920,7 +5928,7 @@ fn main() {
         // wasm-opt: optimize size + enable asyncify for frame yield.
         // Asyncify lets loft_gl_swap_buffers suspend the WASM execution
         // so the browser can render the frame via requestAnimationFrame.
-        let opt_path = std::env::temp_dir().join("loft_html_opt.wasm");
+        let opt_path = build_dir.join("prog_opt.wasm");
         let final_wasm = if std::process::Command::new("wasm-opt")
             .args([
                 // -O / -Oz plus --asyncify strips the host imports

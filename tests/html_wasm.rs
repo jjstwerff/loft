@@ -22,15 +22,12 @@
 
 use std::path::PathBuf;
 use std::process::Command;
-use std::sync::{Mutex, OnceLock};
 
-/// All `--html` invocations write the generated Rust to a fixed
-/// `/tmp/loft_html.rs` path, so concurrent tests step on each other.
-/// Serialise the build path with a process-wide mutex.
-fn build_lock() -> &'static Mutex<()> {
-    static LOCK: OnceLock<Mutex<()>> = OnceLock::new();
-    LOCK.get_or_init(|| Mutex::new(()))
-}
+// `loft --html` now writes every build intermediate to a per-PROCESS scratch dir
+// (`platform::build_scratch_dir` — `scratch/loft_html_<pid>/`), so concurrent
+// invocations no longer race on a shared `scratch/loft_html.{rs,wasm}`.  The old
+// process-wide `build_lock()` mutex that serialised these tests is therefore
+// gone; parallel_html_builds_do_not_cross_contaminate is the regression guard.
 
 fn which(cmd: &str) -> Option<PathBuf> {
     let out = Command::new("sh")
@@ -147,20 +144,9 @@ fn run_html_wasm_full(
         }
     }
 
-    // Serialise: the loft `--html` driver writes to a fixed
-    // `/tmp/loft_html.rs` path, so parallel test invocations would
-    // overwrite each other's emitted Rust mid-build.
-    //
-    // P201: recover from a poisoned lock via `into_inner()` so the
-    // first test to fail surfaces its real error instead of every
-    // later test reporting `PoisonError { .. }`.  The lock guards a
-    // shared file path, not invariant state — a panicking test leaves
-    // the file half-written, but the next test overwrites it on the
-    // next `loft --html` invocation, so consuming the poisoned guard
-    // is safe.
-    let _guard = build_lock()
-        .lock()
-        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    // No build serialisation: `loft --html` isolates its intermediates per
+    // process (per-PID scratch dir), so parallel invocations can't clobber
+    // each other's emitted Rust or wasm output.
     let mut cmd = Command::new(&loft_bin);
     cmd.args([
         "--html",
@@ -175,7 +161,6 @@ fn run_html_wasm_full(
     cmd.arg(src.to_str().unwrap());
     let status = cmd.status().expect("invoke loft --html");
     assert!(status.success(), "loft --html failed for {name}");
-    drop(_guard);
 
     let html_content = std::fs::read_to_string(&html).expect("read html");
     let marker = "const wasmB64=\"";
@@ -353,18 +338,16 @@ fn main() {
     );
 }
 
-/// P201 regression: when one html_wasm test panics while holding
-/// `build_lock()`, every subsequent test must still be able to acquire
-/// the guard.  Before the fix, a poisoned `Mutex<()>` made every later
-/// `.lock().unwrap()` call panic with `PoisonError { .. }` — a noisy
-/// cascade that hid the original failure.  The fix is the recovery
-/// pattern `.lock().unwrap_or_else(|e| e.into_inner())`; this test
-/// exercises that pattern on a local mutex so a regression in the
-/// recovery shape (e.g. someone reverts to plain `.unwrap()`) trips
-/// here without depending on the real `build_lock()` global.
+/// P201 regression: the poisoned-`Mutex` recovery pattern
+/// `.lock().unwrap_or_else(|e| e.into_inner())` — a panicking holder must not
+/// make every later `.lock()` panic with `PoisonError { .. }` (a noisy cascade
+/// that hides the original failure).  The html_wasm suite no longer holds a
+/// shared build mutex (builds isolate per-process now), but the recovery shape
+/// is worth keeping guarded for any future shared-lock test, so this exercises
+/// it on a local mutex.
 #[test]
 fn p201_poisoned_lock_recovery_pattern() {
-    use std::sync::Arc;
+    use std::sync::{Arc, Mutex};
     let m = Arc::new(Mutex::new(()));
     let m2 = Arc::clone(&m);
     let h = std::thread::spawn(move || {
@@ -378,10 +361,103 @@ fn p201_poisoned_lock_recovery_pattern() {
     );
     // The fix's recovery pattern — must NOT panic on a poisoned lock.
     let _guard = m.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-    // Holding the recovered guard proves the pattern is live; drop it
-    // to release.  If the assertion below ever changes shape, the doc
-    // comment on `build_lock().lock()` (above) needs the same edit.
     drop(_guard);
+}
+
+/// Parallel-compilation isolation: N concurrent `loft --html` builds must each
+/// embed THEIR OWN program.  Before per-PID scratch dirs, parallel builds raced
+/// on a shared `scratch/loft_html.rs` (one rustc compiled another's source → a
+/// page silently embedded the wrong program) and `-o scratch/loft_html.wasm`
+/// (two `rust-lld`s truncated each other mid-link → `signal: 7`, SIGBUS).  A
+/// local repro hit 29 build failures + 7 cross-contaminations over 30 builds
+/// pre-fix; this asserts ZERO of each.  Each `loft` is its own process, so
+/// `platform::build_scratch_dir` keys the scratch on the PID.
+#[test]
+fn parallel_html_builds_do_not_cross_contaminate() {
+    if !wasm32_target_installed() {
+        eprintln!("SKIP: wasm32-unknown-unknown target not installed");
+        return;
+    }
+    let loft_bin = repo_root().join("target/release/loft");
+    if !loft_bin.exists() {
+        eprintln!("SKIP: target/release/loft not built (run `cargo build --release`)");
+        return;
+    }
+    const N: usize = 8;
+    let dir = std::env::temp_dir().join(format!("loft_html_parallel_iso_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("create dir");
+
+    // One distinctively-marked program per builder.
+    let srcs: Vec<PathBuf> = (0..N)
+        .map(|i| {
+            let src = dir.join(format!("prog_{i}.loft"));
+            std::fs::write(
+                &src,
+                format!("fn main() {{ println(\"MARKER_{i}_UNIQUE\") }}\n"),
+            )
+            .expect("write source");
+            src
+        })
+        .collect();
+
+    // Launch all builds concurrently (each `loft` = a distinct process → PID).
+    let mut children: Vec<_> = srcs
+        .iter()
+        .map(|src| {
+            Command::new(&loft_bin)
+                .arg("--html")
+                .arg(src)
+                .env("LOFT_TIMEOUT", "120")
+                .stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null())
+                .spawn()
+                .expect("spawn loft --html")
+        })
+        .collect();
+
+    let mut fails: Vec<String> = Vec::new();
+    for (i, child) in children.iter_mut().enumerate() {
+        let status = child.wait().expect("wait for build");
+        if !status.success() {
+            fails.push(format!("prog_{i}: build exited {:?}", status.code()));
+        }
+    }
+
+    // Each page's embedded wasm must carry ITS OWN marker and no sibling's.
+    for i in 0..N {
+        let page = dir.join(".loft").join(format!("prog_{i}.html"));
+        let Ok(html) = std::fs::read_to_string(&page) else {
+            fails.push(format!("prog_{i}: no page emitted"));
+            continue;
+        };
+        let Some(b64) = html
+            .split("const wasmB64=\"")
+            .nth(1)
+            .and_then(|s| s.split('"').next())
+        else {
+            fails.push(format!("prog_{i}: no wasm in page"));
+            continue;
+        };
+        let wasm = base64_decode_standard(b64).unwrap_or_default();
+        let hay = String::from_utf8_lossy(&wasm);
+        if !hay.contains(&format!("MARKER_{i}_UNIQUE")) {
+            fails.push(format!("prog_{i}: missing own marker (build corrupted)"));
+        }
+        for j in 0..N {
+            if j != i && hay.contains(&format!("MARKER_{j}_UNIQUE")) {
+                fails.push(format!("prog_{i}: CONTAMINATED with prog_{j}'s program"));
+            }
+        }
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
+    assert!(
+        fails.is_empty(),
+        "parallel --html builds raced ({} issue(s)):\n{}",
+        fails.len(),
+        fails.join("\n")
+    );
 }
 
 // ── WASM library CI gate ─────────────────────────────────────────────────────

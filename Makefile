@@ -159,7 +159,16 @@ install-artifacts: check-targets all
 	# it here and the installed `libloft.rlib` lacks `native_call`, so every
 	# `--native` run of a library with a `vector`/struct-returning (or -taking)
 	# `#native` fn fails to compile with `E0433: cannot find native_call in loft`.
-	cargo build --release --lib --no-default-features --features mmap,random,threading,native-extensions --target-dir target/install-lib
+	# `registry` + `remote-store` are BOTH in the crate's `default` features, so
+	# omitting them here made the installed native runtime diverge from a normal
+	# build: `store_load_url*` (registry-gated `load_url`, src/database/allocation.rs)
+	# and the sibling remote/URL store loaders (remote-store-gated) then
+	# `--interpret`-accept but `--native`-REJECT with `no method load_url` on the
+	# stable toolchain (reported by a consumer on 2026.7.1).  Both pull only
+	# `ureq` (+ archive/crypto for registry) and are dead-stripped from any
+	# `--native` binary that doesn't call them, so bundling them is free for
+	# programs that don't fetch stores.
+	cargo build --release --lib --no-default-features --features mmap,random,threading,native-extensions,registry,remote-store --target-dir target/install-lib
 	# E0514 guard — cargo's deps/ accumulates a `libloft_ffi-<hash>.rlib` per rustc
 	# version across builds; after a `rustup update` the OLD one lingers beside the
 	# freshly-built one.  The install `cp`s ALL of them into the shared deps/, and
