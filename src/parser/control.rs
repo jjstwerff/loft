@@ -742,8 +742,7 @@ impl Parser {
         // tail that views an OUTER local (`a = { base }`, `base` defined before
         // the block) is a genuine borrow the consumer keeps — the block does not
         // define it, so `block_defines_var` is false and it is left alone.
-        if crate::use_analysis::move_block_return()
-            && !self.first_pass
+        if !self.first_pass
             && context != "return from block"
             && let Type::Reference(td, ls) = t.base()
             && ls.iter().any(|&v| Self::block_defines_var(l, v))

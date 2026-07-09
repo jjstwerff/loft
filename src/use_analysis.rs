@@ -1023,21 +1023,6 @@ pub fn env_tier() -> u8 {
     tier
 }
 
-/// @PLN85 move-on-block-return (`block-return-move.md`).
-///
-/// An inline block whose tail is a FRESH block-local owned struct
-/// (`x = { z = T{…}; z }`) is delivered as OWNED — the LHS *adopts* a
-/// materialised copy and frees it once — instead of borrowing it (`x["z"]`),
-/// which leaked and, via slot reuse with a still-live LHS, corrupted (`a` read
-/// `b`'s value).  **Default ON** (mirrors the shipped `ownership_of` oracle);
-/// the whole suite is green with it enabled (2721/2721).  `LOFT_BLOCK_MOVE=0`
-/// restores the legacy borrow path for fallback / bisection — retired with the
-/// gate in Step 6 once a burn-in cycle confirms it stays the sole path.
-#[must_use]
-pub fn move_block_return() -> bool {
-    std::env::var("LOFT_BLOCK_MOVE").map_or(true, |v| v != "0")
-}
-
 /// Public, test-facing entry: the verdicts for one function by its def number, at
 /// the env-selected tier (Tier 0 unless `LOFT_ELIDE_T1` is set).
 #[must_use]

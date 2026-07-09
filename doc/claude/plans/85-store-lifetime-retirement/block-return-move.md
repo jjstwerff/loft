@@ -5,15 +5,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN85 residual cluster — move-on-block-return
 
-**Status: FIXED, default-on (2026-07-09).** An inline block that returns a
+**Status: DONE / CLOSED (2026-07-09).** An inline block that returns a
 locally-allocated struct — `x = { z = P{…}; z }` — **borrowed** instead of
 **moving**, violating ownership invariants #2 (*move on return*) and #1 (*single
 owner*): it leaked and, via slot reuse with a still-live consumer, corrupted
-(`a` read `b`'s value). Fixed via the oracle/switch migration below (Steps 0–5
-done); `move_block_return` defaults ON, full suite 2721/2721 both switch states,
-regression `tests/scripts/85-block-return-move.loft`. **Remaining:** Step 6
-(retire the off-switch after burn-in) and the separate `p9` write+read residual.
+(`a` read `b`'s value). Fixed via the oracle/switch migration below — **all 6
+steps done**: the fix is now UNCONDITIONAL (switch deleted, Step 6), full suite
+**2721/2721** on both backends, regression `tests/scripts/85-block-return-move.loft`.
 Surfaced by @PLN47 (`f#read as Struct`).
+
+**Separate residual split out — `p9`** (NOT block-return-move): `f += struct`
+then `f#read as struct` leaks the read buffer on **interp only** (native clean),
+struct-specific. Root-caused to an interp slot-reuse bug — the read result var
+`q` reuses the write `_wf` temp's stack slot; at the free site `q`'s slot holds
+`_wf`'s stale (freed) DbRef `#5` rather than the read record `#2` the `PutRef`
+wrote, so the free no-ops on the dead store and `#2` leaks (needs runtime
+step-debugging; a naive write-path copy-skip CORRUPTS the write). A write-path +
+slot-allocator (SLOTS.md) cluster, tracked as its own item — see § below.
 
 ## The defect, precisely
 
@@ -149,11 +157,28 @@ the suite leak-gate catches p1). It passes with the fix and fails under `=0`
 limitation" → retired (read-only reads never had the bug; the write+read leak is
 `p9`, a separate residual).
 
-### Step 6 — burn-in + delete (remaining)
-The off-switch is retained one burn-in cycle (bisection safety), then delete the
-legacy borrow path + the switch (single owner, one code path). Also owed: fix
-the SEPARATE `p9` write+read struct residual (interp-only write-temp slot leak)
-and close both on the @PLN85 issue.
+### Step 6 — delete the switch ✅ DONE
+Full suite green on BOTH switch states (2721/2721) was sufficient burn-in
+evidence, so the gate was retired immediately: `block_result`'s branch is now
+unconditional and `use_analysis::move_block_return` is deleted — single owner,
+one code path. Suite re-run green (2721/2721) with the switch gone. Regression
+`tests/scripts/85-block-return-move.loft` still passes both backends.
+
+## `p9` — separate write+read struct residual (OPEN, its own cluster)
+
+`f += s; f#read as S` in one program leaks the read buffer on **interp only**
+(native clean), struct-specific, pre-existing. **Not** block-return-move: the
+read block-return in isolation is clean. Root cause (bytecode + free trace,
+cache-off): the read result `q` reuses the write `_wf` temp's stack slot
+`[80,92)`; that slot is NOT re-`InitRef`-ed at read-scope entry, so it enters
+holding `_wf`'s freed DbRef `#5`. The read emits `PutRef(q, #2)` then
+`FreeRef(q)`, but at runtime the free reclaims `#5` (already-freed → no-op) while
+the read record `#2` leaks — i.e. the `PutRef` value does not survive to the
+free on a reused-but-uninitialised slot. Needs runtime step-debugging (loft
+debugger); a naive write-path copy-skip CORRUPTS the write (`OpCreateStack` on a
+struct var mis-serialises), so it is deferred as its own write-path +
+slot-allocator ([SLOTS.md](../../SLOTS.md)) investigation. Probe:
+[`probes/block-return-move/p9-writeread-slot-leak.loft`](probes/block-return-move/p9-writeread-slot-leak.loft).
 
 ## Acceptance
 
