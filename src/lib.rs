@@ -138,6 +138,10 @@ pub mod wasm_debug;
 #[cfg(feature = "native-extensions")]
 pub use extensions::native_call;
 #[cfg(feature = "registry")]
+// @PLN53 F1 — raw-source fuzz oracle; available under cargo-fuzz (feature) and
+// under `cargo test` (the seed-corpus replay).
+#[cfg(any(test, feature = "fuzzing"))]
+pub mod fuzz_oracle;
 pub mod install;
 pub mod introspect;
 pub mod libscan;

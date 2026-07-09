@@ -279,7 +279,13 @@ impl Parser {
         parent_tp: &mut Type,
     ) -> Type {
         if self.lexer.has_token("!") {
+            let operand_pos = self.lexer.peek_pos().clone();
             let t = self.parse_part(var_tp, val, parent_tp);
+            // A unary prefix operator must validate its operand like a binary
+            // one does, else an undefined name (a pass-1 placeholder Var with no
+            // slot) reaches codegen and panics instead of a clean "Unknown
+            // variable" diagnostic (@PLN53 F1-1).
+            self.known_var_or_type(val, &operand_pos);
             // #253: `!x` on a non-boolean reads as "is x null?" — the null
             // sentinel is in-band (LOFT.md "!value asymmetry").  On a `not null`
             // operand the value can never BE the sentinel, so `!x` is *always
@@ -310,11 +316,15 @@ impl Parser {
             let arg = val.clone();
             self.call_op(val, "Not", &[arg], &[t])
         } else if self.lexer.has_token("~") {
+            let operand_pos = self.lexer.peek_pos().clone();
             let t = self.parse_part(var_tp, val, parent_tp);
+            self.known_var_or_type(val, &operand_pos); // @PLN53 F1-1 (see `!` above)
             let arg = val.clone();
             self.call_op(val, "BitNot", &[arg], &[t])
         } else if self.lexer.has_token("-") {
+            let operand_pos = self.lexer.peek_pos().clone();
             let t = self.parse_part(var_tp, val, parent_tp);
+            self.known_var_or_type(val, &operand_pos); // @PLN53 F1-1 (see `!` above)
             let arg = val.clone();
             self.call_op(val, "Min", &[arg], &[t])
         } else if self.lexer.has_token("(") {

@@ -36,6 +36,10 @@ wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
                 "dep:console_error_panic_hook"]
 wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
 png          = ["dep:png"]
+# @PLN53 F1 — expose the raw-source fuzz oracle (src/fuzz_oracle.rs) for the
+# cargo-fuzz `program_source` target. Also compiled under `cfg(test)`, so the
+# seed-corpus replay runs without this flag.
+fuzzing      = []
 mmap         = ["dep:mmap-storage"]
 random            = ["dep:rand_core", "dep:rand_pcg"]
 native-extensions = ["dep:libloading"]

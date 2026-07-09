@@ -13,6 +13,8 @@ arbitrary = { version = "1", features = ["derive"] }
 
 [dependencies.loft]
 path = ".."
+# @PLN53 F1 — exposes `loft::fuzz_oracle` for the `program_source` target.
+features = ["fuzzing"]
 
 # Keep loft's internal debug validators (Store::fl_validate + the record-count
 # consistency assert) live in the fuzz build — a free in-tree oracle on top of
@@ -38,6 +40,13 @@ bench = false
 [[bin]]
 name = "program_ownership"
 path = "fuzz_targets/program_ownership.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "program_source"
+path = "fuzz_targets/program_source.rs"
 test = false
 doc = false
 bench = false
