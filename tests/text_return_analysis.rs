@@ -63,19 +63,33 @@ fn text_return_analysis_matches_corpus() {
         expected.len()
     );
 
+    // LOFT_TRA_DUMP names a FILE the compiler appends verdicts to — a
+    // deterministic channel (loft's stderr races with `process::exit` and
+    // truncates unreliably).
+    let dump = std::env::temp_dir().join(format!("loft_tra_{}.txt", std::process::id()));
+    let _ = std::fs::remove_file(&dump);
     let out = Command::new(loft_bin())
-        .env("LOFT_TRA_DUMP", "1")
+        .env("LOFT_TRA_DUMP", &dump)
+        // Force a fresh parse: the program cache is content-keyed, so a warm hit
+        // would skip the parse (and the dump).
+        .env("LOFT_NO_CACHE", "1")
         .arg("--interpret")
         .arg(&corpus)
         .current_dir(workspace_root())
         .output()
         .expect("invoke loft binary");
-    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        out.status.success(),
+        "corpus should run cleanly; stderr: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let dumped = std::fs::read_to_string(&dump).unwrap_or_default();
+    let _ = std::fs::remove_file(&dump);
 
     // Collect `TRA <fn> => <verdict>` lines, stripping a leading `n_` so generic
     // monomorphs (n_f_*) match the source name.
     let mut actual: std::collections::HashMap<String, String> = std::collections::HashMap::new();
-    for line in stderr.lines() {
+    for line in dumped.lines() {
         if let Some(rest) = line.strip_prefix("TRA ") {
             if let Some((fun, verdict)) = rest.split_once(" => ") {
                 let fun = fun.strip_prefix("n_").unwrap_or(fun);
@@ -94,7 +108,7 @@ fn text_return_analysis_matches_corpus() {
     }
     assert!(
         failures.is_empty(),
-        "text-return verdicts diverged from corpus:\n  {}\n--- full TRA dump ---\n{stderr}",
+        "text-return verdicts diverged from corpus:\n  {}\n--- full TRA dump ---\n{dumped}",
         failures.join("\n  ")
     );
 }

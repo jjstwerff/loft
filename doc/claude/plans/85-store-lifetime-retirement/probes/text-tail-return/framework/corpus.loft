@@ -25,6 +25,7 @@ struct U { name: text, age: integer }
 struct Pair { a: text, b: integer }
 struct A { v: (text, text) }
 struct D { ts: vector<text> }
+struct G { fmt: fn(integer) -> text }
 
 // ── Fixed by 2d / 3a / 3b / 3c (Owned → promote) ──────────────────────────
 
@@ -93,6 +94,39 @@ fn f_generic_concat<T: Printable>(x: T) -> text { x.to_text() + "!" }
 // VERDICT: Plain
 fn f_local_dropped() -> text { u = U { name: "Al", age: 7 }; j = u.to_json(); "kept" }
 
+// ── Extension: tuple-of-text return + fn-ref call ─────────────────────────
+
+struct Tri { id: integer }
+fn tri_text(self: Tri) -> text { return "item-{self.id}"; }
+
+// Tuple constructor whose text elements deliver owned text (p329/p330_pair).
+// VERDICT: Owned:TupleElement
+fn f_tuple_ctor<T: Printable>(x: T) -> (text, text, text) { return (x.to_text(), "middle", x.to_text()); }
+
+// A generic 2-tuple whose first element delivers owned text (p330_pair).
+// (Generic like the real harness cases: a RESOLVED tuple return presents as a
+// Reference(__tuple<…>) rather than Type::Tuple — a known extension point for
+// non-generic tuple returns, not a current harness leaker.)
+// VERDICT: Owned:TupleElement
+fn f_tuple_pair<T: Printable>(x: T) -> (text, text) { return (x.to_text(), "sentinel"); }
+
+// A generic tuple of ONLY literals — no owned text element, nothing to promote.
+// VERDICT: Plain
+fn f_tuple_literals<T: Printable>(x: T) -> (text, text) { return ("a", "b"); }
+
+// p330_take_first — chains `.0` off a LOCAL tuple built by a call: that is the
+// already-handled ViewOfLocal shape, NOT a tuple-constructor return.
+// VERDICT: Owned:ViewOfLocal
+fn f_tuple_view() -> text { r = f_tuple_pair(1); r.0 }
+
+// fn-ref call in tail position (p227 local).
+// VERDICT: Owned:FnRefCall
+fn f_fnref_local() -> text { g: fn(integer) -> text = fn(n: integer) -> text { "v: {n}" }; g(42) }
+
+// fn-ref call through a struct field (p227 struct-field).
+// VERDICT: Owned:FnRefCall
+fn f_fnref_field() -> text { h = G { fmt: fn(n: integer) -> text { "v: {n}" } }; h.fmt(42) }
+
 fn main() {
     print(f_native_tail());
     print(f_view_tuple());
@@ -103,4 +137,13 @@ fn main() {
     print(f_forward_arg("y"));
     print(f_generic_concat(42));
     print(f_local_dropped());
+    t = f_tuple_ctor(42);
+    print(t.0);
+    pr = f_tuple_pair(1);
+    print(pr.0);
+    lit = f_tuple_literals(1);
+    print(lit.0);
+    print(f_tuple_view());
+    print(f_fnref_local());
+    print(f_fnref_field());
 }

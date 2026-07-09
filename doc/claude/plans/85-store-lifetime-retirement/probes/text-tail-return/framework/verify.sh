@@ -16,10 +16,15 @@ expected=$(awk '
   /^fn [a-zA-Z_]/ && v!="" { name=$2; sub(/[<(].*/,"",name); print name, v; v="" }
 ' "$CORPUS" | sort)
 
-# actual: strip a leading n_ so generic monomorphs (n_f_*) match the source name.
-actual=$(LOFT_TRA_DUMP=1 "$BIN" "$CORPUS" 2>&1 >/dev/null \
-  | sed -n 's/^TRA \(.*\) => \(.*\)$/\1 \2/p' \
-  | sed 's/^n_//' | sort -u)
+# actual: LOFT_TRA_DUMP names a FILE the compiler appends verdicts to (a
+# deterministic channel — loft's stderr races with process::exit).  Strip a
+# leading n_ so generic monomorphs (n_f_*) match the source name.
+# LOFT_NO_CACHE forces a fresh parse each run — the program cache is
+# content-keyed, so a warm hit would skip the parse (and the dump).
+dump=$(mktemp); : >"$dump"
+LOFT_NO_CACHE=1 LOFT_TRA_DUMP="$dump" "$BIN" "$CORPUS" >/dev/null 2>&1
+actual=$(sed -n 's/^TRA \(.*\) => \(.*\)$/\1 \2/p' "$dump" | sed 's/^n_//' | sort -u)
+rm -f "$dump"
 
 pass=0; fail=0
 printf "%-22s %-20s %-20s %s\n" FN EXPECTED ACTUAL RESULT

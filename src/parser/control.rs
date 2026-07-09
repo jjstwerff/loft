@@ -55,6 +55,14 @@ pub(crate) enum OwnedVia {
     /// A built-up local text — accumulator / interpolation / literal-concat /
     /// rebind — delivered as the tail var; `text_return` already promotes these.
     BuiltLocal,
+    /// A TUPLE-constructor return (`return (x.to_text(), "mid", …)`) at least
+    /// one of whose text elements delivers owned text — p329/p330_pair.  Needs
+    /// per-element `&text` buffer promotion (the `__ret_text_N` hoist).
+    TupleElement,
+    /// A fn-REF call in tail position (`f(42)`, `g.fmt(42)` — `Value::CallRef`)
+    /// delivering owned text — p227.  Promotable, but the fn-ref dispatch ABI
+    /// is @P387-adaptive, so the wiring must keep it uniform.
+    FnRefCall,
 }
 
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -75,6 +83,8 @@ impl TextReturn {
             TextReturn::Owned(OwnedVia::ViewOfLocal) => "Owned:ViewOfLocal",
             TextReturn::Owned(OwnedVia::IfMatchArm) => "Owned:IfMatchArm",
             TextReturn::Owned(OwnedVia::BuiltLocal) => "Owned:BuiltLocal",
+            TextReturn::Owned(OwnedVia::TupleElement) => "Owned:TupleElement",
+            TextReturn::Owned(OwnedVia::FnRefCall) => "Owned:FnRefCall",
             TextReturn::Borrow(BorrowVia::Argument) => "Borrow:Argument",
             TextReturn::Borrow(BorrowVia::ForwardArg) => "Borrow:ForwardArg",
             TextReturn::Plain => "Plain",
@@ -675,13 +685,23 @@ impl Parser {
         // pass for a text/`text?` return tail.
         if !self.first_pass
             && context == "return from block"
-            && matches!(result.base(), Type::Text(_))
-            && std::env::var("LOFT_TRA_DUMP").is_ok()
+            && matches!(result.base(), Type::Text(_) | Type::Tuple(_))
+            && let Ok(path) = std::env::var("LOFT_TRA_DUMP")
             && let Some(tail) = l.last()
         {
             let verdict = self.classify_text_return(tail, &l);
             let fname = self.data.def(self.context).original_name();
-            eprintln!("TRA {fname} => {}", verdict.label());
+            // Append to the dump FILE (open+write+close per line, flushed on
+            // drop) — a deterministic channel: loft's `eprintln!` stderr races
+            // with `process::exit` and truncates unreliably.
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = writeln!(f, "TRA {fname} => {}", verdict.label());
+            }
         }
         // @PLN85 attempt 2d (text-tail-return-leak.md) — a text-returning fn whose
         // TAIL is a bare NATIVE text-dest CALL delivers a fresh owned text with no
@@ -5161,9 +5181,35 @@ impl Parser {
                 }
             }
             Value::Call(op, _) => self.classify_text_call(*op, tail, block),
+            // A tuple-element view (`r.0` — `Value::TupleGet`): owned iff the
+            // tuple LOCAL was built here (freed at scope exit → its text is
+            // copied out), a borrow iff it is a caller-owned argument.  Same
+            // rule as the `OpGetText` field view (3a).
+            Value::TupleGet(root, _) => {
+                if self.var_built_in_block(block, *root) {
+                    TextReturn::Owned(OwnedVia::ViewOfLocal)
+                } else {
+                    TextReturn::Borrow(BorrowVia::Argument)
+                }
+            }
+            // A fn-REF call (`f(42)`, `g.fmt(42)`) returning text delivers a
+            // fresh owned text (p227) — promotable, with the adaptive fn-ref ABI.
+            Value::CallRef(_, _) => TextReturn::Owned(OwnedVia::FnRefCall),
             Value::If(_, then, els) => {
                 if self.arm_delivers_owned(then, block) || self.arm_delivers_owned(els, block) {
                     TextReturn::Owned(OwnedVia::IfMatchArm)
+                } else {
+                    TextReturn::Plain
+                }
+            }
+            // A TUPLE-constructor return: owned iff at least one text element
+            // delivers owned text (the others are literals / arg-borrows).
+            Value::Tuple(elems) => {
+                if elems
+                    .iter()
+                    .any(|e| matches!(self.classify_text_return(e, block), TextReturn::Owned(_)))
+                {
+                    TextReturn::Owned(OwnedVia::TupleElement)
                 } else {
                     TextReturn::Plain
                 }
