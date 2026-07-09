@@ -50,6 +50,18 @@ unsafe extern "C" {
     // `loft_host_print`.  Used by `Stores::host_output_native`'s browser
     // branch; the page routes it to `globalThis.loftOutput(msg)`.
     pub(crate) safe fn loft_host_output(ptr: *const u8, len: usize);
+    // Synchronous-from-loft binary HTTP GET (the browser arm of `net::fetch_bytes`,
+    // used by `store_load_url*`).  A browser `fetch()` is async, but this import
+    // is in the wasm-opt `--asyncify` allowlist (`asyncify-imports@…loft_io.loft_host_http_get`),
+    // so calling it UNWINDS the whole wasm stack back to the JS event loop; the
+    // shell's `AsyncifyCtrl` runs `await fetch(url).arrayBuffer()`, then REWINDS
+    // with the result — so `store_load_url_trusted(r,url) -> boolean` keeps its
+    // synchronous signature and never blocks the page (the same async→sync bridge
+    // `loft_web.ws_yield` proves).  Returns the byte length, or `usize::MAX` on a
+    // network / non-2xx error.  Then `loft_host_http_get_copy` fills the buffer —
+    // the `len`-then-`copy` shape `loft_host_input_len`/`copy` already proves.
+    pub(crate) safe fn loft_host_http_get(url_ptr: *const u8, url_len: usize) -> usize;
+    pub(crate) safe fn loft_host_http_get_copy(ptr: *mut u8);
 }
 
 #[macro_use]
@@ -73,6 +85,13 @@ pub mod json;
 pub mod keys;
 mod lexer;
 pub mod native;
+// `net::fetch_bytes` (behind `store_load_url*`) exists exactly where `load_url`
+// does: a native `registry` build, or the browser (`--html`) target.
+#[cfg(any(
+    feature = "registry",
+    all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
+))]
+pub(crate) mod net;
 pub mod ownership_cfg;
 #[cfg(feature = "remote-store")]
 pub mod paged_reader;

@@ -5942,7 +5942,12 @@ fn main() {
                 //     `WebSocket.onmessage` can deliver, then resumes.  Naming
                 //     it here even when no program yields on it is harmless (the
                 //     import just isn't present in the wasm).
-                "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers,loft_web.ws_yield",
+                //   loft_io.loft_host_http_get — the HTTP frame-yield (@PLN97):
+                //     `store_load_url_trusted` calls this browser-only import,
+                //     which unwinds to the event loop so `await fetch(url)` can
+                //     complete, then resumes with the bytes — the synchronous
+                //     loft API over an async fetch, without blocking the page.
+                "--pass-arg=asyncify-imports@loft_gl.loft_gl_swap_buffers,loft_web.ws_yield,loft_io.loft_host_http_get",
             ])
             .arg("-o")
             .arg(&opt_path)
@@ -6057,6 +6062,9 @@ fn main() {
                 s
             }
         };
+        // The asyncify async→sync bridge (AsyncifyCtrl), shared by the GL and the
+        // headless templates.  gl_js references it, so it is emitted FIRST.
+        let asyncify_js = include_str!("../doc/loft-asyncify.js");
         let gl_js = include_str!("../doc/loft-gl-wasm.js");
         // @lib_plan-29 W2: concatenate every used library's
         // `[wasm.bridge].host_js` file into the HTML preamble.  Each
@@ -6101,11 +6109,14 @@ fn main() {
 <style>body{{margin:0;font:14px/1.5 monospace;background:#111;color:#0f0}}pre{{margin:0;padding:1rem;white-space:pre-wrap;word-break:break-word}}</style>
 </head><body><pre id="out"></pre>
 <script>
+{asyncify_js}
 // Minimal engine-less loft page: a small wasm + this tiny shim.  No WebGL2, no
-// asyncify, no canvas — only `loft_io` (text out).  JS owns the page; loft is a
-// callable module (loft_start builds fresh Stores each call, so JS can invoke
-// it per request).  A program that uses graphics/audio/a frame loop gets the
-// full engine page instead.
+// canvas — only `loft_io` (text out + the async `store_load_url_trusted` fetch).
+// Asyncify IS driven here (via AsyncifyCtrl above) so a synchronous loft call can
+// suspend for an async `fetch()` without freezing the page.  JS owns the page;
+// loft is a callable module (loft_start builds fresh Stores each call, so JS can
+// invoke it per request).  A program that uses graphics/audio/a frame loop gets
+// the full engine page instead.
 const wasmB64="{wasm_b64}";
 const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
 const out=document.getElementById('out');
@@ -6122,16 +6133,51 @@ const enc=new TextEncoder();
 const inQ=[];
 if(globalThis.loftInput!=null)inQ.push(enc.encode(String(globalThis.loftInput)));
 globalThis.loftPush=(m)=>{{inQ.push(enc.encode(String(m)));}};
+// @PLN97: asyncify controller (Step 2 sets `.ac`) + the raw bytes of the last
+// fetch, stashed between the unwind and rewind halves of loft_host_http_get.
+const ctrl={{ac:null,httpBytes:null}};
 const imports={{loft_io:{{
   loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
   loft_host_input_len:()=>inQ.length?inQ[0].length:0,
   loft_host_input_copy:(ptr)=>{{const b=inQ.shift();if(b)new Uint8Array(mem.buffer,ptr,b.length).set(b);}},
   loft_host_output:(ptr,len)=>{{const m=dec.decode(new Uint8Array(mem.buffer,ptr,len));
-    if(globalThis.loftOutput)globalThis.loftOutput(m);else console.log("[loft:out]",m);}}
+    if(globalThis.loftOutput)globalThis.loftOutput(m);else console.log("[loft:out]",m);}},
+  // @PLN97 store_load_url_trusted: async fetch() bridged to a SYNCHRONOUS loft
+  // call via asyncify.  This suspend import is invoked TWICE per fetch:
+  //  (1) NORMAL state — first call: start fetch(url), then ac.suspend() unwinds
+  //      the whole wasm stack back to the JS event loop (return value ignored).
+  //  (2) REWINDING state (===2) — after the fetch resolved and resume() replayed
+  //      the stack to this yield: ac.suspend() stop_rewinds, and we RETURN the
+  //      byte length (or 0xFFFFFFFF on error → net::fetch_bytes maps it to Err).
+  // The bytes are copied out separately by loft_host_http_get_copy.  See
+  // plans/97-layout-contract/WASM_STORE_LOAD_URL.md.
+  loft_host_http_get:(ptr,len)=>{{
+    if(ctrl.ac&&ctrl.ac.exports.asyncify_get_state()===2){{
+      ctrl.ac.suspend();
+      return ctrl.httpBytes?ctrl.httpBytes.length:0xFFFFFFFF;
+    }}
+    const url=dec.decode(new Uint8Array(mem.buffer,ptr,len));
+    ctrl.httpBytes=null;
+    fetch(url).then(async r=>{{ctrl.httpBytes=r.ok?new Uint8Array(await r.arrayBuffer()):null;ctrl.ac.resume('loft_start');}})
+              .catch(()=>{{ctrl.httpBytes=null;ctrl.ac.resume('loft_start');}});
+    if(ctrl.ac)ctrl.ac.suspend();
+    return 0;
+  }},
+  loft_host_http_get_copy:(ptr)=>{{if(ctrl.httpBytes)new Uint8Array(mem.buffer,ptr,ctrl.httpBytes.length).set(ctrl.httpBytes);}}
 }}}};
 WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
   mem=r.instance.exports.memory;
-  r.instance.exports.loft_start();
+  // If the wasm was asyncify-instrumented (wasm-opt --asyncify present), drive it
+  // through AsyncifyCtrl so store_load_url_trusted can suspend for an async
+  // fetch().  Progress after the first suspend is EVENT-driven: each
+  // loft_host_http_get .then() calls ctrl.ac.resume('loft_start') when its
+  // response arrives (no render pump needed — a headless page has no rAF loop).
+  if(r.instance.exports.asyncify_start_unwind){{
+    ctrl.ac=new AsyncifyCtrl(r.instance);
+    ctrl.ac.start('loft_start');
+  }}else{{
+    r.instance.exports.loft_start();
+  }}
 }}).catch(e=>{{out.textContent+="\n[loft] "+e;}});
 </script></body></html>"#
             )
@@ -6144,6 +6190,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
 <canvas id="c" tabindex="0" style="display:none"></canvas>
 <pre id="out"></pre>
 <script>
+{asyncify_js}
 {gl_js}
 {host_js_extensions}
 const wasmB64="{wasm_b64}";

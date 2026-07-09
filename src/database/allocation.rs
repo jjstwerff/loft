@@ -2402,9 +2402,18 @@ impl Stores {
     /// `Store::from_bytes` runs `validate_structure`, so a corrupt/malformed
     /// image is rejected (`false`), never adopted — the heap invariant holds
     /// regardless.  Use `load_url_verified` when the source is untrusted.
-    #[cfg(feature = "registry")]
+    ///
+    /// Available wherever [`crate::net::fetch_bytes`] can fetch: any native build
+    /// with the `registry` client, AND the browser (`--html`) target, where the
+    /// fetch is bridged to JS `fetch()` via the asyncify host import — so the
+    /// loft-visible `store_load_url_trusted(r, url) -> boolean` is identical on
+    /// both, per the same-internal-API requirement.
+    #[cfg(any(
+        feature = "registry",
+        all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
+    ))]
     pub fn load_url(&mut self, slot: u16, url: &str) -> bool {
-        let bytes = match crate::registry_index::http_get_bytes(url) {
+        let bytes = match crate::net::fetch_bytes(url) {
             Ok(b) => b,
             Err(e) => {
                 eprintln!("store loader: {url} — fetch failed: {e}");

@@ -1,0 +1,12 @@
+// @PLN97 harness fixture: write a known store IMAGE the wasm test then URL-loads.
+struct Rec { id: integer not null, val: integer not null }
+fn main() {
+  path = env_variable("HARNESS_STORE_PATH");
+  h: hash<Rec[id]> = [];
+  h += Rec { id: 42, val: 4200 };
+  h += Rec { id: 7,  val: 700 };
+  h += Rec { id: 13, val: 1300 };
+  ok = store_persist_bind(h, path);
+  if !ok { println("FAIL write"); return }
+  println("wrote keys=42,7,13");
+}

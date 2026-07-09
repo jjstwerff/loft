@@ -133,6 +133,11 @@ const getMem = () => (instance ? instance.exports.memory : { buffer: new ArrayBu
 // GL, but the import section may still declare loft_gl entries).
 const imports = {
   loft_io: {
+    // @PLN97: store_load_url_trusted's fetch import is now in every --html
+    // wasm; a WS repro never fetches, so stub to the error sentinel so the
+    // module links (an absent import would LinkError at instantiate).
+    loft_host_http_get: () => 0xffffffff,
+    loft_host_http_get_copy: () => {},
     loft_host_print: (ptr, len) => {
       if (instance) {
         const bytes = new Uint8Array(getMem().buffer, ptr, len);

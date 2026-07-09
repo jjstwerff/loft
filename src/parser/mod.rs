@@ -7043,14 +7043,13 @@ impl Parser {
         }
         let start_dir = if p.is_dir() {
             p.to_path_buf()
-        } else if let Some(parent) = p.parent() {
+        } else {
+            let parent = p.parent()?;
             if parent.as_os_str().is_empty() {
                 std::env::current_dir().ok()?
             } else {
                 parent.to_path_buf()
             }
-        } else {
-            return None;
         };
         // Canonicalize so the walk-up doesn't terminate prematurely
         // on relative `./` prefixes that loop on themselves.
