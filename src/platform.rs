@@ -149,6 +149,28 @@ pub fn scratch_dir() -> std::path::PathBuf {
     dir
 }
 
+/// A unique per-PROCESS build-scratch directory under [`scratch_dir`], holding
+/// one compilation's intermediates (the generated `.rs`, the rustc `.wasm`
+/// output + its `*.rcgu.o` objects, bridge rlibs).
+///
+/// Each `loft` invocation is its own OS process, so keying the directory on the
+/// PID isolates concurrent compilations: nextest runs every test in a separate
+/// process, and a build script can emit many pages at once. Before this, the
+/// `--html` / `--native-wasm` drivers wrote a *shared* `scratch/loft_html.rs`
+/// and `-o scratch/loft_html.wasm`, so two parallel runs raced two ways — one
+/// rustc read the other's generated source (a page silently embedded the wrong
+/// program), and two `rust-lld`s truncated each other's output mid-link
+/// (`signal: 7`, SIGBUS). This is the same isolation the `--native` binary path
+/// already applies via `loft_native_{pid}`. PID (not a random token) suffices
+/// because the racing unit is the *process*, and it keeps the path predictable
+/// for `LOFT_KEEP_NATIVE_RS` inspection.
+#[must_use]
+pub fn build_scratch_dir(tag: &str) -> std::path::PathBuf {
+    let dir = scratch_dir().join(format!("loft_{tag}_{}", std::process::id()));
+    let _ = std::fs::create_dir_all(&dir);
+    dir
+}
+
 /// Bytes currently available on the filesystem backing `path`.
 ///
 /// Uses `df -P -k` (POSIX output → guaranteed single, unwrapped data row) and
