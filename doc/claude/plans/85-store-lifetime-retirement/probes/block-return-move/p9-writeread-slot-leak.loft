@@ -1,0 +1,11 @@
+// SEPARATE RESIDUAL (not block-return-move): `f += struct` then `f#read as
+// struct` in one program leaks the WRITE's copy-temp on INTERP only (native
+// clean) via slot reuse when a struct read follows. Pre-existing; struct-
+// specific (scalar write+read is clean). Documented for a follow-up cluster.
+#cwd
+struct P { x: integer, y: integer }
+fn main() {
+  { f = file("p9.bin"); f#format = LittleEndian; f.set_file_size(0); p = P{x:5,y:6}; f += p; f.sync(); }
+  { f = file("p9.bin"); f#format = LittleEndian; q = f#read as P; println("{q.x}"); }
+  delete("p9.bin");
+}

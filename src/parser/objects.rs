@@ -845,9 +845,8 @@ impl Parser {
                 // slot must hold a real record (OpDatabase) so OpReadFile's
                 // per-field write lands in storage, not the null-sentinel slot
                 // (store u16::MAX → panic).  The block's value (`t`) is
-                // `PutRef`-aliased into the assignment LHS, which then owns and
-                // frees the store, so the temp is skip_free (freeing it too was
-                // a double-free that corrupted the free-list).
+                // `PutRef`-aliased into the assignment LHS (which is empty-dep,
+                // i.e. it ADOPTS the store).
                 let t = self.vars.unique("read", &read_type, &mut self.lexer);
                 ls.push(v_set(t, Value::Null));
                 ls.push(self.cl("OpDatabase", &[Value::Var(t), Value::Int(i32::from(db_tp))]));
