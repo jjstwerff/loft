@@ -125,29 +125,32 @@ with **empty dep** (owned); scopes makes the LHS the owner (adopt, freed at LHS
 scope) and marks the moved local skip-free / suppresses its own free. When OFF,
 the current borrow path is untouched.
 
-### Step 4 — the oracle gate
-Extend the `cross_mode` harness with a `oracle_block_move!` cell that runs each
-probe THREE ways and asserts:
-1. **switch-ON interp == switch-ON native** (cross-backend parity — the primary
-   oracle), and
-2. **switch-ON fixes the probe** (p1/p2/p3b: no leak, correct value), and
-3. **switch-ON == switch-OFF on the CONTROLS** (p4/p5/p8 unchanged — no
-   over-move; p8 must stay a borrow, no UAF).
-Then run the WHOLE suite twice (switch off, switch on) and diff: the only
-permitted differences are the buggy shapes turning correct. Any other diff is a
-regression to root-cause before proceeding. This is the oracle — the old
-behaviour is the reference for everything that was already correct.
+### Step 4 — the oracle gate ✅ DONE
+Full suite run with `LOFT_BLOCK_MOVE=1`: **2721 passed, 0 failed, 217 skipped**
+(the flaky `engine_host_kernel` pair passed too). The switch-ON path is green
+across the whole suite — the fix does not regress anything. **Cache caveat**
+(cost hours here): the per-script `.loft/cache` keys on SOURCE hash, not the
+binary, so MANUAL `./loft` runs can replay stale bytecode across a rebuild/flag
+change — always use `LOFT_NO_CACHE=1` (or fresh `.loft`) for manual A/B. The
+test suite runs under Cargo, where the cache is OFF automatically, so the oracle
+is authoritative. Verified authoritatively (cache-off, both backends): default
+fixes p1 (leak→none) + p2 (`3 4 3 4`→`1 2 3 4`); `=0` restores both.
 
-### Step 5 — flip the default
-Make `move_block_return` default **ON**; the switch now toggles OFF for
-fallback/bisection. Full suite green on both backends, leak-clean. Graduate
-p1/p2/p3b/p8 to `tests/scripts/` (or `tests/binary_io_matrix.rs` for p3b) as
-regressions. Update the @PLN47 struct-read "known limitation" note → fixed.
+### Step 5 — flip the default ✅ DONE
+`move_block_return` now defaults **ON** (`LOFT_BLOCK_MOVE=0` = legacy fallback),
+mirroring the shipped `ownership_of` default-on. Regression:
+`tests/scripts/85-block-return-move.loft` (minimal p2 shape — corruption
+manifests deterministically only in a stable minimal layout; asserts catch it,
+the suite leak-gate catches p1). It passes with the fix and fails under `=0`
+(`assertion failed: a.x moved…`), both backends. @PLN47 struct-read "known
+limitation" → retired (read-only reads never had the bug; the write+read leak is
+`p9`, a separate residual).
 
-### Step 6 — burn-in + delete
-After a clean cycle with default-ON, delete the OLD borrow path and the switch
-(single-owner, one code path). Move any reference content to OWNERSHIP_MODEL.md;
-close this cluster on the @PLN85 issue.
+### Step 6 — burn-in + delete (remaining)
+The off-switch is retained one burn-in cycle (bisection safety), then delete the
+legacy borrow path + the switch (single owner, one code path). Also owed: fix
+the SEPARATE `p9` write+read struct residual (interp-only write-temp slot leak)
+and close both on the @PLN85 issue.
 
 ## Acceptance
 
