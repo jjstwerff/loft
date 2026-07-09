@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
+// @I90 — Shared utilities & data structures (test/fuzz harness support; @PLN53).
+//
 //! @PLN53 F1 — the mutational raw-source fuzz oracle, reified as a library
 //! function so the code that is FUZZED is the code that is TESTED.
 //!

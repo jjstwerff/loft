@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
+// @I90 — Shared utilities & data structures (test/fuzz harness support; @PLN53).
+//
 //! @PLN53 F2 — keyed-container program generator (F2.1).
 //!
 //! Generates valid-by-construction, self-checking loft programs that exercise
