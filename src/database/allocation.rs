@@ -2338,6 +2338,98 @@ impl Stores {
         true
     }
 
+    /// Adopt an in-memory, already-authenticity-verified byte buffer as the store
+    /// in `slot` — the slice counterpart of [`Stores::load_path`] (a heap copy
+    /// keeping the slot's bookkeeping).  Returns `false` (a clean reject, never a
+    /// misread/crash) when the slot is out of range or the buffer is not a
+    /// well-formed store image (bad signature / too small).  The caller MUST have
+    /// established the bytes' authenticity first — see [`Stores::load_url_verified`].
+    /// @PLN97 arc G Phase 0.
+    pub fn load_bytes(&mut self, slot: u16, bytes: &[u8]) -> bool {
+        let slot_idx = slot as usize;
+        if slot_idx >= self.allocations.len() {
+            return false;
+        }
+        // Preserve the slot's bookkeeping across the swap (mirrors load_path).
+        let preserved = {
+            let s = &self.allocations[slot_idx];
+            (s.known_type, s.free, s.created_at, s.last_op_at, s.pinned)
+        };
+        let mut new_store = match crate::store::Store::from_bytes(bytes) {
+            Some(s) => s,
+            None => return false,
+        };
+        new_store.known_type = preserved.0;
+        new_store.free = preserved.1;
+        new_store.created_at = preserved.2;
+        new_store.last_op_at = preserved.3;
+        new_store.pinned = preserved.4;
+        self.allocations[slot_idx] = new_store;
+        true
+    }
+
+    /// @PLN97 arc G Phase 0 — load a persisted store IMAGE over HTTP(S) from a
+    /// TRUSTED source into `slot`, establishing authenticity BEFORE the bytes are
+    /// adopted: fetch the whole image, verify its SHA-256 against the caller-
+    /// pinned `sha256_hex`, and only on a match adopt it in memory (the bytes
+    /// never touch disk).  A fetch error OR a hash mismatch REFUSES the load
+    /// (returns `false`, adopts nothing) — the same fetch→verify→trust discipline
+    /// the registry install path uses (`registry_index::verify_sha256`), bridged
+    /// onto the store loader.  `url` may be `http(s)://` or `file://`
+    /// (offline / testing).  This is the whole-file counterpart of the paged
+    /// `load_key(s)` / `load_range` loaders; per-page authenticity for the paged
+    /// path is a separate (Merkle-tree) problem, out of Phase 0's scope.
+    #[cfg(feature = "registry")]
+    pub fn load_url_verified(&mut self, slot: u16, url: &str, sha256_hex: &str) -> bool {
+        let bytes = match crate::registry_index::http_get_bytes(url) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("store loader: refusing {url} — fetch failed: {e}");
+                return false;
+            }
+        };
+        if let Err(e) = crate::registry_index::verify_sha256(&bytes, sha256_hex) {
+            eprintln!("store loader: refusing {url} — {e}");
+            return false;
+        }
+        self.load_bytes(slot, &bytes)
+    }
+
+    /// @PLN97 arc G Phase 0 — load a whole store IMAGE over HTTP(S)/`file://` from
+    /// a **TRUSTED** source (no authenticity check) into `slot` — the *instant*
+    /// counterpart of [`Stores::load_url_verified`].  Skips the SHA-256 pin (you
+    /// trust the origin) but is still **structurally safe**: `load_bytes` →
+    /// `Store::from_bytes` runs `validate_structure`, so a corrupt/malformed
+    /// image is rejected (`false`), never adopted — the heap invariant holds
+    /// regardless.  Use `load_url_verified` when the source is untrusted.
+    #[cfg(feature = "registry")]
+    pub fn load_url(&mut self, slot: u16, url: &str) -> bool {
+        let bytes = match crate::registry_index::http_get_bytes(url) {
+            Ok(b) => b,
+            Err(e) => {
+                eprintln!("store loader: {url} — fetch failed: {e}");
+                return false;
+            }
+        };
+        self.load_bytes(slot, &bytes)
+    }
+
+    /// @PLN97 arc G Phase 2 — load a store IMAGE from a local file that may be
+    /// **UNTRUSTED** into `slot`, the structurally-validated counterpart of
+    /// [`Stores::load_path`].  Reads the whole file and adopts it via
+    /// `load_bytes` → `Store::from_bytes`, which runs the always-on
+    /// `validate_structure` gate — so a crafted / corrupt file cannot hang
+    /// (0-size block) or drive a heap over-read; it is rejected (`false`).
+    /// `load_path` (the trusted path) validates only in debug and is faster;
+    /// use this for a file whose provenance you don't control.
+    pub fn load_path_untrusted(&mut self, slot: u16, path: &std::path::Path) -> bool {
+        let bytes = match std::fs::read(path) {
+            Ok(b) => b,
+            Err(_) => return false,
+        };
+        self.load_bytes(slot, &bytes)
+    }
+
     /// @PLN97 3b.5 — the layout-identity gate for a working-set load. Returns
     /// `false` (reject) when the store's `.dschema` sidecar records a layout that
     /// differs from THIS program's collection type — so the loader never
