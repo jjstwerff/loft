@@ -1,0 +1,16 @@
+// Exemplar: hash<E[k]> — distinct keys, insert + key-remove, self-check the map.
+struct E { k: text, v: integer }
+struct H { m: hash<E[k]> }
+fn main() {
+  h = H { m: [] };
+  h.m += [E{k:"a", v:1}]; h.m += [E{k:"b", v:2}];
+  h.m += [E{k:"c", v:3}]; h.m += [E{k:"d", v:4}];
+  h.m["b"] = null;                       // remove b
+  assert(h.m.len() == 3, "len after remove: {h.m.len()}");
+  assert(h.m["a"].v == 1, "lookup a");
+  assert(h.m["d"].v == 4, "lookup d");
+  assert(!h.m["b"], "b removed");
+  assert(!h.m["zzz"], "absent null");
+  order = ""; for e in h.m { order += e.k }   // ascending key order
+  assert(order == "acd", "iter order: {order}");
+}
