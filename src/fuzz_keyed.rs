@@ -40,12 +40,15 @@ pub enum Kind {
 }
 
 /// A generated keyed-collection program: insert `n_keys` distinct keys, then
-/// remove the indices in `remove`.
+/// remove the indices in `remove`. When `closures` is set, the program also
+/// folds the collection through lambdas (the closure / overlapping-lifetime
+/// axis — F2.3, stresses the slot allocator).
 #[derive(Clone, Debug)]
 pub struct KeyedSpec {
     pub kind: Kind,
     pub n_keys: u32,
     pub remove: Vec<u32>,
+    pub closures: bool,
 }
 
 /// The distinct value stamped for key index `i` (injective, so a lookup pins
@@ -164,6 +167,27 @@ pub fn generate_keyed(spec: &KeyedSpec) -> String {
         })
         .collect();
     let _ = writeln!(s, "  assert(order == \"{expected}\", \"order {{order}}\");");
+
+    // F2.3 closure / overlapping-lifetime axis: fold the collection through two
+    // lambdas kept live alongside the base locals (c, order, cnt) — extra
+    // simultaneously-live slots pressure the allocator. Self-check the folded
+    // sum, max, and count against values baked from the same survivor set.
+    if spec.closures {
+        let expected_sum: i64 = survivors.iter().map(|&i| value_of(i)).sum();
+        let expected_max: i64 = survivors.iter().map(|&i| value_of(i)).max().unwrap_or(0);
+        s.push_str("  sumfn = fn(a: integer, b: integer) -> integer { a + b };\n");
+        s.push_str(
+            "  maxfn = fn(a: integer, b: integer) -> integer { if a > b { a } else { b } };\n",
+        );
+        s.push_str("  total: integer = 0;\n  peak: integer = 0;\n  ccnt: integer = 0;\n");
+        s.push_str(
+            "  for e in c.m { total = sumfn(total, e.v); peak = maxfn(peak, e.v); \
+             ccnt = sumfn(ccnt, 1); }\n",
+        );
+        let _ = writeln!(s, "  assert(total == {expected_sum}, \"csum {{total}}\");");
+        let _ = writeln!(s, "  assert(peak == {expected_max}, \"cmax {{peak}}\");");
+        let _ = writeln!(s, "  assert(ccnt == {pop}, \"ccnt {{ccnt}}\");");
+    }
     s.push_str("}\n");
     s
 }
@@ -255,25 +279,28 @@ mod tests {
     fn generated_programs_compile_run_and_selfcheck() {
         let mut failures: Vec<String> = Vec::new();
         let mut total = 0;
-        for kind in [Kind::Hash, Kind::Sorted, Kind::Index] {
-            for &n in &[1u32, 2, 5, 10] {
-                for remove in remove_patterns(n) {
-                    let spec = KeyedSpec {
-                        kind,
-                        n_keys: n,
-                        remove,
-                    };
-                    let src = generate_keyed(&spec);
-                    total += 1;
-                    match catch_unwind(AssertUnwindSafe(|| check_generated(&src))) {
-                        Ok(Ok(())) => {}
-                        Ok(Err(msg)) => {
-                            failures.push(format!(
-                                "{kind:?} n={n}: {}",
+        for closures in [false, true] {
+            for kind in [Kind::Hash, Kind::Sorted, Kind::Index] {
+                for &n in &[1u32, 2, 5, 10] {
+                    for remove in remove_patterns(n) {
+                        let spec = KeyedSpec {
+                            kind,
+                            n_keys: n,
+                            remove,
+                            closures,
+                        };
+                        let src = generate_keyed(&spec);
+                        total += 1;
+                        match catch_unwind(AssertUnwindSafe(|| check_generated(&src))) {
+                            Ok(Ok(())) => {}
+                            Ok(Err(msg)) => failures.push(format!(
+                                "{kind:?} n={n} cl={closures}: {}",
                                 msg.lines().next().unwrap_or("")
-                            ));
+                            )),
+                            Err(_) => failures.push(format!(
+                                "{kind:?} n={n} cl={closures}: PANIC (compiler ICE)"
+                            )),
                         }
-                        Err(_) => failures.push(format!("{kind:?} n={n}: PANIC (compiler ICE)")),
                     }
                 }
             }
@@ -307,6 +334,7 @@ mod tests {
             kind: Kind::Hash,
             n_keys: 5,
             remove: vec![2],
+            closures: false,
         };
         let good = generate_keyed(&spec);
         assert!(check_generated(&good).is_ok(), "baseline program must pass");
