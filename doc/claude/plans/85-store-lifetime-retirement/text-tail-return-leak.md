@@ -99,24 +99,36 @@ Harness + probe files: [`probes/text-tail-return/`](probes/text-tail-return/)
 (`run_matrix.sh` regenerates this). Verdict = presence of a runtime-owner leak
 frame (the oracle below); every cell's output was checked non-vacuous.
 
-| tail shape | outcome |
-|---|---|
-| `fn f() -> text { u.to_json() }` (implicit tail native call) | **LEAK** ~2 allocs/call, grows |
-| `fn f() -> text { return u.to_json(); }` (explicit `return` of native call) | **LEAK** (same — not implicit-only) |
-| `fn f() -> text { s.to_uppercase() }` (ANY native text-dest in tail) | **LEAK** (not `to_json`-specific) |
-| `fn f() -> text { inner() }` (forward a user fn returning native text) | **LEAK** |
-| `fn f() -> text? { u.to_json() }` (OPTIONAL tail native call) | **USE-AFTER-FREE** — `_dest` allocs, `append_text` frees, then reads it (`memcpy`) |
-| `fn f() -> text { r = u.to_json(); return r; }` (rebind to a local first) | clean |
-| `fn f() -> text { "…{n}…" }` (interpolation tail) | clean |
-| `t = mk().to_json()` (native result bound in the CALLER) | clean |
+The v2 harness asserts THREE things per cell (VALUE == committed `.golden`, LEAK,
+UAF) — because the attempt-1 regression (below) failed on VALUE, not leak, so a
+leak-only oracle green-lights it. Pre-fix baseline (`VALUE=ok` everywhere):
 
-**Boundary:** the trigger is a native text-dest **CALL delivered directly as a
-user function's return value** (implicit tail OR explicit `return`, any `_dest`
-native, and it forwards through wrapper fns). Binding the result to a local first
-(rebind), or building the text by interpolation/append, routes through the
-promotion/move path and is clean. The **`text?` variant is a UAF** (higher
-severity than the leak) — the @PLN25 optional path frees the source before the
-copy reads it.
+| shape | memory |
+|---|---|
+| `fn f() -> text { u.to_json() }` (implicit tail native call) | **LEAK** ~2/call, grows |
+| `fn f() -> text { return u.to_json(); }` (explicit `return`) | **LEAK** |
+| `fn f() -> text { s.to_uppercase() }` (ANY `_dest` native in tail) | **LEAK** (not `to_json`-only) |
+| `fn f() -> text { inner() }` (forward a native-text fn) | **LEAK** |
+| `fn f() -> text { x.to_text() + "!" }` (native `+` literal, then transferred) | **LEAK** ← the attempt-1 shape |
+| `fn f() -> text { if c { u.to_json() } else { "x" } }` (native in an arm) | **LEAK** |
+| `fn f() -> text { j = u.to_json(); "kept" }` (native result in a DROPPED local) | **LEAK** ← not even return position |
+| `fn f() -> text? { u.to_json() }` (OPTIONAL tail native call) | **USE-AFTER-FREE** — `_dest` allocs, `append_text` frees, then reads it |
+| `fn f() -> text { r = u.to_json(); return r; }` (rebind → promoted/moved) | clean |
+| `fn f() -> text { acc = "J="; acc += u.to_json(); acc }` (append INTO an owned accum) | clean |
+| `fn f() -> text { "PRE-" + s.to_uppercase() }` (literal `+` native) | clean |
+| `fn f() -> text { "…{n}…" }` (interpolation tail) | clean |
+
+**Boundary (broader than first thought):** the trigger is a native text-dest CALL
+whose `wrap_value_text_dest` `__work_N` is **orphaned** — return position (implicit/
+explicit), forwarded, in an `if` arm, `native + literal`, and even a **dropped
+non-returned local**. It is clean only when the result is delivered into an owned
+target that is itself freed/transferred: rebind-and-return (promoted buffer), append
+INTO an owned accumulator, or `literal + native` (the literal owns the buffer). The
+**`text?` variant is a UAF**, higher severity than the leak.
+
+**Two cells are load-bearing guards for the fix:** `concat_suffix`
+(`x.to_text() + "!"`) must go **LEAK→clean while staying VALUE=ok** — it is exactly
+the shape attempt 1 emptied; and `optional_uaf` must go **UAF→clean+VALUE=ok**.
 
 ## Oracle — how to detect this class WITHOUT the ir_read baseline noise
 
