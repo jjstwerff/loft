@@ -3002,7 +3002,10 @@ mod p318_hash_deepcopy {
     // (store.rs) fail-fasts on the dangling read FIRST — an equally valid, louder
     // signal, but not the graceful path this positive control asserts.  So skip
     // it under DA (where the fail-fast is the correct behavior), run it otherwise.
-    #[cfg_attr(debug_assertions, ignore = "graceful dangling-walk is release-mode; DA addr() fail-fasts first")]
+    #[cfg_attr(
+        debug_assertions,
+        ignore = "graceful dangling-walk is release-mode; DA addr() fail-fasts first"
+    )]
     fn verify_graph_catches_a_dangling_pointer() {
         let mut stores = Stores::new();
         let cell = stores.structure("VCell", -1);
