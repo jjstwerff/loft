@@ -355,6 +355,34 @@ guard remain; three representations tried (2b `Insert`, 2c flat-in-`block_result
 each caught by the guard — the remaining unknown is purely the injected-local
 promotion lifecycle, not the approach.
 
+### Attempt 2d (2026-07-09) — LANDED: pass-2-only flat bind-and-promote
+
+The 2c trace (`LOFT_TRACE_2D`) pinned the 2c failure: injecting on BOTH passes made
+pass 1 add the hidden `__tret` ATTRIBUTE, which persists on the `Data` def across
+passes; pass 2's `classify_text_dep` then saw `__tret` as an existing attr →
+returned `Attr` (already-promoted) → never re-set the VAR type to `RefVar`, so the
+body lowered as plain text (empty). `to_json` only worked in 2c because its tail
+type resolved late, so it accidentally injected pass-2-only.
+
+**Fix:** gate the flat bind-and-promote to `!first_pass` (the codegen pass), so it
+promotes once, cleanly, to `RefVar` — exactly what `wrap_value_text_dest` does and
+what the working `to_json` case did. Landed in `parse_block`.
+
+**Validated (both backends):** all 13 matrix cells VALUE=ok; suite 749/0; `--native`
+correct. Oracle memory after 2d: **`tail_to_json`, `tail_upper` → clean** (native
+bare-tail returns now promote to a caller buffer, no owned-text copy) and
+**`optional_uaf` → clean** (the `-> text?` UAF is now FULLY resolved — no UAF AND no
+leak).
+
+**Still LEAK (distinct shapes 2d does not promote — follow-ons):** `return_to_json`
+(explicit `return <call>` — 2d matches a bare `Call` tail, not `Return(Call)`; a
+one-line peel away), and the non-direct shapes `concat_suffix` (`native + "!"`),
+`if_arm_native`, `forward_to_json` (user-fn forward), `local_dropped` (native in a
+dropped local, not a return), `nested_consume` (`wrap(native())`). attempt 2 (the
+`__work_N` free) still covers those partially. Net: the primary tail-return class
+(the harness's implicit-tail JSON/text tests) + the UAF are fixed; the compound/
+forward/dropped variants remain for a follow-on.
+
 ## Why not fixed in the surfacing session
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit

@@ -605,6 +605,41 @@ impl Parser {
         if !self.first_pass {
             self.rewrite_defended_fault_sites(&mut l);
         }
+        // @PLN85 attempt 2d (text-tail-return-leak.md) — a text-returning fn whose
+        // TAIL is a bare NATIVE text-dest CALL delivers a fresh owned text with no
+        // promotable var, so it falls to the leaking owned-text `__ret_N` copy (and
+        // the `-> text?` UAF).  Bind it to a synthetic local FLAT — two SIBLING ops
+        // `Set(__tret, call); Var(__tret)` — so `block_result`'s existing var-tail
+        // `text_return` promotes `__tret` to a hidden `&text` caller buffer and the
+        // call dest-passes into it (no owned-text copy), matching the proven-clean
+        // `t = call(); t` rebind (every native text-dest fn 0-leak).
+        //
+        // PASS 2 ONLY (`!first_pass`), and here is why: `text_return`'s promotion
+        // adds a hidden `&text` ATTRIBUTE, and attributes persist on the `Data` def
+        // ACROSS passes (unlike the per-pass var table).  Injecting on both passes
+        // makes pass 1 add the `__tret` attribute, then on pass 2 `classify_text_dep`
+        // sees `__tret` as an existing attr → returns `Attr` (already-promoted), so
+        // it never re-sets the VAR's type to `RefVar` — the body then lowers `__tret`
+        // as a PLAIN text (the `to_uppercase` empty-return bug).  Firing only on the
+        // codegen pass promotes it once, cleanly, to `RefVar` — exactly what the
+        // (accidentally pass-2-only) `to_json` case already did.  This mirrors
+        // `wrap_value_text_dest`, also `!first_pass`; fn-ref call sites stay adaptive
+        // (@P387).
+        if !self.first_pass
+            && context == "return from block"
+            && matches!(t.base(), Type::Text(d) if d.is_empty())
+            && l.last().is_some_and(|tail| matches!(tail.unspan(), Value::Call(op, _)
+                if crate::state::codegen::is_text_dest_native(self.data.def(*op).name())
+                    || crate::state::codegen::is_cdylib_text_call(self.data.def(*op))))
+        {
+            let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
+            if tv != u16::MAX {
+                let last = l.len() - 1;
+                let call = std::mem::replace(&mut l[last], Value::Var(tv));
+                l.insert(last, crate::data::v_set(tv, call));
+                t = Type::Text(Deps::frame1(tv));
+            }
+        }
         t = self.block_result(context, result, &t, &mut l, &last_expr_peek.position);
         *val = v_block(l, t.clone(), "block");
         t
