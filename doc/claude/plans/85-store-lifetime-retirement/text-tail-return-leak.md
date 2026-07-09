@@ -474,37 +474,67 @@ matrix clean on both backends, `issues` 749/0, full suite green):
 All three reuse the 2d flat pass-2-only `__tret` bind (`parse_block`): bind the tail
 to a synthetic local so `text_return` promotes it to a hidden `&text` caller buffer.
 
-### The remaining 22 — FIVE distinct subsystems (NOT promotable-tail; take each fresh)
+### The remaining leakers — SUPERSEDED by the verified analysis below
 
-Diagnosed with evidence this session; none is a text-return-tail shape, so the
-`__tret` promotion does not apply. Each needs its own probe + boundary matrix +
-both-backend pass.
+The five-subsystem split first recorded here was a source-reading GUESS. The
+per-test ASan owner sweep (session 4) corrected it — see "Verified analysis".
 
-1. **Generic-dispatch work-buffer** (`plan17_b`, `plan17_printable_integer`,
-   `p243`). Isolated: the DIRECT `s.to_uppercase() + "!"` is CLEAN, but the GENERIC
-   `x.to_text() + "!"` (`<T: Printable>`) LEAKS 1/call, and rebinding the native
-   (`t = x.to_text(); t + "!"`) still leaks. So the leak is the bounded-generic
-   `to_text()` monomorph's result buffer — the interface/monomorph dispatch path,
-   not concat or the tail.
-2. **Tuple-of-text return delivery** (`p329_*` ×3, `p330_*` ×2). The fn returns a
-   `(text, text, text)` (fresh native/literal elements); the caller extracts `.N`.
-   Return type is a TUPLE, not `Text` — outside the tail gate. The `__ret_text_N`
-   hoist (scopes.rs @P329) neighbourhood; needs tuple-element buffer promotion.
-3. **Text FN-REF dispatch** (`p227_text_fn_ref_*` ×4, local/capture/struct-field).
-   The @P387 adaptive hidden-buffer fn-ref ABI; promotion here must keep the fn-ref
-   call ABI uniform (the guard the 2b/2d notes flag).
-4. **Native JSON / stdlib internal append** (`p54_match_on_jsonvalue`,
-   `p54_parse_primitive_string`, `p54_extractor_as_text_wrong_kind`,
-   `p54_struct_enum_extractors_spec`, `q4_json_string_round_trips`, `b7`). Traced
-   `local_dropped` (`j = u.to_json(); "kept"` — `OpFreeText(j)` IS emitted yet it
-   leaks): owner `append_text ← execute_argv`, i.e. INSIDE `struct_to_json` /
-   `json_parse` (fill.rs), not the return delivery. A native-stdlib impl leak.
-5. **Assorted singletons** (`n3_reference_assignment_emits_copy_record`,
-   `issue_437_explicit_vector_return_then_append`, `p241_singleton_text`).
+## Session 4 (2026-07-09) — VERIFIED per-test analysis of the remaining leakers
 
-The matrix (`probes/text-tail-return/`) still flags `concat_suffix` (= subsystem 1,
-generic) and `local_dropped` (= subsystem 4, native JSON) as LEAK — they are the
-in-matrix representatives of the two biggest remaining subsystems.
+Method: rebuilt the ASan `issues` test binary (current wiring), swept **every**
+issues test isolated under `detect_leaks=1`, and captured each leaker's deepest
+non-`ir_read` loft frame (`probes/.../leakowner.sh`).  Then reproduced each shape
+as a standalone `.loft` and measured leak + TRA verdict + does-a-promoted/discarded-
+form-still-leak.  This replaces inference with evidence.
+
+**Headline (verified): the leak SITE is UNIFORM.** All 28 remaining leakers have
+the identical owner — `loft::fill::append_text ← State::execute_argv`.  So the
+mechanism is ONE thing: **a text COPIED via `append_text` at a call/return
+boundary whose source is never freed.**  The variation is only the SHAPE that
+produces the un-freed copy — and those fall into exactly TWO root classes:
+
+**Class A — un-promoted owned-text DELIVERY at a boundary** (return/arg copy; the
+promotion gap).  Fixed by delivering through a caller `&text` buffer (no copy) —
+i.e. by the framework's promotion, once the pass-1/pass-2 signature pre-pass lands
+(§ Session 3).  Verified members carry an `Owned:*` verdict and are the EXCLUDED
+set:
+  - user-fn call tails, if/match-arm tails (excluded `UserCall`/`IfMatchArm`);
+  - **generic `x.to_text()` — verdict `Owned:UserCall`** (the monomorph is a
+    user fn, NOT a native): `plan17_b`, `plan17_printable_integer`, `p243`.  This
+    corrects the old "generic-dispatch work-buffer" guess — it is the UserCall
+    gap, and `x.to_text() + "!"` leaks via the OPERAND copy even though the concat
+    RETURN is `BuiltLocal`-promoted;
+  - fn-ref calls — verdict `Owned:FnRefCall` (+ @P387 adaptive ABI): `p227_*` ×4;
+  - tuple-element construction — verdict `Owned:TupleElement`: `p329_*` ×3,
+    `p330_*` ×2 (with correct `to_text`, the tuple DOES leak — an earlier "clean"
+    reading was a mis-typed probe where `T` failed `Printable`);
+  - vector-of-text RETURN then append / generic singleton: `issue_437`, `p241`
+    (verified: building+discarding a `vector<text>` does NOT leak → the leak is
+    the RETURN delivery, not the build);
+  - `n3` — return of a field view after a record copy (view-return delivery; the
+    `b = a` copy discarded alone does NOT leak).
+
+**Class B — CONSUMED composite's embedded text not freed** (NOT return-delivery; a
+scope/lifetime free bug).  Verified decisively: a struct-enum with an embedded
+text, and a `json_parse` result, **LEAK even when constructed/matched and
+DISCARDED with no return** (`leak=1`).  So the free of a consumed/dropped
+struct-enum (or the `json_parse` jsonvalue) does not recurse into its embedded
+text.  Members: `p54_struct_enum_as_struct_field`, `_extractors_spec`,
+`_in_hash_value`, `_multi_call_flow`, `p54_b2_*` ×2, `p54_b6_match_arm_text_unify`,
+`p54_extractor_as_text_wrong_kind`, `p54_or_pattern_mixed_struct_enum`,
+`p54_match_on_jsonvalue`, `p54_parse_primitive_string`, `q4_json_string_round_trips`,
+`b7_repeated_method_dispatch_on_jsonvalue`.  The framework correctly reads these as
+`Plain`/`BuiltLocal` (the return is not the issue) — pointing AWAY from promotion,
+toward the composite-free path.  This is a DISTINCT arc from the whole tail-return
+campaign: it lives in the enum/composite scope-free logic, not text return.
+
+**So the ~28 remaining split ≈ Class A 13 (promotion gap — one fix, the pre-pass)
++ Class B 15 (composite embedded-text free — a separate scope-free fix).**  Two
+arcs, not five.  Matrix representatives: `concat_suffix` (Class A, generic/operand)
+and `local_dropped` (Class B, struct_to_json consume).  The correction that
+`local_dropped`'s `append_text←execute_argv` is INSIDE `struct_to_json` still
+holds, but it is the same Class B "consumed composite" story, not a separate
+"native-stdlib-internal" subsystem.
 
 ## Session 3 (2026-07-09) — the analysis FRAMEWORK, and wiring it in
 
