@@ -234,6 +234,76 @@ and `store_load_range` (Phase 4) are unblocked.
   `SIGNATURE` check only); wire `schema_sidecar::check` at the bootstrap when the remote provider
   lands (a wrong-layout local file is far less likely than a wrong-layout remote fetch).
 
+### Authenticated whole-file load — `store_load_url` (fetch → verify → trust) — **DONE 2026-07-09**
+The whole-file counterpart of `store_load` for an **HTTP(S) source**, with authenticity
+established **before** the bytes are adopted — the answer to "how do we load an HTTP store with the
+same rigor as an mmap store?" The honest finding driving it: mmap/`store_load` rigor is
+*trust-the-writer* (a `SIGNATURE` check + a debug-only `validate`), which is the WRONG threat model
+for an untrusted network source. So this bridges the **registry's** proven discipline
+(`registry_index::verify_sha256`, the `download → verify_sha256 → extract` order in `install.rs`)
+onto the store loader.
+- **Built:** `store_load_url(r, url, sha256)` (`02_files.loft`) → `Stores::load_url_verified`
+  (`allocation.rs`, `#[cfg(feature = "registry")]`): `http_get_bytes(url)` (http(s):// **or**
+  file://) → `verify_sha256(&bytes, sha256)` → on match `load_bytes` → the new
+  `Store::from_bytes(&[u8])` (`store.rs`, the in-memory sibling of `Store::load` — heap copy, no
+  disk) adopts it. **Verify happens in memory; an unverified/tampered body never touches disk and
+  is never adopted.** `n_store_load_url` handler + registry-gated table entry (`native.rs`).
+- **Verified:** a `store_persist_bind`-written hash loads via `store_load_url` (SHA computed in the
+  harness, `file://` URL) with all keys + a correct lookup + `store_verify=true`, on **both
+  backends**; a **wrong hash is REFUSED** (`ok=false`, nothing adopted, `h[13]=null`) — the
+  fetch→verify→trust gate. Guard:
+  `store_persist_loft.rs::store_load_url_verifies_sha_before_adopting_both_backends` +
+  `store_load_smoke.loft` `loadurl` mode.
+- **Scope (Phase 0 of the HTTP-store evaluation):** authenticity + whole-file adopt for a **trusted,
+  hash-pinned** source. Structural safety of the adopted buffer is the follow-on below;
+  per-page authenticity for the paged `load_key(s)`/`load_range` path is a separate Merkle problem.
+
+### Untrusted-buffer structural validator (`validate_structure`) — Phase 2 — **DONE 2026-07-09**
+Phase 0 established *authenticity* (this is the store you pinned); Phase 2 establishes *structural
+safety* (this buffer cannot corrupt the heap when walked), so adopting bytes via `from_bytes` is
+sound **regardless of origin** — the heap-invariant trust bar. The HTTP-store evaluation found the
+mmap/`load`/`from_bytes` path had **~no structural validation in release**: `Store::validate` is
+`#[cfg(debug_assertions)]` (a no-op in release), so a crafted buffer could (a) drive `fl_rebuild`
+into a `pos += 0` **infinite loop** on a 0-size block (the @PLAN38 hazard) or (b) present a record
+whose size word claims more words than the arena holds → a **heap over-read** on later field reads.
+- **Built:** `Store::validate_structure() -> Result<(), String>` (`store.rs`) — the ALWAYS-ON,
+  non-panicking, fail-closed counterpart of `validate`: walk from `PRIMARY`, reject a `span == 0`
+  header (the loop guard), reject any record running past the arena (`u64` math so an `i32::MIN`
+  span can't overflow the bounds test), and require the chain to partition the store exactly
+  (`pos == size`). Wired into `from_bytes` **before `fl_rebuild`** — a malformed buffer returns
+  `None` (dropping the store frees the arena) and `fl_rebuild` never walks garbage headers. The
+  trusted local `load` path is unchanged (still debug-only) — the untrusted path validates, the
+  trusted path stays fast.
+- **Verified:** `store.rs::tests::from_bytes_rejects_crafted_buffers_fail_closed` crafts each cell
+  — 0-size block, oversized claimed/free record, `i32::MIN` span, a chain leaving a zero header
+  mid-store, wrong signature, under-16-byte — and asserts `from_bytes` returns `None`; a valid
+  claimed-block image is still accepted. Run in **release** (where the hazards live) with a timeout
+  as the real assertion — a surviving 0-block would hang, and it does not.
+- **Still Phase 2.1 (interior pointers):** a forged `DbRef` field aimed at a wrong record is caught
+  by `store_verify`/`verify_graph_ok` (the reachable-graph backstop the loader already recommends),
+  but that check is still sampling (8-problem cap, 16-element vector sampling) and trusts the schema
+  type tag — uncapping it + type-tag cross-validation is the remaining hardening.
+
+### The whole-file store-read trust matrix (`trust × source`) — **DONE 2026-07-09**
+Every whole-file loader routes through the same validated adopt (`load_bytes` → `Store::from_bytes`
+→ `validate_structure`), differing only in **source** (file vs HTTP) and **authenticity** (none /
+SHA-pinned). All four are structurally safe (a crafted/corrupt image is rejected, never hangs or
+over-reads); only the untrusted-HTTP one additionally proves *authenticity*.
+
+| | Local file | HTTP(S) / `file://` |
+|---|---|---|
+| **Trusted** (fast; you produced/trust it) | `store_load(r, path)` — debug-only validate, fastest | `store_load_url_trusted(r, url)` — instant fetch + structural validate |
+| **Untrusted** (validate before adopting) | `store_load_untrusted(r, path)` — always-on structural validate | `store_load_url(r, url, sha256)` — SHA-verify **then** structural validate |
+
+`store_load` keeps its debug-only validate (the trusted local hot path stays fast); the other three
+run `validate_structure` always-on. Interior-pointer soundness (Phase 2.1) is `store_verify` on top
+of any of them. These are core loaders that do the HTTP fetch themselves (via the registry
+`http_get_bytes` client) — a `web`-package wrapper (`http_get` for custom headers / auth, then adopt)
+is an additive follow-on, not required for a plain store GET.
+Guards: `store_persist_loft.rs::{store_load_untrusted_validates_before_adopting_both_backends,
+store_load_url_trusted_fetches_over_http_both_backends,
+store_load_url_verifies_sha_before_adopting_both_backends}` + `store.rs::tests::from_bytes_rejects_crafted_buffers_fail_closed`.
+
 ### Phase 2 — paged read-only backing (local provider) — **reader core DONE 2026-07-07**
 - **Built:** `src/paged_reader.rs` (behind the `remote-store` feature — the zero-cost gate): the
   `PageProvider` trait, `LocalFileProvider` (reads ranges from disk, **logs every `(off,len)`** so

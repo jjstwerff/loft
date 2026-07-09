@@ -512,6 +512,78 @@ impl Store {
         store
     }
 
+    /// Adopt an in-memory byte buffer as a store — the slice counterpart of
+    /// [`Store::load`] (a heap copy, no mmap / no file handle, so it works on
+    /// every backend incl. wasm).  Returns `None` (a clean reject, never a
+    /// panic) on a buffer too small for the header, a wrong `SIGNATURE`, or an
+    /// over-limit size.  Used by the verified HTTP store loader
+    /// ([`crate::database::Stores::load_url_verified`], @PLN97 arc G Phase 0):
+    /// the bytes are fetched + authenticity-verified in memory and only then
+    /// adopted here, so an untrusted body never touches disk.
+    ///
+    /// Unlike `load` (the trusted local path, which structurally validates only
+    /// in debug), `from_bytes` runs [`Store::validate_structure`] **always-on and
+    /// BEFORE `fl_rebuild`** (@PLN97 arc G Phase 2): a crafted buffer with a
+    /// zero-size block (the `fl_rebuild` release infinite-loop hazard) or a record
+    /// claiming a size past the arena (a heap over-read) is rejected here with
+    /// `None`, never walked.  Interior `DbRef` soundness remains the caller's
+    /// `store_verify` backstop.
+    #[must_use]
+    pub fn from_bytes(bytes: &[u8]) -> Option<Store> {
+        if bytes.len() < 16 {
+            return None;
+        }
+        let sig = u32::from_ne_bytes([bytes[0], bytes[1], bytes[2], bytes[3]]);
+        if sig != SIGNATURE {
+            return None;
+        }
+        let words = bytes.len().div_ceil(8).max(2) as u32;
+        if words > MAX_STORE_WORDS {
+            return None;
+        }
+        let l = Layout::from_size_align(words as usize * 8, 8).ok()?;
+        let ptr = unsafe { A.alloc_zeroed(l) };
+        if ptr.is_null() {
+            return None;
+        }
+        unsafe {
+            std::ptr::copy_nonoverlapping(bytes.as_ptr(), ptr, bytes.len());
+        }
+        let mut store = Store {
+            ptr,
+            size: words,
+            claims: HashSet::new(),
+            #[cfg(feature = "mmap")]
+            file: None,
+            free: false,
+            read_only: false,
+            free_protected: false,
+            borrowed: false,
+            created_at: 0,
+            last_op_at: 0,
+            free_root: 0,
+            needs_coalesce: false,
+            generation: 0,
+            recording: None,
+            tag: 0,
+            pinned: false,
+            lock_origin: String::new(),
+            known_type: u16::MAX,
+            durable_meta_path: None,
+            durable_tier: 0,
+        };
+        // @PLN97 arc G Phase 2 — fail-closed structural validation of an
+        // UNTRUSTED buffer, ALWAYS-ON and BEFORE `fl_rebuild`.  A crafted
+        // 0-size block or an out-of-bounds record is rejected here (returning
+        // `None`; dropping `store` frees the arena), so `fl_rebuild` never walks
+        // garbage headers (the release infinite-loop / heap-over-read hazards).
+        if store.validate_structure().is_err() {
+            return None;
+        }
+        store.fl_rebuild();
+        Some(store)
+    }
+
     pub fn init(&mut self) {
         // The normal routines will not write to rec=0, so we write a signature: StoreV01
         unsafe {
@@ -918,6 +990,64 @@ impl Store {
             recs == 0 || alloc == recs as usize,
             "Inconsistent number of records: claimed {alloc} walk {recs}"
         );
+    }
+
+    /// Fail-closed, ALWAYS-ON structural validation of the block chain — the
+    /// release-mode, non-panicking counterpart of [`Store::validate`], used to
+    /// make adopting an UNTRUSTED buffer safe ([`Store::from_bytes`]).  Walks
+    /// every record from `PRIMARY`: each `i32` size word must be **non-zero** and
+    /// keep the walk **in-bounds**, and the chain must **partition the store
+    /// exactly** (`pos == size` at the end — so no record claims a size past the
+    /// arena, no overlap, no gap).  Returns `Err(reason)` on the first violation
+    /// instead of panicking or looping.
+    ///
+    /// Two concrete hazards this closes for a crafted buffer:
+    /// - **the 0-size-block release infinite loop** `fl_rebuild` would hit
+    ///   (`pos += 0`; the @PLAN38 hazard `Store::open`'s comment describes) —
+    ///   guarded by the `span == 0` reject, so it MUST run *before* `fl_rebuild`;
+    /// - **the forged-header heap over-read** — a record whose size word claims
+    ///   more words than remain would let later field reads run past the arena;
+    ///   the in-bounds + exact-partition checks make that impossible.
+    ///
+    /// It validates the record/block STRUCTURE (bounds + partition).  It does NOT
+    /// validate interior `DbRef` pointers (a field aimed at a wrong record) —
+    /// that is `verify_graph_ok` / `store_verify`, the reachable-graph backstop
+    /// recommended after an untrusted load.  @PLN97 arc G Phase 2.
+    ///
+    /// # Errors
+    /// Returns `Err(reason)` on a too-small store, a zero-size block header, a
+    /// record running past the arena, or a chain that does not end exactly at the
+    /// store size.
+    pub fn validate_structure(&self) -> Result<(), String> {
+        if self.size < PRIMARY {
+            return Err(format!("store too small: {} words", self.size));
+        }
+        let mut pos = PRIMARY;
+        while pos < self.size {
+            // In-bounds by the loop guard (`pos < size`): the `i32` size word at
+            // byte `pos*8` lies within the `size*8`-byte arena.
+            let claim = *self.addr::<i32>(pos, 0);
+            let span = claim.unsigned_abs();
+            if span == 0 {
+                return Err(format!("zero-size block header at record {pos}"));
+            }
+            // `u64` arithmetic so an `i32::MIN` span (2^31) can't overflow the
+            // bounds test.
+            if u64::from(pos) + u64::from(span) > u64::from(self.size) {
+                return Err(format!(
+                    "record {pos} claims {span} words, past the {}-word store",
+                    self.size
+                ));
+            }
+            pos += span;
+        }
+        if pos != self.size {
+            return Err(format!(
+                "block chain ends at {pos}, not the store size {}",
+                self.size
+            ));
+        }
+        Ok(())
     }
 
     pub fn len(&self) -> u32 {
@@ -2823,6 +2953,70 @@ mod tests {
         }
         // Store must have grown to hold 200 single-word claims (≥200 * 8 bytes).
         assert!(store.byte_capacity() >= 200 * 8);
+    }
+
+    /// @PLN97 arc G Phase 2 — `from_bytes` must fail-closed on a crafted buffer:
+    /// `validate_structure` rejects it BEFORE `fl_rebuild`, so a malicious image
+    /// can neither hang (the 0-size-block release infinite loop) nor drive a read
+    /// past the arena (a forged oversized record).  A structurally-valid image is
+    /// still accepted.
+    #[test]
+    fn from_bytes_rejects_crafted_buffers_fail_closed() {
+        use super::SIGNATURE;
+        // A 4-word (32-byte) image: word 0 = signature, record 1's `i32` size
+        // word = `rec1`; words 2..3 are payload inside record 1.
+        fn img(sig: u32, rec1: i32) -> Vec<u8> {
+            let mut b = vec![0u8; 32];
+            b[0..4].copy_from_slice(&sig.to_ne_bytes());
+            b[8..12].copy_from_slice(&rec1.to_ne_bytes());
+            b
+        }
+
+        // VALID: one claimed block of size 3 partitions words [1, 4).
+        assert!(
+            Store::from_bytes(&img(SIGNATURE, 3)).is_some(),
+            "a structurally-valid image must be accepted"
+        );
+
+        // 0-size block — the @PLAN38 release infinite loop: must reject, not hang.
+        assert!(
+            Store::from_bytes(&img(SIGNATURE, 0)).is_none(),
+            "a zero-size block header must be rejected (DoS guard)"
+        );
+        // A record/free block claiming more words than the arena holds — the
+        // forged-header heap over-read.
+        assert!(
+            Store::from_bytes(&img(SIGNATURE, 100)).is_none(),
+            "an out-of-bounds claimed record must be rejected"
+        );
+        assert!(
+            Store::from_bytes(&img(SIGNATURE, -100)).is_none(),
+            "an out-of-bounds free block must be rejected"
+        );
+        assert!(
+            Store::from_bytes(&img(SIGNATURE, i32::MIN)).is_none(),
+            "an i32::MIN span (2^31) must be rejected without overflow"
+        );
+        // A chain that leaves a zero header mid-store (record 1 spans [1,3),
+        // record 3's header is 0) — caught as a zero block at record 3.
+        assert!(
+            Store::from_bytes(&img(SIGNATURE, 2)).is_none(),
+            "a chain that leaves a zero header mid-store must be rejected"
+        );
+
+        // Pre-structural rejects: wrong signature, too small.
+        assert!(
+            Store::from_bytes(&img(0xDEAD_BEEF, 3)).is_none(),
+            "a wrong signature must be rejected"
+        );
+        assert!(
+            Store::from_bytes(&[0u8; 8]).is_none(),
+            "an under-16-byte buffer must be rejected"
+        );
+        assert!(
+            Store::from_bytes(&[]).is_none(),
+            "an empty buffer must be rejected"
+        );
     }
 
     /// P6: `delete` only coalesces forward, so freeing two blocks in

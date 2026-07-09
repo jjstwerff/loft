@@ -723,7 +723,7 @@ pub fn verify_sha256(bytes: &[u8], expected_hex: &str) -> Result<(), String> {
     }
 }
 
-fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
+pub(crate) fn http_get_bytes(url: &str) -> Result<Vec<u8>, String> {
     // @PLAN12 Phase 6.11 — support `file://` URLs for offline
     // mirrors + bundle-import-served indexes.  Same contract as the
     // HTTP path: return the raw bytes at the URL.

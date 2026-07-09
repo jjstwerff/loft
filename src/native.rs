@@ -178,6 +178,11 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_store_load_keys", n_store_load_keys),
     #[cfg(feature = "remote-store")]
     ("n_store_load_range", n_store_load_range),
+    #[cfg(feature = "registry")]
+    ("n_store_load_url", n_store_load_url),
+    #[cfg(feature = "registry")]
+    ("n_store_load_url_trusted", n_store_load_url_trusted),
+    ("n_store_load_untrusted", n_store_load_untrusted),
     ("n_eprint", n_eprint),
     ("n_directory", n_directory),
     ("n_user_directory", n_user_directory),
@@ -1300,6 +1305,43 @@ fn n_store_load_keys(stores: &mut Stores, stack: &mut DbRef) {
     let v_ref = *stores.get::<DbRef>(stack);
     let n = stores.load_keys_vec(&v_ref, v_path.str(), &v_keys);
     stores.put(stack, n);
+}
+
+/// Interpreter handler for `store_load_url` — fetch a persisted store IMAGE over
+/// HTTP(S) (or `file://`) from a TRUSTED source, verify its SHA-256 against the
+/// caller-pinned digest, and (only on a match) HEAP-load it into the collection's
+/// slot.  A fetch error or hash mismatch refuses (returns false, adopts nothing).
+/// Args pop in reverse: sha256, url, local.  @PLN97 arc G Phase 0.
+#[cfg(feature = "registry")]
+fn n_store_load_url(stores: &mut Stores, stack: &mut DbRef) {
+    let v_sha = *stores.get::<Str>(stack);
+    let v_url = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.load_url_verified(v_ref.store_nr, v_url.str(), v_sha.str());
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_url_trusted` — fetch a whole store IMAGE
+/// over HTTP(S)/`file://` from a TRUSTED source and HEAP-load it (no SHA check;
+/// still structurally validated).  Args pop in reverse: url, local.
+/// @PLN97 arc G Phase 0.
+#[cfg(feature = "registry")]
+fn n_store_load_url_trusted(stores: &mut Stores, stack: &mut DbRef) {
+    let v_url = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.load_url(v_ref.store_nr, v_url.str());
+    stores.put(stack, ok);
+}
+
+/// Interpreter handler for `store_load_untrusted` — HEAP-load a store IMAGE from
+/// a local file that may be UNTRUSTED, structurally validated before adoption
+/// (rejects a crafted / corrupt image instead of hanging or over-reading).  Args
+/// pop in reverse: path, local.  @PLN97 arc G Phase 2.
+fn n_store_load_untrusted(stores: &mut Stores, stack: &mut DbRef) {
+    let v_path = *stores.get::<Str>(stack);
+    let v_ref = *stores.get::<DbRef>(stack);
+    let ok = stores.load_path_untrusted(v_ref.store_nr, std::path::Path::new(v_path.str()));
+    stores.put(stack, ok);
 }
 
 /// Write `text` to stderr — companion to `print()` / `println()`
