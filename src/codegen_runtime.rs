@@ -1523,6 +1523,27 @@ impl FileVal for f64 {
     }
 }
 
+impl FileVal for u8 {
+    /// `boolean` is the only loft scalar that lowers to a native `u8` for
+    /// binary I/O (@PLN47 W3); it is always a single byte — `0`/`1`, or the
+    /// `255` tri-state null sentinel.  Endianness and `db_tp` are irrelevant
+    /// for a one-byte value.
+    fn file_to_bytes(&self, _stores: &Stores, _db_tp: i32, _little_endian: bool) -> Vec<u8> {
+        vec![*self]
+    }
+    fn file_from_bytes(
+        &mut self,
+        _stores: &mut Stores,
+        _db_tp: i32,
+        _little_endian: bool,
+        bytes: &[u8],
+    ) {
+        if let Some(&b) = bytes.first() {
+            *self = b;
+        }
+    }
+}
+
 impl FileVal for String {
     fn file_to_bytes(&self, _stores: &Stores, _db_tp: i32, _little_endian: bool) -> Vec<u8> {
         self.as_bytes().to_vec()

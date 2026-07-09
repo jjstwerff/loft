@@ -1011,9 +1011,9 @@ struct Container { data: sorted<Sort[nr]> }"
 
 // S4: writing a struct with a `sorted<T>` field must be rejected at parse time
 // with a clear message pointing the user to plain structs for serialisation.
-// The parser catches collection fields early; the message contains "collection field".
+// The parser catches variable-width (text/vector/collection) fields early.
 #[test]
-#[should_panic(expected = "collection field")]
+#[should_panic(expected = "variable-width field")]
 fn s4_sorted_field_write_panics_with_clear_message() {
     code!(
         "struct Item { key: integer, value: integer }
@@ -1029,9 +1029,9 @@ fn test() {
 }
 
 // S4: writing a struct with a `hash<T>` field must be rejected at parse time
-// with the same "collection field" message.
+// with the same "variable-width field" message.
 #[test]
-#[should_panic(expected = "collection field")]
+#[should_panic(expected = "variable-width field")]
 fn s4_hash_field_write_panics_with_clear_message() {
     code!(
         "struct Tag { name: text }

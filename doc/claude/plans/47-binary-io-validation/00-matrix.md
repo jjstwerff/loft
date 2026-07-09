@@ -7,40 +7,48 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 **Goal of this phase:** freeze the cell grid, stand up
 `tests/binary_io_matrix.rs` (reusing the @PLAN14 `cross_mode!`
-harness), land one smoke cell, and run the pre-flight survey.  **No
-production change.**
+harness), land one smoke cell, and run the pre-flight survey.
 
-## The frozen grid
+**RESULT (2026-07-09): the whole matrix is GREEN on both backends.** The
+harness landed 32 cross-mode cells; building it surfaced the W2–W4/W9/W10
+bugs that the pre-flight survey had wrongly predicted as shipped (see the
+[README](README.md) fix table).
+
+## The grid (measured)
 
 Rows = value type (W0–W11), columns = format (F1/F2/F3) × access
-pattern (A1–A4).  Fill each cell with one of:
+pattern (A1–A4).  Each cell is one of:
 
 - ✅ — round-trips, interp == native, has a `cross_mode!` test
 - ❌ — fails today (write wrong bytes / read wrong width / unimplemented)
 - N/A — combination not meaningful (e.g. binary scalar in TextFile)
 
-### Scalars (W0–W6) — expected mostly ✅
+### Scalars (W0–W6) — all ✅ (interp == native)
 
 | Type | F1 LE | F2 BE | A1 append | A2 offset | A3 trunc | A4 sync |
 |---|---|---|---|---|---|---|
-| W0 `integer` i64 (8B) | | | | | | |
-| W1 `i32` (4B) | | | | | | |
-| W1 `u32` (4B) | | | | | | |
-| W2 `i16`/`u16` (2B) | | | | | | |
-| W3 `i8`/`u8`/`bool` (1B) | | | | | | |
-| W4 `character` (4B) | | | | | | |
-| W5 `float` f64 (8B) | | | | | | |
-| W6 `single` f32 (4B) | | | | | | |
+| W0 `integer` i64 (8B) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| W1 `i32` (4B) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| W1 `u32` (4B) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| W2 `i16`/`u16` (2B) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| W3 `i8`/`u8`/`bool` (1B) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| W4 `character` (4B) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| W5 `float` f64 (8B) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
+| W6 `single` f32 (4B) | ✅ | ✅ | ✅ | ✅ | ✅ | ✅ |
 
-### Variable-width (W7–W11) — expected ❌ until phases 02–05
+Signed narrow ints (`i8`/`i16`) sign-extend on read (fixed this pass — interp
+had zero-extended, diverging from native).  `u32`/`i32` ≥ 2³¹ round-trip via
+raw bytes but read back as negative i64 in expressions (@P293 caveat).
+
+### Variable-width (W7–W11)
 
 | Type | F1 LE | F2 BE | F3 Text | Notes |
 |---|---|---|---|---|
-| W7 `text` | | | | length-prefix convention (phase 02) |
-| W8 `vector<scalar>` | | | N/A | `f#read(N) as vector<T>` first (phase 03) |
-| W9 `struct` scalars | | | N/A | per-field walk (phase 04) |
-| W10 `struct` w/ text/vec field | | | N/A | stretch (phase 05) |
-| W11 `vector<struct>` / nested | | | N/A | stretch (phase 05) |
+| W7 `text` | ✅ | ✅ | ✅ | explicit-count `f#read(N) as text` |
+| W8 `vector<scalar>` | ✅ | ✅ | N/A | `f#read(N)` counts N **bytes**; warns when N ∤ element width |
+| W9 `struct` scalars | ✅ | ✅ | N/A | per-field walk both directions; leaks 1 record/read (pre-existing block-temp ownership bug, tracked separately) |
+| W10 `struct` w/ text/vec field | ⛔ | ⛔ | N/A | **rejected at compile time** (variable-width field) — by design, not a gap |
+| W11 nested plain `struct` | ✅ | ✅ | N/A | rides the W9 per-field walk |
 
 ## Harness
 

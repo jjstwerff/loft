@@ -334,16 +334,31 @@ impl State {
                 // variable whose stack slot is 8 bytes (Phase 2c integer
                 // width) and holds a raw i64 — not the +1-encoded form that
                 // Parts::Byte/Short use in struct fields, nor the i32::MIN
-                // null sentinel Parts::Int uses.  Decode the bytes and store
-                // as a sign-extended i64.
+                // null sentinel Parts::Int uses.  Decode the bytes into the
+                // raw i64.  @PLN47 W2/W3: a SIGNED narrow type (`i8`/`i16`,
+                // whose range `from` is negative) must sign-extend; an
+                // unsigned one (`u8`/`u16`, `from >= 0`) zero-extends.  The
+                // native backend reads these as `i16`/`i8` and lets the slot
+                // type wrap; the interpreter holds a raw i64, so it must pick
+                // the extension explicitly or a signed value read back as a
+                // large positive (`-12345 as i16` → 53191) — a silent
+                // corruption that diverged from native.
                 let v: i64 = match &self.database.types[db_tp as usize].parts {
-                    Parts::Byte(_, _) => i64::from(data[0]),
-                    Parts::Short(_, _) | Parts::ShortRaw(_, _) => {
-                        let d: [u8; 2] = data[0..2].try_into().unwrap();
-                        if little_endian {
-                            i64::from(u16::from_le_bytes(d))
+                    Parts::Byte(from, _) => {
+                        if *from < 0 {
+                            i64::from(data[0] as i8)
                         } else {
-                            i64::from(u16::from_be_bytes(d))
+                            i64::from(data[0])
+                        }
+                    }
+                    Parts::Short(from, _) | Parts::ShortRaw(from, _) => {
+                        let d: [u8; 2] = data[0..2].try_into().unwrap();
+                        let signed = *from < 0;
+                        match (little_endian, signed) {
+                            (true, true) => i64::from(i16::from_le_bytes(d)),
+                            (true, false) => i64::from(u16::from_le_bytes(d)),
+                            (false, true) => i64::from(i16::from_be_bytes(d)),
+                            (false, false) => i64::from(u16::from_be_bytes(d)),
                         }
                     }
                     Parts::Int(_, _) => {
