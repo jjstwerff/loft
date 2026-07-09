@@ -231,6 +231,39 @@ still work), superseding both halves. Next slice: either free the consumed
 return-temp at the caller's `Set(local, <owned-text call>)`, or promote. Guard: the
 matrix must reach 0 runtime-owner frames on every cell (not just `optional_uaf`).
 
+### Probing the remaining half (2026-07-09) — it is the native-call return, not consumption
+
+Two matrices on the attempt-2 binary pin the residual 1/call precisely
+(`probes/text-tail-return/` companions `cc.*`/`rc.*`; runtime-owner OBJECT count,
+N=5 vs N=105):
+
+**Consumption-independent** — every caller pattern leaks the *same* 1/call:
+`r = drive()` (reassign) · `print(drive())` · `x = "p" + drive()` · `drive();`
+(discard) · `eat(drive())` (arg) · `s = drive(); …` (bind+use). So it is NOT a
+caller-consumption bug — a caller-side free would have to fire on all of these.
+
+**Return-shape-specific** — the decisive cut:
+
+| return shape | per-call |
+|---|---|
+| `"literal"` · `"a" + "b"` · `return s` (built local) · `s` (built-local tail) | **0** |
+| `u.to_json()` (native text-dest CALL) | **1** |
+
+So EVERY owned-text return is clean EXCEPT a native text-dest call: the clean ones
+deliver through a **promoted caller buffer** (`text_return` promotes the var/
+built-text — `fn f(r: &text) -> text["r"]`, the caller allocates + frees), while the
+native-call tail instead emits an owned-text `__ret_N` copy that no side frees.
+
+**Conclusion — the clean FULL fix is promotion, not a caller-side free.** Give the
+native-call tail the SAME buffer promotion the var tail already gets (the proven
+`rebind`/mc2 form): bind the tail native call to a synthetic local so `text_return`
+promotes it, so the native writes straight into the caller's buffer and there is no
+owned-text `__ret_N` at all → 0 leak, matching every other return shape. This
+SUPERSEDES attempt 2's `__work_N` free (no `__work_N`, no `__ret_N`). Risk: it is an
+ABI shift (a text fn gains a hidden `&text` buffer), the class @P387 made adaptive
+for fn-refs — so the guard must include the `p227_text_fn_ref_*` / par shapes
+(#273) alongside the leak matrix. Attempt 2b = this promotion.
+
 ## Why not fixed in the surfacing session
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit
