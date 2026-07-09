@@ -160,11 +160,31 @@ block-return-move Step 1). Thread to the Step-1 chokepoint; prove IR/behaviour
 byte-identical OFF via `loft introspect` (cache-off / `LOFT_NO_CACHE=1` — the
 per-script cache keys on source, not binary).
 
-### Step 4 — the fix behind the gate
-Enforce the invariant at the chokepoint: null/`InitRef` the consumer slot on
-adopt (chokepoint 1/3) or persist the delivery (chokepoint 2). Match the native
-sequence. When ON: all 13 probes leak-free AND correct-valued on interp; native
-unchanged.
+### Step 4 — the fix 🔶 DIRECTION CONFIRMED, last-mile open (reverted; no code shipped)
+
+Full mechanism now understood (op-level `put_var`/`read_file`/deref traces):
+- The struct read emits `OpReadFile(OpCreateStack(temp_var))`. `OpReadFile` fills
+  the eval-stack slot, NOT the record `#2` (`OpDatabase(temp_var)`). The block
+  then delivers that stack slot; **reinterpreted as a DbRef its `store_nr` = the
+  first field value** (`x=5` → "store #5"), so the consumer lands on whatever
+  store number equals the field — correct only by that coincidence, garbage
+  under poison / in `a3`.
+- **Fix direction (confirmed correct):** mirror the working **Vector arm** in
+  `dispatch_read_data` — deref the slot to the record ref and fill THAT. With it:
+  the delivery is FIXED (`put_var` shows `q ← #2`, the real record, not the
+  bytes-as-DbRef) and the write targets the record (`[deref] rec_ref=#2@1,8
+  data.len=16`, the right file bytes). So the structural fix is the deref, same
+  as vectors.
+- **Last-mile open:** even with `rec_ref = #2` and 16 correct bytes, `write_data`
+  does not land them — `#2` reads back stale (`0x8_0000_0001`) though `q == #2`.
+  So `write_data(&#2, struct, data)` isn't filling the record here (offset /
+  reused-store / copy-back interaction), a record-fill question distinct from the
+  now-solved delivery. Needs a raw byte-dump of `#2` before/after `write_data`.
+
+**Reverted** — shipping the deref alone regresses W9 (delivery fixed but record
+still empty ⇒ value garbage). No p9 code on the branch. Next: dump `#2` around
+`write_data` to close the last mile, then land deref + record-fill together,
+gated, verified against the poison oracle (all 13 green both backends).
 
 ### Step 5 — oracle gate + flip
 Gate the fix, then assert the **poison + cross-mode oracle** (above): every probe
