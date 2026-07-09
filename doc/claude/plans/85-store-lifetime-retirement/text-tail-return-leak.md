@@ -374,14 +374,21 @@ bare-tail returns now promote to a caller buffer, no owned-text copy) and
 **`optional_uaf` → clean** (the `-> text?` UAF is now FULLY resolved — no UAF AND no
 leak).
 
-**Still LEAK (distinct shapes 2d does not promote — follow-ons):** `return_to_json`
-(explicit `return <call>` — 2d matches a bare `Call` tail, not `Return(Call)`; a
-one-line peel away), and the non-direct shapes `concat_suffix` (`native + "!"`),
-`if_arm_native`, `forward_to_json` (user-fn forward), `local_dropped` (native in a
-dropped local, not a return), `nested_consume` (`wrap(native())`). attempt 2 (the
-`__work_N` free) still covers those partially. Net: the primary tail-return class
-(the harness's implicit-tail JSON/text tests) + the UAF are fixed; the compound/
-forward/dropped variants remain for a follow-on.
+**2d extension — explicit `return <call>` too.** `native_text_call_tail` peels
+`Span`/`Return`, and the gate keys on the DECLARED `result` type (not the tail `t`):
+an explicit `return <call>` tail is typed `Never` (it diverges), so a `t`-based gate
+missed it; `result.base() == Text` catches both the bare tail and `return <call>`.
+The rewrite lifts the call out of the `Return` (`Set(__tret, call); return __tret`).
+**`return_to_json` → clean** (both backends, suite 749/0). Now BOTH direct
+native-tail forms + the UAF are fixed — **8/13 matrix cells clean**.
+
+**Still LEAK (non-direct shapes — the native call is NOT the tail itself):**
+`concat_suffix` (`native + "!"` — native is a concat operand), `if_arm_native`
+(native in an `if` arm), `forward_to_json` (user-fn forward — 2d excludes user
+fns), `local_dropped` (native in a dropped non-returned local), `nested_consume`
+(`wrap(native())` — native as a nested arg). Each needs the native SUB-expression
+promoted/freed at its own site, not the tail; attempt 2's `__work_N` free covers
+them partially (they leak 1/call, not 2). Follow-on.
 
 ## Why not fixed in the surfacing session
 

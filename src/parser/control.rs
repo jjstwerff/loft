@@ -627,16 +627,22 @@ impl Parser {
         // (@P387).
         if !self.first_pass
             && context == "return from block"
-            && matches!(t.base(), Type::Text(d) if d.is_empty())
-            && l.last().is_some_and(|tail| matches!(tail.unspan(), Value::Call(op, _)
-                if crate::state::codegen::is_text_dest_native(self.data.def(*op).name())
-                    || crate::state::codegen::is_cdylib_text_call(self.data.def(*op))))
+            && matches!(result.base(), Type::Text(_))
+            && l.last().is_some_and(|tail| self.native_text_call_tail(tail))
         {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
                 let last = l.len() - 1;
-                let call = std::mem::replace(&mut l[last], Value::Var(tv));
-                l.insert(last, crate::data::v_set(tv, call));
+                if matches!(l[last].unspan(), Value::Return(_)) {
+                    // explicit `return <call>` → `Set(__tret, call); return __tret`
+                    let ret =
+                        std::mem::replace(&mut l[last], Value::Return(Box::new(Value::Var(tv))));
+                    l.insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(ret)));
+                } else {
+                    // bare `<call>` tail → `Set(__tret, call); __tret`
+                    let call = std::mem::replace(&mut l[last], Value::Var(tv));
+                    l.insert(last, crate::data::v_set(tv, call));
+                }
                 t = Type::Text(Deps::frame1(tv));
             }
         }
@@ -5027,6 +5033,34 @@ impl Parser {
     /// caller copies the projected field into `__retbuf` via
     /// `materialize_view_return` so the field's record survives the lift's
     /// free — the same owned-copy `return d.value` already performs.
+    /// @PLN85 2d — the tail delivers a fresh owned text from a NATIVE text-dest CALL,
+    /// either as a bare `<call>` or an explicit `return <call>`.  `parse_block` binds
+    /// it to a synthetic local so it promotes to a hidden `&text` caller buffer (the
+    /// clean rebind shape).  Same predicate as `wrap_value_text_dest`; a forwarded
+    /// USER fn is already promoted (excluded).  Peels `Span`/`Return`.
+    fn native_text_call_tail(&self, tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Call(op, _) => {
+                let def = self.data.def(*op);
+                crate::state::codegen::is_text_dest_native(def.name())
+                    || crate::state::codegen::is_cdylib_text_call(def)
+            }
+            Value::Return(inner) => self.native_text_call_tail(inner),
+            _ => false,
+        }
+    }
+
+    /// Peel `Span`/`Return` wrappers off an owned tail value, returning the inner
+    /// call (spans dropped — codegen-irrelevant).  Used by the 2d bind to lift the
+    /// call out of `return <call>` before rebinding it to `__tret`.
+    fn peel_to_inner_call(v: Value) -> Value {
+        match v {
+            Value::Span(b) => Self::peel_to_inner_call(b.1),
+            Value::Return(inner) => Self::peel_to_inner_call(*inner),
+            other => other,
+        }
+    }
+
     fn return_field_base_is_call(&self, tail: &Value) -> bool {
         match tail.unspan() {
             Value::Return(inner) | Value::Drop(inner) => self.return_field_base_is_call(inner),
