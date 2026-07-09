@@ -8,8 +8,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > **Part of @PLN97 arc G** (remote store loader). **Requirement (user):** the
 > **same internal API** on every target — `store_load_url_trusted(r, url) ->
 > boolean` is one synchronous call; only the fetch underneath differs. **Status:
-> Rust core DONE + compile-verified on native and `wasm32-unknown-unknown`; JS
-> shell + browser validation remain (this doc).**
+> ✅ DONE + FULLY VALIDATED (2026-07-09)** — Rust core + JS shell built and
+> compile-verified on native and `wasm32-unknown-unknown`; all five steps GREEN,
+> including a REAL `fetch()` round-trip in headless Chromium
+> (`harness/run_browser.sh`). Functions in wasm with the identical synchronous
+> API, no page freeze, same validation + failure contract as native.
 
 ## The invariant
 
@@ -141,9 +144,13 @@ Steps 1–3 + Step 5 are GREEN via the repeatable `harness/` (a `.store` image, 
   `false` (fail-closed, same as native).
 - **V5 (parity)** — the SAME program run natively via `file://` → `url keys=7,13,42`,
   byte-identical to the wasm output.
+- **V4 (Step 4 — the real browser)** — `harness/run_browser.sh`: serve the `.store`
+  over HTTP, load the `--html` page in **headless Chromium**, and the rendered DOM
+  shows `<pre id="out">url keys=7,13,42` (absent from the page source → it is the
+  runtime output of a REAL `fetch()` + asyncify unwind/rewind). ✅ **GREEN.**
 
-**Remaining: Step 4** — the real `fetch()` round-trip in headless Chrome (the
-harness mocks the network; only a browser exercises the actual `fetch()`).
+**All steps GREEN** — the feature is done and validated end-to-end, including a
+live browser fetch.
 
 ## Residual / notes
 
