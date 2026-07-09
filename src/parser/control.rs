@@ -18,6 +18,70 @@ pub(crate) enum RetSite {
     MidReturn,
 }
 
+/// @PLN85 text-return analysis framework (SHADOW — not yet wired to codegen).
+///
+/// The ONE property behind the stacked per-shape promotion predicates (2d
+/// native-call, 3a view-of-local, 3b user-call, 3c if/match arm) and the p281
+/// borrow exclusion: *does a text return TAIL deliver a fresh OWNED text (→
+/// promote to a hidden `&text` caller buffer) or BORROW a caller-owned value
+/// (→ forward the borrow, never promote)?*  `classify_text_return` is the pure
+/// selector; `OwnedVia`/`BorrowVia` record WHICH shape produced the verdict so
+/// the corpus can verify it.  Verified beside the tests (via the `LOFT_TRA_DUMP`
+/// dump) before any codegen switch — see
+/// `plans/85-store-lifetime-retirement/probes/text-tail-return/framework/`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum TextReturn {
+    /// Fresh owned text — promote the return to a hidden `&text` caller buffer.
+    Owned(OwnedVia),
+    /// A borrow of a caller-owned value — forward it, do NOT promote.
+    Borrow(BorrowVia),
+    /// Not a promotable text-return shape: a literal-only tail, or a shape
+    /// whose leak (if any) is NOT in the return delivery (a consumed local, a
+    /// native-internal buffer) — the framework points AWAY from return promotion.
+    Plain,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum OwnedVia {
+    /// Native text-dest call in tail position (`u.to_json()`) — attempt 2d.
+    NativeCall,
+    /// User fn call that itself delivers owned text (`inner()`) — slice 3b.
+    UserCall,
+    /// Text field/index view of a LOCAL composite built in this body
+    /// (`a.v.0`, `d.ts[0]`) — slice 3a.
+    ViewOfLocal,
+    /// An `if`/`match` (match lowers to `If`) with an owned-text arm — slice 3c.
+    IfMatchArm,
+    /// A built-up local text — accumulator / interpolation / literal-concat /
+    /// rebind — delivered as the tail var; `text_return` already promotes these.
+    BuiltLocal,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum BorrowVia {
+    /// A text field-view rooted at a caller-owned ARGUMENT (`fn f(p) { p.a }`).
+    Argument,
+    /// A call to a fn that itself returns an argument-borrow (`f(s){ g(s) }`,
+    /// `g(s) -> text["s"]`) — the p281 shape; promoting it breaks the forward.
+    ForwardArg,
+}
+
+impl TextReturn {
+    /// Stable label for the `LOFT_TRA_DUMP` shadow dump + corpus verification.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            TextReturn::Owned(OwnedVia::NativeCall) => "Owned:NativeCall",
+            TextReturn::Owned(OwnedVia::UserCall) => "Owned:UserCall",
+            TextReturn::Owned(OwnedVia::ViewOfLocal) => "Owned:ViewOfLocal",
+            TextReturn::Owned(OwnedVia::IfMatchArm) => "Owned:IfMatchArm",
+            TextReturn::Owned(OwnedVia::BuiltLocal) => "Owned:BuiltLocal",
+            TextReturn::Borrow(BorrowVia::Argument) => "Borrow:Argument",
+            TextReturn::Borrow(BorrowVia::ForwardArg) => "Borrow:ForwardArg",
+            TextReturn::Plain => "Plain",
+        }
+    }
+}
+
 /// @PLN85 / D-own-1 — how an implicit-tail `t == Vector` return delivers its
 /// value into the fn's one `__retbuf` buffer. The SELECTOR
 /// (`classify_vector_delivery`) reads the deps fact + tail shape once and picks a
@@ -605,6 +669,20 @@ impl Parser {
         if !self.first_pass {
             self.rewrite_defended_fault_sites(&mut l);
         }
+        // @PLN85 text-return analysis framework (SHADOW) — classify the raw tail
+        // and print the verdict, WITHOUT changing codegen.  Verified beside the
+        // tests via the corpus (framework/corpus.loft).  Fires on the codegen
+        // pass for a text/`text?` return tail.
+        if !self.first_pass
+            && context == "return from block"
+            && matches!(result.base(), Type::Text(_))
+            && std::env::var("LOFT_TRA_DUMP").is_ok()
+            && let Some(tail) = l.last()
+        {
+            let verdict = self.classify_text_return(tail, &l);
+            let fname = self.data.def(self.context).original_name();
+            eprintln!("TRA {fname} => {}", verdict.label());
+        }
         // @PLN85 attempt 2d (text-tail-return-leak.md) — a text-returning fn whose
         // TAIL is a bare NATIVE text-dest CALL delivers a fresh owned text with no
         // promotable var, so it falls to the leaking owned-text `__ret_N` copy (and
@@ -628,7 +706,8 @@ impl Parser {
         if !self.first_pass
             && context == "return from block"
             && matches!(result.base(), Type::Text(_))
-            && l.last().is_some_and(|tail| self.native_text_call_tail(tail))
+            && l.last()
+                .is_some_and(|tail| self.native_text_call_tail(tail))
         {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
@@ -5046,6 +5125,151 @@ impl Parser {
                     || crate::state::codegen::is_cdylib_text_call(def)
             }
             Value::Return(inner) => self.native_text_call_tail(inner),
+            _ => false,
+        }
+    }
+
+    // ── @PLN85 text-return analysis framework (SHADOW) ────────────────────
+    // The single selector that replaces the stacked per-shape predicates.
+    // Pure + read-only: it classifies a text return TAIL into `TextReturn`.
+    // Verified beside the tests via `LOFT_TRA_DUMP`; not yet wired to codegen.
+
+    /// Classify a text (or `text?`) return TAIL — see `TextReturn`.  `block`
+    /// is the operator list the tail lives in (its siblings), needed to tell a
+    /// LOCAL composite (constructed here) from a caller-owned argument.
+    pub(crate) fn classify_text_return(&self, tail: &Value, block: &[Value]) -> TextReturn {
+        match tail.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => self.classify_text_return(inner, block),
+            Value::Block(bl) => bl.operators.last().map_or(TextReturn::Plain, |t| {
+                self.classify_text_return(t, &bl.operators)
+            }),
+            Value::Insert(ops) => ops
+                .last()
+                .map_or(TextReturn::Plain, |t| self.classify_text_return(t, ops)),
+            // A var tail.  A `RefVar(Text)` var is a promoted `&text` caller
+            // buffer — a built-up text (accumulator / interpolation / concat /
+            // rebind) `text_return` ALREADY promoted, so owned.  A plain-text
+            // caller ARGUMENT returned directly is a borrow.  Any other local is
+            // a built-up text — owned.
+            Value::Var(v) => {
+                if matches!(self.vars.tp(*v), Type::RefVar(_)) {
+                    TextReturn::Owned(OwnedVia::BuiltLocal)
+                } else if self.vars.is_argument(*v) {
+                    TextReturn::Borrow(BorrowVia::Argument)
+                } else {
+                    TextReturn::Owned(OwnedVia::BuiltLocal)
+                }
+            }
+            Value::Call(op, _) => self.classify_text_call(*op, tail, block),
+            Value::If(_, then, els) => {
+                if self.arm_delivers_owned(then, block) || self.arm_delivers_owned(els, block) {
+                    TextReturn::Owned(OwnedVia::IfMatchArm)
+                } else {
+                    TextReturn::Plain
+                }
+            }
+            _ => TextReturn::Plain,
+        }
+    }
+
+    /// Classify a CALL tail (`classify_text_return`'s call arm).
+    fn classify_text_call(&self, op: u32, tail: &Value, block: &[Value]) -> TextReturn {
+        // Native text-dest call (2d).
+        if self.native_text_call_tail(tail) {
+            return TextReturn::Owned(OwnedVia::NativeCall);
+        }
+        let def = self.data.def(op);
+        let name = def.name();
+        // Text concatenation / append operator that BUILDS a fresh text.
+        if name == "OpAddText" || name == "OpAppendText" || name == "OpAppendStackText" {
+            return TextReturn::Owned(OwnedVia::BuiltLocal);
+        }
+        // A text field/index VIEW (`OpGetText` chain): owned iff rooted at a
+        // LOCAL composite built here (3a); an argument-rooted view is a borrow.
+        if op == self.data.def_nr("OpGetText") {
+            return match self.text_view_root(tail) {
+                Some(root) if self.var_built_in_block(block, root) => {
+                    TextReturn::Owned(OwnedVia::ViewOfLocal)
+                }
+                Some(_) => TextReturn::Borrow(BorrowVia::Argument),
+                None => TextReturn::Plain,
+            };
+        }
+        // Any other store getter VIEWS an existing text — not a fresh delivery.
+        if name.starts_with("OpGet") {
+            return TextReturn::Plain;
+        }
+        // A user (or native-global) fn call returning text: owned iff its return
+        // borrows nothing or only HIDDEN buffer attrs; a return that borrows a
+        // VISIBLE argument is a forward-borrow (3b vs p281).
+        if matches!(def.returned().base(), Type::Text(_)) {
+            let attrs = def.attributes();
+            let owned = def
+                .returned()
+                .depend()
+                .iter()
+                .all(|&d| (d as usize) < attrs.len() && attrs[d as usize].hidden);
+            return if owned {
+                TextReturn::Owned(OwnedVia::UserCall)
+            } else {
+                TextReturn::Borrow(BorrowVia::ForwardArg)
+            };
+        }
+        TextReturn::Plain
+    }
+
+    /// True when an `if`/`match` ARM tail delivers a fresh owned text (a
+    /// native/user owned-text call, recursively through nested `if`/blocks) —
+    /// the signal that the branch return is the leaking owned shape (3c).
+    fn arm_delivers_owned(&self, arm: &Value, block: &[Value]) -> bool {
+        matches!(
+            self.classify_text_return(arm, block),
+            TextReturn::Owned(OwnedVia::NativeCall | OwnedVia::UserCall | OwnedVia::IfMatchArm)
+        )
+    }
+
+    /// The root local var of a TEXT field/index view tail — `OpGetText` over a
+    /// `OpGetText`/`OpGetVector`/`OpGetField` chain — or `None`.  NOT filtered
+    /// by `is_argument` (an NRVO-promoted local reads as an argument here); the
+    /// caller uses `var_built_in_block` to tell a local from a true argument.
+    fn text_view_root(&self, tail: &Value) -> Option<u16> {
+        let gt = self.data.def_nr("OpGetText");
+        let gv = self.data.def_nr("OpGetVector");
+        let gf = self.data.def_nr("OpGetField");
+        fn root(v: &Value, gt: u32, gv: u32, gf: u32) -> Option<u16> {
+            match v.unspan() {
+                Value::Var(x) => Some(*x),
+                Value::Call(d, args) if *d == gt || *d == gv || *d == gf => {
+                    args.first().and_then(|a| root(a, gt, gv, gf))
+                }
+                _ => None,
+            }
+        }
+        match tail.unspan() {
+            Value::Return(inner) => self.text_view_root(inner),
+            Value::Call(d, _) if *d == gt => root(tail, gt, gv, gf),
+            _ => None,
+        }
+    }
+
+    /// True when `var` is CONSTRUCTED in this block — the target of a `Set` or
+    /// an `OpDatabase(var, …)` construction (recursively through
+    /// `Block`/`Insert`).  Distinguishes an NRVO-promoted LOCAL composite from
+    /// a genuine caller-owned parameter.
+    fn var_built_in_block(&self, ops: &[Value], var: u16) -> bool {
+        let db = self.data.def_nr("OpDatabase");
+        ops.iter().any(|op| self.op_builds_var(op, var, db))
+    }
+
+    fn op_builds_var(&self, op: &Value, var: u16, db: u32) -> bool {
+        match op.unspan() {
+            Value::Set(v, _) => *v == var,
+            Value::Call(d, args) if *d == db => {
+                matches!(args.first().map(Value::unspan), Some(Value::Var(v)) if *v == var)
+            }
+            Value::Block(bl) => self.var_built_in_block(&bl.operators, var),
+            Value::Insert(ops) => self.var_built_in_block(ops, var),
+            Value::Call(_, args) => args.iter().any(|a| self.op_builds_var(a, var, db)),
             _ => false,
         }
     }

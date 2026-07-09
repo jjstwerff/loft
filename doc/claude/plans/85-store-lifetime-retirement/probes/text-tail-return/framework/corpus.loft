@@ -1,0 +1,106 @@
+// @PLN85 text-return analysis framework — the CASE CORPUS + expected verdicts.
+//
+// One fn per return-delivery shape.  The `// VERDICT: <kind>` comment on the
+// line ABOVE each `fn` is the KNOWN-CORRECT classification the shadow analysis
+// (classify_text_return) must produce.  `run_matrix`/`verify.sh` runs the
+// compiler with LOFT_TRA_DUMP=1 (which prints `TRA <fn> => <kind>` per
+// text-returning fn, WITHOUT changing codegen) and diffs against these.
+//
+// Verdict vocabulary:
+//   Owned:NativeCall     fresh owned text from a native text-dest call        (2d)
+//   Owned:UserCall       fresh owned text from a user fn that delivers owned   (3b)
+//   Owned:ViewOfLocal    text field/index view of a LOCAL composite built here (3a)
+//   Owned:IfMatchArm     an if/match whose arm delivers a native/user owned txt (3c)
+//   Owned:BuiltLocal     accumulator / interpolation / literal-concat / rebind (already clean)
+//   Borrow:Argument      text field-view rooted at a caller-owned ARGUMENT     (clean borrow)
+//   Borrow:ForwardArg    user call that itself returns an arg-borrow           (p281 — must NOT promote)
+//   Plain                literal-only tail, OR the leak is NOT in the return    (open subsystems)
+//
+// A verdict of Owned:* means "promote this return to a hidden &text buffer".
+// Borrow:* means "leave it a borrow / forward it".  Plain means "the return
+// delivery is not the promotable case" (for the open subsystems below the
+// leak, if any, lives elsewhere — the framework correctly points AWAY).
+
+struct U { name: text, age: integer }
+struct Pair { a: text, b: integer }
+struct A { v: (text, text) }
+struct D { ts: vector<text> }
+
+// ── Fixed by 2d / 3a / 3b / 3c (Owned → promote) ──────────────────────────
+
+// VERDICT: Owned:NativeCall
+fn f_native_tail() -> text { u = U { name: "Al", age: 7 }; u.to_json() }
+
+// VERDICT: Owned:NativeCall
+fn f_native_return() -> text { u = U { name: "Al", age: 7 }; return u.to_json(); }
+
+// VERDICT: Owned:NativeCall
+fn f_native_upper(s: text) -> text { s.to_uppercase() }
+
+// VERDICT: Owned:ViewOfLocal
+fn f_view_tuple() -> text { a = A { v: ("hello", "world") }; a.v.0 }
+
+// VERDICT: Owned:ViewOfLocal
+fn f_view_struct() -> text { s = U { name: "Al", age: 7 }; s.name }
+
+// VERDICT: Owned:ViewOfLocal
+fn f_view_vecfield() -> text { d = D { ts: ["aa", "bb"] }; d.ts[0] }
+
+// VERDICT: Owned:UserCall
+fn f_user_call() -> text { f_native_tail() }
+
+// VERDICT: Owned:IfMatchArm
+fn f_if_arm(c: boolean) -> text { u = U { name: "Al", age: 7 }; if c { u.to_json() } else { "fallback" } }
+
+// ── Already clean (Owned:BuiltLocal — text_return handles these today) ────
+
+// VERDICT: Owned:BuiltLocal
+fn f_rebind() -> text { u = U { name: "Al", age: 7 }; r = u.to_json(); r }
+
+// VERDICT: Owned:BuiltLocal
+fn f_interp(n: integer) -> text { "value is {n}" }
+
+// VERDICT: Owned:BuiltLocal
+fn f_accum() -> text { u = U { name: "Al", age: 7 }; acc = "J="; acc += u.to_json(); acc }
+
+// VERDICT: Owned:BuiltLocal
+fn f_literal_concat(s: text) -> text { "PRE-" + s.to_uppercase() }
+
+// ── Must NOT promote (Borrow — the p281 / arg-view boundary) ──────────────
+
+// VERDICT: Borrow:Argument
+fn f_arg_view(p: Pair) -> text { p.a }
+
+// VERDICT: Borrow:ForwardArg
+fn f_forward_arg(s: text) -> text { f_identity(s) }
+
+// f_identity returns its argument directly — a borrow of the arg, not a forward.
+// VERDICT: Borrow:Argument
+fn f_identity(s: text) -> text { s }
+
+// ── Open subsystems (Plain for the RETURN — the leak, if any, is elsewhere) ─
+
+// VERDICT: Plain
+fn f_literal_only() -> text { "just a literal" }
+
+// generic to_text() operand leak (plan17) — the RETURN is a clean built-local
+// concat; the leak is the generic monomorph's to_text() buffer, NOT the return.
+// VERDICT: Owned:BuiltLocal
+fn f_generic_concat<T: Printable>(x: T) -> text { x.to_text() + "!" }
+
+// local_dropped — return is a literal; the leak is the dropped local `j` /
+// struct_to_json internal, NOT the return delivery.
+// VERDICT: Plain
+fn f_local_dropped() -> text { u = U { name: "Al", age: 7 }; j = u.to_json(); "kept" }
+
+fn main() {
+    print(f_native_tail());
+    print(f_view_tuple());
+    print(f_user_call());
+    print(f_if_arm(true));
+    print(f_rebind());
+    print(f_arg_view(Pair { a: "x", b: 1 }));
+    print(f_forward_arg("y"));
+    print(f_generic_concat(42));
+    print(f_local_dropped());
+}
