@@ -63,14 +63,15 @@ fn key_text(i: u32) -> String {
     format!("k{i:03}")
 }
 
-/// Build a valid-by-construction, self-checking program for `spec`.
-pub fn generate_keyed(spec: &KeyedSpec) -> String {
+/// Emit the shared prefix — struct decls, `fn {entry}()` open, inserts, then
+/// removes — plus `(n, removed, survivors)` for the caller's tail. Shared by
+/// [`generate_keyed`] (self-check asserts) and [`generate_keyed_summary`]
+/// (print). The survivor set is computed once here and returned, so both tails
+/// read the same model (F2-DESIGN.md § re-assertion sites).
+fn build_prelude(spec: &KeyedSpec, entry: &str) -> (String, u32, BTreeSet<u32>, Vec<u32>) {
     let n = spec.n_keys.clamp(1, 20);
     let removed: BTreeSet<u32> = spec.remove.iter().copied().filter(|&i| i < n).collect();
-    // ONE model: the survivor set drives both the emitted ops and the baked
-    // assertions — there is no second copy to drift out of sync.
     let survivors: Vec<u32> = (0..n).filter(|i| !removed.contains(i)).collect();
-    let pop = survivors.len();
 
     let mut s = String::new();
     match spec.kind {
@@ -87,7 +88,8 @@ pub fn generate_keyed(spec: &KeyedSpec) -> String {
             s.push_str("struct C { m: sorted<E[k]> }\n");
         }
     }
-    s.push_str("fn main() {\n  c = C { m: [] };\n");
+    let _ = writeln!(s, "fn {entry}() {{");
+    s.push_str("  c = C { m: [] };\n");
 
     // Inserts — all n keys, in index order.
     for i in 0..n {
@@ -116,6 +118,13 @@ pub fn generate_keyed(spec: &KeyedSpec) -> String {
             }
         }
     }
+    (s, n, removed, survivors)
+}
+
+/// Build a valid-by-construction, self-checking program (`fn main`) for `spec`.
+pub fn generate_keyed(spec: &KeyedSpec) -> String {
+    let (mut s, n, removed, survivors) = build_prelude(spec, "main");
+    let pop = survivors.len();
 
     // Population + iteration order (a `;`-separated string, unambiguous for any n).
     s.push_str("  order: text = \"\";\n  cnt: integer = 0;\n");
@@ -188,6 +197,25 @@ pub fn generate_keyed(spec: &KeyedSpec) -> String {
         let _ = writeln!(s, "  assert(peak == {expected_max}, \"cmax {{peak}}\");");
         let _ = writeln!(s, "  assert(ccnt == {pop}, \"ccnt {{ccnt}}\");");
     }
+    s.push_str("}\n");
+    s
+}
+
+/// Build a program that PRINTS the canonical summary — population, then the
+/// surviving `key=value;` pairs in declared key order — instead of
+/// self-asserting. This is the F3 deterministic-output subset (F3-DESIGN.md):
+/// the stdout is a pure function of the program's semantics, so every backend
+/// must print it byte-identically. Emits `fn test()` for `run_cross_mode`,
+/// which appends `fn main() { test(); }`. Population is counted in the loop, so
+/// this is uniform across all three types (`index` has no `.len()`).
+pub fn generate_keyed_summary(spec: &KeyedSpec) -> String {
+    let (mut s, _n, _removed, _survivors) = build_prelude(spec, "test");
+    s.push_str("  cnt: integer = 0;\n  out: text = \"\";\n");
+    match spec.kind {
+        Kind::Index => s.push_str("  for e in c.m { cnt += 1; out += \"{e.n}={e.v};\"; }\n"),
+        _ => s.push_str("  for e in c.m { cnt += 1; out += \"{e.k}={e.v};\"; }\n"),
+    }
+    s.push_str("  print(\"pop={cnt};{out}\");\n");
     s.push_str("}\n");
     s
 }
