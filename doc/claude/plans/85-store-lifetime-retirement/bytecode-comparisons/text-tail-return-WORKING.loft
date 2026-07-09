@@ -1,0 +1,3 @@
+struct U { name: text }
+fn run() -> text { u = U { name: "Alice" }; r = u.to_json(); return r; }
+fn main() { t = run(); print(t); }
