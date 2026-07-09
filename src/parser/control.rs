@@ -101,18 +101,23 @@ impl TextReturn {
     ///   call resolves only on PASS 2, so this binds pass-2-only in practice
     ///   (identical to 2d) and carries 2d's latent forward-ref limitation.
     ///
-    /// `UserCall` / `IfMatchArm` are EXCLUDED: their tail is a call that pass 1
-    /// leaves unresolved (lowered to a work `Var`), so binding it only on pass 2
-    /// makes the fn's ABI inconsistent across passes and a forward-reference
-    /// caller emits the call without the buffer ("Too few parameters" — the
-    /// viewer/p281 regression class).  Re-enabling them needs pass-1/pass-2 tail
-    /// classification to agree (a signature pre-pass) — the next arc.
+    /// - `UserCall` — a user-fn text CALL tail, but the callee-side gate in
+    ///   `tret_bind_ok` additionally restricts it to a BACKWARD reference (callee
+    ///   defined before this fn).  A forward-referenced callee classifies `Plain`
+    ///   on pass 1 (its return type is unresolved there) and `UserCall` on pass 2,
+    ///   so promoting it pass-2-only diverges the ABI and crashes a forward-ref
+    ///   caller ("Too few parameters" — the viewer/p281 class).  A backward ref is
+    ///   `UserCall` on BOTH passes → pass-stable → safe.
+    ///
+    /// `IfMatchArm` is delivered by the per-arm accumulator (`push_text_arms_into`).
     /// `BuiltLocal` is already promoted by `text_return`; `TupleElement` /
-    /// `FnRefCall` need their own delivery.
+    /// `FnRefCall` need their own delivery.  The forward-ref `UserCall` case (and
+    /// generic-monomorph callees, whose def_nr is minted pass-2 and so reads as
+    /// forward) await the signature pre-pass.
     fn wants_tret_bind(self) -> bool {
         matches!(
             self,
-            TextReturn::Owned(OwnedVia::NativeCall | OwnedVia::ViewOfLocal)
+            TextReturn::Owned(OwnedVia::NativeCall | OwnedVia::ViewOfLocal | OwnedVia::UserCall)
         )
     }
 }
@@ -763,8 +768,7 @@ impl Parser {
                 .def(self.context)
                 .original_name()
                 .starts_with("replmain_")
-            && l.last()
-                .is_some_and(|tail| self.classify_text_return(tail, &l).wants_tret_bind());
+            && l.last().is_some_and(|tail| self.tret_bind_ok(tail, &l));
         if do_tret_bind {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
@@ -5331,6 +5335,37 @@ impl Parser {
     // The single selector that replaces the stacked per-shape predicates.
     // Pure + read-only: it classifies a text return TAIL into `TextReturn`.
     // Verified beside the tests via `LOFT_TRA_DUMP`; not yet wired to codegen.
+
+    /// Gate the `__tret` bind: the verdict must want it, AND — for the
+    /// forward-reference-UNSTABLE `UserCall` verdict — the callee must be a
+    /// BACKWARD reference (its def_nr precedes this fn's).  A later-defined callee
+    /// classifies `Plain` on pass 1 (return type unresolved there) and `UserCall`
+    /// on pass 2, so promoting it pass-2-only diverges the ABI and crashes a
+    /// forward-ref caller compiled earlier in pass 2 (`page_landing` class); a
+    /// backward ref is `UserCall` on both passes → pass-stable.  Native / view /
+    /// built-local carry their own pass behavior and are not gated here.
+    fn tret_bind_ok(&self, tail: &Value, block: &[Value]) -> bool {
+        let verdict = self.classify_text_return(tail, block);
+        if !verdict.wants_tret_bind() {
+            return false;
+        }
+        if matches!(verdict, TextReturn::Owned(OwnedVia::UserCall)) {
+            return self.tail_call_op(tail).is_some_and(|op| op < self.context);
+        }
+        true
+    }
+
+    /// The callee def_nr of a CALL return tail (peeling `Block`/`Insert`/
+    /// `Return`/`Drop` wrappers), or `None` when the tail is not a direct call.
+    fn tail_call_op(&self, tail: &Value) -> Option<u32> {
+        match tail.unspan() {
+            Value::Block(bl) => bl.operators.last().and_then(|t| self.tail_call_op(t)),
+            Value::Insert(ops) => ops.last().and_then(|t| self.tail_call_op(t)),
+            Value::Return(inner) | Value::Drop(inner) => self.tail_call_op(inner),
+            Value::Call(op, _) => Some(*op),
+            _ => None,
+        }
+    }
 
     /// Classify a text (or `text?`) return TAIL — see `TextReturn`.  `block`
     /// is the operator list the tail lives in (its siblings), needed to tell a

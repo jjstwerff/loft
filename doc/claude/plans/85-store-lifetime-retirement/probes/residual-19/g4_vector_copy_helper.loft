@@ -1,0 +1,5 @@
+// @PLN85 residual — vector<text> copy-helper (issue_437). LEAK: `o += [v[i] ?? ""]`
+// copies elements into a returned vector; the copied element text is unfreed.
+// A minimal `mk(){o=[];o+=["A"];return o}` does NOT leak — the leak is the ?? copy.
+fn ct(v: vector<text>) -> vector<text> { o: vector<text> = []; for i in 0..len(v) { o += [ v[i] ?? "" ]; } return o; }
+fn main() { for i in 0..3 { src: vector<text> = ["title"]; xs = ct(src); xs += ["tags"]; } }

@@ -1,0 +1,5 @@
+// !! VACUOUS — DOES NOT COMPILE (loop-var type-change error). leak=0 here means
+// NOT-RUN, not clean. Superseded by verify_tuple_NONgeneric_RUNS.loft. Do not trust.
+fn s() -> vector<text> { o: vector<text> = []; o += ["hello"]; return o; }
+fn get() -> text { s()[0] }
+fn main() { for i in 0..3 { r = get(); } }

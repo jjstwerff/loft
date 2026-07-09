@@ -1,0 +1,8 @@
+// !! VACUOUS — DOES NOT COMPILE (loop-var type-change error). leak=0 here means
+// NOT-RUN, not clean. Superseded by verify_tuple_NONgeneric_RUNS.loft. Do not trust.
+fn mk() -> text { s = "a"; s + "b" }
+fn pair() -> (text, text) { return (mk(), "m"); }
+fn main() { for i in 0..3 { r: (text, text) = pair(); } }
+// VERIFY (leak=0): NON-generic tuple return is CLEAN. With the SAME shape but
+// generic (g3_tuple_return) it leaks=1. → the axis is GENERIC MONOMORPH, not the
+// tuple. Merges 1b + tuple(3) + p241 into ONE root.

@@ -1,0 +1,5 @@
+// CLEAN sibling: build a tuple-of-text and discard — no return-delivery.
+struct P { id: integer }
+fn to_text(self: P) -> text { return "item-{self.id}"; }
+fn build<T: Printable>(x: T) { t: (text, text) = (x.to_text(), "m"); }
+fn main() { for i in 0..3 { build(P { id: i }); } }

@@ -1,0 +1,6 @@
+fn inner() -> text { s = "x"; s + "y" }
+fn run() -> text { inner() }
+fn main() { for i in 0..3 { r = run(); print(r); } }
+// REFUTES caller-side-free: main emits OpFreeText(r) yet leak=1 (== unbound). The
+// leaked alloc is the interpreter Rust String built in append_text for the __ret_1
+// copy, not the store the caller holds. Only PROMOTION (no owned __ret_N) fixes it.

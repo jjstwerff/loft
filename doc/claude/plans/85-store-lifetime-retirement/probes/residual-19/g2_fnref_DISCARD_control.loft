@@ -1,0 +1,9 @@
+fn run() {
+    f: fn(integer) -> text = fn(n: integer) -> text { "v: {n}" };
+    x = f(42);
+}
+fn main() { run(); }
+// CONTROL (run-checked). Discarding the fn-ref result frees it (OpFreeText(x)) →
+// clean. Returning it (g2_fnref_local) leaves __ret_1 unfreed → leak. Proves B is
+// the __ret_N owned-return class, NOT a fn-ref-ABI bug (the cref_work_buf is freed
+// identically in both).

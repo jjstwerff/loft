@@ -1,0 +1,7 @@
+fn mk() -> text { s = "a"; s + "b" }
+fn pair() -> (text, text) { return (mk(), "m"); }
+fn main() { for i in 0..3 { t = pair(); print(t.0); } }
+// RUNS (verified). Introspect: n_pair(__retbuf: __tuple<text,text>) — delivers the
+// tuple through a caller BUFFER (clean). The generic monomorph t_1P_pair -> (String,
+// String) delivers BY VALUE via an unfreed __ret_text_1 clone → leak. So the tuple
+// leak is the generic instantiation's by-value return (mod.rs:3135), NOT tuple-ness.

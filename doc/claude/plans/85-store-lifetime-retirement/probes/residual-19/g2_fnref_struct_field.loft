@@ -1,0 +1,4 @@
+// p227 variant — fn-ref stored in a struct field.
+struct G { fmt: fn(integer) -> text }
+fn run() -> text { g = G { fmt: fn(n: integer) -> text { "v: {n}" } }; g.fmt(42) }
+fn main() { print(run()); }

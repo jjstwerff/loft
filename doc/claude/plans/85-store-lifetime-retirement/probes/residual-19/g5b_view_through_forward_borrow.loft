@@ -1,0 +1,7 @@
+// @PLN85 residual — p54_b6. extract() returns a VIEW of its ARGUMENT (p.a), so
+// run() classifies ForwardArg (correctly NOT promoted). Leak = delivering a view
+// into a LOCAL passed as the arg — same class as n3 (composite embedded text).
+struct Pair { a: text, b: integer }
+fn extract(p: const Pair) -> text { match p.b { 0 => p.a, _ => "other" } }
+fn run() -> text { extract(Pair { a: "hello", b: 0 }) }
+fn main() { print(run()); }
