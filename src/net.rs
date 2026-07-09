@@ -1,5 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @I77 — Registry / manifest / lockfile resolution (the shared HTTP-GET layer:
+// native delegates to registry_index::http_get_bytes; browser uses the host
+// fetch() import).
 
 //! Target-uniform HTTP GET behind the `store_load_url*` stdlib functions.
 //!
