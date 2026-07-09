@@ -66,12 +66,20 @@ right now.
   blind-suppressed. Naming it needs a debug (no-inline) ASan build or a test
   bisection — a focused step; then flip `detect_leaks=1`. See
   [REMAINING_DESIGN.md](REMAINING_DESIGN.md) § S4.
-- **S1 (macOS-ARM sanitizer leg) — routed to a native Mac session.** The full
-  suite already runs on macOS-ARM (`v2-validation.yml`); only the *sanitizer*
-  (Miri/ASan) leg is ubuntu-only. This Linux box cannot validate a macOS
-  sanitizer job (Apple ASan runtime, `aarch64-apple-darwin`), and the plan's bar
-  is "validate what you ship" — so S1 is handed to a Mac-hosted agent to add +
-  validate the ARM sanitizer leg (steps in [REMAINING_DESIGN.md](REMAINING_DESIGN.md) § S1).
+- **S1 (macOS-ARM sanitizer leg) — ✅ DONE (2026-07-09), validated on a real Mac.**
+  The `miri` and `asan` jobs in `miri.yml` now run a `[ubuntu-latest, macos-latest]`
+  OS matrix (`fail-fast: false`), closing the ARM residual the founding @P383 (an
+  ARM-only incident) exposed. Validated on `aarch64-apple-darwin` before landing:
+  Miri store-unit set **6/6 clean**, ASan corpus sweep **1494 pass / 0 fail**, and
+  the raw-pointer-OOB positive control **fires on arm64** (the ARM Apple ASan
+  runtime is active — non-vacuous). One finding, catalogued + handled: ASan's
+  per-frame redzones (~6× on ARM) defeat the 8 MB-stack calibration of the
+  `deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash` guard test —
+  128-deep recursion overflows the thread stack before the depth guard bails. Pure
+  ASan-instrumentation artifact (production frames ~10 KB, guard fires at ~1.3 MB),
+  a functional guard test not UAF/OOB coverage, still run unsanitized on the
+  macOS-ARM full suite (`v2-validation.yml`) + the ubuntu ASan leg — so the macOS
+  ASan leg skips just that one test with no memory-safety-coverage loss.
 - **S7 (nightly notifier) — ✅ DONE (2026-07-09).** The `notify` job in `miri.yml`
   reads per-JOB conclusions and opens/updates/closes ONE deduped GitHub issue on any
   red gate (logic validated locally; first-run issue-file confirms on merge).
@@ -87,12 +95,12 @@ right now.
 - **S8 (MSan) — defer** (needs a fully-instrumented dep closure; low marginal value
   over Miri + the DA gate).
 
-**Recommended entry point (updated 2026-07-09):** **S2, S3, S5, S6, S7 are DONE**
-(TSan · both poison halves + gate · reframed Miri + new debug-asserts gate ·
-native ASan · nightly notifier). **S1** is routed to a native Mac session; **S8**
-deferred. The only remaining implementation is **S4** (LSan triage →
-`detect_leaks=1`, ~1 day, low risk) and **S9** (mixed-boundary cdylib ASan — a
-focused session; candidate design in NATIVE_ASAN_DESIGN.md, medium-high risk).
+**Recommended entry point (updated 2026-07-09):** **S1, S2, S3, S5, S6, S7 are DONE**
+(macOS-ARM sanitizer leg · TSan · both poison halves + gate · reframed Miri + new
+debug-asserts gate · native ASan · nightly notifier). **S8** deferred. The only
+remaining implementation is **S4** (LSan triage → `detect_leaks=1`, ~1 day, low
+risk) and **S9** (mixed-boundary cdylib ASan — a focused session; candidate design
+in NATIVE_ASAN_DESIGN.md, medium-high risk).
 
 ## Goal
 
@@ -110,7 +118,7 @@ S9's deep analysis is in [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md).
 
 | Item | Description | Exit criterion | Priority |
 |---|---|---|---|
-| **S1** | **macOS-ARM nightly leg** — add a macOS-ARM runner to `miri.yml`'s toolchain-matrix job (and, when affordable, to the Miri/ASan jobs).  @P383 — the founding incident — surfaced exclusively on macOS-ARM; a ubuntu-only nightly would not have caught it.  **State 2026-07-09: mostly moot** — `v2-validation.yml` already runs the full suite on macOS-ARM (macOS-latest); only the *sanitizer* (Miri/ASan) leg is still ubuntu-only, which is the narrow residual.  **Routed to a native Mac session 2026-07-09** (a macOS sanitizer job can't be validated from Linux — Apple ASan runtime / `aarch64-apple-darwin`; steps in REMAINING_DESIGN.md § S1). | macOS-ARM *sanitizer* leg green on `main`, validated on a real Mac; nightly badge reflects it. | Mac session |
+| **S1** | **macOS-ARM sanitizer leg** — the founding @P383 incident surfaced exclusively on macOS-ARM, so a ubuntu-only nightly would not have caught it.  **✅ DONE 2026-07-09, validated on a real Mac:** the `miri` + `asan` jobs run a `[ubuntu-latest, macos-latest]` OS matrix.  On `aarch64-apple-darwin`: Miri store-unit set 6/6 clean, ASan sweep 1494 pass / 0 fail, raw-pointer-OOB positive control fires on arm64.  The macOS ASan leg skips one deep-nesting guard test whose 8 MB-stack calibration ASan's frame redzones defeat (an instrumentation artifact, not a loft bug — see README § S1 / the asan job comment). | macOS-ARM *sanitizer* leg green on `main`, validated on a real Mac; nightly badge reflects it. | ✅ Done |
 | **S2** | **ThreadSanitizer (TSan)** — add a `tsan` job to `miri.yml` running the parallel/threading suite under `RUSTFLAGS=-Zsanitizer=thread`.  loft executes real parallel workloads via `par`/`par_light` under a store-isolation model (THREADING.md); zero data-race coverage exists today (Miri runs stacked-borrows-off; ASan/guard are not race detectors).  **✅ DONE 2026-07-09: `tsan` job built + validated — `threading`+`threading_chars` TSan-CLEAN (0 races), positive control confirms it fires; needs -Zbuild-std + target-scoped flag (§ Concrete steps S2).** | TSan job green on `main`; any races found catalogued or fixed. | ✅ Done |
 | **S3** | **`LOFT_POISON=1` arena poison-on-free keystone — ✅ STORE-RECORD HALF BUILT** (2026-06-29, @PLN85 fuzz-proof: `keys.rs::poison_enabled` + the `allocation.rs::free_named` poison block; both backends — native calls the same `free_named`; positive control proven — exposed a SILENT use-after-free (`elem_accumulate-none`) the cross-backend differential alone missed. **✅ FULLY CLOSED (2026-07-09):** store half + nightly `poison` CI gate in `miri.yml` + stack half. Stack half = poison at **reserve** not free ([STACK_POISON_DESIGN.md](STACK_POISON_DESIGN.md)): `reserve_frame` sentinel-fills its provably-dead reserved region (interpreter-only); green-drive 1498/1498 + positive control fires. See § Concrete steps S3.3.) Fill freed store records + freed stack slots with a sentinel value on free, turning silent store-internal use-after-free (the @P377/@P378 dangling-`DbRef` family) into loud, deterministic garbage at the dangling read — on any rustc, no nightly.  This is the blind spot Miri/ASan/Valgrind all share (loft's arena "free" is not a libc `free()`). | `LOFT_POISON=1 cargo test` green; @P377/@P378-class reads produce sentinel-value panics rather than silent stale data.  **Also unblocks @PLN53 F4.** | ✅ Done |
 | **S4** | **Triage the LeakSanitizer baseline** (~108 live-at-exit allocations) — understand each allocation class, fix the avoidable leaks, and turn `detect_leaks=1` on in `miri.yml` for the corpus.  Cluster 5 was a leak; there are likely others. | ASan `detect_leaks=1` passes corpus-wide in CI, or each surviving allocation class has a one-line accepted-leak annotation. | Medium |

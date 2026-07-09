@@ -193,7 +193,39 @@ branch → Miri red). **Acceptance:** ≥ 8 tests, job ≤ 20 min, all green.
 
 ---
 
-## S1 — macOS-ARM sanitizer leg — DO IN A NATIVE MAC SESSION
+## S1 — macOS-ARM sanitizer leg — ✅ DONE 2026-07-09 (validated on a real Mac)
+
+**Result:** the `miri` and `asan` jobs in `miri.yml` now run a
+`[ubuntu-latest, macos-latest]` OS matrix (`fail-fast: false`). Validated on
+`aarch64-apple-darwin` before landing — the "validate what you ship" bar met on
+the actual target platform, not inferred from Linux:
+
+- **Miri store-unit gate:** 6/6 curated store-layer tests Miri-clean (~0.6s under
+  Miri; the aarch64-apple-darwin sysroot built clean).
+- **ASan corpus sweep:** 1494 passed / 0 failed / 9 skipped.
+- **Positive control (non-vacuity):** a throwaway raw-pointer heap-buffer-overflow
+  compiled `-Zsanitizer=address --target aarch64-apple-darwin` → the Apple ASan
+  runtime reported `heap-buffer-overflow` on `arm64` and aborted. So the ARM ASan
+  runtime is genuinely active — the clean sweep is real coverage.
+
+**One finding, catalogued + handled (not hidden):** the ASan sweep tripped a
+`stack-overflow` in `parser::plan86_nesting_guard_tests::\
+deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash`. That test spawns an
+**8 MB-stack** thread and parses 2000-deep parens, expecting the
+`SANDBOX_MAX_PARSE_DEPTH = 128` guard to bail at ~1.3 MB before the recursion
+overflows. ASan pads every `parse_operators` frame with redzones (~6× on ARM
+here), so 128-deep recursion overflows the 8 MB stack *before* the guard fires.
+It is a **pure ASan-instrumentation artifact** (production frames ~10 KB, the
+guard fires correctly), a **functional recursion-guard test — not UAF/OOB
+coverage** — and it still runs unsanitized on the macOS-ARM full suite
+(`v2-validation.yml`) and passes on the ubuntu ASan leg. So the macOS ASan leg
+skips just that one test (`extra_filter` in the `asan` matrix `include`); no
+memory-safety coverage is lost. Bumping the test's stack was rejected — it would
+subvert the test's deliberate "8 MB overflows without the guard" calibration.
+
+---
+
+<details><summary>Original design (for the record)</summary>
 
 **State:** `v2-validation.yml` already runs the **full suite** on macOS-ARM
 (`macos-latest` = ARM64). Only the *sanitizer* (Miri / ASan) leg is ubuntu-only.
@@ -224,6 +256,8 @@ runs it locally with the standard per-sanitizer positive control, then lands it.
 **Acceptance:** macOS-ARM sanitizer leg green on `main`, validated on a real Mac.
 **Effort:** ~½ day in a Mac session. **Owner:** a native-Mac agent (this
 Linux-session agent cannot validate it — do NOT ship it blind from here).
+
+</details>
 
 ---
 
@@ -284,9 +318,10 @@ uninit surface the `plan53_cluster4` MaybeUninit fix targeted.
   the original "grow the full-program set" infeasible; the reframe gets more
   coverage for less CI time. (This § kept for the record; see README § S5.)
 - ✅ **S7 — DONE**: the nightly failure→issue notifier.
+- ✅ **S1 — DONE** (2026-07-09): macOS-ARM sanitizer leg, validated on a real Mac
+  (Miri 6/6, ASan 1494/0, positive control fires on arm64). See § S1 above.
 - **S4** (~1 day) — turns the muted leak baseline into a live gate; low risk. **Next.**
 - **S9** (focused session) — the high-value, higher-risk mixed-boundary finish.
-- **S1** — hand to a **native Mac session** (can't be validated from Linux).
 - **S8** — defer with the one-line cost note above; revisit only if a concrete
   need appears.
 
