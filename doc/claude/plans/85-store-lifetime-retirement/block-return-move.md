@@ -72,10 +72,14 @@ One place decides the block value's own-vs-borrow — do not spread the fix.
 oracle, already default-on at `scopes.rs:2977` with 0/54 over-free), and the
 block-value classifier is:
 
-- **`src/parser/control.rs` `classify_reference_delivery`** (L1201; called from
-  `block_result` ~L1013-1026): decides whether a block/tail Reference value is
-  delivered as owned or borrowing. This is where "tail is a fresh block-local ⇒
-  owned (empty dep, adopt)" must be added — as a fact the `ownership_of` oracle
+- **`src/parser/control.rs` `block_result`** (L723): the UNIFORM block-value
+  chokepoint — `parse_block` calls it (L608) for every block, return AND local
+  assignment. `classify_reference_delivery` (L1201) is only its
+  `context == "return from block"` sub-path (delivery into `__retbuf`); the
+  LOCAL-assignment dep (`a["z"]`) comes from the tail-expression typing that
+  `block_result` returns for `context == "block"`. Step 2 pins the exact line
+  that attaches the local dep; the adopt decision ("tail is a fresh block-local
+  ⇒ owned, empty dep") belongs here — as a fact the `ownership_of` oracle
   reports, NOT a new per-site heuristic.
 - Supporting: **`src/scopes.rs` `Value::Block`** hoist (~L2343-2406, the
   first-occurrence-only `!var_scope.contains_key` gate) and `get_free_vars`
@@ -100,12 +104,13 @@ the interp-vs-native cross-mode parity.
 Probes above committed; baseline recorded (both backends). Prove the harness can
 fail: p1/p2/p3b are red today.
 
-### Step 1 — the switch (no behaviour change yet)
-Add a single gate `move_block_return` read ONCE from env `LOFT_BLOCK_MOVE` into a
-parser/`Data` flag (like the existing diagnostic toggles). Thread it to the two
-chokepoint sites. Default **OFF** ⇒ byte-identical IR to today. Gate:
-`loft introspect` on a probe must emit the SAME IR with the switch off (prove the
-scaffold is inert).
+### Step 1 — the switch (no behaviour change yet) ✅ DONE
+`use_analysis::move_block_return()` reads env `LOFT_BLOCK_MOVE` (mirrors
+`env_tier`). It is `pub` (lib API surface ⇒ no dead-code lint) and has ZERO
+callers in the compile pipeline ⇒ provably inert. Verified: warm-vs-warm
+`loft introspect` on `p1` is byte-identical with the flag OFF vs ON (the naive
+fresh-vs-cached first diff was `.loft/cache` state, not the flag). Behaviour
+with the flag ON is unchanged (p1 still leaks — the adopt path is Step 3).
 
 ### Step 2 — the escape-analysis fact
 Implement `block_tail_adopts_fresh_local(bl, function) -> bool`: the tail is

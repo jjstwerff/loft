@@ -1023,6 +1023,20 @@ pub fn env_tier() -> u8 {
     tier
 }
 
+/// @PLN85 move-on-block-return migration switch (`block-return-move.md`).
+///
+/// When set, an inline block whose tail is a FRESH block-local owned struct
+/// (`x = { z = T{…}; z }`) will be delivered as OWNED — the LHS *adopts* the
+/// store and frees it once — instead of borrowing it (`x["z"]`), which today
+/// leaks and, via slot reuse with a still-live LHS, corrupts.  Default OFF: the
+/// scaffold is inert and the emitted IR is byte-identical to before.  The adopt
+/// path lands behind this gate in Step 3; the switch is retired in Step 6 once
+/// the behaviour is the sole path.
+#[must_use]
+pub fn move_block_return() -> bool {
+    std::env::var_os("LOFT_BLOCK_MOVE").is_some()
+}
+
 /// Public, test-facing entry: the verdicts for one function by its def number, at
 /// the env-selected tier (Tier 0 unless `LOFT_ELIDE_T1` is set).
 #[must_use]
