@@ -255,10 +255,34 @@ onto the store loader.
   `store_persist_loft.rs::store_load_url_verifies_sha_before_adopting_both_backends` +
   `store_load_smoke.loft` `loadurl` mode.
 - **Scope (Phase 0 of the HTTP-store evaluation):** authenticity + whole-file adopt for a **trusted,
-  hash-pinned** source. NOT in scope (its Phase 2): a *structural* validator for a
-  crafted-malicious buffer — `from_bytes` keeps `load`'s trust-the-producer posture (`fl_rebuild`
-  on a 0-size block is still a release hazard), and per-page authenticity for the paged
-  `load_key(s)`/`load_range` path is a separate Merkle problem.
+  hash-pinned** source. Structural safety of the adopted buffer is the follow-on below;
+  per-page authenticity for the paged `load_key(s)`/`load_range` path is a separate Merkle problem.
+
+### Untrusted-buffer structural validator (`validate_structure`) — Phase 2 — **DONE 2026-07-09**
+Phase 0 established *authenticity* (this is the store you pinned); Phase 2 establishes *structural
+safety* (this buffer cannot corrupt the heap when walked), so adopting bytes via `from_bytes` is
+sound **regardless of origin** — the heap-invariant trust bar. The HTTP-store evaluation found the
+mmap/`load`/`from_bytes` path had **~no structural validation in release**: `Store::validate` is
+`#[cfg(debug_assertions)]` (a no-op in release), so a crafted buffer could (a) drive `fl_rebuild`
+into a `pos += 0` **infinite loop** on a 0-size block (the @PLAN38 hazard) or (b) present a record
+whose size word claims more words than the arena holds → a **heap over-read** on later field reads.
+- **Built:** `Store::validate_structure() -> Result<(), String>` (`store.rs`) — the ALWAYS-ON,
+  non-panicking, fail-closed counterpart of `validate`: walk from `PRIMARY`, reject a `span == 0`
+  header (the loop guard), reject any record running past the arena (`u64` math so an `i32::MIN`
+  span can't overflow the bounds test), and require the chain to partition the store exactly
+  (`pos == size`). Wired into `from_bytes` **before `fl_rebuild`** — a malformed buffer returns
+  `None` (dropping the store frees the arena) and `fl_rebuild` never walks garbage headers. The
+  trusted local `load` path is unchanged (still debug-only) — the untrusted path validates, the
+  trusted path stays fast.
+- **Verified:** `store.rs::tests::from_bytes_rejects_crafted_buffers_fail_closed` crafts each cell
+  — 0-size block, oversized claimed/free record, `i32::MIN` span, a chain leaving a zero header
+  mid-store, wrong signature, under-16-byte — and asserts `from_bytes` returns `None`; a valid
+  claimed-block image is still accepted. Run in **release** (where the hazards live) with a timeout
+  as the real assertion — a surviving 0-block would hang, and it does not.
+- **Still Phase 2.1 (interior pointers):** a forged `DbRef` field aimed at a wrong record is caught
+  by `store_verify`/`verify_graph_ok` (the reachable-graph backstop the loader already recommends),
+  but that check is still sampling (8-problem cap, 16-element vector sampling) and trusts the schema
+  type tag — uncapping it + type-tag cross-validation is the remaining hardening.
 
 ### Phase 2 — paged read-only backing (local provider) — **reader core DONE 2026-07-07**
 - **Built:** `src/paged_reader.rs` (behind the `remote-store` feature — the zero-cost gate): the
