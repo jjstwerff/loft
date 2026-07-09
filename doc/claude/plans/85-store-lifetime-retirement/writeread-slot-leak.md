@@ -5,12 +5,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN85 cluster — write+read struct residual (`p9`)
 
-**Status: OPEN — matrix done (Step 0), root-cause + fix designed below.** An
-interp-only store leak: `f += s` (struct write) then `f#read as S` (struct read)
-in one program leaks one read-buffer record **per read**, iff a struct write ran
-earlier. Native is clean. Distinct from block-return-move (the read block-return
-in isolation is clean). This doc is the stepped implementation plan; it reuses
-the oracle/switch migration proven on block-return-move.
+**Status: FIXED (2026-07-09).** Interp-only struct binary-I/O corruption+leak:
+`f += s` then `f#read as S` mis-targeted the eval-stack slot instead of the
+record on BOTH the write (`assemble_write_data`) and read (`dispatch_read_data`)
+paths — the write serialised the record's DbRef bytes as "fields" (garbage to
+file), the read filled the stack (record orphaned → leak) and delivered a store
+whose number equalled the first field value (right only by coincidence; garbage
+under `LOFT_POISON`, wrong for inline-literal / one-field structs). **Fix:** deref
+the slot to the record in both paths (mirroring the proven Vector arm) — native
+already did this via `FileVal for DbRef`, so it was purely an interp divergence.
+All 13 probes pass the poison oracle (value == native + leak-free) on BOTH
+backends; `binary_io_matrix` 32/32; full suite green (bar a websocket flake);
+regression `tests/scripts/86-writeread-struct.loft`. No switch was needed — the
+poison oracle proved the deref exact, so it landed directly.
 
 ## The defect (measured, not hypothesised)
 
@@ -181,10 +188,18 @@ Full mechanism now understood (op-level `put_var`/`read_file`/deref traces):
   reused-store / copy-back interaction), a record-fill question distinct from the
   now-solved delivery. Needs a raw byte-dump of `#2` before/after `write_data`.
 
-**Reverted** — shipping the deref alone regresses W9 (delivery fixed but record
-still empty ⇒ value garbage). No p9 code on the branch. Next: dump `#2` around
-`write_data` to close the last mile, then land deref + record-fill together,
-gated, verified against the poison oracle (all 13 green both backends).
+**Closed by the byte-dump.** Dumping `#2` around `write_data` showed `data0`
+itself was garbage (`34359738369`) — i.e. the write had already put DbRef bytes
+in the FILE. So the read deref alone couldn't help; the WRITE
+(`assemble_write_data`) needed the SAME deref. Landing BOTH derefs makes all 13
+probes pass the poison oracle + leak-free, both backends (see status header). No
+gate/switch needed — the oracle proved the two-line deref exact.
+
+### Steps 5-6 ✅ DONE
+Poison-oracle validated (all 13 green both backends); `binary_io_matrix` 32/32;
+full suite green modulo a known websocket parallel-flake. Regression graduated to
+`tests/scripts/86-writeread-struct.loft` (a1/a3/c1/c2/c3 shapes, value asserts +
+leak-gate), green both backends. Cluster CLOSED.
 
 ### Step 5 — oracle gate + flip
 Gate the fix, then assert the **poison + cross-mode oracle** (above): every probe

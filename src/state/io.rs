@@ -162,6 +162,19 @@ impl State {
                         .read_data(&elem, elem_tp, little_endian, &mut data);
                 }
             }
+        } else if matches!(
+            &self.database.types[db_tp as usize].parts,
+            Parts::Struct(_) | Parts::EnumValue(_, _)
+        ) {
+            // @PLN85 p9: like the Vector arm, a struct's RECORD DbRef is stored in
+            // the slot `val` refs — deref it and serialise the RECORD's fields.
+            // Serialising `val` directly read the DbRef bytes AS fields and wrote
+            // them (garbage) to the file; the read then filled the reader's record
+            // with that garbage.  Native derefs (FileVal for DbRef); this was the
+            // interp-only write half of the same defect.
+            let rec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
+            self.database
+                .read_data(&rec_ref, db_tp, little_endian, &mut data);
         } else {
             self.database
                 .read_data(&val, db_tp, little_endian, &mut data);
@@ -372,6 +385,19 @@ impl State {
                     _ => unreachable!(),
                 };
                 self.database.store_mut(&val).set_int(val.rec, val.pos, v);
+            } else if matches!(
+                &self.database.types[db_tp as usize].parts,
+                Parts::Struct(_) | Parts::EnumValue(_, _)
+            ) {
+                // @PLN85 p9: like the Vector arm, a struct's RECORD DbRef is
+                // stored in the slot `val` refs — deref it and fill the record.
+                // Writing into `val` directly filled the eval-stack slot, so the
+                // record was never populated and the delivered value was the slot
+                // bytes reinterpreted as a DbRef.  Native derefs (FileVal for
+                // DbRef); this was the interp-only read half.
+                let rec_ref = *self.database.store(&val).addr::<DbRef>(val.rec, val.pos);
+                self.database
+                    .write_data(&rec_ref, db_tp, little_endian, &data);
             } else {
                 self.database.write_data(&val, db_tp, little_endian, &data);
             }
