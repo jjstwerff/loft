@@ -390,6 +390,32 @@ fns), `local_dropped` (native in a dropped non-returned local), `nested_consume`
 promoted/freed at its own site, not the tail; attempt 2's `__work_N` free covers
 them partially (they leak 1/call, not 2). Follow-on.
 
+### Harness impact of 2d (measured, `--test issues` under `detect_leaks=1`)
+
+The real goal is the @PLN54 S4 gate, so measure the ACTUAL harness leakers, not just
+the synthetic matrix. Distinct leaking `issues` tests: **~113 pre-fix → 42 after 2d**
+(≈71 fixed, a majority) — every DIRECT native-tail return (the bulk of the p54/q3/q4
+JSON/text tests) is now clean, plus the UAF. The 42 that remain are the compound /
+indirect shapes where the native call is NOT the whole tail, grouped:
+
+- `p54_struct_parse_*` / `p54_struct_enum_*` / `p54_b*` / `p54_match_*` — JSON
+  struct-parse + enum-extractor shapes (the native text lands in a struct field or
+  match arm, not the return tail).
+- `p197_*` (text from a tuple field), `p329_*`/`p330_*`/`p243_*` (generic-tuple text
+  elements), `p227_*` (text FN-REF), `p235_*`/`p4d_*` (par text), `plan17_*` (bounded
+  generic method), `q4_json_string_round_trips`, `b7_*`, `issue_437`, `n3_*`, `p189c`,
+  `p213`, `p241_singleton_text`.
+
+Each needs the native SUB-expression (or the tuple-element / fn-ref / par delivery)
+promoted or freed at its own site — a family of follow-on slices, not the tail-return
+fix. (16 `ir_read`/`ir_schema`/`ir_store` lib tests also "fail" — the intentional
+Class-1 `Box::leak`, handled by the flip's narrow suppression.)
+
+**So the flip is not yet ready** (42 real Class-2 leakers remain); but 2d closed the
+largest, most-common slice + the safety bug, validated on both backends, no
+regression. Corrects an earlier mis-stated "113 → 0" (a grep bug — the `( N/M)`
+nextest progress prefix; the real count is 42).
+
 ## Why not fixed in the surfacing session
 
 The surfacing session was on macOS-ARM and had done the full diagnosis; the edit
