@@ -1563,9 +1563,18 @@ impl Stores {
         }
     }
 
+    /// `tp` is the CONTAINER type (`Array` / `Ordered`), not the content type: the
+    /// keystone walk is keyed on the container's `Parts`.  The content type is read
+    /// back out of it, so the caller no longer has to know which of the two it is.
     pub(super) fn copy_claims_array_body(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
+        let content_tp = match &self.types[tp as usize].parts {
+            Parts::Array(v) | Parts::Ordered(v, _) => *v,
+            other => {
+                panic!("copy_claims_array_body called with non-array type {tp} (parts: {other:?})")
+            }
+        };
         let length = vector::length_vector(rec, &self.allocations);
-        let size = u32::from(self.size(tp));
+        let size = u32::from(self.size(content_tp));
         let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
         if cur == 0 {
             self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
@@ -1581,8 +1590,29 @@ impl Stores {
         let into = self.store_mut(to).claim(1 + length.div_ceil(2));
         self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
         self.store_mut(to).set_u32_raw(into, 4, length);
-        for i in 0..length {
-            let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
+        // SOURCE enumeration reads the keystone walk — the single home of the
+        // per-`Parts` source layout.  Its `Array`/`Ordered` arm computes the same
+        // `get_u32_raw(cur, 8 + i * 4)` this loop used to, and hands each element
+        // record back as `owning_elem`, so the fold is position-for-position.
+        // The DESTINATION build below (claim → `copy_block` → rec-id slot → recurse)
+        // stays per-kind, including the @P309 length header written above.
+        let elems: Vec<u32> = self
+            .for_each_owned_child(rec, tp)
+            .children
+            .into_iter()
+            .filter_map(|c| c.owning_elem)
+            .collect();
+        // The keystone reads the same `length_vector` header, so the counts are one
+        // fact seen twice.  Assert it rather than let a future divergence write the
+        // header for N and fill N-1 slots (the @P309 shape) — the nightly
+        // debug-assertions gate runs this over the whole interpreter corpus.
+        debug_assert_eq!(
+            u32::try_from(elems.len()).unwrap_or(u32::MAX),
+            length,
+            "keystone element count disagrees with the vector length header (tp={tp})"
+        );
+        for (i, elm) in elems.into_iter().enumerate() {
+            let i = u32::try_from(i).unwrap_or(u32::MAX);
             let new = self.store_mut(to).claim(size.div_ceil(8));
             self.copy_block(
                 &DbRef {
@@ -1609,7 +1639,7 @@ impl Stores {
                     rec: new,
                     pos: 8,
                 },
-                tp,
+                content_tp,
             );
         }
     }
@@ -1914,8 +1944,10 @@ impl Stores {
                     self.store_mut(to).set_u32_raw(to.rec, to.pos, new_rec);
                 }
             }
-            Parts::Array(v) | Parts::Ordered(v, _) => {
-                self.copy_claims_array_body(rec, to, *v);
+            Parts::Array(_) | Parts::Ordered(_, _) => {
+                // Pass the CONTAINER type: the keystone walk is keyed on it, and the
+                // helper reads the content type back out (same shape as `Hash`/`Index`).
+                self.copy_claims_array_body(rec, to, tp);
             }
             Parts::Hash(_, _) => {
                 self.copy_claims_hash_body(rec, to, tp);
