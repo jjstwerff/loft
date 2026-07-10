@@ -22,11 +22,12 @@ declare the contract range they were tested against; `1.0` is contract 1.**
   tag. It counts *silent breaking changes* to loft's contract (language
   syntax/semantics, stdlib API meaning, store/heap layout, on-disk + wire format,
   package format). Additive and loud-failing changes do **not** bump it.
-- **1.0 == contract 1.** Everything before the syntax/type freeze is contract 0 —
-  "unstable, no compatibility promise." When the surface freezes (imminent — the type
-  surface is feature-complete on `main`, the last syntax changes in flight), contract
-  becomes 1 and the promise begins. The versioning pivot and arc E are the **same
-  milestone**.
+- **1.0 == contract 1** (ratified). Everything before the syntax/type freeze is contract
+  0 — "unstable, no compatibility promise." When the surface freezes (imminent — the type
+  surface is feature-complete on `main`, the last syntax changes in flight), `CONTRACT_VERSION`
+  flips 0 → 1 and the promise begins. The versioning pivot and arc E are the **same
+  milestone**. **The mechanism ships now at 0 (inert); the flip to 1 lands *after* the
+  open syntax changes** — see § The two sub-choices.
 
 ## The invariant (design-protocol step 1)
 
@@ -161,17 +162,22 @@ price of the simplest axis, and it fails safe (warn, not silent-wrong).
    ⇒ contract bump; golden-corpus-output-changed ⇒ classify + bump (shared with arcs
    A/C). This is the failure-path-1 mitigation; it lands with the policy arcs.
 
-## The two cosmetic sub-choices left to the user
+## The two sub-choices — RATIFIED 2026-07-10
 
-Substance is decided; these are naming/brand and do not change the design:
+Both ratified by the owner:
 
-1. **The field + concept name.** `contract` is used here to avoid the Rust-`edition`
-   connotation (Rust editions are *multiplexed, additive* opt-ins the compiler supports
-   simultaneously — the opposite of a monotone compatibility floor). Alternatives:
-   `loft-contract`, `compat`, `epoch`, `language-level`. Recommend **`contract`** (it
-   says what it is: the compatibility contract).
-2. **The starting integer at 1.0.** `1` reads cleanly ("contract 1 == loft 1.0"). If a
-   pre-1.0 promise is ever wanted, contract 0 is available for it as-is.
+1. **The field + concept name → `contract`.** (Chosen over `edition` to avoid the
+   Rust-`edition` connotation — Rust editions are *multiplexed, additive* opt-ins the
+   compiler supports simultaneously, the opposite of a monotone compatibility floor.)
+   Already the field name in `manifest.rs`.
+2. **The baseline integer → 1.** The compatibility contract starts at **1** (not a
+   pre-1.0 `0`): contract 1 is the 1.0 baseline. **Sequencing:** the mechanism ships now
+   with `CONTRACT_VERSION = 0` (inert — no existing library declares `contract`, so
+   nothing gates), and the **0 → 1 flip lands *after* the last open syntax changes
+   settle** — those changes are part of defining what contract 1 *is*, so declaring the
+   baseline before they land would freeze a moving contract. The flip is a one-line,
+   deliberate follow-up at the freeze. A library tested against the pre-1.0 language may
+   carry `contract = "0"`, which then drifts (warns) once loft is at contract 1.
 
 ## See also
 

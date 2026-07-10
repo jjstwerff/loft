@@ -134,7 +134,7 @@ accept/reject divergence here is a Goal-D violation).
 | **A** — Compatibility policy: what *is* a breaking change, per surface (language syntax/semantics · stdlib API · store/heap layout · on-disk + wire format · package format) | needs design → `COMPATIBILITY.md` | Open |
 | **B-mechanical** — bind upper bounds + ranges + exact pins; loud rejection of unparseable constraints; grandfather a bare `>=` as "unknown compatibility" | `src/manifest.rs` (`check_version` → `VersionCheck`), `src/parser/mod.rs` (loader), matrix unit test + `testpkg_badconstraint`/`testpkg_upperbound` fixtures | **✅ IMPLEMENTED** (2026-07-10) |
 | **B-registry** — the registry (`pr-validate`) validates the declared range on submission | external — loft-lang/registry | Open |
-| **B-semantic** — the `contract` integer + loader semantics (reject-below / accept-in-range / warn-above) | `src/manifest.rs` (`CONTRACT_VERSION`, `ContractCheck`, `check_contract`), `src/parser/mod.rs` (loader), `[package] contract` field, unit + `testpkg_contract_*` fixtures | **✅ IMPLEMENTED** (2026-07-10) — `CONTRACT_VERSION = 0` (pre-1.0), inert until libraries adopt `contract` and loft bumps to 1 |
+| **B-semantic** — the `contract` integer + loader semantics (reject-below / accept-in-range / warn-above) | `src/manifest.rs` (`CONTRACT_VERSION`, `ContractCheck`, `check_contract`), `src/parser/mod.rs` (loader), `[package] contract` field, unit + `testpkg_contract_*` fixtures | **✅ IMPLEMENTED** (2026-07-10). Name + baseline **ratified**: field `contract`, baseline **1**. Ships at `CONTRACT_VERSION = 0` (inert — nothing declares `contract` yet); the **0 → 1 flip lands after the last open syntax changes settle** (they define what contract 1 is) |
 | **C** — Deprecation channel: a warning path for a semantic change a library can trip.  [Goal F](../../GOALS.md) permits exactly one channel — warnings, free to ignore | needs design; worked example = C86 / `hex_terrain` | Open |
 | **D** — Public bug-intake path: the fix-not-file discipline is internal and does not reach strangers | [ISSUE_TRACKING.md](../../ISSUE_TRACKING.md) | Open |
 | **E** — The 1.0 line: what is frozen vs still moving | [RELEASE.md](../../RELEASE.md) | Open — **newly timely**: as of 2026-07-10 the type surface is feature-complete on `main` and the last syntax changes are in flight, so "what is frozen" is about to have a concrete answer |
@@ -190,9 +190,10 @@ plan's own open questions had left implicit.
    range they were tested against; **`1.0` == contract 1** (so the pivot and arc E are
    the same milestone).  An integer suffices — probed: the feature-floor case (needing a
    later-added symbol) already fails LOUDLY, so only the *silent* breaking-change class
-   needs a version axis, which collapses semver to major-only.  Ratification of two
-   cosmetic sub-choices (the field name; the starting integer) is the user's; the
-   substance is committed.
+   needs a version axis, which collapses semver to major-only.  Both sub-choices
+   **RATIFIED 2026-07-10**: field name `contract`, baseline `1` — with the `0 → 1` flip
+   landing after the last open syntax changes settle (see versioning-decision.md § The
+   two sub-choices).
 3. **Whose obligation is a deprecation warning?**  C86 changed the meaning of code that
    libraries had *already shipped*.  A warning at loft-build time reaches the loft team;
    a warning at library-compile time reaches the author; a warning at consumer-compile

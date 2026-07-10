@@ -657,11 +657,18 @@ fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
 // declared contract stays valid exactly as long as loft's silent contract is
 // unchanged.  Full rationale: doc/claude/plans/102-stability-contract/versioning-decision.md.
 
-/// loft's current compatibility contract.  **0 = pre-1.0, no promise** (the
-/// language surface is still settling); it becomes **1 at the 1.0 freeze** and
-/// increments on each subsequent silent breaking change.  Bumping this is a
-/// deliberate maintainer act paired with a CHANGELOG note — see the versioning
-/// decision doc (layout-hash / golden-corpus CI gates make an omitted bump loud).
+/// loft's current compatibility contract.
+///
+/// **Currently 0 — pre-freeze**: the mechanism is live but the value has not yet
+/// been declared, so existing libraries (which carry no `contract` field) are
+/// grandfathered and nothing gates.  **Ratified to flip to 1 — the 1.0 contract
+/// baseline — once the last open syntax changes land** (those changes are part of
+/// defining what contract 1 *is*, so declaring the baseline before they settle
+/// would freeze a moving contract).  After the freeze it increments to 2 on the
+/// first silent breaking change, and so on.  The 0→1 flip is a one-line,
+/// deliberate follow-up at the freeze; bumping it thereafter is a maintainer act
+/// paired with a CHANGELOG note (layout-hash / golden-corpus CI gates make an
+/// omitted bump loud — see the versioning decision doc).
 pub const CONTRACT_VERSION: u32 = 0;
 
 /// Outcome of checking a library's `contract` requirement against the running
