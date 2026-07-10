@@ -121,10 +121,12 @@ impl TextReturn {
     ///   `UserCall` on BOTH passes → pass-stable → safe.
     ///
     /// `IfMatchArm` is delivered by the per-arm accumulator (`push_text_arms_into`).
-    /// `BuiltLocal` is already promoted by `text_return`; `TupleElement` /
-    /// `FnRefCall` need their own delivery.  The forward-ref `UserCall` case (and
-    /// generic-monomorph callees, whose def_nr is minted pass-2 and so reads as
-    /// forward) await the signature pre-pass.
+    /// `BuiltLocal` is already promoted by `text_return`.  `FnRefCall` promotes
+    /// through the P227 adaptive hidden-`&text`-buffer fn-ref ABI (a `CallRef`
+    /// tail is structurally stable across passes, so it needs no backward-ref
+    /// gate).  `TupleElement` still needs its own per-element delivery.  The
+    /// forward-ref `UserCall` case (and generic-monomorph callees, whose def_nr
+    /// is minted pass-2 and so reads as forward) await the signature pre-pass.
     fn wants_tret_bind(self) -> bool {
         matches!(
             self,
@@ -133,6 +135,7 @@ impl TextReturn {
                     | OwnedVia::ViewOfLocal
                     | OwnedVia::ViewOfLocalCall
                     | OwnedVia::UserCall
+                    | OwnedVia::FnRefCall
             )
         )
     }

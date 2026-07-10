@@ -231,27 +231,32 @@ but a real correctness bug: a probe crashes it today
 2. **Gate.** Add the native forward-ref cell to `bytecode-comparisons/` + the
    matrix so it can never silently return.
 
-## Slice 3 — FnRefCall promotion (`p227` ×4)
+## Slice 3 — FnRefCall promotion (`p227` ×4) — ✅ FIXED 2026-07-10 (one line)
 
 **Closes:** `p227_text_fn_ref_local_call`, `_local_with_capture`, `_struct_field`,
 `_struct_field_capture`.
 
-1. **Probe first.** Fn-ref tails classify `Plain` on pass 1 (the fn-ref var's fn
-   type isn't resolved yet) and `FnRefCall` on pass 2 — confirm whether the fn-ref
-   var's type IS resolvable at end of pass 1 (when slice 0 runs). Instrument the
-   pre-pass to log the fn-ref-tail verdict at that point.
-2. **If resolvable:** slice 0's stamp covers it — add `OwnedVia::FnRefCall` to
-   `wants_tret_bind` and verify the adaptive @P387 buffer ABI (`text_return`'s
-   lambda work-buffer logic, `control.rs:4861`, and `fn_call_ref` hidden-buffer
-   dispatch) delivers the buffer through the indirect call. The ABI is already
-   "one hidden `&text` buffer per text-returning fn-ref" (P227 groundwork).
-3. **If NOT resolvable at end of pass 1:** the fn-ref typing must be resolved
-   earlier, or FnRefCall needs a dedicated stamp keyed on the fn-ref var's declared
-   `fn(...)->text` type (available at declaration) rather than the call-site
-   verdict. This is a follow-on within the slice.
-4. **Gate.** All 4 `p227` drop from the sweep; par (`p235`) + fn-ref value tests
-   unregressed; both backends. `p227` is the delicate ABI shape — verify capture
-   (closure record + buffer are distinct hidden params, correct attribute slots).
+**Fix.** `OwnedVia::FnRefCall` added to `wants_tret_bind` — a single line. The
+DISCARD control (`x = f(42)` frees via `OpFreeText(x)` → clean; `return f(42)`
+leaks) proved the fn-ref leak is just the `__ret_N` unpromoted-owned-return class,
+NOT a fn-ref-ABI bug. The concern that fn-ref tails classify `Plain` on pass 1 did
+NOT materialise: `classify_text_return` matches `Value::CallRef` STRUCTURALLY (a
+`CallRef` is a `CallRef` on both passes), so the verdict is pass-stable and needs
+NO backward-ref gate (unlike `UserCall`/`ViewOfLocalCall`). The P227 adaptive
+hidden-`&text`-buffer ABI already delivers the buffer through the `Set(__tret,
+f(42)); __tret` promotion.
+
+**Gate (all passed).** All 4 `p227` shapes (local, capture, struct-field,
+struct-field-capture) leak-0 + correct (`v: 42` / `hi: 42`) on BOTH backends; full
+suite 2738-green; verdict framework 25/25.
+
+**⚠ Toolchain footnote.** The FIRST post-fix suite run showed 3 FALSE failures
+(`p310_graphics_vector_ffi`, `moros_glb_cli`, `imaging_png_roundtrip`) — all
+`error[E0514]: loft_ffi compiled by an incompatible version of rustc`. Cause:
+stable rustc moved 1.96.1 → 1.97.0, so the cached `loft_ffi`/cdylib artifacts were
+stale (a full `cargo clean` + rebuild fixed it; the fn-ref change was innocent).
+See the [[mac_sanitizer_toolchain]] memory — never run `--native` in a
+nightly-`RUSTUP_TOOLCHAIN` shell, and `cargo clean` after a rustc bump.
 
 ## Slice 4 — vector-of-text element-copy delivery (`issue_437`)
 
