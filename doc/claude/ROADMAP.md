@@ -25,35 +25,52 @@ The methodology behind this file (categories, no-time-projections, features-need
 
 ---
 
-## Where we are & the highest-leverage next work (2026-06-17)
+## Where we are & the highest-leverage next work (2026-07-10)
 
-> **Update 2026-06-19 — FFI bridge migration done; the next leverage is frictionless library REUSE.**
-> Plan-74 is **COMPLETE**: all 7 loft-lang native libraries migrated to `#[loft_native]` generated
-> bridges + re-published to the registry (signed, merged); the legacy ~98-arm interpreter marshaller
-> is deleted (bridge-only dispatch); the `#306` bridge ref-return bug is fixed.  Libraries are now
-> **discoverable in-repo** — auto-generated [LIBRARIES.md](LIBRARIES.md) + CLAUDE.md hooks + a CI
-> staleness gate + a registry `validate.py` docs gate (rejects a package with missing/incorrect docs).
-> The remaining bottleneck is **reuse friction** — agents reimplement libraries they can't find or
-> can't use without ceremony — so the top next picks are:
+> **Update 2026-07-10 — the plan board is EMPTY; the remaining work was never ticketed.**
+> Zero plans carry `status:active` / `status:next` / `status:progress`, and the loft repo has **zero
+> open bug issues** — not because the roadmap is finished, but because @PLN25/@PLN28/@PLN36/@PLN85/
+> @PLN90/@PLN94/@PLN97–101 all closed and the residue was never filed.  The top picks now are:
 >
-> 1. **`loft search` CLI** (effort S) — the advertised-but-unimplemented registry discovery command;
->    closes the discovery loop *outside* the loft repo (any project, not just this one).  Spec:
->    [PACKAGES/PKG_REGISTRY](PKG_REGISTRY.md) § Open work — `loft search`.
-> 2. **Lazy auto-use** ([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib)) — auto-load a registered
->    library on first use of its trigger method (`line.matches(p)` with no `use`); the registry
->    triggers + the catalogue are the substrate.  The purest live-prototyping win, and `loft search`
->    is its discoverable front door.
+> 1. **Cluster C / H10 — fold `copy_claims` onto the keystone** ([STABILITY_ROADMAP § Red-flag
+>    remediation](STABILITY_ROADMAP.md), plan written at
+>    [cluster-C-copy-claims-fold.md](plans/85-store-lifetime-retirement/cluster-C-copy-claims-fold.md)).
+>    The **last item of the wide-release bar's gate 1** — the gate the roadmap calls *"the definition
+>    of stabilized, not one item among five."*  Fully designed, **S per copy helper**, and it has
+>    **no plan issue**.
+> 2. **Gate 5 — the stability contract** (semver / compat promise, public bug-intake path, the 1.0
+>    line).  Its opening condition ("when gate 1 is in sight") has **fired**, and the failure mode it
+>    prevents is already live: `hex_terrain 0.1.0` silently computes a wrong answer against current
+>    loft.  No plan.
+> 3. **Drain the fuzz-proof** — @PLN53 F4 (its `LOFT_POISON` blocker is resolved) + @PLN54 S4 LSan.
+>    These are what turn gate 1's silence into *proof by construction*.
 >
-> Alternatives if pivoting: **stability instruments** (`@PLN53`/`@PLN54` — fuzzing/sanitizer, the
-> roadmap below) or the **`@PLN18` engine host** (the north star, but the parallel gaming lane — a
-> deliberate hand-off, not an unprompted pickup).  (The 2026-06-17 digest below predates this — the
-> "Library system" row's `regex match_groups/replace` is now SHIPPED as regex v0.2.0.)
+> Two standing gates are RED and neither is a flake: `main` fails the **differential oracle** (a
+> native/wasm accept-reject divergence on a match-arm tail call), and **`registry-validation` has
+> never had a green run** (`graphics` = missing `libasound2-dev` on the runner; `hex_terrain` = stale
+> plain-bind write-through vs C86 H-Copy).
+>
+> Lower-friction picks that remain valid: **`loft search` CLI** (effort S — the
+> advertised-but-unimplemented registry discovery command; spec:
+> [PKG_REGISTRY](PKG_REGISTRY.md) § Open work) and **lazy auto-use**
+> ([lib_plans/59-lazy-stdlib](lib_plans/59-lazy-stdlib) — auto-load a registered library on first use
+> of its trigger method; note the tracker row for it is marked closed/superseded, so re-premise before
+> picking up).
 
-The 2026-06 cycle shipped (narrow-int storage + dev-communication, install/native
-hardening, the `@PLN27` plan migration).  The **stability roadmap is drained**
-([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — H3/H5/H6/H7/H8 all done) and the
-**bug queue is clean** (the two open GitHub issues are deferred enhancements).  So
-forward work is improvement, not firefighting.  Under the warm feature freeze
+> **Historical (2026-06-19) — FFI bridge migration done.**  The local plan
+> [`lib_plans/74-ffi-dispatch`](lib_plans/74-ffi-dispatch) is **COMPLETE**: all 7 loft-lang native
+> libraries migrated to `#[loft_native]` generated bridges + re-published to the registry (signed,
+> merged); the legacy ~98-arm interpreter marshaller is deleted (bridge-only dispatch); the `#306`
+> bridge ref-return bug is fixed.  Libraries are **discoverable in-repo** — auto-generated
+> [LIBRARIES.md](LIBRARIES.md) + CLAUDE.md hooks + a CI staleness gate + a registry `validate.py` docs
+> gate.  **Tracker mismatch:** the issue `@PLN74` ("[libs] FFI dispatch") is still OPEN /
+> `status:future` — it is a migration stub pointing at `lib_plans/future/25-ffi-dispatch/`.  Either
+> close `@PLN74` or stop calling the work complete; do not read the two numbers as the same plan.
+
+The 2026-07 cycle shipped as `2026.7.1` (stability + type safety).  The **H-register is drained**
+([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — H3/H5/H6/H7/H8 all done) and the **bug queue is
+empty** (zero open GitHub issues), but the stability roadmap itself is **not** drained: gate 1's
+Cluster C fold and gate 5 both remain, and both are un-ticketed.  Under the warm feature freeze
 (below), **in-scope** = library enablement + optimisations + stabilisation;
 **gated** = new language features.  Current top picks, by theme — this is a pointer
 digest; the detail lives in the linked homes (no catalogue is duplicated here).
@@ -74,10 +91,10 @@ now — what's open below is the increments.
 | Theme | Open increment (the part NOT yet shipped) | Scope | Home |
 |---|---|---|---|
 | **Performance / startup** (serves live-prototyping) | precompiled-stdlib fast-start (`@PLN52` — **DELIVERED** via @PLN11 arc D/D2b, opt-in `LOFT_STDLIB_CACHE`); const-store Phase B/C (`@PLN82`); the wasm-vs-native gap | in-scope | [PERFORMANCE.md § Open work](PERFORMANCE.md); `@PLN82` |
-| **Native robustness** | shared-store dispatch → a C-ABI `LoftStore` handle (gh #389 pt.1 — the recurring `viewer_markdown` cdylib-collision cause) | in-scope (stabilisation) | [NATIVE.md § Open work](NATIVE.md); gh #389 |
-| **Library system** (the dogfood track) | LSP, a game-client lib, viewer generalisation, regex `match_groups`/`replace` — *graphics / imaging / server / markdown / world / game_protocol / **regex** (v0.1.0: matches/find/split) already ship* | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
+| **Native robustness** | ~~shared-store dispatch → a C-ABI `LoftStore` handle~~ — **gh #389 CLOSED**.  Live item: the **differential-oracle divergence** on `main` (native/wasm reject a match-arm tail call the interpreter accepts) | in-scope (stabilisation) | [NATIVE.md § Open work](NATIVE.md) |
+| **Library system** (the dogfood track) | LSP, a game-client lib, viewer generalisation, regex Phase 1 (pure-loft NFA) — *graphics / imaging / server / markdown / world / game_protocol / **regex** (v0.2.0: matches/find/split **+ match_groups/replace**) already ship*.  Also: migrate `hex_terrain` off the plain-bind write-through idiom (see gate 5) | in-scope | [lib_plans/README](lib_plans/README.md); the `[libs]` `@PLN` issues |
 | **Friend-readiness / UX** | first-time tutorial + more day-to-day ergonomics — *REPL / `introspect` / the IDE editor slices already ship* | mixed | ROADMAP § U + § "Near-term focus" below |
-| **Games / engine** (the north star) | the `@PLN18` UDP state-sync channel (05a), scriptable scenes, fuller browser game UI — *the run modes + graphics rendering + the multiplayer protocol already ship* | parallel-agent lane + partly gated | ROADMAP § G; `@PLN18` |
+| **Games / engine** (the north star) | the UDP state-sync channel (05a) — a **deferred sub-item of the now-CLOSED `@PLN18`**, at [`plans/18-engine-host/05a-udp.md`](plans/18-engine-host/05a-udp.md) — scriptable scenes, fuller browser game UI — *the run modes + graphics rendering + the multiplayer protocol already ship* | parallel-agent lane + partly gated | ROADMAP § G; `plans/18-engine-host/` |
 | **Coroutines** (native iterator *sources* — Rust fns yielding into `iterator<T>`) | the native iterator source (P327) | gated (language feature) | [COROUTINE.md](COROUTINE.md); PLANNING § CO1 |
 | **Stability instruments** | program-level fuzzing (`@PLN53`) — **✅ harness shipped + CLOSED**; sanitizer-coverage expansion (`@PLN54`) — **✅ stack shipped + CLOSED** (only S9 cdylib-boundary ASan spun out, toolchain-blocked) | ✅ both closed | STABILITY_ROADMAP step 9; plans 53/54 |
 | **CI / tooling** | docs-only-PR matrix-skip fix (STABILITY_ROADMAP row 11 — risky; validate via a docs-only test PR) | in-scope | STABILITY_ROADMAP row 11 |
@@ -149,13 +166,16 @@ Item 4 (tables) adds MH on top but elevates polish.
 
 Features that "appear to work" but don't, or that lose data without indication.  HIGHEST priority because invisible to users.  See [plans/README.md § Value categories](plans/README.md#value-categories--what-kind-of-value-not-just-how-much) for why S sits above R.
 
+> **Reconciled 2026-07-10.** Four of the five rows below were CLOSED plans still being presented as
+> highest-priority open work.  Only the Q1 row is genuinely open.
+
 | ID | Title | E | Design | Source |
 |---|---|---|---|---|
-| (cross) | Match validation — subject type × pattern shape matrix | M | ✓ | plans/29-match-validation/README.md |
-| (cross) | Struct-enum validation — variant payload × dispatch context matrix | M | ✓ | plans/30-struct-enum-validation/README.md |
-| (cross) | Keyed collection validation — collection × operation matrix | M | ✓ | plans/31-collection-validation/README.md |
-| Q* | JSON parse-error diagnostics (Q1) — parse currently fails silently in some shapes | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
-| (cross) | Integer width discipline — `integer` is i64, explicit `i32` only 4-byte, no implicit `integer`→`i32` (data loss); FFI marshal + compiler enforcement + lib i32 end-to-end.  Absorbs @P370 | M | ✓ | plans/1-integer-width-discipline/README.md |
+| Q* | **JSON parse-error diagnostics (Q1) — the auto-wrap `Struct.parse(text)` path silently drops diagnostics.**  Verified on **both backends** 2026-07-10: on malformed input it leaves fields null with `json_errors()` **empty**; and after a *successful* parse `json_errors()` still returns the **previous** call's error, so a program that checks it reports failure on correct data.  The two-stage `Struct.parse(json_parse(text))` reports both classes correctly. | S-M | ✓ | QUALITY.md#open-work--actionable-summary |
+| ~~(cross)~~ | ~~Match validation~~ — **✅ CLOSED** (@PLN29 `status:finished`) | M | ✓ | plans/29-match-validation/README.md |
+| ~~(cross)~~ | ~~Struct-enum validation~~ — **✅ CLOSED 2026-07-09** (@PLN30, delivered) | M | ✓ | plans/30-struct-enum-validation/README.md |
+| ~~(cross)~~ | ~~Keyed collection validation~~ — **✅ CLOSED 2026-07-09** (@PLN31, superseded) | M | ✓ | plans/31-collection-validation/README.md |
+| ~~(cross)~~ | ~~Integer width discipline~~ — **✅ CLOSED** (@PLN1 `status:finished`; `integer` is i64 end-to-end) | M | ✓ | plans/1-integer-width-discipline/README.md |
 
 ---
 
@@ -241,7 +261,7 @@ Unblocks 2+ downstream plans.  Lattice points in the dependency graph.
 | LSP.1 | `loft-lsp` MVP — diagnostics + outline + hover | M | ✓ | lib_plans/63-lsp/README.md |
 | LSP-CLIENT | `loft-lsp-bridge` sidecar + viewer code intelligence — rust-analyzer / loft-lsp / jdtls | L | ✓ | lib_plans/66-viewer-lsp-bridge/README.md |
 | (cross) | Lazy stdlib loading — trigger-based pay-for-what-you-use | M | ✓ | lib_plans/59-lazy-stdlib/README.md |
-| **REGEX.0** | regex MVP — `#native` cdylib bridge to Rust `regex` crate.  **SHIPPED as `regex` v0.1.0** (loft-libs-core/regex; matches/find/split).  Next: `match_groups` + `replace` (unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports) | S | ✓ | lib_plans/57-regex/README.md |
+| **REGEX.0** | regex MVP — `#native` cdylib bridge to Rust `regex` crate.  **SHIPPED as `regex` v0.2.0** (loft-libs-core/regex; matches/find/split **+ `match_groups` + `replace`**).  Next: Phase 1+ (pure-loft NFA) | S | ✓ | lib_plans/57-regex/README.md |
 | **TIME.1** | `DateTime` value type (i64 epoch-ms, JS-`Date`-aligned) + built-in `{dt:…}` formatting + pure-loft `lib/time` operations — unblocks the `training` app's date-indexed B8–B10 routines; broadly useful Data/ETL gap | H | ~ | lib_plans/21-datetime/README.md |
 | **GFX.PORTABLE** | Make the `Renderer`/`Scene` layer the complete backend-portable rendering contract (portable shaders, scene-level custom materials + render-target/post-process passes; no script reaches raw `gl_*`) — prerequisite for a native GPU backend (wgpu → Vulkan/Metal) and thus native Android/iOS | H | ~ | lib_plans/72-renderer-backend-boundary/README.md |
 
@@ -395,7 +415,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 
 | Plan | E | Depends on | Notes |
 |---|---|---|---|
-| [`plans/29-match-validation/`](plans/29-match-validation) | M | (cross-mode harness shipped by closed @PLAN14) | Subject type × pattern shape matrix |
+| [`plans/29-match-validation/`](plans/29-match-validation) | M | **✅ CLOSED** (@PLN29 `status:finished`) | Subject type × pattern shape matrix |
 | [`plans/30-struct-enum-validation/`](plans/30-struct-enum-validation) | M | **✅ CLOSED 2026-07-09 (delivered)** | Variant payload × dispatch context matrix — feature shipped + ~135 tests; matrix demoted to docs per the plan's own gate |
 | [`plans/31-collection-validation/`](plans/31-collection-validation) | M | **✅ CLOSED 2026-07-09 (superseded)** | Motivating panic gone; hash/sorted/index validated cross-mode; spacial folds into @PLN48 |
 | [`plans/47-binary-io-validation/`](plans/47-binary-io-validation) | M | **✅ CLOSED 2026-07-09 (delivered)** | Value type × format × access-pattern matrix; absorbs @P289 — scalar/struct/char/bool/narrow-int round-trip shipped; variable-width-field compile-time rejection; 32-cell `tests/binary_io_matrix.rs` harness |
@@ -428,7 +448,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 | [PACKAGES.md § Open work](PACKAGES.md#open-work) | S-M | — | PKG.7 + PKG.REG (format itself already shipped) |
 | [`lib_plans/12-library-extraction/`](lib_plans/12-library-extraction) | L | **PACKAGES.md § Open work PKG.REG** | Multi-release execution arc |
 | [`lib_plans/59-lazy-stdlib/`](lib_plans/59-lazy-stdlib) | M | **✅ CLOSED 2026-07-09 (superseded)** | Re-premised to `use`-loaded `lib/*` (crypto precedent); trigger-registry not built |
-| [`lib_plans/57-regex/`](lib_plans/57-regex) | S (Phase 0) / MH (Phase 1+) | — | **Phase 0 SHIPPED** (`regex` v0.1.0 at loft-libs-core/regex; matches/find/split).  Next: match_groups/replace.  Phase 1+ (pure-loft NFA) future.  Unblocks @PLN42 phase 07 scan.loft + check_doc_drift.sh ports |
+| [`lib_plans/57-regex/`](lib_plans/57-regex) | MH (Phase 1+) | — | **Phase 0 SHIPPED** (`regex` **v0.2.0** at loft-libs-core/regex; matches/find/split **+ match_groups/replace**).  Next: Phase 1+ (pure-loft NFA + backtracking fallback).  Unblocked @PLN42 phase 07 scan.loft + check_doc_drift.sh ports |
 | [`plans/43-loft-store-durable/`](plans/43-loft-store-durable) | M | cooperates with **plans/42-tracker-index/07** + **plans/39-tic-tac-toe** + **plans/6-audience-generative-art** | Three-tier opt-in durability for loft mmap stores: IntegrityOnly (indexer), SnapshotEvery (TTT v5 sessions), WAL (audience demo).  Index is cheap test bed; game servers are critical consumers |
 | [`lib_plans/67-process/`](lib_plans/67-process) | M | — | `lib/process/` subprocess primitive — closes the indexer / viewer bash-wrapper dependency (dogfood-driven by @PLN42 + @PLAN35) |
 | [`lib_plans/68-fs-watch/`](lib_plans/68-fs-watch) | M | — | `lib/fs_watch/` file-event watcher — prerequisite for @PLN42 phase 07a WebSocket-push daemon (inotify on Linux, kqueue on macOS, ReadDirectoryChangesW on Windows) |
@@ -497,7 +517,7 @@ the plan moves back to `future/` and ROADMAP gains a row.
 - **plans/32-event-loop → lib_plans/64-game-client** (protocol abstraction → client library)
 - **plans/32-event-loop → plans/33-multiplayer-editor** (depends transitively via plans/39-tic-tac-toe v2 ground layer)
 - **(cross-mode harness shipped by closed @PLAN14) → plans/future/15/16/18/19/20** (the validation-matrix toolchain feeds 5 sibling validation plans — all S category)
-- **plans/54-sanitizer-coverage-expansion S3 (`LOFT_POISON`) → plans/53-program-level-fuzzing F4** (arena poison-on-free keystone prerequisite for meaningful store-internal UAF fuzzing)
+- ~~**plans/54-sanitizer-coverage-expansion S3 (`LOFT_POISON`) → plans/53-program-level-fuzzing F4**~~ — **RESOLVED**: S3 shipped (store + stack poison-at-RESERVE), so F4 is unblocked
 - **C57 / I13 (in plans/37-server-features) → lib_plans/future/08-server route decorators + iterator protocol** (language features prerequisite for server API ergonomics)
 
 ### Features still needing plan promotion

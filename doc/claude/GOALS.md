@@ -649,21 +649,35 @@ not "all of A" or "all of B":
   the Miri/ASan set covers the surfaces the games use (eval stack, store
   claim/copy/resize, vectors, fn-refs, text). *Not* "every Goal-A coverage leg
   shipped."
-  **Reading (2026-06): near.** CI's `guard`/`asan` jobs are green on `main`; the
-  store-lifetime class that kept surfacing is being retired the right way
-  ([OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md), @PLN85). The open part is *confirming*
-  the Miri/ASan set covers the game surfaces, not new failures.
+  **Reading (2026-07-10): near, with two named gaps.** @PLN85 closed; every *tracked*
+  store-lifetime bug is fixed, and the nightly sanitizer set (Miri, ASan UAF/OOB, TSan,
+  `LOFT_POISON`, native-ASan) is green on `main`. Two gaps keep this from reading MET.
+  (i) **Coverage is narrower than the Checks above state**: the `stack_align_guard` sweep
+  runs four test binaries, not the corpus; and `LOFT_STORE_GUARD=1` (Goal E's Check) is set
+  in *no* workflow — the assert it was promoted to is compiled out of normal test builds by
+  `[profile.dev.package.loft] debug-assertions = false`, so only the nightly debug-assertions
+  gate exercises it, over `--lib --test issues`. (ii) **The class is not yet retired by
+  construction**: the Cluster C / H10 fold plus @PLN53 F4 / @PLN54 S4 are what turn the current
+  silence into proof. Tracked in [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md).
 - **Structure floor — cleared when:** the libraries a game depends on (graphics,
   game_client / game_protocol, server) are extracted, installable, and
   version-stable through the registry. *Not* "the whole package toolchain
   polished."
-  **Reading (2026-06): MET.** The [`loft-lang/registry`](https://github.com/loft-lang/registry)
-  carries 21 signed (`index.json` + Ed25519 `.sig`), per-version-`sha256` packages
-  with dependency resolution (`server` → `web >=0.1`) — `graphics`, `game_protocol`,
-  `server`, the hex-world stack, `web`, `crypto` (the zero-trust lib), assets, docs
-  — each on its own semver track (`web 0.2.2`, `crypto 0.3.4`). `loft install <name>`
-  resolves against it end to end. Extraction + installability + version-stability —
-  the named bar — read true.
+  **Reading (2026-07-10): still MET on the named bar — but "installable" is doing quiet work.**
+  The [`loft-lang/registry`](https://github.com/loft-lang/registry) carries 22 signed
+  (`index.json` + Ed25519 `.sig`), per-version-`sha256` packages with dependency resolution
+  (`server` → `web >=0.1`; `hex_terrain` → `hex_grid`) — `graphics`, `game_protocol`, `server`,
+  the hex-world stack, `web`, `crypto` (the zero-trust lib), assets, docs — each on its own
+  semver track. `loft install <name>` resolves and fetches end to end, including transitive
+  deps. Extraction + installability + version-stability read true.
+  **Caveat that the bar does not capture:** *installable* here means **resolves + fetches**, not
+  *yields a working artifact*. The nightly `registry-validation` gate has **never had a green
+  run**: `graphics` does not build `--native` on a clean runner (its `alsa-sys` dep needs
+  `libasound2-dev`, which the workflow never installs), and `hex_terrain 0.1.0` fails its own
+  test against current loft (it uses the plain-bind write-through idiom that now **copies** —
+  C86 H-Copy — so it silently computes a wrong answer). Neither overturns the MET reading, but
+  both are real ecosystem rot, and the second is exactly the compatibility failure the
+  wide-release bar's **gate 5** exists to prevent.
 
 The structure floor's bar reads MET and the soundness floor is near, so **the pause
 is at its end, not its middle**. When both read true the dogfood loop sets the
