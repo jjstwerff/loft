@@ -1,0 +1,4 @@
+struct P { id: integer }
+fn to_text(self: P) -> text { return "item-{self.id}"; }
+fn pair<T: Printable>(x: T) -> (text, text) { return (x.to_text(), "m"); }
+fn main() { for i in 0..3 { e = pair(P { id: i }).0; assert(e == "item-{i}", "e0"); } }
