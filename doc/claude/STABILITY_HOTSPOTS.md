@@ -703,20 +703,20 @@ family (#260/#330). Every drift between the dispatchers is a latent corruption.
 
 **The fix — a 3-way split, NOT a uniform fold (the over-unification guard).** Grounding
 in the structure (2026-06-22) shows the keystone `Stores::for_each_owned_child(rec, tp) →
-OwnedWalk` (`src/database/allocation.rs:75`) yields `children` (each
+OwnedWalk` (`src/database/allocation.rs:95`) yields `children` (each
 `{child: DbRef, child_tp, owning_elem: Option<u32>}`) + `container_rec` + `zero_field`;
-`remove_claims` (1907) is the model thin-visitor. The three "drifting" dispatchers do NOT
+`remove_claims` (2024) is the model thin-visitor. The three "drifting" dispatchers do NOT
 fold equally — spraying all three onto the read-walk keystone would be over-reach:
-- **`validate_claims` (1206)** — does **NOT** fold. The 2026-06-22 investigation falsified the
+- **`validate_claims` (1268)** — does **NOT** fold. The 2026-06-22 investigation falsified the
   "pure read-walk folds cleanly" hypothesis: it is a separate DEFENSIVE family. It runs on
   *suspected-corrupt* heaps (the @P306 `LOFT_TRACE_CR` pre-walk before `OpCopyRecord`), so it
   bounds-checks each pointer BEFORE following it and does not recurse into the per-element-record
   kinds (`Array`/`Ordered`/`Hash`/`Index`) at all — whereas this keystone TRUSTS its pointers
   (`debug_assert!` on a freed/out-of-range record). Folding it would turn "name the broken edge"
   back into "fault on it". The boundary is pinned in the keystone's `OwnedChild` doc comment.
-- **`copy_claims` (1594) + 4 helpers** — the SOURCE enumeration folds (`copy_claims_hash_body`
+- **`copy_claims` (1711) + 4 helpers** — the SOURCE enumeration folds (`copy_claims_hash_body`
   already reads the keystone); the DESTINATION build (allocating into `to`) stays. PARTIAL.
-- **construction `record_new`/`record_finish` (`structures.rs:59`/`104`)** — a WRITE/build,
+- **construction `record_new`/`record_finish` (`structures.rs:60`/`122`)** — a WRITE/build,
   NOT a read-walk → forcing it onto the keystone is OVER-REACH. If it shares a per-`Parts`
   LAYOUT fact (strides/positions), that is a SEPARATE refactor, not this fold.
 

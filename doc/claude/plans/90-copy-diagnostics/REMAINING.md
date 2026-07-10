@@ -18,10 +18,14 @@ priority, done after the P0 issues.** Each item points at its canonical home.
 > destination instead of copy-then-free) now runs for every proven-safe shape (Record; Construct
 > field-append / fresh construction / `a.field=base`; flat + nested), `LOFT_NO_MOVE_ELIDE` opts out.
 > That is the *elimination* direction. What remains below is the **borrow direction** (return an
-> alias, don't copy OUT — A1b/A2, the actual soundness blocker), the **user-facing lint** (the
-> plan's namesake — Phase 2, only the classification scaffold is built), and **Phase 3**
-> (explicit-copy syntax). The plan is NOT done: **@PLN90 stays OPEN** — its P0 A1b native
-> borrow-return UAF is the wide-release blocker and is tracked only here.
+> alias, don't copy OUT — A1b/A2), the **user-facing lint** (the plan's namesake — Phase 2), and
+> **Phase 3** (explicit-copy syntax).
+>
+> **CLOSED 2026-07-07 (PR #516, all 9 items resolved): @PLN90 is DONE.** The P0 soundness blocker
+> — the A1b temporary-subject borrow-return UAF — is fixed on both backends (default on), the
+> user-facing copy lint is enforced, and the par-native fixes landed. @PLN90 the tracking issue is
+> closed (`status:finished`). Any explicit-copy-syntax work beyond this is a future enhancement,
+> not a release blocker. The P0/P1 detail below is kept as the record of that close-out.
 
 ## P0 — genuine issues (must close before release)
 
