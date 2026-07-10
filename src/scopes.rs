@@ -3375,8 +3375,21 @@ impl Scopes {
         // text-returning fn with ANY freeable local returns a literal (the
         // p54 match-of-literals / json-classify family).  Returning the literal
         // directly is exactly what a fn with NO frees already emits.
+        //
+        // @PLN85 corpus — the null-text sentinel `OpConvTextFromNull()` (an
+        // early `return null` in a `-> text?` fn) is the SAME free-safe shape:
+        // it lowers to `Str::new(STRING_NULL)`, a borrowed static that owns no
+        // allocation and aliases none of the to-be-freed locals.  Treated as a
+        // literal it returns directly (matching native's `return
+        // Str::new(STRING_NULL)`); routed through the B5-L3 text hoist it minted
+        // an OWNED skip_free `__ret_N` copy of the sentinel that a non-copying
+        // caller (`f(-1) == null`) never freed → append_text orphan.
+        let expr_is_null_text_sentinel = matches!(expr.unspan(),
+            Value::Call(d, args) if args.is_empty() && *d == data.def_nr("OpConvTextFromNull"));
         if ls.is_empty()
-            || (matches!(expr, Value::Null | Value::Var(_) | Value::Text(_)) && !var_is_place_ref)
+            || ((matches!(expr, Value::Null | Value::Var(_) | Value::Text(_))
+                || expr_is_null_text_sentinel)
+                && !var_is_place_ref)
         {
             if is_return && !expr_is_terminal {
                 ls.push(Value::Return(Box::new(expr.clone())));

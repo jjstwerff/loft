@@ -327,6 +327,27 @@ jobs:
           -E 'not (test(fill_rs_up_to_date) | test(n9_generated_fill_matches_src) |
           test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
 
+      # SPECIFIC LOGGING: nextest names the failing TEST, but the `loft_suite` /
+      # `library_suite` runners execute the whole `.loft` corpus IN ONE PROCESS, so a
+      # leak there names only the runner, not the file.  This scans each script
+      # SEPARATELY under the ASan loft binary and emits a `::error file=…::` annotation
+      # naming the exact leaking `.loft` + its owner frame.  `if: always()` so it runs
+      # (and names names) even after the nextest step already failed the job.
+      - name: Build ASan loft binary (for per-file leak scan)
+        if: always()
+        env:
+          RUSTFLAGS: '-Zsanitizer=address'
+        run: |
+          cargo +nightly build --release --bin loft --target ${{ matrix.target }}
+          ln -sfn "$PWD/default" target/${{ matrix.target }}/release/default
+      - name: Per-file leak scan (names the exact leaking .loft)
+        if: always()
+        env:
+          LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
+        run: >
+          ABIN=target/${{ matrix.target }}/release/loft
+          bash scripts/asan_leak_scan.sh tests/scripts/*.loft tests/docs/*.loft
+
   poison:
     name: LOFT_POISON arena-UAF gate (store-internal use-after-free)
     runs-on: ubuntu-latest

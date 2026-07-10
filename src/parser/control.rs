@@ -4999,17 +4999,41 @@ impl Parser {
             // case (plan17_b).  The `__tret` bind + `text_return` below delivers it
             // through the hidden `&text` buffer exactly as the non-generic would.
             // @PLN85 forward-ref class.
-            let promotable = l.last().is_some_and(|tail| {
+            // @PLN85 corpus (p205 / 86) — ALSO promote a FORWARD-BORROW call tail
+            // (`lab<T>(x) -> text { x.tolab() }`, where `tolab -> text["self"]`).
+            // A non-generic forwards the borrow as a `text["x"]` view (the caller
+            // frees the arg it borrows — leak-free), but a monomorph is built by IR
+            // substitution and keeps the BARE declared `text` return: the arg-dep is
+            // never derived, so the borrowed view is copied into an owned String and
+            // orphaned on the interpreter (native RAII-drops it).  Deliver it through
+            // the hidden `&text` buffer exactly as the manual rebind (`y = x.tolab();
+            // y`) already does — a `Borrow::ForwardArg` verdict is only ever a call.
+            let tail_promotable = l.last().is_some_and(|tail| {
                 self.tret_bind_ok(tail, l)
                     || matches!(
                         self.classify_text_return(tail, l),
                         TextReturn::Owned(OwnedVia::BuiltLocal)
+                            | TextReturn::Borrow(BorrowVia::ForwardArg)
                     )
             });
-            if promotable {
+            // @PLN85 corpus (86 / if_describe) — an EARLY `return` (not the tail)
+            // can be the orphaning path: `describe<T>(x) { if x.ok() { return
+            // x.tolab() } ; "invalid" }` returns a forward-borrow through the guard
+            // but a literal at the tail.  Promote on either signal, then deliver
+            // EVERY return — tail and early — into the one `&text` buffer.
+            let tail_ix = l.len().saturating_sub(1);
+            let early_promotable = l[..tail_ix]
+                .iter()
+                .any(|op| self.early_text_return_orphans(op, l));
+            if tail_promotable || early_promotable {
                 let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
                 if tv != u16::MAX {
+                    // Route every EARLY `return <e>` through the buffer:
+                    // `return <e>` → `{ Set(__tret, <e>); return __tret }`.
                     let last = l.len() - 1;
+                    for op in &mut l[..last] {
+                        Self::rewrite_text_returns_into(op, tv);
+                    }
                     if matches!(l[last].unspan(), Value::Return(_)) {
                         let ret = std::mem::replace(
                             &mut l[last],
@@ -5035,6 +5059,64 @@ impl Parser {
             &mut self.data.definitions[d_nr as usize].variables,
         );
         self.context = saved_ctx;
+    }
+
+    /// @PLN85 corpus — true when a NON-tail `return` in `op` delivers a text that
+    /// would orphan on the interpreter for a generic monomorph: an owned call /
+    /// built-local, or a forward-borrow call (`if c { return x.m() }`).  Recurses
+    /// `if`/`match` arms + inline blocks (a return anywhere in them still returns
+    /// from the fn); stops at other constructs.  `block` is the fn body for the
+    /// `var_built_in_block` check inside `classify_text_return`.
+    fn early_text_return_orphans(&self, op: &Value, block: &[Value]) -> bool {
+        match op.unspan() {
+            Value::Return(inner) => matches!(
+                self.classify_text_return(inner, block),
+                TextReturn::Owned(_) | TextReturn::Borrow(BorrowVia::ForwardArg)
+            ),
+            Value::If(_, t, e) => {
+                self.early_text_return_orphans(t, block) || self.early_text_return_orphans(e, block)
+            }
+            Value::Block(bl) => bl
+                .operators
+                .iter()
+                .any(|o| self.early_text_return_orphans(o, block)),
+            Value::Insert(ops) => ops.iter().any(|o| self.early_text_return_orphans(o, block)),
+            _ => false,
+        }
+    }
+
+    /// @PLN85 corpus — rewrite every `return <e>` in `op` (recursing `if`/`match`
+    /// arms + inline blocks) to deliver into the promoted `&text` buffer `tv`:
+    /// `return <e>` → `{ Set(tv, <e>); return tv }`.  The companion of the tail
+    /// rebind in `promote_monomorph_text_return`, applied to the EARLY returns so
+    /// all paths write the one caller buffer (no orphaned owned copy).
+    fn rewrite_text_returns_into(op: &mut Value, tv: u16) {
+        match op {
+            Value::Span(b) => Self::rewrite_text_returns_into(&mut b.1, tv),
+            Value::Return(_) => {
+                let ret = std::mem::replace(op, Value::Null);
+                let expr = Self::peel_to_inner_call(ret);
+                *op = Value::Insert(vec![
+                    crate::data::v_set(tv, expr),
+                    Value::Return(Box::new(Value::Var(tv))),
+                ]);
+            }
+            Value::If(_, t, e) => {
+                Self::rewrite_text_returns_into(t, tv);
+                Self::rewrite_text_returns_into(e, tv);
+            }
+            Value::Block(bl) => {
+                for o in &mut bl.operators {
+                    Self::rewrite_text_returns_into(o, tv);
+                }
+            }
+            Value::Insert(ops) => {
+                for o in ops {
+                    Self::rewrite_text_returns_into(o, tv);
+                }
+            }
+            _ => {}
+        }
     }
 
     /// Walk a return expression to find work-ref variables passed as hidden
@@ -5391,6 +5473,17 @@ impl Parser {
         match tail.unspan() {
             Value::Return(inner) | Value::Drop(inner) => Self::if_tail_yields_text(inner),
             Value::If(_, then, els) => Self::arm_yields_text(then) && Self::arm_yields_text(els),
+            // @PLN85 corpus — a `??` coalesce (`build_null_coalesce_default`)
+            // wraps its selecting `if` in an "ncc" block behind a `Set(__ncc, lhs)`
+            // preamble; `?? return` builds the "ncr" twin.  A coalesce whose arms
+            // yield text (`v[i] ?? "fb"`) is the SAME promotable value-yielding
+            // if-text tail — see through the coalesce block so it takes the per-arm
+            // `__acc` promotion (delivered through the caller `&text` buffer),
+            // instead of falling to `Plain` and orphaning the owned `__ncc` /
+            // result copy that a non-buffered return never frees on the interpreter.
+            Value::Block(bl) if bl.name == "ncc" || bl.name == "ncr" => {
+                bl.operators.last().is_some_and(Self::if_tail_yields_text)
+            }
             _ => false,
         }
     }
