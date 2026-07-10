@@ -1757,7 +1757,19 @@ impl Stores {
         };
         let size = u32::from(self.size(content_tp));
         let keys = self.types[tp as usize].keys.clone();
-        let nodes = self.collect_index_nodes(rec, left);
+        // SOURCE enumeration reads the keystone walk — the single home of the
+        // per-`Parts` source layout — exactly as `remove_claims` and
+        // `copy_claims_hash_body` do.  The keystone's `Index` arm makes the same
+        // `collect_index_nodes(rec, left)` call and hands each node back as
+        // `owning_elem`, so this is position-for-position the walk it replaces.
+        // The DESTINATION build (claim → back-pointer → `copy_block` → recurse →
+        // `tree::add`) stays per-kind: unifying it is how @P318/@P309 come back.
+        let nodes: Vec<u32> = self
+            .for_each_owned_child(rec, tp)
+            .children
+            .into_iter()
+            .filter_map(|c| c.owning_elem)
+            .collect();
         // Initialize the destination tree root to empty before inserting.
         self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
         for src_node in nodes {
