@@ -159,10 +159,11 @@ pending merge**: its tracked store-lifetime bugs are all CLOSED (#460 / #461 / #
 nightly DA + `stack_align_guard` gates were widened to the whole in-process interpreter corpus — all on
 `tuxedo-cluster-c`, which just needs to merge to `main` green. **Gate 5 (@PLN102) is now the active next
 gate** — its arc B-mechanical (a real version-constraint parser that stops silently accepting
-constraints it does not honour) is spec-ready to implement; its pivot (the language-versioning decision)
-and policy arcs (A/C/E) need design. The registry-validation graphics leg was fixed this session, so
-`hex_terrain` (the @PLN102 exemplar) is its sole remaining red — and needs a library republish, not a
-loft fix.
+constraints it does not honour) is **IMPLEMENTED** (`check_version` → `VersionCheck`; binds bounds/ranges,
+rejects the unparseable loudly); its pivot (the language-versioning decision) and policy arcs (A/C/E) need
+design — newly timely now the type surface is feature-complete on `main` and the last syntax changes are
+in flight. The registry-validation graphics leg was fixed this session, so `hex_terrain` (the @PLN102
+exemplar) is its sole remaining red — and needs a library republish, not a loft fix.
 
 **Why the tracker is empty — and what to read instead.** This stream's standing rule at the top of
 this file is *fix, don't file*, and the cycle runs under a warm feature freeze

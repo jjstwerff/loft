@@ -27,6 +27,15 @@ independent of any policy) and a *semantic* half (what a bound *means*), and the
 semantic half depends on the **language-versioning decision** (open question 2), which
 is therefore promoted to the pivot below.  See § Phase ordering.
 
+**Timing (2026-07-10):** the language's **type surface is now feature-complete on `main`
+and the last syntax changes are in flight** — so the versioning pivot and arc E (the 1.0
+line) are no longer far off: "what is frozen" is about to have a concrete answer, which
+is exactly when the compatibility axis must be decided.  **Status update:** arc
+B-**mechanical** is now **IMPLEMENTED** (a real constraint parser: binds `>=`/`<=`/`>`/`<`/`=`
+and comma ranges, grandfathers a bare `>=`, rejects the unparseable via
+`VersionCheck::Malformed`; `src/manifest.rs`, plan matrix + both-parser-path fixtures).
+B-semantic, the pivot, and arcs A/C/D/E remain open.
+
 ## Goal
 
 Ship a stated compatibility contract for loft, plus the mechanism that enforces it —
@@ -121,11 +130,12 @@ accept/reject divergence here is a Goal-D violation).
 | Item | Source | Status |
 |---|---|---|
 | **A** — Compatibility policy: what *is* a breaking change, per surface (language syntax/semantics · stdlib API · store/heap layout · on-disk + wire format · package format) | needs design → `COMPATIBILITY.md` | Open |
-| **B-mechanical** — bind upper bounds + ranges + exact pins; loud rejection of unparseable constraints; grandfather a bare `>=` as "unknown compatibility"; registry validates the declared range | matrix above; `src/manifest.rs:513`, `src/parser/mod.rs:7593` | Open — spec written, **ready to implement** (no policy dependency) |
+| **B-mechanical** — bind upper bounds + ranges + exact pins; loud rejection of unparseable constraints; grandfather a bare `>=` as "unknown compatibility" | `src/manifest.rs` (`check_version` → `VersionCheck`), `src/parser/mod.rs` (loader), matrix unit test + `testpkg_badconstraint`/`testpkg_upperbound` fixtures | **✅ IMPLEMENTED** (2026-07-10) |
+| **B-registry** — the registry (`pr-validate`) validates the declared range on submission | external — loft-lang/registry | Open |
 | **B-semantic** — what a bound *means* (which is why the language must have a compatibility-tracking version axis) | blocked on the versioning decision (Q2, the pivot) | Open — blocked |
 | **C** — Deprecation channel: a warning path for a semantic change a library can trip.  [Goal F](../../GOALS.md) permits exactly one channel — warnings, free to ignore | needs design; worked example = C86 / `hex_terrain` | Open |
 | **D** — Public bug-intake path: the fix-not-file discipline is internal and does not reach strangers | [ISSUE_TRACKING.md](../../ISSUE_TRACKING.md) | Open |
-| **E** — The 1.0 line: what is frozen vs still moving | [RELEASE.md](../../RELEASE.md) | Open |
+| **E** — The 1.0 line: what is frozen vs still moving | [RELEASE.md](../../RELEASE.md) | Open — **newly timely**: as of 2026-07-10 the type surface is feature-complete on `main` and the last syntax changes are in flight, so "what is frozen" is about to have a concrete answer |
 
 ## Phase ordering
 
