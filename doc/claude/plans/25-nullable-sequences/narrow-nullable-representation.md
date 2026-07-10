@@ -63,6 +63,20 @@ All three, ×3 widths, ×2 backends. A deliberate append-lowering + index-read-d
 not squeezed in. Loci (`data.rs` / `vectors.rs` / `fields.rs` / `fill.rs` / `generation`) do
 not collide with mac-work.
 
+**Sharper hypothesis (2026-07-10, second probe) — likely a READ-SIDE-ONLY fix.** The append
+ALREADY stores the full sentinel: `OpSetInt(_elm, 0, OpConvIntFromNull())` writes `i32::MIN`
+into the stride-8 element slot, so the null sentinel IS in the store. The bug is the READ:
+`OpGetByte(OpGetVectorNullable(v, 8, i), 0, 0)` reads only the LOW byte (`i32::MIN`'s low byte
+is `0`) → reads `0`, never null. So the smallest coherent fix is **read-side only**: for a
+nullable narrow element emit a full-width read + `i32::MIN`→null decode instead of `OpGetByte`,
+keying on `Optional`, leaving the wide storage + `OpSetInt` write untouched. RISK: that read
+path (`get_val` / `elm_size` dispatch, `fields.rs:858-905`) is SHARED with FIELD reads (which
+already work) and the `collections.rs`/`expressions.rs` shapes — so the decode must key on
+(vector-element ∧ `Optional`) without disturbing field reads. Verify against the no-regression
+matrix (non-nullable `vector<u8>`, `vector<boolean?>`/`character?`, field reads) + full suite.
+Two forks reverted here rather than half-build; this wants a FRESH focused session starting
+from the read-side hypothesis, not another one-shot on saturated context.
+
 ## 3. LOW — narrow field sentinel collision
 
 A `u8?` field storing its **extreme** value reads back as `null`: `255 → null` (255 is
