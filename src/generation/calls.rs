@@ -156,12 +156,13 @@ impl Output<'_> {
         if is_generator {
             write!(w, ")")?; // close alloc_coroutine(...)
         } else if narrow_int_cast(def_fn.returned()).is_some()
-            && !matches!(def_fn.returned(), Type::Boolean)
+            && !matches!(def_fn.returned().base(), Type::Boolean)
         {
             // Narrow integer return types (u8/u16/i8/i16) must be widened so that
             // assignments and comparisons with default-Integer expressions type-check.
             // Post-2c: widen to i64 (the default Integer width).
-            // @PLN17: boolean's expression form is u8/bool, never i64 — no widening.
+            // @PLN17: boolean's expression form is u8/bool, never i64 — no widening
+            // (incl. `boolean?`: its slot is u8, so `.base()` excludes it here too).
             write!(w, " as i64")?;
         }
         Ok(())
@@ -339,7 +340,7 @@ impl Output<'_> {
                 // a `bool` literal / comparison arg must coerce.  `((arg) as u8)`
                 // is idempotent for a u8 arg, 0/1 for a bool.
                 let param_is_boolean = idx < def_fn.attributes().len()
-                    && matches!(def_fn.attributes()[idx].typedef, Type::Boolean);
+                    && matches!(def_fn.attributes()[idx].typedef.base(), Type::Boolean);
                 if needs_deref {
                     write!(w, "&*(")?;
                 }
@@ -502,7 +503,7 @@ impl Output<'_> {
                 // boolean is the byte 255; everything else is rendered to its u8
                 // storage form — a no-op cast for a `u8` variable, a `0/1`
                 // narrowing for a transient `bool` sub-expression.
-                if matches!(a.typedef, Type::Boolean) {
+                if matches!(a.typedef.base(), Type::Boolean) {
                     if matches!(vals[a_nr], Value::Null) {
                         res = replace_placeholder(&res, &name, "(255u8)");
                     } else {
@@ -749,9 +750,10 @@ impl Output<'_> {
         if matches!(def_fn.returned(), Type::Character) {
             write!(w, "({res}) as u32 as i32")
         } else if narrow_int_cast(def_fn.returned()).is_some()
-            && !matches!(def_fn.returned(), Type::Boolean)
+            && !matches!(def_fn.returned().base(), Type::Boolean)
         {
-            // @PLN17: boolean op results stay u8/bool — never widened to i64.
+            // @PLN17: boolean op results stay u8/bool — never widened to i64
+            // (incl. `boolean?`: u8 slot, excluded via `.base()`).
             if res.contains(';') {
                 write!(w, "({{{res}}}) as i64")
             } else {

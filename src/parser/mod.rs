@@ -2173,6 +2173,17 @@ impl Parser {
                 self.convert(code, is_type, inner);
                 return true;
             }
+            // Implicit CHECKED narrowing into a nullable narrow target: an integer or
+            // `integer?` coerced into `Optional(narrow int)` (e.g. `u8?`) yields the value
+            // when it fits, else null. Allowed WITHOUT an explicit `as` because the target is
+            // nullable — an out-of-range value becomes a VISIBLE null, never a silent
+            // truncation. A non-null narrow target (`u8`) is unchanged (still needs `as`).
+            if !self.first_pass && Self::is_narrowing_int(is_type.base(), inner.base()) {
+                let dst_base = inner.base().clone();
+                let src_base = is_type.base().clone();
+                self.dn4_checked_cast(code, &dst_base, &src_base);
+                return true;
+            }
             return self.convert(code, is_type, inner);
         }
         if let Type::Optional(inner) = is_type {

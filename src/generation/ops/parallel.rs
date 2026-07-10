@@ -391,7 +391,7 @@ impl OpEmitter for ParallelForEmitter {
                 // an `as u8` bridge.  Other Scalar shapes (Integer
                 // narrow / wide, Character → i32, Enum-no-payload →
                 // u8) all support `as i64` natively.
-                if matches!(worker_ret, Type::Boolean) {
+                if matches!(worker_ret.base(), Type::Boolean) {
                     write!(
                         ctx.w,
                         ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) as u8 as i64 }})"
@@ -559,7 +559,7 @@ impl OpEmitter for ParallelQueueEmitter {
                 // an `as u8` bridge.  Other Scalar shapes (Integer
                 // narrow / wide, Character → i32, Enum-no-payload →
                 // u8) all support `as i64` natively.
-                if matches!(worker_ret, Type::Boolean) {
+                if matches!(worker_ret.base(), Type::Boolean) {
                     write!(
                         ctx.w,
                         ", |cell, elm| {{ {prep}{worker_name}(cell, {arg}{extras}{dests}) as u8 as i64 }})"

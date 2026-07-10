@@ -1756,24 +1756,21 @@ impl Parser {
     /// integer null. Pure parse-time desugar over existing ops (`OpLeInt`,
     /// `OpConvIntFromNull`, `if`) — no new runtime op, no runtime error. `src_tp`
     /// is `e`'s type (the temp's slot); the result type is the nullable `τ`.
-    fn dn4_checked_cast(&mut self, code: &mut Value, tp: &Type, src_tp: &Type) -> Type {
+    pub(crate) fn dn4_checked_cast(&mut self, code: &mut Value, tp: &Type, src_tp: &Type) -> Type {
         let Type::Integer(spec) = tp else {
             return tp.clone();
         };
         let (min, max) = (spec.min, spec.max as i32);
-        // Result is a FULL nullable integer, NOT the narrow τ: the else-branch is the
-        // integer null sentinel (`i64::MIN`), which needs the full width. Typing the
-        // block as the narrow τ makes native emit `as u8` on the tail, and
-        // `i64::MIN as u8 == 0` silently destroys the null (interp tolerated it,
-        // native did not). The narrow-width tag is dropped here until nullable-narrow
-        // sentinel support lands; the value still fits τ on the present path.
-        let res_tp = match src_tp {
-            Type::Integer(s) => Type::Integer(IntegerSpec {
-                not_null: false,
-                ..*s
-            }),
-            other => other.clone(),
-        };
+        // Result type is `Optional(τ)` — the narrow target τ, marked nullable. As a Rust
+        // VALUE this is carried full-width (`rust_type(Optional(Integer))` is `i64`, so the
+        // else-branch's integer null sentinel fits and the value is not truncated); the
+        // narrow width is a domain fact used at the store/field seam, which packs it. This
+        // preserves τ so the checked cast composes downstream — e.g. `e as u8?` returned into
+        // a `u8?` slot is an exact type match, not an implicit narrow of a bare integer.
+        // (Earlier this dropped to the full source integer to dodge a native `as u8` on the
+        // tail that turned `i64::MIN` into 0 and destroyed the null; that hazard is now fixed
+        // at the `rust_type` seam, so the narrow τ is preserved.)
+        let res_tp = Type::optional(tp.clone());
         let tmp = self.create_unique("_dn4", src_tp);
         let set = v_set(tmp, code.clone());
         let cond_lo = self.cl("OpLeInt", &[Value::Int(min), Value::Var(tmp)]);

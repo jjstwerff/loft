@@ -1,0 +1,11 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN25 deferred (LOW): a u8? field storing its extreme value (255) reads back as null —
+// the extreme doubles as the in-band null sentinel. Both backends identical.
+// See plans/25-nullable-sequences/narrow-nullable-representation.md.
+// @EXPECT_FAIL: sentinel-collision
+struct Holder { x: u8? }
+fn main() {
+  h = Holder { x: 255 };
+  assert(h.x == 255, "sentinel-collision: u8? field storing 255 read back as {h.x}");
+}

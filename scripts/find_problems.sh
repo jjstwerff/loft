@@ -49,6 +49,31 @@ source "$(dirname "${BASH_SOURCE[0]}")/sccache_env.sh"
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
 REPO_TAG=$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)
 
+# FFI toolchain guard (E0514 self-heal).  A nightly / sanitizer build run into the
+# shared `target/` leaves `target/release/deps/libloft_ffi-*.rlib` compiled by a
+# different rustc than the active one.  The native test harness links that rlib via
+# direct rustc (out of cargo's fingerprint), and its mtime looks fresh — so neither
+# cargo nor mtime rebuilds it, and every native test fails E0514 ("incompatible
+# version of rustc").  Detect the mismatch from the rlib's embedded version and
+# delete the stale rlib so the next build recompiles it with the active rustc.
+# Prevent the pollution in the first place with scripts/asan.sh (isolated target dir).
+ffi_toolchain_guard() {
+  local active rlib built cleaned=0
+  active=$(rustc -vV | sed -n 's/^release: //p')
+  [[ -n "$active" ]] || return 0
+  for rlib in "$REPO_ROOT"/target/release/deps/libloft_ffi-*.rlib; do
+    [[ -e "$rlib" ]] || continue
+    built=$(strings "$rlib" 2>/dev/null | grep -oiE 'rustc [0-9]+\.[0-9]+\.[0-9]+(-nightly)?' | head -1 | sed 's/^rustc //I')
+    if [[ -n "$built" && "$built" != "$active" ]]; then
+      echo "ffi-guard: libloft_ffi built by rustc $built ≠ active $active — removing stale rlib(s) so cargo rebuilds. Use scripts/asan.sh (isolated target dir) to avoid this." >&2
+      rm -f "$REPO_ROOT"/target/release/deps/libloft_ffi-*.rlib
+      cleaned=1
+      break
+    fi
+  done
+  return 0
+}
+
 # Keep native/wasm compiles OFF a small /tmp tmpfs.  The native test harness
 # writes generated `.rs` + cached binaries via `scratch_dir()` (LOFT_TMPDIR,
 # else temp_dir()), and rustc/rust-lld put their link intermediates under
@@ -366,6 +391,10 @@ if [[ "${1:-}" == "--wait" ]]; then
   wc -l "$OUT"
   exit 0
 fi
+
+# Self-heal a cross-toolchain-polluted loft_ffi rlib before any build (run + --bg
+# modes; --peek/--wait already exited above without building).
+ffi_toolchain_guard
 
 # `--bg`: start the run in the background and return immediately.
 if [[ "${1:-}" == "--bg" ]]; then

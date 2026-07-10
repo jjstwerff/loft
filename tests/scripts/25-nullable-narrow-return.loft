@@ -1,0 +1,30 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN25 — a function returning a nullable NARROW integer (`u8?`/`u16?`/`i8?`/`i16?`).
+// A nullable narrow int is carried FULL-WIDTH (i64) as a value — the narrow packing is
+// store-only, and a narrow slot can't hold both the full value range and the null sentinel
+// (`u8?` must keep 255-as-value distinct from null). The native generator used to lower the
+// RETURN TYPE to the narrow base (`-> u8`) while the body returned the i64 value, so `rustc`
+// rejected it (E0308) — the fn compiled on --interpret but failed to build on --native. The
+// fix: `rust_type(Optional(Integer), _)` is `i64` (src/generation/mod.rs), matching the value.
+// This is a both-backend guard; it must run identically on --interpret and --native.
+fn ret_u8(i: integer) -> u8? { r = i as u8?; r }
+fn lit_u8() -> u8? { 200 }
+fn ret_u16(i: integer) -> u16? { r = i as u16?; r }
+fn ret_i16(i: integer) -> i16? { r = i as i16?; r }
+
+fn main() {
+  // 255 is a VALUE, not null — proves the full-width carrier (a narrow u8 can't do this).
+  assert(ret_u8(255) == 255, "ret_u8(255)={ret_u8(255)}");
+  assert(ret_u8(255) != null, "ret_u8(255) must not be null");
+  // out of the u8 range -> null (the honest nullable result).
+  assert(ret_u8(300) == null, "ret_u8(300) should be null");
+  // a plain literal in a nullable-narrow return.
+  assert(lit_u8() == 200, "lit_u8={lit_u8()}");
+  // u16 (2-byte) — top-of-range value distinct from null.
+  assert(ret_u16(65535) == 65535, "ret_u16(65535)={ret_u16(65535)}");
+  assert(ret_u16(70000) == null, "ret_u16(70000) should be null");
+  // signed narrow.
+  assert(ret_i16(-5) == -5, "ret_i16(-5)={ret_i16(-5)}");
+  assert(ret_i16(999999) == null, "ret_i16(999999) should be null");
+}

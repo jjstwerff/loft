@@ -1,0 +1,12 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN25 deferred (MEDIUM — vectors should carry sentinels like fields do): a
+// vector<u8?> element cannot represent null (collapses to 0). Both backends identical.
+// See plans/25-nullable-sequences/narrow-nullable-representation.md.
+// @EXPECT_FAIL: vector-narrow-null
+fn main() {
+  v: vector<u8?> = [];
+  v += [null];
+  v += [42];
+  assert(v[0] == null, "vector-narrow-null: element 0 should be null, got {v[0]}");
+}
