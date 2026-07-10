@@ -2120,7 +2120,10 @@ impl Store {
     pub fn set_short(&mut self, rec: u32, fld: u32, min: i32, val: i32) -> bool {
         if rec != 0 && self.valid(rec, fld) {
             if val == i32::MIN {
-                *self.addr_mut(rec, fld) = 0;
+                // The `u16` suffix is load-bearing: a bare `0` infers `i32`, so
+                // `addr_mut::<i32>` writes 4 bytes and zeroes the two packed bytes
+                // after this 2-byte field (silent sibling corruption on a null store).
+                *self.addr_mut(rec, fld) = 0u16;
                 true
             } else if val >= min && val <= min + 65536 {
                 *self.addr_mut(rec, fld) = (val - min + 1) as u16;
@@ -2200,7 +2203,10 @@ impl Store {
     pub fn set_byte(&mut self, rec: u32, fld: u32, min: i32, val: i32) -> bool {
         if rec != 0 && self.valid(rec, fld) {
             if val == i32::MIN {
-                *self.addr_mut(rec, fld) = 255;
+                // The `u8` suffix is load-bearing: a bare `255` infers `i32`, so
+                // `addr_mut::<i32>` writes 4 bytes and zeroes the three packed
+                // fields after this one (silent sibling corruption on a null store).
+                *self.addr_mut(rec, fld) = 255u8;
                 true
             } else if val >= min && val <= min + 256 {
                 *self.addr_mut(rec, fld) = (val - min) as u8;

@@ -18,19 +18,21 @@ storage/layout/packing change in loft's #1-weakness area, **not low-hanging**. T
 `boolean?` native-codegen gap found in the same sweep is a *different* thing (a codegen
 wrap gap, not representation) and is fixed separately.
 
-The three items, in the maker's priority order (2026-07-10):
+The items, in the maker's priority order (2026-07-10):
 
-## 1. HIGHER — packed multi-narrow-field corruption
+## 1. HIGHER — packed multi-narrow-field corruption — ✅ FIXED (2026-07-10)
 
-In a struct with **several** narrow-nullable fields, writing `null` to one field
-mis-round-trips or clobbers a *sibling*. Repro: `Multi { a: i8?, b: u8? }` constructed
-with `b: 20`, then `m.a = null` → `m.b` reads back `0`. A struct with a **single**
-narrow-nullable field round-trips `null` correctly, so it is layout/offset-specific
-(the null write to one packed field disturbs an adjacent field's bytes).
+In a struct with **several** narrow-nullable fields, writing `null` to one clobbered a
+*sibling* (`Multi { a: i8?, b: u8? }`, `b: 20`, then `m.a = null` → `m.b` read `0`).
 
-**Why highest priority:** this is silent corruption of an *unrelated* field — the most
-serious failure kind (it violates the soundness promise, not just a nullable edge). Fix
-the packed-field offset/masking so a null write touches only its own field.
+**Root cause (turned out NOT to be the deep representation — a bounded store-width bug):**
+`Store::set_byte` / `set_short` wrote the null sentinel with a bare literal
+(`*addr_mut(rec, fld) = 255;` / `= 0;`). The untyped literal inferred `i32`, so
+`addr_mut::<i32>` wrote **4 bytes** and zeroed the packed fields after this one. The value
+path was safe because it wrote `(val - min) as u8` / `as u16` (correct width). Fixed with
+the `255u8` / `0u16` suffix. Regression: `tests/scripts/25-narrow-nullable-packed-field-clobber.loft`
+(byte + short + mixed, both backends). This was separable from items 2–3 and did not need
+the sentinel-encoding redesign.
 
 ## 2. MEDIUM — `vector<narrow?>` cannot represent null
 
@@ -56,7 +58,8 @@ this rides along with them rather than earning its own effort.
 
 ## Relationship
 
-Items 1–2 want the same thing — a packed narrow-nullable representation that reserves a
-null sentinel without stealing an in-range value and without disturbing neighbours. Item
-3 dissolves once that representation exists. Pick this up as one focused storage effort
-(the A-vs-B decision in RESUME.md's F2 Part-2 note), not piecemeal.
+Item 1 was a bounded store-write-width bug, separable and now fixed. **Items 2–3 are the
+remaining deep family** — both want the same thing: a packed narrow-nullable representation
+that reserves a null sentinel *without* stealing an in-range value (item 3) and lets a
+vector element carry it like a field does (item 2). Pick those up as one focused storage
+effort (the A-vs-B decision in RESUME.md's F2 Part-2 note), not piecemeal.
