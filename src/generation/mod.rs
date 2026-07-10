@@ -1041,6 +1041,7 @@ enum BareIo {
     Vector(u16),
     Sorted(u16, Vec<(u16, bool)>),
     Hash(u16, Vec<u16>),
+    Radix(u16, Vec<u16>),
     Index(u16, Vec<(u16, bool)>),
 }
 
@@ -2064,11 +2065,19 @@ extern crate loft;"
                 crate::database::Parts::Hash(c, keys) if !field_keyed.contains(&tid) => {
                     bare_io.push((tid, BareIo::Hash(*c, keys.clone())));
                 }
+                // @PLN48 — a local-only Radix (`spacial<T[…]>`) minted for a var,
+                // referenced by no field: emit it here so it does not leave a gap in
+                // the runtime type-id sequence (else `content(tp)` reads u16::MAX and
+                // `record_new` panics), exactly as the local-only Hash arm above.
+                crate::database::Parts::Radix(c, keys) if !field_keyed.contains(&tid) => {
+                    bare_io.push((tid, BareIo::Radix(*c, keys.clone())));
+                }
                 crate::database::Parts::Index(c, keys, _) if !field_keyed.contains(&tid) => {
                     bare_io.push((tid, BareIo::Index(*c, keys.clone())));
                 }
                 crate::database::Parts::Sorted(_, _)
                 | crate::database::Parts::Hash(_, _)
+                | crate::database::Parts::Radix(_, _)
                 | crate::database::Parts::Index(_, _, _) => {}
                 _ => {}
             }
@@ -2404,6 +2413,16 @@ extern crate loft;"
                     .collect::<Vec<_>>()
                     .join(", ");
                 writeln!(w, "    let t{tid} = db.hash({c_ref}, &[{keys_str}]);")?;
+            }
+            BareIo::Radix(c, keys) => {
+                let c_ref = type_id_ref(*c);
+                let keys_str = keys
+                    .iter()
+                    .map(|&k| format!("\"{}\".to_string()", self.bare_field_name(*c, k)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                // `db.spacial` is the surface constructor for the shared Radix kind.
+                writeln!(w, "    let t{tid} = db.spacial({c_ref}, &[{keys_str}]);")?;
             }
             BareIo::Index(c, keys) => {
                 let c_ref = type_id_ref(*c);

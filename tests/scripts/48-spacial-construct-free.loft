@@ -1,7 +1,6 @@
-// @PLN48 S2 — a spacial<T[x, y]> collection constructs and frees end-to-end.
-// Interp-only for now (in tests/native.rs SCRIPTS_NATIVE_SKIP): the native
-// IR-schema wiring and full iteration land next.  The runner's leak check is the
-// real assertion here — remove_claims must free the tree + every element record.
+// @PLN48 S2 — a spacial<T[x, y]> collection constructs and frees end-to-end, on
+// BOTH backends.  The runner's leak check is the real assertion here —
+// remove_claims must free the tree + every element record.
 struct SMob { x: integer, y: integer }
 
 fn main() {
