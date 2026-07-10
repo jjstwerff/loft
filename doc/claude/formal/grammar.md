@@ -81,6 +81,44 @@ ordinary operator at level 6 (looser than `+`, so `1 + 2 & 3` is `(1+2) & 3`). A
 *front* of a binding (`b = &a`) it is the reference annotation from `binding.md`, and it
 is the only place a leading `&` is allowed. The parser disambiguates purely by position.
 
+### Pattern-operator precedence (@PLN35, SPEC-FIRST · planned, NOT yet implemented)
+
+> **@PLN35 · SPEC-FIRST** — the target for the PEG pattern grammar
+> ([matching.md § Rules — PEG patterns](matching.md)), written ahead of the code. The pattern
+> *productions* live in [LOFT.md § Summary of grammar](../LOFT.md); this pins their operator
+> precedence, the one fact that lives only in the parser. Design:
+> [../plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
+
+A pattern has its own small precedence ladder (separate from the expression ladder above), loosest
+first:
+
+```
+  pattern level   form                              binds
+  ─────────────   ───────────────────────────────   ──────────────────────────────────
+   0  ` , `        multi-pattern arm separator        (loosest — separates whole alternative shapes)
+   1  ` | `        alternation inside a group
+   2  sequence     juxtaposition inside `[ … ]`
+   3  ` : `        capture  name:pat
+   4  postfix       `?`  `*`  `+`  `*(sep)`           (tightest — bind to the nearest pattern)
+      prefix        `...name`  (rest — only as a slice tail)
+```
+
+```
+  (G-Pat-Prec)   for pattern operators, level N binds tighter than level N-1: `a:V | b:W` is
+                 `(a:V) | (b:W)`; `x:p*` is `x:(p*)`.
+  (G-Pat-Group)  a `(…)` inside a pattern is an alternation / optional / repetition GROUP, told apart
+                 from a tuple pattern by its operators (`|`, `?`, `*`, `+`) — the same speculative
+                 parse the surface already uses (a DECIDED EDGE like D-gram-2; no CFG is owed,
+                 tooling reuses the hand-written parser).
+```
+
+**In words.** Inside a pattern, `,` (separating whole alternative shapes in a multi-pattern arm) is
+loosest, then `|` (ordered choice), then a sequence of sub-patterns, then `:` (a capture); the
+postfix quantifiers `? * +` bind tightest to the pattern right before them. `...name` is a prefix
+rest, allowed only as the last element of a slice. A parenthesised pattern is a *group* (not a
+tuple) when it carries a pattern operator — resolved by the same position-based, deliberately
+non-context-free parse this doc already documents for `&` and struct-vs-block.
+
 ---
 
 ## Deviations

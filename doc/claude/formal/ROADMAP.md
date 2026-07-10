@@ -48,6 +48,15 @@ deviations are therefore: the operational **D1** (differential oracle, @PLN89) �
 open-ended coverage instrument, not a one-shot close — and layout's **D-layout-1** (the persistence
 consumer wiring). The @PLN89 differential oracle + LOFT_POISON grow alongside as the safety net.
 
+**Spec-first entry — @PLN35 (PEG match patterns).** Unusually, its formal rules are written *ahead*
+of the code ([matching.md § Rules — PEG patterns](matching.md), [types.md § Pattern captures](types.md),
+[grammar.md § Pattern-operator precedence](grammar.md), [binding.md § Pattern captures](binding.md);
+design [plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md)). This opens
+**no deviation** — there is no implementation yet to break a rule — so it is not a row above; the
+build obligation is tracked in [VERIFICATION.md § matching.md — PEG patterns](VERIFICATION.md) and
+each rule graduates to a ✓ there as its phase lands. It is the last planned *syntax* feature; the
+rules exist so the implementation is built to satisfy them (the maker's spec-first directive).
+
 ---
 
 ## Phase A — turnkey (days, no new design)

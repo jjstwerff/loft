@@ -124,6 +124,28 @@ mutate it in place). The one exception is reading a *struct-typed* field or elem
 (`o.inner`, `v[i]`): that is a view onto the interior, and mutating it is already
 visible — no `&` needed there.
 
+### Pattern captures (@PLN35, SPEC-FIRST · planned, NOT yet implemented)
+
+> **@PLN35 · SPEC-FIRST** — the target for how PEG match-pattern captures alias the subject
+> ([matching.md § Rules — PEG patterns](matching.md)), written ahead of the code. Design:
+> [../plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
+
+```
+  (P-Cap-View)   a SINGLE structural capture that names an INTERIOR place of the subject (a struct
+                 field, a struct-typed element) is a VIEW (B-View / heap.md H-View): it aliases
+                 WITHOUT `&`, and carries the subject's borrow-dep (`Deps::frame1(subject)`) so both
+                 backends agree on free.
+  (P-Cap-Fresh)  a `...rest` sub-slice and a repetition `(a)*` accumulator are FRESH vectors
+                 (heap.md H-Alloc), INDEPENDENT of the subject (B-Copy / iteration.md I-Comp).
+```
+
+**In words.** Binding a single interior piece of the matched value — a field, a struct element — is
+a *view* onto that place, exactly like reading `o.inner` today (`B-View`): no copy, and a mutation
+writes through. A `...rest` tail or a repetition's collected vector is instead a *fresh* vector,
+independent of the subject — the same "fresh result vector" a comprehension builds (`I-Comp`) — so
+mutating a captured `rest` never touches the original. This split keeps the cheap case cheap while
+avoiding an interior-sub-slice lifetime that neither backend models cleanly.
+
 ---
 
 ## Deviations
