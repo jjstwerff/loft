@@ -32,12 +32,12 @@ The methodology behind this file (categories, no-time-projections, features-need
 > open bug issues** — not because the roadmap is finished, but because @PLN25/@PLN28/@PLN36/@PLN85/
 > @PLN90/@PLN94/@PLN97–101 all closed and the residue was never filed.  The top picks now are:
 >
-> 1. **Cluster C / H10 — fold `copy_claims` onto the keystone** ([STABILITY_ROADMAP § Red-flag
->    remediation](STABILITY_ROADMAP.md), plan written at
->    [cluster-C-copy-claims-fold.md](plans/85-store-lifetime-retirement/cluster-C-copy-claims-fold.md)).
+> 1. **Cluster C / H10 — fold `copy_claims` onto the keystone** (executable plan:
+>    [STABILITY_REDFLAG_REMEDIATION § Cluster C / H10](STABILITY_REDFLAG_REMEDIATION.md#cluster-c--h10--fold-copy_claims-source-enumeration-onto-the-keystone);
+>    tracking row: [STABILITY_ROADMAP](STABILITY_ROADMAP.md)).
 >    The **last item of the wide-release bar's gate 1** — the gate the roadmap calls *"the definition
->    of stabilized, not one item among five."*  Fully designed, **S per copy helper**, and it has
->    **no plan issue**.
+>    of stabilized, not one item among five."*  Fully designed, **S per copy helper**.  Deliberately a
+>    **work item, not a plan** (the design is settled; a plan issue would be a pointer).
 > 2. **Gate 5 — the stability contract** (semver / compat promise, public bug-intake path, the 1.0
 >    line).  Its opening condition ("when gate 1 is in sight") has **fired**, and the failure mode it
 >    prevents is already live: `hex_terrain 0.1.0` silently computes a wrong answer against current

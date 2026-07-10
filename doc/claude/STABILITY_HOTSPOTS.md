@@ -724,7 +724,7 @@ fold equally — spraying all three onto the read-walk keystone would be over-re
 still caught): (1) `validate_claims` — investigated 2026-06-22, does **NOT** fold (separate
 defensive walk; boundary pinned in the keystone doc comment); (2) `copy_claims` source-enum
 fold — **the active step**, with a concrete verifiable plan in
-[plans/85-store-lifetime-retirement/cluster-C-copy-claims-fold.md](plans/85-store-lifetime-retirement/cluster-C-copy-claims-fold.md)
+[STABILITY_REDFLAG_REMEDIATION.md § Cluster C / H10](STABILITY_REDFLAG_REMEDIATION.md#cluster-c--h10--fold-copy_claims-source-enumeration-onto-the-keystone)
 (per-helper Phase 0–4, ~S each: `index_body` is a near drop-in, `array_body`/`seq_vector` need a
 container-type call-site touch); (3) assess construction (likely its own layout-descriptor
 refactor — do NOT force it). **Size S per copy helper.** Surfaced by the 2026-06-22 code-quality
