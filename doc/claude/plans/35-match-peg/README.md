@@ -4,11 +4,48 @@
 
 # @PLN35 — PEG-Style Match Patterns with Anchor-Revert Captures (L3)
 
-> **Status: design draft.**  Extends the base match syntax
-> ([LOFT.md](../../LOFT.md) § Match expressions) with sequence patterns,
-> alternation, optionals, repetition, and multi-variable capture.
-> Backtracking is modelled on the existing `Lexer::link()` / `revert()`
-> anchor mechanic so a partially-matched branch can be cleanly undone.
+> **Status: design draft — reconciled to loft reality (2026-07-10).**  Extends the base
+> match syntax ([LOFT.md](../../LOFT.md) § Match expressions) with sequence patterns,
+> alternation, optionals, repetition, and multi-variable capture.  Backtracking is
+> modelled on the existing `Lexer::link()` / `revert()` anchor mechanic so a
+> partially-matched branch can be cleanly undone.  **Build plan:**
+> [IMPLEMENTATION.md](IMPLEMENTATION.md).  **Strict-spec changes:**
+> [FORMAL-DESIGN.md](FORMAL-DESIGN.md).  **Phase 0 in progress** — the D2 architecture
+> bet (slice backtracking needs no new opcode) is CONFIRMED on both backends
+> (`probes/p0-d2-backtrack.loft`).
+
+---
+
+## Reconciliation with loft reality (read before the design below)
+
+The design in this doc was drafted against an idealized syntax; a full read of the current
+`match` implementation ([IMPLEMENTATION.md § 1](IMPLEMENTATION.md) has the code anchors)
+corrects several assumptions.  The examples further down use the idealized shapes — the
+**real** loft forms are:
+
+- **No tuple-style enum variants.**  loft has only STRUCT variants: write `Num { v: integer }`,
+  not `Num(integer)`; `Neg { inner: … }`, not `Neg(Expr)`.  Every `Num(n)` / `Ident(name)`
+  example below is shorthand for `Num { v: n }` / `Ident { name }`.  (Decision **D5** /
+  [C89](../../DESIGN_DECISIONS.md): tuple variants are a PERMANENT non-goal — they force
+  match-to-read plus a mitigation-syntax sprawl; loft reads enum payloads by name.)
+- **Recursion goes through a collection, not an inline field.**  `Neg { inner: Expr }` fails
+  type-layout (an inline self-reference has no size); an AST enum uses
+  `Neg { inner: vector<Expr> }` (or a reference), as `445-generic-tree-walk.loft` models a tree
+  with `vector<Node>`.
+- **`match` has no IR node — it desugars entirely in the parser** into `If`-chains + ops.  So
+  L2–L3.4 are parser-only work and both backends come for free; only iterator input (L3.6) adds
+  opcodes.
+- **Slice backtracking needs no new opcode** — a slice cursor is a `usize` index; anchor/revert
+  = save/restore it.  **CONFIRMED** by the Phase-0 D2 probe on both backends.
+- **Already shipped, reused as-is:** fixed-arity slice patterns `[a, b, c]` and single-level
+  variant binding `V { field }`.  **Not yet implemented (this plan builds them):** nested
+  patterns `V { f: Inner { x } }` (L2), named / `...rest` / sequence captures (L3.1), and the
+  PEG operators `| ? * +`.
+
+The formal contract for all of the above — and the invariant it must preserve (`M-Total`: a
+match with any non-total pattern needs a total final arm, so a match never fails to select at
+runtime) — is [FORMAL-DESIGN.md](FORMAL-DESIGN.md); the five load-bearing decisions **D1–D5**
+are pinned there.
 
 ---
 

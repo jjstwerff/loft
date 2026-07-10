@@ -2021,3 +2021,46 @@ caught divergences #495/#500/#501 this cycle). At that point, "make the oracle t
 authority and dissolve the special-case gate" is a **fresh plan**, NOT @PLN79's drop-the-half
 proposal. The phase-00 characterisation + @P203 strace evidence stay in
 `plans/79-scope-exit-emission/` as historical record.
+
+## C89 — No tuple-style enum variants; a matcher reads like grammar and is never forced
+
+### Question
+
+Should loft add positional / tuple-style enum variants (`Ok(a)`, `Num(i64)`) alongside its struct
+variants (`Ok { value: a }`, `Num { v: integer }`)?  And how far should the @PLN35 PEG match-pattern
+surface go syntactically?
+
+### Decision (2026-07-10)
+
+**Tuple-style variants: permanently declined — never planned.**  loft enum payloads are always
+NAMED fields.  The @PLN35 structural matcher stays, under two conditions: it is **never forced**, and
+its surface **reads like grammar notation, not regex**.
+
+### Rationale
+
+- **The root problem is ACCESS, not spelling.**  `Ok(a)` *wraps* the value, so the only way to read
+  `a` is to destructure it — you are forced through a matcher just to read data.  Because
+  match-to-read is painful everywhere, a whole slew of *derived construction* grows up to mitigate
+  it: `?`, `unwrap`, `if let`, `let-else`, `.map`/`.and_then`, `matches!`.  The complexity is not the
+  variant; it is the mitigation the wrapping makes necessary.
+- **loft refuses this at the root.**  Enum payloads are named fields — you read `e.field` directly,
+  and matching is for *dispatch* (which variant), never for *extraction*.  A maybe-value is `τ?` read
+  and discharged inline with `??` (the anti-`Ok(a)`: no `Some`/`Ok` wrapper, no combinator tail).  So
+  there is nothing to mitigate and the mitigation-syntax sprawl never gets a foothold.
+- **A matcher is fine because it is never forced.**  @PLN35 PEG patterns are legitimate *structural
+  dispatch* — recognizing the shape of a token stream / AST / vector — reached for by choice, never a
+  tax the data model imposes to read a value.  "Never forced" is the invariant; it is also why no
+  mitigation layer forms around it.
+- **Read like grammar, not regex.**  The PEG surface must read like the standardized way parser logic
+  is written (PEG / EBNF-style: a sequence of named elements with `|`, `?`, `*`, `+`, grouping, named
+  captures) — which a reader follows without training — NOT like regex, which needs it.  That is
+  exactly why text matching stays in the regex *library*, out of `match` (one text-pattern language,
+  opt-in).  **loft will pay a bit of extra PARSER LOGIC to keep that readable-grammar surface —
+  readability of the written pattern beats parser simplicity.**
+
+### Revisit when
+
+Never, for tuple variants (a permanent non-goal).  The PEG readability bar is a live constraint on
+@PLN35's per-operator syntax choices (e.g. how a repetition separator is spelled) — each decided
+against "reads like grammar" in
+[plans/35-match-peg/FORMAL-DESIGN.md](plans/35-match-peg/FORMAL-DESIGN.md).

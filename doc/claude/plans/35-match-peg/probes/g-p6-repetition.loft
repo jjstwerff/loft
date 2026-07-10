@@ -1,0 +1,20 @@
+// @PLN35 golden · P6 (L3.4 repetition + separator) — RED until Phase 6.
+// Graduates to tests/scripts/35f-repetition.loft. `(a)*` collects into a FRESH vector; `+` needs
+// >=1; a separator is consumed, not captured. Hand-computed (both backends):
+// dispatch([1,5,6,7])=="call/3"; dispatch([1])=="call/0"; dispatch([0,42])=="set 42".
+
+fn dispatch(v: vector<integer>) -> text {
+  match v {
+    [ 1, args:integer* ]   => "call/{len(args)}",   // 1, then zero-or-more integers collected into args (bare postfix, no parens)
+    [ 0, one:integer ]     => "set {one}",
+    _                      => "unknown",
+  }
+}
+
+fn main() {
+  assert(dispatch([1, 5, 6, 7]) == "call/3", "repetition collects 3");
+  assert(dispatch([1]) == "call/0", "repetition zero");
+  assert(dispatch([0, 42]) == "set 42", "the other sequence arm");
+  assert(dispatch([9]) == "unknown", "no arm -> _");
+  print("P6 repetition: PASS");
+}

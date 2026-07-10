@@ -1,0 +1,18 @@
+// @PLN35 golden · P2 (L3.1 sequence + named capture + ...rest) — RED until Phase 2.
+// Graduates to tests/scripts/35b-sequence-capture.loft. Currently: named element captures and a
+// true `...rest` sub-slice do not parse (`..` today binds nothing). Hand-computed (both backends):
+// label([10,20,30,40])=="first 10 rest 3"; label([5])=="first 5 rest 0"; label([])=="empty".
+
+fn label(v: vector<integer>) -> text {
+  match v {
+    [ first, ...rest ] => "first {first} rest {len(rest)}",   // named head + FRESH sub-slice tail
+    _                  => "empty",
+  }
+}
+
+fn main() {
+  assert(label([10, 20, 30, 40]) == "first 10 rest 3", "first + rest sub-slice length 3");
+  assert(label([5]) == "first 5 rest 0", "rest empty");
+  assert(label([]) == "empty", "empty falls to _");
+  print("P2 sequence-rest: PASS");
+}

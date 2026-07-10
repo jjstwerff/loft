@@ -1,0 +1,18 @@
+// @PLN35 golden · P3 (L3.7 multi-pattern arm) — RED until Phase 3.
+// Graduates to tests/scripts/35c-multi-pattern-arm.loft. Comma-separated patterns per arm; the
+// first matching shape binds. Move|Jump jointly cover Cmd, so M-Total needs no trailing `_`.
+// Hand-computed (both backends): go(Move{3,5})==8; go(Jump{1,9})==10.
+
+enum Cmd { Move { x: integer, y: integer }, Jump { x: integer, y: integer } }
+
+fn go(c: Cmd) -> integer {
+  match c {
+    Move { x, y }, Jump { x, y } => x + y,     // ONE arm, two shapes, shared captures (first-match commit)
+  }
+}
+
+fn main() {
+  assert(go(Move { x: 3, y: 5 }) == 8, "Move dispatches");
+  assert(go(Jump { x: 1, y: 9 }) == 10, "Jump dispatches to the same arm");
+  print("P3 multi-pattern-arm: PASS");
+}

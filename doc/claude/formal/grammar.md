@@ -114,7 +114,9 @@ first:
 
 **In words.** Inside a pattern, `,` (separating whole alternative shapes in a multi-pattern arm) is
 loosest, then `|` (ordered choice), then a sequence of sub-patterns, then `:` (a capture); the
-postfix quantifiers `? * +` bind tightest to the pattern right before them. `...name` is a prefix
+postfix quantifiers `? * +` bind tightest to the pattern right before them — with **no** parens
+around a **single** element (`Num { value: n }*`, `Ident { name }?`), so `( … )` groups only a
+multi-element sequence or an alternation (`( Colon, Ident { name: ty } )?`). `...name` is a prefix
 rest, allowed only as the last element of a slice. A parenthesised pattern is a *group* (not a
 tuple) when it carries a pattern operator — resolved by the same position-based, deliberately
 non-context-free parse this doc already documents for `&` and struct-vs-block.
