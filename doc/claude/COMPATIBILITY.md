@@ -88,6 +88,33 @@ function`) is still a regression: the program that called it stops working. Loud
 it *safe to detect*, not *acceptable to ship*. The only thing loudness buys is that our
 CI and the developer catch it immediately — which is why the detectors below matter.
 
+## The error surface is one-directional — you can drop an error, never add one
+
+Errors have an asymmetry the other surfaces do not, and it flips the pre-freeze disposition:
+
+- **Dropping an error is safe** (loosening). A program that used to be *rejected* now compiles
+  or runs — no program that *functioned* is broken, because the rejected one never functioned.
+  So loft may always become *more* permissive.
+- **Introducing an error is a break** (tightening). A program that compiled and ran now fails —
+  that is exactly a functioning program breaking. So after the freeze loft may **never** become
+  *less* permissive on a covered surface.
+
+Therefore the frozen error set is the **maximum** loft will ever have; it can only shrink. That
+**inverts the disposition for errors**: everywhere else the pre-freeze mandate is "improve, then
+you can't"; for errors it is **"be strict now, because you can always relax later but never
+tighten."** The audit question for the error surface is precisely *"do we need **more** errors?"*
+— every place loft is *too permissive* (silently accepts something dubious, or produces a
+plausible-wrong value where it should reject or fault) is a **last-chance-to-add**: add the error
+while contract 0 allows, convert the programs it catches, and the freeze then locks in a strict
+floor we can only ever loosen. (Caveat: a *runtime* fault a program can **catch** is observable
+both ways — dropping one can change a program that handled it — so the clean "drop is always
+safe" rule is sharpest for **compile-time** errors; runtime faults still follow the general
+"functioning program unchanged" test.)
+
+This is why the silent-wrong findings from the lib and formal audits (`text as integer` → null,
+integer overflow → null, a classifier true on `""`) are really **missing-error** findings: the
+fix is usually *to add a diagnostic or a fault*, and adding it is the one-way door.
+
 ## Deprecation is soft steering, never warn-then-remove
 
 A deprecation under this promise **steers** toward a better idiom; it never announces a
