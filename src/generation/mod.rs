@@ -621,6 +621,10 @@ fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
         Type::Integer(s) if s.range() - 1 <= 65536 && i64::from(s.min) >= 0 => Some("u16"),
         Type::Integer(s) if s.range() - 1 <= 255 => Some("i8"),
         Type::Integer(s) if s.range() - 1 <= 65536 => Some("i16"),
+        // @PLN25: a nullable boolean (`boolean?`) still stores as `u8` (tri-state
+        // 0/1/255), so the same bool→u8 wrap must fire — unlike a nullable narrow
+        // INTEGER, which is carried full-width i64 (rust_type) and must stay `None`.
+        Type::Optional(inner) if matches!(inner.base(), Type::Boolean) => Some("u8"),
         _ => None,
     }
 }
@@ -4054,7 +4058,7 @@ extern crate loft;"
         // The bridge result lands directly in the wrapper's return slot.  Match
         // the wrapper signature the rest of codegen chose for this return type.
         let needs_ret_cast = matches!(def.returned(), Type::Integer(_)); // wrapper -> i64
-        let needs_bool_ret = matches!(def.returned(), Type::Boolean); // wrapper -> u8
+        let needs_bool_ret = matches!(def.returned().base(), Type::Boolean); // wrapper -> u8 (incl. boolean?)
         write!(w, "  ")?;
         write!(w, "{target}(stores")?;
         for attr in def.attributes() {

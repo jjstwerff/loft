@@ -727,7 +727,7 @@ impl Output<'_> {
             // the last token (`!= 1 as u8`) and leaves a `bool`.  Open the paren
             // here; the narrow-cast suffix below closes it with `) as u8`.
             let wrap_bool =
-                !matches!(to, Value::Null) && matches!(variables.tp(var), Type::Boolean);
+                !matches!(to, Value::Null) && matches!(variables.tp(var).base(), Type::Boolean);
             // #433 — a narrow-int value-block (`vec<u8>[i] ?? <int>` ncc) assigned to
             // a plain `integer` (i64) variable needs an `as i64` widen, same as the
             // return seam (see block_needs_i64_widen).  Open the wrapping paren here;
@@ -901,7 +901,7 @@ impl Output<'_> {
                     // the narrow type.  Post-2c: widen to i64 to match the default Integer.
                     // @PLN17: a boolean variable's storage form is u8 (not i64) — cast the
                     // RHS (`bool` literal/comparison or `u8`) to u8, not i64.
-                    if matches!(variables.tp(var), Type::Boolean) {
+                    if matches!(variables.tp(var).base(), Type::Boolean) {
                         write!(w, ") as u8")?; // closes the `(` opened before the RHS
                     } else {
                         write!(w, " as i64")?;
