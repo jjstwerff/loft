@@ -52,8 +52,15 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      - name: Install mold (loft's pinned linker)
-        run: sudo apt-get update -y && sudo apt-get install -y mold
+      # `mold` is loft's pinned linker.  `libasound2-dev` provides the ALSA
+      # headers `alsa-sys` (a transitive native dep of the `graphics` package's
+      # `rodio`) builds against — without them the graphics leg fails at native
+      # crate build, not for package rot.  `xvfb` + `libgl1-mesa-dri` give a
+      # headless software-GL for any package whose tests render.  Mirrors the
+      # main CI Test job's Linux install so a published library validates under
+      # the same provisioning its own source repo's CI had.
+      - name: Install mold + ALSA + headless GL
+        run: sudo apt-get update -y && sudo apt-get install -y mold libasound2-dev xvfb libgl1-mesa-dri
 
       - name: Update to latest stable rustc
         run: rustup update stable && rustc --version
