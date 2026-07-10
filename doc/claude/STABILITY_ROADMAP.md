@@ -70,11 +70,13 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    exactly what @PLN25 decided. @PLN25 CLOSED 2026-07-02, so the foundation is in place.
    (This is why earlier @PLN85 attempts flailed — there wasn't enough of @PLN25 settled to know
    what to build.)
-   **What is left of gate 1 (2026-07-10):** every *tracked* store-lifetime bug is closed. The
-   remaining items are (a) the **Cluster C / H10** `copy_claims` keystone fold below — which has
-   **no plan issue**, and whose real scope is far smaller than the row's old M–L size; and (b) the
-   fuzz-proof itself, @PLN53 (F4 differential) + @PLN54 (S4 LSan, S9 mixed-cdylib). Gate 1 is
-   "closed by construction" only when (a) lands and (b) has run over it.
+   **What is left of gate 1 (2026-07-10): exactly one item.** Every *tracked* store-lifetime bug is
+   closed, and the **fuzz-proof half is DONE** — @PLN53 (harness shipped, #542) and @PLN54 (sanitizer
+   stack, S4 LSan green) both CLOSED 2026-07-10 via #547, leaving only S9's toolchain-blocked
+   cdylib-boundary ASan spun out. So the sole remaining item is the **Cluster C / H10** `copy_claims`
+   keystone fold below — a **work item under the light flow**, deliberately not a plan (see the C row).
+   Its real scope is far smaller than that row's old M–L size. Gate 1 is "closed by construction" when
+   the fold lands and the standing corpora run over it.
 
 2. **One coherent null model — and the substrate gate 1 is built on. MODEL LANDED 2026-07-02 (#480);
    the gate is NOT yet cleared.** @PLN25 (nullable sequences / dense-default) is closed as a *plan*:
@@ -131,16 +133,18 @@ is the live one.** Gate 2 (@PLN25) settled the value model and the `deps` owners
 invariant is defined against, exactly as the build order required — so gate 1 is **unblocked** even
 though gate 2 still carries verified-open soundness edges of its own (see gate 2 above; they do not
 block gate 1, because the *model* is what gate 1 reads). Gate 3 (@PLN28 + @PLN36) is closed. So the
-order now reads: **finish gate 1** (Cluster C, then let @PLN53/@PLN54 run over it) and **drain gate 2's
-edge cases** in parallel, **then open gate 5** (its trigger has fired), with gate 4 (@PLN43, parked)
-after. Performance (the copy-vs-borrow elision, an @PLN25 sub-thread) is "good enough for prototyping"
-— fold in opportunistically, not a blocker.
+order now reads: **finish gate 1** (the Cluster C fold — the fuzz/sanitizer corpora it must run under
+are now standing, @PLN53/@PLN54 closed) and **drain gate 2's edge cases** in parallel, **then open
+gate 5** (opened, @PLN102), with gate 4 (@PLN43, parked) after. Performance (the copy-vs-borrow
+elision, an @PLN25 sub-thread) is "good enough for prototyping" — fold in opportunistically, not a
+blocker.
 
 **Readiness today (2026-07-10).** The 2026-07 stability + type-safety release SHIPPED as
 `2026.7.1`. Gate 3 is CLOSED; gate 2's *model* is landed but the gate is **open** on verified soundness
 edges (a `?? null` unsoundness, the call-arg N-Store hole — see gate 2 above). Gate 1's tracked
-store-lifetime bugs are all CLOSED (#460 / #461 / #462 / #465, and A1b via @PLN90 #516); what remains is
-the Cluster C fold — forward-risk hardening, not an active bug — plus the fuzz-proof run.
+store-lifetime bugs are all CLOSED (#460 / #461 / #462 / #465, and A1b via @PLN90 #516) **and its
+fuzz-proof is now standing** (@PLN53/@PLN54 closed, #547); the single remaining item is the Cluster C
+fold — forward-risk hardening, not an active bug.
 
 **Why the tracker is empty — and what to read instead.** This stream's standing rule at the top of
 this file is *fix, don't file*, and the cycle runs under a warm feature freeze
@@ -203,11 +207,10 @@ refactors that retire whole future-bug *classes*. In finishing order:
 > worker-slot swap-back encapsulated into one home; full field-privacy is
 > design-protocol over-reach for the benign reads, optional), 8 (H4-medium GET↔SET),
 > and 10 (de-dup tail — triaged clean) are ✅. Remaining are NOT bugs/hardening-gaps:
-> **step 9** is the fuzzing/sanitizer instrument pair (@PLN53/@PLN54) — **no longer "future":
-> it has been REACHED, is partly built, and now IS gate 1's fuzz-proof** (see the row);
-> **step 2** is parked WIP on a separate branch.  The live open queue is
-> **step 11** (CI docs-only matrix-skip — risky CI surgery, validate via a docs-only PR)
-> plus step 9's residual (F4, S4).
+> **step 9** is the fuzzing/sanitizer instrument pair (@PLN53/@PLN54) — **✅ BOTH CLOSED 2026-07-10**
+> (#547); it was gate 1's fuzz-proof and it now stands (only S9's toolchain-blocked cdylib-boundary
+> ASan spun out); **step 2** is parked WIP on a separate branch.  The live open queue is
+> **step 11** (CI docs-only matrix-skip — risky CI surgery, validate via a docs-only PR).
 > **Step 8** (H4-medium) is now ✅ (design-protocol — free-op already single-homed, null-init
 > are different facts; premise over-stated like H3) and **step 12** (i32 reclaim) is deferred
 > (matrix-revised to M + low-value). The optional residuals

@@ -41,16 +41,20 @@ The methodology behind this file (categories, no-time-projections, features-need
 > 1. **Cluster C / H10 — fold `copy_claims` onto the keystone** (executable plan:
 >    [STABILITY_REDFLAG_REMEDIATION § Cluster C / H10](STABILITY_REDFLAG_REMEDIATION.md#cluster-c--h10--fold-copy_claims-source-enumeration-onto-the-keystone);
 >    tracking row: [STABILITY_ROADMAP](STABILITY_ROADMAP.md)).
->    The **last item of the wide-release bar's gate 1** — the gate the roadmap calls *"the definition
->    of stabilized, not one item among five."*  Fully designed, **S per copy helper**.  Deliberately a
->    **work item, not a plan** (the design is settled; a plan issue would be a pointer).
+>    The **sole remaining item of the wide-release bar's gate 1** — the gate the roadmap calls *"the
+>    definition of stabilized, not one item among five."*  Gate 1's other half, the fuzz-proof, now
+>    stands: @PLN53 + @PLN54 both CLOSED 2026-07-10 (#547).  Fully designed, **S per copy helper**.
+>    Deliberately a **work item, not a plan** (the design is settled; a plan issue would be a pointer).
 > 2. **Gate 5 — the stability contract** (compat promise, expressible version bounds, deprecation
 >    channel, public bug-intake path, the 1.0 line).  Its opening condition ("when gate 1 is in
 >    sight") has **fired**, and the failure mode it prevents is already live: `hex_terrain 0.1.0`
 >    silently computes a wrong answer against current loft.  Opened as
 >    **[@PLN102](https://github.com/loft-lang/plans/issues/102)** (`status:next`).
-> 3. **Drain the fuzz-proof** — @PLN53 F4 (its `LOFT_POISON` blocker is resolved) + @PLN54 S4 LSan.
->    These are what turn gate 1's silence into *proof by construction*.
+> 3. **Un-mute the nightlies** (effort S).  `ci.yml` and `registry-validation.yml` have **no failure
+>    notifier at all** — `ci.yml` carries the 3-OS matrix and the differential oracle (Goal D's whole
+>    Check) and went red 6 of 10 scheduled nights with nobody told.  Reuse `miri.yml`'s `notify` job.
+>    Then the `graphics` one-liner (`libasound2-dev` + `pkg-config` on the runner).  A gate nobody
+>    watches is not a gate — that is how `registry-validation` was mistaken for a DNS flake for days.
 >
 > Two standing gates are RED and neither is a flake: `main` fails the **differential oracle** (a
 > native/wasm accept-reject divergence on a match-arm tail call), and **`registry-validation` has

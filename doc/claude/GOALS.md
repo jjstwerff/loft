@@ -683,8 +683,9 @@ not "all of A" or "all of B":
   in *no* workflow — the assert it was promoted to is compiled out of normal test builds by
   `[profile.dev.package.loft] debug-assertions = false`, so only the nightly debug-assertions
   gate exercises it, over `--lib --test issues`. (ii) **The class is not yet retired by
-  construction**: the Cluster C / H10 fold plus @PLN53 F4 / @PLN54 S4 are what turn the current
-  silence into proof. Tracked in [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md).
+  construction**: the fuzz/sanitizer corpora that must prove it are now standing (@PLN53 + @PLN54
+  both closed 2026-07-10), so the **one** remaining step is the Cluster C / H10 fold — land it and
+  the silence becomes proof. Tracked in [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md).
 - **Structure floor — cleared when:** the libraries a game depends on (graphics,
   game_client / game_protocol, server) are extracted, installable, and
   version-stable through the registry. *Not* "the whole package toolchain
