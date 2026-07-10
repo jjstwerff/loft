@@ -1,0 +1,22 @@
+// @PLN48 S3 — xs.within(cx, cy, radius): the exact proximity (aggro) query, on
+// both backends.  Every 2D point within Euclidean radius of the query point.
+struct WMob { x: integer, y: integer }
+
+fn main() {
+  xs: spacial<WMob[x, y]> = [];
+  xs += [WMob{x: 10, y: 10}];
+  xs += [WMob{x: 12, y: 11}];   // dist sqrt(5) from (10,10)
+  xs += [WMob{x: 50, y: 50}];   // far
+  xs += [WMob{x: 9,  y: 8}];    // dist sqrt(5)
+  xs += [WMob{x: 10, y: 10}];   // same cell as the first
+
+  hits: integer = 0;
+  sum: integer = 0;
+  for m in xs.within(10, 10, 5) {
+    hits += 1;
+    sum += m.x * 100 + m.y;
+  }
+  // Within r=5 of (10,10): (10,10),(12,11),(9,8),(10,10) — 4 hits (the dup counts).
+  // sum = 1010 + 1211 + 908 + 1010 = 4139.
+  print("hits={hits} sum={sum}\n");
+}

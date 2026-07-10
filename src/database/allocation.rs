@@ -941,6 +941,22 @@ impl Stores {
         self.build_rec_scratch(coll, &recs)
     }
 
+    /// @PLN48 S3 — the `within(cx, cy, r)` proximity query as an iterable scratch
+    /// vector: every 2D point within Euclidean `radius` of `(cx, cy)`, exact.  Feeds
+    /// the same Ordered (on=3) iteration path as `build_radix_sorted_vec`.
+    pub fn build_radix_within_vec(
+        &mut self,
+        coll: &DbRef,
+        tp: u16,
+        cx: i64,
+        cy: i64,
+        radius: i64,
+    ) -> DbRef {
+        let keys = self.types[tp as usize].keys.clone();
+        let recs = crate::radix_db::within(coll, &self.allocations, &keys, &[cx, cy], radius);
+        self.build_rec_scratch(coll, &recs)
+    }
+
     /// Materialise `recs` (live hash rec-nrs) into a rec-nr scratch vector that
     /// the Ordered (on=3) iteration path walks.
     ///

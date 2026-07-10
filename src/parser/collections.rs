@@ -1703,13 +1703,30 @@ use #count instead"
                 } else {
                     "n_hash_sorted"
                 };
-                let hash_sorted_fn = self.data.def_nr(scratch_fn_name);
-                if hash_sorted_fn != u32::MAX {
-                    let call = Value::Call(hash_sorted_fn, vec![expr.clone(), Value::Int(tp_arg)]);
-                    fill = v_set(scratch_var, call);
+                // @PLN48 S3 — `for m in xs.within(…)`: the `.within` intercept already
+                // rewrote `expr` to an `n_spacial_within(…)` call that BUILDS the
+                // ordered scratch.  Use it directly — do not wrap it in n_radix_sorted
+                // (which would walk the scratch as if it were a tree).
+                let already_scratch = matches!(
+                    expr.unspan(),
+                    Value::Call(d, _) if self.data.def(*d).name() == "n_spacial_within"
+                );
+                if already_scratch {
+                    fill = v_set(scratch_var, expr.clone());
                     expr = Value::Var(scratch_var);
                     if !self.first_pass {
                         self.vars.set_type(scratch_var, scratch_tp);
+                    }
+                } else {
+                    let hash_sorted_fn = self.data.def_nr(scratch_fn_name);
+                    if hash_sorted_fn != u32::MAX {
+                        let call =
+                            Value::Call(hash_sorted_fn, vec![expr.clone(), Value::Int(tp_arg)]);
+                        fill = v_set(scratch_var, call);
+                        expr = Value::Var(scratch_var);
+                        if !self.first_pass {
+                            self.vars.set_type(scratch_var, scratch_tp);
+                        }
                     }
                 }
             }

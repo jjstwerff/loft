@@ -40,9 +40,10 @@ const AXIS_BITS: u32 = 64;
 const MAX_AXES: usize = 3;
 
 /// A key field's value, mapped to an order-preserving 64-bit code (offset-binary).
-fn axis_code(store: &Store, rec: u32, key: &Key) -> u64 {
+/// A key field's signed coordinate value (for distance arithmetic).
+fn axis_i64(store: &Store, rec: u32, key: &Key) -> i64 {
     let p = PAYLOAD + u32::from(key.position);
-    let v: i64 = match key.type_nr.unsigned_abs() {
+    match key.type_nr.unsigned_abs() {
         2 => store.get_long(rec, p),
         8 => i64::from(store.get_i32_raw(rec, p)),
         9 => i64::from(store.get_short(rec, p, 0)),
@@ -53,8 +54,18 @@ fn axis_code(store: &Store, rec: u32, key: &Key) -> u64 {
         }
         // type_nr 1 (`integer`) and any other integer default.
         _ => store.get_int(rec, p),
-    };
+    }
+}
+
+/// The order-preserving (offset-binary) code of a signed coordinate — the axis's
+/// contribution to the Morton key.  Flipping the sign bit makes an unsigned compare
+/// agree with the signed value compare.
+fn coord_code(v: i64) -> u64 {
     (v as u64) ^ (1u64 << 63)
+}
+
+fn axis_code(store: &Store, rec: u32, key: &Key) -> u64 {
+    coord_code(axis_i64(store, rec, key))
 }
 
 /// The same code from an already-extracted query value.  Must match [`axis_code`]:
@@ -178,6 +189,75 @@ pub fn records(coll: &DbRef, stores: &[Store]) -> Vec<u32> {
     out
 }
 
+// ---------------------------------------------------------------------------
+// Proximity queries — @PLN48 S3, the Rust ports of `src/spatial.rs`, reading
+// coordinates through the schema's key fields instead of fixed offsets.
+// ---------------------------------------------------------------------------
+
+/// The full multi-word Morton code of a point given each axis's order-preserving
+/// code.  `n` axes × 64 bits interleave into `n` words (word 0 most significant).
+fn morton_words(n: usize, code: impl Fn(usize) -> u64) -> [u64; MAX_AXES] {
+    let mut words = [0u64; MAX_AXES];
+    for (w, slot) in words.iter_mut().enumerate().take(n) {
+        *slot = interleave(w as u32, n, &code);
+    }
+    words
+}
+
+/// Lexicographic compare of two `n`-word Morton codes (word 0 most significant).
+fn code_gt(a: &[u64; MAX_AXES], b: &[u64; MAX_AXES], n: usize) -> bool {
+    for i in 0..n {
+        if a[i] != b[i] {
+            return a[i] > b[i];
+        }
+    }
+    false
+}
+
+/// Squared Euclidean distance from a record to the query point `q`.
+fn dist2(store: &Store, rec: u32, keys: &[Key], q: &[i64]) -> i64 {
+    keys.iter().zip(q).fold(0i64, |acc, (k, &qc)| {
+        let d = axis_i64(store, rec, k) - qc;
+        acc.saturating_add(d.saturating_mul(d))
+    })
+}
+
+/// Every record within Euclidean `radius` of query point `q`, in key (Morton) order.
+///
+/// **Exact.**  The axis-aligned box `[q−r, q+r]` contains the disc, and by Morton
+/// monotonicity the box's codes lie in `[morton(q−r), morton(q+r)]` — so seeking to
+/// the low corner and walking until a code passes the high corner visits every point
+/// of the box (plus some outside it, which the `dist2 ≤ r²` test drops).  No false
+/// negatives.  Ported from `spatial::within`; see its proof.
+#[must_use]
+pub fn within(coll: &DbRef, stores: &[Store], keys: &[Key], q: &[i64], radius: i64) -> Vec<u32> {
+    let store = keys::store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    if tree == 0 {
+        return Vec::new();
+    }
+    let n = keys.len();
+    let lo = |a: usize| coord_code(q[a].saturating_sub(radius));
+    let hi_code = morton_words(n, |a| coord_code(q[a].saturating_add(radius)));
+    let oracle = RadixOracle { keys };
+    let probe = |word: u32| interleave(word, n, lo);
+    let mut it = rt::rtree_seek(store, tree, &probe, key_bits(keys), &oracle);
+    let r2 = radius.saturating_mul(radius);
+    let mut out = Vec::new();
+    let mut rec = it.rec();
+    while rec != 0 {
+        let rec_code = morton_words(n, |a| axis_code(store, rec, &keys[a]));
+        if code_gt(&rec_code, &hi_code, n) {
+            break;
+        }
+        if dist2(store, rec, keys, q) <= r2 {
+            out.push(rec);
+        }
+        rec = it.next(store, tree).unwrap_or(0);
+    }
+    out
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -293,6 +373,43 @@ mod tests {
         let mut want = bucket.clone();
         want.sort_unstable();
         assert_eq!(got, want, "the three same-bucket records are one contiguous run");
+    }
+
+    /// D4 — `within` equals brute force over many random discs, negatives included.
+    #[test]
+    fn d4_within_matches_brute_force() {
+        let mut store = Store::new_in_use(1 << 16);
+        let keys = xy_keys();
+        let coll_rec = store.claim(1);
+        let coll = DbRef {
+            store_nr: 0,
+            rec: coll_rec,
+            pos: 4,
+        };
+        let mut seed = 0x77aa_33cc_11ee_9988;
+        let mut pts = Vec::new();
+        for _ in 0..500 {
+            let (x, y) = (lcg(&mut seed) % 400 - 200, lcg(&mut seed) % 400 - 200);
+            let rec = add_point(&mut store, &coll, &keys, x, y);
+            pts.push((x, y, rec));
+        }
+        let stores = std::slice::from_ref(&store);
+        for _ in 0..200 {
+            let (cx, cy) = (lcg(&mut seed) % 400 - 200, lcg(&mut seed) % 400 - 200);
+            let r = 1 + lcg(&mut seed) % 50;
+            let mut got = within(&coll, stores, &keys, &[cx, cy], r);
+            got.sort_unstable();
+            let mut want: Vec<u32> = pts
+                .iter()
+                .filter(|&&(x, y, _)| {
+                    let (dx, dy) = (x - cx, y - cy);
+                    dx * dx + dy * dy <= r * r
+                })
+                .map(|&(_, _, rec)| rec)
+                .collect();
+            want.sort_unstable();
+            assert_eq!(got, want, "within({cx},{cy},{r}) must match brute force");
+        }
     }
 
     /// D3 — the code is order-preserving even across zero: a negative axis must sort

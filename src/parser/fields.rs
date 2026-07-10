@@ -65,6 +65,39 @@ impl Parser {
             diagnostic!(self.lexer, Level::Error, "Expect a field name");
             return t;
         };
+        // @PLN48 S3 — `xs.within(cx, cy, radius)` on a `spacial<T[x, y]>`, BEFORE the
+        // `type_elm` check below (a keyed collection has no struct "element" there, so
+        // it would otherwise error "Unknown type spacial<…>").  Rewrites to
+        // `n_spacial_within(xs, tp, cx, cy, radius)`, injecting the type id (mirrors
+        // the `to_json` intercept); the result is a `vector<reference<T>>` of the
+        // matching points, iterable in natural order.
+        if field == "within"
+            && matches!(t, Type::Radix(_, _, _))
+            && self.lexer.peek_token("(")
+        {
+            self.lexer.token("(");
+            let (mut cx, mut cy, mut r) = (Value::Null, Value::Null, Value::Null);
+            let _ = self.expression(&mut cx);
+            self.lexer.token(",");
+            let _ = self.expression(&mut cy);
+            self.lexer.token(",");
+            let _ = self.expression(&mut r);
+            self.lexer.token(")");
+            if !self.first_pass {
+                let tp = self.get_type(&t);
+                let fn_nr = self.data.def_nr("n_spacial_within");
+                if tp != u16::MAX && fn_nr != u32::MAX {
+                    *code = Value::Call(
+                        fn_nr,
+                        vec![code.clone(), Value::Int(i32::from(tp)), cx, cy, r],
+                    );
+                }
+            }
+            // Return the SAME Radix type so `for m in xs.within(…)` flows through the
+            // proven on=3 iteration path (parse_for detects the already-built scratch
+            // and iterates it directly, without re-wrapping in n_radix_sorted).
+            return t;
+        }
         let enr = self.data.type_elm(&t);
         if enr == u32::MAX {
             let shown = t.show(&self.data, &self.vars);

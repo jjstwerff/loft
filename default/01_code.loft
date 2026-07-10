@@ -1148,6 +1148,12 @@ pub fn hash_unsorted(h: reference, tp: integer) -> reference;
 // desugars `for e in xs { … }` into this call with the collection's type id.
 pub fn radix_sorted(r: reference, tp: integer) -> reference;
 #impure(parent_write)
+// @PLN48 S3 — the `xs.within(cx, cy, radius)` proximity query.  Returns a fresh
+// vector<reference<T>> of every 2D point within Euclidean `radius` of `(cx, cy)`,
+// in natural (Morton) order.  The parser rewrites the method call, injecting the
+// collection's type id.  Exact (the box scan distance-verifies).
+pub fn spacial_within(r: reference, tp: integer, cx: integer, cy: integer, radius: integer) -> reference;
+#impure(parent_write)
 type index size(4);
 
 // P192: hash<T[key]> bucket-array walk.  No const args needed —
