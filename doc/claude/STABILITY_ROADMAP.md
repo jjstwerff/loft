@@ -76,7 +76,7 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    fuzz-proof itself, @PLN53 (F4 differential) + @PLN54 (S4 LSan, S9 mixed-cdylib). Gate 1 is
    "closed by construction" only when (a) lands and (b) has run over it.
 
-2. **One coherent null model — and the substrate gate 1 is built on. MODEL LANDED 2026-07-02;
+2. **One coherent null model — and the substrate gate 1 is built on. MODEL LANDED 2026-07-02 (#480);
    the gate is NOT yet cleared.** @PLN25 (nullable sequences / dense-default) is closed as a *plan*:
    vectors, scalars and DN1–DN6 all landed default-on across both backends, `formal/types.md` is at
    0 open deviations, and `not null` is now a **deprecated no-op** — it still parses, with a warning,
@@ -88,13 +88,12 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    a **`?? null` unsoundness** (`y: integer = x ?? null` is accepted and a non-null slot ends up
    holding `null`, both backends), the **call-arg N-Store hole** (a nullable passed into a non-null
    *parameter* is silently accepted, though into a non-null *local* it is correctly rejected), a
-   **`u8?`-return native codegen failure**, and the registry-gated `not null` hard-reject. A null
-   reaching a non-null slot is a soundness edge, not cosmetics: it is the user-facing incoherence
-   this gate exists to remove, so the gate reads **open**.
-   *Provenance:* re-probed on both backends 2026-07-10 by the @PLN25 stream; the authoritative list
-   is that plan's residual section — see
-   [plans/25-nullable-sequences/RESUME.md](plans/25-nullable-sequences/RESUME.md) (the written record
-   lands with the in-flight @PLN25 doc-sync; these are **not** independently re-verified here).
+   **`u8?`-return native codegen failure**, the registry-gated `not null` hard-reject, and the F6
+   bookkeeping close-out. A null reaching a non-null slot is a soundness edge, not cosmetics: it is
+   the user-facing incoherence this gate exists to remove, so the gate reads **open**.
+   *Provenance:* re-probed on both backends 2026-07-10 by the @PLN25 stream — the authoritative list
+   is [RESUME.md § VERIFIED-OPEN RESIDUALS](plans/25-nullable-sequences/RESUME.md#verified-open-residuals-re-probed-both-backends-2026-07-10).
+   These are **not** independently re-verified here.
 
 3. **First-contact developer experience. ✅ CLEARED 2026-07-07.** GOALS' acceptance test is
    *"done = picking it up is fun,"* and first contact is dominated by what happens when the user
