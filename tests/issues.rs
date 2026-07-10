@@ -491,6 +491,36 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
+// A FORWARD-REFERENCE caller of a fn whose text-return tail classifies only on
+// pass 2 (a fn-ref call `f(x)`, a local vector index `tv[0]`, or a closure-field
+// call `g.fmt(n)`) crashed with "Too few parameters" (codegen.rs) — and the H5
+// two-pass-contract assert flagged it under `-C debug-assertions=on`.  Root:
+// `do_tret_bind` promotes `__tret` to a hidden `&text` SIGNATURE buffer, but
+// those tails read as `Plain`/`Borrow` on pass 1 and `Owned(FnRefCall/ViewOfLocal)`
+// on pass 2, so the buffer was appended pass-2-only — after the forward-ref caller
+// had already emitted its call against the pass-1 (bufferless) signature.  Fixed
+// by gating pass-2 promotion on pass 1 having already minted the `__tret` attr
+// (each callee is defined AFTER its caller here, so the ABI must be stable).
+#[test]
+fn tret_bind_forward_ref_pass_stable() {
+    code!(
+        "fn mk_z(n: integer) -> text { \"z{n}\" }
+fn call_fnref(x: integer) -> text { return via_fnref(mk_z, x); }
+fn via_fnref(f: fn(integer) -> text, x: integer) -> text { f(x) }
+fn call_index() -> text { return via_index(); }
+fn via_index() -> text { tv: vector<text> = [\"a\", \"b\"]; return tv[0]; }
+struct TbG { fmt: fn(integer) -> text }
+fn call_method() -> text { return via_method(); }
+fn via_method() -> text { g = TbG { fmt: fn(n: integer) -> text { \"m{n}\" } }; g.fmt(7) }
+fn test() {
+    assert(call_fnref(5) == \"z5\", \"fwd fn-ref call: {call_fnref(5)}\");
+    assert(call_index() == \"a\", \"fwd vector index: {call_index()}\");
+    assert(call_method() == \"m7\", \"fwd closure-field call: {call_method()}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
 // ── map / filter / reduce ─────────────────────────────────────────────────────
 
 #[test]
