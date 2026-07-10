@@ -1,0 +1,4 @@
+// @PLN102 arc B fixture — carries a malformed loft version constraint.
+pub fn bad_fn() -> integer {
+  0
+}

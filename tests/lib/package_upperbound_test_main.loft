@@ -1,0 +1,5 @@
+// @PLN102 arc B — using a package whose upper bound the interpreter does not
+// meet must be rejected; before arc B this bound was silently ignored.
+use testpkg_upperbound;
+fn main() {
+}

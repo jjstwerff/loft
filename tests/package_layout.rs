@@ -48,6 +48,63 @@ fn package_layout_version_mismatch_is_fatal() {
     );
 }
 
+/// @PLN102 arc B — a package whose `loft.toml` carries a MALFORMED version
+/// constraint (`^0.9`, an unsupported operator) is rejected LOUDLY at load,
+/// not silently accepted.  Before arc B, `check_version` degraded any non-`>=`
+/// form to `0.0.0` and always passed; the caret would have loaded fine.
+#[test]
+fn arc_b_malformed_constraint_is_fatal() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(
+        &format!("tests{s}lib{s}package_badconstraint_test_main.loft"),
+        false,
+    );
+    assert!(
+        p.diagnostics.level() >= Level::Error,
+        "Expected a fatal for the malformed version constraint '^0.9'"
+    );
+    assert!(
+        p.diagnostics
+            .lines()
+            .iter()
+            .any(|l| l.contains("invalid loft version requirement")),
+        "Expected the malformed-constraint diagnostic, got: {:?}",
+        p.diagnostics.lines()
+    );
+}
+
+/// @PLN102 arc B — a package with an UPPER bound the running interpreter does
+/// not meet (`<=0.1` against calendar-versioned loft) is rejected.  This is the
+/// core regression: before arc B the upper bound was silently ignored and the
+/// package loaded, the category-S silent failure the plan removes.
+#[test]
+fn arc_b_unsatisfiable_upper_bound_is_fatal() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(
+        &format!("tests{s}lib{s}package_upperbound_test_main.loft"),
+        false,
+    );
+    assert!(
+        p.diagnostics.level() >= Level::Error,
+        "Expected a fatal for the unsatisfiable upper bound '<=0.1'; \
+         before arc B this loaded silently"
+    );
+    assert!(
+        p.diagnostics
+            .lines()
+            .iter()
+            .any(|l| l.contains("requires loft")),
+        "Expected the version-requirement diagnostic, got: {:?}",
+        p.diagnostics.lines()
+    );
+}
+
 /// P129: native_packages must not contain duplicate crate entries.
 /// A package with `[native] crate` parsed through lib_path_manifest should
 /// not produce a second entry if register_native_manifest already added it.

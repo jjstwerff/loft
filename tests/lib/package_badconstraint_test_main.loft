@@ -1,0 +1,5 @@
+// @PLN102 arc B — using a package with a malformed loft version constraint
+// must fail loudly ("invalid loft version requirement"), not load silently.
+use testpkg_badconstraint;
+fn main() {
+}

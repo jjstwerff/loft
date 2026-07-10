@@ -7592,13 +7592,26 @@ impl Parser {
             let m = manifest::read_manifest(&manifest_path)?;
             if let Some(ref req) = m.loft_version {
                 let current = env!("CARGO_PKG_VERSION");
-                if !manifest::check_version(req, current) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Fatal,
-                        "Package '{id}' requires loft {req} but interpreter is {current}"
-                    );
-                    return None;
+                match manifest::check_version(req, current) {
+                    manifest::VersionCheck::Satisfied => {}
+                    manifest::VersionCheck::Unsatisfied => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Fatal,
+                            "Package '{id}' requires loft {req} but interpreter is {current}"
+                        );
+                        return None;
+                    }
+                    // @PLN102 arc B: a constraint the loader cannot honour is
+                    // rejected loudly, not silently treated as "any version".
+                    manifest::VersionCheck::Malformed(why) => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Fatal,
+                            "Package '{id}' has an invalid loft version requirement '{req}': {why}"
+                        );
+                        return None;
+                    }
                 }
             }
             let entry = m.entry.as_ref().map_or_else(nested_entry, |e| {

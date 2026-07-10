@@ -1,0 +1,4 @@
+// @PLN102 arc B fixture — carries an unsatisfiable upper-bound constraint.
+pub fn ub_fn() -> integer {
+  0
+}
