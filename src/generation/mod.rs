@@ -794,6 +794,15 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
             let parts: Vec<String> = elems.iter().map(|e| rust_type(e, elem_context)).collect();
             return format!("({})", parts.join(", "));
         }
+        // @PLN25: a nullable narrow integer is carried FULL-WIDTH (i64) as a Rust value.
+        // The narrow packing is store-only; a narrow Rust type (u8/u16) can't hold the
+        // null sentinel alongside the full value range (`u8?` must keep 255-as-value
+        // distinct from null). Non-Result contexts already map a narrow Integer to i64,
+        // so this only corrects the Result (function-return) signature to match the i64
+        // the body yields — else a `-> u8` header over a `return <i64>` body is rustc E0308.
+        Type::Optional(inner) if matches!(inner.base(), Type::Integer(_)) => {
+            return "i64".to_string();
+        }
         // @PLN25 slice (b): `Optional(τ)` shares its base's Rust type (sentinel storage).
         Type::Rewritten(inner) | Type::Optional(inner) => return rust_type(inner, context),
         _ => panic!("Incorrect type {tp:?}"),
