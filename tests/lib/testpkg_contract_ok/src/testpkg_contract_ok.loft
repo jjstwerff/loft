@@ -1,0 +1,4 @@
+// @PLN102 arc B-semantic fixture — declares the current compatibility contract.
+pub fn ok_contract_fn() -> integer {
+  0
+}

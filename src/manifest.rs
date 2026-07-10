@@ -103,6 +103,14 @@ pub struct Manifest {
     /// Interpreter version requirement from the `[package]` section,
     /// e.g. `">=1.0"`.  `None` means no constraint.
     pub loft_version: Option<String>,
+    /// Compatibility-contract requirement from `[package] contract = "..."`
+    /// (@PLN102 arc B-semantic).  The `contract` axis is a monotone integer
+    /// that increments on a *silent* breaking change to loft's contract —
+    /// distinct from the calendar release tag `loft_version` bounds.  A bare
+    /// integer (`"1"`) is a "tested-at" epoch; ranges (`">=1"`, `">=1, <=3"`)
+    /// assert forward-coverage.  `None` means the library declares no contract
+    /// (grandfathered — no gate).  See `check_contract` / `CONTRACT_VERSION`.
+    pub contract: Option<String>,
     /// GitHub repository that publishes this package's releases, from
     /// `[package] repository = "..."`.  Either a bare repo name under the
     /// `loft-lang` org (`"loft-libs-core"`) or a full `"owner/repo"`.  When
@@ -474,6 +482,7 @@ fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
         ("package", "name") => m.name = Some(value.scalar()),
         ("package", "version") => m.version = Some(value.scalar()),
         ("package", "loft") => m.loft_version = Some(value.scalar()),
+        ("package", "contract") => m.contract = Some(value.scalar()),
         ("package", "repository") => m.repository = Some(value.scalar()),
         ("package", "description") => m.description = Some(value.scalar()),
         ("library", "entry") => m.entry = Some(value.scalar()),
@@ -506,28 +515,254 @@ fn split_list(value: &str) -> Vec<String> {
         .collect()
 }
 
-/// Check whether the `required` version constraint is satisfied by `current`.
-/// Only `>=X.Y` and `>=X.Y.Z` forms are supported (Phase 1 scope).
-/// Returns `true` when `current >= required_version` or `required` is empty.
-#[must_use]
-pub fn check_version(required: &str, current: &str) -> bool {
-    if required.is_empty() {
-        return true;
-    }
-    let req = required.strip_prefix(">=").unwrap_or(required);
-    version_ge(current, req)
+/// Outcome of checking a `loft = "<constraint>"` manifest requirement against
+/// the running interpreter version.  Three distinct cases so the loader can
+/// reject the two kinds of failure with different diagnostics (@PLN102 arc B).
+#[derive(Debug, PartialEq, Eq)]
+pub enum VersionCheck {
+    /// The interpreter satisfies every predicate in the constraint (or the
+    /// constraint is empty).
+    Satisfied,
+    /// The constraint parsed, but the interpreter version does not satisfy it
+    /// (e.g. `>=9999.0`, an unmet upper bound, or an exact pin that differs).
+    Unsatisfied,
+    /// The constraint is not valid loft version-requirement syntax.  A
+    /// constraint the loader cannot honour must be rejected LOUDLY, never
+    /// silently accepted as "any version" — that silent-accept was the
+    /// category-S failure @PLN102 arc B removes.  The payload is the reason.
+    Malformed(String),
 }
 
-/// Returns `true` when semantic version `a >= b`.
-fn version_ge(a: &str, b: &str) -> bool {
-    fn parse(s: &str) -> (u32, u32, u32) {
-        let mut parts = s.splitn(3, '.');
-        let major = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-        let minor = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-        let patch = parts.next().and_then(|x| x.parse().ok()).unwrap_or(0);
-        (major, minor, patch)
+/// One comparison predicate parsed from a constraint (`>=0.8`, `<2027`, …).
+struct Predicate {
+    op: VersionOp,
+    ver: (u32, u32, u32),
+}
+
+#[derive(Clone, Copy)]
+enum VersionOp {
+    Ge,
+    Le,
+    Gt,
+    Lt,
+    Eq,
+}
+
+impl Predicate {
+    fn matches(&self, cur: (u32, u32, u32)) -> bool {
+        match self.op {
+            VersionOp::Ge => cur >= self.ver,
+            VersionOp::Le => cur <= self.ver,
+            VersionOp::Gt => cur > self.ver,
+            VersionOp::Lt => cur < self.ver,
+            VersionOp::Eq => cur == self.ver,
+        }
     }
-    parse(a) >= parse(b)
+}
+
+/// Check whether the `required` version constraint is satisfied by `current`.
+///
+/// Supported syntax: comparison predicates `>=`, `<=`, `>`, `<`, `=` over
+/// `X` / `X.Y` / `X.Y.Z` versions, AND-combined by comma (`">=0.8, <2027"`).
+/// A bare version with no operator (`"0.8"`) is a lower bound (`>=`), for
+/// backward compatibility with the many libraries that carry `loft = ">=0.8"`.
+/// An empty constraint is satisfied by anything.
+///
+/// Anything else — an unsupported operator (`^`, `~`, `!=`), a non-numeric or
+/// malformed version, an empty predicate — is [`VersionCheck::Malformed`], NOT
+/// a silent accept.  This is the @PLN102 arc-B contract: honour the constraint
+/// exactly as written, or reject it loudly.
+#[must_use]
+pub fn check_version(required: &str, current: &str) -> VersionCheck {
+    let required = required.trim();
+    if required.is_empty() {
+        return VersionCheck::Satisfied;
+    }
+    let Some(cur) = parse_version(current) else {
+        // `current` is `env!("CARGO_PKG_VERSION")` at the real call site, so
+        // this is defensive; a bad build version is itself a hard error.
+        return VersionCheck::Malformed(format!(
+            "interpreter version '{current}' is not a valid version"
+        ));
+    };
+    // Comma-separated predicates are AND-ed into a range.
+    for part in required.split(',') {
+        let pred = match parse_predicate(part.trim()) {
+            Ok(p) => p,
+            Err(why) => return VersionCheck::Malformed(why),
+        };
+        if !pred.matches(cur) {
+            return VersionCheck::Unsatisfied;
+        }
+    }
+    VersionCheck::Satisfied
+}
+
+/// Parse one predicate: an optional operator prefix followed by a version.  A
+/// leading non-digit that is not a recognised operator (`^`, `garbage`) is
+/// malformed — not a bare version — so unsupported syntax rejects loudly.
+fn parse_predicate(s: &str) -> Result<Predicate, String> {
+    if s.is_empty() {
+        return Err("empty version predicate (a stray comma?)".to_string());
+    }
+    let (op, rest) = if let Some(r) = s.strip_prefix(">=") {
+        (VersionOp::Ge, r)
+    } else if let Some(r) = s.strip_prefix("<=") {
+        (VersionOp::Le, r)
+    } else if let Some(r) = s.strip_prefix('>') {
+        (VersionOp::Gt, r)
+    } else if let Some(r) = s.strip_prefix('<') {
+        (VersionOp::Lt, r)
+    } else if let Some(r) = s.strip_prefix('=') {
+        (VersionOp::Eq, r)
+    } else if s.starts_with(|c: char| c.is_ascii_digit()) {
+        (VersionOp::Ge, s) // bare version → lower bound (backward compat)
+    } else {
+        return Err(format!(
+            "unsupported version constraint '{s}' — use >=, <=, >, <, =, or a comma-separated range"
+        ));
+    };
+    let rest = rest.trim();
+    let ver = parse_version(rest)
+        .ok_or_else(|| format!("'{rest}' is not a valid version in constraint predicate '{s}'"))?;
+    Ok(Predicate { op, ver })
+}
+
+/// Parse `X` / `X.Y` / `X.Y.Z` into a numeric triple (missing parts default to
+/// 0).  Returns `None` for any non-numeric component or a fourth component —
+/// the malformed signal the old `unwrap_or(0)` swallowed.
+fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let mut parts = s.split('.');
+    let major = parts.next()?.parse().ok()?;
+    let minor = parts.next().map_or(Some(0), |x| x.parse().ok())?;
+    let patch = parts.next().map_or(Some(0), |x| x.parse().ok())?;
+    if parts.next().is_some() {
+        return None; // more than three components → malformed
+    }
+    Some((major, minor, patch))
+}
+
+// ── @PLN102 arc B-semantic — the compatibility `contract` axis ───────────────
+//
+// The RELEASE tag stays calendar-versioned (`CARGO_PKG_VERSION`, checked by
+// `check_version` above).  The COMPATIBILITY contract is a separate monotone
+// integer that increments iff loft makes a *silent* breaking change — old code
+// that still compiles and runs, but now produces a different result (the C86
+// plain-bind-copy class that broke `hex_terrain`).  Additive and loud-failing
+// changes (a missing symbol errors at compile) do NOT bump it, so a library's
+// declared contract stays valid exactly as long as loft's silent contract is
+// unchanged.  Full rationale: doc/claude/plans/102-stability-contract/versioning-decision.md.
+
+/// loft's current compatibility contract.
+///
+/// **Currently 0 — pre-freeze**: the mechanism is live but the value has not yet
+/// been declared, so existing libraries (which carry no `contract` field) are
+/// grandfathered and nothing gates.  **Ratified to flip to 1 — the 1.0 contract
+/// baseline — once the last open syntax changes land** (those changes are part of
+/// defining what contract 1 *is*, so declaring the baseline before they settle
+/// would freeze a moving contract).  After the freeze it increments to 2 on the
+/// first silent breaking change, and so on.  The 0→1 flip is a one-line,
+/// deliberate follow-up at the freeze; bumping it thereafter is a maintainer act
+/// paired with a CHANGELOG note (layout-hash / golden-corpus CI gates make an
+/// omitted bump loud — see the versioning decision doc).
+pub const CONTRACT_VERSION: u32 = 0;
+
+/// Outcome of checking a library's `contract` requirement against the running
+/// interpreter's [`CONTRACT_VERSION`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum ContractCheck {
+    /// loft's contract is within the range the library was tested against.
+    Ok,
+    /// loft's contract is BELOW the library's minimum — loft is too old for the
+    /// library's epoch; the library may rely on semantics not yet in this loft.
+    /// Hard reject.
+    TooOld { required_min: u32 },
+    /// loft's contract has advanced PAST the library's tested ceiling — a silent
+    /// break may have landed since it was tested.  Accept, but WARN (the arc-C
+    /// deprecation channel): the fix is the author republishing against the
+    /// current contract, never a silent wrong answer for the consumer.
+    Drifted { tested_max: u32 },
+    /// The `contract` requirement is not valid syntax (non-integer, unsupported
+    /// operator, contradictory range) — rejected loudly, never silently ignored.
+    Malformed(String),
+}
+
+/// Check a library's `contract` requirement against loft's `current` contract.
+///
+/// The requirement is an integer window folded from comma-separated predicates:
+/// a bare integer or `=K` is the exact "tested-at" epoch (`[K, K]`); `>=K` opens
+/// the ceiling (`[K, ∞)`, asserting forward-coverage); `<=M`/`<M`/`>K` bound the
+/// other side; a range `">=K, <=M"` is `[K, M]`.  Then `current < lo` →
+/// [`ContractCheck::TooOld`], `current > hi` → [`ContractCheck::Drifted`], else
+/// [`ContractCheck::Ok`].  An empty requirement is `Ok` (library declares no
+/// contract — grandfathered).  Unlike a release-version bound, a BARE contract
+/// is "tested-at" (exact), NOT `>=`: forward-compatibility is the thing this axis
+/// refuses to assume silently.
+#[must_use]
+pub fn check_contract(required: &str, current: u32) -> ContractCheck {
+    let required = required.trim();
+    if required.is_empty() {
+        return ContractCheck::Ok;
+    }
+    let mut lo: u32 = 0;
+    let mut hi: u32 = u32::MAX;
+    for part in required.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return ContractCheck::Malformed(format!(
+                "empty contract predicate in '{required}' (a stray comma?)"
+            ));
+        }
+        let (op, num) = if let Some(r) = part.strip_prefix(">=") {
+            (VersionOp::Ge, r)
+        } else if let Some(r) = part.strip_prefix("<=") {
+            (VersionOp::Le, r)
+        } else if let Some(r) = part.strip_prefix('>') {
+            (VersionOp::Gt, r)
+        } else if let Some(r) = part.strip_prefix('<') {
+            (VersionOp::Lt, r)
+        } else if let Some(r) = part.strip_prefix('=') {
+            (VersionOp::Eq, r)
+        } else if part.starts_with(|c: char| c.is_ascii_digit()) {
+            (VersionOp::Eq, part) // bare contract → exact "tested-at" epoch
+        } else {
+            return ContractCheck::Malformed(format!(
+                "unsupported contract constraint '{part}' — use an integer, or >=, <=, >, <, =, or a comma range"
+            ));
+        };
+        let Ok(k) = num.trim().parse::<u32>() else {
+            return ContractCheck::Malformed(format!(
+                "'{}' is not an integer contract version in '{part}'",
+                num.trim()
+            ));
+        };
+        match op {
+            VersionOp::Eq => {
+                lo = lo.max(k);
+                hi = hi.min(k);
+            }
+            VersionOp::Ge => lo = lo.max(k),
+            VersionOp::Gt => lo = lo.max(k.saturating_add(1)),
+            VersionOp::Le => hi = hi.min(k),
+            VersionOp::Lt => hi = hi.min(k.saturating_sub(1)),
+        }
+    }
+    if lo > hi {
+        return ContractCheck::Malformed(format!(
+            "contradictory contract range in '{required}' (lower bound {lo} exceeds upper bound {hi})"
+        ));
+    }
+    if current < lo {
+        ContractCheck::TooOld { required_min: lo }
+    } else if current > hi {
+        ContractCheck::Drifted { tested_max: hi }
+    } else {
+        ContractCheck::Ok
+    }
 }
 
 /// Extract the `path` value from an inline-table dependency value
@@ -596,10 +831,10 @@ mod tests {
 
     #[test]
     fn version_current_passes() {
-        assert!(check_version(">=0.1", "0.1.0"));
-        assert!(check_version(">=1.0", "1.2.3"));
-        assert!(check_version(">=0.1.0", "0.1.0"));
-        assert!(check_version("", "0.1.0"));
+        assert_eq!(check_version(">=0.1", "0.1.0"), VersionCheck::Satisfied);
+        assert_eq!(check_version(">=1.0", "1.2.3"), VersionCheck::Satisfied);
+        assert_eq!(check_version(">=0.1.0", "0.1.0"), VersionCheck::Satisfied);
+        assert_eq!(check_version("", "0.1.0"), VersionCheck::Satisfied);
     }
 
     #[test]
@@ -912,9 +1147,88 @@ n_demo_fn_b = "demo_fn_b"
 
     #[test]
     fn version_too_high_fails() {
-        assert!(!check_version(">=2.0", "1.9.9"));
-        assert!(!check_version(">=1.1", "1.0.0"));
-        assert!(!check_version(">=1.0.1", "1.0.0"));
+        assert_eq!(check_version(">=2.0", "1.9.9"), VersionCheck::Unsatisfied);
+        assert_eq!(check_version(">=1.1", "1.0.0"), VersionCheck::Unsatisfied);
+        assert_eq!(check_version(">=1.0.1", "1.0.0"), VersionCheck::Unsatisfied);
+    }
+
+    /// @PLN102 arc B — the composition matrix (plan README § Composition
+    /// matrix) probed against the shipping interpreter version `2026.7.1`.
+    /// The pre-arc-B `check_version` silently ACCEPTED every row but the
+    /// positive control by degrading a non-`>=` constraint to `0.0.0`; each
+    /// bound must now BIND, and an unparseable constraint must reject LOUDLY
+    /// (`Malformed`) rather than pass.
+    #[test]
+    fn arc_b_version_constraint_matrix() {
+        let cur = "2026.7.1";
+        use VersionCheck::{Malformed, Satisfied, Unsatisfied};
+
+        // Lower bounds — the grandfathered form every published library carries.
+        assert_eq!(check_version(">=0.8", cur), Satisfied);
+        assert_eq!(check_version("0.8", cur), Satisfied); // bare = lower bound
+        // Positive control: the one cell that fired even before arc B.
+        assert!(matches!(check_version(">=9999.0", cur), Unsatisfied));
+
+        // Upper bounds and exact pins must now BIND (were silent ACCEPT before).
+        assert_eq!(check_version("<=0.1", cur), Unsatisfied);
+        assert_eq!(check_version("<2026.0.0", cur), Unsatisfied);
+        assert_eq!(check_version("=0.1", cur), Unsatisfied);
+        // A satisfiable upper bound still accepts.
+        assert_eq!(check_version("<2027", cur), Satisfied);
+        assert_eq!(check_version("=2026.7.1", cur), Satisfied);
+
+        // Ranges (comma-separated AND).
+        assert_eq!(check_version(">=0.8, <2027", cur), Satisfied);
+        assert_eq!(check_version(">=0.8, <2026", cur), Unsatisfied);
+
+        // Unparseable / unsupported → REJECT LOUDLY, never silent accept.
+        assert!(matches!(check_version("garbage", cur), Malformed(_)));
+        assert!(matches!(check_version("^0.9", cur), Malformed(_))); // caret unsupported
+        assert!(matches!(check_version("~0.9", cur), Malformed(_)));
+        assert!(matches!(check_version(">=1.x", cur), Malformed(_)));
+        assert!(matches!(check_version(">=", cur), Malformed(_)));
+        assert!(matches!(check_version(">=0.8,", cur), Malformed(_))); // empty predicate
+        assert!(matches!(check_version("1.2.3.4", cur), Malformed(_))); // too many parts
+    }
+
+    /// @PLN102 arc B-semantic — the `contract` axis (a monotone integer,
+    /// separate from the calver release tag).  Bare = "tested-at" (exact), so a
+    /// newer loft DRIFTS (warn) rather than silently accepting; `>=K` opens the
+    /// ceiling (forward-coverage, no drift); below the floor is a hard reject.
+    #[test]
+    fn arc_b_semantic_contract_check() {
+        use ContractCheck::{Drifted, Malformed, Ok, TooOld};
+
+        // Bare integer = exact tested-at epoch: below → TooOld, at → Ok, above → Drifted.
+        assert_eq!(check_contract("1", 0), TooOld { required_min: 1 });
+        assert_eq!(check_contract("1", 1), Ok);
+        assert_eq!(check_contract("1", 3), Drifted { tested_max: 1 });
+        assert_eq!(check_contract("=2", 2), Ok);
+        assert_eq!(check_contract("=2", 4), Drifted { tested_max: 2 });
+
+        // `>=K` asserts forward-coverage: no drift on a newer loft.
+        assert_eq!(check_contract(">=1", 1), Ok);
+        assert_eq!(check_contract(">=1", 9), Ok);
+        assert_eq!(check_contract(">=2", 1), TooOld { required_min: 2 });
+
+        // Ranges fold to [lo, hi].
+        assert_eq!(check_contract(">=1, <=3", 2), Ok);
+        assert_eq!(check_contract(">=1, <=3", 0), TooOld { required_min: 1 });
+        assert_eq!(check_contract(">=1, <=3", 5), Drifted { tested_max: 3 });
+        assert_eq!(check_contract(">1", 2), Ok); // >1 → lo=2
+        assert_eq!(check_contract(">1", 1), TooOld { required_min: 2 });
+        assert_eq!(check_contract("<=2", 2), Ok);
+        assert_eq!(check_contract("<=2", 3), Drifted { tested_max: 2 });
+
+        // Empty → no gate (library declares no contract).
+        assert_eq!(check_contract("", 7), Ok);
+
+        // Malformed → loud, never silent.
+        assert!(matches!(check_contract("1.5", 0), Malformed(_))); // not an integer
+        assert!(matches!(check_contract("^1", 0), Malformed(_))); // unsupported op
+        assert!(matches!(check_contract("garbage", 0), Malformed(_)));
+        assert!(matches!(check_contract(">=3, <=1", 2), Malformed(_))); // contradictory
+        assert!(matches!(check_contract(">=1,", 1), Malformed(_))); // empty predicate
     }
 
     #[test]

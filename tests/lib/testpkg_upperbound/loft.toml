@@ -1,0 +1,7 @@
+[package]
+name    = "testpkg_upperbound"
+version = "0.0.1"
+# @PLN102 arc B — a satisfiable-looking UPPER bound that the running interpreter
+# (calendar-versioned, far above 0.1) does NOT meet.  Before arc B this bound
+# was silently ignored and the package loaded; it must now be rejected.
+loft    = "<=0.1"

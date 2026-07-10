@@ -7592,13 +7592,61 @@ impl Parser {
             let m = manifest::read_manifest(&manifest_path)?;
             if let Some(ref req) = m.loft_version {
                 let current = env!("CARGO_PKG_VERSION");
-                if !manifest::check_version(req, current) {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Fatal,
-                        "Package '{id}' requires loft {req} but interpreter is {current}"
-                    );
-                    return None;
+                match manifest::check_version(req, current) {
+                    manifest::VersionCheck::Satisfied => {}
+                    manifest::VersionCheck::Unsatisfied => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Fatal,
+                            "Package '{id}' requires loft {req} but interpreter is {current}"
+                        );
+                        return None;
+                    }
+                    // @PLN102 arc B: a constraint the loader cannot honour is
+                    // rejected loudly, not silently treated as "any version".
+                    manifest::VersionCheck::Malformed(why) => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Fatal,
+                            "Package '{id}' has an invalid loft version requirement '{req}': {why}"
+                        );
+                        return None;
+                    }
+                }
+            }
+            // @PLN102 arc B-semantic — the compatibility `contract` axis (a
+            // monotone integer; increments on a silent breaking change, distinct
+            // from the calendar release tag above).  Too-old is a hard reject;
+            // drift (loft advanced past the tested epoch) WARNS — the arc-C
+            // deprecation channel — and loads, so the fix is the author
+            // republishing, never a silent wrong answer for the consumer.
+            if let Some(ref creq) = m.contract {
+                let cur = manifest::CONTRACT_VERSION;
+                match manifest::check_contract(creq, cur) {
+                    manifest::ContractCheck::Ok => {}
+                    manifest::ContractCheck::TooOld { required_min } => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Fatal,
+                            "Package '{id}' requires loft contract >= {required_min} but this loft is contract {cur}"
+                        );
+                        return None;
+                    }
+                    manifest::ContractCheck::Drifted { tested_max } => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Warning,
+                            "Package '{id}' was tested against loft contract <= {tested_max} but this loft is contract {cur} — a breaking change since then may make it misbehave; ask its author to republish against contract {cur}"
+                        );
+                    }
+                    manifest::ContractCheck::Malformed(why) => {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Fatal,
+                            "Package '{id}' has an invalid loft contract requirement '{creq}': {why}"
+                        );
+                        return None;
+                    }
                 }
             }
             let entry = m.entry.as_ref().map_or_else(nested_entry, |e| {

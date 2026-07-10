@@ -1,0 +1,6 @@
+[package]
+name    = "testpkg_badconstraint"
+version = "0.0.1"
+# @PLN102 arc B — an UNSUPPORTED operator (caret).  Before arc B this was
+# silently degraded to "0.0.0" and always accepted; it must now reject loudly.
+loft    = "^0.9"

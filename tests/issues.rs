@@ -243,6 +243,100 @@ fn test() {
     .result(Value::Null);
 }
 
+// Returning a FIELD / enum-arm vector from a local composite (`return c.pts`,
+// `match e { Filled { items } => items }`) copies the source into the caller's
+// retbuf, so the local source is freed at scope exit AFTER the copy.  A retired
+// H2-step-5 debug sentinel (scopes.rs) mis-fired on these: it re-read the
+// block-result deps under the old POSITIONAL guess, which names the copied-from
+// source, and panicked ("block-result dep read would have decided alone") under
+// `-C debug-assertions=on` even though freeing the source is correct.  This guards
+// that the free stays leak-free (re-adding the retired read would suppress it and
+// leak); it panicked on the sentinel without the fix.
+#[test]
+fn h2_field_arm_vector_return_source_freed_not_leaked() {
+    code!(
+        "struct H2Ctx { pts: vector<integer> }
+fn h2_mk() -> H2Ctx { c = H2Ctx { pts: [] }; c.pts += [1]; c.pts += [2]; return c; }
+fn h2_get_pts() -> vector<integer> {
+    extra = \"live\";
+    c = h2_mk();
+    note = \"{extra}\";
+    if len(note) < 0 { return []; }
+    return c.pts;
+}
+enum H2Cell { Filled { items: vector<integer> }, Empty }
+fn h2_arm(e: H2Cell) -> vector<integer> { match e { Filled { items } => { items }, _ => { [] } } }
+fn test() {
+    a = h2_get_pts();
+    assert(len(a) == 2 && a[0] == 1, \"struct-field vector return: len {len(a)}\");
+    b = h2_arm(Filled { items: [7, 8] });
+    assert(len(b) == 2 && b[1] == 8, \"enum-arm vector return: len {len(b)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// `map`/`filter` on a literal receiver (`[1,2,3].map(..)`) confines its build
+// vector to a block that lives inside the lowered `Iter`/`Call` — off the
+// control-flow spine `relocate_null_init`'s `prepend_to_scope` walks.  The Plan-57
+// null-init relocation therefore cannot reach that block and correctly falls back
+// to the body-0 null-init (leak/poison-clean, both backends), but a debug
+// `debug_assert!(false)` treated the un-reached scope as a bug and panicked under
+// `-C debug-assertions=on` (scripts 501, 85-short-lambda-capture).  Fixed by
+// asserting only when the scope is ABSENT FROM THE IR entirely (a real
+// store_confinement bug), not merely unreached; it panicked without the fix.
+#[test]
+fn reloc_null_init_map_on_literal_confined_block_unreached() {
+    code!(
+        "fn rlm_vsum(v: vector<integer>) -> integer { s = 0; for x in v { s += x; } s }
+fn test() {
+    d = [1, 2, 3].map(|x| { x * 2 });
+    assert(rlm_vsum(d) == 12, \"map on literal: {rlm_vsum(d)}\");
+    evens = [1, 2, 3, 4, 5, 6].filter(|x| { x % 2 == 0 });
+    assert(rlm_vsum(evens) == 12, \"filter on literal: {rlm_vsum(evens)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
+// A chained `??` (`a ?? b ?? c`) whose operands are OWNED/call-produced text
+// double-freed an inner `__ncc_N` coalesce temp on the interpreter (a
+// `state/text.rs:334` double free under `-C debug-assertions=on`; script 156).
+// Root cause in `scopes::collect_consumed_ncc_text`, which emits the in-place
+// free for a consumed skip_free ncc temp: (1) it recursed INTO nested ncc blocks,
+// so a left-nested chain's inner temp was collected at multiple levels; (2) a
+// right-nested `a ?? (b ?? c)` hoists a merge-var pre-declaration `__ncc_N = ""`
+// (a literal init) into the outer ncc block, and collecting that literal Set as
+// well as the real inner assignment freed the temp twice.  Fix: don't recurse
+// into ncc blocks (each nested one gets its own free pass), and only collect the
+// REAL subject assignment (non-literal value).  A `var ?? …` first operand never
+// mints a temp, so it was always clean.  DA-gated (double-free is benign in
+// release / dropped via RAII on native).
+#[test]
+fn chained_coalesce_owned_text_no_double_free() {
+    code!(
+        "struct CccCache { items: hash<CccEntry[name]> }
+struct CccEntry { name: text, value: text }
+fn ccc_lookup(c: CccCache, k: text) -> text { return c.items[k].value; }
+fn test() {
+    p = CccCache { items: [] }; p.items[\"theme\"] = CccEntry { name: \"theme\", value: \"dark\" };
+    q = CccCache { items: [] }; q.items[\"lang\"] = CccEntry { name: \"lang\", value: \"en\" };
+    // chained (left-nested), first operand a call → hits
+    a = ccc_lookup(p, \"theme\") ?? ccc_lookup(q, \"theme\") ?? \"fb\";
+    assert(a == \"dark\", \"chained first hit, got '{a}'\");
+    // chained, all miss → fallback
+    b = ccc_lookup(p, \"x\") ?? ccc_lookup(q, \"y\") ?? \"fb\";
+    assert(b == \"fb\", \"chained fallback, got '{b}'\");
+    // right-nested via parens, inner branch hits
+    d = ccc_lookup(p, \"x\") ?? (ccc_lookup(q, \"lang\") ?? \"fb\");
+    assert(d == \"en\", \"right-nested, got '{d}'\");
+    // inline (unbound) chained
+    assert((ccc_lookup(p, \"theme\") ?? ccc_lookup(q, \"theme\") ?? \"fb\") == \"dark\", \"inline chained\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // `vec_of_u8[i] ?? <fitting-int-literal>` keeps the value's NARROW type instead
 // of widening the `??` result to i64, so the defaulted element appends back into
 // a `vector<u8>` with no `as u8` cast and no spurious "cannot implicitly narrow"
@@ -448,6 +542,36 @@ fn apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
 fn test() {
     result = apply(square, 7);
     assert(result == 49, \"expected 49, got {result}\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+// A FORWARD-REFERENCE caller of a fn whose text-return tail classifies only on
+// pass 2 (a fn-ref call `f(x)`, a local vector index `tv[0]`, or a closure-field
+// call `g.fmt(n)`) crashed with "Too few parameters" (codegen.rs) — and the H5
+// two-pass-contract assert flagged it under `-C debug-assertions=on`.  Root:
+// `do_tret_bind` promotes `__tret` to a hidden `&text` SIGNATURE buffer, but
+// those tails read as `Plain`/`Borrow` on pass 1 and `Owned(FnRefCall/ViewOfLocal)`
+// on pass 2, so the buffer was appended pass-2-only — after the forward-ref caller
+// had already emitted its call against the pass-1 (bufferless) signature.  Fixed
+// by gating pass-2 promotion on pass 1 having already minted the `__tret` attr
+// (each callee is defined AFTER its caller here, so the ABI must be stable).
+#[test]
+fn tret_bind_forward_ref_pass_stable() {
+    code!(
+        "fn mk_z(n: integer) -> text { \"z{n}\" }
+fn call_fnref(x: integer) -> text { return via_fnref(mk_z, x); }
+fn via_fnref(f: fn(integer) -> text, x: integer) -> text { f(x) }
+fn call_index() -> text { return via_index(); }
+fn via_index() -> text { tv: vector<text> = [\"a\", \"b\"]; return tv[0]; }
+struct TbG { fmt: fn(integer) -> text }
+fn call_method() -> text { return via_method(); }
+fn via_method() -> text { g = TbG { fmt: fn(n: integer) -> text { \"m{n}\" } }; g.fmt(7) }
+fn test() {
+    assert(call_fnref(5) == \"z5\", \"fwd fn-ref call: {call_fnref(5)}\");
+    assert(call_index() == \"a\", \"fwd vector index: {call_index()}\");
+    assert(call_method() == \"m7\", \"fwd closure-field call: {call_method()}\");
 }"
     )
     .result(loft::data::Value::Null);
@@ -13713,6 +13837,119 @@ fn p329_pair_second<T: Printable>(p329x: T) -> (text, text) {
     )
     .expr("p329_pair_second(P329Second { p329_second_id: 8 }).1")
     .result(Value::str("item-8"));
+}
+
+/// #549 — a bounded-generic fn whose return SHAPE is a concrete aggregate
+/// (a struct, struct-enum, or pure-value tuple) leaked its result store when
+/// the call was used INLINE (`f(x).field`) or DISCARDED, on both backends
+/// (the `(integer,integer)` twin of this is `p240`).  Root cause: the caller's
+/// lift-and-free decision (`scopes::inline_struct_return`) fired only for `n_`
+/// (concrete) callees, not for `t_` generic monomorphs — so the fresh store the
+/// monomorph allocated via `__retbuf` was never freed.  Fix: extend the lift to
+/// `t_` callees that carry a `__retbuf` param (the NRVO signal that the return
+/// is a fresh owned aggregate a monomorph keeps even after it loses its return
+/// dep).  These pass under the DA gate (`-C debug-assertions=on`), where the
+/// leak becomes a hard "Database not correctly freed" panic.
+#[test]
+fn p549_generic_struct_return_inline_no_leak() {
+    code!(
+        "struct P549Item { p549_id: integer }
+fn to_text(self: P549Item) -> text { return \"i{self.p549_id}\"; }
+struct P549Pair { p549_a: integer, p549_b: integer }
+fn p549_mk<T: Printable>(_p549x: T) -> P549Pair { return P549Pair { p549_a: 1, p549_b: 2 }; }"
+    )
+    .expr("p549_mk(P549Item { p549_id: 7 }).p549_a")
+    .result(Value::Int(1));
+}
+
+#[test]
+fn p549_generic_struct_enum_return_inline_no_leak() {
+    code!(
+        "struct P549Item { p549_id: integer }
+fn to_text(self: P549Item) -> text { return \"i{self.p549_id}\"; }
+enum P549Shape { P549Circle { r: integer }, P549Square { s: integer } }
+fn p549_shape<T: Printable>(_p549x: T) -> P549Shape { return P549Circle { r: 3 }; }
+fn p549_use(e: P549Shape) -> integer { match e { P549Circle { r } => r, P549Square { s } => s } }"
+    )
+    .expr("p549_use(p549_shape(P549Item { p549_id: 7 }))")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn p549_generic_aggregate_return_discarded_no_leak() {
+    code!(
+        "struct P549Item { p549_id: integer }
+fn to_text(self: P549Item) -> text { return \"i{self.p549_id}\"; }
+struct P549Pair { p549_a: integer, p549_b: integer }
+fn p549_mk<T: Printable>(_p549x: T) -> P549Pair { return P549Pair { p549_a: 1, p549_b: 2 }; }
+fn p549_discard() -> integer {
+    p549_mk(P549Item { p549_id: 7 });
+    return 42;
+}"
+    )
+    .expr("p549_discard()")
+    .result(Value::Int(42));
+}
+
+/// #549 over-reach guard — a bounded-generic fn that RETURNS ITS ARGUMENT
+/// (`id<T>(x) -> T { x }`) is a BORROWED view, not a fresh store: its monomorph
+/// loses the return dep AND gets no `__retbuf`, so the fix must NOT lift-and-free
+/// it (that would double-free the caller's arg).  Under the DA gate this would
+/// panic "double free"; it must stay clean.
+#[test]
+fn p549_generic_returns_arg_not_double_freed() {
+    code!(
+        "struct P549Item { p549_id: integer }
+fn to_text(self: P549Item) -> text { return \"i{self.p549_id}\"; }
+fn p549_id<T: Printable>(p549x: T) -> T { return p549x; }"
+    )
+    .expr("p549_id(P549Item { p549_id: 5 }).p549_id")
+    .result(Value::Int(5));
+}
+
+/// #549 bug 2 — an explicit `return (owned_text, …)` of an aggregate literal
+/// whose element is an OWNED/call-produced text double-freed that element's
+/// String (`text.rs:334` under `-C debug-assertions=on`).  NON-generic (unlike
+/// the p243/p329/p330 siblings) — the bug is not generic-specific.  Root cause:
+/// the synthetic tuple/struct block a `return` builds is processed by BOTH the
+/// `Value::Return` scan arm and `convert`'s is_body_return tail sweep; the first
+/// makes the block terminal, and `scopes::free_vars` re-ran `insert_free` on the
+/// now-terminal Block (the `Value::Block` arm preceded the `expr_is_terminal`
+/// dedup) → a second `OpFreeText`.  Fix: order the terminal-dedup first.  A tail
+/// aggregate (no `return`) never hit this, so these all use an explicit `return`.
+#[test]
+fn p549_bug2_return_tuple_owned_text_not_double_freed() {
+    code!(
+        "fn p549_gt() -> text { return \"a\" + \"b\"; }
+fn p549_pair() -> (text, text) { return (p549_gt(), \"x\"); }"
+    )
+    .expr("p549_pair().0")
+    .result(Value::str("ab"));
+}
+
+#[test]
+fn p549_bug2_return_struct_owned_text_not_double_freed() {
+    code!(
+        "struct P549S { p549_a: text, p549_b: text }
+fn p549_gt() -> text { return \"a\" + \"b\"; }
+fn p549_mk() -> P549S { return P549S { p549_a: p549_gt(), p549_b: \"x\" }; }"
+    )
+    .expr("p549_mk().p549_a")
+    .result(Value::str("ab"));
+}
+
+#[test]
+fn p549_bug2_return_tuple_owned_text_discarded_not_double_freed() {
+    code!(
+        "fn p549_gt() -> text { return \"a\" + \"b\"; }
+fn p549_pair() -> (text, text) { return (p549_gt(), \"x\"); }
+fn p549_discard() -> integer {
+    p549_pair();
+    return 7;
+}"
+    )
+    .expr("p549_discard()")
+    .result(Value::Int(7));
 }
 
 /// P239 — for-loop over `vector<T>` inside a generic fn crashed

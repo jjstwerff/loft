@@ -787,7 +787,24 @@ impl Parser {
                 .def(self.context)
                 .original_name()
                 .starts_with("replmain_")
-            && l.last().is_some_and(|tail| self.tret_bind_ok(tail, &l));
+            && l.last().is_some_and(|tail| self.tret_bind_ok(tail, &l))
+            // Pass-stability gate.  `do_tret_bind` promotes `__tret` to a hidden
+            // `&text` SIGNATURE buffer, so it MUST fire IDENTICALLY on both passes
+            // — a pass-2-only promotion grows the ABI after a forward-ref caller
+            // already emitted its call, crashing it ("Too few parameters",
+            // codegen.rs:272 / the H5 two-pass-contract assert).  `classify_text_
+            // return` is not pass-stable for every tail: a fn-ref call (`f(x)` →
+            // `CallRef` only after pass-2 lowering) and a local vector INDEX
+            // (`tv[0]` → `OpGetText`-of-local only after pass-2 lowering) read as
+            // `Plain`/`Borrow` on pass 1 but `Owned(FnRefCall)`/`Owned(ViewOfLocal)`
+            // on pass 2 — whereas a field view (`res.name`) is `OpGetText`-of-local
+            // on BOTH passes and stays stable.  Rather than enumerate which tail
+            // shapes lower stably, make pass 2 FOLLOW pass 1: promote on pass 2
+            // only if pass 1 already minted the `__tret` attribute.  (Pass 1 always
+            // evaluates the verdict directly; the attr it mints persists into pass
+            // 2, so a genuinely pass-stable tail like `res.name` still promotes on
+            // both passes.)
+            && (self.first_pass || self.def_has_tret_attr());
         if do_tret_bind {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
@@ -5618,6 +5635,20 @@ impl Parser {
     /// forward-ref caller compiled earlier in pass 2 (`page_landing` class); a
     /// backward ref is `UserCall` on both passes → pass-stable.  Native / view /
     /// built-local carry their own pass behavior and are not gated here.
+    /// True when the current def already carries a `__tret` return-buffer
+    /// attribute — i.e. `do_tret_bind` promoted it on a PRIOR pass.  Used to gate
+    /// pass-2 promotion so it follows pass 1 (the pass-stability contract that
+    /// `do_tret_bind`'s signature growth requires; see its call site).  The temp
+    /// is minted as `___tret_<n>` (`vars::unique` prefixes `_` and suffixes the
+    /// dedup counter onto `__tret`), and a def carries at most one.
+    fn def_has_tret_attr(&self) -> bool {
+        self.data
+            .def(self.context)
+            .attr_names
+            .keys()
+            .any(|k| k.starts_with("___tret"))
+    }
+
     fn tret_bind_ok(&self, tail: &Value, block: &[Value]) -> bool {
         let verdict = self.classify_text_return(tail, block);
         if !verdict.wants_tret_bind() {

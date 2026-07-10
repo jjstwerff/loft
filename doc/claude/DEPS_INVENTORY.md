@@ -79,11 +79,18 @@ share-marker is deliberately NOT writable through this path.  ✅ uniform.
    `dep_has_var`)** — RETIRED in step 5 (2026-06-12): the read decodes
    per entry (`Deps::entries`: attr index → name-mapped frame var;
    tagged callee-frame note → direct compare); the positional fallback
-   is deleted.  The BLOCK-RESULT (`tp`) dep read is dropped entirely —
-   corpus-probed as never deciding alone — with a debug `tp_alone`
-   sentinel guarding the claim.  (History: the step-3 bisect showed the
-   fallback was load-bearing for factories — `26-closures`' two
-   `make_adder` results shared one record without it.)
+   is deleted.  The BLOCK-RESULT (`tp`) dep read is dropped entirely.
+   The debug `tp_alone` sentinel that guarded the claim is now ALSO
+   removed (cd9c1f94 line): it was NOT "never decides alone" — seven
+   corpus scripts (450, 508, repro_p365, four 85-store-lifetime-*) fire
+   it — but every firing is a FALSE positive of the retired POSITIONAL
+   decode on a field / enum-arm return that COPIES its source into the
+   caller's retbuf (`return c.pts`, `match e { Filled{items} => items }`),
+   so freeing the local source is CORRECT; re-adding the read would
+   suppress that free and LEAK.  Verified value + leak + LOFT_POISON + the
+   DA store-free asserts, both backends.  (History: the step-3 bisect
+   showed the fallback was load-bearing for factories — `26-closures`'
+   two `make_adder` results shared one record without it.)
 2. **`scopes.rs:2379–2391` (`check_ref_leaks`)** — pools
    `ret_type.depend()` (def space) and `function.tp(ret_var).depend()`
    (frame space) into ONE `HashSet<u16>` matched against frame var
@@ -183,9 +190,12 @@ wide to combine with other work.
       relied on it), and `check_ref_leaks` (pools the decoded frame var
       instead of silently dropping it — this was the false-leak report on
       `___clos_1`).  The BLOCK-RESULT dep read in `get_free_vars` is
-      DROPPED: the corpus probes showed it never decides alone (the
-      declared-return + returned-var checks subsume it); a debug
-      `tp_alone` sentinel screams if a live case ever appears.
+      DROPPED: the declared-return + returned-var + return-source-backing
+      checks subsume every TRUE return source.  The debug `tp_alone`
+      sentinel that guarded this is REMOVED (its firings — seven scripts —
+      are all false positives of the retired positional decode on field /
+      enum-arm returns that copy into the retbuf; freeing the source is
+      correct, and re-adding the read would leak it).
       Regression: `tests/scripts/297-closure-factory-explicit-return.loft`
       (both backends).  Residuals found en route, NOT step-5 scope:
       armed-lib-debug builds (`profile.dev.package.loft`

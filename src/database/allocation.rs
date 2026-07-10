@@ -37,9 +37,12 @@ use crate::vector;
 ///   edge" back into "fault on it".  Keep it separate.
 /// - `copy_claims`' destination construction is genuinely per-kind (allocate-into-`to`,
 ///   header writes, re-insert-vs-slot-copy) and is not a walk over this enumeration.
-///   Its SOURCE enumeration DOES match this keystone — `copy_claims_hash_body` already
-///   reads it, and `seq_vector`/`array_body`/`index_body` are a mechanical source-fold
-///   away (each then pairs a keystone source child with a freshly-claimed dest slot).
+///   Its SOURCE enumeration now reads this keystone in ALL FOUR kinds — `hash_body`,
+///   `index_body`, `array_body`, and `seq_vector` (folded H10, 2026-07) — so the
+///   per-`Parts` source layout lives in ONE place.  Each helper then pairs a keystone
+///   source child with its own per-kind destination build (re-insert for hash/index, a
+///   freshly-claimed slot for array, a same-offset position after the bulk copy for
+///   vector).
 ///
 /// `child` is the `DbRef` (in the SOURCE record's store) at which the child value
 /// lives; `child_tp` is its type.  `owning_elem` is the separate element record
@@ -1519,9 +1522,18 @@ impl Stores {
         }
     }
 
+    /// `tp` is the CONTAINER type (`Vector` / `Sorted`), not the content type — the
+    /// same convention as `array_body` / `hash_body` / `index_body`, so the keystone
+    /// walk keys on the container's `Parts` and the content type is read back out.
     pub(super) fn copy_claims_seq_vector(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
+        let content_tp = match &self.types[tp as usize].parts {
+            Parts::Vector(v) | Parts::Sorted(v, _) => *v,
+            other => {
+                panic!("copy_claims_seq_vector called with non-vector type {tp} (parts: {other:?})")
+            }
+        };
         let length = vector::length_vector(rec, &self.allocations);
-        let size = u32::from(self.size(tp));
+        let size = u32::from(self.size(content_tp));
         let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
         if cur == 0 {
             self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
@@ -1533,6 +1545,10 @@ impl Stores {
             "vector allocation offset overflow: {into}"
         );
         self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
+        // DESTINATION build: one bulk copy of the whole element block (elements are
+        // INLINE in the container, unlike array/hash/index where each is a separate
+        // record).  Keep it — the keystone only enumerates the SOURCE; it does not
+        // build the destination.
         self.copy_block(
             &DbRef {
                 store_nr: rec.store_nr,
@@ -1546,26 +1562,45 @@ impl Stores {
             },
             length * size + 4,
         );
-        for i in 0..length {
+        // SOURCE enumeration reads the keystone walk — the single home of the
+        // per-`Parts` source layout.  Its `Vector`/`Sorted` arm yields one child per
+        // element at `pos = 8 + size*i` with `owning_elem: None` (inline, no separate
+        // record).  We iterate it ALONGSIDE the bulk copy above (two passes over the
+        // same elements, deliberately not merged — the bulk copy moves the bytes, this
+        // pass deep-copies the nested claims).  The bulk copy laid the destination out
+        // byte-identically, so each element sits at the SAME offset in `into`; reuse
+        // `child.pos` for the destination instead of recomputing `8 + size*i`.
+        let children = self.for_each_owned_child(rec, tp).children;
+        debug_assert_eq!(
+            u32::try_from(children.len()).unwrap_or(u32::MAX),
+            length,
+            "keystone element count disagrees with the vector length header (tp={tp})"
+        );
+        for child in children {
             self.copy_claims(
-                &DbRef {
-                    store_nr: rec.store_nr,
-                    rec: cur,
-                    pos: 8 + size * i,
-                },
+                &child.child,
                 &DbRef {
                     store_nr: to.store_nr,
                     rec: into,
-                    pos: 8 + size * i,
+                    pos: child.child.pos,
                 },
-                tp,
+                child.child_tp,
             );
         }
     }
 
+    /// `tp` is the CONTAINER type (`Array` / `Ordered`), not the content type: the
+    /// keystone walk is keyed on the container's `Parts`.  The content type is read
+    /// back out of it, so the caller no longer has to know which of the two it is.
     pub(super) fn copy_claims_array_body(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
+        let content_tp = match &self.types[tp as usize].parts {
+            Parts::Array(v) | Parts::Ordered(v, _) => *v,
+            other => {
+                panic!("copy_claims_array_body called with non-array type {tp} (parts: {other:?})")
+            }
+        };
         let length = vector::length_vector(rec, &self.allocations);
-        let size = u32::from(self.size(tp));
+        let size = u32::from(self.size(content_tp));
         let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
         if cur == 0 {
             self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
@@ -1581,8 +1616,29 @@ impl Stores {
         let into = self.store_mut(to).claim(1 + length.div_ceil(2));
         self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
         self.store_mut(to).set_u32_raw(into, 4, length);
-        for i in 0..length {
-            let elm = self.store(rec).get_u32_raw(cur, 8 + 4 * i);
+        // SOURCE enumeration reads the keystone walk — the single home of the
+        // per-`Parts` source layout.  Its `Array`/`Ordered` arm computes the same
+        // `get_u32_raw(cur, 8 + i * 4)` this loop used to, and hands each element
+        // record back as `owning_elem`, so the fold is position-for-position.
+        // The DESTINATION build below (claim → `copy_block` → rec-id slot → recurse)
+        // stays per-kind, including the @P309 length header written above.
+        let elems: Vec<u32> = self
+            .for_each_owned_child(rec, tp)
+            .children
+            .into_iter()
+            .filter_map(|c| c.owning_elem)
+            .collect();
+        // The keystone reads the same `length_vector` header, so the counts are one
+        // fact seen twice.  Assert it rather than let a future divergence write the
+        // header for N and fill N-1 slots (the @P309 shape) — the nightly
+        // debug-assertions gate runs this over the whole interpreter corpus.
+        debug_assert_eq!(
+            u32::try_from(elems.len()).unwrap_or(u32::MAX),
+            length,
+            "keystone element count disagrees with the vector length header (tp={tp})"
+        );
+        for (i, elm) in elems.into_iter().enumerate() {
+            let i = u32::try_from(i).unwrap_or(u32::MAX);
             let new = self.store_mut(to).claim(size.div_ceil(8));
             self.copy_block(
                 &DbRef {
@@ -1609,7 +1665,7 @@ impl Stores {
                     rec: new,
                     pos: 8,
                 },
-                tp,
+                content_tp,
             );
         }
     }
@@ -1757,7 +1813,19 @@ impl Stores {
         };
         let size = u32::from(self.size(content_tp));
         let keys = self.types[tp as usize].keys.clone();
-        let nodes = self.collect_index_nodes(rec, left);
+        // SOURCE enumeration reads the keystone walk — the single home of the
+        // per-`Parts` source layout — exactly as `remove_claims` and
+        // `copy_claims_hash_body` do.  The keystone's `Index` arm makes the same
+        // `collect_index_nodes(rec, left)` call and hands each node back as
+        // `owning_elem`, so this is position-for-position the walk it replaces.
+        // The DESTINATION build (claim → back-pointer → `copy_block` → recurse →
+        // `tree::add`) stays per-kind: unifying it is how @P318/@P309 come back.
+        let nodes: Vec<u32> = self
+            .for_each_owned_child(rec, tp)
+            .children
+            .into_iter()
+            .filter_map(|c| c.owning_elem)
+            .collect();
         // Initialize the destination tree root to empty before inserting.
         self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
         for src_node in nodes {
@@ -1854,8 +1922,10 @@ impl Stores {
                     );
                 }
             }
-            Parts::Vector(v) | Parts::Sorted(v, _) => {
-                self.copy_claims_seq_vector(rec, to, *v);
+            Parts::Vector(_) | Parts::Sorted(_, _) => {
+                // Pass the CONTAINER type: the keystone walk keys on it, and the helper
+                // reads the content type back out (same shape as array/hash/index).
+                self.copy_claims_seq_vector(rec, to, tp);
             }
             Parts::ChildRec(content_kt) => {
                 // P213: read source rec-id; if 0 (empty / non-capturing),
@@ -1902,8 +1972,10 @@ impl Stores {
                     self.store_mut(to).set_u32_raw(to.rec, to.pos, new_rec);
                 }
             }
-            Parts::Array(v) | Parts::Ordered(v, _) => {
-                self.copy_claims_array_body(rec, to, *v);
+            Parts::Array(_) | Parts::Ordered(_, _) => {
+                // Pass the CONTAINER type: the keystone walk is keyed on it, and the
+                // helper reads the content type back out (same shape as `Hash`/`Index`).
+                self.copy_claims_array_body(rec, to, tp);
             }
             Parts::Hash(_, _) => {
                 self.copy_claims_hash_body(rec, to, tp);

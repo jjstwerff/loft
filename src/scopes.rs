@@ -217,8 +217,16 @@ fn is_var_null_init(op: &Value, vdb: u16) -> bool {
     matches!(op.unspan(), Value::Set(v, val) if *v == vdb && matches!(val.unspan(), Value::Null))
 }
 
-/// Prepend `ni` to the operators of the Block whose `scope == target`.  Returns
-/// `None` once inserted, or `Some(ni)` (un-consumed) if no such block was found.
+/// Prepend `ni` to the operators of the Block whose `scope == target`, descending
+/// only the control-flow spine (`Block`/`Insert`/`If`/`Span`/`Return`).  Returns
+/// `None` once inserted, or `Some(ni)` (un-consumed) if no such block was reached.
+/// A confined block nested inside a `Set`/`Call`/`Iter` value (a `map`/`filter`
+/// body, a short-lambda capture) is deliberately NOT entered: the Plan-57 null-init
+/// relocation is a best-effort watermark optimization, and such a block keeps its
+/// body-0 null-init (the caller's fallback), which is leak/poison-clean.  Widening
+/// the descent to every child would relocate into far more functions for marginal
+/// benefit — out of scope here; the concern is only to stop the false-positive
+/// debug assert on the (correct) un-reached case.
 fn prepend_to_scope(node: &mut Value, target: u16, ni: Value) -> Option<Value> {
     match node {
         Value::Block(bl) if bl.scope == target => {
@@ -273,18 +281,45 @@ fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
         body.operators.remove(pos)
     };
     if let Some(ni) = prepend_to_scope(code, block_scope, ni) {
-        // Block not found — restore the null-init so the first_def is never lost.
+        // Not reached by the control-flow descent — restore the null-init so the
+        // `first_def` is never lost, and skip the (best-effort) relocation: the
+        // store keeps its body-0 `first_def` and is still freed by the confined
+        // block's scope-exit sweep (verified leak/poison-clean, both backends).
+        // The confined block can legitimately live inside a `map`/`filter` body or
+        // a short-lambda capture (a `Call`/`Iter`/`Set` value `prepend_to_scope`
+        // does not enter — 501, 85-short-lambda-capture).  Only a `block_scope`
+        // that is ABSENT FROM THE IR ENTIRELY is a `store_confinement` bug worth
+        // asserting; a present-but-unreached scope is the expected miss.
         if let Value::Block(body) = code {
             body.operators.insert(0, ni);
         }
         debug_assert!(
-            false,
-            "relocate_null_init: block scope {block_scope} not found"
+            block_scope_present(code, block_scope),
+            "relocate_null_init: block scope {block_scope} is not in the IR at all \
+             (a store_confinement bug, not merely an unreached inline block)"
         );
         false
     } else {
         true
     }
+}
+
+/// True if any `Block`/`Loop` anywhere in `node`'s subtree has `scope == target`.
+/// Unlike [`prepend_to_scope`], this descends into EVERY child (`Value::walk`), so
+/// it distinguishes a scope that is genuinely absent from one that merely lives off
+/// the control-flow spine (inside a `map`/`filter` body, a lambda capture).  Only
+/// consulted from the `relocate_null_init` `debug_assert!`, but must compile in
+/// release too (the assert's argument is still type-checked there).
+fn block_scope_present(node: &Value, target: u16) -> bool {
+    let mut found = false;
+    node.walk(&mut |n| {
+        if let Value::Block(bl) | Value::Loop(bl) = n
+            && bl.scope == target
+        {
+            found = true;
+        }
+    });
+    found
 }
 
 /// EXPERIMENTAL (LOFT_BORROW_ELIDE) — inline the Tier-0 Borrow-verdict vector
@@ -3398,15 +3433,22 @@ impl Scopes {
             } else {
                 ls.push(expr.clone());
             }
+        } else if expr_is_terminal {
+            // expr is already a `Return(...)` (or a `Block`/`Insert(...)` ending
+            // in one) — the cleanup was emitted alongside it by the inner Return
+            // arm's free_vars call.  Re-emitting `ls` here would duplicate every
+            // OpFreeText/OpFreeRef (and tack on a dead `Return(Null)`).  Just
+            // propagate the terminal as-is.  #549 bug 2: a terminal *Block* must
+            // hit this dedup BEFORE the `Value::Block` insert_free arm below —
+            // an explicit `return (owned_text, …)` at a body tail is processed by
+            // both the `Value::Return` scan arm AND `convert`'s is_body_return
+            // tail sweep; the first makes the synthetic tuple block terminal, and
+            // without ordering this check first the second re-ran `insert_free`,
+            // emitting a second `OpFreeText` on the owned element (double free
+            // under `-C debug-assertions=on`; text.rs:334).
+            return vec![expr.clone()];
         } else if let Value::Block(bl) = expr {
             return self.insert_free(bl, &ls, is_return, data, function);
-        } else if expr_is_terminal {
-            // expr is already a `Return(...)` (or `Insert(...)` ending in
-            // one) — the cleanup was emitted alongside it by the inner
-            // Return arm's free_vars call.  Re-emitting `ls` here would
-            // duplicate every OpFreeText/OpFreeRef and tack on a dead
-            // `Return(Null)`.  Just propagate the terminal as-is.
-            return vec![expr.clone()];
         } else if is_return && is_value_return_type(tp) && !expr_is_terminal {
             // B5-L3: when a value-returning function's tail expression is a
             // non-Block, non-Var, non-Null value (If/Match/Call etc.) and
@@ -3760,30 +3802,24 @@ impl Scopes {
                 let in_ret = ret_borrows_v
                     || backs_return_source
                     || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
-                // H2 step-5 sentinel: the BLOCK-RESULT type's deps were
-                // read here for years under the positional guess; the
-                // 2026-06-12 corpus probes (scripts, docs, examples,
-                // tools, libs) show that read never decides alone — the
-                // declared-return and returned-var checks subsume it.
-                // Scream if a live case ever appears; re-add the read
-                // WITH a typed decode then (DEPS_INVENTORY § step 5).
-                #[cfg(debug_assertions)]
-                {
-                    let tp_alone = !in_ret
-                        && tp.depend().iter().any(|&a| {
-                            if (a as usize) < def.attributes.len() {
-                                function.var(&def.attributes[a as usize].name) == v
-                            } else {
-                                a == v
-                            }
-                        });
-                    debug_assert!(
-                        !tp_alone,
-                        "H2 step-5 sentinel: the block-result dep read would have \
-                         decided alone for var {v} in '{}'",
-                        def.name()
-                    );
-                }
+                // H2 step 5 (DEPS_INVENTORY): the BLOCK-RESULT type's deps were
+                // read here for years under the positional guess.  That read is
+                // RETIRED: the declared-return (`ret_borrows_v`, a TYPED decode),
+                // returned-var, and return-source-backing checks above decide the
+                // suppression.  A debug sentinel used to scream when the old read
+                // would have "decided alone" (`tp.depend()` names `v` while
+                // `in_ret` is false), on the theory that such a case would need
+                // the read re-added.  It does NOT: every firing is a FALSE positive
+                // of the retired POSITIONAL decode — a field / enum-field / match-
+                // arm return that COPIES its source into the caller's retbuf
+                // (`return fv_c.pts`, `match e { Filled{items} => items }`), so the
+                // local source `v` is correctly freed at scope exit AFTER the copy.
+                // Re-adding the read would instead SUPPRESS that free and LEAK the
+                // source.  Verified on the seven firing cases (450, 508, repro_p365,
+                // four 85-store-lifetime-*) — value + leak + LOFT_POISON + the DA
+                // store-free asserts all clean, both backends — so the read stays
+                // retired and the sentinel is removed (the reliable checks subsume
+                // every TRUE return source; the positional read only added noise).
                 // Work-refs (`__ref_N` / `__rref_N`) carry their own var
                 // in the dep list (`src/parser/mod.rs:1924-1928`) so the
                 // standard `dep.is_empty()` gate skips them.  But work-
@@ -4347,7 +4383,23 @@ impl Scopes {
         // pitfall `scan_set` was patched for under @P198 (`value.unspan()`).
         if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
-            if def.name.starts_with("n_") && def.code != Value::Null {
+            // #549 — a generic monomorph (`t_…`) whose return SHAPE is a concrete
+            // aggregate (`f<T>(x) -> (integer,integer)` / `-> Struct` / `-> Enum`)
+            // leaks its result store when used inline or discarded: the caller
+            // lifts+frees an `n_` aggregate return (below) but historically not a
+            // `t_` one, so the fresh store the monomorph allocated via `__retbuf`
+            // was orphaned (both backends).  Extend the lift to `t_` — BUT a
+            // monomorph LOSES its return dep during specialization, so the
+            // dep-based ownership guards here cannot tell a fresh-owned return
+            // from a borrowed-arg one (`id<T>(x) -> T { x }` reads as empty-dep =
+            // owned and would DOUBLE-FREE if lifted).  The reliable "delivers a
+            // fresh owned aggregate" signal a monomorph keeps is the `__retbuf`
+            // NRVO parameter: a concrete-aggregate return gets it at signature
+            // finalization; a borrowed-reference return never does.  So gate the
+            // `t_` extension on `__retbuf`, leaving every `n_` case untouched.
+            let lift_owned_return = def.name.starts_with("n_")
+                || (def.name.starts_with("t_") && def.attr_names.contains_key("__retbuf"));
+            if lift_owned_return && def.code != Value::Null {
                 if let Type::Reference(d_nr, _) = &def.returned {
                     return Some(Type::Reference(*d_nr, Deps::none()));
                 }
@@ -4519,15 +4571,33 @@ fn collect_consumed_ncc_text(node: &Value, function: &Function, out: &mut Vec<u1
         Value::Span(b) => collect_consumed_ncc_text(&b.1, function, out),
         Value::Block(bl) if bl.name == "ncc" => {
             for op in &bl.operators {
-                if let Value::Set(v, _) = op.unspan()
+                if let Value::Set(v, val) = op.unspan()
                     && function.is_skip_free(*v)
                     && matches!(function.tp(*v).base(), Type::Text(_))
                     && function.name(*v).starts_with("__ncc_")
+                    // Only the REAL coalesce-subject assignment (a Call / field
+                    // access / nested block — a producer of an owned String)
+                    // gets an in-place free.  A right-nested `??` (`a ?? (b ?? c)`)
+                    // hoists a merge-var pre-declaration `__ncc_N = ""` (a literal
+                    // Text init) into the OUTER ncc block while the real
+                    // assignment lives in the inner block; collecting the literal
+                    // init too freed the temp twice (156 sibling: right-nested
+                    // `??` double-free).  A subject is never a bare literal.
+                    && !matches!(val.unspan(), Value::Text(_) | Value::Null)
                 {
                     out.push(*v);
                 }
             }
-            node.for_each_child(&mut |c| collect_consumed_ncc_text(c, function, out));
+            // Do NOT recurse INTO this ncc block: a nested `??` (`a ?? b ?? c`)
+            // lowers to an ncc block whose Set value is ANOTHER ncc block, and
+            // that inner block gets its OWN `convert` (and thus its own in-place
+            // free pass) when it is scanned.  Recursing here would ALSO collect
+            // the inner block's `__ncc_*` temp from the outer level, freeing it
+            // twice (a `text.rs:334` double-free on the interpreter for a chained
+            // `??` whose first operand is an owned/call-produced text; 156).
+            // Non-ncc structures (call args, if-branches) are still descended
+            // through by the `_` arm below, so sibling / nested-in-expression ncc
+            // blocks are reached exactly once.
         }
         Value::Block(_) | Value::Loop(_) => {}
         _ => node.for_each_child(&mut |c| collect_consumed_ncc_text(c, function, out)),
@@ -4881,6 +4951,34 @@ fn collect_freed_vars(ir: &Value, free_ops: &[u32], result: &mut HashSet<u16>) {
     });
 }
 
+/// Block-tail temps whose store is ADOPTED (moved) into a freed assignment LHS,
+/// so freeing the LHS frees them — no `OpFreeRef` of the temp is emitted, and
+/// none should be (it would double-free the shared record).
+///
+/// The shape is `Set(lhs, Block[…, Var(v)])`: the block allocates a fresh record
+/// into `v` and yields it, and `lhs = <block>` PutRef-aliases that record into
+/// `lhs` (the empty-dep adopt — e.g. the `#reading file` surface temp behind
+/// `q = f#read as S`).  `v`'s free responsibility transfers to `lhs`, so when
+/// `lhs` is freed, `v` is covered.
+///
+/// Narrow by construction: it matches only a BLOCK-valued RHS (a plain
+/// `lhs = v` COPY has an RHS of `Var(v)`, not `Block`, and its `v` is freed
+/// separately, so `v` is already in `freed` and never reaches the leak assert).
+/// It credits `v` only when `lhs` is in `freed`, so it cannot mask a genuine
+/// leak where the adopting LHS itself is never freed.
+#[cfg(debug_assertions)]
+fn collect_adopted_block_results(ir: &Value, freed: &HashSet<u16>, result: &mut HashSet<u16>) {
+    ir.walk(&mut |n| {
+        if let Value::Set(lhs, rhs) = n
+            && freed.contains(lhs)
+            && let Value::Block(bl) = rhs.unspan()
+            && let Some(Value::Var(v)) = bl.operators.last().map(Value::unspan)
+        {
+            result.insert(*v);
+        }
+    });
+}
+
 /// After scope analysis, assert that every Reference variable that should be
 /// freed has a corresponding `OpFreeRef` somewhere in `ir`.
 ///
@@ -4966,6 +5064,13 @@ fn check_ref_leaks(
     let mut freed: HashSet<u16> = HashSet::new();
     collect_freed_vars(ir, &free_ops, &mut freed);
 
+    // A block-tail temp adopted into a freed LHS (`q = f#read as S`, whose
+    // `#reading file` surface temp `_read_N` moves its record into `q`) has no
+    // OpFreeRef of its own and must not — `q`'s free covers it.  Credit it so
+    // the leak assert below does not false-positive on the moved-from source.
+    let mut adopted: HashSet<u16> = HashSet::new();
+    collect_adopted_block_results(ir, &freed, &mut adopted);
+
     // H2: `ret_type` deps are ATTRIBUTE indices — translate each to its
     // frame var through the attribute name before pooling with the
     // frame-space deps below (the old code inserted them raw, so an attr
@@ -5026,6 +5131,9 @@ fn check_ref_leaks(
         }
         if v == direct_ret_var {
             continue; // ownership transferred to caller
+        }
+        if adopted.contains(&v) {
+            continue; // moved into a freed LHS — that free covers this store
         }
         if let Type::Reference(_, dep) = function.tp(v) {
             // LOFT_REF_LEAK_WARN=1 downgrades the assert to a warning so a

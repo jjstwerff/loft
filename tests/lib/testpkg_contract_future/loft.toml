@@ -1,0 +1,7 @@
+[package]
+name    = "testpkg_contract_future"
+version = "0.0.1"
+# @PLN102 arc B-semantic — requires a compatibility contract newer than this
+# loft provides (CONTRACT_VERSION is 0 pre-1.0).  A hard reject: loft is too
+# old for the library's epoch.
+contract = "1"

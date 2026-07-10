@@ -171,9 +171,25 @@ per-kind.
 **Guards.**  `tests/scripts/85-store-lifetime-claims-keystone.loft` covers every axis
 (vector, hash, sorted/ordered, index + sibling-sorted = the @P309 axis, multi-heap struct,
 inline enum) under the store-leak gate.  `cargo test --release --test leak` catches a
-dropped or double-freed element record.  `LOFT_COPY_CHECK=1` (or `LOFT_LOG=copy_check`) is
-the in-process tripwire for an off-by-one source fold: it walks source and destination
-lengths in parallel and warns on any nested-collection mismatch.
+dropped or double-freed element record.  `LOFT_COPY_CHECK=1` (or `LOFT_LOG=copy_check`) walks
+source and destination in parallel and warns on a nested-collection mismatch, hooked at
+`OpCopyRecord` / `OpReplaceKeyed` / `set_keyed`.
+
+**Tripwire calibration (2026-07-10) — read this before trusting its silence.**  Two faults
+were injected into `copy_claims_array_body` and the results differ, which changes how the
+phases below must be read:
+
+| injected fault | `LOFT_COPY_CHECK` | guard values |
+|---|---|---|
+| short length **header** (`length-1`) | **FIRES** — `MISMATCH copy_record.s: src_len=3 dst_len=2`, on BOTH backends | fails |
+| truncated element **loop** (`0..length-1`), header still correct | **SILENT** | fails (3/7) |
+
+So `LOFT_COPY_CHECK` detects a *length* divergence, not "right length, wrong or missing
+element" — which is exactly the shape an off-by-one **source fold** produces.  It is a
+secondary net here, not the primary one.  The primary net for these phases is the guard's
+**value assertions** plus the leak gate; both caught the truncation the tripwire missed.
+Its silence is only evidence for the length class.  (Earlier text called it "the in-process
+tripwire for an off-by-one source fold" — that overstated it.)
 
 ---
 

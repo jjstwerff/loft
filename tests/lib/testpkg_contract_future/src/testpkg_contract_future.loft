@@ -1,0 +1,4 @@
+// @PLN102 arc B-semantic fixture — declares a future compatibility contract.
+pub fn future_contract_fn() -> integer {
+  0
+}
