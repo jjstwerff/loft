@@ -181,3 +181,27 @@ to the proven non-generic.
 
 ## Status: FIXED (p329/p330 tuple class → 0). The separate `-> text` generic-monomorph
 ## return (`g1b`, the forward-ref/pre-pass class) is untouched by this and remains open.
+
+## #549 follow-up — INLINE / DISCARD aggregate-return leak (bug 1, FIXED 2026-07-10)
+
+The RESOLUTION above closed the BOUND case (`t = f(x)`; caller pairing broadened to
+`t_` in `get_free_vars`). A sibling leak survived for the INLINE (`f(x).0`) and
+DISCARDED (`f(x);`) cases of a generic monomorph returning ANY concrete aggregate —
+pure-value tuple (`p240`), plain struct, or struct-enum. Those route through
+`scopes::inline_struct_return`, whose first block (the `Reference` / struct-`Enum` /
+`Function` arms) was gated on `n_` ONLY, so a `t_` monomorph's fresh `__retbuf` store
+was never lifted-and-freed → orphaned on BOTH backends (`Database N not correctly
+freed` under the DA gate).
+
+Fix: extend that block's gate to a `t_` callee that carries a `__retbuf` param. The
+`__retbuf` NRVO parameter is the reliable "delivers a fresh owned aggregate" signal a
+monomorph keeps even though it LOSES its return dep during specialization — so it
+lifts the fresh-aggregate returns (`p240`, `p549_*`) while leaving a borrowed-arg
+return (`id<T>(x) -> T { x }`, no `__retbuf`, empty dep) unlifted (lifting it would
+double-free the caller's arg — the `p549_generic_returns_arg_not_double_freed` guard).
+Verified: the 10-cell boundary matrix + `p240` + the four `p549_*` guards, correct +
+leak-free on interpret AND native, under the DA gate.
+
+The **`text.rs:334` double-free** (bug 2 in #549 — a `(text, …)` return double-frees an
+owned/call-produced text element; `p243`/`p329`/`p330`, DA-only, pre-existing) is a
+SEPARATE, older bug and is UNTOUCHED here — #549 stays open for it.

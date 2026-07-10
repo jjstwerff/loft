@@ -4347,7 +4347,23 @@ impl Scopes {
         // pitfall `scan_set` was patched for under @P198 (`value.unspan()`).
         if let Value::Call(fn_nr, _) = val.unspan() {
             let def = data.def(*fn_nr);
-            if def.name.starts_with("n_") && def.code != Value::Null {
+            // #549 — a generic monomorph (`t_…`) whose return SHAPE is a concrete
+            // aggregate (`f<T>(x) -> (integer,integer)` / `-> Struct` / `-> Enum`)
+            // leaks its result store when used inline or discarded: the caller
+            // lifts+frees an `n_` aggregate return (below) but historically not a
+            // `t_` one, so the fresh store the monomorph allocated via `__retbuf`
+            // was orphaned (both backends).  Extend the lift to `t_` — BUT a
+            // monomorph LOSES its return dep during specialization, so the
+            // dep-based ownership guards here cannot tell a fresh-owned return
+            // from a borrowed-arg one (`id<T>(x) -> T { x }` reads as empty-dep =
+            // owned and would DOUBLE-FREE if lifted).  The reliable "delivers a
+            // fresh owned aggregate" signal a monomorph keeps is the `__retbuf`
+            // NRVO parameter: a concrete-aggregate return gets it at signature
+            // finalization; a borrowed-reference return never does.  So gate the
+            // `t_` extension on `__retbuf`, leaving every `n_` case untouched.
+            let lift_owned_return = def.name.starts_with("n_")
+                || (def.name.starts_with("t_") && def.attr_names.contains_key("__retbuf"));
+            if lift_owned_return && def.code != Value::Null {
                 if let Type::Reference(d_nr, _) = &def.returned {
                     return Some(Type::Reference(*d_nr, Deps::none()));
                 }

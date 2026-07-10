@@ -13715,6 +13715,74 @@ fn p329_pair_second<T: Printable>(p329x: T) -> (text, text) {
     .result(Value::str("item-8"));
 }
 
+/// #549 — a bounded-generic fn whose return SHAPE is a concrete aggregate
+/// (a struct, struct-enum, or pure-value tuple) leaked its result store when
+/// the call was used INLINE (`f(x).field`) or DISCARDED, on both backends
+/// (the `(integer,integer)` twin of this is `p240`).  Root cause: the caller's
+/// lift-and-free decision (`scopes::inline_struct_return`) fired only for `n_`
+/// (concrete) callees, not for `t_` generic monomorphs — so the fresh store the
+/// monomorph allocated via `__retbuf` was never freed.  Fix: extend the lift to
+/// `t_` callees that carry a `__retbuf` param (the NRVO signal that the return
+/// is a fresh owned aggregate a monomorph keeps even after it loses its return
+/// dep).  These pass under the DA gate (`-C debug-assertions=on`), where the
+/// leak becomes a hard "Database not correctly freed" panic.
+#[test]
+fn p549_generic_struct_return_inline_no_leak() {
+    code!(
+        "struct P549Item { p549_id: integer }
+fn to_text(self: P549Item) -> text { return \"i{self.p549_id}\"; }
+struct P549Pair { p549_a: integer, p549_b: integer }
+fn p549_mk<T: Printable>(_p549x: T) -> P549Pair { return P549Pair { p549_a: 1, p549_b: 2 }; }"
+    )
+    .expr("p549_mk(P549Item { p549_id: 7 }).p549_a")
+    .result(Value::Int(1));
+}
+
+#[test]
+fn p549_generic_struct_enum_return_inline_no_leak() {
+    code!(
+        "struct P549Item { p549_id: integer }
+fn to_text(self: P549Item) -> text { return \"i{self.p549_id}\"; }
+enum P549Shape { P549Circle { r: integer }, P549Square { s: integer } }
+fn p549_shape<T: Printable>(_p549x: T) -> P549Shape { return P549Circle { r: 3 }; }
+fn p549_use(e: P549Shape) -> integer { match e { P549Circle { r } => r, P549Square { s } => s } }"
+    )
+    .expr("p549_use(p549_shape(P549Item { p549_id: 7 }))")
+    .result(Value::Int(3));
+}
+
+#[test]
+fn p549_generic_aggregate_return_discarded_no_leak() {
+    code!(
+        "struct P549Item { p549_id: integer }
+fn to_text(self: P549Item) -> text { return \"i{self.p549_id}\"; }
+struct P549Pair { p549_a: integer, p549_b: integer }
+fn p549_mk<T: Printable>(_p549x: T) -> P549Pair { return P549Pair { p549_a: 1, p549_b: 2 }; }
+fn p549_discard() -> integer {
+    p549_mk(P549Item { p549_id: 7 });
+    return 42;
+}"
+    )
+    .expr("p549_discard()")
+    .result(Value::Int(42));
+}
+
+/// #549 over-reach guard — a bounded-generic fn that RETURNS ITS ARGUMENT
+/// (`id<T>(x) -> T { x }`) is a BORROWED view, not a fresh store: its monomorph
+/// loses the return dep AND gets no `__retbuf`, so the fix must NOT lift-and-free
+/// it (that would double-free the caller's arg).  Under the DA gate this would
+/// panic "double free"; it must stay clean.
+#[test]
+fn p549_generic_returns_arg_not_double_freed() {
+    code!(
+        "struct P549Item { p549_id: integer }
+fn to_text(self: P549Item) -> text { return \"i{self.p549_id}\"; }
+fn p549_id<T: Printable>(p549x: T) -> T { return p549x; }"
+    )
+    .expr("p549_id(P549Item { p549_id: 5 }).p549_id")
+    .result(Value::Int(5));
+}
+
 /// P239 — for-loop over `vector<T>` inside a generic fn crashed
 /// both backends.  Interp SIGSEGV; native rustc E0610
 /// `i64.rec`.  The for-loop iter-termination check
