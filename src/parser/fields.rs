@@ -65,31 +65,37 @@ impl Parser {
             diagnostic!(self.lexer, Level::Error, "Expect a field name");
             return t;
         };
-        // @PLN48 S3 — `xs.within(cx, cy, radius)` on a `spacial<T[x, y]>`, BEFORE the
-        // `type_elm` check below (a keyed collection has no struct "element" there, so
-        // it would otherwise error "Unknown type spacial<…>").  Rewrites to
-        // `n_spacial_within(xs, tp, cx, cy, radius)`, injecting the type id (mirrors
-        // the `to_json` intercept); the result is a `vector<reference<T>>` of the
-        // matching points, iterable in natural order.
-        if field == "within"
+        // @PLN48 S3 — the proximity queries `xs.within(cx, cy, radius)` /
+        // `xs.nearest(cx, cy, k)` on a `spacial<T[x, y]>`, BEFORE the `type_elm` check
+        // below (a keyed collection has no struct "element" there, so it would
+        // otherwise error "Unknown type spacial<…>").  Each rewrites to
+        // `n_spacial_<q>(xs, tp, cx, cy, arg)`, injecting the type id (mirrors the
+        // `to_json` intercept).  The result is the matching points, iterable: within
+        // yields Morton order, nearest yields distance order.
+        if (field == "within" || field == "nearest")
             && matches!(t, Type::Radix(_, _, _))
             && self.lexer.peek_token("(")
         {
             self.lexer.token("(");
-            let (mut cx, mut cy, mut r) = (Value::Null, Value::Null, Value::Null);
+            let (mut cx, mut cy, mut arg) = (Value::Null, Value::Null, Value::Null);
             let _ = self.expression(&mut cx);
             self.lexer.token(",");
             let _ = self.expression(&mut cy);
             self.lexer.token(",");
-            let _ = self.expression(&mut r);
+            let _ = self.expression(&mut arg);
             self.lexer.token(")");
             if !self.first_pass {
                 let tp = self.get_type(&t);
-                let fn_nr = self.data.def_nr("n_spacial_within");
+                let fn_name = if field == "within" {
+                    "n_spacial_within"
+                } else {
+                    "n_spacial_nearest"
+                };
+                let fn_nr = self.data.def_nr(fn_name);
                 if tp != u16::MAX && fn_nr != u32::MAX {
                     *code = Value::Call(
                         fn_nr,
-                        vec![code.clone(), Value::Int(i32::from(tp)), cx, cy, r],
+                        vec![code.clone(), Value::Int(i32::from(tp)), cx, cy, arg],
                     );
                 }
             }

@@ -236,26 +236,89 @@ pub fn within(coll: &DbRef, stores: &[Store], keys: &[Key], q: &[i64], radius: i
     if tree == 0 {
         return Vec::new();
     }
+    let r2 = radius.saturating_mul(radius);
+    let mut found = Vec::new();
+    scan_box(store, tree, keys, q, radius, &mut found);
+    // `scan_box` walks the tree in order, so the kept records stay Morton-ordered.
+    found
+        .into_iter()
+        .filter(|&(d, _)| d <= r2)
+        .map(|(_, rec)| rec)
+        .collect()
+}
+
+/// Collect `(dist², rec)` for every record in the box of half-width `radius` about
+/// `q`.  The shared box scan behind `within` and `nearest`.
+fn scan_box(
+    store: &Store,
+    tree: u32,
+    keys: &[Key],
+    q: &[i64],
+    radius: i64,
+    out: &mut Vec<(i64, u32)>,
+) {
     let n = keys.len();
     let lo = |a: usize| coord_code(q[a].saturating_sub(radius));
     let hi_code = morton_words(n, |a| coord_code(q[a].saturating_add(radius)));
     let oracle = RadixOracle { keys };
     let probe = |word: u32| interleave(word, n, lo);
     let mut it = rt::rtree_seek(store, tree, &probe, key_bits(keys), &oracle);
-    let r2 = radius.saturating_mul(radius);
-    let mut out = Vec::new();
     let mut rec = it.rec();
     while rec != 0 {
         let rec_code = morton_words(n, |a| axis_code(store, rec, &keys[a]));
         if code_gt(&rec_code, &hi_code, n) {
             break;
         }
-        if dist2(store, rec, keys, q) <= r2 {
-            out.push(rec);
-        }
+        out.push((dist2(store, rec, keys, q), rec));
         rec = it.next(store, tree).unwrap_or(0);
     }
-    out
+}
+
+/// The `k` records closest to `q`, nearest first (ties by rec id); fewer than `k`
+/// only if the index holds fewer.
+///
+/// **Exact**, by an expanding box: scan the box of half-width `r`; stop once it holds
+/// `k` records and the `k`-th is within `r` (anything outside a box of half-width `r`
+/// has distance `> r`, hence farther than that `k`-th).  Otherwise double `r`, until
+/// the box saturates the coordinate range.  Ported from `spatial::nearest`.
+#[must_use]
+pub fn nearest(coll: &DbRef, stores: &[Store], keys: &[Key], q: &[i64], k: usize) -> Vec<u32> {
+    if k == 0 {
+        return Vec::new();
+    }
+    let store = keys::store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    if tree == 0 {
+        return Vec::new();
+    }
+    let n = keys.len();
+    let mut radius: i64 = 8;
+    let mut prev_corners = [(0i64, 0i64); MAX_AXES];
+    let mut first = true;
+    loop {
+        let corners: [(i64, i64); MAX_AXES] = std::array::from_fn(|a| {
+            if a < n {
+                (q[a].saturating_sub(radius), q[a].saturating_add(radius))
+            } else {
+                (0, 0)
+            }
+        });
+        let saturated = !first && corners == prev_corners;
+
+        let mut found: Vec<(i64, u32)> = Vec::new();
+        scan_box(store, tree, keys, q, radius, &mut found);
+        found.sort_unstable();
+
+        let r2 = radius.saturating_mul(radius);
+        let kth_within = found.len() >= k && found[k - 1].0 <= r2;
+        if kth_within || saturated {
+            found.truncate(k);
+            return found.into_iter().map(|(_, rec)| rec).collect();
+        }
+        prev_corners = corners;
+        first = false;
+        radius = radius.saturating_mul(2);
+    }
 }
 
 #[cfg(test)]
@@ -409,6 +472,44 @@ mod tests {
                 .collect();
             want.sort_unstable();
             assert_eq!(got, want, "within({cx},{cy},{r}) must match brute force");
+        }
+    }
+
+    /// D5 — `nearest` equals a brute-force sort by (distance, rec), across k values.
+    #[test]
+    fn d5_nearest_matches_brute_force() {
+        let mut store = Store::new_in_use(1 << 15);
+        let keys = xy_keys();
+        let coll_rec = store.claim(1);
+        let coll = DbRef {
+            store_nr: 0,
+            rec: coll_rec,
+            pos: 4,
+        };
+        let mut seed = 0x1122_3344_5566_7788;
+        let mut pts = Vec::new();
+        for _ in 0..250 {
+            let (x, y) = (lcg(&mut seed) % 300 - 150, lcg(&mut seed) % 300 - 150);
+            let rec = add_point(&mut store, &coll, &keys, x, y);
+            pts.push((x, y, rec));
+        }
+        let stores = std::slice::from_ref(&store);
+        for _ in 0..150 {
+            let (cx, cy) = (lcg(&mut seed) % 300 - 150, lcg(&mut seed) % 300 - 150);
+            for &kk in &[1usize, 3, 10, 250, 300] {
+                let got = nearest(&coll, stores, &keys, &[cx, cy], kk);
+                let mut ranked: Vec<(i64, u32)> = pts
+                    .iter()
+                    .map(|&(x, y, rec)| {
+                        let (dx, dy) = (x - cx, y - cy);
+                        (dx * dx + dy * dy, rec)
+                    })
+                    .collect();
+                ranked.sort_unstable();
+                ranked.truncate(kk);
+                let want: Vec<u32> = ranked.into_iter().map(|(_, rec)| rec).collect();
+                assert_eq!(got, want, "nearest({cx},{cy},{kk}) must match brute force");
+            }
         }
     }
 

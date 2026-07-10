@@ -1709,7 +1709,10 @@ use #count instead"
                 // (which would walk the scratch as if it were a tree).
                 let already_scratch = matches!(
                     expr.unspan(),
-                    Value::Call(d, _) if self.data.def(*d).name() == "n_spacial_within"
+                    Value::Call(d, _) if matches!(
+                        self.data.def(*d).name(),
+                        "n_spacial_within" | "n_spacial_nearest"
+                    )
                 );
                 if already_scratch {
                     fill = v_set(scratch_var, expr.clone());

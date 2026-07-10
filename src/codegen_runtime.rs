@@ -106,6 +106,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_hash_unsorted",              abi: Abi::Cell },
     RuntimeFn { name: "n_radix_sorted",               abi: Abi::Cell },
     RuntimeFn { name: "n_spacial_within",             abi: Abi::Cell },
+    RuntimeFn { name: "n_spacial_nearest",            abi: Abi::Cell },
     // P268 — JSON ecosystem (P54 sprint).  Native runtime wrappers
     // around `crate::native::json_parse_into_stores` + the JsonValue
     // method natives so `--native` programs can read/parse JSON
@@ -2090,6 +2091,20 @@ pub fn n_spacial_within(
 ) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.build_radix_within_vec(&r, tp as u16, cx, cy, radius)
+}
+
+/// @PLN48 S3 — `xs.nearest(cx, cy, k)`.  Bytecode equivalent: `n_spacial_nearest`.
+#[allow(clippy::too_many_arguments)]
+pub fn n_spacial_nearest(
+    cell: &std::cell::UnsafeCell<Stores>,
+    r: DbRef,
+    tp: i64,
+    cx: i64,
+    cy: i64,
+    k: i64,
+) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores.build_radix_nearest_vec(&r, tp as u16, cx, cy, k)
 }
 
 /// Read the text element a par worker's `&str` parameter expects out of the

@@ -1154,6 +1154,10 @@ pub fn radix_sorted(r: reference, tp: integer) -> reference;
 // collection's type id.  Exact (the box scan distance-verifies).
 pub fn spacial_within(r: reference, tp: integer, cx: integer, cy: integer, radius: integer) -> reference;
 #impure(parent_write)
+// @PLN48 S3 — `xs.nearest(cx, cy, k)`: the k closest points, NEAREST FIRST.  Exact
+// (expanding-box k-NN).  The parser rewrites the method, injecting the type id.
+pub fn spacial_nearest(r: reference, tp: integer, cx: integer, cy: integer, k: integer) -> reference;
+#impure(parent_write)
 type index size(4);
 
 // P192: hash<T[key]> bucket-array walk.  No const args needed —

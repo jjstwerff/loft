@@ -957,6 +957,22 @@ impl Stores {
         self.build_rec_scratch(coll, &recs)
     }
 
+    /// @PLN48 S3 — the `nearest(cx, cy, k)` query as an iterable scratch vector: the
+    /// `k` closest 2D points, NEAREST FIRST (distance order, not Morton).  Exact.
+    pub fn build_radix_nearest_vec(
+        &mut self,
+        coll: &DbRef,
+        tp: u16,
+        cx: i64,
+        cy: i64,
+        k: i64,
+    ) -> DbRef {
+        let keys = self.types[tp as usize].keys.clone();
+        let kk = usize::try_from(k.max(0)).unwrap_or(0);
+        let recs = crate::radix_db::nearest(coll, &self.allocations, &keys, &[cx, cy], kk);
+        self.build_rec_scratch(coll, &recs)
+    }
+
     /// Materialise `recs` (live hash rec-nrs) into a rec-nr scratch vector that
     /// the Ordered (on=3) iteration path walks.
     ///
