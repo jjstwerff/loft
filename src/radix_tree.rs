@@ -75,9 +75,14 @@
 use crate::store::Store;
 use std::cmp::Ordering;
 
-/// Bit `bit` of `rec`'s user key, most significant first.  Called only for
-/// `bit < (KeySpec::bits)(rec)`.
-pub type BitFn = fn(store: &Store, rec: u32, bit: u32) -> bool;
+/// 64 bits of `rec`'s user key starting at bit `word * 64`, most significant first
+/// (bit `word*64` lands in bit 63 of the `u64`).  Zero-padded past the key's end.
+///
+/// A word accessor rather than a bit accessor because the comparison hot path is
+/// `first_diff`: one `XOR` plus `leading_zeros` replaces up to 64 indirect calls.
+/// The per-bit read is *derived* from this, so there is no second accessor to keep
+/// consistent with it.
+pub type WordFn = fn(store: &Store, rec: u32, word: u32) -> u64;
 
 /// How many bits `rec`'s user key has.  A constant for fixed-width keys; `8 * len`
 /// for text.
@@ -87,7 +92,7 @@ pub type LenFn = fn(store: &Store, rec: u32) -> u32;
 /// record id; see the module header.
 #[derive(Clone, Copy)]
 pub struct KeySpec {
-    pub bit: BitFn,
+    pub word: WordFn,
     pub bits: LenFn,
 }
 
@@ -115,45 +120,72 @@ const HDR: u32 = 24;
 /// `bit: u32`, `parent: u32`, `false: i32`, `true: i32` — exactly two store words.
 const NODE_SIZE: u32 = 16;
 
-/// Bit `bit` of the string the tree really keys on, given the user key's length `n`.
-/// Total: past the end of everything it reads as `0`, so the string never ends and
-/// comparison is total.
-fn full_n(store: &Store, spec: KeySpec, rec: u32, n: u32, bit: u32) -> bool {
-    if bit < n {
-        (spec.bit)(store, rec, bit)
-    } else if bit < n + TERM_BITS {
-        false
-    } else if bit < n + SUFFIX_BITS {
-        let j = bit - n - TERM_BITS;
-        (rec >> (ID_BITS - 1 - j)) & 1 == 1
-    } else {
-        false
+/// One key as the tree sees it — the infinite bit string of the module header.
+///
+/// A **record** view carries the record id, so its keys are unique.  A **probe** view
+/// carries id `0`, which is what sorts a probe to the head of its own bucket.  The
+/// two are the same type, so `first_diff` needs no probe-versus-record special case.
+struct View<F: Fn(u32) -> u64> {
+    word: F,
+    bits: u32,
+    id: u32,
+}
+
+impl<F: Fn(u32) -> u64> View<F> {
+    /// Bit `b` of the composed string: user bits, terminator, record id, then zeros.
+    fn bit(&self, b: u32) -> bool {
+        let n = self.bits;
+        if b < n {
+            ((self.word)(b / 64) >> (63 - b % 64)) & 1 == 1
+        } else if b < n + TERM_BITS {
+            false
+        } else if b < n + SUFFIX_BITS {
+            (self.id >> (ID_BITS - 1 - (b - n - TERM_BITS))) & 1 == 1
+        } else {
+            false
+        }
     }
-}
 
-/// One-off read of a key bit, re-deriving the length.  Prefer [`key_fn`] in a loop.
-fn full(store: &Store, spec: KeySpec, rec: u32, bit: u32) -> bool {
-    full_n(store, spec, rec, (spec.bits)(store, rec), bit)
-}
-
-/// A record's key as a closure, with its length read **once** rather than per bit.
-fn key_fn(store: &Store, spec: KeySpec, rec: u32, n: u32) -> impl Fn(u32) -> bool + '_ {
-    move |bit| full_n(store, spec, rec, n, bit)
+    /// Bits beyond which the string is all zeros.
+    fn total(&self) -> u32 {
+        self.bits + SUFFIX_BITS
+    }
 }
 
 /// First bit at which two key strings differ, and the first one's value there.
 ///
-/// `None` means they agree on every bit below `limit`.  For two *distinct* records
-/// that cannot happen — their id suffixes differ — so every caller treats `None` as
-/// "the same key", never as a failure.
-fn first_diff<A, B>(a: &A, b: &B, limit: u32) -> Option<(u32, bool)>
+/// Over the stretch both keys share, this compares **64 bits at a time**: one `XOR`
+/// and one `leading_zeros` locate the differing bit.  Only the tail — past the
+/// shorter user key, where terminator and id live — is walked bit by bit, and that
+/// happens solely when two keys agree over their whole common length.
+///
+/// `None` means they agree on every bit.  For two *distinct* records that cannot
+/// happen, since their id suffixes differ; every caller reads `None` as "the same
+/// key", never as a failure.
+fn first_diff<A, B>(a: &View<A>, b: &View<B>) -> Option<(u32, bool)>
 where
-    A: Fn(u32) -> bool,
-    B: Fn(u32) -> bool,
+    A: Fn(u32) -> u64,
+    B: Fn(u32) -> u64,
 {
-    (0..limit).find_map(|bit| {
-        let x = a(bit);
-        (x != b(bit)).then_some((bit, x))
+    let common = a.bits.min(b.bits);
+    let mut w = 0;
+    while w * 64 < common {
+        let (av, bv) = ((a.word)(w), (b.word)(w));
+        let x = av ^ bv;
+        if x != 0 {
+            let bit = w * 64 + x.leading_zeros();
+            if bit < common {
+                return Some((bit, a.bit(bit)));
+            }
+            // The difference lies past the shorter key; the tail walk settles it.
+            break;
+        }
+        w += 1;
+    }
+    let limit = a.total().max(b.total());
+    (common..limit).find_map(|bit| {
+        let x = a.bit(bit);
+        (x != b.bit(bit)).then_some((bit, x))
     })
 }
 
@@ -392,10 +424,7 @@ fn free_node(store: &mut Store, tree: u32, node: u32) {
 
 /// Follow `key` down to the candidate leaf, and the node directly above it.
 /// Leaf `0` = empty tree; parent `0` = the leaf is the root.
-fn descend<K>(store: &Store, tree: u32, key: &K) -> (u32, u32)
-where
-    K: Fn(u32) -> bool,
-{
+fn descend<F: Fn(u32) -> u64>(store: &Store, tree: u32, key: &View<F>) -> (u32, u32) {
     let mut cur = top(store, tree);
     let mut parent = 0;
     loop {
@@ -403,7 +432,29 @@ where
             Child::Empty => return (0, 0),
             Child::Rec(r) => return (r, parent),
             Child::Node(n) => {
-                let dir = key(node_bit(store, tree, n));
+                let dir = key.bit(node_bit(store, tree, n));
+                cur = child(store, tree, n, dir);
+                parent = n;
+            }
+        }
+    }
+}
+
+/// Follow `key` from `start` rather than the root — the finger descent.
+fn descend_from<F: Fn(u32) -> u64>(
+    store: &Store,
+    tree: u32,
+    key: &View<F>,
+    start: u32,
+) -> (u32, u32) {
+    let mut cur = Child::Node(start);
+    let mut parent = node_parent(store, tree, start);
+    loop {
+        match cur {
+            Child::Empty => return (0, 0),
+            Child::Rec(r) => return (r, parent),
+            Child::Node(n) => {
+                let dir = key.bit(node_bit(store, tree, n));
                 cur = child(store, tree, n, dir);
                 parent = n;
             }
@@ -440,10 +491,7 @@ fn descend_extreme(
 /// have sent the search key and the candidate leaf the same way, so they would agree
 /// at `d`, contradicting `d` being their first difference.  So `<` and `>` partition
 /// the path and no third case exists.
-fn split_point<K>(store: &Store, tree: u32, key: &K, d: u32) -> (u32, bool)
-where
-    K: Fn(u32) -> bool,
-{
+fn split_point<F: Fn(u32) -> u64>(store: &Store, tree: u32, key: &View<F>, d: u32) -> (u32, bool) {
     let mut cur = top(store, tree);
     let (mut parent, mut dir) = (0, false);
     while let Child::Node(n) = cur {
@@ -451,9 +499,33 @@ where
         if bit > d {
             break;
         }
-        dir = key(bit);
+        dir = key.bit(bit);
         cur = child(store, tree, n, dir);
         parent = n;
+    }
+    (parent, dir)
+}
+
+/// [`split_point`] resumed at `start` instead of the root.  Sound only when
+/// `bit(start) < d`, which every caller establishes.
+fn split_point_from<F: Fn(u32) -> u64>(
+    store: &Store,
+    tree: u32,
+    key: &View<F>,
+    d: u32,
+    start: u32,
+) -> (u32, bool) {
+    let mut parent = start;
+    let mut dir = key.bit(node_bit(store, tree, start));
+    let mut cur = child(store, tree, start, dir);
+    while let Child::Node(n) = cur {
+        let bit = node_bit(store, tree, n);
+        if bit > d {
+            break;
+        }
+        dir = key.bit(bit);
+        parent = n;
+        cur = child(store, tree, n, dir);
     }
     (parent, dir)
 }
@@ -467,13 +539,14 @@ fn subtree_below(store: &Store, tree: u32, parent: u32, dir: bool) -> Child {
     }
 }
 
-/// A probe key: the caller's bits, then zeros — the same string a record gets, with
-/// an id of `0`.  It therefore sorts to the head of its own bucket.
-fn probe_key<K>(probe: &K, probe_bits: u32) -> impl Fn(u32) -> bool + '_
-where
-    K: Fn(u32) -> bool,
-{
-    move |bit| bit < probe_bits && probe(bit)
+/// A probe key: the caller's words, then zeros — the same string a record gets, but
+/// with id `0`, so it sorts to the head of its own bucket.
+fn probe_view<P: Fn(u32) -> u64>(probe: &P, probe_bits: u32) -> View<&P> {
+    View {
+        word: probe,
+        bits: probe_bits,
+        id: 0,
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -487,49 +560,49 @@ where
 /// elided, so for an absent key the candidate is some other record entirely.
 /// Compare keys before trusting it, or call [`rtree_get`], which does.
 #[must_use]
-pub fn rtree_find<K>(store: &Store, tree: u32, probe: &K, probe_bits: u32) -> RadixIter
+pub fn rtree_find<P>(store: &Store, tree: u32, probe: &P, probe_bits: u32) -> RadixIter
 where
-    K: Fn(u32) -> bool,
+    P: Fn(u32) -> u64,
 {
-    let (rec, node) = descend(store, tree, &probe_key(probe, probe_bits));
+    let (rec, node) = descend(store, tree, &probe_view(probe, probe_bits));
     RadixIter::at(store, tree, rec, node)
 }
 
-/// Position at the lowest record whose key is `>= probe` — a lower bound.
+/// Position at the lowest record whose key is `>= probe` — a lower bound — and report
+/// the bit at which the probe first left the candidate's key.
 ///
 /// The candidate leaf a descent reaches is *not* generally that record, because the
-/// descent skipped the bits path compression elided.  So re-ascend to the subtree
-/// that diverges from the probe at bit `d`: by I2 every record in it agrees with the
-/// probe below `d` and agrees with the candidate *at* `d`.  If the probe has `0`
-/// there it precedes the whole subtree; if `1`, it follows all of it.
-///
-/// Because a probe carries id `0`, seeking a text prefix lands on the first record
-/// bearing that prefix.
-#[must_use]
-pub fn rtree_seek<K>(
+/// descent skipped the bits path compression elided.  So re-ascend to the subtree that
+/// diverges from the probe at bit `d`: by I2 every record in it agrees with the probe
+/// below `d` and agrees with the candidate *at* `d`.  If the probe has `0` there it
+/// precedes the whole subtree; if `1`, it follows all of it.
+fn seek_inner<P>(
     store: &Store,
     tree: u32,
-    probe: &K,
+    probe: &P,
     probe_bits: u32,
     spec: KeySpec,
-) -> RadixIter
+) -> (RadixIter, Option<u32>)
 where
-    K: Fn(u32) -> bool,
+    P: Fn(u32) -> u64,
 {
-    let kp = probe_key(probe, probe_bits);
+    let kp = probe_view(probe, probe_bits);
     let (cand, cand_parent) = descend(store, tree, &kp);
     if cand == 0 {
-        return RadixIter::empty();
+        return (RadixIter::empty(), None);
     }
-    let n = (spec.bits)(store, cand);
-    let kc = key_fn(store, spec, cand, n);
-    let limit = (probe_bits + SUFFIX_BITS).max(n + SUFFIX_BITS);
-    let Some((d, probe_bit)) = first_diff(&kp, &kc, limit) else {
-        return RadixIter::at(store, tree, cand, cand_parent);
+    let cw = |w: u32| (spec.word)(store, cand, w);
+    let kc = View {
+        word: cw,
+        bits: (spec.bits)(store, cand),
+        id: cand,
+    };
+    let Some((d, probe_bit)) = first_diff(&kp, &kc) else {
+        return (RadixIter::at(store, tree, cand, cand_parent), None);
     };
     let (parent, dir) = split_point(store, tree, &kp, d);
     let sub = subtree_below(store, tree, parent, dir);
-    if probe_bit {
+    let it = if probe_bit {
         // The probe sorts after every record in the subtree: take its last, step on.
         let (rec, node) = descend_extreme(store, tree, sub, true, parent);
         let mut it = RadixIter::at(store, tree, rec, node);
@@ -538,32 +611,71 @@ where
     } else {
         let (rec, node) = descend_extreme(store, tree, sub, false, parent);
         RadixIter::at(store, tree, rec, node)
-    }
+    };
+    (it, Some(d))
+}
+
+/// Position at the lowest record whose key is `>= probe`.
+///
+/// Because a probe carries id `0`, seeking a text prefix lands on the first record
+/// bearing that prefix.
+#[must_use]
+pub fn rtree_seek<P>(
+    store: &Store,
+    tree: u32,
+    probe: &P,
+    probe_bits: u32,
+    spec: KeySpec,
+) -> RadixIter
+where
+    P: Fn(u32) -> u64,
+{
+    seek_inner(store, tree, probe, probe_bits, spec).0
 }
 
 /// Does `rec` carry exactly this user key?  Lets a caller walk a bucket — the
 /// contiguous run of records sharing one key — from [`rtree_seek`].
 #[must_use]
-pub fn rtree_key_eq<K>(store: &Store, rec: u32, probe: &K, probe_bits: u32, spec: KeySpec) -> bool
+pub fn rtree_key_eq<P>(store: &Store, rec: u32, probe: &P, probe_bits: u32, spec: KeySpec) -> bool
 where
-    K: Fn(u32) -> bool,
+    P: Fn(u32) -> u64,
 {
+    // Equal lengths mean both views zero-pad identically past the key, so whole words
+    // may be compared without masking the tail.
     (spec.bits)(store, rec) == probe_bits
-        && (0..probe_bits).all(|bit| (spec.bit)(store, rec, bit) == probe(bit))
+        && (0..probe_bits.div_ceil(64)).all(|w| (spec.word)(store, rec, w) == probe(w))
 }
 
 /// The first record whose user key equals the probe, or `0` when none does.
 ///
-/// This is the exact lookup [`rtree_find`] deliberately is not.  When several
-/// records share the key, it is the head of that run; walk on with
-/// [`RadixIter::next`] and [`rtree_key_eq`].
+/// This is the exact lookup [`rtree_find`] deliberately is not.  When several records
+/// share the key, it is the head of that run; walk on with [`RadixIter::next`] and
+/// [`rtree_key_eq`].
+///
+/// It re-reads no key bits.  `seek` already found `d`, the first bit at which the probe
+/// left the candidate, and
+///
+/// > the user keys are equal **iff** `d >= probe_bits` and the lengths match.
+///
+/// Both halves carry weight, and neither implies the other.  `d >= probe_bits` says
+/// they agree over the probe's whole length — but a stored key may simply be longer
+/// (`"ab"` against `"abc"` diverges at bit 17, past a 16-bit probe), which only the
+/// length rejects.  And equal lengths alone say nothing about the bits.  The result
+/// holds for `rec`, not just the candidate, because every record in the divergence
+/// subtree agrees below `d` (I2).  No `0x00` assumption is needed.
 #[must_use]
-pub fn rtree_get<K>(store: &Store, tree: u32, probe: &K, probe_bits: u32, spec: KeySpec) -> u32
+pub fn rtree_get<P>(store: &Store, tree: u32, probe: &P, probe_bits: u32, spec: KeySpec) -> u32
 where
-    K: Fn(u32) -> bool,
+    P: Fn(u32) -> u64,
 {
-    let rec = rtree_seek(store, tree, probe, probe_bits, spec).rec();
-    if rec != 0 && rtree_key_eq(store, rec, probe, probe_bits, spec) {
+    let (it, d) = seek_inner(store, tree, probe, probe_bits, spec);
+    let rec = it.rec();
+    if rec == 0 {
+        return 0;
+    }
+    // `d == None` means the strings are identical — unreachable while ids differ.
+    let matched = d.is_none_or(|d| d >= probe_bits);
+    if matched && (spec.bits)(store, rec) == probe_bits {
         rec
     } else {
         0
@@ -601,8 +713,7 @@ fn straight(store: &Store, tree: u32, dir: bool) -> RadixIter {
 /// This cannot fail: distinct records always differ somewhere in the key string,
 /// so there is always a bit to split on.
 pub fn rtree_insert(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> u32 {
-    let len = rtree_len(store, tree);
-    if len == 0 {
+    if rtree_len(store, tree) == 0 {
         set_top(store, tree, Child::Rec(rec));
         store.set_u32_raw(tree, LEN, 1);
         return tree;
@@ -611,17 +722,24 @@ pub fn rtree_insert(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> u3
     // Everything the split needs is read before the tree can move.
     let (d, rec_bit, parent, dir, displaced) = {
         let s: &Store = store;
-        let n_rec = (spec.bits)(s, rec);
-        let ka = key_fn(s, spec, rec, n_rec);
+        let rw = |w: u32| (spec.word)(s, rec, w);
+        let ka = View {
+            word: rw,
+            bits: (spec.bits)(s, rec),
+            id: rec,
+        };
         let (cand, _) = descend(s, tree, &ka);
         if cand == rec {
             return tree;
         }
-        let n_cand = (spec.bits)(s, cand);
-        let kb = key_fn(s, spec, cand, n_cand);
-        let limit = (n_rec + SUFFIX_BITS).max(n_cand + SUFFIX_BITS);
+        let cw = |w: u32| (spec.word)(s, cand, w);
+        let kb = View {
+            word: cw,
+            bits: (spec.bits)(s, cand),
+            id: cand,
+        };
         // Unreachable: two distinct records differ in their id suffix.
-        let Some((d, rec_bit)) = first_diff(&ka, &kb, limit) else {
+        let Some((d, rec_bit)) = first_diff(&ka, &kb) else {
             return tree;
         };
         let (parent, dir) = split_point(s, tree, &ka, d);
@@ -629,22 +747,7 @@ pub fn rtree_insert(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> u3
         (d, rec_bit, parent, dir, displaced)
     };
 
-    let (tree, node) = alloc_node(store, tree);
-    set_node_bit(store, tree, node, d);
-    set_node_parent(store, tree, node, parent);
-    set_child(store, tree, node, rec_bit, Child::Rec(rec));
-    set_child(store, tree, node, !rec_bit, displaced);
-    if let Child::Node(sub) = displaced {
-        set_node_parent(store, tree, sub, node);
-    }
-
-    if parent == 0 {
-        set_top(store, tree, Child::Node(node));
-    } else {
-        set_child(store, tree, parent, dir, Child::Node(node));
-    }
-    store.set_u32_raw(tree, LEN, len + 1);
-    tree
+    link_split(store, tree, rec, d, rec_bit, parent, dir, displaced)
 }
 
 /// Remove `rec`; `false` if it is not present.
@@ -654,32 +757,224 @@ pub fn rtree_insert(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> u3
 pub fn rtree_remove(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> bool {
     let (leaf, parent) = {
         let s: &Store = store;
-        let n = (spec.bits)(s, rec);
-        descend(s, tree, &key_fn(s, spec, rec, n))
+        let rw = |w: u32| (spec.word)(s, rec, w);
+        let key = View {
+            word: rw,
+            bits: (spec.bits)(s, rec),
+            id: rec,
+        };
+        descend(s, tree, &key)
     };
     if leaf != rec {
         return false;
     }
+    unlink(store, tree, rec, parent);
+    true
+}
+
+/// Splice `rec` out from under `parent`, and return the node that survives directly
+/// above the hole — the **finger** a re-insert can descend from.  `0` when there is
+/// none (the tree became empty, or the sibling was promoted to the root).
+fn unlink(store: &mut Store, tree: u32, rec: u32, parent: u32) -> u32 {
     let len = rtree_len(store, tree);
+    store.set_u32_raw(tree, LEN, len - 1);
     if parent == 0 {
         set_top(store, tree, Child::Empty);
-    } else {
-        let grand = node_parent(store, tree, parent);
-        let rec_is_true = child(store, tree, parent, true) == Child::Rec(rec);
-        let sibling = child(store, tree, parent, !rec_is_true);
-        if grand == 0 {
-            set_top(store, tree, sibling);
-        } else {
-            let up_is_true = child(store, tree, grand, true) == Child::Node(parent);
-            set_child(store, tree, grand, up_is_true, sibling);
-        }
-        if let Child::Node(sub) = sibling {
-            set_node_parent(store, tree, sub, grand);
-        }
-        free_node(store, tree, parent);
+        return 0;
     }
-    store.set_u32_raw(tree, LEN, len - 1);
-    true
+    let grand = node_parent(store, tree, parent);
+    let rec_is_true = child(store, tree, parent, true) == Child::Rec(rec);
+    let sibling = child(store, tree, parent, !rec_is_true);
+    if grand == 0 {
+        set_top(store, tree, sibling);
+    } else {
+        let up_is_true = child(store, tree, grand, true) == Child::Node(parent);
+        set_child(store, tree, grand, up_is_true, sibling);
+    }
+    if let Child::Node(sub) = sibling {
+        set_node_parent(store, tree, sub, grand);
+    }
+    free_node(store, tree, parent);
+    grand
+}
+
+/// How far a finger may climb before giving up and descending from the root.
+///
+/// Chosen by measurement, not taste (`probe_finger_savings`).  A drifting object's
+/// new key diverges from its old one deep in the string, so the climb is short and the
+/// finger visits ~4× fewer nodes.  A teleport diverges near the root, the climb runs
+/// the whole way, and an *uncapped* finger is 1.7× **worse** than simply starting over.
+/// At `k = 2` the mixed cost is within 1% of the flat optimum while the teleport
+/// penalty is held to 1.2×.
+const FINGER_CLIMB_CAP: usize = 2;
+
+/// What the read phase decided.
+enum Plan {
+    /// Already present under this key.
+    Noop,
+    /// Split below `parent`/`dir`, putting `rec` on side `rec_bit` of a node at `d`.
+    Split {
+        d: u32,
+        rec_bit: bool,
+        parent: u32,
+        dir: bool,
+    },
+    /// The finger was no use; start from the root.
+    Restart,
+}
+
+/// Re-insert `rec` starting from `finger` instead of the root.
+///
+/// The finger is sound because of I2: every record under a node `A` agrees on all bits
+/// below `bit(A)`.  So if the new key first leaves the leaf below the finger at bit
+/// `d`, then `bit(A) <= d` says exactly that the new key still belongs under `A` —
+/// climb while `bit(A) > d`, and descend from the first `A` that qualifies.
+fn insert_with_finger(store: &mut Store, tree: u32, rec: u32, spec: KeySpec, finger: u32) -> u32 {
+    if rtree_len(store, tree) == 0 || finger == 0 {
+        return rtree_insert(store, tree, rec, spec);
+    }
+    let plan = {
+        let s: &Store = store;
+        let rw = |w: u32| (spec.word)(s, rec, w);
+        let ka = View {
+            word: rw,
+            bits: (spec.bits)(s, rec),
+            id: rec,
+        };
+        let diff_below = |from: u32| -> Option<(u32, bool)> {
+            let (cand, _) = descend_from(s, tree, &ka, from);
+            if cand == rec || cand == 0 {
+                return None;
+            }
+            let cw = |w: u32| (spec.word)(s, cand, w);
+            let kb = View {
+                word: cw,
+                bits: (spec.bits)(s, cand),
+                id: cand,
+            };
+            first_diff(&ka, &kb)
+        };
+
+        match diff_below(finger) {
+            None => Plan::Noop,
+            Some((mut d, mut rec_bit)) => {
+                let mut anchor = finger;
+                if d < node_bit(s, tree, anchor) {
+                    let mut climbed = 0;
+                    while anchor != 0 && node_bit(s, tree, anchor) > d && climbed < FINGER_CLIMB_CAP
+                    {
+                        anchor = node_parent(s, tree, anchor);
+                        climbed += 1;
+                    }
+                    if anchor == 0 || node_bit(s, tree, anchor) > d {
+                        // The new key belongs somewhere far away; the root is cheaper.
+                        Plan::Restart
+                    } else {
+                        match diff_below(anchor) {
+                            None => Plan::Noop,
+                            Some((d2, rb2)) => {
+                                d = d2;
+                                rec_bit = rb2;
+                                let (parent, dir) = split_point_from(s, tree, &ka, d, anchor);
+                                Plan::Split {
+                                    d,
+                                    rec_bit,
+                                    parent,
+                                    dir,
+                                }
+                            }
+                        }
+                    }
+                } else {
+                    let (parent, dir) = split_point_from(s, tree, &ka, d, anchor);
+                    Plan::Split {
+                        d,
+                        rec_bit,
+                        parent,
+                        dir,
+                    }
+                }
+            }
+        }
+    };
+
+    match plan {
+        Plan::Noop => tree,
+        Plan::Restart => rtree_insert(store, tree, rec, spec),
+        Plan::Split {
+            d,
+            rec_bit,
+            parent,
+            dir,
+        } => {
+            let displaced = subtree_below(store, tree, parent, dir);
+            link_split(store, tree, rec, d, rec_bit, parent, dir, displaced)
+        }
+    }
+}
+
+/// Hang a fresh node testing bit `d` in the slot `(parent, dir)`, with `rec` on side
+/// `rec_bit` and the displaced subtree opposite.  Returns the (possibly moved) tree.
+#[allow(clippy::too_many_arguments)] // the split is one act; splitting it hides the wiring
+fn link_split(
+    store: &mut Store,
+    tree: u32,
+    rec: u32,
+    d: u32,
+    rec_bit: bool,
+    parent: u32,
+    dir: bool,
+    displaced: Child,
+) -> u32 {
+    let len = rtree_len(store, tree);
+    let (tree, node) = alloc_node(store, tree);
+    set_node_bit(store, tree, node, d);
+    set_node_parent(store, tree, node, parent);
+    set_child(store, tree, node, rec_bit, Child::Rec(rec));
+    set_child(store, tree, node, !rec_bit, displaced);
+    if let Child::Node(sub) = displaced {
+        set_node_parent(store, tree, sub, node);
+    }
+    if parent == 0 {
+        set_top(store, tree, Child::Node(node));
+    } else {
+        set_child(store, tree, parent, dir, Child::Node(node));
+    }
+    store.set_u32_raw(tree, LEN, len + 1);
+    tree
+}
+
+/// Move `rec`: unlink it, let `mutate` rewrite the fields its key is built from, then
+/// re-insert from the finger the unlink left behind.
+///
+/// This is the operation a game loop actually performs — an entity's coordinates
+/// change, so its Morton key changes, so the index must be updated.  Because the entity
+/// has *not* moved far, its new key shares a long prefix with the old one and the
+/// re-insert starts near where it ended up rather than at the root.
+///
+/// The key must not be read from anywhere but the record, and `mutate` must not touch
+/// the tree.
+pub fn rtree_move<F>(store: &mut Store, tree: u32, rec: u32, spec: KeySpec, mutate: F) -> u32
+where
+    F: FnOnce(&mut Store),
+{
+    let (leaf, parent) = {
+        let s: &Store = store;
+        let rw = |w: u32| (spec.word)(s, rec, w);
+        let key = View {
+            word: rw,
+            bits: (spec.bits)(s, rec),
+            id: rec,
+        };
+        descend(s, tree, &key)
+    };
+    let finger = if leaf == rec {
+        unlink(store, tree, rec, parent)
+    } else {
+        0
+    };
+    mutate(store);
+    insert_with_finger(store, tree, rec, spec, finger)
 }
 
 // ---------------------------------------------------------------------------
@@ -733,9 +1028,15 @@ pub fn rtree_validate(store: &Store, tree: u32, spec: KeySpec) {
                 }
                 Child::Rec(r) => {
                     self.leaves += 1;
+                    let rw = |w: u32| (self.spec.word)(self.store, r, w);
+                    let key = View {
+                        word: rw,
+                        bits: (self.spec.bits)(self.store, r),
+                        id: r,
+                    };
                     for &(bit, dir) in &self.constraints {
                         assert_eq!(
-                            full(self.store, self.spec, r, bit),
+                            key.bit(bit),
                             dir,
                             "record {r} sits on the {dir} side of bit {bit}, its key disagrees"
                         );
@@ -767,10 +1068,26 @@ pub fn rtree_validate(store: &Store, tree: u32, spec: KeySpec) {
                     // I2: the bits this node skipped are common to the whole subtree,
                     // so they never needed storing.
                     let from = parent_bit.map_or(0, |pb| pb + 1);
+                    let (lw, hw) = (
+                        |w: u32| (self.spec.word)(self.store, lo, w),
+                        |w: u32| (self.spec.word)(self.store, hi, w),
+                    );
+                    let (lk, hk) = (
+                        View {
+                            word: &lw,
+                            bits: (self.spec.bits)(self.store, lo),
+                            id: lo,
+                        },
+                        View {
+                            word: &hw,
+                            bits: (self.spec.bits)(self.store, hi),
+                            id: hi,
+                        },
+                    );
                     for b in from..bit {
                         assert_eq!(
-                            full(self.store, self.spec, lo, b),
-                            full(self.store, self.spec, hi, b),
+                            lk.bit(b),
+                            hk.bit(b),
                             "I2: node {n} skips bit {b} on its way to bit {bit}, \
                              but records {lo} and {hi} below it disagree there"
                         );
@@ -821,8 +1138,12 @@ mod tests {
 
     // ---- fixed-width oracle: a `u32` code at `fld 4` -----------------------
 
-    fn code_bit(store: &Store, rec: u32, bit: u32) -> bool {
-        (store.get_u32_raw(rec, 4) >> (31 - bit)) & 1 == 1
+    fn code_word(store: &Store, rec: u32, word: u32) -> u64 {
+        if word == 0 {
+            u64::from(store.get_u32_raw(rec, 4)) << 32
+        } else {
+            0
+        }
     }
 
     fn code_bits(_store: &Store, _rec: u32) -> u32 {
@@ -830,7 +1151,7 @@ mod tests {
     }
 
     const CODE: KeySpec = KeySpec {
-        bit: code_bit,
+        word: code_word,
         bits: code_bits,
     };
 
@@ -839,8 +1160,8 @@ mod tests {
         (u64::from(code) << 32) | u64::from(rec)
     }
 
-    fn code_probe(code: u32) -> impl Fn(u32) -> bool {
-        move |bit| (code >> (31 - bit)) & 1 == 1
+    fn code_probe(code: u32) -> impl Fn(u32) -> u64 {
+        move |word| if word == 0 { u64::from(code) << 32 } else { 0 }
     }
 
     fn add(store: &mut Store, code: u32) -> u32 {
@@ -879,97 +1200,112 @@ mod tests {
     // the same keys — the structure a loft user would otherwise reach for via
     // `sorted<T[k]>`.  The ratio is what travels.
 
+    #[allow(clippy::cast_precision_loss)] // counts here are ≤ 10^6
     fn per_op(d: std::time::Duration, n: usize) -> f64 {
         d.as_secs_f64() * 1e9 / n as f64
     }
 
     fn row(name: &str, radix: f64, btree: f64) {
-        println!("  {name:<22} {radix:>9.1} {btree:>11.1} {:>8.2}x", radix / btree);
+        println!(
+            "  {name:<22} {radix:>9.1} {btree:>11.1} {:>8.2}x",
+            radix / btree
+        );
     }
 
     /// Bulk behaviour at 100k records, against a `BTreeMap` baseline.
+    ///
+    /// **Best of 3 warm rounds**, as `PERFORMANCE.md` does: a single round swings by
+    /// ~20% run to run — enough to invent or hide a 1.2× effect — so one round's
+    /// numbers are not quotable.  Each round rebuilds from a fresh store.
     #[test]
     #[ignore = "benchmark — run with --release --ignored --nocapture"]
     fn bench_vs_btreemap() {
         use std::time::Instant;
         const N: usize = 100_000;
+        const ROUNDS: usize = 3;
 
-        let mut store = Store::new_in_use(1 << 16);
-        let mut tree = rtree_init(&mut store, 0);
-        let mut seed = 0x9e37_79b9_7f4a_7c15;
+        // [insert, get, walk, remove] for radix, then the same for BTreeMap.
+        let mut best = [f64::MAX; 8];
+        for _ in 0..ROUNDS {
+            let mut store = Store::new_in_use(1 << 16);
+            let mut tree = rtree_init(&mut store, 0);
+            let mut seed = 0x9e37_79b9_7f4a_7c15;
 
-        // Records exist before timing, so the store allocator is not in the insert cost.
-        let codes: Vec<u32> = (0..N).map(|_| lcg(&mut seed)).collect();
-        let recs: Vec<u32> = codes.iter().map(|&c| add(&mut store, c)).collect();
+            // Records exist before timing: the store allocator is not in the insert cost.
+            let codes: Vec<u32> = (0..N).map(|_| lcg(&mut seed)).collect();
+            let recs: Vec<u32> = codes.iter().map(|&c| add(&mut store, c)).collect();
 
-        let t = Instant::now();
-        for &r in &recs {
-            tree = rtree_insert(&mut store, tree, r, CODE);
+            let t = Instant::now();
+            for &r in &recs {
+                tree = rtree_insert(&mut store, tree, r, CODE);
+            }
+            best[0] = best[0].min(per_op(t.elapsed(), N));
+
+            let t = Instant::now();
+            let mut hits = 0u64;
+            for &c in &codes {
+                hits += u64::from(rtree_get(&store, tree, &code_probe(c), 32, CODE) != 0);
+            }
+            best[1] = best[1].min(per_op(t.elapsed(), N));
+            assert_eq!(hits as usize, N, "every key must be found");
+
+            let t = Instant::now();
+            let walked = collect(&store, tree).len();
+            best[2] = best[2].min(per_op(t.elapsed(), N));
+            assert_eq!(walked, N);
+
+            let t = Instant::now();
+            for &r in &recs {
+                rtree_remove(&mut store, tree, r, CODE);
+            }
+            best[3] = best[3].min(per_op(t.elapsed(), N));
+
+            let mut bt = BTreeMap::new();
+            let t = Instant::now();
+            for (i, &r) in recs.iter().enumerate() {
+                bt.insert(ordered_key(codes[i], r), r);
+            }
+            best[4] = best[4].min(per_op(t.elapsed(), N));
+
+            let t = Instant::now();
+            let mut hits = 0u64;
+            for (i, &c) in codes.iter().enumerate() {
+                hits += u64::from(bt.contains_key(&ordered_key(c, recs[i])));
+            }
+            best[5] = best[5].min(per_op(t.elapsed(), N));
+            assert_eq!(hits as usize, N);
+
+            let t = Instant::now();
+            let walked = bt.values().count();
+            best[6] = best[6].min(per_op(t.elapsed(), N));
+            assert_eq!(walked, N);
+
+            let t = Instant::now();
+            for (i, &r) in recs.iter().enumerate() {
+                bt.remove(&ordered_key(codes[i], r));
+            }
+            best[7] = best[7].min(per_op(t.elapsed(), N));
         }
-        let ins_r = per_op(t.elapsed(), N);
 
-        let mut bt = BTreeMap::new();
-        let t = Instant::now();
-        for (i, &r) in recs.iter().enumerate() {
-            bt.insert(ordered_key(codes[i], r), r);
-        }
-        let ins_b = per_op(t.elapsed(), N);
-
-        let t = Instant::now();
-        let mut hits = 0u64;
-        for &c in &codes {
-            hits += u64::from(rtree_get(&store, tree, &code_probe(c), 32, CODE) != 0);
-        }
-        let get_r = per_op(t.elapsed(), N);
-        assert_eq!(hits as usize, N, "every key must be found");
-
-        let t = Instant::now();
-        let mut hits = 0u64;
-        for (i, &c) in codes.iter().enumerate() {
-            hits += u64::from(bt.contains_key(&ordered_key(c, recs[i])));
-        }
-        let get_b = per_op(t.elapsed(), N);
-        assert_eq!(hits as usize, N);
-
-        let t = Instant::now();
-        let walked = collect(&store, tree).len();
-        let walk_r = per_op(t.elapsed(), N);
-        assert_eq!(walked, N);
-
-        let t = Instant::now();
-        let walked = bt.values().count();
-        let walk_b = per_op(t.elapsed(), N);
-        assert_eq!(walked, N);
-
-        let t = Instant::now();
-        for &r in &recs {
-            rtree_remove(&mut store, tree, r, CODE);
-        }
-        let del_r = per_op(t.elapsed(), N);
-
-        let t = Instant::now();
-        for (i, &r) in recs.iter().enumerate() {
-            bt.remove(&ordered_key(codes[i], r));
-        }
-        let del_b = per_op(t.elapsed(), N);
-
-        println!("\nradix_tree vs BTreeMap, n = {N}, ns/op (lower is better)");
-        println!("  {:<22} {:>9} {:>11} {:>8}", "op", "radix", "BTreeMap", "ratio");
-        row("insert", ins_r, ins_b);
-        row("get (exact)", get_r, get_b);
-        row("walk (in-order)", walk_r, walk_b);
-        row("remove", del_r, del_b);
+        println!("\nradix_tree vs BTreeMap, n = {N}, best of {ROUNDS}, ns/op (lower is better)");
         println!(
-            "\n  tree nodes: {}, node bytes: {}, bytes/record: {:.1}",
-            store.get_u32_raw(tree, NODES),
-            NODE_SIZE,
-            f64::from(store.get_u32_raw(tree, NODES) * NODE_SIZE) / N as f64
+            "  {:<22} {:>9} {:>11} {:>8}",
+            "op", "radix", "BTreeMap", "ratio"
         );
+        for (i, name) in ["insert", "get (exact)", "walk (in-order)", "remove"]
+            .iter()
+            .enumerate()
+        {
+            row(name, best[i], best[i + 4]);
+        }
+        println!("\n  node bytes: {NODE_SIZE} — one node per record beyond the first");
     }
 
     /// @PLN48's real workload: a per-chunk index of a few hundred entities, every one
     /// of which moves each frame (remove + reinsert), followed by a proximity query
     /// that walks outward from a point.  This is the number that decides S4.
+    ///
+    /// Best of 3 warm rounds, for the same reason as [`bench_vs_btreemap`].
     #[test]
     #[ignore = "benchmark — run with --release --ignored --nocapture"]
     fn bench_move_and_proximity() {
@@ -977,49 +1313,56 @@ mod tests {
         const ENTITIES: usize = 512;
         const FRAMES: usize = 2_000;
         const NEIGHBOURS: usize = 8;
+        const ROUNDS: usize = 3;
 
-        let mut store = Store::new_in_use(1 << 12);
-        let mut tree = rtree_init(&mut store, 0);
-        let mut seed = 0xdead_beef_cafe_f00d;
-        let recs: Vec<u32> = (0..ENTITIES).map(|_| add(&mut store, lcg(&mut seed))).collect();
-        for &r in &recs {
-            tree = rtree_insert(&mut store, tree, r, CODE);
-        }
-
-        // Move every entity, every frame.
-        let t = Instant::now();
-        for _ in 0..FRAMES {
+        let (mut best_move, mut best_query) = (f64::MAX, f64::MAX);
+        for _ in 0..ROUNDS {
+            let mut store = Store::new_in_use(1 << 12);
+            let mut tree = rtree_init(&mut store, 0);
+            let mut seed = 0xdead_beef_cafe_f00d;
+            let recs: Vec<u32> = (0..ENTITIES)
+                .map(|_| add(&mut store, lcg(&mut seed)))
+                .collect();
             for &r in &recs {
-                rtree_remove(&mut store, tree, r, CODE);
-                store.set_u32_raw(r, 4, lcg(&mut seed));
                 tree = rtree_insert(&mut store, tree, r, CODE);
             }
-        }
-        let moves = FRAMES * ENTITIES;
-        let move_ns = per_op(t.elapsed(), moves);
 
-        // Proximity: seed two cursors from one seek and walk outward.  `RadixIter` is
-        // `Copy`, so the second cursor costs no allocation.
-        let t = Instant::now();
-        let mut seen = 0u64;
-        for _ in 0..FRAMES {
-            let probe = code_probe(lcg(&mut seed));
-            let succ = rtree_seek(&store, tree, &probe, 32, CODE);
-            let mut pred = succ; // Copy
-            let mut fwd = succ;
-            for _ in 0..NEIGHBOURS {
-                seen += u64::from(pred.prev(&store, tree).unwrap_or(0) != 0);
-                seen += u64::from(fwd.next(&store, tree).unwrap_or(0) != 0);
+            // Every entity moves, every frame.
+            let t = Instant::now();
+            for _ in 0..FRAMES {
+                for &r in &recs {
+                    rtree_remove(&mut store, tree, r, CODE);
+                    store.set_u32_raw(r, 4, lcg(&mut seed));
+                    tree = rtree_insert(&mut store, tree, r, CODE);
+                }
             }
-        }
-        let query_ns = per_op(t.elapsed(), FRAMES);
-        assert!(seen > 0, "the outward walk must find neighbours");
+            best_move = best_move.min(per_op(t.elapsed(), FRAMES * ENTITIES));
 
-        rtree_validate(&store, tree, CODE);
-        println!("\n@PLN48 workload — {ENTITIES} entities, {FRAMES} frames");
-        println!("  move (remove+insert) : {move_ns:>8.1} ns   ({moves} moves)");
-        println!("  proximity query      : {query_ns:>8.1} ns   (seek + {NEIGHBOURS} each way)");
-        println!("  per-frame cost       : {:>8.1} us", (move_ns * ENTITIES as f64 + query_ns) / 1000.0);
+            // Proximity: one seek seeds two cursors that walk outward.  `RadixIter` is
+            // `Copy`, so the second cursor costs no allocation.
+            let t = Instant::now();
+            let mut found = 0u64;
+            for _ in 0..FRAMES {
+                let probe = code_probe(lcg(&mut seed));
+                let start = rtree_seek(&store, tree, &probe, 32, CODE);
+                let (mut back, mut fore) = (start, start);
+                for _ in 0..NEIGHBOURS {
+                    found += u64::from(back.prev(&store, tree).unwrap_or(0) != 0);
+                    found += u64::from(fore.next(&store, tree).unwrap_or(0) != 0);
+                }
+            }
+            best_query = best_query.min(per_op(t.elapsed(), FRAMES));
+            assert!(found > 0, "the outward walk must find neighbours");
+            rtree_validate(&store, tree, CODE);
+        }
+
+        println!("\n@PLN48 workload — {ENTITIES} entities, {FRAMES} frames, best of {ROUNDS}");
+        println!("  move (remove+insert) : {best_move:>8.1} ns");
+        println!("  proximity query      : {best_query:>8.1} ns   (seek + {NEIGHBOURS} each way)");
+        println!(
+            "  per-frame cost       : {:>8.1} us",
+            best_move.mul_add(f64::from(u32::try_from(ENTITIES).unwrap()), best_query) / 1000.0
+        );
     }
 
     /// R0 — a cursor is three words.  A `Vec` is 24 bytes, so this is a standing
@@ -1165,6 +1508,44 @@ mod tests {
             r = it.next(&store, tree).unwrap_or(0);
         }
         assert_eq!(bucket, sorted, "the bucket is a contiguous run");
+    }
+
+    /// R2e — `rtree_get`'s shortcut must reject a probe that merely *shares a prefix*.
+    ///
+    /// `get` no longer re-scans the key: it trusts `d`, the bit at which `seek` saw the
+    /// probe leave the candidate.  The two ways that could go wrong are a probe that is
+    /// a proper prefix of a stored key, and a probe that properly extends one — in both
+    /// cases `d` lands inside the user key, well below `probe_bits + TERM_BITS`.
+    #[test]
+    fn r2e_get_rejects_prefixes_and_extensions() {
+        let mut store = Store::new_in_use(64);
+        let mut tree = rtree_init(&mut store, 0);
+        for w in ["abc", "abd", "abf", "zz"] {
+            let r = add_text(&mut store, w);
+            tree = rtree_insert(&mut store, tree, r, TEXT);
+        }
+        // "ab" is a proper prefix of a stored key, and is not itself stored.
+        assert_eq!(rtree_get(&store, tree, &text_probe("ab"), 16, TEXT), 0);
+        // "abcd" properly extends a stored key, and is not itself stored.
+        assert_eq!(rtree_get(&store, tree, &text_probe("abcd"), 32, TEXT), 0);
+        // "a" shares only one byte.
+        assert_eq!(rtree_get(&store, tree, &text_probe("a"), 8, TEXT), 0);
+        // "abe" sorts between "abd" and "abf", so `seek` lands on "abf" — the SAME
+        // length as the probe.  The length check cannot reject it; only `d >= probe_bits`
+        // can.  This is the witness for that half of the condition.
+        assert_eq!(rtree_get(&store, tree, &text_probe("abe"), 24, TEXT), 0);
+        // But the exact keys are found.
+        for w in ["abc", "abd", "abf", "zz"] {
+            let bits = w.len() as u32 * 8;
+            assert_ne!(
+                rtree_get(&store, tree, &text_probe(w), bits, TEXT),
+                0,
+                "{w}"
+            );
+        }
+        // And `seek("ab")` still lands on the first key bearing that prefix.
+        let it = rtree_seek(&store, tree, &text_probe("ab"), 16, TEXT);
+        assert!(rtree_key_eq(&store, it.rec(), &text_probe("abc"), 24, TEXT));
     }
 
     /// R3 — I1 and I2 hold after every one of a thousand inserts.
@@ -1335,11 +1716,592 @@ mod tests {
         );
     }
 
+    // ---- 2D Morton (Z-order) oracle: x at `fld 4`, y at `fld 8` -------------
+    //
+    // The @PLN48 key.  `bits` is 64, so a whole code is one word: the tree never
+    // materialises it, yet `first_diff` compares it with a single XOR.
+
+    /// Spread the 32 bits of `v` into the even bit positions of a `u64`.
+    fn spread(v: u32) -> u64 {
+        let mut x = u64::from(v);
+        x = (x | (x << 16)) & 0x0000_ffff_0000_ffff;
+        x = (x | (x << 8)) & 0x00ff_00ff_00ff_00ff;
+        x = (x | (x << 4)) & 0x0f0f_0f0f_0f0f_0f0f;
+        x = (x | (x << 2)) & 0x3333_3333_3333_3333;
+        x = (x | (x << 1)) & 0x5555_5555_5555_5555;
+        x
+    }
+
+    /// Interleave x (even bits) with y (odd bits) — the Z-order curve.
+    fn morton(x: u32, y: u32) -> u64 {
+        spread(x) | (spread(y) << 1)
+    }
+
+    fn xy_word(store: &Store, rec: u32, word: u32) -> u64 {
+        if word == 0 {
+            morton(store.get_u32_raw(rec, 4), store.get_u32_raw(rec, 8))
+        } else {
+            0
+        }
+    }
+
+    fn xy_bits(_store: &Store, _rec: u32) -> u32 {
+        64
+    }
+
+    const XY: KeySpec = KeySpec {
+        word: xy_word,
+        bits: xy_bits,
+    };
+
+    fn morton_probe(code: u64) -> impl Fn(u32) -> u64 {
+        move |word| if word == 0 { code } else { 0 }
+    }
+
+    fn add_xy(store: &mut Store, x: u32, y: u32) -> u32 {
+        let rec = store.claim(2);
+        store.set_u32_raw(rec, 4, x);
+        store.set_u32_raw(rec, 8, y);
+        rec
+    }
+
+    fn pos(store: &Store, rec: u32) -> (u32, u32) {
+        (store.get_u32_raw(rec, 4), store.get_u32_raw(rec, 8))
+    }
+
+    fn code_of(store: &Store, rec: u32) -> u64 {
+        let (x, y) = pos(store, rec);
+        morton(x, y)
+    }
+
+    fn dist2(a: (u32, u32), b: (u32, u32)) -> i64 {
+        let dx = i64::from(a.0) - i64::from(b.0);
+        let dy = i64::from(a.1) - i64::from(b.1);
+        dx * dx + dy * dy
+    }
+
+    /// Move an object.  The key is derived from the coordinates, so the index must be
+    /// updated: remove under the old key, write, reinsert under the new one.
+    fn move_to(store: &mut Store, tree: u32, rec: u32, x: u32, y: u32) -> u32 {
+        assert!(rtree_remove(store, tree, rec, XY), "object was not indexed");
+        store.set_u32_raw(rec, 4, x);
+        store.set_u32_raw(rec, 8, y);
+        rtree_insert(store, tree, rec, XY)
+    }
+
+    /// A small drift, clamped to the grid — how a real entity moves.
+    fn drift(seed: &mut u64, p: (u32, u32), grid: u32) -> (u32, u32) {
+        let step = |v: u32, s: &mut u64| {
+            let d = i64::from(lcg(s) % 5) - 2; // -2 ..= +2
+            (i64::from(v) + d).clamp(0, i64::from(grid) - 1) as u32
+        };
+        (step(p.0, seed), step(p.1, seed))
+    }
+
+    /// M1 — objects move through space, and the index reorders them.
+    ///
+    /// The reordering is the point.  The test asserts it actually happened (otherwise
+    /// it would pass vacuously against a structure that ignored coordinates), and that
+    /// after *every* move the walk still equals a fresh brute-force sort by
+    /// `(morton, rec)`.
+    #[test]
+    fn m1_moving_objects_reorder_in_the_index() {
+        const OBJECTS: usize = 200;
+        const MOVES: usize = 300;
+        const GRID: u32 = 256;
+
+        let mut store = Store::new_in_use(1 << 14);
+        let mut tree = rtree_init(&mut store, 0);
+        let mut seed = 0x51ed_0011_2233_4455;
+        let mut objs = Vec::new();
+        for _ in 0..OBJECTS {
+            let (x, y) = (lcg(&mut seed) % GRID, lcg(&mut seed) % GRID);
+            let r = add_xy(&mut store, x, y);
+            objs.push(r);
+            tree = rtree_insert(&mut store, tree, r, XY);
+        }
+        rtree_validate(&store, tree, XY);
+
+        let sorted = |store: &Store, objs: &[u32]| {
+            let mut v: Vec<u32> = objs.to_vec();
+            v.sort_by_key(|&r| (code_of(store, r), r));
+            v
+        };
+        assert_eq!(collect(&store, tree), sorted(&store, &objs));
+
+        let mut reorderings = 0;
+        for i in 0..MOVES {
+            let before = collect(&store, tree);
+            let who = objs[(lcg(&mut seed) as usize) % OBJECTS];
+            // Half the moves drift, half teleport — both must hold.
+            let (x, y) = if i % 2 == 0 {
+                drift(&mut seed, pos(&store, who), GRID)
+            } else {
+                (lcg(&mut seed) % GRID, lcg(&mut seed) % GRID)
+            };
+            tree = move_to(&mut store, tree, who, x, y);
+
+            rtree_validate(&store, tree, XY);
+            let after = collect(&store, tree);
+            assert_eq!(after.len(), OBJECTS, "no object lost or duplicated");
+            assert_eq!(
+                after,
+                sorted(&store, &objs),
+                "walk must track the coordinates"
+            );
+            if before != after {
+                reorderings += 1;
+            }
+        }
+        assert!(
+            reorderings > MOVES / 4,
+            "moves must really reorder the index ({reorderings} of {MOVES})"
+        );
+    }
+
+    /// Every object whose position lies in the axis-aligned box, found by scanning the
+    /// Morton interval between the box's two corners and filtering.
+    ///
+    /// This is exact — no false negatives — and the reason is a property of Z-order:
+    /// interleaving is monotone per axis, so `x0<=x<=x1` and `y0<=y<=y1` imply
+    /// `morton(x0,y0) <= morton(x,y) <= morton(x1,y1)`.  Every point of the box is
+    /// therefore inside the code interval.  The interval also contains points *outside*
+    /// the box (Z-order leaves the box and comes back), which the filter drops.
+    fn box_query(store: &Store, tree: u32, lo: (u32, u32), hi: (u32, u32)) -> Vec<u32> {
+        let (lo_code, hi_code) = (morton(lo.0, lo.1), morton(hi.0, hi.1));
+        let probe = morton_probe(lo_code);
+        let mut it = rtree_seek(store, tree, &probe, 64, XY);
+        let mut out = Vec::new();
+        let mut r = it.rec();
+        while r != 0 {
+            if code_of(store, r) > hi_code {
+                break;
+            }
+            let (x, y) = pos(store, r);
+            if x >= lo.0 && x <= hi.0 && y >= lo.1 && y <= hi.1 {
+                out.push(r);
+            }
+            r = it.next(store, tree).unwrap_or(0);
+        }
+        out.sort_unstable();
+        out
+    }
+
+    /// M2 — iterate from a position: an exact neighbourhood query over moving objects.
+    ///
+    /// Also pins the caveat @PLN48 warns about.  A raw walk outward from the query
+    /// point's own code visits objects in **Morton** order, which is *not* distance
+    /// order — Z-order jumps at quadrant boundaries.  The test asserts both: the box
+    /// scan is exact, and the raw ±k walk really does miss true neighbours, so `near`
+    /// can never be built on it alone.
+    #[test]
+    fn m2_query_from_a_position_is_exact_while_the_raw_walk_is_not() {
+        const OBJECTS: usize = 400;
+        const GRID: u32 = 256;
+        const RADIUS: u32 = 12;
+        const NEIGHBOURS: usize = 8;
+
+        let mut store = Store::new_in_use(1 << 14);
+        let mut tree = rtree_init(&mut store, 0);
+        let mut seed = 0xbeef_2468_1357_9bdf;
+        let mut objs = Vec::new();
+        for _ in 0..OBJECTS {
+            let (x, y) = (lcg(&mut seed) % GRID, lcg(&mut seed) % GRID);
+            let r = add_xy(&mut store, x, y);
+            objs.push(r);
+            tree = rtree_insert(&mut store, tree, r, XY);
+        }
+        // Let everything drift a while, so the index has been churned.
+        for _ in 0..500 {
+            let who = objs[(lcg(&mut seed) as usize) % OBJECTS];
+            let (x, y) = drift(&mut seed, pos(&store, who), GRID);
+            tree = move_to(&mut store, tree, who, x, y);
+        }
+        rtree_validate(&store, tree, XY);
+
+        let mut raw_walk_missed = 0;
+        for _ in 0..200 {
+            let q = (lcg(&mut seed) % GRID, lcg(&mut seed) % GRID);
+            let lo = (q.0.saturating_sub(RADIUS), q.1.saturating_sub(RADIUS));
+            let hi = ((q.0 + RADIUS).min(GRID - 1), (q.1 + RADIUS).min(GRID - 1));
+
+            // Exact: box scan over the Morton interval.
+            let got = box_query(&store, tree, lo, hi);
+            let mut want: Vec<u32> = objs
+                .iter()
+                .copied()
+                .filter(|&r| {
+                    let (x, y) = pos(&store, r);
+                    x >= lo.0 && x <= hi.0 && y >= lo.1 && y <= hi.1
+                })
+                .collect();
+            want.sort_unstable();
+            assert_eq!(got, want, "box query at {q:?} must match brute force");
+
+            // Approximate: the raw ±k Morton walk from the query point's own code.
+            let probe = morton_probe(morton(q.0, q.1));
+            let start = rtree_seek(&store, tree, &probe, 64, XY);
+            let (mut back, mut fore) = (start, start);
+            let mut found = vec![];
+            if start.rec() != 0 {
+                found.push(start.rec());
+            }
+            for _ in 0..NEIGHBOURS {
+                if let Some(r) = back.prev(&store, tree) {
+                    found.push(r);
+                }
+                if let Some(r) = fore.next(&store, tree) {
+                    found.push(r);
+                }
+            }
+            // The true nearest object, by brute force.
+            let nearest = objs
+                .iter()
+                .copied()
+                .min_by_key(|&r| dist2(pos(&store, r), q))
+                .unwrap();
+            if !found.contains(&nearest) {
+                raw_walk_missed += 1;
+            }
+        }
+        assert!(
+            raw_walk_missed > 0,
+            "a raw Morton walk is supposed to miss true neighbours — if it never does, \
+             the test grid is too small to exhibit a Z-order discontinuity"
+        );
+        println!(
+            "raw ±{NEIGHBOURS} Morton walk missed the true nearest in {raw_walk_missed}/200 queries"
+        );
+    }
+
+    /// M3 — `rtree_move` must build **exactly** the tree that remove-then-insert builds.
+    ///
+    /// A PATRICIA shape is uniquely determined by its key set, so two trees over the
+    /// same records must walk identically.  Both are maintained over the *same* records
+    /// through the same move sequence — one by the plain path, one by the finger — and
+    /// compared after every single move.  Drifts and teleports are interleaved, so the
+    /// climb, the cap, and the root-restart fallback are all exercised.
+    #[test]
+    fn m3_finger_move_matches_remove_then_insert() {
+        const OBJECTS: usize = 200;
+        const MOVES: usize = 400;
+        const GRID: u32 = 256;
+
+        let mut store = Store::new_in_use(1 << 15);
+        let mut plain = rtree_init(&mut store, 0);
+        let mut finger = rtree_init(&mut store, 0);
+        let mut seed = 0x0f1e_2d3c_4b5a_6978;
+
+        let mut objs = Vec::new();
+        for _ in 0..OBJECTS {
+            let (x, y) = (lcg(&mut seed) % GRID, lcg(&mut seed) % GRID);
+            let r = add_xy(&mut store, x, y);
+            objs.push(r);
+            plain = rtree_insert(&mut store, plain, r, XY);
+            finger = rtree_insert(&mut store, finger, r, XY);
+        }
+        assert_eq!(collect(&store, plain), collect(&store, finger));
+
+        let mut teleports = 0;
+        for i in 0..MOVES {
+            let who = objs[(lcg(&mut seed) as usize) % OBJECTS];
+            let teleport = i % 3 == 0;
+            let (x, y) = if teleport {
+                teleports += 1;
+                (lcg(&mut seed) % GRID, lcg(&mut seed) % GRID)
+            } else {
+                drift(&mut seed, pos(&store, who), GRID)
+            };
+
+            // Plain tree: unlink under the OLD key, before the coordinates change.
+            assert!(rtree_remove(&mut store, plain, who, XY));
+            // Finger tree: unlink, mutate, re-insert from the finger.
+            finger = rtree_move(&mut store, finger, who, XY, |s| {
+                s.set_u32_raw(who, 4, x);
+                s.set_u32_raw(who, 8, y);
+            });
+            // Plain tree: re-insert under the NEW key, from the root.
+            plain = rtree_insert(&mut store, plain, who, XY);
+
+            rtree_validate(&store, plain, XY);
+            rtree_validate(&store, finger, XY);
+            assert_eq!(
+                collect(&store, plain),
+                collect(&store, finger),
+                "finger move diverged from remove+insert at move {i}"
+            );
+            assert_eq!(
+                rtree_len(&store, plain),
+                rtree_len(&store, finger),
+                "length diverged at move {i}"
+            );
+        }
+        assert!(teleports > 0, "the fallback path must be exercised");
+    }
+
+    /// BENCH — the game move: plain remove+insert against the finger, for a drifting
+    /// entity and for a teleporting one.
+    ///
+    /// Run: `cargo test --release --lib radix_tree::tests::bench_move_finger -- --ignored --nocapture`
+    #[test]
+    #[ignore = "benchmark — run with --release --ignored --nocapture"]
+    fn bench_move_finger() {
+        use std::time::Instant;
+        const OBJECTS: usize = 512;
+        const FRAMES: usize = 400;
+        const GRID: u32 = 1024;
+        const ROUNDS: usize = 3;
+        const CELL: u32 = 3; // quantize to 8×8 cells
+
+        let build = |store: &mut Store, seed: &mut u64| {
+            let mut tree = rtree_init(store, 0);
+            let objs: Vec<u32> = (0..OBJECTS)
+                .map(|_| add_xy(store, lcg(seed) % GRID, lcg(seed) % GRID))
+                .collect();
+            for &r in &objs {
+                tree = rtree_insert(store, tree, r, XY);
+            }
+            (tree, objs)
+        };
+
+        println!("\n@PLN48 game move — {OBJECTS} entities, {FRAMES} frames, best of {ROUNDS}");
+        println!(
+            "  {:<10} {:>12} {:>12} {:>9}",
+            "motion", "remove+ins", "rtree_move", "speedup"
+        );
+
+        for &teleport in &[false, true] {
+            let (mut best_plain, mut best_finger) = (f64::MAX, f64::MAX);
+            for _ in 0..ROUNDS {
+                for &use_finger in &[false, true] {
+                    let mut store = Store::new_in_use(1 << 15);
+                    let mut seed = 0xa1b2_c3d4_e5f6_0718;
+                    let (mut tree, objs) = build(&mut store, &mut seed);
+
+                    let t = Instant::now();
+                    for _ in 0..FRAMES {
+                        for &r in &objs {
+                            let (x, y) = if teleport {
+                                (lcg(&mut seed) % GRID, lcg(&mut seed) % GRID)
+                            } else {
+                                drift(&mut seed, pos(&store, r), GRID)
+                            };
+                            if use_finger {
+                                tree = rtree_move(&mut store, tree, r, XY, |s| {
+                                    s.set_u32_raw(r, 4, x);
+                                    s.set_u32_raw(r, 8, y);
+                                });
+                            } else {
+                                tree = move_to(&mut store, tree, r, x, y);
+                            }
+                        }
+                    }
+                    let ns = per_op(t.elapsed(), FRAMES * OBJECTS);
+                    if use_finger {
+                        best_finger = best_finger.min(ns);
+                    } else {
+                        best_plain = best_plain.min(ns);
+                    }
+                    rtree_validate(&store, tree, XY);
+                }
+            }
+            let label = if teleport { "teleport" } else { "drift ±2" };
+            println!(
+                "  {label:<10} {best_plain:>9.1} ns {best_finger:>9.1} ns {:>8.2}x",
+                best_plain / best_finger
+            );
+        }
+
+        // The biggest lever is not in the tree at all: quantize the key to a cell, and
+        // most drifts do not change it, so the index needs no update whatsoever.
+        let mut store = Store::new_in_use(1 << 15);
+        let mut seed = 0xa1b2_c3d4_e5f6_0718;
+        let (_tree, objs) = build(&mut store, &mut seed);
+        let (mut changed_raw, mut changed_cell, mut total) = (0u64, 0u64, 0u64);
+        for _ in 0..FRAMES {
+            for &r in &objs {
+                let old = pos(&store, r);
+                let new = drift(&mut seed, old, GRID);
+                total += 1;
+                changed_raw += u64::from(morton(old.0, old.1) != morton(new.0, new.1));
+                changed_cell += u64::from(
+                    morton(old.0 >> CELL, old.1 >> CELL) != morton(new.0 >> CELL, new.1 >> CELL),
+                );
+                store.set_u32_raw(r, 4, new.0);
+                store.set_u32_raw(r, 8, new.1);
+            }
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let pct = |n: u64| 100.0 * n as f64 / total as f64;
+        println!(
+            "\n  drifts that change the key: raw coords {:.0}%   quantized to {}×{} cells {:.0}%",
+            pct(changed_raw),
+            1 << CELL,
+            1 << CELL,
+            pct(changed_cell)
+        );
+        println!("  (a key that does not change needs no reindex at all)");
+    }
+
+    /// Bit `b` of an object's full key, mirroring `View::bit` for a 64-bit code.
+    fn xy_key_bit(code: u64, rec: u32, b: u32) -> bool {
+        if b < 64 {
+            (code >> (63 - b)) & 1 == 1
+        } else if b < 64 + TERM_BITS {
+            false
+        } else if b < 64 + SUFFIX_BITS {
+            (rec >> (103 - b)) & 1 == 1
+        } else {
+            false
+        }
+    }
+
+    /// Nodes visited descending by `(code, rec)` from `from`.
+    fn count_descend(store: &Store, tree: u32, from: Child, code: u64, rec: u32) -> usize {
+        let mut n = 0;
+        let mut cur = from;
+        while let Child::Node(x) = cur {
+            n += 1;
+            let b = node_bit(store, tree, x);
+            cur = child(store, tree, x, xy_key_bit(code, rec, b));
+        }
+        n
+    }
+
+    /// PROBE — how much could a finger (climb from the old spot) actually save?
+    ///
+    /// Run: `cargo test --release --lib radix_tree::tests::probe_finger -- --ignored --nocapture`
+    ///
+    /// For each move it compares the nodes a descent from the ROOT would visit against
+    /// `climb + descent from the deepest ancestor whose subtree still holds the new
+    /// key`.  The ancestor is found by I2: `bit(A) <= e` iff the new key still belongs
+    /// under `A`, where `e` is the first bit at which the old and new codes differ.
+    #[test]
+    #[ignore = "probe — run with --release --ignored --nocapture"]
+    fn probe_finger_savings() {
+        const OBJECTS: usize = 512;
+        const GRID: u32 = 256;
+        const SAMPLES: usize = 4000;
+
+        let mut store = Store::new_in_use(1 << 14);
+        let mut tree = rtree_init(&mut store, 0);
+        let mut seed = 0x1357_9bdf_2468_ace0;
+        let mut objs = Vec::new();
+        for _ in 0..OBJECTS {
+            let (x, y) = (lcg(&mut seed) % GRID, lcg(&mut seed) % GRID);
+            let r = add_xy(&mut store, x, y);
+            objs.push(r);
+            tree = rtree_insert(&mut store, tree, r, XY);
+        }
+
+        // A capped climb: give up after `k` steps and descend from the root instead.
+        // cost(k) = climbed + descent-from-A   when the finger reached A within k,
+        //           k + descent-from-root      when it did not (the climb is wasted).
+        const CAPS: [usize; 7] = [0, 1, 2, 3, 4, 5, 64];
+        let mut mixed = [0f64; CAPS.len()];
+
+        for &teleport in &[false, true] {
+            let mut root_nodes = 0usize;
+            let mut cost = [0usize; CAPS.len()];
+            let mut e_sum = 0u64;
+            for _ in 0..SAMPLES {
+                let who = objs[(lcg(&mut seed) as usize) % OBJECTS];
+                let old = code_of(&store, who);
+                let (nx, ny) = if teleport {
+                    (lcg(&mut seed) % GRID, lcg(&mut seed) % GRID)
+                } else {
+                    drift(&mut seed, pos(&store, who), GRID)
+                };
+                let new = morton(nx, ny);
+
+                let ow = |w: u32| (XY.word)(&store, who, w);
+                let key = View {
+                    word: ow,
+                    bits: 64,
+                    id: who,
+                };
+                let (_leaf, parent) = descend(&store, tree, &key);
+
+                // `e`: first bit at which the new code leaves the old.
+                let e = if old == new {
+                    64
+                } else {
+                    (old ^ new).leading_zeros()
+                };
+
+                // Climb to the deepest ancestor that still contains the new key.
+                let (mut a, mut climbed) = (parent, 0usize);
+                while a != 0 && node_bit(&store, tree, a) > e {
+                    a = node_parent(&store, tree, a);
+                    climbed += 1;
+                }
+
+                let root = top(&store, tree);
+                let from_root = count_descend(&store, tree, root, new, who);
+                let from_a = if a == 0 {
+                    from_root
+                } else {
+                    count_descend(&store, tree, Child::Node(a), new, who)
+                };
+                root_nodes += from_root;
+                e_sum += u64::from(e);
+                for (i, &k) in CAPS.iter().enumerate() {
+                    cost[i] += if climbed <= k {
+                        climbed + from_a
+                    } else {
+                        k + from_root
+                    };
+                }
+                tree = move_to(&mut store, tree, who, nx, ny);
+            }
+
+            #[allow(clippy::cast_precision_loss)]
+            let n = SAMPLES as f64;
+            let label = if teleport { "teleport" } else { "drift ±2" };
+            #[allow(clippy::cast_precision_loss)]
+            let root_avg = root_nodes as f64 / n;
+            #[allow(clippy::cast_precision_loss)] // e_sum <= SAMPLES*64
+            let mean_e = e_sum as f64 / n;
+            print!("  {label:<9} root {root_avg:>5.2}  mean e {mean_e:>4.1} |");
+            for (i, &k) in CAPS.iter().enumerate() {
+                #[allow(clippy::cast_precision_loss)]
+                let c = cost[i] as f64 / n;
+                let tag = if k == 64 {
+                    "inf".to_string()
+                } else {
+                    k.to_string()
+                };
+                print!("  k={tag}:{c:>5.2}");
+                // 95% drift / 5% teleport, the shape of a real frame.
+                mixed[i] += if teleport { 0.05 * c } else { 0.95 * c };
+            }
+            println!();
+        }
+        print!("  {:<9} {:>21} |", "mixed 95/5", "");
+        for (i, &k) in CAPS.iter().enumerate() {
+            let tag = if k == 64 {
+                "inf".to_string()
+            } else {
+                k.to_string()
+            };
+            print!("  k={tag}:{:>5.2}", mixed[i]);
+        }
+        println!();
+    }
+
     // ---- variable-length oracle: a byte string at `fld 8`, length at `fld 4` ----
 
-    fn text_bit(store: &Store, rec: u32, bit: u32) -> bool {
-        let byte = store.get_byte(rec, 8 + bit / 8, 0) as u32;
-        (byte >> (7 - bit % 8)) & 1 == 1
+    fn text_word(store: &Store, rec: u32, word: u32) -> u64 {
+        let len = store.get_u32_raw(rec, 4);
+        let mut out = 0u64;
+        for i in 0..8 {
+            let idx = word * 8 + i;
+            if idx < len {
+                let byte = store.get_byte(rec, 8 + idx, 0) as u64;
+                out |= byte << (56 - 8 * i);
+            }
+        }
+        out
     }
 
     fn text_bits(store: &Store, rec: u32) -> u32 {
@@ -1347,7 +2309,7 @@ mod tests {
     }
 
     const TEXT: KeySpec = KeySpec {
-        bit: text_bit,
+        word: text_word,
         bits: text_bits,
     };
 
@@ -1360,8 +2322,18 @@ mod tests {
         rec
     }
 
-    fn text_probe(s: &'static str) -> impl Fn(u32) -> bool {
-        move |bit| (s.as_bytes()[(bit / 8) as usize] >> (7 - bit % 8)) & 1 == 1
+    fn text_probe(s: &'static str) -> impl Fn(u32) -> u64 {
+        move |word| {
+            let b = s.as_bytes();
+            let mut out = 0u64;
+            for i in 0..8 {
+                let idx = (word * 8 + i) as usize;
+                if idx < b.len() {
+                    out |= u64::from(b[idx]) << (56 - 8 * i);
+                }
+            }
+            out
+        }
     }
 
     /// R8 — variable-length keys sort lexicographically, and a *prefix* probe seeks
@@ -1429,14 +2401,22 @@ mod tests {
         fn word(rec: u32) -> &'static [u8] {
             if rec == AB { b"ab" } else { b"abc" }
         }
-        fn big_bit(_store: &Store, rec: u32, bit: u32) -> bool {
-            (word(rec)[(bit / 8) as usize] >> (7 - bit % 8)) & 1 == 1
+        fn big_word(_store: &Store, rec: u32, w: u32) -> u64 {
+            let b = word(rec);
+            let mut out = 0u64;
+            for i in 0..8 {
+                let idx = (w * 8 + i) as usize;
+                if idx < b.len() {
+                    out |= u64::from(b[idx]) << (56 - 8 * i);
+                }
+            }
+            out
         }
         fn big_bits(_store: &Store, rec: u32) -> u32 {
             word(rec).len() as u32 * 8
         }
         const BIG: KeySpec = KeySpec {
-            bit: big_bit,
+            word: big_word,
             bits: big_bits,
         };
 
