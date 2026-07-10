@@ -3767,30 +3767,24 @@ impl Scopes {
                 let in_ret = ret_borrows_v
                     || backs_return_source
                     || ret_var != u16::MAX && function.tp(ret_var).depend().contains(&v);
-                // H2 step-5 sentinel: the BLOCK-RESULT type's deps were
-                // read here for years under the positional guess; the
-                // 2026-06-12 corpus probes (scripts, docs, examples,
-                // tools, libs) show that read never decides alone — the
-                // declared-return and returned-var checks subsume it.
-                // Scream if a live case ever appears; re-add the read
-                // WITH a typed decode then (DEPS_INVENTORY § step 5).
-                #[cfg(debug_assertions)]
-                {
-                    let tp_alone = !in_ret
-                        && tp.depend().iter().any(|&a| {
-                            if (a as usize) < def.attributes.len() {
-                                function.var(&def.attributes[a as usize].name) == v
-                            } else {
-                                a == v
-                            }
-                        });
-                    debug_assert!(
-                        !tp_alone,
-                        "H2 step-5 sentinel: the block-result dep read would have \
-                         decided alone for var {v} in '{}'",
-                        def.name()
-                    );
-                }
+                // H2 step 5 (DEPS_INVENTORY): the BLOCK-RESULT type's deps were
+                // read here for years under the positional guess.  That read is
+                // RETIRED: the declared-return (`ret_borrows_v`, a TYPED decode),
+                // returned-var, and return-source-backing checks above decide the
+                // suppression.  A debug sentinel used to scream when the old read
+                // would have "decided alone" (`tp.depend()` names `v` while
+                // `in_ret` is false), on the theory that such a case would need
+                // the read re-added.  It does NOT: every firing is a FALSE positive
+                // of the retired POSITIONAL decode — a field / enum-field / match-
+                // arm return that COPIES its source into the caller's retbuf
+                // (`return fv_c.pts`, `match e { Filled{items} => items }`), so the
+                // local source `v` is correctly freed at scope exit AFTER the copy.
+                // Re-adding the read would instead SUPPRESS that free and LEAK the
+                // source.  Verified on the seven firing cases (450, 508, repro_p365,
+                // four 85-store-lifetime-*) — value + leak + LOFT_POISON + the DA
+                // store-free asserts all clean, both backends — so the read stays
+                // retired and the sentinel is removed (the reliable checks subsume
+                // every TRUE return source; the positional read only added noise).
                 // Work-refs (`__ref_N` / `__rref_N`) carry their own var
                 // in the dep list (`src/parser/mod.rs:1924-1928`) so the
                 // standard `dep.is_empty()` gate skips them.  But work-

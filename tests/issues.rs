@@ -243,6 +243,39 @@ fn test() {
     .result(Value::Null);
 }
 
+// Returning a FIELD / enum-arm vector from a local composite (`return c.pts`,
+// `match e { Filled { items } => items }`) copies the source into the caller's
+// retbuf, so the local source is freed at scope exit AFTER the copy.  A retired
+// H2-step-5 debug sentinel (scopes.rs) mis-fired on these: it re-read the
+// block-result deps under the old POSITIONAL guess, which names the copied-from
+// source, and panicked ("block-result dep read would have decided alone") under
+// `-C debug-assertions=on` even though freeing the source is correct.  This guards
+// that the free stays leak-free (re-adding the retired read would suppress it and
+// leak); it panicked on the sentinel without the fix.
+#[test]
+fn h2_field_arm_vector_return_source_freed_not_leaked() {
+    code!(
+        "struct H2Ctx { pts: vector<integer> }
+fn h2_mk() -> H2Ctx { c = H2Ctx { pts: [] }; c.pts += [1]; c.pts += [2]; return c; }
+fn h2_get_pts() -> vector<integer> {
+    extra = \"live\";
+    c = h2_mk();
+    note = \"{extra}\";
+    if len(note) < 0 { return []; }
+    return c.pts;
+}
+enum H2Cell { Filled { items: vector<integer> }, Empty }
+fn h2_arm(e: H2Cell) -> vector<integer> { match e { Filled { items } => { items }, _ => { [] } } }
+fn test() {
+    a = h2_get_pts();
+    assert(len(a) == 2 && a[0] == 1, \"struct-field vector return: len {len(a)}\");
+    b = h2_arm(Filled { items: [7, 8] });
+    assert(len(b) == 2 && b[1] == 8, \"enum-arm vector return: len {len(b)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // A chained `??` (`a ?? b ?? c`) whose operands are OWNED/call-produced text
 // double-freed an inner `__ncc_N` coalesce temp on the interpreter (a
 // `state/text.rs:334` double free under `-C debug-assertions=on`; script 156).
