@@ -1,0 +1,6 @@
+// plan17_b: callee tail is a CONCAT (BuiltLocal); run RETURNS the monomorph result.
+struct P { id: integer }
+fn to_text(self: P) -> text { return "item-{self.id}"; }
+fn label<T: Printable>(x: T) -> text { x.to_text() + "!" }
+fn run() -> text { label(P{id:7}) }
+fn main() { assert(run() == "item-7!", "plan17_b"); }

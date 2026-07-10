@@ -1,0 +1,4 @@
+// !! VACUOUS — DOES NOT COMPILE (loop-var type-change error). leak=0 here means
+// NOT-RUN, not clean. Superseded by verify_tuple_NONgeneric_RUNS.loft. Do not trust.
+fn pair<T>(x: T) -> (text, text) { return ("aaa", "m"); }
+fn main() { for i in 0..3 { r: (text, text) = pair(7); } }

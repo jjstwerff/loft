@@ -1043,7 +1043,14 @@ impl Parser {
             if elems.iter().any(crate::data::has_lifetime_concern)
                 || (u32::from(crate::variables::size(&result, &crate::data::Context::Argument)) > 8
                     && !elems.iter().any(|e| matches!(e, crate::data::Type::Function(_, _, _)))));
-        if !is_generic_template
+        // @PLN85 generic-tuple-return-fix.md — a generic template whose return SHAPE
+        // is already concrete (`-> (text, text)`, no `T` in any element) is not the
+        // "T resolves later" case the skip guards; let it ride the same promotion the
+        // non-generic gets so the monomorph inherits it (sites 1 + 3 + block_result).
+        // Only a shape that DEPENDS on `T` (`-> (T, T)`) defers to instantiation.
+        let generic_return_promotable =
+            !is_generic_template || !self.return_shape_depends_on_type_var(&result);
+        if generic_return_promotable
             && needs_tuple_rewrite
             && let crate::data::Type::Tuple(elems) = &result
         {
@@ -1102,8 +1109,11 @@ impl Parser {
             // change), generic templates (specialisations never promote,
             // I9-var), lambdas (separate parse path, no earlier callers).
             if self.first_pass
-                && !is_generic_template
-                && self.data.def_type(self.context) == DefType::Function
+                && generic_return_promotable
+                && matches!(
+                    self.data.def_type(self.context),
+                    DefType::Function | DefType::Generic
+                )
                 && self.data.def(self.context).rust().is_empty()
                 && matches!(
                     self.data.def(self.context).returned(),

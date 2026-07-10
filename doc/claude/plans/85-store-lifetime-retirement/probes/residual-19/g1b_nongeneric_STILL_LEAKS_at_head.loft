@@ -1,0 +1,9 @@
+// NOTE: NOT a clean sibling. At HEAD this ALSO leaks (leak=1) — `run(){firsti(nums)}`
+// is a UserCall chain HEAD does not promote, AND firsti's `v[0].to_text()` native
+// tail delivery. The generic-vs-nongeneric distinction only appears AFTER the
+// UserCall slice + NativeCall-monomorph promotion land. OPEN sub-question (enhance
+// later): firsti's `v[0].to_text()` is a native tail that 2d SHOULD promote — why
+// does it still leak? (indexing + native-arg? or run's UserCall copy?)
+fn firsti(v: vector<integer>) -> text { v[0].to_text() }
+fn run() -> text { nums: vector<integer> = [10, 20, 30]; firsti(nums) }
+fn main() { print(run()); }

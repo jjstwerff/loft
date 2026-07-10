@@ -131,32 +131,81 @@ went from ~108 to 0-modulo-suppressions.
 survivor has a one-line accepted-leak annotation. **Effort:** ~1 day. **Risk:**
 low — worst case the suppression file is larger than hoped.
 
-### S4 — baseline captured 2026-07-09 (post-#537 rebase); root-cause BLOCKED on inlining
+### S4 — ROOT-CAUSED on macOS-ARM 2026-07-09 (the Linux session was blocked on inlining)
 
-`RUSTFLAGS=-Zsanitizer=address ASAN_OPTIONS=detect_leaks=1 cargo +nightly test
---release --target … --test issues -- --test-threads=1` → **2389 B leaked in 215
-allocations, essentially ONE class**: `RawVecInner::finish_grow` ← `State::static_call`
-← `execute_argv` ← `issues::testing::Test::drop`. Not the ~108 the doc guessed;
-LSan does REACHABILITY, so `OnceLock`/cached-stdlib allocations are NOT leaks.
-The 2 "failed" tests under leaks-on (`fill_rs_up_to_date`, `n9_generated_fill_matches_src`)
-are the generated-code-freshness meta-tests the `asan` job already excludes — not bugs.
+**LSan runs on macOS-ARM** (newer LLVM added arm64-Darwin LeakSanitizer — verified
+with a deliberate `Box::leak` positive control: reported + aborted). This is the
+mirror of S1: the Linux session couldn't name the leak because `--release` inlined
+the owner into `static_call` and gave `??:?`; on this Mac the release frames
+symbolize directly, so the class is named without needing a no-inline build.
 
-**Root-cause is BLOCKED, and must NOT be blind-suppressed.** `static_call`'s own
-`Vec` allocations are all in the snapshot branch (`if call == stack_trace_lib_nr`),
-which no `--test issues` test reaches — so the leaking `Vec` is in a NATIVE FUNCTION
-the optimizer **inlined into `static_call`** (`--release`, so the frame is
-collapsed; `-C debuginfo=2` still gives `??:?`). The allocations are tiny (~11 B —
-small `String`/`Vec`), 122 + 93 of them, from a subset of `issues` tests. This
-could be a real **store/heap leak in a native call** (PLN54's exact target), so a
-broad `leak:static_call` suppression is WRONG — it would mask the very class the
-gate exists to catch.
+**Two distinct, bounded, benign classes — NOT the single "store leak in a native
+call" the Linux note feared:**
 
-**Next (a focused step):** defeat inlining to name the native fn — a DEBUG ASan
-build (`-C opt-level=0`, no inlining) over the leaking subset, OR bisect the
-`issues` corpus by test-group under `detect_leaks=1` to find the leaking tests →
-read their loft to name the native call → fix it at the owner. THEN flip the
-`asan` job to `detect_leaks=1` (+ a narrow, documented suppression only for any
-genuinely-intentional residual). Do NOT flip the gate until the leak is named.
+**Class 1 — PRODUCTION (`loft prog.loft`): the intentional `ir_read` `Box::leak`
+(accepted).** A standalone valid program (`probe_D`: `s="abc"; s+="def…"; print`,
+output verified) leaks **311 allocations / 1942 B — 100 % `loft::ir_read::read_block`
+→ `read_value` → `read_definition`**, zero runtime-fn frames. This is the @PLN11
+store→native IR round-trip that runs on every compile: the native IR holds names as
+`&'static str`, so the reader promotes deserialized names with a **bounded,
+documented `Box::leak`** (ir_read.rs:25-27 — "a small fixed set of block names that
+live for the whole process anyway"). Interner-style: bounded by the program+stdlib
+name set, does **not** grow at runtime (a 1000-iteration loop leaks the same 311 as
+a 1-line body), freed by process exit. Standard compiler technique, not a bug.
+
+**Class 2 — a REAL, GROWING PRODUCTION leak (corrects an earlier wrong reading).**
+The `--test issues` baseline (**4181 B / 229 allocs on ARM**) is owned by RUNTIME
+text fns — `append_text`, `n_kind_dest`, `n_to_json_dest`/`_pretty`/
+`struct_to_json_dispatch`, `n_as_text_dest`, `n_env_variable_dest`,
+`t_4text_to_upper/lower_dest`. An early note guessed this was "test-harness only /
+freed in production," but that rested on **unrepresentative probes** (`s += …` and a
+str-view `[0]`), neither of which hits the leaking shape. A representative probe
+falsifies it.
+
+**Root cause (isolated with a boundary matrix, both cells output-verified):** a
+native fn's `text` result used as the **implicit tail-return** (the last expression)
+of a user function is never registered as an owned text, so it — and its
+return-copy — are never freed. ~**2 allocations leak per call, and it GROWS**:
+
+    fn run() -> text { u = U{…}; u.to_json() }        // C1: implicit tail return
+    while i < N { t = run(); i += 1 }                 //     N=10 → 20 leaked; N=100 → 200 (2/call)
+
+    fn run() -> text { u = U{…}; r = u.to_json(); return r; }   // C2: rebind to a local first
+    while i < N { t = run(); i += 1 }                 //     N=10 → 0;  N=100 → 0
+
+Rebinding to a named local before `return` (C2) gives the value proper ownership
+tracking → 0 leaks. `to_uppercase()` bound *directly* to a local (`t = x.to_upper()`)
+is also clean — so it is NOT "all native text fns," it is specifically the native
+result **flowing straight into the return slot**. This explains every harness owner:
+the JSON/text tests use `fn helper() -> text { …native_call() }` and run per test, so
+the per-call leak accumulates across the ~129 text/JSON cases. `free_text` itself
+works (`probe_A`: 1000 scope-freed texts leak the same as 1). A long-running program
+calling `to_json`/`kind`/`as_text` via such a helper in a loop leaks unboundedly —
+exactly the class the leak gate exists to catch.
+
+**Likely fix site:** the caller-side bind of a Call's `text` result and the
+function-tail `OpReturn` path in `state/codegen.rs` (the owned-placeholder logic
+around the return slot — cf. the `nrvo_collapse_tail_set` / "owned/freed ELSEWHERE"
+comments): a native-call result in tail position must be registered as an owned text
+the caller frees at scope exit, the same way a `return <local>` already is. This is
+codegen/ownership work — do it under the **loft-codegen** discipline (introspect
+BOTH backends first) with a `--native` cross-check, and add a regression test
+(the C1 shape) that leaks pre-fix.
+
+**Decision — gate stays at `detect_leaks=0` until the bug is FIXED (not
+suppressed).** This is a genuine growing production leak, so per stability policy it
+must be fixed with a regression test, not annotated away. Two residuals then gate the
+flip: (a) this Class-2 codegen fix; (b) the intentional Class-1 `ir_read` `Box::leak`
+— 16 `ir_read`/`ir_schema`/`ir_store` round-trip lib tests deliberately materialize
+IR, so they get a narrow, documented exclusion or `leak:ir_read` suppression. Only
+after (a) lands does `detect_leaks=1` become a meaningful gate. Both the S1 caveat
+(Linux leg unvalidatable from a Mac) and the fix belong to a focused follow-up.
+
+**Status of the attempted harness "fix" (rejected):** a `fn main(){ test(); }`
+wrapper in `tests/testing.rs` (to make `test` return so entry frees fire) was tried
+and REVERTED — it did NOT reduce the leak (159 tests still leaked under
+`detect_leaks=1`), confirming the cause is the codegen ownership gap above, not the
+harness entry shape.
 
 ---
 
@@ -193,7 +242,39 @@ branch → Miri red). **Acceptance:** ≥ 8 tests, job ≤ 20 min, all green.
 
 ---
 
-## S1 — macOS-ARM sanitizer leg — DO IN A NATIVE MAC SESSION
+## S1 — macOS-ARM sanitizer leg — ✅ DONE 2026-07-09 (validated on a real Mac)
+
+**Result:** the `miri` and `asan` jobs in `miri.yml` now run a
+`[ubuntu-latest, macos-latest]` OS matrix (`fail-fast: false`). Validated on
+`aarch64-apple-darwin` before landing — the "validate what you ship" bar met on
+the actual target platform, not inferred from Linux:
+
+- **Miri store-unit gate:** 6/6 curated store-layer tests Miri-clean (~0.6s under
+  Miri; the aarch64-apple-darwin sysroot built clean).
+- **ASan corpus sweep:** 1494 passed / 0 failed / 9 skipped.
+- **Positive control (non-vacuity):** a throwaway raw-pointer heap-buffer-overflow
+  compiled `-Zsanitizer=address --target aarch64-apple-darwin` → the Apple ASan
+  runtime reported `heap-buffer-overflow` on `arm64` and aborted. So the ARM ASan
+  runtime is genuinely active — the clean sweep is real coverage.
+
+**One finding, catalogued + handled (not hidden):** the ASan sweep tripped a
+`stack-overflow` in `parser::plan86_nesting_guard_tests::\
+deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash`. That test spawns an
+**8 MB-stack** thread and parses 2000-deep parens, expecting the
+`SANDBOX_MAX_PARSE_DEPTH = 128` guard to bail at ~1.3 MB before the recursion
+overflows. ASan pads every `parse_operators` frame with redzones (~6× on ARM
+here), so 128-deep recursion overflows the 8 MB stack *before* the guard fires.
+It is a **pure ASan-instrumentation artifact** (production frames ~10 KB, the
+guard fires correctly), a **functional recursion-guard test — not UAF/OOB
+coverage** — and it still runs unsanitized on the macOS-ARM full suite
+(`v2-validation.yml`) and passes on the ubuntu ASan leg. So the macOS ASan leg
+skips just that one test (`extra_filter` in the `asan` matrix `include`); no
+memory-safety coverage is lost. Bumping the test's stack was rejected — it would
+subvert the test's deliberate "8 MB overflows without the guard" calibration.
+
+---
+
+<details><summary>Original design (for the record)</summary>
 
 **State:** `v2-validation.yml` already runs the **full suite** on macOS-ARM
 (`macos-latest` = ARM64). Only the *sanitizer* (Miri / ASan) leg is ubuntu-only.
@@ -224,6 +305,8 @@ runs it locally with the standard per-sanitizer positive control, then lands it.
 **Acceptance:** macOS-ARM sanitizer leg green on `main`, validated on a real Mac.
 **Effort:** ~½ day in a Mac session. **Owner:** a native-Mac agent (this
 Linux-session agent cannot validate it — do NOT ship it blind from here).
+
+</details>
 
 ---
 
@@ -284,9 +367,10 @@ uninit surface the `plan53_cluster4` MaybeUninit fix targeted.
   the original "grow the full-program set" infeasible; the reframe gets more
   coverage for less CI time. (This § kept for the record; see README § S5.)
 - ✅ **S7 — DONE**: the nightly failure→issue notifier.
+- ✅ **S1 — DONE** (2026-07-09): macOS-ARM sanitizer leg, validated on a real Mac
+  (Miri 6/6, ASan 1494/0, positive control fires on arm64). See § S1 above.
 - **S4** (~1 day) — turns the muted leak baseline into a live gate; low risk. **Next.**
 - **S9** (focused session) — the high-value, higher-risk mixed-boundary finish.
-- **S1** — hand to a **native Mac session** (can't be validated from Linux).
 - **S8** — defer with the one-line cost note above; revisit only if a concrete
   need appears.
 

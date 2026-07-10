@@ -18,6 +18,129 @@ pub(crate) enum RetSite {
     MidReturn,
 }
 
+/// @PLN85 text-return analysis framework (SHADOW — not yet wired to codegen).
+///
+/// The ONE property behind the stacked per-shape promotion predicates (2d
+/// native-call, 3a view-of-local, 3b user-call, 3c if/match arm) and the p281
+/// borrow exclusion: *does a text return TAIL deliver a fresh OWNED text (→
+/// promote to a hidden `&text` caller buffer) or BORROW a caller-owned value
+/// (→ forward the borrow, never promote)?*  `classify_text_return` is the pure
+/// selector; `OwnedVia`/`BorrowVia` record WHICH shape produced the verdict so
+/// the corpus can verify it.  Verified beside the tests (via the `LOFT_TRA_DUMP`
+/// dump) before any codegen switch — see
+/// `plans/85-store-lifetime-retirement/probes/text-tail-return/framework/`.
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum TextReturn {
+    /// Fresh owned text — promote the return to a hidden `&text` caller buffer.
+    Owned(OwnedVia),
+    /// A borrow of a caller-owned value — forward it, do NOT promote.
+    Borrow(BorrowVia),
+    /// Not a promotable text-return shape: a literal-only tail, or a shape
+    /// whose leak (if any) is NOT in the return delivery (a consumed local, a
+    /// native-internal buffer) — the framework points AWAY from return promotion.
+    Plain,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum OwnedVia {
+    /// Native text-dest call in tail position (`u.to_json()`) — attempt 2d.
+    NativeCall,
+    /// User fn call that itself delivers owned text (`inner()`) — slice 3b.
+    UserCall,
+    /// Text field/index view of a LOCAL composite built in this body
+    /// (`a.v.0`, `d.ts[0]`) — slice 3a.
+    ViewOfLocal,
+    /// A user fn call that returns a forward-borrow of a VISIBLE param
+    /// (`extract(p) -> text["p"]`), but where THIS call site fills that param
+    /// with a LOCAL composite built here (`extract(Pair{…})` / `extract(pr)`).
+    /// The borrow is of a value that dies with this frame, so the tail is
+    /// materialised (copied) into the promoted `&text` buffer before the local
+    /// is freed — owned, exactly like [`ViewOfLocal`], just delivered through a
+    /// call.  Distinct variant so `tret_bind_ok` can gate it on a BACKWARD-ref
+    /// callee (same pass-stability rule as `UserCall`); the direct
+    /// `ViewOfLocal` needs no such gate.  @PLN85 p54_b6.
+    ViewOfLocalCall,
+    /// An `if`/`match` (match lowers to `If`) with an owned-text arm — slice 3c.
+    IfMatchArm,
+    /// A built-up local text — accumulator / interpolation / literal-concat /
+    /// rebind — delivered as the tail var; `text_return` already promotes these.
+    BuiltLocal,
+    /// A TUPLE-constructor return (`return (x.to_text(), "mid", …)`) at least
+    /// one of whose text elements delivers owned text — p329/p330_pair.  Needs
+    /// per-element `&text` buffer promotion (the `__ret_text_N` hoist).
+    TupleElement,
+    /// A fn-REF call in tail position (`f(42)`, `g.fmt(42)` — `Value::CallRef`)
+    /// delivering owned text — p227.  Promotable, but the fn-ref dispatch ABI
+    /// is @P387-adaptive, so the wiring must keep it uniform.
+    FnRefCall,
+}
+
+#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+pub(crate) enum BorrowVia {
+    /// A text field-view rooted at a caller-owned ARGUMENT (`fn f(p) { p.a }`).
+    Argument,
+    /// A call to a fn that itself returns an argument-borrow (`f(s){ g(s) }`,
+    /// `g(s) -> text["s"]`) — the p281 shape; promoting it breaks the forward.
+    ForwardArg,
+}
+
+impl TextReturn {
+    /// Stable label for the `LOFT_TRA_DUMP` shadow dump + corpus verification.
+    pub(crate) fn label(self) -> &'static str {
+        match self {
+            TextReturn::Owned(OwnedVia::NativeCall) => "Owned:NativeCall",
+            TextReturn::Owned(OwnedVia::UserCall) => "Owned:UserCall",
+            TextReturn::Owned(OwnedVia::ViewOfLocal) => "Owned:ViewOfLocal",
+            TextReturn::Owned(OwnedVia::ViewOfLocalCall) => "Owned:ViewOfLocalCall",
+            TextReturn::Owned(OwnedVia::IfMatchArm) => "Owned:IfMatchArm",
+            TextReturn::Owned(OwnedVia::BuiltLocal) => "Owned:BuiltLocal",
+            TextReturn::Owned(OwnedVia::TupleElement) => "Owned:TupleElement",
+            TextReturn::Owned(OwnedVia::FnRefCall) => "Owned:FnRefCall",
+            TextReturn::Borrow(BorrowVia::Argument) => "Borrow:Argument",
+            TextReturn::Borrow(BorrowVia::ForwardArg) => "Borrow:ForwardArg",
+            TextReturn::Plain => "Plain",
+        }
+    }
+
+    /// True when this owned return is delivered by the `__tret` bind-and-promote.
+    ///
+    /// Scoped to the FORWARD-REFERENCE-SAFE verdicts:
+    /// - `ViewOfLocal` — a field/index view resolves to `OpGetText` on PASS 1,
+    ///   so the buffer lands in the signature before any forward-ref caller is
+    ///   compiled (verified: `fref_view`).
+    /// - `NativeCall` — a native text-dest CALL tail (attempt 2d).  A method
+    ///   call resolves only on PASS 2, so this binds pass-2-only in practice
+    ///   (identical to 2d) and carries 2d's latent forward-ref limitation.
+    ///
+    /// - `UserCall` — a user-fn text CALL tail, but the callee-side gate in
+    ///   `tret_bind_ok` additionally restricts it to a BACKWARD reference (callee
+    ///   defined before this fn).  A forward-referenced callee classifies `Plain`
+    ///   on pass 1 (its return type is unresolved there) and `UserCall` on pass 2,
+    ///   so promoting it pass-2-only diverges the ABI and crashes a forward-ref
+    ///   caller ("Too few parameters" — the viewer/p281 class).  A backward ref is
+    ///   `UserCall` on BOTH passes → pass-stable → safe.
+    ///
+    /// `IfMatchArm` is delivered by the per-arm accumulator (`push_text_arms_into`).
+    /// `BuiltLocal` is already promoted by `text_return`.  `FnRefCall` promotes
+    /// through the P227 adaptive hidden-`&text`-buffer fn-ref ABI (a `CallRef`
+    /// tail is structurally stable across passes, so it needs no backward-ref
+    /// gate).  `TupleElement` still needs its own per-element delivery.  The
+    /// forward-ref `UserCall` case (and generic-monomorph callees, whose def_nr
+    /// is minted pass-2 and so reads as forward) await the signature pre-pass.
+    fn wants_tret_bind(self) -> bool {
+        matches!(
+            self,
+            TextReturn::Owned(
+                OwnedVia::NativeCall
+                    | OwnedVia::ViewOfLocal
+                    | OwnedVia::ViewOfLocalCall
+                    | OwnedVia::UserCall
+                    | OwnedVia::FnRefCall
+            )
+        )
+    }
+}
+
 /// @PLN85 / D-own-1 — how an implicit-tail `t == Vector` return delivers its
 /// value into the fn's one `__retbuf` buffer. The SELECTOR
 /// (`classify_vector_delivery`) reads the deps fact + tail shape once and picks a
@@ -605,6 +728,127 @@ impl Parser {
         if !self.first_pass {
             self.rewrite_defended_fault_sites(&mut l);
         }
+        // @PLN85 text-return analysis framework (SHADOW) — classify the raw tail
+        // and print the verdict, WITHOUT changing codegen.  Verified beside the
+        // tests via the corpus (framework/corpus.loft).  Fires on the codegen
+        // pass for a text/`text?` return tail.
+        if !self.first_pass
+            && context == "return from block"
+            && matches!(result.base(), Type::Text(_) | Type::Tuple(_))
+            && let Ok(path) = std::env::var("LOFT_TRA_DUMP")
+            && let Some(tail) = l.last()
+        {
+            let verdict = self.classify_text_return(tail, &l);
+            let fname = self.data.def(self.context).original_name();
+            // Append to the dump FILE (open+write+close per line, flushed on
+            // drop) — a deterministic channel: loft's `eprintln!` stderr races
+            // with `process::exit` and truncates unreliably.
+            use std::io::Write;
+            if let Ok(mut f) = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&path)
+            {
+                let _ = writeln!(f, "TRA {fname} => {}", verdict.label());
+            }
+        }
+        // @PLN85 attempt 2d (text-tail-return-leak.md) — a text-returning fn whose
+        // TAIL is a bare NATIVE text-dest CALL delivers a fresh owned text with no
+        // promotable var, so it falls to the leaking owned-text `__ret_N` copy (and
+        // the `-> text?` UAF).  Bind it to a synthetic local FLAT — two SIBLING ops
+        // `Set(__tret, call); Var(__tret)` — so `block_result`'s existing var-tail
+        // `text_return` promotes `__tret` to a hidden `&text` caller buffer and the
+        // call dest-passes into it (no owned-text copy), matching the proven-clean
+        // `t = call(); t` rebind (every native text-dest fn 0-leak).
+        //
+        // Driven by the analysis framework's verdict (`classify_text_return`):
+        // one selector replaces the stacked per-shape predicates (native / view
+        // of a local composite / user call / if-match owned arm).
+        //
+        // Fires in BOTH passes so the hidden `&text` buffer lands in the fn
+        // SIGNATURE on pass 1 — every call site, INCLUDING a forward reference
+        // compiled earlier in pass 2, then sees the promoted ABI.  (Pass-2-only
+        // promotion was the "Too few parameters on n_<fn>" regression class: the
+        // buffer was added after a forward-ref caller had already emitted its
+        // call.)  On pass 2 the `__tret` name is already an attribute, so
+        // `text_return`'s `Attr` arm re-applies `RefVar` to the var — the
+        // double-classify 2d avoided by staying pass-2-only.
+        // Exclude the debugger/REPL's throwaway `replmain_*` eval fns: the
+        // frame-reenter eval path (`eval_frame_reenter`) expects an OWNED-text
+        // return (it reads the value straight back / serialises with `.to_json()`
+        // that survives frame teardown, @P293), NOT a hidden `&text` buffer — so
+        // promoting one leaves the eval caller passing no buffer and the callee
+        // reading an undefined arg slot (SIGSEGV in `rpc_eval_*`).  A run-once
+        // eval fn gains nothing from the leak-opt anyway.
+        let do_tret_bind = context == "return from block"
+            && matches!(result.base(), Type::Text(_))
+            && !self
+                .data
+                .def(self.context)
+                .original_name()
+                .starts_with("replmain_")
+            && l.last().is_some_and(|tail| self.tret_bind_ok(tail, &l));
+        if do_tret_bind {
+            let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
+            if tv != u16::MAX {
+                let last = l.len() - 1;
+                if matches!(l[last].unspan(), Value::Return(_)) {
+                    // explicit `return <call>` → `Set(__tret, call); return __tret`
+                    let ret =
+                        std::mem::replace(&mut l[last], Value::Return(Box::new(Value::Var(tv))));
+                    l.insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(ret)));
+                } else {
+                    // bare `<call>` tail → `Set(__tret, call); __tret`
+                    let call = std::mem::replace(&mut l[last], Value::Var(tv));
+                    l.insert(last, crate::data::v_set(tv, call));
+                }
+                t = Type::Text(Deps::frame1(tv));
+            }
+        }
+        // @PLN85 unified fix — a value-yielding `if`/`match` text tail (match
+        // lowers to nested `If`).  Do NOT bind the whole `if` as one value
+        // (`__tret = (if{a}else{b})`) — native rejects mixed arm Rust types
+        // (E0308, 533/534).  Instead materialise PER-ARM into a text
+        // accumulator: push `Set(__acc, <arm tail>)` into each arm and return
+        // `__acc`.  Each arm becomes an independent buffer-write of uniform type
+        // (native-safe) and `text_return` promotes `__acc` (BuiltLocal) to the
+        // caller `&text` buffer (leak-free) — the proven `acc = ""; if c { acc =
+        // … } else { acc = … }; acc` shape.  This is the text analogue of the
+        // vector `materialize_vector_arms_into` per-arm delivery.
+        //
+        // Forward-ref-SAFE: an `if` is structurally an `If` on both passes.
+        // Gated on BOTH arms YIELDING a text value (not a guard `if c { return
+        // … }` — that would suppress the missing-return diagnostic) and a
+        // NON-nullable tail (a `text?` tail must keep its `(N-Store)` reject).
+        let do_if_acc = !do_tret_bind
+            && context == "return from block"
+            && matches!(result.base(), Type::Text(_))
+            && !matches!(t, Type::Optional(_))
+            && !self
+                .data
+                .def(self.context)
+                .original_name()
+                .starts_with("replmain_")
+            && l.last().is_some_and(Self::if_tail_yields_text);
+        if do_if_acc {
+            let av = self.create_unique("__acc", &Type::Text(Deps::none()));
+            if av != u16::MAX {
+                let last = l.len() - 1;
+                let mut tail = std::mem::replace(&mut l[last], Value::Null);
+                let is_ret = matches!(tail.unspan(), Value::Return(_));
+                if let Value::Return(inner) = tail {
+                    tail = *inner;
+                }
+                Self::push_text_arms_into(&mut tail, av);
+                l[last] = tail;
+                l.push(if is_ret {
+                    Value::Return(Box::new(Value::Var(av)))
+                } else {
+                    Value::Var(av)
+                });
+                t = Type::Text(Deps::frame1(av));
+            }
+        }
         t = self.block_result(context, result, &t, &mut l, &last_expr_peek.position);
         *val = v_block(l, t.clone(), "block");
         t
@@ -933,7 +1177,18 @@ impl Parser {
         // The fn-body tail then delivers every arm into `__retbuf` (the `match` path,
         // `materialize_vector_arms_into`), so gating the promotion to the real return
         // context lets the `if` arms behave exactly like `match` arms already do.
-        if self.data.def_type(self.context) != DefType::Generic && context == "return from block" {
+        // @PLN85 generic-tuple-return-fix.md — this promotion is skipped for generic
+        // templates because a `-> T` return promotes the wrong locals once T is a
+        // value type.  NARROW exception: a generic template returning the synthetic
+        // `__tuple<…>` struct (a concrete lifetime-tuple already rewritten at
+        // definitions.rs) IS safe to promote here so the monomorph inherits the
+        // synthetic-struct body.  Kept to `__tuple` only — enabling the general
+        // text_return/ref_return path for ALL concrete generic returns panics on a
+        // template whose var table isn't promotion-ready (`plan17_b`, `-> text`).
+        let generic_promote_ok = self.data.def_type(self.context) != DefType::Generic
+            || matches!(self.data.def(self.context).returned(),
+                Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"));
+        if generic_promote_ok && context == "return from block" {
             // @PLN25 single-payload: the tail was just coerced `__nullable<S>` → dense `S`
             // via a payload sub-ref (`OpGetField`), so `t` is still the Enum tail type and
             // the type-keyed branches below (which match `t`) all miss it — the default
@@ -3190,22 +3445,33 @@ impl Parser {
                             arm_stmts.push(v_set(v_nr, field_read));
                             let old = self.vars.set_name(&field_name, v_nr);
                             name_aliases.push((field_name.clone(), old));
-                            // B5 remaining half (2026-04-14): match-arm
-                            // bindings are field extractions from the
-                            // subject — the subject owns the store and
-                            // the binding is a borrowed view (a DbRef
-                            // pointing into the subject's record).
-                            // Emitting OpFreeRef for the binding at
-                            // function exit would decrement a store the
-                            // binding doesn't own; worse, if the arm
-                            // wasn't taken the slot is never assigned
-                            // and the free reads garbage bytes as a
-                            // DbRef (observed as out-of-bounds store_nr
-                            // ≈ 4621 in `p54_b5_recursive_struct_enum`).
-                            // Mark the binding `skip_free` so scope
-                            // cleanup leaves it alone in both the
-                            // taken and not-taken arms.
-                            self.vars.set_skip_free(v_nr);
+                            // B5 remaining half (2026-04-14): a HEAP match-arm
+                            // binding is a field extraction from the subject —
+                            // the subject owns the store and the binding is a
+                            // borrowed view (a DbRef pointing into the subject's
+                            // record).  Emitting OpFreeRef for it at function
+                            // exit would decrement a store the binding doesn't
+                            // own; worse, if the arm wasn't taken the slot is
+                            // never assigned and the free reads garbage bytes as
+                            // a DbRef (observed as out-of-bounds store_nr ≈ 4621
+                            // in `p54_b5_recursive_struct_enum`).  Mark it
+                            // `skip_free` so scope cleanup leaves it alone in
+                            // both the taken and not-taken arms.
+                            //
+                            // @PLN85 Class B — but a TEXT payload binding is
+                            // NOT a borrow: `_mv_<f> = OpGetText(subj, off)` is
+                            // typed plain `text` (an OWNED copy), and it is
+                            // default-initialised to `""` at block entry — so
+                            // freeing it is correct (it owns an allocation) AND
+                            // safe in the not-taken arm (`OpFreeText("")` is a
+                            // no-op, no garbage read).  Leaving it `skip_free`
+                            // leaked the copy 1/call whenever a text-payload arm
+                            // was taken (the whole p54 struct-enum / json-match
+                            // family).  So skip_free HEAP bindings only; let a
+                            // text binding free through normal scope cleanup.
+                            if !matches!(field_type.base(), Type::Text(_)) {
+                                self.vars.set_skip_free(v_nr);
+                            }
                             // #429: the binding is a BORROWED VIEW of the
                             // subject, so its TYPE must record that borrow —
                             // otherwise a value derived from it and returned
@@ -4567,6 +4833,24 @@ impl Parser {
                         if !dep.contains(&a) {
                             dep.push(a);
                         }
+                        // @PLN85 — a var already registered as a HIDDEN
+                        // RefVar(Text) work-buffer attribute (promoted on an
+                        // earlier pass — the pass-1 `__tret` bind) must
+                        // re-acquire the RefVar var-type + argument marking so
+                        // pass 2 lowers its body as the promoted buffer, not a
+                        // plain text.  Without this the both-pass `__tret` bind
+                        // double-classifies (the empty-return bug 2d dodged by
+                        // staying pass-2-only); WITH it the bind is
+                        // signature-consistent, fixing forward-reference callers.
+                        let promoted_buf = {
+                            let at = &self.data.def(self.context).attributes()[a as usize];
+                            at.hidden && matches!(at.typedef, Type::RefVar(_))
+                        };
+                        if promoted_buf {
+                            self.vars.become_argument(*v);
+                            self.vars
+                                .set_type(*v, Type::RefVar(Box::new(Type::Text(Deps::none()))));
+                        }
                     }
                     TextDep::SkipCaptured | TextDep::SkipTupleLocal => {
                         // SkipTupleLocal (@P330): the dep drops on purpose — the
@@ -4661,6 +4945,96 @@ impl Parser {
             };
             self.data.definitions[self.context as usize].returned = new_ret;
         }
+    }
+
+    /// @PLN85 category A — re-run the text-return promotion on a freshly-minted
+    /// generic MONOMORPH so it delivers through a hidden `&text` caller buffer,
+    /// identical to its non-generic twin.  Monomorphs are built by IR
+    /// substitution (`try_generic_instantiation`), NOT by `parse_block`, so the
+    /// parse-time `do_tret_bind` + `text_return` promotion never engages and the
+    /// monomorph returns an owned `String` by value (the interpreter orphans it →
+    /// leak; native RAII drops it).  Both promoters couple to exactly
+    /// `self.context` + `self.vars`, so we swap those two onto the monomorph,
+    /// replicate the `do_tret_bind` rebind (`Set(__tret, tail); __tret`), and call
+    /// the identical `text_return` — then restore.  Called from
+    /// `try_generic_instantiation` BEFORE it returns `d_nr`, so the promoted
+    /// signature is in place when the call site lowers its call.
+    ///
+    /// Closes the BOUND/discarded cases (only the monomorph needs promoting); a
+    /// RETURNED monomorph result (`run() -> text { first(nums) }`) also needs the
+    /// caller to promote, which the def_nr backward-ref gate blocks (monomorph
+    /// minted after the caller) — that half awaits the forward-ref pre-pass.
+    pub(crate) fn promote_monomorph_text_return(&mut self, d_nr: u32) {
+        // Only plain `text` / `text?` returns (tuple-of-text is a separate arc).
+        if !matches!(
+            self.data.definitions[d_nr as usize].returned.base(),
+            Type::Text(_)
+        ) {
+            return;
+        }
+        // Swap parse context onto the monomorph: `create_unique` mutates
+        // `self.vars`; `text_return` mutates `self.data.def(self.context)` +
+        // `self.vars`.  `code` is moved OUT of `self.data` first so we can hold
+        // `&mut code` while calling `&mut self` methods (code is a local, not
+        // borrowed from self).
+        let saved_ctx = self.context;
+        // Swap the monomorph's variable table into `self.vars` (the old table is
+        // parked in `def.variables` and swapped back below — `Function` has no
+        // `Default`, so a swap, not a take).
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        if let Value::Block(bl) = &mut code {
+            let l = &mut bl.operators;
+            // Same gate as parse_block's `do_tret_bind`: a promotable text tail.
+            // ALSO promote a `BuiltLocal` tail (accumulator / concat / interpolation):
+            // for a non-generic, `text_return` promotes those directly, but that path
+            // is skipped for the generic template (control.rs I9-var guard), so a
+            // generic monomorph's built-up text return would otherwise orphan — the
+            // `run() -> text { label(42) }` / `label<T> -> text { x.to_text() + "!" }`
+            // case (plan17_b).  The `__tret` bind + `text_return` below delivers it
+            // through the hidden `&text` buffer exactly as the non-generic would.
+            // @PLN85 forward-ref class.
+            let promotable = l.last().is_some_and(|tail| {
+                self.tret_bind_ok(tail, l)
+                    || matches!(
+                        self.classify_text_return(tail, l),
+                        TextReturn::Owned(OwnedVia::BuiltLocal)
+                    )
+            });
+            if promotable {
+                let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
+                if tv != u16::MAX {
+                    let last = l.len() - 1;
+                    if matches!(l[last].unspan(), Value::Return(_)) {
+                        let ret = std::mem::replace(
+                            &mut l[last],
+                            Value::Return(Box::new(Value::Var(tv))),
+                        );
+                        l.insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(ret)));
+                    } else {
+                        let call = std::mem::replace(&mut l[last], Value::Var(tv));
+                        l.insert(last, crate::data::v_set(tv, call));
+                    }
+                    // `text_return([tv])` stamps the hidden `&text` buffer attr on
+                    // the monomorph def and rewrites its returned type — the same
+                    // call `block_result` makes for a non-generic text tail.
+                    self.text_return(&[tv]);
+                }
+            }
+        }
+        // Restore: move code back, swap the (now-promoted) monomorph vars back
+        // into `def.variables`, reset context.
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
     }
 
     /// Walk a return expression to find work-ref variables passed as hidden
@@ -4992,6 +5366,371 @@ impl Parser {
     /// caller copies the projected field into `__retbuf` via
     /// `materialize_view_return` so the field's record survives the lift's
     /// free — the same owned-copy `return d.value` already performs.
+    /// @PLN85 2d — the tail delivers a fresh owned text from a NATIVE text-dest CALL,
+    /// either as a bare `<call>` or an explicit `return <call>`.  `parse_block` binds
+    /// it to a synthetic local so it promotes to a hidden `&text` caller buffer (the
+    /// clean rebind shape).  Same predicate as `wrap_value_text_dest`; a forwarded
+    /// USER fn is already promoted (excluded).  Peels `Span`/`Return`.
+    fn native_text_call_tail(&self, tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Call(op, _) => {
+                let def = self.data.def(*op);
+                crate::state::codegen::is_text_dest_native(def.name())
+                    || crate::state::codegen::is_cdylib_text_call(def)
+            }
+            Value::Return(inner) => self.native_text_call_tail(inner),
+            _ => false,
+        }
+    }
+
+    /// @PLN85 unified fix — the tail is a value-yielding `if`/`match` text
+    /// return (match lowers to nested `If`): an `If` (peeling `Return`) whose
+    /// BOTH arms yield a text value.  Drives the per-arm accumulator
+    /// materialisation (`push_text_arms_into`).
+    fn if_tail_yields_text(tail: &Value) -> bool {
+        match tail.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => Self::if_tail_yields_text(inner),
+            Value::If(_, then, els) => Self::arm_yields_text(then) && Self::arm_yields_text(els),
+            _ => false,
+        }
+    }
+
+    /// True when an `if`/`match` ARM YIELDS a text value (a literal, call, var,
+    /// view, or a nested `if` whose sub-arms all yield) — NOT a diverging
+    /// `return`/`break`/`continue`, a `null`/empty arm, or an empty block.  A
+    /// promotable value-yielding tail needs BOTH arms to yield; a guard `if c {
+    /// return … }` does not, and must stay unbound so the missing-return
+    /// diagnostic still fires.
+    fn arm_yields_text(arm: &Value) -> bool {
+        match arm.unspan() {
+            Value::Return(_) | Value::Break(_) | Value::BreakWith(_, _) | Value::Continue(_) => {
+                false
+            }
+            Value::Null => false,
+            Value::Block(bl) => bl.operators.last().is_some_and(Self::arm_yields_text),
+            Value::Insert(ops) => ops.last().is_some_and(Self::arm_yields_text),
+            Value::If(_, then, els) => Self::arm_yields_text(then) && Self::arm_yields_text(els),
+            _ => true,
+        }
+    }
+
+    /// Rewrite each ARM leaf of an `if`/`match` text tail to deliver into the
+    /// text accumulator `av` — `<leaf>` becomes `Set(av, <leaf>)` (which lowers
+    /// to a per-arm clear+append into `av`'s buffer).  Recurses `If`/`Block`/
+    /// `Insert`/`Span`; the leaf is the arm's terminal value.  Each arm then
+    /// writes `av` independently (uniform Rust type on native — no if-expression
+    /// to unify) and `av` becomes the single owned text the caller buffer
+    /// promotion delivers copy-free.
+    fn push_text_arms_into(op: &mut Value, av: u16) {
+        match op {
+            Value::Span(b) => Self::push_text_arms_into(&mut b.1, av),
+            Value::Return(inner) | Value::Drop(inner) => Self::push_text_arms_into(inner, av),
+            Value::If(_, then, els) => {
+                Self::push_text_arms_into(then, av);
+                Self::push_text_arms_into(els, av);
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    Self::push_text_arms_into(last, av);
+                }
+                // The arm now ends in a `Set(av, …)` (or a void nested `If`), so
+                // the block yields VOID, not text — retype it, else native emits
+                // a text trailing value that mismatches the sibling arm's `()`
+                // (`if`/`else` incompatible types).
+                bl.result = Type::Void;
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    Self::push_text_arms_into(last, av);
+                }
+            }
+            leaf => {
+                let v = std::mem::replace(leaf, Value::Null);
+                *leaf = crate::data::v_set(av, v);
+            }
+        }
+    }
+
+    // ── @PLN85 text-return analysis framework (SHADOW) ────────────────────
+    // The single selector that replaces the stacked per-shape predicates.
+    // Pure + read-only: it classifies a text return TAIL into `TextReturn`.
+    // Verified beside the tests via `LOFT_TRA_DUMP`; not yet wired to codegen.
+
+    /// Gate the `__tret` bind: the verdict must want it, AND — for the
+    /// forward-reference-UNSTABLE `UserCall` verdict — the callee must be a
+    /// BACKWARD reference (its def_nr precedes this fn's).  A later-defined callee
+    /// classifies `Plain` on pass 1 (return type unresolved there) and `UserCall`
+    /// on pass 2, so promoting it pass-2-only diverges the ABI and crashes a
+    /// forward-ref caller compiled earlier in pass 2 (`page_landing` class); a
+    /// backward ref is `UserCall` on both passes → pass-stable.  Native / view /
+    /// built-local carry their own pass behavior and are not gated here.
+    fn tret_bind_ok(&self, tail: &Value, block: &[Value]) -> bool {
+        let verdict = self.classify_text_return(tail, block);
+        if !verdict.wants_tret_bind() {
+            return false;
+        }
+        if matches!(
+            verdict,
+            TextReturn::Owned(OwnedVia::UserCall | OwnedVia::ViewOfLocalCall)
+        ) {
+            // Both depend on the callee's resolved return signature, so they are
+            // forward-ref-UNSTABLE — promote ONLY for a backward-ref callee
+            // (def_nr precedes this fn's), pass-stable on both passes.
+            return Self::tail_call_op(tail)
+                .is_some_and(|op| self.backward_ref_defnr(op) < self.context);
+        }
+        true
+    }
+
+    /// The def_nr that governs the backward-ref gate for a call tail.  Normally the
+    /// callee itself — but a GENERIC MONOMORPH is minted at its call site (pass 2),
+    /// so its OWN def_nr reads forward even when the generic is defined textually
+    /// BEFORE the caller.  Map such a callee (`t_<Type>_<fn>`) back to its TEMPLATE
+    /// (`n_<fn>`, `DefType::Generic`), which is where the callee is really defined and
+    /// is pass-stable: pass 1 resolves the call to the template, pass 2 to the
+    /// monomorph, and both then compare the SAME template def_nr.  @PLN85 forward-ref
+    /// class (g1b — a `-> text` monomorph returned through a non-generic caller).
+    fn backward_ref_defnr(&self, op: u32) -> u32 {
+        if (op as usize) < self.data.definitions.len() {
+            let def = self.data.def(op);
+            if def.def_type() == DefType::Function && def.name().starts_with("t_") {
+                let tmpl = self.data.def_nr(&format!("n_{}", def.original_name()));
+                if tmpl != u32::MAX && self.data.def_type(tmpl) == DefType::Generic {
+                    return tmpl;
+                }
+            }
+        }
+        op
+    }
+
+    /// The callee def_nr of a CALL return tail (peeling `Block`/`Insert`/
+    /// `Return`/`Drop` wrappers), or `None` when the tail is not a direct call.
+    fn tail_call_op(tail: &Value) -> Option<u32> {
+        match tail.unspan() {
+            Value::Block(bl) => bl.operators.last().and_then(Self::tail_call_op),
+            Value::Insert(ops) => ops.last().and_then(Self::tail_call_op),
+            Value::Return(inner) | Value::Drop(inner) => Self::tail_call_op(inner),
+            Value::Call(op, _) => Some(*op),
+            _ => None,
+        }
+    }
+
+    /// Classify a text (or `text?`) return TAIL — see `TextReturn`.  `block`
+    /// is the operator list the tail lives in (its siblings), needed to tell a
+    /// LOCAL composite (constructed here) from a caller-owned argument.
+    pub(crate) fn classify_text_return(&self, tail: &Value, block: &[Value]) -> TextReturn {
+        match tail.unspan() {
+            Value::Return(inner) | Value::Drop(inner) => self.classify_text_return(inner, block),
+            Value::Block(bl) => bl.operators.last().map_or(TextReturn::Plain, |t| {
+                self.classify_text_return(t, &bl.operators)
+            }),
+            Value::Insert(ops) => ops
+                .last()
+                .map_or(TextReturn::Plain, |t| self.classify_text_return(t, ops)),
+            // A var tail.  A `RefVar(Text)` var is a promoted `&text` caller
+            // buffer — a built-up text (accumulator / interpolation / concat /
+            // rebind) `text_return` ALREADY promoted, so owned.  A plain-text
+            // caller ARGUMENT returned directly is a borrow.  Any other local is
+            // a built-up text — owned.
+            Value::Var(v) => {
+                if matches!(self.vars.tp(*v), Type::RefVar(_)) {
+                    TextReturn::Owned(OwnedVia::BuiltLocal)
+                } else if self.vars.is_argument(*v) {
+                    TextReturn::Borrow(BorrowVia::Argument)
+                } else {
+                    TextReturn::Owned(OwnedVia::BuiltLocal)
+                }
+            }
+            Value::Call(op, _) => self.classify_text_call(*op, tail, block),
+            // A tuple-element view (`r.0` — `Value::TupleGet`): owned iff the
+            // tuple LOCAL was built here (freed at scope exit → its text is
+            // copied out), a borrow iff it is a caller-owned argument.  Same
+            // rule as the `OpGetText` field view (3a).
+            Value::TupleGet(root, _) => {
+                if self.var_built_in_block(block, *root) {
+                    TextReturn::Owned(OwnedVia::ViewOfLocal)
+                } else {
+                    TextReturn::Borrow(BorrowVia::Argument)
+                }
+            }
+            // A fn-REF call (`f(42)`, `g.fmt(42)`) returning text delivers a
+            // fresh owned text (p227) — promotable, with the adaptive fn-ref ABI.
+            Value::CallRef(_, _) => TextReturn::Owned(OwnedVia::FnRefCall),
+            Value::If(_, then, els) => {
+                if self.arm_delivers_owned(then, block) || self.arm_delivers_owned(els, block) {
+                    TextReturn::Owned(OwnedVia::IfMatchArm)
+                } else {
+                    TextReturn::Plain
+                }
+            }
+            // A TUPLE-constructor return: owned iff at least one text element
+            // delivers owned text (the others are literals / arg-borrows).
+            Value::Tuple(elems) => {
+                if elems
+                    .iter()
+                    .any(|e| matches!(self.classify_text_return(e, block), TextReturn::Owned(_)))
+                {
+                    TextReturn::Owned(OwnedVia::TupleElement)
+                } else {
+                    TextReturn::Plain
+                }
+            }
+            _ => TextReturn::Plain,
+        }
+    }
+
+    /// Classify a CALL tail (`classify_text_return`'s call arm).
+    fn classify_text_call(&self, op: u32, tail: &Value, block: &[Value]) -> TextReturn {
+        // Native text-dest call (2d).
+        if self.native_text_call_tail(tail) {
+            return TextReturn::Owned(OwnedVia::NativeCall);
+        }
+        let def = self.data.def(op);
+        let name = def.name();
+        // Text concatenation / append operator that BUILDS a fresh text.
+        if name == "OpAddText" || name == "OpAppendText" || name == "OpAppendStackText" {
+            return TextReturn::Owned(OwnedVia::BuiltLocal);
+        }
+        // A text field/index VIEW (`OpGetText` chain): owned iff rooted at a
+        // LOCAL composite built here (3a); an argument-rooted view is a borrow.
+        if op == self.data.def_nr("OpGetText") {
+            return match self.text_view_root(tail) {
+                Some(root) if self.var_built_in_block(block, root) => {
+                    TextReturn::Owned(OwnedVia::ViewOfLocal)
+                }
+                Some(_) => TextReturn::Borrow(BorrowVia::Argument),
+                None => TextReturn::Plain,
+            };
+        }
+        // Any other store getter VIEWS an existing text — not a fresh delivery.
+        if name.starts_with("OpGet") {
+            return TextReturn::Plain;
+        }
+        // A user (or native-global) fn call returning text: owned iff its return
+        // borrows nothing or only HIDDEN buffer attrs; a return that borrows a
+        // VISIBLE argument is a forward-borrow (3b vs p281).
+        if matches!(def.returned().base(), Type::Text(_)) {
+            let attrs = def.attributes();
+            let deps = def.returned().depend();
+            let owned = deps
+                .iter()
+                .all(|&d| (d as usize) < attrs.len() && attrs[d as usize].hidden);
+            if owned {
+                return TextReturn::Owned(OwnedVia::UserCall);
+            }
+            // The return forward-borrows ≥1 VISIBLE param.  If EVERY such
+            // borrowed param is filled at THIS call site with a LOCAL composite
+            // built in this block (`extract(Pair{…})` / `extract(pr)`), the
+            // borrow is of a value that dies with this frame, so the tail is
+            // materialised into the promoted buffer before the local is freed —
+            // owned (ViewOfLocalCall), NOT a true forward.  A borrowed param
+            // filled with one of THIS fn's own arguments stays a real forward.
+            // (A non-hidden dep is a positional param, so its attr index is the
+            // argument position — hidden buffers, which come after, are excluded
+            // by the `owned` test above.)
+            let Value::Call(_, args) = tail.unspan() else {
+                return TextReturn::Borrow(BorrowVia::ForwardArg);
+            };
+            let all_borrows_local = deps
+                .iter()
+                .filter(|&&d| !attrs[d as usize].hidden)
+                .all(|&d| {
+                    args.get(d as usize)
+                        .and_then(Self::arg_root_var)
+                        .is_some_and(|root| self.var_built_in_block(block, root))
+                });
+            return if all_borrows_local {
+                TextReturn::Owned(OwnedVia::ViewOfLocalCall)
+            } else {
+                TextReturn::Borrow(BorrowVia::ForwardArg)
+            };
+        }
+        TextReturn::Plain
+    }
+
+    /// True when an `if`/`match` ARM tail delivers a fresh owned text (a
+    /// native/user owned-text call, recursively through nested `if`/blocks) —
+    /// the signal that the branch return is the leaking owned shape (3c).
+    fn arm_delivers_owned(&self, arm: &Value, block: &[Value]) -> bool {
+        matches!(
+            self.classify_text_return(arm, block),
+            TextReturn::Owned(OwnedVia::NativeCall | OwnedVia::UserCall | OwnedVia::IfMatchArm)
+        )
+    }
+
+    /// The root local var of a TEXT field/index view tail — `OpGetText` over a
+    /// `OpGetText`/`OpGetVector`/`OpGetField` chain — or `None`.  NOT filtered
+    /// by `is_argument` (an NRVO-promoted local reads as an argument here); the
+    /// caller uses `var_built_in_block` to tell a local from a true argument.
+    fn text_view_root(&self, tail: &Value) -> Option<u16> {
+        let gt = self.data.def_nr("OpGetText");
+        let gv = self.data.def_nr("OpGetVector");
+        let gf = self.data.def_nr("OpGetField");
+        fn root(v: &Value, gt: u32, gv: u32, gf: u32) -> Option<u16> {
+            match v.unspan() {
+                Value::Var(x) => Some(*x),
+                Value::Call(d, args) if *d == gt || *d == gv || *d == gf => {
+                    args.first().and_then(|a| root(a, gt, gv, gf))
+                }
+                _ => None,
+            }
+        }
+        match tail.unspan() {
+            Value::Return(inner) => self.text_view_root(inner),
+            Value::Call(d, _) if *d == gt => root(tail, gt, gv, gf),
+            _ => None,
+        }
+    }
+
+    /// True when `var` is CONSTRUCTED in this block — the target of a `Set` or
+    /// an `OpDatabase(var, …)` construction (recursively through
+    /// `Block`/`Insert`).  Distinguishes an NRVO-promoted LOCAL composite from
+    /// a genuine caller-owned parameter.
+    fn var_built_in_block(&self, ops: &[Value], var: u16) -> bool {
+        let db = self.data.def_nr("OpDatabase");
+        ops.iter().any(|op| self.op_builds_var(op, var, db))
+    }
+
+    fn op_builds_var(&self, op: &Value, var: u16, db: u32) -> bool {
+        match op.unspan() {
+            Value::Set(v, _) => *v == var,
+            Value::Call(d, args) if *d == db => {
+                matches!(args.first().map(Value::unspan), Some(Value::Var(v)) if *v == var)
+            }
+            Value::Block(bl) => self.var_built_in_block(&bl.operators, var),
+            Value::Insert(ops) => self.var_built_in_block(ops, var),
+            Value::Call(_, args) => args.iter().any(|a| self.op_builds_var(a, var, db)),
+            _ => false,
+        }
+    }
+
+    /// The root VAR an argument expression evaluates to — a bare `Var`, or the
+    /// tail var of a value-`Block`/`Insert` (an inline composite construction
+    /// `Pair{…}` lowers to a block whose last op is `Var(__ref_N)`).  Used by
+    /// the `ViewOfLocalCall` classification to check whether the value backing a
+    /// forward-borrowed param is a LOCAL built in this block.  `None` when the
+    /// argument is not a simple var/composite (e.g. a literal or a call).
+    fn arg_root_var(arg: &Value) -> Option<u16> {
+        match arg.unspan() {
+            Value::Var(v) => Some(*v),
+            Value::Block(bl) => bl.operators.last().and_then(Self::arg_root_var),
+            Value::Insert(ops) => ops.last().and_then(Self::arg_root_var),
+            Value::Return(inner) | Value::Drop(inner) => Self::arg_root_var(inner),
+            _ => None,
+        }
+    }
+
+    /// Peel `Span`/`Return` wrappers off an owned tail value, returning the inner
+    /// call (spans dropped — codegen-irrelevant).  Used by the 2d bind to lift the
+    /// call out of `return <call>` before rebinding it to `__tret`.
+    fn peel_to_inner_call(v: Value) -> Value {
+        match v {
+            Value::Span(b) => Self::peel_to_inner_call(b.1),
+            Value::Return(inner) => Self::peel_to_inner_call(*inner),
+            other => other,
+        }
+    }
+
     fn return_field_base_is_call(&self, tail: &Value) -> bool {
         match tail.unspan() {
             Value::Return(inner) | Value::Drop(inner) => self.return_field_base_is_call(inner),

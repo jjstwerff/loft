@@ -1,0 +1,6 @@
+// @PLN85 residual — n3. LEAK requires OpCopyRecord (b=a) + { } block-RHS.
+// Without b=a it's clean; mutation not required → OpCopyRecord's scope-exit free
+// does not recurse into the copy's embedded text.
+struct Item { name: text }
+pub fn test() { test_value = { a = Item { name: "hello" }; b = a; a.name }; assert(test_value == "hello", "f"); }
+fn main() { test(); }

@@ -1,0 +1,6 @@
+// @PLN85 residual — p241. LEAK requires generic + index + { } block-RHS.
+// Non-generic OR no-braces OR split-bind is clean → generic-monomorph vector<text>
+// element delivered into a block-value assignment; copied element unfreed.
+fn s<T>(x: T) -> vector<T> { o: vector<T> = []; o += [x]; return o; }
+pub fn test() { test_value = { s("hello")[0] }; assert(test_value == "hello", "f"); }
+fn main() { test(); }

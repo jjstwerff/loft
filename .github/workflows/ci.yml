@@ -938,6 +938,10 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
           test(n9_generated_fill_matches_src) | test(native_rs_functions_up_to_date))'
+      # The interpreter LEAK GATE (detect_leaks=1, enforcing) is the nightly
+      # `asan-leak-gate` job in miri.yml — kept off the per-PR path (its slow
+      # single-threaded pass would bloat PR CI).  Its red/green surfaces onto PRs via
+      # the nightly-status mechanism below, same as the other nightly gates.
 
   clippy:
     name: Clippy

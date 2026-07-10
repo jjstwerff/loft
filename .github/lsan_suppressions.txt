@@ -1,0 +1,17 @@
+# LeakSanitizer suppressions for the loft interpreter ASan leak gate (@PLN85).
+# Syntax: `leak:<substr>` suppresses any leak whose stack contains a frame whose
+# demangled name contains <substr>.
+#
+# ir_read: the interpreter interns IR node/schema/store names as `&'static str`
+# via an intentional, bounded `Box::leak` (interner-style, not a growing leak) —
+# ~16 ir_read/ir_schema/ir_store round-trip lib tests report it. Documented in
+# miri.yml. This is the ONLY class suppressed; every real interpreter leak stays
+# visible and is gated by the shrinking count baseline (scripts/asan_leak_ratchet.sh).
+leak:ir_read
+
+# macOS dyld thread-local storage term-func registration on a spawned thread
+# (the test harness watchdog): `dyld::ThreadLocalVariables::addTermFunc`, reached
+# via `thread_start`. A one-per-thread SYSTEM allocation, not a loft heap leak — and
+# absent on the Linux CI leg (different TLS impl), so this line is a macOS-only no-op
+# there. Specific to the dyld frame so it never masks a real loft leak.
+leak:addTermFunc

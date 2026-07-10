@@ -1,0 +1,7 @@
+// @PLN85 residual — text fn-ref call tail (p227). LEAK: f(42) is a CallRef; the
+// fn-ref ABI (@P387 adaptive) delivers owned text with no caller buffer.
+fn run() -> text {
+    f: fn(integer) -> text = fn(n: integer) -> text { "v: {n}" };
+    f(42)
+}
+fn main() { print(run()); }

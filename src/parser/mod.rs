@@ -2964,6 +2964,41 @@ impl Parser {
     /// receiving variable's type agrees across passes.  Wide (>8 B) or
     /// lifetime-bearing tuples are rewritten; an 8-byte pure-value tuple and
     /// fn-element tuples keep their existing ABI (mirrors the deferral predicate).
+    /// Does `t` mention the type variable `tv_nr` anywhere?  A type variable appears
+    /// as a `Reference`/`Enum` to its def; recurses `Vector`/`Optional`/`Tuple`.
+    fn type_mentions_tv(t: &Type, tv_nr: u32) -> bool {
+        match t {
+            Type::Reference(d, _) | Type::Enum(d, _, _) => *d == tv_nr,
+            Type::Vector(inner, _) | Type::Optional(inner) => Self::type_mentions_tv(inner, tv_nr),
+            Type::Tuple(elems) => elems.iter().any(|e| Self::type_mentions_tv(e, tv_nr)),
+            _ => false,
+        }
+    }
+
+    /// Does the current def's return SHAPE depend on its generic type variable
+    /// (`-> T`, `-> (T, T)`, `-> vector<T>`)?  False for a non-generic context and
+    /// for a generic template whose return is already CONCRETE (`-> (text, text)`).
+    ///
+    /// @PLN85 generic-tuple-return-fix.md — the pass-STABLE predicate that lets the
+    /// return-promotion chokepoint (the `__tuple` sig rewrite + hidden `__retbuf`
+    /// param in `definitions.rs`, the body rewrite + `ref_return` in `block_result`)
+    /// run for a concrete-return generic template so the monomorph inherits it.
+    /// Keying the guards on this (not on `is_generic_template`) collapses the 4
+    /// re-assertion sites onto the one existing non-generic flow.  The type variable
+    /// is the template's own (`extract_type_var` of its first attribute) — NOT any
+    /// `DefType::Generic` def (that is the FUNCTION, not the type param).
+    fn return_shape_depends_on_type_var(&self, t: &Type) -> bool {
+        if self.context == u32::MAX || self.data.def_type(self.context) != DefType::Generic {
+            return false;
+        }
+        let attrs = self.data.def(self.context).attributes();
+        if attrs.is_empty() {
+            return false;
+        }
+        let tv_nr = Self::extract_type_var(&attrs[0].typedef);
+        tv_nr != u32::MAX && Self::type_mentions_tv(t, tv_nr)
+    }
+
     fn tuple_return_rewrite(&mut self, returned: Type, from_type_var: bool) -> Type {
         // Only the `-> T` shape needs this.  When the template return type IS the
         // bare type variable, the body delivers T as a DbRef (the template compiled
@@ -3177,6 +3212,11 @@ impl Parser {
         );
         self.data.definitions[d_nr as usize].code = new_code;
         self.data.definitions[d_nr as usize].variables = vars;
+        // @PLN85 category A — engage the text-return promotion the parse-time
+        // path skips for IR-substituted monomorphs, so a `-> text` monomorph
+        // delivers through a hidden `&text` buffer (no orphaned owned String).
+        // Runs BEFORE returning `d_nr` so the call site sees the promoted ABI.
+        self.promote_monomorph_text_return(d_nr);
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
         if !self.check_satisfaction(g_nr, type_nr) {

@@ -1,0 +1,3 @@
+// pure-value tuple: must stay bare ABI, no leak, unchanged by the fix.
+fn classify<T: Ordered>(a: T, b: T) -> (integer, integer) { lt = if a < b { 1 } else { 0 }; gt = if a > b { 1 } else { 0 }; return (lt, gt); }
+fn main() { for i in 0..3 { r = classify(i, 2); assert(r.0 + r.1 <= 1, "ok"); } }

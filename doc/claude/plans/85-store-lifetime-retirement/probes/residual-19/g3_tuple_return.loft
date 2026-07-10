@@ -1,0 +1,7 @@
+// @PLN85 residual — tuple-of-text RETURN delivery (p329/p330). LEAK: binding a
+// whole returned (text,text) leaks 1; building+discarding a tuple is clean —
+// so the leak is the tuple return-delivery, not construction or extraction.
+struct P { id: integer }
+fn to_text(self: P) -> text { return "item-{self.id}"; }
+fn pair<T: Printable>(x: T) -> (text, text) { return (x.to_text(), "m"); }
+fn main() { for i in 0..3 { r: (text, text) = pair(P { id: i }); } }

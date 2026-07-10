@@ -1,0 +1,6 @@
+// g1b: callee tail is a method CALL; run RETURNS the monomorph result.
+struct P { id: integer }
+fn to_text(self: P) -> text { return "item-{self.id}"; }
+fn first<T: Printable>(v: vector<T>) -> text { v[0].to_text() }
+fn run() -> text { nums: vector<P> = [P{id:1}, P{id:2}]; first(nums) }
+fn main() { assert(run() == "item-1", "g1b"); }

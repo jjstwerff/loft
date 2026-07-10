@@ -1,0 +1,8 @@
+// @PLN85 residual — SHARPEST 1b repro. LEAK: a generic monomorph's OWN body leaks
+// its internal native `x.to_text()` even when the RESULT IS DISCARDED (not returned,
+// not used). So 1b is NOT a return-delivery bug — generic instantiation substitutes
+// the template body without re-running the 2d NativeCall promotion, so the monomorph
+// never delivers x.to_text() through a buffer. One fix (promote monomorph bodies)
+// closes the whole 1b group regardless of caller.
+fn to_text2<T: Printable>(x: T) -> text { x.to_text() }
+fn main() { for i in 0..3 { z = to_text2(7); } }

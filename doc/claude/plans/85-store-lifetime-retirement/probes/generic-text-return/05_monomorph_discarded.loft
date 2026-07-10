@@ -1,0 +1,5 @@
+// discard the monomorph result (no return through caller) — must still not leak.
+struct P { id: integer }
+fn to_text(self: P) -> text { return "d{self.id}"; }
+fn mk<T: Printable>(x: T) -> text { x.to_text() + "y" }
+fn main() { for i in 0..3 { mk(P{id:i}); } }

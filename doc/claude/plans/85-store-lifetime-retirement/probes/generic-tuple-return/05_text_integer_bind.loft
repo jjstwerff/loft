@@ -1,0 +1,4 @@
+struct P { id: integer }
+fn to_text(self: P) -> text { return "item-{self.id}"; }
+fn pi<T: Printable>(x: T, n: integer) -> (text, integer) { return (x.to_text(), n); }
+fn main() { for i in 0..3 { r = pi(P { id: i }, i); assert(r.0 == "item-{i}", "e0"); assert(r.1 == i, "e1"); } }

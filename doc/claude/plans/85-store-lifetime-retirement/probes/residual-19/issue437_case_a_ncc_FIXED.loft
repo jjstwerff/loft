@@ -1,0 +1,16 @@
+// @PLN85 skip_free-orphan case (a) — FIXED (issue_437's `??` ncc text temp).
+// `v[i] ?? ""` mints a skip_free `__ncc_N` text temp; SetText COPIES it into the
+// vector element, then the temp is dead.  Pre-fix it was never freed on interp
+// (orphan); the fix frees it after the consuming statement (scopes.rs::convert).
+// Expect leak=0 on both backends.
+fn ct(v: vector<text>) -> vector<text> {
+  o: vector<text> = [];
+  for i in 0..len(v) { o += [ v[i] ?? "" ]; }
+  return o;
+}
+fn main() {
+  src: vector<text> = ["title", "body"];
+  xs = ct(src);
+  assert(len(xs) == 2, "len 2");
+  assert((xs[0] ?? "z") == "title", "first preserved");
+}

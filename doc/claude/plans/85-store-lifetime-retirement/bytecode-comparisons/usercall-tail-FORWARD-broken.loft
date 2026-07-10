@@ -1,0 +1,6 @@
+// UserCall tail, callee AFTER caller (forward ref) — crashes codegen
+// ("Too few parameters on n_inner") when UserCall is naively enabled without
+// the signature pre-pass. Must match usercall-tail-BACKWARD-working after the fix.
+fn outer() -> text { inner() }
+fn inner() -> text { s = "x"; s + "y" }
+fn main() { print(outer()); }

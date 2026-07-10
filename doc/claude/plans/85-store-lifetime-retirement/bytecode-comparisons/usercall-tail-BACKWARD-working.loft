@@ -1,0 +1,5 @@
+// UserCall tail, callee BEFORE caller (backward ref) — promotes cleanly today
+// if UserCall is enabled. The TARGET signature the forward-ref case must match.
+fn inner() -> text { s = "x"; s + "y" }
+fn outer() -> text { inner() }
+fn main() { print(outer()); }

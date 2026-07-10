@@ -1,0 +1,4 @@
+// non-generic control: backward-ref call returned — already worked, guards regression.
+fn inner(n: integer) -> text { "k{n}" + "!" }
+fn run() -> text { inner(5) }
+fn main() { assert(run() == "k5!", "nongeneric"); }

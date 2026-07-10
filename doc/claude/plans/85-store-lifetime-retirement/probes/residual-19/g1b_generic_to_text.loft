@@ -1,0 +1,7 @@
+// @PLN85 residual — generic `.to_text()` monomorph (plan17_b/printable/p243).
+// LEAK: run() returns first(nums); first<T>'s monomorph returns a plain owned
+// String (no &text buffer). Generic instantiation is pass-2-only and substitutes
+// the template body, so the __tret promotion never fires for the monomorph.
+fn first<T: Printable>(v: vector<T>) -> text { v[0].to_text() }
+fn run() -> text { nums: vector<integer> = [10, 20, 30]; first(nums) }
+fn main() { print(run()); }

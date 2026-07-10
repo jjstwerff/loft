@@ -1,0 +1,6 @@
+// interpolation BuiltLocal tail; returned through caller.
+struct P { id: integer }
+fn to_text(self: P) -> text { return "n{self.id}"; }
+fn wrap<T: Printable>(x: T) -> text { "[{x.to_text()}]" }
+fn run() -> text { wrap(P{id:3}) }
+fn main() { assert(run() == "[n3]", "interp"); }

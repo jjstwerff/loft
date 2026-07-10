@@ -2737,7 +2737,13 @@ impl Scopes {
             function.tp(v),
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) && let Value::Call(fn_nr, _) = unspanned_value
-            && data.def(*fn_nr).name.starts_with("n_")
+            // A user-defined callee: an `n_` global OR a `t_` method / generic
+            // monomorph (@PLN85 generic-tuple-return-fix.md — a generic tuple return
+            // is a `t_<Type>_<fn>` monomorph; without `t_` the adopts-fresh /
+            // OpFreeRefIfDistinct pairing was skipped and the caller freed the
+            // aliased return with a plain OpFreeRef, orphaning its text fields).
+            // `code != Null` excludes native `t_` methods (Rust bodies).
+            && (data.def(*fn_nr).name.starts_with("n_") || data.def(*fn_nr).name.starts_with("t_"))
             && data.def(*fn_nr).code != Value::Null
         {
             let adopts_fresh_store = data.def(*fn_nr).return_adopts_fresh_store();
@@ -3121,6 +3127,29 @@ impl Scopes {
         } else {
             ls.pop().unwrap()
         };
+        // @PLN85 skip_free-orphan (case a) — free each `__ncc_N` text temp that a
+        // NON-TAIL statement consumes IN PLACE, right after that statement.  A
+        // `skip_free` text ncc temp (`v[i] ?? ""`) is suppressed from its own
+        // scope-exit free because the ncc block's result ALIASES it (freeing at
+        // the ncc block would dangle the value the consumer still reads).  But a
+        // text consumer (SetText / assignment / append) COPIES the String, so once
+        // the consuming statement completes the temp's backing String is dead —
+        // never freed on the interpreter → orphan.  The tail expression is left
+        // untouched (case b: it IS the returned value, copied by the caller after
+        // return, so any in-function free UAFs).  Native drops the String via RAII
+        // and treats `OpFreeText` as a no-op, so the added op is interp-only.
+        {
+            let mut with_frees = Vec::with_capacity(ls.len());
+            for stmt in ls.drain(..) {
+                let mut ncc = Vec::new();
+                collect_consumed_ncc_text(&stmt, function, &mut ncc);
+                with_frees.push(stmt);
+                for v in ncc {
+                    with_frees.push(call("OpFreeText", v, data));
+                }
+            }
+            ls = with_frees;
+        }
         let scope_vars = self.variables(self.scope);
         for &v in &scope_vars {
             self.var_mapping.remove(&v);
@@ -3338,7 +3367,17 @@ impl Scopes {
             && matches!(expr, Value::Var(v)
                 if matches!(function.tp(*v), Type::RefVar(inner)
                     if !matches!(inner.base(), Type::Text(_))));
-        if ls.is_empty() || (matches!(expr, Value::Null | Value::Var(_)) && !var_is_place_ref) {
+        // @PLN85 Class B2 — a plain text LITERAL tail reads none of the
+        // to-be-freed locals and has no side effects, so `ls (frees); return
+        // "lit"` is correct and copy-free.  The B5-L3 text hoist below would
+        // otherwise mint an OWNED `__ret_N = "lit"` copy (skip_free) that the
+        // caller consumes-and-leaks — the leak that appears whenever a
+        // text-returning fn with ANY freeable local returns a literal (the
+        // p54 match-of-literals / json-classify family).  Returning the literal
+        // directly is exactly what a fn with NO frees already emits.
+        if ls.is_empty()
+            || (matches!(expr, Value::Null | Value::Var(_) | Value::Text(_)) && !var_is_place_ref)
+        {
             if is_return && !expr_is_terminal {
                 ls.push(Value::Return(Box::new(expr.clone())));
             } else if matches!(expr, Value::Null) {
@@ -3374,6 +3413,7 @@ impl Scopes {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
+            free_copied_work_texts(&mut result, expr, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -3402,6 +3442,7 @@ impl Scopes {
             self.var_order.push(tmp);
             let mut result = Vec::with_capacity(ls.len() + 2);
             result.push(v_set(tmp, expr.clone()));
+            free_copied_work_texts(&mut result, expr, function, data);
             result.extend(ls);
             result.push(Value::Return(Box::new(Value::Var(tmp))));
             return result;
@@ -3528,7 +3569,22 @@ impl Scopes {
                 self.ret_temp_counter += 1;
                 let name = format!("__blk_{}", self.ret_temp_counter);
                 let tmp = function.add_temp_var(&name, tp);
-                self.var_scope.insert(tmp, self.scope);
+                // @PLN85 n3 — register the hoist temp at the FUNCTION BODY scope
+                // (1), not `self.scope` (this nested block's scope, where `__blk_N`
+                // is the tail value and so is EXCLUDED from `get_free_vars` as the
+                // block's `ret_var` → its owned String leaked, e.g.
+                // `test_value = { a = Item{name:"x"}; b = a; a.name }`).  The block
+                // value is delivered to the outer consumer by COPY (OpAppendText),
+                // never moved, so the temp stays owned and must be freed.  Its
+                // `InitText` is hoisted to the function root (the `lift_texts`
+                // mechanism below), so its `OpFreeText` must fire exactly ONCE at
+                // function exit — registering at scope 1 makes the function-exit
+                // sweep (`get_free_vars(to_scope = 1)`) emit it, matching the
+                // root-level init and avoiding a per-iteration double-free in loops.
+                // The hoist only fires for `!is_return` blocks (always nested,
+                // scope >= 2), so `__blk_N` is never a function return value — the
+                // function-exit free can never free a value the caller adopts.
+                self.var_scope.insert(tmp, 1);
                 self.var_order.push(tmp);
                 self.lift_texts.push(tmp);
                 let mut result = Vec::with_capacity(ls.len() + 2);
@@ -4408,8 +4464,61 @@ fn needs_pre_init(tp: &Type) -> bool {
     )
 }
 
+/// @PLN85 text-tail-return-leak — after a B5-L3 `__ret_N` COPY hoist
+/// (`Set(__ret_N, expr)` lowers to `OpAppendText`, a deep copy), any `__work_N`
+/// text temp that `expr` reads is now dead: the caller consumes the `__ret_N`
+/// copy, not `__work_N`.  `wrap_value_text_dest` synthesises that work-text
+/// precisely so it CAN be freed, but as the return terminal its scope-exit free
+/// is suppressed (it looked like the returned value — `ret_var`).  Emit the free
+/// HERE, at the copy, so it fires ONLY when a copy actually happened; the
+/// direct-transfer path (fast-path `Return(Var(__work_N))`, no `__ret_N`) reaches
+/// neither this nor a free and correctly leaves `__work_N` for the caller.  Fixes
+/// the tail native-text-CALL leak (and the `-> text?` freed-then-read UAF) without
+/// touching the direct-transfer shapes attempt 1 broke.  See
+/// plans/85-store-lifetime-retirement/text-tail-return-leak.md.
+fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Function, data: &Data) {
+    let mut srcs = Vec::new();
+    collect_return_sources(expr, &mut srcs);
+    for w in srcs {
+        if function.name(w).starts_with("__work_") && matches!(function.tp(w).base(), Type::Text(_))
+        {
+            result.push(call("OpFreeText", w, data));
+        }
+    }
+}
+
 fn call(to: &'static str, v: u16, data: &Data) -> Value {
     Value::Call(data.def_nr(to), vec![Value::Var(v)])
+}
+
+/// @PLN85 skip_free-orphan (case a): collect the `skip_free` text `__ncc_N` temps
+/// whose null-coalesce value-block is nested (as a sub-expression) inside `node` —
+/// i.e. the temps this statement CONSUMES IN PLACE.  Descends through expression
+/// constructs (`Call`/`If`/`Insert`/…) and INTO `ncc`-named value-blocks (to reach
+/// a nested `??`), but STOPS at any other `Block`/`Loop`: those run their own
+/// `convert` and free their own temps, so descending would double-free.  A bare
+/// `Set(__ncc, …)` outside an `ncc` block (the temp's own declaration inside the
+/// ncc block) is deliberately NOT matched — only the value-block's presence counts,
+/// which is why the ncc block's own `convert` attributes no free (its statement is
+/// the declaration, not a nested ncc consumer).
+fn collect_consumed_ncc_text(node: &Value, function: &Function, out: &mut Vec<u16>) {
+    match node {
+        Value::Span(b) => collect_consumed_ncc_text(&b.1, function, out),
+        Value::Block(bl) if bl.name == "ncc" => {
+            for op in &bl.operators {
+                if let Value::Set(v, _) = op.unspan()
+                    && function.is_skip_free(*v)
+                    && matches!(function.tp(*v).base(), Type::Text(_))
+                    && function.name(*v).starts_with("__ncc_")
+                {
+                    out.push(*v);
+                }
+            }
+            node.for_each_child(&mut |c| collect_consumed_ncc_text(c, function, out));
+        }
+        Value::Block(_) | Value::Loop(_) => {}
+        _ => node.for_each_child(&mut |c| collect_consumed_ncc_text(c, function, out)),
+    }
 }
 
 /// #316 — what kind of store does the RHS of a `Set` into a Reference var

@@ -8,12 +8,15 @@
 #
 #   - miri  — gold-standard hard-UB (alignment/OOB/UAF/uninit/leak), but
 #     interpreter-on-Miri is ~20 min, so it runs a curated representative set.
+#     Runs on BOTH ubuntu-x86_64 and macos-ARM64 (@PLN54 S1 — @P383 was ARM-only).
 #   - asan  — AddressSanitizer over the WHOLE interpreter corpus at near-native
 #     speed: the broad UAF/OOB sweep Miri's curated set can't afford.  loft's
 #     intentional store aliasing lives WITHIN single allocations, so ASan (which
 #     checks allocation bounds, not borrow models) runs clean where Miri needs
 #     -Zmiri-disable-stacked-borrows.  Leaks off for now (detect_leaks=0) pending
-#     triage of the live-at-exit baseline.
+#     triage of the live-at-exit baseline.  Runs on BOTH ubuntu-x86_64 and
+#     macos-ARM64 (@PLN54 S1); the ARM leg skips one deep-nesting guard test whose
+#     8 MB-stack calibration ASan's frame redzones defeat (see the asan job).
 #   - poison — the arena poison-on-free detector (@PLN54 S3): LOFT_POISON=1
 #     fills every freed STORE RECORD with 0xDEADBEEF so a dangling-DbRef read
 #     after free is loud garbage, not silent stale data.  This is the
@@ -82,8 +85,19 @@ jobs:
             echo "::warning::stale plans found — close directive on main but issue still status:active; run scripts/close-shipped-plans.sh" || true
 
   miri:
-    name: Miri hard-UB gate
-    runs-on: ubuntu-latest
+    name: Miri hard-UB gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # @PLN54 S1 — the founding @P383 incident surfaced EXCLUSIVELY on macOS-ARM, so
+    # the Miri leg runs on both the ubuntu-x86_64 and macos-ARM64 runners; a
+    # ubuntu-only nightly would not have caught it.  The store-unit set is
+    # platform-agnostic Rust (no mold, no target flag), so both legs share the same
+    # steps; `runner.os`-scoped cache keys keep them separate.  `fail-fast: false`
+    # so a red leg on one OS never masks the other's result.  Validated on a real
+    # Mac before landing (6/6 store-unit tests Miri-clean on aarch64-apple-darwin).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
     # The store-unit set runs in seconds; the whole job is dominated by the Miri
     # sysroot build + the lib compile under Miri (~10-15 min).  30 min is generous
     # headroom AND a fail-fast tripwire: a future test that runs a WHOLE loft
@@ -159,8 +173,34 @@ jobs:
             database::store_rebase_tests::translate_rewrites_mapped
 
   asan:
-    name: ASan UAF/OOB sweep (interpreter corpus)
-    runs-on: ubuntu-latest
+    name: ASan UAF/OOB sweep (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    # @PLN54 S1 — run the whole-corpus ASan sweep on BOTH the ubuntu-x86_64 and
+    # macos-ARM64 runners.  The founding @P383 incident surfaced only on macOS-ARM,
+    # so ARM ASan closes a real residual (a UB that manifests on ARM but not on the
+    # ubuntu leg).  `include` carries the per-runner native `target` triple (ASan
+    # instruments the whole build only under an explicit --target) and a macOS-only
+    # `extra_filter` (see the sweep step).  `fail-fast: false` so one OS's red never
+    # hides the other.  Validated on a real Mac before landing (1494 pass / 0 fail
+    # + the raw-pointer-OOB positive control fires on arm64).
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            extra_filter: ''
+          # ASan pads every stack frame with redzones (~6× on ARM here), which
+          # defeats the 8 MB-stack calibration of the deep-nesting guard test:
+          # 128-deep recursion overflows the thread stack BEFORE the depth guard
+          # bails (a pure ASan-instrumentation artifact — production frames are
+          # ~10 KB and the guard fires at ~1.3 MB).  It is a functional recursion
+          # guard test, not UAF/OOB coverage, and still runs unsanitized on the
+          # macOS-ARM full suite (v2-validation.yml) + the ubuntu ASan leg, so
+          # skipping it only here loses no memory-safety coverage.
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            extra_filter: ' | test(deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash)'
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -169,6 +209,7 @@ jobs:
         uses: dtolnay/rust-toolchain@nightly
 
       - name: Install mold
+        if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y mold
 
       - name: Cache cargo registry and build
@@ -178,8 +219,8 @@ jobs:
             ~/.cargo/registry
             ~/.cargo/git
             target
-          key: ubuntu-asan-cargo-${{ hashFiles('**/Cargo.lock') }}
-          restore-keys: ubuntu-asan-cargo-
+          key: ${{ runner.os }}-asan-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-asan-cargo-
 
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
@@ -188,8 +229,17 @@ jobs:
       # tests) run in-process, so ASan instruments the interpreter itself —
       # native/wasm/html tests spawn separate uninstrumented binaries and add no
       # ASan coverage.  An explicit --target makes RUSTFLAGS instrument the whole
-      # build.  detect_leaks=0 keeps this a clean UAF/OOB gate until the
-      # LeakSanitizer live-at-exit baseline (~108 allocations) is triaged.
+      # build.  detect_leaks=0 keeps this a clean UAF/OOB gate.  The LeakSanitizer
+      # baseline is now ROOT-CAUSED (@PLN54 S4, plans/54-.../REMAINING_DESIGN.md § S4):
+      # (1) the intentional documented `ir_read` Box::leak of &'static str IR names
+      # (interner-style, bounded), and (2) a REAL GROWING production leak — a native
+      # fn's `text` result used as a user function's implicit tail-return is never
+      # registered as owned (~2 allocs/call, grows; rebinding to a local fixes it;
+      # likely a caller-bind/OpReturn owned-placeholder gap in state/codegen.rs).
+      # This sweep stays detect_leaks=0 (a clean UAF/OOB gate).  The LEAK half is the
+      # SEPARATE `asan-leak-gate` job below (detect_leaks=1, ENFORCING at baseline 0) —
+      # split out so the slow single-threaded leak pass never gates this fast sweep,
+      # and so a leak regression is its own red signal.
       #
       # nextest (not `cargo test`): it does NOT build doctests, which under
       # `--target` + `-Zsanitizer` fail to resolve the curve25519 proc-macro
@@ -203,10 +253,79 @@ jobs:
           ASAN_OPTIONS: 'detect_leaks=0'
         run: >
           cargo +nightly nextest run --profile ci --release
-          --target x86_64-unknown-linux-gnu
+          --target ${{ matrix.target }}
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
-          test(n9_generated_fill_matches_src) | test(native_rs_functions_up_to_date))'
+          test(n9_generated_fill_matches_src) |
+          test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
+
+  # @PLN85 — the interpreter LEAK GATE.  SEPARATE from the ASan UAF/OOB sweep above:
+  # its own runner (the slow single-threaded leak pass never gates the fast sweep) and
+  # its own red/green signal.  ENFORCING at baseline 0 — a leak FAILS this job so it
+  # gets found and fixed.  Non-blocking by construction: it lives only in the nightly
+  # workflow, so it never gates a PR / another fix; it just lands red within 24h.
+  #
+  # detect_leaks=1 + .github/lsan_suppressions.txt (the intentional `ir_read` Box::leak,
+  # + the macOS dyld thread-TLS frame — a no-op on Linux).  As of @PLN85 the whole
+  # interpreter corpus is leak=0 locally; this job holds it there.  If a NEW benign
+  # SYSTEM frame surfaces on the Linux leg (different TLS impl), suppress THAT specific
+  # frame in lsan_suppressions.txt — never raise the baseline off zero for a real leak.
+  asan-leak-gate:
+    name: ASan interpreter leak gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            extra_filter: ''
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            extra_filter: ' | test(deep_nesting_guard)'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install mold
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-asan-leak-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-asan-leak-cargo-
+      # LIBRARY leak coverage needs the native-FFI build deps (GL / ALSA): the
+      # library suite exercises the graphics / input / moros libs — the libs are
+      # where loft's real use lives, so they MUST be leak-gated too.
+      - name: Install lib-FFI build deps (GL/ALSA)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libgl1-mesa-dev libasound2-dev pkg-config
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      # The leak gate = the ASan sweep's command with detect_leaks=1 instead of 0, so
+      # nextest runs each test in its OWN process and LSan fails THAT test at exit if it
+      # leaks — per-test attribution (the best "work we might miss" signal), implicit
+      # baseline 0.  Includes `library_suite` (dropped from the fast sweep) so a leak in
+      # ANY library's interpreted test suite (its spawned `loft test` child inherits
+      # detect_leaks=1 and exits non-zero) reds this gate.  Suppressions cover only the
+      # intentional `ir_read` Box::leak + the macOS dyld thread-TLS frame.
+      - name: Leak gate (detect_leaks=1, whole corpus incl. libraries)
+        env:
+          RUSTFLAGS: '-Zsanitizer=address'
+          ASAN_OPTIONS: 'detect_leaks=1'
+          LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
+        run: >
+          cargo +nightly nextest run --profile ci --release --no-fail-fast
+          --target ${{ matrix.target }}
+          --lib --test issues --test wrap --test strings --test frame_vars
+          -E 'not (test(fill_rs_up_to_date) | test(n9_generated_fill_matches_src) |
+          test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
 
   poison:
     name: LOFT_POISON arena-UAF gate (store-internal use-after-free)

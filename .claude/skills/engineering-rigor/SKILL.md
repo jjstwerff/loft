@@ -263,6 +263,31 @@ cleverness). The tell triggers the search for a missing invariant; finding one �
 shorter + robust; honestly finding none → the length is essential, accept it. The
 alarm did its job by making you check.
 
+## When iterating stalls: change altitude — the pivot always exists
+
+The tell says *look*; this says **where** once looking-broad has stalled. A few
+unresolving probes is fine — iterate freely. The rule bites only at
+**non-convergence**: you're retrying and the evidence is piling up that the *frame*
+is off (*actionable ≠ true* — a category becoming useful is not it becoming
+correct). Both instinctive moves fail here for one reason — another **retry** stays
+at the wrong category's altitude, and **more breadth** (extra matrix cells) spreads
+you thinner across that same shallow level; neither drops to the facts the category
+summarized.
+
+**Plan B is depth on ONE case.** Take the **simplest-looking** one and go all the
+way down — the IR, the emitted code, the exact values, one variable's real lifetime
+— asking: *is this really the category, or have I skated over a detail?* Simple =
+least noise, so the missing detail is visible; one case understood **completely**
+decides rather than suggests.
+
+It is the highest-leverage move when stuck, and it **compounds**: the detail doesn't
+just settle this case, it **opens plans C, D, E** — the real mechanism, once seen,
+generates approaches that were invisible while you guessed. So a good engineer knows
+*when* to pivot and trusts **a way out always exists — you just have to look for
+it.** Perseveration (retrying plan A past its stall) is the failure; a block is only
+the signal to drop altitude. Sight, not willpower: stuck means you can't *see* the
+case yet — go see one.
+
 ## Keep it light — the procedure must not consume the judgment it serves
 
 There are **two layers, and only the second is expensive.** The always-on layer is
