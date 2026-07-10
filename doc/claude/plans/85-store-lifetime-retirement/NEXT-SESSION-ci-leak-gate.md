@@ -35,7 +35,8 @@ hidden `&text` caller buffer** (= "register it as owned" = the CI comment's "reb
 | `b8719d5d` | `FnRefCall` → `wants_tret_bind` (control.rs) | p227×4, 13→9 | ✅ |
 | `20a74329` | `promote_monomorph_text_return` (control.rs + mod.rs) | plan17/p243, 9→6 | ✅ |
 | `348622c1` | tuple diagnosis doc | — | ✅ |
-| `c17ba462` | skip_free-orphan class doc | — | **⚠ UNPUSHED** |
+| `c17ba462` | skip_free-orphan class doc | — | ✅ |
+| _pending_ | `collect_consumed_ncc_text` free-after-consumer (scopes.rs) | issue_437, 6→5 | ⏳ |
 
 **FIRST ACTION next session: `git push origin mac-work`** (c17ba462 + this handoff).
 
@@ -43,15 +44,16 @@ Method notes that paid off: matrix-first (a vacuous compile-error cell nearly mi
 the tuple diagnosis — always prove the cell can fail); prove the promoted bytecode
 byte-matches the non-generic twin; both-backend + full-suite gate every change.
 
-## The remaining 6 leakers — ONE class: skip_free-orphan (see skip-free-orphan-class.md)
+## The remaining 5 leakers — case (b) of skip_free-orphan (see skip-free-orphan-class.md)
 
 A text temp marked `skip_free` (to outlive its block for a consumer) never freed on
 interp. Split by value flow:
-- **`issue_437` (1) — case (a) consumed-in-place.** `__ncc_N` (`v[i] ?? ""`) copied
-  into the returned vector, temp then dead. Fixable by a per-last-use free — but needs
-  ESCAPE ANALYSIS (a `?? ""` that IS the return tail is case b, must stay alive), is
-  per-iteration inside a loop, sits in the `??` operator (94 test files), and native
-  keys on the `__ncc_* skip_free` pattern in 5 places. NOT a patch.
+- **`issue_437` (1) — case (a) consumed-in-place — ✅ FIXED (6→5).** `__ncc_N`
+  (`v[i] ?? ""`) copied into the vector element, temp then dead. Freed after the
+  consuming statement in `scopes.rs::convert` (`collect_consumed_ncc_text`). The
+  escape split fell out structurally: a tail `?? ""` (case b) is the block tail, not
+  a statement, so the walker never touches it. Interp-only — native no-ops
+  `OpFreeText` (RAII). Full suite green; leak=0 both backends. See the class doc.
 - **p329/p330 (5) — case (b) the temp IS the returned value.** Tuple element is a live
   view into `__ret_text_N` on interp; any in-function free UAFs. Needs the caller to
   own the buffer — the `__tuple`-for-generics route, which has a documented

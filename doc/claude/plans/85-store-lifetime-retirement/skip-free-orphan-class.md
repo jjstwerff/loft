@@ -3,16 +3,17 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# @PLN85 — the `skip_free`-orphan text-temp class (the final 6 leakers)
+# @PLN85 — the `skip_free`-orphan text-temp class (case a FIXED; 5 leakers left)
 
 After the promotion fixes (16→6 leakers, n3/p54_b6/p227/generic-text), the residual
-6 are ONE class: a text temp marked `skip_free` (so its backing `String` outlives
+6 were ONE class: a text temp marked `skip_free` (so its backing `String` outlives
 its block, for a consumer to copy) that is then **never freed on the interpreter**
 → orphan. Native drops it via RAII, so it is INTERPRETER-ONLY. Members:
 
 - **`issue_437`** — the `??` ncc temp `__ncc_N` (`operators.rs`, `set_skip_free`).
+  **FIXED** (case a, 6→5) — see "The fix (case a)" below.
 - **`p329`×3, `p330`×2** — the tuple element hoist `__ret_text_N`
-  (`scopes.rs:3454`, `set_skip_free`).
+  (`scopes.rs:3454`, `set_skip_free`). Still open (case b, the return-ABI class).
 
 ## The load-bearing split: case (a) consumed-in-place vs case (b) outlives
 
@@ -37,19 +38,46 @@ at the temp's LAST USE, which differs by how the value flows:
     avoids (`tuple_return_rewrite` `from_tv` gate) with a doc-comment warning that
     routing generics through `__tuple` broke p329/p330/p240/plan17 before.
 
-## Why it is NOT a session-tail change
+## The fix (case a) — free after the consuming statement
 
-- **`issue_437` (case a, tractable but wide):** the fix is a per-last-use free of
-  `__ncc_N`, gated on it being consumed-in-place (NOT the block/return value). That
-  distinction is context-dependent (a `?? ""` that IS the return tail is case b and
-  must stay alive), and it sits in the `??` operator — 94 test files use `??`, and
-  native keys on the `__ncc_*` `skip_free` PATTERN (`block_contains_ncc_skip_free`,
-  `needs_ncc_materialise`, `generation/emit.rs:384`, `calls.rs:302/316`). A blanket
-  free-at-exit regresses the case-(b) `??` returns; the correct fix needs a real
-  last-use / escape analysis for the temp.
+`src/scopes.rs::convert` now, after popping the block tail, walks each **non-tail**
+statement and — via `collect_consumed_ncc_text` — finds every `skip_free` text
+`__ncc_N` temp whose `ncc`-named value-block is nested inside it (the temps that
+statement CONSUMES IN PLACE). It emits `OpFreeText(temp)` right after the statement.
+
+Why this is the exact chokepoint, and why it's safe:
+- **The free CANNOT live at the ncc block** — its result ALIASES `__ncc` (the true
+  arm yields the temp), so a free there dangles the value the consumer still reads
+  (verified: un-suppressing `skip_free` for text put the free at the ncc block exit
+  and corrupted the value on interp — assertions failed — while native, which
+  borrows and treats `OpFreeText` as a no-op, stayed clean).
+- **Every text consumer COPIES** (SetText / assignment / append copy the String), so
+  once the consuming *statement* completes the temp's String is dead. The free lands
+  after `OpSetText` and before `OpFinishRecord`, per loop iteration → no orphan.
+- **The tail expression is left untouched** — that IS case b (the value the caller
+  copies after return); an in-function free would UAF. The walker only processes
+  non-tail statements, so a tail `?? ""` return stays `skip_free`.
+- **Interp-only, no native change.** Native treats `OpFreeText` as a no-op
+  (`generation/ops/text_ops.rs:64`, `pre_eval.rs:169` — Rust drops via RAII) and keys
+  its `__ncc_*` detection on the NAME, not the flag, so the added op is invisible to
+  native: no double-free, and the `block_contains_ncc_skip_free` machinery is intact.
+- The walker STOPS at non-`ncc` `Block`/`Loop` scopes (they run their own `convert`
+  and free their own temps) → no double-free of a temp consumed in a nested scope.
+- Only `Type::Text` ncc temps are freed; heap-DbRef ncc temps (`?? []`, `?? Enum{}`)
+  keep their existing skip_free treatment (native materialises them).
+
+Gate: full suite green (the 94-`??`-file blast radius), correctness + leak=0 on both
+backends across a consumer matrix (vector element, assignment, struct field, concat,
+nested `??`, if-arm, loop, non-text control). Guard probe:
+`probes/residual-19/issue437_case_a_ncc_FIXED.loft` (leak=0).
+
+## Why case b is NOT a session-tail change
+
 - **`p329`/`p330` (case b):** the return-ABI landmine — either free the returned
   view without UAF (impossible with the Str ABI) or re-open `__tuple`-for-generics
-  past the documented regression. Both delicate.
+  past the documented regression. Both delicate. A `?? ""` that IS the return tail
+  is the same shape (the ncc temp escapes as the returned value) and is left
+  `skip_free` by design.
 
 ## The right shape for the arc (next session)
 
@@ -61,4 +89,4 @@ own probe — a minimal `o += [v[i] ?? ""]` loop, ASan leak oracle, both backend
 full suite (the 94-file `??` blast radius is the gate). Tuples (case b) fold into the
 forward-ref/`__tuple` promotion work, not this free.
 
-## Status: MAPPED. No code change — the fix needs escape analysis, not a patch.
+## Status: case a FIXED (issue_437, 6→5). Case b (p329/p330 tuple) still open.

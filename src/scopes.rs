@@ -3121,6 +3121,29 @@ impl Scopes {
         } else {
             ls.pop().unwrap()
         };
+        // @PLN85 skip_free-orphan (case a) — free each `__ncc_N` text temp that a
+        // NON-TAIL statement consumes IN PLACE, right after that statement.  A
+        // `skip_free` text ncc temp (`v[i] ?? ""`) is suppressed from its own
+        // scope-exit free because the ncc block's result ALIASES it (freeing at
+        // the ncc block would dangle the value the consumer still reads).  But a
+        // text consumer (SetText / assignment / append) COPIES the String, so once
+        // the consuming statement completes the temp's backing String is dead —
+        // never freed on the interpreter → orphan.  The tail expression is left
+        // untouched (case b: it IS the returned value, copied by the caller after
+        // return, so any in-function free UAFs).  Native drops the String via RAII
+        // and treats `OpFreeText` as a no-op, so the added op is interp-only.
+        {
+            let mut with_frees = Vec::with_capacity(ls.len());
+            for stmt in ls.drain(..) {
+                let mut ncc = Vec::new();
+                collect_consumed_ncc_text(&stmt, function, &mut ncc);
+                with_frees.push(stmt);
+                for v in ncc {
+                    with_frees.push(call("OpFreeText", v, data));
+                }
+            }
+            ls = with_frees;
+        }
         let scope_vars = self.variables(self.scope);
         for &v in &scope_vars {
             self.var_mapping.remove(&v);
@@ -4460,6 +4483,36 @@ fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Func
 
 fn call(to: &'static str, v: u16, data: &Data) -> Value {
     Value::Call(data.def_nr(to), vec![Value::Var(v)])
+}
+
+/// @PLN85 skip_free-orphan (case a): collect the `skip_free` text `__ncc_N` temps
+/// whose null-coalesce value-block is nested (as a sub-expression) inside `node` —
+/// i.e. the temps this statement CONSUMES IN PLACE.  Descends through expression
+/// constructs (`Call`/`If`/`Insert`/…) and INTO `ncc`-named value-blocks (to reach
+/// a nested `??`), but STOPS at any other `Block`/`Loop`: those run their own
+/// `convert` and free their own temps, so descending would double-free.  A bare
+/// `Set(__ncc, …)` outside an `ncc` block (the temp's own declaration inside the
+/// ncc block) is deliberately NOT matched — only the value-block's presence counts,
+/// which is why the ncc block's own `convert` attributes no free (its statement is
+/// the declaration, not a nested ncc consumer).
+fn collect_consumed_ncc_text(node: &Value, function: &Function, out: &mut Vec<u16>) {
+    match node {
+        Value::Span(b) => collect_consumed_ncc_text(&b.1, function, out),
+        Value::Block(bl) if bl.name == "ncc" => {
+            for op in &bl.operators {
+                if let Value::Set(v, _) = op.unspan()
+                    && function.is_skip_free(*v)
+                    && matches!(function.tp(*v).base(), Type::Text(_))
+                    && function.name(*v).starts_with("__ncc_")
+                {
+                    out.push(*v);
+                }
+            }
+            node.for_each_child(&mut |c| collect_consumed_ncc_text(c, function, out));
+        }
+        Value::Block(_) | Value::Loop(_) => {}
+        _ => node.for_each_child(&mut |c| collect_consumed_ncc_text(c, function, out)),
+    }
 }
 
 /// #316 — what kind of store does the RHS of a `Set` into a Reference var
