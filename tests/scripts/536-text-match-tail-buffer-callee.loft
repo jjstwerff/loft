@@ -58,20 +58,32 @@ fn tmt_if_twin(k: integer) -> text {
   if k == 1 { tmt_computed() } else { "" }
 }
 
-// A match in BIND position (not the tail) goes through a different path and was
-// never affected by this fix.  Pinned with a TEXT subject, which is the shape that
-// works today.
-//
-// KNOWN SIBLING, still open: the same bind position with an INTEGER subject and a
-// buffer-taking callee — `q = match k { 1 => tmt_computed(), _ => "" }; q` — still
-// miscompiles on native (E0716), and the interpreter is correct.  It is NOT caused
-// by this fix (`if_tail_yields_text`'s only caller gates on the fn body's TAIL, and
-// this tail is `Var(q)`), and it predates it.  Same class — a buffer callee under a
-// `scalar_match` — but a different site: the `Set(q, …)` bind, not the tail.  Left
-// out of this guard so the guard stays green; probe kept in the fix's commit message.
-fn tmt_not_tail(k: text) -> text {
+// The BIND position — `q = <branch>; …` — was the same class at a different site,
+// and is now fixed too (`Parser::try_branch_text_bind`, the bind-site analogue of
+// `do_if_acc`).  Both rustc masks are pinned: an integer/boolean subject gave E0716,
+// an `if` gave E0308.  A TEXT subject passed only by accident (its `OpFreeText` on
+// the subject copy tripped the emitter's `has_trailing_void`), so it is pinned too —
+// it must stay correct for the RIGHT reason now.  Full corpus cell:
+// `tests/oracle/30-text-branch-bind-delivery.loft`.
+fn tmt_bind_text_subject(k: text) -> text {
   q = match k { "hit" => tmt_computed(), _ => "" };
   q
+}
+fn tmt_bind_int_subject(k: integer) -> text {
+  q = match k { 1 => tmt_computed(), _ => "" };
+  q
+}
+fn tmt_bind_if(k: integer) -> text {
+  q = if k == 1 { tmt_computed() } else { "" };
+  q
+}
+// Destination NOT returned, so no hidden-buffer promotion.  The leading `Set(q, "")`
+// in `try_branch_text_bind` is what introduces `q` here: without it the per-arm sets
+// live inside the branch, the interpreter silently read an EMPTY text (a wrong
+// answer, worse than the reject it replaced) and native emitted an undeclared var.
+fn tmt_bind_local(k: integer) -> text {
+  q = match k { 1 => tmt_computed(), _ => "" };
+  "[{q}]"
 }
 
 fn main() {
@@ -86,5 +98,9 @@ fn main() {
   assert(tmt_both_arms(1) == "ab", "both arms first");
   assert(tmt_both_arms(0) == "z!", "both arms default");
   assert(tmt_if_twin(1) == "ab", "if twin");
-  assert(tmt_not_tail("hit") == "ab", "match not in tail");
+  assert(tmt_bind_text_subject("hit") == "ab", "bind, text subject");
+  assert(tmt_bind_int_subject(1) == "ab", "bind, int subject (was E0716)");
+  assert(tmt_bind_int_subject(9) == "", "bind, int subject default");
+  assert(tmt_bind_if(1) == "ab", "bind an if (was E0308)");
+  assert(tmt_bind_local(1) == "[ab]", "bind, destination not returned");
 }

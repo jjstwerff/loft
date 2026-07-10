@@ -1,0 +1,118 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN89 differential-oracle corpus — AXIS: binding a text-typed BRANCH to a local.
+//
+// Sibling of cell 27's `a7_match_arm_tail`.  Where 27 pins the branch in TAIL
+// position, this pins it in BIND position: `q = <branch>; …`.  Both were
+// accept/reject divergences — the interpreter, which keeps the value on its
+// stack, ran correctly while `--native` refused to compile.
+//
+// TRIGGER (verified by a 17-cell boundary matrix, one axis per probe): a callee
+// that needs a caller-provided DESTINATION BUFFER, i.e. a COMPUTED text body.  A
+// literal-bodied callee returns an owned `String`, needs no buffer, and never
+// diverged — with or without parameters.  Two rustc masks, one cause: `match` on
+// a scalar subject gave **E0716** (borrow of a dropped `Str` temporary), `if`
+// gave **E0308** (the arms' Rust reps disagree).  A `match` on a TEXT subject
+// passed only BY ACCIDENT — freeing the subject copy emits an `OpFreeText` after
+// the value, which incidentally tripped the emitter's `has_trailing_void` and
+// materialised the block.  The subject's type has nothing to do with the arm
+// temporary's lifetime.
+//
+// FIX: `Parser::try_branch_text_bind` — a branch RHS delivers PER ARM into the
+// destination (`Set(q, leaf)` per arm, plus a leading `Set(q, "")` that
+// introduces `q`, since the per-arm sets live inside the branch).  That is the
+// bind-site analogue of `do_if_acc`'s tail promotion, and it emits exactly the
+// shape the `if` tail already produced.  Guard: tests/scripts/536.
+//
+// NOT covered here, still open: a `-> text?` whose branch tail has a `null` arm
+// (E0308 on native, both for `if` and `match`) — a distinct nullable-branch-tail
+// gap, see NATIVE.md § Open work.  Keep it out of the corpus until it is fixed;
+// a cell for a known divergence would make this gate red.
+//
+// Both backends must AGREE on value and on accept/reject.
+
+fn tb_computed() -> text { "a" + "b" }          // buffer-taking callee
+fn tb_literal() -> text { "lit" }               // bufferless callee (owned String)
+fn tb_param(s: text) -> text { s + "!" }        // params are not the trigger
+
+// --- bind, integer subject (was E0716) ------------------------------------
+fn b_int(k: integer) -> text {
+  q = match k { 1 => tb_computed(), _ => "" };
+  q
+}
+
+// --- bind, boolean subject (was E0716) ------------------------------------
+fn b_bool(f: boolean) -> text {
+  q = match f { true => tb_computed(), _ => "" };
+  q
+}
+
+// --- bind, text subject (passed only by accident; must stay correct) -------
+fn b_text(s: text) -> text {
+  q = match s { "hit" => tb_computed(), _ => "" };
+  q
+}
+
+// --- bind an `if` (was E0308) ---------------------------------------------
+fn b_if(k: integer) -> text {
+  q = if k == 1 { tb_computed() } else { "" };
+  q
+}
+
+// --- bind, destination NOT returned (no hidden-buffer promotion) -----------
+// The regression that a naive fix introduces: with the per-arm sets inside the
+// branch and no leading init, `q` is never introduced — the interpreter silently
+// read an empty text (a wrong ANSWER) and native emitted an undeclared `var_q`.
+fn b_local(k: integer) -> text {
+  q = match k { 1 => tb_computed(), _ => "" };
+  out = "[{q}]";
+  out
+}
+
+// --- bind then USE (not merely return) ------------------------------------
+fn b_used(k: integer) -> text {
+  q = match k { 1 => tb_computed(), _ => "" };
+  q + "!"
+}
+
+// --- three arms: the chain nests `If`s ------------------------------------
+fn b_three(k: integer) -> text {
+  q = match k { 1 => tb_computed(), 2 => tb_param("x"), _ => "" };
+  q
+}
+
+// --- shapes that never diverged; they must not regress ---------------------
+fn b_literal_callee(k: integer) -> text {
+  q = match k { 1 => tb_literal(), _ => "" };
+  q
+}
+fn b_single_wildcard(k: integer) -> text {
+  q = match k { _ => tb_computed() };
+  q
+}
+fn b_plain_call(k: integer) -> text {
+  q = tb_computed();
+  q
+}
+fn b_coalesce(k: integer) -> text {
+  q = b_int(k) ?? "fb";
+  q
+}
+
+fn main() {
+  println("b_int_hit={b_int(1)}");                 // ab
+  println("b_int_miss={b_int(9)}");                // (empty)
+  println("b_bool={b_bool(true)}");                // ab
+  println("b_text={b_text(\"hit\")}");             // ab
+  println("b_if={b_if(1)}");                       // ab
+  println("b_local={b_local(1)}");                 // [ab]
+  println("b_used={b_used(1)}");                   // ab!
+  println("b_three_1={b_three(1)}");               // ab
+  println("b_three_2={b_three(2)}");               // x!
+  println("b_three_d={b_three(7)}");               // (empty)
+  println("b_lit={b_literal_callee(1)}");          // lit
+  println("b_wild={b_single_wildcard(0)}");        // ab
+  println("b_call={b_plain_call(0)}");             // ab
+  println("b_coalesce={b_coalesce(1)}");           // ab
+}

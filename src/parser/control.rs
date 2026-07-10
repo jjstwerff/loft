@@ -5469,7 +5469,7 @@ impl Parser {
     /// return (match lowers to nested `If`): an `If` (peeling `Return`) whose
     /// BOTH arms yield a text value.  Drives the per-arm accumulator
     /// materialisation (`push_text_arms_into`).
-    fn if_tail_yields_text(tail: &Value) -> bool {
+    pub(super) fn if_tail_yields_text(tail: &Value) -> bool {
         match tail.unspan() {
             Value::Return(inner) | Value::Drop(inner) => Self::if_tail_yields_text(inner),
             Value::If(_, then, els) => Self::arm_yields_text(then) && Self::arm_yields_text(els),
@@ -5532,7 +5532,49 @@ impl Parser {
     /// writes `av` independently (uniform Rust type on native — no if-expression
     /// to unify) and `av` becomes the single owned text the caller buffer
     /// promotion delivers copy-free.
-    fn push_text_arms_into(op: &mut Value, av: u16) {
+    /// Bind-site analogue of `do_if_acc`'s tail promotion (the @P323 sibling, 2026-07-10).
+    ///
+    /// `q = <branch producing text>` must deliver PER ARM into `q`; it must never lower to
+    /// `Set(q, <branch>)`.  Lowered as an expression, each arm emits `&*(callee(…))` — a
+    /// borrow of the `Str` temporary the callee returned — and that temporary dies at the
+    /// arm's `}`, so the consumer reads a dangling borrow.  Native rejects with **E0716**
+    /// (`match` on a scalar subject) or **E0308** when the arms' Rust reps disagree (`if`,
+    /// `??`); the interpreter, which keeps the value on its stack, is correct in all of
+    /// them — an accept/reject divergence.
+    ///
+    /// A `match` on a TEXT subject only *appeared* to work: freeing the subject copy emits
+    /// an `OpFreeText` after the value, which incidentally trips `has_trailing_void` in
+    /// `generation::emit`, which materialises the block.  The subject's type has nothing to
+    /// do with the arm temporary's lifetime — that is what makes it a proxy, not the fact.
+    ///
+    /// Rewriting each arm leaf to `Set(q, leaf)` yields exactly the shape the `if` TAIL
+    /// already emits (`*var_q = …;` per arm), which native compiles.  Returns `true` when
+    /// it rewrote `code`, which is then a VOID branch of `Set`s.
+    ///
+    /// Declines when the RHS reads `q` (the P223 clear-before-read wrap owns that shape),
+    /// when any arm yields `null` / `return` (`arm_yields_text`, so a `text?` bind keeps
+    /// its `(N-Store)` reject), and on pass 1 — the shape must be stable across passes.
+    ///
+    /// The leading `Set(q, "")` is load-bearing, not defensive.  The per-arm `Set`s live
+    /// INSIDE the branch, so without it this statement never introduces `q`: the
+    /// interpreter silently read an empty text (a wrong ANSWER, worse than the reject it
+    /// replaced) and native emitted an undeclared `var_q` (E0425).  The init defines the
+    /// destination exactly where the old `Set(q, <branch>)` did.
+    pub(super) fn try_branch_text_bind(&mut self, code: &mut Value, var_nr: u16) -> bool {
+        if self.first_pass
+            || var_nr == u16::MAX
+            || code.reads_var(var_nr)
+            || !Self::if_tail_yields_text(code)
+        {
+            return false;
+        }
+        Self::push_text_arms_into(code, var_nr);
+        let branch = std::mem::replace(code, Value::Null);
+        *code = Value::Insert(vec![v_set(var_nr, Value::Text(String::new())), branch]);
+        true
+    }
+
+    pub(super) fn push_text_arms_into(op: &mut Value, av: u16) {
         match op {
             Value::Span(b) => Self::push_text_arms_into(&mut b.1, av),
             Value::Return(inner) | Value::Drop(inner) => Self::push_text_arms_into(inner, av),
