@@ -165,6 +165,27 @@ then is the flip earned. Consciously-accepted items are recorded as deliberate (
 [DESIGN_DECISIONS.md](DESIGN_DECISIONS.md) entry), so the freeze is a decision, not an
 oversight.
 
+### The road to contract 1 is two phases — language, then libs
+
+The audit is not one rushed pass; reaching the freeze is **dual-phase**, and the order is
+forced by the work:
+
+1. **Close the open plans → settle the language.** You cannot audit a surface still in
+   motion, so the language side (syntax, semantics, errors) is settled *first* by landing the
+   in-flight feature/language plans. This phase is underway. As each plan closes its surface
+   stops moving and becomes auditable.
+2. **Then a dedicated, unhurried pass on the lib side.** The standard library and the core
+   published libraries are an *equally permanent* surface — every public name, signature,
+   default, and behavior is frozen forever (§ The promise is a ratchet). They get their **own
+   focused phase**, not a rushed tail on the language work: naming consistency, coverage gaps,
+   wrong defaults, the method-vs-free-function asymmetries in
+   [INCONSISTENCIES.md](INCONSISTENCIES.md) — all decided while contract 0 still permits it.
+
+Only when both phases are done — the language settled and audited, the lib side deliberately
+gone over — is the `0 → 1` flip earned. This is *why* the freeze is not imminent despite the
+type surface being feature-complete: the language nearing done is phase 1; the libs are phase
+2, and they are given their time.
+
 ## Per-surface — additive is the path; here is what a regression looks like
 
 | Surface | Additive (allowed) | Regression (a bug) |
