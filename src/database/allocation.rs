@@ -1519,9 +1519,18 @@ impl Stores {
         }
     }
 
+    /// `tp` is the CONTAINER type (`Vector` / `Sorted`), not the content type — the
+    /// same convention as `array_body` / `hash_body` / `index_body`, so the keystone
+    /// walk keys on the container's `Parts` and the content type is read back out.
     pub(super) fn copy_claims_seq_vector(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
+        let content_tp = match &self.types[tp as usize].parts {
+            Parts::Vector(v) | Parts::Sorted(v, _) => *v,
+            other => {
+                panic!("copy_claims_seq_vector called with non-vector type {tp} (parts: {other:?})")
+            }
+        };
         let length = vector::length_vector(rec, &self.allocations);
-        let size = u32::from(self.size(tp));
+        let size = u32::from(self.size(content_tp));
         let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
         if cur == 0 {
             self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
@@ -1533,6 +1542,10 @@ impl Stores {
             "vector allocation offset overflow: {into}"
         );
         self.store_mut(to).set_u32_raw(to.rec, to.pos, into);
+        // DESTINATION build: one bulk copy of the whole element block (elements are
+        // INLINE in the container, unlike array/hash/index where each is a separate
+        // record).  Keep it — the keystone only enumerates the SOURCE; it does not
+        // build the destination.
         self.copy_block(
             &DbRef {
                 store_nr: rec.store_nr,
@@ -1546,19 +1559,29 @@ impl Stores {
             },
             length * size + 4,
         );
-        for i in 0..length {
+        // SOURCE enumeration reads the keystone walk — the single home of the
+        // per-`Parts` source layout.  Its `Vector`/`Sorted` arm yields one child per
+        // element at `pos = 8 + size*i` with `owning_elem: None` (inline, no separate
+        // record).  We iterate it ALONGSIDE the bulk copy above (two passes over the
+        // same elements, deliberately not merged — the bulk copy moves the bytes, this
+        // pass deep-copies the nested claims).  The bulk copy laid the destination out
+        // byte-identically, so each element sits at the SAME offset in `into`; reuse
+        // `child.pos` for the destination instead of recomputing `8 + size*i`.
+        let children = self.for_each_owned_child(rec, tp).children;
+        debug_assert_eq!(
+            u32::try_from(children.len()).unwrap_or(u32::MAX),
+            length,
+            "keystone element count disagrees with the vector length header (tp={tp})"
+        );
+        for child in children {
             self.copy_claims(
-                &DbRef {
-                    store_nr: rec.store_nr,
-                    rec: cur,
-                    pos: 8 + size * i,
-                },
+                &child.child,
                 &DbRef {
                     store_nr: to.store_nr,
                     rec: into,
-                    pos: 8 + size * i,
+                    pos: child.child.pos,
                 },
-                tp,
+                child.child_tp,
             );
         }
     }
@@ -1896,8 +1919,10 @@ impl Stores {
                     );
                 }
             }
-            Parts::Vector(v) | Parts::Sorted(v, _) => {
-                self.copy_claims_seq_vector(rec, to, *v);
+            Parts::Vector(_) | Parts::Sorted(_, _) => {
+                // Pass the CONTAINER type: the keystone walk keys on it, and the helper
+                // reads the content type back out (same shape as array/hash/index).
+                self.copy_claims_seq_vector(rec, to, tp);
             }
             Parts::ChildRec(content_kt) => {
                 // P213: read source rec-id; if 0 (empty / non-capturing),
