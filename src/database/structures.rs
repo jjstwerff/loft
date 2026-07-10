@@ -248,7 +248,13 @@ impl Stores {
                     &mut self.allocations,
                 );
             }
-            Parts::Radix(_, _) => panic!("Not implemented"),
+            Parts::Radix(_, _) => {
+                // @PLN48 S2 — no dedup: two records may share a cell (they differ in
+                // the id suffix and land adjacent), which is what a spatial index
+                // needs.  A future `radix<T[k]>` map surface can layer dedup on top.
+                let keys = self.types[tp as usize].keys.clone();
+                crate::radix_db::add(data, rec, &mut self.allocations, &keys);
+            }
             _ => (),
         }
     }

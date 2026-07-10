@@ -552,9 +552,15 @@ through **text prefix queries**, the **finger move** (cheap incremental re-index
 build-and-test reference, is the tracker/symbol index:
 [RADIX_TEXT_INDEX.md](RADIX_TEXT_INDEX.md).
 
-Also left to S2/S3: the Morton interleave, the `spacial` arms in `search.rs`
-(`find`/`iterate`/`remove` currently panic as "non-collection"), a
-`for_each_owned_child` arm, `copy_claims` by re-insert, and the proximity API.
+S2 progress (`src/radix_db.rs`, the DB↔tree bridge, mirrors `src/hash.rs`):
+`determine_keys` resolves the coordinate keys; the oracle offset-binary-encodes each
+integer axis (so the radix order matches `sorted`/`index`) and Morton-interleaves 1–3
+axes; `insert_record` and `find` are wired (`add`/`find`, tested on a store fixture,
+ASan + debug-asserts clean).  Still left: `iterate`/`remove` arms, the
+`for_each_owned_child` arm + `copy_claims`/`remove_claims` (so a spacial local frees
+instead of leaking), lifting the parser 1.1+ gate, and then a loft program on both
+backends.  Text keys (the `radix<T[text]>` path) and per-width axis packing are also
+deferred.
 
 ### 8.1 Settled: one runtime variant, named for the storage
 

@@ -108,6 +108,7 @@ pub mod ops;
 pub mod parser;
 #[cfg(feature = "png")]
 mod png_store;
+mod radix_db;
 mod radix_tree;
 mod spatial;
 pub mod store;

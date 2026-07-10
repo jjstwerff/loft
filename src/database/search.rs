@@ -210,6 +210,9 @@ impl Stores {
                 }
             }
             Parts::Hash(_, _) => hash::find(data, &self.allocations, self.keys(db), key),
+            Parts::Radix(_, _) => {
+                crate::radix_db::find(data, &self.allocations, self.keys(db), key)
+            }
             Parts::Index(rec_nr, _, left_field) => {
                 self.find_index(data, *rec_nr, *left_field, db, key)
             }
@@ -222,8 +225,7 @@ impl Stores {
             | Parts::ShortRaw(_, _)
             | Parts::Int(_, _)
             | Parts::DbRef
-            | Parts::ChildRec(_)
-            | Parts::Radix(_, _) => panic!(
+            | Parts::ChildRec(_) => panic!(
                 "find called on non-collection type: {} (db={})",
                 self.types[db as usize].name, db
             ),

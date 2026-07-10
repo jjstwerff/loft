@@ -1770,6 +1770,82 @@ mod tests {
         );
     }
 
+    // ---- multi-word keys: a 128-bit key from two i64 fields -----------------
+    //
+    // @PLN48 S2 relies on this: a loft `integer` is an i64, so a 2D Morton key over
+    // two integer axes is 128 user bits — more than one word.  These prove the tree's
+    // word-at-a-time `first_diff` and `View::bit` handle a key that spans words, and
+    // that the terminator + id suffix past the second word still order correctly.
+
+    fn wide_word(store: &Store, rec: u32, word: u32) -> u64 {
+        // Two u64s at fld 4 and fld 12 (a 3-word record): word 0 is the high half.
+        match word {
+            0 => store.get_u32_raw(rec, 4) as u64 | (u64::from(store.get_u32_raw(rec, 8)) << 32),
+            1 => store.get_u32_raw(rec, 12) as u64 | (u64::from(store.get_u32_raw(rec, 16)) << 32),
+            _ => 0,
+        }
+    }
+    fn wide_bits(_store: &Store, _rec: u32) -> u32 {
+        128
+    }
+    const WIDE: KeySpec = KeySpec {
+        word: wide_word,
+        bits: wide_bits,
+    };
+
+    fn add_wide(store: &mut Store, hi: u64, lo: u64) -> u32 {
+        let rec = store.claim(3);
+        store.set_u32_raw(rec, 4, hi as u32);
+        store.set_u32_raw(rec, 8, (hi >> 32) as u32);
+        store.set_u32_raw(rec, 12, lo as u32);
+        store.set_u32_raw(rec, 16, (lo >> 32) as u32);
+        rec
+    }
+    fn wide_probe(hi: u64, lo: u64) -> impl Fn(u32) -> u64 {
+        move |w| match w {
+            0 => hi,
+            1 => lo,
+            _ => 0,
+        }
+    }
+
+    /// R9 — a 128-bit key crosses the word boundary and still inserts, finds, and
+    /// walks in order.  The differing bit lands in word 0 for some pairs and word 1
+    /// for others, so the word-loop's "difference past the first word" branch runs.
+    #[test]
+    fn r9_multiword_keys_order_across_the_word_boundary() {
+        let mut store = Store::new_in_use(1 << 15);
+        let mut tree = rtree_init(&mut store, 0);
+        let mut seed = 0xc0ff_ee00_1234_5678;
+        let mut expect: Vec<u128> = Vec::new();
+        let mut recs = Vec::new();
+        for _ in 0..500 {
+            // Deliberately narrow the high word sometimes, so many keys share word 0
+            // and first diverge in word 1 — the multi-word path.
+            let hi = if lcg(&mut seed) & 1 == 0 { 0 } else { u64::from(lcg(&mut seed)) };
+            let lo = (u64::from(lcg(&mut seed)) << 32) | u64::from(lcg(&mut seed));
+            let rec = add_wide(&mut store, hi, lo);
+            recs.push((rec, hi, lo));
+            expect.push((u128::from(hi) << 64) | u128::from(lo));
+            tree = rtree_insert(&mut store, tree, rec, WIDE);
+            rtree_validate(&store, tree, WIDE);
+        }
+        // exact lookup of every key
+        for &(rec, hi, lo) in &recs {
+            assert_eq!(rtree_get(&store, tree, &wide_probe(hi, lo), 128, WIDE), rec);
+        }
+        // in-order walk == u128 sort (ties on (hi,lo) break by rec id, mirrored below)
+        expect.sort_unstable();
+        let got: Vec<u128> = collect(&store, tree)
+            .iter()
+            .map(|&r| {
+                let (_, hi, lo) = *recs.iter().find(|(x, _, _)| *x == r).unwrap();
+                (u128::from(hi) << 64) | u128::from(lo)
+            })
+            .collect();
+        assert_eq!(got, expect, "multi-word walk must be sorted by the full 128-bit key");
+    }
+
     // ---- 2D Morton (Z-order) oracle: x at `fld 4`, y at `fld 8` -------------
     //
     // The @PLN48 key.  `bits` is 64, so a whole code is one word: the tree never
