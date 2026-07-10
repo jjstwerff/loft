@@ -265,14 +265,14 @@ and nullable-join `(N-Join)` that already run the integer / nullability model ab
   (P-Alt-Diff)   name bound in only SOME alternatives  ⟹   name : τ?           (via (N-Join))
   (P-Opt-Ty)     a capture inside (a)?                 ⟹   promoted to τ?       (via (N-Opt))
   (P-Rep-Ty)     the capture inside (a)* / (a)+        ⟹   vector<τ>            (via (N-Dense))
-  (P-Rest-Ty)    ...name over a vector<τ> subject      ⟹   name : vector<τ>
+  (P-Rest-Ty)    ..name over a vector<τ> subject      ⟹   name : vector<τ>
 ```
 
 **In words.** A named capture takes the type of whatever its sub-pattern produced. When two
 alternatives bind the same name, the two types are joined (`integer` and `u8` → `integer`; no join
 ⟹ a compile error, exactly like an incompatible integer join). A name only *some* branches bind, or
 a capture inside an optional, becomes nullable (`τ?`) — the same optional-join `(N-Join)` an
-inferred `a = null; a = 5` uses. A repetition or `...rest` collects into a `vector<τ>`. So PEG
+inferred `a = null; a = 5` uses. A repetition or `..rest` collects into a `vector<τ>`. So PEG
 capture typing is a new *source* of the types loft already has; `match` also stays a `τ?` eliminator
 (`(N-Match)` is unchanged — a `null` / `x` arm still discharges an optional).
 

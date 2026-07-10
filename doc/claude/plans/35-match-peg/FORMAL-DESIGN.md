@@ -81,7 +81,7 @@ Reading the spec collapses the formal surface twice over:
    | `n` bound in only some alternatives | `τ?` | `(N-Join)` — "optional iff some branch lacks it" |
    | `(a)?` captures | `τ?` | the optional former `(N-Opt)` |
    | `(a)*` / `(a)+` capture | `vector<τ>` | `(N-Dense)` vector |
-   | `...rest` | `vector<τ>` (subject elem type) | `(N-Dense)` vector |
+   | `..rest` | `vector<τ>` (subject elem type) | `(N-Dense)` vector |
    This is the single strongest simplification: PEG capture typing is a set of **additive
    synthesis rules over the type relation loft already has**.
 
@@ -133,7 +133,7 @@ relation**:
   (P-Seq)    ⟨[p₁ … pₙ], κ, σ⟩: run p₁ from κ→κ₁, …, pₙ from κ_{n-1}→κₙ; if ANY pᵢ ⇓ Fail, the
              whole sequence ⇓ Fail (κ unchanged — INV-Pure).  Binds = ⋃ binds_i.
   (P-Whole)  an ARM's pattern must consume the WHOLE input: κ' = ⟨len(src), src⟩.  A pattern that
-             matches a proper PREFIX ⇓ Fail for arm-selection UNLESS it ends in `...rest`, which
+             matches a proper PREFIX ⇓ Fail for arm-selection UNLESS it ends in `..rest`, which
              absorbs the remaining sub-slice.  (This is why today `[a,b,c]` needs exact length.)
   (P-Alt)    ⟨(a | b), κ, σ⟩: try a from κ; if Match, that; else (a ⇓ Fail) try b from the SAME κ.
              Ordered choice — FIRST success wins; if both Fail, ⇓ Fail.
@@ -144,7 +144,7 @@ relation**:
              `*(s)` consumes s between iterations (not captured).  BOUNDED by len(src) for slices
              ⟹ terminates; for iterators, by a `max_lookahead` arm attribute (L3.6).
   (P-Cap)    ⟨name:p, κ, σ⟩: run p; on Match(bs,κ') ⇓ Match(bs ∪ {name ↦ p's result}, κ').
-  (P-Rest)   ⟨...name, κ=⟨i,src⟩, σ⟩ ⇓ Match({name ↦ FRESH vector of src[i..len-t]}, ⟨len-t, src⟩)
+  (P-Rest)   ⟨..name, κ=⟨i,src⟩, σ⟩ ⇓ Match({name ↦ FRESH vector of src[i..len-t]}, ⟨len-t, src⟩)
              where t = the count of fixed patterns after the rest.  H-Alloc (a new store).
   (P-Multi)  a MULTI-PATTERN arm `pat_a, pat_b => body`: try pat_a from ⟨0,v⟩; if Match(+Whole)
              commit; else try pat_b; first whole-match commits.  (No new cursor work — P-Alt at
@@ -186,7 +186,7 @@ precedence** (a second, small ladder, loosest first):
    2  sequence    juxtaposition in `[ … ]`
    3  ` : `       capture  name:pat
    4  postfix      `?`  `*`  `+`  `*(sep)`               (tightest — bind to the nearest pat)
-      prefix       `...name` (rest, only as a slice tail)
+      prefix       `..name` (rest, only as a slice tail)
 ```
 
 Add a **non-CFG note** (like `D-gram-2`, a decided edge): a `(…)` inside a pattern is an
@@ -205,7 +205,7 @@ Add a **§ Pattern captures** with the synthesis rules from §2.1, each citing t
   (P-Alt-Diff)   name bound in only some alternatives    ⟹   name : τ?           (via N-Join)
   (P-Opt-Ty)     captures inside (a)?                    ⟹   each promoted to τ?  (via N-Opt)
   (P-Rep-Ty)     the capture inside (a)* / (a)+          ⟹   vector<τ>            (via N-Dense)
-  (P-Rest-Ty)    ...name over a vector<τ> subject        ⟹   name : vector<τ>
+  (P-Rest-Ty)    ..name over a vector<τ> subject        ⟹   name : vector<τ>
 ```
 
 **Headline for the doc:** PEG captures introduce **no new type constructor** — they are a
@@ -222,12 +222,12 @@ Add **§ Pattern captures** pinning which captures alias the subject:
                  struct field, a struct-typed element) is a VIEW (binding.md B-View / heap.md
                  H-View): it aliases WITHOUT `&`, and carries the subject's borrow-dep
                  (Deps::frame1(subject)) so both backends agree on free.
-  (P-Cap-Fresh)  a `...rest` sub-slice and a repetition `(a)*` accumulator are FRESH vectors
+  (P-Cap-Fresh)  a `..rest` sub-slice and a repetition `(a)*` accumulator are FRESH vectors
                  (H-Alloc), INDEPENDENT of the subject (binding.md B-Copy / iteration.md I-Comp).
 ```
 
 *Rationale (decision D-F2/D-F3, §4):* views for single interior captures match today's match
-bindings (no copy, cheap); fresh vectors for `...rest`/repetition match `I-Comp`'s "fresh result
+bindings (no copy, cheap); fresh vectors for `..rest`/repetition match `I-Comp`'s "fresh result
 vector" and avoid a sub-slice-aliasing lifetime that neither backend models cleanly.
 
 ### 3.5 `formal/iteration.md` (+ `operational.md`) — cursors
@@ -275,8 +275,8 @@ the guarded operation, not the match). Add a one-line note so the area stays com
 
 | id | decision | rationale | falsifier (obey-rule vs naive disagree) |
 |---|---|---|---|
-| **D-F1** | **Whole-consume default; `...rest` for prefix.** An arm matches iff its pattern consumes the *entire* subject (`P-Whole`); a prefix match is not a selection. | matches today's exact-length `[a,b,c]`; makes length part of the pattern, not a silent truncation. | `match [1,2,3,4] { [a,b,c] => X, _ => Y }` must pick `Y` (naive prefix-match picks `X`). |
-| **D-F2** | **`...rest` + repetition captures are FRESH vectors** (H-Alloc), not sub-slice views. | consistent with `I-Comp`'s fresh result + `B-Copy`; avoids an interior-slice lifetime neither backend models. | mutate a captured `rest`; the subject must be UNCHANGED on both backends (naive view aliases). |
+| **D-F1** | **Whole-consume default; `..rest` for prefix.** An arm matches iff its pattern consumes the *entire* subject (`P-Whole`); a prefix match is not a selection. | matches today's exact-length `[a,b,c]`; makes length part of the pattern, not a silent truncation. | `match [1,2,3,4] { [a,b,c] => X, _ => Y }` must pick `Y` (naive prefix-match picks `X`). |
+| **D-F2** | **`..rest` + repetition captures are FRESH vectors** (H-Alloc), not sub-slice views. | consistent with `I-Comp`'s fresh result + `B-Copy`; avoids an interior-slice lifetime neither backend models. | mutate a captured `rest`; the subject must be UNCHANGED on both backends (naive view aliases). |
 | **D-F3** | **A single interior capture is a VIEW** (`B-View`), as today. | cheap, matches current match bindings + `H-View`. | `V { inner }` then `inner.x = 9` ⇒ subject's `inner.x == 9` (the existing view contract). |
 | **D-F4** | **Ordered choice, first-match, greedy repetition** (PEG, not regex/longest-match). | unambiguous ⟹ INV-Det tractable; mirrors the parser loft already ships. | `(a | ab)` on `"ab"`: PEG takes `a` then fails the rest; longest-match takes `ab`. Both backends must take `a`. |
 | **D-F5** | **Struct-variant patterns only — tuple variants are a PERMANENT non-goal ([C89](../../DESIGN_DECISIONS.md)).** | loft enum payloads are always named fields; positional `Num(i64)` / `Ok(a)` force match-to-read + a mitigation-syntax sprawl. | `Num(i64)` is a parse error, always; every example uses `Num { v: … }`. |
@@ -290,7 +290,7 @@ the guarded operation, not the match). Add a one-line note so the area stays com
 |---|---|---|
 | **P0** design | `M-Total`, INV-Pure/INV-Det/INV-Total probes; docs 3.1–3.7 written | `35-invariant-*.loft` (the three falsifiers) |
 | **P1** L2 nested | `P-Var`/`P-Bind` recursion, `P-Cap-Ty`, `P-Cap-View` | `35-nested-enum-match.loft` |
-| **P2** L3.1 seq + `...rest` | `P-Seq`, `P-Whole`, `P-Rest`, `P-Rest-Ty`, `P-Cap-Fresh`, `M-Total` gate on slices | `35-sequence-rest.loft` |
+| **P2** L3.1 seq + `..rest` | `P-Seq`, `P-Whole`, `P-Rest`, `P-Rest-Ty`, `P-Cap-Fresh`, `M-Total` gate on slices | `35-sequence-rest.loft` |
 | **P3** L3.7 multi-arm | `P-Multi`, `M-Total` union | `35-multi-pattern-arm.loft` |
 | **P4** L3.2 alternation | `P-Alt`, `P-Alt-Same` (⊔), `P-Alt-Diff` (N-Join), `P-Atomic` (slice) | `35-alternation.loft` |
 | **P5** L3.3 optional | `P-Opt`, `P-Opt-Ty` | `35-optional.loft` |

@@ -39,7 +39,7 @@ corrects several assumptions.  The examples further down use the idealized shape
   = save/restore it.  **CONFIRMED** by the Phase-0 D2 probe on both backends.
 - **Already shipped, reused as-is:** fixed-arity slice patterns `[a, b, c]` and single-level
   variant binding `V { field }`.  **Not yet implemented (this plan builds them):** nested
-  patterns `V { f: Inner { x } }` (L2), named / `...rest` / sequence captures (L3.1), and the
+  patterns `V { f: Inner { x } }` (L2), named / `..rest` / sequence captures (L3.1), and the
   PEG operators `| ? * +`.
 
 The formal contract for all of the above — and the invariant it must preserve (`M-Total`: a
@@ -185,7 +185,7 @@ per job:
 |---------------------|----------------------------------------------|
 | `name`              | single-element capture                       |
 | `name:pat`          | sub-pattern, `name` bound to its result      |
-| `...name`           | slice tail                                   |
+| `..name`           | slice tail                                   |
 | `name:pat*`         | repetition capture into vec                  |
 | `name:pat+`         | repetition, at least one                     |
 | `name:pat*(sep)`    | repetition with separator                    |
@@ -497,7 +497,7 @@ one revert per loop exit.
 | Existing feature                    | Interaction                                                                 |
 |------------------------------------|------------------------------------------------------------------------------|
 | L2 nested enum patterns            | Required prerequisite — sub-patterns inside seq must already work on fields. See PLANNING.md § L2. |
-| Slice/vector patterns              | L3 sequence *is* the generalised slice pattern; `[a, b, ...rest]` compiles identically. |
+| Slice/vector patterns              | L3 sequence *is* the generalised slice pattern; `[a, b, ..rest]` compiles identically. |
 | Tuple destructure ([TUPLES.md](../../TUPLES.md)) | Tuples are a fixed-arity sequence — a degenerate L3.1 case.                |
 | Guards (`if` on arm)               | Guard runs *after* L3 captures are committed; failure is not revertable.   |
 | Coroutines ([COROUTINE.md](../../COROUTINE.md)) | Already shipped (0.8.3), both interpreter and native (state-machine lowering).  Matching on an `iterator<T>` value uses L3.6's memoised cursor; no dependency blocker. |

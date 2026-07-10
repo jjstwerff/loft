@@ -135,13 +135,13 @@ visible — no `&` needed there.
                  field, a struct-typed element) is a VIEW (B-View / heap.md H-View): it aliases
                  WITHOUT `&`, and carries the subject's borrow-dep (`Deps::frame1(subject)`) so both
                  backends agree on free.
-  (P-Cap-Fresh)  a `...rest` sub-slice and a repetition `(a)*` accumulator are FRESH vectors
+  (P-Cap-Fresh)  a `..rest` sub-slice and a repetition `(a)*` accumulator are FRESH vectors
                  (heap.md H-Alloc), INDEPENDENT of the subject (B-Copy / iteration.md I-Comp).
 ```
 
 **In words.** Binding a single interior piece of the matched value — a field, a struct element — is
 a *view* onto that place, exactly like reading `o.inner` today (`B-View`): no copy, and a mutation
-writes through. A `...rest` tail or a repetition's collected vector is instead a *fresh* vector,
+writes through. A `..rest` tail or a repetition's collected vector is instead a *fresh* vector,
 independent of the subject — the same "fresh result vector" a comprehension builds (`I-Comp`) — so
 mutating a captured `rest` never touches the original. This split keeps the cheap case cheap while
 avoiding an interior-sub-slice lifetime that neither backend models cleanly.

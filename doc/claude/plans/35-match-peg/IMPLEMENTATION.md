@@ -21,6 +21,67 @@
 
 ---
 
+## ▶ RESUME HERE — status (2026-07-11)
+
+**Branch** `tuxedo-pln35-match-peg` @ `841ac6b7`, pushed, on current `origin/main`; full-suite
+**green** (`2787/2788` — only the environmental `wasm_debug_relay` fails on this box; see memory
+`wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+
+**Design — COMPLETE.** [README.md](README.md) (draft, reconciled), [FORMAL-DESIGN.md](FORMAL-DESIGN.md)
+(spec-first rules, the `INV-Total` invariant), [SUBRULE-DESIGN.md](SUBRULE-DESIGN.md) (the
+parser-combinator keystone: `Cursor`, `P-Rule`, `INV-Static`, reporting; phases PC1–PC5),
+[EXAMPLES.md](EXAMPLES.md), plus the strict-spec edits in `doc/claude/formal/*`
+(matching/types/grammar/binding + `collections.md` scope). Decision **C89** (no tuple variants ever;
+matchers are opt-in + read like grammar, not regex) → [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md).
+
+**Phase 0 — DONE.** D2 architecture bet CONFIRMED on both backends
+(`probes/p0-d2-backtrack.loft`: slice backtracking = save/reset an index temp, **no new opcode**).
+Golden target-syntax specs in `probes/g-*.loft`.
+
+**Phase 1 (L2 nested patterns) — DONE**, both backends, byte-identical gate + full-suite green:
+- **P1.2** nested struct-enum FIELD patterns `Parcel { detail: Ship { carrier } }` — commit `a0f79bf4`
+  (`parse_field_sub_pattern` in `control.rs` recurses for struct-enum fields).
+- **P1.3** nested variant SLICE-ELEMENT sub-patterns `[Ship { carrier }, ..]`,
+  `[first, Ship { carrier }]` — commit `841ac6b7` (`parse_vector_match` detects an enum-variant
+  element, reads `v[pos]`, tag-tests+binds via `parse_field_sub_pattern`; a `"_"` placeholder keeps
+  positions aligned). Guard: `tests/scripts/35-nested-match.loft` (cross-mode, leak-checked).
+
+**Phase 2 (L3.1) — IN PROGRESS, one blocker precisely identified:**
+- **Syntax DECIDED: `..rest`** (two dots + adjacent name), NOT `...` — loft lexes `..`, not `...`.
+  Docs reconciled to `..rest` throughout.
+- **BLOCKER — the tail sub-slice materialization primitive.** `..rest` binds
+  `rest = v[head_len .. len − tail_len]` as a FRESH `vector<T>`. But `v[a..b]` is a lazy
+  `iterator<T>` that materializes only on ASSIGNMENT via a token-parsing comprehension desugar
+  (`objects.rs`: `slice_clamp_bound` + the `#Slice materialise` loop). No stdlib slice fn; a generic
+  loft `fn f<T>(v,lo,hi)->vector<T>{ s=v[lo..hi]; s }` PANICS (interp `keys.rs`) / native E0308
+  (generics don't compose with slicing). `src/vector.rs::alloc_vector_from_bytes` is a BYTE copy —
+  correct for SCALAR elements only; HEAP elements (text/struct/struct-enum — what parser tokens are)
+  need element-type-aware DEEP copy (which is why the existing materialization is a typed per-element
+  loop).
+- **NEXT STEP (chosen: option b) — build `vector::slice_vector`** in `src/vector.rs`:
+  element-type-aware (byte-copy the scalar case via `alloc_vector_from_bytes`; deep-copy the heap case,
+  modeled on the `v[a..b]` per-element materialization + `copy_vector_of_struct` / `copy_record`).
+  Then `fn vector_slice(v: vector, lo: integer, hi: integer) -> vector;` + a `#rust` template in
+  `default/01_code.loft` → `make fill` → native (template or a `codegen_runtime` helper) → wire
+  `..rest` in `parse_vector_match` (detect `..name`; bind `rest = vector_slice(v, head_len,
+  len−tail_len)`). Store-level + lifetime-sensitive → do it **MATRIX-GATED** (engineering-rigor):
+  scalar/text/struct elements × empty/full/negative bounds × value + length + **leak**, both backends.
+- **Unblocked lighter Phase-2 bits (no materialization):** `name:pat` element captures, and the
+  totality gate (F6 / `M-Total`: a sequence/rest slice arm requires a trailing `_`). Could land
+  before `..rest`.
+
+**Instrument (loft-codegen gate).** `bytecode-comparisons/`: one-fn-per-path corpora + `INSTRUMENT.md`
+— the two-part byte-identical capture (`LOFT_LOG=static` IR + `loft --native-emit` Rust; **warm up
+once** before capturing — first-run slot flake). Before/after captures are regenerable (removed from
+git). Two pre-existing **TOOLING BUGS** worth filing: (1) `introspect`/`--dump` PANIC on a match with
+an enum `==` (`debug.rs:1077` type-table index); (2) the static-dump first-run slot flake.
+
+**Other decisions in play.** Bare-postfix quantifiers `Num { value: n }*` (no parens for a single
+element; `()` only groups a multi-element sequence). The sub-rule/parser-combinator layer
+([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md), PC1–PC5) comes after the core P-phases.
+
+---
+
 ## 1. What the code actually looks like (reconciliation with the design draft)
 
 The README was written against an idealized syntax. Six facts from a full read of
@@ -33,7 +94,7 @@ why the phase order below differs from the README's L3.1→L3.7 list.**
 | **F2** | **Slice backtracking needs no new opcode.** A slice cursor is a `usize` index; "revert" = reset an index temp. `parse_vector_match` already does index arithmetic with `OpGetVector`/`OpLengthVector`. | `src/parser/control.rs:3960`, `:4010`, `:4063` | `OpMatchAnchor`/`OpMatchRevert` are needed **only for iterator input (L3.6)**. L3.1–L3.4 emit no new ops. This is the single biggest de-risking. |
 | **F3** | **Four separate arm-parsers, one per subject kind** — enum (inline in `parse_match`), scalar, vector, tuple. Not one recursive pattern grammar. | `control.rs:2620` (enum), `:3797` (scalar), `:3960` (vector), `:4169` (tuple) | PEG needs sub-patterns in *any* position. Phase 1 introduces one recursive `parse_pattern()` the four handlers delegate to. This unification is the backbone. |
 | **F4** | **Nested sub-patterns don't parse** (`V { field: Inner { x } }`). A field with `:` only accepts a plain-enum variant name, `_`, or a scalar literal; a struct/struct-enum field falls to `self.expression()` and chokes on the inner `{`. | `control.rs:3554` (`parse_field_sub_pattern`), guard at `:3556` (`Type::Enum(_, false, _)`), scalar fallback `:3633-3636` | This is **L2**, the stated prerequisite, and it is unimplemented. It is Phase 1. |
-| **F5** | **`...rest` named tail-capture does not exist.** `..` is a length-flex marker binding nothing; `[a, ..rest]` mis-parses (`rest` becomes a single last element). | `control.rs:3990` (`..` marker), element loop `:3986-4007` (bare `Vec<String>`) | True named-rest capture is a genuine gap added in Phase 2 (L3.1). |
+| **F5** | **`..rest` named tail-capture does not exist.** `..` is a length-flex marker binding nothing; `[a, ..rest]` mis-parses (`rest` becomes a single last element). | `control.rs:3990` (`..` marker), element loop `:3986-4007` (bare `Vec<String>`) | True named-rest capture is a genuine gap added in Phase 2 (L3.1). |
 | **F6** | **Exhaustiveness/totality is enforced for enums only.** Vector/tuple/scalar handlers fall back to a typed null with no coverage check. | enum check `control.rs:3138-3156`; vector fallback `:4141-4146` | The README rule "sequence/repetition are non-total → require a trailing `_`" has **no existing home** in the vector handler. Phase 2 adds it there. |
 
 Two more facts inform the design but aren't obstacles:
@@ -114,7 +175,7 @@ parse_pattern(subject_read, subject_type) -> PatternMatch
 ├─ wildcard `_`           → cond=None, binds=[]        (exists, scattered)
 ├─ binding `name`         → Set(mv, subject_read)      (exists: control.rs:3442)
 ├─ enum variant `V {..}`  → tag test + recurse fields  (Phase 1 — generalize :3403/:3554)
-├─ slice `[p, p, ...r]`   → len test + recurse elems   (Phase 1/2 — generalize :3960)
+├─ slice `[p, p, ..r]`   → len test + recurse elems   (Phase 1/2 — generalize :3960)
 ├─ tuple `(p, p)`         → recurse elems              (Phase 1 — via :4169)
 ├─ alternation `(a|b)`    → anchor; try a; revert; try b   (Phase 4)
 ├─ optional `(a)?`        → anchor; try a; else bind null   (Phase 5)
@@ -210,14 +271,14 @@ entry; IR-identical refactor proven; `35-nested-match.loft` in the suite.
 
 ---
 
-### Phase 2 — L3.1: sequence patterns + named sub-pattern capture + `...rest`
+### Phase 2 — L3.1: sequence patterns + named sub-pattern capture + `..rest`
 
 **Goal.** A slice arm reads like a parser rule:
-`[ first:Ident, mid:Expr, ...rest ] => …`, with `rest` bound to the sub-slice.
+`[ first:Ident, mid:Expr, ..rest ] => …`, with `rest` bound to the sub-slice.
 
 **Design.** Generalize the slice grammar from "bare names + one `..` marker" to a
 sequence of `parse_pattern` elements, each optionally `name:pat`, with **one** real
-named-rest capture. `...rest` binds `subject[k..len-t]` as a sub-vector (new: F5).
+named-rest capture. `..rest` binds `subject[k..len-t]` as a sub-vector (new: F5).
 Add the totality gate (F6): a slice arm using a sequence/rest is non-total → require a
 trailing `_` or a full-cover set.
 
@@ -236,13 +297,13 @@ trailing `_` or a full-cover set.
 **Steps & verification.**
 2.1 `name:pat` capture in element position. *Verify:* `35b-sequence-capture.loft`
     binds each named element, both backends.
-2.2 `...rest` sub-slice capture. *Verify:* `rest` equals `subject[k..len-t]` by
+2.2 `..rest` sub-slice capture. *Verify:* `rest` equals `subject[k..len-t]` by
     value **and length**; leak-clean on both backends (heap sub-vector must free
     correctly — assert store balance).
 2.3 Totality gate + diagnostic. *Verify:* a sequence arm with no trailing `_`
     produces the "non-exhaustive — add a `_`" error (`tests/parse_errors.rs`).
 
-**Exit:** parser-rule-shaped arms with captures + `...rest` work both backends,
+**Exit:** parser-rule-shaped arms with captures + `..rest` work both backends,
 leak-clean; totality enforced.
 
 ---
@@ -404,7 +465,7 @@ freshness-checked.
 - **Cross-mode harness.** Every `35*.loft` runs on `--interpret` and `--native`
   under the leak gate (see loft-test skill). Parser diagnostics go in
   `tests/parse_errors.rs`.
-- **Rust unit tests** where a helper deserves isolation (e.g. `...rest` sub-slice
+- **Rust unit tests** where a helper deserves isolation (e.g. `..rest` sub-slice
   math, capture-type unify).
 - **Docs synced per phase:** `LOFT.md` § Match (syntax), `INTERMEDIATE.md` (the two
   L3.6 opcodes only), `CAVEATS.md` (iterator limits), `INCONSISTENCIES.md` #26
@@ -418,7 +479,7 @@ freshness-checked.
 |---|---|---|
 | D2 wrong (slice backtracking *does* need an op) | 0 | Falsification probe 0.2 **before** any feature code. |
 | `parse_pattern` refactor regresses live match | 1 | loft-codegen gate: byte-identical IR/native proof (1.1) before adding cases. |
-| Heap captures (`...rest`, repetition vec) leak or diverge across backends | 2,6 | Assert store balance + length on both backends; preserve `Deps::frame1` borrow-dep rewrite (`control.rs:3490-3508`). |
+| Heap captures (`..rest`, repetition vec) leak or diverge across backends | 2,6 | Assert store balance + length on both backends; preserve `Deps::frame1` borrow-dep rewrite (`control.rs:3490-3508`). |
 | Repetition loop-IR construction harder than assumed | 6 | Verify the `for`/`while` IR constructor in `collections.rs` at phase start; if costly, land `*`/`+` as a bounded unroll fallback. |
 | Iterator memo native parity | 7 | Interp-first, then native; custom `OpEmitter` + `codegen_runtime` helper; native-gate fallback if truly non-native. |
 

@@ -108,8 +108,8 @@ and recurse. This keeps `match` a shape-recognizer, not a parser generator.
 // grammar:   stmt := 'let' IDENT '=' expr | 'return' expr | expr
 fn parse_stmt(ts: vector<Token>) -> Stmt {
   match ts {
-    [ Let, Ident { name }, Eq, ...rhs ] => Stmt.Let      { name: name, value: parse_expr(rhs) },
-    [ Return, ...e ]                    => Stmt.Return   { value: parse_expr(e) },
+    [ Let, Ident { name }, Eq, ..rhs ] => Stmt.Let      { name: name, value: parse_expr(rhs) },
+    [ Return, ..e ]                    => Stmt.Return   { value: parse_expr(e) },
     _                                   => Stmt.ExprStmt { e: parse_expr(ts) },
   }
 }
@@ -117,12 +117,12 @@ fn parse_stmt(ts: vector<Token>) -> Stmt {
 
 Edges to know — the honest limits of the design as scoped:
 
-- **`...rest` is tail-only** — you cannot write `[ Let, Ident{name}, Eq, ...mid, Semi ]` (rest in
+- **`..rest` is tail-only** — you cannot write `[ Let, Ident{name}, Eq, ..mid, Semi ]` (rest in
   the middle). Tokenize per statement, or use the L3.6 **iterator** input where the cursor stops
   before `Semi` and the caller continues from there (the natural streaming-parser model).
 - **No in-pattern rule reference** — `expr:expr` (match the `expr` sub-grammar inline) is not a
   feature; write `parse_expr(rhs)`.
-- **Whole-consume** — an arm matches the ENTIRE slice unless it ends in `...rest`, so `[ Stop ]`
+- **Whole-consume** — an arm matches the ENTIRE slice unless it ends in `..rest`, so `[ Stop ]`
   means *exactly one* token.
 
 ## Verdict against the bar

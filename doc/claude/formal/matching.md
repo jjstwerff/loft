@@ -114,7 +114,7 @@ index `i` into a source `src`, with `elem(src,i)` / `len(src)` **null past the e
   (P-Seq)    ⟨[p₁ … pₙ], κ⟩: run p₁ from κ→κ₁, …, pₙ from κ_{n-1}→κₙ; ANY pᵢ ⇓ Fail ⟹ the whole
              sequence ⇓ Fail (κ unchanged).  binds = ⋃ᵢ binds_i.
   (P-Whole)  an ARM's sequence pattern must consume the WHOLE input (κ' = ⟨len(src),src⟩); a proper
-             PREFIX ⇓ Fail for arm-selection UNLESS the sequence ends in `...rest`, which absorbs the
+             PREFIX ⇓ Fail for arm-selection UNLESS the sequence ends in `..rest`, which absorbs the
              remainder.  (This is why `[a,b,c]` needs exact length today.)
   (P-Alt)    ⟨(a | b), κ⟩: try a from κ; if Match, that; else try b from the SAME κ.  Ordered choice
              — FIRST success wins; both Fail ⟹ Fail.
@@ -124,7 +124,7 @@ index `i` into a source `src`, with `elem(src,i)` / `len(src)` **null past the e
              `(a)+` = a then (a)*.  A separator `*(s)` is consumed between iterations, not captured.
              BOUNDED by len(src) for slices ⟹ terminates; for iterators, by `max_lookahead` (P-IterBound).
   (P-Cap)    ⟨name:p, κ⟩: run p; on Match(bs,κ') ⟹ Match(bs ∪ {name ↦ p's result}, κ').
-  (P-Rest)   ⟨...name, κ=⟨i,src⟩⟩ ⟹ Match({name ↦ a FRESH vector of src[i .. len−t]}, ⟨len−t, src⟩),
+  (P-Rest)   ⟨..name, κ=⟨i,src⟩⟩ ⟹ Match({name ↦ a FRESH vector of src[i .. len−t]}, ⟨len−t, src⟩),
              t = fixed patterns after the rest (H-Alloc — a new store, independent of src).
   (P-Multi)  a MULTI-PATTERN arm `pat_a, pat_b => body`: try pat_a from ⟨0,v⟩ (whole-match); else
              pat_b; the FIRST whole-match commits.  (P-Alt at arm granularity — no new cursor work.)
@@ -134,7 +134,7 @@ index `i` into a source `src`, with `elem(src,i)` / `len(src)` **null past the e
 
 **In words.** A pattern either matches — moving the cursor forward and binding names — or fails,
 leaving everything exactly as it was. A sequence runs its parts in order and fails as a whole if any
-part fails; an arm's sequence must line up with the *entire* input unless it ends in `...rest`.
+part fails; an arm's sequence must line up with the *entire* input unless it ends in `..rest`.
 Alternation tries its branches left to right and takes the first that works; an optional either
 matches or quietly binds its captures to null without moving; a repetition matches greedily and
 stops at the first failure, collecting what it got. Crucially, a *failed* attempt is invisible — no
@@ -184,7 +184,7 @@ same assumption `Lexer` makes about its token stream.
 
 Captures follow [types.md § Pattern captures](types.md) (no new type former — `τ` / `τ?` /
 `vector<τ>` via the join) and [binding.md § Pattern captures](binding.md) (a single interior capture
-is a view; `...rest` / repetition are fresh vectors); the pattern grammar + precedence are in
+is a view; `..rest` / repetition are fresh vectors); the pattern grammar + precedence are in
 [grammar.md § Pattern-operator precedence](grammar.md).
 
 ---

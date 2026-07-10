@@ -100,7 +100,7 @@ first:
    2  sequence     juxtaposition inside `[ … ]`
    3  ` : `        capture  name:pat
    4  postfix       `?`  `*`  `+`  `*(sep)`           (tightest — bind to the nearest pattern)
-      prefix        `...name`  (rest — only as a slice tail)
+      prefix        `..name`  (rest — only as a slice tail)
 ```
 
 ```
@@ -116,7 +116,7 @@ first:
 loosest, then `|` (ordered choice), then a sequence of sub-patterns, then `:` (a capture); the
 postfix quantifiers `? * +` bind tightest to the pattern right before them — with **no** parens
 around a **single** element (`Num { value: n }*`, `Ident { name }?`), so `( … )` groups only a
-multi-element sequence or an alternation (`( Colon, Ident { name: ty } )?`). `...name` is a prefix
+multi-element sequence or an alternation (`( Colon, Ident { name: ty } )?`). `..name` is a prefix
 rest, allowed only as the last element of a slice. A parenthesised pattern is a *group* (not a
 tuple) when it carries a pattern operator — resolved by the same position-based, deliberately
 non-context-free parse this doc already documents for `&` and struct-vs-block.
