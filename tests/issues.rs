@@ -1007,7 +1007,7 @@ struct Container { data: sorted<Sort[nr]> }"
 
 // ── S4: Binary I/O type coverage ─────────────────────────────────────────────
 // read_data / write_data panic with "Not implemented" for Array / Sorted /
-// Ordered / Hash / Index / Spacial / Base — should be improved.
+// Ordered / Hash / Index / Radix / Base — should be improved.
 
 // S4: writing a struct with a `sorted<T>` field must be rejected at parse time
 // with a clear message pointing the user to plain structs for serialisation.
@@ -11262,7 +11262,7 @@ fn test() {
 // collection locals.  After P188, `gen_set_first_keyed_null` (bytecode) and
 // `emit_null_dbref`'s sorted/hash/index/spacial arm (native) allocate the
 // store and zero the root pointer; subsequent `+= T {...}` operations grow
-// the collection in place via record_new's Parts::Sorted/Hash/Index/Spacial
+// the collection in place via record_new's Parts::Sorted/Hash/Index/Radix
 // dispatch.
 #[test]
 fn p188_sorted_local_via_plus_equals() {
@@ -11584,7 +11584,7 @@ fn p189b_vector_tuple_for_loop_int_text() {
 ///   to `Set(v, Null)` for keyed-collection types so codegen's
 ///   gen_set_first_keyed_null fires at the declaration site.
 /// - `data.rs::heap_dep` and `scopes.rs::get_free_vars` now
-///   recognise Sorted/Hash/Index/Spacial as heap-owned, so
+///   recognise Sorted/Hash/Index/Radix as heap-owned, so
 ///   scope-exit `OpFreeRef` is emitted (no more "stores not
 ///   freed" warnings on program exit).
 #[test]

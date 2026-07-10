@@ -31,7 +31,7 @@ use loft::parser::Parser;
 use std::path::PathBuf;
 
 /// The corpus — one structure per representative layout cell. Closure (fn-ref
-/// field → DbRef/ChildRec), Spacial (1.1+), and Sorted/Short (a local / nullable
+/// field → DbRef/ChildRec), Radix (1.1+), and Sorted/Short (a local / nullable
 /// narrow) stay uncovered — the coverage audit classifies them (Phase B4).
 const CORPUS: &str = r#"
 struct Scalars { b: boolean, c: character, s: single, f: float, i: integer, t: text }
@@ -157,7 +157,7 @@ fn referenced(db: &Stores, kt: u16, out: &mut Vec<u16>) {
         | Parts::Ordered(e, _)
         | Parts::Hash(e, _)
         | Parts::Index(e, _, _)
-        | Parts::Spacial(e, _) => out.push(*e),
+        | Parts::Radix(e, _) => out.push(*e),
         Parts::ChildRec(c) => out.push(*c),
         // A plain variant (no data) keeps `known_type == u16::MAX`; only
         // data-carrying variants have an `EnumValue` type to reach.
@@ -222,8 +222,8 @@ fn coverage(p: &Parts) -> (&'static str, Cover) {
             "Short",
             Cover::Gap("2-byte shifted narrow int — nullable narrow field"),
         ),
-        Parts::Spacial(..) => (
-            "Spacial",
+        Parts::Radix(..) => (
+            "Radix",
             Cover::Gap("spacial<T[key]> — planned 1.1+, errors today"),
         ),
         Parts::Array(_) => (

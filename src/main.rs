@@ -2835,7 +2835,7 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Hash(_, _, _)
-                | Type::Spacial(_, _, _) => {
+                | Type::Radix(_, _, _) => {
                     let type_name = p.data.type_name_str(&attr.typedef);
                     c_params.push(format!("{name}: loft_ffi::LoftRef /* {type_name} */"));
                     param_names.push(name.clone());
@@ -2874,7 +2874,7 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
-            | Type::Spacial(_, _, _) => {
+            | Type::Radix(_, _, _) => {
                 RetKind::Ref(format!(" -> loft_ffi::LoftRef /* {ret_type_name} */"))
             }
             _ => RetKind::Scalar(format!(
@@ -2901,7 +2901,7 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
                     | Type::Sorted(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Hash(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
         });
         let has_ref_ret = matches!(
@@ -2912,7 +2912,7 @@ fn generate_native_stubs(pkg_path: &std::path::Path) {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Hash(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
         );
 
         // If any param or return is a Ref, prepend LoftStore as first C-ABI param.

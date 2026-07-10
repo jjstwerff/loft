@@ -3463,7 +3463,7 @@ pub(crate) fn populate_struct_from_jsonvalue(
                         populate_vector_from_jarray(stores, &dest_handle, elem_kt, &sub);
                     }
                 _ => {
-                    // Other field types (Hash, Sorted, Index, Spacial,
+                    // Other field types (Hash, Sorted, Index, Radix,
                     // Array, Base, Byte, Short) are not yet handled.
                     // Leave at zero-init default.
                 }

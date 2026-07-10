@@ -958,9 +958,9 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         | Type::Hash(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Index(_, _, _)
-        // Spacial: parser-rejected today (planned 1.1+); arm kept in step
+        // Radix: parser-rejected today (planned 1.1+); arm kept in step
         // with the store-backed family so it never falls to the `0` default.
-        | Type::Spacial(_, _, _)
+        | Type::Radix(_, _, _)
         // N8b.1: exhausted / uninitialized generator variable.
         // The canonical heap-ref null is `DbRef::NULL` (`keys.rs`) — the one
         // source; `is_null()` ignores `pos`, so the old `pos: 8` was drift
@@ -1015,7 +1015,7 @@ enum FieldPhase {
 /// (collection-typed fields that reference a bare Vector / Sorted /
 /// Hash / Index created during `output_init`'s first pass).
 fn is_collection_field(tp: &Type) -> bool {
-    // Spacial is included for family-consistency with `Type::heap_dep` /
+    // Radix is included for family-consistency with `Type::heap_dep` /
     // `slot_kind` even though `spacial<T>` is parser-rejected today
     // ("planned for 1.1+") — when it lands, this classifier is ready.
     matches!(
@@ -1024,7 +1024,7 @@ fn is_collection_field(tp: &Type) -> bool {
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
     )
 }
 

@@ -358,7 +358,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
     // runs finish_type to assign positions.
     //
     // Only Index appends bookkeeping fields (#left/#right/#color)
-    // to the content struct; Hash/Spacial just create an entry in
+    // to the content struct; Hash/Radix just create an entry in
     // self.types without struct mutation.  But registering all three
     // here keeps the codepath uniform with what gen_set_first_keyed_null
     // would do later — and is idempotent (database.{index,hash,spacial}
@@ -398,7 +398,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                         database.index(c_tp, &key);
                     }
                 }
-                Type::Spacial(c, key, _) => {
+                Type::Radix(c, key, _) => {
                     let c_tp = data.def(c).known_type;
                     if c_tp != u16::MAX {
                         database.spacial(c_tp, &key);
@@ -765,7 +765,7 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     set_mutable_directed(data, kd, &key_fields);
                     database.sorted(c_tp, &key_fields)
                 }
-                Type::Spacial(c_nr, key_fields, _) => {
+                Type::Radix(c_nr, key_fields, _) => {
                     let mut c_tp = data.def(c_nr).known_type;
                     if c_tp == u16::MAX {
                         fill_database(data, database, c_nr);

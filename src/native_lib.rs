@@ -197,7 +197,7 @@ fn is_synthetic_name(stored_name: &str) -> bool {
 /// loft type `t` references.
 fn collect_type_defs(data: &Data, t: &Type, types: &mut BTreeSet<u32>) {
     // The struct/enum `def_nr` this type references, if any.  Reference / Enum /
-    // Sorted / Index / Hash / Spacial all carry a leading element-struct `def_nr`;
+    // Sorted / Index / Hash / Radix all carry a leading element-struct `def_nr`;
     // a Vector recurses into its element type; everything else is a leaf.
     let d = match t {
         Type::Reference(d, _)
@@ -205,7 +205,7 @@ fn collect_type_defs(data: &Data, t: &Type, types: &mut BTreeSet<u32>) {
         | Type::Sorted(d, _, _)
         | Type::Index(d, _, _)
         | Type::Hash(d, _, _)
-        | Type::Spacial(d, _, _) => *d,
+        | Type::Radix(d, _, _) => *d,
         Type::Vector(elm, _) => {
             collect_type_defs(data, elm, types);
             return;
@@ -571,7 +571,7 @@ fn bridge_read(t: &Type, slot: &str) -> String {
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Spacial(_, _, _) => format!("{slot}.dbref"),
+        | Type::Radix(_, _, _) => format!("{slot}.dbref"),
         // Not bridge-able — the gate excludes these, so this is unreachable for a
         // shared-store-dispatchable function; emit a clearly-wrong token so a gate
         // bug surfaces as a compile error rather than silent corruption.
@@ -600,7 +600,7 @@ fn bridge_write_ret(t: &Type, expr: &str, inner_owned: bool) -> String {
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Spacial(_, _, _) => format!("unsafe {{ (*ret).dbref = ({expr}); }}"),
+        | Type::Radix(_, _, _) => format!("unsafe {{ (*ret).dbref = ({expr}); }}"),
         // Text return: the inner fn returns a `Str` pointing into a local work
         // `String` (about to drop).  @PLN10 — destination-passing, not `scratch`:
         // the interpreter caller routes this call through `gen_cdylib_text_dest_call`

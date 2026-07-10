@@ -86,7 +86,7 @@ impl Stores {
     /// Returns the children to recurse on (each carrying its own `DbRef`, type,
     /// and — for per-element kinds — the element record that owns it) and the
     /// container record to free.  Leaf / empty / null shapes yield no children
-    /// and no container.  `Spacial` is unsupported (callers panic on it); the
+    /// and no container.  `Radix` is unsupported (callers panic on it); the
     /// keystone returns an empty walk so a non-cascading caller stays safe.
     ///
     /// Collects into a `Vec` (rather than borrowing an iterator) so callers can
@@ -225,7 +225,7 @@ impl Stores {
                     }
                 }
             }
-            // Base text leaf, scalars, DbRef, Spacial (unsupported): no cascade.
+            // Base text leaf, scalars, DbRef, Radix (unsupported): no cascade.
             _ => {}
         }
         // The value is reached through a heap pointer (zeroed on teardown) for the
@@ -1803,7 +1803,7 @@ impl Stores {
             Parts::Hash(_, _) => {
                 self.copy_claims_hash_body(rec, to, tp);
             }
-            Parts::Spacial(_, _) => panic!("Not implemented"),
+            Parts::Radix(_, _) => panic!("Not implemented"),
             Parts::Index(_, _, _) => self.copy_claims_index_body(rec, to, tp),
             Parts::Enum(values) => {
                 let e_nr = self.store(rec).get_byte(rec.rec, rec.pos, -1);
@@ -2017,7 +2017,7 @@ impl Stores {
     (struct / enum / vector / sorted / array / ordered / hash / index / childrec):
     one walk recurses into each owned child, frees the per-element record it lived
     in, then frees the container block and clears the field pointer.  Only the text
-    leaf and the (unimplemented) `Spacial` teardown stay special-cased.
+    leaf and the (unimplemented) `Radix` teardown stay special-cased.
     # Panics
     When a field points to a spacial structure (teardown unimplemented).
     */
@@ -2066,10 +2066,10 @@ impl Stores {
                     }
                 }
             }
-            // `Spacial` teardown is unimplemented; the keystone yields nothing for
+            // `Radix` teardown is unimplemented; the keystone yields nothing for
             // it, so guard explicitly to preserve the loud failure (a silent no-op
             // would leak).
-            Parts::Spacial(_, _) => panic!("Not implemented"),
+            Parts::Radix(_, _) => panic!("Not implemented"),
             // Every owned-child cascade kind (Struct/Enum/Vector/Sorted/Array/
             // Ordered/Hash/Index/ChildRec) reads the SINGLE keystone walk: recurse
             // into each child, free the per-element record it lived in (Array/Hash/
@@ -2114,7 +2114,7 @@ impl Stores {
                     None
                 }
             }
-            Parts::Spacial(_, _) => None,
+            Parts::Radix(_, _) => None,
             _ => {
                 let walk = self.for_each_owned_child(rec, tp);
                 for c in walk.children {

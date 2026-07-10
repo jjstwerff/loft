@@ -831,7 +831,7 @@ fn native_type_kind(t: &Type) -> TypeKind {
         Type::Iterator(_, _) => K::Iterator,
         Type::Sorted(_, _, _) => K::Sorted,
         Type::Index(_, _, _) => K::Index,
-        Type::Spacial(_, _, _) => K::Spacial,
+        Type::Radix(_, _, _) => K::Radix,
         Type::Hash(_, _, _) => K::Hash,
         Type::Function(_, _, _) => K::Function,
         Type::Rewritten(_) => K::Rewritten,

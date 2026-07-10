@@ -677,7 +677,7 @@ impl Parser {
             if self.parse_text_index(code, &mut p, &index_t) == Type::Character {
                 elm_type = Type::Character;
             }
-        } else if let Type::Hash(el, keys, _) | Type::Spacial(el, keys, _) = &t {
+        } else if let Type::Hash(el, keys, _) | Type::Radix(el, keys, _) = &t {
             // @PLN25 E2 — key fields live in the `Some` variant when the element was
             // rewritten to `__nullable<S>`; resolve names against the key-bearing def.
             let el = crate::typedef::key_bearing_def(&self.data, *el);
@@ -701,7 +701,7 @@ impl Parser {
                 key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
             self.parse_key(code, &t, &key_types);
-            // @P285 — see the Hash/Spacial arm above; the lookup result is nullable.
+            // @P285 — see the Hash/Radix arm above; the lookup result is nullable.
             self.expr_not_null = false;
             self.expr_not_null_name.clear();
         } else if t.is_unknown() {
@@ -773,7 +773,7 @@ impl Parser {
         } else if let Type::Sorted(d_nr, _, _)
         | Type::Hash(d_nr, _, _)
         | Type::Index(d_nr, _, _)
-        | Type::Spacial(d_nr, _, _) = t
+        | Type::Radix(d_nr, _, _) = t
         {
             let ret = self.data.def(*d_nr).returned().clone();
             // S16b: struct-enum variants have .returned = Type::Enum(parent, true, []).

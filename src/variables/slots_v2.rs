@@ -63,7 +63,7 @@ pub struct SlotAssignment {
 }
 
 /// Map a Type to its SlotKind.  Any owned `DbRef`-handle type —
-/// Reference, Vector, Hash, Sorted, Index, Spacial, Iterator, Enum
+/// Reference, Vector, Hash, Sorted, Index, Radix, Iterator, Enum
 /// (struct variant), or RefVar — is `RefSlot`.  Text is also
 /// `RefSlot` (size 24 B, uses `OpFreeText`); every RefSlot of size
 /// 12 B shares the `OpFreeRef` drop opcode.  Everything else is
@@ -82,7 +82,7 @@ pub fn slot_kind(tp: &Type) -> SlotKind {
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
         | Type::Sorted(_, _, _)
-        | Type::Spacial(_, _, _)
+        | Type::Radix(_, _, _)
         | Type::Iterator(_, _)
         | Type::Enum(_, true, _)
         | Type::RefVar(_) => SlotKind::RefSlot,

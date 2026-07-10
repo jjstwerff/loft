@@ -337,7 +337,7 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
-            | Type::Spacial(_, _, _) => ArgT::Ref,
+            | Type::Radix(_, _, _) => ArgT::Ref,
             Type::Vector(_, _) => ArgT::Vec,
             _ => return None,
         };
@@ -359,7 +359,7 @@ fn compute_sig(data: &crate::data::Data, d_nr: u32) -> Option<NativeSig> {
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Spacial(_, _, _) => Some(ArgT::Ref),
+        | Type::Radix(_, _, _) => Some(ArgT::Ref),
         Type::Vector(_, _) => Some(ArgT::Vec),
         _ => return None,
     };
@@ -387,7 +387,7 @@ fn marshal_arg_t(t: &crate::data::Type) -> Option<ArgT> {
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Spacial(_, _, _) => ArgT::Ref,
+        | Type::Radix(_, _, _) => ArgT::Ref,
         Type::Vector(_, _) => ArgT::Vec,
         _ => return None,
     })

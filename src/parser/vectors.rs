@@ -1445,7 +1445,7 @@ impl Parser {
                     Type::Hash(c, _, _)
                     | Type::Sorted(c, _, _)
                     | Type::Index(c, _, _)
-                    | Type::Spacial(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
+                    | Type::Radix(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
                     Type::Vector(elm, _) => {
                         Type::Reference(self.data.type_elm(elm), Deps::share_sentinel())
                     }
@@ -2443,7 +2443,7 @@ impl Parser {
                 let c = self.data.def(*td).known_type();
                 (c != u16::MAX).then(|| self.database.index(c, key))
             }
-            Some(Type::Spacial(td, key, _)) => {
+            Some(Type::Radix(td, key, _)) => {
                 let c = self.data.def(*td).known_type();
                 (c != u16::MAX).then(|| self.database.spacial(c, key))
             }
@@ -3103,7 +3103,7 @@ fn cell_value_type(tp: &Type) -> Type {
 ///   - `Type::Enum(_, false, _)` (plain enum)
 ///
 /// Reference / Function / Vector / Hash / Sorted / Index /
-/// Spacial / Tuple captures are NOT scalars — they're handled by
+/// Radix / Tuple captures are NOT scalars — they're handled by
 /// other paths (Reference: phase 02c; Function: phase 02c via
 /// existing fn-ref machinery; Vector + keyed: rejected by P257).
 ///

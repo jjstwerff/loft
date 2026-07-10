@@ -682,7 +682,7 @@ fn run() -> integer {
 // par-keyed-collection-return: closed by ARC.md A6.d — extended the
 // parser's ref-mode matcher (return_size = -1 sentinel) plus
 // early/late `route_ref_queue` gates to accept Type::Sorted / Hash /
-// Index / Spacial, sharing the existing DbRef-return Queue path.
+// Index / Radix, sharing the existing DbRef-return Queue path.
 // `data::owned_elements` already enumerates each keyed type's
 // internal owned-DbRef fields so the rebase walk is correct without
 // further machinery.

@@ -1802,7 +1802,7 @@ impl Parser {
                     | Type::Hash(_, _, _)
                     | Type::Sorted(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
             && self.type_carries_closure(&tp)
         {
@@ -2018,7 +2018,7 @@ impl Parser {
                         // (`while !has_closing_angle { has_token(","); has_identifier(); }`)
                         // hung forever on `spacial<X[name]>` because none
                         // of the lookahead helpers advance on `[` — see
-                        // @PLAN52 cluster-IV-Spacial-parser.md.  Match the
+                        // @PLAN52 cluster-IV-Radix-parser.md.  Match the
                         // grammar of sorted/hash/index, but allow a bare
                         // `spacial<T>` (no key-spec) since the diagnostic
                         // also fires from `tests/issues.rs::p22_*`.

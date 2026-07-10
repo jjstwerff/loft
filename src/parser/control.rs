@@ -1068,7 +1068,7 @@ impl Parser {
                         | Type::Sorted(_, _, _)
                         | Type::Hash(_, _, _)
                         | Type::Index(_, _, _)
-                        | Type::Spacial(_, _, _)
+                        | Type::Radix(_, _, _)
                 )
                 && matches!(l[last].unspan(), Value::If(_, _, _))
                 && self.unify_if_branches_work_refs(&mut l[last]).is_some();
@@ -1759,7 +1759,7 @@ impl Parser {
             | Type::Sorted(_, _, d)
             | Type::Hash(_, _, d)
             | Type::Index(_, _, d)
-            | Type::Spacial(_, _, d)
+            | Type::Radix(_, _, d)
             | Type::Text(d) => Some(d),
             _ => None,
         };

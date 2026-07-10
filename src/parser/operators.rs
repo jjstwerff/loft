@@ -290,7 +290,7 @@ impl Parser {
                 Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
         {
             return false;

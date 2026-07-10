@@ -103,7 +103,7 @@ impl Stores {
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
             | Parts::Index(c, _, _)
-            | Parts::Spacial(c, _) => {
+            | Parts::Radix(c, _) => {
                 let rec = self.claim(&d, 1 + ((u32::from(self.size(c)) + 7) >> 3));
                 self.store_mut(&rec).set_u32_raw(rec.rec, 4, data.rec);
                 rec
@@ -248,7 +248,7 @@ impl Stores {
                     &mut self.allocations,
                 );
             }
-            Parts::Spacial(_, _) => panic!("Not implemented"),
+            Parts::Radix(_, _) => panic!("Not implemented"),
             _ => (),
         }
     }
@@ -661,7 +661,7 @@ impl Stores {
             | Parts::Array(c)
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
-            | Parts::Spacial(c, _)
+            | Parts::Radix(c, _)
             | Parts::Index(c, _, _) => {
                 let crate::json::Parsed::Array(items) = parsed else {
                     return Err(mismatch());
@@ -1117,7 +1117,7 @@ impl Stores {
             }
             Parts::Sorted(_, _)
             | Parts::Ordered(_, _)
-            | Parts::Spacial(_, _)
+            | Parts::Radix(_, _)
             | Parts::Hash(_, _)
             | Parts::Index(_, _, _)
             | Parts::Array(_)

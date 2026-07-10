@@ -45,7 +45,7 @@ fn short_type(tp: &Type) -> String {
         Type::Iterator(inner, _) => format!("iter<{}>", short_type(inner)),
         Type::Sorted(t, _, _) => format!("sorted({t})"),
         Type::Index(t, _, _) => format!("index({t})"),
-        Type::Spacial(t, _, _) => format!("spacial({t})"),
+        Type::Radix(t, _, _) => format!("spacial({t})"),
         Type::Hash(t, _, _) => format!("hash({t})"),
         Type::Function(_, _, _) => "fn".to_string(),
         Type::Rewritten(inner) => format!("~{}", short_type(inner)),

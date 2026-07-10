@@ -428,13 +428,13 @@ impl Parser {
                 Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _) => {
+                | Type::Radix(_, _, _) => {
                     // Derive element type for the block result annotation.
                     let elem_type = match is_type {
                         Type::Sorted(dnr, _, dep)
                         | Type::Index(dnr, _, dep)
                         | Type::Hash(dnr, _, dep)
-                        | Type::Spacial(dnr, _, dep) => Type::Reference(*dnr, dep.clone()),
+                        | Type::Radix(dnr, _, dep) => Type::Reference(*dnr, dep.clone()),
                         _ => Type::Null,
                     };
                     // Create a separate Long variable to hold the packed i64 iterator
@@ -788,7 +788,7 @@ impl Parser {
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
         ) {
             if let Value::Var(nr) = to.unspan() {
                 if !self.first_pass && self.vars.is_const_param(*nr) {
@@ -810,8 +810,8 @@ impl Parser {
             // copy_claims(val, field); `0x8000` frees a fresh-storage call
             // source.  (Empty `s.h = []` → OpClearKeyed and `s.h[k]=v` →
             // OpSetKeyed are handled earlier; this is the remaining
-            // whole-value case.)  Vector/Spacial keep the bare return —
-            // vector field-replace lives in parse_assign_op, and Spacial's
+            // whole-value case.)  Vector/Radix keep the bare return —
+            // vector field-replace lives in parse_assign_op, and Radix's
             // copy_claims is unimplemented (per @P295), so `keyed_field_kt`
             // returns None for both.
             if op == "="
@@ -1738,7 +1738,7 @@ use #count instead"
                     Type::Sorted(_, _, _)
                         | Type::Hash(_, _, _)
                         | Type::Index(_, _, _)
-                        | Type::Spacial(_, _, _)
+                        | Type::Radix(_, _, _)
                 ) && let Some((mat_fill_ir, mat_var, mat_in_type)) =
                     self.materialise_keyed_for_par(&in_type, &expr)
                 {
@@ -2206,7 +2206,7 @@ use #count instead"
             Type::Sorted(c, _, dep)
             | Type::Hash(c, _, dep)
             | Type::Index(c, _, dep)
-            | Type::Spacial(c, _, dep) => (*c, dep.clone()),
+            | Type::Radix(c, _, dep) => (*c, dep.clone()),
             _ => return None,
         };
         let elem_ref_tp = Type::Reference(content_d, dep);
@@ -2784,7 +2784,7 @@ use #count instead"
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
         ) {
             // Reference mode — workers return a DbRef into their own
             // store; main deep-copies via copy_from_worker.  Plan-06
@@ -2797,7 +2797,7 @@ use #count instead"
             // store and the main thread deep-copies it via the same
             // copy_from_worker mechanism.
             // Plan-06 ARC.md A6.d: keyed collections (Sorted / Hash /
-            // Index / Spacial) are stored as DbRefs to their backing
+            // Index / Radix) are stored as DbRefs to their backing
             // records and route through the same ref path; the rebase
             // walk in `data::owned_elements` already enumerates their
             // internal owned-DbRef fields.
@@ -3005,7 +3005,7 @@ use #count instead"
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
         ) && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX
@@ -3315,7 +3315,7 @@ use #count instead"
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
         ) && fn_d_nr != u32::MAX
             && queue_ref_d_nr != u32::MAX
             && buf_get_ref_d_nr != u32::MAX

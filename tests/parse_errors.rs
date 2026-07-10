@@ -566,7 +566,7 @@ fn spacial_not_implemented() {
     // surfaces the 1.1+ timeline so a user who typed it knows when
     // the feature ships and which substitute to reach for.
     //
-    // @PLAN52 IV-Spacial fix (2026-05-29): use the new bracket-key
+    // @PLAN52 IV-Radix fix (2026-05-29): use the new bracket-key
     // syntax `spacial<X[k]>`; the comma-separated form parses with
     // additional errors after the @PLAN52 fix landed.
     code!("struct Point { x: integer, y: integer }\nstruct World { pts: spacial<Point[x, y]> }\nfn test() {}")

@@ -985,7 +985,7 @@ impl Parser {
                 Type::Vector(_, _)
                     | Type::Sorted(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
         {
             return;
@@ -1144,7 +1144,7 @@ use a separate collection or add after the loop"
                 Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
             && self.lexer.peek_token("[")
         {
@@ -1594,7 +1594,7 @@ use a separate collection or add after the loop"
                 Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
         {
             let elm_tp = f_type.content();
@@ -2154,7 +2154,7 @@ use a separate collection or add after the loop"
                     Type::Sorted(_, _, d)
                     | Type::Hash(_, _, d)
                     | Type::Index(_, _, d)
-                    | Type::Spacial(_, _, d) => d.to_vec(),
+                    | Type::Radix(_, _, d) => d.to_vec(),
                     _ => Vec::new(),
                 };
                 for d in deps {
@@ -2179,13 +2179,13 @@ use a separate collection or add after the loop"
             return Type::Void;
         }
         // @P295 — `spacial` reassignment is not yet supported (copy_claims
-        // and insert_record both `panic!("Not implemented")` for Spacial).
+        // and insert_record both `panic!("Not implemented")` for Radix).
         // Reject with an actionable error instead of crashing in codegen.
         if !self.first_pass
             && op == "="
             && var_nr != u16::MAX
-            && matches!(f_type, Type::Spacial(_, _, _))
-            && matches!(s_type, Type::Spacial(_, _, _))
+            && matches!(f_type, Type::Radix(_, _, _))
+            && matches!(s_type, Type::Radix(_, _, _))
             && !matches!(code, Value::Insert(_) | Value::Null)
             && !matches!(code.unspan(), Value::Var(rhs) if *rhs == var_nr)
         {
@@ -2295,7 +2295,7 @@ use a separate collection or add after the loop"
                     | Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
             && matches!(code, Value::Insert(_))
         {
