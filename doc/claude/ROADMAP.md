@@ -29,8 +29,14 @@ The methodology behind this file (categories, no-time-projections, features-need
 
 > **Update 2026-07-10 — the plan board is EMPTY; the remaining work was never ticketed.**
 > Zero plans carry `status:active` / `status:next` / `status:progress`, and the loft repo has **zero
-> open bug issues** — not because the roadmap is finished, but because @PLN25/@PLN28/@PLN36/@PLN85/
-> @PLN90/@PLN94/@PLN97–101 all closed and the residue was never filed.  The top picks now are:
+> open bug issues**.  That second number is real — loft runs **fix-don't-file** (CLAUDE.md § Bug-filing
+> policy) under a feature freeze, so a known defect is never parked and nothing accumulates — but it is
+> **not the defect ledger**.  The known remainder is a set of deliberate, scoped deferrals living in
+> each open plan's residual list (e.g.
+> [plans/25-nullable-sequences/RESUME.md](plans/25-nullable-sequences/RESUME.md)) and in the
+> [STABILITY_ROADMAP](STABILITY_ROADMAP.md) queue.  Read those, not the issue count.  The empty *plan
+> board* is real too: @PLN25/@PLN28/@PLN36/@PLN85/@PLN90/@PLN94/@PLN97–101 all closed and the residue
+> was never ticketed.  The top picks now are:
 >
 > 1. **Cluster C / H10 — fold `copy_claims` onto the keystone** (executable plan:
 >    [STABILITY_REDFLAG_REMEDIATION § Cluster C / H10](STABILITY_REDFLAG_REMEDIATION.md#cluster-c--h10--fold-copy_claims-source-enumeration-onto-the-keystone);
@@ -69,9 +75,11 @@ The methodology behind this file (categories, no-time-projections, features-need
 > close `@PLN74` or stop calling the work complete; do not read the two numbers as the same plan.
 
 The 2026-07 cycle shipped as `2026.7.1` (stability + type safety).  The **H-register is drained**
-([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — H3/H5/H6/H7/H8 all done) and the **bug queue is
-empty** (zero open GitHub issues), but the stability roadmap itself is **not** drained: gate 1's
-Cluster C fold and gate 5 both remain, and both are un-ticketed.  Under the warm feature freeze
+([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md) — H3/H5/H6/H7/H8 all done) and the **GitHub issue
+tracker is empty — which under fix-don't-file means "no deferrals", not "no bugs"** (the ledger is in
+the docs; see the digest above).  The stability roadmap itself is **not** drained either: gate 1's
+Cluster C fold remains, and gate 5 is now [@PLN102](https://github.com/loft-lang/plans/issues/102).
+Under the warm feature freeze
 (below), **in-scope** = library enablement + optimisations + stabilisation;
 **gated** = new language features.  Current top picks, by theme — this is a pointer
 digest; the detail lives in the linked homes (no catalogue is duplicated here).

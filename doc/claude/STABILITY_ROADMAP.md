@@ -126,8 +126,27 @@ sub-thread) is "good enough for prototyping" — fold in opportunistically, not 
 **Readiness today (2026-07-10).** The 2026-07 stability + type-safety release SHIPPED as
 `2026.7.1`. Gates 2 and 3 are CLOSED. Gate 1's tracked store-lifetime bugs are all CLOSED
 (#460 / #461 / #462 / #465, and A1b via @PLN90 #516); what remains is the Cluster C fold — forward-risk
-hardening, not an active bug — plus the fuzz-proof run. **Zero open bug issues.** Two standing gates
-are RED, and neither is a flake:
+hardening, not an active bug — plus the fuzz-proof run.
+
+**Why the tracker is empty — and what to read instead.** This stream's standing rule at the top of
+this file is *fix, don't file*, and the cycle runs under a warm feature freeze
+([ROADMAP § Feature freeze](ROADMAP.md)): **a known defect cannot be parked** — it is fixed in the
+session that surfaces it, with a regression test, and new feature work stops until what we can see
+works. So "zero open bug issues" is not bookkeeping; it is the *consequence* of refusing to tolerate a
+defect, and it is why nothing accumulates. What the number is **not** is the ledger. The known
+remainder is a set of **deliberate, scoped deferrals**, recorded in each open plan's residual list —
+e.g. [plans/25-nullable-sequences/RESUME.md](plans/25-nullable-sequences/RESUME.md), whose 2026-07-10
+both-backend re-probe records a `?? null` unsoundness, a call-arg N-Store hole, a `u8?`-return native
+codegen bug, and the registry-gated `not null` hard-reject — plus this queue. **Read those, not the
+issue count.**
+
+The discipline earns its keep because *the person who finds a bug is the person who fixes it*: repro
+warm, paths loaded, no scope/mechanism re-derivation to re-pay later. It does not survive contact with
+anyone who **cannot** fix — filing is a stranger's only available move — which is why a public intake
+path is its own arc of gate 5 ([@PLN102](https://github.com/loft-lang/plans/issues/102)) rather than an
+afterthought. The policy is right; its boundary is scale, not size.
+
+Two standing gates are RED, and neither is a flake:
 - **`main` is red on the differential oracle** — `tests/oracle/27-native-tailcall-return-heap.loft`
   runs on `--interpret` but `--native` and `--native-wasm` **reject it** (rustc E0599:
   `return ().to_string()` — codegen drops the value of a tail call inside a match arm). An
