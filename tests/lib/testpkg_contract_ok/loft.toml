@@ -1,0 +1,6 @@
+[package]
+name    = "testpkg_contract_ok"
+version = "0.0.1"
+# @PLN102 arc B-semantic — declares the current contract epoch (0), so it
+# loads clean.  Proves the contract gate is not a blanket reject.
+contract = "0"

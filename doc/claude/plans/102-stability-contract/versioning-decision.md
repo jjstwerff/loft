@@ -144,16 +144,22 @@ noise for the author never having to enumerate surfaces. The precise-but-heavy
 alternative (per-surface) was rejected for that reason. The over-warn is the honest
 price of the simplest axis, and it fails safe (warn, not silent-wrong).
 
-## What arc B-semantic must build (not now — this doc is the decision)
+## What arc B-semantic builds — ✅ IMPLEMENTED 2026-07-10 (except the CI gates)
 
-1. A `contract` constant in the loft binary (start: 0 pre-freeze, 1 at the syntax
-   freeze / 1.0), separate from `CARGO_PKG_VERSION`.
-2. A manifest field carrying the library's contract bound (name = a cosmetic sub-choice,
-   see below), parsed by **arc B-mechanical's existing constraint parser**.
-3. Loader semantics per the table above: reject `E < K`, accept `E == K`/in-range, hand
-   `E > K` to arc C's deprecation warning.
-4. The CI gates that make an omitted bump loud: layout-hash-changed ⇒ contract bump;
-   golden-corpus-output-changed ⇒ classify + bump (shared with arcs A/C).
+1. ✅ `manifest::CONTRACT_VERSION` — loft's current contract, `0` pre-freeze (the
+   language surface is still settling), to become `1` at the 1.0 freeze. Separate from
+   `CARGO_PKG_VERSION`.
+2. ✅ The `[package] contract = "..."` manifest field (`Manifest::contract`).
+3. ✅ `manifest::check_contract` + the `ContractCheck { Ok | TooOld | Drifted | Malformed }`
+   outcome, folding the constraint into a `[lo, hi]` window (bare integer = exact
+   "tested-at", `>=K` opens the ceiling), with the loader (`parser/mod.rs`) rejecting
+   `TooOld`, warning on `Drifted` (the arc-C channel — loads, does not reject), and
+   rejecting `Malformed`. Unit test `arc_b_semantic_contract_check` + integration
+   fixtures `testpkg_contract_future` (too-new → fatal) / `testpkg_contract_ok`
+   (current → loads). The `Drifted` warn arm is inert until `CONTRACT_VERSION > 0`.
+4. ⬜ **Still open** — the CI gates that make an omitted bump loud: layout-hash-changed
+   ⇒ contract bump; golden-corpus-output-changed ⇒ classify + bump (shared with arcs
+   A/C). This is the failure-path-1 mitigation; it lands with the policy arcs.
 
 ## The two cosmetic sub-choices left to the user
 

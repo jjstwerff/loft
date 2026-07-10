@@ -1,0 +1,5 @@
+// @PLN102 arc B-semantic — a package declaring the current contract epoch loads
+// without error (the gate is not a blanket reject).
+use testpkg_contract_ok;
+fn main() {
+}

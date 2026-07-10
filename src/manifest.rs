@@ -103,6 +103,14 @@ pub struct Manifest {
     /// Interpreter version requirement from the `[package]` section,
     /// e.g. `">=1.0"`.  `None` means no constraint.
     pub loft_version: Option<String>,
+    /// Compatibility-contract requirement from `[package] contract = "..."`
+    /// (@PLN102 arc B-semantic).  The `contract` axis is a monotone integer
+    /// that increments on a *silent* breaking change to loft's contract —
+    /// distinct from the calendar release tag `loft_version` bounds.  A bare
+    /// integer (`"1"`) is a "tested-at" epoch; ranges (`">=1"`, `">=1, <=3"`)
+    /// assert forward-coverage.  `None` means the library declares no contract
+    /// (grandfathered — no gate).  See `check_contract` / `CONTRACT_VERSION`.
+    pub contract: Option<String>,
     /// GitHub repository that publishes this package's releases, from
     /// `[package] repository = "..."`.  Either a bare repo name under the
     /// `loft-lang` org (`"loft-libs-core"`) or a full `"owner/repo"`.  When
@@ -474,6 +482,7 @@ fn apply_kv(m: &mut Manifest, section: &str, key: &str, value: &MValue) {
         ("package", "name") => m.name = Some(value.scalar()),
         ("package", "version") => m.version = Some(value.scalar()),
         ("package", "loft") => m.loft_version = Some(value.scalar()),
+        ("package", "contract") => m.contract = Some(value.scalar()),
         ("package", "repository") => m.repository = Some(value.scalar()),
         ("package", "description") => m.description = Some(value.scalar()),
         ("library", "entry") => m.entry = Some(value.scalar()),
@@ -635,6 +644,118 @@ fn parse_version(s: &str) -> Option<(u32, u32, u32)> {
         return None; // more than three components → malformed
     }
     Some((major, minor, patch))
+}
+
+// ── @PLN102 arc B-semantic — the compatibility `contract` axis ───────────────
+//
+// The RELEASE tag stays calendar-versioned (`CARGO_PKG_VERSION`, checked by
+// `check_version` above).  The COMPATIBILITY contract is a separate monotone
+// integer that increments iff loft makes a *silent* breaking change — old code
+// that still compiles and runs, but now produces a different result (the C86
+// plain-bind-copy class that broke `hex_terrain`).  Additive and loud-failing
+// changes (a missing symbol errors at compile) do NOT bump it, so a library's
+// declared contract stays valid exactly as long as loft's silent contract is
+// unchanged.  Full rationale: doc/claude/plans/102-stability-contract/versioning-decision.md.
+
+/// loft's current compatibility contract.  **0 = pre-1.0, no promise** (the
+/// language surface is still settling); it becomes **1 at the 1.0 freeze** and
+/// increments on each subsequent silent breaking change.  Bumping this is a
+/// deliberate maintainer act paired with a CHANGELOG note — see the versioning
+/// decision doc (layout-hash / golden-corpus CI gates make an omitted bump loud).
+pub const CONTRACT_VERSION: u32 = 0;
+
+/// Outcome of checking a library's `contract` requirement against the running
+/// interpreter's [`CONTRACT_VERSION`].
+#[derive(Debug, PartialEq, Eq)]
+pub enum ContractCheck {
+    /// loft's contract is within the range the library was tested against.
+    Ok,
+    /// loft's contract is BELOW the library's minimum — loft is too old for the
+    /// library's epoch; the library may rely on semantics not yet in this loft.
+    /// Hard reject.
+    TooOld { required_min: u32 },
+    /// loft's contract has advanced PAST the library's tested ceiling — a silent
+    /// break may have landed since it was tested.  Accept, but WARN (the arc-C
+    /// deprecation channel): the fix is the author republishing against the
+    /// current contract, never a silent wrong answer for the consumer.
+    Drifted { tested_max: u32 },
+    /// The `contract` requirement is not valid syntax (non-integer, unsupported
+    /// operator, contradictory range) — rejected loudly, never silently ignored.
+    Malformed(String),
+}
+
+/// Check a library's `contract` requirement against loft's `current` contract.
+///
+/// The requirement is an integer window folded from comma-separated predicates:
+/// a bare integer or `=K` is the exact "tested-at" epoch (`[K, K]`); `>=K` opens
+/// the ceiling (`[K, ∞)`, asserting forward-coverage); `<=M`/`<M`/`>K` bound the
+/// other side; a range `">=K, <=M"` is `[K, M]`.  Then `current < lo` →
+/// [`ContractCheck::TooOld`], `current > hi` → [`ContractCheck::Drifted`], else
+/// [`ContractCheck::Ok`].  An empty requirement is `Ok` (library declares no
+/// contract — grandfathered).  Unlike a release-version bound, a BARE contract
+/// is "tested-at" (exact), NOT `>=`: forward-compatibility is the thing this axis
+/// refuses to assume silently.
+#[must_use]
+pub fn check_contract(required: &str, current: u32) -> ContractCheck {
+    let required = required.trim();
+    if required.is_empty() {
+        return ContractCheck::Ok;
+    }
+    let mut lo: u32 = 0;
+    let mut hi: u32 = u32::MAX;
+    for part in required.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            return ContractCheck::Malformed(format!(
+                "empty contract predicate in '{required}' (a stray comma?)"
+            ));
+        }
+        let (op, num) = if let Some(r) = part.strip_prefix(">=") {
+            (VersionOp::Ge, r)
+        } else if let Some(r) = part.strip_prefix("<=") {
+            (VersionOp::Le, r)
+        } else if let Some(r) = part.strip_prefix('>') {
+            (VersionOp::Gt, r)
+        } else if let Some(r) = part.strip_prefix('<') {
+            (VersionOp::Lt, r)
+        } else if let Some(r) = part.strip_prefix('=') {
+            (VersionOp::Eq, r)
+        } else if part.starts_with(|c: char| c.is_ascii_digit()) {
+            (VersionOp::Eq, part) // bare contract → exact "tested-at" epoch
+        } else {
+            return ContractCheck::Malformed(format!(
+                "unsupported contract constraint '{part}' — use an integer, or >=, <=, >, <, =, or a comma range"
+            ));
+        };
+        let Ok(k) = num.trim().parse::<u32>() else {
+            return ContractCheck::Malformed(format!(
+                "'{}' is not an integer contract version in '{part}'",
+                num.trim()
+            ));
+        };
+        match op {
+            VersionOp::Eq => {
+                lo = lo.max(k);
+                hi = hi.min(k);
+            }
+            VersionOp::Ge => lo = lo.max(k),
+            VersionOp::Gt => lo = lo.max(k.saturating_add(1)),
+            VersionOp::Le => hi = hi.min(k),
+            VersionOp::Lt => hi = hi.min(k.saturating_sub(1)),
+        }
+    }
+    if lo > hi {
+        return ContractCheck::Malformed(format!(
+            "contradictory contract range in '{required}' (lower bound {lo} exceeds upper bound {hi})"
+        ));
+    }
+    if current < lo {
+        ContractCheck::TooOld { required_min: lo }
+    } else if current > hi {
+        ContractCheck::Drifted { tested_max: hi }
+    } else {
+        ContractCheck::Ok
+    }
 }
 
 /// Extract the `path` value from an inline-table dependency value
@@ -1064,6 +1185,46 @@ n_demo_fn_b = "demo_fn_b"
         assert!(matches!(check_version(">=", cur), Malformed(_)));
         assert!(matches!(check_version(">=0.8,", cur), Malformed(_))); // empty predicate
         assert!(matches!(check_version("1.2.3.4", cur), Malformed(_))); // too many parts
+    }
+
+    /// @PLN102 arc B-semantic — the `contract` axis (a monotone integer,
+    /// separate from the calver release tag).  Bare = "tested-at" (exact), so a
+    /// newer loft DRIFTS (warn) rather than silently accepting; `>=K` opens the
+    /// ceiling (forward-coverage, no drift); below the floor is a hard reject.
+    #[test]
+    fn arc_b_semantic_contract_check() {
+        use ContractCheck::{Drifted, Malformed, Ok, TooOld};
+
+        // Bare integer = exact tested-at epoch: below → TooOld, at → Ok, above → Drifted.
+        assert_eq!(check_contract("1", 0), TooOld { required_min: 1 });
+        assert_eq!(check_contract("1", 1), Ok);
+        assert_eq!(check_contract("1", 3), Drifted { tested_max: 1 });
+        assert_eq!(check_contract("=2", 2), Ok);
+        assert_eq!(check_contract("=2", 4), Drifted { tested_max: 2 });
+
+        // `>=K` asserts forward-coverage: no drift on a newer loft.
+        assert_eq!(check_contract(">=1", 1), Ok);
+        assert_eq!(check_contract(">=1", 9), Ok);
+        assert_eq!(check_contract(">=2", 1), TooOld { required_min: 2 });
+
+        // Ranges fold to [lo, hi].
+        assert_eq!(check_contract(">=1, <=3", 2), Ok);
+        assert_eq!(check_contract(">=1, <=3", 0), TooOld { required_min: 1 });
+        assert_eq!(check_contract(">=1, <=3", 5), Drifted { tested_max: 3 });
+        assert_eq!(check_contract(">1", 2), Ok); // >1 → lo=2
+        assert_eq!(check_contract(">1", 1), TooOld { required_min: 2 });
+        assert_eq!(check_contract("<=2", 2), Ok);
+        assert_eq!(check_contract("<=2", 3), Drifted { tested_max: 2 });
+
+        // Empty → no gate (library declares no contract).
+        assert_eq!(check_contract("", 7), Ok);
+
+        // Malformed → loud, never silent.
+        assert!(matches!(check_contract("1.5", 0), Malformed(_))); // not an integer
+        assert!(matches!(check_contract("^1", 0), Malformed(_))); // unsupported op
+        assert!(matches!(check_contract("garbage", 0), Malformed(_)));
+        assert!(matches!(check_contract(">=3, <=1", 2), Malformed(_))); // contradictory
+        assert!(matches!(check_contract(">=1,", 1), Malformed(_))); // empty predicate
     }
 
     #[test]

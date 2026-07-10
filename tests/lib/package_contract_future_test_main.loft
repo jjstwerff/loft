@@ -1,0 +1,5 @@
+// @PLN102 arc B-semantic — using a package that requires a newer compatibility
+// contract than this loft provides must be a hard, loud reject.
+use testpkg_contract_future;
+fn main() {
+}
