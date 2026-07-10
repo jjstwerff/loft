@@ -5,6 +5,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN85 — the text-return SIGNATURE PRE-PASS (spec)
 
+> **UPDATE 2026-07-10 — the GENERIC-MONOMORPH subset is CLOSED without the pre-pass.**
+> The `run() -> text { first(nums) }` case (a `-> text` generic monomorph returned
+> through a non-generic caller — `g1b`, and the `plan17`/`p243` UserCall family) was
+> fixed by a narrow REORDER, not the whole-program pre-pass: `tret_bind_ok`'s
+> backward-ref gate now maps a generic-MONOMORPH callee (`t_<Type>_<fn>`, minted
+> pass-2 so its own def_nr reads forward) back to its TEMPLATE (`n_<fn>`), which is
+> textually backward and pass-stable — pass 1 resolves the call to the template, pass
+> 2 to the monomorph, and both compare the same template def_nr. See
+> `control.rs::backward_ref_defnr`. The residual-19 sweep is now fully leak=0; full
+> suite green. The GENUINELY forward-referenced NON-generic UserCall (`caller_first {
+> callee_later() }`, callee defined AFTER caller) and the native-wrap case are still
+> what the pre-pass below addresses — they are not exercised by the current leakers.
+
+
 The last enabler for the 19 residual text leaks (§ `text-tail-return-leak.md`).
 > **CORRECTION (2026-07-09, after an implementation attempt — see
 > `residual-19-fix-plan.md` § Slice 1).** The claim below that the instability is

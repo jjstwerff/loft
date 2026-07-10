@@ -5462,9 +5462,32 @@ impl Parser {
             // Both depend on the callee's resolved return signature, so they are
             // forward-ref-UNSTABLE — promote ONLY for a backward-ref callee
             // (def_nr precedes this fn's), pass-stable on both passes.
-            return self.tail_call_op(tail).is_some_and(|op| op < self.context);
+            return self
+                .tail_call_op(tail)
+                .is_some_and(|op| self.backward_ref_defnr(op) < self.context);
         }
         true
+    }
+
+    /// The def_nr that governs the backward-ref gate for a call tail.  Normally the
+    /// callee itself — but a GENERIC MONOMORPH is minted at its call site (pass 2),
+    /// so its OWN def_nr reads forward even when the generic is defined textually
+    /// BEFORE the caller.  Map such a callee (`t_<Type>_<fn>`) back to its TEMPLATE
+    /// (`n_<fn>`, `DefType::Generic`), which is where the callee is really defined and
+    /// is pass-stable: pass 1 resolves the call to the template, pass 2 to the
+    /// monomorph, and both then compare the SAME template def_nr.  @PLN85 forward-ref
+    /// class (g1b — a `-> text` monomorph returned through a non-generic caller).
+    fn backward_ref_defnr(&self, op: u32) -> u32 {
+        if (op as usize) < self.data.definitions.len() {
+            let def = self.data.def(op);
+            if def.def_type() == DefType::Function && def.name().starts_with("t_") {
+                let tmpl = self.data.def_nr(&format!("n_{}", def.original_name()));
+                if tmpl != u32::MAX && self.data.def_type(tmpl) == DefType::Generic {
+                    return tmpl;
+                }
+            }
+        }
+        op
     }
 
     /// The callee def_nr of a CALL return tail (peeling `Block`/`Insert`/

@@ -52,10 +52,13 @@ The p329/p330 generic tuple-of-text returns are closed by the generic-return REO
 generic template rides the existing non-generic `__tuple` promotion, plus broadening
 the caller's `OpFreeRefIfDistinct` pairing from `n_` to `t_` callees. Full suite green;
 all `probes/generic-tuple-return/` cells leak=0 on both backends. The tracked
-interpreter text-leak classes (issue_437 + p329/p330) are now at **0**. Remaining known
-text leaker: `g1b` (`-> text` generic monomorph returned through a caller — the
-forward-ref/signature-pre-pass class, a PROBE not a suite test). Next: recalibrate the
-CI ratchet baseline (should drop) and drive the forward-ref class.
+interpreter text-leak classes (issue_437 + p329/p330) are now at **0**. The `g1b` forward-ref
+case (`-> text` generic monomorph returned through a non-generic caller) is now ALSO
+FIXED via a narrow reorder (`control.rs::backward_ref_defnr` maps a monomorph callee to
+its backward template for the promotion gate — see `signature-pre-pass-spec.md`
+UPDATE). **The entire residual-19 sweep is now leak=0** on the interpreter; full suite
+green. Next: recalibrate the CI ratchet baseline (it should drop toward 0) via a CI
+run, then flip `detect_leaks=1` to enforcing.
 
 ## The (former) 5 leakers — case (b) of skip_free-orphan (see skip-free-orphan-class.md)
 
