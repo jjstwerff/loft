@@ -540,17 +540,24 @@ jobs:
       # its OWN correctness contract (distinct from Rust-level UB the sanitizers
       # check).  `[profile.dev.package.loft]` compiles them OUT of every normal
       # dev/test build, so until now NOTHING in CI checked them except cargo-fuzz.
-      # `-C debug-assertions=on` turns them on across the WHOLE interpreter corpus
-      # at near-native speed — catching an invariant regression the moment it lands,
+      # `-C debug-assertions=on` turns them on across the interpreter corpus at
+      # near-native speed — catching an invariant regression the moment it lands,
       # far more coverage per CI-minute than growing the slow Miri set (@PLN54 S5).
-      # Scoped to `--lib --test issues` (validated green); expanding to wrap/strings
-      # awaits the known stdlib slot-width DA items (plan85 DA-inventory worklist).
-      # Non-vacuous: the asserts are proven to fire (the @PLN85 DA campaign closed
-      # a 53→0 failed-target inventory of real bugs by turning them on).
+      # Scope MATCHES the per-PR `stack_align_guard` sweep in ci.yml: the in-process
+      # interpreter test binaries, `library_suite` excluded (it builds the lib/*
+      # NATIVE cdylibs + needs GL/ALSA this lean job omits, and DA asserts fire in
+      # the in-process compile+run, not the spawned native binary).  The wrap/strings
+      # DA-tripwire chain (the plan85 DA-inventory worklist) was cleared on
+      # `tuxedo-cluster-c`, so the gate now spans the same corpus the alignment sweep
+      # does.  Non-vacuous: the asserts are proven to fire (the @PLN85 DA campaign
+      # closed a 53→0 failed-target inventory of real bugs by turning them on).
       - name: Debug-assertions sweep (interpreter corpus)
         env:
           RUSTFLAGS: '-C debug-assertions=on'
-        run: cargo test --release --no-fail-fast --lib --test issues
+        run: >
+          cargo test --release --no-fail-fast
+          --lib --test issues --test wrap --test strings --test frame_vars
+          -- --skip library_suite
 
   toolchain-matrix:
     name: Suite under ${{ matrix.toolchain }}

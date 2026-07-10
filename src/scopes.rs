@@ -4951,6 +4951,34 @@ fn collect_freed_vars(ir: &Value, free_ops: &[u32], result: &mut HashSet<u16>) {
     });
 }
 
+/// Block-tail temps whose store is ADOPTED (moved) into a freed assignment LHS,
+/// so freeing the LHS frees them — no `OpFreeRef` of the temp is emitted, and
+/// none should be (it would double-free the shared record).
+///
+/// The shape is `Set(lhs, Block[…, Var(v)])`: the block allocates a fresh record
+/// into `v` and yields it, and `lhs = <block>` PutRef-aliases that record into
+/// `lhs` (the empty-dep adopt — e.g. the `#reading file` surface temp behind
+/// `q = f#read as S`).  `v`'s free responsibility transfers to `lhs`, so when
+/// `lhs` is freed, `v` is covered.
+///
+/// Narrow by construction: it matches only a BLOCK-valued RHS (a plain
+/// `lhs = v` COPY has an RHS of `Var(v)`, not `Block`, and its `v` is freed
+/// separately, so `v` is already in `freed` and never reaches the leak assert).
+/// It credits `v` only when `lhs` is in `freed`, so it cannot mask a genuine
+/// leak where the adopting LHS itself is never freed.
+#[cfg(debug_assertions)]
+fn collect_adopted_block_results(ir: &Value, freed: &HashSet<u16>, result: &mut HashSet<u16>) {
+    ir.walk(&mut |n| {
+        if let Value::Set(lhs, rhs) = n
+            && freed.contains(lhs)
+            && let Value::Block(bl) = rhs.unspan()
+            && let Some(Value::Var(v)) = bl.operators.last().map(Value::unspan)
+        {
+            result.insert(*v);
+        }
+    });
+}
+
 /// After scope analysis, assert that every Reference variable that should be
 /// freed has a corresponding `OpFreeRef` somewhere in `ir`.
 ///
@@ -5036,6 +5064,13 @@ fn check_ref_leaks(
     let mut freed: HashSet<u16> = HashSet::new();
     collect_freed_vars(ir, &free_ops, &mut freed);
 
+    // A block-tail temp adopted into a freed LHS (`q = f#read as S`, whose
+    // `#reading file` surface temp `_read_N` moves its record into `q`) has no
+    // OpFreeRef of its own and must not — `q`'s free covers it.  Credit it so
+    // the leak assert below does not false-positive on the moved-from source.
+    let mut adopted: HashSet<u16> = HashSet::new();
+    collect_adopted_block_results(ir, &freed, &mut adopted);
+
     // H2: `ret_type` deps are ATTRIBUTE indices — translate each to its
     // frame var through the attribute name before pooling with the
     // frame-space deps below (the old code inserted them raw, so an attr
@@ -5096,6 +5131,9 @@ fn check_ref_leaks(
         }
         if v == direct_ret_var {
             continue; // ownership transferred to caller
+        }
+        if adopted.contains(&v) {
+            continue; // moved into a freed LHS — that free covers this store
         }
         if let Type::Reference(_, dep) = function.tp(v) {
             // LOFT_REF_LEAK_WARN=1 downgrades the assert to a warning so a
