@@ -684,17 +684,30 @@ mostly dissolved with H1 (the contract is now documented + the assert
 enforces its hardest clause).  Full history:
 [plans/55-return-abi](plans/55-return-abi/README.md).
 
-## H10 — The per-`Parts` container taxonomy (copy/remove/validate/construct drift)
+## H10 — The per-`Parts` container taxonomy (copy source-fold) — ✅ RESOLVED 2026-07-10
 
-**The risk.** The heap-cascade operations — copy, remove, validate, construct —
-each re-encode the same per-`Parts` fact ("which child type, at which stride, with
-which container walk") independently. `remove_claims` was collapsed onto
-`for_each_owned_child` (REDFLAGS cluster C, C.0–C.3, merged), but **copy / validate /
-construct never followed**: `copy_claims` split into 4 per-kind helpers
-(`copy_claims_seq_vector/array/hash/index`), `validate_claims` stayed monolithic, and
-construction (`record_new`/`record_finish`) is a 4th encoding — ~53 `Parts::` arms
-across 3 dispatchers, already drifting. A new collection kind must be taught each
-dispatcher separately or it silently misclassifies.
+**Status.** The `copy_claims` source enumeration is folded onto `for_each_owned_child` —
+all four kinds (`hash_body`, `index_body`, `array_body`, `seq_vector`) now read the one
+keystone walk, joining `remove_claims`. Done on branch `tuxedo-cluster-c` (phases 0–3); the
+scope was corrected first (see "What actually folded" below) and each fold verified on both
+backends. `validate_claims` and construction were **ruled out of scope by a design probe**,
+not left undone — folding them would be over-reach. The register entry stays as the record.
+
+**The risk (original framing).** The heap-cascade operations — copy, remove, validate,
+construct — each re-encode the same per-`Parts` fact ("which child type, at which stride,
+with which container walk") independently. `remove_claims` was collapsed onto
+`for_each_owned_child` (REDFLAGS cluster C, C.0–C.3, merged), but **copy never followed**:
+`copy_claims` split into 4 per-kind helpers (`copy_claims_seq_vector/array/hash/index`).
+A new collection kind had to be taught each source walk separately or it silently
+misclassifies.
+
+**What actually folded (scope corrected 2026-06-22, executed 2026-07-10).** Only the copy
+**source** enumeration. `validate_claims` does NOT fold — it is a defensive walk that
+bounds-checks each pointer before following it, where the keystone trusts its pointers.
+`record_new`/`record_finish` is a WRITE path, not a read-walk. And each copy helper's
+**destination** build stays per-kind (re-insert vs slot vs bulk-copy). The "~53 arms across
+3 dispatchers" framing was the falsified over-scope; the real, landed change is the copy
+source walk carried once. Detail: [STABILITY_REDFLAG_REMEDIATION § Cluster C / H10](STABILITY_REDFLAG_REMEDIATION.md#cluster-c--h10--fold-copy_claims-source-enumeration-onto-the-keystone).
 
 **Why it's a future bug factory.** The **densest HISTORICAL bug cluster** in the
 tree: @P290 (SIGSEGV — `room*2` vs `(room-1)*2`), @P306/@P318 (hash slot-drift),

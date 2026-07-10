@@ -37,9 +37,12 @@ use crate::vector;
 ///   edge" back into "fault on it".  Keep it separate.
 /// - `copy_claims`' destination construction is genuinely per-kind (allocate-into-`to`,
 ///   header writes, re-insert-vs-slot-copy) and is not a walk over this enumeration.
-///   Its SOURCE enumeration DOES match this keystone — `copy_claims_hash_body` already
-///   reads it, and `seq_vector`/`array_body`/`index_body` are a mechanical source-fold
-///   away (each then pairs a keystone source child with a freshly-claimed dest slot).
+///   Its SOURCE enumeration now reads this keystone in ALL FOUR kinds — `hash_body`,
+///   `index_body`, `array_body`, and `seq_vector` (folded H10, 2026-07) — so the
+///   per-`Parts` source layout lives in ONE place.  Each helper then pairs a keystone
+///   source child with its own per-kind destination build (re-insert for hash/index, a
+///   freshly-claimed slot for array, a same-offset position after the bulk copy for
+///   vector).
 ///
 /// `child` is the `DbRef` (in the SOURCE record's store) at which the child value
 /// lives; `child_tp` is its type.  `owning_elem` is the separate element record
