@@ -19,6 +19,21 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > agenda for the Phase 2 review with the owner. The tables below carry only a *terse* fix column;
 > each item is expanded to the full working format (below) when it is actually worked.
 
+### The disposition — lean toward improving, not toward freezing what we have
+
+The absolute promise is about *after* the freeze. *Before* it, the mandate is the opposite of
+conservative: **actively improve.** Freezing an illogical choice does not just cost us — it
+**pushes that illogical choice onto everyone who ever touches loft, forever.** Measured against
+that, the conversion cost of a change now is small: we pay it once, on a corpus we control, to
+spare every future user a permanent wart.
+
+So the two dispositions are not symmetric. **"Consciously accept" is reserved for choices that
+are genuinely *deliberate* and defensible** (a distinct `character` scalar; the spreadsheet
+div-by-zero model) — it is **not** a way to dodge the conversion work. When an item is simply
+*wrong or illogical*, the default is **fix it now**, and the size of its conversion set is a
+cost to weigh, not a veto. The willingness to improve is exactly what this window is for; once
+it closes it never reopens.
+
 ### Working format for each item — alternatives + the conversion set
 
 Because every choice here is **permanent**, no item is a snap fix. Each is worked as a small
