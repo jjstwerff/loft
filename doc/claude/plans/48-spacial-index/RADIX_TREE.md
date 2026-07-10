@@ -1,6 +1,7 @@
 # @PLN48 · Deliverable R — the radix tree
 
-**Status:** landed — `src/radix_tree.rs`, steps R1–R7 green, clippy clean.
+**Status:** landed — `src/radix_tree.rs`, steps R0–R8c green (15), clippy clean.
+Allocation-free, and no input reaches a panic.
 **Scope:** `src/radix_tree.rs` — a store-backed binary PATRICIA tree, standalone and
 unit-tested in Rust, with *no* dependency on the database type layer.
 **Consumers:** deliverable S2 (`spacial<T[x,y]>`), and any later `radix<T[key]>`.
@@ -66,30 +67,55 @@ the search key's bits, so a node testing bit `d` would have sent the search key 
 the candidate leaf to the same side, i.e. they agree at `d`, contradicting `d` =
 first differing bit.  This is a `debug_assert`, not a branch.
 
-### 1.1 Preconditions on the key oracle
+### 1.1 The key the tree keys on — why there are no preconditions
 
-The oracle is `key(store, rec, bit) -> Option<bool>` — bit `0` is the **most
-significant** bit, `None` means "the key has ended".  I1 holds only if:
+An earlier revision made prefix-freeness and distinctness **caller obligations** (P2,
+P3), enforced by `debug_assert!`.  That was wrong twice over.
 
-- **P1 — prefix-closed.** `key(..,b)` is `Some` for every `b < len(rec)` and `None`
-  for every `b >= len(rec)`.
-- **P2 — prefix-free.** No key is a proper prefix of another.  A node branches on a
-  *bit*; it cannot branch on "the key ended here".
-- **P3 — distinct.** No two live records have equal keys, or no differing bit `d`
-  exists and the split is undefined.
+First, the enforcement did not exist: this crate builds with
+`[profile.dev.package.loft] debug-assertions = false`, so every `debug_assert!` is
+compiled out *even under `cargo test`* (probed directly; it is also why the old sketch
+SIGSEGV'd instead of tripping `Store::addr`'s bounds checks).  In release a duplicate
+key made `rtree_insert` return with `LEN` unincremented — the record was **silently
+dropped** — and `rtree_seek` read the same `None` as "exact match" and answered the
+wrong record.  One `None` was overloaded across three unrelated outcomes.
 
-These are the **only** obligations a caller has, and each key mode discharges them
-explicitly rather than by hand-wave:
+Second, and more to the point: a failure mode you have to *react* to is a failure mode
+you should *delete*.  The tree now composes the key itself.  Conceptually it keys on
+the **infinite bit string**
 
-| key mode | P2 discharged by | P3 discharged by |
-|---|---|---|
-| fixed-width integer, Morton code | all keys are `W` bits ⇒ none is a proper prefix | append the 32-bit record id ⇒ length `W+32` |
-| text (UTF-8) | append one virtual `NUL` byte — legal *because* loft text is UTF-8 and excludes `0x00` | append the 32-bit record id |
+```text
+    user bits ‖ 0x00 terminator ‖ 32-bit record id ‖ zeros forever
+```
 
-**Loudness (design-protocol step 2, second cure).**  A violated P3 is otherwise a
-*silent* corruption.  `first_diff_bit` therefore ends in
-`debug_assert!(found, "duplicate key")` — forgetting the tie-break suffix panics in
-test builds instead of quietly producing a tree that fails I1.
+so the obligations become theorems:
+
+- **No key ever ends** ⇒ a comparison never decides what "one key stopped" means.
+  Prefix-freeness is a consequence, not a precondition.
+- **Distinct records always differ** (their ids do) ⇒ there is always a bit to split
+  on; `rtree_insert` cannot fail.  Re-inserting the *same* record is a no-op.
+- **Order is lexicographic.**  The terminator buys this, not the prefix-freeness:
+  without it `"ab" ‖ id` versus `"abc" ‖ id` compares a record id against `'c'`, so
+  which sorts first would depend on allocation.  `0x00` is below every UTF-8 byte.
+- **A probe carries id `0`**, so it sorts to the head of its own bucket:
+  `seek("ab")` lands on the first key with prefix `"ab"`.  Prefix queries need no
+  separate entry point — this closes a gap an earlier revision had to list as future
+  work.
+- **Fixed-width keys pay nothing.**  All Morton codes are the same length, so no two
+  records diverge inside the terminator and path compression creates no node there.
+  One rule, no modes.
+
+Two records may share a user key — several entities in one cell.  They differ only in
+the id suffix, so they land **adjacent**: @PLN48's per-code bucket is a contiguous
+run, and no bucket structure exists.
+
+The caller now supplies only a `KeySpec { bit, bits }`.  `MAX_KEY_BITS`, the `Option`,
+and both panic paths are gone.
+
+**The single remaining assumption:** no key byte is `0x00` — true for UTF-8 text,
+vacuous for fixed-width numeric keys.  Violated, the ids still differ, so the tree
+stays a structurally valid PATRICIA and only lexicographic order degrades for that
+pair.  It degrades; it does not corrupt, and it does not panic.
 
 ---
 
@@ -211,6 +237,45 @@ Each maps to a design element; none is left to care.
 
 ---
 
+## 4.1 The cursor allocates nothing
+
+A `next`/`prev` step has to **climb**.  Storing the descent path to climb it means a
+heap `Vec` per `seek` — a malloc inside @PLN48's per-frame proximity query, since
+entities move and every frame is a remove-plus-insert.  There are exactly two ways to
+climb without a stack:
+
+- **pay time** — re-descend from the root each step, `O(depth)` per step, turning a
+  full iteration into `O(n·depth)`;
+- **pay space** — a **parent index** in each node, `O(1)` amortised.
+
+We pay the space: 4 bytes per node (12 → 16, which also makes a node exactly two store
+words instead of straddling).  `RadixIter` becomes three `u32`s — `Copy`, so one seek
+clones into two cursors for the outward walk, with no allocation anywhere.  A test
+pins `size_of::<RadixIter>() <= 16`, and a `Vec` is 24.
+
+The parent link is maintained at **three** sites (insert's split, the displaced
+subtree, remove's splice) and getting it wrong is silent.  So it gets its own
+invariant, checked by the validator that already runs after every mutation:
+
+> **I3** — `parent(child(n, d)) == n`, and the root's parent is `0`.
+
+### The bound that keeps a corrupt tree from hanging
+
+Production must never panic and must chug along — but an **infinite loop is worse than
+a panic**, and this is a real hazard the parent chain introduces.
+
+Bounding the parent *climb* is **not enough**, and the probe proved it: with a stale
+parent link the child pointers still form a valid tree, so `next` keeps returning
+records and it is the *caller's* loop that never ends.  A ceiling on one `step()`
+never fires; `r4` hung anyway.
+
+The correct bound is per-**cursor**: a walk over `LEN` records cannot legitimately
+yield more than `LEN` of them.  A cursor carries that budget, decrements per step, and
+simply stops when it runs out.  It costs 4 bytes and a decrement — no store read —
+and every intended walk (iteration, and the monotone outward proximity scan) never
+approaches it.  With the budget, the same corruption makes `r4` and `r6` **fail fast**
+instead of spinning.
+
 ## 5. Representation
 
 `Store::claim(n)` counts **8-byte words**; `fld` is a **byte** offset, valid for
@@ -229,13 +294,14 @@ fld 20   u32   FREE   head of the free-node list (0 = none)
 fld 24   ...   node array — node n (1-based) at 24 + 12*(n-1)
 ```
 
-**Node — 12 bytes.**  Header is 24 (a multiple of 8, so nodes are word-aligned) and
-`12*(n-1)` is 4-aligned, which is what `addr::<u32>` requires.
+**Node — 16 bytes**, exactly two store words (header 24, so every node is
+word-aligned).
 
 ```
-+0  u32  bit     absolute bit index tested
-+4  i32  false   child
-+8  i32  true    child
++0   u32  bit     absolute bit index tested
++4   u32  parent  the node above; 0 at the root  (I3)
++8   i32  false   child
++12  i32  true    child
 ```
 
 A **free** node is threaded through its `false` slot (next free id).  Node ids are
@@ -323,9 +389,13 @@ suite re-run:
 | the new node takes bit `d + 1` | something catches it | the per-leaf branch constraint catches it — *not* I2 |
 | `first_diff_bit` starts at bit 1, so a divergence at bit 0 is missed — an I2 violation that leaves I1 and the constraints intact | only I2 reddens R3 | **I2 fires at insert time**: *"node 1 skips bit 0 on its way to bit 1, but records 4 and 5 below it disagree there."*  With I2 removed, **R3 passes clean** and the corruption only surfaces downstream in R4/R5/R6 |
 
-That last row is why I2 is in the validator: without it the structural pass is blind
+| the `0x00` terminator is dropped from the key string | text ordering breaks | **only R8c** reddens.  R8 stays green — small record ids lead with `0x00`, which silently plays the terminator's part, so R8 alone is *vacuous* for this claim.  R8c uses ids leading with `0x70` (above `'c'`) |
+| the id suffix is dropped from the key string | duplicate keys collapse | exactly the two duplicate-key tests redden (R2d, R8b) |
+| a parent link is left stale (the displaced subtree) | I3 catches it | **I3 fires at insert time**: *"node 2 does not point back at the node above it."*  And without the cursor budget the same corruption made R4 **hang** rather than fail — see §4.1 |
+
+That I2 row is why I2 is in the validator: without it the structural pass is blind
 to a bad skip, and the failure reappears three steps later as an inexplicable
-ordering bug.
+ordering bug.  Each design element now has exactly one witness that dies without it.
 
 **The mutation also caught a hole in the test data.**  The first attempt at that
 mutation changed nothing, because `lcg` returned `(seed >> 33) as u32` — a **31-bit**
@@ -347,27 +417,34 @@ simply did not have.
 
 ## 7.1 Known gaps — what R does *not* yet prove
 
-Stated plainly, because each one is a place a downstream deliverable will otherwise
+Stated plainly, because each is a place a downstream deliverable would otherwise
 discover the hard way:
 
-- **The Morton key is untested.**  R proves the tree against a 64-bit fixed-width
-  oracle.  Interleaving is S1's job, and S1 must re-run R3–R7 with a Morton `KeyFn`
-  before S2 trusts it.
-- **Text keys are designed, not exercised.**  The virtual-`NUL` construction (§1.1)
-  discharges P2 on paper; no test yet builds a text oracle.
-- **`rtree_seek` cannot take a *shorter* search key.**  It compares the probe against
-  the candidate via `first_diff_bit`, which trips the P2 `debug_assert` when the probe
-  ends first.  So a **prefix** query — `seek("ab")` over keys `"abc"`, `"abd"` — is
-  *not* supported by today's entry point, even though `descend` already treats a
-  `None` bit as `0`.  This matters: §8 argues a loft-visible `radix<T[text]>` earns
-  its keep precisely through prefix queries, so that use needs a separate
-  `rtree_seek_prefix` whose contract admits an exhausted probe key.  `spacial` is
-  unaffected — its keys are fixed width.
-- **Iterator allocation is unmeasured.**  Each `rtree_first`/`rtree_seek` allocates a
-  `Vec<Step>`.  S3's proximity walk seeds two iterators per query per frame, so this
-  is the first place to look if S4's measurement disappoints.  The fixed `[i32; 64]`
-  it replaced was a correctness hazard (§3), so the allocation is deliberate, not an
-  oversight — but it is a bet, and S4 is where it gets called.
+- **The Morton key is untested.**  R proves the tree against a fixed-width oracle and
+  a variable-length text oracle.  Interleaving is S1's job, and S1 must re-run R3–R7
+  with a Morton `KeySpec` before S2 trusts it.
+- **`first_diff` is `O(key_bits)`.**  It walks a bit at a time through an indirect
+  `fn` pointer the compiler cannot inline: ~96 calls per Morton insert where a
+  crit-bit tree does two `XOR`s.  Descent is unaffected (it touches only the
+  `≤ LEN-1` tested bits).  The fix, when it bites, is a chunk accessor
+  (`word(rec, i) -> u64`) plus `XOR` + `leading_zeros` — a **compare-side** change
+  that leaves the representation alone.  (The per-bit re-derivation of the key length
+  is already hoisted out.)
+- **Binary fan-out.**  Depth goes as `log₂ n` where ART or a qp-trie would give
+  `log₁₆ n` / `log₂₅₆ n`.  Deliberate: those want byte- or nibble-addressable keys,
+  which means materialising the Morton code — the thing the bit oracle exists to
+  avoid.  For a per-chunk index (a few hundred entities, depth ≈ 9) it does not bite.
+  The upgrade path, if ever needed, is to widen the oracle to a nibble.
+- **No bulk load, no compaction, no concurrency.**  The free list never returns memory
+  to the store; a sorted bulk build would be `O(n)` rather than `n × descent`.
+- **No fuzzing, no property tests, no benchmarks, no ASAN run** — and this repo ships
+  ASAN scripts.  The mutation testing behind §7 was done by hand, not `cargo-mutants`.
+- **Two undocumented bounds, now documented.**  `Child::Rec` packs a record id into an
+  `i32`, safe *only* because `MAX_STORE_WORDS == i32::MAX`.  And `node_off` overflows
+  `u32` above ~268M nodes, a size the store limit technically permits.
+
+Two gaps an earlier revision listed here are **closed**: `rtree_seek` now accepts a
+shorter probe (a prefix query — §1.1), and the cursor no longer allocates (§4.1).
 
 ## 8. What deliverable R does **not** decide — and the number S2 needs
 

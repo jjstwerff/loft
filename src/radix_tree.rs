@@ -112,13 +112,13 @@ const CAP: u32 = 16;
 const FREE: u32 = 20;
 /// First node sits here; a multiple of 8, so nodes stay word-aligned.
 const HDR: u32 = 24;
-/// `bit: u32`, `false: i32`, `true: i32`.
-const NODE_SIZE: u32 = 12;
+/// `bit: u32`, `parent: u32`, `false: i32`, `true: i32` — exactly two store words.
+const NODE_SIZE: u32 = 16;
 
-/// Bit `bit` of the string the tree really keys on.  Total: past the end of
-/// everything it reads as `0`, so the string never ends and comparison is total.
-fn full(store: &Store, spec: KeySpec, rec: u32, bit: u32) -> bool {
-    let n = (spec.bits)(store, rec);
+/// Bit `bit` of the string the tree really keys on, given the user key's length `n`.
+/// Total: past the end of everything it reads as `0`, so the string never ends and
+/// comparison is total.
+fn full_n(store: &Store, spec: KeySpec, rec: u32, n: u32, bit: u32) -> bool {
     if bit < n {
         (spec.bit)(store, rec, bit)
     } else if bit < n + TERM_BITS {
@@ -131,9 +131,14 @@ fn full(store: &Store, spec: KeySpec, rec: u32, bit: u32) -> bool {
     }
 }
 
-/// Bits beyond which a record's key string is all zeros.
-fn total(store: &Store, spec: KeySpec, rec: u32) -> u32 {
-    (spec.bits)(store, rec) + SUFFIX_BITS
+/// One-off read of a key bit, re-deriving the length.  Prefer [`key_fn`] in a loop.
+fn full(store: &Store, spec: KeySpec, rec: u32, bit: u32) -> bool {
+    full_n(store, spec, rec, (spec.bits)(store, rec), bit)
+}
+
+/// A record's key as a closure, with its length read **once** rather than per bit.
+fn key_fn(store: &Store, spec: KeySpec, rec: u32, n: u32) -> impl Fn(u32) -> bool + '_ {
+    move |bit| full_n(store, spec, rec, n, bit)
 }
 
 /// First bit at which two key strings differ, and the first one's value there.
@@ -178,30 +183,42 @@ impl Child {
     }
 }
 
-/// One branch taken during a descent: which node, and down which side.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-struct Step {
-    node: u32,
-    took_true: bool,
-}
-
-/// A position in the tree, plus the path that reached it.
+/// A cursor: the record under it, and the node above that record (`0` at the root).
 ///
-/// The path holds node *ids*, not addresses, so it survives the record relocation
-/// a growing [`rtree_insert`] can cause.  `Clone` is what lets one seek drive two
-/// cursors, walking predecessor and successor outward together — @PLN48's
-/// proximity query.
-#[derive(Clone)]
+/// It holds **no path** — climbing runs on the parent index in each node — so a
+/// cursor is three words, `Copy`, and costs no allocation.  That is what lets one
+/// seek drive two cursors, walking predecessor and successor outward together:
+/// @PLN48's proximity query, with no malloc in the frame loop.
+///
+/// `budget` is what keeps a corrupted tree from hanging its caller.  A walk over
+/// `LEN` records cannot legitimately yield more than `LEN` of them, so a cursor that
+/// tries simply stops.  Bounding the parent *climb* is not enough: a stale parent
+/// leaves the child pointers a valid tree, so `next` keeps returning records and it
+/// is the caller's loop that never ends.  Every intended walk is monotone —
+/// iteration, and the outward proximity scan — so the bound never fires on a healthy
+/// tree.  It degrades; it does not spin, and it does not panic.
+#[derive(Clone, Copy)]
 pub struct RadixIter {
-    path: Vec<Step>,
     rec: u32,
+    node: u32,
+    budget: u32,
 }
 
 impl RadixIter {
     fn empty() -> RadixIter {
         RadixIter {
-            path: Vec::new(),
             rec: 0,
+            node: 0,
+            budget: 0,
+        }
+    }
+
+    /// A cursor at `rec` (whose parent is `node`), allowed to walk the whole tree.
+    fn at(store: &Store, tree: u32, rec: u32, node: u32) -> RadixIter {
+        RadixIter {
+            rec,
+            node,
+            budget: rtree_len(store, tree) + 1,
         }
     }
 
@@ -213,8 +230,9 @@ impl RadixIter {
 
     /// Step to the next record in increasing key order.
     ///
-    /// Climb until we find a node we entered on the FALSE side, cross to its TRUE
-    /// child, then take the FALSE-most path down — the in-order successor.
+    /// Climb the parent chain to the deepest ancestor entered from its FALSE side,
+    /// cross to its TRUE child, then take the FALSE-most path down — the in-order
+    /// successor.  Amortised O(1) over a full traversal.
     pub fn next(&mut self, store: &Store, tree: u32) -> Option<u32> {
         self.step(store, tree, true)
     }
@@ -225,22 +243,29 @@ impl RadixIter {
     }
 
     fn step(&mut self, store: &Store, tree: u32, forward: bool) -> Option<u32> {
-        if self.rec == 0 {
+        if self.rec == 0 || self.budget == 0 {
+            self.rec = 0;
             return None;
         }
-        while let Some(s) = self.path.pop() {
-            if s.took_true == forward {
-                continue;
+        self.budget -= 1;
+        let mut from = Child::Rec(self.rec);
+        let mut n = self.node;
+        while n != 0 {
+            // Which side did we come up from?  The children are distinct, so one
+            // comparison settles it.
+            let came_true = child(store, tree, n, true) == from;
+            if came_true != forward {
+                let c = child(store, tree, n, forward);
+                let (rec, node) = descend_extreme(store, tree, c, !forward, n);
+                self.rec = rec;
+                self.node = node;
+                return Some(rec);
             }
-            self.path.push(Step {
-                node: s.node,
-                took_true: forward,
-            });
-            let c = child(store, tree, s.node, forward);
-            self.rec = descend_extreme(store, tree, c, !forward, &mut self.path);
-            return Some(self.rec);
+            from = Child::Node(n);
+            n = node_parent(store, tree, n);
         }
         self.rec = 0;
+        self.node = 0;
         None
     }
 }
@@ -262,8 +287,17 @@ fn set_node_bit(store: &mut Store, tree: u32, node: u32, bit: u32) {
     store.set_u32_raw(tree, node_off(node), bit);
 }
 
+/// The node this node hangs under; `0` for the root.
+fn node_parent(store: &Store, tree: u32, node: u32) -> u32 {
+    store.get_u32_raw(tree, node_off(node) + 4)
+}
+
+fn set_node_parent(store: &mut Store, tree: u32, node: u32, parent: u32) {
+    store.set_u32_raw(tree, node_off(node) + 4, parent);
+}
+
 fn child_off(node: u32, dir: bool) -> u32 {
-    node_off(node) + if dir { 8 } else { 4 }
+    node_off(node) + if dir { 12 } else { 8 }
 }
 
 fn child(store: &Store, tree: u32, node: u32, dir: bool) -> Child {
@@ -356,70 +390,80 @@ fn free_node(store: &mut Store, tree: u32, node: u32) {
 // Descent
 // ---------------------------------------------------------------------------
 
-/// Follow `key` down to the candidate leaf, recording the path.  Leaf `0` = empty.
-fn descend<K>(store: &Store, tree: u32, key: &K) -> (Vec<Step>, u32)
+/// Follow `key` down to the candidate leaf, and the node directly above it.
+/// Leaf `0` = empty tree; parent `0` = the leaf is the root.
+fn descend<K>(store: &Store, tree: u32, key: &K) -> (u32, u32)
 where
     K: Fn(u32) -> bool,
 {
-    let mut path = Vec::new();
     let mut cur = top(store, tree);
+    let mut parent = 0;
     loop {
         match cur {
-            Child::Empty => return (path, 0),
-            Child::Rec(r) => return (path, r),
+            Child::Empty => return (0, 0),
+            Child::Rec(r) => return (r, parent),
             Child::Node(n) => {
                 let dir = key(node_bit(store, tree, n));
-                path.push(Step {
-                    node: n,
-                    took_true: dir,
-                });
                 cur = child(store, tree, n, dir);
+                parent = n;
             }
         }
     }
 }
 
-/// Always branch the same way; reaches the FALSE-most (or TRUE-most) leaf.
+/// Always branch the same way; reaches the FALSE-most (or TRUE-most) leaf and the
+/// node above it.
 fn descend_extreme(
     store: &Store,
     tree: u32,
     mut cur: Child,
     dir: bool,
-    path: &mut Vec<Step>,
-) -> u32 {
+    mut parent: u32,
+) -> (u32, u32) {
     loop {
         match cur {
-            Child::Empty => return 0,
-            Child::Rec(r) => return r,
+            Child::Empty => return (0, 0),
+            Child::Rec(r) => return (r, parent),
             Child::Node(n) => {
-                path.push(Step {
-                    node: n,
-                    took_true: dir,
-                });
                 cur = child(store, tree, n, dir);
+                parent = n;
             }
         }
     }
 }
 
-/// Index of the first step whose node tests a bit at or beyond `d`.
+/// Where a new node testing bit `d` must be spliced in: the node whose child slot
+/// points at the subtree that diverges there, and which side.  `parent == 0` means
+/// the slot is TOP.
 ///
 /// I1 makes `bit(n) == d` impossible on a descent path: a node testing `d` would
-/// have sent the search key and the candidate leaf the same way, so they would
-/// agree at `d`, contradicting `d` being their first difference.
-fn split_index(store: &Store, tree: u32, path: &[Step], d: u32) -> usize {
-    path.iter()
-        .position(|s| node_bit(store, tree, s.node) > d)
-        .unwrap_or(path.len())
+/// have sent the search key and the candidate leaf the same way, so they would agree
+/// at `d`, contradicting `d` being their first difference.  So `<` and `>` partition
+/// the path and no third case exists.
+fn split_point<K>(store: &Store, tree: u32, key: &K, d: u32) -> (u32, bool)
+where
+    K: Fn(u32) -> bool,
+{
+    let mut cur = top(store, tree);
+    let (mut parent, mut dir) = (0, false);
+    while let Child::Node(n) = cur {
+        let bit = node_bit(store, tree, n);
+        if bit > d {
+            break;
+        }
+        dir = key(bit);
+        cur = child(store, tree, n, dir);
+        parent = n;
+    }
+    (parent, dir)
 }
 
-/// The child slot hanging below `path[..i]` — the subtree the split displaces.
-fn subtree_at(store: &Store, tree: u32, path: &[Step], i: usize) -> Child {
-    if i == 0 {
+/// The child slot `split_point` named — the subtree a split displaces.
+fn subtree_below(store: &Store, tree: u32, parent: u32, dir: bool) -> Child {
+    if parent == 0 {
         top(store, tree)
     } else {
-        let p = path[i - 1];
-        child(store, tree, p.node, p.took_true)
+        child(store, tree, parent, dir)
     }
 }
 
@@ -447,8 +491,8 @@ pub fn rtree_find<K>(store: &Store, tree: u32, probe: &K, probe_bits: u32) -> Ra
 where
     K: Fn(u32) -> bool,
 {
-    let (path, rec) = descend(store, tree, &probe_key(probe, probe_bits));
-    RadixIter { path, rec }
+    let (rec, node) = descend(store, tree, &probe_key(probe, probe_bits));
+    RadixIter::at(store, tree, rec, node)
 }
 
 /// Position at the lowest record whose key is `>= probe` — a lower bound.
@@ -473,27 +517,27 @@ where
     K: Fn(u32) -> bool,
 {
     let kp = probe_key(probe, probe_bits);
-    let (path, cand) = descend(store, tree, &kp);
+    let (cand, cand_parent) = descend(store, tree, &kp);
     if cand == 0 {
         return RadixIter::empty();
     }
-    let kc = |bit| full(store, spec, cand, bit);
-    let limit = (probe_bits + SUFFIX_BITS).max(total(store, spec, cand));
+    let n = (spec.bits)(store, cand);
+    let kc = key_fn(store, spec, cand, n);
+    let limit = (probe_bits + SUFFIX_BITS).max(n + SUFFIX_BITS);
     let Some((d, probe_bit)) = first_diff(&kp, &kc, limit) else {
-        return RadixIter { path, rec: cand };
+        return RadixIter::at(store, tree, cand, cand_parent);
     };
-    let i = split_index(store, tree, &path, d);
-    let sub = subtree_at(store, tree, &path, i);
-    let mut trimmed: Vec<Step> = path[..i].to_vec();
+    let (parent, dir) = split_point(store, tree, &kp, d);
+    let sub = subtree_below(store, tree, parent, dir);
     if probe_bit {
         // The probe sorts after every record in the subtree: take its last, step on.
-        let rec = descend_extreme(store, tree, sub, true, &mut trimmed);
-        let mut it = RadixIter { path: trimmed, rec };
+        let (rec, node) = descend_extreme(store, tree, sub, true, parent);
+        let mut it = RadixIter::at(store, tree, rec, node);
         it.next(store, tree);
         it
     } else {
-        let rec = descend_extreme(store, tree, sub, false, &mut trimmed);
-        RadixIter { path: trimmed, rec }
+        let (rec, node) = descend_extreme(store, tree, sub, false, parent);
+        RadixIter::at(store, tree, rec, node)
     }
 }
 
@@ -539,10 +583,9 @@ pub fn rtree_last(store: &Store, tree: u32) -> RadixIter {
 }
 
 fn straight(store: &Store, tree: u32, dir: bool) -> RadixIter {
-    let mut path = Vec::new();
     let c = top(store, tree);
-    let rec = descend_extreme(store, tree, c, dir, &mut path);
-    RadixIter { path, rec }
+    let (rec, node) = descend_extreme(store, tree, c, dir, 0);
+    RadixIter::at(store, tree, rec, node)
 }
 
 // ---------------------------------------------------------------------------
@@ -566,32 +609,39 @@ pub fn rtree_insert(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> u3
     }
 
     // Everything the split needs is read before the tree can move.
-    let (path, d, rec_bit, displaced) = {
+    let (d, rec_bit, parent, dir, displaced) = {
         let s: &Store = store;
-        let ka = |bit| full(s, spec, rec, bit);
-        let (path, cand) = descend(s, tree, &ka);
+        let n_rec = (spec.bits)(s, rec);
+        let ka = key_fn(s, spec, rec, n_rec);
+        let (cand, _) = descend(s, tree, &ka);
         if cand == rec {
             return tree;
         }
-        let kb = |bit| full(s, spec, cand, bit);
-        let limit = total(s, spec, rec).max(total(s, spec, cand));
+        let n_cand = (spec.bits)(s, cand);
+        let kb = key_fn(s, spec, cand, n_cand);
+        let limit = (n_rec + SUFFIX_BITS).max(n_cand + SUFFIX_BITS);
         // Unreachable: two distinct records differ in their id suffix.
         let Some((d, rec_bit)) = first_diff(&ka, &kb, limit) else {
             return tree;
         };
-        let i = split_index(s, tree, &path, d);
-        let displaced = subtree_at(s, tree, &path, i);
-        (path[..i].to_vec(), d, rec_bit, displaced)
+        let (parent, dir) = split_point(s, tree, &ka, d);
+        let displaced = subtree_below(s, tree, parent, dir);
+        (d, rec_bit, parent, dir, displaced)
     };
 
     let (tree, node) = alloc_node(store, tree);
     set_node_bit(store, tree, node, d);
+    set_node_parent(store, tree, node, parent);
     set_child(store, tree, node, rec_bit, Child::Rec(rec));
     set_child(store, tree, node, !rec_bit, displaced);
+    if let Child::Node(sub) = displaced {
+        set_node_parent(store, tree, sub, node);
+    }
 
-    match path.last() {
-        None => set_top(store, tree, Child::Node(node)),
-        Some(p) => set_child(store, tree, p.node, p.took_true, Child::Node(node)),
+    if parent == 0 {
+        set_top(store, tree, Child::Node(node));
+    } else {
+        set_child(store, tree, parent, dir, Child::Node(node));
     }
     store.set_u32_raw(tree, LEN, len + 1);
     tree
@@ -602,27 +652,31 @@ pub fn rtree_insert(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> u3
 /// Splicing the parent out keeps every internal node at exactly two children,
 /// which is what makes `live_nodes == LEN - 1` a total check on the structure.
 pub fn rtree_remove(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> bool {
-    let (path, leaf) = {
+    let (leaf, parent) = {
         let s: &Store = store;
-        descend(s, tree, &|bit| full(s, spec, rec, bit))
+        let n = (spec.bits)(s, rec);
+        descend(s, tree, &key_fn(s, spec, rec, n))
     };
     if leaf != rec {
         return false;
     }
     let len = rtree_len(store, tree);
-    match path.last() {
-        None => set_top(store, tree, Child::Empty),
-        Some(p) => {
-            let sibling = child(store, tree, p.node, !p.took_true);
-            match path.len() {
-                1 => set_top(store, tree, sibling),
-                n => {
-                    let gp = path[n - 2];
-                    set_child(store, tree, gp.node, gp.took_true, sibling);
-                }
-            }
-            free_node(store, tree, p.node);
+    if parent == 0 {
+        set_top(store, tree, Child::Empty);
+    } else {
+        let grand = node_parent(store, tree, parent);
+        let rec_is_true = child(store, tree, parent, true) == Child::Rec(rec);
+        let sibling = child(store, tree, parent, !rec_is_true);
+        if grand == 0 {
+            set_top(store, tree, sibling);
+        } else {
+            let up_is_true = child(store, tree, grand, true) == Child::Node(parent);
+            set_child(store, tree, grand, up_is_true, sibling);
         }
+        if let Child::Node(sub) = sibling {
+            set_node_parent(store, tree, sub, grand);
+        }
+        free_node(store, tree, parent);
     }
     store.set_u32_raw(tree, LEN, len - 1);
     true
@@ -643,6 +697,11 @@ pub fn rtree_remove(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> bo
 /// *every* bit below `bit(n)`.  This is what makes a skipped bit unnecessary to
 /// store, and what [`rtree_seek`] leans on when it argues that the whole divergence
 /// subtree sits on one side of the probe.
+///
+/// **I3** — `parent(child(n, d)) == n`, and the root's parent is `0`.  The parent index
+/// is what makes a cursor allocation-free, and the three sites that maintain it
+/// (insert's split, remove's splice, the displaced subtree) would each fail silently;
+/// this check is what makes them loud.
 ///
 /// I1 and I2 are independent: put two keys that first diverge at bit 0 under a root
 /// that tests bit 1, and every I1-shaped check still passes.
@@ -666,7 +725,7 @@ pub fn rtree_validate(store: &Store, tree: u32, spec: KeySpec) {
 
     impl Walk<'_> {
         /// Returns a representative leaf from each end of this subtree.
-        fn visit(&mut self, cur: Child, parent_bit: Option<u32>) -> Option<(u32, u32)> {
+        fn visit(&mut self, cur: Child, parent_bit: Option<u32>, up: u32) -> Option<(u32, u32)> {
             match cur {
                 Child::Empty => {
                     assert_eq!(self.len, 0, "empty child in a non-empty tree");
@@ -689,12 +748,17 @@ pub fn rtree_validate(store: &Store, tree: u32, spec: KeySpec) {
                     if let Some(pb) = parent_bit {
                         assert!(bit > pb, "I1: bit {bit} does not exceed parent bit {pb}");
                     }
+                    assert_eq!(
+                        node_parent(self.store, self.tree, n),
+                        up,
+                        "I3: node {n} does not point back at the node above it"
+                    );
                     let mut ends = [0u32; 2];
                     for dir in [false, true] {
                         let c = child(self.store, self.tree, n, dir);
                         assert_ne!(c, Child::Empty, "node {n} has no {dir} child");
                         self.constraints.push((bit, dir));
-                        let (lo, hi) = self.visit(c, Some(bit)).expect("a child has leaves");
+                        let (lo, hi) = self.visit(c, Some(bit), n).expect("a child has leaves");
                         self.constraints.pop();
                         ends[usize::from(dir)] = if dir { hi } else { lo };
                     }
@@ -727,7 +791,7 @@ pub fn rtree_validate(store: &Store, tree: u32, spec: KeySpec) {
         live: 0,
         constraints: Vec::new(),
     };
-    let _ = walk.visit(top(store, tree), None);
+    let _ = walk.visit(top(store, tree), None, 0);
     let (leaves, live) = (walk.leaves, walk.live);
     assert_eq!(leaves, len, "leaf count disagrees with LEN");
     assert_eq!(live, len.saturating_sub(1), "live nodes must be LEN - 1");
@@ -803,6 +867,18 @@ mod tests {
             r = it.next(store, tree).unwrap_or(0);
         }
         out
+    }
+
+    /// R0 — a cursor is three words.  A `Vec` is 24 bytes, so this is a standing
+    /// guard that `seek`/`first`/`next` stay allocation-free.
+    #[test]
+    fn r0_cursor_is_two_words_and_allocates_nothing() {
+        assert!(
+            std::mem::size_of::<RadixIter>() <= 16,
+            "a Vec cannot fit here"
+        );
+        fn assert_copy<T: Copy>() {}
+        assert_copy::<RadixIter>();
     }
 
     /// R1 — a tree that is initialised and freed leaves no claim behind.
