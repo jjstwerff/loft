@@ -556,6 +556,35 @@ Also left to S2/S3: the Morton interleave, the `spacial` arms in `search.rs`
 (`find`/`iterate`/`remove` currently panic as "non-collection"), a
 `for_each_owned_child` arm, `copy_claims` by re-insert, and the proximity API.
 
+### 8.1 Settled: one runtime variant, named for the storage
+
+`spacial` and `radix` share **one** `Type` / `Parts` variant — because the thing that
+distinguishes them is the **key signature the variant already stores**, not the
+storage.  The wiring (`insert`/`find`/`remove`/`copy_claims`/teardown) is
+oracle-agnostic; everything that differs is a *function of the key fields*:
+
+| distinction | derived from the key fields |
+|---|---|
+| which oracle | count + types: 1 int → ordered, 1 text → prefix, 2–3 int → Morton |
+| which methods are legal | `near`/`within`/`nearest` need 2–3 coord fields; `prefix`/`range` need 1 |
+| surface type name | 1 field → `radix`, N coord fields → `spacial` |
+| parse-time arity | `radix` = exactly 1 key field; `spacial` = 2–3 coord fields |
+
+This is *not* over-unification: the shared part (storage + wiring) is genuinely
+identical, and the divergent part is computed from the variant's own data.  The one
+discipline it demands: **choose the oracle in exactly one chokepoint** —
+`oracle_for(type) -> impl KeyOracle`, which reads the keys — never re-derived at the
+wiring sites (the same single-chokepoint rule the tree follows internally).
+
+**The variant is named `Radix`, not `Spacial`.**  The storage *is* a radix tree;
+`spacial` and `radix` are both *uses* of it, so the honest name is the storage's.  The
+rename lands before the wiring — it is cheapest while the variant is still unwired
+(mechanical, mostly grouped arms), and only gets more expensive once it is threaded
+through working code.  The **surface** stays untouched: users still write
+`spacial<T[x,y]>` (and, later, `radix<T[k]>`); the keyword, the `Database::spacial`
+constructor, and the printed type name are surface-facing and keep the `spacial`
+spelling.
+
 ---
 
 ## 9. The proximity API (`src/spatial.rs`) — @PLN48 S3
