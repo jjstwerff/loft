@@ -1680,7 +1680,8 @@ use #count instead"
             // `self.data.def(content)`; passing 0 gave whatever
             // definition happens to sit at index 0 and corrupted
             // stack layout.
-            if let Type::Hash(content, _, dep) = in_type.clone() {
+            if let Type::Hash(content, _, dep) | Type::Radix(content, _, dep) = in_type.clone() {
+                let is_radix = matches!(in_type, Type::Radix(_, _, _));
                 let scratch_tp = Type::Reference(content, dep.clone());
                 let scratch_var = self.create_unique("hash_scratch", &scratch_tp);
                 let hash_tp_id = self.get_type(&in_type);
@@ -1689,11 +1690,15 @@ use #count instead"
                 } else {
                     i32::from(hash_tp_id)
                 };
-                // A `par` loop discards the hash's order across worker threads,
-                // so skip the O(n log n) key sort and walk the buckets raw.
+                // A `par` loop discards a hash's order across worker threads, so it
+                // skips the O(n log n) key sort and walks the buckets raw.  A radix
+                // has a natural order and its walk is already ordered (no sort), so
+                // it uses the same builder in every case (@PLN48).
                 let is_par =
                     matches!(&self.lexer.peek().has, LexItem::Identifier(kw) if kw == "par");
-                let scratch_fn_name = if is_par {
+                let scratch_fn_name = if is_radix {
+                    "n_radix_sorted"
+                } else if is_par {
                     "n_hash_unsorted"
                 } else {
                     "n_hash_sorted"

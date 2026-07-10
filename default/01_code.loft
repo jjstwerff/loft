@@ -1141,6 +1141,13 @@ pub fn hash_sorted(h: reference, tp: integer) -> reference;
 // parser desugars the par form of `for e in h` into this call.
 pub fn hash_unsorted(h: reference, tp: integer) -> reference;
 #pure
+// @PLN48 — iterate a spacial/radix collection in its NATURAL key order (the tree's
+// in-order walk = Morton/Z-order for a spatial index).  Returns a fresh
+// vector<reference<T>> of the records already in order — no sort, unlike
+// `hash_sorted`, because a radix tree is ordered by construction.  The parser
+// desugars `for e in xs { … }` into this call with the collection's type id.
+pub fn radix_sorted(r: reference, tp: integer) -> reference;
+#impure(parent_write)
 type index size(4);
 
 // P192: hash<T[key]> bucket-array walk.  No const args needed —

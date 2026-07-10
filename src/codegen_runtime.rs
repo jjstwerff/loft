@@ -104,6 +104,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_stack_trace",                abi: Abi::Cell },
     RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
     RuntimeFn { name: "n_hash_unsorted",              abi: Abi::Cell },
+    RuntimeFn { name: "n_radix_sorted",               abi: Abi::Cell },
     // P268 — JSON ecosystem (P54 sprint).  Native runtime wrappers
     // around `crate::native::json_parse_into_stores` + the JsonValue
     // method natives so `--native` programs can read/parse JSON
@@ -2066,6 +2067,14 @@ pub fn n_hash_sorted(cell: &std::cell::UnsafeCell<Stores>, h: DbRef, tp: i64) ->
 pub fn n_hash_unsorted(cell: &std::cell::UnsafeCell<Stores>, h: DbRef, tp: i64) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     stores.build_hash_unsorted_vec(&h, tp as u16)
+}
+
+/// @PLN48 — iterate a `spacial`/`radix` collection in natural key order.  No sort:
+/// the tree walk is ordered by construction.  Bytecode equivalent: `n_radix_sorted`
+/// in `src/native.rs`; result iterated via Ordered (on=3).
+pub fn n_radix_sorted(cell: &std::cell::UnsafeCell<Stores>, r: DbRef, tp: i64) -> DbRef {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    stores.build_radix_sorted_vec(&r, tp as u16)
 }
 
 /// Read the text element a par worker's `&str` parameter expects out of the

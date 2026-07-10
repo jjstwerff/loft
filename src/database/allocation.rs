@@ -931,6 +931,16 @@ impl Stores {
         self.build_rec_scratch(hash_ref, &recs)
     }
 
+    /// @PLN48 — the Radix counterpart, feeding the same Ordered (on=3) iteration
+    /// path via `build_rec_scratch`.  Unlike a hash, a radix tree has a **natural
+    /// order** (its in-order walk is key order — Morton/Z-order for a spatial
+    /// index), so `radix_db::records` already yields the records sorted: no O(n log n)
+    /// key sort, just the O(n) tree walk.  The `tp` is unused for the same reason.
+    pub fn build_radix_sorted_vec(&mut self, coll: &DbRef, _tp: u16) -> DbRef {
+        let recs = crate::radix_db::records(coll, &self.allocations);
+        self.build_rec_scratch(coll, &recs)
+    }
+
     /// Materialise `recs` (live hash rec-nrs) into a rec-nr scratch vector that
     /// the Ordered (on=3) iteration path walks.
     ///

@@ -2918,6 +2918,23 @@ impl Parser {
                 }
                 self.database.hash(c_tp, key)
             }
+            Type::Radix(tp, key, _) => {
+                // @PLN48 — mirror Hash: resolve the spacial<T[…]> db type id, and
+                // register it on demand for a local-only var (whose type would else
+                // be absent from the schema, so iteration/`get_type` sees u16::MAX).
+                let mut name = "spacial<".to_string() + self.data.def(*tp).name() + "[";
+                self.database
+                    .field_name(self.data.def(*tp).known_type(), key, &mut name);
+                let r = self.database.name(&name);
+                if r != u16::MAX {
+                    return r;
+                }
+                let c_tp = self.data.def(*tp).known_type();
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.spacial(c_tp, key)
+            }
             Type::Sorted(tp, key, _) => {
                 let mut name = "sorted<".to_string() + self.data.def(*tp).name() + "[";
                 field_id(key, &mut name);

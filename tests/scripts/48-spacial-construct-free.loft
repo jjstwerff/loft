@@ -1,13 +1,25 @@
-// @PLN48 S2 — a spacial<T[x, y]> collection constructs and frees end-to-end, on
-// BOTH backends.  The runner's leak check is the real assertion here —
+// @PLN48 S2 — a spacial<T[x, y]> collection: construct, iterate in natural order,
+// and free — on BOTH backends.  The runner's leak check is the real assertion —
 // remove_claims must free the tree + every element record.
 struct SMob { x: integer, y: integer }
 
 fn main() {
   xs: spacial<SMob[x, y]> = [];
+  xs += [SMob{x: 3, y: 3}];
   xs += [SMob{x: 1, y: 2}];
-  xs += [SMob{x: 3, y: 4}];
-  xs += [SMob{x: 1, y: 2}];   // same cell — both kept
-  print("spacial built and freed\n");
+  xs += [SMob{x: 3, y: 3}];   // same cell — both kept
+  xs += [SMob{x: 0, y: 0}];
+
+  // Iterate in the tree's natural (Morton/Z-order) order — no sort, the walk is
+  // ordered by construction.  Sum the coordinates as a stable, order-independent
+  // check that every record (including the duplicate cell) is visited exactly once.
+  total: integer = 0;
+  count: integer = 0;
+  for m in xs {
+    total += m.x * 100 + m.y;
+    count += 1;
+  }
+  // 4 records: (3,3)+(1,2)+(3,3)+(0,0) → 303+102+303+0 = 708, count 4.
+  print("count={count} total={total}\n");
   // `xs` falls out of scope here; remove_claims frees it with no leak.
 }
