@@ -415,6 +415,78 @@ simply did not have.
 
 ---
 
+## 7.2 Measurements — the benchmark and the sanitizer gate
+
+### Benchmark
+
+`cargo test --release --lib radix_tree::tests::bench -- --ignored --nocapture`
+(`#[ignore]` by default, as the repo does for heavy Rust work).  Absolute ns/op is
+machine-specific, so every figure sits beside `std::collections::BTreeMap` doing the
+same work on the same keys — the structure a loft user would otherwise reach for via
+`sorted<T[k]>`.  The *ratio* is what travels.
+
+n = 100 000 random 32-bit codes, ns/op:
+
+| op | radix | BTreeMap | ratio |
+|---|---:|---:|---:|
+| insert | 541.7 | 79.4 | 6.8× |
+| get (exact) | 429.3 | 69.1 | 6.2× |
+| walk (in-order) | 17.0 | 2.3 | 7.5× |
+| **remove** | **117.0** | 79.0 | **1.5×** |
+
+16 bytes of node per record (`LEN-1` nodes, 16 B each).
+
+**The numbers corrected a claim I had been making.**  I had said the bit-at-a-time
+`first_diff` was the dominant constant factor.  `remove` is the control: it descends
+but never compares keys — and it is only **1.5×** BTreeMap.  Everything that does
+compare keys is 6–7×.  So the cost is not the descent and not the fan-out at this
+size; it is the **per-bit loops** (`first_diff`, and `rtree_key_eq`'s 32-bit scan in
+`rtree_get`), each iteration an un-inlinable `fn`-pointer call plus a bounds-checked
+store read.  A chunked oracle (`word(rec, i) -> u64`, `XOR` + `leading_zeros`) would
+collapse both.  A cheaper win first: `rtree_seek` already computes the first differing
+bit `d`, and `d >= probe_bits + TERM_BITS` proves the landed record's user key equals
+the probe — so `rtree_get` need not re-scan all 32 bits.
+
+### The workload that decides S4
+
+512 entities, every one moving each frame (remove + reinsert), then a proximity query
+seeded from one `seek` and walked 8 records each way:
+
+| | |
+|---|---:|
+| move (remove + insert) | 215.6 ns |
+| proximity query (seek + 8 each way) | 247.2 ns |
+| **per-frame, 512 entities** | **110.6 µs** |
+
+Comfortably inside a frame budget, and allocation-free: the second cursor is a `Copy`
+of the first.
+
+### What the sanitizer gate actually covers
+
+`./scripts/asan.sh --lib -E 'test(radix_tree)'` → **15/15 clean**.  But a green
+sanitizer proves nothing until it can go red, and probing it produced a caveat worth
+writing down:
+
+| deliberate fault | ASan | `-C debug-assertions=on` |
+|---|---|---|
+| node read **past the arena** (a wild offset, like the old sketch's `3 + (-node) as u32`) | **SEGV — caught** | caught |
+| node read past the tree **record**, still inside the arena | **passes silently** | **caught**: *"Fld 4808 is outside of record 4097 size 40"* |
+
+loft's `Store` is one arena allocation and ASan checks *allocation* bounds, so the
+intra-arena overrun — exactly what a node-index bug produces — is **invisible to
+ASan**.  The gate that covers this module is `Store::valid()`, i.e. CI's
+`debug-asserts` job; the suite is clean there too.  Which is also why deliverable R
+puts its structural weight on `rtree_validate` rather than on a sanitizer.
+
+**Repaired along the way:** `scripts/asan.sh` could not run at all.  It used a bare
+`+nightly` (a recent nightly fails to compile `curve25519-dalek`) and omitted
+`--target x86_64-unknown-linux-gnu`, so `-Zsanitizer=address` was applied to host
+proc-macros and the build died with `E0463: can't find crate for zerofrom_derive` —
+despite the script's header claiming it mirrored CI's flags.  It now pins CI's
+nightly and scopes the flag to the target.
+
+---
+
 ## 7.1 Known gaps — what R does *not* yet prove
 
 Stated plainly, because each is a place a downstream deliverable would otherwise
@@ -423,13 +495,11 @@ discover the hard way:
 - **The Morton key is untested.**  R proves the tree against a fixed-width oracle and
   a variable-length text oracle.  Interleaving is S1's job, and S1 must re-run R3–R7
   with a Morton `KeySpec` before S2 trusts it.
-- **`first_diff` is `O(key_bits)`.**  It walks a bit at a time through an indirect
-  `fn` pointer the compiler cannot inline: ~96 calls per Morton insert where a
-  crit-bit tree does two `XOR`s.  Descent is unaffected (it touches only the
-  `≤ LEN-1` tested bits).  The fix, when it bites, is a chunk accessor
-  (`word(rec, i) -> u64`) plus `XOR` + `leading_zeros` — a **compare-side** change
-  that leaves the representation alone.  (The per-bit re-derivation of the key length
-  is already hoisted out.)
+- **The per-bit loops are the measured bottleneck** (§7.2), not the descent: `remove`,
+  which never compares keys, is 1.5× BTreeMap while `insert`/`get` are 6–7×.  The fix
+  is a chunk accessor (`word(rec, i) -> u64`) plus `XOR` + `leading_zeros` — a
+  **compare-side** change that leaves the representation alone.  (The per-bit
+  re-derivation of the key length is already hoisted out.)
 - **Binary fan-out.**  Depth goes as `log₂ n` where ART or a qp-trie would give
   `log₁₆ n` / `log₂₅₆ n`.  Deliberate: those want byte- or nibble-addressable keys,
   which means materialising the Morton code — the thing the bit oracle exists to
@@ -437,8 +507,9 @@ discover the hard way:
   The upgrade path, if ever needed, is to widen the oracle to a nibble.
 - **No bulk load, no compaction, no concurrency.**  The free list never returns memory
   to the store; a sorted bulk build would be `O(n)` rather than `n × descent`.
-- **No fuzzing, no property tests, no benchmarks, no ASAN run** — and this repo ships
-  ASAN scripts.  The mutation testing behind §7 was done by hand, not `cargo-mutants`.
+- **No fuzzing and no property tests.**  The benchmark and the ASan/debug-asserts runs
+  now exist (§7.2); the mutation testing behind §7 was done by hand, not
+  `cargo-mutants`.
 - **Two undocumented bounds, now documented.**  `Child::Rec` packs a record id into an
   `i32`, safe *only* because `MAX_STORE_WORDS == i32::MAX`.  And `node_off` overflows
   `u32` above ~268M nodes, a size the store limit technically permits.

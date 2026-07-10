@@ -869,6 +869,159 @@ mod tests {
         out
     }
 
+    // ---- benchmarks -------------------------------------------------------
+    //
+    // `#[ignore]` by default, as the repo does for heavy Rust work.  Run:
+    //   cargo test --release --lib radix_tree::tests::bench -- --ignored --nocapture
+    //
+    // Absolute ns/op is machine-specific and not worth quoting.  Every figure is
+    // therefore reported beside `std::collections::BTreeMap` doing the same work on
+    // the same keys — the structure a loft user would otherwise reach for via
+    // `sorted<T[k]>`.  The ratio is what travels.
+
+    fn per_op(d: std::time::Duration, n: usize) -> f64 {
+        d.as_secs_f64() * 1e9 / n as f64
+    }
+
+    fn row(name: &str, radix: f64, btree: f64) {
+        println!("  {name:<22} {radix:>9.1} {btree:>11.1} {:>8.2}x", radix / btree);
+    }
+
+    /// Bulk behaviour at 100k records, against a `BTreeMap` baseline.
+    #[test]
+    #[ignore = "benchmark — run with --release --ignored --nocapture"]
+    fn bench_vs_btreemap() {
+        use std::time::Instant;
+        const N: usize = 100_000;
+
+        let mut store = Store::new_in_use(1 << 16);
+        let mut tree = rtree_init(&mut store, 0);
+        let mut seed = 0x9e37_79b9_7f4a_7c15;
+
+        // Records exist before timing, so the store allocator is not in the insert cost.
+        let codes: Vec<u32> = (0..N).map(|_| lcg(&mut seed)).collect();
+        let recs: Vec<u32> = codes.iter().map(|&c| add(&mut store, c)).collect();
+
+        let t = Instant::now();
+        for &r in &recs {
+            tree = rtree_insert(&mut store, tree, r, CODE);
+        }
+        let ins_r = per_op(t.elapsed(), N);
+
+        let mut bt = BTreeMap::new();
+        let t = Instant::now();
+        for (i, &r) in recs.iter().enumerate() {
+            bt.insert(ordered_key(codes[i], r), r);
+        }
+        let ins_b = per_op(t.elapsed(), N);
+
+        let t = Instant::now();
+        let mut hits = 0u64;
+        for &c in &codes {
+            hits += u64::from(rtree_get(&store, tree, &code_probe(c), 32, CODE) != 0);
+        }
+        let get_r = per_op(t.elapsed(), N);
+        assert_eq!(hits as usize, N, "every key must be found");
+
+        let t = Instant::now();
+        let mut hits = 0u64;
+        for (i, &c) in codes.iter().enumerate() {
+            hits += u64::from(bt.contains_key(&ordered_key(c, recs[i])));
+        }
+        let get_b = per_op(t.elapsed(), N);
+        assert_eq!(hits as usize, N);
+
+        let t = Instant::now();
+        let walked = collect(&store, tree).len();
+        let walk_r = per_op(t.elapsed(), N);
+        assert_eq!(walked, N);
+
+        let t = Instant::now();
+        let walked = bt.values().count();
+        let walk_b = per_op(t.elapsed(), N);
+        assert_eq!(walked, N);
+
+        let t = Instant::now();
+        for &r in &recs {
+            rtree_remove(&mut store, tree, r, CODE);
+        }
+        let del_r = per_op(t.elapsed(), N);
+
+        let t = Instant::now();
+        for (i, &r) in recs.iter().enumerate() {
+            bt.remove(&ordered_key(codes[i], r));
+        }
+        let del_b = per_op(t.elapsed(), N);
+
+        println!("\nradix_tree vs BTreeMap, n = {N}, ns/op (lower is better)");
+        println!("  {:<22} {:>9} {:>11} {:>8}", "op", "radix", "BTreeMap", "ratio");
+        row("insert", ins_r, ins_b);
+        row("get (exact)", get_r, get_b);
+        row("walk (in-order)", walk_r, walk_b);
+        row("remove", del_r, del_b);
+        println!(
+            "\n  tree nodes: {}, node bytes: {}, bytes/record: {:.1}",
+            store.get_u32_raw(tree, NODES),
+            NODE_SIZE,
+            f64::from(store.get_u32_raw(tree, NODES) * NODE_SIZE) / N as f64
+        );
+    }
+
+    /// @PLN48's real workload: a per-chunk index of a few hundred entities, every one
+    /// of which moves each frame (remove + reinsert), followed by a proximity query
+    /// that walks outward from a point.  This is the number that decides S4.
+    #[test]
+    #[ignore = "benchmark — run with --release --ignored --nocapture"]
+    fn bench_move_and_proximity() {
+        use std::time::Instant;
+        const ENTITIES: usize = 512;
+        const FRAMES: usize = 2_000;
+        const NEIGHBOURS: usize = 8;
+
+        let mut store = Store::new_in_use(1 << 12);
+        let mut tree = rtree_init(&mut store, 0);
+        let mut seed = 0xdead_beef_cafe_f00d;
+        let recs: Vec<u32> = (0..ENTITIES).map(|_| add(&mut store, lcg(&mut seed))).collect();
+        for &r in &recs {
+            tree = rtree_insert(&mut store, tree, r, CODE);
+        }
+
+        // Move every entity, every frame.
+        let t = Instant::now();
+        for _ in 0..FRAMES {
+            for &r in &recs {
+                rtree_remove(&mut store, tree, r, CODE);
+                store.set_u32_raw(r, 4, lcg(&mut seed));
+                tree = rtree_insert(&mut store, tree, r, CODE);
+            }
+        }
+        let moves = FRAMES * ENTITIES;
+        let move_ns = per_op(t.elapsed(), moves);
+
+        // Proximity: seed two cursors from one seek and walk outward.  `RadixIter` is
+        // `Copy`, so the second cursor costs no allocation.
+        let t = Instant::now();
+        let mut seen = 0u64;
+        for _ in 0..FRAMES {
+            let probe = code_probe(lcg(&mut seed));
+            let succ = rtree_seek(&store, tree, &probe, 32, CODE);
+            let mut pred = succ; // Copy
+            let mut fwd = succ;
+            for _ in 0..NEIGHBOURS {
+                seen += u64::from(pred.prev(&store, tree).unwrap_or(0) != 0);
+                seen += u64::from(fwd.next(&store, tree).unwrap_or(0) != 0);
+            }
+        }
+        let query_ns = per_op(t.elapsed(), FRAMES);
+        assert!(seen > 0, "the outward walk must find neighbours");
+
+        rtree_validate(&store, tree, CODE);
+        println!("\n@PLN48 workload — {ENTITIES} entities, {FRAMES} frames");
+        println!("  move (remove+insert) : {move_ns:>8.1} ns   ({moves} moves)");
+        println!("  proximity query      : {query_ns:>8.1} ns   (seek + {NEIGHBOURS} each way)");
+        println!("  per-frame cost       : {:>8.1} us", (move_ns * ENTITIES as f64 + query_ns) / 1000.0);
+    }
+
     /// R0 — a cursor is three words.  A `Vec` is 24 bytes, so this is a standing
     /// guard that `seek`/`first`/`next` stay allocation-free.
     #[test]
