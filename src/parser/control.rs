@@ -1177,7 +1177,18 @@ impl Parser {
         // The fn-body tail then delivers every arm into `__retbuf` (the `match` path,
         // `materialize_vector_arms_into`), so gating the promotion to the real return
         // context lets the `if` arms behave exactly like `match` arms already do.
-        if self.data.def_type(self.context) != DefType::Generic && context == "return from block" {
+        // @PLN85 generic-tuple-return-fix.md — this promotion is skipped for generic
+        // templates because a `-> T` return promotes the wrong locals once T is a
+        // value type.  NARROW exception: a generic template returning the synthetic
+        // `__tuple<…>` struct (a concrete lifetime-tuple already rewritten at
+        // definitions.rs) IS safe to promote here so the monomorph inherits the
+        // synthetic-struct body.  Kept to `__tuple` only — enabling the general
+        // text_return/ref_return path for ALL concrete generic returns panics on a
+        // template whose var table isn't promotion-ready (`plan17_b`, `-> text`).
+        let generic_promote_ok = self.data.def_type(self.context) != DefType::Generic
+            || matches!(self.data.def(self.context).returned(),
+                Type::Reference(d, _) if self.data.def(*d).name().starts_with("__tuple<"));
+        if generic_promote_ok && context == "return from block" {
             // @PLN25 single-payload: the tail was just coerced `__nullable<S>` → dense `S`
             // via a payload sub-ref (`OpGetField`), so `t` is still the Enum tail type and
             // the type-keyed branches below (which match `t`) all miss it — the default

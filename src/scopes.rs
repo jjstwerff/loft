@@ -2737,7 +2737,13 @@ impl Scopes {
             function.tp(v),
             Type::Reference(_, _) | Type::Enum(_, true, _)
         ) && let Value::Call(fn_nr, _) = unspanned_value
-            && data.def(*fn_nr).name.starts_with("n_")
+            // A user-defined callee: an `n_` global OR a `t_` method / generic
+            // monomorph (@PLN85 generic-tuple-return-fix.md — a generic tuple return
+            // is a `t_<Type>_<fn>` monomorph; without `t_` the adopts-fresh /
+            // OpFreeRefIfDistinct pairing was skipped and the caller freed the
+            // aliased return with a plain OpFreeRef, orphaning its text fields).
+            // `code != Null` excludes native `t_` methods (Rust bodies).
+            && (data.def(*fn_nr).name.starts_with("n_") || data.def(*fn_nr).name.starts_with("t_"))
             && data.def(*fn_nr).code != Value::Null
         {
             let adopts_fresh_store = data.def(*fn_nr).return_adopts_fresh_store();

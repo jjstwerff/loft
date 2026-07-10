@@ -107,18 +107,24 @@ struct Tri { id: integer }
 fn tri_text(self: Tri) -> text { return "item-{self.id}"; }
 
 // Tuple constructor whose text elements deliver owned text (p329/p330_pair).
-// VERDICT: Owned:TupleElement
+// @PLN85 generic-tuple-return-fix.md — a CONCRETE lifetime-tuple return (no `T` in
+// any element) is now rewritten to the `__tuple<…>` synthetic-struct ABI at
+// definitions.rs, exactly like the non-generic path, so it is delivered as a
+// heap Reference (freed normally) — NOT via the per-element `__ret_text_N` hoist
+// that leaked on the interpreter.  It therefore no longer reaches the text-return
+// classifier as a `Value::Tuple`, so there is no `TupleElement` verdict (the leak
+// is gone; see probes/generic-tuple-return/).  No VERDICT annotation: a `__tuple`
+// return is not a text return.
 fn f_tuple_ctor<T: Printable>(x: T) -> (text, text, text) { return (x.to_text(), "middle", x.to_text()); }
 
-// A generic 2-tuple whose first element delivers owned text (p330_pair).
-// (Generic like the real harness cases: a RESOLVED tuple return presents as a
-// Reference(__tuple<…>) rather than Type::Tuple — a known extension point for
-// non-generic tuple returns, not a current harness leaker.)
-// VERDICT: Owned:TupleElement
+// A generic 2-tuple whose first element delivers owned text (p330_pair) — same
+// `__tuple` delivery as f_tuple_ctor above (@PLN85), no text-return verdict.
 fn f_tuple_pair<T: Printable>(x: T) -> (text, text) { return (x.to_text(), "sentinel"); }
 
-// A generic tuple of ONLY literals — no owned text element, nothing to promote.
-// VERDICT: Plain
+// A generic tuple of ONLY literals — no owned element to promote — but its
+// (text, text) return still has lifetime-bearing element TYPES, so @PLN85 routes it
+// through the same `__tuple` synthetic-struct ABI as the other concrete tuple
+// returns above.  Delivered as a heap Reference, not a text return → no verdict.
 fn f_tuple_literals<T: Printable>(x: T) -> (text, text) { return ("a", "b"); }
 
 // p330_take_first — chains `.0` off a LOCAL tuple built by a call: that is the

@@ -44,7 +44,20 @@ Method notes that paid off: matrix-first (a vacuous compile-error cell nearly mi
 the tuple diagnosis — always prove the cell can fail); prove the promoted bytecode
 byte-matches the non-generic twin; both-backend + full-suite gate every change.
 
-## The remaining 5 leakers — case (b) of skip_free-orphan (see skip-free-orphan-class.md)
+## UPDATE 2026-07-10 (later): the 5 tuple leakers are now FIXED (5→0)
+
+The p329/p330 generic tuple-of-text returns are closed by the generic-return REORDER
+(`generic-tuple-return-fix.md`): narrowing the return-promotion guards from
+`is_generic_template` to `return_shape_depends_on_type_var` so a concrete-return
+generic template rides the existing non-generic `__tuple` promotion, plus broadening
+the caller's `OpFreeRefIfDistinct` pairing from `n_` to `t_` callees. Full suite green;
+all `probes/generic-tuple-return/` cells leak=0 on both backends. The tracked
+interpreter text-leak classes (issue_437 + p329/p330) are now at **0**. Remaining known
+text leaker: `g1b` (`-> text` generic monomorph returned through a caller — the
+forward-ref/signature-pre-pass class, a PROBE not a suite test). Next: recalibrate the
+CI ratchet baseline (should drop) and drive the forward-ref class.
+
+## The (former) 5 leakers — case (b) of skip_free-orphan (see skip-free-orphan-class.md)
 
 A text temp marked `skip_free` (to outlive its block for a consumer) never freed on
 interp. Split by value flow:

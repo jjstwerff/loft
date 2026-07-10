@@ -89,4 +89,5 @@ own probe — a minimal `o += [v[i] ?? ""]` loop, ASan leak oracle, both backend
 full suite (the 94-file `??` blast radius is the gate). Tuples (case b) fold into the
 forward-ref/`__tuple` promotion work, not this free.
 
-## Status: case a FIXED (issue_437, 6→5). Case b (p329/p330 tuple) still open.
+## Status: BOTH FIXED. Case a (issue_437, 6→5) + case b (p329/p330 tuple, 5→0) —
+## the tuple class via the generic-return reorder (generic-tuple-return-fix.md).

@@ -18,9 +18,15 @@ SUPP=${SUPP:-$ROOT/.github/lsan_suppressions.txt}
 # stdlib-path pitfalls). If even this shows no LSan SUMMARY, the oracle is blind
 # (wrong ABIN / detect_leaks off) and every 0 below is vacuous.
 _probe0=$(ls "$DIR"/*.loft | head -1)
-raw=$(ASAN_OPTIONS=detect_leaks=1 "$ABIN" --interpret "$_probe0" 2>&1 \
-  | grep -c 'SUMMARY: AddressSanitizer.*leaked')
-[ "$raw" -ge 1 ] || { echo "FATAL: ASan leak oracle is blind (no LSan SUMMARY) — wrong ABIN / detect_leaks off?" >&2; exit 3; }
+# The ASan binary's FIRST invocation in a fresh process occasionally emits no LSan
+# report (a startup race); retry a few times before declaring the oracle blind.
+raw=0
+for _try in 1 2 3; do
+  raw=$(ASAN_OPTIONS=detect_leaks=1 "$ABIN" --interpret "$_probe0" 2>&1 \
+    | grep -c 'SUMMARY: AddressSanitizer.*leaked')
+  [ "$raw" -ge 1 ] && break
+done
+[ "$raw" -ge 1 ] || { echo "FATAL: ASan leak oracle is blind (no LSan SUMMARY after retries) — wrong ABIN / detect_leaks off?" >&2; exit 3; }
 printf 'harness liveness: oracle-live=yes (unsuppressed ir_read baseline leaks; suppressed below)\n'
 printf '%-32s %6s %6s %6s\n' probe interp native leak
 for f in "$DIR"/*.loft; do

@@ -145,5 +145,39 @@ concrete instantiated return, not the template shape mid-resolution).
 `promote_monomorph_text_return` — gated on a pass-stable concrete-tuple test. The
 probe matrix + trustworthy oracle are now in place to validate it cell-by-cell.
 
-## Status: DIAGNOSED to 4 sites (incl. the missing `ref_return __retbuf`); probes +
-## oracle landed; fix reverted to green pending the `__retbuf` plumbing.
+## RESOLUTION — the reorder collapsed the sites (FIXED, suite green)
+
+Instead of re-deriving the 4 promotion sites on each monomorph (additive, fragile),
+the sites were collapsed onto the ONE existing non-generic promotion flow by NARROWING
+its guards — `is_generic_template` → `return_shape_depends_on_type_var`. A generic
+template whose return SHAPE is already concrete (`-> (text, text)`) now rides the same
+`definitions.rs` signature finalization (`__tuple` rewrite at site 1 + `__retbuf` at
+site 3) and `block_result` body path the non-generic uses; the monomorph inherits a
+fully-promoted signature+body for free. A return that still depends on `T` (`-> (T,T)`)
+defers to instantiation as before.
+
+The five changes:
+1. `mod.rs::return_shape_depends_on_type_var` — the pass-stable predicate (keyed on the
+   template's own type var via `extract_type_var`, NOT `DefType::Generic` — the type
+   PARAMETER is not a generic FUNCTION def; that mistake let `(T,T)` slip through).
+2. `definitions.rs` site 1 (`__tuple` rewrite) + site 3 (`__retbuf` param) — guard
+   narrowed to `!is_generic_template || !return_shape_depends_on_type_var`.
+3. `control.rs:1180` — the block_result promotion guard, narrowed to also allow a
+   generic template already returning a `__tuple<…>` (kept to `__tuple` ONLY: enabling
+   the general text_return path for concrete `-> text` generics panics on a template
+   whose var table isn't promotion-ready — `plan17_b`).
+4. `scopes.rs` caller pairing — the `adopts_fresh_store` / `OpFreeRefIfDistinct` pairing
+   fired only for `n_`-named callees; broadened to `t_` (generic monomorphs / methods),
+   so the caller frees the aliased return with `OpFreeRefIfDistinct`, not a leaking
+   `OpFreeRef`. This was the last residual and a LATENT gap for any `t_` method
+   returning an owned ref/tuple.
+5. `corpus.loft` — `f_tuple_ctor`/`f_tuple_pair`/`f_tuple_literals` now deliver via
+   `__tuple` (no `TupleElement` text-return verdict); annotations updated.
+
+Gate met: all 8 `probes/generic-tuple-return/` cells leak=0 + correct on interp AND
+native; `g3_tuple_return` leak 1→0; p329/p330/p240/plan17 + the text_return corpus +
+the FULL suite (2738) green. `loft introspect` of the fixed monomorph is byte-identical
+to the proven non-generic.
+
+## Status: FIXED (p329/p330 tuple class → 0). The separate `-> text` generic-monomorph
+## return (`g1b`, the forward-ref/pre-pass class) is untouched by this and remains open.
