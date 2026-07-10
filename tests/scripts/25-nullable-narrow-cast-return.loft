@@ -1,0 +1,27 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN25 — `e as τ?` (checked narrowing cast) returned directly as a function's tail
+// expression, into a nullable-narrow return type (`u8?`/`u16?`/`i16?`).
+// The cast now types `Optional(τ)` (dn4_checked_cast), so returning it into a `τ?` slot
+// is an exact type match — not an implicit narrow of a bare integer. Before, the cast
+// typed as the full source integer, so the tail form was rejected ("cannot implicitly
+// narrow integer to u8") even though the identical `r = e as τ?; r` local form worked.
+// Both-backend guard: it must behave identically on --interpret and --native.
+fn tail_u8(i: integer) -> u8? { i as u8? }
+fn tail_u16(i: integer) -> u16? { i as u16? }
+fn tail_i16(i: integer) -> i16? { i as i16? }
+
+fn main() {
+  // 255 is a VALUE, not null — the nullable narrow is carried full-width (i64), so the
+  // top-of-range value stays distinct from null (a raw u8 could not do this).
+  assert(tail_u8(255) == 255, "tail_u8(255)={tail_u8(255)}");
+  assert(tail_u8(255) != null, "tail_u8(255) must not be null");
+  // out of the u8 range -> the checked cast yields null.
+  assert(tail_u8(300) == null, "tail_u8(300) should be null");
+  // u16 (2-byte): top-of-range value distinct from null.
+  assert(tail_u16(65535) == 65535, "tail_u16(65535)={tail_u16(65535)}");
+  assert(tail_u16(70000) == null, "tail_u16(70000) should be null");
+  // signed narrow.
+  assert(tail_i16(-5) == -5, "tail_i16(-5)={tail_i16(-5)}");
+  assert(tail_i16(999999) == null, "tail_i16(999999) should be null");
+}
