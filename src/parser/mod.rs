@@ -3177,6 +3177,11 @@ impl Parser {
         );
         self.data.definitions[d_nr as usize].code = new_code;
         self.data.definitions[d_nr as usize].variables = vars;
+        // @PLN85 category A — engage the text-return promotion the parse-time
+        // path skips for IR-substituted monomorphs, so a `-> text` monomorph
+        // delivers through a hidden `&text` buffer (no orphaned owned String).
+        // Runs BEFORE returning `d_nr` so the call site sees the promoted ABI.
+        self.promote_monomorph_text_return(d_nr);
         // I6: verify the concrete type satisfies every declared bound.
         // Emit a diagnostic and return u32::MAX if any required method is missing.
         if !self.check_satisfaction(g_nr, type_nr) {

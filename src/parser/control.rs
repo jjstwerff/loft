@@ -4936,6 +4936,82 @@ impl Parser {
         }
     }
 
+    /// @PLN85 category A — re-run the text-return promotion on a freshly-minted
+    /// generic MONOMORPH so it delivers through a hidden `&text` caller buffer,
+    /// identical to its non-generic twin.  Monomorphs are built by IR
+    /// substitution (`try_generic_instantiation`), NOT by `parse_block`, so the
+    /// parse-time `do_tret_bind` + `text_return` promotion never engages and the
+    /// monomorph returns an owned `String` by value (the interpreter orphans it →
+    /// leak; native RAII drops it).  Both promoters couple to exactly
+    /// `self.context` + `self.vars`, so we swap those two onto the monomorph,
+    /// replicate the `do_tret_bind` rebind (`Set(__tret, tail); __tret`), and call
+    /// the identical `text_return` — then restore.  Called from
+    /// `try_generic_instantiation` BEFORE it returns `d_nr`, so the promoted
+    /// signature is in place when the call site lowers its call.
+    ///
+    /// Closes the BOUND/discarded cases (only the monomorph needs promoting); a
+    /// RETURNED monomorph result (`run() -> text { first(nums) }`) also needs the
+    /// caller to promote, which the def_nr backward-ref gate blocks (monomorph
+    /// minted after the caller) — that half awaits the forward-ref pre-pass.
+    pub(crate) fn promote_monomorph_text_return(&mut self, d_nr: u32) {
+        // Only plain `text` / `text?` returns (tuple-of-text is a separate arc).
+        if !matches!(
+            self.data.definitions[d_nr as usize].returned.base(),
+            Type::Text(_)
+        ) {
+            return;
+        }
+        // Swap parse context onto the monomorph: `create_unique` mutates
+        // `self.vars`; `text_return` mutates `self.data.def(self.context)` +
+        // `self.vars`.  `code` is moved OUT of `self.data` first so we can hold
+        // `&mut code` while calling `&mut self` methods (code is a local, not
+        // borrowed from self).
+        let saved_ctx = self.context;
+        // Swap the monomorph's variable table into `self.vars` (the old table is
+        // parked in `def.variables` and swapped back below — `Function` has no
+        // `Default`, so a swap, not a take).
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        if let Value::Block(bl) = &mut code {
+            let l = &mut bl.operators;
+            // Same gate as parse_block's `do_tret_bind`: a promotable text tail.
+            let promotable = l.last().is_some_and(|tail| self.tret_bind_ok(tail, l));
+            if promotable {
+                let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
+                if tv != u16::MAX {
+                    let last = l.len() - 1;
+                    if matches!(l[last].unspan(), Value::Return(_)) {
+                        let ret = std::mem::replace(
+                            &mut l[last],
+                            Value::Return(Box::new(Value::Var(tv))),
+                        );
+                        l.insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(ret)));
+                    } else {
+                        let call = std::mem::replace(&mut l[last], Value::Var(tv));
+                        l.insert(last, crate::data::v_set(tv, call));
+                    }
+                    // `text_return([tv])` stamps the hidden `&text` buffer attr on
+                    // the monomorph def and rewrites its returned type — the same
+                    // call `block_result` makes for a non-generic text tail.
+                    self.text_return(&[tv]);
+                }
+            }
+        }
+        // Restore: move code back, swap the (now-promoted) monomorph vars back
+        // into `def.variables`, reset context.
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+
     /// Walk a return expression to find work-ref variables passed as hidden
     /// Reference arguments to struct-returning calls.  Used by `block_result`
     /// to recover deps that `filter_hidden` stripped from the return type.
