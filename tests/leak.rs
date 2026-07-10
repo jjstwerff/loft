@@ -436,8 +436,8 @@ fn p291_vector_append_fn_call_result_no_leak() {
     p.database = db;
     p.parse_str(
         r#"
-struct Cell { c_color: u8 not null, c_height: u8 not null, c_age: u16 not null }
-struct Chunk { ck_cx: integer not null, ck_cz: integer not null, ck_cells: vector<Cell> }
+struct Cell { c_color: u8, c_height: u8, c_age: u16 }
+struct Chunk { ck_cx: integer, ck_cz: integer, ck_cells: vector<Cell> }
 fn build_chunk(cx: integer, cz: integer) -> Chunk {
   Chunk{ck_cx: cx, ck_cz: cz, ck_cells: []}
 }
@@ -485,9 +485,9 @@ fn p291_vector_append_with_inner_vector_no_leak() {
     p.database = db;
     p.parse_str(
         r#"
-struct Cell { c_color: u8 not null, c_height: u8 not null, c_age: u16 not null }
-struct Chunk { ck_cx: integer not null, ck_cz: integer not null, ck_cells: vector<Cell> }
-struct World { chunks: vector<Chunk>, tick: integer not null }
+struct Cell { c_color: u8, c_height: u8, c_age: u16 }
+struct Chunk { ck_cx: integer, ck_cz: integer, ck_cells: vector<Cell> }
+struct World { chunks: vector<Chunk>, tick: integer }
 fn cell_empty() -> Cell { Cell{c_color: 0, c_height: 0, c_age: 0} }
 fn build_chunk(cx: integer, cz: integer) -> Chunk {
   cs: vector<Cell> = [];
@@ -547,7 +547,7 @@ fn p290_iter_struct_hash_field_no_panic() {
     p.database = db;
     p.parse_str(
         r#"
-struct Cell { ck: text not null, x: integer not null, y: integer not null }
+struct Cell { ck: text, x: integer, y: integer }
 struct World { cells: hash<Cell[ck]> }
 fn snap_xs(w: World) -> integer {
   count = 0;
@@ -630,9 +630,9 @@ fn p290_sret_struct_with_hash_field_deep_copy_no_crash() {
     p.database = db;
     p.parse_str(
         r#"
-struct Cell { ck: text not null, x: integer not null, y: integer not null }
+struct Cell { ck: text, x: integer, y: integer }
 struct World { cells: hash<Cell[ck]> }
-struct ChunkRef { ck: text not null, cx: integer not null, cy: integer not null }
+struct ChunkRef { ck: text, cx: integer, cy: integer }
 struct ChunkSet { chunks: hash<ChunkRef[ck]> }
 fn collect(w: World) -> ChunkSet {
   cs = ChunkSet{chunks: []};
@@ -1287,7 +1287,7 @@ fn p15_phase05_nested_closure_no_leak() {
 fn p295_keyed_reassign_no_leak() {
     run_leak_check_str(
         r#"
-struct Item { k: integer not null }
+struct Item { k: integer }
 fn test() {
   s: sorted<Item[k]> = [];
   s += [Item{k: 100}];
@@ -1308,7 +1308,7 @@ fn test() {
 fn p295_keyed_reassign_call_rhs_no_leak() {
     run_leak_check_str(
         r#"
-struct Item { k: integer not null }
+struct Item { k: integer }
 fn build(n: integer) -> sorted<Item[k]> {
   r: sorted<Item[k]> = [];
   for i in 0..n { r += [Item{k: n - i}]; }

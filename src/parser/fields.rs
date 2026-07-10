@@ -905,7 +905,11 @@ impl Parser {
                         &[code.clone(), Value::Int(elm_size), *next.clone()],
                     );
                     if self.database.is_base(known) {
-                        v = self.get_val(etp, true, 0, v, u32::MAX);
+                        // Pass the ELEMENT's declared nullability (its slot
+                        // reserves a sentinel iff `τ?`), NOT the OOB-nullable
+                        // read result — a nullable narrow element decodes via
+                        // its sentinel op, a `vector<u8>` element stays raw.
+                        v = self.get_val(etp, matches!(etp, Type::Optional(_)), 0, v, u32::MAX);
                     } else if let Type::Tuple(elems) = etp {
                         v = self.unbox_tuple_from_dbref(v, elems);
                     }
@@ -950,7 +954,16 @@ impl Parser {
         } else {
             *code = self.cl("OpGetVector", &[code.clone(), Value::Int(elm_size), p]);
             if self.database.is_base(known) {
-                *code = self.get_val(etp, true, 0, code.clone(), u32::MAX);
+                // Element's DECLARED nullability drives the sentinel decode (see
+                // the Nullable-iterator branch above); the OOB-nullable read
+                // result is orthogonal (the caller null-checks `v[i]` regardless).
+                *code = self.get_val(
+                    etp,
+                    matches!(etp, Type::Optional(_)),
+                    0,
+                    code.clone(),
+                    u32::MAX,
+                );
             } else if let Type::Tuple(elems) = etp {
                 *code = self.unbox_tuple_from_dbref(code.clone(), elems);
             } else if matches!(etp, Type::Function(_, _, _)) {

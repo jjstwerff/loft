@@ -1492,14 +1492,18 @@ fn get_byte_nullable(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        let r = s
-            .database
-            .store(&db)
-            .get_byte(db.rec, db.pos + u32::from(v_fld), i32::from(v_min));
-        if r == i32::from(v_min) + 255 {
+        if db.rec == 0 {
             i64::MIN
         } else {
-            i64::from(r)
+            let r =
+                s.database
+                    .store(&db)
+                    .get_byte(db.rec, db.pos + u32::from(v_fld), i32::from(v_min));
+            if r == i32::from(v_min) + 255 {
+                i64::MIN
+            } else {
+                i64::from(r)
+            }
         }
     };
     s.put_stack(new_value);

@@ -446,8 +446,23 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
     **A HARD "retired" error is BLOCKED on the registry republish (task #4):** the registry libs
     (graphics/web/gridmesh/crypto/cbor) still carry ~103 code `not null`, and green tests load
     them — a hard error would break those. Once task #4 republishes them without `not null`, the
-    parser can reject it. **REMAINING to close F2:** F6 (the deviation-register + CHANGELOG update
-    is the only thing left; the model is functionally complete).
+    parser can reject it.
+  - **(7) ✅ DEPRECATION WARNING added (2026-07-10) — the missing rung between "silent no-op"
+    and the task-#4 hard error.** `not null` now emits a `Level::Warning` at every parse site
+    (`definitions.rs::has_deprecated_not_null`, one shared consume-and-warn helper routing the
+    return / integer-field / keyed / vector-element / struct-field sites; pass-2-gated so each
+    use warns once). It's contract-COMPATIBLE (still parses as a no-op, so libraries that carry
+    `not null` keep loading) but the warning drives the gate attrition: a package fails
+    `loft test --deny-warnings` (the per-package CI default unless `.allow_warnings`) until it
+    drops `not null` — so libraries shed the remaining uses on their own next PR, converging on
+    the state where task #4's hard error becomes unblocking rather than breaking. First-party
+    libraries are deliberately NOT swept here (maker's call: let attrition do it). Regression:
+    `tests/scripts/25-not-null-deprecated.loft` (`@EXPECT_WARNING`, both backends; asserts the
+    no-op still runs). NOTE the warning rides the normal diagnostics channel, so a WARM
+    whole-program cache hit suppresses it (as with every loft warning) — `cargo test`/cold CI
+    (cache-off) see it reliably, which is where the gate lives. **REMAINING to close F2:** F6
+    (deviation-register + CHANGELOG) and the task-#4 registry republish; the model is
+    functionally complete.
     **Separate slice (Part 2) — the NULLABLE-NARROW REPRESENTATION is inconsistent across backends,
     a DESIGN decision that blocks several gaps:** a `u8?` FIELD silently swallows literal `255`→null
     while a `u8?` LOCAL keeps 255; and (found 2026-07-02 while evaluating `i as u8?`) INTERP

@@ -526,7 +526,12 @@ impl Test {
                 // not an error).  Many `&`-param regression guards keep the `&`
                 // deliberately to exercise the RefVar path; filter it here so it
                 // only fails a test that explicitly expects it via `.warning(..)`.
-                || l.starts_with("Warning: `&` on parameter ");
+                || l.starts_with("Warning: `&` on parameter ")
+                // @PLN25 F2 — `not null` is a deprecated no-op emitting a tree-wide
+                // advisory during the retirement window.  Many `code!` fixtures still
+                // declare fields with it incidentally; filter it so it only fails a
+                // test that explicitly expects it via `.warning(..)`.
+                || l.starts_with("Warning: `not null` is deprecated");
             if expected.contains(&l) {
                 expected.remove(&l);
             } else if is_runtime_warning {
