@@ -3336,6 +3336,11 @@ impl Parser {
         hoisted_bindings: &mut Vec<Value>,
     ) -> (EnumArm, bool) {
         let mut field_conditions: Vec<Value> = Vec::new();
+        // @PLN35 L2 — a nested struct-enum field sub-pattern binds via
+        // parse_match_enum_field_bindings, which uses the name-alias save list; a plain-struct
+        // arm has no arm-level alias restore, so give it a local sink (the existing scalar /
+        // plain-enum / wildcard sub-pattern branches never touch it → byte-identical).
+        let mut name_aliases: Vec<(String, Option<u16>)> = Vec::new();
         if self.lexer.peek_token("{") {
             self.lexer.token("{");
             while !self.lexer.peek_token("}") {
@@ -3345,8 +3350,13 @@ impl Parser {
                         let field_val = self.get_field(e_nr, attr_idx, subject_val.clone());
                         let field_type = self.data.attr_type(e_nr, attr_idx);
                         if self.lexer.has_token(":") {
-                            if let Some(cond) = self.parse_field_sub_pattern(field_val, &field_type)
-                            {
+                            if let Some(cond) = self.parse_field_sub_pattern(
+                                field_val,
+                                &field_type,
+                                hoisted_bindings,
+                                &mut field_conditions,
+                                &mut name_aliases,
+                            ) {
                                 field_conditions.push(cond);
                             }
                         } else {
@@ -3452,7 +3462,13 @@ impl Parser {
                 Some((attr_idx, field_type)) => {
                     let field_read = self.get_field(variant_def_nr, attr_idx, subject_val.clone());
                     if self.lexer.has_token(":") {
-                        if let Some(cond) = self.parse_field_sub_pattern(field_read, &field_type) {
+                        if let Some(cond) = self.parse_field_sub_pattern(
+                            field_read,
+                            &field_type,
+                            arm_stmts,
+                            field_conditions,
+                            name_aliases,
+                        ) {
                             field_conditions.push(cond);
                         }
                     } else {
@@ -3566,9 +3582,64 @@ impl Parser {
     }
 
     /// Parse a sub-pattern in a match field position (L2).
-    /// Given a field value expression and its type, returns a boolean condition.
-    /// Handles: enum variant names, scalar literals, ranges, `_` (wildcard).
-    fn parse_field_sub_pattern(&mut self, field_val: Value, field_type: &Type) -> Option<Value> {
+    /// Given a field value expression and its type, returns a boolean condition; a nested
+    /// struct-enum sub-pattern also pushes its payload bindings through the passed-in
+    /// `arm_stmts` / `field_conditions` / `name_aliases` (the recursive pattern path).
+    /// Handles: enum variant names (plain AND struct-enum, nested), scalar literals, ranges,
+    /// `_` (wildcard).
+    fn parse_field_sub_pattern(
+        &mut self,
+        field_val: Value,
+        field_type: &Type,
+        arm_stmts: &mut Vec<Value>,
+        field_conditions: &mut Vec<Value>,
+        name_aliases: &mut Vec<(String, Option<u16>)>,
+    ) -> Option<Value> {
+        // @PLN35 L2 — Struct-enum field: the sub-pattern is `Variant { subfields }` (or a bare
+        // `Variant`).  Tag-test the field's discriminant and recurse into the variant's payload
+        // bindings — the same tag-test + payload-bind a top-level struct-enum arm emits, applied to
+        // the field-read value (`OpEqInt(OpConvIntFromEnum(OpGetEnum(field_val, 0)), disc)`).
+        if let Type::Enum(e_nr, true, _) = field_type
+            && let Some(name) = self.lexer.has_identifier()
+        {
+            if name == "_" {
+                return None;
+            }
+            let disc = if let Some(a_nr) = self.data.def(*e_nr).attr_names.get(&name) {
+                if let Value::Enum(nr, _) = self.data.def(*e_nr).attributes()[*a_nr].value {
+                    i32::from(nr)
+                } else {
+                    0
+                }
+            } else {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "'{}' is not a variant of {}",
+                        name,
+                        self.data.def(*e_nr).name()
+                    );
+                }
+                return None;
+            };
+            let get_enum = self.cl("OpGetEnum", &[field_val.clone(), Value::Int(0)]);
+            let disc_expr = self.cl("OpConvIntFromEnum", &[get_enum]);
+            let tag_test = self.cl("OpEqInt", &[disc_expr, Value::Int(disc)]);
+            // Nested payload: `Variant { subfields }` binds the variant's fields from field_val.
+            if self.lexer.peek_token("{") {
+                let variant_def_nr = self.data.variant_of(*e_nr, &name);
+                self.parse_match_enum_field_bindings(
+                    variant_def_nr,
+                    &name,
+                    &field_val,
+                    arm_stmts,
+                    field_conditions,
+                    name_aliases,
+                );
+            }
+            return Some(tag_test);
+        }
         // Enum field: the sub-pattern is a variant name (or `_`).
         if let Type::Enum(e_nr, false, _) = field_type
             && let Some(name) = self.lexer.has_identifier()

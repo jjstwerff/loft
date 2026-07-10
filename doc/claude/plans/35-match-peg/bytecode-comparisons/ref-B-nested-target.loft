@@ -1,0 +1,14 @@
+// Target (B): a NESTED struct-enum field pattern — FAILS to parse today (the F4 gap P1 closes).
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+struct Parcel { id: integer, detail: Detail }
+fn carrier(p: Parcel) -> text {
+  match p {
+    Parcel { detail: Ship { carrier } } => carrier
+    _ => "none"
+  }
+}
+fn main() {
+  p = Parcel { id: 1, detail: Ship { carrier: "FedEx" } };
+  assert(carrier(p) == "FedEx", "nested struct-enum field");
+  print("ref-B: PASS");
+}

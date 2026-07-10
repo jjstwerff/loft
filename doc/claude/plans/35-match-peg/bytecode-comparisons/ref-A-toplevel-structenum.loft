@@ -1,0 +1,15 @@
+// Reference (A): a TOP-LEVEL struct-enum match — works today. Its IR is the target the
+// nested-field case must emit (tag-test + payload-bind), applied to a field-read value.
+// (Enum arms are COMMA-separated — mirrors tests/scripts/123-struct-enum-arg-temp.loft.)
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+fn describe(d: Detail) -> text {
+  match d {
+    Ship { carrier } => carrier,
+    Pickup { store } => "pickup"
+  }
+}
+fn main() {
+  assert(describe(Ship { carrier: "UPS" }) == "UPS", "ship");
+  assert(describe(Pickup { store: 7 }) == "pickup", "pickup");
+  print("ref-A: PASS");
+}
