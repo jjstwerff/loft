@@ -5,6 +5,27 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN102 — the language-versioning decision (the pivot, open Q2)
 
+> **⚠ STRENGTHENED 2026-07-10 by the absolute-compat commitment — read this first.** After
+> this doc was written the owner set a stronger rule: **at contract 1, loft never breaks a
+> functioning program (language + errors + libs), whatever we do; a deviation is a bug, not
+> a managed breaking change** ([COMPATIBILITY.md](../../COMPATIBILITY.md)). Two concrete
+> effects on the mechanism below, which is otherwise intact:
+> 1. **The contract does NOT "count silent breaking changes"** — post-1 there *are* none
+>    (they are bugs, fixed stop-the-world). It is a monotone **capability floor** (+ a
+>    behavior-epoch key for the rare escape-valve change). The framing below of "increments
+>    on a silent break" is superseded; a silent break is now a *bug*, and the contract only
+>    rises for additive capability epochs.
+> 2. **A bare `contract = N` is a lower bound (`>= N`, forward-open), NOT "tested-at N /
+>    warn on newer."** Forward-compat is guaranteed, so a newer loft never drifts; `Drifted`
+>    fires only for an *explicit* upper bound. (The mechanism's bare case was flipped
+>    `=`→`>=` — `check_contract`.)
+> 3. **The `0 → 1` flip is gated on a thorough pre-freeze audit** of every surface (see
+>    COMPATIBILITY.md § Before the flip), not only "after the open syntax changes."
+>
+> The rest of this doc is the original reasoning (monotone integer, calver for releases,
+> `1.0 == contract 1`, "an integer suffices because feature-floor fails loudly") — all still
+> correct; only the two semantics above are refined by the stronger promise.
+
 **Status: DECIDED 2026-07-10** (ratification of the two cosmetic sub-choices below is
 the user's — the substance is committed). This resolves the pivot that arc B-semantic
 and arc E (the 1.0 line) both wait on. Written design-protocol-first: the invariant, the
