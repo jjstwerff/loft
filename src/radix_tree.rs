@@ -520,12 +520,22 @@ pub fn rtree_remove(store: &mut Store, tree: u32, rec: u32, key_of: KeyFn) -> bo
 // Validation
 // ---------------------------------------------------------------------------
 
-/// Assert I1 over the whole tree: strictly increasing bits, two children per
-/// node, every leaf on the side its key bit chooses, and the counts that a
-/// two-children-per-node tree forces (`live_nodes == LEN - 1`).
+/// Assert I1 and I2 over the whole tree.
 ///
-/// A leaked node, a double-freed node, and a failed splice each break one of
-/// these, so a single call catches all three.
+/// **I1** — strictly increasing bits, two children per node, every leaf on the
+/// side its key bit chooses, and the counts a two-children-per-node tree forces
+/// (`leaves == LEN`, `live_nodes == LEN - 1`, `live + freed == NODES`).  A leaked
+/// node, a double-freed node, and a failed splice each break one of these.
+///
+/// **I2 — the licence to skip bits.**  Every record under node `n` agrees on
+/// *every* bit below `bit(n)`.  This is what makes a skipped bit unnecessary to
+/// store: its run length is `bit(n) - bit(parent) - 1`, and its values can be read
+/// off any leaf in the subtree.  It is also what [`rtree_seek`] leans on when it
+/// argues that the whole divergence subtree sits on one side of the probe key.
+///
+/// Checking the subtree's least and greatest leaf suffices: leaves under `n` are
+/// contiguous in key order, so if the two extremes share a bit-prefix, everything
+/// between them does too.
 #[cfg(test)]
 pub fn rtree_validate(store: &Store, tree: u32, key_of: KeyFn) {
     struct Walk<'a> {
@@ -540,9 +550,13 @@ pub fn rtree_validate(store: &Store, tree: u32, key_of: KeyFn) {
     }
 
     impl Walk<'_> {
-        fn visit(&mut self, cur: Child, parent_bit: Option<u32>) {
+        /// Returns the least and greatest leaf of this subtree, in key order.
+        fn visit(&mut self, cur: Child, parent_bit: Option<u32>) -> Option<(u32, u32)> {
             match cur {
-                Child::Empty => assert_eq!(self.len, 0, "empty child in a non-empty tree"),
+                Child::Empty => {
+                    assert_eq!(self.len, 0, "empty child in a non-empty tree");
+                    None
+                }
                 Child::Rec(r) => {
                     self.leaves += 1;
                     for &(bit, dir) in &self.constraints {
@@ -552,6 +566,7 @@ pub fn rtree_validate(store: &Store, tree: u32, key_of: KeyFn) {
                             "record {r} sits on the {dir} side of bit {bit}, its key disagrees"
                         );
                     }
+                    Some((r, r))
                 }
                 Child::Node(n) => {
                     self.live += 1;
@@ -559,13 +574,29 @@ pub fn rtree_validate(store: &Store, tree: u32, key_of: KeyFn) {
                     if let Some(pb) = parent_bit {
                         assert!(bit > pb, "I1: bit {bit} does not exceed parent bit {pb}");
                     }
+                    let mut ends = [0u32; 2];
                     for dir in [false, true] {
                         let c = child(self.store, self.tree, n, dir);
                         assert_ne!(c, Child::Empty, "node {n} has no {dir} child");
                         self.constraints.push((bit, dir));
-                        self.visit(c, Some(bit));
+                        let (lo, hi) = self.visit(c, Some(bit)).expect("a child has leaves");
                         self.constraints.pop();
+                        ends[usize::from(dir)] = if dir { hi } else { lo };
                     }
+                    let (lo, hi) = (ends[0], ends[1]);
+
+                    // I2: the bits this node skipped over are common to the whole
+                    // subtree, so they never needed storing.
+                    let from = parent_bit.map_or(0, |pb| pb + 1);
+                    for b in from..bit {
+                        assert_eq!(
+                            (self.key_of)(self.store, lo, b),
+                            (self.key_of)(self.store, hi, b),
+                            "I2: node {n} skips bit {b} on its way to bit {bit}, \
+                             but records {lo} and {hi} below it disagree there"
+                        );
+                    }
+                    Some((lo, hi))
                 }
             }
         }
@@ -581,7 +612,7 @@ pub fn rtree_validate(store: &Store, tree: u32, key_of: KeyFn) {
         live: 0,
         constraints: Vec::new(),
     };
-    walk.visit(top(store, tree), None);
+    let _ = walk.visit(top(store, tree), None);
     let (leaves, live) = (walk.leaves, walk.live);
     assert_eq!(leaves, len, "leaf count disagrees with LEN");
     assert_eq!(live, len.saturating_sub(1), "live nodes must be LEN - 1");
@@ -639,9 +670,13 @@ mod tests {
     }
 
     /// Deterministic pseudo-random codes — reproducible failures, no `rand` dep.
+    ///
+    /// Shifts by 32, not 33: a 31-bit code would pin the key's most significant
+    /// bit to `0` for every record, so no node would ever branch on it and the
+    /// top of the key would go untested.
     fn lcg(seed: &mut u64) -> u32 {
         *seed = seed.wrapping_mul(6_364_136_223_846_793_005).wrapping_add(1);
-        (*seed >> 33) as u32
+        (*seed >> 32) as u32
     }
 
     fn collect(store: &Store, tree: u32) -> Vec<u32> {

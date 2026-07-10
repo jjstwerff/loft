@@ -117,6 +117,47 @@ one fewer block to leak.
 This is the design's central subtraction, and it is the reason the rewrite is
 expected to come out **shorter** than a corrected version of the sketch.
 
+### 2.1 So how *are* bits skipped?  They are derived, never stored
+
+Nothing records a skip, because nothing needs to:
+
+- **The run length is the gap.**  A node skips exactly `bit(n) - bit(parent) - 1`
+  bits.  Both numbers are already there.
+- **The skipped values live in the subtree.**  Every record under `n` agrees on
+  every bit below `bit(n)`, so if the values are ever wanted, read them off *any*
+  leaf below `n`.
+
+That second point is the **licence to skip**, and it is a claim, so it is asserted
+rather than assumed:
+
+> **I2** — all records under node `n` agree on every bit `b < bit(n)`.
+
+I1 and I2 are independent.  A tree can satisfy I1 (increasing bits), give every leaf
+a key that matches each *tested* bit on its path, and still be wrong — put two keys
+that first diverge at bit 0 under a root that tests bit 1, and every I1-shaped check
+passes while `seek` quietly returns the wrong neighbour.  I2 is the only thing that
+sees it.
+
+Descent never *checks* a skipped bit — which is precisely why `find` returns a
+**candidate** and `insert` compares full keys once, at the end, against that concrete
+record.  "Skipping" is not an operation the tree performs; it is the absence of a
+node at bits where nothing diverges.
+
+`rtree_validate` checks I2 by comparing one representative leaf from each child
+subtree across the skipped range.  That is sufficient by induction: the recursive
+call establishes that every leaf under a child agrees with its representative on all
+bits below the child's bit, which strictly exceeds this node's.
+
+### 2.2 Where bit-at-a-time actually costs
+
+One place, and it is not the descent: `first_diff_bit` scans a bit at a time from
+`0`, so an insert costs `O(key_bits)` oracle calls — 96 for a 2D Morton key, but
+unbounded for text.  If S4's measurement points here, the fix is to widen the oracle
+with a chunk accessor (`key_word(rec, i) -> Option<u64>`) and find the first
+difference with `XOR` + `leading_zeros`, turning the scan into `O(key_words)`.  That
+is a **compare**-side optimisation and it does not touch the representation: the
+absolute bit index stays, and no skip count comes back.
+
 ---
 
 ## 3. Attacking the cleanest claims
@@ -265,20 +306,33 @@ after **every** mutation in R3, R6 and R7.
 | **R7** | growth: `resize` past `CAP`, rec-id repoint | 200 inserts from `CAP = 0`; asserts the record actually **relocated**, then that order and membership survived it | ✅ |
 
 `rtree_validate` checks I1 structurally (strictly increasing bits, two children per
-node, each leaf's key agreeing with every branch decision above it) plus the counts a
-two-children-per-node tree forces: `leaves == LEN`, `live_nodes == LEN - 1`, and
-`live + freed == NODES`.  A leaked node, a double-free and a failed splice each break
-one of them.
+node, each leaf's key agreeing with every branch decision above it), **I2** (§2.1 —
+the skipped bits are common to the subtree), plus the counts a two-children-per-node
+tree forces: `leaves == LEN`, `live_nodes == LEN - 1`, and `live + freed == NODES`.
+A leaked node, a double-free and a failed splice each break one of them.
 
 ### Proving the harness can fail
 
-A green step that cannot go red is vacuous, so both subtle pieces were mutated and
-the suite re-run:
+A green step that cannot go red is vacuous, so each subtle piece was mutated and the
+suite re-run:
 
 | Mutation | Predicted | Observed |
 |---|---|---|
 | `rtree_seek` returns the candidate leaf directly — i.e. the "candidate is the neighbour" bug §6 exists to prevent | only R5 reddens | **exactly R5**, 7 others green |
-| `split_index` returns the wrong edge | the structural checks catch it | 6 red; `rtree_validate` reports it by name: *"I1: bit 2 does not exceed parent bit 5"* |
+| `split_index` returns the wrong edge | the structural checks catch it | 6 red; `rtree_validate` names it: *"I1: bit 2 does not exceed parent bit 5"* |
+| the new node takes bit `d + 1` | something catches it | the per-leaf branch constraint catches it — *not* I2 |
+| `first_diff_bit` starts at bit 1, so a divergence at bit 0 is missed — an I2 violation that leaves I1 and the constraints intact | only I2 reddens R3 | **I2 fires at insert time**: *"node 1 skips bit 0 on its way to bit 1, but records 4 and 5 below it disagree there."*  With I2 removed, **R3 passes clean** and the corruption only surfaces downstream in R4/R5/R6 |
+
+That last row is why I2 is in the validator: without it the structural pass is blind
+to a bad skip, and the failure reappears three steps later as an inexplicable
+ordering bug.
+
+**The mutation also caught a hole in the test data.**  The first attempt at that
+mutation changed nothing, because `lcg` returned `(seed >> 33) as u32` — a **31-bit**
+code, pinning the key's most significant bit to `0` for every record.  No node ever
+branched on bit 0, so "miss bit 0" was a no-op and the cell was vacuous.  Shifting by
+32 exercises the full key width.  A probe that cannot fail proves nothing, and this
+one nearly didn't.
 
 ### Validating against the prediction (design-protocol step 6)
 
