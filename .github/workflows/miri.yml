@@ -551,9 +551,15 @@ jobs:
       # `tuxedo-cluster-c`, so the gate now spans the same corpus the alignment sweep
       # does.  Non-vacuous: the asserts are proven to fire (the @PLN85 DA campaign
       # closed a 53→0 failed-target inventory of real bugs by turning them on).
+      # `LOFT_STORE_GUARD=1` (Goal E) additionally runs the block-confinement
+      # detector (`store_lifetime_guard`) across this corpus — its enforced twin,
+      # the `reclaim_guard` `assert_eq!`, already hard-gates here via
+      # `cfg(debug_assertions)`.  Closes the "the env var is set in no workflow"
+      # gap; verified silent corpus-wide.
       - name: Debug-assertions sweep (interpreter corpus)
         env:
           RUSTFLAGS: '-C debug-assertions=on'
+          LOFT_STORE_GUARD: '1'
         run: >
           cargo test --release --no-fail-fast
           --lib --test issues --test wrap --test strings --test frame_vars

@@ -717,16 +717,29 @@ jobs:
             ubuntu-guard-cargo-
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
-      # Exclude `wrap::library_suite`: it builds/runs the lib/* NATIVE suites
-      # (graphics/moros_*/shapes FFI), which need the GL/ALSA + graphics-cdylib
-      # build-prep this lean job deliberately omits — and the guard can't see
-      # those spawned native builds anyway.  The alignment-relevant interpreter
-      # tests it leaves are fully covered by the other wrap tests + issues/
-      # strings/frame_vars; the full lib suite runs in the main `test` job.
+      # Goal A wants the guard silent across EVERY test binary — but it only
+      # fires IN-PROCESS: a test that shells out to a spawned `--native`/`--wasm`
+      # binary (every `cross_mode!` matrix cell, the mixed-boundary suites) runs
+      # the guarded code in a child the sweep can't observe (see
+      # `tests/n3_parity.rs` — "the stack_align_guard sweep can't see spawned
+      # binaries").  So the reachable corpus IS the in-process interpreter test
+      # binaries; this sweep now runs all of them.  `expressions` /
+      # `expressions_auto_convert` (expression-eval eval-stack), `slots` /
+      # `slot_v2_baseline` / `value_struct_alloc` (slot & value-struct layout),
+      # `dispatch_reentry`, and `format` join `issues`/`wrap`/`strings`/
+      # `frame_vars` — each verified zero-fires under the feature.
+      #
+      # `wrap::library_suite` stays excluded: it builds/runs the lib/* NATIVE
+      # suites (graphics/moros_*/shapes FFI), which need the GL/ALSA +
+      # graphics-cdylib build-prep this lean job omits — and the guard can't see
+      # those spawned native builds anyway; the full lib suite runs in `test`.
       - name: Guard sweep (interpreter suites, zero fires expected)
         run: >
           cargo nextest run --profile ci --features stack_align_guard
           --lib --test issues --test wrap --test strings --test frame_vars
+          --test expressions --test expressions_auto_convert --test slots
+          --test slot_v2_baseline --test value_struct_alloc --test dispatch_reentry
+          --test format
           -E 'not test(library_suite)'
 
   # Doc-index hygiene (plan-37) — `make index` + broken `@`-tag / markdown-link
