@@ -1,0 +1,6 @@
+// bind the monomorph result to a local, then return the local.
+struct P { id: integer }
+fn to_text(self: P) -> text { return "v{self.id}"; }
+fn mk<T: Printable>(x: T) -> text { x.to_text() + "x" }
+fn run() -> text { r = mk(P{id:9}); r }
+fn main() { assert(run() == "v9x", "bound"); }

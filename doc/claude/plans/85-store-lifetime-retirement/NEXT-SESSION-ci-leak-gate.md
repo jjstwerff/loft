@@ -56,9 +56,19 @@ interpreter text-leak classes (issue_437 + p329/p330) are now at **0**. The `g1b
 case (`-> text` generic monomorph returned through a non-generic caller) is now ALSO
 FIXED via a narrow reorder (`control.rs::backward_ref_defnr` maps a monomorph callee to
 its backward template for the promotion gate — see `signature-pre-pass-spec.md`
-UPDATE). **The entire residual-19 sweep is now leak=0** on the interpreter; full suite
-green. Next: recalibrate the CI ratchet baseline (it should drop toward 0) via a CI
-run, then flip `detect_leaks=1` to enforcing.
+UPDATE), plus a companion fix promoting a `BuiltLocal` (concat/interp) text return on a
+generic monomorph (`promote_monomorph_text_return`, the `plan17_b` case).
+
+**MILESTONE: the WHOLE `issues` test suite is now leak=0 on the interpreter** (ASan
+`detect_leaks=1`, ir_read + macOS dyld-TLS suppressed) — verified by rerunning the ASan
+`issues` binary `--test-threads=1`: zero `append_text`/loft frames in any leak stack.
+Full suite (2738) green. Probes: `probes/generic-text-return/` (forward-ref class) +
+`probes/generic-tuple-return/` (tuple class), both all-cells leak=0.
+
+Next: set the CI ratchet `LEAK_BASELINE` to **0** and run the nightly `miri.yml` ONCE
+to confirm the Linux leg is also 0 (LSan frames differ — the macOS dyld-TLS line is a
+no-op there), then delete `continue-on-error` to make `detect_leaks=1` an ENFORCING
+zero-leak gate. That flip is the deliverable.
 
 ## The (former) 5 leakers — case (b) of skip_free-orphan (see skip-free-orphan-class.md)
 

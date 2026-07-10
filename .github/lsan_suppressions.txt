@@ -8,3 +8,10 @@
 # miri.yml. This is the ONLY class suppressed; every real interpreter leak stays
 # visible and is gated by the shrinking count baseline (scripts/asan_leak_ratchet.sh).
 leak:ir_read
+
+# macOS dyld thread-local storage term-func registration on a spawned thread
+# (the test harness watchdog): `dyld::ThreadLocalVariables::addTermFunc`, reached
+# via `thread_start`. A one-per-thread SYSTEM allocation, not a loft heap leak — and
+# absent on the Linux CI leg (different TLS impl), so this line is a macOS-only no-op
+# there. Specific to the dyld frame so it never masks a real loft leak.
+leak:addTermFunc

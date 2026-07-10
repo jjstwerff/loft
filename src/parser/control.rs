@@ -4991,7 +4991,21 @@ impl Parser {
         if let Value::Block(bl) = &mut code {
             let l = &mut bl.operators;
             // Same gate as parse_block's `do_tret_bind`: a promotable text tail.
-            let promotable = l.last().is_some_and(|tail| self.tret_bind_ok(tail, l));
+            // ALSO promote a `BuiltLocal` tail (accumulator / concat / interpolation):
+            // for a non-generic, `text_return` promotes those directly, but that path
+            // is skipped for the generic template (control.rs I9-var guard), so a
+            // generic monomorph's built-up text return would otherwise orphan — the
+            // `run() -> text { label(42) }` / `label<T> -> text { x.to_text() + "!" }`
+            // case (plan17_b).  The `__tret` bind + `text_return` below delivers it
+            // through the hidden `&text` buffer exactly as the non-generic would.
+            // @PLN85 forward-ref class.
+            let promotable = l.last().is_some_and(|tail| {
+                self.tret_bind_ok(tail, l)
+                    || matches!(
+                        self.classify_text_return(tail, l),
+                        TextReturn::Owned(OwnedVia::BuiltLocal)
+                    )
+            });
             if promotable {
                 let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
                 if tv != u16::MAX {
