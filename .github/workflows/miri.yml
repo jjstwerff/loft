@@ -236,9 +236,13 @@ jobs:
       # fn's `text` result used as a user function's implicit tail-return is never
       # registered as owned (~2 allocs/call, grows; rebinding to a local fixes it;
       # likely a caller-bind/OpReturn owned-placeholder gap in state/codegen.rs).
-      # detect_leaks stays 0 until (2) is FIXED (stability policy: fix + regression
-      # test, not suppress); the flip then adds a narrow Class-1 `leak:ir_read`
-      # exclusion for the ~16 ir_read/ir_schema/ir_store round-trip lib tests.
+      # This sweep stays detect_leaks=0 (a clean UAF/OOB gate).  The LEAK half is
+      # now the separate "ASan leak ratchet" step below: detect_leaks=1 + the
+      # `leak:ir_read` suppression (Class 1) + a shrinking count baseline over the
+      # residual (2)-class leakers (@PLN85 drove the ncc/tail-return class down; the
+      # residue is the p329/p330 tuple returns).  When the baseline ratchets to 0,
+      # the model is fully CI-verified and this sweep can itself flip to
+      # detect_leaks=1.
       #
       # nextest (not `cargo test`): it does NOT build doctests, which under
       # `--target` + `-Zsanitizer` fail to resolve the curve25519 proc-macro
@@ -257,6 +261,32 @@ jobs:
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
           test(n9_generated_fill_matches_src) |
           test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
+
+      # @PLN85 — the interpreter LEAK RATCHET (the second half of the leak gate:
+      # the sweep above is UAF/OOB with detect_leaks=0; this asserts leaks do not
+      # GROW past a shrinking baseline).  Reruns the SAME ASan-instrumented `issues`
+      # binary the sweep just built, under detect_leaks=1, and counts Direct leak
+      # roots (ir_read's intentional Box::leak frame-suppressed via
+      # .github/lsan_suppressions.txt).  The residual roots are the p329/p330
+      # skip_free-orphan tuple returns; a NEW leak bumps the count and fails.
+      #
+      # CALIBRATION RUN: `continue-on-error` prints the true per-OS count (LSan
+      # root counts differ Linux-vs-macOS) WITHOUT blocking.  After this run:
+      #   1. read "Direct leak roots" from each OS leg's log,
+      #   2. set LEAK_BASELINE to that count (per-OS via matrix if they differ),
+      #   3. delete `continue-on-error` — the ratchet is then enforcing.
+      # When a baseline reaches 0, this becomes a plain zero-leak gate.
+      - name: ASan leak ratchet (interp text-leak baseline; CALIBRATION)
+        continue-on-error: true
+        env:
+          RUSTFLAGS: '-Zsanitizer=address'
+          LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
+          LEAK_BASELINE: '0'
+        run: |
+          BIN=$(ls -t target/${{ matrix.target }}/release/deps/issues-* 2>/dev/null \
+            | grep -v '\.d$' | head -1)
+          echo "issues test binary: $BIN"
+          bash scripts/asan_leak_ratchet.sh "$BIN" --test-threads=1
 
   poison:
     name: LOFT_POISON arena-UAF gate (store-internal use-after-free)

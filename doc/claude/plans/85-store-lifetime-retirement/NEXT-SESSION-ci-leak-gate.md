@@ -67,16 +67,28 @@ The user leans **ratchet-now**; confirm before implementing.
    zero first (build the skip_free escape analysis), then `detect_leaks=1` + only the
    `leak:ir_read` suppression (~16 ir_read/ir_schema/ir_store lib tests). Waits on the
    hard arc.
-2. **Ratchet now (RECOMMENDED):** `detect_leaks=1` + `ir_read` suppression + a
-   documented, SHRINKING allowlist/baseline of the 6 known frames; gate asserts "no
-   leak beyond baseline." Catches every NEW leak immediately; allowlist ratchets to 0.
-   - Draft: flip `ASAN_OPTIONS` in `miri.yml`'s "ASan sweep" step (+ `ci.yml:933`);
-     add `lsan_suppressions.txt` (ir_read) + a baseline check. The existing sweep
-     harness (`probes/text-tail-return/sweep_owners.sh`, `probes/residual-19/run.sh`)
-     is the detector to wire in.
-   - **CAVEAT: cannot be validated on this macOS box** — Linux LSan frames/counts
-     differ. Needs a CI run to confirm the exact frames + baseline number. Confirm on
-     the ubuntu-x86_64 leg before landing.
+2. **Ratchet now (RECOMMENDED) — DRAFTED, awaiting a calibration CI run.**
+   `detect_leaks=1` + `ir_read` suppression + a documented, SHRINKING COUNT baseline;
+   the gate asserts "Direct leak roots ≤ baseline." Catches every NEW leak immediately;
+   baseline ratchets to 0. **A per-frame allowlist does NOT work** — every residual
+   text leak shares the `append_text`←`execute_argv` frames, so a `leak:<frame>`
+   suppression can't tell a known leaker from a new one; the gate is a COUNT instead.
+   - **Landed (this session):**
+     - `.github/lsan_suppressions.txt` — the single `leak:ir_read` suppression
+       (verified locally: 42→1 roots on `g3_tuple_return`).
+     - `scripts/asan_leak_ratchet.sh` — runs an ASan binary under `detect_leaks=1`,
+       counts `^Direct leak` roots, compares to `LEAK_BASELINE`; fails on growth,
+       warns (ratchet-down) when below. Locally validated 3 ways (OK / new-leak-fail /
+       fixed-below-baseline) + missing-binary guard.
+     - New "ASan leak ratchet" step in **both** `miri.yml` (both-OS matrix) and
+       `ci.yml` (ubuntu; timeout 30→45), reusing the `issues` ASan binary the sweep
+       built. Marked `continue-on-error: true` + `LEAK_BASELINE: '0'` for CALIBRATION.
+   - **NEXT: run the nightly `miri.yml` (workflow_dispatch), read "Direct leak roots"
+     from each OS leg, then** (a) set `LEAK_BASELINE` to that count (per-OS via matrix
+     if ubuntu ≠ macOS), and (b) delete `continue-on-error` in both workflows to make
+     the ratchet enforcing.
+   - **CAVEAT: the baseline number cannot be pinned on this macOS box** — Linux LSan
+     root counts differ from ARM. The calibration run supplies both.
 
 ## Tooling / repro (this box)
 
