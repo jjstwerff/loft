@@ -1099,7 +1099,12 @@ impl Parser {
     /// `xs[(fx,fy)..:n]`, or the open `xs[(fx,fy)..]`, and lower it to an
     /// `n_spacial_range` scratch-builder call.  Returns the Radix `typedef` so the
     /// enclosing `for` iterates the scratch it builds.  `(` has already been peeked.
-    fn parse_spacial_slice(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) -> Type {
+    fn parse_spacial_slice(
+        &mut self,
+        code: &mut Value,
+        typedef: &Type,
+        key_types: &[Type],
+    ) -> Type {
         // Parse a `(c0, c1, …)` coordinate tuple with exactly one value per axis of the
         // collection (`key_types.len()`), padded to MAX_AXES with `0` for the fixed-arity
         // `n_spacial_range` call.  The collection's own axis count drives how many the
@@ -1148,7 +1153,11 @@ impl Parser {
             let mut n = Value::Null;
             let nt = self.expression(&mut n);
             if !self.convert(&mut n, &nt, &crate::data::I64) {
-                diagnostic!(self.lexer, Level::Error, "spacial slice limit must be an integer");
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "spacial slice limit must be an integer"
+                );
             }
             (Value::Int(0), vec![Value::Int(0); max_axes], n)
         } else {

@@ -1780,9 +1780,12 @@ mod tests {
     fn wide_word(store: &Store, rec: u32, word: u32) -> u64 {
         // Two u64s at fld 4 and fld 12 (a 3-word record): word 0 is the high half.
         match word {
-            0 => u64::from(store.get_u32_raw(rec, 4)) | (u64::from(store.get_u32_raw(rec, 8)) << 32),
+            0 => {
+                u64::from(store.get_u32_raw(rec, 4)) | (u64::from(store.get_u32_raw(rec, 8)) << 32)
+            }
             1 => {
-                u64::from(store.get_u32_raw(rec, 12)) | (u64::from(store.get_u32_raw(rec, 16)) << 32)
+                u64::from(store.get_u32_raw(rec, 12))
+                    | (u64::from(store.get_u32_raw(rec, 16)) << 32)
             }
             _ => 0,
         }
@@ -1824,7 +1827,11 @@ mod tests {
         for _ in 0..500 {
             // Deliberately narrow the high word sometimes, so many keys share word 0
             // and first diverge in word 1 — the multi-word path.
-            let hi = if lcg(&mut seed) & 1 == 0 { 0 } else { u64::from(lcg(&mut seed)) };
+            let hi = if lcg(&mut seed) & 1 == 0 {
+                0
+            } else {
+                u64::from(lcg(&mut seed))
+            };
             let lo = (u64::from(lcg(&mut seed)) << 32) | u64::from(lcg(&mut seed));
             let rec = add_wide(&mut store, hi, lo);
             recs.push((rec, hi, lo));
@@ -1845,7 +1852,10 @@ mod tests {
                 (u128::from(hi) << 64) | u128::from(lo)
             })
             .collect();
-        assert_eq!(got, expect, "multi-word walk must be sorted by the full 128-bit key");
+        assert_eq!(
+            got, expect,
+            "multi-word walk must be sorted by the full 128-bit key"
+        );
     }
 
     // ---- 2D Morton (Z-order) oracle: x at `fld 4`, y at `fld 8` -------------

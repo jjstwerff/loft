@@ -349,11 +349,20 @@ mod tests {
         }
 
         // A coordinate never inserted is absent.
-        let absent = find(&coll, stores, &keys, &[Content::Long(999_999), Content::Long(1)]);
+        let absent = find(
+            &coll,
+            stores,
+            &keys,
+            &[Content::Long(999_999), Content::Long(1)],
+        );
         assert_eq!(absent.rec, 0, "an absent key returns null");
 
         let walked = records(&coll, stores);
-        assert_eq!(walked.len(), pts.len(), "the walk enumerates every record once");
+        assert_eq!(
+            walked.len(),
+            pts.len(),
+            "the walk enumerates every record once"
+        );
         let unique: std::collections::HashSet<u32> = walked.iter().copied().collect();
         assert_eq!(unique.len(), pts.len(), "no record appears twice");
     }
@@ -373,7 +382,9 @@ mod tests {
 
         // Three entities at (5, 7), plus neighbours either side.
         add_point(&mut store, &coll, &keys, 1, 1);
-        let bucket: Vec<u32> = (0..3).map(|_| add_point(&mut store, &coll, &keys, 5, 7)).collect();
+        let bucket: Vec<u32> = (0..3)
+            .map(|_| add_point(&mut store, &coll, &keys, 5, 7))
+            .collect();
         add_point(&mut store, &coll, &keys, 9, 9);
 
         let stores = std::slice::from_ref(&store);
@@ -387,7 +398,10 @@ mod tests {
         got.sort_unstable();
         let mut want = bucket.clone();
         want.sort_unstable();
-        assert_eq!(got, want, "the three same-bucket records are one contiguous run");
+        assert_eq!(
+            got, want,
+            "the three same-bucket records are one contiguous run"
+        );
     }
 
     /// D4 — `range` returns exactly the records whose Morton code is in the interval,
@@ -397,7 +411,11 @@ mod tests {
         let mut store = Store::new_in_use(1 << 15);
         let keys = xy_keys();
         let coll_rec = store.claim(1);
-        let coll = DbRef { store_nr: 0, rec: coll_rec, pos: 4 };
+        let coll = DbRef {
+            store_nr: 0,
+            rec: coll_rec,
+            pos: 4,
+        };
         // The full 128-bit Morton code of a point, for the brute-force oracle.
         let code_of = |store: &Store, rec: u32| -> [u64; MAX_AXES] {
             morton_words(2, |a| axis_code(store, rec, &keys[a]))
@@ -422,26 +440,36 @@ mod tests {
                 .collect();
             want.sort_unstable();
             let want_recs: Vec<u32> = want.into_iter().map(|(_, r)| r).collect();
-            assert_eq!(got, want_recs, "range from ({fx},{fy}) must be the code tail in order");
+            assert_eq!(
+                got, want_recs,
+                "range from ({fx},{fy}) must be the code tail in order"
+            );
         }
         let all = range(&coll, stores, &keys, &[-1000, -1000], None, None);
         let capped = range(&coll, stores, &keys, &[-1000, -1000], None, Some(5));
         assert_eq!(capped.len(), 5.min(all.len()));
-        assert_eq!(capped, all[..capped.len()].to_vec(), "limit is a prefix of the full walk");
+        assert_eq!(
+            capped,
+            all[..capped.len()].to_vec(),
+            "limit is a prefix of the full walk"
+        );
     }
 
     /// D3 — the code is order-preserving    /// D3 — the code is order-preserving    /// D3 — the code is order-preserving even across zero: a negative axis must sort
     /// before a positive one, which raw 2's-complement bits would get backwards.
     #[test]
     fn d3_offset_binary_orders_negatives_below_positives() {
-        assert!(
-            axis_code_of(-1) < axis_code_of(0),
-            "-1 must encode below 0"
-        );
+        assert!(axis_code_of(-1) < axis_code_of(0), "-1 must encode below 0");
         assert!(axis_code_of(0) < axis_code_of(1), "0 below 1");
-        assert!(axis_code_of(i64::MIN) < axis_code_of(i64::MAX), "min below max");
+        assert!(
+            axis_code_of(i64::MIN) < axis_code_of(i64::MAX),
+            "min below max"
+        );
         // And a raw cast would NOT: (-1 as u64) is all-ones, the largest.
-        assert!((-1i64 as u64) > (1i64 as u64), "sanity: raw bits are misordered");
+        assert!(
+            (-1i64 as u64) > (1i64 as u64),
+            "sanity: raw bits are misordered"
+        );
     }
 
     fn axis_code_of(v: i64) -> u64 {

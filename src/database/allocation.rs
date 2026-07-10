@@ -5,8 +5,8 @@
 
 use crate::database::{Parts, Stores, WorkerStores};
 use crate::hash;
-use crate::radix_db;
 use crate::keys::DbRef;
+use crate::radix_db;
 use crate::store::Store;
 use crate::tree;
 use crate::vector;
@@ -968,7 +968,8 @@ impl Stores {
         let till = [tx, ty, tz];
         let till_ref = (has_till != 0).then_some(&till[..n]);
         let cap = (limit >= 0).then_some(limit as usize);
-        let recs = crate::radix_db::range(coll, &self.allocations, &keys, &from[..n], till_ref, cap);
+        let recs =
+            crate::radix_db::range(coll, &self.allocations, &keys, &from[..n], till_ref, cap);
         self.build_rec_scratch(coll, &recs)
     }
 
