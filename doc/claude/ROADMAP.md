@@ -38,10 +38,11 @@ The methodology behind this file (categories, no-time-projections, features-need
 >    The **last item of the wide-release bar's gate 1** — the gate the roadmap calls *"the definition
 >    of stabilized, not one item among five."*  Fully designed, **S per copy helper**.  Deliberately a
 >    **work item, not a plan** (the design is settled; a plan issue would be a pointer).
-> 2. **Gate 5 — the stability contract** (semver / compat promise, public bug-intake path, the 1.0
->    line).  Its opening condition ("when gate 1 is in sight") has **fired**, and the failure mode it
->    prevents is already live: `hex_terrain 0.1.0` silently computes a wrong answer against current
->    loft.  No plan.
+> 2. **Gate 5 — the stability contract** (compat promise, expressible version bounds, deprecation
+>    channel, public bug-intake path, the 1.0 line).  Its opening condition ("when gate 1 is in
+>    sight") has **fired**, and the failure mode it prevents is already live: `hex_terrain 0.1.0`
+>    silently computes a wrong answer against current loft.  Opened as
+>    **[@PLN102](https://github.com/loft-lang/plans/issues/102)** (`status:next`).
 > 3. **Drain the fuzz-proof** — @PLN53 F4 (its `LOFT_POISON` blocker is resolved) + @PLN54 S4 LSan.
 >    These are what turn gate 1's silence into *proof by construction*.
 >

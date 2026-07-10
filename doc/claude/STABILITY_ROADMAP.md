@@ -96,11 +96,16 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    never loses the store (@PLN43). Skippable for throwaway prototypes, load-bearing for
    real projects.
 
-5. **A stability contract for scale. ▶ TRIGGER FIRED 2026-07-10 — still no plan.** A stated
+5. **A stability contract for scale. ▶ TRIGGER FIRED 2026-07-10 — plan OPENED as
+   [@PLN102](https://github.com/loft-lang/plans/issues/102)** (`status:next`,
+   [plans/102-stability-contract/](plans/102-stability-contract/README.md)). A stated
    semver / compatibility promise, a **public** bug-intake path (the fix-not-file discipline is
    internal-only and doesn't reach strangers), and a 1.0 line — what is frozen vs still moving.
-   The opening condition was "open one when gate 1 is in sight"; gate 1 is now one refactor away,
-   so **this is due**.
+   The opening condition was "open one when gate 1 is in sight"; gate 1 is now one work item away.
+   **Verified mechanism gap:** `manifest::check_version` honours only a `>=` lower bound — an upper
+   bound, exact pin, caret, or malformed constraint is silently accepted as "any version" — and
+   under calendar versioning (`2026.7.1`) the `>=0.8` that every published library carries is
+   permanently vacuous. So a library *cannot* declare incompatibility even if its author knows.
    **The failure mode it prevents is already live.** `hex_terrain 0.1.0` fails its own registry
    test with `0 land cells`: it uses the plain-bind write-through idiom (`th = t.tr_h; th[i] = v`),
    and loft now **copies on plain bind** (C86 H-Copy), so the heights land in throwaway copies.
