@@ -160,7 +160,7 @@ pub(crate) const TY_ROUTINE: u8 = 16;
 pub(crate) const TY_ITERATOR: u8 = 17;
 pub(crate) const TY_SORTED: u8 = 18;
 pub(crate) const TY_INDEX: u8 = 19;
-pub(crate) const TY_SPACIAL: u8 = 20;
+pub(crate) const TY_RADIX: u8 = 20;
 pub(crate) const TY_HASH: u8 = 21;
 pub(crate) const TY_FUNCTION: u8 = 22;
 pub(crate) const TY_REWRITTEN: u8 = 23;
@@ -198,9 +198,9 @@ pub(crate) const TYSORTED_DEP: u32 = 16;
 pub(crate) const TYINDEX_N: u32 = 8;
 pub(crate) const TYINDEX_KEYS: u32 = 4;
 pub(crate) const TYINDEX_DEP: u32 = 16;
-pub(crate) const TYSPACIAL_N: u32 = 8;
-pub(crate) const TYSPACIAL_NAMES: u32 = 4;
-pub(crate) const TYSPACIAL_DEP: u32 = 16;
+pub(crate) const TYRADIX_N: u32 = 8;
+pub(crate) const TYRADIX_NAMES: u32 = 4;
+pub(crate) const TYRADIX_DEP: u32 = 16;
 pub(crate) const TYHASH_N: u32 = 8;
 pub(crate) const TYHASH_NAMES: u32 = 4;
 pub(crate) const TYHASH_DEP: u32 = 16;
@@ -383,7 +383,7 @@ pub(crate) const PT_SORTED: u8 = 11;
 pub(crate) const PT_ORDERED: u8 = 12;
 pub(crate) const PT_HASH: u8 = 13;
 pub(crate) const PT_INDEX: u8 = 14;
-pub(crate) const PT_SPACIAL: u8 = 15;
+pub(crate) const PT_RADIX: u8 = 15;
 pub(crate) const PT_DB_REF: u8 = 16;
 pub(crate) const PT_CHILD_REC: u8 = 17;
 // `DbParts` field offsets (shared where variant shapes coincide).
@@ -393,9 +393,9 @@ pub(crate) const PTENUMVALUE_VALUE: u32 = 8;
 pub(crate) const PTENUMVALUE_FIELDS: u32 = 4; // vector<DbField>
 pub(crate) const PTNUM_START: u32 = 8; // Byte/Short/Int/ShortRaw (i32)
 pub(crate) const PTNUM_NULLABLE: u32 = 7; // Byte/Short/Int/ShortRaw
-pub(crate) const PTCONTENT: u32 = 8; // Vector/Array/Sorted/Ordered/Hash/Index/Spacial/ChildRec
+pub(crate) const PTCONTENT: u32 = 8; // Vector/Array/Sorted/Ordered/Hash/Index/Radix/ChildRec
 pub(crate) const PTKEYS: u32 = 4; // Sorted/Ordered/Index (vector<KeyField>)
-pub(crate) const PTFIELDS: u32 = 4; // Hash/Spacial (vector<integer>)
+pub(crate) const PTFIELDS: u32 = 4; // Hash/Radix (vector<integer>)
 pub(crate) const PTINDEX_LEFT: u32 = 16;
 
 /// `DbType` (`database::Type`) record — `parents` is derived, not stored.
@@ -485,7 +485,7 @@ pub enum TypeKind {
     Iterator,
     Sorted,
     Index,
-    Spacial,
+    Radix,
     Hash,
     Function,
     Rewritten,
@@ -517,7 +517,7 @@ pub fn type_kind(disc: u8) -> TypeKind {
         TY_ITERATOR => TypeKind::Iterator,
         TY_SORTED => TypeKind::Sorted,
         TY_INDEX => TypeKind::Index,
-        TY_SPACIAL => TypeKind::Spacial,
+        TY_RADIX => TypeKind::Radix,
         TY_HASH => TypeKind::Hash,
         TY_FUNCTION => TypeKind::Function,
         TY_REWRITTEN => TypeKind::Rewritten,
@@ -1201,7 +1201,7 @@ mod tests {
         assert_eq!(disc(ids.ty_iterator), TY_ITERATOR);
         assert_eq!(disc(ids.ty_sorted), TY_SORTED);
         assert_eq!(disc(ids.ty_index), TY_INDEX);
-        assert_eq!(disc(ids.ty_spacial), TY_SPACIAL);
+        assert_eq!(disc(ids.ty_radix), TY_RADIX);
         assert_eq!(disc(ids.ty_hash), TY_HASH);
         assert_eq!(disc(ids.ty_function), TY_FUNCTION);
         assert_eq!(disc(ids.ty_rewritten), TY_REWRITTEN);
@@ -1316,9 +1316,9 @@ mod tests {
         assert_eq!(pos(ids.ty_index, "n"), TYINDEX_N);
         assert_eq!(pos(ids.ty_index, "keys"), TYINDEX_KEYS);
         assert_eq!(pos(ids.ty_index, "dep"), TYINDEX_DEP);
-        assert_eq!(pos(ids.ty_spacial, "n"), TYSPACIAL_N);
-        assert_eq!(pos(ids.ty_spacial, "names"), TYSPACIAL_NAMES);
-        assert_eq!(pos(ids.ty_spacial, "dep"), TYSPACIAL_DEP);
+        assert_eq!(pos(ids.ty_radix, "n"), TYRADIX_N);
+        assert_eq!(pos(ids.ty_radix, "names"), TYRADIX_NAMES);
+        assert_eq!(pos(ids.ty_radix, "dep"), TYRADIX_DEP);
         assert_eq!(pos(ids.ty_hash, "n"), TYHASH_N);
         assert_eq!(pos(ids.ty_hash, "names"), TYHASH_NAMES);
         assert_eq!(pos(ids.ty_hash, "dep"), TYHASH_DEP);
@@ -1486,7 +1486,7 @@ mod tests {
         assert_eq!(disc(ids.pt_ordered), PT_ORDERED);
         assert_eq!(disc(ids.pt_hash), PT_HASH);
         assert_eq!(disc(ids.pt_index), PT_INDEX);
-        assert_eq!(disc(ids.pt_spacial), PT_SPACIAL);
+        assert_eq!(disc(ids.pt_radix), PT_RADIX);
         assert_eq!(disc(ids.pt_db_ref), PT_DB_REF);
         assert_eq!(disc(ids.pt_child_rec), PT_CHILD_REC);
         assert_eq!(pos(ids.pt_struct, "fields"), PTSTRUCT_FIELDS);
@@ -1506,7 +1506,7 @@ mod tests {
             ids.pt_ordered,
             ids.pt_hash,
             ids.pt_index,
-            ids.pt_spacial,
+            ids.pt_radix,
             ids.pt_child_rec,
         ] {
             assert_eq!(pos(v, "content"), PTCONTENT);
@@ -1514,7 +1514,7 @@ mod tests {
         for v in [ids.pt_sorted, ids.pt_ordered, ids.pt_index] {
             assert_eq!(pos(v, "keys"), PTKEYS);
         }
-        for v in [ids.pt_hash, ids.pt_spacial] {
+        for v in [ids.pt_hash, ids.pt_radix] {
             assert_eq!(pos(v, "fields"), PTFIELDS);
         }
         assert_eq!(pos(ids.pt_index, "left"), PTINDEX_LEFT);

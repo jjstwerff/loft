@@ -32,7 +32,9 @@ The runtime data layer is split across multiple source files that together imple
 | `src/vector.rs` | Dynamic arrays: by-value (Vector), by-reference (Array/Ordered) |
 | `src/tree.rs` | Left-leaning red-black tree for `sorted<T>` / `index<T>` |
 | `src/hash.rs` | Open-addressing hash table for `hash<T>` / `index<T>` by hash |
-| `src/radix_tree.rs` | Radix tree for `spacial<T>` (partially implemented) |
+| `src/radix_tree.rs` | Store-backed binary PATRICIA/radix tree over an abstract bit-key oracle (backs `spacial<T>`) |
+| `src/radix_db.rs` | DB↔tree bridge: Morton/Z-order key interleaving + range/proximity primitives for `spacial<T>` |
+| `src/spatial.rs` | Morton-coded near/within/nearest geometry algorithms used by `src/radix_db.rs` |
 
 ---
 
@@ -179,7 +181,7 @@ pub struct Type {
 | `Ordered(u16, Vec<(u16,bool)>)` | Ordered array (binary search) by key fields |
 | `Hash(u16, Vec<u16>)` | Open-addressing hash table; field indices as hash keys |
 | `Index(u16, Vec<(u16,bool)>, u16)` | Combo: sorted tree + hash table for a single collection |
-| `Spacial(u16, Vec<u16>)` | Spatial index (future) |
+| `Radix(u16, Vec<u16>)` | Spatial index for `spacial<T[x,y]>` / `spacial<T[x,y,z]>` — Morton/Z-order radix tree, 1–3 coordinate axes (renamed from `Spacial`) |
 
 ### Field struct
 
@@ -636,9 +638,44 @@ An element at `idx` with ideal slot `ideal` moves to `hole` when `d_hole < d_idx
 
 ## Spatial Index (`src/radix_tree.rs`)
 
-The `Spacial(u16, Vec<u16>)` variant of `Parts` is the schema-level marker for a spatial index collection. Its planned backing structure is a **radix tree** implemented in `src/radix_tree.rs`.
+`spacial<T[x,y]>` / `spacial<T[x,y,z]>` (@PLN48) is a fully implemented keyed
+collection on both backends (interpreter + `--native`). The `Radix(u16,
+Vec<u16>)` variant of `Parts` is the schema-level marker — content type nr
+plus the coordinate key field indices; the runtime `Type::Radix(content,
+coord_fields, deps)` (`src/data.rs`) mirrors it. This was renamed from
+`Spacial` to `Radix` (storage-honest — the language keyword stays `spacial`).
 
-The radix tree is partially implemented (inserts and finds work; iteration and removal are stubs). See `doc/claude/INTERNALS.md` for the full API and record layout. The `Spacial` type is reserved in the schema today but not yet wired to the radix tree operations in the interpreter. See [INTERNALS.md](INTERNALS.md) for the full API and record layout.
+The backing structure is a **store-backed binary PATRICIA/radix tree**
+(`src/radix_tree.rs`) over an abstract bit-key oracle. `src/radix_db.rs` is
+the DB↔tree bridge: it interleaves the coordinate axes into a **Morton /
+Z-order** key and implements `add`/`find`/`remove`/`count`/`records`/`range`.
+`src/spatial.rs` holds the underlying near/within/nearest geometry algorithms
+`radix_db.rs` builds on.
+
+**Dimensionality: 1 to 3 coordinate axes** (`MAX_AXES = 3` in
+`src/radix_db.rs`). The parser rejects a `spacial<T[a,b,c,d]>` with more than
+3 axes with a diagnostic (*"spacial<T[…] > supports at most 3 coordinate
+axes, got N"*); a bare `spacial<T>` with no key fields is also rejected
+(*"needs coordinate key fields"*). See `tests/parse_errors.rs::spacial_needs_coordinate_keys`
+and `::spacial_rejects_more_than_three_axes`.
+
+Supported operations, all working on both backends:
+- **Construct**: `xs: spacial<Mob[x, y]> = [];`, including as a struct field.
+- **Append**: `xs += [Mob{x: 1, y: 2}];`.
+- **Iterate**: `for m in xs { … }` — yields records in the tree's natural
+  Morton/Z-order (no sort, unlike `hash`).
+- **Length**: `xs.len()` — O(1), reads the tree's cached length word.
+- **Range slices** — the language surface for proximity queries (no
+  `.near`/`.within`/`.nearest` methods; spacial reuses ordinary slicing):
+  `xs[(x,y)..]` (open outward walk, caller `break`s), `xs[(x,y)..:n]` (capped
+  at `n`), and `xs[(x1,y1)..(x2,y2)]` (bounding-box). All three are the raw
+  Morton-code interval — a bounding box is a *superset* of the geometric box
+  (Z-order threads through codes outside it), so the caller filters or breaks
+  as needed, same as any other keyed range slice. Slices carry up to 3 axes.
+
+See [INTERNALS.md](INTERNALS.md) for the full radix-tree API and record
+layout, and [plans/48-spacial-index/README.md](plans/48-spacial-index/README.md)
+for the design history.
 
 ---
 
@@ -658,7 +695,7 @@ loft runtime value
                             ├── Vector layout   → src/vector.rs
                             ├── Sorted/Index    → src/tree.rs  (+ src/vector.rs for Ordered)
                             ├── Hash            → src/hash.rs
-                            ├── Spacial         → src/radix_tree.rs (partial)
+                            ├── Radix           → src/radix_tree.rs + src/radix_db.rs
                             └── Key comparison  → src/keys.rs
 ```
 

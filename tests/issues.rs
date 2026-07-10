@@ -1007,7 +1007,7 @@ struct Container { data: sorted<Sort[nr]> }"
 
 // ── S4: Binary I/O type coverage ─────────────────────────────────────────────
 // read_data / write_data panic with "Not implemented" for Array / Sorted /
-// Ordered / Hash / Index / Spacial / Base — should be improved.
+// Ordered / Hash / Index / Radix / Base — should be improved.
 
 // S4: writing a struct with a `sorted<T>` field must be rejected at parse time
 // with a clear message pointing the user to plain structs for serialisation.
@@ -5212,17 +5212,12 @@ fn run() -> text {
 
 // ── P22: spacial<T> diagnostic wording (FIXED) ─────────────────────────
 //
-// `spacial<T>` is reserved for the planned 1.1+ ordered-spatial
-// collection.  Today it's not implemented; the parser has a bespoke
-// diagnostic that names the feature, the milestone, and the
-// substitute (`sorted<T>` / `index<T>`) so users who guess the
-// keyword get a useful answer rather than "unknown type".
-//
-// This test guards the wording — the diagnostic must mention BOTH
-// the milestone (so users know when to retry) AND the substitute
-// (so they know what to use today).
+// @PLN48 S2: `spacial<T[x, y]>` now works (the radix tree), so the old
+// "planned 1.1+" gate is gone.  A `spacial<T>` written WITHOUT its coordinate
+// key fields is still an error — a spatial index needs coordinates — with a
+// diagnostic that shows the correct bracket-key syntax.
 #[test]
-fn p22_spacial_diagnostic_names_milestone_and_substitute() {
+fn p22_spacial_without_keys_names_the_bracket_syntax() {
     code!(
         "struct Point { x: float not null, y: float not null }
 struct World { items: spacial<Point> }
@@ -5231,8 +5226,8 @@ fn test() {
 }"
     )
     .error(
-        "spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups \
-at p22_spacial_diagnostic_names_milestone_and_substitute:2:39",
+        "spacial<T[x, y]> needs coordinate key fields, e.g. spacial<Mob[x, y]> \
+at p22_spacial_without_keys_names_the_bracket_syntax:2:39",
     );
 }
 
@@ -11262,7 +11257,7 @@ fn test() {
 // collection locals.  After P188, `gen_set_first_keyed_null` (bytecode) and
 // `emit_null_dbref`'s sorted/hash/index/spacial arm (native) allocate the
 // store and zero the root pointer; subsequent `+= T {...}` operations grow
-// the collection in place via record_new's Parts::Sorted/Hash/Index/Spacial
+// the collection in place via record_new's Parts::Sorted/Hash/Index/Radix
 // dispatch.
 #[test]
 fn p188_sorted_local_via_plus_equals() {
@@ -11584,7 +11579,7 @@ fn p189b_vector_tuple_for_loop_int_text() {
 ///   to `Set(v, Null)` for keyed-collection types so codegen's
 ///   gen_set_first_keyed_null fires at the declaration site.
 /// - `data.rs::heap_dep` and `scopes.rs::get_free_vars` now
-///   recognise Sorted/Hash/Index/Spacial as heap-owned, so
+///   recognise Sorted/Hash/Index/Radix as heap-owned, so
 ///   scope-exit `OpFreeRef` is emitted (no more "stores not
 ///   freed" warnings on program exit).
 #[test]

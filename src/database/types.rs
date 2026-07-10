@@ -130,7 +130,7 @@ impl Stores {
         | Parts::Ordered(c, _)
         | Parts::Hash(c, _)
         | Parts::Index(c, _, _)
-        | Parts::Spacial(c, _) = self.types[content as usize].parts
+        | Parts::Radix(c, _) = self.types[content as usize].parts
         {
             // A dead `main_vector<unknown>` wrapper — left over when a vector's
             // element type was an unresolved cross-package forward reference on
@@ -209,7 +209,7 @@ impl Stores {
             | Parts::Sorted(c, _)
             | Parts::Index(c, _, _)
             | Parts::Hash(c, _)
-            | Parts::Spacial(c, _) => c,
+            | Parts::Radix(c, _) => c,
             _ => u16::MAX,
         }
     }
@@ -275,7 +275,7 @@ impl Stores {
                 for f in fields {
                     match self.types[f.content as usize].parts {
                         Parts::Vector(v) | Parts::Sorted(v, _) => vectors.insert(v),
-                        Parts::Hash(r, _) | Parts::Spacial(r, _) | Parts::Index(r, _, _) => {
+                        Parts::Hash(r, _) | Parts::Radix(r, _) | Parts::Index(r, _, _) => {
                             linked.insert(r)
                         }
                         _ => false,
@@ -533,7 +533,11 @@ impl Stores {
     pub(super) fn determine_keys(&mut self) {
         for t_nr in 0..self.types.len() {
             match self.types[t_nr].parts.clone() {
-                Parts::Hash(c, key_fields) => {
+                // Hash and Radix both key on a bare `Vec<u16>` of ascending field
+                // numbers.  Radix's key positions are what the Morton oracle reads
+                // (@PLN48 S2): each coordinate axis is one entry, interleaved in list
+                // order.
+                Parts::Hash(c, key_fields) | Parts::Radix(c, key_fields) => {
                     self.types[t_nr].keys.clear();
                     for key_field in key_fields {
                         if let Some((content, position)) = self.key_field(c, key_field) {
@@ -595,7 +599,7 @@ impl Stores {
     /// positions per `calc::calculate_positions`'s alignment-aware
     /// reordering).
     ///
-    /// For Sorted/Hash/Index/Spacial: also shows the content struct's
+    /// For Sorted/Hash/Index/Radix: also shows the content struct's
     /// layout indented underneath, since those types' bookkeeping
     /// lives inside the content struct.
     #[must_use]
@@ -630,7 +634,7 @@ impl Stores {
             Parts::Ordered(_, _) => "ordered",
             Parts::Hash(_, _) => "hash",
             Parts::Index(_, _, _) => "index",
-            Parts::Spacial(_, _) => "spacial",
+            Parts::Radix(_, _) => "spacial",
             _ => "<other>",
         };
         let _ = writeln!(
@@ -645,7 +649,7 @@ impl Stores {
         | Parts::Sorted(c, _)
         | Parts::Ordered(c, _)
         | Parts::Hash(c, _)
-        | Parts::Spacial(c, _) = t.parts
+        | Parts::Radix(c, _) = t.parts
         {
             let _ = writeln!(
                 out,
@@ -775,7 +779,7 @@ impl Stores {
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
                 | Parts::Index(_, _, _)
-                | Parts::Spacial(_, _) => {
+                | Parts::Radix(_, _) => {
                     self.validate_layout_by_nr(tp as u16, &mut visited, &mut issues);
                 }
                 _ => {}
@@ -856,7 +860,7 @@ impl Stores {
             | Parts::Sorted(c, _)
             | Parts::Ordered(c, _)
             | Parts::Hash(c, _)
-            | Parts::Spacial(c, _) => {
+            | Parts::Radix(c, _) => {
                 self.validate_layout_by_nr(*c, visited, issues);
             }
             Parts::Index(c, _, left_field_nr) => {
@@ -1158,7 +1162,7 @@ impl Stores {
         } else {
             let num = self.types.len() as u16;
             self.types
-                .push(Type::data(&name, Parts::Spacial(content, key_nrs)));
+                .push(Type::data(&name, Parts::Radix(content, key_nrs)));
             self.names.insert(name, num);
             num
         }
@@ -1735,7 +1739,7 @@ impl Stores {
                 | Parts::Ordered(e, _)
                 | Parts::Hash(e, _)
                 | Parts::Index(e, _, _)
-                | Parts::Spacial(e, _) => refs.push(*e),
+                | Parts::Radix(e, _) => refs.push(*e),
                 Parts::ChildRec(c) => refs.push(*c),
                 // A plain variant (no data) keeps `known_type == u16::MAX`;
                 // only data-carrying variants have an `EnumValue` type to reach.
@@ -1809,7 +1813,7 @@ impl Stores {
                     self.size(*e)
                 )
             }
-            Parts::Spacial(e, keys) => {
+            Parts::Radix(e, keys) => {
                 format!(
                     "spacial<{}>(keys={keys:?},elem_size={})",
                     name(*e),
@@ -2192,7 +2196,7 @@ impl Type {
             | Parts::Hash(c, _)
             | Parts::Index(c, _, _)
             | Parts::ChildRec(c)
-            | Parts::Spacial(c, _) => c == tp,
+            | Parts::Radix(c, _) => c == tp,
             _ => false,
         }
     }
@@ -2564,6 +2568,32 @@ mod layout_tests {
                 s.types[tp as usize].name
             )
         }
+    }
+
+    #[test]
+    fn spacial_registers_its_coordinate_keys() {
+        // @PLN48 S2: a `spacial<Mob[x, y]>` must resolve its two coordinate fields to
+        // `keys`, in list order, exactly as a `hash` does — that list is what the
+        // Morton oracle interleaves.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("Mob", 0);
+        s.field(tp, "x", int_c);
+        s.field(tp, "y", int_c);
+        let sp = s.spacial(tp, &["x".to_string(), "y".to_string()]);
+        s.finish();
+
+        let keys = &s.types[sp as usize].keys;
+        assert_eq!(keys.len(), 2, "two axes → two keys");
+        // Ascending (positive type_nr), and x precedes y in interleave order.
+        assert!(
+            keys.iter().all(|k| k.type_nr > 0),
+            "spatial keys are ascending"
+        );
+        assert!(
+            keys[0].position < keys[1].position,
+            "x must resolve to an earlier field than y"
+        );
     }
 
     #[test]

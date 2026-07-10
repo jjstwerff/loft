@@ -1445,7 +1445,7 @@ impl Parser {
                     Type::Hash(c, _, _)
                     | Type::Sorted(c, _, _)
                     | Type::Index(c, _, _)
-                    | Type::Spacial(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
+                    | Type::Radix(c, _, _) => Type::Reference(*c, Deps::share_sentinel()),
                     Type::Vector(elm, _) => {
                         Type::Reference(self.data.type_elm(elm), Deps::share_sentinel())
                     }
@@ -2443,7 +2443,7 @@ impl Parser {
                 let c = self.data.def(*td).known_type();
                 (c != u16::MAX).then(|| self.database.index(c, key))
             }
-            Some(Type::Spacial(td, key, _)) => {
+            Some(Type::Radix(td, key, _)) => {
                 let c = self.data.def(*td).known_type();
                 (c != u16::MAX).then(|| self.database.spacial(c, key))
             }
@@ -2918,6 +2918,23 @@ impl Parser {
                 }
                 self.database.hash(c_tp, key)
             }
+            Type::Radix(tp, key, _) => {
+                // @PLN48 — mirror Hash: resolve the spacial<T[…]> db type id, and
+                // register it on demand for a local-only var (whose type would else
+                // be absent from the schema, so iteration/`get_type` sees u16::MAX).
+                let mut name = "spacial<".to_string() + self.data.def(*tp).name() + "[";
+                self.database
+                    .field_name(self.data.def(*tp).known_type(), key, &mut name);
+                let r = self.database.name(&name);
+                if r != u16::MAX {
+                    return r;
+                }
+                let c_tp = self.data.def(*tp).known_type();
+                if c_tp == u16::MAX {
+                    return u16::MAX;
+                }
+                self.database.spacial(c_tp, key)
+            }
             Type::Sorted(tp, key, _) => {
                 let mut name = "sorted<".to_string() + self.data.def(*tp).name() + "[";
                 field_id(key, &mut name);
@@ -3103,7 +3120,7 @@ fn cell_value_type(tp: &Type) -> Type {
 ///   - `Type::Enum(_, false, _)` (plain enum)
 ///
 /// Reference / Function / Vector / Hash / Sorted / Index /
-/// Spacial / Tuple captures are NOT scalars — they're handled by
+/// Radix / Tuple captures are NOT scalars — they're handled by
 /// other paths (Reference: phase 02c; Function: phase 02c via
 /// existing fn-ref machinery; Vector + keyed: rejected by P257).
 ///

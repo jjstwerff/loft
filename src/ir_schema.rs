@@ -88,7 +88,7 @@ fn write_sort_keys(out: &mut String, keys: &[(String, bool)]) {
     out.push(']');
 }
 
-/// Encode a `Vec<String>` name list (`Spacial` / `Hash`).
+/// Encode a `Vec<String>` name list (`Radix` / `Hash`).
 fn write_str_list(out: &mut String, names: &[String]) {
     out.push('[');
     for (i, name) in names.iter().enumerate() {
@@ -197,8 +197,8 @@ fn write_type(out: &mut String, ty: &Type) {
             write_u16_list(out, dep);
             out.push('}');
         }
-        Type::Spacial(n, names, dep) => {
-            let _ = write!(out, "{{\"k\":\"Spacial\",\"n\":{n},\"names\":");
+        Type::Radix(n, names, dep) => {
+            let _ = write!(out, "{{\"k\":\"Radix\",\"n\":{n},\"names\":");
             write_str_list(out, names);
             out.push_str(",\"dep\":");
             write_u16_list(out, dep);
@@ -412,7 +412,7 @@ fn type_from_parsed(p: &Parsed) -> Result<Type, TypeDecodeError> {
             sort_keys(field(p, "keys")?)?,
             deps(field(p, "dep")?)?,
         ),
-        "Spacial" => Type::Spacial(
+        "Radix" => Type::Radix(
             as_u32(field(p, "n")?)?,
             str_list(field(p, "names")?)?,
             deps(field(p, "dep")?)?,
@@ -1548,7 +1548,7 @@ mod tests {
                 Deps::unknown(vec![1]),
             ),
             Type::Index(3, vec![("key".into(), true)], Deps::none()),
-            Type::Spacial(3, vec!["x".into(), "y".into()], Deps::unknown(vec![1])),
+            Type::Radix(3, vec!["x".into(), "y".into()], Deps::unknown(vec![1])),
             Type::Hash(3, vec!["id".into()], Deps::none()),
             Type::Function(
                 vec![Type::Integer(IntegerSpec::wide()), Type::Text(Deps::none())],

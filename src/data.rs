@@ -966,7 +966,7 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Spacial(_, _, _) => Value::Int(0),
+        | Type::Radix(_, _, _) => Value::Int(0),
         Type::Single => Value::Single(0.0),
         Type::Float => Value::Float(0.0),
         Type::Text(_) => Value::Text(String::new()),
@@ -1345,7 +1345,7 @@ pub enum Type {
     /// An index towards other records. The key is [field name, ascending]
     Index(u32, Vec<(String, bool)>, Deps), // @F9 — index<T[keys]> B-tree (asc/desc, multi-key)
     /// An index towards other records. The second is [field name]
-    Spacial(u32, Vec<String>, Deps),
+    Radix(u32, Vec<String>, Deps),
     /// A hash table towards other records. The second is the hash function per [field name].
     Hash(u32, Vec<String>, Deps), // @F7 — hash<T[keys]> keyed collection
     /// A function reference allowing for closures. Argument types, result, and deps.
@@ -1424,7 +1424,7 @@ impl Type {
             | Type::Routine(_)
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
             | Type::Hash(_, _, _) => {}
         }
     }
@@ -1458,14 +1458,14 @@ impl Type {
                 | Type::Routine(d)
                 | Type::Sorted(d, _, _)
                 | Type::Index(d, _, _)
-                | Type::Spacial(d, _, _)
+                | Type::Radix(d, _, _)
                 | Type::Hash(d, _, _) if *d == d_nr)
         })
     }
 
     /// Returns the dep list if this is a heap-allocated, store-backed type
     /// (Reference, Vector, struct-enum with is_ref=true, or any keyed
-    /// collection: Sorted/Hash/Index/Spacial — each `gen_set_first_keyed_null`
+    /// collection: Sorted/Hash/Index/Radix — each `gen_set_first_keyed_null`
     /// allocates a fresh store via `OpDatabase` that needs scope-exit
     /// `OpFreeRef` cleanup).
     /// Use this instead of manual pattern matches to avoid forgetting an arm.
@@ -1478,7 +1478,7 @@ impl Type {
             | Type::Sorted(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Index(_, _, dep)
-            | Type::Spacial(_, _, dep) => Some(dep),
+            | Type::Radix(_, _, dep) => Some(dep),
             _ => None,
         }
     }
@@ -1530,7 +1530,7 @@ impl Type {
             Type::Reference(t, _) => Type::Reference(*t, v),
             Type::Enum(t, is_ref, _) => Type::Enum(*t, *is_ref, v),
             Type::Index(t, keys, _) => Type::Index(*t, keys.clone(), v),
-            Type::Spacial(t, keys, _) => Type::Spacial(*t, keys.clone(), v),
+            Type::Radix(t, keys, _) => Type::Radix(*t, keys.clone(), v),
             Type::Hash(t, keys, _) => Type::Hash(*t, keys.clone(), v),
             Type::Sorted(t, keys, _) => Type::Sorted(*t, keys.clone(), v),
             Type::Vector(t, _) => Type::Vector(Box::new(*t.clone()), v),
@@ -1557,7 +1557,7 @@ impl Type {
             Type::Text(dep)
             | Type::Reference(_, dep)
             | Type::Index(_, _, dep)
-            | Type::Spacial(_, _, dep)
+            | Type::Radix(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Sorted(_, _, dep)
             | Type::Enum(_, _, dep)
@@ -1576,7 +1576,7 @@ impl Type {
             Type::Text(dep)
             | Type::Reference(_, dep)
             | Type::Index(_, _, dep)
-            | Type::Spacial(_, _, dep)
+            | Type::Radix(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Sorted(_, _, dep)
             | Type::Enum(_, _, dep)
@@ -1604,7 +1604,7 @@ impl Type {
     pub fn content(&self) -> Type {
         match self {
             Type::Index(tp, _, dep)
-            | Type::Spacial(tp, _, dep)
+            | Type::Radix(tp, _, dep)
             | Type::Hash(tp, _, dep)
             | Type::Sorted(tp, _, dep) => Type::Reference(*tp, dep.clone()),
             Type::Vector(tp, _) => *tp.clone(),
@@ -1652,7 +1652,7 @@ impl Type {
             (Type::Reference(r, _), Type::Reference(o, _)) => return r == o,
             (Type::Vector(r, _), Type::Vector(o, _)) => return r.is_equal(o),
             (Type::Hash(r, rf, _), Type::Hash(o, of, _))
-            | (Type::Spacial(r, rf, _), Type::Spacial(o, of, _)) => return r == o && rf == of,
+            | (Type::Radix(r, rf, _), Type::Radix(o, of, _)) => return r == o && rf == of,
             (Type::Sorted(r, rf, _), Type::Sorted(o, of, _))
             | (Type::Index(r, rf, _), Type::Index(o, of, _)) => return r == o && rf == of,
             (Type::Function(sp, sr, _), Type::Function(op, or, _)) => {
@@ -1702,7 +1702,7 @@ impl Type {
             }
             Type::Hash(tp, key, _) => format!("hash<{},{key:?}>", data.def(*tp).name),
             Type::Index(tp, key, _) => format!("index<{},{key:?}>", data.def(*tp).name),
-            Type::Spacial(tp, key, _) => {
+            Type::Radix(tp, key, _) => {
                 format!("spacial<{},{key:?}>", data.def(*tp).name)
             }
             Type::Routine(tp) => format!("fn {}[{tp}]", data.def(*tp).name),
@@ -1780,7 +1780,7 @@ impl Type {
                 data.def(*tp).name,
                 Self::dep_var(dep, vars)
             ),
-            Type::Spacial(tp, key, dep) => {
+            Type::Radix(tp, key, dep) => {
                 format!(
                     "spacial<{},{key:?}>{}",
                     data.def(*tp).name,
@@ -1866,7 +1866,7 @@ impl Type {
 ///
 /// Lifetime-bearing = goes through `text_return` / `ref_return` as a
 /// direct function return today: Text, Reference, Vector, Enum-struct,
-/// Sorted / Hash / Index / Spacial keyed collections, RefVar.  Tuples
+/// Sorted / Hash / Index / Radix keyed collections, RefVar.  Tuples
 /// recursively inherit the concern from any element.
 ///
 /// Pure-value tuples (every element is a scalar value type — Integer,
@@ -1884,7 +1884,7 @@ pub fn has_lifetime_concern(t: &Type) -> bool {
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
             | Type::RefVar(_)
     ) || matches!(t, Type::Tuple(elems) if elems.iter().any(has_lifetime_concern))
 }
@@ -1916,7 +1916,7 @@ pub fn element_align(t: &Type) -> u8 {
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Spacial(_, _, _)
+        | Type::Radix(_, _, _)
         | Type::Enum(_, true, _) => 4,
         Type::Tuple(elems) => element_offsets_alignment_max(elems),
         _ => 1,
@@ -1957,7 +1957,7 @@ pub fn element_size(t: &Type) -> usize {
         | Type::Sorted(_, _, _)
         | Type::Index(_, _, _)
         | Type::Hash(_, _, _)
-        | Type::Spacial(_, _, _)
+        | Type::Radix(_, _, _)
         | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
         Type::Tuple(elems) => {
             // Atomic-group size: each element padded to its natural-
@@ -2144,7 +2144,7 @@ pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
             | Type::Enum(_, true, _) => {
                 result.push((offsets[i], i));
             }
@@ -4131,7 +4131,7 @@ impl Data {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Hash(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
                 | Type::Enum(_, true, _) => 4, // DbRef alignment
                 Type::Tuple(_) => 8, // conservative max
                 _ => 1,
@@ -4877,6 +4877,7 @@ impl Data {
             Type::Sorted(_, _, _) => self.source_nr(0, "sorted"),
             Type::Index(_, _, _) => self.source_nr(0, "index"),
             Type::Hash(_, _, _) => self.source_nr(0, "hash"),
+            Type::Radix(_, _, _) => self.source_nr(0, "spacial"),
             // P189: look up the synthetic tuple struct registered by
             // `tuple_def` at parse time.  Returns u32::MAX if the
             // tuple shape was never registered (caller must register
@@ -4922,9 +4923,10 @@ impl Data {
                     self.type_def_nr(tp)
                 }
             }
-            Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Hash(_, _, _) => {
-                self.source_nr(0, "reference")
-            }
+            Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Radix(_, _, _) => self.source_nr(0, "reference"),
             // P189: tuple element types resolve to the synthetic
             // tuple struct registered by `tuple_def`.  Same lookup
             // as `type_def_nr`'s Tuple arm.
@@ -4971,7 +4973,7 @@ impl Data {
             }
             Type::Iterator(inner, _) => format!("iterator<{}>", self.type_name_str(inner)),
             Type::Rewritten(inner) => self.type_name_str(inner),
-            Type::Spacial(d_nr, _, _) => format!("spacial<{}>", self.def(*d_nr).name),
+            Type::Radix(d_nr, _, _) => format!("spacial<{}>", self.def(*d_nr).name),
             Type::Tuple(elems) => {
                 let es: Vec<String> = elems.iter().map(|e| self.type_name_str(e)).collect();
                 format!("({})", es.join(", "))

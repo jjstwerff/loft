@@ -1,0 +1,50 @@
+// @PLN48 S3 — spacial range slicing (no methods, no new functions): the bounding
+// box `xs[(x1,y1)..(x2,y2)]`, the open outward walk `xs[(x,y)..]` with a break, and
+// the count-limited `xs[(x,y)..:n]`.  Both backends, Morton order.  2D and 3D — the
+// slice ABI carries up to MAX_AXES (3) coordinate axes.
+struct SLMob { x: integer, y: integer }
+struct SLMob3 { x: integer, y: integer, z: integer }
+
+fn main() {
+  xs: spacial<SLMob[x, y]> = [];
+  xs += [SLMob{x: 5,  y: 5}];
+  xs += [SLMob{x: 1,  y: 1}];
+  xs += [SLMob{x: 8,  y: 8}];
+  xs += [SLMob{x: 50, y: 50}];
+  assert(xs.len() == 4, "len counts every inserted record");
+
+  // bounding box (0,0)..(10,10): (1,1),(5,5),(8,8) — 3, excludes (50,50).
+  boxn: integer = 0;
+  for m in xs[(0,0)..(10,10)] { boxn += 1; }
+  assert(boxn == 3, "2D box (0,0)..(10,10) holds 3 of 4");
+
+  // open from (5,5).., break after 2 — approximate outward walk.
+  seen: integer = 0;
+  for m in xs[(5,5)..] {
+    seen += 1;
+    if seen == 2 { break; }
+  }
+  assert(seen == 2, "open walk breaks after 2");
+
+  // limited from (0,0)..:1 — at most one record.
+  lim: integer = 0;
+  for m in xs[(0,0)..:1] { lim += 1; }
+  assert(lim == 1, "limit :1 yields one record");
+
+  // 3D — the same slice forms carry a third axis.
+  ps: spacial<SLMob3[x, y, z]> = [];
+  ps += [SLMob3{x: 1, y: 1, z: 1}];
+  ps += [SLMob3{x: 2, y: 2, z: 2}];
+  ps += [SLMob3{x: 8, y: 8, z: 8}];
+  assert(ps.len() == 3, "3D len");
+
+  box3: integer = 0;
+  for p in ps[(0,0,0)..(3,3,3)] { box3 += 1; }
+  assert(box3 == 2, "3D box (0,0,0)..(3,3,3) holds 2 of 3");
+
+  cap3: integer = 0;
+  for p in ps[(0,0,0)..:2] { cap3 += 1; }
+  assert(cap3 == 2, "3D limit :2");
+
+  print("box={boxn} walk={seen} lim={lim} box3={box3} cap3={cap3}\n");
+}

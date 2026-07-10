@@ -210,6 +210,9 @@ impl Stores {
                 }
             }
             Parts::Hash(_, _) => hash::find(data, &self.allocations, self.keys(db), key),
+            Parts::Radix(_, _) => {
+                crate::radix_db::find(data, &self.allocations, self.keys(db), key)
+            }
             Parts::Index(rec_nr, _, left_field) => {
                 self.find_index(data, *rec_nr, *left_field, db, key)
             }
@@ -222,8 +225,7 @@ impl Stores {
             | Parts::ShortRaw(_, _)
             | Parts::Int(_, _)
             | Parts::DbRef
-            | Parts::ChildRec(_)
-            | Parts::Spacial(_, _) => panic!(
+            | Parts::ChildRec(_) => panic!(
                 "find called on non-collection type: {} (db={})",
                 self.types[db as usize].name, db
             ),
@@ -404,7 +406,7 @@ impl Stores {
             | Parts::DbRef
             | Parts::ChildRec(_)
             | Parts::Hash(_, _)
-            | Parts::Spacial(_, _) => panic!(
+            | Parts::Radix(_, _) => panic!(
                 "Undefined iterate on non-collection type: {} (db={})",
                 self.types[db as usize].name, db
             ),
@@ -557,6 +559,10 @@ impl Stores {
                 let keys = self.keys(db).to_vec();
                 tree::remove(data, rec, left, &mut self.allocations, &keys);
             }
+            Parts::Radix(_, _) => {
+                let keys = self.keys(db).to_vec();
+                crate::radix_db::remove(data, rec, &mut self.allocations, &keys);
+            }
             Parts::Base
             | Parts::Struct(_)
             | Parts::Enum(_)
@@ -566,8 +572,7 @@ impl Stores {
             | Parts::ShortRaw(_, _)
             | Parts::Int(_, _)
             | Parts::DbRef
-            | Parts::ChildRec(_)
-            | Parts::Spacial(_, _) => panic!(
+            | Parts::ChildRec(_) => panic!(
                 "remove called on non-collection type: {} (db={})",
                 self.types[db as usize].name, db
             ),

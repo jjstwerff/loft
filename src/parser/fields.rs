@@ -677,7 +677,7 @@ impl Parser {
             if self.parse_text_index(code, &mut p, &index_t) == Type::Character {
                 elm_type = Type::Character;
             }
-        } else if let Type::Hash(el, keys, _) | Type::Spacial(el, keys, _) = &t {
+        } else if let Type::Hash(el, keys, _) | Type::Radix(el, keys, _) = &t {
             // @PLN25 E2 — key fields live in the `Some` variant when the element was
             // rewritten to `__nullable<S>`; resolve names against the key-bearing def.
             let el = crate::typedef::key_bearing_def(&self.data, *el);
@@ -685,7 +685,18 @@ impl Parser {
             for k in keys {
                 key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
-            self.parse_key(code, &t, &key_types);
+            // @PLN48 S3 — a `spacial` RANGE SLICE `xs[(fx,fy)..(tx,ty)]` /
+            // `xs[(fx,fy)..:n]` / `xs[(fx,fy)..]`: iterate the records whose Morton
+            // code is in the interval (a bounding box is the raw code interval), in
+            // natural order.  Lowers to `n_spacial_range(xs, tp, fx, fy, has_till, tx,
+            // ty, limit)` — the same scratch path as iteration — and returns the Radix
+            // type so `parse_for` iterates the already-built scratch.  A `(` opens the
+            // coordinate tuple.
+            if matches!(t, Type::Radix(_, _, _)) && self.lexer.peek_token("(") {
+                elm_type = self.parse_spacial_slice(code, &t, &key_types);
+            } else {
+                self.parse_key(code, &t, &key_types);
+            }
             // @P285 — a keyed-collection lookup RESULT is nullable (an absent
             // key returns the null record).  `parse_key` parsed the KEY last,
             // so `expr_not_null` still reflects the key (e.g. a `not null`
@@ -701,7 +712,7 @@ impl Parser {
                 key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
             self.parse_key(code, &t, &key_types);
-            // @P285 — see the Hash/Spacial arm above; the lookup result is nullable.
+            // @P285 — see the Hash/Radix arm above; the lookup result is nullable.
             self.expr_not_null = false;
             self.expr_not_null_name.clear();
         } else if t.is_unknown() {
@@ -773,7 +784,7 @@ impl Parser {
         } else if let Type::Sorted(d_nr, _, _)
         | Type::Hash(d_nr, _, _)
         | Type::Index(d_nr, _, _)
-        | Type::Spacial(d_nr, _, _) = t
+        | Type::Radix(d_nr, _, _) = t
         {
             let ret = self.data.def(*d_nr).returned().clone();
             // S16b: struct-enum variants have .returned = Type::Enum(parent, true, []).
@@ -1084,6 +1095,89 @@ impl Parser {
         }
     }
 
+    /// @PLN48 S3 — parse a `spacial` range slice `xs[(fx,fy)..(tx,ty)]`,
+    /// `xs[(fx,fy)..:n]`, or the open `xs[(fx,fy)..]`, and lower it to an
+    /// `n_spacial_range` scratch-builder call.  Returns the Radix `typedef` so the
+    /// enclosing `for` iterates the scratch it builds.  `(` has already been peeked.
+    fn parse_spacial_slice(
+        &mut self,
+        code: &mut Value,
+        typedef: &Type,
+        key_types: &[Type],
+    ) -> Type {
+        // Parse a `(c0, c1, …)` coordinate tuple with exactly one value per axis of the
+        // collection (`key_types.len()`), padded to MAX_AXES with `0` for the fixed-arity
+        // `n_spacial_range` call.  The collection's own axis count drives how many the
+        // range builder reads, so the padding is inert.
+        let axes = key_types.len();
+        let max_axes = crate::radix_db::MAX_AXES;
+        let parse_tuple = |s: &mut Self| -> Vec<Value> {
+            let mut out = Vec::new();
+            s.lexer.token("(");
+            loop {
+                let i = out.len();
+                let mut v = Value::Null;
+                let vt = s.expression(&mut v);
+                if !s.convert(&mut v, &vt, &key_types[i.min(axes - 1)]) {
+                    diagnostic!(s.lexer, Level::Error, "Invalid spacial coordinate");
+                }
+                out.push(v);
+                if !s.lexer.has_token(",") {
+                    break;
+                }
+            }
+            s.lexer.token(")");
+            if out.len() != axes {
+                diagnostic!(
+                    s.lexer,
+                    Level::Error,
+                    "a spacial coordinate needs {axes} axes, got {}",
+                    out.len()
+                );
+            }
+            out.resize(max_axes, Value::Int(0));
+            out
+        };
+        let from = parse_tuple(self);
+        if !self.lexer.has_token("..") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a spacial slice needs a range: `xs[(x,y)..]`, `xs[(x,y)..:n]`, or `xs[(x1,y1)..(x2,y2)]`"
+            );
+        }
+        // The `..` is followed by a till tuple `(tx,ty,…)`, a limit `:n`, or nothing.
+        let (has_till, till, limit) = if self.lexer.peek_token("(") {
+            (Value::Int(1), parse_tuple(self), Value::Int(-1))
+        } else if self.lexer.has_token(":") {
+            let mut n = Value::Null;
+            let nt = self.expression(&mut n);
+            if !self.convert(&mut n, &nt, &crate::data::I64) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "spacial slice limit must be an integer"
+                );
+            }
+            (Value::Int(0), vec![Value::Int(0); max_axes], n)
+        } else {
+            (Value::Int(0), vec![Value::Int(0); max_axes], Value::Int(-1))
+        };
+        if !self.first_pass {
+            let tp = self.get_type(typedef);
+            let fn_nr = self.data.def_nr("n_spacial_range");
+            if tp != u16::MAX && fn_nr != u32::MAX {
+                let mut args = vec![code.clone(), Value::Int(i32::from(tp))];
+                args.extend(from); // fx, fy, fz
+                args.push(has_till);
+                args.extend(till); // tx, ty, tz
+                args.push(limit);
+                *code = Value::Call(fn_nr, args);
+            }
+        }
+        typedef.clone()
+    }
+
     #[allow(clippy::too_many_lines)]
     pub(crate) fn parse_key(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) {
         // detect open-start `col[..hi]` or `col[..]` before parsing expression.
@@ -1294,11 +1388,13 @@ impl Parser {
                 on = 3;
                 arg = 4;
             }
-            Parts::Hash(_, _) => {
+            Parts::Hash(_, _) | Parts::Radix(_, _) => {
                 // C60 piece 3 edit C: route hash iteration through
                 // Ordered's on=3 code.  Parser has substituted the
                 // iterated expression with a `hash_scratch` ref to a
                 // u32-stride rec-nr vector in the hash's store (B+A).
+                // @PLN48 — a Radix walks the tree into the same scratch
+                // rec-vector (it is already key-ordered), then iterates it.
                 on = 3;
                 arg = 4;
             }

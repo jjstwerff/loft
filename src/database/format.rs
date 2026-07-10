@@ -990,7 +990,7 @@ impl ShowDb<'_> {
                 | Parts::Ordered(tp, _)
                 | Parts::Hash(tp, _)
                 | Parts::Index(tp, _, _)
-                | Parts::Spacial(tp, _) => {
+                | Parts::Radix(tp, _) => {
                     self.write_list(s, *tp, indent);
                 }
                 Parts::Byte(from, nullable) => {
@@ -1747,8 +1747,8 @@ impl ShowDb<'_> {
             | Parts::Index(tp, _, _) => {
                 self.write_dump_list(s, *tp, indent);
             }
-            Parts::Hash(_, _) | Parts::Spacial(_, _) => {
-                // Hash and Spacial don't support sequential next() — show count only.
+            Parts::Hash(_, _) | Parts::Radix(_, _) => {
+                // Hash and Radix don't support sequential next() — show count only.
                 let data = DbRef {
                     store_nr: self.store,
                     rec: self.rec,

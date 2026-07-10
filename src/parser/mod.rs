@@ -2430,7 +2430,7 @@ impl Parser {
             Type::Hash(_, _, _)
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
         ) {
             // A keyed-collection handle IS a `DbRef`, so it satisfies a bare
             // `reference` parameter unchanged — no conversion op.  Used by
@@ -2651,7 +2651,7 @@ impl Parser {
                     Type::Hash(_, _, _)
                         | Type::Sorted(_, _, _)
                         | Type::Index(_, _, _)
-                        | Type::Spacial(_, _, _)
+                        | Type::Radix(_, _, _)
                 )
             {
                 return true;
@@ -2670,7 +2670,7 @@ impl Parser {
                     || (r == self.data.def_nr("index")
                         && matches!(test_type, Type::Index(_, _, _)))
                     || (r == self.data.def_nr("spacial")
-                        && matches!(test_type, Type::Spacial(_, _, _)));
+                        && matches!(test_type, Type::Radix(_, _, _)));
                 if bare {
                     return true;
                 }
@@ -4536,7 +4536,7 @@ impl Parser {
                 Type::Hash(d, _, _)
                 | Type::Sorted(d, _, _)
                 | Type::Index(d, _, _)
-                | Type::Spacial(d, _, _) => walk_def(data, db, *d, seen),
+                | Type::Radix(d, _, _) => walk_def(data, db, *d, seen),
                 Type::Tuple(elems) => elems.iter().any(|e| walk(data, db, e, seen)),
                 _ => false,
             }
@@ -4630,7 +4630,7 @@ impl Parser {
             Type::Text(_) => self.cl("OpGetText", &[code, p]),
             Type::Hash(_, _, _)
             | Type::Sorted(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
             | Type::Index(_, _, _)
             | Type::Enum(_, true, _)
             | Type::Vector(_, _) => {
@@ -4941,7 +4941,7 @@ impl Parser {
             }
             Type::Hash(_, _, _)
             | Type::Index(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
             | Type::Sorted(_, _, _) => self.cl("OpSetInt4", &[ref_code.clone(), pos_v, value]),
             // Plan-06 phase 4d: nested tuple element — recurse into
             // `emit_tuple_set_ops` with the inner tuple's offsets so
@@ -5149,7 +5149,7 @@ impl Parser {
             Type::Vector(_, _)
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
             | Type::Sorted(_, _, _) => {
                 // Collection header is a 4-byte u32 record pointer.  Post-2c
                 // `OpSetInt` writes 8 bytes (i64), which overflows into the
@@ -5787,8 +5787,8 @@ impl Parser {
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
             )
-        } else if let Type::Spacial(to, key, d) = tp {
-            Type::Spacial(
+        } else if let Type::Radix(to, key, d) = tp {
+            Type::Radix(
                 to,
                 key,
                 Deps::frame(Self::resolve_deps(types, d.as_attr_indices())),
@@ -5865,7 +5865,7 @@ impl Parser {
             | Type::Sorted(_, _, ad)
             | Type::Hash(_, _, ad)
             | Type::Index(_, _, ad)
-            | Type::Spacial(_, _, ad)
+            | Type::Radix(_, _, ad)
             | Type::Reference(_, ad)
             | Type::Enum(_, true, ad) = &types[*ar as usize]
             {

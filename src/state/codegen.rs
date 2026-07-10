@@ -602,7 +602,7 @@ impl State {
                     Type::Vector(_, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
                     | Type::Sorted(_, _, _)
                     | Type::Iterator(_, _) => {
                         // Collection-typed stack element: 12-byte DbRef
@@ -1256,7 +1256,7 @@ impl State {
                 Type::Vector(_, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
                 | Type::Sorted(_, _, _)
                 | Type::Iterator(_, _) => {
                     stack.add_op("OpVarRef", self);
@@ -1438,7 +1438,7 @@ impl State {
     /// record sized for the collection type at the local's slot.
     /// `set_default_value` zero-initialises the root-pointer field;
     /// subsequent `OpNewRecord` / `OpFinishRecord` operations will
-    /// dispatch through `record_new`'s `Parts::Sorted/Hash/Index/Spacial`
+    /// dispatch through `record_new`'s `Parts::Sorted/Hash/Index/Radix`
     /// arms and grow the collection in-place.
     pub(super) fn gen_set_first_keyed_null(&mut self, stack: &mut Stack, v: u16) {
         self.gen_keyed_null(stack, v, true);
@@ -1508,7 +1508,7 @@ impl State {
                 let c = stack.data.def(*td).known_type();
                 self.database.index(c, key)
             }
-            Type::Spacial(td, key, _) => {
+            Type::Radix(td, key, _) => {
                 let c = stack.data.def(*td).known_type();
                 self.database.spacial(c, key)
             }
@@ -1609,7 +1609,7 @@ impl State {
                 Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             ) && *value == Value::Null
             {
                 self.gen_keyed_null(stack, v, false);
@@ -2264,7 +2264,7 @@ impl State {
             Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
         ) && *value == Value::Null
         {
             self.gen_set_first_keyed_null(stack, v);
@@ -2337,7 +2337,7 @@ impl State {
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _) => stack.add_op("OpPutRef", self),
+                | Type::Radix(_, _, _) => stack.add_op("OpPutRef", self),
                 // @PLN87 L1 — first-Set of a local `&`-link (`b = &a` →
                 // `b: &T = OpCreateStack(a)`): the value is the 12-byte stack-cell
                 // ref; store it raw into `b`'s RefVar slot.  Reads/writes of `b`
@@ -3152,8 +3152,8 @@ impl State {
                     return Type::Reference(*v, link.clone());
                 }
             }
-            "OpGetSpacial" => {
-                if let Type::Spacial(v, _, link) = &tps[0] {
+            "OpGetRadix" => {
+                if let Type::Radix(v, _, link) = &tps[0] {
                     return Type::Reference(*v, link.clone());
                 }
             }
@@ -3291,7 +3291,7 @@ impl State {
             Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
-            | Type::Spacial(_, _, _) => {
+            | Type::Radix(_, _, _) => {
                 let tp = stack.function.tp(variable);
                 let name = tp.name(stack.data);
                 let mut tp_nr = self.database.name(&name);
@@ -3862,7 +3862,7 @@ impl State {
             | Type::Sorted(_, _, _)
             | Type::Index(_, _, _)
             | Type::Hash(_, _, _)
-            | Type::Spacial(_, _, _) => {
+            | Type::Radix(_, _, _) => {
                 stack.add_op("OpPutRef", self);
             }
             Type::Tuple(elems) => {

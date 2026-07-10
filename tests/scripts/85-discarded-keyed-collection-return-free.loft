@@ -7,7 +7,7 @@
 // stack-pop that never freed the store.  Under a debug-assertions build the leaked
 // store even panicked the exit dumper (format.rs:1213 `types[65535]` — rendering a
 // sentinel-typed leaked store).  Fix: extend the owned-collection lift to Sorted /
-// Index / Hash / Spacial (empty dep = owned), and teach the set-var codegen that
+// Index / Hash / Radix (empty dep = owned), and teach the set-var codegen that
 // those DbRef-backed types bind via `OpPutRef`.  Values assert on both backends; the
 // wrap leak-gate proves the discarded stores are freed.
 

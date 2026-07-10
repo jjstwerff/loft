@@ -167,11 +167,11 @@ fn write_type(stores: &mut Stores, slot: &Record, ty: &Type) {
             sort_key_list(stores, slot, ds::TYINDEX_KEYS, keys);
             dep_list(stores, slot, ds::TYINDEX_DEP, dep);
         }
-        Type::Spacial(n, names, dep) => {
-            slot.set_discriminant(stores, ds::TY_SPACIAL);
-            slot.set_field_int(stores, ds::TYSPACIAL_N, i64::from(*n));
-            name_list(stores, slot, ds::TYSPACIAL_NAMES, names);
-            dep_list(stores, slot, ds::TYSPACIAL_DEP, dep);
+        Type::Radix(n, names, dep) => {
+            slot.set_discriminant(stores, ds::TY_RADIX);
+            slot.set_field_int(stores, ds::TYRADIX_N, i64::from(*n));
+            name_list(stores, slot, ds::TYRADIX_NAMES, names);
+            dep_list(stores, slot, ds::TYRADIX_DEP, dep);
         }
         Type::Hash(n, names, dep) => {
             slot.set_discriminant(stores, ds::TY_HASH);
@@ -552,8 +552,8 @@ fn write_db_parts(stores: &mut Stores, r: &Record, parts: &Parts) {
             write_key_fields(stores, r, ds::PTKEYS, keys);
             r.set_field_int(stores, ds::PTINDEX_LEFT, i64::from(*left));
         }
-        Parts::Spacial(c, fields) => {
-            r.set_discriminant(stores, ds::PT_SPACIAL);
+        Parts::Radix(c, fields) => {
+            r.set_discriminant(stores, ds::PT_RADIX);
             r.set_field_int(stores, ds::PTCONTENT, i64::from(*c));
             dep_list(stores, r, ds::PTFIELDS, fields);
         }
@@ -1438,7 +1438,7 @@ mod tests {
         let mut stores = Stores::new();
         let _ids = register_ir_schema(&mut stores);
 
-        // Sorted + Spacial exercise vector<SortKey> and vector<NameRef>.
+        // Sorted + Radix exercise vector<SortKey> and vector<NameRef>.
         let ty = Type::Sorted(
             9,
             vec![("name".into(), true), ("age".into(), false)],
@@ -1458,12 +1458,12 @@ mod tests {
         assert_eq!(k1.field_str(&stores, ds::SORTKEY_NAME), "age");
         assert!(!k1.field_bool(&stores, ds::SORTKEY_ASC));
 
-        let sp = Type::Spacial(4, vec!["x".into(), "y".into()], Deps::none());
+        let sp = Type::Radix(4, vec!["x".into(), "y".into()], Deps::none());
         let root2 = root_type_vector(&mut stores);
         materialize_type(&mut stores, root2, &sp);
         let spr = root2.get(0, &stores);
-        assert_eq!(ds::type_kind(spr.discriminant(&stores)), TypeKind::Spacial);
-        let names = spr.field_recvec(ds::TYSPACIAL_NAMES, ds::NAMEREF_STRIDE);
+        assert_eq!(ds::type_kind(spr.discriminant(&stores)), TypeKind::Radix);
+        let names = spr.field_recvec(ds::TYRADIX_NAMES, ds::NAMEREF_STRIDE);
         assert_eq!(names.len(&stores), 2);
         assert_eq!(
             names.get(0, &stores).field_str(&stores, ds::NAMEREF_NAME),

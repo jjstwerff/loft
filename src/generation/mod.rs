@@ -769,6 +769,7 @@ pub fn rust_type(tp: &Type, context: &Context) -> String {
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
+        | Type::Radix(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Index(_, _, _)
         // N8b.1: generator variables are stored as DbRef (index into native coroutine table).
@@ -956,11 +957,9 @@ pub(super) fn default_native_value(tp: &Type) -> String {
         | Type::Vector(_, _)
         | Type::Sorted(_, _, _)
         | Type::Hash(_, _, _)
+        | Type::Radix(_, _, _)
         | Type::Enum(_, true, _)
         | Type::Index(_, _, _)
-        // Spacial: parser-rejected today (planned 1.1+); arm kept in step
-        // with the store-backed family so it never falls to the `0` default.
-        | Type::Spacial(_, _, _)
         // N8b.1: exhausted / uninitialized generator variable.
         // The canonical heap-ref null is `DbRef::NULL` (`keys.rs`) — the one
         // source; `is_null()` ignores `pos`, so the old `pos: 8` was drift
@@ -1015,16 +1014,15 @@ enum FieldPhase {
 /// (collection-typed fields that reference a bare Vector / Sorted /
 /// Hash / Index created during `output_init`'s first pass).
 fn is_collection_field(tp: &Type) -> bool {
-    // Spacial is included for family-consistency with `Type::heap_dep` /
-    // `slot_kind` even though `spacial<T>` is parser-rejected today
-    // ("planned for 1.1+") — when it lands, this classifier is ready.
+    // Radix backs `spacial<T[x,y]>` (@PLN48) — same Phase-2 bare-type
+    // reference shape as Hash, so it is classified alongside the family.
     matches!(
         tp,
         Type::Vector(_, _)
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
     )
 }
 
@@ -1042,6 +1040,7 @@ enum BareIo {
     Vector(u16),
     Sorted(u16, Vec<(u16, bool)>),
     Hash(u16, Vec<u16>),
+    Radix(u16, Vec<u16>),
     Index(u16, Vec<(u16, bool)>),
 }
 
@@ -2065,11 +2064,19 @@ extern crate loft;"
                 crate::database::Parts::Hash(c, keys) if !field_keyed.contains(&tid) => {
                     bare_io.push((tid, BareIo::Hash(*c, keys.clone())));
                 }
+                // @PLN48 — a local-only Radix (`spacial<T[…]>`) minted for a var,
+                // referenced by no field: emit it here so it does not leave a gap in
+                // the runtime type-id sequence (else `content(tp)` reads u16::MAX and
+                // `record_new` panics), exactly as the local-only Hash arm above.
+                crate::database::Parts::Radix(c, keys) if !field_keyed.contains(&tid) => {
+                    bare_io.push((tid, BareIo::Radix(*c, keys.clone())));
+                }
                 crate::database::Parts::Index(c, keys, _) if !field_keyed.contains(&tid) => {
                     bare_io.push((tid, BareIo::Index(*c, keys.clone())));
                 }
                 crate::database::Parts::Sorted(_, _)
                 | crate::database::Parts::Hash(_, _)
+                | crate::database::Parts::Radix(_, _)
                 | crate::database::Parts::Index(_, _, _) => {}
                 _ => {}
             }
@@ -2405,6 +2412,16 @@ extern crate loft;"
                     .collect::<Vec<_>>()
                     .join(", ");
                 writeln!(w, "    let t{tid} = db.hash({c_ref}, &[{keys_str}]);")?;
+            }
+            BareIo::Radix(c, keys) => {
+                let c_ref = type_id_ref(*c);
+                let keys_str = keys
+                    .iter()
+                    .map(|&k| format!("\"{}\".to_string()", self.bare_field_name(*c, k)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                // `db.spacial` is the surface constructor for the shared Radix kind.
+                writeln!(w, "    let t{tid} = db.spacial({c_ref}, &[{keys_str}]);")?;
             }
             BareIo::Index(c, keys) => {
                 let c_ref = type_id_ref(*c);
@@ -3015,6 +3032,26 @@ extern crate loft;"
                 field_name,
                 "hash",
                 &format!("db.hash({c_ref}, &[{keys_str}])"),
+            )?;
+            return Ok(());
+        }
+        // @PLN48 — a `spacial<T[x,y]>` field: keyed like Hash but the runtime
+        // structure is a radix (Morton) tree.  Same key-name emission as Hash;
+        // `db.spacial(content, keys)` builds the Radix Part.
+        if let Type::Radix(c_nr, keys, _) = typedef {
+            let c_tp = self.data.def(*c_nr).known_type();
+            let c_ref = type_id_ref(c_tp);
+            let keys_str = keys
+                .iter()
+                .map(|k| format!("\"{k}\".to_string()"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            emit_db_field(
+                w,
+                s_var,
+                field_name,
+                "spacial",
+                &format!("db.spacial({c_ref}, &[{keys_str}])"),
             )?;
             return Ok(());
         }

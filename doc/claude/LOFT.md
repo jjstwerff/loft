@@ -201,6 +201,7 @@ internal utility should one become necessary.
 | `hash<T[field1, field2]>`          | Hash-indexed collection of `T` on the given fields    |
 | `index<T[field1, -field2]>`        | B-tree index (ascending/descending)                   |
 | `sorted<T[field]>`                 | Sorted vector on the given fields                     |
+| `spacial<T[x,y]>` / `spacial<T[x,y,z]>` | Spatial keyed collection, 1–3 coordinate axes, Morton/Z-order radix tree |
 | `reference<T>`                     | Reference (pointer) to a stored `T` record            |
 | `iterator<T, I>`                   | Iterator yielding `T` using internal state `I`        |
 | `fn(T1, T2) -> R`                  | First-class function type                             |
@@ -1280,6 +1281,16 @@ loop, `#index` is valid on vector and sorted but a compile error on index
 collections.  When porting code between collection types, treat these gaps
 as structural differences rather than bugs — they are intentional and not
 planned to close.
+
+**`spacial<T[x,y]>` / `spacial<T[x,y,z]>` (1–3 coordinate axes, @PLN48) is a
+related keyed collection** backed by a Morton/Z-order radix tree.  It shares
+`+=` append, `for` iteration (visited in the tree's natural Morton order —
+no sort, unlike `hash`), and `.len()`.  Proximity queries use range-slice
+syntax instead of new keywords or methods: `xs[(x,y)..]` (open outward walk,
+caller `break`s), `xs[(x,y)..:n]` (capped at `n`), `xs[(x1,y1)..(x2,y2)]`
+(bounding box — the raw Morton-code interval, a superset of the geometric
+box).  See [STDLIB.md § Keyed collections](STDLIB.md#keyed-collections-hash--index--sorted)
+for the full syntax table.
 
 ---
 

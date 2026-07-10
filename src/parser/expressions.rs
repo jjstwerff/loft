@@ -985,7 +985,7 @@ impl Parser {
                 Type::Vector(_, _)
                     | Type::Sorted(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
         {
             return;
@@ -1144,7 +1144,7 @@ use a separate collection or add after the loop"
                 Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
             && self.lexer.peek_token("[")
         {
@@ -1594,7 +1594,7 @@ use a separate collection or add after the loop"
                 Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
         {
             let elm_tp = f_type.content();
@@ -2098,6 +2098,13 @@ use a separate collection or add after the loop"
                     let c = self.data.def(*td).known_type();
                     (c != u16::MAX).then(|| self.database.index(c, key))
                 }
+                // @PLN48 — Radix reassignment (return/pass a spacial) now deep-copies
+                // via OpReplaceKeyed like the other keyed kinds; copy_claims_radix_body
+                // backs it.  Replaces the old @P295 "not yet supported" gate.
+                Type::Radix(td, key, _) => {
+                    let c = self.data.def(*td).known_type();
+                    (c != u16::MAX).then(|| self.database.spacial(c, key))
+                }
                 _ => None,
             }
         } else {
@@ -2106,7 +2113,10 @@ use a separate collection or add after the loop"
         if let Some(kt) = keyed_kt
             && matches!(
                 s_type,
-                Type::Sorted(_, _, _) | Type::Hash(_, _, _) | Type::Index(_, _, _)
+                Type::Sorted(_, _, _)
+                    | Type::Hash(_, _, _)
+                    | Type::Index(_, _, _)
+                    | Type::Radix(_, _, _)
             )
             && !matches!(code, Value::Insert(_) | Value::Null)
         {
@@ -2154,7 +2164,7 @@ use a separate collection or add after the loop"
                     Type::Sorted(_, _, d)
                     | Type::Hash(_, _, d)
                     | Type::Index(_, _, d)
-                    | Type::Spacial(_, _, d) => d.to_vec(),
+                    | Type::Radix(_, _, d) => d.to_vec(),
                     _ => Vec::new(),
                 };
                 for d in deps {
@@ -2176,27 +2186,6 @@ use a separate collection or add after the loop"
             // existing store before `copy_claims`).  No parse-time
             // first-vs-reassign discriminator needed.
             *code = Value::Insert(vec![Value::Set(var_nr, Box::new(Value::Null)), replace]);
-            return Type::Void;
-        }
-        // @P295 — `spacial` reassignment is not yet supported (copy_claims
-        // and insert_record both `panic!("Not implemented")` for Spacial).
-        // Reject with an actionable error instead of crashing in codegen.
-        if !self.first_pass
-            && op == "="
-            && var_nr != u16::MAX
-            && matches!(f_type, Type::Spacial(_, _, _))
-            && matches!(s_type, Type::Spacial(_, _, _))
-            && !matches!(code, Value::Insert(_) | Value::Null)
-            && !matches!(code.unspan(), Value::Var(rhs) if *rhs == var_nr)
-        {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "reassigning a spacial collection local is not yet supported \
-                 (@P295) — build into a fresh local you return/pass, or mutate \
-                 in place"
-            );
-            *code = Value::Insert(Vec::new());
             return Type::Void;
         }
         // `lhs += other_vec` where both sides are vectors: append all elements
@@ -2295,7 +2284,7 @@ use a separate collection or add after the loop"
                     | Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
             && matches!(code, Value::Insert(_))
         {

@@ -560,25 +560,23 @@ fn test() { assert(compute(5) == 5, \"ok\"); }"
     );
 }
 
+/// @PLN48 S2: `spacial<T[x, y]>` is now a working keyed collection (the radix
+/// tree), so the old "planned for 1.1+" gate is gone.  What remains is the
+/// arity check: a spatial index needs its coordinate key fields, so a bare
+/// `spacial<T>` (no key-spec) is a helpful error rather than a silent empty key.
 #[test]
-fn spacial_not_implemented() {
-    // C7/P22: spacial<T> is a reserved keyword; its diagnostic now
-    // surfaces the 1.1+ timeline so a user who typed it knows when
-    // the feature ships and which substitute to reach for.
-    //
-    // @PLAN52 IV-Spacial fix (2026-05-29): use the new bracket-key
-    // syntax `spacial<X[k]>`; the comma-separated form parses with
-    // additional errors after the @PLAN52 fix landed.
-    code!("struct Point { x: integer, y: integer }\nstruct World { pts: spacial<Point[x, y]> }\nfn test() {}")
-        .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
+fn spacial_needs_coordinate_keys() {
+    code!("struct Point { x: integer, y: integer }\nfn test() { xs: spacial<Point> = []; }")
+        .error("spacial<T[x, y]> needs coordinate key fields, e.g. spacial<Mob[x, y]> at spacial_needs_coordinate_keys:2:33");
 }
 
-/// C7/P22 regression guard: the diagnostic also fires for a local
-/// variable (not just a struct field) and carries the same hint.
+/// @PLN48: the Morton code interleaves at most `radix_db::MAX_AXES` (3) axes; a wider
+/// `spacial<T[a,b,c,d]>` key would index past the fixed `[u64; MAX_AXES]` code array
+/// at runtime (a production panic).  The parser rejects it with a clean diagnostic.
 #[test]
-fn spacial_not_implemented_in_local() {
-    code!("struct Point { x: integer, y: integer }\nfn test() { xs: spacial<Point[x, y]> = []; }")
-        .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented_in_local:2:39");
+fn spacial_rejects_more_than_three_axes() {
+    code!("struct P4 { a: integer, b: integer, c: integer, d: integer }\nfn test() { xs: spacial<P4[a, b, c, d]> = []; }")
+        .error("spacial<T[…]> supports at most 3 coordinate axes, got 4 at spacial_rejects_more_than_three_axes:2:42");
 }
 
 /// F57: write_file on a struct with a collection-type field must produce a compile error.

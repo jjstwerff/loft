@@ -57,7 +57,7 @@ impl Parser {
                 | Type::Hash(_, _, _)
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
         )
     }
 
@@ -932,7 +932,7 @@ impl Parser {
                 Type::Sorted(..)
                 | Type::Index(..)
                 | Type::Hash(..)
-                | Type::Spacial(..)
+                | Type::Radix(..)
                 | Type::Text(_)
                 | Type::Vector(..) => return Some(a.name.clone()),
                 Type::Reference(inner, _) => {
@@ -2136,7 +2136,7 @@ impl Parser {
             let mut value = if let Type::Vector(_, _)
             | Type::Sorted(_, _, _)
             | Type::Hash(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
             | Type::Enum(_, true, _)
             | Type::Index(_, _, _) = td
             {
@@ -2174,7 +2174,7 @@ impl Parser {
                 Type::Vector(_, _)
                     | Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
                     | Type::Index(_, _, _)
             ) && {
                 let link = self.lexer.link();
@@ -2642,6 +2642,13 @@ impl Parser {
                 let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.index(c, key))
             }
+            // @PLN48 — a `spacial` STRUCT FIELD is keyed like the others; without this
+            // arm `keyed_field_kt` returned None and the field construction crashed
+            // (`record_new` resolved the wrong field index).
+            Type::Radix(d, key, _) => {
+                let c = self.data.def(*d).known_type();
+                (c != u16::MAX).then(|| self.database.spacial(c, key))
+            }
             _ => None,
         }
     }
@@ -2697,7 +2704,7 @@ impl Parser {
             Type::Vector(_, _)
                 | Type::Sorted(_, _, _)
                 | Type::Hash(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
                 | Type::Index(_, _, _)
         ) {
             // Issue #120: for vector fields assigned from a bare variable
@@ -2753,7 +2760,7 @@ impl Parser {
                 // deep-copy that runs when a struct with a keyed field is
                 // copied.  The `0x8000` bit frees a fresh-storage call source.
                 // An empty/literal `[]` keeps the bare push (field stays
-                // empty — correct).  Spacial is excluded by `keyed_field_kt`
+                // empty — correct).  Radix is excluded by `keyed_field_kt`
                 // (copy_claims panics for it, per @P295).
                 let pos = self
                     .database

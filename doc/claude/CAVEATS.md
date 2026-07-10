@@ -583,14 +583,19 @@ auto-wrap `Struct.parse(text)` (Q1 — see
 [QUALITY.md § Open work](QUALITY.md#open-work--actionable-summary)).
 
 ### ~~C7 / P22~~ — `spacial<T>` diagnostic — DONE
-Diagnostic updated to surface the 1.1+ timeline: *"spacial<T> is
-planned for 1.1+; until then use sorted<T> or index<T> for ordered
-lookups"*.  A user who typed `spacial` now knows when the feature
-ships and which substitute to reach for.  Keyword retained (more
-helpful than a generic "unknown type" would be).  **Tests:**
-`tests/parse_errors.rs::spacial_not_implemented`,
-`spacial_not_implemented_in_local` (new regression guard for the
-local-variable path).
+`spacial<T[x,y]>` / `spacial<T[x,y,z]>` (@PLN48) shipped as a working keyed
+collection on both backends (interpreter + `--native`) — the old "planned
+for 1.1+" diagnostic is gone.  Two diagnostics remain: a bare `spacial<T>`
+with no coordinate key fields (*"spacial<T[x, y]> needs coordinate key
+fields, e.g. spacial<Mob[x, y]>"*), and more than 3 axes (*"spacial<T[…] >
+supports at most 3 coordinate axes, got N"* — `MAX_AXES = 3`).  See
+[DATABASE.md § Spatial Index](DATABASE.md#spatial-index-srcradix_treers)
+for the full operation set (construct/append/iterate/`len()`/range slices).
+**Tests:** `tests/parse_errors.rs::spacial_needs_coordinate_keys`,
+`::spacial_rejects_more_than_three_axes` (the old `spacial_not_implemented*`
+tests no longer exist).  Guard scripts:
+`tests/scripts/48-spacial-construct-free.loft`,
+`tests/scripts/48b-spacial-slice.loft`.
 
 ### P344 — a reused loop-variable name must keep a consistent type
 `for i in [1,2,3] {…}` then `for i in ["a","b"] {…}` in the SAME function
@@ -617,7 +622,7 @@ Last retested: **2026-04-12** against commit `2aaba5a` (main branch).
 | Caveat | Milestone | Decision |
 |--------|-----------|----------|
 | C3     | 1.1+      | Accepted — WASM threading deferred (Web Worker pool cost > benefit today) |
-| ~~C7/P22~~ | — | **Done** — diagnostic now references 1.1+ timeline; regression guard added |
+| ~~C7/P22~~ | — | **Done** — `spacial<T[x,y]>`/`<T[x,y,z]>` shipped as a working keyed collection (@PLN48); residual diagnostics are missing-key-fields and >3-axes |
 | C38    | —         | Updated — @PLAN22 (2026-05-13) adds by-body mutation classification; Reference captures always via DbRef; scalars via heap cell.  Pure read-only scalar captures remain value-copy. |
 | ~~C54~~ | — | **Done** 2026-04-20 — `integer` is i64 end-to-end; `long` is a historical alias.  See CAVEATS.md § C54 long-form for post-migration footguns |
 | ~~C58/P135~~ | — | **Done** — canonical `(0, 0) = screen-top-left`; upload no longer pre-flips rows; convention locked in lib_plans/58-graphics/README.md.  Regression: 2×2 atlas corner check in `tests/scripts/snap_smoke.sh` / `make test-gl-golden` |

@@ -222,13 +222,13 @@ pub fn read_type(stores: &Stores, slot: Record) -> Type {
             ),
             read_deps(stores, slot, ds::TYINDEX_DEP),
         ),
-        TypeKind::Spacial => Type::Spacial(
-            slot.field_int(stores, ds::TYSPACIAL_N) as u32,
+        TypeKind::Radix => Type::Radix(
+            slot.field_int(stores, ds::TYRADIX_N) as u32,
             read_name_list(
                 stores,
-                slot.field_recvec(ds::TYSPACIAL_NAMES, ds::NAMEREF_STRIDE),
+                slot.field_recvec(ds::TYRADIX_NAMES, ds::NAMEREF_STRIDE),
             ),
-            read_deps(stores, slot, ds::TYSPACIAL_DEP),
+            read_deps(stores, slot, ds::TYRADIX_DEP),
         ),
         TypeKind::Hash => Type::Hash(
             slot.field_int(stores, ds::TYHASH_N) as u32,
@@ -879,7 +879,7 @@ fn read_db_parts(stores: &Stores, r: Record) -> Parts {
             read_key_fields(stores, r, ds::PTKEYS),
             r.field_int(stores, ds::PTINDEX_LEFT) as u16,
         ),
-        ds::PT_SPACIAL => Parts::Spacial(content(), read_dep_list(stores, r, ds::PTFIELDS)),
+        ds::PT_RADIX => Parts::Radix(content(), read_dep_list(stores, r, ds::PTFIELDS)),
         ds::PT_DB_REF => Parts::DbRef,
         ds::PT_CHILD_REC => Parts::ChildRec(content()),
         other => panic!("ir_read: unknown DbParts discriminant {other}"),
@@ -1143,7 +1143,7 @@ mod tests {
                 crate::data::Deps::unknown(vec![1]),
             ),
             Type::Index(3, vec![("key".into(), true)], crate::data::Deps::none()),
-            Type::Spacial(
+            Type::Radix(
                 3,
                 vec!["x".into(), "y".into()],
                 crate::data::Deps::unknown(vec![1]),

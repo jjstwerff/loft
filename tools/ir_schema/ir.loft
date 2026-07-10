@@ -74,7 +74,7 @@ enum TypeT {
   TyIterator { step: vector<TypeT>, inner: vector<TypeT> },
   TySorted { n: integer, keys: vector<SortKey>, dep: vector<integer> },
   TyIndex { n: integer, keys: vector<SortKey>, dep: vector<integer> },
-  TySpacial { n: integer, names: vector<NameRef>, dep: vector<integer> },
+  TyRadix { n: integer, names: vector<NameRef>, dep: vector<integer> },
   TyHash { n: integer, names: vector<NameRef>, dep: vector<integer> },
   TyFunction { args: vector<TypeT>, result: vector<TypeT>, dep: vector<integer> },
   TyRewritten { inner: vector<TypeT> },
@@ -272,7 +272,7 @@ enum DbParts {         // src/database/mod.rs::Parts (17 variants)
   PtOrdered { content: integer, keys: vector<KeyField> },
   PtHash { content: integer, fields: vector<integer> },
   PtIndex { content: integer, keys: vector<KeyField>, left: integer },
-  PtSpacial { content: integer, fields: vector<integer> },
+  PtRadix { content: integer, fields: vector<integer> },
   PtDbRef,
   PtChildRec { content: integer }
 }

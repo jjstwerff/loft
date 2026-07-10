@@ -2331,7 +2331,7 @@ impl State {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Hash(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
                 | Type::Enum(_, true, _)
         )
     }
@@ -2470,7 +2470,7 @@ impl State {
                 | Type::Sorted(_, _, _)
                 | Type::Index(_, _, _)
                 | Type::Hash(_, _, _)
-                | Type::Spacial(_, _, _)
+                | Type::Radix(_, _, _)
                 | Type::Enum(_, true, _) => {
                     FrameArg::Ref(*store.addr::<crate::keys::DbRef>(rec, at))
                 }

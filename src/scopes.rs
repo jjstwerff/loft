@@ -2644,7 +2644,7 @@ impl Scopes {
                 Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
-                    | Type::Spacial(_, _, _)
+                    | Type::Radix(_, _, _)
             )
         {
             return Value::Insert(Vec::new());
@@ -3679,7 +3679,7 @@ impl Scopes {
                         | Type::Sorted(_, _, _)
                         | Type::Hash(_, _, _)
                         | Type::Index(_, _, _)
-                        | Type::Spacial(_, _, _)
+                        | Type::Radix(_, _, _)
                 )
         };
         for v in vars {
@@ -3718,7 +3718,7 @@ impl Scopes {
                     ls.push(call("OpFreeText", v, data));
                 }
             }
-            // P193: include keyed collections (Sorted/Hash/Index/Spacial)
+            // P193: include keyed collections (Sorted/Hash/Index/Radix)
             // — `gen_set_first_keyed_null` allocates a fresh store via
             // `OpDatabase` for each local-var keyed collection, so each
             // needs scope-exit `OpFreeRef`.  Without this they leak as
@@ -3731,7 +3731,7 @@ impl Scopes {
             | Type::Index(_, _, dep)
             // @PLN25 slice (c): peel `Optional` so an owned `vector?`/`reference?` local is
             // still freed at scope exit (same reasoning as the `text?` case above).
-            | Type::Spacial(_, _, dep) = function.tp(v).base()
+            | Type::Radix(_, _, dep) = function.tp(v).base()
             {
                 // H2 step 5 (DEPS_INVENTORY): the declared return type's
                 // dep list is DEF-space — attr indices from `ref_return`,
@@ -3818,7 +3818,7 @@ impl Scopes {
                             Type::Sorted(_, _, _)
                                 | Type::Hash(_, _, _)
                                 | Type::Index(_, _, _)
-                                | Type::Spacial(_, _, _)
+                                | Type::Radix(_, _, _)
                         ));
                 // Plan-57 Phase B (Mechanism B), widened by #323: a
                 // Reference-typed capture — a boxed `__cell_<T>` AND, per
@@ -4432,8 +4432,8 @@ impl Scopes {
                     Type::Hash(d, keys, dep) if dep.is_empty() => {
                         return Some(Type::Hash(*d, keys.clone(), Deps::none()));
                     }
-                    Type::Spacial(d, keys, dep) if dep.is_empty() => {
-                        return Some(Type::Spacial(*d, keys.clone(), Deps::none()));
+                    Type::Radix(d, keys, dep) if dep.is_empty() => {
+                        return Some(Type::Radix(*d, keys.clone(), Deps::none()));
                     }
                     _ => {}
                 }

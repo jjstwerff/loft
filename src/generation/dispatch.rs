@@ -965,7 +965,7 @@ impl Output<'_> {
             Type::Sorted(_, _, dep)
             | Type::Hash(_, _, dep)
             | Type::Index(_, _, dep)
-            | Type::Spacial(_, _, dep) => dep.is_empty() || (dep.len() == 1 && dep[0] == var),
+            | Type::Radix(_, _, dep) => dep.is_empty() || (dep.len() == 1 && dep[0] == var),
             _ => false,
         };
         if is_elm || variables.is_inline_ref(var) || is_skip_free || !owns_store {
@@ -1008,14 +1008,14 @@ impl Output<'_> {
                             self.stores.name(&name)
                         }
                     }
-                    Type::Hash(td, key, _) | Type::Spacial(td, key, _) => {
+                    Type::Hash(td, key, _) | Type::Radix(td, key, _) => {
                         let c = self.data.def(*td).known_type();
                         if c == u16::MAX {
                             u16::MAX
                         } else {
                             let prefix = match &var_tp {
                                 Type::Hash(_, _, _) => "hash",
-                                Type::Spacial(_, _, _) => "spacial",
+                                Type::Radix(_, _, _) => "spacial",
                                 _ => unreachable!(),
                             };
                             let mut name =
@@ -1160,7 +1160,7 @@ fn tuple_has_non_copy_leaf(elems: &[Type]) -> bool {
             | Type::Hash(_, _, _)
             | Type::Index(_, _, _)
             | Type::Sorted(_, _, _)
-            | Type::Spacial(_, _, _)
+            | Type::Radix(_, _, _)
             | Type::Iterator(_, _)
             | Type::Enum(_, true, _) => return true,
             Type::Tuple(inner) if tuple_has_non_copy_leaf(inner) => return true,

@@ -6,6 +6,7 @@
 use crate::database::{Parts, Stores, WorkerStores};
 use crate::hash;
 use crate::keys::DbRef;
+use crate::radix_db;
 use crate::store::Store;
 use crate::tree;
 use crate::vector;
@@ -86,7 +87,7 @@ impl Stores {
     /// Returns the children to recurse on (each carrying its own `DbRef`, type,
     /// and — for per-element kinds — the element record that owns it) and the
     /// container record to free.  Leaf / empty / null shapes yield no children
-    /// and no container.  `Spacial` is unsupported (callers panic on it); the
+    /// and no container.  `Radix` is unsupported (callers panic on it); the
     /// keystone returns an empty walk so a non-cascading caller stays safe.
     ///
     /// Collects into a `Vec` (rather than borrowing an iterator) so callers can
@@ -225,7 +226,28 @@ impl Stores {
                     }
                 }
             }
-            // Base text leaf, scalars, DbRef, Spacial (unsupported): no cascade.
+            Parts::Radix(v, _) => {
+                let v = *v;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 {
+                    // The tree's leaves ARE the element records; walk them key-free
+                    // (`radix_db::records` → `rtree_first`/`next`).  `cur` is the tree
+                    // container — a separate block to free (below).  Mirrors Hash.
+                    for elm in radix_db::records(rec, &self.allocations) {
+                        children.push(OwnedChild {
+                            child: DbRef {
+                                store_nr: rec.store_nr,
+                                rec: elm,
+                                pos: 8,
+                            },
+                            child_tp: v,
+                            owning_elem: Some(elm),
+                        });
+                    }
+                    container_rec = Some(cur);
+                }
+            }
+            // Base text leaf, scalars, DbRef: no cascade.
             _ => {}
         }
         // The value is reached through a heap pointer (zeroed on teardown) for the
@@ -238,6 +260,7 @@ impl Stores {
                 | Parts::Array(_)
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
+                | Parts::Radix(_, _)
                 | Parts::Index(_, _, _)
                 | Parts::ChildRec(_)
         );
@@ -906,6 +929,48 @@ impl Stores {
     pub fn build_hash_unsorted_vec(&mut self, hash_ref: &DbRef, _tp: u16) -> DbRef {
         let recs = crate::hash::records(hash_ref, &self.allocations);
         self.build_rec_scratch(hash_ref, &recs)
+    }
+
+    /// @PLN48 — the Radix counterpart, feeding the same Ordered (on=3) iteration
+    /// path via `build_rec_scratch`.  Unlike a hash, a radix tree has a **natural
+    /// order** (its in-order walk is key order — Morton/Z-order for a spatial
+    /// index), so `radix_db::records` already yields the records sorted: no O(n log n)
+    /// key sort, just the O(n) tree walk.  The `tp` is unused for the same reason.
+    pub fn build_radix_sorted_vec(&mut self, coll: &DbRef, _tp: u16) -> DbRef {
+        let recs = crate::radix_db::records(coll, &self.allocations);
+        self.build_rec_scratch(coll, &recs)
+    }
+
+    /// @PLN48 S3 — a `spacial` range slice as an iterable scratch vector, feeding the
+    /// same Ordered (on=3) path as `build_radix_sorted_vec`.  Records whose Morton code
+    /// lies in `[from, till]` (or `[from, ∞)` when `has_till == 0`), in natural order,
+    /// capped at `limit` (`< 0` = no cap).  Backs `xs[(x,y)..]`, `xs[(x,y)..:n]`, and the
+    /// bounding box `xs[(x1,y1)..(x2,y2)]`.  Coordinates arrive as a fixed `MAX_AXES`-wide
+    /// triple; only the collection's own `keys.len()` axes are read (a 2D collection
+    /// ignores `fz`/`tz`), so the same ABI serves 1D…3D slices.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_radix_range_vec(
+        &mut self,
+        coll: &DbRef,
+        tp: u16,
+        fx: i64,
+        fy: i64,
+        fz: i64,
+        has_till: i64,
+        tx: i64,
+        ty: i64,
+        tz: i64,
+        limit: i64,
+    ) -> DbRef {
+        let keys = self.types[tp as usize].keys.clone();
+        let n = keys.len().min(crate::radix_db::MAX_AXES);
+        let from = [fx, fy, fz];
+        let till = [tx, ty, tz];
+        let till_ref = (has_till != 0).then_some(&till[..n]);
+        let cap = (limit >= 0).then_some(limit as usize);
+        let recs =
+            crate::radix_db::range(coll, &self.allocations, &keys, &from[..n], till_ref, cap);
+        self.build_rec_scratch(coll, &recs)
     }
 
     /// Materialise `recs` (live hash rec-nrs) into a rec-nr scratch vector that
@@ -1616,6 +1681,46 @@ impl Stores {
         }
     }
 
+    /// Deep-copy a `Radix` collection: rebuild the destination tree by re-inserting
+    /// each source element.  A radix tree cannot be byte-copied — node ids and the
+    /// container relocate — so, like `copy_claims_hash_body`, it re-inserts entry by
+    /// entry through the same keystone walk `remove_claims` uses.
+    pub(super) fn copy_claims_radix_body(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
+        // Start the destination as an empty tree; `radix_db::add` claims + grows it.
+        self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
+        let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+        if cur == 0 {
+            return;
+        }
+        let content_tp = match &self.types[tp as usize].parts {
+            Parts::Radix(c, _) => *c,
+            other => panic!("copy_claims_radix_body called with non-radix type {tp} ({other:?})"),
+        };
+        let size = u32::from(self.size(content_tp));
+        let keys = self.types[tp as usize].keys.clone();
+        for child in self.for_each_owned_child(rec, tp).children {
+            let Some(elm) = child.owning_elem else {
+                continue;
+            };
+            // Element layout (record_new): header, back-pointer at 4, payload at 8.
+            let new = self.store_mut(to).claim(1 + size.div_ceil(8));
+            self.store_mut(to).set_u32_raw(new, 4, to.rec);
+            let src_db = DbRef {
+                store_nr: rec.store_nr,
+                rec: elm,
+                pos: 8,
+            };
+            let new_db = DbRef {
+                store_nr: to.store_nr,
+                rec: new,
+                pos: 8,
+            };
+            self.copy_block(&src_db, &new_db, size);
+            self.copy_claims(&src_db, &new_db, content_tp);
+            radix_db::add(to, &new_db, &mut self.allocations, &keys);
+        }
+    }
+
     /// Collect all record numbers in an RB-tree index by in-order traversal.
     /// `rec` points to the i32 tree-root field; `left` is `self.fields(index_tp)`.
     pub(super) fn collect_index_nodes(&self, rec: &DbRef, left: u16) -> Vec<u32> {
@@ -1803,7 +1908,7 @@ impl Stores {
             Parts::Hash(_, _) => {
                 self.copy_claims_hash_body(rec, to, tp);
             }
-            Parts::Spacial(_, _) => panic!("Not implemented"),
+            Parts::Radix(_, _) => self.copy_claims_radix_body(rec, to, tp),
             Parts::Index(_, _, _) => self.copy_claims_index_body(rec, to, tp),
             Parts::Enum(values) => {
                 let e_nr = self.store(rec).get_byte(rec.rec, rec.pos, -1);
@@ -2017,7 +2122,7 @@ impl Stores {
     (struct / enum / vector / sorted / array / ordered / hash / index / childrec):
     one walk recurses into each owned child, frees the per-element record it lived
     in, then frees the container block and clears the field pointer.  Only the text
-    leaf and the (unimplemented) `Spacial` teardown stay special-cased.
+    leaf and the (unimplemented) `Radix` teardown stay special-cased.
     # Panics
     When a field points to a spacial structure (teardown unimplemented).
     */
@@ -2066,10 +2171,9 @@ impl Stores {
                     }
                 }
             }
-            // `Spacial` teardown is unimplemented; the keystone yields nothing for
+            // `Radix` teardown is unimplemented; the keystone yields nothing for
             // it, so guard explicitly to preserve the loud failure (a silent no-op
             // would leak).
-            Parts::Spacial(_, _) => panic!("Not implemented"),
             // Every owned-child cascade kind (Struct/Enum/Vector/Sorted/Array/
             // Ordered/Hash/Index/ChildRec) reads the SINGLE keystone walk: recurse
             // into each child, free the per-element record it lived in (Array/Hash/
@@ -2114,7 +2218,6 @@ impl Stores {
                     None
                 }
             }
-            Parts::Spacial(_, _) => None,
             _ => {
                 let walk = self.for_each_owned_child(rec, tp);
                 for c in walk.children {

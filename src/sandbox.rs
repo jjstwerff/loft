@@ -1198,7 +1198,7 @@ fn appended_record_size(vars: &crate::variables::Function, var_nr: u16) -> u32 {
         Type::Sorted(nr, _, _)
         | Type::Index(nr, _, _)
         | Type::Hash(nr, _, _)
-        | Type::Spacial(nr, _, _) => Type::Reference(*nr, crate::data::Deps::none()),
+        | Type::Radix(nr, _, _) => Type::Reference(*nr, crate::data::Deps::none()),
         _ => return 0,
     };
     crate::data::element_size(&elem) as u32
