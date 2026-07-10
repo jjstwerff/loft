@@ -236,13 +236,10 @@ jobs:
       # fn's `text` result used as a user function's implicit tail-return is never
       # registered as owned (~2 allocs/call, grows; rebinding to a local fixes it;
       # likely a caller-bind/OpReturn owned-placeholder gap in state/codegen.rs).
-      # This sweep stays detect_leaks=0 (a clean UAF/OOB gate).  The LEAK half is
-      # now the separate "ASan leak ratchet" step below: detect_leaks=1 + the
-      # `leak:ir_read` suppression (Class 1) + a shrinking count baseline over the
-      # residual (2)-class leakers (@PLN85 drove the ncc/tail-return class down; the
-      # residue is the p329/p330 tuple returns).  When the baseline ratchets to 0,
-      # the model is fully CI-verified and this sweep can itself flip to
-      # detect_leaks=1.
+      # This sweep stays detect_leaks=0 (a clean UAF/OOB gate).  The LEAK half is the
+      # SEPARATE `asan-leak-gate` job below (detect_leaks=1, ENFORCING at baseline 0) —
+      # split out so the slow single-threaded leak pass never gates this fast sweep,
+      # and so a leak regression is its own red signal.
       #
       # nextest (not `cargo test`): it does NOT build doctests, which under
       # `--target` + `-Zsanitizer` fail to resolve the curve25519 proc-macro
@@ -262,31 +259,73 @@ jobs:
           test(n9_generated_fill_matches_src) |
           test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
 
-      # @PLN85 — the interpreter LEAK RATCHET (the second half of the leak gate:
-      # the sweep above is UAF/OOB with detect_leaks=0; this asserts leaks do not
-      # GROW past a shrinking baseline).  Reruns the SAME ASan-instrumented `issues`
-      # binary the sweep just built, under detect_leaks=1, and counts Direct leak
-      # roots (ir_read's intentional Box::leak frame-suppressed via
-      # .github/lsan_suppressions.txt).  The residual roots are the p329/p330
-      # skip_free-orphan tuple returns; a NEW leak bumps the count and fails.
-      #
-      # CALIBRATION RUN: `continue-on-error` prints the true per-OS count (LSan
-      # root counts differ Linux-vs-macOS) WITHOUT blocking.  After this run:
-      #   1. read "Direct leak roots" from each OS leg's log,
-      #   2. set LEAK_BASELINE to that count (per-OS via matrix if they differ),
-      #   3. delete `continue-on-error` — the ratchet is then enforcing.
-      # When a baseline reaches 0, this becomes a plain zero-leak gate.
-      - name: ASan leak ratchet (interp text-leak baseline; CALIBRATION)
-        continue-on-error: true
+  # @PLN85 — the interpreter LEAK GATE.  SEPARATE from the ASan UAF/OOB sweep above:
+  # its own runner (the slow single-threaded leak pass never gates the fast sweep) and
+  # its own red/green signal.  ENFORCING at baseline 0 — a leak FAILS this job so it
+  # gets found and fixed.  Non-blocking by construction: it lives only in the nightly
+  # workflow, so it never gates a PR / another fix; it just lands red within 24h.
+  #
+  # detect_leaks=1 + .github/lsan_suppressions.txt (the intentional `ir_read` Box::leak,
+  # + the macOS dyld thread-TLS frame — a no-op on Linux).  As of @PLN85 the whole
+  # interpreter corpus is leak=0 locally; this job holds it there.  If a NEW benign
+  # SYSTEM frame surfaces on the Linux leg (different TLS impl), suppress THAT specific
+  # frame in lsan_suppressions.txt — never raise the baseline off zero for a real leak.
+  asan-leak-gate:
+    name: ASan interpreter leak gate (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            extra_filter: ''
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            extra_filter: ' | test(deep_nesting_guard)'
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust nightly
+        uses: dtolnay/rust-toolchain@nightly
+      - name: Install mold
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo registry and build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-asan-leak-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-asan-leak-cargo-
+      # LIBRARY leak coverage needs the native-FFI build deps (GL / ALSA): the
+      # library suite exercises the graphics / input / moros libs — the libs are
+      # where loft's real use lives, so they MUST be leak-gated too.
+      - name: Install lib-FFI build deps (GL/ALSA)
+        if: runner.os == 'Linux'
+        run: sudo apt-get install -y libgl1-mesa-dev libasound2-dev pkg-config
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      # The leak gate = the ASan sweep's command with detect_leaks=1 instead of 0, so
+      # nextest runs each test in its OWN process and LSan fails THAT test at exit if it
+      # leaks — per-test attribution (the best "work we might miss" signal), implicit
+      # baseline 0.  Includes `library_suite` (dropped from the fast sweep) so a leak in
+      # ANY library's interpreted test suite (its spawned `loft test` child inherits
+      # detect_leaks=1 and exits non-zero) reds this gate.  Suppressions cover only the
+      # intentional `ir_read` Box::leak + the macOS dyld thread-TLS frame.
+      - name: Leak gate (detect_leaks=1, whole corpus incl. libraries)
         env:
           RUSTFLAGS: '-Zsanitizer=address'
+          ASAN_OPTIONS: 'detect_leaks=1'
           LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
-          LEAK_BASELINE: '0'
-        run: |
-          BIN=$(ls -t target/${{ matrix.target }}/release/deps/issues-* 2>/dev/null \
-            | grep -v '\.d$' | head -1)
-          echo "issues test binary: $BIN"
-          bash scripts/asan_leak_ratchet.sh "$BIN" --test-threads=1
+        run: >
+          cargo +nightly nextest run --profile ci --release --no-fail-fast
+          --target ${{ matrix.target }}
+          --lib --test issues --test wrap --test strings --test frame_vars
+          -E 'not (test(fill_rs_up_to_date) | test(n9_generated_fill_matches_src) |
+          test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
 
   poison:
     name: LOFT_POISON arena-UAF gate (store-internal use-after-free)

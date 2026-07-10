@@ -895,8 +895,7 @@ jobs:
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    # 45 (was 30): the leak-ratchet step reruns the issues binary single-threaded.
-    timeout-minutes: 45
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v5
       - name: Install Rust nightly (pinned)
@@ -939,23 +938,10 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(library_suite) | test(fill_rs_up_to_date) |
           test(n9_generated_fill_matches_src) | test(native_rs_functions_up_to_date))'
-
-      # @PLN85 interpreter LEAK RATCHET — see miri.yml for the full rationale.
-      # Reruns the ASan `issues` binary under detect_leaks=1 + the `leak:ir_read`
-      # suppression and fails if Direct leak roots exceed a shrinking baseline.
-      # CALIBRATION: continue-on-error prints the true Linux count; after the first
-      # run, pin LEAK_BASELINE to it and delete continue-on-error to enforce.
-      - name: ASan leak ratchet (interp text-leak baseline; CALIBRATION)
-        continue-on-error: true
-        env:
-          RUSTFLAGS: '-Zsanitizer=address'
-          LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
-          LEAK_BASELINE: '0'
-        run: |
-          BIN=$(ls -t target/x86_64-unknown-linux-gnu/release/deps/issues-* 2>/dev/null \
-            | grep -v '\.d$' | head -1)
-          echo "issues test binary: $BIN"
-          bash scripts/asan_leak_ratchet.sh "$BIN" --test-threads=1
+      # The interpreter LEAK GATE (detect_leaks=1, enforcing) is the nightly
+      # `asan-leak-gate` job in miri.yml — kept off the per-PR path (its slow
+      # single-threaded pass would bloat PR CI).  Its red/green surfaces onto PRs via
+      # the nightly-status mechanism below, same as the other nightly gates.
 
   clippy:
     name: Clippy
