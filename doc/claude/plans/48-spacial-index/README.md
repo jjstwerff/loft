@@ -1,12 +1,14 @@
 # @PLN48 — `spacial<T[x,y]>` / `spacial<T[x,y,z]>`: a Morton/Z-order radix spatial index
 
-**Status:** S1–S3 done. `spacial<T[x,y]>` / `spacial<T[x,y,z]>` is a working
-keyed collection on both backends (interpreter + `--native`): construct,
-append, `for`-iterate (natural Morton/Z-order), `len()`, and range-slice
-proximity queries (`xs[(x,y)..]`, `xs[(x,y)..:n]`, `xs[(x1,y1)..(x2,y2)]`),
-1–3 coordinate axes. The old "planned for 1.1+" diagnostic is gone. S4
-(consumer validation in moros) remains open. See
-[DATABASE.md § Spatial Index](../../DATABASE.md#spatial-index-srcradix_treers)
+**Status:** S1–S4 done — the plan is **complete**. `spacial<T[x,y]>` /
+`spacial<T[x,y,z]>` is a working keyed collection on both backends (interpreter +
+`--native`): construct, append, `for`-iterate (natural Morton/Z-order), `len()`,
+and range-slice proximity queries (`xs[(x,y)..]`, `xs[(x,y)..:n]`,
+`xs[(x1,y1)..(x2,y2)]`), 1–3 coordinate axes. The old "planned for 1.1+"
+diagnostic is gone. S4 validated it in crawler (`near_mobs_test.loft`): the
+spacial near-set matches a brute-force scan on every query, both backends, with
+an 18× candidate reduction and an 8× (interpreted) / 3.7× (native) wall-clock
+win. See [DATABASE.md § Spatial Index](../../DATABASE.md#spatial-index-srcradix_treers)
 for the shipped operation reference.
 
 ## Why
@@ -94,7 +96,11 @@ field lives):
 | **S1** ✅ | The Morton bit-key: interleave the 2 or 3 quantized coordinate axes into the oracle deliverable R already consumes.  Rust unit tests (2D + 3D keys). |
 | **S2** ✅ | `spacial<T[…]>` wired to the radix tree: insert/find/remove/`copy_claims` (`src/radix_db.rs`, `src/database/allocation.rs`), Morton-encoded coord key fields (offset-binary so signed axes compare like `sorted`/`index`), the parser's "planned 1.1+" gate lifted, both backends (interpreter + `--native`, including a local-only `spacial` type).  Also landed beyond the original scope: struct-field `spacial`, `for`-iteration in natural Morton order, `len()`. |
 | **S3** ✅ | **Proximity via range slicing, not methods** — deliberately pivoted away from the originally planned `coll.near`/`coll.within`/`coll.nearest` stdlib methods (user direction: *"I do not want any keywords or function related to the new data structures.. use the current iterate syntax and slicing syntax"*).  `spacial` needs no new keywords or functions — it is queried with the same range-slice syntax any keyed collection uses: `xs[(x,y)..]` (open outward walk, caller `break`s), `xs[(x,y)..:n]` (capped at `n`), `xs[(x1,y1)..(x2,y2)]` (bounding box — the raw Morton-code interval, a superset of the geometric box since Z-order threads through codes outside it; caller filters/breaks for an exact shape).  Slices carry 1–3 axes (`xs[(x,y,z)..(x2,y2,z2)]`), guarded by a new parser diagnostic (`MAX_AXES = 3`: `spacial<T[a,b,c,d]>` now a clean error instead of the runtime panic an unbounded axis count would cause). |
-| **S4** | Consumer validation — a "near mobs from a mob's perspective" demo in the moros/audience world; cross-mode; cache-locality + correctness vs brute-force measurement. |
+| **S4** ✅ | **Consumer validation in crawler** — `crawler/near_mobs_test.loft` (the `combat` branch).  Crawler stores enemies as a flat `vector<Enemy>` keyed on hex axial coords (`src/sim.loft`), so every proximity query (`sim_enemy_dist`, aggro/threat) is a linear scan.  The demo builds the SAME 2000-mob set as both a `vector<Mob>` and a `spacial<Mob[q,r]>`, and for 500 query points ("who is within 5 hexes of me?") compares the bounding-box slice `idx[(q-R,r-R)..(q+R,r+R)]` + exact `hex_distance` filter against the brute-force scan.  Result (both backends): all 500 near-sets **identical** to brute force; ~**18× fewer candidates** examined (54 732 vs 1 000 000); wall-clock **8× faster interpreted** (261→33 ms) and **3.7× faster native** (101→27 ms).  Also exercised the outward `idx[(q,r)..:k]` interest-walk, negative coords (offset-binary), and `integer not null` coord keys (crawler's idiom). |
+
+**S4 harvested lessons (dogfood):**
+- The win **scales with mob density**, not with the feature itself.  Crawler's *per-dungeon-level* enemy count is tiny (`MAX_SPAWNS = 32`, ~15 live), so a linear scan there is already fine — the index earns its keep on the **large** populations: the town's civilian daily-loop NPCs, overland/wilderness, or any crowd/broad-phase.  Point the adoption there, not at the 15-enemy dungeon floor.
+- The `spacial` query's cost is **allocation-bound, not compute-bound**: each slice materialises a scratch rec-vector, so native's compute speedup barely moved `spac time` (27 ms) while it cut `brute time` 2.6×.  This is the concrete motivation for the **direct-cursor walk** follow-up (a compact `RadixIter` over the parent links, no scratch vector — resembling `index` `on=1`).
 
 ## Critical files
 - `src/radix_tree.rs` — the tree + bidirectional iterator (deliverable R, done); the Morton bit-key plugs in as a `KeyFn`.
@@ -115,10 +121,16 @@ field lives):
   backends.
 - Parser diagnostics: `tests/parse_errors.rs::spacial_needs_coordinate_keys`,
   `::spacial_rejects_more_than_three_axes`.
-- Memory/cache (S4, open): `store_memory()` bounded; per-chunk index fits L1/L2.
+- Consumer validation (S4): `crawler/near_mobs_test.loft` — spacial near-set ==
+  brute-force scan on 500 queries over 2000 mobs, both backends; 18× candidate
+  reduction; 8×/3.7× (interp/native) wall-clock win.  Harvested lesson: the win
+  scales with population, so adopt on the town/overland crowds, not the ~15-enemy
+  dungeon floor; the per-query scratch-vector allocation is the next efficiency
+  lever (direct-cursor walk).
 
-Acceptance (S1–S3, met): `spacial<T[x,y]>` and `spacial<T[x,y,z]>` work end to
+Acceptance (S1–S4, met): `spacial<T[x,y]>` and `spacial<T[x,y,z]>` work end to
 end — construct, append, iterate in natural Morton order, `len()`, and range
 slices for proximity; the 1.1+ diagnostic lifted; both backends green; reuses
 `radix_tree.rs` + `spacial<T>` rather than inventing new structure; no new
-keywords or stdlib functions.  S4 (consumer validation) remains open.
+keywords or stdlib functions; validated against a brute-force oracle in a real
+consumer (crawler).  The plan is complete.
