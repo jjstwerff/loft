@@ -79,35 +79,101 @@ and Cluster E's manifestation guards.
 
 ---
 
-## Cluster C — the `for_each_owned_child` traversal keystone
+## Cluster C / H10 — fold `copy_claims` source enumeration onto the keystone
 
-**Complex code to delete (loft):** the `claims` triad **already drifted to
-19/10/7 `Parts` arms** (`copy_claims` `src/database/allocation.rs:1374`,
-`remove_claims:1682`, `validate_claims:984`) + the `copy_claims_*_body` helpers
-that `remove`/`validate` lack; the `record_new`/`record_finish`/`insert_record`
-construction (`src/database/structures.rs`); the `gen_set_first_*_null` codegen
-family; the keyed `Type::{Sorted,Hash,Index,Spacial}→database.{kind}` re-dispatch
-repeated across ≥4 files.
+> **Scope corrected 2026-06-22, coordinates re-measured 2026-07-10.**  The original
+> framing below (C.0–C.5: fold copy *and* validate *and* construct *and* the keyed
+> re-dispatch) was **falsified by a design probe**.  Only `copy_claims` folds.  This
+> section is Cluster C's canonical home — the executable plan lives here, not in the
+> closed @PLN85 plan directory.  Register entry:
+> [STABILITY_HOTSPOTS.md § H10](STABILITY_HOTSPOTS.md); tracking row:
+> [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md).  This is a **work item under the light
+> flow**, not a plan — the design is settled, so a plan issue would be a pointer.
 
-**Fact to land:** one carried walk —
-`for_each_owned_child(tp, rec) -> Iterator<(child, child_tp, stride)>` (the
-per-`Parts` descriptor), with copy/free/validate/construct as **thin visitors**.
+**Fact to land:** one carried walk — `for_each_owned_child(rec, tp) -> OwnedWalk`
+(`src/database/allocation.rs:95`), the per-`Parts` source descriptor.  `remove_claims`
+(`:2024`) already reads it and is the model thin-visitor.  `copy_claims` (`:1711`) does
+not: its four per-kind helpers each re-roll the same source walk by hand.  That
+divergence is the densest historical bug cluster in the tree (@P290 SIGSEGV, @P306/@P318
+hash slot-drift, @P309 missing length header, #260/#330).
 
-**Steps:**
-1. **C.0 — pin the drift as the test.** Matrix every container kind ×
-   {copy, remove, validate, construct}, hand-computing word/slot layout; the
-   divergent arms (19/10/7) are where cells will disagree.
-2. **C.1 — define the keystone** from the single descriptor. *Gate:* per kind it
-   yields exactly the union of children the three dispatchers visit today.
-3. **C.2/C.3 — rewrite copy → remove → validate as visitors.** *Gate:* byte-identical
-   heap on the matrix, both backends; @P290/@P306/@P318/@P309 repros stay fixed; the
-   arm counts reach parity (all read ONE walk).
-4. **C.4 — fold construction + `gen_set_first_*_null` in** (read element-word-count
-   from the keystone). *Gate:* #260/#330 null-init repros green both backends.
-5. **C.5 — unify the keyed re-dispatch** into one keystone-keyed table — closes the
-   interp/native H4 drift on this axis.
+**What folds and what does NOT.**  The walk has two halves.  **Source enumeration**
+("list this record's child slots") is the shared fact and folds.  **Destination build**
+("allocate the copy into `to`") is genuinely per-kind and **stays** — unifying it is how
+@P318/@P309 come back.  Two paths are ruled OUT of this fold:
 
-**Highest-leverage NEW finding** (file an H-row when picked up).
+- **`validate_claims` (`:1268`) does NOT fold.**  It is a separate *defensive* family: it
+  runs on suspected-corrupt heaps (the @P306 `LOFT_TRACE_CR` pre-walk before
+  `OpCopyRecord`), so it bounds-checks each pointer *before* following it and does not
+  recurse into the per-element-record kinds at all — whereas the keystone **trusts** its
+  pointers (`debug_assert!` on a freed/out-of-range record).  Folding it would turn "name
+  the broken edge" back into "fault on it".  Boundary pinned in the keystone's
+  `OwnedChild` doc comment.
+- **`record_new` / `record_finish` (`structures.rs`) do NOT fold.**  A WRITE/build path,
+  not a read-walk.  If they share a per-`Parts` *layout* fact (strides/positions), that is
+  a separate refactor.
+
+`copy_claims_hash_body` (`:1572`) is the worked template — it already reads
+`for child in self.for_each_owned_child(rec, tp).children`, takes `child.owning_elem` as
+the source element record, and pairs each with a freshly-claimed destination slot.  The
+other three copy that shape with a hand-rolled source loop.
+
+| helper (line) | source walk to replace | destination build that STAYS |
+|---|---|---|
+| `copy_claims_index_body` (`:1640`) | `collect_index_nodes(rec, left)` — the **same call** the keystone's Index arm makes (`:180`) | `tree::add` re-insert; already mirrors `hash_body` |
+| `copy_claims_array_body` (`:1501`) | `for i in 0..length { elm = get_u32_raw(cur, 8+4*i) }` | @P309 length-header `set_u32_raw(into, 4, length)`; per-element slot-copy |
+| `copy_claims_seq_vector` (`:1457`) | `for i in 0..length { pos: 8 + size*i }` | one bulk `copy_block(length*size+4)`; positional slot-copy |
+
+Each source walk is ~3–6 lines and matches the keystone position-by-position (verified:
+Vector `8+size*i`, Array `8+4*i`, Index the identical `collect_index_nodes`).  So the fold
+is mechanical, with **one wrinkle**: `array_body` and `seq_vector` are called with the
+*content* type (`*v`, call sites `:1753` and `:1801`), but the keystone wants the
+*container* type — folding them needs a small call-site/signature change, not a pure body
+edit.  `index_body` already takes the container type, so it is a near drop-in.
+
+### The verifiable phased plan
+
+One helper per phase, each independently shippable.  Prove green on **both backends**
+before editing and after each phase; on any red, revert that one site and diagnose before
+continuing (bisect-by-site).  `B=./target/release/loft`,
+`T=tests/scripts/85-store-lifetime-claims-keystone.loft`.
+
+- **Phase 0 — baseline (no edits).**  Confirm the tree is green so any later red is
+  unambiguously the fold: `$B --interpret --tests $T` → ok · `$B --native --tests $T` → ok
+  · `LOFT_COPY_CHECK=1 $B --interpret $T` → no mismatch warning ·
+  `cargo test --release --test leak` → pass.
+- **Phase 1 — fold `index_body` (lowest risk).**  Replace the `collect_index_nodes` source
+  walk with the keystone children, reading `child.owning_elem` as the source node; keep the
+  `tree::add` destination body unchanged.  *Verify:* `$T` both backends → ok; leak gate →
+  pass; `LOFT_COPY_CHECK=1` → clean; `62-index-range-queries.loft` +
+  `129-sorted-index-field-deepcopy.loft` both backends → ok.
+- **Phase 2 — fold `array_body`.**  Change the call site / signature to pass the container
+  type; replace the `8+4*i` source loop with keystone children.  **Keep** the @P309
+  length-header write.  *Verify:* `$T` both backends; leak gate; `LOFT_COPY_CHECK=1` clean;
+  `374-vector-hash-sibling-dup-key.loft` → ok.
+- **Phase 3 — fold `seq_vector`.**  Same container-type adjustment; replace the `8+size*i`
+  source positions with keystone children.  **Keep** the single bulk `copy_block` (iterate
+  the keystone alongside it — accept the double pass; do not merge them).  *Verify:* `$T`
+  both backends; leak gate; `LOFT_COPY_CHECK=1` clean; `182-deep-nested-vector-copy.loft`,
+  `183-nested-single-vector.loft`, `152-i319-i320-field-vectors.loft`,
+  `163-plan53-cross-store-vector-add.loft` → ok on both backends.
+- **Phase 4 — full verification + docs.**  `./scripts/find_problems.sh --bg` then `--wait`
+  → nothing new.  `cargo fmt --check` + `cargo clippy --release --lib` clean.  Update the
+  keystone `OwnedChild` comment (the three helpers "are a mechanical source-fold away" →
+  "now fold") and the H10 register.
+
+**Done when:** `for_each_owned_child` is the single source enumeration for `remove_claims`
+and all four `copy_claims` kinds; the keystone guard, the leak gate and `LOFT_COPY_CHECK`
+are green on interp **and** `--native`; the suite shows no new failures.  The three
+divergent re-encodings of the cascade walk are gone, with destination build correctly left
+per-kind.
+
+**Guards.**  `tests/scripts/85-store-lifetime-claims-keystone.loft` covers every axis
+(vector, hash, sorted/ordered, index + sibling-sorted = the @P309 axis, multi-heap struct,
+inline enum) under the store-leak gate.  `cargo test --release --test leak` catches a
+dropped or double-freed element record.  `LOFT_COPY_CHECK=1` (or `LOFT_LOG=copy_check`) is
+the in-process tripwire for an off-by-one source fold: it walks source and destination
+lengths in parallel and warns on any nested-collection mismatch.
 
 ---
 

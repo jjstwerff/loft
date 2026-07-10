@@ -3107,7 +3107,11 @@ use a separate collection or add after the loop"
             // analogous wrap in `Parser::assign_text` (operators.rs)
             // — local-text path — but for the RefVar(Text) parameter
             // path that lands here.
-            if !self.first_pass && var_nr != u16::MAX && code.reads_var(var_nr) {
+            // Same bind-site rule as the local-text path in `operators::assign_text`:
+            // a branch RHS delivers per ARM into the destination.
+            if self.try_branch_text_bind(code, var_nr) {
+                // `code` is now a void branch of `Set(var_nr, …)`.
+            } else if !self.first_pass && var_nr != u16::MAX && code.reads_var(var_nr) {
                 let work = self.vars.work_text(&mut self.lexer);
                 let ls = vec![
                     self.cl("OpClearText", &[Value::Var(work)]),

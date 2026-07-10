@@ -85,6 +85,62 @@ consumer forced open is **@PLN85 cluster V**
 formerly the standalone plan-90 #437 investigation) — pin this slice of the invariant (a vector
 local's `dep` = the store it owns), enforce at the chokepoint.
 
+## Why this shape — the control story (maker's call)
+
+> **loft exists to give the programmer MORE control over memory than Rust does — control
+> over *allocation topology*: group data that belongs together into ONE allocation, split
+> data that does not into ANOTHER.** One store is one allocation with one lifetime, laid
+> out together and freed as a unit; separate stores hold data with independent lifetimes
+> and no false coupling. That grouping choice is the programmer's, made directly. It is the
+> engine author's core tool — arenas, pools, per-frame allocators, entity storage — and
+> loft hands it over instead of hiding it.
+
+**The pitfall it kills — interleaved on-the-fly allocation.** The worst memory problem in a
+managed language is both *invisible* and *unactionable*. An object allocated on the fly lands
+wherever the allocator puts it, interleaved with unrelated data, so a logically-cohesive set of
+objects ends up scattered across the heap. It costs nothing at small data (everything fits in
+cache) and surfaces only under production load — and even the programmer who *diagnoses* it has
+no lever: Java cannot dictate placement (`ArrayList<Foo>` is a contiguous array of *references*
+to scattered objects; GC compaction reorders by generation, never by your logical grouping). The
+store is that missing lever: put related records in one store and they are packed together, not
+interleaved — you write down the co-location the managed language gave you no syntax for. This is
+data-oriented design as a first-class control, which is exactly why it doubles as the engine
+author's core tool.
+
+**The split that makes this work — the machine keeps the bookkeeping, the programmer keeps
+the layout.** Two different things get called "control"; loft assigns them to different
+owners:
+
+- the **layout** decision — *what is co-allocated with what* — is the **programmer's**, explicit;
+- the **bookkeeping** — *when a store is freed, who owns it, copy-vs-move, borrow tracking* —
+  is the **machine's**, automated. That automation is the whole `deps` beacon above.
+
+loft gives you the first and takes the second off your hands. This is why "internal and
+invisible" (next section) does not fight "full control": the *bookkeeping* is invisible; the
+*layout* is yours.
+
+**The line between the two is drawn by performance-criticality — and what is automated stays
+deterministic.** A performance-critical decision is never abstracted away: allocation topology,
+the highest-leverage one, is exposed and controlled by the programmer. What loft automates —
+free placement, copy-vs-move — it derives from the layout you chose and runs *predictably*:
+freeing happens at owner death (no tracing collector, no pauses), and a whole-value bind copies
+unless the source is provably dead (§ The law), so the cost is legible from the source, not
+hidden. loft draws the line at *hidden, nondeterministic* machinery — a tracing GC, a surprise
+reallocation, a silent deep copy — and rejects it. A language that hides its performance-critical
+decisions cannot be trusted with them; loft keeps every such decision either in your hands or
+predictable.
+
+**Why this is MORE control than Rust, not less.** Rust's ownership is single-owner and
+tree-shaped by construction, which pushes you toward one-allocation-per-object. The moment
+your data is a graph — which real engine data always is — controlling co-allocation means
+reaching for arena crates and re-encoding pointers as indices into a `Vec`, which drops you
+*out* of the borrow checker: you get layout control **or** the safety discipline, not both.
+loft makes the arena the native unit — a store IS the arena, `DbRef` is the index-pointer
+(`src/keys.rs`) — and the `deps` discipline is built to hold *across* grouped, graph-shaped
+data. So you author the allocation topology **and** keep the lifetime guarantees. That
+combination — hand-authored layout under an enforced discipline that survives it — is the
+control loft is built to give and Rust withholds.
+
 ## Internal and invisible — never a user-facing borrow checker (decided)
 
 > **Ownership in loft is INTERNAL.** It never surfaces an ownership error to the
@@ -93,6 +149,10 @@ local's `dep` = the store it owns), enforce at the chokepoint.
 > safe**. No "cannot borrow", no lifetime annotations, no move-vs-borrow puzzles. The goal
 > is the *most natural solution for the programmer*: write it the obvious way, it works.
 > (This was always the plan.)
+
+This invisibility is about the **bookkeeping** — ownership errors, free placement,
+copy-vs-move — not about layout. Layout (which store data lives in) stays the programmer's
+explicit control; see the control story above.
 
 This makes the system's load-bearing property **completeness, not just soundness**: the
 analysis must be **total** — produce a valid free/copy/move for *every* binding on *every*

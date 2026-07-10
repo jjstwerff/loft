@@ -7,11 +7,19 @@ consolidates the open-issue tracking that previously drifted between
 PROBLEMS.md and CAVEATS.md.
 
 Read order:
+> **⚠ Reconciled 2026-07-10 — read this before the back half.**  Sections 2–5 below are
+> **historical design reference, not a live queue.**  The P54 sprint is complete except one
+> residual (the Q1 auto-wrap gap in § Open programmer-biting issues); the B2–B7 compiler
+> blockers were AUDITED + CLOSED 2026-05-21 on both backends; C54 (`integer` → i64) LANDED
+> 2026-04-21.  § Recommended landing order and § Enhancement tiers § Tier 1 are dated
+> **2026-04-13** and name work that has since shipped — do not plan from them.  The live
+> queues are [ROADMAP.md](ROADMAP.md) and [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md).
+
 1. § Open programmer-biting issues — the live work queue
-2. § Active sprint — P54 — current focus, with steps remaining
+2. § Active sprint — P54 — **COMPLETE except the Q1 auto-wrap residual**; kept as design reference
 3. § Active design — C54 — **LANDED** 2026-04-21 via @PLAN01; kept as design reference
-4. § Compiler blockers — struct-enum bugs (B2…B7) gating P54 + future enums
-5. § Enhancement tiers — quality investments ranked by leverage
+4. § Compiler blockers — struct-enum bugs (B2…B7) — **all CLOSED 2026-05-21**; kept as design reference
+5. § Enhancement tiers — quality investments ranked by leverage (**Tier 1 has shipped**; see the banner)
 
 History and closed items live in [CHANGELOG.md](../../CHANGELOG.md).
 Decisions to *not* fix something live in
@@ -23,7 +31,16 @@ Decisions to *not* fix something live in
 
 | # | Issue | Severity | Status |
 |---|-------|----------|--------|
-| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  **Known gap (verified 2026-07-02): the auto-wrap path parses but DROPS diagnostics** — malformed input and schema mismatches leave fields null with `json_errors()` empty, and stale errors from a PREVIOUS two-stage parse linger (misattribution hazard); the two-stage form `Struct.parse(json_parse(text))` reports both classes correctly.  This is the remaining Q1 shape.  All 25 P54 + Q1 acceptance tests green.  Boolean allocator-corruption fix carried forward (`database(elem_size.max(2))` for handle stores).  **All JSON natives ship natively as of 2026-04-14 (commit `7a2329e` cleared `NATIVE_SKIP` and `SCRIPTS_NATIVE_SKIP`)** — `n_json_parse`, `n_json_array`, `n_json_object`, `n_to_json`, `n_to_json_pretty`, `n_kind`, `n_keys`, `n_fields`, `n_has_field`, `n_struct_from_jsonvalue`, etc. all dispatch through `src/native.rs` and run through `cargo nextest run --release --test native` cleanly.  The user-facing typed-impl refactor (making `MyStruct.parse(text)` enforce text-must-be-JSON typing at compile time instead of routing through the runtime auto-wrap) remains an optional follow-up — orthogonal to the JSON correctness work.  `p54_struct_parse_rejects_plain_text` was deleted (tested a rejected design decision). |
+| P54 | `json_items` returns opaque `vector<text>`; `MyStruct.parse(text)` silently zeroes on malformed input | High | **Steps 4 + 5 + 6 + Q1 schema-side COMPLETE 2026-04-14 (single-walker design)**.  Step 4: arena materialiser.  Step 5: `Type.parse(JsonValue)` lowers to one IR call to `n_struct_from_jsonvalue(arg, struct_kt)` regardless of struct shape.  The runtime walker uses `stores.types[struct_kt].parts` to dispatch on each declared field type — primitive (text / integer / float / boolean) extracts with inline Q1 schema-side type-mismatch checks, nested struct recurses on the embedded sub-struct DbRef, JsonValue-typed fields byte-copy verbatim, and `vector<T>` fields iterate the JArray + recurse per element (struct elements call back into the walker).  Step 6: auto-wrap form — text arguments to `Struct.parse(text)` route through `json_parse` internally so legacy code keeps compiling.  **Known gap — RE-VERIFIED 2026-07-10 on BOTH backends (identical output; a shared semantic defect, not a parity bug): the auto-wrap path parses but DROPS diagnostics.**  Probe (`struct Cfg { name: text, port: integer }`, malformed `"{ this is not json"`):
+
+```
+A  Cfg.parse(bad)               → json_errors() == ""        (len 0)   ← silent
+B  Cfg.parse(json_parse(bad))   → json_errors() == "parse error at line 1 col 3 …"
+C  Cfg.parse(good)   [succeeds] → json_errors() == B's error (len 128) ← STALE
+   …and c.name == "x", c.port == 7, so the parse really did succeed
+```
+
+So malformed input and schema mismatches leave fields null with `json_errors()` **empty** (A), and — worse — after a **successful** parse `json_errors()` still returns the *previous* call's error (C), so a program that checks `json_errors()` to validate a parse **reports failure on correct data**.  The two-stage form `Struct.parse(json_parse(text))` reports both classes correctly.  This is the remaining Q1 shape, and the only genuinely-open row in ROADMAP § S.  All 25 P54 + Q1 acceptance tests green.  Boolean allocator-corruption fix carried forward (`database(elem_size.max(2))` for handle stores).  **All JSON natives ship natively as of 2026-04-14 (commit `7a2329e` cleared `NATIVE_SKIP` and `SCRIPTS_NATIVE_SKIP`)** — `n_json_parse`, `n_json_array`, `n_json_object`, `n_to_json`, `n_to_json_pretty`, `n_kind`, `n_keys`, `n_fields`, `n_has_field`, `n_struct_from_jsonvalue`, etc. all dispatch through `src/native.rs` and run through `cargo nextest run --release --test native` cleanly.  The user-facing typed-impl refactor (making `MyStruct.parse(text)` enforce text-must-be-JSON typing at compile time instead of routing through the runtime auto-wrap) remains an optional follow-up — orthogonal to the JSON correctness work.  `p54_struct_parse_rejects_plain_text` was deleted (tested a rejected design decision). |
 | Q1 | `json_errors()` reports byte offset only — no path, no line:column, no context snippet | Medium | **Q1 COMPLETE 2026-04-14** — parser side: RFC 6901 path + line:column + context snippet with caret, all 5 `p54_err_*` acceptance tests green; 8 unit tests in `src/json::tests`; 6 `q1_*` tests for state-clearing.  Schema side: kind checks live inline in the unified `n_struct_from_jsonvalue` walker — primitive fields receiving a wrong JSON variant (and not `JNull`, which signals "absent field" and stays silent) push a `"<Struct>.<field>: expected <KKind>, got <KKind>"` diagnostic to `json_errors()`.  Symmetric across direct fields and `vector<struct>` element fields (same walker code path).  6 `q1_schema_side_*` tests covering type-mismatch, missing-field-silent, clean-parse, vector-element mismatch, text-receiving-number, boolean-receiving-string. |
 | Q2 | No free-form object iteration / key listing / quick `kind(v)` peek | Medium | **Q2 COMPLETE 2026-04-14**: `kind` + `has_field` + `keys` + `fields` all shipped with real JObject walks.  `keys` returns field names in insertion order; `fields` returns name + value pairs with full deep-copy (primitives and container values preserved).  See § Q2 below |
 | Q3 | No `to_json(v)` serialiser — reads but can't write or round-trip | Medium | **JsonValue side complete 2026-04-14, T.to_json() complete 2026-05-07.**  JsonValue: `to_json` walks all six variants (primitives, empty containers, non-empty containers, nested containers) — full tree serialisation.  `to_json_pretty` adds 2-space indent + one-element-per-line for non-empty containers (empty stay `[]` / `{}`; `"k": v` with single space after colon).  `T.to_json()` / `T.to_json_pretty()` for any user struct ship via the parser-side intercept in `src/parser/fields.rs::field()` lowering to `n_struct_to_json(self_ref, struct_kt)` — which delegates to `Stores::show_json` reusing the existing `ShowDb` schema walker (`json: true` flag flips text → JSON-escaped, field names → quoted, struct-enum variants → `{"VariantName": …}`, JsonValue fields → semantic subtree).  See § Q3 below |
@@ -88,7 +105,7 @@ Items below are "what to BUILD" derived from the design content in this document
 |---|---|---|
 | **Cluster III Route 2** — reassignment store-free across shared blocks | [plan-57](plans/2-vector-store-watermark/cluster-III-reassignment-pin.md) | **Benign watermark residual** of the now-closed plan-57 (exit-safe, below the `LOFT_STORES=warn` floor — not a correctness/leak bug).  A shared `z` reassigned across `else` blocks / `x` across `match` arms keeps the overwritten store pinned to scope exit → watermark O(reassignments).  The gated foundation (`confine_reassign_safe`, `multi_store` recovery) is **inert in `src/scopes.rs`** as a head-start.  M effort; "do nothing, it's benign" is explicitly on the table. |
 | **@PLN85 cluster I** — FFI struct-return read gap (latent) | [@PLN85 README probe 01](plans/85-store-lifetime-retirement/README.md) | **Latent / unreachable** residual of the now-closed @PLN85.  A `#native` fn returning a non-vector **struct** has no `alloc_struct` helper to lay out a loft-readable ref, so the read path can't be exercised — gated on a future struct-return helper.  The reachable FFI **vector**-return instances (#409/#410) are FIXED.  Re-probe when the helper lands. |
-| **@PLN85 cluster IV** — @PLN51 hidden-buffer-aliasing latent residuals | [@PLN85 README cluster IV](plans/85-store-lifetime-retirement/README.md) (cites the finished @PLN51 probe set) | Re-probed at @PLN85 closure: ~11 raw @PLN51 probes still show **native-mostly latent leaks on edge shapes** (tuple-of-canvas, lambda/operator vector-return, capture-heap-return, mixed-lit-call).  **Pre-existing** (identical on `origin/main` — not a @PLN85 regression), below the graduated-corpus leak-gate; the standing instruments (leak-gate + ASan + Miri) cover the graduated class.  L effort; edge-shape, not shipped-consumer-reachable. |
+| **@PLN85 cluster IV** — @PLAN51 hidden-buffer-aliasing latent residuals | [@PLN85 README cluster IV](plans/85-store-lifetime-retirement/README.md).  Cites the `@PLAN51` probe set, preserved at [`plans/finished/51-hidden-buffer-aliasing/`](plans/finished/51-hidden-buffer-aliasing/) — the **legacy local plan** `@PLAN51`, *not* the tracker issue `@PLN51` (which is "[audience] Bumper-airplanes") | Re-probed at @PLN85 closure: ~11 raw @PLAN51 probes still show **native-mostly latent leaks on edge shapes** (tuple-of-canvas, lambda/operator vector-return, capture-heap-return, mixed-lit-call).  **Pre-existing** (identical on `origin/main` — not a @PLN85 regression), below the graduated-corpus leak-gate; the standing instruments (leak-gate + ASan + Miri) cover the graduated class.  L effort; edge-shape, not shipped-consumer-reachable. |
 
 For the open programmer-biting issues list (running, not plan-shaped), see [§ Open programmer-biting issues](#open-programmer-biting-issues) above.  For ranked enhancement work, see [§ Enhancement tiers](#enhancement-tiers).  For ordering across all open items, see [§ Recommended landing order](#recommended-landing-order).
 
@@ -2242,11 +2259,16 @@ session-of-the-week background bite.
 
 ### Tier 1 — closes whole classes of bugs
 
-1. **B7 lifecycle for native-returned struct-enum temporaries.**
+> **⛔ HISTORICAL — both items have SHIPPED (checked 2026-07-10).**  B7 closed with the B2–B7 audit
+> (2026-05-21, both backends); C54 (`integer` → i64) landed 2026-04-21 via @PLAN01 / @PLN88.  Kept as
+> a worked example of the "closes a whole class" selection criterion, which still applies — today it
+> selects **Cluster C / H10** ([STABILITY_ROADMAP.md](STABILITY_ROADMAP.md)).
+
+1. **B7 lifecycle for native-returned struct-enum temporaries.** ✅ CLOSED 2026-05-21.
    Unblocks 5 P54 ignored tests in one fix.  Scope analysis pattern,
    precedent in `File`'s ref-count handling.
 
-2. **C54 integer → i64.**  Eliminates the `i32::MIN` sentinel trap
+2. **C54 integer → i64.** ✅ LANDED 2026-04-21.  Eliminates the `i32::MIN` sentinel trap
    that has spawned three documented gotchas.  Multi-session,
    sub-tickets land independently (see § C54).
 
@@ -2508,6 +2530,12 @@ session-of-the-week background bite.
 ---
 
 ## Recommended landing order
+
+> **⛔ HISTORICAL — do not plan from this section (checked 2026-07-10).**  Every item it orders
+> (B7, B5, B2, B3, C54, P54 steps 4–8) has since **shipped**: B2–B7 audited + closed 2026-05-21 on
+> both backends, C54 landed 2026-04-21, P54 steps 4/5/6 complete.  Kept for the investigation
+> record — the *method* (explore-agent → file:line targets → tested prediction) is still the model.
+> The live ordering lives in [ROADMAP.md](ROADMAP.md) and [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md).
 
 **Updated 2026-04-13** — explore-agent investigation produced
 concrete file:line targets for all four compiler bugs.  The B7

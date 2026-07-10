@@ -64,51 +64,126 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    ([DEBUG.md](DEBUG.md#the-debug-assertions-calibration-run-target-da)).  The residue
    is enumerated, not anecdotal: the open DA cells + unfuzzed axes in
    [plans/85 fuzz-proof-gate.md](plans/85-store-lifetime-retirement/fuzz-proof-gate.md).
-   **Build-order dependency — gate 1 is blocked by gate 2.** The right ownership invariant
-   cannot be *defined* until the value/null model is settled: ownership flows through the
-   `deps` facts, and what a vector/value *is* (dense vs nullable, how it copies vs borrows)
-   is exactly what @PLN25 decides. The two plans meet at one chokepoint — the dense-default
-   flip is what closed @PLN85's #462 cluster, and Cluster C / #465 is literally the @PLN25
-   copy-vs-borrow `materialization_mode` predicate. So in **build order @PLN85 follows
-   @PLN25**, even though it is the headline gate. (This is why earlier @PLN85 attempts
-   flailed — there wasn't enough of @PLN25 settled to know what to build.)
+   **Build-order dependency — RESOLVED.** Gate 1 was blocked by gate 2: the ownership invariant
+   could not be *defined* until the value/null model settled, because ownership flows through the
+   `deps` facts and what a vector/value *is* (dense vs nullable, how it copies vs borrows) is
+   exactly what @PLN25 decided. @PLN25 CLOSED 2026-07-02, so the foundation is in place.
+   (This is why earlier @PLN85 attempts flailed — there wasn't enough of @PLN25 settled to know
+   what to build.)
+   **What is left of gate 1 (2026-07-10): exactly one item.** Every *tracked* store-lifetime bug is
+   closed, and the **fuzz-proof half is DONE** — @PLN53 (harness shipped, #542) and @PLN54 (sanitizer
+   stack, S4 LSan green) both CLOSED 2026-07-10 via #547, leaving only S9's toolchain-blocked
+   cdylib-boundary ASan spun out. So the sole remaining item is the **Cluster C / H10** `copy_claims`
+   keystone fold below — a **work item under the light flow**, deliberately not a plan (see the C row).
+   Its real scope is far smaller than that row's old M–L size. Gate 1 is "closed by construction" when
+   the fold lands and the standing corpora run over it.
 
-2. **One coherent null model — and the substrate gate 1 is built on.** Finish @PLN25
-   (nullable sequences / dense-default): vectors are coherent; scalars + DN3 + the `not null`
-   retirement remain. **Dual value:** (a) user-facing — a half-flipped model is a visible
-   incoherence ("null works for `vector<int>` but not `vector<Item>`"), exactly what a
-   newcomer or AI trips over; (b) load-bearing for gate 1 — this model defines the value
-   shapes and `deps` ownership facts the memory-model fix reads, so settling it is what makes
-   gate 1's invariant *knowable*. Ship one model before wide exposure.
-   Handoff: [plans/25-nullable-sequences/RESUME.md](plans/25-nullable-sequences/RESUME.md).
+2. **One coherent null model — and the substrate gate 1 is built on. MODEL LANDED 2026-07-02 (#480);
+   the gate is NOT yet cleared.** @PLN25 (nullable sequences / dense-default) is closed as a *plan*:
+   vectors, scalars and DN1–DN6 all landed default-on across both backends, `formal/types.md` is at
+   0 open deviations, and `not null` is now a **deprecated no-op** — it still parses, with a warning,
+   so not-yet-republished libraries keep loading, and the hard "retired" error stays blocked on the
+   registry republish (#546). **Load-bearing half realised:** the value shapes and `deps` ownership
+   facts the memory-model fix reads are settled, which is what makes **gate 1's invariant
+   *knowable*** — so gate 1 is unblocked, and that was gate 2's job for it.
+   **What keeps the gate open** is close-out plus a set of **verified-open edge cases** — among them
+   a **`?? null` unsoundness** (`y: integer = x ?? null` is accepted and a non-null slot ends up
+   holding `null`, both backends), the **call-arg N-Store hole** (a nullable passed into a non-null
+   *parameter* is silently accepted, though into a non-null *local* it is correctly rejected), a
+   **`u8?`-return native codegen failure**, the registry-gated `not null` hard-reject, and the F6
+   bookkeeping close-out. A null reaching a non-null slot is a soundness edge, not cosmetics: it is
+   the user-facing incoherence this gate exists to remove, so the gate reads **open**.
+   *Provenance:* re-probed on both backends 2026-07-10 by the @PLN25 stream — the authoritative list
+   is [RESUME.md § VERIFIED-OPEN RESIDUALS](plans/25-nullable-sequences/RESUME.md#verified-open-residuals-re-probed-both-backends-2026-07-10).
+   These are **not** independently re-verified here.
 
-3. **First-contact developer experience.** GOALS' acceptance test is *"done = picking it
-   up is fun,"* and first contact is dominated by what happens when the user is **wrong**.
-   Error messages (@PLN28) + developer experience (@PLN36) are the highest-leverage
-   newcomer/AI investment.
+3. **First-contact developer experience. ✅ CLEARED 2026-07-07.** GOALS' acceptance test is
+   *"done = picking it up is fun,"* and first contact is dominated by what happens when the user
+   is **wrong**. Error messages (@PLN28) and developer experience (@PLN36) are **both CLOSED**
+   (`status:finished`): `file:line:col` + caret across parser/type/runtime, did-you-mean
+   suggestions, concrete type-mismatch + match-pattern checks. Residual is two non-blocking
+   polish slices (finer format-null tokens, the `= note:` renderer) — not a gate.
 
 4. **Durability.** The "trust and forget your data" half — opt-in mmap so a crash or edit
    never loses the store (@PLN43). Skippable for throwaway prototypes, load-bearing for
    real projects.
 
-5. **A stability contract for scale.** A stated semver / compatibility promise, a
-   **public** bug-intake path (the fix-not-file discipline is internal-only and doesn't
-   reach strangers), and a 1.0 line — what is frozen vs still moving. No plan yet; open
-   one when gate 1 is in sight.
+5. **A stability contract for scale. ▶ TRIGGER FIRED 2026-07-10 — plan OPENED as
+   [@PLN102](https://github.com/loft-lang/plans/issues/102)** (`status:next`,
+   [plans/102-stability-contract/](plans/102-stability-contract/README.md)). A stated
+   semver / compatibility promise, a **public** bug-intake path (the fix-not-file discipline is
+   internal-only and doesn't reach strangers), and a 1.0 line — what is frozen vs still moving.
+   The opening condition was "open one when gate 1 is in sight"; gate 1 is now one work item away.
+   **Verified mechanism gap:** `manifest::check_version` honours only a `>=` lower bound — an upper
+   bound, exact pin, caret, or malformed constraint is silently accepted as "any version" — and
+   under calendar versioning (`2026.7.1`) the `>=0.8` that every published library carries is
+   permanently vacuous. So a library *cannot* declare incompatibility even if its author knows.
+   **The failure mode it prevents is already live.** `hex_terrain 0.1.0` fails its own registry
+   test with `0 land cells`: it uses the plain-bind write-through idiom (`th = t.tr_h; th[i] = v`),
+   and loft now **copies on plain bind** (C86 H-Copy), so the heights land in throwaway copies.
+   `graphics` hit the identical class and was migrated to `&self.data`; `hex_terrain` never was.
+   Both pin `loft = ">=0.8"`, so nothing guarded them, and the library does not crash — it
+   computes a plausible-looking wrong answer. That is precisely what
+   [GOALS.md](GOALS.md) forbids of the platform: *"the platform never broke its users; the cost of
+   change was paid by the maker, not the customer."* A compat promise with a deprecation channel
+   is the mechanism that would have caught it.
 
-**Sequence — gate 2 LEADS gate 1.** Finish enough of @PLN25 to settle the value model and the
-`deps` ownership facts (vectors done; scalars in flight, PR #469), THEN seal the memory model
-(gate 1) on that foundation — you cannot pin the ownership invariant on a moving value model.
-The two co-evolve at the shared `materialization_mode` chokepoint, with @PLN25 leading. Then
-gate 3 → gates 4–5. Performance (the copy-vs-borrow elision, an @PLN25 sub-thread) is "good
-enough for prototyping" — fold in opportunistically, not a blocker. **Readiness today (2026-07-09):
-the 2026-07 stability + type-safety release SHIPPED as `2026.7.1`. Gate 2's value model is
-substantially landed — @PLN25 dense vectors + scalars/DN4 merged (#469); DN3, the `not null`
-retirement, and the cleanup remain. Gate 1's tracked store-lifetime bugs are all CLOSED
-(#460 / #461 / #462 / #465, and A1b via @PLN90 #516); the one remaining hard item is the Cluster C
-dispatcher-taxonomy refactor below — forward-risk hardening, not an active bug. The distribution /
-multi-target / test infrastructure is release-grade** (4 targets parity-gated, suite green, signed
-registry, 0 open tracked bugs).
+**Sequence — gate 3 is CLEARED; gate 2 delivered what gate 1 needed but is not itself closed; gate 1
+is the live one.** Gate 2 (@PLN25) settled the value model and the `deps` ownership facts that gate 1's
+invariant is defined against, exactly as the build order required — so gate 1 is **unblocked** even
+though gate 2 still carries verified-open soundness edges of its own (see gate 2 above; they do not
+block gate 1, because the *model* is what gate 1 reads). Gate 3 (@PLN28 + @PLN36) is closed. So the
+order now reads: **finish gate 1** (the Cluster C fold — the fuzz/sanitizer corpora it must run under
+are now standing, @PLN53/@PLN54 closed) and **drain gate 2's edge cases** in parallel, **then open
+gate 5** (opened, @PLN102), with gate 4 (@PLN43, parked) after. Performance (the copy-vs-borrow
+elision, an @PLN25 sub-thread) is "good enough for prototyping" — fold in opportunistically, not a
+blocker.
+
+**Readiness today (2026-07-10).** The 2026-07 stability + type-safety release SHIPPED as
+`2026.7.1`. Gate 3 is CLOSED; gate 2's *model* is landed but the gate is **open** on verified soundness
+edges (a `?? null` unsoundness, the call-arg N-Store hole — see gate 2 above). Gate 1's tracked
+store-lifetime bugs are all CLOSED (#460 / #461 / #462 / #465, and A1b via @PLN90 #516) **and its
+fuzz-proof is now standing** (@PLN53/@PLN54 closed, #547); the single remaining item is the Cluster C
+fold — forward-risk hardening, not an active bug.
+
+**Why the tracker is empty — and what to read instead.** This stream's standing rule at the top of
+this file is *fix, don't file*, and the cycle runs under a warm feature freeze
+([ROADMAP § Feature freeze](ROADMAP.md)): **a known defect cannot be parked** — it is fixed in the
+session that surfaces it, with a regression test, and new feature work stops until what we can see
+works. So "zero open bug issues" is not bookkeeping; it is the *consequence* of refusing to tolerate a
+defect, and it is why nothing accumulates. What the number is **not** is the ledger. The known
+remainder is **recorded, scoped and owned** in each open plan's residual list — plus this queue — and
+it is not all comfortable: gate 2's `?? null` unsoundness above is a real soundness edge, named rather
+than parked. **Read those lists, not the issue count.**
+
+The discipline earns its keep because *the person who finds a bug is the person who fixes it*: repro
+warm, paths loaded, no scope/mechanism re-derivation to re-pay later. It does not survive contact with
+anyone who **cannot** fix — filing is a stranger's only available move — which is why a public intake
+path is its own arc of gate 5 ([@PLN102](https://github.com/loft-lang/plans/issues/102)) rather than an
+afterthought. The policy is right; its boundary is scale, not size.
+
+Two standing gates are RED, and neither is a flake:
+- **`main` is red on the differential oracle** — `tests/oracle/27-native-tailcall-return-heap.loft`
+  runs on `--interpret` but `--native` and `--native-wasm` **reject it** (rustc E0599:
+  `return ().to_string()` — codegen drops the value of a tail call inside a match arm). An
+  accept/reject divergence, so Goal D's Check ("zero differences") does not hold. The corpus cell was
+  added by @PLN97 precisely to stop this class re-opening; the oracle did its job.
+- **`registry-validation` has never had a green run** since it was added 2026-07-05. Exactly 2 of
+  ~22 libraries fail: `graphics` (CI provisioning — `alsa-sys` needs `libasound2-dev` + pkg-config,
+  the workflow installs only `mold`) and `hex_terrain` (see gate 5 above). Do **not** dismiss this
+  as a network flake — the other 20 pass.
+
+**Coverage gaps against the GOALS.md Checks** (the Checks are the bar and stay as written; these are
+*results*, i.e. open work):
+- Goal A asks `stack_align_guard` to fire zero times "across the whole corpus (every test binary)".
+  CI's `stack_align_guard sweep` runs `--lib --test issues --test wrap --test strings --test frame_vars`
+  with `library_suite` excluded — four test binaries, not the corpus. **Widen it.**
+- Goal E asks that `LOFT_STORE_GUARD=1` be silent across the corpus. That env var is set in **no**
+  workflow. The assert it was promoted to (`scopes.rs`, `cfg!(debug_assertions) || LOFT_STORE_GUARD`)
+  is compiled OUT of every normal test build by `[profile.dev.package.loft] debug-assertions = false`,
+  so it is exercised only by the nightly **debug-assertions gate**, which is scoped to
+  `--lib --test issues` (its own comment: widening awaits the plan-85 DA-inventory worklist).
+  **Wire the corpus sweep into CI, and widen the DA gate.**
 
 ## The queue
 
@@ -117,7 +192,7 @@ the store-lifetime UAFs *as of that pass*, and the **Pass-2 arity-growth cascade
 (Reference + Vector/struct-Enum, #355/#356) — is **complete** (see Done below). The
 store-lifetime class REOPENED 2026-06-21, but as of 2026-07-09 **all its tracked bugs are CLOSED**
 (see [§ Red-flag remediation](#red-flag-remediation--the-live-store-lifetime-stream-2026-06-21-)
-below); the one remaining item there is the **Cluster C** dispatcher refactor — forward-risk
+below); the one remaining item there is the **Cluster C** `copy_claims` keystone fold — forward-risk
 hardening, not an active failure. Nothing in the
 H-register queue below is an active failure either. What remains *there* is **forward-risk hardening** (the
 H-register): asserts and tripwires that lock in finished work, then structural
@@ -132,8 +207,9 @@ refactors that retire whole future-bug *classes*. In finishing order:
 > worker-slot swap-back encapsulated into one home; full field-privacy is
 > design-protocol over-reach for the benign reads, optional), 8 (H4-medium GET↔SET),
 > and 10 (de-dup tail — triaged clean) are ✅. Remaining are NOT bugs/hardening-gaps:
-> **step 9** is future fuzzing/sanitizer plan slots (@PLN53/@PLN54, open when
-> reached); **step 2** is parked WIP on a separate branch.  The live open queue is just
+> **step 9** is the fuzzing/sanitizer instrument pair (@PLN53/@PLN54) — **✅ BOTH CLOSED 2026-07-10**
+> (#547); it was gate 1's fuzz-proof and it now stands (only S9's toolchain-blocked cdylib-boundary
+> ASan spun out); **step 2** is parked WIP on a separate branch.  The live open queue is
 > **step 11** (CI docs-only matrix-skip — risky CI surgery, validate via a docs-only PR).
 > **Step 8** (H4-medium) is now ✅ (design-protocol — free-op already single-homed, null-init
 > are different facts; premise over-stated like H3) and **step 12** (i32 reclaim) is deferred
@@ -170,14 +246,15 @@ the design protocol; verify-armed before trusting the armed channel's silence
 > ([STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md)). **As of 2026-07-09 every tracked bug in it
 > is CLOSED** — the Cluster A residuals (#426, #429), the #462 leak, the native mixed-mode
 > boundary (#460, #461), and the A1b temporary-subject UAF (@PLN90 #516). What remains is **one
-> untracked refactor, not an active bug**: Cluster C, folding the copy / validate / construct
-> claim dispatchers onto the keystone — this retires the densest historical bug cluster *by
-> construction*. Finishing order:
+> untracked refactor, not an active bug**: Cluster C, folding the **`copy_claims` source
+> enumeration** onto the keystone (`validate_claims` and construction were probed and ruled OUT
+> of scope — see the C row) — this retires the densest historical bug cluster *by construction*.
+> Finishing order:
 
 | # | Item | Size | Status |
 |---|---|---|---|
 | **A** | **Cluster A — return/bind ownership** (collapse the per-site ownership re-derivation onto one carried `deps` fact). A.4 / A.3 / A.2-a7 + the native-FFI fixes merged (#423); A.1 part i (free-suppress, return-source SET) + the parser-counter substrate / #426B / #425-sibling / native-leak fixes on `tuxedo-substrate-followup`. **Residuals #426 + #429 both CLOSED** (2026-06-22). #429 (borrowed-view return over-free) landed the borrow-classify in `ref_return` + the nullable-enum copy-bind path in `gen_set_first_at_tos`; regression `tests/scripts/85-store-lifetime-enum-match-borrowed-view-overfree.loft` passes both backends. Cluster A's tracked bugs are done; the remaining ownership-substrate work is Cluster C. | — | ✅ done (residuals closed) |
-| **C** | **Cluster C — per-`Parts` container taxonomy** (copy/remove/validate/construct heap-cascade). `remove_claims` collapsed onto `for_each_owned_child` (C.0–C.3, merged), but **copy / validate / construct still drift** — `copy_claims` split 4 ways, `validate_claims` monolithic, ~53 `Parts::` arms across 3 dispatchers. The densest HISTORICAL bug cluster (@P290 SIGSEGV, @P306/@P318 hash slot-drift, @P309, #260/#330) and the highest-leverage **UN-TRACKED** hotspot. Fix: fold copy/validate/construct onto the keystone. Now H10. | M–L | ⬜ open — the next pass after A |
+| **C** | **Cluster C — fold `copy_claims` onto the keystone** (was: "per-`Parts` container taxonomy"). `remove_claims` already collapsed onto `for_each_owned_child` (C.0–C.3, merged) — that is the model thin-visitor and the proof the fold works. **The remaining scope is `copy_claims` ALONE.** A 2026-06-22 design probe *falsified* the wider framing: `validate_claims` does **NOT** fold (a defensive walk over suspected-corrupt heaps — it bounds-checks before following a pointer, where the keystone trusts it), and `record_new`/`record_finish` is a WRITE path, so forcing it onto a read-walk is over-reach. Retires the densest HISTORICAL bug cluster (@P290 SIGSEGV, @P306/@P318 hash slot-drift, @P309, #260/#330) **by construction**. Now H10. **This is the last item of gate 1.** It is deliberately a **work item under the light flow, not a plan** — the design is settled and the phases are three mechanical helper folds, so a plan issue would be a pointer with no content of its own ([plans/README § docs-vs-plans](plans/README.md)); *this row is its lifecycle*. Phase 0–4 written, per-helper (`index_body` near drop-in → `array_body` → `seq_vector`), with guard script + `LOFT_COPY_CHECK=1` tripwire. | **S per copy helper** (was mis-sized M–L against the falsified wider scope) | ⬜ open — **the next pass**; executable plan: [STABILITY_REDFLAG_REMEDIATION § Cluster C / H10](STABILITY_REDFLAG_REMEDIATION.md#cluster-c--h10--fold-copy_claims-source-enumeration-onto-the-keystone) |
 | **@PLN87** | **Reference-default `&`-binding semantics — DONE.** `&` binds a LIVE REFERENCE to an addressable source (variable / field / element): reads see the source, writes and field/element mutation write through, uniform across scalars and heap. Shipped via PR #436 (the L1–L7 ladder, both backends) + #506 (`&`-write-back to a computed lvalue) + the W4 redundant-`&` lint (#510, on by default). The corrected live-reference model supersedes the original write-back framing; realizes the OWNERSHIP_MODEL binding rule. | M | ✅ done ([@PLN87](https://github.com/loft-lang/plans/issues/87)) |
 | **B** | **Cluster B — stack-delta wrong-signal.** Deferred — unverifiable, no RED probe fires; latent. Pick up only on a real trigger. | — | ⏸ deferred |
 | **462-leak** | **#462 residual store leak — CLOSED (2026-06-26).** The native-only `MonsterDef` record leak (the `mon_*` borrowed-view shape) is fixed and landed; issue #462 closed. | S–M | ✅ done |

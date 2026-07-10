@@ -14,11 +14,40 @@ probe verdicts) → [implementation-steps.md](implementation-steps.md) (the phas
 
 ---
 
-## TL;DR — where we are (updated 2026-07-01)
+## TL;DR — where we are (updated 2026-07-10)
 
-> **Remaining steps to close @PLN25: see [§ FINISH LINE](#finish-line--the-remaining-steps-to-close-pln25-2026-07-01) below.**
-> The model is built + gated + both-backends-validated; what's left is landing the flip as the
-> default (F1) + retiring `not null` (F2) + closing DN5/DN6/DN4 (F3–F5) + the final PR (F6).
+> **The null/dense value model has LANDED on `main` (#480, 2026-07-02): `formal/types.md` is at
+> 0 open deviations — DN1–DN6 all closed, default-on, both backends. F1–F5 are done.** What
+> remains is close-out + a handful of deferred edge cases, none blocking the model — see
+> § VERIFIED-OPEN RESIDUALS directly below. The F1–F5 detail is kept in § FINISH LINE as the record
+> (that section predates the 2026-07-10 re-probe and is stale on flow-narrowing + `u8?`).
+
+## VERIFIED-OPEN RESIDUALS (re-probed both backends 2026-07-10)
+
+All are **deferred edge cases / close-out** — the value model itself is complete. Probed on the
+current tree, so this supersedes the older FINISH-LINE notes where they disagree.
+
+- **`not null` HARD parser-reject — open by design.** Still accepted as a silent no-op
+  (`src/parser/definitions.rs`); a hard "retired" error is blocked on the registry republish
+  (task #4 — graphics/web/gridmesh/crypto/cbor still carry `not null`, and green tests load them).
+- **Call-arg (N-Store) hole — open.** A nullable passed into a non-null PARAMETER is silently
+  accepted on both backends (`takes(v[j])`, `takes(a / b)`), though the same value into a non-null
+  LOCAL is correctly rejected. The teeth sit on the local-slot site, not the call-arg site.
+- **`?? null` unsoundness — open.** `y: integer = x ?? null` (and `?? <nullableVar>`) is accepted
+  and a non-null slot ends up holding `null` on both backends; `??` discharges regardless of the
+  fallback's own nullability. (`?? null` is itself a pathological no-op idiom.)
+- **`u8?`-return native codegen bug — open (native-only build failure).** `fn f(i) -> u8? {
+  r = i as u8?; r }` runs correctly on interp but emits invalid Rust on native (declared `-> u8`,
+  body returns `i64` → `rustc` E0308). Also: the tail-expr form `-> u8? { i as u8? }` is spuriously
+  rejected at compile time while the local-bound form is accepted (a return-coercion checker
+  inconsistency). Merits its own GH issue when the edge-case phase starts.
+- **F6 — close-out**: the `Closes @PLN25` PR + `CHANGELOG` + the deviation-register confirmation.
+
+**Removed as FIXED (2026-07-10):** the old "interp full-width vs native narrow-packed" `u8?`
+FIELD/LOCAL divergence no longer reproduces — both backends now agree (255 in a `u8?` field reads
+back `null` on both; a `u8?` local holds 255 on both). And **flow-narrowing works** — `if x != null
+{ y: integer = x }` and the `== null`-else branch both narrow with no `?? d`, both backends; the
+"Deferred" note in § FINISH LINE is superseded.
 
 ### ⭐ MOST RECENT — cold-start read this first (branch `tuxedo-pln85-fuzz-proof-gate`)
 
@@ -533,9 +562,11 @@ tightenings**. In order, each ends green (never carry two phases' breakage):
   CLOSED (F3/F4/F5, 2026-07-02); remaining: confirm DN1+DN2 CLOSED + `CHANGELOG` + F2 (retire
   `not null`, blocked on the range reconciliation — see F2 above).
 
-**Deferred (a SEPARATE feature, NOT blocking the @PLN25 close):** flow-narrowing (`if x != null
-{ x : τ }`), the ergonomic chokepoint for the `got = raw`-style N-Store cases. Tracked in
-DN1-MITIGATION §3 (turns those from a diagnostic into a silent semantic auto-fix).
+**Flow-narrowing — ✅ DONE (verified both backends 2026-07-10).** `if x != null { x : τ }` and the
+`== null`-else branch both narrow a `τ?` to `τ` with no `?? d` discharge; the unguarded store is
+still correctly rejected. This closed the `got = raw`-style ergonomic chokepoint. (Historical note:
+this section originally listed it as a deferred separate feature — see § VERIFIED-OPEN RESIDUALS at
+the top for the current, re-probed status.)
 
 ---
 

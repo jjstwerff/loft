@@ -74,6 +74,7 @@ open is the exact trust-break above.
 | 10 | Ships and is legible | a newcomer who just discovered loft | they install, hit a library that fights them, and leave |
 | 11 | The method is the moat | contributors who value a project that fixes the class | the rough-spot lists stop shrinking |
 | 12 | Keeps running under fault | game/server authors who can't take a crash-on-fault | it isn't built yet (still halts); a degraded null can be hard to trace to its source |
+| 13 | Layout control with a safety net | performance-conscious devs turned off by "only C++ is valid" | the cache win only shows on `--native`; or layout becomes a mandatory tax, not an optional power |
 
 Read top-down: the turn-offs are roughly in trust-cost order — #1–#5 break the
 promises that *are* loft's identity, so they cost the most to leave open.
@@ -412,6 +413,40 @@ second turn-off with the **opt-in debug log + null provenance** — when the pro
 *where* a degraded value first went null, so "keeps running" never costs them the root cause.
 *Check:* a deliberate `s/0` deep in a call chain keeps the program running AND, with the debug
 log on, names the originating site.
+
+---
+
+## 13. Layout control with a safety net — you place the data
+
+**Strength.** You decide the **allocation topology**: group data that belongs together into
+one store (one allocation, packed, one lifetime, freed as a unit) and split unrelated data into
+another (independent lifetimes, no false coupling). The store **is** the arena and `DbRef` is
+the index-pointer — and, unlike C++ or Zig, the ownership/`deps` discipline holds *across* the
+grouping, so you keep the safety net while you author the layout. That combination is an empty
+quadrant elsewhere: C#/Unity and GDScript hide layout entirely (the interleaved-allocation
+pitfall), C++ gives layout but no enforced safety, and Rust gives both but fights hardest on the
+shared-mutable object graphs games are made of. loft occupies **approachable + layout control +
+enforced safety** together — data-oriented design as a default, not a framework bolted on. See
+[OWNERSHIP_MODEL.md § the control story](OWNERSHIP_MODEL.md#why-this-shape--the-control-story-makers-call).
+
+**Who it wins.** Performance-conscious developers — the "write Java like ANSI-C" and
+data-oriented-design school — who want to control memory layout but are turned off by C++'s
+no-safety bargain and by managed languages that hide layout altogether, and anyone uneasy with
+the idea that only C++ is a valid engine language.
+
+**The turn-off.** Two, opposite in shape. First, the *realized* cache win is a `--native`
+story: on the interpreter, dispatch overhead masks locality, so someone who benchmarks the
+layout control on the interpreter sees the control but not the speed and concludes it is
+theatre. Second, **progressive disclosure** — if grouping and splitting stores is a decision the
+programmer *must* make to write *correct* code, loft stops being "easier than Java" and becomes
+a tax, losing the very approachability that wins the newcomer. The control has to be an optional
+power over a sane naive default, never an upfront obligation.
+
+**Raise it higher.** Keep layout an *optional* power — a beginner writes into a default store
+and is correct with zero topology decisions — and prove the realized win on `--native` (the
+~10k-body browser physics demo is the existence proof against "only C++"). *Check:* a beginner
+program is correct with no store-placement decisions; and the physics demo shows the
+cache/throughput win on `--native`, not merely the layout *control* on the interpreter.
 
 ---
 

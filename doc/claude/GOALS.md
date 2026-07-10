@@ -141,6 +141,32 @@ familiar surface over an alien-but-dependable substrate, because the alternative
 rushing to *look* like Rust — *is* Rust underneath, and loses the goal. The years
 were not overhead; they were the goal taken seriously.
 
+### Legible cost — you keep the performance-critical decisions
+
+There is a second failure that "does not fail for software reasons" has to cover, and it
+is the one that generated loft: code that is **correct at low scale and fatal at
+production**. A construction runs fine on a developer's small dataset, then breaks the
+day real load arrives — an N+1 access pattern, an unbounded cache, a GC that never paused
+until the allocation rate was real. The code was not wrong; it was wrong *at a scale the
+source did not reveal*, because the language hid the decisions that determine cost. The
+worst case is **interleaved on-the-fly allocation** — objects scattered across the heap as
+they are created, invisible until the working set outgrows cache, and *unactionable* even
+once diagnosed, because a managed language gives no lever to dictate placement.
+
+So loft draws a line by **performance-criticality**: a performance-critical decision is
+never abstracted away — **allocation topology (group related data into one allocation,
+split unrelated data into another) stays visible and in the programmer's hands** — while
+the bookkeeping that is *not* performance-critical is automated, but **deterministically**
+(freeing at scope/owner death, not a tracing collector; a copy by a legible rule, not a
+silent deep copy). What loft refuses is *hidden, nondeterministic* machinery — a tracing
+GC, a surprise reallocation. This is the layout/cost sibling of **Goal E**: E makes *when*
+a value dies match the source; this makes *where* it lives, and *what it costs*, the
+programmer's to see and set. The mechanism is [OWNERSHIP_MODEL.md § the control
+story](OWNERSHIP_MODEL.md#why-this-shape--the-control-story-makers-call); the realized
+speed of it is a `--native` concern (the interpreter's dispatch overhead masks locality),
+so today loft lets you *express* the right layout and `--native` turns that into machine
+cost.
+
 ### Why a language, not a store bolted onto an existing one
 
 A key reason loft is a *language* and not an in-memory data store added to Rust
@@ -649,21 +675,36 @@ not "all of A" or "all of B":
   the Miri/ASan set covers the surfaces the games use (eval stack, store
   claim/copy/resize, vectors, fn-refs, text). *Not* "every Goal-A coverage leg
   shipped."
-  **Reading (2026-06): near.** CI's `guard`/`asan` jobs are green on `main`; the
-  store-lifetime class that kept surfacing is being retired the right way
-  ([OWNERSHIP_MODEL.md](OWNERSHIP_MODEL.md), @PLN85). The open part is *confirming*
-  the Miri/ASan set covers the game surfaces, not new failures.
+  **Reading (2026-07-10): near, with two named gaps.** @PLN85 closed; every *tracked*
+  store-lifetime bug is fixed, and the nightly sanitizer set (Miri, ASan UAF/OOB, TSan,
+  `LOFT_POISON`, native-ASan) is green on `main`. Two gaps keep this from reading MET.
+  (i) **Coverage is narrower than the Checks above state**: the `stack_align_guard` sweep
+  runs four test binaries, not the corpus; and `LOFT_STORE_GUARD=1` (Goal E's Check) is set
+  in *no* workflow — the assert it was promoted to is compiled out of normal test builds by
+  `[profile.dev.package.loft] debug-assertions = false`, so only the nightly debug-assertions
+  gate exercises it, over `--lib --test issues`. (ii) **The class is not yet retired by
+  construction**: the fuzz/sanitizer corpora that must prove it are now standing (@PLN53 + @PLN54
+  both closed 2026-07-10), so the **one** remaining step is the Cluster C / H10 fold — land it and
+  the silence becomes proof. Tracked in [STABILITY_ROADMAP.md](STABILITY_ROADMAP.md).
 - **Structure floor — cleared when:** the libraries a game depends on (graphics,
   game_client / game_protocol, server) are extracted, installable, and
   version-stable through the registry. *Not* "the whole package toolchain
   polished."
-  **Reading (2026-06): MET.** The [`loft-lang/registry`](https://github.com/loft-lang/registry)
-  carries 21 signed (`index.json` + Ed25519 `.sig`), per-version-`sha256` packages
-  with dependency resolution (`server` → `web >=0.1`) — `graphics`, `game_protocol`,
-  `server`, the hex-world stack, `web`, `crypto` (the zero-trust lib), assets, docs
-  — each on its own semver track (`web 0.2.2`, `crypto 0.3.4`). `loft install <name>`
-  resolves against it end to end. Extraction + installability + version-stability —
-  the named bar — read true.
+  **Reading (2026-07-10): still MET on the named bar — but "installable" is doing quiet work.**
+  The [`loft-lang/registry`](https://github.com/loft-lang/registry) carries 22 signed
+  (`index.json` + Ed25519 `.sig`), per-version-`sha256` packages with dependency resolution
+  (`server` → `web >=0.1`; `hex_terrain` → `hex_grid`) — `graphics`, `game_protocol`, `server`,
+  the hex-world stack, `web`, `crypto` (the zero-trust lib), assets, docs — each on its own
+  semver track. `loft install <name>` resolves and fetches end to end, including transitive
+  deps. Extraction + installability + version-stability read true.
+  **Caveat that the bar does not capture:** *installable* here means **resolves + fetches**, not
+  *yields a working artifact*. The nightly `registry-validation` gate has **never had a green
+  run**: `graphics` does not build `--native` on a clean runner (its `alsa-sys` dep needs
+  `libasound2-dev`, which the workflow never installs), and `hex_terrain 0.1.0` fails its own
+  test against current loft (it uses the plain-bind write-through idiom that now **copies** —
+  C86 H-Copy — so it silently computes a wrong answer). Neither overturns the MET reading, but
+  both are real ecosystem rot, and the second is exactly the compatibility failure the
+  wide-release bar's **gate 5** exists to prevent.
 
 The structure floor's bar reads MET and the soundness floor is near, so **the pause
 is at its end, not its middle**. When both read true the dogfood loop sets the

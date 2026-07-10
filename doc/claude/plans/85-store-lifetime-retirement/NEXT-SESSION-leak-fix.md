@@ -151,8 +151,8 @@ Each line below was re-run on the current build, not taken from the prior note.
 - **Cluster C / H10** — **OPEN** (confirmed in code): `remove_claims` is folded onto
   `for_each_owned_child`, but `copy_claims` is still split four ways
   (`copy_claims_seq_vector`/`_array_body`/`_hash_body`/`_index_body`) and `validate_claims` is
-  monolithic. A brittleness refactor, not a red test. See
-  [cluster-C-copy-claims-fold.md](cluster-C-copy-claims-fold.md).
+  monolithic. A brittleness refactor, not a red test. The executable plan moved to its canonical
+  home when this plan closed: [STABILITY_REDFLAG_REMEDIATION.md § Cluster C / H10](../../STABILITY_REDFLAG_REMEDIATION.md#cluster-c--h10--fold-copy_claims-source-enumeration-onto-the-keystone).
 - **#460** (interpret aborts on cdylib-dispatch stub) — **OPEN, could not reproduce here.**
   Crawler `equiptest`/`selftest` both run to `OK` (exit 0) with no `extensions.rs:678` warning,
   on the current build AND the pre-fix baseline. BUT the test box has lib cdylibs built from

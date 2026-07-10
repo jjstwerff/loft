@@ -79,10 +79,15 @@ impl Parser {
                 }
             }
         } else if op == "=" && var_nr != u16::MAX {
+            // A branch RHS (`q = if …`, `q = match …`, `q = a ?? b`) delivers per ARM
+            // into `q` instead of being lowered as a value — see `try_branch_text_bind`.
+            if self.try_branch_text_bind(code, var_nr) {
+                // `code` is now a void branch of `Set(q, …)`; nothing further to wrap.
+            }
             // detect self-reference (t = t[N..], t = fn(t), etc.)
             // If the RHS reads from the same variable being assigned, use a
             // work text to avoid the clear-before-read problem.
-            if code.reads_var(var_nr) {
+            else if code.reads_var(var_nr) {
                 let work = self.vars.work_text(&mut self.lexer);
                 let ls = vec![
                     self.cl("OpClearText", &[Value::Var(work)]),
