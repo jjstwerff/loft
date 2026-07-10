@@ -1149,10 +1149,7 @@ n_demo_fn_b = "demo_fn_b"
     fn version_too_high_fails() {
         assert_eq!(check_version(">=2.0", "1.9.9"), VersionCheck::Unsatisfied);
         assert_eq!(check_version(">=1.1", "1.0.0"), VersionCheck::Unsatisfied);
-        assert_eq!(
-            check_version(">=1.0.1", "1.0.0"),
-            VersionCheck::Unsatisfied
-        );
+        assert_eq!(check_version(">=1.0.1", "1.0.0"), VersionCheck::Unsatisfied);
     }
 
     /// @PLN102 arc B — the composition matrix (plan README § Composition
