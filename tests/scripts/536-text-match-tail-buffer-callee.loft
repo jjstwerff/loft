@@ -1,0 +1,90 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+
+// Differential-oracle divergence 2026-07-10 — a `-> text` fn whose TAIL is a
+// `match` miscompiled on native while the interpreter ran fine (an accept/reject
+// divergence, caught by `tests/oracle/27-native-tailcall-return-heap.loft`).
+//
+// MECHANISM.  A text tail promotes its branch arms into an `__acc` buffer
+// (`do_if_acc` → `push_text_arms_into` → `text_return`), which is what lets the
+// caller supply the `&text` return buffer.  A `match` lowers to
+// `Block["scalar_match"]{ Set(subj), <nested If chain> }` — the same
+// value-yielding branch tail as a bare `if`, just behind the subject-binding
+// wrapper — but `if_tail_yields_text` did not see through that block, so the
+// promotion never fired.  Native then emitted an arm that borrows a dead `Str`
+// temporary, and the interpreter (which keeps the value on its stack) was right.
+//
+// The trigger is the CALLEE needing a caller-provided destination buffer (a
+// computed text body), NOT a heap/store-backed param as the oracle cell's old
+// header claimed: a literal-bodied callee returns an owned `String` and is fine,
+// with or without params.  Both rustc symptoms are pinned here because the
+// subject type decides which one fires: `text` subject → E0599 (`().to_string()`,
+// the value dropped); `integer` subject → E0716 (borrow of a dropped temporary).
+// Fixed by teaching `if_tail_yields_text` the `scalar_match` see-through, exactly
+// as it already does for the `ncc`/`ncr` coalesce blocks.
+
+fn tmt_computed() -> text { "a" + "b" }        // buffer-taking callee (computed body)
+fn tmt_literal() -> text { "lit" }             // bufferless callee (owned String)
+fn tmt_param(s: text) -> text { s + "!" }      // params are irrelevant to the trigger
+
+// integer subject → the E0716 mask
+fn tmt_int_subject(k: integer) -> text {
+  match k { 1 => tmt_computed(), _ => "" }
+}
+
+// text subject → the E0599 mask
+fn tmt_text_subject(k: text) -> text {
+  match k { "hit" => tmt_computed(), _ => "" }
+}
+
+// three arms: the chain nests `If`s, which `arm_yields_text` must recurse
+fn tmt_three_arms(k: integer) -> text {
+  match k { 1 => tmt_computed(), 2 => tmt_param("x"), _ => "" }
+}
+
+// a bufferless callee must keep working (it never needed the promotion)
+fn tmt_literal_callee(k: integer) -> text {
+  match k { 1 => tmt_literal(), _ => "" }
+}
+
+// both arms buffer-taking
+fn tmt_both_arms(k: integer) -> text {
+  match k { 1 => tmt_computed(), _ => tmt_param("z") }
+}
+
+// the `if` twin stays correct (it always was) — guards against a regression in
+// the shared `do_if_acc` path the fix routes through
+fn tmt_if_twin(k: integer) -> text {
+  if k == 1 { tmt_computed() } else { "" }
+}
+
+// A match in BIND position (not the tail) goes through a different path and was
+// never affected by this fix.  Pinned with a TEXT subject, which is the shape that
+// works today.
+//
+// KNOWN SIBLING, still open: the same bind position with an INTEGER subject and a
+// buffer-taking callee — `q = match k { 1 => tmt_computed(), _ => "" }; q` — still
+// miscompiles on native (E0716), and the interpreter is correct.  It is NOT caused
+// by this fix (`if_tail_yields_text`'s only caller gates on the fn body's TAIL, and
+// this tail is `Var(q)`), and it predates it.  Same class — a buffer callee under a
+// `scalar_match` — but a different site: the `Set(q, …)` bind, not the tail.  Left
+// out of this guard so the guard stays green; probe kept in the fix's commit message.
+fn tmt_not_tail(k: text) -> text {
+  q = match k { "hit" => tmt_computed(), _ => "" };
+  q
+}
+
+fn main() {
+  assert(tmt_int_subject(1) == "ab", "int subject hit");
+  assert(tmt_int_subject(9) == "", "int subject miss");
+  assert(tmt_text_subject("hit") == "ab", "text subject hit");
+  assert(tmt_text_subject("no") == "", "text subject miss");
+  assert(tmt_three_arms(1) == "ab", "three arms first");
+  assert(tmt_three_arms(2) == "x!", "three arms second");
+  assert(tmt_three_arms(7) == "", "three arms default");
+  assert(tmt_literal_callee(1) == "lit", "literal callee");
+  assert(tmt_both_arms(1) == "ab", "both arms first");
+  assert(tmt_both_arms(0) == "z!", "both arms default");
+  assert(tmt_if_twin(1) == "ab", "if twin");
+  assert(tmt_not_tail("hit") == "ab", "match not in tail");
+}

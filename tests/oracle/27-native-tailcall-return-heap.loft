@@ -13,6 +13,22 @@
 // optional-text discharge in tail, a match-arm tail, and a 2-level tail chain —
 // so a future codegen change can't re-open the class on a shape no single guard
 // tests. Both backends must AGREE on value and on accept/reject.
+//
+// It EARNED its keep 2026-07-10: `a7_match_arm_tail` went red.  Note for whoever
+// reads this next — the header above describes the 2026-07-02 routing family, NOT
+// what a7 caught, and following it costs you an hour.  a7's trigger has nothing to
+// do with heap params or store-backed params.  It is: a `-> text` fn whose TAIL is
+// a `match` with an arm calling a callee that needs a caller-provided destination
+// buffer (i.e. a COMPUTED text body; a literal-bodied callee returns an owned
+// String and is fine, with or without params).  Reduces to three lines with no
+// JsonValue at all:
+//     fn c0() -> text { "a" + "b" }
+//     fn f(k: integer) -> text { match k { 1 => c0(), _ => "" } }
+// The subject type only picks the rustc symptom — `text` → E0599 (value dropped,
+// `return ().to_string()`), `integer` → E0716 (borrow of a dropped temporary).
+// Root cause: `if_tail_yields_text` did not see through the `scalar_match` block,
+// so `do_if_acc` never promoted the arms into the `__acc` return buffer.  Fixed in
+// `src/parser/control.rs`; pinned by tests/scripts/536-text-match-tail-buffer-callee.loft.
 
 struct Doc { body: text, tag: text }
 struct Res { name: text, n: integer }

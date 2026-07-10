@@ -5484,6 +5484,24 @@ impl Parser {
             Value::Block(bl) if bl.name == "ncc" || bl.name == "ncr" => {
                 bl.operators.last().is_some_and(Self::if_tail_yields_text)
             }
+            // A `match` in tail position lowers to `Block["scalar_match"]{ Set(subj),
+            // <nested If chain> }` — structurally the SAME value-yielding branch tail as
+            // a bare `if`, just behind the subject-binding wrapper.  Without seeing
+            // through it, `do_if_acc` never fires, the arms are not pushed into `__acc`,
+            // and `text_return` promotes nothing: native then emits the arm's borrow of a
+            // dead `Str` temporary (E0716) or drops the value and returns `()` (E0599),
+            // while the interpreter — which keeps the value on its stack — is correct.
+            // That accept/reject divergence is what the differential oracle caught in
+            // `tests/oracle/27-native-tailcall-return-heap.loft`.  `push_text_arms_into`
+            // already descends `Value::Block` and retypes it `Void`, so only the
+            // RECOGNISER was blind.  Exactly the `ncc`/`ncr` see-through above.
+            //
+            // Forward-ref-SAFE for the same reason the `if` arm is: `parse_scalar_match`
+            // emits this block on BOTH passes.  A `null` arm still yields `false` via
+            // `arm_yields_text`, so a `text?` tail keeps its `(N-Store)` reject.
+            Value::Block(bl) if bl.name == "scalar_match" => {
+                bl.operators.last().is_some_and(Self::if_tail_yields_text)
+            }
             _ => false,
         }
     }
