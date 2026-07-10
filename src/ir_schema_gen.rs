@@ -165,8 +165,8 @@ pub struct IrSchemaIds {
     pub pt_short_raw: u16,
     /// `known_type` of `PtSorted`.
     pub pt_sorted: u16,
-    /// `known_type` of `PtSpacial`.
-    pub pt_spacial: u16,
+    /// `known_type` of `PtRadix`.
+    pub pt_radix: u16,
     /// `known_type` of `PtStruct`.
     pub pt_struct: u16,
     /// `known_type` of `PtVector`.
@@ -209,8 +209,8 @@ pub struct IrSchemaIds {
     pub ty_single: u16,
     /// `known_type` of `TySorted`.
     pub ty_sorted: u16,
-    /// `known_type` of `TySpacial`.
-    pub ty_spacial: u16,
+    /// `known_type` of `TyRadix`.
+    pub ty_radix: u16,
     /// `known_type` of `TyText`.
     pub ty_text: u16,
     /// `known_type` of `TyTuple`.
@@ -269,7 +269,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     let t91 = db.structure("TyIterator", 17);
     let t92 = db.structure("TySorted", 18);
     let t94 = db.structure("TyIndex", 19);
-    let t95 = db.structure("TySpacial", 20);
+    let t95 = db.structure("TyRadix", 20);
     let t97 = db.structure("TyHash", 21);
     let t98 = db.structure("TyFunction", 22);
     let t99 = db.structure("TyRewritten", 23);
@@ -344,7 +344,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     let t172 = db.structure("PtOrdered", 12);
     let t173 = db.structure("PtHash", 13);
     let t174 = db.structure("PtIndex", 14);
-    let t175 = db.structure("PtSpacial", 15);
+    let t175 = db.structure("PtRadix", 15);
     let t176 = db.structure("PtDbRef", 16);
     let t177 = db.structure("PtChildRec", 17);
     let t178 = db.structure("DbType", 0);
@@ -877,7 +877,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.value(t64, "TyIterator", t91);
     db.value(t64, "TySorted", t92);
     db.value(t64, "TyIndex", t94);
-    db.value(t64, "TySpacial", t95);
+    db.value(t64, "TyRadix", t95);
     db.value(t64, "TyHash", t97);
     db.value(t64, "TyFunction", t98);
     db.value(t64, "TyRewritten", t99);
@@ -935,7 +935,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.value(t67, "PtOrdered", t172);
     db.value(t67, "PtHash", t173);
     db.value(t67, "PtIndex", t174);
-    db.value(t67, "PtSpacial", t175);
+    db.value(t67, "PtRadix", t175);
     db.value(t67, "PtDbRef", t176);
     db.value(t67, "PtChildRec", t177);
     db.finish();
@@ -1013,7 +1013,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
         pt_short: t165,
         pt_short_raw: t167,
         pt_sorted: t170,
-        pt_spacial: t175,
+        pt_radix: t175,
         pt_struct: t159,
         pt_vector: t168,
         sort_key: t70,
@@ -1035,7 +1035,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
         ty_routine: t90,
         ty_single: t81,
         ty_sorted: t92,
-        ty_spacial: t95,
+        ty_radix: t95,
         ty_text: t83,
         ty_tuple: t100,
         ty_optional: t182, // @PLN25 HAND-ADD

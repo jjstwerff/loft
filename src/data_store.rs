@@ -1201,7 +1201,7 @@ mod tests {
         assert_eq!(disc(ids.ty_iterator), TY_ITERATOR);
         assert_eq!(disc(ids.ty_sorted), TY_SORTED);
         assert_eq!(disc(ids.ty_index), TY_INDEX);
-        assert_eq!(disc(ids.ty_spacial), TY_RADIX);
+        assert_eq!(disc(ids.ty_radix), TY_RADIX);
         assert_eq!(disc(ids.ty_hash), TY_HASH);
         assert_eq!(disc(ids.ty_function), TY_FUNCTION);
         assert_eq!(disc(ids.ty_rewritten), TY_REWRITTEN);
@@ -1316,9 +1316,9 @@ mod tests {
         assert_eq!(pos(ids.ty_index, "n"), TYINDEX_N);
         assert_eq!(pos(ids.ty_index, "keys"), TYINDEX_KEYS);
         assert_eq!(pos(ids.ty_index, "dep"), TYINDEX_DEP);
-        assert_eq!(pos(ids.ty_spacial, "n"), TYRADIX_N);
-        assert_eq!(pos(ids.ty_spacial, "names"), TYRADIX_NAMES);
-        assert_eq!(pos(ids.ty_spacial, "dep"), TYRADIX_DEP);
+        assert_eq!(pos(ids.ty_radix, "n"), TYRADIX_N);
+        assert_eq!(pos(ids.ty_radix, "names"), TYRADIX_NAMES);
+        assert_eq!(pos(ids.ty_radix, "dep"), TYRADIX_DEP);
         assert_eq!(pos(ids.ty_hash, "n"), TYHASH_N);
         assert_eq!(pos(ids.ty_hash, "names"), TYHASH_NAMES);
         assert_eq!(pos(ids.ty_hash, "dep"), TYHASH_DEP);
@@ -1486,7 +1486,7 @@ mod tests {
         assert_eq!(disc(ids.pt_ordered), PT_ORDERED);
         assert_eq!(disc(ids.pt_hash), PT_HASH);
         assert_eq!(disc(ids.pt_index), PT_INDEX);
-        assert_eq!(disc(ids.pt_spacial), PT_RADIX);
+        assert_eq!(disc(ids.pt_radix), PT_RADIX);
         assert_eq!(disc(ids.pt_db_ref), PT_DB_REF);
         assert_eq!(disc(ids.pt_child_rec), PT_CHILD_REC);
         assert_eq!(pos(ids.pt_struct, "fields"), PTSTRUCT_FIELDS);
@@ -1506,7 +1506,7 @@ mod tests {
             ids.pt_ordered,
             ids.pt_hash,
             ids.pt_index,
-            ids.pt_spacial,
+            ids.pt_radix,
             ids.pt_child_rec,
         ] {
             assert_eq!(pos(v, "content"), PTCONTENT);
@@ -1514,7 +1514,7 @@ mod tests {
         for v in [ids.pt_sorted, ids.pt_ordered, ids.pt_index] {
             assert_eq!(pos(v, "keys"), PTKEYS);
         }
-        for v in [ids.pt_hash, ids.pt_spacial] {
+        for v in [ids.pt_hash, ids.pt_radix] {
             assert_eq!(pos(v, "fields"), PTFIELDS);
         }
         assert_eq!(pos(ids.pt_index, "left"), PTINDEX_LEFT);
