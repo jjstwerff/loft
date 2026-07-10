@@ -4066,6 +4066,9 @@ impl Parser {
             }
             let mut bindings: Vec<Value> = Vec::new();
             let mut cond: Option<Value> = None;
+            // @PLN35 L2 — conditions from element sub-patterns (`[Variant { f }, ..]`); empty for
+            // bare-name / `..` / `_` slice patterns, so those stay byte-identical.
+            let mut elem_conds: Vec<Value> = Vec::new();
             if self.lexer.has_token("[") {
                 // Parse slice pattern elements
                 let mut head: Vec<String> = Vec::new();
@@ -4077,6 +4080,41 @@ impl Parser {
                     }
                     if self.lexer.has_token("..") {
                         has_rest = true;
+                    } else if !has_rest && {
+                        // @PLN35 L2 — is this head element a VARIANT sub-pattern of the element
+                        // enum type (`Ship { carrier }` / bare `Ship`)?  Peek without consuming so a
+                        // plain binding name still falls through to the branch below.
+                        if let Type::Enum(elm_e_nr, _, _) = &elm_tp {
+                            if let LexItem::Identifier(pname) = &self.lexer.peek().has {
+                                self.data.variant_of(*elm_e_nr, pname) != u32::MAX
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        }
+                    } {
+                        // Read v[pos] and tag-test + bind via parse_field_sub_pattern; a "_"
+                        // placeholder keeps the position count so following bare-name indices align.
+                        let position = head.len() as i32;
+                        let get = self.cl(
+                            "OpGetVector",
+                            &[Value::Var(v), elm_size.clone(), Value::Int(position)],
+                        );
+                        let read = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
+                        let mut sub_conds: Vec<Value> = Vec::new();
+                        let mut aliases: Vec<(String, Option<u16>)> = Vec::new();
+                        if let Some(c) = self.parse_field_sub_pattern(
+                            read,
+                            &elm_tp,
+                            &mut bindings,
+                            &mut sub_conds,
+                            &mut aliases,
+                        ) {
+                            elem_conds.push(c);
+                        }
+                        elem_conds.append(&mut sub_conds);
+                        head.push("_".to_string());
                     } else if let Some(id) = self.lexer.has_identifier() {
                         if has_rest {
                             tail.push(id);
@@ -4164,6 +4202,16 @@ impl Parser {
                     let get = self.cl("OpGetVector", &[Value::Var(v), elm_size.clone(), idx]);
                     let val = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
                     bindings.push(v_set(bind_nr, val));
+                }
+                // @PLN35 L2 — AND element sub-pattern conditions into the arm condition AFTER the
+                // length check, so `&&` short-circuit never reads past the end.
+                for ec in elem_conds.drain(..) {
+                    match cond.take() {
+                        // `c && ec` via short-circuit if (the AND idiom used elsewhere in match
+                        // lowering) — avoids reading v[pos] when the length check already failed.
+                        Some(c) => cond = Some(v_if(c, ec, Value::Boolean(false))),
+                        None => cond = Some(ec),
+                    }
                 }
             } else if let Some(id) = self.lexer.has_identifier() {
                 if id == "_" {

@@ -1,0 +1,10 @@
+// Target (C): a struct-enum variant sub-pattern as a slice ELEMENT — fails to parse today.
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+fn head_carrier(ds: vector<Detail>) -> text {
+  match ds { [Ship { carrier }, ..] => carrier, _ => "none" }
+}
+fn main() {
+  ds = [Ship { carrier: "UPS" }, Pickup { store: 3 }];
+  assert(head_carrier(ds) == "UPS", "slice head sub-pattern: {head_carrier(ds)}");
+  print("ref-C: PASS");
+}

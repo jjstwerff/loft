@@ -1,0 +1,26 @@
+// @PLN35 P1.3 — behaviour-preserving corpus for the slice-element sub-pattern edit.
+// Existing slice-pattern paths (bare names, .., _, head/tail) must stay byte-identical.
+fn sum3(xs: vector<integer>) -> integer {
+  match xs { [a, b, c] => a + b + c, _ => -1 }
+}
+fn first_of(xs: vector<integer>) -> integer {
+  match xs { [x, ..] => x, _ => -1 }
+}
+fn last_of(xs: vector<integer>) -> integer {
+  match xs { [.., y] => y, _ => -1 }
+}
+fn ends(xs: vector<integer>) -> integer {
+  match xs { [a, .., c] => a + c, _ => -1 }
+}
+fn skip_first(xs: vector<integer>) -> integer {
+  match xs { [_, b] => b, _ => -1 }
+}
+fn main() {
+  assert(sum3([1, 2, 3]) == 6, "sum3");
+  assert(sum3([1, 2]) == -1, "sum3 short");
+  assert(first_of([9, 8, 7]) == 9, "first");
+  assert(last_of([9, 8, 7]) == 7, "last");
+  assert(ends([1, 5, 9]) == 10, "ends");
+  assert(skip_first([4, 5]) == 5, "skip");
+  print("slice corpus: PASS");
+}

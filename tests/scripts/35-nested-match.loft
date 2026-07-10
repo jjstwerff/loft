@@ -32,6 +32,16 @@ fn store_of(p: Parcel) -> integer {
   }
 }
 
+// nested variant sub-pattern as a slice ELEMENT (head + rest)
+fn head_ship(ds: vector<Detail>) -> text {
+  match ds { [Ship { carrier }, ..] => carrier, _ => "none" }
+}
+// mixed: a binding element then a sub-pattern element (the `[a, Inner { x }]` shape) —
+// exercises the "_" placeholder position alignment.
+fn second_ship(ds: vector<Detail>) -> text {
+  match ds { [first, Ship { carrier }] => carrier, _ => "none" }
+}
+
 fn main() {
   ship = Parcel { id: 1, detail: Ship { carrier: "FedEx" } };
   pick = Parcel { id: 2, detail: Pickup { store: 7 } };
@@ -41,5 +51,12 @@ fn main() {
   assert(kind(pick) == 2, "kind pickup: {kind(pick)}");
   assert(store_of(pick) == 7, "nested Pickup store: {store_of(pick)}");
   assert(store_of(ship) == -1, "Ship falls to wildcard: {store_of(ship)}");
+  // slice-element sub-patterns
+  parcels = [Ship { carrier: "UPS" }, Pickup { store: 3 }];
+  assert(head_ship(parcels) == "UPS", "slice head sub-pattern: {head_ship(parcels)}");
+  two = [Pickup { store: 9 }, Ship { carrier: "DHL" }];
+  assert(second_ship(two) == "DHL", "slice [binding, sub-pattern]: {second_ship(two)}");
+  mismatch = [Ship { carrier: "X" }, Pickup { store: 1 }];
+  assert(second_ship(mismatch) == "none", "2nd not Ship falls to wildcard");
   print("35-nested-match: PASS");
 }
