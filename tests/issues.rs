@@ -276,6 +276,29 @@ fn test() {
     .result(Value::Null);
 }
 
+// `map`/`filter` on a literal receiver (`[1,2,3].map(..)`) confines its build
+// vector to a block that lives inside the lowered `Iter`/`Call` — off the
+// control-flow spine `relocate_null_init`'s `prepend_to_scope` walks.  The Plan-57
+// null-init relocation therefore cannot reach that block and correctly falls back
+// to the body-0 null-init (leak/poison-clean, both backends), but a debug
+// `debug_assert!(false)` treated the un-reached scope as a bug and panicked under
+// `-C debug-assertions=on` (scripts 501, 85-short-lambda-capture).  Fixed by
+// asserting only when the scope is ABSENT FROM THE IR entirely (a real
+// store_confinement bug), not merely unreached; it panicked without the fix.
+#[test]
+fn reloc_null_init_map_on_literal_confined_block_unreached() {
+    code!(
+        "fn rlm_vsum(v: vector<integer>) -> integer { s = 0; for x in v { s += x; } s }
+fn test() {
+    d = [1, 2, 3].map(|x| { x * 2 });
+    assert(rlm_vsum(d) == 12, \"map on literal: {rlm_vsum(d)}\");
+    evens = [1, 2, 3, 4, 5, 6].filter(|x| { x % 2 == 0 });
+    assert(rlm_vsum(evens) == 12, \"filter on literal: {rlm_vsum(evens)}\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // A chained `??` (`a ?? b ?? c`) whose operands are OWNED/call-produced text
 // double-freed an inner `__ncc_N` coalesce temp on the interpreter (a
 // `state/text.rs:334` double free under `-C debug-assertions=on`; script 156).

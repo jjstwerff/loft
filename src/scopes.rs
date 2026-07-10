@@ -217,8 +217,16 @@ fn is_var_null_init(op: &Value, vdb: u16) -> bool {
     matches!(op.unspan(), Value::Set(v, val) if *v == vdb && matches!(val.unspan(), Value::Null))
 }
 
-/// Prepend `ni` to the operators of the Block whose `scope == target`.  Returns
-/// `None` once inserted, or `Some(ni)` (un-consumed) if no such block was found.
+/// Prepend `ni` to the operators of the Block whose `scope == target`, descending
+/// only the control-flow spine (`Block`/`Insert`/`If`/`Span`/`Return`).  Returns
+/// `None` once inserted, or `Some(ni)` (un-consumed) if no such block was reached.
+/// A confined block nested inside a `Set`/`Call`/`Iter` value (a `map`/`filter`
+/// body, a short-lambda capture) is deliberately NOT entered: the Plan-57 null-init
+/// relocation is a best-effort watermark optimization, and such a block keeps its
+/// body-0 null-init (the caller's fallback), which is leak/poison-clean.  Widening
+/// the descent to every child would relocate into far more functions for marginal
+/// benefit — out of scope here; the concern is only to stop the false-positive
+/// debug assert on the (correct) un-reached case.
 fn prepend_to_scope(node: &mut Value, target: u16, ni: Value) -> Option<Value> {
     match node {
         Value::Block(bl) if bl.scope == target => {
@@ -273,18 +281,45 @@ fn relocate_null_init(code: &mut Value, vdb: u16, block_scope: u16) -> bool {
         body.operators.remove(pos)
     };
     if let Some(ni) = prepend_to_scope(code, block_scope, ni) {
-        // Block not found — restore the null-init so the first_def is never lost.
+        // Not reached by the control-flow descent — restore the null-init so the
+        // `first_def` is never lost, and skip the (best-effort) relocation: the
+        // store keeps its body-0 `first_def` and is still freed by the confined
+        // block's scope-exit sweep (verified leak/poison-clean, both backends).
+        // The confined block can legitimately live inside a `map`/`filter` body or
+        // a short-lambda capture (a `Call`/`Iter`/`Set` value `prepend_to_scope`
+        // does not enter — 501, 85-short-lambda-capture).  Only a `block_scope`
+        // that is ABSENT FROM THE IR ENTIRELY is a `store_confinement` bug worth
+        // asserting; a present-but-unreached scope is the expected miss.
         if let Value::Block(body) = code {
             body.operators.insert(0, ni);
         }
         debug_assert!(
-            false,
-            "relocate_null_init: block scope {block_scope} not found"
+            block_scope_present(code, block_scope),
+            "relocate_null_init: block scope {block_scope} is not in the IR at all \
+             (a store_confinement bug, not merely an unreached inline block)"
         );
         false
     } else {
         true
     }
+}
+
+/// True if any `Block`/`Loop` anywhere in `node`'s subtree has `scope == target`.
+/// Unlike [`prepend_to_scope`], this descends into EVERY child (`Value::walk`), so
+/// it distinguishes a scope that is genuinely absent from one that merely lives off
+/// the control-flow spine (inside a `map`/`filter` body, a lambda capture).  Only
+/// consulted from the `relocate_null_init` `debug_assert!`, but must compile in
+/// release too (the assert's argument is still type-checked there).
+fn block_scope_present(node: &Value, target: u16) -> bool {
+    let mut found = false;
+    node.walk(&mut |n| {
+        if let Value::Block(bl) | Value::Loop(bl) = n
+            && bl.scope == target
+        {
+            found = true;
+        }
+    });
+    found
 }
 
 /// EXPERIMENTAL (LOFT_BORROW_ELIDE) — inline the Tier-0 Borrow-verdict vector
