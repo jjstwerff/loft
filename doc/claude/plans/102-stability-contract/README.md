@@ -131,7 +131,7 @@ accept/reject divergence here is a Goal-D violation).
 
 | Item | Source | Status |
 |---|---|---|
-| **A** — Compatibility policy: what *is* a breaking change, per surface (language syntax/semantics · stdlib API · store/heap layout · on-disk + wire format · package format) | needs design → `COMPATIBILITY.md` | Open |
+| **A** — Compatibility policy: what *is* a breaking change, per surface (language syntax/semantics · stdlib API · store/heap layout · on-disk + wire format · package format) | [../../COMPATIBILITY.md](../../COMPATIBILITY.md) | **✅ DRAFTED** (2026-07-10) — the silent/loud/additive trichotomy per surface, the per-tier maker obligations, and the misclassification detectors; three owner decisions flagged (window length, 1.0 scope, bug-fix reliance) |
 | **B-mechanical** — bind upper bounds + ranges + exact pins; loud rejection of unparseable constraints; grandfather a bare `>=` as "unknown compatibility" | `src/manifest.rs` (`check_version` → `VersionCheck`), `src/parser/mod.rs` (loader), matrix unit test + `testpkg_badconstraint`/`testpkg_upperbound` fixtures | **✅ IMPLEMENTED** (2026-07-10) |
 | **B-registry** — the registry (`pr-validate`) validates the declared range on submission | external — loft-lang/registry | Open |
 | **B-semantic** — the `contract` integer + loader semantics (reject-below / accept-in-range / warn-above) | `src/manifest.rs` (`CONTRACT_VERSION`, `ContractCheck`, `check_contract`), `src/parser/mod.rs` (loader), `[package] contract` field, unit + `testpkg_contract_*` fixtures | **✅ IMPLEMENTED** (2026-07-10). Name + baseline **ratified**: field `contract`, baseline **1**. Ships at `CONTRACT_VERSION = 0` (inert — nothing declares `contract` yet); the **0 → 1 flip lands after the last open syntax changes settle** (they define what contract 1 is) |
@@ -161,9 +161,12 @@ plan's own open questions had left implicit.
    permanently vacuous.  B-mechanical binds bounds without this; B-semantic points that
    same parser at the `contract` integer and adds the loader semantics
    (reject-below / accept-in-range / warn-above).
-3. **A — policy before the rest of the mechanism.**  B-semantic enforces a rule; the
-   rule ("what *is* a breaking change, per surface") has to exist.  A is doc-only
-   (`COMPATIBILITY.md`) and unblocks C and E.
+3. **A — policy before the rest of the mechanism. ✅ DRAFTED** →
+   [../../COMPATIBILITY.md](../../COMPATIBILITY.md).  B-semantic enforces a rule; the
+   rule ("what *is* a breaking change, per surface") now exists — the
+   silent/loud/additive trichotomy per surface, what the maker owes per tier, and the
+   per-surface detectors that make a misclassification a CI failure.  Unblocks C (it
+   defines what must be deprecated) and E (it defines "breaking" for whatever E freezes).
 4. **C after A** — the deprecation channel needs A's definition of "breaking" to know
    what it must warn about.  C is what would actually have caught `hex_terrain`; B only
    lets a library defend itself after the fact.  Its own open question (Q3, *whose*
