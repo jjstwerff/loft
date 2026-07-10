@@ -50,6 +50,16 @@ pub(crate) enum OwnedVia {
     /// Text field/index view of a LOCAL composite built in this body
     /// (`a.v.0`, `d.ts[0]`) — slice 3a.
     ViewOfLocal,
+    /// A user fn call that returns a forward-borrow of a VISIBLE param
+    /// (`extract(p) -> text["p"]`), but where THIS call site fills that param
+    /// with a LOCAL composite built here (`extract(Pair{…})` / `extract(pr)`).
+    /// The borrow is of a value that dies with this frame, so the tail is
+    /// materialised (copied) into the promoted `&text` buffer before the local
+    /// is freed — owned, exactly like [`ViewOfLocal`], just delivered through a
+    /// call.  Distinct variant so `tret_bind_ok` can gate it on a BACKWARD-ref
+    /// callee (same pass-stability rule as `UserCall`); the direct
+    /// `ViewOfLocal` needs no such gate.  @PLN85 p54_b6.
+    ViewOfLocalCall,
     /// An `if`/`match` (match lowers to `If`) with an owned-text arm — slice 3c.
     IfMatchArm,
     /// A built-up local text — accumulator / interpolation / literal-concat /
@@ -81,6 +91,7 @@ impl TextReturn {
             TextReturn::Owned(OwnedVia::NativeCall) => "Owned:NativeCall",
             TextReturn::Owned(OwnedVia::UserCall) => "Owned:UserCall",
             TextReturn::Owned(OwnedVia::ViewOfLocal) => "Owned:ViewOfLocal",
+            TextReturn::Owned(OwnedVia::ViewOfLocalCall) => "Owned:ViewOfLocalCall",
             TextReturn::Owned(OwnedVia::IfMatchArm) => "Owned:IfMatchArm",
             TextReturn::Owned(OwnedVia::BuiltLocal) => "Owned:BuiltLocal",
             TextReturn::Owned(OwnedVia::TupleElement) => "Owned:TupleElement",
@@ -117,7 +128,12 @@ impl TextReturn {
     fn wants_tret_bind(self) -> bool {
         matches!(
             self,
-            TextReturn::Owned(OwnedVia::NativeCall | OwnedVia::ViewOfLocal | OwnedVia::UserCall)
+            TextReturn::Owned(
+                OwnedVia::NativeCall
+                    | OwnedVia::ViewOfLocal
+                    | OwnedVia::ViewOfLocalCall
+                    | OwnedVia::UserCall
+            )
         )
     }
 }
@@ -5349,7 +5365,13 @@ impl Parser {
         if !verdict.wants_tret_bind() {
             return false;
         }
-        if matches!(verdict, TextReturn::Owned(OwnedVia::UserCall)) {
+        if matches!(
+            verdict,
+            TextReturn::Owned(OwnedVia::UserCall | OwnedVia::ViewOfLocalCall)
+        ) {
+            // Both depend on the callee's resolved return signature, so they are
+            // forward-ref-UNSTABLE — promote ONLY for a backward-ref callee
+            // (def_nr precedes this fn's), pass-stable on both passes.
             return self.tail_call_op(tail).is_some_and(|op| op < self.context);
         }
         true
@@ -5463,13 +5485,36 @@ impl Parser {
         // VISIBLE argument is a forward-borrow (3b vs p281).
         if matches!(def.returned().base(), Type::Text(_)) {
             let attrs = def.attributes();
-            let owned = def
-                .returned()
-                .depend()
+            let deps = def.returned().depend();
+            let owned = deps
                 .iter()
                 .all(|&d| (d as usize) < attrs.len() && attrs[d as usize].hidden);
-            return if owned {
-                TextReturn::Owned(OwnedVia::UserCall)
+            if owned {
+                return TextReturn::Owned(OwnedVia::UserCall);
+            }
+            // The return forward-borrows ≥1 VISIBLE param.  If EVERY such
+            // borrowed param is filled at THIS call site with a LOCAL composite
+            // built in this block (`extract(Pair{…})` / `extract(pr)`), the
+            // borrow is of a value that dies with this frame, so the tail is
+            // materialised into the promoted buffer before the local is freed —
+            // owned (ViewOfLocalCall), NOT a true forward.  A borrowed param
+            // filled with one of THIS fn's own arguments stays a real forward.
+            // (A non-hidden dep is a positional param, so its attr index is the
+            // argument position — hidden buffers, which come after, are excluded
+            // by the `owned` test above.)
+            let Value::Call(_, args) = tail.unspan() else {
+                return TextReturn::Borrow(BorrowVia::ForwardArg);
+            };
+            let all_borrows_local = deps
+                .iter()
+                .filter(|&&d| !attrs[d as usize].hidden)
+                .all(|&d| {
+                    args.get(d as usize)
+                        .and_then(Self::arg_root_var)
+                        .is_some_and(|root| self.var_built_in_block(block, root))
+                });
+            return if all_borrows_local {
+                TextReturn::Owned(OwnedVia::ViewOfLocalCall)
             } else {
                 TextReturn::Borrow(BorrowVia::ForwardArg)
             };
@@ -5530,6 +5575,22 @@ impl Parser {
             Value::Insert(ops) => self.var_built_in_block(ops, var),
             Value::Call(_, args) => args.iter().any(|a| self.op_builds_var(a, var, db)),
             _ => false,
+        }
+    }
+
+    /// The root VAR an argument expression evaluates to — a bare `Var`, or the
+    /// tail var of a value-`Block`/`Insert` (an inline composite construction
+    /// `Pair{…}` lowers to a block whose last op is `Var(__ref_N)`).  Used by
+    /// the `ViewOfLocalCall` classification to check whether the value backing a
+    /// forward-borrowed param is a LOCAL built in this block.  `None` when the
+    /// argument is not a simple var/composite (e.g. a literal or a call).
+    fn arg_root_var(arg: &Value) -> Option<u16> {
+        match arg.unspan() {
+            Value::Var(v) => Some(*v),
+            Value::Block(bl) => bl.operators.last().and_then(Self::arg_root_var),
+            Value::Insert(ops) => ops.last().and_then(Self::arg_root_var),
+            Value::Return(inner) | Value::Drop(inner) => Self::arg_root_var(inner),
+            _ => None,
         }
     }
 

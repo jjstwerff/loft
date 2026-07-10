@@ -315,13 +315,87 @@ bugs:
   is a scope-registration fix, and native's `__blk_N` `OpFreeText` is the identical
   clear+shrink the working `__work_N` already uses.
 
-## p54_b6 — view-through-forward-borrow (regrouped out of "UserCall")
+## p54_b6 — view-through-forward-borrow — ✅ FIXED 2026-07-10 (classifier promotion)
 
-**Confirmed:** `g5b_view_through_forward_borrow` leaks 1. `extract(p){match p.b { 0 =>
-p.a, _ => "other" }}` returns a VIEW of its ARGUMENT `p.a`, so `run(){extract(local)}`
-classifies `ForwardArg` and correctly does NOT promote. The leak is the delivery of a
-view into a LOCAL passed as the arg — the same class as `n3` (composite embedded text),
-NOT a user-call delivery. Belongs with Group 5, not the UserCall slice.
+**Confirmed leak; but the "composite embedded text / same class as n3" label is REFUTED
+by the boundary matrix.** `g5b` = `extract(p:const Pair)->text{ p.a }` (or the `match`
+form) returns a VIEW of its arg; `run()->text{ extract(Pair{a:"hello",b:0}) }`;
+`main{ print(run()) }`. Matrix (q0–q4): the leak needs ONLY **`extract` returning a
+view of its arg** — independent of inline-vs-named temp (q1 leaks), `const` (q3 leaks),
+or the `match` (q4 bare `p.a` leaks). The lone clean cell is q2 (extract returns a FRESH
+`"zero"`, not `p.a`).
+
+**True mechanism (bytecode-pinned).** Because `extract` returns a forward-arg VIEW, it
+CANNOT be promoted, so `run()->text` stays **unpromoted** (returns an owned `String` by
+value; it copies the view into a `__ret_1` on the way out). The clean q2, by contrast,
+promotes `run` to `-> text["___tret_1"]` (a `&text` buffer the CALLER owns). At the top
+call site the two ABIs diverge:
+- **q2 (promoted):** `main` allocates `__work_1:text`, passes `&__work_1` to `run`,
+  `print`s it, then **`FreeText(__work_1)`** — caller owns the buffer, frees it. Clean.
+- **q4 (unpromoted):** `main` is just `Call(n_run); Call(n_print, run's value)` — the
+  owned `String` `run` returns by value is consumed by `print` and **never freed**. Leak.
+
+So `p54_b6` is NOT a temp-record-embedded-text bug and NOT n3's class — `free_named` has
+NO embedded-text walk at all (verified), and the temp `Pair`'s `"hello"` never leaks (it
+is a const-store pointer). The leak is the **unpromoted owned-text return not freed at
+the consuming call site** — i.e. the SAME core class as categories **A/F** (returns that
+should promote but can't → owned `String` delivered by value → caller drops it on the
+floor). It is **interpreter-only** (native RAII drops `run`'s returned `String`; both
+backends run correct, value `"hello"`).
+
+**FIXED 2026-07-10 (`control.rs`, ~30 lines) — via PROMOTION, the correct route.** A
+deeper matrix (r0–r5, b0–b1) showed the leak is NOT consumer-context-dependent: it leaks
+even when bound to a local (`x = run(); print(x)`), because `run`'s materialised owned
+`String` (`__ret_1`) is orphaned when `run` discards its frame — the caller only ever
+COPIES from the returned borrowing `Str`. Crucially `run`'s return IS materialised-owned
+(the view got copied into `__ret_1`), so it **can and should be promoted** — the reason
+it wasn't is a classifier gap: `classify_text_call` saw `extract`'s forward-borrow
+signature and returned `Borrow:ForwardArg` WITHOUT checking that `run` fills the borrowed
+param with a run-LOCAL (`Pair{…}` / `pr`) that dies with the frame. A borrow of a local
+is materialised → owned → promotable, exactly like the existing direct `OpGetText`
+`ViewOfLocal` (which distinguishes local- from arg-rooted via `var_built_in_block`).
+
+**Fix.** New verdict `OwnedVia::ViewOfLocalCall`: in the `ForwardArg` branch, when every
+borrowed VISIBLE param is filled at this call site with a local composite built in this
+block (`arg_root_var` + `var_built_in_block`), classify `Owned(ViewOfLocalCall)` →
+`wants_tret_bind` → the uniform `Set(__tret, tail); __tret` promotion (the caller passes a
+`&text` buffer, the tail materialises into it before the local is freed — the proven-clean
+`vol_direct` shape). Gated in `tret_bind_ok` on a BACKWARD-ref callee (same pass-stability
+rule as `UserCall` — the classification depends on the callee's resolved return
+signature). A TRUE forward (`fn wrapper(p) -> text { extract(p) }`, borrowing `wrapper`'s
+OWN arg) stays `Borrow:ForwardArg` — verified unpromoted and still clean (the p281
+contract). Verified: g5b + q0–q4 + r0/r1 leak-0 + correct on BOTH backends; b0/b1 direct
+borrows stay clean (not double-freed); the forward guard stays unpromoted; full suite
+green; verdict framework 25/25 (new `f_view_local_call` corpus cell). Residual 14 → 13.
+
+**Note on the alternative (free-at-call-site).** The "materialise the unpromoted return
+into a caller `__work_N` and free it" route (no promotion) is real but strictly worse
+here — promotion avoids the callee-frame orphan entirely (no copy, caller owns the
+buffer), and it reuses the mature, pass-stable `text_return` machinery. The free-at-call
+route is only needed for returns that genuinely CANNOT promote (true forward-borrows of a
+caller arg), which are already clean (the caller's arg-owner frees them). So promotion is
+the complete answer for this class; A/F's residue is the generic/forward-ref promotion
+gap, not a free gap.
+
+## `issue_437` / the `??` null-coalesce leak — UNIVERSAL, native-coupled (2026-07-10)
+
+`g4_vector_copy_helper` is one symptom of a **universal** bug, not a vector-specific one.
+Matrix (m0–m5, p0–p4): EVERY `v[i] ?? <default>` on a non-trivial text LHS leaks — as a
+plain assignment (`x = src[0] ?? ""`), a function return, a discard (`len(src[0] ?? "")`),
+AND the vector-element append — and is clean only WITHOUT `??` (m1) or with a literal
+element (m4). Root: `??` materialises the LHS into a `__ncc_N` temp and marks it
+**unconditionally `skip_free`** (`operators.rs:1729`) — a deliberate @PLAN52 "leak rather
+than UAF" tradeoff (the present-path `Str` must outlive the ncc block so the outer
+consumer can copy it). So the owned copy (`AppendText(__ncc_N, v[i])`) is never freed.
+Interpreter-only (native RAII drops it).
+
+The n3-style cure (free `__ncc_N` at function exit via `lift_texts`, once, after the outer
+copy) is correct in principle but **native-coupled**: ≥5 native sites key on the
+`__ncc_*` `skip_free` PATTERN (`block_contains_ncc_skip_free`, `needs_ncc_materialise`,
+`generation/emit.rs:384`, `calls.rs:302/316`), and the interp temp's `InitText` is
+block-local (not root-hoisted like `__blk_N`), so a naive function-exit free double-frees
+in loops. Blast radius: 94 test files use `??`. This is a coordinated cross-backend
+change (its own slice-4 arc), not a one-liner — left open, characterised.
 
 ---
 

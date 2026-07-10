@@ -75,6 +75,13 @@ fn f_arg_view(p: Pair) -> text { p.a }
 // VERDICT: Borrow:ForwardArg
 fn f_forward_arg(s: text) -> text { f_identity(s) }
 
+// Calls a fn that forward-borrows its param (`f_arg_view` returns `p.a`), but
+// fills that param HERE with a LOCAL composite — the borrow dies with this
+// frame, so the tail materialises into the promoted buffer (owned), unlike the
+// true forward `f_forward_arg`.  Backward-ref callee → pass-stable.  @PLN85 p54_b6.
+// VERDICT: Owned:ViewOfLocalCall
+fn f_view_local_call() -> text { f_arg_view(Pair { a: "z", b: 1 }) }
+
 // f_identity returns its argument directly — a borrow of the arg, not a forward.
 // VERDICT: Borrow:Argument
 fn f_identity(s: text) -> text { s }
@@ -135,6 +142,7 @@ fn main() {
     print(f_rebind());
     print(f_arg_view(Pair { a: "x", b: 1 }));
     print(f_forward_arg("y"));
+    print(f_view_local_call());
     print(f_generic_concat(42));
     print(f_local_dropped());
     t = f_tuple_ctor(42);
