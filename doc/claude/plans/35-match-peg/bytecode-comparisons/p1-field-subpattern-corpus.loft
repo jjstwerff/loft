@@ -1,0 +1,63 @@
+// @PLN35 Phase 1 — behaviour-preserving corpus for the field-sub-pattern recursion.
+// One fn per code path parse_field_sub_pattern / parse_match_enum_field_bindings touch today.
+// Capture `loft introspect` into before.txt BEFORE the edit; the edit must leave the EXISTING
+// paths' IR + native byte-identical (empty diff on these fns). The new struct-enum nested case is
+// added in a SEPARATE file and proven standalone (bug-fix mode).
+// (Struct-match arms are newline-separated, no comma — mirrors tests/scripts/44-nested-match.loft.)
+
+enum Status { Pending, Paid, Refunded }
+struct Order { id: integer, status: Status, amount: float }
+
+// plain field binding: V { field } (unconditional struct arm is total — no wildcard)
+fn bind_field(o: Order) -> float {
+  match o {
+    Order { amount } => amount
+  }
+}
+// field sub-pattern: enum variant name
+fn sub_variant(o: Order) -> integer {
+  match o {
+    Order { status: Paid } => 1
+    _ => 0
+  }
+}
+// field sub-pattern: wildcard + a sibling binding
+fn sub_wildcard(o: Order) -> float {
+  match o {
+    Order { status: _, amount } => amount
+  }
+}
+// field sub-pattern: scalar literal
+fn sub_scalar(o: Order) -> integer {
+  match o {
+    Order { id: 1 } => 1
+    _ => 0
+  }
+}
+// field sub-pattern: or-pattern
+fn sub_or(o: Order) -> integer {
+  match o {
+    Order { status: Paid | Refunded } => 1
+    _ => 0
+  }
+}
+// multiple field sub-patterns in one arm
+fn multi_field(o: Order) -> integer {
+  match o {
+    Order { id: 1, status: Paid } => 1
+    _ => 0
+  }
+}
+fn main() {
+  o1 = Order { id: 1, status: Status.Paid, amount: 99.0 };
+  o2 = Order { id: 2, status: Status.Refunded, amount: 50.0 };
+  assert(bind_field(o1) == 99.0, "bind_field");
+  assert(sub_variant(o1) == 1, "sub_variant paid");
+  assert(sub_variant(o2) == 0, "sub_variant refunded");
+  assert(sub_wildcard(o1) == 99.0, "sub_wildcard");
+  assert(sub_scalar(o1) == 1, "sub_scalar");
+  assert(sub_or(o1) == 1, "sub_or paid");
+  assert(sub_or(o2) == 1, "sub_or refunded");
+  assert(multi_field(o1) == 1, "multi_field");
+  print("p1 corpus: PASS");
+}
