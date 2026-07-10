@@ -1492,7 +1492,6 @@ fn get_byte_nullable(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        // rec == 0 OOB guard, mirroring OpGetByte's #403 — see the loft-source twin.
         if db.rec == 0 {
             i64::MIN
         } else {
