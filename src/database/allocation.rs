@@ -941,35 +941,28 @@ impl Stores {
         self.build_rec_scratch(coll, &recs)
     }
 
-    /// @PLN48 S3 — the `within(cx, cy, r)` proximity query as an iterable scratch
-    /// vector: every 2D point within Euclidean `radius` of `(cx, cy)`, exact.  Feeds
-    /// the same Ordered (on=3) iteration path as `build_radix_sorted_vec`.
-    pub fn build_radix_within_vec(
+    /// @PLN48 S3 — a `spacial` range slice as an iterable scratch vector, feeding the
+    /// same Ordered (on=3) path as `build_radix_sorted_vec`.  Records whose Morton code
+    /// lies in `[(fx, fy), (tx, ty)]` (or `[(fx, fy), ∞)` when `has_till == 0`), in
+    /// natural order, capped at `limit` (`< 0` = no cap).  Backs `xs[(x,y)..]`,
+    /// `xs[(x,y)..:n]`, and the bounding box `xs[(x1,y1)..(x2,y2)]`.
+    #[allow(clippy::too_many_arguments)]
+    pub fn build_radix_range_vec(
         &mut self,
         coll: &DbRef,
         tp: u16,
-        cx: i64,
-        cy: i64,
-        radius: i64,
+        fx: i64,
+        fy: i64,
+        has_till: i64,
+        tx: i64,
+        ty: i64,
+        limit: i64,
     ) -> DbRef {
         let keys = self.types[tp as usize].keys.clone();
-        let recs = crate::radix_db::within(coll, &self.allocations, &keys, &[cx, cy], radius);
-        self.build_rec_scratch(coll, &recs)
-    }
-
-    /// @PLN48 S3 — the `nearest(cx, cy, k)` query as an iterable scratch vector: the
-    /// `k` closest 2D points, NEAREST FIRST (distance order, not Morton).  Exact.
-    pub fn build_radix_nearest_vec(
-        &mut self,
-        coll: &DbRef,
-        tp: u16,
-        cx: i64,
-        cy: i64,
-        k: i64,
-    ) -> DbRef {
-        let keys = self.types[tp as usize].keys.clone();
-        let kk = usize::try_from(k.max(0)).unwrap_or(0);
-        let recs = crate::radix_db::nearest(coll, &self.allocations, &keys, &[cx, cy], kk);
+        let till = [tx, ty];
+        let till_ref = (has_till != 0).then_some(&till[..]);
+        let cap = (limit >= 0).then_some(limit as usize);
+        let recs = crate::radix_db::range(coll, &self.allocations, &keys, &[fx, fy], till_ref, cap);
         self.build_rec_scratch(coll, &recs)
     }
 

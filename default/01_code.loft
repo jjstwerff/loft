@@ -1148,15 +1148,11 @@ pub fn hash_unsorted(h: reference, tp: integer) -> reference;
 // desugars `for e in xs { … }` into this call with the collection's type id.
 pub fn radix_sorted(r: reference, tp: integer) -> reference;
 #impure(parent_write)
-// @PLN48 S3 — the `xs.within(cx, cy, radius)` proximity query.  Returns a fresh
-// vector<reference<T>> of every 2D point within Euclidean `radius` of `(cx, cy)`,
-// in natural (Morton) order.  The parser rewrites the method call, injecting the
-// collection's type id.  Exact (the box scan distance-verifies).
-pub fn spacial_within(r: reference, tp: integer, cx: integer, cy: integer, radius: integer) -> reference;
-#impure(parent_write)
-// @PLN48 S3 — `xs.nearest(cx, cy, k)`: the k closest points, NEAREST FIRST.  Exact
-// (expanding-box k-NN).  The parser rewrites the method, injecting the type id.
-pub fn spacial_nearest(r: reference, tp: integer, cx: integer, cy: integer, k: integer) -> reference;
+// @PLN48 S3 — a spacial range slice `xs[(fx,fy)..(tx,ty)]` / `xs[(fx,fy)..:limit]`.
+// Returns a fresh vector<reference<T>> of the records whose Morton code is in the
+// interval (has_till=0 = open end; limit<0 = no cap), in natural order.  The parser
+// rewrites the slice expression, injecting the collection's type id.
+pub fn spacial_range(r: reference, tp: integer, fx: integer, fy: integer, has_till: integer, tx: integer, ty: integer, limit: integer) -> reference;
 #impure(parent_write)
 type index size(4);
 

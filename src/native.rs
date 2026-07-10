@@ -445,8 +445,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("i_parse_error_push", i_parse_error_push),
     ("n_hash_sorted", n_hash_sorted),
     ("n_radix_sorted", n_radix_sorted),
-    ("n_spacial_within", n_spacial_within),
-    ("n_spacial_nearest", n_spacial_nearest),
+    ("n_spacial_range", n_spacial_range),
     ("n_hash_unsorted", n_hash_unsorted),
     // Plan-12 phase 1a (2026-05-23) — crypto `n_*` symbols
     // (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`,
@@ -2634,25 +2633,17 @@ fn n_radix_sorted(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result);
 }
 
-/// @PLN48 S3 — `xs.within(cx, cy, radius)`.  Args pop in reverse declaration order.
-fn n_spacial_within(stores: &mut Stores, stack: &mut DbRef) {
-    let radius = *stores.get::<i64>(stack);
-    let cy = *stores.get::<i64>(stack);
-    let cx = *stores.get::<i64>(stack);
+/// @PLN48 S3 — a spacial range slice.  Args pop in reverse declaration order.
+fn n_spacial_range(stores: &mut Stores, stack: &mut DbRef) {
+    let limit = *stores.get::<i64>(stack);
+    let ty = *stores.get::<i64>(stack);
+    let tx = *stores.get::<i64>(stack);
+    let has_till = *stores.get::<i64>(stack);
+    let fy = *stores.get::<i64>(stack);
+    let fx = *stores.get::<i64>(stack);
     let tp = *stores.get::<i64>(stack) as u16;
     let coll = *stores.get::<DbRef>(stack);
-    let result = stores.build_radix_within_vec(&coll, tp, cx, cy, radius);
-    stores.put(stack, result);
-}
-
-/// @PLN48 S3 — `xs.nearest(cx, cy, k)`.  Args pop in reverse declaration order.
-fn n_spacial_nearest(stores: &mut Stores, stack: &mut DbRef) {
-    let k = *stores.get::<i64>(stack);
-    let cy = *stores.get::<i64>(stack);
-    let cx = *stores.get::<i64>(stack);
-    let tp = *stores.get::<i64>(stack) as u16;
-    let coll = *stores.get::<DbRef>(stack);
-    let result = stores.build_radix_nearest_vec(&coll, tp, cx, cy, k);
+    let result = stores.build_radix_range_vec(&coll, tp, fx, fy, has_till, tx, ty, limit);
     stores.put(stack, result);
 }
 

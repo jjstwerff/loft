@@ -65,45 +65,6 @@ impl Parser {
             diagnostic!(self.lexer, Level::Error, "Expect a field name");
             return t;
         };
-        // @PLN48 S3 — the proximity queries `xs.within(cx, cy, radius)` /
-        // `xs.nearest(cx, cy, k)` on a `spacial<T[x, y]>`, BEFORE the `type_elm` check
-        // below (a keyed collection has no struct "element" there, so it would
-        // otherwise error "Unknown type spacial<…>").  Each rewrites to
-        // `n_spacial_<q>(xs, tp, cx, cy, arg)`, injecting the type id (mirrors the
-        // `to_json` intercept).  The result is the matching points, iterable: within
-        // yields Morton order, nearest yields distance order.
-        if (field == "within" || field == "nearest")
-            && matches!(t, Type::Radix(_, _, _))
-            && self.lexer.peek_token("(")
-        {
-            self.lexer.token("(");
-            let (mut cx, mut cy, mut arg) = (Value::Null, Value::Null, Value::Null);
-            let _ = self.expression(&mut cx);
-            self.lexer.token(",");
-            let _ = self.expression(&mut cy);
-            self.lexer.token(",");
-            let _ = self.expression(&mut arg);
-            self.lexer.token(")");
-            if !self.first_pass {
-                let tp = self.get_type(&t);
-                let fn_name = if field == "within" {
-                    "n_spacial_within"
-                } else {
-                    "n_spacial_nearest"
-                };
-                let fn_nr = self.data.def_nr(fn_name);
-                if tp != u16::MAX && fn_nr != u32::MAX {
-                    *code = Value::Call(
-                        fn_nr,
-                        vec![code.clone(), Value::Int(i32::from(tp)), cx, cy, arg],
-                    );
-                }
-            }
-            // Return the SAME Radix type so `for m in xs.within(…)` flows through the
-            // proven on=3 iteration path (parse_for detects the already-built scratch
-            // and iterates it directly, without re-wrapping in n_radix_sorted).
-            return t;
-        }
         let enr = self.data.type_elm(&t);
         if enr == u32::MAX {
             let shown = t.show(&self.data, &self.vars);
@@ -724,7 +685,18 @@ impl Parser {
             for k in keys {
                 key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
-            self.parse_key(code, &t, &key_types);
+            // @PLN48 S3 — a `spacial` RANGE SLICE `xs[(fx,fy)..(tx,ty)]` /
+            // `xs[(fx,fy)..:n]` / `xs[(fx,fy)..]`: iterate the records whose Morton
+            // code is in the interval (a bounding box is the raw code interval), in
+            // natural order.  Lowers to `n_spacial_range(xs, tp, fx, fy, has_till, tx,
+            // ty, limit)` — the same scratch path as iteration — and returns the Radix
+            // type so `parse_for` iterates the already-built scratch.  A `(` opens the
+            // coordinate tuple.
+            if matches!(t, Type::Radix(_, _, _)) && self.lexer.peek_token("(") {
+                elm_type = self.parse_spacial_slice(code, &t, &key_types);
+            } else {
+                self.parse_key(code, &t, &key_types);
+            }
             // @P285 — a keyed-collection lookup RESULT is nullable (an absent
             // key returns the null record).  `parse_key` parsed the KEY last,
             // so `expr_not_null` still reflects the key (e.g. a `not null`
@@ -1121,6 +1093,63 @@ impl Parser {
             *code = self.cl("OpTextCharacter", &[code.clone(), p.clone()]);
             Type::Character
         }
+    }
+
+    /// @PLN48 S3 — parse a `spacial` range slice `xs[(fx,fy)..(tx,ty)]`,
+    /// `xs[(fx,fy)..:n]`, or the open `xs[(fx,fy)..]`, and lower it to an
+    /// `n_spacial_range` scratch-builder call.  Returns the Radix `typedef` so the
+    /// enclosing `for` iterates the scratch it builds.  `(` has already been peeked.
+    fn parse_spacial_slice(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) -> Type {
+        // A `(fx, fy)` coordinate tuple.
+        let coord = |s: &mut Self, i: usize| -> Value {
+            let mut v = Value::Null;
+            let vt = s.expression(&mut v);
+            if !s.convert(&mut v, &vt, &key_types[i.min(key_types.len() - 1)]) {
+                diagnostic!(s.lexer, Level::Error, "Invalid spacial coordinate");
+            }
+            v
+        };
+        self.lexer.token("(");
+        let fx = coord(self, 0);
+        self.lexer.token(",");
+        let fy = coord(self, 1);
+        self.lexer.token(")");
+        if !self.lexer.has_token("..") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a spacial slice needs a range: `xs[(x,y)..]`, `xs[(x,y)..:n]`, or `xs[(x1,y1)..(x2,y2)]`"
+            );
+        }
+        // The `..` is followed by a till tuple `(tx,ty)`, a limit `:n`, or nothing.
+        let (has_till, tx, ty, limit) = if self.lexer.peek_token("(") {
+            self.lexer.token("(");
+            let tx = coord(self, 0);
+            self.lexer.token(",");
+            let ty = coord(self, 1);
+            self.lexer.token(")");
+            (Value::Int(1), tx, ty, Value::Int(-1))
+        } else if self.lexer.has_token(":") {
+            let mut n = Value::Null;
+            let nt = self.expression(&mut n);
+            if !self.convert(&mut n, &nt, &crate::data::I64) {
+                diagnostic!(self.lexer, Level::Error, "spacial slice limit must be an integer");
+            }
+            (Value::Int(0), Value::Int(0), Value::Int(0), n)
+        } else {
+            (Value::Int(0), Value::Int(0), Value::Int(0), Value::Int(-1))
+        };
+        if !self.first_pass {
+            let tp = self.get_type(typedef);
+            let fn_nr = self.data.def_nr("n_spacial_range");
+            if tp != u16::MAX && fn_nr != u32::MAX {
+                *code = Value::Call(
+                    fn_nr,
+                    vec![code.clone(), Value::Int(i32::from(tp)), fx, fy, has_till, tx, ty, limit],
+                );
+            }
+        }
+        typedef.clone()
     }
 
     #[allow(clippy::too_many_lines)]

@@ -214,111 +214,48 @@ fn code_gt(a: &[u64; MAX_AXES], b: &[u64; MAX_AXES], n: usize) -> bool {
     false
 }
 
-/// Squared Euclidean distance from a record to the query point `q`.
-fn dist2(store: &Store, rec: u32, keys: &[Key], q: &[i64]) -> i64 {
-    keys.iter().zip(q).fold(0i64, |acc, (k, &qc)| {
-        let d = axis_i64(store, rec, k) - qc;
-        acc.saturating_add(d.saturating_mul(d))
-    })
-}
-
-/// Every record within Euclidean `radius` of query point `q`, in key (Morton) order.
+/// The records whose Morton code lies in `[from, till]` (or `[from, ∞)` when `till`
+/// is `None`), in natural Morton order, capped at `limit` records (`None` = all).
 ///
-/// **Exact.**  The axis-aligned box `[q−r, q+r]` contains the disc, and by Morton
-/// monotonicity the box's codes lie in `[morton(q−r), morton(q+r)]` — so seeking to
-/// the low corner and walking until a code passes the high corner visits every point
-/// of the box (plus some outside it, which the `dist2 ≤ r²` test drops).  No false
-/// negatives.  Ported from `spatial::within`; see its proof.
+/// This is the primitive behind `spacial` range slicing: `xs[(x,y)..]`,
+/// `xs[(x,y)..:n]`, and the bounding box `xs[(x1,y1)..(x2,y2)]`.  It is the raw code
+/// interval — for a bounding box that is a *superset* of the geometric box (Z-order
+/// threads through codes outside it), exactly as a keyed range slice is the raw key
+/// range; the caller filters or `break`s as needed.
 #[must_use]
-pub fn within(coll: &DbRef, stores: &[Store], keys: &[Key], q: &[i64], radius: i64) -> Vec<u32> {
+pub fn range(
+    coll: &DbRef,
+    stores: &[Store],
+    keys: &[Key],
+    from: &[i64],
+    till: Option<&[i64]>,
+    limit: Option<usize>,
+) -> Vec<u32> {
     let store = keys::store(coll, stores);
     let tree = store.get_u32_raw(coll.rec, coll.pos);
     if tree == 0 {
         return Vec::new();
     }
-    let r2 = radius.saturating_mul(radius);
-    let mut found = Vec::new();
-    scan_box(store, tree, keys, q, radius, &mut found);
-    // `scan_box` walks the tree in order, so the kept records stay Morton-ordered.
-    found
-        .into_iter()
-        .filter(|&(d, _)| d <= r2)
-        .map(|(_, rec)| rec)
-        .collect()
-}
-
-/// Collect `(dist², rec)` for every record in the box of half-width `radius` about
-/// `q`.  The shared box scan behind `within` and `nearest`.
-fn scan_box(
-    store: &Store,
-    tree: u32,
-    keys: &[Key],
-    q: &[i64],
-    radius: i64,
-    out: &mut Vec<(i64, u32)>,
-) {
     let n = keys.len();
-    let lo = |a: usize| coord_code(q[a].saturating_sub(radius));
-    let hi_code = morton_words(n, |a| coord_code(q[a].saturating_add(radius)));
+    let from_lo = |a: usize| coord_code(from[a]);
+    let till_code = till.map(|t| morton_words(n, |a| coord_code(t[a])));
     let oracle = RadixOracle { keys };
-    let probe = |word: u32| interleave(word, n, lo);
+    let probe = |word: u32| interleave(word, n, from_lo);
     let mut it = rt::rtree_seek(store, tree, &probe, key_bits(keys), &oracle);
+    let cap = limit.unwrap_or(usize::MAX);
+    let mut out = Vec::new();
     let mut rec = it.rec();
-    while rec != 0 {
-        let rec_code = morton_words(n, |a| axis_code(store, rec, &keys[a]));
-        if code_gt(&rec_code, &hi_code, n) {
-            break;
+    while rec != 0 && out.len() < cap {
+        if let Some(hi) = &till_code {
+            let rec_code = morton_words(n, |a| axis_code(store, rec, &keys[a]));
+            if code_gt(&rec_code, hi, n) {
+                break;
+            }
         }
-        out.push((dist2(store, rec, keys, q), rec));
+        out.push(rec);
         rec = it.next(store, tree).unwrap_or(0);
     }
-}
-
-/// The `k` records closest to `q`, nearest first (ties by rec id); fewer than `k`
-/// only if the index holds fewer.
-///
-/// **Exact**, by an expanding box: scan the box of half-width `r`; stop once it holds
-/// `k` records and the `k`-th is within `r` (anything outside a box of half-width `r`
-/// has distance `> r`, hence farther than that `k`-th).  Otherwise double `r`, until
-/// the box saturates the coordinate range.  Ported from `spatial::nearest`.
-#[must_use]
-pub fn nearest(coll: &DbRef, stores: &[Store], keys: &[Key], q: &[i64], k: usize) -> Vec<u32> {
-    if k == 0 {
-        return Vec::new();
-    }
-    let store = keys::store(coll, stores);
-    let tree = store.get_u32_raw(coll.rec, coll.pos);
-    if tree == 0 {
-        return Vec::new();
-    }
-    let n = keys.len();
-    let mut radius: i64 = 8;
-    let mut prev_corners = [(0i64, 0i64); MAX_AXES];
-    let mut first = true;
-    loop {
-        let corners: [(i64, i64); MAX_AXES] = std::array::from_fn(|a| {
-            if a < n {
-                (q[a].saturating_sub(radius), q[a].saturating_add(radius))
-            } else {
-                (0, 0)
-            }
-        });
-        let saturated = !first && corners == prev_corners;
-
-        let mut found: Vec<(i64, u32)> = Vec::new();
-        scan_box(store, tree, keys, q, radius, &mut found);
-        found.sort_unstable();
-
-        let r2 = radius.saturating_mul(radius);
-        let kth_within = found.len() >= k && found[k - 1].0 <= r2;
-        if kth_within || saturated {
-            found.truncate(k);
-            return found.into_iter().map(|(_, rec)| rec).collect();
-        }
-        prev_corners = corners;
-        first = false;
-        radius = radius.saturating_mul(2);
-    }
+    out
 }
 
 #[cfg(test)]
@@ -438,82 +375,47 @@ mod tests {
         assert_eq!(got, want, "the three same-bucket records are one contiguous run");
     }
 
-    /// D4 — `within` equals brute force over many random discs, negatives included.
+    /// D4 — `range` returns exactly the records whose Morton code is in the interval,
+    /// in Morton order, respecting the limit.
     #[test]
-    fn d4_within_matches_brute_force() {
-        let mut store = Store::new_in_use(1 << 16);
-        let keys = xy_keys();
-        let coll_rec = store.claim(1);
-        let coll = DbRef {
-            store_nr: 0,
-            rec: coll_rec,
-            pos: 4,
-        };
-        let mut seed = 0x77aa_33cc_11ee_9988;
-        let mut pts = Vec::new();
-        for _ in 0..500 {
-            let (x, y) = (lcg(&mut seed) % 400 - 200, lcg(&mut seed) % 400 - 200);
-            let rec = add_point(&mut store, &coll, &keys, x, y);
-            pts.push((x, y, rec));
-        }
-        let stores = std::slice::from_ref(&store);
-        for _ in 0..200 {
-            let (cx, cy) = (lcg(&mut seed) % 400 - 200, lcg(&mut seed) % 400 - 200);
-            let r = 1 + lcg(&mut seed) % 50;
-            let mut got = within(&coll, stores, &keys, &[cx, cy], r);
-            got.sort_unstable();
-            let mut want: Vec<u32> = pts
-                .iter()
-                .filter(|&&(x, y, _)| {
-                    let (dx, dy) = (x - cx, y - cy);
-                    dx * dx + dy * dy <= r * r
-                })
-                .map(|&(_, _, rec)| rec)
-                .collect();
-            want.sort_unstable();
-            assert_eq!(got, want, "within({cx},{cy},{r}) must match brute force");
-        }
-    }
-
-    /// D5 — `nearest` equals a brute-force sort by (distance, rec), across k values.
-    #[test]
-    fn d5_nearest_matches_brute_force() {
+    fn d4_range_matches_the_code_interval() {
         let mut store = Store::new_in_use(1 << 15);
         let keys = xy_keys();
         let coll_rec = store.claim(1);
-        let coll = DbRef {
-            store_nr: 0,
-            rec: coll_rec,
-            pos: 4,
+        let coll = DbRef { store_nr: 0, rec: coll_rec, pos: 4 };
+        // The full 128-bit Morton code of a point, for the brute-force oracle.
+        let code_of = |store: &Store, rec: u32| -> [u64; MAX_AXES] {
+            morton_words(2, |a| axis_code(store, rec, &keys[a]))
         };
-        let mut seed = 0x1122_3344_5566_7788;
+        let mut seed = 0x77aa_33cc_11ee_9988;
         let mut pts = Vec::new();
-        for _ in 0..250 {
-            let (x, y) = (lcg(&mut seed) % 300 - 150, lcg(&mut seed) % 300 - 150);
+        for _ in 0..400 {
+            let (x, y) = (lcg(&mut seed) % 400 - 200, lcg(&mut seed) % 400 - 200);
             let rec = add_point(&mut store, &coll, &keys, x, y);
-            pts.push((x, y, rec));
+            pts.push(rec);
         }
         let stores = std::slice::from_ref(&store);
-        for _ in 0..150 {
-            let (cx, cy) = (lcg(&mut seed) % 300 - 150, lcg(&mut seed) % 300 - 150);
-            for &kk in &[1usize, 3, 10, 250, 300] {
-                let got = nearest(&coll, stores, &keys, &[cx, cy], kk);
-                let mut ranked: Vec<(i64, u32)> = pts
-                    .iter()
-                    .map(|&(x, y, rec)| {
-                        let (dx, dy) = (x - cx, y - cy);
-                        (dx * dx + dy * dy, rec)
-                    })
-                    .collect();
-                ranked.sort_unstable();
-                ranked.truncate(kk);
-                let want: Vec<u32> = ranked.into_iter().map(|(_, rec)| rec).collect();
-                assert_eq!(got, want, "nearest({cx},{cy},{kk}) must match brute force");
-            }
+        for _ in 0..100 {
+            let (fx, fy) = (lcg(&mut seed) % 400 - 200, lcg(&mut seed) % 400 - 200);
+            let from = morton_words(2, |a| coord_code([fx, fy][a]));
+            let got = range(&coll, stores, &keys, &[fx, fy], None, None);
+            // brute: records with code >= from, sorted by (code, rec).
+            let mut want: Vec<([u64; MAX_AXES], u32)> = pts
+                .iter()
+                .map(|&rec| (code_of(&store, rec), rec))
+                .filter(|(c, _)| !code_gt(&from, c, 2))
+                .collect();
+            want.sort_unstable();
+            let want_recs: Vec<u32> = want.into_iter().map(|(_, r)| r).collect();
+            assert_eq!(got, want_recs, "range from ({fx},{fy}) must be the code tail in order");
         }
+        let all = range(&coll, stores, &keys, &[-1000, -1000], None, None);
+        let capped = range(&coll, stores, &keys, &[-1000, -1000], None, Some(5));
+        assert_eq!(capped.len(), 5.min(all.len()));
+        assert_eq!(capped, all[..capped.len()].to_vec(), "limit is a prefix of the full walk");
     }
 
-    /// D3 — the code is order-preserving even across zero: a negative axis must sort
+    /// D3 — the code is order-preserving    /// D3 — the code is order-preserving    /// D3 — the code is order-preserving even across zero: a negative axis must sort
     /// before a positive one, which raw 2's-complement bits would get backwards.
     #[test]
     fn d3_offset_binary_orders_negatives_below_positives() {

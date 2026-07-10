@@ -1,0 +1,29 @@
+// @PLN48 S3 — spacial range slicing (no methods, no new functions): the bounding
+// box `xs[(x1,y1)..(x2,y2)]`, the open outward walk `xs[(x,y)..]` with a break, and
+// the count-limited `xs[(x,y)..:n]`.  Both backends, Morton order.
+struct SLMob { x: integer, y: integer }
+
+fn main() {
+  xs: spacial<SLMob[x, y]> = [];
+  xs += [SLMob{x: 5,  y: 5}];
+  xs += [SLMob{x: 1,  y: 1}];
+  xs += [SLMob{x: 8,  y: 8}];
+  xs += [SLMob{x: 50, y: 50}];
+
+  // bounding box (0,0)..(10,10): (1,1),(5,5),(8,8) — 3, excludes (50,50).
+  boxn: integer = 0;
+  for m in xs[(0,0)..(10,10)] { boxn += 1; }
+
+  // open from (5,5).., break after 2 — approximate outward walk.
+  seen: integer = 0;
+  for m in xs[(5,5)..] {
+    seen += 1;
+    if seen == 2 { break; }
+  }
+
+  // limited from (0,0)..:1 — at most one record.
+  lim: integer = 0;
+  for m in xs[(0,0)..:1] { lim += 1; }
+
+  print("box={boxn} walk={seen} lim={lim}\n");   // box=3 walk=2 lim=1
+}
