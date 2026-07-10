@@ -1,4 +1,4 @@
-# Plan 45 — `spacial<T[x,y]>` / `spacial<T[x,y,z]>`: a Morton/Z-order radix spatial index
+# @PLN48 — `spacial<T[x,y]>` / `spacial<T[x,y,z]>`: a Morton/Z-order radix spatial index
 
 **Status:** Future (planned). Completes the long-reserved `spacial<T>`
 keyed-collection (gated today with *"spacial<T> is planned for 1.1+; until
@@ -24,15 +24,18 @@ The same Morton machinery serves both; 2 or 3 interleaved axes.
   (`insert_record`/`find`/`remove`/`copy_claims`) is
   `panic!("Not implemented")`, and the parser gates it with the 1.1+
   diagnostic.
-- **`src/radix_tree.rs`** — header: *"A radix tree implementation.  This is
-  especially useful for spacial indexes."*  A binary radix tree (FALSE/TRUE
-  bit branching, `MAX_DEPTH = 64`) whose `rtree_find(store, tree, key:
-  Fn(u32) -> bool)` consumes the key **one bit at a time** — purpose-built
-  for an interleaved Morton key.  `rtree_init/first/last/find/insert` exist;
-  `RadixIter::next` (the bidirectional walk), `remove`, and the wiring are
-  stubbed.
+- **`src/radix_tree.rs`** — a store-backed binary PATRICIA tree whose key oracle
+  consumes the key **one bit at a time**, so an interleaved Morton key is never
+  materialised.  **Rewritten and unit-tested as deliverable R** —
+  see [RADIX_TREE.md](RADIX_TREE.md).
 
-So this is **completion**, not greenfield.
+An earlier revision of this plan claimed *"this is completion, not greenfield"*
+for the radix tree.  That was **false**, and probing it is what produced
+deliverable R: the sketch's `set_bits` silently stored `0` (its arguments were
+swapped against `set_byte(rec, fld, min, val)`), and inserting a **second**
+record segfaulted.  `RadixIter::next` returned `None` unconditionally, so the
+bidirectional walk — the entire reason this plan wants the tree — did not exist.
+The *interface intent* was sound and is kept; the representation was replaced.
 
 ## Design
 
@@ -82,14 +85,19 @@ field lives):
 
 | # | Scope |
 |---|---|
-| **S1** | Complete `src/radix_tree.rs`: bidirectional `RadixIter` (`next`/`prev` from an arbitrary position), `insert`, `remove`, the interleaved Morton bit-key.  Rust unit tests (2D + 3D keys, insert/find/walk/remove). |
+| **R** ✅ | **The radix tree, as a standalone deliverable** — [RADIX_TREE.md](RADIX_TREE.md).  A store-backed binary PATRICIA tree over an abstract bit-key oracle: `init`/`free`, `insert` (with growth + relocation), `find`, `seek` (lower bound), bidirectional `first`/`last`/`next`/`prev`, `remove` with a node free list, and `validate`.  Rust unit tests only — no schema, no parser, no `Parts::Spacial` — so everything downstream inherits a structure that is already proven.  Steps R1–R7 green. |
+| **S1** | The Morton bit-key: interleave the 2 or 3 quantized coordinate axes into the oracle deliverable R already consumes.  Rust unit tests (2D + 3D keys). |
 | **S2** | Wire `spacial<T[…]>` to the radix tree — implement the four panicking ops + `copy_claims` (`structures.rs`/`search.rs`/`allocation.rs`); Morton-encode the coord key fields; lift the parser's "planned 1.1+" gate.  (This also finally implements the keyed kind @P295/@P305/@P309 had to exclude.) |
 | **S3** | Proximity API (stdlib, `default/*.loft`): `coll.near(x, y[, z])` (nearest-first iterator), `coll.within(x, y[, z], radius)`, `coll.nearest(x, y[, z], k)` — with distance verification. |
 | **S4** | Consumer validation — a "near mobs from a mob's perspective" demo in the moros/audience world; cross-mode; cache-locality + correctness vs brute-force measurement. |
 
 ## Critical files
-- `src/radix_tree.rs` — the tree + bidirectional iterator + Morton bit-key.
+- `src/radix_tree.rs` — the tree + bidirectional iterator (deliverable R, done); the Morton bit-key plugs in as a `KeyFn`.
 - `src/database/{structures.rs,search.rs,allocation.rs}` — the `spacial` ops (currently `panic!`).
+  Note `search.rs` panics in **three** places (`find`, `iterate`, `remove`), and
+  `allocation.rs::for_each_owned_child` needs a `Spacial` arm — today it yields no
+  children, which is why the two `remove_claims`/`copy_claims` panics exist to stop a
+  silent leak.
 - `src/database/types.rs` — `spacial()` registration + the Morton key; keyed-kind handling.
 - `src/parser/*` — lift the `spacial<T>` 1.1+ diagnostic; keyed-field handling (mirror hash/sorted/index from @P305/@P307/@P308).
 - `default/*.loft` — the `near`/`within`/`nearest` API.
