@@ -3398,15 +3398,22 @@ impl Scopes {
             } else {
                 ls.push(expr.clone());
             }
+        } else if expr_is_terminal {
+            // expr is already a `Return(...)` (or a `Block`/`Insert(...)` ending
+            // in one) — the cleanup was emitted alongside it by the inner Return
+            // arm's free_vars call.  Re-emitting `ls` here would duplicate every
+            // OpFreeText/OpFreeRef (and tack on a dead `Return(Null)`).  Just
+            // propagate the terminal as-is.  #549 bug 2: a terminal *Block* must
+            // hit this dedup BEFORE the `Value::Block` insert_free arm below —
+            // an explicit `return (owned_text, …)` at a body tail is processed by
+            // both the `Value::Return` scan arm AND `convert`'s is_body_return
+            // tail sweep; the first makes the synthetic tuple block terminal, and
+            // without ordering this check first the second re-ran `insert_free`,
+            // emitting a second `OpFreeText` on the owned element (double free
+            // under `-C debug-assertions=on`; text.rs:334).
+            return vec![expr.clone()];
         } else if let Value::Block(bl) = expr {
             return self.insert_free(bl, &ls, is_return, data, function);
-        } else if expr_is_terminal {
-            // expr is already a `Return(...)` (or `Insert(...)` ending in
-            // one) — the cleanup was emitted alongside it by the inner
-            // Return arm's free_vars call.  Re-emitting `ls` here would
-            // duplicate every OpFreeText/OpFreeRef and tack on a dead
-            // `Return(Null)`.  Just propagate the terminal as-is.
-            return vec![expr.clone()];
         } else if is_return && is_value_return_type(tp) && !expr_is_terminal {
             // B5-L3: when a value-returning function's tail expression is a
             // non-Block, non-Var, non-Null value (If/Match/Call etc.) and

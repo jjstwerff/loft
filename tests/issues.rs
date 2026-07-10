@@ -13783,6 +13783,51 @@ fn p549_id<T: Printable>(p549x: T) -> T { return p549x; }"
     .result(Value::Int(5));
 }
 
+/// #549 bug 2 — an explicit `return (owned_text, …)` of an aggregate literal
+/// whose element is an OWNED/call-produced text double-freed that element's
+/// String (`text.rs:334` under `-C debug-assertions=on`).  NON-generic (unlike
+/// the p243/p329/p330 siblings) — the bug is not generic-specific.  Root cause:
+/// the synthetic tuple/struct block a `return` builds is processed by BOTH the
+/// `Value::Return` scan arm and `convert`'s is_body_return tail sweep; the first
+/// makes the block terminal, and `scopes::free_vars` re-ran `insert_free` on the
+/// now-terminal Block (the `Value::Block` arm preceded the `expr_is_terminal`
+/// dedup) → a second `OpFreeText`.  Fix: order the terminal-dedup first.  A tail
+/// aggregate (no `return`) never hit this, so these all use an explicit `return`.
+#[test]
+fn p549_bug2_return_tuple_owned_text_not_double_freed() {
+    code!(
+        "fn p549_gt() -> text { return \"a\" + \"b\"; }
+fn p549_pair() -> (text, text) { return (p549_gt(), \"x\"); }"
+    )
+    .expr("p549_pair().0")
+    .result(Value::str("ab"));
+}
+
+#[test]
+fn p549_bug2_return_struct_owned_text_not_double_freed() {
+    code!(
+        "struct P549S { p549_a: text, p549_b: text }
+fn p549_gt() -> text { return \"a\" + \"b\"; }
+fn p549_mk() -> P549S { return P549S { p549_a: p549_gt(), p549_b: \"x\" }; }"
+    )
+    .expr("p549_mk().p549_a")
+    .result(Value::str("ab"));
+}
+
+#[test]
+fn p549_bug2_return_tuple_owned_text_discarded_not_double_freed() {
+    code!(
+        "fn p549_gt() -> text { return \"a\" + \"b\"; }
+fn p549_pair() -> (text, text) { return (p549_gt(), \"x\"); }
+fn p549_discard() -> integer {
+    p549_pair();
+    return 7;
+}"
+    )
+    .expr("p549_discard()")
+    .result(Value::Int(7));
+}
+
 /// P239 — for-loop over `vector<T>` inside a generic fn crashed
 /// both backends.  Interp SIGSEGV; native rustc E0610
 /// `i64.rec`.  The for-loop iter-termination check

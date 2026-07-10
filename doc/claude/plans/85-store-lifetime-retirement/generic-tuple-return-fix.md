@@ -203,5 +203,33 @@ Verified: the 10-cell boundary matrix + `p240` + the four `p549_*` guards, corre
 leak-free on interpret AND native, under the DA gate.
 
 The **`text.rs:334` double-free** (bug 2 in #549 — a `(text, …)` return double-frees an
-owned/call-produced text element; `p243`/`p329`/`p330`, DA-only, pre-existing) is a
-SEPARATE, older bug and is UNTOUCHED here — #549 stays open for it.
+owned/call-produced text element; `p243`/`p329`/`p330`, DA-only) is a SEPARATE, older
+bug — fixed next (below), NOT by the bug-1 lift change.
+
+## #549 bug 2 — the explicit-`return` aggregate double-free (FIXED 2026-07-10)
+
+Boundary (matrix, both backends): double-free ⟺ an explicit `return (…)` of an aggregate
+LITERAL (tuple OR struct) containing an OWNED text element (call-produced / `+`-concat /
+a variable holding one). A TAIL aggregate (no `return` keyword) and an all-literal
+aggregate are clean; position / container / `(text,int)` don't matter.
+
+Root cause (in `scopes::free_vars`, NOT the parser): an explicit `return (owned_text, …)`
+at a body tail builds a `synthetic_tuple_return` Block and is processed by `free_vars`
+TWICE — once by the `Value::Return` scan arm, once by `convert`'s `is_body_return` tail
+sweep (the tail-no-`return` form has no Return node, so it runs once → clean). The first
+pass runs `insert_free`, which appends the owned-element free + the return, making the
+Block TERMINAL. The second pass hit the `Value::Block` arm — which precedes the
+`expr_is_terminal` dedup — and re-ran `insert_free`, emitting a SECOND `OpFreeText` on the
+same element (and a `return return`). The `expr_is_terminal` dedup already existed for an
+`Insert`-ending-in-Return; a terminal *Block* just never reached it.
+
+Fix: order the `expr_is_terminal` dedup BEFORE the `Value::Block` insert_free arm, so a
+Block that already ends in a Return propagates as-is instead of being re-freed. The fixed
+`return`-path IR is byte-identical to the clean tail path (one `OpFreeText`, one `return`).
+Verified: 13-cell matrix + `p243`/`p329`/`p330` (DA gate 6 fails → 0) + three non-generic
+`p549_bug2_*` guards, on interpret AND native; full `issues` DA gate 755/0; full suite green.
+
+Two UNRELATED pre-existing DA-only failures surfaced while verifying (both red on
+`origin/main`, both orthogonal to this fix, both OUT OF SCOPE): `156-plan52-chained-
+coalesce` (a `??`-coalesce double-free, a DIFFERENT `text.rs:334` path — not a return) and
+`audience_crystal/03-crystal-incr` (`mod.rs:4014`). Worth a follow-up.
