@@ -163,43 +163,58 @@ anyone who **cannot** fix — filing is a stranger's only available move — whi
 path is its own arc of gate 5 ([@PLN102](https://github.com/loft-lang/plans/issues/102)) rather than an
 afterthought. The policy is right; its boundary is scale, not size.
 
-Two standing gates are RED, and neither is a flake:
-- **`main` is red on the differential oracle** — `tests/oracle/27-native-tailcall-return-heap.loft`
-  runs on `--interpret` but `--native` and `--native-wasm` **reject it** (rustc E0599:
-  `return ().to_string()` — codegen drops the value of a tail call inside a match arm). An
-  accept/reject divergence, so Goal D's Check ("zero differences") does not hold. The corpus cell was
-  added by @PLN97 precisely to stop this class re-opening; the oracle did its job.
-- **`registry-validation` has never had a green run** since it was added 2026-07-05. Exactly 2 of
-  ~22 libraries fail: `graphics` (CI provisioning — `alsa-sys` needs `libasound2-dev` + pkg-config,
-  the workflow installs only `mold`) and `hex_terrain` (see gate 5 above). Do **not** dismiss this
-  as a network flake — the other 20 pass.
+Two standing gates were RED; **both are now resolved except one external library**:
+- **`main` on the differential oracle — ✅ GREEN (2026-07-10).**
+  `tests/oracle/27-native-tailcall-return-heap.loft` was the `a7_match_arm_tail` divergence
+  (a `-> text` fn whose tail `match` arm calls a caller-buffer callee → rustc E0599); it was
+  fixed in `b1426f9e` (#548) on `main` (`if_tail_yields_text` now sees through the `scalar_match`
+  block) and pinned by `tests/scripts/536-text-match-tail-buffer-callee.loft`.
+  `oracle_corpus_agrees_across_backends` passes both backends. The corpus cell added by @PLN97 did
+  its job.
+- **`registry-validation` — graphics leg FIXED (2026-07-10); one library still red.** `graphics`
+  failed at native-crate build (`alsa-sys` needs `libasound2-dev`; the workflow installed only
+  `mold`) — a provisioning gap, now closed by mirroring the main CI Test job's Linux install
+  (`libasound2-dev xvfb libgl1-mesa-dri`) into `registry-validation.yml`. The remaining red leg is
+  **`hex_terrain 0.1.0`**, a real published-library bug (the C86 plain-bind write-through idiom
+  lands its heights in throwaway copies — see gate 5): it needs a **library republish in
+  loft-libs-game**, out of this repo's scope, and is the motivating case for the @PLN102 compat
+  promise. Not a network flake — the other ~20 pass.
 
-**Coverage gaps against the GOALS.md Checks** (the Checks are the bar and stay as written; these are
-*results*, i.e. open work):
-- Goal A asks `stack_align_guard` to fire zero times "across the whole corpus (every test binary)".
-  CI's `stack_align_guard sweep` runs `--lib --test issues --test wrap --test strings --test frame_vars`
-  with `library_suite` excluded — four test binaries, not the corpus. **Widen it.**
-- Goal E asks that `LOFT_STORE_GUARD=1` be silent across the corpus. That env var is set in **no**
-  workflow. The assert it was promoted to (`scopes.rs`, `cfg!(debug_assertions) || LOFT_STORE_GUARD`)
-  is compiled OUT of every normal test build by `[profile.dev.package.loft] debug-assertions = false`,
-  so it is exercised only by the nightly **debug-assertions gate**, which is scoped to
-  `--lib --test issues` (its own comment: widening awaits the plan-85 DA-inventory worklist).
-  **Wire the corpus sweep into CI, and widen the DA gate.**
+**Coverage gaps against the GOALS.md Checks — both CLOSED 2026-07-10** (the Checks are the bar and
+stay as written; these were *results*):
+- Goal A (`stack_align_guard` fires zero across every test binary): **✅ widened.** The guard fires
+  only IN-PROCESS — a `cross_mode!` matrix cell / mixed-boundary suite shells out to a spawned
+  `--native`/`--wasm` binary the sweep can't observe (`tests/n3_parity.rs` states this), so the
+  reachable corpus IS the in-process interpreter binaries. The `guard` sweep now runs all of them:
+  `issues/wrap/strings/frame_vars` **plus** `expressions`, `expressions_auto_convert`, `slots`,
+  `slot_v2_baseline`, `value_struct_alloc`, `dispatch_reentry`, `format` (each verified zero-fires
+  under the feature). `library_suite` stays excluded (native cdylibs + GL/ALSA the lean job omits;
+  guard-blind anyway).
+- Goal E (`LOFT_STORE_GUARD=1` silent across the corpus, promoted to a `cfg(debug_assertions)`
+  assertion): **✅ wired + widened.** The enforced twin — the `reclaim_guard`
+  `reclaim_unfreed_eligible == 0` `assert_eq!` — now hard-gates across the interpreter corpus
+  because the **nightly debug-assertions gate was widened** from `--lib --test issues` to
+  `--test wrap --test strings --test frame_vars` (`library_suite` excluded), the plan-85
+  DA-inventory chain having been cleared (below). `LOFT_STORE_GUARD=1` is now set on that gate too
+  (closing "set in no workflow"), additionally running the block-confinement `store_lifetime_guard`
+  detector; both verified silent corpus-wide, positive-controlled by
+  `watermark.rs::phase4_goal_e_guard_is_falsifiable`.
 
-### The `wrap` loft_suite DA-gate residuals — the widen-the-gate worklist (2026-07-10)
+### The `wrap` loft_suite DA-gate residuals — the widen-the-gate worklist (✅ CLEARED 2026-07-10)
 
-The nightly DA gate is scoped to `--lib --test issues` (GREEN).  Widening it to
-`--test wrap` is blocked by a **chain of debug-assert tripwires**: under
+**DONE — the nightly DA gate now spans `--lib --test issues --test wrap --test strings
+--test frame_vars` (`library_suite` excluded), matching the per-PR `stack_align_guard`
+sweep scope.** Widening was blocked by a **chain of debug-assert tripwires**: under
 `RUSTFLAGS='-C debug-assertions=on' … cargo test --release --test wrap`, the
 `loft_suite` test (one test that runs every `tests/scripts/*.loft`) aborts at the
-FIRST script that trips an assert — so each fix unmasks the next.  Enumerated while
-clearing it on `tuxedo-cluster-c` (UNMERGED).  **Most were FALSE ALARMS** — over-eager
+FIRST script that trips an assert — so each fix unmasked the next.  Cleared on
+`tuxedo-cluster-c` (UNMERGED).  **Most were FALSE ALARMS** — over-eager
 sentinels firing on correct-but-flagged cases (the H2 sentinel's OWN advice, "re-add
 the read", would have *leaked*; the relocate one tempted a wide-blast-radius "complete
-the traversal" that wasn't needed); two were real latent bugs.  Lesson: before obeying
-a sentinel's "this shouldn't happen" premise, verify the
-flagged behaviour (value + leak + `LOFT_POISON` + the DA store-free asserts, BOTH
-backends) — a debug tripwire is a hypothesis, not a verdict.
+the traversal" that wasn't needed); the read-surface one (86) was the same shape.  Two
+were real latent bugs.  Lesson: before obeying a sentinel's "this shouldn't happen"
+premise, verify the flagged behaviour (value + leak + `LOFT_POISON` + the DA store-free
+asserts, BOTH backends) — a debug tripwire is a hypothesis, not a verdict.
 
 Cleared (each verified: the fixed case correct on both backends; a non-vacuous
 `tests/issues.rs` guard):
@@ -210,31 +225,27 @@ Cleared (each verified: the fixed case correct on both backends; a non-vacuous
 | `387-text-fn-ref`, `85-ncc-container-text-return`, `85-poison-return-tail-uaf` | `parser/mod.rs:1195` (H5 two-pass contract) | `cd9c1f94` | **REAL, latent** — a pass-2-only `__tret` hidden `&text` signature buffer → forward-ref caller "Too few parameters" crash (BOTH backends, release, not just DA). Gate pass-2 tret promotion on pass-1. |
 | `450-struct-field-vector-return`, `508-empty-arm-real-empty-vector`, `repro_p365`, 4× `85-store-lifetime-*` | `scopes.rs` (H2 step-5 `tp_alone` sentinel) | `e1d594cb` | **FALSE ALARM** — retired positional block-result read; a field/enum-arm vector return copies its source into the retbuf, so freeing the local source is correct (re-adding the read would leak). Sentinel removed. |
 | `501-map-filter-literal-receiver`, `85-short-lambda-capture` | `scopes.rs` (`relocate_null_init`) | `097879bb` | **FALSE ALARM** — the best-effort Plan-57 null-init relocation can't reach a confined block off the control-flow spine (a `map`/`filter`/lambda body); the body-0 fallback is correct. Assert softened to fire only on genuine scope-absence. |
+| `86-writeread-struct` | `scopes.rs` (`check_ref_leaks`) | `d5b6212a` | **FALSE ALARM** — `_read_1`, the `#reading file` surface temp behind `q = f#read as S`, is a MOVE source: the block allocs one record and PutRef-adopts it into `q`, which IS freed. `get_free_vars` already elides the temp's free; `check_ref_leaks` didn't model the adoption. Both backends clean (values + empty-allowlist leak gate + POISON). Fixed by crediting the adopted block-tail temp (`collect_adopted_block_results`) — narrow: a plain-bind COPY has a bare-`Var` RHS and its source is freed separately, and the credit requires `lhs ∈ freed`, so it can't mask a real leak. |
 
-Remaining (each VERIFIED failing at the parent commit — orthogonal to the fixes
-above; NOT yet fixed):
+Remaining — **NONE for the interpreter gate.** The two that were listed are outside the
+gate's scope by construction (the gate covers the in-process interpreter corpus,
+`library_suite`/native excluded — exactly like the alignment sweep):
 
-- **`86-writeread-struct` — `check_ref_leaks` (`scopes.rs`).** `_read_1` (a Reference
-  var) "registered in an inner block scope not reachable from function-exit cleanup",
-  no `OpFreeRef`. DA-only; release + `LOFT_STORES=warn` + `LOFT_POISON` all CLEAN, so
-  the store IS freed at runtime — the STATIC check disagrees. Either a real
-  scope-registration bug (the store is freed by luck of layout) or another over-eager
-  static tripwire. **The one worth a real look** (likely-real store-lifetime).
-- **`75-native-stub` — `compile.rs`.** "native function not loaded: its library's
-  native cdylib is missing or stale." **INFRA, not a code bug** — the standalone DA
-  binary lacks the rebuilt native cdylib; `scripts/find_problems.sh` (which runs
-  `make rebuild-native-cdylibs`) passes it. Widening the DA gate must rebuild the
-  cdylibs against the DA `libloft` first.
-- **`audience_crystal/03-crystal-incr` — `mod.rs:4014` op-count watchdog** ("Too many
-  operations (infinite loop?)", last op `OpSetSingle` in `emit_segment`). NOT a
-  debug-assert — the compute-heavy incremental-crystal test trips the op limit in the
-  slower DA build, OR a genuine runaway. Needs a look; may just need a higher limit
-  under DA.
+- **`75-native-stub`** — INFRA (needs a rebuilt native cdylib); native-only, so it is
+  never hit by the interpreter DA gate (which runs `--interpret`).  `find_problems.sh`
+  (runs `make rebuild-native-cdylibs`) passes it.  Only a hypothetical *native* DA sweep
+  would need this; not built.
+- **`audience_crystal/03-crystal-incr`** — `mod.rs:4014` op-count watchdog.  Lives in
+  `library_suite` (excluded).  NOT a runaway: under normal CI it runs NATIVE (cdylib
+  built) with no op watchdog; a DA `library_suite` attempt forces interpreter fallback
+  (the cdylib isn't rebuilt against the DA `libloft`), and the compute-heavy crystal-incr
+  legitimately exceeds the *interpreter's* op limit — an artifact of interpreter fallback,
+  not a bug.  Out of scope unless `library_suite` is ever run under DA.
 
-Order of the chain (each masks the next): `156 → H5 → 3787(H2) → 280(relocate) →
-{86, 75, audience}`. To finish widening: fix/triage `86`, rebuild native cdylibs for
-`75`, and bound/raise the op limit for `audience_crystal` — then the `wrap` suite can
-join the nightly DA gate.
+Order of the chain (each masked the next): `156 → H5 → 3787(H2) → 280(relocate) → 86`.
+All cleared — the `wrap` (+ `strings`/`frame_vars`) suites joined the nightly DA gate in
+`d5b6212a`. `75` (native infra) and `audience_crystal` (library_suite op-limit) sit in the
+excluded native/library domain, out of the interpreter gate by construction (above).
 
 ## The queue
 
@@ -281,7 +292,7 @@ refactors that retire whole future-bug *classes*. In finishing order:
 | 8 | **H4 medium half — extend the `#rust`-template idea upward** — the free-op family, null-init emission, and the GET→SET table become one declaration each that both backends derive, the way fill.rs derives ops. Includes the F4 op-coverage sentinel (enumerate ops lacking `cross_mode` cells) as its completeness check. The L half (one shared lowering IR) stays 1.1+ and explicitly NOT before step 6 (H3). **GET↔SET table DONE 2026-06-17** (`NarrowIntKind::of` — one width→op home for `get_val`/`set_field_check`, `9153e132`); the other two halves RESOLVED by design-protocol (2026-06-17, "start Row 8"): the **free-op family** is already single-homed (`scopes.rs` selection + de-duped `pre_eval::free_op_var` recognizer — no per-backend table); the **null-init** pair are DIFFERENT facts (`emit_typed_null` live NULL sentinel vs `default_native_value` default-INIT placeholder — probed identical live-null round-trip on both backends; `floatvar=null` type-rejected; merging would be the H6-`NullEnc`-phantom), with the lone residual (`default_native_value`'s conflated contract) fixed by a clarifying doc comment. Premise over-stated, like H3. | M | ✅ done — GET↔SET shipped; free-op + null-init resolved by design-protocol | [STABILITY_HOTSPOTS § H4](STABILITY_HOTSPOTS.md); F4 row in [STABILITY_SWEEP](STABILITY_SWEEP.md) |
 | 9 | **The instrument plans — fuzzing + sanitizer expansion** — **✅ BOTH CLOSED 2026-07-10.** @PLN53 program-level fuzzing (harness shipped #542; continuous-run/OSS-Fuzz decision-deferred) + @PLN54 sanitizer coverage expansion (S1/S2/S3/S5/S6/S7 green; S4 LSan `detect_leaks=1` unblocked by @PLN85 + green; S8 MSan deferred; only S9 mixed-boundary cdylib ASan spun out, toolchain-blocked on curve25519 `E0463`). The sweep's "store-level fuzz harness" instrument + the remaining pass-1 DEFERRED cells (F1 diagnostics-altering-flow, F5 odd-size adjacency, F6 P191 late-mutation, F8 crafted attr/var collision, F9 lib-path axes, F10 par text buffers, match-unification, dispenser stress) fold into the shipped fuzz corpora (or re-open with S9) rather than being probed by hand. | L | ✅ both plans closed | [plans/53](plans/53-program-level-fuzzing/README.md), [plans/54](plans/54-sanitizer-coverage-expansion/README.md); DEFERRED markers throughout [STABILITY_SWEEP](STABILITY_SWEEP.md) |
 | 10 | **Pass-3 de-dup tail** — **TRIAGED CLEAN 2026-06-17.** Every named candidate is already resolved: `generation/ops` post-plan-57 rc remnants — **gone** (no rc code left); `value_reads_var` — already centralised (`data.rs::reads_var`, replaced `scopes::value_reads_var` + two more); `base_var_of` — already unified (`data.rs::base_var`); the variables size-table — DECIDED a non-dup vs `byte_width` (PASS2 wave 5, different facts); `towards_set` dual discriminators + the codegen_runtime mirrors — INTENTIONAL (interp-vs-native, #328). The H3 flag-setter "five homes" (#316/#323) is the one residual de-dup, opportunistic. Nothing actionable stands open. | S each | ✅ triaged clean | module rows in [STABILITY_SWEEP § Module work list](STABILITY_SWEEP.md) + [STABILITY_PASS2 § Work list](STABILITY_PASS2.md) |
-| 11 | **CI — docs-only PRs block on the skipped Test matrix** (surfaced 2026-06-17, PR #400). A pure docs-only diff skips the Test matrix at the JOB level (`if: needs.changes.outputs.code == 'true'`), so the matrix never EXPANDS: only the unexpanded `Test (${{ matrix.os }})` reports (SKIPPED) and the required `Test (ubuntu/macos/windows)` names never appear → branch protection stays `BLOCKED`. The workflow's "a skipped required check counts as satisfied" comment holds only when the matrix expands (skip at STEP level). #400 dodged it (its `tests/fixtures/` change classifies as code). Fix: move the `if` from the matrix job onto its heavy STEPS (each leg still reports its required name), or a companion job that posts the three names green on a docs-only diff. | S | ⬜ open | `.github/workflows/ci.yml` (`changes` + `Test` jobs) |
+| 11 | **CI — docs-only PRs block on the skipped Test matrix** (surfaced 2026-06-17, PR #400). A pure docs-only diff skips the Test matrix at the JOB level, so the required `Test (<os>)` contexts never appeared → branch protection stayed `BLOCKED`. **✅ DONE** — the companion-job fix (a `test-skip` matrix job, `if: needs.changes.outputs.code == 'false'`, that posts `Test (ubuntu-latest)`/`Test (macos-latest)` green on a docs-only diff) was landed in `b79c3798` (PR #400 itself) and is on `main`; the row was just never flipped. Verified present on `origin/main`. | S | ✅ done (`b79c3798`) | `.github/workflows/ci.yml` (`test-skip` job) |
 | 12 | **H6 follow-up — 4-byte `i32` reclaims `i32::MIN` (not-null full range).** A not-null `i32` cannot hold `i32::MIN`: `OpGetInt4` decodes a stored `i32::MIN → i64::MIN` (null) — the sentinel-decode the 1-byte `Byte` and 2-byte `ShortFull` reads avoid. Fix = the 4-byte twin: a no-sentinel read (`get_i32_raw` direct → `i64::from`), a `NarrowIntKind` arm splitting not-null vs nullable at width 4, `reserves_narrow_sentinel` + `usable_min/max` coverage for `Some(4)`; the compile + runtime sentinel communication then falls out of the shared `usable_min/max` home. LOW value — reclaims one extreme value. **Matrix-first (2026-06-17) revised this to M, not S, and KEPT IT DEFERRED:** the `i32::MIN` *literal* is itself narrowing-rejected — `x: i32 = -2147483648` → "cannot implicitly narrow integer to i32", because the unary-minus isn't const-folded before `int_value_fits`, which sees the positive `2147483648` (> `i32::MAX`). So a real fix needs negative-literal const-folding PLUS the not-null no-sentinel read PLUS the width-4 not_null distinction — M effort for a value (`i32::MIN`) that is virtually never real data. **`i64`/`integer` likewise DEFERRED**: its null IS the universal stack/register sentinel (`i64::MIN`, 60+ sites in `ops.rs` alone), so reclaiming it is a null-model rearchitecture. | M (was S) | ⏸ deferred — low value | [STABILITY_HOTSPOTS § H6](STABILITY_HOTSPOTS.md) |
 
 Standing discipline (not queue items): every lowering-semantics change lands
