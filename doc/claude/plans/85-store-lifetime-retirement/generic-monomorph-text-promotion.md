@@ -89,10 +89,27 @@ BOUND cases (`test_value = { first(nums) }`, harness shape). Verified leak-0 +
 correct on both backends; full suite 2738-green.
 
 **Still open (5), two distinct residues:**
-- **Tuple returns — `p329`×3, `p330`×2.** `promote_monomorph_text_return` gates on
-  `Type::Text` only; a `-> (text, text)` monomorph needs the per-element
-  `__ret_text_N` tuple promotion (scopes.rs tuple branch / `TupleElement`), a
-  different mechanism. Extend the helper to route tuple-of-text returns through it.
+- **Tuple returns — `p329`×3, `p330`×2 — DIFFERENT CLASS (not route B).**
+  Diagnosed 2026-07-10. A `-> (text, text)`/`-> (text, integer)` generic monomorph
+  returns the tuple BY VALUE; the scope-pass per-element hoist DID run (the body has
+  `var___ret_text_1 = x.to_text().to_string(); return (var___ret_text_1.to_string(),
+  …)`), but `__ret_text_1` is `skip_free` (to outlive the frame) and is ORPHANED on
+  interp (native RAII drops it). Correct matrix (element access `.0`/`.1`): the leak
+  is present for BOTH the text element AND the integer element read — so it is
+  independent of consumption; the text element's owned temp simply never frees. This
+  is the SAME `skip_free`-orphan class as the `??`/ncc leak, NOT the
+  unpromoted-owned-return class route B fixes — `promote_monomorph_text_return`
+  cannot touch it.
+  - The CLEAN path is the non-generic ABI: `-> (text, text)` is rewritten to the
+    `__tuple<text,text>` synthetic STRUCT (`needs_tuple_rewrite`, definitions.rs), a
+    heap Reference freed normally. The generic deliberately keeps the BARE-VALUE
+    tuple ABI (`tuple_return_rewrite`'s `from_tv` gate, `parser/mod.rs:2967`), whose
+    doc-comment warns "rewriting the literal tuple breaks the value-tuple generic
+    returns (p329/p330/p240/plan17)" — i.e. someone tried routing generics through
+    `__tuple` and it regressed. So the two viable fixes are both delicate: (a) free
+    `__ret_text_N` at the interp tuple-return without UAF (the shared skip_free-orphan
+    problem), or (b) re-open the `__tuple`-for-generics route past the documented
+    landmine. A separate arc, sibling to ncc — do NOT fold onto route B.
 - **Returned (not bound) monomorph text — e.g. `run() -> text { first(nums) }`.**
   The monomorph promotes, but `run` returning it does NOT (the def_nr gate blocks
   `run`'s own promotion — the monomorph is minted AFTER `run`, reads forward). This
