@@ -5476,8 +5476,7 @@ impl Parser {
             // Both depend on the callee's resolved return signature, so they are
             // forward-ref-UNSTABLE — promote ONLY for a backward-ref callee
             // (def_nr precedes this fn's), pass-stable on both passes.
-            return self
-                .tail_call_op(tail)
+            return Self::tail_call_op(tail)
                 .is_some_and(|op| self.backward_ref_defnr(op) < self.context);
         }
         true
@@ -5506,11 +5505,11 @@ impl Parser {
 
     /// The callee def_nr of a CALL return tail (peeling `Block`/`Insert`/
     /// `Return`/`Drop` wrappers), or `None` when the tail is not a direct call.
-    fn tail_call_op(&self, tail: &Value) -> Option<u32> {
+    fn tail_call_op(tail: &Value) -> Option<u32> {
         match tail.unspan() {
-            Value::Block(bl) => bl.operators.last().and_then(|t| self.tail_call_op(t)),
-            Value::Insert(ops) => ops.last().and_then(|t| self.tail_call_op(t)),
-            Value::Return(inner) | Value::Drop(inner) => self.tail_call_op(inner),
+            Value::Block(bl) => bl.operators.last().and_then(Self::tail_call_op),
+            Value::Insert(ops) => ops.last().and_then(Self::tail_call_op),
+            Value::Return(inner) | Value::Drop(inner) => Self::tail_call_op(inner),
             Value::Call(op, _) => Some(*op),
             _ => None,
         }

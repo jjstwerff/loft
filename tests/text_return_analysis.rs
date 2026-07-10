@@ -38,15 +38,15 @@ fn expected_verdicts(corpus: &str) -> Vec<(String, String)> {
         let t = line.trim_start();
         if let Some(rest) = t.strip_prefix("// VERDICT:") {
             pending = Some(rest.trim().to_string());
-        } else if let Some(rest) = t.strip_prefix("fn ") {
-            if let Some(v) = pending.take() {
-                // fn name = up to the first '<' (generics) or '(' (params).
-                let name: String = rest
-                    .chars()
-                    .take_while(|c| *c != '<' && *c != '(')
-                    .collect();
-                out.push((name.trim().to_string(), v));
-            }
+        } else if let Some(rest) = t.strip_prefix("fn ")
+            && let Some(v) = pending.take()
+        {
+            // fn name = up to the first '<' (generics) or '(' (params).
+            let name: String = rest
+                .chars()
+                .take_while(|c| *c != '<' && *c != '(')
+                .collect();
+            out.push((name.trim().to_string(), v));
         }
     }
     out
@@ -90,11 +90,11 @@ fn text_return_analysis_matches_corpus() {
     // monomorphs (n_f_*) match the source name.
     let mut actual: std::collections::HashMap<String, String> = std::collections::HashMap::new();
     for line in dumped.lines() {
-        if let Some(rest) = line.strip_prefix("TRA ") {
-            if let Some((fun, verdict)) = rest.split_once(" => ") {
-                let fun = fun.strip_prefix("n_").unwrap_or(fun);
-                actual.insert(fun.to_string(), verdict.trim().to_string());
-            }
+        if let Some(rest) = line.strip_prefix("TRA ")
+            && let Some((fun, verdict)) = rest.split_once(" => ")
+        {
+            let fun = fun.strip_prefix("n_").unwrap_or(fun);
+            actual.insert(fun.to_string(), verdict.trim().to_string());
         }
     }
 
