@@ -10,12 +10,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Open — no implementation.  Design partial; arc B's spec is written (the matrix
 below), arcs A / C / E need design.**  This is the wide-release bar's **gate 5**
 ([STABILITY_ROADMAP.md § The wide-release bar](../../STABILITY_ROADMAP.md)).  Its
-opening condition — *"open one when gate 1 is in sight"* — fired **2026-07-10**, when
-gate 1 came down to a single work item (the Cluster C `copy_claims` fold).  Gates 2
-(@PLN25) and 3 (@PLN28 / @PLN36) are already closed.
+opening condition — *"open one when gate 1 is in sight"* — fired **2026-07-10**.  As of
+that date gate 1 is **sealed pending merge**: its last structural item (the Cluster C
+`copy_claims` fold) landed on `tuxedo-cluster-c`, its fuzz/sanitizer proof stands
+(@PLN53/@PLN54 closed), and the nightly DA + `stack_align_guard` gates were widened to
+the whole in-process interpreter corpus — so gate 5 is now the genuinely-active next
+gate, not merely "in sight."  Gates 2 (@PLN25) and 3 (@PLN28 / @PLN36) are already
+closed.
 
 The plan is opened **because the failure mode it prevents is already live**, not as a
 speculative hardening.  See § Why now.
+
+**Design refinement (2026-07-10):** arc B splits into a *mechanical* half (bind upper
+bounds/ranges, loudly reject unparseable — closes the verified silent failure,
+independent of any policy) and a *semantic* half (what a bound *means*), and the
+semantic half depends on the **language-versioning decision** (open question 2), which
+is therefore promoted to the pivot below.  See § Phase ordering.
 
 ## Goal
 
@@ -48,6 +58,14 @@ answer.**
 
 `graphics` hit the identical class and was migrated to `&self.data`.  `hex_terrain` was
 never migrated.  Both declare `loft = ">=0.8"`, so nothing guarded either of them.
+
+As of 2026-07-10 `hex_terrain` is the **sole** red leg on `registry-validation` (the
+other former failure, `graphics`, was a CI-provisioning gap — missing `libasound2-dev`
+— now fixed), which makes it the clean isolated exemplar for this plan.  Note that
+**none of this plan's arcs fix `hex_terrain` itself**: arc B would let it *declare*
+incompatibility, arc C would *warn* its author, but the library still computes a wrong
+answer until it is **republished** with the `&self.data` idiom (external — loft-libs-game).
+The plan removes the *silence*, not the library bug.
 
 [GOALS.md](../../GOALS.md) holds the platform to the opposite standard, and names it as
 the thing loft is trying to win back from the AS/400:
@@ -103,23 +121,45 @@ accept/reject divergence here is a Goal-D violation).
 | Item | Source | Status |
 |---|---|---|
 | **A** — Compatibility policy: what *is* a breaking change, per surface (language syntax/semantics · stdlib API · store/heap layout · on-disk + wire format · package format) | needs design → `COMPATIBILITY.md` | Open |
-| **B** — Expressible version bounds: upper bounds + ranges; loud rejection of unparseable constraints; how the language versions itself; registry validates the declared range | matrix above; `src/manifest.rs:513`, `src/parser/mod.rs:7593` | Open — spec written |
+| **B-mechanical** — bind upper bounds + ranges + exact pins; loud rejection of unparseable constraints; grandfather a bare `>=` as "unknown compatibility"; registry validates the declared range | matrix above; `src/manifest.rs:513`, `src/parser/mod.rs:7593` | Open — spec written, **ready to implement** (no policy dependency) |
+| **B-semantic** — what a bound *means* (which is why the language must have a compatibility-tracking version axis) | blocked on the versioning decision (Q2, the pivot) | Open — blocked |
 | **C** — Deprecation channel: a warning path for a semantic change a library can trip.  [Goal F](../../GOALS.md) permits exactly one channel — warnings, free to ignore | needs design; worked example = C86 / `hex_terrain` | Open |
 | **D** — Public bug-intake path: the fix-not-file discipline is internal and does not reach strangers | [ISSUE_TRACKING.md](../../ISSUE_TRACKING.md) | Open |
 | **E** — The 1.0 line: what is frozen vs still moving | [RELEASE.md](../../RELEASE.md) | Open |
 
 ## Phase ordering
 
-1. **A first — policy before mechanism.**  B enforces a rule; the rule has to exist.  A
-   is doc-only and unblocks everything else.
-2. **B next — it has the sharpest evidence and the smallest surface.**  The matrix is
-   already the spec.  Landing B alone closes the *silent* half of the gap (a constraint
-   that is accepted but not honoured), even before any policy is stated.
-3. **C after A** — the deprecation channel needs A's definition of "breaking" to know
+Refined 2026-07-10 to separate the two halves of arc B and to surface the pivot the
+plan's own open questions had left implicit.
+
+1. **B-mechanical first — the sharpest evidence, smallest surface, no policy
+   dependency.**  Replace `check_version` with a real constraint parser: bind upper
+   bounds / ranges / exact pins, and **reject an unparseable constraint LOUDLY** (a
+   constraint accepted-but-not-honoured is the verified category-S silent failure).
+   Grandfather a bare `>=` lower bound as *"unknown compatibility"* (warn, do not
+   reject) so the ~20 already-published libraries keep loading.  The matrix is the spec;
+   both backends (the check runs in the parser).  This closes the *silent* half of the
+   gap **before any policy is stated**, and gives `registry-validation` something real
+   to check.
+2. **The language-versioning decision — THE PIVOT (open question 2).**  A version bound
+   is only *meaningful* once loft has a version axis that increments on breaking changes;
+   under calendar versioning (`2026.7.1`) `>=0.8` is permanently vacuous and even a valid
+   `<2027` upper bound tracks *time*, not compatibility.  So B-mechanical can bind bounds
+   without this, but B's *semantics* and E's 1.0 line both wait on it.  Decide before
+   B-semantic.  *Leaning: a monotone language-**edition** integer libraries declare
+   against, calver retained for release tags* — but this is an open decision (see § Open
+   design questions), not settled here.
+3. **A — policy before the rest of the mechanism.**  B-semantic enforces a rule; the
+   rule ("what *is* a breaking change, per surface") has to exist.  A is doc-only
+   (`COMPATIBILITY.md`) and unblocks C and E.
+4. **C after A** — the deprecation channel needs A's definition of "breaking" to know
    what it must warn about.  C is what would actually have caught `hex_terrain`; B only
-   lets a library defend itself after the fact.
-4. **D in parallel** — independent of A/B/C; no dependencies.
-5. **E last** — the 1.0 line is a statement about A, so it cannot precede it.
+   lets a library defend itself after the fact.  Its own open question (Q3, *whose*
+   obligation is the warning) is the thorniest design in the plan — run the
+   design-protocol.
+5. **D in parallel** — independent of A/B/C; no dependencies.
+6. **E last** — the 1.0 line is a statement about A (and the versioning decision), so it
+   cannot precede them.
 
 ## Open design questions
 
@@ -127,17 +167,26 @@ accept/reject divergence here is a Goal-D violation).
    contract?**  @PLN97 shipped a formal memory/file layout contract with a layout-identity
    hash.  Is that hash the compatibility key for the store surface — i.e. does a layout-hash
    change *define* a breaking change there?
-2. **Does the language version itself keep calendar versioning?**  `2026.7.1` cannot
-   express compatibility (see the matrix).  Options: a separate monotone *language
-   edition* number that libraries declare against; or semver for the language surface
-   with calver retained for releases.
+2. **Does the language version itself keep calendar versioning? — THE PIVOT (gates
+   B-semantic + E).**  `2026.7.1` cannot express compatibility (see the matrix): a bound
+   is only meaningful against a version axis that increments on *breaking changes*, and
+   calver increments on *time*.  Options: a separate monotone *language edition* number
+   that libraries declare against; or semver for the language surface with calver
+   retained for releases.  *Leaning: the language-edition integer* — it decouples the
+   compatibility axis from the release cadence (so a patch release never looks like it
+   might break a library) and gives libraries one small thing to declare against.  Open,
+   not settled — this is the decision B-semantic and E wait on.
 3. **Whose obligation is a deprecation warning?**  C86 changed the meaning of code that
    libraries had *already shipped*.  A warning at loft-build time reaches the loft team;
    a warning at library-compile time reaches the author; a warning at consumer-compile
    time reaches the wrong person.  Where does it fire?
 4. **Is `loft = ">=0.8"` grandfathered?**  Every published library carries a vacuous
    bound.  Does arc B rewrite them, reject them, or treat a bare lower bound as
-   "unknown compatibility"?
+   "unknown compatibility"?  *Leaning: treat a bare `>=` as "unknown compatibility" —
+   warn, do not reject* — so B-mechanical can land without breaking the ~20 published
+   libraries that all carry one; a hard reject would strand every existing consumer the
+   day it merges.  Malformed / unparseable constraints still reject loudly (that is the
+   silent-failure fix); only the *legacy bare lower bound* is grandfathered.
 5. **How does this interact with the registry `verified` mark?**  See
    [LIBRARY_CHECKLIST.md](../../LIBRARY_CHECKLIST.md).  Should `verified` assert
    "tested against loft X" rather than a point-in-time pass?

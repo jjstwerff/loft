@@ -75,9 +75,13 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    #547, only S9's toolchain-blocked cdylib ASan spun out); and the **Cluster C / H10** `copy_claims`
    keystone fold — the last structural item — is **✅ done** (branch `tuxedo-cluster-c`, see the C row
    below), so the three divergent source re-encodings that produced the densest historical bug cluster
-   are gone by construction. What remains before the gate is *sealed* is only the standing verification:
-   the corpora built by @PLN53/@PLN54 keep running over the folded code, and the branch merges to `main`
-   green. The invariant is enforced; this is now "keep it enforced," not "define it."
+   are gone by construction. The standing verification is now WIDER, too: the nightly debug-assertions
+   gate and the per-PR `stack_align_guard` sweep were both widened to the whole in-process interpreter
+   corpus (2026-07-10, see the coverage-gaps section) — so the invariant is checked over `wrap`/`strings`/
+   `frame_vars`/`expressions`/… not just `issues`. What remains before the gate is *sealed* is only that
+   these standing corpora keep running over the folded code and that **`tuxedo-cluster-c` merges to
+   `main` green**. The invariant is enforced and now broadly gated; this is "keep it enforced," not
+   "define it" — gate 1 is **sealed pending that merge**.
 
 2. **One coherent null model — and the substrate gate 1 is built on. MODEL LANDED 2026-07-02 (#480);
    the gate is NOT yet cleared.** @PLN25 (nullable sequences / dense-default) is closed as a *plan*:
@@ -114,11 +118,18 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    [plans/102-stability-contract/](plans/102-stability-contract/README.md)). A stated
    semver / compatibility promise, a **public** bug-intake path (the fix-not-file discipline is
    internal-only and doesn't reach strangers), and a 1.0 line — what is frozen vs still moving.
-   The opening condition was "open one when gate 1 is in sight"; gate 1 is now one work item away.
+   The opening condition was "open one when gate 1 is in sight"; gate 1 is now **sealed pending merge**,
+   so gate 5 is the active next gate. **Design refined 2026-07-10** (plan README § Phase ordering): arc
+   B splits into a *mechanical* half — a real constraint parser that binds upper bounds/ranges/pins and
+   loudly rejects the unparseable, spec-ready and independent of policy — and a *semantic* half gated on
+   the **language-versioning decision** (the pivot: a bound only means "compatibility" once the language
+   has a version axis that increments on breaking changes, which calver does not).
    **Verified mechanism gap:** `manifest::check_version` honours only a `>=` lower bound — an upper
    bound, exact pin, caret, or malformed constraint is silently accepted as "any version" — and
    under calendar versioning (`2026.7.1`) the `>=0.8` that every published library carries is
    permanently vacuous. So a library *cannot* declare incompatibility even if its author knows.
+   (Re-verified against the current tree this session: `"<=0.1"` / `"=0.1"` / `"garbage"` all ACCEPT,
+   only `">=9999.0"` REJECTs.)
    **The failure mode it prevents is already live.** `hex_terrain 0.1.0` fails its own registry
    test with `0 land cells`: it uses the plain-bind write-through idiom (`th = t.tr_h; th[i] = v`),
    and loft now **copies on plain bind** (C86 H-Copy), so the heights land in throwaway copies.
@@ -142,10 +153,16 @@ blocker.
 
 **Readiness today (2026-07-10).** The 2026-07 stability + type-safety release SHIPPED as
 `2026.7.1`. Gate 3 is CLOSED; gate 2's *model* is landed but the gate is **open** on verified soundness
-edges (a `?? null` unsoundness, the call-arg N-Store hole — see gate 2 above). Gate 1's tracked
-store-lifetime bugs are all CLOSED (#460 / #461 / #462 / #465, and A1b via @PLN90 #516) **and its
-fuzz-proof is now standing** (@PLN53/@PLN54 closed, #547); the single remaining item is the Cluster C
-fold — forward-risk hardening, not an active bug.
+edges (a `?? null` unsoundness, the call-arg N-Store hole — see gate 2 above). **Gate 1 is sealed
+pending merge**: its tracked store-lifetime bugs are all CLOSED (#460 / #461 / #462 / #465, and A1b via
+@PLN90 #516), its fuzz-proof stands (@PLN53/@PLN54 closed, #547), the Cluster C fold landed, and the
+nightly DA + `stack_align_guard` gates were widened to the whole in-process interpreter corpus — all on
+`tuxedo-cluster-c`, which just needs to merge to `main` green. **Gate 5 (@PLN102) is now the active next
+gate** — its arc B-mechanical (a real version-constraint parser that stops silently accepting
+constraints it does not honour) is spec-ready to implement; its pivot (the language-versioning decision)
+and policy arcs (A/C/E) need design. The registry-validation graphics leg was fixed this session, so
+`hex_terrain` (the @PLN102 exemplar) is its sole remaining red — and needs a library republish, not a
+loft fix.
 
 **Why the tracker is empty — and what to read instead.** This stream's standing rule at the top of
 this file is *fix, don't file*, and the cycle runs under a warm feature freeze
