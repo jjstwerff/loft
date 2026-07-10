@@ -1,0 +1,180 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# @PLN102 — the language-versioning decision (the pivot, open Q2)
+
+**Status: DECIDED 2026-07-10** (ratification of the two cosmetic sub-choices below is
+the user's — the substance is committed). This resolves the pivot that arc B-semantic
+and arc E (the 1.0 line) both wait on. Written design-protocol-first: the invariant, the
+failure paths, the falsified alternatives, then the mechanism.
+
+## The decision, in one line
+
+**loft gets a monotone integer `contract` version — separate from the calendar release
+tag — that increments if and only if loft makes a *silent* breaking change; libraries
+declare the contract range they were tested against; `1.0` is contract 1.**
+
+- **Releases stay calendar-versioned** (`2026.7.1`) — the tag you install; it
+  communicates recency and cadence and is unchanged.
+- **The contract surface gets its own integer**, `contract`, decoupled from the release
+  tag. It counts *silent breaking changes* to loft's contract (language
+  syntax/semantics, stdlib API meaning, store/heap layout, on-disk + wire format,
+  package format). Additive and loud-failing changes do **not** bump it.
+- **1.0 == contract 1.** Everything before the syntax/type freeze is contract 0 —
+  "unstable, no compatibility promise." When the surface freezes (imminent — the type
+  surface is feature-complete on `main`, the last syntax changes in flight), contract
+  becomes 1 and the promise begins. The versioning pivot and arc E are the **same
+  milestone**.
+
+## The invariant (design-protocol step 1)
+
+> **The `contract` integer increments if and only if a change would make
+> already-shipped library code compile-and-run to a *different result* — a silent
+> breaking change. Every other change (additive, or one that fails loudly) leaves it
+> untouched.**
+
+So a library's declared bound stays valid *exactly* as long as loft's silent contract is
+unchanged — that is the single rule under which a library never tested against a future
+loft still behaves correctly for the same reason the tested ones do: either the contract
+is unchanged (safe), or it moved and the library is told.
+
+## Why an integer is *sufficient* — the load-bearing claim, probed
+
+The obvious objection: an integer that bumps only on breaking changes cannot express a
+**feature floor** ("I need a stdlib fn added in a later loft"). Semver's minor/patch
+exists for exactly that. Do we need it?
+
+**No — because the feature-floor case already fails LOUDLY, so it needs no version
+guard.** Probed against the interpreter (2026-07-10): a program using a symbol loft does
+not have fails at compile with a hard error, not a silent wrong answer:
+
+```
+error: Unknown function some_function_added_in_a_future_loft   (rc=1)
+error: Unknown field text.method_from_the_future               (rc=1)
+```
+
+The class this whole plan exists to kill is the **silent** one — old code that still
+compiles and runs but now does the *wrong* thing (C86 plain-bind copy → `hex_terrain`'s
+`0 land cells`). That is precisely the *breaking-change* class, and a monotone
+breaking-change integer is exactly the axis that captures it. The loud class is already
+safe without any version bound. So minor/patch buys nothing here: **collapse semver to
+major-only, i.e. a single integer.** (This is why option B below reduces to option A.)
+
+## Semantics — how a bound is checked
+
+A library declares `contract = K` (or a range). Let `E` be loft's current contract:
+
+| relation | meaning | loader action |
+|---|---|---|
+| `E == K` | exact epoch match | **accept** |
+| `E < K` | loft is *older* than the library's epoch (the library may rely on post-K semantics) | **reject** — "requires loft contract ≥ K, this is E" |
+| `E > K` | loft made ≥1 silent break since K; the library may misbehave | **warn** via the deprecation channel (arc C) — "tested against contract K; loft is at E; republish" |
+
+A bare `contract = K` means **"tested at epoch K"** and warns on a newer loft — the
+*honest* default, because forward-compatibility is exactly the thing C86 silently
+assumed and broke. An author who has re-tested widens to a range (`">=K"`, or
+`">=K, <=E"`) to assert forward-coverage and clear the warning. This puts the cost of
+change on the maker (republish/re-test), never silently on the consumer — the GOALS.md
+standard.
+
+Ranges reuse **arc B-mechanical's parser unchanged** (`>=`/`<=`/`>`/`<`/`=` + comma), now
+over the contract integer instead of the release version. That is the whole point of the
+B split: the mechanism already shipped; B-semantic only points it at the right axis.
+
+## Failure paths (design-protocol — enumerate how it breaks)
+
+1. **Maintainer forgets to bump `contract` on a silent break.** THE real brittleness:
+   the integer is only as honest as the discipline that increments it, and a semantic
+   break (C86-shaped) changes no hash and throws no error, so nothing *automatically*
+   catches the omission. Mitigation, and the tie to the other arcs:
+   - The @PLN97 **layout-identity hash** already detects store/heap-layout breaks
+     mechanically → a CI gate "layout hash changed ⇒ contract must bump" makes omission
+     loud *for that surface* (answers open Q1: a layout-hash change *is* a contract
+     bump).
+   - The **golden-behavior corpus** (a curated set of programs whose stdout is pinned)
+     turns a silent semantic break into a diff → "golden output changed ⇒ classify:
+     intended break ⇒ bump contract." This is arc A/C work; the versioning decision
+     *names it as required*, it does not hand-wave it away.
+   - Residual after both: a semantic break in an *un-corpus'd* shape can still ship
+     without a bump. That is the dogfood loop's job to surface, and it is strictly
+     smaller than today's "no axis at all."
+2. **A break to surface X, a library that only uses surface Y.** The single integer is
+   **conservative**: it warns library Y even though the break can't touch it. Named
+   residual — see below. Accepted because the alternative (per-surface versions) makes
+   the *author* track which of five surfaces they touch, which is the wrong cost.
+3. **Existing libraries carry no `contract`.** All ~20 declare only `loft = ">=0.8"`.
+   Treated as **contract-unknown**: they keep loading (grandfathered), and the registry
+   nudges a `contract` at republish; at 1.0 the registry can *require* `contract = 1`
+   for new submissions. No flag-day break.
+4. **`E < K` on a genuinely forward-only library.** Correct to reject — an old loft
+   cannot honour a newer contract. This is the one hard-reject; it is the symmetric,
+   honest twin of the warn-on-newer default.
+
+## Falsified alternatives (design-protocol step 4 — attack the clean claims)
+
+- **Full semver for releases (drop calver).** Abandons a deliberate project choice and
+  forces *every* release to be classified major/minor/patch — the exact per-release
+  breaking-change judgement calver was chosen to avoid. Rejected; calver stays for
+  releases.
+- **Two numbers: a language-semver + calver.** The minor/patch of the language-semver
+  buys the feature-floor expressiveness — which the probe above shows is **not needed**
+  (feature-missing fails loudly). So the minor/patch is complexity with no payoff:
+  collapse to major-only = the single integer. This is *option B reducing to option A*,
+  and the reduction is *earned by the probe*, not assumed.
+- **Per-surface contract versions (5 axes).** Maximally precise (a wire break doesn't
+  warn a pure-syntax library), but it makes the author answer "which surfaces do I
+  touch?" — genuinely hard (does using a vector touch store layout?). Wrong cost on the
+  wrong party. The single conservative integer + the layout hash for the one
+  accidentally-easy-to-break surface is the right trade. Rejected as over-broad for the
+  author.
+- **Reinterpret the existing `loft = "…"` field as the contract.** Every published lib
+  says `loft = ">=0.8"` meaning the *release* 0.8; reinterpreting silently changes what
+  those bounds mean. Rejected — the contract is a **new** field; the release-version
+  bound stays grandfathered.
+
+## The named residual (don't hide it)
+
+The single integer **over-warns**: a break confined to surface X warns every library
+declaring an older contract, including those that only use surface Y and are genuinely
+fine. This is deliberate — it is a *warning*, not a hard reject (Goal F), the author
+clears it with a one-line re-test + republish (widen to a range), and it trades a little
+noise for the author never having to enumerate surfaces. The precise-but-heavy
+alternative (per-surface) was rejected for that reason. The over-warn is the honest
+price of the simplest axis, and it fails safe (warn, not silent-wrong).
+
+## What arc B-semantic must build (not now — this doc is the decision)
+
+1. A `contract` constant in the loft binary (start: 0 pre-freeze, 1 at the syntax
+   freeze / 1.0), separate from `CARGO_PKG_VERSION`.
+2. A manifest field carrying the library's contract bound (name = a cosmetic sub-choice,
+   see below), parsed by **arc B-mechanical's existing constraint parser**.
+3. Loader semantics per the table above: reject `E < K`, accept `E == K`/in-range, hand
+   `E > K` to arc C's deprecation warning.
+4. The CI gates that make an omitted bump loud: layout-hash-changed ⇒ contract bump;
+   golden-corpus-output-changed ⇒ classify + bump (shared with arcs A/C).
+
+## The two cosmetic sub-choices left to the user
+
+Substance is decided; these are naming/brand and do not change the design:
+
+1. **The field + concept name.** `contract` is used here to avoid the Rust-`edition`
+   connotation (Rust editions are *multiplexed, additive* opt-ins the compiler supports
+   simultaneously — the opposite of a monotone compatibility floor). Alternatives:
+   `loft-contract`, `compat`, `epoch`, `language-level`. Recommend **`contract`** (it
+   says what it is: the compatibility contract).
+2. **The starting integer at 1.0.** `1` reads cleanly ("contract 1 == loft 1.0"). If a
+   pre-1.0 promise is ever wanted, contract 0 is available for it as-is.
+
+## See also
+
+- [README.md](README.md) — the plan; § Phase ordering (this decision is step 2, the
+  pivot) and open question 2.
+- [../97-layout-contract/](../97-layout-contract/) — the layout-identity hash; the
+  automatic detector for the store surface (failure path 1) and the answer to open Q1.
+- [../../DESIGN_DECISIONS.md § C86](../../DESIGN_DECISIONS.md) — the plain-bind copy: the
+  archetypal *silent* break this axis exists to make declarable.
+- [../../GOALS.md](../../GOALS.md) — Goal F (warnings are the only channel that may bill
+  the programmer) governs the `E > K` warn; the AS/400 standard (cost of change paid by
+  the maker) governs the republish-to-clear model.

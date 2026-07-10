@@ -24,8 +24,10 @@ speculative hardening.  See § Why now.
 **Design refinement (2026-07-10):** arc B splits into a *mechanical* half (bind upper
 bounds/ranges, loudly reject unparseable — closes the verified silent failure,
 independent of any policy) and a *semantic* half (what a bound *means*), and the
-semantic half depends on the **language-versioning decision** (open question 2), which
-is therefore promoted to the pivot below.  See § Phase ordering.
+semantic half depended on the **language-versioning decision** (the pivot), which is now
+**DECIDED** — [versioning-decision.md](versioning-decision.md): a monotone integer
+`contract` version, calver kept for release tags, `1.0` == contract 1.  See § Phase
+ordering.
 
 **Timing (2026-07-10):** the language's **type surface is now feature-complete on `main`
 and the last syntax changes are in flight** — so the versioning pivot and arc E (the 1.0
@@ -132,7 +134,7 @@ accept/reject divergence here is a Goal-D violation).
 | **A** — Compatibility policy: what *is* a breaking change, per surface (language syntax/semantics · stdlib API · store/heap layout · on-disk + wire format · package format) | needs design → `COMPATIBILITY.md` | Open |
 | **B-mechanical** — bind upper bounds + ranges + exact pins; loud rejection of unparseable constraints; grandfather a bare `>=` as "unknown compatibility" | `src/manifest.rs` (`check_version` → `VersionCheck`), `src/parser/mod.rs` (loader), matrix unit test + `testpkg_badconstraint`/`testpkg_upperbound` fixtures | **✅ IMPLEMENTED** (2026-07-10) |
 | **B-registry** — the registry (`pr-validate`) validates the declared range on submission | external — loft-lang/registry | Open |
-| **B-semantic** — what a bound *means* (which is why the language must have a compatibility-tracking version axis) | blocked on the versioning decision (Q2, the pivot) | Open — blocked |
+| **B-semantic** — the `contract` integer + loader semantics (reject-below / accept-in-range / warn-above) over arc B-mechanical's parser | [versioning-decision.md](versioning-decision.md) § What arc B-semantic must build | Open — **unblocked** (pivot decided) |
 | **C** — Deprecation channel: a warning path for a semantic change a library can trip.  [Goal F](../../GOALS.md) permits exactly one channel — warnings, free to ignore | needs design; worked example = C86 / `hex_terrain` | Open |
 | **D** — Public bug-intake path: the fix-not-file discipline is internal and does not reach strangers | [ISSUE_TRACKING.md](../../ISSUE_TRACKING.md) | Open |
 | **E** — The 1.0 line: what is frozen vs still moving | [RELEASE.md](../../RELEASE.md) | Open — **newly timely**: as of 2026-07-10 the type surface is feature-complete on `main` and the last syntax changes are in flight, so "what is frozen" is about to have a concrete answer |
@@ -151,14 +153,14 @@ plan's own open questions had left implicit.
    both backends (the check runs in the parser).  This closes the *silent* half of the
    gap **before any policy is stated**, and gives `registry-validation` something real
    to check.
-2. **The language-versioning decision — THE PIVOT (open question 2).**  A version bound
-   is only *meaningful* once loft has a version axis that increments on breaking changes;
-   under calendar versioning (`2026.7.1`) `>=0.8` is permanently vacuous and even a valid
-   `<2027` upper bound tracks *time*, not compatibility.  So B-mechanical can bind bounds
-   without this, but B's *semantics* and E's 1.0 line both wait on it.  Decide before
-   B-semantic.  *Leaning: a monotone language-**edition** integer libraries declare
-   against, calver retained for release tags* — but this is an open decision (see § Open
-   design questions), not settled here.
+2. **The language-versioning decision — THE PIVOT.  ✅ DECIDED** →
+   [versioning-decision.md](versioning-decision.md).  A monotone integer `contract`
+   version (increments iff loft makes a *silent* breaking change), separate from the
+   calver release tag; libraries declare a contract range; `1.0` == contract 1.  A
+   version bound is only *meaningful* against such an axis — calver's `>=0.8` is
+   permanently vacuous.  B-mechanical binds bounds without this; B-semantic points that
+   same parser at the `contract` integer and adds the loader semantics
+   (reject-below / accept-in-range / warn-above).
 3. **A — policy before the rest of the mechanism.**  B-semantic enforces a rule; the
    rule ("what *is* a breaking change, per surface") has to exist.  A is doc-only
    (`COMPATIBILITY.md`) and unblocks C and E.
@@ -176,16 +178,21 @@ plan's own open questions had left implicit.
 1. **What does semver mean when the schema is data and the heap layout *is* the
    contract?**  @PLN97 shipped a formal memory/file layout contract with a layout-identity
    hash.  Is that hash the compatibility key for the store surface — i.e. does a layout-hash
-   change *define* a breaking change there?
-2. **Does the language version itself keep calendar versioning? — THE PIVOT (gates
-   B-semantic + E).**  `2026.7.1` cannot express compatibility (see the matrix): a bound
-   is only meaningful against a version axis that increments on *breaking changes*, and
-   calver increments on *time*.  Options: a separate monotone *language edition* number
-   that libraries declare against; or semver for the language surface with calver
-   retained for releases.  *Leaning: the language-edition integer* — it decouples the
-   compatibility axis from the release cadence (so a patch release never looks like it
-   might break a library) and gives libraries one small thing to declare against.  Open,
-   not settled — this is the decision B-semantic and E wait on.
+   change *define* a breaking change there?  **✅ ANSWERED by the versioning decision:**
+   yes — a layout-hash change is a silent store-surface break, so it bumps the `contract`
+   integer, and a CI gate "layout hash changed ⇒ contract must bump" is what makes an
+   omitted bump loud for that surface (see [versioning-decision.md](versioning-decision.md)
+   failure path 1).
+2. **Does the language version itself keep calendar versioning? — THE PIVOT.
+   ✅ DECIDED 2026-07-10 → [versioning-decision.md](versioning-decision.md).**  A
+   monotone integer `contract` version, separate from the calver release tag, that
+   increments iff loft makes a *silent* breaking change; libraries declare the contract
+   range they were tested against; **`1.0` == contract 1** (so the pivot and arc E are
+   the same milestone).  An integer suffices — probed: the feature-floor case (needing a
+   later-added symbol) already fails LOUDLY, so only the *silent* breaking-change class
+   needs a version axis, which collapses semver to major-only.  Ratification of two
+   cosmetic sub-choices (the field name; the starting integer) is the user's; the
+   substance is committed.
 3. **Whose obligation is a deprecation warning?**  C86 changed the meaning of code that
    libraries had *already shipped*.  A warning at loft-build time reaches the loft team;
    a warning at library-compile time reaches the author; a warning at consumer-compile
