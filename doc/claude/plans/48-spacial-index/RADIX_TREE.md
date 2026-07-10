@@ -547,7 +547,10 @@ This is one family, not two compressed into one: the only thing that varies is w
 bits the oracle yields.  The claim worth watching is the *name* — a `radix<T[text]>`
 whose diagnostics say "spacial" is a UX wart S2 must handle, and `sorted<T[k]>`
 already covers ordered lookup on one key, so a loft-visible `radix` earns its keep
-only through **text prefix queries**, not through ordering.
+through **text prefix queries**, the **finger move** (cheap incremental re-index), and
+**spatial** — not through plain ordering.  Its first concrete consumer, and the
+build-and-test reference, is the tracker/symbol index:
+[RADIX_TEXT_INDEX.md](RADIX_TEXT_INDEX.md).
 
 Also left to S2/S3: the Morton interleave, the `spacial` arms in `search.rs`
 (`find`/`iterate`/`remove` currently panic as "non-collection"), a
