@@ -60,7 +60,10 @@ and can emit Rust code for host integration.
 | `character` | A single Unicode character                       |
 | `text`      | A UTF-8 string; `len()` counts bytes             |
 
-Any variable or field can hold a `null` (absent) value unless declared `not null`.
+A type is **non-null by default** — a plain `integer` / `text` / `Row` never holds
+`null`. Add `?` to make it nullable: `integer?` holds a value or `null`. (The old
+`not null` modifier is now the default and is **deprecated** — it parses as a no-op
+and warns; delete it. See "Fields" below.)
 
 #### Null representation
 
@@ -257,7 +260,8 @@ struct Argument {
 
 Fields are declared as `name: type` with optional modifiers **after** the type:
 - `limit(min, max)` — constrain an integer field to a range
-- `not null` — disallow the null value (enables full integer range in storage)
+- `not null` — **deprecated no-op** (fields are non-null by default; it parses but
+  warns). Delete it; write the type as `T?` if the field should allow `null`.
 - `= expr` — stored default value, applied when field is omitted in constructor
 - `assert(expr)` / `assert(expr, message)` — runtime constraint checked on every write
 - `computed(expr)` — calculated on every access, **not stored** in the record

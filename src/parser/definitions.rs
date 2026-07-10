@@ -8,6 +8,33 @@ use super::{
 };
 
 impl Parser {
+    /// Consume an optional `not null` annotation, warning that it is deprecated.
+    /// Returns `true` when it was present.
+    ///
+    /// @PLN25 F2: a type is non-null by DEFAULT now (`τ?` is the nullable form),
+    /// so `not null` carries nothing — it stays parseable as an accepted no-op for
+    /// back-compat, but every use gets a deprecation warning. That drives the
+    /// warning-gate attrition (packages fail CI on the warning unless they carry
+    /// `.allow_warnings`) toward the eventual hard "retired" error, which stays
+    /// blocked on the registry republish (RESUME.md § F2 task #4). Warns once
+    /// (pass 2 only) so a definition parsed in both passes reports a single note.
+    fn has_deprecated_not_null(&mut self) -> bool {
+        if self.lexer.has_keyword("not") {
+            self.lexer.token("null");
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "`not null` is deprecated and has no effect — a type is non-null by \
+                     default now; delete `not null` (write `T?` if the type should allow null)"
+                );
+            }
+            true
+        } else {
+            false
+        }
+    }
+
     pub(crate) fn warn_missing_enum_variants(&mut self, e_nr: u32, nrs: &[usize], name: &str) {
         let implemented: HashSet<u32> = nrs
             .iter()
@@ -968,8 +995,7 @@ impl Parser {
         let mut result = if self.lexer.has_token("->") {
             // Will be the correct def_nr on the second pass
             if let Some(tp) = self.parse_type_full(self.data.def_nr(&fn_name), true) {
-                if self.lexer.has_keyword("not") {
-                    self.lexer.token("null");
+                if self.has_deprecated_not_null() {
                     returned_not_null = true;
                 }
                 tp
@@ -1656,12 +1682,7 @@ impl Parser {
         if type_name == "integer" {
             let has_limit = self.parse_type_limit(&mut min, &mut max);
             // T1.7: check for `not null` annotation after the integer type
-            let not_null = if self.lexer.has_keyword("not") {
-                self.lexer.token("null");
-                true
-            } else {
-                false
-            };
+            let not_null = self.has_deprecated_not_null();
             if has_limit || not_null {
                 // Phase 2c round 10c — all integer ranges stay as Type::Integer
                 // (i64 storage + i64 arithmetic at rest).  Narrow-bounded
@@ -1940,9 +1961,7 @@ impl Parser {
                         // element is implicitly `not null` (a key denotes presence).  Accept an
                         // explicit `not null` in the definition as a no-op.  (Design:
                         // single-payload-refactor.md § "DESIGN DECISION (2026-06-20)".)
-                        if self.lexer.has_keyword("not") {
-                            self.lexer.token("null");
-                        }
+                        self.has_deprecated_not_null();
                         self.parse_fields(true, &mut fields);
                         Type::Index(
                             self.data.type_def_nr(&tp),
@@ -1952,9 +1971,7 @@ impl Parser {
                     }
                     "hash" => {
                         // Dense (implicitly `not null`) — see the `index` arm.
-                        if self.lexer.has_keyword("not") {
-                            self.lexer.token("null");
-                        }
+                        self.has_deprecated_not_null();
                         self.parse_fields(false, &mut fields);
                         self.data.set_referenced(sub_nr, on_d, Value::Null);
                         let mut f = Vec::new();
@@ -1975,9 +1992,7 @@ impl Parser {
                         // parse above, so this fires only for a named element.)
                         // `not null` still accepted (now redundant — dense IS the
                         // default) as a no-op, for back-compat with existing source.
-                        if self.lexer.has_keyword("not") {
-                            self.lexer.token("null");
-                        }
+                        self.has_deprecated_not_null();
                         self.lexer.closing_angle();
                         // @PLN25 storage-vs-access-nullability: DENSE by default; the
                         // leading `?` (`vector<?S>`) opts in to a nullable element,
@@ -1991,9 +2006,7 @@ impl Parser {
                     }
                     "sorted" => {
                         // Dense (implicitly `not null`) — see the `index` arm.
-                        if self.lexer.has_keyword("not") {
-                            self.lexer.token("null");
-                        }
+                        self.has_deprecated_not_null();
                         self.parse_fields(true, &mut fields);
                         Type::Sorted(sub_nr, fields, crate::data::Deps::none())
                     }
@@ -2644,14 +2657,12 @@ impl Parser {
         // though the resolved Type::Integer collapses the alias info.
         let mut alias_d_nr: u32 = u32::MAX;
         loop {
-            if self.lexer.has_keyword("not") {
-                // @PLN25 F2 — `not null` is RETIRED but still ACCEPTED as a no-op. A scalar field
-                // is non-null by DEFAULT now (F2 sets the attribute non-null via `is_optional`
-                // below; the `not_null` flag is stamped for the range), so the annotation carries
-                // nothing.  In-tree source is stripped of it; kept accepted here for backward
-                // compat with not-yet-republished registry libraries (they still use `not null`).
-                // A hard "retired" error is blocked on that republish (task #4).
-                self.lexer.token("null");
+            // @PLN25 F2 — `not null` is RETIRED but still ACCEPTED as a no-op (a scalar field
+            // is non-null by DEFAULT now; `is_optional` below sets the attribute non-null and
+            // the `not_null` flag is stamped for the range). `has_deprecated_not_null` consumes
+            // it and emits the deprecation warning; the hard "retired" error stays blocked on
+            // the registry republish (RESUME.md § F2 task #4).
+            if self.has_deprecated_not_null() {
                 nullable = false;
             }
             {

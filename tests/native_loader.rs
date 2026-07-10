@@ -130,7 +130,7 @@ fn load_one_registers_native_functions() {
     };
 
     let native_decl = r#"
-pub fn ext_add_one(x: integer) -> integer not null;
+pub fn ext_add_one(x: integer) -> integer;
 #native "loft_ext_add_one"
 "#;
     let source = r#"
@@ -363,7 +363,7 @@ fn registry_takes_priority_over_dlsym() {
     };
 
     let native_decl = r#"
-pub fn ext_add_one(x: integer) -> integer not null;
+pub fn ext_add_one(x: integer) -> integer;
 #native "loft_ext_add_one"
 "#;
     // The assertion checks that the registered version (x+1) is called,
@@ -453,7 +453,7 @@ fn guard_inner() {
     // Use a #native name that is NOT registered by loft_register_v1,
     // but IS exported as a raw C-ABI symbol (dlsym will find it).
     let native_decl = r#"
-pub fn ext_bad(x: integer) -> integer not null;
+pub fn ext_bad(x: integer) -> integer;
 #native "loft_ext_unregistered"
 "#;
     let source = r#"
@@ -518,7 +518,7 @@ fn run_native_test(native_decl: &str, source: &str) {
 fn vec_i32_sum() {
     run_native_test(
         r#"
-pub fn ext_vec_sum(data: vector<integer>) -> integer not null;
+pub fn ext_vec_sum(data: vector<integer>) -> integer;
 #native "loft_ext_vec_sum"
 "#,
         r#"
@@ -536,7 +536,7 @@ fn main() {
 fn vec_f32_sum() {
     run_native_test(
         r#"
-pub fn ext_vec_sum_f32(data: vector<single>) -> integer not null;
+pub fn ext_vec_sum_f32(data: vector<single>) -> integer;
 #native "loft_ext_vec_sum_f32"
 "#,
         r#"
@@ -554,7 +554,7 @@ fn main() {
 fn scalar_before_vec() {
     run_native_test(
         r#"
-pub fn ext_offset_sum(offset: integer, data: vector<integer>) -> integer not null;
+pub fn ext_offset_sum(offset: integer, data: vector<integer>) -> integer;
 #native "loft_ext_offset_sum"
 "#,
         r#"
@@ -572,7 +572,7 @@ fn main() {
 fn vec_between_scalars() {
     run_native_test(
         r#"
-pub fn ext_sandwich_sum(a: integer, data: vector<integer>, b: integer) -> integer not null;
+pub fn ext_sandwich_sum(a: integer, data: vector<integer>, b: integer) -> integer;
 #native "loft_ext_sandwich_sum"
 "#,
         r#"
@@ -590,7 +590,7 @@ fn main() {
 fn vec_from_struct_field() {
     run_native_test(
         r#"
-pub fn ext_struct_vec_len(data: vector<integer>) -> integer not null;
+pub fn ext_struct_vec_len(data: vector<integer>) -> integer;
 #native "loft_ext_struct_vec_len"
 
 struct TestBox {
@@ -612,7 +612,7 @@ fn main() {
 fn vec_in_loop_if() {
     run_native_test(
         r#"
-pub fn ext_loop_vec_sum(data: vector<integer>) -> integer not null;
+pub fn ext_loop_vec_sum(data: vector<integer>) -> integer;
 #native "loft_ext_loop_vec_sum"
 "#,
         r#"
@@ -638,7 +638,7 @@ fn main() {
 fn vec_from_returned_struct() {
     run_native_test(
         r#"
-pub fn ext_struct_vec_len(data: vector<integer>) -> integer not null;
+pub fn ext_struct_vec_len(data: vector<integer>) -> integer;
 #native "loft_ext_struct_vec_len"
 
 struct TestBox {
@@ -665,10 +665,10 @@ fn main() {
 fn vec_from_returned_struct_with_gap() {
     run_native_test(
         r#"
-pub fn ext_add_one(x: integer) -> integer not null;
+pub fn ext_add_one(x: integer) -> integer;
 #native "loft_ext_add_one"
 
-pub fn ext_struct_vec_len(data: vector<integer>) -> integer not null;
+pub fn ext_struct_vec_len(data: vector<integer>) -> integer;
 #native "loft_ext_struct_vec_len"
 
 struct TestBox {
@@ -699,7 +699,7 @@ fn main() {
 fn vec_from_returned_struct_heavy() {
     run_native_test(
         r#"
-pub fn ext_vec_sum(data: vector<integer>) -> integer not null;
+pub fn ext_vec_sum(data: vector<integer>) -> integer;
 #native "loft_ext_vec_sum"
 
 struct BigBox {
@@ -739,7 +739,7 @@ fn main() {
 fn vec_struct_field_in_loop() {
     run_native_test(
         r#"
-pub fn ext_loop_vec_sum(data: vector<integer>) -> integer not null;
+pub fn ext_loop_vec_sum(data: vector<integer>) -> integer;
 #native "loft_ext_loop_vec_sum"
 
 struct Container {

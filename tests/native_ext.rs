@@ -36,7 +36,7 @@ fn n_add_two(stores: &mut Stores, stack: &mut DbRef) {
 #[test]
 fn native_integer_function() {
     let native_decl = r#"
-pub fn double_it(x: integer) -> integer not null;
+pub fn double_it(x: integer) -> integer;
 #native
 "#;
     let source = r#"
@@ -68,7 +68,7 @@ fn main() {
 #[test]
 fn native_symbol_name_differs_from_fn_name() {
     let native_decl = r#"
-pub fn say_hi(x: integer) -> integer not null;
+pub fn say_hi(x: integer) -> integer;
 #native "n_add_two"
 "#;
     let source = r#"
