@@ -533,7 +533,11 @@ impl Stores {
     pub(super) fn determine_keys(&mut self) {
         for t_nr in 0..self.types.len() {
             match self.types[t_nr].parts.clone() {
-                Parts::Hash(c, key_fields) => {
+                // Hash and Spacial both key on a bare `Vec<u16>` of ascending field
+                // numbers.  Spacial's key positions are what the Morton oracle reads
+                // (@PLN48 S2): each coordinate axis is one entry, interleaved in list
+                // order.
+                Parts::Hash(c, key_fields) | Parts::Spacial(c, key_fields) => {
                     self.types[t_nr].keys.clear();
                     for key_field in key_fields {
                         if let Some((content, position)) = self.key_field(c, key_field) {
@@ -2564,6 +2568,32 @@ mod layout_tests {
                 s.types[tp as usize].name
             )
         }
+    }
+
+    #[test]
+    fn spacial_registers_its_coordinate_keys() {
+        // @PLN48 S2: a `spacial<Mob[x, y]>` must resolve its two coordinate fields to
+        // `keys`, in list order, exactly as a `hash` does — that list is what the
+        // Morton oracle interleaves.
+        let mut s = Stores::new();
+        let int_c = s.name("integer");
+        let tp = s.structure("Mob", 0);
+        s.field(tp, "x", int_c);
+        s.field(tp, "y", int_c);
+        let sp = s.spacial(tp, &["x".to_string(), "y".to_string()]);
+        s.finish();
+
+        let keys = &s.types[sp as usize].keys;
+        assert_eq!(keys.len(), 2, "two axes → two keys");
+        // Ascending (positive type_nr), and x precedes y in interleave order.
+        assert!(
+            keys.iter().all(|k| k.type_nr > 0),
+            "spatial keys are ascending"
+        );
+        assert!(
+            keys[0].position < keys[1].position,
+            "x must resolve to an earlier field than y"
+        );
     }
 
     #[test]
