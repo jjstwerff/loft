@@ -45,6 +45,24 @@ in-band sentinel and *can* hold null — a vector element cannot.
 can represent null exactly like a field does. (`vector<boolean?>` and `vector<character?>`
 already hold null — only the packed-narrow-int element kind is missing it.)
 
+**Scope (probed 2026-07-10) — type-propagation + op-dispatch, NOT storage.** The byte
+stays 1 byte; the sentinels (`Byte` 255, `ShortRaw` `u16::MAX`, `Int` `i32::MIN`) are all
+in-band, no stride growth. But it is **not a one-chokepoint flip** — flipping
+`narrow_vector_content`'s `nullable` flag alone is *inert* (verified). Both the write and
+read sides are non-nullable by construction:
+1. `narrow_vector_content` (`data.rs`): peel `Optional`, pass `nullable`, pick the nullable
+   `Parts` — necessary but not sufficient.
+2. **Append element-build**: the append emits a generic `OpSetInt(elm, 0, null)` whose low
+   byte is `0`, so null stores as `0` not the width-correct sentinel. Must width-match the
+   element set op (`OpSetByte` / `OpSetShortRaw` / `OpSetInt4`) so null encodes the sentinel.
+   (This generic-`OpSetInt`-for-a-byte-element quirk is load-bearing — confirm nothing else
+   relies on it before changing.)
+3. **Index read**: `v[i]` emits a plain `get_byte` with no sentinel decode (H6 removed it so
+   `vector<u16>` can hold `65535`); the nullable element needs the sentinel-decoding read.
+All three, ×3 widths, ×2 backends. A deliberate append-lowering + index-read-dispatch slice,
+not squeezed in. Loci (`data.rs` / `vectors.rs` / `fields.rs` / `fill.rs` / `generation`) do
+not collide with mac-work.
+
 ## 3. LOW — narrow field sentinel collision
 
 A `u8?` field storing its **extreme** value reads back as `null`: `255 → null` (255 is
