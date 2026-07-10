@@ -76,14 +76,25 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    fuzz-proof itself, @PLN53 (F4 differential) + @PLN54 (S4 LSan, S9 mixed-cdylib). Gate 1 is
    "closed by construction" only when (a) lands and (b) has run over it.
 
-2. **One coherent null model — and the substrate gate 1 is built on. ✅ CLEARED 2026-07-02.**
-   @PLN25 (nullable sequences / dense-default) is CLOSED: vectors, scalars, DN1/DN3 and the
-   **`not null` retirement** all landed (`LOFT_PLN25_F2` flipped default-on, then reduced to a
-   no-op; `not null` stripped from `.loft` source). **Dual value, both realised:** (a) user-facing —
-   the half-flipped model that read as "null works for `vector<int>` but not `vector<Item>`" is
-   gone; (b) load-bearing for gate 1 — the value shapes and `deps` ownership facts the memory-model
-   fix reads are now settled, which is what makes gate 1's invariant *knowable*.
-   Handoff: [plans/25-nullable-sequences/RESUME.md](plans/25-nullable-sequences/RESUME.md).
+2. **One coherent null model — and the substrate gate 1 is built on. MODEL LANDED 2026-07-02;
+   the gate is NOT yet cleared.** @PLN25 (nullable sequences / dense-default) is closed as a *plan*:
+   vectors, scalars and DN1–DN6 all landed default-on across both backends, `formal/types.md` is at
+   0 open deviations, and `not null` is now a **deprecated no-op** — it still parses, with a warning,
+   so not-yet-republished libraries keep loading, and the hard "retired" error stays blocked on the
+   registry republish (#546). **Load-bearing half realised:** the value shapes and `deps` ownership
+   facts the memory-model fix reads are settled, which is what makes **gate 1's invariant
+   *knowable*** — so gate 1 is unblocked, and that was gate 2's job for it.
+   **What keeps the gate open** is close-out plus a set of **verified-open edge cases** — among them
+   a **`?? null` unsoundness** (`y: integer = x ?? null` is accepted and a non-null slot ends up
+   holding `null`, both backends), the **call-arg N-Store hole** (a nullable passed into a non-null
+   *parameter* is silently accepted, though into a non-null *local* it is correctly rejected), a
+   **`u8?`-return native codegen failure**, and the registry-gated `not null` hard-reject. A null
+   reaching a non-null slot is a soundness edge, not cosmetics: it is the user-facing incoherence
+   this gate exists to remove, so the gate reads **open**.
+   *Provenance:* re-probed on both backends 2026-07-10 by the @PLN25 stream; the authoritative list
+   is that plan's residual section — see
+   [plans/25-nullable-sequences/RESUME.md](plans/25-nullable-sequences/RESUME.md) (the written record
+   lands with the in-flight @PLN25 doc-sync; these are **not** independently re-verified here).
 
 3. **First-contact developer experience. ✅ CLEARED 2026-07-07.** GOALS' acceptance test is
    *"done = picking it up is fun,"* and first contact is dominated by what happens when the user
@@ -116,17 +127,21 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    change was paid by the maker, not the customer."* A compat promise with a deprecation channel
    is the mechanism that would have caught it.
 
-**Sequence — gates 2 and 3 are CLEARED; gate 1 is the live one.** Gate 2 (@PLN25) settled the
-value model and the `deps` ownership facts that gate 1's invariant is defined against, exactly as
-the build order required. Gate 3 (@PLN28 + @PLN36) is closed. So the order now reads: **finish
-gate 1** (Cluster C, then let @PLN53/@PLN54 run over it), **then open gate 5** (its trigger has
-fired), with gate 4 (@PLN43, parked) after. Performance (the copy-vs-borrow elision, an @PLN25
-sub-thread) is "good enough for prototyping" — fold in opportunistically, not a blocker.
+**Sequence — gate 3 is CLEARED; gate 2 delivered what gate 1 needed but is not itself closed; gate 1
+is the live one.** Gate 2 (@PLN25) settled the value model and the `deps` ownership facts that gate 1's
+invariant is defined against, exactly as the build order required — so gate 1 is **unblocked** even
+though gate 2 still carries verified-open soundness edges of its own (see gate 2 above; they do not
+block gate 1, because the *model* is what gate 1 reads). Gate 3 (@PLN28 + @PLN36) is closed. So the
+order now reads: **finish gate 1** (Cluster C, then let @PLN53/@PLN54 run over it) and **drain gate 2's
+edge cases** in parallel, **then open gate 5** (its trigger has fired), with gate 4 (@PLN43, parked)
+after. Performance (the copy-vs-borrow elision, an @PLN25 sub-thread) is "good enough for prototyping"
+— fold in opportunistically, not a blocker.
 
 **Readiness today (2026-07-10).** The 2026-07 stability + type-safety release SHIPPED as
-`2026.7.1`. Gates 2 and 3 are CLOSED. Gate 1's tracked store-lifetime bugs are all CLOSED
-(#460 / #461 / #462 / #465, and A1b via @PLN90 #516); what remains is the Cluster C fold — forward-risk
-hardening, not an active bug — plus the fuzz-proof run.
+`2026.7.1`. Gate 3 is CLOSED; gate 2's *model* is landed but the gate is **open** on verified soundness
+edges (a `?? null` unsoundness, the call-arg N-Store hole — see gate 2 above). Gate 1's tracked
+store-lifetime bugs are all CLOSED (#460 / #461 / #462 / #465, and A1b via @PLN90 #516); what remains is
+the Cluster C fold — forward-risk hardening, not an active bug — plus the fuzz-proof run.
 
 **Why the tracker is empty — and what to read instead.** This stream's standing rule at the top of
 this file is *fix, don't file*, and the cycle runs under a warm feature freeze
@@ -134,11 +149,9 @@ this file is *fix, don't file*, and the cycle runs under a warm feature freeze
 session that surfaces it, with a regression test, and new feature work stops until what we can see
 works. So "zero open bug issues" is not bookkeeping; it is the *consequence* of refusing to tolerate a
 defect, and it is why nothing accumulates. What the number is **not** is the ledger. The known
-remainder is a set of **deliberate, scoped deferrals**, recorded in each open plan's residual list —
-e.g. [plans/25-nullable-sequences/RESUME.md](plans/25-nullable-sequences/RESUME.md), whose 2026-07-10
-both-backend re-probe records a `?? null` unsoundness, a call-arg N-Store hole, a `u8?`-return native
-codegen bug, and the registry-gated `not null` hard-reject — plus this queue. **Read those, not the
-issue count.**
+remainder is **recorded, scoped and owned** in each open plan's residual list — plus this queue — and
+it is not all comfortable: gate 2's `?? null` unsoundness above is a real soundness edge, named rather
+than parked. **Read those lists, not the issue count.**
 
 The discipline earns its keep because *the person who finds a bug is the person who fixes it*: repro
 warm, paths loaded, no scope/mechanism re-derivation to re-pay later. It does not survive contact with
