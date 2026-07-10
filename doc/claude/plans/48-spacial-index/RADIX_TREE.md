@@ -552,3 +552,61 @@ only through **text prefix queries**, not through ordering.
 Also left to S2/S3: the Morton interleave, the `spacial` arms in `search.rs`
 (`find`/`iterate`/`remove` currently panic as "non-collection"), a
 `for_each_owned_child` arm, `copy_claims` by re-insert, and the proximity API.
+
+---
+
+## 9. The proximity API (`src/spatial.rs`) — @PLN48 S3
+
+The tree is geometry-free: it only sees a 64-bit key.  `src/spatial.rs` supplies the
+geometry — a point is a record with `u32` `x`@4, `y`@8, keyed by its Morton (Z-order)
+code — and the three queries S3 owes, two exact and one deliberately not.
+
+Both exact queries rest on one property, which `s0` tests directly:
+
+> **Morton monotonicity.**  `morton(x,y) = spread(x) + 2·spread(y)`, and `spread` is
+> increasing, so the code rises with each axis on its own.  A box `[x0,x1]×[y0,y1]`
+> thus has its least code at `(x0,y0)`, its greatest at `(x1,y1)`, and every point of
+> the box has a code between them — so scanning that code interval **cannot skip a box
+> point**, which is what makes a scan a sound basis for an exact query.
+
+| query | guarantee | how |
+|---|---|---|
+| `within(c, r)` | **exact** | the disc's bounding box lies in the scanned code interval; keep points with `dist² ≤ r²` |
+| `nearest(c, k)` | **exact** | expanding box: scan half-width `r`; stop once `k` are found and the `k`-th is within `r`, since anything *outside* the box is farther than `r` ≥ that `k`-th distance |
+| `near(c)` | **approximate** | two cursors walk outward in Morton order — cheap and allocation-free, but Z-order jumps at quadrant boundaries, so a near point can arrive late |
+
+`s1`/`s2` diff the exact queries against brute force; each exactness mechanism has a
+mutation witness (shrinking the box reddens `s1`; dropping the k-NN guard reddens
+`s2`).  `s3b` asserts `near` *does* disagree with true nearest — if it ever stops, the
+"approximate" contract was silently broken.
+
+### The crossover (measured — a spatial index is not free)
+
+`ns/query`, best of 3, index vs brute force, in a 2048² field:
+
+| points | `within(r=24)` | `nearest(k=8)` | `near(k=8)` |
+|---:|---|---|---:|
+| 200 | 139 vs 133 | 3382 vs 2549 | 205 |
+| 1 000 | 298 vs **618** | 7124 vs **13691** | 262 |
+| 5 000 | 1183 vs **3014** | 15934 vs **73986** | 318 |
+| 20 000 | 5434 vs **12704** | 33267 vs **317056** | 395 |
+
+Read it as guidance, not decoration:
+
+- **Below a few hundred points the index does not beat brute force** — the scan pays a
+  descent and per-step store reads while brute force is a cache-friendly sweep.  A
+  per-chunk index of a hundred mobs is near break-even for the *exact* queries.
+- **The index wins once the field is a few hundred–thousand**, and `nearest` pulls away
+  fastest (brute force sorts the whole field per query): 9.5× at 20k.
+- **`near` is the standout — flat ~200–400 ns regardless of field size**, because it is
+  `O(k)`, not `O(n)`.  For aggro / interest management, where approximate is fine, it
+  is the reason to have the index at chunk scale at all.
+- **Cheapest win is upstream:** quantize coordinates to a cell (`@PLN48`), and ~3/4 of
+  drifts change no key, so the index is never touched (`bench_move_finger`).
+
+### Left to S2 proper
+
+`spatial.rs` proves the *algorithm* at the Rust layer; wiring it to the loft language —
+`spacial<T[x,y]>` insert/find/remove/`copy_claims`, lifting the parser's 1.1+ gate, and
+the `for_each_owned_child` arm so teardown does not leak — is S2, costed in §8.  3D
+(`spacial<T[x,y,z]>`) is the same machinery with a third interleaved axis.
