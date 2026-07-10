@@ -186,6 +186,56 @@ Two standing gates are RED, and neither is a flake:
   `--lib --test issues` (its own comment: widening awaits the plan-85 DA-inventory worklist).
   **Wire the corpus sweep into CI, and widen the DA gate.**
 
+### The `wrap` loft_suite DA-gate residuals — the widen-the-gate worklist (2026-07-10)
+
+The nightly DA gate is scoped to `--lib --test issues` (GREEN).  Widening it to
+`--test wrap` is blocked by a **chain of debug-assert tripwires**: under
+`RUSTFLAGS='-C debug-assertions=on' … cargo test --release --test wrap`, the
+`loft_suite` test (one test that runs every `tests/scripts/*.loft`) aborts at the
+FIRST script that trips an assert — so each fix unmasks the next.  Enumerated while
+clearing it on `tuxedo-cluster-c` (UNMERGED).  **Most were FALSE ALARMS** — over-eager
+sentinels firing on correct-but-flagged cases (the H2 sentinel's OWN advice, "re-add
+the read", would have *leaked*; the relocate one tempted a wide-blast-radius "complete
+the traversal" that wasn't needed); two were real latent bugs.  Lesson: before obeying
+a sentinel's "this shouldn't happen" premise, verify the
+flagged behaviour (value + leak + `LOFT_POISON` + the DA store-free asserts, BOTH
+backends) — a debug tripwire is a hypothesis, not a verdict.
+
+Cleared (each verified: the fixed case correct on both backends; a non-vacuous
+`tests/issues.rs` guard):
+
+| Script(s) | Assert | Commit | Was it real? |
+|---|---|---|---|
+| `156-plan52-chained-coalesce` | `text.rs:334` double free | `afacd148` | **REAL** — a chained `??` double-freed an owned `__ncc` coalesce temp (interp; `collect_consumed_ncc_text` double-collected a nested-`??` temp). |
+| `387-text-fn-ref`, `85-ncc-container-text-return`, `85-poison-return-tail-uaf` | `parser/mod.rs:1195` (H5 two-pass contract) | `cd9c1f94` | **REAL, latent** — a pass-2-only `__tret` hidden `&text` signature buffer → forward-ref caller "Too few parameters" crash (BOTH backends, release, not just DA). Gate pass-2 tret promotion on pass-1. |
+| `450-struct-field-vector-return`, `508-empty-arm-real-empty-vector`, `repro_p365`, 4× `85-store-lifetime-*` | `scopes.rs` (H2 step-5 `tp_alone` sentinel) | `e1d594cb` | **FALSE ALARM** — retired positional block-result read; a field/enum-arm vector return copies its source into the retbuf, so freeing the local source is correct (re-adding the read would leak). Sentinel removed. |
+| `501-map-filter-literal-receiver`, `85-short-lambda-capture` | `scopes.rs` (`relocate_null_init`) | `097879bb` | **FALSE ALARM** — the best-effort Plan-57 null-init relocation can't reach a confined block off the control-flow spine (a `map`/`filter`/lambda body); the body-0 fallback is correct. Assert softened to fire only on genuine scope-absence. |
+
+Remaining (each VERIFIED failing at the parent commit — orthogonal to the fixes
+above; NOT yet fixed):
+
+- **`86-writeread-struct` — `check_ref_leaks` (`scopes.rs`).** `_read_1` (a Reference
+  var) "registered in an inner block scope not reachable from function-exit cleanup",
+  no `OpFreeRef`. DA-only; release + `LOFT_STORES=warn` + `LOFT_POISON` all CLEAN, so
+  the store IS freed at runtime — the STATIC check disagrees. Either a real
+  scope-registration bug (the store is freed by luck of layout) or another over-eager
+  static tripwire. **The one worth a real look** (likely-real store-lifetime).
+- **`75-native-stub` — `compile.rs`.** "native function not loaded: its library's
+  native cdylib is missing or stale." **INFRA, not a code bug** — the standalone DA
+  binary lacks the rebuilt native cdylib; `scripts/find_problems.sh` (which runs
+  `make rebuild-native-cdylibs`) passes it. Widening the DA gate must rebuild the
+  cdylibs against the DA `libloft` first.
+- **`audience_crystal/03-crystal-incr` — `mod.rs:4014` op-count watchdog** ("Too many
+  operations (infinite loop?)", last op `OpSetSingle` in `emit_segment`). NOT a
+  debug-assert — the compute-heavy incremental-crystal test trips the op limit in the
+  slower DA build, OR a genuine runaway. Needs a look; may just need a higher limit
+  under DA.
+
+Order of the chain (each masks the next): `156 → H5 → 3787(H2) → 280(relocate) →
+{86, 75, audience}`. To finish widening: fix/triage `86`, rebuild native cdylibs for
+`75`, and bound/raise the op limit for `audience_crystal` — then the `wrap` suite can
+join the nightly DA gate.
+
 ## The queue
 
 The bug-level stability work — the F-family sweep, the armed-corpus residuals,
