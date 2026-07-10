@@ -141,6 +141,32 @@ familiar surface over an alien-but-dependable substrate, because the alternative
 rushing to *look* like Rust — *is* Rust underneath, and loses the goal. The years
 were not overhead; they were the goal taken seriously.
 
+### Legible cost — you keep the performance-critical decisions
+
+There is a second failure that "does not fail for software reasons" has to cover, and it
+is the one that generated loft: code that is **correct at low scale and fatal at
+production**. A construction runs fine on a developer's small dataset, then breaks the
+day real load arrives — an N+1 access pattern, an unbounded cache, a GC that never paused
+until the allocation rate was real. The code was not wrong; it was wrong *at a scale the
+source did not reveal*, because the language hid the decisions that determine cost. The
+worst case is **interleaved on-the-fly allocation** — objects scattered across the heap as
+they are created, invisible until the working set outgrows cache, and *unactionable* even
+once diagnosed, because a managed language gives no lever to dictate placement.
+
+So loft draws a line by **performance-criticality**: a performance-critical decision is
+never abstracted away — **allocation topology (group related data into one allocation,
+split unrelated data into another) stays visible and in the programmer's hands** — while
+the bookkeeping that is *not* performance-critical is automated, but **deterministically**
+(freeing at scope/owner death, not a tracing collector; a copy by a legible rule, not a
+silent deep copy). What loft refuses is *hidden, nondeterministic* machinery — a tracing
+GC, a surprise reallocation. This is the layout/cost sibling of **Goal E**: E makes *when*
+a value dies match the source; this makes *where* it lives, and *what it costs*, the
+programmer's to see and set. The mechanism is [OWNERSHIP_MODEL.md § the control
+story](OWNERSHIP_MODEL.md#why-this-shape--the-control-story-makers-call); the realized
+speed of it is a `--native` concern (the interpreter's dispatch overhead masks locality),
+so today loft lets you *express* the right layout and `--native` turns that into machine
+cost.
+
 ### Why a language, not a store bolted onto an existing one
 
 A key reason loft is a *language* and not an in-memory data store added to Rust
