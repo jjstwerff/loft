@@ -315,6 +315,16 @@ target's domain is its value RANGE × nullness, and `null` is the reserved out-o
 check). A `null as S` heap ref stays legal (`is_non_null_scalar` is scalar-only). Regression:
 `tests/scripts/102-expected-errors.loft` twins + the `25-*-nullable.loft` accept paths.
 
+### Refinement (2026-07-10): implicit checked narrowing into a NULLABLE narrow target
+DN4's `as`-required rule is for a **non-null** narrow target. Coercing an integer / `integer?`
+into a **nullable** narrow target (`Optional<narrow>`, e.g. `u8?`) needs **no explicit `as`**:
+`convert` routes it through the same `dn4_checked_cast` range-guard (in-range → the value,
+out-of-range → `null`). This is sound without ceremony because the target is nullable — an
+out-of-range value becomes a VISIBLE `null`, never the silent truncation that `as u8` into a
+non-null slot would be. Only nullable narrow targets are affected; a non-null `u8` still
+requires an explicit `as`. Guard: `tests/scripts/25-nullable-narrow-implicit-checked.loft`
+(both backends).
+
 ### DN6 — CLOSED (2026-07-02, F4): the inferred `null`-join widens to `τ?` instead of rejecting
 Per `(N-Join)` an INFERRED `a = null; a = 5` (no annotation) now infers `a : integer?` — the join
 of `null` and the scalar — via `change_var_type` (`variables/mod.rs`). `var_tp == null` is

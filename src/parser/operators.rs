@@ -1756,7 +1756,7 @@ impl Parser {
     /// integer null. Pure parse-time desugar over existing ops (`OpLeInt`,
     /// `OpConvIntFromNull`, `if`) — no new runtime op, no runtime error. `src_tp`
     /// is `e`'s type (the temp's slot); the result type is the nullable `τ`.
-    fn dn4_checked_cast(&mut self, code: &mut Value, tp: &Type, src_tp: &Type) -> Type {
+    pub(crate) fn dn4_checked_cast(&mut self, code: &mut Value, tp: &Type, src_tp: &Type) -> Type {
         let Type::Integer(spec) = tp else {
             return tp.clone();
         };
