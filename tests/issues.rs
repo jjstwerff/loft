@@ -243,6 +243,44 @@ fn test() {
     .result(Value::Null);
 }
 
+// A chained `??` (`a ?? b ?? c`) whose operands are OWNED/call-produced text
+// double-freed an inner `__ncc_N` coalesce temp on the interpreter (a
+// `state/text.rs:334` double free under `-C debug-assertions=on`; script 156).
+// Root cause in `scopes::collect_consumed_ncc_text`, which emits the in-place
+// free for a consumed skip_free ncc temp: (1) it recursed INTO nested ncc blocks,
+// so a left-nested chain's inner temp was collected at multiple levels; (2) a
+// right-nested `a ?? (b ?? c)` hoists a merge-var pre-declaration `__ncc_N = ""`
+// (a literal init) into the outer ncc block, and collecting that literal Set as
+// well as the real inner assignment freed the temp twice.  Fix: don't recurse
+// into ncc blocks (each nested one gets its own free pass), and only collect the
+// REAL subject assignment (non-literal value).  A `var ?? …` first operand never
+// mints a temp, so it was always clean.  DA-gated (double-free is benign in
+// release / dropped via RAII on native).
+#[test]
+fn chained_coalesce_owned_text_no_double_free() {
+    code!(
+        "struct CccCache { items: hash<CccEntry[name]> }
+struct CccEntry { name: text, value: text }
+fn ccc_lookup(c: CccCache, k: text) -> text { return c.items[k].value; }
+fn test() {
+    p = CccCache { items: [] }; p.items[\"theme\"] = CccEntry { name: \"theme\", value: \"dark\" };
+    q = CccCache { items: [] }; q.items[\"lang\"] = CccEntry { name: \"lang\", value: \"en\" };
+    // chained (left-nested), first operand a call → hits
+    a = ccc_lookup(p, \"theme\") ?? ccc_lookup(q, \"theme\") ?? \"fb\";
+    assert(a == \"dark\", \"chained first hit, got '{a}'\");
+    // chained, all miss → fallback
+    b = ccc_lookup(p, \"x\") ?? ccc_lookup(q, \"y\") ?? \"fb\";
+    assert(b == \"fb\", \"chained fallback, got '{b}'\");
+    // right-nested via parens, inner branch hits
+    d = ccc_lookup(p, \"x\") ?? (ccc_lookup(q, \"lang\") ?? \"fb\");
+    assert(d == \"en\", \"right-nested, got '{d}'\");
+    // inline (unbound) chained
+    assert((ccc_lookup(p, \"theme\") ?? ccc_lookup(q, \"theme\") ?? \"fb\") == \"dark\", \"inline chained\");
+}"
+    )
+    .result(Value::Null);
+}
+
 // `vec_of_u8[i] ?? <fitting-int-literal>` keeps the value's NARROW type instead
 // of widening the `??` result to i64, so the defaulted element appends back into
 // a `vector<u8>` with no `as u8` cast and no spurious "cannot implicitly narrow"

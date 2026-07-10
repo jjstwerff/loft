@@ -4542,15 +4542,33 @@ fn collect_consumed_ncc_text(node: &Value, function: &Function, out: &mut Vec<u1
         Value::Span(b) => collect_consumed_ncc_text(&b.1, function, out),
         Value::Block(bl) if bl.name == "ncc" => {
             for op in &bl.operators {
-                if let Value::Set(v, _) = op.unspan()
+                if let Value::Set(v, val) = op.unspan()
                     && function.is_skip_free(*v)
                     && matches!(function.tp(*v).base(), Type::Text(_))
                     && function.name(*v).starts_with("__ncc_")
+                    // Only the REAL coalesce-subject assignment (a Call / field
+                    // access / nested block — a producer of an owned String)
+                    // gets an in-place free.  A right-nested `??` (`a ?? (b ?? c)`)
+                    // hoists a merge-var pre-declaration `__ncc_N = ""` (a literal
+                    // Text init) into the OUTER ncc block while the real
+                    // assignment lives in the inner block; collecting the literal
+                    // init too freed the temp twice (156 sibling: right-nested
+                    // `??` double-free).  A subject is never a bare literal.
+                    && !matches!(val.unspan(), Value::Text(_) | Value::Null)
                 {
                     out.push(*v);
                 }
             }
-            node.for_each_child(&mut |c| collect_consumed_ncc_text(c, function, out));
+            // Do NOT recurse INTO this ncc block: a nested `??` (`a ?? b ?? c`)
+            // lowers to an ncc block whose Set value is ANOTHER ncc block, and
+            // that inner block gets its OWN `convert` (and thus its own in-place
+            // free pass) when it is scanned.  Recursing here would ALSO collect
+            // the inner block's `__ncc_*` temp from the outer level, freeing it
+            // twice (a `text.rs:334` double-free on the interpreter for a chained
+            // `??` whose first operand is an owned/call-produced text; 156).
+            // Non-ncc structures (call args, if-branches) are still descended
+            // through by the `_` arm below, so sibling / nested-in-expression ncc
+            // blocks are reached exactly once.
         }
         Value::Block(_) | Value::Loop(_) => {}
         _ => node.for_each_child(&mut |c| collect_consumed_ncc_text(c, function, out)),
