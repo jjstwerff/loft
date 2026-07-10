@@ -1151,8 +1151,10 @@ pub fn radix_sorted(r: reference, tp: integer) -> reference;
 // @PLN48 S3 — a spacial range slice `xs[(fx,fy)..(tx,ty)]` / `xs[(fx,fy)..:limit]`.
 // Returns a fresh vector<reference<T>> of the records whose Morton code is in the
 // interval (has_till=0 = open end; limit<0 = no cap), in natural order.  The parser
-// rewrites the slice expression, injecting the collection's type id.
-pub fn spacial_range(r: reference, tp: integer, fx: integer, fy: integer, has_till: integer, tx: integer, ty: integer, limit: integer) -> reference;
+// rewrites the slice expression, injecting the collection's type id.  Coordinates
+// carry up to MAX_AXES (3) axes; the range builder reads only the collection's own
+// axis count, so `fz`/`tz` are ignored (0) for a 2D `spacial<T[x,y]>`.
+pub fn spacial_range(r: reference, tp: integer, fx: integer, fy: integer, fz: integer, has_till: integer, tx: integer, ty: integer, tz: integer, limit: integer) -> reference;
 #impure(parent_write)
 type index size(4);
 
@@ -1277,6 +1279,16 @@ type iterator;
 // panicking in `complete_definition` (enum/type).
 type radix;
 type spacial;
+// @PLN48 — number of elements in a spacial<T[x,y]> (radix / Morton tree).  Reads
+// the tree's cached length word (O(1)), mirroring `len(both: hash)`.  Declared
+// after `type spacial` so the parameter type resolves.
+fn OpLengthSpacial(r: spacial) -> integer;
+#rust"i64::from(codegen_runtime::spacial_len(&@r, &s.database.allocations))"
+// Number of elements in a spacial (radix / Morton tree) collection.
+pub fn len(both: spacial) -> integer {
+  OpLengthSpacial(both)
+}
+#pure
 // Call a predefined system function (but not an operator).
 fn OpStaticCall(call: const u16);
 // Create a DbRef that points INTO the current stack frame (not into a data store).

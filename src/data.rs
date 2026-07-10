@@ -4923,9 +4923,10 @@ impl Data {
                     self.type_def_nr(tp)
                 }
             }
-            Type::Sorted(_, _, _) | Type::Index(_, _, _) | Type::Hash(_, _, _) => {
-                self.source_nr(0, "reference")
-            }
+            Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Hash(_, _, _)
+            | Type::Radix(_, _, _) => self.source_nr(0, "reference"),
             // P189: tuple element types resolve to the synthetic
             // tuple struct registered by `tuple_def`.  Same lookup
             // as `type_def_nr`'s Tuple arm.

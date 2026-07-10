@@ -1014,9 +1014,8 @@ enum FieldPhase {
 /// (collection-typed fields that reference a bare Vector / Sorted /
 /// Hash / Index created during `output_init`'s first pass).
 fn is_collection_field(tp: &Type) -> bool {
-    // Radix is included for family-consistency with `Type::heap_dep` /
-    // `slot_kind` even though `spacial<T>` is parser-rejected today
-    // ("planned for 1.1+") — when it lands, this classifier is ready.
+    // Radix backs `spacial<T[x,y]>` (@PLN48) — same Phase-2 bare-type
+    // reference shape as Hash, so it is classified alongside the family.
     matches!(
         tp,
         Type::Vector(_, _)
@@ -3033,6 +3032,26 @@ extern crate loft;"
                 field_name,
                 "hash",
                 &format!("db.hash({c_ref}, &[{keys_str}])"),
+            )?;
+            return Ok(());
+        }
+        // @PLN48 — a `spacial<T[x,y]>` field: keyed like Hash but the runtime
+        // structure is a radix (Morton) tree.  Same key-name emission as Hash;
+        // `db.spacial(content, keys)` builds the Radix Part.
+        if let Type::Radix(c_nr, keys, _) = typedef {
+            let c_tp = self.data.def(*c_nr).known_type();
+            let c_ref = type_id_ref(c_tp);
+            let keys_str = keys
+                .iter()
+                .map(|k| format!("\"{k}\".to_string()"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            emit_db_field(
+                w,
+                s_var,
+                field_name,
+                "spacial",
+                &format!("db.spacial({c_ref}, &[{keys_str}])"),
             )?;
             return Ok(());
         }

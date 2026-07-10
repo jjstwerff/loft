@@ -2025,6 +2025,18 @@ impl Parser {
                             for (field, _) in fields {
                                 f.push(field);
                             }
+                            // The Morton code interleaves at most `MAX_AXES` axes; a wider
+                            // key would index past the `[u64; MAX_AXES]` array at runtime
+                            // (a production panic).  Reject it here with a clean message.
+                            if f.len() > crate::radix_db::MAX_AXES {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "spacial<T[…]> supports at most {} coordinate axes, got {}",
+                                    crate::radix_db::MAX_AXES,
+                                    f.len()
+                                );
+                            }
                             Type::Radix(sub_nr, f, crate::data::Deps::none())
                         } else {
                             self.lexer.closing_angle();

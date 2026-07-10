@@ -1,7 +1,9 @@
 // @PLN48 S2 — a spacial<T[x, y]> collection: construct, iterate in natural order,
 // and free — on BOTH backends.  The runner's leak check is the real assertion —
-// remove_claims must free the tree + every element record.
+// remove_claims must free the tree + every element record.  Covers both a local
+// variable and a struct field (the field must be laid out and torn down too).
 struct SMob { x: integer, y: integer }
+struct SWorld { mobs: spacial<SMob[x, y]> }
 
 fn main() {
   xs: spacial<SMob[x, y]> = [];
@@ -9,6 +11,7 @@ fn main() {
   xs += [SMob{x: 1, y: 2}];
   xs += [SMob{x: 3, y: 3}];   // same cell — both kept
   xs += [SMob{x: 0, y: 0}];
+  assert(xs.len() == 4, "len counts duplicate cells");
 
   // Iterate in the tree's natural (Morton/Z-order) order — no sort, the walk is
   // ordered by construction.  Sum the coordinates as a stable, order-independent
@@ -20,6 +23,17 @@ fn main() {
     count += 1;
   }
   // 4 records: (3,3)+(1,2)+(3,3)+(0,0) → 303+102+303+0 = 708, count 4.
+  assert(count == 4, "iteration visits every record once");
+  assert(total == 708, "natural-order walk sums all coordinates");
   print("count={count} total={total}\n");
-  // `xs` falls out of scope here; remove_claims frees it with no leak.
+
+  // A spacial as a STRUCT FIELD — construct, mutate, iterate, len, tear down.
+  w = SWorld { mobs: [] };
+  w.mobs += [SMob{x: 5, y: 9}];
+  w.mobs += [SMob{x: 2, y: 4}];
+  assert(w.mobs.len() == 2, "struct-field spacial len");
+  fcount: integer = 0;
+  for m in w.mobs { fcount += 1; }
+  assert(fcount == 2, "struct-field spacial iterates");
+  // `xs` and `w` fall out of scope here; remove_claims frees them with no leak.
 }

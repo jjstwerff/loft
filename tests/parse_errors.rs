@@ -570,6 +570,15 @@ fn spacial_needs_coordinate_keys() {
         .error("spacial<T[x, y]> needs coordinate key fields, e.g. spacial<Mob[x, y]> at spacial_needs_coordinate_keys:2:33");
 }
 
+/// @PLN48: the Morton code interleaves at most `radix_db::MAX_AXES` (3) axes; a wider
+/// `spacial<T[a,b,c,d]>` key would index past the fixed `[u64; MAX_AXES]` code array
+/// at runtime (a production panic).  The parser rejects it with a clean diagnostic.
+#[test]
+fn spacial_rejects_more_than_three_axes() {
+    code!("struct P4 { a: integer, b: integer, c: integer, d: integer }\nfn test() { xs: spacial<P4[a, b, c, d]> = []; }")
+        .error("spacial<T[…]> supports at most 3 coordinate axes, got 4 at spacial_rejects_more_than_three_axes:2:42");
+}
+
 /// F57: write_file on a struct with a collection-type field must produce a compile error.
 #[test]
 fn write_file_collection_field() {

@@ -258,6 +258,30 @@ All three keyed collection types share a common lookup and removal syntax handle
 
 These are parser-level operations; they compile to `OpGetRecord`, `OpHashRemove`, and `OpRemove` respectively. There are no corresponding callable functions.
 
+### `spacial<T[x,y]>` / `spacial<T[x,y,z]>` — spatial keyed collection
+
+A keyed collection backed by a Morton/Z-order radix tree, with 1–3
+coordinate key fields (@PLN48):
+
+| Syntax | Description |
+|--------|-------------|
+| `xs: spacial<Mob[x, y]> = [];` | Construct; also legal as a struct field (`mobs: spacial<Mob[x,y]>`). |
+| `xs += [Mob{x: 1, y: 2}];` | Append. |
+| `for m in xs { … }` | Iterate in the tree's natural Morton/Z-order — no sort (unlike `hash`, which sorts via its internal ordered index). |
+| `xs.len()` | Element count — O(1), reads the tree's cached length word. |
+| `xs[(x,y)..]` | Open outward walk from a point; caller `break`s to stop. |
+| `xs[(x,y)..:n]` | Same, capped at `n` records. |
+| `xs[(x1,y1)..(x2,y2)]` | Bounding-box range. |
+
+There are no `.near`/`.within`/`.nearest` methods — proximity is ordinary
+range slicing. All three slice forms are the raw Morton-code interval: a
+bounding box is a *superset* of the geometric box (Z-order threads through
+codes outside it, same as any keyed range slice being the raw key range) —
+filter or `break` inside the loop for an exact shape. A slice is a
+`for`-loop iterator, not a value, same as other keyed range slices. See
+[DATABASE.md § Spatial Index](DATABASE.md#spatial-index-srcradix_treers) for
+the implementation.
+
 ---
 
 ## Output and Diagnostics

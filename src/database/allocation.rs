@@ -943,9 +943,11 @@ impl Stores {
 
     /// @PLN48 S3 — a `spacial` range slice as an iterable scratch vector, feeding the
     /// same Ordered (on=3) path as `build_radix_sorted_vec`.  Records whose Morton code
-    /// lies in `[(fx, fy), (tx, ty)]` (or `[(fx, fy), ∞)` when `has_till == 0`), in
-    /// natural order, capped at `limit` (`< 0` = no cap).  Backs `xs[(x,y)..]`,
-    /// `xs[(x,y)..:n]`, and the bounding box `xs[(x1,y1)..(x2,y2)]`.
+    /// lies in `[from, till]` (or `[from, ∞)` when `has_till == 0`), in natural order,
+    /// capped at `limit` (`< 0` = no cap).  Backs `xs[(x,y)..]`, `xs[(x,y)..:n]`, and the
+    /// bounding box `xs[(x1,y1)..(x2,y2)]`.  Coordinates arrive as a fixed `MAX_AXES`-wide
+    /// triple; only the collection's own `keys.len()` axes are read (a 2D collection
+    /// ignores `fz`/`tz`), so the same ABI serves 1D…3D slices.
     #[allow(clippy::too_many_arguments)]
     pub fn build_radix_range_vec(
         &mut self,
@@ -953,16 +955,20 @@ impl Stores {
         tp: u16,
         fx: i64,
         fy: i64,
+        fz: i64,
         has_till: i64,
         tx: i64,
         ty: i64,
+        tz: i64,
         limit: i64,
     ) -> DbRef {
         let keys = self.types[tp as usize].keys.clone();
-        let till = [tx, ty];
-        let till_ref = (has_till != 0).then_some(&till[..]);
+        let n = keys.len().min(crate::radix_db::MAX_AXES);
+        let from = [fx, fy, fz];
+        let till = [tx, ty, tz];
+        let till_ref = (has_till != 0).then_some(&till[..n]);
         let cap = (limit >= 0).then_some(limit as usize);
-        let recs = crate::radix_db::range(coll, &self.allocations, &keys, &[fx, fy], till_ref, cap);
+        let recs = crate::radix_db::range(coll, &self.allocations, &keys, &from[..n], till_ref, cap);
         self.build_rec_scratch(coll, &recs)
     }
 

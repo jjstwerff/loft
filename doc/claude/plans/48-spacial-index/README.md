@@ -1,8 +1,13 @@
 # @PLN48 — `spacial<T[x,y]>` / `spacial<T[x,y,z]>`: a Morton/Z-order radix spatial index
 
-**Status:** Future (planned). Completes the long-reserved `spacial<T>`
-keyed-collection (gated today with *"spacial<T> is planned for 1.1+; until
-then use sorted<T> or index<T>"*).
+**Status:** S1–S3 done. `spacial<T[x,y]>` / `spacial<T[x,y,z]>` is a working
+keyed collection on both backends (interpreter + `--native`): construct,
+append, `for`-iterate (natural Morton/Z-order), `len()`, and range-slice
+proximity queries (`xs[(x,y)..]`, `xs[(x,y)..:n]`, `xs[(x1,y1)..(x2,y2)]`),
+1–3 coordinate axes. The old "planned for 1.1+" diagnostic is gone. S4
+(consumer validation in moros) remains open. See
+[DATABASE.md § Spatial Index](../../DATABASE.md#spatial-index-srcradix_treers)
+for the shipped operation reference.
 
 ## Why
 
@@ -86,32 +91,34 @@ field lives):
 | # | Scope |
 |---|---|
 | **R** ✅ | **The radix tree, as a standalone deliverable** — [RADIX_TREE.md](RADIX_TREE.md).  A store-backed binary PATRICIA tree over an abstract bit-key oracle: `init`/`free`, `insert` (with growth + relocation), `find`, `seek` (lower bound), bidirectional `first`/`last`/`next`/`prev`, `remove` with a node free list, and `validate`.  Rust unit tests only — no schema, no parser, no `Parts::Spacial` — so everything downstream inherits a structure that is already proven.  Steps R1–R7 green. |
-| **S1** | The Morton bit-key: interleave the 2 or 3 quantized coordinate axes into the oracle deliverable R already consumes.  Rust unit tests (2D + 3D keys). |
-| **S2** | Wire `spacial<T[…]>` to the radix tree — implement the four panicking ops + `copy_claims` (`structures.rs`/`search.rs`/`allocation.rs`); Morton-encode the coord key fields; lift the parser's "planned 1.1+" gate.  (This also finally implements the keyed kind @P295/@P305/@P309 had to exclude.) |
-| **S3** | Proximity API (stdlib, `default/*.loft`): `coll.near(x, y[, z])` (nearest-first iterator), `coll.within(x, y[, z], radius)`, `coll.nearest(x, y[, z], k)` — with distance verification. |
+| **S1** ✅ | The Morton bit-key: interleave the 2 or 3 quantized coordinate axes into the oracle deliverable R already consumes.  Rust unit tests (2D + 3D keys). |
+| **S2** ✅ | `spacial<T[…]>` wired to the radix tree: insert/find/remove/`copy_claims` (`src/radix_db.rs`, `src/database/allocation.rs`), Morton-encoded coord key fields (offset-binary so signed axes compare like `sorted`/`index`), the parser's "planned 1.1+" gate lifted, both backends (interpreter + `--native`, including a local-only `spacial` type).  Also landed beyond the original scope: struct-field `spacial`, `for`-iteration in natural Morton order, `len()`. |
+| **S3** ✅ | **Proximity via range slicing, not methods** — deliberately pivoted away from the originally planned `coll.near`/`coll.within`/`coll.nearest` stdlib methods (user direction: *"I do not want any keywords or function related to the new data structures.. use the current iterate syntax and slicing syntax"*).  `spacial` needs no new keywords or functions — it is queried with the same range-slice syntax any keyed collection uses: `xs[(x,y)..]` (open outward walk, caller `break`s), `xs[(x,y)..:n]` (capped at `n`), `xs[(x1,y1)..(x2,y2)]` (bounding box — the raw Morton-code interval, a superset of the geometric box since Z-order threads through codes outside it; caller filters/breaks for an exact shape).  Slices carry 1–3 axes (`xs[(x,y,z)..(x2,y2,z2)]`), guarded by a new parser diagnostic (`MAX_AXES = 3`: `spacial<T[a,b,c,d]>` now a clean error instead of the runtime panic an unbounded axis count would cause). |
 | **S4** | Consumer validation — a "near mobs from a mob's perspective" demo in the moros/audience world; cross-mode; cache-locality + correctness vs brute-force measurement. |
 
 ## Critical files
 - `src/radix_tree.rs` — the tree + bidirectional iterator (deliverable R, done); the Morton bit-key plugs in as a `KeyFn`.
-- `src/database/{structures.rs,search.rs,allocation.rs}` — the `spacial` ops (currently `panic!`).
-  Note `search.rs` panics in **three** places (`find`, `iterate`, `remove`), and
-  `allocation.rs::for_each_owned_child` needs a `Spacial` arm — today it yields no
-  children, which is why the two `remove_claims`/`copy_claims` panics exist to stop a
-  silent leak.
-- `src/database/types.rs` — `spacial()` registration + the Morton key; keyed-kind handling.
-- `src/parser/*` — lift the `spacial<T>` 1.1+ diagnostic; keyed-field handling (mirror hash/sorted/index from @P305/@P307/@P308).
-- `default/*.loft` — the `near`/`within`/`nearest` API.
+- `src/radix_db.rs` — the DB↔tree bridge (the `Radix`-kind counterpart of `src/hash.rs`): `add`/`find`/`remove`/`count`/`records`/`range`, Morton/Z-order key interleaving, `MAX_AXES = 3`. **Resolved** — the four ops that used to `panic!("Not implemented")` are implemented; `allocation.rs::for_each_owned_child` has a `Radix` arm (mirrors `Hash`) so `remove_claims`/`copy_claims` no longer leak or panic.
+- `src/spatial.rs` — the underlying near/within/nearest geometry algorithms `radix_db.rs`'s range primitives build on.
+- `src/database/types.rs` — `spacial()` registration + the Morton key; keyed-kind handling. (This finally implements the keyed kind @P295/@P305/@P309 had to exclude.)
+- `src/parser/*` — the `spacial<T>` 1.1+ diagnostic is lifted; residual diagnostics are missing-key-fields and the `MAX_AXES` guard; keyed-field handling mirrors hash/sorted/index from @P305/@P307/@P308.
+- Proximity is **not** a `default/*.loft` API — see S3: it is range-slice syntax the parser/runtime already support for every keyed collection, no new stdlib surface.
 - Reuse: `src/keys.rs` (key extraction), the keyed-collection deep-copy machinery, the gridmesh chunk model (per-chunk indexing).
 
 ## Verification
 - Rust unit tests for `radix_tree` (insert / find / bidirectional walk /
   remove; 2D + 3D Morton keys).
-- loft cross-mode: insert N entities; `near(p)` returns them increasing in
-  distance; `within(p,r)` and `nearest(p,k)` match a brute-force oracle on
-  small sets; both backends.
-- Memory/cache: `store_memory()` bounded; per-chunk index fits L1/L2.
+- loft cross-mode: `tests/scripts/48-spacial-construct-free.loft` (construct /
+  append / iterate / `len()` / struct-field / teardown, no leak) and
+  `tests/scripts/48b-spacial-slice.loft` (2D + 3D bounding-box / open-walk /
+  count-limited slices, asserted against hand-computed expectations); both
+  backends.
+- Parser diagnostics: `tests/parse_errors.rs::spacial_needs_coordinate_keys`,
+  `::spacial_rejects_more_than_three_axes`.
+- Memory/cache (S4, open): `store_memory()` bounded; per-chunk index fits L1/L2.
 
-Acceptance: `spacial<T[x,y]>` and `spacial<T[x,y,z]>` work; `near` (approx)
-+ `within`/`nearest` (distance-verified exact) correct; the 1.1+ diagnostic
-lifted; both backends green; reuses `radix_tree.rs` + `spacial<T>` rather
-than inventing new structure.
+Acceptance (S1–S3, met): `spacial<T[x,y]>` and `spacial<T[x,y,z]>` work end to
+end — construct, append, iterate in natural Morton order, `len()`, and range
+slices for proximity; the 1.1+ diagnostic lifted; both backends green; reuses
+`radix_tree.rs` + `spacial<T>` rather than inventing new structure; no new
+keywords or stdlib functions.  S4 (consumer validation) remains open.

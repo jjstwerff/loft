@@ -2642,6 +2642,13 @@ impl Parser {
                 let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.index(c, key))
             }
+            // @PLN48 — a `spacial` STRUCT FIELD is keyed like the others; without this
+            // arm `keyed_field_kt` returned None and the field construction crashed
+            // (`record_new` resolved the wrong field index).
+            Type::Radix(d, key, _) => {
+                let c = self.data.def(*d).known_type();
+                (c != u16::MAX).then(|| self.database.spacial(c, key))
+            }
             _ => None,
         }
     }

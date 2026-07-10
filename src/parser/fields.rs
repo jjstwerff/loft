@@ -1100,20 +1100,40 @@ impl Parser {
     /// `n_spacial_range` scratch-builder call.  Returns the Radix `typedef` so the
     /// enclosing `for` iterates the scratch it builds.  `(` has already been peeked.
     fn parse_spacial_slice(&mut self, code: &mut Value, typedef: &Type, key_types: &[Type]) -> Type {
-        // A `(fx, fy)` coordinate tuple.
-        let coord = |s: &mut Self, i: usize| -> Value {
-            let mut v = Value::Null;
-            let vt = s.expression(&mut v);
-            if !s.convert(&mut v, &vt, &key_types[i.min(key_types.len() - 1)]) {
-                diagnostic!(s.lexer, Level::Error, "Invalid spacial coordinate");
+        // Parse a `(c0, c1, …)` coordinate tuple with exactly one value per axis of the
+        // collection (`key_types.len()`), padded to MAX_AXES with `0` for the fixed-arity
+        // `n_spacial_range` call.  The collection's own axis count drives how many the
+        // range builder reads, so the padding is inert.
+        let axes = key_types.len();
+        let max_axes = crate::radix_db::MAX_AXES;
+        let parse_tuple = |s: &mut Self| -> Vec<Value> {
+            let mut out = Vec::new();
+            s.lexer.token("(");
+            loop {
+                let i = out.len();
+                let mut v = Value::Null;
+                let vt = s.expression(&mut v);
+                if !s.convert(&mut v, &vt, &key_types[i.min(axes - 1)]) {
+                    diagnostic!(s.lexer, Level::Error, "Invalid spacial coordinate");
+                }
+                out.push(v);
+                if !s.lexer.has_token(",") {
+                    break;
+                }
             }
-            v
+            s.lexer.token(")");
+            if out.len() != axes {
+                diagnostic!(
+                    s.lexer,
+                    Level::Error,
+                    "a spacial coordinate needs {axes} axes, got {}",
+                    out.len()
+                );
+            }
+            out.resize(max_axes, Value::Int(0));
+            out
         };
-        self.lexer.token("(");
-        let fx = coord(self, 0);
-        self.lexer.token(",");
-        let fy = coord(self, 1);
-        self.lexer.token(")");
+        let from = parse_tuple(self);
         if !self.lexer.has_token("..") {
             diagnostic!(
                 self.lexer,
@@ -1121,32 +1141,29 @@ impl Parser {
                 "a spacial slice needs a range: `xs[(x,y)..]`, `xs[(x,y)..:n]`, or `xs[(x1,y1)..(x2,y2)]`"
             );
         }
-        // The `..` is followed by a till tuple `(tx,ty)`, a limit `:n`, or nothing.
-        let (has_till, tx, ty, limit) = if self.lexer.peek_token("(") {
-            self.lexer.token("(");
-            let tx = coord(self, 0);
-            self.lexer.token(",");
-            let ty = coord(self, 1);
-            self.lexer.token(")");
-            (Value::Int(1), tx, ty, Value::Int(-1))
+        // The `..` is followed by a till tuple `(tx,ty,…)`, a limit `:n`, or nothing.
+        let (has_till, till, limit) = if self.lexer.peek_token("(") {
+            (Value::Int(1), parse_tuple(self), Value::Int(-1))
         } else if self.lexer.has_token(":") {
             let mut n = Value::Null;
             let nt = self.expression(&mut n);
             if !self.convert(&mut n, &nt, &crate::data::I64) {
                 diagnostic!(self.lexer, Level::Error, "spacial slice limit must be an integer");
             }
-            (Value::Int(0), Value::Int(0), Value::Int(0), n)
+            (Value::Int(0), vec![Value::Int(0); max_axes], n)
         } else {
-            (Value::Int(0), Value::Int(0), Value::Int(0), Value::Int(-1))
+            (Value::Int(0), vec![Value::Int(0); max_axes], Value::Int(-1))
         };
         if !self.first_pass {
             let tp = self.get_type(typedef);
             let fn_nr = self.data.def_nr("n_spacial_range");
             if tp != u16::MAX && fn_nr != u32::MAX {
-                *code = Value::Call(
-                    fn_nr,
-                    vec![code.clone(), Value::Int(i32::from(tp)), fx, fy, has_till, tx, ty, limit],
-                );
+                let mut args = vec![code.clone(), Value::Int(i32::from(tp))];
+                args.extend(from); // fx, fy, fz
+                args.push(has_till);
+                args.extend(till); // tx, ty, tz
+                args.push(limit);
+                *code = Value::Call(fn_nr, args);
             }
         }
         typedef.clone()

@@ -36,8 +36,10 @@ use crate::store::Store;
 const PAYLOAD: u32 = 8;
 /// Bits given to each axis.  Uniform so the interleave is a plain Morton code.
 const AXIS_BITS: u32 = 64;
-/// The most axes a spatial key interleaves (`spacial<T[x,y,z]>`).
-const MAX_AXES: usize = 3;
+/// The most axes a spatial key interleaves (`spacial<T[x,y,z]>`).  The parser
+/// rejects a `spacial<T[…]>` with more key fields than this (else the Morton
+/// interleave indexes past the `[u64; MAX_AXES]` code array — a runtime panic).
+pub const MAX_AXES: usize = 3;
 
 /// A key field's value, mapped to an order-preserving 64-bit code (offset-binary).
 /// A key field's signed coordinate value (for distance arithmetic).
@@ -169,6 +171,19 @@ pub fn remove(coll: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) -> 
         return false;
     }
     rt::rtree_remove(store, tree, rec.rec, &RadixOracle { keys })
+}
+
+/// Number of element records in the collection.  Reads the tree's cached length
+/// word (O(1)); key-free, mirroring `hash::count`.
+#[must_use]
+pub fn count(coll: &DbRef, stores: &[Store]) -> u32 {
+    let store = keys::store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    if tree == 0 {
+        0
+    } else {
+        rt::rtree_len(store, tree)
+    }
 }
 
 /// Every element record in the collection, in key order.  Key-free (a plain tree

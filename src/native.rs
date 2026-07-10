@@ -2636,14 +2636,16 @@ fn n_radix_sorted(stores: &mut Stores, stack: &mut DbRef) {
 /// @PLN48 S3 — a spacial range slice.  Args pop in reverse declaration order.
 fn n_spacial_range(stores: &mut Stores, stack: &mut DbRef) {
     let limit = *stores.get::<i64>(stack);
+    let tz = *stores.get::<i64>(stack);
     let ty = *stores.get::<i64>(stack);
     let tx = *stores.get::<i64>(stack);
     let has_till = *stores.get::<i64>(stack);
+    let fz = *stores.get::<i64>(stack);
     let fy = *stores.get::<i64>(stack);
     let fx = *stores.get::<i64>(stack);
     let tp = *stores.get::<i64>(stack) as u16;
     let coll = *stores.get::<DbRef>(stack);
-    let result = stores.build_radix_range_vec(&coll, tp, fx, fy, has_till, tx, ty, limit);
+    let result = stores.build_radix_range_vec(&coll, tp, fx, fy, fz, has_till, tx, ty, tz, limit);
     stores.put(stack, result);
 }
 

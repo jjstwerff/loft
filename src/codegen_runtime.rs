@@ -768,6 +768,15 @@ pub fn OpLengthCharacter(_cell: &std::cell::UnsafeCell<Stores>, c: i32) -> i64 {
     }
 }
 
+/// Number of elements in a `spacial<T[x,y]>` (radix / Morton tree) collection.
+/// Thin wrapper over the crate-private `radix_db::count` so the `#rust` `len`
+/// template reaches it through the pub `codegen_runtime` module on both backends
+/// (mirrors how `hash::count` backs `len(both: hash)`).
+#[must_use]
+pub fn spacial_len(coll: &DbRef, stores: &[crate::store::Store]) -> u32 {
+    crate::radix_db::count(coll, stores)
+}
+
 /// Pack a (current-position, finish) pair into a single i64 iterator state.
 /// High 32 bits = finish; low 32 bits = cur.
 /// `finish == u32::MAX` signals that iteration is complete.
@@ -2086,13 +2095,15 @@ pub fn n_spacial_range(
     tp: i64,
     fx: i64,
     fy: i64,
+    fz: i64,
     has_till: i64,
     tx: i64,
     ty: i64,
+    tz: i64,
     limit: i64,
 ) -> DbRef {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
-    stores.build_radix_range_vec(&r, tp as u16, fx, fy, has_till, tx, ty, limit)
+    stores.build_radix_range_vec(&r, tp as u16, fx, fy, fz, has_till, tx, ty, tz, limit)
 }
 
 /// Read the text element a par worker's `&str` parameter expects out of the
