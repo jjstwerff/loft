@@ -7,49 +7,61 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**PARKED (`status:parked`) — deferred with a concrete trigger; owner-authorized
-2026-07-09.**  Floor shipped, remaining phases paused pending a driver consumer.
-This plan is not "not started": its highest-value slices landed
-**opportunistically inside sibling stability plans**, which is exactly how
-program-level fuzzing has proven to get built here — a stability plan pulls in
-the fuzz coverage it needs, rather than this plan driving a standalone 5-arc
-push.  What actually shipped since this plan opened (2026-05-31):
+**HARNESS COMPLETE — merged to `main` 2026-07-09 (PR #542).  `status:parked`
+pending an at-scale driver.**  Arcs F1, F2, and F3 are built and landed; what is
+left is not code to write but fuzz **runs at scale** (env-gated) plus OSS-Fuzz
+onboarding (F5).  [STEPS.md](STEPS.md) is the per-step ledger — read it for the
+exact state of each step.
 
-- **F4 dependency cleared + F4 substantially done** — @PLN25 landed the
-  `LOFT_POISON` arena poison-on-free keystone (@PLN54 S3), and the
-  program-level target below already runs with `poison_free` set on the store
-  arena, so a store-internal stale read is a loud panic, not silent luck.
-- **F2 partially delivered** — @PLN85 built `fuzz/fuzz_targets/program_ownership.rs`:
-  a valid-by-construction, self-checking, **in-process** program-level fuzzer
-  (parse → scopes → bytecode → interpret) over the ownership-composition
-  grammar.  It is the F2 shape, but scoped to the ownership/over-free grammar;
-  it explicitly leaves **keyed containers (`hash`/`sorted`) as a follow-up
-  axis**.
-- **F3 harness delivered (corpus, not fuzzed)** — @PLN89's differential oracle
-  (`tests/differential_oracle.rs`, nightly-gated, now a **3-backend** interp ≡
-  native ≡ wasm check after this cycle's wasm leg) gives F3's differential
-  assertion — but over a **fixed ~29-program corpus**, not coverage-guided
-  fuzzed programs.
+**Built and on `main`:**
 
-**Why park (not close, not push):** no active driver, and the highest-risk
-slice (ownership over-free + poison) is already covered by `program_ownership`.
-But real coverage remains genuinely unbuilt — so this is a *defer*, not a
-close-by-decision.  **Residual, all unstarted:** F1
-(mutational raw-source target seeded from the ~2000 `.loft` files), **F2's
-`hash`/`sorted`/`index` + closure axes** (the schema-coupled collection
-coverage loft's heap model actually wants), F3-over-*fuzzed*-programs, and F5
-(OSS-Fuzz onboarding).
+- **F1 — raw-source fuzzer (F1.0–F1.5).**  `src/fuzz_oracle.rs::classify_source`
+  plus the `program_source` libfuzzer target.  The correctness oracle runs under
+  `cargo test` on stable — the fuzzed code is the tested code, no nightly needed.
+  It already found and fixed F1-1 (a unary-prefix undefined-operand ICE;
+  regression `tests/scripts/535-unary-prefix-undefined-operand.loft`).
+- **F2 — keyed-container generator (F2.0–F2.6).**  `src/fuzz_keyed.rs::generate_keyed`
+  emits valid-by-construction `hash` / `sorted` / `index` programs (plus a closure
+  / overlapping-lifetime axis), each self-checking its collection invariant.  It
+  runs under arena poison (F4) and has a `program_keyed` libfuzzer target.  This is
+  the schema-coupled coverage loft's heap model wants — the axis `program_ownership`
+  (the @PLN85 ownership fuzzer) deliberately left out.
+- **F3 — differential on generated programs (F3.0–F3.2).**  A `cargo test` that
+  runs generated keyed programs on the interpreter and `--native` and compares
+  output, over the deterministic-output subset pinned in
+  [F3-DESIGN.md](F3-DESIGN.md).  This complements @PLN89's fixed-corpus 3-backend
+  oracle (`tests/differential_oracle.rs`, interp ≡ native ≡ wasm) by driving the
+  differential over *generated* programs, not a fixed corpus.
+- **F4 — arena-poison dependency cleared.**  @PLN25 landed the `LOFT_POISON`
+  poison-on-free keystone (@PLN54 S3); the targets run with it, so a store-internal
+  stale read is a loud panic, not silent luck.
+- **F5.0 — OSS-Fuzz precondition gate** (design only).
 
-**Resume trigger — pick this up (→ `status:next`/`active`) when any fires:**
-1. A **schema-coupled collection bug** (a `hash`/`sorted`/`index` UAF or
-   layout violation) surfaces that `program_ownership`'s ownership grammar
-   cannot generate → build **F2's keyed-container axis** then.
-2. **@PLN97's layout contract** wants a fuzzer to prove memory/file-layout
-   invariants across mutated programs → F1/F2 become its instrument.
-3. Appetite for **sustained continuous fuzzing at scale** → F5 (OSS-Fuzz).
+**Residual (running + onboarding, not unstarted code):**
 
-The `fuzz/` cargo-fuzz crate already exists (set up under @PLAN53 Wave 2); the
-remaining arcs add targets to it.  Issue stays **open** at `status:parked`.
+- **Env-gated runs:** an actual coverage-guided `cargo +nightly fuzz run` of
+  `program_source` / `program_keyed` (F1.4 / F2.5) — needs `cargo-fuzz` + nightly —
+  plus the ongoing fix-or-record triage of anything they surface (F1.5 / F2.6).
+- **F5 OSS-Fuzz onboarding (F5.1–F5.3):** the `oss-fuzz/` project skeleton + seed
+  corpus / dictionary, then a PR to `google/oss-fuzz` — needs Docker and is
+  externally reviewed.
+
+**Why still parked:** the harness is done and its in-process oracles run green in
+the suite; the rest needs sustained fuzzing appetite (nightly cycles) or the
+external OSS-Fuzz process, neither of which has an active driver.  Closing at
+"harness complete" — spinning F5 + continuous fuzzing into a follow-up — is a
+reasonable call whenever you want it.
+
+**Resume trigger — move to `status:next`/`active` when any fires:**
+1. A **schema-coupled collection bug** the in-process generators can reach but the
+   suite has not → run F1.4 / F2.5 at scale and triage.
+2. **@PLN97's layout contract** wants a fuzzer to prove memory / file-layout
+   invariants across mutated programs → these generators are its instrument.
+3. Appetite for **sustained continuous fuzzing at scale** → do F5 (OSS-Fuzz).
+
+The `fuzz/` cargo-fuzz crate holds every target — `program_source`, `program_keyed`,
+`program_ownership`, plus the earlier `store_alloc` / `vector_collection`.  Issue
+stays **open** at `status:parked`.
 
 ## Goal
 

@@ -101,20 +101,25 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
 (gate 1) on that foundation — you cannot pin the ownership invariant on a moving value model.
 The two co-evolve at the shared `materialization_mode` chokepoint, with @PLN25 leading. Then
 gate 3 → gates 4–5. Performance (the copy-vs-borrow elision, an @PLN25 sub-thread) is "good
-enough for prototyping" — fold in opportunistically, not a blocker. **Readiness today: gate 2
-is well underway and gate 1 is the one hard problem behind it; the distribution / multi-target
-/ test infrastructure is already release-grade** (4 targets parity-gated, suite green, signed
+enough for prototyping" — fold in opportunistically, not a blocker. **Readiness today (2026-07-09):
+the 2026-07 stability + type-safety release SHIPPED as `2026.7.1`. Gate 2's value model is
+substantially landed — @PLN25 dense vectors + scalars/DN4 merged (#469); DN3, the `not null`
+retirement, and the cleanup remain. Gate 1's tracked store-lifetime bugs are all CLOSED
+(#460 / #461 / #462 / #465, and A1b via @PLN90 #516); the one remaining hard item is the Cluster C
+dispatcher-taxonomy refactor below — forward-risk hardening, not an active bug. The distribution /
+multi-target / test infrastructure is release-grade** (4 targets parity-gated, suite green, signed
 registry, 0 open tracked bugs).
 
 ## The queue
 
 The bug-level stability work — the F-family sweep, the armed-corpus residuals,
 the store-lifetime UAFs *as of that pass*, and the **Pass-2 arity-growth cascade**
-(Reference + Vector/struct-Enum, #355/#356) — is **complete** (see Done below) —
-**EXCEPT the store-lifetime class, which REOPENED 2026-06-21: see
-[§ Red-flag remediation](#red-flag-remediation--the-live-store-lifetime-stream-2026-06-21-) below.
-It, not this H-register, is the live open stability work.** Nothing in the
-H-register queue below is an active failure. What remains *there* is **forward-risk hardening** (the
+(Reference + Vector/struct-Enum, #355/#356) — is **complete** (see Done below). The
+store-lifetime class REOPENED 2026-06-21, but as of 2026-07-09 **all its tracked bugs are CLOSED**
+(see [§ Red-flag remediation](#red-flag-remediation--the-live-store-lifetime-stream-2026-06-21-)
+below); the one remaining item there is the **Cluster C** dispatcher refactor — forward-risk
+hardening, not an active failure. Nothing in the
+H-register queue below is an active failure either. What remains *there* is **forward-risk hardening** (the
 H-register): asserts and tripwires that lock in finished work, then structural
 refactors that retire whole future-bug *classes*. In finishing order:
 
@@ -160,24 +165,24 @@ the design protocol; verify-armed before trusting the armed channel's silence
 
 ## Red-flag remediation — the live store-lifetime stream (2026-06-21 →)
 
-> **The H-register above is the forward-risk hardening (genuinely cleared
-> 2026-06-17). This stream is different and LIVE:** a later cross-cut
-> ([STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md), 2026-06-21) plus the live tracker
-> show the **store-lifetime / return-bind-ownership class is still spawning bugs** —
-> the Cluster A residuals (#426, #429) are both now CLOSED, but the open native issues
-> (#460, #461) are the mixed interpret→native shared-store boundary — store-lifetime is
-> **mid-migration (@PLN85), not complete.**
-> Finishing order:
+> **The H-register above is the forward-risk hardening (cleared 2026-06-17). This stream
+> tracked the store-lifetime / return-bind-ownership class that reopened 2026-06-21**
+> ([STABILITY_REDFLAGS.md](STABILITY_REDFLAGS.md)). **As of 2026-07-09 every tracked bug in it
+> is CLOSED** — the Cluster A residuals (#426, #429), the #462 leak, the native mixed-mode
+> boundary (#460, #461), and the A1b temporary-subject UAF (@PLN90 #516). What remains is **one
+> untracked refactor, not an active bug**: Cluster C, folding the copy / validate / construct
+> claim dispatchers onto the keystone — this retires the densest historical bug cluster *by
+> construction*. Finishing order:
 
 | # | Item | Size | Status |
 |---|---|---|---|
 | **A** | **Cluster A — return/bind ownership** (collapse the per-site ownership re-derivation onto one carried `deps` fact). A.4 / A.3 / A.2-a7 + the native-FFI fixes merged (#423); A.1 part i (free-suppress, return-source SET) + the parser-counter substrate / #426B / #425-sibling / native-leak fixes on `tuxedo-substrate-followup`. **Residuals #426 + #429 both CLOSED** (2026-06-22). #429 (borrowed-view return over-free) landed the borrow-classify in `ref_return` + the nullable-enum copy-bind path in `gen_set_first_at_tos`; regression `tests/scripts/85-store-lifetime-enum-match-borrowed-view-overfree.loft` passes both backends. Cluster A's tracked bugs are done; the remaining ownership-substrate work is Cluster C. | — | ✅ done (residuals closed) |
 | **C** | **Cluster C — per-`Parts` container taxonomy** (copy/remove/validate/construct heap-cascade). `remove_claims` collapsed onto `for_each_owned_child` (C.0–C.3, merged), but **copy / validate / construct still drift** — `copy_claims` split 4 ways, `validate_claims` monolithic, ~53 `Parts::` arms across 3 dispatchers. The densest HISTORICAL bug cluster (@P290 SIGSEGV, @P306/@P318 hash slot-drift, @P309, #260/#330) and the highest-leverage **UN-TRACKED** hotspot. Fix: fold copy/validate/construct onto the keystone. Now H10. | M–L | ⬜ open — the next pass after A |
-| **@PLN87** | **Reference-default `&`-binding semantics** — `&`-to-reassign + the W4 redundant-`&` lint; the OWNERSHIP_MODEL binding rule realized. | M | ⬜ planned ([@PLN87](https://github.com/loft-lang/plans/issues/87), loft2 implements) |
+| **@PLN87** | **Reference-default `&`-binding semantics — DONE.** `&` binds a LIVE REFERENCE to an addressable source (variable / field / element): reads see the source, writes and field/element mutation write through, uniform across scalars and heap. Shipped via PR #436 (the L1–L7 ladder, both backends) + #506 (`&`-write-back to a computed lvalue) + the W4 redundant-`&` lint (#510, on by default). The corrected live-reference model supersedes the original write-back framing; realizes the OWNERSHIP_MODEL binding rule. | M | ✅ done ([@PLN87](https://github.com/loft-lang/plans/issues/87)) |
 | **B** | **Cluster B — stack-delta wrong-signal.** Deferred — unverifiable, no RED probe fires; latent. Pick up only on a real trigger. | — | ⏸ deferred |
-| **462-leak** | **#462 residual store leak** — native-only `MonsterDef×216` **record** leak, the `mon_*` borrowed-view shape (a Cluster-A/C-family borrow over-free, NOT the adopt-and-re-return chain, which is fixed). Reproduces `--native`: `probes/over-free-sweep/P3-monone-cond` `M×36`, `M-462repro` `M×90`; interp clean. [cluster-462 item 5](plans/85-store-lifetime-retirement/cluster-462-slot-reuse-uaf.md). | S–M | ⬜ open |
-| **N** | **Native mixed-mode boundary** — #460 (`--interpret` aborts when a main-program fn is marked for cdylib dispatch with no cdylib built) + #461 (interpret→native shared-store call corrupts a complex nested struct arg). Both sev:high, hit-by:crawler/moros. Could not be cleanly reproduced on 2026-06-26 (cdylibs present masked #460; #461 guard scene too small) — verdict needs a clean-room native build. | M | ⬜ open |
-| **A1b** | **Temporary-subject borrow UAF** — a borrowed return (the match-arm `{ items }`; the struct-field `b.rows` if @PLN90 A2 lands) whose **subject is freed before the result's last use** is a use-after-free. `--native` carries it latently; @PLN90 **A1** (`f70a729d`) fixed the interp *crash* (a gen_if frame bug) but **not** the lifetime hole. Fix = the caller materialises where the subject does not out-live the result (the `deps` decision). [@PLN90 REMAINING.md P0.1](plans/90-copy-diagnostics/REMAINING.md) · [borrow-return/DESIGN.md](plans/90-copy-diagnostics/borrow-return/DESIGN.md). | M | ⬜ open |
+| **462-leak** | **#462 residual store leak — CLOSED (2026-06-26).** The native-only `MonsterDef` record leak (the `mon_*` borrowed-view shape) is fixed and landed; issue #462 closed. | S–M | ✅ done |
+| **N** | **Native mixed-mode boundary — CLOSED (2026-06-27).** #460 (`--interpret` aborts when a main-program fn is marked for cdylib dispatch with no cdylib built) and #461 (interpret→native shared-store call corrupts a complex nested struct arg) are both fixed and landed. | M | ✅ done |
+| **A1b** | **Temporary-subject borrow UAF — FIXED (2026-07-06, default ON, @PLN90 #516).** A borrowed return whose subject is freed before the result's last use is now materialised by the caller so the subject out-lives the result (the `deps` decision), on both backends. | M | ✅ done |
 
 D (typed-null encoders) merged; E (manifestation guards) dissolves behind A. Full
 detail: [STABILITY_REDFLAG_REMEDIATION.md](STABILITY_REDFLAG_REMEDIATION.md),
