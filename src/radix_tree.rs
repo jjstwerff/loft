@@ -96,6 +96,36 @@ pub struct KeySpec {
     pub bits: LenFn,
 }
 
+/// How the tree reads a record's key.  Every `rtree_*` operation is generic over this,
+/// so a caller may key on anything — a fixed `KeySpec` of `fn` pointers (the tests and
+/// `spatial::MORTON2D`), or a value that carries runtime state, such as the list of
+/// coordinate fields a `spacial<T[…]>` schema discovers.  The bound is `Copy`, met by
+/// `KeySpec` and by a shared reference, so the database passes `&its_oracle`.
+pub trait KeyOracle {
+    /// 64 key bits of `rec` starting at bit `word * 64`; see [`WordFn`].
+    fn word(&self, store: &Store, rec: u32, word: u32) -> u64;
+    /// How many bits `rec`'s user key has; see [`LenFn`].
+    fn bits(&self, store: &Store, rec: u32) -> u32;
+}
+
+impl KeyOracle for KeySpec {
+    fn word(&self, store: &Store, rec: u32, word: u32) -> u64 {
+        (self.word)(store, rec, word)
+    }
+    fn bits(&self, store: &Store, rec: u32) -> u32 {
+        (self.bits)(store, rec)
+    }
+}
+
+impl<T: KeyOracle> KeyOracle for &T {
+    fn word(&self, store: &Store, rec: u32, word: u32) -> u64 {
+        (*self).word(store, rec, word)
+    }
+    fn bits(&self, store: &Store, rec: u32) -> u32 {
+        (*self).bits(store, rec)
+    }
+}
+
 /// The zero byte that separates a user key from the id suffix, so a shorter key
 /// sorts before a longer one that extends it.
 const TERM_BITS: u32 = 8;
@@ -576,12 +606,12 @@ where
 /// diverges from the probe at bit `d`: by I2 every record in it agrees with the probe
 /// below `d` and agrees with the candidate *at* `d`.  If the probe has `0` there it
 /// precedes the whole subtree; if `1`, it follows all of it.
-fn seek_inner<P>(
+fn seek_inner<P, K: KeyOracle + Copy>(
     store: &Store,
     tree: u32,
     probe: &P,
     probe_bits: u32,
-    spec: KeySpec,
+    spec: K,
 ) -> (RadixIter, Option<u32>)
 where
     P: Fn(u32) -> u64,
@@ -591,10 +621,10 @@ where
     if cand == 0 {
         return (RadixIter::empty(), None);
     }
-    let cw = |w: u32| (spec.word)(store, cand, w);
+    let cw = |w: u32| spec.word(store, cand, w);
     let kc = View {
         word: cw,
-        bits: (spec.bits)(store, cand),
+        bits: spec.bits(store, cand),
         id: cand,
     };
     let Some((d, probe_bit)) = first_diff(&kp, &kc) else {
@@ -620,12 +650,12 @@ where
 /// Because a probe carries id `0`, seeking a text prefix lands on the first record
 /// bearing that prefix.
 #[must_use]
-pub fn rtree_seek<P>(
+pub fn rtree_seek<P, K: KeyOracle + Copy>(
     store: &Store,
     tree: u32,
     probe: &P,
     probe_bits: u32,
-    spec: KeySpec,
+    spec: K,
 ) -> RadixIter
 where
     P: Fn(u32) -> u64,
@@ -636,14 +666,20 @@ where
 /// Does `rec` carry exactly this user key?  Lets a caller walk a bucket — the
 /// contiguous run of records sharing one key — from [`rtree_seek`].
 #[must_use]
-pub fn rtree_key_eq<P>(store: &Store, rec: u32, probe: &P, probe_bits: u32, spec: KeySpec) -> bool
+pub fn rtree_key_eq<P, K: KeyOracle + Copy>(
+    store: &Store,
+    rec: u32,
+    probe: &P,
+    probe_bits: u32,
+    spec: K,
+) -> bool
 where
     P: Fn(u32) -> u64,
 {
     // Equal lengths mean both views zero-pad identically past the key, so whole words
     // may be compared without masking the tail.
-    (spec.bits)(store, rec) == probe_bits
-        && (0..probe_bits.div_ceil(64)).all(|w| (spec.word)(store, rec, w) == probe(w))
+    spec.bits(store, rec) == probe_bits
+        && (0..probe_bits.div_ceil(64)).all(|w| spec.word(store, rec, w) == probe(w))
 }
 
 /// The first record whose user key equals the probe, or `0` when none does.
@@ -664,7 +700,13 @@ where
 /// holds for `rec`, not just the candidate, because every record in the divergence
 /// subtree agrees below `d` (I2).  No `0x00` assumption is needed.
 #[must_use]
-pub fn rtree_get<P>(store: &Store, tree: u32, probe: &P, probe_bits: u32, spec: KeySpec) -> u32
+pub fn rtree_get<P, K: KeyOracle + Copy>(
+    store: &Store,
+    tree: u32,
+    probe: &P,
+    probe_bits: u32,
+    spec: K,
+) -> u32
 where
     P: Fn(u32) -> u64,
 {
@@ -675,7 +717,7 @@ where
     }
     // `d == None` means the strings are identical — unreachable while ids differ.
     let matched = d.is_none_or(|d| d >= probe_bits);
-    if matched && (spec.bits)(store, rec) == probe_bits {
+    if matched && spec.bits(store, rec) == probe_bits {
         rec
     } else {
         0
@@ -712,7 +754,7 @@ fn straight(store: &Store, tree: u32, dir: bool) -> RadixIter {
 ///
 /// This cannot fail: distinct records always differ somewhere in the key string,
 /// so there is always a bit to split on.
-pub fn rtree_insert(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> u32 {
+pub fn rtree_insert<K: KeyOracle + Copy>(store: &mut Store, tree: u32, rec: u32, spec: K) -> u32 {
     if rtree_len(store, tree) == 0 {
         set_top(store, tree, Child::Rec(rec));
         store.set_u32_raw(tree, LEN, 1);
@@ -722,20 +764,20 @@ pub fn rtree_insert(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> u3
     // Everything the split needs is read before the tree can move.
     let (d, rec_bit, parent, dir, displaced) = {
         let s: &Store = store;
-        let rw = |w: u32| (spec.word)(s, rec, w);
+        let rw = |w: u32| spec.word(s, rec, w);
         let ka = View {
             word: rw,
-            bits: (spec.bits)(s, rec),
+            bits: spec.bits(s, rec),
             id: rec,
         };
         let (cand, _) = descend(s, tree, &ka);
         if cand == rec {
             return tree;
         }
-        let cw = |w: u32| (spec.word)(s, cand, w);
+        let cw = |w: u32| spec.word(s, cand, w);
         let kb = View {
             word: cw,
-            bits: (spec.bits)(s, cand),
+            bits: spec.bits(s, cand),
             id: cand,
         };
         // Unreachable: two distinct records differ in their id suffix.
@@ -754,13 +796,13 @@ pub fn rtree_insert(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> u3
 ///
 /// Splicing the parent out keeps every internal node at exactly two children,
 /// which is what makes `live_nodes == LEN - 1` a total check on the structure.
-pub fn rtree_remove(store: &mut Store, tree: u32, rec: u32, spec: KeySpec) -> bool {
+pub fn rtree_remove<K: KeyOracle + Copy>(store: &mut Store, tree: u32, rec: u32, spec: K) -> bool {
     let (leaf, parent) = {
         let s: &Store = store;
-        let rw = |w: u32| (spec.word)(s, rec, w);
+        let rw = |w: u32| spec.word(s, rec, w);
         let key = View {
             word: rw,
-            bits: (spec.bits)(s, rec),
+            bits: spec.bits(s, rec),
             id: rec,
         };
         descend(s, tree, &key)
@@ -829,16 +871,22 @@ enum Plan {
 /// below `bit(A)`.  So if the new key first leaves the leaf below the finger at bit
 /// `d`, then `bit(A) <= d` says exactly that the new key still belongs under `A` —
 /// climb while `bit(A) > d`, and descend from the first `A` that qualifies.
-fn insert_with_finger(store: &mut Store, tree: u32, rec: u32, spec: KeySpec, finger: u32) -> u32 {
+fn insert_with_finger<K: KeyOracle + Copy>(
+    store: &mut Store,
+    tree: u32,
+    rec: u32,
+    spec: K,
+    finger: u32,
+) -> u32 {
     if rtree_len(store, tree) == 0 || finger == 0 {
         return rtree_insert(store, tree, rec, spec);
     }
     let plan = {
         let s: &Store = store;
-        let rw = |w: u32| (spec.word)(s, rec, w);
+        let rw = |w: u32| spec.word(s, rec, w);
         let ka = View {
             word: rw,
-            bits: (spec.bits)(s, rec),
+            bits: spec.bits(s, rec),
             id: rec,
         };
         let diff_below = |from: u32| -> Option<(u32, bool)> {
@@ -846,10 +894,10 @@ fn insert_with_finger(store: &mut Store, tree: u32, rec: u32, spec: KeySpec, fin
             if cand == rec || cand == 0 {
                 return None;
             }
-            let cw = |w: u32| (spec.word)(s, cand, w);
+            let cw = |w: u32| spec.word(s, cand, w);
             let kb = View {
                 word: cw,
-                bits: (spec.bits)(s, cand),
+                bits: spec.bits(s, cand),
                 id: cand,
             };
             first_diff(&ka, &kb)
@@ -954,16 +1002,22 @@ fn link_split(
 ///
 /// The key must not be read from anywhere but the record, and `mutate` must not touch
 /// the tree.
-pub fn rtree_move<F>(store: &mut Store, tree: u32, rec: u32, spec: KeySpec, mutate: F) -> u32
+pub fn rtree_move<F, K: KeyOracle + Copy>(
+    store: &mut Store,
+    tree: u32,
+    rec: u32,
+    spec: K,
+    mutate: F,
+) -> u32
 where
     F: FnOnce(&mut Store),
 {
     let (leaf, parent) = {
         let s: &Store = store;
-        let rw = |w: u32| (spec.word)(s, rec, w);
+        let rw = |w: u32| spec.word(s, rec, w);
         let key = View {
             word: rw,
-            bits: (spec.bits)(s, rec),
+            bits: spec.bits(s, rec),
             id: rec,
         };
         descend(s, tree, &key)
@@ -1006,11 +1060,11 @@ where
 /// representative on all bits below the child's bit, which strictly exceeds this
 /// node's.
 #[cfg(test)]
-pub fn rtree_validate(store: &Store, tree: u32, spec: KeySpec) {
-    struct Walk<'a> {
+pub fn rtree_validate<K: KeyOracle + Copy>(store: &Store, tree: u32, spec: K) {
+    struct Walk<'a, K: KeyOracle> {
         store: &'a Store,
         tree: u32,
-        spec: KeySpec,
+        spec: K,
         len: u32,
         leaves: u32,
         live: u32,
@@ -1018,7 +1072,7 @@ pub fn rtree_validate(store: &Store, tree: u32, spec: KeySpec) {
         constraints: Vec<(u32, bool)>,
     }
 
-    impl Walk<'_> {
+    impl<K: KeyOracle + Copy> Walk<'_, K> {
         /// Returns a representative leaf from each end of this subtree.
         fn visit(&mut self, cur: Child, parent_bit: Option<u32>, up: u32) -> Option<(u32, u32)> {
             match cur {
@@ -1028,10 +1082,10 @@ pub fn rtree_validate(store: &Store, tree: u32, spec: KeySpec) {
                 }
                 Child::Rec(r) => {
                     self.leaves += 1;
-                    let rw = |w: u32| (self.spec.word)(self.store, r, w);
+                    let rw = |w: u32| self.spec.word(self.store, r, w);
                     let key = View {
                         word: rw,
-                        bits: (self.spec.bits)(self.store, r),
+                        bits: self.spec.bits(self.store, r),
                         id: r,
                     };
                     for &(bit, dir) in &self.constraints {
@@ -1069,18 +1123,18 @@ pub fn rtree_validate(store: &Store, tree: u32, spec: KeySpec) {
                     // so they never needed storing.
                     let from = parent_bit.map_or(0, |pb| pb + 1);
                     let (lw, hw) = (
-                        |w: u32| (self.spec.word)(self.store, lo, w),
-                        |w: u32| (self.spec.word)(self.store, hi, w),
+                        |w: u32| self.spec.word(self.store, lo, w),
+                        |w: u32| self.spec.word(self.store, hi, w),
                     );
                     let (lk, hk) = (
                         View {
                             word: &lw,
-                            bits: (self.spec.bits)(self.store, lo),
+                            bits: self.spec.bits(self.store, lo),
                             id: lo,
                         },
                         View {
                             word: &hw,
-                            bits: (self.spec.bits)(self.store, hi),
+                            bits: self.spec.bits(self.store, hi),
                             id: hi,
                         },
                     );

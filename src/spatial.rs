@@ -102,6 +102,67 @@ fn code_probe(code: u64) -> impl Fn(u32) -> u64 {
     move |word| if word == 0 { code } else { 0 }
 }
 
+/// Scatter the low `bits` of `v` across a `u64` at stride `stride`: bit `i` of `v`
+/// lands at position `i * stride`, leaving the `stride − 1` positions between free
+/// for the other axes.  The bit-at-a-time form here is the runtime counterpart of the
+/// closed-form [`spread`]; for `stride == 2` the two agree exactly.
+fn scatter(v: u32, stride: u32, bits: u32) -> u64 {
+    (0..bits).fold(0u64, |out, i| {
+        out | (u64::from((v >> i) & 1) << (i * stride))
+    })
+}
+
+/// A Morton key assembled at run time from a record's coordinate fields, rather than
+/// from a compile-time [`KeySpec`].
+///
+/// This is the shape `spacial<T[…]>` needs: the interleaved axes are not known when
+/// the code is written, they are the coordinate key fields a schema discovers, so the
+/// oracle must *carry* their byte offsets.  Each axis is a `u32` at the listed offset;
+/// they interleave LSB-aligned, the first axis into bit 0, the next into bit 1, and so
+/// on — so `MortonKey` over `[x, y]` produces exactly [`morton`]`(x, y)`, which `s5`
+/// checks against [`MORTON2D`].
+///
+/// Two axes give 32 bits each (a 64-bit code); three give 21 each (63 bits, one word).
+pub struct MortonKey {
+    offsets: Vec<u32>,
+}
+
+impl MortonKey {
+    /// Key on the `u32` coordinates at these byte offsets, in interleave order.
+    #[must_use]
+    pub fn new(offsets: Vec<u32>) -> MortonKey {
+        assert!(
+            (1..=3).contains(&offsets.len()),
+            "a Morton key interleaves 1–3 axes"
+        );
+        MortonKey { offsets }
+    }
+
+    fn axis_bits(&self) -> u32 {
+        64 / self.offsets.len() as u32
+    }
+}
+
+impl crate::radix_tree::KeyOracle for MortonKey {
+    fn word(&self, store: &Store, rec: u32, word: u32) -> u64 {
+        if word != 0 {
+            return 0;
+        }
+        let stride = self.offsets.len() as u32;
+        let bits = self.axis_bits();
+        self.offsets
+            .iter()
+            .enumerate()
+            .fold(0u64, |code, (axis, &off)| {
+                code | (scatter(coord(store, rec, off), stride, bits) << axis as u32)
+            })
+    }
+
+    fn bits(&self, _store: &Store, _rec: u32) -> u32 {
+        self.axis_bits() * self.offsets.len() as u32
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Building and moving points
 // ---------------------------------------------------------------------------
@@ -468,6 +529,63 @@ mod tests {
     #[allow(clippy::cast_precision_loss)] // counts stay well under 2^52
     fn per_op(d: std::time::Duration, n: usize) -> f64 {
         d.as_secs_f64() * 1e9 / n as f64
+    }
+
+    /// S5 — the runtime key is the compile-time key.
+    ///
+    /// The bridge that unblocks the database: a `spacial<T[…]>` will build a
+    /// [`MortonKey`] from schema-discovered coordinate offsets, not from a fixed
+    /// [`KeySpec`].  This inserts the same points into two trees — one keyed by the
+    /// `fn`-pointer `MORTON2D`, one by a `MortonKey` over the same two offsets — and
+    /// requires byte-identical behaviour: same walk order, same `get`, same length.
+    #[test]
+    fn s5_runtime_morton_key_matches_the_compile_time_one() {
+        use crate::radix_tree::{self as rt, KeyOracle};
+        let key = MortonKey::new(vec![X_OFF, Y_OFF]);
+
+        let mut store = Store::new_in_use(1 << 15);
+        let mut fixed = rt::rtree_init(&mut store, 0);
+        let mut runtime = rt::rtree_init(&mut store, 0);
+        let mut seed = 0x5151_7272_9393_b4b4;
+        let mut recs = Vec::new();
+
+        for _ in 0..500 {
+            let (x, y) = (lcg(&mut seed) % 1000, lcg(&mut seed) % 1000);
+            let rec = store.claim(2);
+            store.set_u32_raw(rec, X_OFF, x);
+            store.set_u32_raw(rec, Y_OFF, y);
+            recs.push(rec);
+            fixed = rt::rtree_insert(&mut store, fixed, rec, MORTON2D);
+            runtime = rt::rtree_insert(&mut store, runtime, rec, &key);
+            // The two must agree at every step, not merely at the end.
+            assert_eq!(rt::rtree_len(&store, fixed), rt::rtree_len(&store, runtime));
+        }
+
+        // Same in-order walk.
+        let (mut a, mut b) = (
+            rt::rtree_first(&store, fixed),
+            rt::rtree_first(&store, runtime),
+        );
+        loop {
+            assert_eq!(a.rec(), b.rec(), "the two keys must walk identically");
+            if a.rec() == 0 {
+                break;
+            }
+            a.next(&store, fixed);
+            b.next(&store, runtime);
+        }
+
+        // Same code for every record, and the same exact lookup.
+        for &rec in &recs {
+            let (x, y) = point(&store, rec);
+            assert_eq!(morton(x, y), key.word(&store, rec, 0), "codes must match");
+            let probe = code_probe(morton(x, y));
+            assert_eq!(
+                rt::rtree_get(&store, runtime, &probe, 64, &key),
+                rt::rtree_get(&store, fixed, &probe, 64, MORTON2D),
+                "get must agree"
+            );
+        }
     }
 
     /// BENCH — the crossover.  A spatial index is not free; at a small field the
