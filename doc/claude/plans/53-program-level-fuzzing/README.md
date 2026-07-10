@@ -5,13 +5,25 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN53 — Program-level fuzzing
 
-## Status
+## Status — CLOSED 2026-07-10 (harness shipped; continuous-fuzzing/OSS-Fuzz decision-deferred)
 
-**HARNESS COMPLETE — merged to `main` 2026-07-09 (PR #542).  `status:parked`
-pending an at-scale driver.**  Arcs F1, F2, and F3 are built and landed; what is
-left is not code to write but fuzz **runs at scale** (env-gated) plus OSS-Fuzz
-onboarding (F5).  [STEPS.md](STEPS.md) is the per-step ledger — read it for the
-exact state of each step.
+The deliverable — a coverage-guided, ASan-instrumented fuzz **harness** over
+`source → parse → byte_code → execute`, plus the schema-coupled keyed-collection
+generator and the interp≡native differential — is **built, merged (#542), and
+green in the suite on both backends**.  Per the plan's own verifiability
+principle each fuzzer is reified as a library function gated by `cargo test`
+("the fuzzed code IS the tested code, no nightly needed"), so the harness needs
+no external driver to be complete and valuable.
+
+The only residual is **not code**: running the built fuzzers at scale
+(`cargo +nightly fuzz run`, F1.4/F2.5 — this box has no nightly/cargo-fuzz) and
+**F5 OSS-Fuzz onboarding** (`oss-fuzz/` skeleton + dictionary + a PR to
+`google/oss-fuzz`, F5.1–F5.3 — Docker + external review, verified absent
+2026-07-10).  Its only resume trigger is *appetite for sustained continuous
+fuzzing* — no concrete external event — so per the plan-workflow it is
+**closed-by-decision**, not deferred.  [F5-DESIGN.md](F5-DESIGN.md) is kept as
+the record; if OSS-Fuzz appetite ever appears, re-open it as its own small plan.
+The finishing PR closes the tracker issue (`Closes @PLN53`).
 
 **Built and on `main`:**
 
@@ -46,13 +58,7 @@ exact state of each step.
   corpus / dictionary, then a PR to `google/oss-fuzz` — needs Docker and is
   externally reviewed.
 
-**Why still parked:** the harness is done and its in-process oracles run green in
-the suite; the rest needs sustained fuzzing appetite (nightly cycles) or the
-external OSS-Fuzz process, neither of which has an active driver.  Closing at
-"harness complete" — spinning F5 + continuous fuzzing into a follow-up — is a
-reasonable call whenever you want it.
-
-**Resume trigger — move to `status:next`/`active` when any fires:**
+**Re-open triggers (as a fresh plan) if any fires:**
 1. A **schema-coupled collection bug** the in-process generators can reach but the
    suite has not → run F1.4 / F2.5 at scale and triage.
 2. **@PLN97's layout contract** wants a fuzzer to prove memory / file-layout
@@ -60,8 +66,7 @@ reasonable call whenever you want it.
 3. Appetite for **sustained continuous fuzzing at scale** → do F5 (OSS-Fuzz).
 
 The `fuzz/` cargo-fuzz crate holds every target — `program_source`, `program_keyed`,
-`program_ownership`, plus the earlier `store_alloc` / `vector_collection`.  Issue
-stays **open** at `status:parked`.
+`program_ownership`, plus the earlier `store_alloc` / `vector_collection`.
 
 ## Goal
 

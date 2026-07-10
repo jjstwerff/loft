@@ -5,6 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN53 — verifiable small steps for the rest of the plan
 
+> **STALE / HISTORICAL (plan CLOSED 2026-07-10).**  **F2 (F2.0–F2.6) and F3
+> (F3.0–F3.2) LANDED in #542** — this ledger predates that merge and still frames
+> them as open design gates; they are DONE (`src/fuzz_keyed.rs::generate_keyed` +
+> the `program_keyed` target; `tests/fuzz_differential.rs`).  The only steps that
+> remain are **F1.4/F2.5** (env-gated at-scale `cargo fuzz run`) and **F5.1–F5.3**
+> (OSS-Fuzz onboarding) — both closed-by-decision (README § Status).  Kept as the
+> per-step design record for a future re-open, not a live TODO list.
+
 Companion to [`README.md`](README.md) (the arc catalogue) and
 [`F1-DESIGN.md`](F1-DESIGN.md) (F1's design gate). This decomposes the **open**
 work — the F1 residual, F2, F3, F5 — into small steps, each with a **local
