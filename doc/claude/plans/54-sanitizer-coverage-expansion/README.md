@@ -5,18 +5,41 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN54 — Sanitizer coverage expansion
 
-## Status
+## Status — CLOSED 2026-07-10 (sanitizer stack shipped; S9 toolchain-blocked, spun out)
 
-**LIVE — real, unstarted, valuable work; NOT parked (ledger reconciled 2026-07-09).**
 Opened 2026-05-31 as the successor to
-[@PLAN53](../finished/53-sanitizer-ci-lever/README.md), which shipped the base
-sanitizer CI stack (Wave 1 + Wave 2 kickoff) and routed program-level fuzzing
-to [@PLN53](../53-program-level-fuzzing/README.md).  This plan owns the
-remaining Wave-2 sanitizer-coverage items that are not fuzzing.  It is the
-**sanitizer half of loft's #1 stability priority** (proving the store/heap
-model sound — the bar that gates crypto trust), so it stays active-able rather
-than deferred.  `status:future` retained only because no slice is in flight
-right now.
+[@PLAN53](../finished/53-sanitizer-ci-lever/README.md) (base sanitizer CI stack,
+Wave 1 + Wave 2 kickoff), owning the Wave-2 sanitizer-coverage items that are not
+fuzzing.  **Eight of nine slices are green on `main`; the ninth is a toolchain
+block, deferred with a one-line reason (the plan's own exit criterion accepts
+that) — so it closes.**
+
+- **✅ DONE on `main`:** S1 (macOS-ARM sanitizer leg) · S2 (TSan, 0 races) ·
+  S3 (`LOFT_POISON` both halves + gate) · S5 (Miri store-unit set + whole-corpus
+  debug-asserts gate) · S6 (native-backend ASan) · S7 (nightly failure notifier).
+- **✅ S4 (LSan → `detect_leaks=1`) — DONE, unblocked by @PLN85.**  S4's blocker
+  was the *"REAL, GROWING production leak"* (a native-`text` result in a user fn's
+  implicit tail-return, never freed).  **@PLN85 closed that class** (the
+  owned-text-return family) and the nightly `asan-leak-gate` in `miri.yml` now runs
+  **`detect_leaks=1` enforcing at baseline 0, green** over the whole corpus +
+  libraries on both backends — S4's exit criterion ("`detect_leaks=1` passes
+  corpus-wide in CI") is met.  (The per-slice notes below predate the fix and still
+  read "gate stays `detect_leaks=0`" — stale.)
+- **⏸ S8 (MSan) — deferred** (needs a fully-instrumented dep closure; low marginal
+  value over Miri + the debug-asserts gate).  Meets the exit criterion (deferred
+  with a one-line reason).
+- **⏭ S9 (mixed-boundary C71 cdylib ASan) — SPUN OUT (toolchain-blocked).**  The
+  ASan-injection mechanism landed (`build_shared_cdylib` + the `LOFT_NATIVE_ASAN`
+  gate); end-to-end is blocked on the **curve25519-proc-macro `E0463`** in the
+  cross-target ASan cdylib build (the host proc-macro is not on the target `-L`) —
+  a *toolchain* limitation, not loft code.  A probe-grounded candidate fix (design
+  in [NATIVE_ASAN_DESIGN.md](NATIVE_ASAN_DESIGN.md) § S9) is unvalidated.  It was
+  routed in from [@PLN11](../11-data-as-store/README.md) N5 (the mixed-boundary
+  soundness A-leg); re-open it there or as its own focused plan when the `E0463`
+  block is cleared.  The C71 cross-boundary surface stays sanitizer-uncovered until
+  then (documented gap, not silent).
+
+The finishing PR closes the tracker issue (`Closes @PLN54`).
 
 **Ledger vs the CI reality (grepped 2026-07-09), highest-value first:**
 
