@@ -5212,17 +5212,12 @@ fn run() -> text {
 
 // ── P22: spacial<T> diagnostic wording (FIXED) ─────────────────────────
 //
-// `spacial<T>` is reserved for the planned 1.1+ ordered-spatial
-// collection.  Today it's not implemented; the parser has a bespoke
-// diagnostic that names the feature, the milestone, and the
-// substitute (`sorted<T>` / `index<T>`) so users who guess the
-// keyword get a useful answer rather than "unknown type".
-//
-// This test guards the wording — the diagnostic must mention BOTH
-// the milestone (so users know when to retry) AND the substitute
-// (so they know what to use today).
+// @PLN48 S2: `spacial<T[x, y]>` now works (the radix tree), so the old
+// "planned 1.1+" gate is gone.  A `spacial<T>` written WITHOUT its coordinate
+// key fields is still an error — a spatial index needs coordinates — with a
+// diagnostic that shows the correct bracket-key syntax.
 #[test]
-fn p22_spacial_diagnostic_names_milestone_and_substitute() {
+fn p22_spacial_without_keys_names_the_bracket_syntax() {
     code!(
         "struct Point { x: float not null, y: float not null }
 struct World { items: spacial<Point> }
@@ -5231,8 +5226,8 @@ fn test() {
 }"
     )
     .error(
-        "spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups \
-at p22_spacial_diagnostic_names_milestone_and_substitute:2:39",
+        "spacial<T[x, y]> needs coordinate key fields, e.g. spacial<Mob[x, y]> \
+at p22_spacial_without_keys_names_the_bracket_syntax:2:39",
     );
 }
 

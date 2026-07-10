@@ -4877,6 +4877,7 @@ impl Data {
             Type::Sorted(_, _, _) => self.source_nr(0, "sorted"),
             Type::Index(_, _, _) => self.source_nr(0, "index"),
             Type::Hash(_, _, _) => self.source_nr(0, "hash"),
+            Type::Radix(_, _, _) => self.source_nr(0, "spacial"),
             // P189: look up the synthetic tuple struct registered by
             // `tuple_def` at parse time.  Returns u32::MAX if the
             // tuple shape was never registered (caller must register

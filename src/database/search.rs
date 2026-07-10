@@ -559,6 +559,10 @@ impl Stores {
                 let keys = self.keys(db).to_vec();
                 tree::remove(data, rec, left, &mut self.allocations, &keys);
             }
+            Parts::Radix(_, _) => {
+                let keys = self.keys(db).to_vec();
+                crate::radix_db::remove(data, rec, &mut self.allocations, &keys);
+            }
             Parts::Base
             | Parts::Struct(_)
             | Parts::Enum(_)
@@ -568,8 +572,7 @@ impl Stores {
             | Parts::ShortRaw(_, _)
             | Parts::Int(_, _)
             | Parts::DbRef
-            | Parts::ChildRec(_)
-            | Parts::Radix(_, _) => panic!(
+            | Parts::ChildRec(_) => panic!(
                 "remove called on non-collection type: {} (db={})",
                 self.types[db as usize].name, db
             ),

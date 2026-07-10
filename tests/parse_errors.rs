@@ -560,25 +560,14 @@ fn test() { assert(compute(5) == 5, \"ok\"); }"
     );
 }
 
+/// @PLN48 S2: `spacial<T[x, y]>` is now a working keyed collection (the radix
+/// tree), so the old "planned for 1.1+" gate is gone.  What remains is the
+/// arity check: a spatial index needs its coordinate key fields, so a bare
+/// `spacial<T>` (no key-spec) is a helpful error rather than a silent empty key.
 #[test]
-fn spacial_not_implemented() {
-    // C7/P22: spacial<T> is a reserved keyword; its diagnostic now
-    // surfaces the 1.1+ timeline so a user who typed it knows when
-    // the feature ships and which substitute to reach for.
-    //
-    // @PLAN52 IV-Radix fix (2026-05-29): use the new bracket-key
-    // syntax `spacial<X[k]>`; the comma-separated form parses with
-    // additional errors after the @PLAN52 fix landed.
-    code!("struct Point { x: integer, y: integer }\nstruct World { pts: spacial<Point[x, y]> }\nfn test() {}")
-        .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented:2:43");
-}
-
-/// C7/P22 regression guard: the diagnostic also fires for a local
-/// variable (not just a struct field) and carries the same hint.
-#[test]
-fn spacial_not_implemented_in_local() {
-    code!("struct Point { x: integer, y: integer }\nfn test() { xs: spacial<Point[x, y]> = []; }")
-        .error("spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups at spacial_not_implemented_in_local:2:39");
+fn spacial_needs_coordinate_keys() {
+    code!("struct Point { x: integer, y: integer }\nfn test() { xs: spacial<Point> = []; }")
+        .error("spacial<T[x, y]> needs coordinate key fields, e.g. spacial<Mob[x, y]> at spacial_needs_coordinate_keys:2:33");
 }
 
 /// F57: write_file on a struct with a collection-type field must produce a compile error.

@@ -117,7 +117,7 @@ fn key_bits(keys: &[Key]) -> u32 {
 /// (the `hash`-bucket convention).  A growing insert can relocate the tree, so the
 /// (possibly new) id is written back.  Two records with the same coordinates both
 /// stay — they differ in the id suffix and land adjacent — which is what lets many
-/// entities share a cell; no dedup here.
+/// entities share a bucket; no dedup here.
 pub fn add(coll: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) {
     let store = keys::mut_store(coll, stores);
     let mut tree = store.get_u32_raw(coll.rec, coll.pos);
@@ -146,6 +146,18 @@ pub fn find(coll: &DbRef, stores: &[Store], keys: &[Key], key: &[Content]) -> Db
         rec,
         pos: PAYLOAD,
     }
+}
+
+/// Unlink element record `rec` from the collection; the caller frees `rec` itself.
+/// `false` if it was not present (the tree removes only the record whose key AND id
+/// match, so a same-bucket sibling is never removed by mistake).
+pub fn remove(coll: &DbRef, rec: &DbRef, stores: &mut [Store], keys: &[Key]) -> bool {
+    let store = keys::mut_store(coll, stores);
+    let tree = store.get_u32_raw(coll.rec, coll.pos);
+    if tree == 0 {
+        return false;
+    }
+    rt::rtree_remove(store, tree, rec.rec, &RadixOracle { keys })
 }
 
 /// Every element record in the collection, in key order.  Key-free (a plain tree
@@ -251,8 +263,8 @@ mod tests {
         assert_eq!(unique.len(), pts.len(), "no record appears twice");
     }
 
-    /// D2 — several records at the *same* cell all stay (no dedup), adjacent in the
-    /// walk: the per-cell bucket @PLN48 needs.
+    /// D2 — several records at the *same* bucket all stay (no dedup), adjacent in the
+    /// walk: the per-bucket bucket @PLN48 needs.
     #[test]
     fn d2_same_cell_keeps_every_record() {
         let mut store = Store::new_in_use(1 << 13);
@@ -266,21 +278,21 @@ mod tests {
 
         // Three entities at (5, 7), plus neighbours either side.
         add_point(&mut store, &coll, &keys, 1, 1);
-        let cell: Vec<u32> = (0..3).map(|_| add_point(&mut store, &coll, &keys, 5, 7)).collect();
+        let bucket: Vec<u32> = (0..3).map(|_| add_point(&mut store, &coll, &keys, 5, 7)).collect();
         add_point(&mut store, &coll, &keys, 9, 9);
 
         let stores = std::slice::from_ref(&store);
         assert_eq!(records(&coll, stores).len(), 5, "no record was dropped");
 
-        // The cell's records are contiguous in the walk.
+        // The bucket's records are contiguous in the walk.
         let walk = records(&coll, stores);
-        let first = walk.iter().position(|r| cell.contains(r)).unwrap();
+        let first = walk.iter().position(|r| bucket.contains(r)).unwrap();
         let run: Vec<u32> = walk[first..first + 3].to_vec();
         let mut got = run.clone();
         got.sort_unstable();
-        let mut want = cell.clone();
+        let mut want = bucket.clone();
         want.sort_unstable();
-        assert_eq!(got, want, "the three same-cell records are one contiguous run");
+        assert_eq!(got, want, "the three same-bucket records are one contiguous run");
     }
 
     /// D3 — the code is order-preserving even across zero: a negative axis must sort

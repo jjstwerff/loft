@@ -2011,31 +2011,30 @@ impl Parser {
                         Type::Sorted(sub_nr, fields, crate::data::Deps::none())
                     }
                     "spacial" => {
-                        // Consume the optional `[field, ...]` key-spec then
-                        // the closing `>` so the parser advances past the
-                        // spacial type even though we reject it.  The
-                        // previous hand-rolled loop
-                        // (`while !has_closing_angle { has_token(","); has_identifier(); }`)
-                        // hung forever on `spacial<X[name]>` because none
-                        // of the lookahead helpers advance on `[` — see
-                        // @PLAN52 cluster-IV-Radix-parser.md.  Match the
-                        // grammar of sorted/hash/index, but allow a bare
-                        // `spacial<T>` (no key-spec) since the diagnostic
-                        // also fires from `tests/issues.rs::p22_*`.
+                        // @PLN48 S2 — `spacial<T[x, y]>` lowers to the shared `Radix`
+                        // runtime kind (RADIX_TREE.md §8.1): the coordinate key fields
+                        // become the Morton-interleaved axes.  Mirrors the `hash` arm;
+                        // a spatial index needs its coordinate keys, so a bare
+                        // `spacial<T>` (no key-spec) is a helpful error rather than a
+                        // silent empty key.
+                        self.has_deprecated_not_null();
                         if self.lexer.peek_token("[") {
                             self.parse_fields(false, &mut fields);
+                            self.data.set_referenced(sub_nr, on_d, Value::Null);
+                            let mut f = Vec::new();
+                            for (field, _) in fields {
+                                f.push(field);
+                            }
+                            Type::Radix(sub_nr, f, crate::data::Deps::none())
                         } else {
                             self.lexer.closing_angle();
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "spacial<T[x, y]> needs coordinate key fields, e.g. spacial<Mob[x, y]>"
+                            );
+                            Type::Unknown(0)
                         }
-                        // Keep the bespoke diagnostic (more helpful than a
-                        // generic "unknown type") and surface the milestone
-                        // so users know when to check back.
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "spacial<T> is planned for 1.1+; until then use sorted<T> or index<T> for ordered lookups"
-                        );
-                        Type::Unknown(0)
                     }
                     "reference" => {
                         self.lexer.closing_angle();

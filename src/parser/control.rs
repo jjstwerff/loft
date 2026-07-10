@@ -4709,7 +4709,8 @@ impl Parser {
             t
         } else if let Type::Sorted(dnr, _, dep)
         | Type::Index(dnr, _, dep)
-        | Type::Hash(dnr, _, dep) = &in_type
+        | Type::Hash(dnr, _, dep)
+        | Type::Radix(dnr, _, dep) = &in_type
         {
             // C60 path 2c piece 2: hash iteration yields `reference<T>`,
             // same shape as Sorted/Index.  This is the parser-side

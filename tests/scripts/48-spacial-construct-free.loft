@@ -1,0 +1,14 @@
+// @PLN48 S2 — a spacial<T[x, y]> collection constructs and frees end-to-end.
+// Interp-only for now (in tests/native.rs SCRIPTS_NATIVE_SKIP): the native
+// IR-schema wiring and full iteration land next.  The runner's leak check is the
+// real assertion here — remove_claims must free the tree + every element record.
+struct SMob { x: integer, y: integer }
+
+fn main() {
+  xs: spacial<SMob[x, y]> = [];
+  xs += [SMob{x: 1, y: 2}];
+  xs += [SMob{x: 3, y: 4}];
+  xs += [SMob{x: 1, y: 2}];   // same cell — both kept
+  print("spacial built and freed\n");
+  // `xs` falls out of scope here; remove_claims frees it with no leak.
+}

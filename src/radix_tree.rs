@@ -1780,8 +1780,10 @@ mod tests {
     fn wide_word(store: &Store, rec: u32, word: u32) -> u64 {
         // Two u64s at fld 4 and fld 12 (a 3-word record): word 0 is the high half.
         match word {
-            0 => store.get_u32_raw(rec, 4) as u64 | (u64::from(store.get_u32_raw(rec, 8)) << 32),
-            1 => store.get_u32_raw(rec, 12) as u64 | (u64::from(store.get_u32_raw(rec, 16)) << 32),
+            0 => u64::from(store.get_u32_raw(rec, 4)) | (u64::from(store.get_u32_raw(rec, 8)) << 32),
+            1 => {
+                u64::from(store.get_u32_raw(rec, 12)) | (u64::from(store.get_u32_raw(rec, 16)) << 32)
+            }
             _ => 0,
         }
     }

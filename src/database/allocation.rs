@@ -5,6 +5,7 @@
 
 use crate::database::{Parts, Stores, WorkerStores};
 use crate::hash;
+use crate::radix_db;
 use crate::keys::DbRef;
 use crate::store::Store;
 use crate::tree;
@@ -225,7 +226,28 @@ impl Stores {
                     }
                 }
             }
-            // Base text leaf, scalars, DbRef, Radix (unsupported): no cascade.
+            Parts::Radix(v, _) => {
+                let v = *v;
+                let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+                if cur != 0 {
+                    // The tree's leaves ARE the element records; walk them key-free
+                    // (`radix_db::records` → `rtree_first`/`next`).  `cur` is the tree
+                    // container — a separate block to free (below).  Mirrors Hash.
+                    for elm in radix_db::records(rec, &self.allocations) {
+                        children.push(OwnedChild {
+                            child: DbRef {
+                                store_nr: rec.store_nr,
+                                rec: elm,
+                                pos: 8,
+                            },
+                            child_tp: v,
+                            owning_elem: Some(elm),
+                        });
+                    }
+                    container_rec = Some(cur);
+                }
+            }
+            // Base text leaf, scalars, DbRef: no cascade.
             _ => {}
         }
         // The value is reached through a heap pointer (zeroed on teardown) for the
@@ -238,6 +260,7 @@ impl Stores {
                 | Parts::Array(_)
                 | Parts::Ordered(_, _)
                 | Parts::Hash(_, _)
+                | Parts::Radix(_, _)
                 | Parts::Index(_, _, _)
                 | Parts::ChildRec(_)
         );
@@ -1616,6 +1639,46 @@ impl Stores {
         }
     }
 
+    /// Deep-copy a `Radix` collection: rebuild the destination tree by re-inserting
+    /// each source element.  A radix tree cannot be byte-copied — node ids and the
+    /// container relocate — so, like `copy_claims_hash_body`, it re-inserts entry by
+    /// entry through the same keystone walk `remove_claims` uses.
+    pub(super) fn copy_claims_radix_body(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
+        // Start the destination as an empty tree; `radix_db::add` claims + grows it.
+        self.store_mut(to).set_u32_raw(to.rec, to.pos, 0);
+        let cur = self.store(rec).get_u32_raw(rec.rec, rec.pos);
+        if cur == 0 {
+            return;
+        }
+        let content_tp = match &self.types[tp as usize].parts {
+            Parts::Radix(c, _) => *c,
+            other => panic!("copy_claims_radix_body called with non-radix type {tp} ({other:?})"),
+        };
+        let size = u32::from(self.size(content_tp));
+        let keys = self.types[tp as usize].keys.clone();
+        for child in self.for_each_owned_child(rec, tp).children {
+            let Some(elm) = child.owning_elem else {
+                continue;
+            };
+            // Element layout (record_new): header, back-pointer at 4, payload at 8.
+            let new = self.store_mut(to).claim(1 + size.div_ceil(8));
+            self.store_mut(to).set_u32_raw(new, 4, to.rec);
+            let src_db = DbRef {
+                store_nr: rec.store_nr,
+                rec: elm,
+                pos: 8,
+            };
+            let new_db = DbRef {
+                store_nr: to.store_nr,
+                rec: new,
+                pos: 8,
+            };
+            self.copy_block(&src_db, &new_db, size);
+            self.copy_claims(&src_db, &new_db, content_tp);
+            radix_db::add(to, &new_db, &mut self.allocations, &keys);
+        }
+    }
+
     /// Collect all record numbers in an RB-tree index by in-order traversal.
     /// `rec` points to the i32 tree-root field; `left` is `self.fields(index_tp)`.
     pub(super) fn collect_index_nodes(&self, rec: &DbRef, left: u16) -> Vec<u32> {
@@ -1803,7 +1866,7 @@ impl Stores {
             Parts::Hash(_, _) => {
                 self.copy_claims_hash_body(rec, to, tp);
             }
-            Parts::Radix(_, _) => panic!("Not implemented"),
+            Parts::Radix(_, _) => self.copy_claims_radix_body(rec, to, tp),
             Parts::Index(_, _, _) => self.copy_claims_index_body(rec, to, tp),
             Parts::Enum(values) => {
                 let e_nr = self.store(rec).get_byte(rec.rec, rec.pos, -1);
@@ -2069,7 +2132,6 @@ impl Stores {
             // `Radix` teardown is unimplemented; the keystone yields nothing for
             // it, so guard explicitly to preserve the loud failure (a silent no-op
             // would leak).
-            Parts::Radix(_, _) => panic!("Not implemented"),
             // Every owned-child cascade kind (Struct/Enum/Vector/Sorted/Array/
             // Ordered/Hash/Index/ChildRec) reads the SINGLE keystone walk: recurse
             // into each child, free the per-element record it lived in (Array/Hash/
@@ -2114,7 +2176,6 @@ impl Stores {
                     None
                 }
             }
-            Parts::Radix(_, _) => None,
             _ => {
                 let walk = self.for_each_owned_child(rec, tp);
                 for c in walk.children {

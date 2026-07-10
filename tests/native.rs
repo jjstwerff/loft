@@ -63,6 +63,10 @@ const NATIVE_SKIP: &[&str] = &[
 
 /// Script files to skip in native mode.
 const SCRIPTS_NATIVE_SKIP: &[&str] = &[
+    // @PLN48 S2 — spacial<T[x, y]> works on the interpreter (construct + free),
+    // but the native IR-schema round-trip for the Radix kind is still WIP
+    // (the content type deserialises as u16::MAX).  Remove when native lands.
+    "48-spacial-construct-free.loft",
     // Struct yields from a generator's LOOP body are interpreter-only for
     // now: the native eager-collect factory cannot preserve per-yield
     // snapshots (values silently alias), so --native rejects the shape with
