@@ -3,11 +3,31 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# NEXT SESSION — drive the CORPUS leakers to 0 (@PLN85, cold start)
+# CORPUS leakers → 0 (@PLN85) — DONE 2026-07-10
 
-Cold-start handoff after the 2026-07-10 session. Read order: this file →
-[`generic-tuple-return-fix.md`](generic-tuple-return-fix.md) (the method that worked) →
-[`skip-free-orphan-class.md`](skip-free-orphan-class.md) →
+> **RESOLVED 2026-07-10.** All 9 gate-identified corpus leakers are Direct-leak=0
+> on BOTH backends; the full `tests/scripts` + `tests/docs` corpus (436 files) and
+> the `lib/` `library_suite` (audience_crystal) are 0; the full test suite (2738)
+> is green; `fmt`/`clippy` clean. The enforcing nightly leak gate
+> (`miri.yml::asan-leak-gate`, scope `--lib --test issues --test wrap --test
+> strings --test frame_vars` + the `tests/scripts`/`tests/docs` per-file scan) is
+> therefore GREEN. Four principled fixes closed the whole `append_text`
+> owned-text-return family; see `leakers.txt` for the fix map and the sections
+> below for the method.
+>
+> **Known follow-up (OUT of leak-gate scope):** `tests/fixtures/libs/web/tests/byte_at.loft`
+> Direct-leaks 1 root via `buf = web::pack_take()` — a NATIVE-EXTENSION interop
+> leak (the loft-level `buf` IS freed; the native `pack_take` return String is
+> orphaned in the bridge), a different subsystem from the codegen text-return
+> class. Pre-existing; the fixture-lib suites (`tests/native`, `tests/leak`) are
+> NOT in the leak-gate's nextest filter, so it does not red the gate. Track
+> separately if a native-extension-interop leak sweep is wanted.
+
+---
+
+Cold-start handoff after the 2026-07-10 session (the original task, now complete).
+Read order: this file → [`generic-tuple-return-fix.md`](generic-tuple-return-fix.md)
+(the method that worked) → [`skip-free-orphan-class.md`](skip-free-orphan-class.md) →
 [`signature-pre-pass-spec.md`](signature-pre-pass-spec.md).
 
 ## THE STATE (don't lose this)

@@ -8,6 +8,48 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 Plan id: [@PLN85](https://github.com/loft-lang/plans/issues/85) · investigation-style
 (reading order: Status → Probes → Cluster docs → Roadmap).
 
+> # Status — CLOSED 2026-07-10 (store-lifetime bug class retired).
+> Every arc of this investigation has shipped: the store-lifetime clusters, the
+> `@PLN54` text-tail-return leak, the write+read / move-on-block-return residuals,
+> and — finally — the CORPUS text-leaker second wave (below). The enforcing
+> nightly leak gate is GREEN (full `tests/scripts` + `tests/docs` corpus + `lib/`
+> `library_suite` Direct-leak=0 on both backends). The cluster docs + `probes/`
+> below stay as the mechanism-understanding record. One out-of-gate-scope
+> follow-up remains (`web/byte_at`, a NATIVE-EXTENSION interop leak, a different
+> subsystem) — see [`NEXT-SESSION-corpus-leakers.md`](NEXT-SESSION-corpus-leakers.md).
+> The finishing PR closes the tracker issue (`Closes @PLN85`).
+
+> ## ✅ CORPUS text-leakers → 0 (2026-07-10) — the enforcing leak gate is GREEN.
+> The second wave the nightly `asan-leak-gate` uncovered (9 `tests/scripts`
+> leakers beyond the issues suite) is CLOSED. All `append_text` owned-text-return
+> orphans on the interpreter; four principled fixes, each proven on a boundary
+> matrix + ASan oracle and graduated to focused regressions in `tests/scripts/`
+> (`85-text-optional-null-return`, `85-ncc-container-text-return`,
+> `85-generic-forward-borrow-text-return`, `85-field-iter-text-payload-free` — plus
+> the 9 real-world corpus leakers themselves), on BOTH backends:
+> 1. **null-text sentinel early return** (`-> text?` with a work-buffer) — the
+>    `return null` hoisted `OpConvTextFromNull()` into an owned skip_free temp; it
+>    is a borrowed static, so return it directly like a text literal (`scopes.rs`
+>    B2 free-safe rule). Fixes `85-text-optional-null-return`.
+> 2. **`??`/ncc over a container** — the coalesce block wraps its selecting `if`,
+>    which `if_tail_yields_text` didn't see through, so the ncc missed the per-arm
+>    `__acc` buffer promotion and orphaned the owned copy (`control.rs`). Fixes
+>    `500`, `155`, `157`, `199`, `repro_p356`.
+> 3. **generic forward-borrow return** — a monomorph returning `x.method()` where
+>    the method borrows `self` keeps the bare declared `text` (the arg-dep the
+>    non-generic derives is lost) → owned copy orphaned. `promote_monomorph_text_return`
+>    now also promotes a `ForwardArg` call tail AND non-tail early returns
+>    (`control.rs`). Fixes `repro_p205`, `86-interfaces`.
+> 4. **`#fields` text payload binding** — the unrolled field-iteration shared ONE
+>    `_mv_<f>` payload binding across clones, freed only at the last (conditional)
+>    use; each field-block now gets its own copy (`collections.rs`). Fixes
+>    `45-field-iter`.
+>
+> Full `tests/scripts` + `tests/docs` corpus (436) and the `lib/` `library_suite`
+> are Direct-leak=0; full suite 2738/2738; fmt/clippy clean. See
+> [`NEXT-SESSION-corpus-leakers.md`](NEXT-SESSION-corpus-leakers.md) for the fix
+> map + the one out-of-gate-scope follow-up (`web/byte_at` native-extension interop).
+
 > ## 🔺 REOPENED then RE-CLOSED (2026-07-09) — two residual clusters fixed.
 > `@PLN47` surfaced residuals the earlier close had missed. Both now FIXED:
 > - **move-on-block-return** — `x = { z = P{…}; z }` borrowed instead of moving

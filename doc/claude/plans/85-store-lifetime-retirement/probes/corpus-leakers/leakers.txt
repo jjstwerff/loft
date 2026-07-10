@@ -1,6 +1,14 @@
-# @PLN85 corpus leakers found by the nightly leak gate (2026-07-10). All are
-# `append_text` (owned text-return) orphans — the same class family the issues-suite
-# fixes closed, surfacing in scripts the issues binary never ran. Drive each to 0.
+# @PLN85 corpus leakers found by the nightly leak gate (2026-07-10). All were
+# `append_text` (owned text-return) orphans on the interpreter (native drops via
+# RAII).  ALL DRIVEN TO 0 on 2026-07-10 — the full tests/scripts + tests/docs
+# corpus (436 files) and the lib/ library_suite are now Direct-leak=0 on both
+# backends.  Kept as the regression list; `run.sh` must report 0 leaking files.
+#
+# fix map (all in this session):
+#   85-text-optional-null-return        null-text sentinel hoist   scopes.rs   (B2 free-safe: return OpConvTextFromNull directly)
+#   500 / 155 / 157 / 199 / repro_p356  `??`/ncc-over-container     control.rs  (if_tail_yields_text sees the ncc/ncr block)
+#   repro_p205 / 86-interfaces          generic fwd-borrow return   control.rs  (promote_monomorph_text_return: ForwardArg + early returns)
+#   45-field-iter                       #fields text payload bind   collections.rs (per-clone `_mv_` binding copy)
 tests/scripts/85-text-optional-null-return.loft
 tests/scripts/500-nested-ncc-optional-text-return.loft
 tests/scripts/199-nwb-text-owned-string.loft

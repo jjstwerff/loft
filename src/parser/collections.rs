@@ -4005,6 +4005,38 @@ use #count instead"
         let mut body = Value::Null;
         self.parse_block("fields", &mut body, &Type::Void);
 
+        // @PLN85 45-field-iter — OWNED-text locals bound in the body (a text
+        // match-payload binding `is FvText { v }`, or a `"{v}"` interpolation
+        // `__work`) are PER-ITERATION temporaries.  The body is parsed ONCE and
+        // cloned per field below, so all clones would share ONE var; the scope
+        // machinery then frees it only at its LAST textual use — which sits inside
+        // a CONDITIONAL match arm — and when the last field doesn't take that arm
+        // the owned copy from an earlier text field orphans on the interpreter
+        // (native RAII-drops it).  Give each field-block its OWN copy so each is
+        // freed at its own block's use, exactly like a real loop's per-iteration
+        // scope.  Identify them as owned-text vars ASSIGNED (`Set`) inside the body
+        // — an outer accumulator (`r += v`) is an `OpAppendText`, not a `Set`, so it
+        // is left shared; a borrow/skip_free binding owns no allocation.
+        let mut set_targets: Vec<u16> = Vec::new();
+        Self::collect_set_targets(&body, &mut set_targets);
+        let owned_text_locals: Vec<u16> = set_targets
+            .into_iter()
+            .filter(|&v| {
+                (v as usize) < self.vars.count() as usize
+                    && matches!(self.vars.tp(v).base(), Type::Text(_))
+                    // OWNED text (empty deps) — a payload-copy binding, not a
+                    // borrow view (a `["mf"]`-typed view owns no allocation).
+                    && self.vars.tp(v).depend().is_empty()
+                    && !self.vars.is_argument(v)
+                    // ONLY the match-payload binding (`_mv_<field>`): its free
+                    // lands at the OUTER last-use (a conditional arm) so it orphans
+                    // across the unroll.  An interpolation `__work` buffer is freed
+                    // per-statement WITHIN its arm already — remapping it splits the
+                    // var away from that free and re-introduces a leak.
+                    && self.vars.name(v).starts_with("_mv_")
+            })
+            .collect();
+
         let num_attrs = self.data.attributes(struct_def_nr);
         let mut blocks: Vec<Value> = Vec::new();
 
@@ -4051,7 +4083,14 @@ use #count instead"
             blocks.push(fv_insert);
             blocks.push(sf_insert);
             blocks.push(v_set(loop_var, Value::Var(sf_work)));
-            blocks.push(body.clone());
+            // Fresh per-field copies of the owned-text bindings so each field-block
+            // frees its own (see `owned_text_locals` above).
+            let mut this_body = body.clone();
+            for &v in &owned_text_locals {
+                let fresh = self.vars.copy_variable(v);
+                Self::remap_var_deep(&mut this_body, v, fresh);
+            }
+            blocks.push(this_body);
         }
         // do NOT call clean_work_refs here.  The unrolled loop
         // creates 2 work-refs per iteration (FvFloat/etc + StructField)
@@ -4068,6 +4107,105 @@ use #count instead"
             *code = Value::Null;
         } else {
             *code = v_block(blocks, Type::Void, "field_iter");
+        }
+    }
+
+    /// Deep-remap every occurrence of var `from` → `to` in `val`, recursing ALL
+    /// container variants (unlike `remap_var_nr`, which only walks
+    /// `Call`/`Set`/`Insert` for flat default-expression trees).  Used by
+    /// `parse_field_iteration` to give each unrolled field-block its own copy of a
+    /// body-local text binding.
+    fn remap_var_deep(val: &mut Value, from: u16, to: u16) {
+        match val {
+            Value::Var(n) if *n == from => *n = to,
+            Value::Set(v, inner) => {
+                if *v == from {
+                    *v = to;
+                }
+                Self::remap_var_deep(inner, from, to);
+            }
+            Value::Call(_, xs)
+            | Value::CallRef(_, xs)
+            | Value::Insert(xs)
+            | Value::Tuple(xs)
+            | Value::Parallel(xs) => {
+                for x in xs {
+                    Self::remap_var_deep(x, from, to);
+                }
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for op in &mut bl.operators {
+                    Self::remap_var_deep(op, from, to);
+                }
+            }
+            Value::If(c, t, e) => {
+                Self::remap_var_deep(c, from, to);
+                Self::remap_var_deep(t, from, to);
+                Self::remap_var_deep(e, from, to);
+            }
+            Value::Return(inner) | Value::Drop(inner) | Value::Yield(inner) => {
+                Self::remap_var_deep(inner, from, to);
+            }
+            Value::BreakWith(_, inner) => Self::remap_var_deep(inner, from, to),
+            Value::Span(b) => Self::remap_var_deep(&mut b.1, from, to),
+            Value::Iter(v, a, b, c) => {
+                if *v == from {
+                    *v = to;
+                }
+                Self::remap_var_deep(a, from, to);
+                Self::remap_var_deep(b, from, to);
+                Self::remap_var_deep(c, from, to);
+            }
+            Value::TupleGet(v, _) => {
+                if *v == from {
+                    *v = to;
+                }
+            }
+            Value::TuplePut(v, _, inner) => {
+                if *v == from {
+                    *v = to;
+                }
+                Self::remap_var_deep(inner, from, to);
+            }
+            _ => {}
+        }
+    }
+
+    /// Collect the var numbers that are the TARGET of a `Set` anywhere in `val`
+    /// (recursing every child).  Used by `parse_field_iteration` to find the
+    /// body-local temporaries an unrolled field-block assigns (and so must own a
+    /// private copy of).  Duplicates are harmless — the caller filters + copies
+    /// each once.
+    fn collect_set_targets(val: &Value, out: &mut Vec<u16>) {
+        match val.unspan() {
+            Value::Set(v, inner) => {
+                if !out.contains(v) {
+                    out.push(*v);
+                }
+                Self::collect_set_targets(inner, out);
+            }
+            Value::Block(bl) => {
+                for op in &bl.operators {
+                    Self::collect_set_targets(op, out);
+                }
+            }
+            Value::Insert(ops) => {
+                for op in ops {
+                    Self::collect_set_targets(op, out);
+                }
+            }
+            Value::If(c, t, e) => {
+                Self::collect_set_targets(c, out);
+                Self::collect_set_targets(t, out);
+                Self::collect_set_targets(e, out);
+            }
+            Value::Return(inner) | Value::Drop(inner) => Self::collect_set_targets(inner, out),
+            Value::Call(_, args) => {
+                for a in args {
+                    Self::collect_set_targets(a, out);
+                }
+            }
+            _ => {}
         }
     }
 
