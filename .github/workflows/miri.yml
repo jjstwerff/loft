@@ -715,7 +715,12 @@ jobs:
   # tracked issue, not seven (and auto-resolves it when the gates go green again).
   notify:
     name: Nightly gate failure → tracked issue
-    needs: [miri, asan, poison, tsan, native-asan, debug-asserts, toolchain-matrix, index-hygiene]
+    # EVERY gate job belongs here — a gate absent from `needs` is invisible to the
+    # check below, and worse, its silence reads as green and AUTO-CLOSES the tracked
+    # issue.  `asan-leak-gate` was added in #544 after this list was written (#539)
+    # and went unwatched.  When you add a gate job, add it here in the same commit.
+    # (Informational-only jobs — `library-health`, `stale-plans-audit` — stay out.)
+    needs: [miri, asan, asan-leak-gate, poison, tsan, native-asan, debug-asserts, toolchain-matrix, index-hygiene]
     if: always()
     runs-on: ubuntu-latest
     permissions:
@@ -729,10 +734,14 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          # Per-JOB conclusions from the needs context — failure OR timed_out counts
-          # (a matrix leg that timed out is a real regression signal).
+          # Per-JOB conclusions from the needs context.  Anything that is not `success`
+          # counts — NOT an allowlist of bad values.  `needs.<job>.result` is one of
+          # success / failure / cancelled / skipped, and a gate that was CANCELLED or
+          # SKIPPED did not prove anything: treating it as green is how a gate stops
+          # gating without ever going red.  Inverting also self-heals if GitHub adds a
+          # result value.  (Every job in `needs` is a gate; informational jobs are excluded.)
           failed=$(printf '%s' "$RESULTS" | jq -r '
-            to_entries[] | select(.value.result=="failure" or .value.result=="timed_out") | .key' \
+            to_entries[] | select(.value.result != "success") | .key' \
             | paste -sd, - || true)
           # Idempotent dedup label; find any OPEN prior issue.
           gh label create nightly-failure --color b60205 \
@@ -747,8 +756,8 @@ jobs:
             fi
             exit 0
           fi
-          echo "::warning::nightly gate(s) failed: $failed"
-          body=$(printf 'Nightly UB/sanitizer gate(s) failed: **%s**\n\nRun: %s\n\nFiled from per-JOB conclusions (the overall run can read green while a matrix leg is red). This issue auto-updates on repeat failures and auto-closes when the gates go green.' "$failed" "$RUN_URL")
+          echo "::warning::nightly gate(s) not green: $failed"
+          body=$(printf 'Nightly UB/sanitizer gate(s) did not pass: **%s**\n\nRun: %s\n\nFiled from per-JOB conclusions — anything that is not `success` counts, including `cancelled` and `skipped` (a gate that did not RUN proved nothing). The overall run can read green while a matrix leg is red. This issue auto-updates on repeat failures and auto-closes when every watched gate is green.' "$failed" "$RUN_URL")
           if [ -n "$existing" ]; then
             gh issue comment "$existing" --body "$body"
             echo "updated existing issue #$existing"
