@@ -2612,33 +2612,34 @@ impl Parser {
                 for l in steps {
                     ls.push(l.clone());
                 }
-            } else if let Type::Integer(spec) = in_t
-                && let Some(n) = spec.vector_narrow_width()
+            } else if let Some((spec, elem_nullable)) = match in_t {
+                Type::Integer(spec) => Some((spec, false)),
+                // @PLN25 item 2: a `vector<u8?>` element is `Optional(Integer)` —
+                // peel it and emit the NULLABLE narrow write so null encodes the
+                // reserved sentinel (a raw `OpSetByte` would store null's low byte
+                // `0`, indistinguishable from the value 0).
+                Type::Optional(inner) => match &**inner {
+                    Type::Integer(spec) => Some((spec, true)),
+                    _ => None,
+                },
+                _ => None,
+            }
+            .filter(|(spec, _)| spec.vector_narrow_width().is_some())
             {
-                // narrow integer element write.
-                // `set_field(ed_nr=INTEGER_DEF, f_nr=usize::MAX, …)`
-                // dispatches through the wide `integer`'s `returned`
-                // type and emits `OpSetInt` (8 bytes).  That works
-                // for `Parts::Byte` / `Parts::Int` by coincidence
-                // (their direct encoding matches the low bytes of a
-                // wide little-endian write), and now works for
-                // `Parts::ShortRaw` (which is also direct).  Emit
-                // the narrow-width opcode directly so writes encode
-                // correctly for all narrow widths — defensive against
-                // future changes where the wide-write coincidence
-                // might break.
+                // narrow integer element write.  Route through the ONE width→op
+                // home (`NarrowIntKind::of`) so the append op is the exact twin of
+                // the index-READ op (`get_val`) for every width and nullability —
+                // `OpSetByte`/`OpSetShortRaw`/`OpSetInt4` for raw elements,
+                // `OpSetByteNullable`/`OpSetShort` for nullable ones.  The fallback
+                // (`n` outside the narrow gate) keeps the wide `set_field` path.
+                let n = spec.vector_narrow_width().unwrap();
+                let kind = crate::data::NarrowIntKind::of(n, elem_nullable, true);
                 let pos = Value::Int(0);
-                let op = match n {
-                    1 => {
-                        let m = Value::Int(spec.min);
-                        self.cl("OpSetByte", &[Value::Var(elm), pos, m, p.clone()])
-                    }
-                    2 => {
-                        let m = Value::Int(spec.min);
-                        self.cl("OpSetShortRaw", &[Value::Var(elm), pos, m, p.clone()])
-                    }
-                    4 => self.cl("OpSetInt4", &[Value::Var(elm), pos, p.clone()]),
-                    _ => self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), p.clone()),
+                let op = if kind.takes_min() {
+                    let m = Value::Int(spec.usable_min(kind.reserves_sentinel()));
+                    self.cl(kind.set_op(), &[Value::Var(elm), pos, m, p.clone()])
+                } else {
+                    self.cl(kind.set_op(), &[Value::Var(elm), pos, p.clone()])
                 };
                 ls.push(op);
             } else if matches!(in_t, Type::Function(_, _, _)) {

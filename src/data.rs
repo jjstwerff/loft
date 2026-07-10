@@ -349,20 +349,33 @@ pub enum NarrowIntKind {
 
 impl NarrowIntKind {
     /// Map a resolved storage `width` (1/2/4/8) to its op kind.  `nullable` = the
-    /// field reserves a null sentinel (a nullable struct field — NOT a
-    /// narrow-vector element); `narrow_vec` = a direct-encoded narrow-vector
-    /// element (raw, no `+1`/sentinel translation).
+    /// slot reserves a null sentinel — a nullable struct field OR a nullable
+    /// narrow-vector element (both encode null the same way).  `narrow_vec` = a
+    /// direct-encoded narrow-vector element, which selects the RAW 2-byte read
+    /// (`ShortRaw`) over the not-null field's full-range read (`ShortFull`) —
+    /// but only when the slot is NOT nullable; a nullable slot always reserves a
+    /// sentinel regardless of field-vs-vector.
     #[must_use]
     pub fn of(width: u8, nullable: bool, narrow_vec: bool) -> Self {
         match width {
-            1 if nullable && !narrow_vec => NarrowIntKind::ByteNullable,
+            1 if nullable => NarrowIntKind::ByteNullable,
             1 => NarrowIntKind::Byte,
-            2 if narrow_vec => NarrowIntKind::ShortRaw,
             2 if nullable => NarrowIntKind::Short,
+            2 if narrow_vec => NarrowIntKind::ShortRaw,
             2 => NarrowIntKind::ShortFull,
             4 => NarrowIntKind::Int4,
             _ => NarrowIntKind::Int,
         }
+    }
+
+    /// True for the kinds that reserve an in-band null sentinel (the `255` byte
+    /// code / the `+1`-shifted short).  The read/write `min` derives from THIS —
+    /// not a re-derived `nullable && !narrow_vec` — so a nullable narrow-vector
+    /// element (also `ByteNullable`/`Short` now) decodes against the same shrunk
+    /// `min` its write encodes with.
+    #[must_use]
+    pub fn reserves_sentinel(self) -> bool {
+        matches!(self, NarrowIntKind::ByteNullable | NarrowIntKind::Short)
     }
 
     /// The `OpGet*` op name for this kind.
@@ -3082,12 +3095,28 @@ impl Data {
         content: &Type,
         database: &mut crate::database::Stores,
     ) -> Option<u16> {
-        if let Type::Integer(spec) = content {
+        // A nullable narrow element (`vector<u8?>`) reserves a null sentinel the
+        // same way a nullable FIELD does — peel the `Optional` and register the
+        // NULLABLE narrow Parts so the element can hold null (@PLN25 item 2).  A
+        // non-nullable `vector<u8>` element stays raw (full range, no sentinel).
+        let narrow = match content {
+            Type::Integer(spec) => Some((spec, false)),
+            Type::Optional(inner) => match &**inner {
+                Type::Integer(spec) => Some((spec, true)),
+                _ => None,
+            },
+            _ => None,
+        };
+        if let Some((spec, nullable)) = narrow {
             let n = spec.vector_narrow_width()?;
             return match n {
-                1 => Some(database.byte(spec.min, false)),
+                1 => Some(database.byte(spec.min, nullable)),
+                // a nullable 2-byte element uses the `+1` sentinel encoding
+                // (`Parts::Short`), matching the nullable field; the non-null
+                // element stays direct (`Parts::ShortRaw`, full 65536 range).
+                2 if nullable => Some(database.short(spec.min, true)),
                 2 => Some(database.short_raw(spec.min, false)),
-                4 => Some(database.int(spec.min, false)),
+                4 => Some(database.int(spec.min, nullable)),
                 _ => None,
             };
         }

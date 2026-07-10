@@ -904,7 +904,11 @@ fn OpGetByte(v1: reference, fld: const u16, min: const i16) -> integer;
 // OpGetByte/OpSetByte when the attribute is nullable; `not null` fields
 // keep the full 256-value range through the raw pair.
 fn OpGetByteNullable(v1: reference, fld: const u16, min: const i16) -> integer;
-#rust"{{let db = @v1; let r = stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min)); if r == i32::from(@min) + 255 {{ i64::MIN }} else {{ i64::from(r) }}}}"
+// The `rec == 0` OOB guard mirrors OpGetByte's #403: an out-of-bounds
+// `vector<u8?/i8?>` element reads the null DbRef (record 0), whose zero byte
+// would decode as the value `min` instead of null.  The byte 255 sentinel is
+// value-ambiguous, so OOB null is detected by `rec == 0`, not by the value.
+#rust"{{let db = @v1; if db.rec == 0 {{ i64::MIN }} else {{ let r = stores.store(&db).get_byte(db.rec, db.pos + u32::from(@fld), i32::from(@min)); if r == i32::from(@min) + 255 {{ i64::MIN }} else {{ i64::from(r) }} }}}}"
 fn OpGetEnum(v1: reference, fld: const u16) -> enumerate;
 // A `rec == 0` ref is the null/absent record — an out-of-bounds vector index
 // (`get_vector` returns `rec: 0`) or an unset slot.  `OpGetInt`/`OpGetCharacter`

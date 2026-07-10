@@ -34,11 +34,41 @@ the `255u8` / `0u16` suffix. Regression: `tests/scripts/25-narrow-nullable-packe
 (byte + short + mixed, both backends). This was separable from items 2–3 and did not need
 the sentinel-encoding redesign.
 
-## 2. MEDIUM — `vector<narrow?>` cannot represent null
+## 2. MEDIUM — `vector<narrow?>` cannot represent null — ✅ FIXED (2026-07-10)
 
-`vector<u8?>` / `vector<u16?>` collapse `null` (and an overflowing `x as u8?`) to `0`:
-the element reads back `0` and `== null` is **false**. A `u8?` **field** uses a reserved
-in-band sentinel and *can* hold null — a vector element cannot.
+**Fix landed.** A `vector<narrow?>` element now carries the SAME reserved sentinel a
+nullable field does, so it holds null across every narrow width (`u8?`/`i8?`/`u16?`/`i16?`/
+`i32?`), on both backends — value, length, OOB-read-null, overflowing `x as u8?`→null, and
+no-regression for non-null `vector<u8>` (255 stays a value). Regression:
+`tests/scripts/25-narrow-nullable-vector-null.loft`; hand-computed boundary matrix +
+prediction in `bytecode-comparisons/vector-narrow-null-prediction.md`.
+
+**Root cause — one missing type-fact, not a storage redesign.** The second probe's
+"read-side-only" hypothesis was wrong: the append stored the *integer* sentinel (low byte 0),
+so a read-only fix read 0≠255. The first probe's 3-piece analysis was right, and it reduced
+to a single fact never threaded to the op selector — the element is DECLARED nullable
+(`Optional`), so its slot reserves a sentinel. The `narrow_vec` flag had been a proxy for
+"raw, no sentinel," neutralised everywhere by `&& !narrow_vec`. The fix threads the real fact:
+1. `data.rs narrow_vector_content` — peel `Optional`, register the NULLABLE narrow Parts
+   (`byte(min,true)` / `short(min,true)` / `int(min,true)`) so the element stores narrow + can
+   hold null (width-2 nullable uses `Parts::Short`'s `+1` sentinel, not `ShortRaw`).
+2. `data.rs NarrowIntKind::of` — a nullable narrow byte/short is `ByteNullable`/`Short`
+   (sentinel) whether field or vector; added `reserves_sentinel()` so the read/write `min`
+   derives from the kind, not a re-computed `nullable && !narrow_vec`.
+3. `fields.rs` index read — pass the element's declared nullability (`Optional`?) to
+   `get_val`, not the hardcoded OOB `true`.
+4. `mod.rs get_val` + `set_field_check` — `min` from `kind.reserves_sentinel()`.
+5. `vectors.rs new_record` — route the narrow element WRITE through `NarrowIntKind` (peel
+   `Optional`) so the append op is the exact twin of the index-read op for every width.
+6. `OpGetByteNullable` (loft-source `#rust` body + `fill.rs` twin) — add the `rec == 0` OOB
+   guard mirroring `OpGetByte`'s `#403` (byte 255 is value-ambiguous, so OOB null keys on the
+   null DbRef; `Short`/`Int4` OOB already worked because record-0's zeros ARE their sentinel).
+
+### Original diagnosis (kept for the record)
+
+`vector<u8?>` / `vector<u16?>` collapsed `null` (and an overflowing `x as u8?`) to `0`:
+the element read back `0` and `== null` was **false**. A `u8?` **field** used a reserved
+in-band sentinel and *could* hold null — a vector element could not.
 
 **Fix direction (maker's call): vectors should carry sentinels too** — give a
 `vector<narrow?>` element the same reserved-sentinel encoding a field has, so an element
@@ -90,8 +120,11 @@ this rides along with them rather than earning its own effort.
 
 ## Relationship
 
-Item 1 was a bounded store-write-width bug, separable and now fixed. **Items 2–3 are the
-remaining deep family** — both want the same thing: a packed narrow-nullable representation
-that reserves a null sentinel *without* stealing an in-range value (item 3) and lets a
-vector element carry it like a field does (item 2). Pick those up as one focused storage
-effort (the A-vs-B decision in RESUME.md's F2 Part-2 note), not piecemeal.
+Items 1 and 2 are fixed. Both turned out to be bounded, separable fixes — NOT the deep
+storage redesign first feared: item 1 a store-write-width bug, item 2 a single missing
+type-fact threaded to the op selector (the reserved-sentinel encoding a field already had,
+extended to the vector element). **Item 3 is the only residual** — a narrow field storing
+its EXTREME value reads back as null (the extreme doubles as the in-band sentinel). Its real
+fix is a wider packed representation that reserves a sentinel *outside* the value range; it is
+low priority (the extreme is rarely the intended payload, behaviour is consistent across
+backends) and stands alone now that item 2 no longer needs it.

@@ -4605,13 +4605,13 @@ impl Parser {
                 // field-sentinel one) — `narrow_vec` selects that.
                 let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
                 if kind.takes_min() {
-                    // H6: a nullable narrow FIELD reserves the all-ones code for
-                    // null, so its usable range (and the `min` the read decodes
-                    // against) shrinks by one edge — `usable_min` is the one home
-                    // shared with the write op + range-check.  Narrow-VECTOR
-                    // elements use the raw path (no field sentinel), so they keep
-                    // the full `min`.
-                    let mn = spec.usable_min(nullable && !narrow_vec);
+                    // H6: a sentinel-reserving kind (`ByteNullable`/`Short` — a
+                    // nullable narrow FIELD *or* vector element) shrinks its usable
+                    // range by one edge, so the read decodes against `usable_min`;
+                    // raw kinds keep the full `min`.  Deriving from the KIND (not a
+                    // re-computed `nullable && !narrow_vec`) keeps this in lockstep
+                    // with the write op's `min`.
+                    let mn = spec.usable_min(kind.reserves_sentinel());
                     self.cl(kind.get_op(), &[code, p, Value::Int(mn)])
                 } else {
                     self.cl(kind.get_op(), &[code, p])
@@ -5111,10 +5111,10 @@ impl Parser {
                 let nullable = f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr);
                 let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
                 // H6: the WRITE op encodes against the same `usable_min` the READ
-                // op (`get_val`) decodes against — a nullable narrow field reserves
-                // the all-ones code for null, shrinking the usable range by one
-                // edge; narrow-VECTOR elements keep the full `min` (raw path).
-                let m = Value::Int(spec.usable_min(nullable && !narrow_vec));
+                // op (`get_val`) decodes against — derived from the KIND so a
+                // sentinel-reserving kind (`ByteNullable`/`Short`) shrinks the
+                // range identically on both sides and raw kinds keep the full `min`.
+                let m = Value::Int(spec.usable_min(kind.reserves_sentinel()));
                 if kind.takes_min() {
                     self.cl(kind.set_op(), &[ref_code, pos_val, m, val_code])
                 } else {
