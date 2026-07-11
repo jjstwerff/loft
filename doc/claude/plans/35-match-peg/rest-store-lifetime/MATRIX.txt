@@ -1,0 +1,36 @@
+probe                            | iV   iL   | nV   nL   | hypo | verdict
+                                 |           |           | hypo | verdict
+---------------------------------|-----------|-----------|------|--------
+a-enum-len                       | ok   ok   | ok   ok   | ok   | OK
+a-enum-pass                      | ok   ok   | ok   ok   | ok   | OK
+a-enum-return                    | ok   ok   | ok   ok   | ok   | OK
+a-enum-unused                    | ok   ok   | ok   ok   | ok   | OK
+a-scalar-len                     | ok   ok   | ok   ok   | ok   | OK
+a-scalar-pass                    | ok   ok   | ok   ok   | ok   | OK
+a-scalar-return                  | ok   ok   | ok   ok   | ok   | OK
+a-scalar-unused                  | ok   ok   | ok   ok   | ok   | OK
+a-struct-len                     | ok   ok   | ok   ok   | ok   | OK
+a-struct-pass                    | ok   ok   | ok   ok   | ok   | OK
+a-struct-return                  | ok   ok   | ok   ok   | ok   | OK
+a-struct-unused                  | ok   ok   | ok   ok   | ok   | OK
+a-text-len                       | ok   ok   | ok   ok   | ok   | OK
+a-text-pass                      | ok   ok   | ok   ok   | ok   | OK
+a-text-return                    | ok   ok   | ok   ok   | ok   | OK
+a-text-unused                    | ok   ok   | ok   ok   | ok   | OK
+b-varhead-escape-enum-used       | ok   ok   | ok   ok   | ok   | OK
+b-varhead-escape-struct-used     | ok   ok   | ok   ok   | ok   | OK
+b-varhead-escape-text-unused     | ok   ok   | ok   ok   | ok   | OK
+b-varhead-escape-text-used       | ok   ok   | ok   ok   | ok   | OK
+b-varhead-return-rest            | ok   ok   | ok   ok   | ok   | OK
+b-varhead-unused-int             | ok   ok   | ok   ok   | ok   | OK
+c-namepat-escape                 | ok   ok   | ok   ok   | ok   | OK
+d-namepat-plus-rest-escape       | ok   ok   | ok   ok   | ok   | OK
+d-nested-match                   | ok   ok   | ok   ok   | ok   | OK
+d-subject-local                  | ok   ok   | ok   ok   | ok   | OK
+d-two-rest-arms                  | ok   ok   | ok   ok   | ok   | OK
+e-empty-heap-vec-match           | ok   ok   | ERR  ok   | ok   | OK
+e-empty-scalar-vec-match         | ok   ok   | ok   ok   | ok   | OK
+---------------------------------|-----------|-----------|------|--------
+mismatches (actual≠hypothesis, or wrong value): 0
+iV/nV = interpret/native VALUE (ok=PASS printed, BAD=wrong/no PASS, ERR=native compile fail)
+iL/nL = interpret/native LEAK (leak=store not freed at exit)

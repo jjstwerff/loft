@@ -1,0 +1,34 @@
+probe                            | leak | pred   | return-type                    | oracle store verdict
+---------------------------------|------|--------|--------------------------------|---------------------
+a-enum-len                       | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-enum-pass                      | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-enum-return                    | ok   | n/a    | –                            | –  ✓
+a-enum-unused                    | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-scalar-len                     | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-scalar-pass                    | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-scalar-return                  | ok   | n/a    | –                            | –  ✓
+a-scalar-unused                  | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-struct-len                     | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-struct-pass                    | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-struct-return                  | ok   | n/a    | –                            | –  ✓
+a-struct-unused                  | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-text-len                       | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-text-pass                      | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+a-text-return                    | ok   | n/a    | –                            | –  ✓
+a-text-unused                    | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+b-varhead-escape-enum-used       | ok   | ok     | NO-hoist                       | alloc-before-free → clean  ✓
+b-varhead-escape-struct-used     | ok   | ok     | NO-hoist                       | alloc-before-free → clean  ✓
+b-varhead-escape-text-unused     | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+b-varhead-escape-text-used       | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+b-varhead-return-rest            | ok   | n/a    | –                            | –  ✓
+b-varhead-unused-int             | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+c-namepat-escape                 | ok   | ok     | NO-hoist                       | alloc-before-free → clean  ✓
+d-namepat-plus-rest-escape       | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+d-nested-match                   | ok   | n/a    | –                            | –  ✓
+d-subject-local                  | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+d-two-rest-arms                  | ok   | ok     | hoists                         | alloc-before-free → clean  ✓
+e-empty-heap-vec-match           | ok   | n/a    | –                            | –  ✓
+e-empty-scalar-vec-match         | ok   | n/a    | –                            | –  ✓
+---------------------------------|------|--------|--------------------------------|---------------------
+oracle prediction matches ground truth: 29   mismatches: 0
+pred = oracle's free/alloc-order leak prediction; leak = interpreter ground-truth leak-check

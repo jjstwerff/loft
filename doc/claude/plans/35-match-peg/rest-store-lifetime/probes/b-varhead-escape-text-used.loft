@@ -1,0 +1,6 @@
+// @DESC captured field + rest into a FORMATTED text (owned, not promoted &text)
+// @EXPECT let3
+// @LEAK ok
+enum Tok { Kw { word: text }, Ident { name: text }, Num { value: integer } }
+fn f(ts: vector<Tok>) -> text { match ts { [Kw { word }, ..rest] => "{word}{len(rest)}", whole => "none" } }
+fn main() { ts = [Kw{word:"let"}, Num{value:1}, Num{value:2}, Num{value:3}]; assert(f(ts) == "let3", "w={f(ts)}"); print("PASS"); }

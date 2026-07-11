@@ -1,0 +1,6 @@
+// @DESC call ..rest fn twice on the same subject (enum)
+// @EXPECT 3
+// @LEAK ok
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+fn f(v: vector<Detail>) -> integer { match v { [h, ..rest] => len(rest), _ => -1 } }
+fn main() { s = [Ship{carrier:"A"}, Pickup{store:2}, Pickup{store:3}, Pickup{store:4}]; a = f(s); b = f(s); assert(a == 3 && b == 3, "reuse: {a},{b}"); print("PASS"); }

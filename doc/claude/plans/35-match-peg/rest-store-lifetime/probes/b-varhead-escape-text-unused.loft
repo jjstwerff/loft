@@ -1,0 +1,6 @@
+// @DESC captured head field escapes (&text), rest unused — sub-class B, FIXED
+// @EXPECT let
+// @LEAK ok
+enum Tok { Kw { word: text }, Ident { name: text }, Num { value: integer } }
+fn f(ts: vector<Tok>) -> text { match ts { [Kw { word }, ..rest] => word, whole => "none" } }
+fn main() { ts = [Kw{word:"let"}, Num{value:1}]; assert(f(ts) == "let", "w={f(ts)}"); print("PASS"); }

@@ -1,0 +1,8 @@
+// @DESC captured field + rest into a struct — sub-class A, FIXED
+// @EXPECT 3
+// @LEAK ok
+enum Tok { Kw { word: text }, Ident { name: text }, Num { value: integer } }
+struct R { name: text, count: integer }
+fn nt(w: vector<Tok>) -> integer { len(w) }
+fn f(ts: vector<Tok>) -> R { match ts { [Kw { word }, ..rest] => R { name: word, count: nt(rest) }, whole => R { name: "x", count: -1 } } }
+fn main() { ts = [Kw{word:"let"}, Num{value:1}, Num{value:2}, Num{value:3}]; assert(f(ts).count == 3, "c={f(ts).count}"); print("PASS"); }

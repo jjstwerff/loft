@@ -1,0 +1,6 @@
+// @DESC [] empty heap vector as a match _ arm (no ..rest)
+// @EXPECT 0
+// @LEAK ok
+struct P { x: integer, y: integer }
+fn pick(n: integer, src: vector<P>) -> vector<P> { match n { 0 => src, _ => [] } }
+fn main() { a = [P{x:1,y:1}]; assert(len(pick(9, a)) == 0, "n={len(pick(9,a))}"); print("PASS"); }

@@ -2047,6 +2047,16 @@ pub fn check(data: &mut Data) {
             free_ref_nr,
             data.def_nr("OpGetField"),
         );
+        // @PLN35 — the `..rest` store-lifetime OBSERVER (reporting only; no IR change).
+        if std::env::var("LOFT_REST_ORACLE").is_ok() {
+            rest_store_oracle(
+                &data.definitions[d_nr as usize].code,
+                &data.definitions[d_nr as usize].variables,
+                free_ref_nr,
+                data.def_nr("OpDatabase"),
+                data.def(d_nr).name(),
+            );
+        }
         if !confined.is_empty() {
             let mut cmap: HashMap<u16, u16> = HashMap::new();
             for (&vdb, &(local, b)) in &confined {
@@ -4618,6 +4628,41 @@ enum RefRhs {
 /// If `op` is a scope-exit free (`OpFreeRef` / `OpFreeText` /
 /// `OpFreeRefIfDistinct`), return the var it frees.  The scopes-side twin of
 /// `pre_eval::free_op_var` (generation is not depended on from here).
+/// @PLN35 sub-class B — insert `frees` into every arm of an `If`/nested tail, just BEFORE
+/// the arm's RESULT value (keeping the result as the tail). Used when a non-hoistable
+/// `&text` return's arm allocates a sibling store: the frees run after the allocation
+/// inside the arm instead of before the whole `return`. A store null on an arm's path
+/// makes its `OpFreeRef` a no-op, so pushing into every arm is safe.
+fn push_frees_into_arms(tail: &mut Value, frees: &[Value]) {
+    match tail {
+        Value::Span(b) => push_frees_into_arms(&mut b.1, frees),
+        Value::If(_, then, els) => {
+            push_frees_into_arms(then, frees);
+            push_frees_into_arms(els, frees);
+        }
+        Value::Block(bl) => {
+            let at = bl.operators.len().saturating_sub(1);
+            for (i, fv) in frees.iter().enumerate() {
+                bl.operators.insert(at + i, fv.clone());
+            }
+        }
+        Value::Insert(ops) => {
+            let at = ops.len().saturating_sub(1);
+            for (i, fv) in frees.iter().enumerate() {
+                ops.insert(at + i, fv.clone());
+            }
+        }
+        leaf => {
+            // A bare result value — wrap `[frees…, value]` in an `Insert` (a flat statement
+            // sequence whose value is its last element).
+            let v = std::mem::replace(leaf, Value::Null);
+            let mut ops: Vec<Value> = frees.to_vec();
+            ops.push(v);
+            *leaf = Value::Insert(ops);
+        }
+    }
+}
+
 fn scope_free_op_var(op: &Value, data: &Data) -> Option<u16> {
     if let Value::Call(d, args) = op.unspan() {
         let name = data.def(*d).name();
@@ -4642,8 +4687,41 @@ impl Scopes {
     ) -> Vec<Value> {
         let mut res = Vec::new();
         let mut ls = Vec::new();
+        let n = block.operators.len();
+        // @PLN35 — the block's RESULT op is the last op that is NOT a scope-exit free.
+        // A value-returning block can end in a free of a block-scoped local that was
+        // materialised inside a branch (e.g. a `..rest` text read-temp, freed at the
+        // common-parent block after the value-producing `if`): that trailing free is not
+        // the block's value.  Hoisting it as the result minted `<int> __ret_N =
+        // OpFreeText(local)` — an empty result on interp and invalid native (`= ;`).  So
+        // when a value-result return-block's LAST op is a scope-free and its real result
+        // is a plain value op (not a nested Block), treat that value op as the result and
+        // run the trailing free(s) AFTER the hoist.  All other blocks keep `n-1`.
+        let result_idx = if is_return
+            && block.result != Type::Void
+            && n > 0
+            && scope_free_op_var(&block.operators[n - 1], data).is_some()
+        {
+            (0..n)
+                .rev()
+                .find(|&i| scope_free_op_var(&block.operators[i], data).is_none())
+                .filter(|&i| !matches!(&block.operators[i], Value::Block(_)))
+                .unwrap_or(n.wrapping_sub(1))
+        } else {
+            n.wrapping_sub(1)
+        };
+        let trailing_frees: Vec<Value> = if n > 0 && result_idx + 1 < n {
+            block.operators[result_idx + 1..].to_vec()
+        } else {
+            Vec::new()
+        };
         for (o_nr, o) in block.operators.iter().enumerate() {
-            if o_nr + 1 == block.operators.len() {
+            if o_nr > result_idx {
+                // A trailing scope-free op (collected into `trailing_frees`); it runs
+                // after the result hoist below, never as the block's value.
+                continue;
+            }
+            if o_nr == result_idx {
                 if let Value::Block(bl) = &block.operators[o_nr] {
                     for v in self.insert_free(bl, free, is_return, data, function) {
                         ls.push(v);
@@ -4706,17 +4784,35 @@ impl Scopes {
                     // (the caller copies bytes immediately on return — the
                     // established `__ret_N` text contract pre_eval/native read).
                     let is_text_result = matches!(block.result.base(), Type::Text(_));
+                    // @PLN35 sub-class A — a heap-record / vector return (a `Reference`
+                    // struct, a struct-`Enum(_, true)`, or a `Vector`) ALSO takes the hoist:
+                    // when the block's tail is an `if`/`match` whose taken arm ALLOCATES a
+                    // sibling store (a `..rest` materialisation's `__vdb`), the un-hoisted
+                    // `frees; return <if>` emits `OpFreeRef(__vdb)` BEFORE the allocation
+                    // inside the return → the store leaks (`ANALYSIS.md`, oracle
+                    // FREE-before-ALLOC). Hoisting to a `__ret` temp runs the allocation
+                    // first. A DbRef `__ret` is native-safe (the `&text` out-buffer is NOT —
+                    // it is excluded above via `tail_needs_eval`).
+                    let is_heap_ref_result = matches!(
+                        block.result.base(),
+                        Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
+                    );
                     let mut hoist_tmp: Option<u16> = None;
                     if is_return
-                        && !free.is_empty()
-                        && (is_value_return_type(&block.result) || is_text_result)
+                        && (!free.is_empty() || !trailing_frees.is_empty())
+                        && (is_value_return_type(&block.result)
+                            || is_text_result
+                            || is_heap_ref_result)
                         && tail_needs_eval
                         && !expr_ends_in_return(o)
                     {
                         self.ret_temp_counter += 1;
                         let name = format!("__ret_{}", self.ret_temp_counter);
                         let tmp = function.add_temp_var(&name, &block.result);
-                        if is_text_result {
+                        // The hoisted value is the RETURN value (transferred to the caller):
+                        // its scope-exit free must NOT fire, else the caller reads a freed
+                        // record. Text already does this; a heap ref/vector needs it too.
+                        if is_text_result || is_heap_ref_result {
                             function.set_skip_free(tmp);
                         }
                         self.var_scope.insert(tmp, self.scope);
@@ -4724,7 +4820,10 @@ impl Scopes {
                         ls.push(v_set(tmp, o.clone()));
                         hoist_tmp = Some(tmp);
                     }
-                    for v in free {
+                    // The block's OWN trailing scope-frees (after the result op) run first,
+                    // then the enclosing scope's `free`; both after the result is hoisted.
+                    let mut ret_frees: Vec<Value> = Vec::new();
+                    for v in trailing_frees.iter().chain(free.iter()) {
                         // A free of a var the RETURNED tail expression still READS
                         // cannot run before it — that is a use-after-free (the
                         // `?? [literal]` return-tail class: interp read the freed
@@ -4744,14 +4843,34 @@ impl Scopes {
                         {
                             continue;
                         }
-                        ls.push(v.clone());
+                        ret_frees.push(v.clone());
                     }
-                    if let Some(tmp) = hoist_tmp {
-                        ls.push(Value::Return(Box::new(Value::Var(tmp))));
-                    } else if is_return {
-                        ls.push(Value::Return(Box::new(o.clone())));
+                    // @PLN35 sub-class B — a NON-hoistable `&text` (RefVar-text) tail whose `If`
+                    // arm ALLOCATES a sibling store: the frees can't run before the return (they
+                    // would precede the arm's `OpDatabase` → the store leaks) and the `&text`
+                    // out-buffer can't hoist (native `Str::new(&local)` dangle, excluded via
+                    // `tail_needs_eval`). Push the frees INTO each arm, just before the arm's
+                    // result, so they run AFTER the allocation and the buffer is yielded raw.
+                    let is_refvar_text = matches!(block.result.base(),
+                        Type::RefVar(inner) if matches!(inner.base(), Type::Text(_)));
+                    if hoist_tmp.is_none()
+                        && is_return
+                        && is_refvar_text
+                        && !ret_frees.is_empty()
+                        && matches!(o.unspan(), Value::If(_, _, _))
+                    {
+                        let mut tail = o.clone();
+                        push_frees_into_arms(&mut tail, &ret_frees);
+                        ls.push(Value::Return(Box::new(tail)));
                     } else {
-                        ls.push(o.clone());
+                        ls.extend(ret_frees);
+                        if let Some(tmp) = hoist_tmp {
+                            ls.push(Value::Return(Box::new(Value::Var(tmp))));
+                        } else if is_return {
+                            ls.push(Value::Return(Box::new(o.clone())));
+                        } else {
+                            ls.push(o.clone());
+                        }
                     }
                 }
             } else {
@@ -6568,6 +6687,171 @@ fn store_dead_after_block(code: &Value, local: u16) -> bool {
 /// (return/yield/break, block-result, tuple/vector element via `guard_escapes`),
 /// loop-internal confinement (per-iteration reuse, not a watermark), and any
 /// store aliased by a variable that outlives block `b`.
+/// @PLN35 `..rest` store-lifetime OBSERVER (reached only via `LOFT_REST_ORACLE`; never
+/// rewrites IR). For every `__vdb` store it re-runs the `store_confinement` gates in
+/// REPORTING mode and prints the verdict — CONFINED to a block, or REJECTED with the
+/// exact gate — so a leak can be attributed to a precise decision (e.g. the ambiguous
+/// dep-backer gate that blocks the escaping-field `..rest` shape). Diagnostic only.
+fn rest_store_oracle(code: &Value, vars: &Function, free_ref_nr: u32, db_nr: u32, fn_name: &str) {
+    let mut any = false;
+    for vdb in 0..vars.count() {
+        if !vars.name(vdb).starts_with("__vdb") {
+            continue;
+        }
+        // Backers: every var whose dep carries this store.
+        let mut backers: Vec<u16> = Vec::new();
+        for v in 0..vars.count() {
+            if vars.tp(v).depend().contains(&vdb) {
+                backers.push(v);
+            }
+        }
+        let user_backers: Vec<u16> = backers
+            .iter()
+            .copied()
+            .filter(|&v| !vars.name(v).starts_with('_'))
+            .collect();
+        let temp_backers: Vec<u16> = backers
+            .iter()
+            .copied()
+            .filter(|&v| vars.name(v).starts_with('_'))
+            .collect();
+        let arg_cap = backers
+            .iter()
+            .any(|&v| vars.is_argument(v) || vars.is_captured(v));
+        if !any {
+            eprintln!("[rest-oracle] fn={fn_name}");
+            any = true;
+        }
+        let bnames: Vec<String> = backers.iter().map(|&v| vars.name(v).to_string()).collect();
+        // Walk the same gate ladder store_confinement uses, but report the stop.
+        let verdict = if arg_cap {
+            "REJECT(arg/captured backer)".to_string()
+        } else if backers.len() > 1 {
+            // The gate that blocks the escaping-field `..rest` shape: the store is
+            // dep-backed by the user vector AND a `_`-temp (`_elm`/`_comp`).
+            format!(
+                "REJECT(ambiguous: {} backers — user={:?} temp={:?})",
+                backers.len(),
+                user_backers
+                    .iter()
+                    .map(|&v| vars.name(v))
+                    .collect::<Vec<_>>(),
+                temp_backers
+                    .iter()
+                    .map(|&v| vars.name(v))
+                    .collect::<Vec<_>>(),
+            )
+        } else if let Some(&local) = backers.first() {
+            if vars.is_skip_free(local) || vars.is_skip_free(vdb) {
+                "REJECT(skip_free — treated as escaping/borrowed)".to_string()
+            } else if guard_escapes(code, local) {
+                "REJECT(escapes: return/yield/break/element)".to_string()
+            } else {
+                let multi_store = vars.tp(local).depend().len() != 1;
+                if multi_store && !confine_reassign_safe(code, local) {
+                    "REJECT(multi-store, reassign-unsafe)".to_string()
+                } else {
+                    let span_target = if multi_store { vdb } else { local };
+                    let mut stack: Vec<(u16, bool)> = Vec::new();
+                    let mut lca: Option<Vec<(u16, bool)>> = None;
+                    guard_refs(code, span_target, free_ref_nr, &mut stack, &mut lca);
+                    match lca {
+                        None => "REJECT(no ref LCA)".to_string(),
+                        Some(path) if path.iter().any(|&(_, is_loop)| is_loop) => {
+                            "REJECT(loop in LCA path — per-iteration reuse)".to_string()
+                        }
+                        Some(path) => match path.last() {
+                            Some(&(b, _)) if vars.scope(vdb) == b => {
+                                format!("already fn/block scope {b} (frees there)")
+                            }
+                            Some(&(b, _)) => format!("CONFINE to block {b}"),
+                            None => "REJECT(empty LCA path)".to_string(),
+                        },
+                    }
+                }
+            }
+        } else {
+            "REJECT(no dep-backer — orphaned store)".to_string()
+        };
+        // THE DIRECT LEAK PREDICTOR (independent of confinement): does OpFreeRef(vdb)
+        // execute BEFORE OpDatabase(vdb)? A value-type return hoists the allocating arm
+        // into a `__ret` temp so the free lands after; a Reference / promoted-&text return
+        // is NOT hoisted, so the free precedes the allocation → the store leaks. Pre-order
+        // index of each op (Return(expr)→[expr], If(c,t,e)→[c,t,e]) approximates exec order.
+        let mut ctr = 0usize;
+        let mut alloc_at: Option<usize> = None;
+        let mut free_at: Option<usize> = None;
+        preorder_op_index(
+            code,
+            vdb,
+            db_nr,
+            free_ref_nr,
+            &mut ctr,
+            &mut alloc_at,
+            &mut free_at,
+        );
+        let order = match (free_at, alloc_at) {
+            (Some(f), Some(a)) if f < a => "FREE-before-ALLOC → LEAKS".to_string(),
+            (Some(_), Some(_)) => "alloc-before-free → clean".to_string(),
+            (Some(_), None) => "free, no alloc (null-only) → n/a".to_string(),
+            (None, Some(_)) => "alloc, no free → LEAKS".to_string(),
+            (None, None) => "neither → n/a".to_string(),
+        };
+        let ret_ty = block_result_type(code);
+        eprintln!(
+            "  store {} scope={} backers={bnames:?} ret={ret_ty} conf={verdict}",
+            vars.name(vdb),
+            vars.scope(vdb),
+        );
+        eprintln!("      free/alloc order: {order}");
+    }
+}
+
+/// Pre-order (execution-approximating) index of the FIRST `OpDatabase(vdb)` and the FIRST
+/// `OpFreeRef(vdb)` in `node`. `Return(expr)` unfolds to its inner (expr evaluates first);
+/// `If(c,t,e)` visits cond then arms. Reporting helper for [`rest_store_oracle`].
+fn preorder_op_index(
+    node: &Value,
+    vdb: u16,
+    db_nr: u32,
+    free_nr: u32,
+    ctr: &mut usize,
+    alloc_at: &mut Option<usize>,
+    free_at: &mut Option<usize>,
+) {
+    *ctr += 1;
+    if let Value::Call(op, args) = node.unspan()
+        && let Some(Value::Var(v)) = args.first().map(Value::unspan)
+        && *v == vdb
+    {
+        if *op == db_nr && alloc_at.is_none() {
+            *alloc_at = Some(*ctr);
+        }
+        if *op == free_nr && free_at.is_none() {
+            *free_at = Some(*ctr);
+        }
+    }
+    node.for_each_child(&mut |c| preorder_op_index(c, vdb, db_nr, free_nr, ctr, alloc_at, free_at));
+}
+
+/// The result `Type` of a function body: the top-level `Block`'s declared result.
+/// Reporting helper (the return type is the free-analysis hoist discriminator).
+fn block_result_type(code: &Value) -> String {
+    match code.unspan() {
+        Value::Block(b) => {
+            // The exact hoist gate the free-analysis (`insert_free`) uses.
+            let hoists =
+                is_value_return_type(&b.result) || matches!(b.result.base(), Type::Text(_));
+            format!(
+                "{:?}{}",
+                b.result,
+                if hoists { " (hoists)" } else { " (NO-hoist)" }
+            )
+        }
+        _ => "<non-block>".to_string(),
+    }
+}
+
 fn store_confinement(
     code: &Value,
     vars: &Function,

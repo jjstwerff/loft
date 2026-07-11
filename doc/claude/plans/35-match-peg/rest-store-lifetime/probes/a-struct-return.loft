@@ -1,0 +1,6 @@
+// @DESC return rest (struct)
+// @EXPECT 3
+// @LEAK ok
+struct P { x: integer, y: integer }
+fn f(v: vector<P>) -> vector<P> { match v { [h, ..rest] => rest, w => w } }
+fn main() { r = f([P{x:1,y:1}, P{x:2,y:2}, P{x:3,y:3}, P{x:4,y:4}]); assert(len(r) == 3, "len={len(r)}"); print("PASS"); }

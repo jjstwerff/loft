@@ -1,0 +1,6 @@
+// @DESC ..rest inside a match returned from an outer match
+// @EXPECT 3
+// @LEAK ok
+fn inner(v: vector<integer>) -> integer { match v { [h, ..r] => len(r), _ => -1 } }
+fn f(n: integer, v: vector<integer>) -> integer { match n { 0 => inner(v), _ => -9 } }
+fn main() { assert(f(0, [1,2,3,4]) == 3, "n={f(0,[1,2,3,4])}"); print("PASS"); }

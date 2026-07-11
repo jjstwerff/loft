@@ -1,0 +1,7 @@
+// @DESC pass rest to a fn (enum)
+// @EXPECT 3
+// @LEAK ok
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+fn nt(w: vector<Detail>) -> integer { len(w) }
+fn f(v: vector<Detail>) -> integer { match v { [h, ..rest] => nt(rest), _ => -1 } }
+fn main() { assert(f([Ship{carrier:"A"}, Pickup{store:2}, Pickup{store:3}, Pickup{store:4}]) == 3, "n={f([Ship{carrier:"A"}, Pickup{store:2}, Pickup{store:3}, Pickup{store:4}])}"); print("PASS"); }

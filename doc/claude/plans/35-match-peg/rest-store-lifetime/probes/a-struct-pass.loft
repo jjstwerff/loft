@@ -1,0 +1,7 @@
+// @DESC pass rest to a fn (struct)
+// @EXPECT 3
+// @LEAK ok
+struct P { x: integer, y: integer }
+fn nt(w: vector<P>) -> integer { len(w) }
+fn f(v: vector<P>) -> integer { match v { [h, ..rest] => nt(rest), _ => -1 } }
+fn main() { assert(f([P{x:1,y:1}, P{x:2,y:2}, P{x:3,y:3}, P{x:4,y:4}]) == 3, "n={f([P{x:1,y:1}, P{x:2,y:2}, P{x:3,y:3}, P{x:4,y:4}])}"); print("PASS"); }

@@ -1,0 +1,7 @@
+// @DESC name:pat ELEMENT capture escapes + ..rest (clean — element, not field)
+// @EXPECT UPS
+// @LEAK ok
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+fn f(ds: vector<Detail>) -> Detail { match ds { [tok:Ship, ..rest] => tok, _ => Pickup { store: -1 } } }
+fn main() { ds = [Ship{carrier:"UPS"}, Pickup{store:1}, Pickup{store:2}];
+  match f(ds) { Ship { carrier } => assert(carrier == "UPS", "c={carrier}"), _ => assert(false, "x") } print("PASS"); }

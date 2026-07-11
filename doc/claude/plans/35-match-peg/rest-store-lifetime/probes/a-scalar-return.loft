@@ -1,0 +1,5 @@
+// @DESC return rest (scalar)
+// @EXPECT 3
+// @LEAK ok
+fn f(v: vector<integer>) -> vector<integer> { match v { [h, ..rest] => rest, w => w } }
+fn main() { r = f([10, 20, 30, 40]); assert(len(r) == 3, "len={len(r)}"); print("PASS"); }

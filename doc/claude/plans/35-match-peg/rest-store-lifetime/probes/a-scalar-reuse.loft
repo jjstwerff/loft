@@ -1,0 +1,5 @@
+// @DESC call ..rest fn twice on the same subject (scalar)
+// @EXPECT 3
+// @LEAK ok
+fn f(v: vector<integer>) -> integer { match v { [h, ..rest] => len(rest), _ => -1 } }
+fn main() { s = [10, 20, 30, 40]; a = f(s); b = f(s); assert(a == 3 && b == 3, "reuse: {a},{b}"); print("PASS"); }

@@ -1,0 +1,6 @@
+// @DESC variant head capture unused, return rest vector
+// @EXPECT 3
+// @LEAK ok
+enum Tok { Kw { word: text }, Ident { name: text }, Num { value: integer } }
+fn f(ts: vector<Tok>) -> vector<Tok> { match ts { [Kw { word }, ..rest] => rest, whole => whole } }
+fn main() { ts = [Kw{word:"let"}, Num{value:1}, Num{value:2}, Num{value:3}]; assert(len(f(ts)) == 3, "n={len(f(ts))}"); print("PASS"); }

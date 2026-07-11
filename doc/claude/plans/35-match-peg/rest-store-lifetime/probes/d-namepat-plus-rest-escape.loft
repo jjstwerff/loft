@@ -1,0 +1,6 @@
+// @DESC name:pat head + ..rest, name escapes as text — sub-class B, FIXED
+// @EXPECT hi
+// @LEAK ok
+enum Tok { Kw { word: text }, Ident { name: text }, Num { value: integer } }
+fn f(ts: vector<Tok>) -> text { match ts { [k:Kw { word }, ..rest] => word, whole => "none" } }
+fn main() { ts = [Kw{word:"hi"}, Num{value:1}, Num{value:2}]; assert(f(ts) == "hi", "r={f(ts)}"); print("PASS"); }

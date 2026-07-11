@@ -1,0 +1,6 @@
+// @DESC subject is a local
+// @EXPECT 3
+// @LEAK ok
+enum Tok { Kw { word: text }, Ident { name: text }, Num { value: integer } }
+fn f() -> text { ts = [Kw{word:"hi"}, Num{value:1}, Num{value:2}, Num{value:3}]; match ts { [Kw { word }, ..rest] => "{word}{len(rest)}", whole => "none" } }
+fn main() { assert(f() == "hi3", "r={f()}"); print("PASS"); }

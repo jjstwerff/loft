@@ -1,0 +1,5 @@
+// @DESC rest materialised but unused (text)
+// @EXPECT 42
+// @LEAK ok
+fn f(v: vector<text>) -> integer { match v { [h, ..rest] => 42, _ => -1 } }
+fn main() { assert(f(["a", "b", "c", "d"]) == 42, "n={f(["a", "b", "c", "d"])}"); print("PASS"); }
