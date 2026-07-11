@@ -3785,6 +3785,118 @@ impl Parser {
         self.get_field(td, usize::MAX, get)
     }
 
+    /// @PLN35 — materialise a named `..rest` sub-slice `v[lo .. hi]` into a FRESH independent
+    /// `vector<T>` (`rest_var`), by reusing the proven compile-time slice-materialise path
+    /// (`materialize_iterator` over a minimal index-range `Iter`).  `lo`/`hi` are `Value`s: a
+    /// compile-time `Int(head_len)` / `len − tail_len` for a fixed-arity slice, or a runtime
+    /// cursor `Var(pos)` / `len` once a variable-width alternation determines the head width
+    /// (Phase 4.3 step 5).  Reads from the subject SOURCE var `v` (not the `_match_subj` copy),
+    /// matching the `x = v[lo..hi]` path.  Pushes the materialisation into `bindings`.
+    #[allow(clippy::too_many_arguments)]
+    fn materialize_named_rest(
+        &mut self,
+        v: u16,
+        elm_tp: &Type,
+        elm_size: &Value,
+        rest_var: u16,
+        vec_tp: &Type,
+        lo_val: Value,
+        hi_val: Value,
+        bindings: &mut Vec<Value>,
+    ) {
+        let lo_slot = self.create_unique("rest_lo", &I32);
+        let hi_slot = self.create_unique("rest_hi", &I32);
+        let idx = self.create_unique("rest_idx", &I32);
+        let null_idx = self.null(&I32);
+        let init = Value::Insert(vec![
+            v_set(lo_slot, lo_val),
+            v_set(hi_slot, hi_val),
+            v_set(idx, null_idx),
+        ]);
+        // index step: `idx = !idx ? lo : idx + 1 ; if hi <= idx break ; idx`
+        let bump = self.conv_op(
+            "+",
+            Value::Var(idx),
+            Value::Int(1),
+            I32.clone(),
+            I32.clone(),
+        );
+        let not_idx = self.single_op("!", Value::Var(idx), I32.clone());
+        let advance = v_set(idx, v_if(not_idx, Value::Var(lo_slot), bump));
+        let past_end = self.conv_op(
+            "<=",
+            Value::Var(hi_slot),
+            Value::Var(idx),
+            I32.clone(),
+            I32.clone(),
+        );
+        let brk = v_if(past_end, Value::Break(0), Value::Null);
+        let idx_block = v_block(
+            vec![advance, brk, Value::Var(idx)],
+            I32.clone(),
+            "Iter range",
+        );
+        // Element read must match the slice-subscript builder in `fields.rs`
+        // (`parse_vector_index`): a linked struct derefs its record pointer, a
+        // base/primitive wraps with `get_val` (e.g. `OpGetInt`/`OpGetText`), a
+        // tuple unboxes, and an inline struct stays the RAW record DbRef so
+        // `materialize_iterator`'s `OpCopyRecord` deep-copies it.
+        let elm_type_def = match self.data.type_elm(elm_tp) {
+            u32::MAX => self.data.source_nr(0, "reference"),
+            e => e,
+        };
+        let known = self.data.def(elm_type_def).known_type();
+        let elm_read = if self.database.is_linked(known) {
+            self.cl("OpVectorRefNullable", &[Value::Var(v), idx_block])
+        } else {
+            let mut r = self.cl(
+                "OpGetVectorNullable",
+                &[Value::Var(v), elm_size.clone(), idx_block],
+            );
+            if self.database.is_base(known) {
+                r = self.get_val(elm_tp, matches!(elm_tp, Type::Optional(_)), 0, r, u32::MAX);
+            } else if let Type::Tuple(elems) = elm_tp {
+                let elems = elems.clone();
+                r = self.unbox_tuple_from_dbref(r, &elems);
+            }
+            r
+        };
+        let next = v_block(vec![elm_read], elm_tp.clone(), "Vector Index");
+        let mut mat = Value::Iter(
+            u16::MAX,
+            Box::new(init),
+            Box::new(next),
+            Box::new(Value::Null),
+        );
+        // A VIEW-read element type (a DbRef INTO the subject) needs a borrow dep on the transient
+        // per-iteration read temp so the free-analysis frees each read once (via the copy source),
+        // not double-freeing the subject; text/scalar take NO dep (owned copy / no DbRef).
+        let elm_borrowed = match elm_tp {
+            Type::Reference(td, _) => Type::Reference(*td, Deps::frame1(v)),
+            Type::Vector(it, _) => Type::Vector(it.clone(), Deps::frame1(v)),
+            Type::Enum(td, su, _) => Type::Enum(*td, *su, Deps::frame1(v)),
+            other => other.clone(),
+        };
+        let iter_tp = Type::Iterator(Box::new(elm_borrowed), Box::new(Type::Null));
+        self.materialize_iterator(
+            &mut mat,
+            &iter_tp,
+            &Value::Var(rest_var),
+            vec_tp,
+            rest_var,
+            "=",
+        );
+        // `rest`'s elements are deep-copied (OpCopyRecord) into its own store — INDEPENDENT of the
+        // subject — so reset the ELEMENT type to the clean `elm_tp` while PRESERVING `rest`'s
+        // vector-level deps (the fresh-store dep `materialize_iterator` set); leaving the element
+        // borrow-dep would make the analysis treat `rest` as borrowing the subject → a leak.
+        if let Type::Vector(_, vdeps) = self.vars.tp(rest_var).clone() {
+            self.vars
+                .set_type(rest_var, Type::Vector(Box::new(elm_tp.clone()), vdeps));
+        }
+        bindings.push(mat);
+    }
+
     /// @PLN35 Phase 4.3 — lexical lookahead (no parser side effects) at a `(` in a slice
     /// pattern: does the FIRST alternation branch consume MORE THAN ONE element?  A
     /// single-element branch is `Variant [::Variant] [{ … }]` immediately followed by `|` or
@@ -4051,13 +4163,36 @@ impl Parser {
             }
         }
 
-        // Step 5 (deferred): `..rest` from the runtime `pos` = the matched branch's width.
-        if has_rest && !self.first_pass {
-            diagnostic!(
-                self.lexer,
-                Level::Error,
-                "a `..rest` after a multi-element alternation is Phase 4.3 step 5 (not yet built)"
-            );
+        // Step 5: `..rest` picks up after WHICHEVER branch matched.  The runtime cursor
+        // `pos` = the matched branch's width (the pos-advance the contract calls for — here it
+        // only moves forward, never reverts, because a tag branch is a pure test).  `rest`
+        // materialises `v[pos .. len]` from that cursor via the shared `materialize_named_rest`.
+        if let Some(name) = rest_name {
+            let pos_var = self.create_unique("alt_pos", &I32);
+            self.vars.defined(pos_var);
+            // pos = if b0 { w0 } else if b1 { w1 } … else 0 (0 unreachable — cond already gated).
+            let mut pos_acc = Value::Int(0);
+            for (i, bc) in branch_conds.iter().enumerate().rev() {
+                pos_acc = v_if(bc.clone(), Value::Int(branches[i].len() as i32), pos_acc);
+            }
+            bindings.push(v_set(pos_var, pos_acc));
+
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
+            let rest_var = self.vars.add_variable(&name, &vec_tp, &mut self.lexer);
+            self.vars.defined(rest_var);
+            if !self.first_pass && rest_var != u16::MAX {
+                let hi_val = self.cl("OpLengthVector", &[Value::Var(v)]);
+                self.materialize_named_rest(
+                    v,
+                    elm_tp,
+                    elm_size,
+                    rest_var,
+                    &vec_tp,
+                    Value::Var(pos_var),
+                    hi_val,
+                    bindings,
+                );
+            }
         }
     }
 
@@ -5133,11 +5268,6 @@ impl Parser {
                         self.vars.defined(rest_var);
                         if !self.first_pass && rest_var != u16::MAX {
                             let lo_val = Value::Int(head.len() as i32);
-                            // Read the sub-slice from the subject's SOURCE var (the parameter/local
-                            // being matched), not the internal `_match_subj` copy — the copy is a
-                            // borrowed view whose per-element reads the free-analysis would double-free
-                            // (it frees the view AND the deep-copy source). Reading the source directly
-                            // matches the proven `x = v[lo..hi]` path (which reads its parameter).
                             let len_c = self.cl("OpLengthVector", &[Value::Var(v)]);
                             let hi_val = self.conv_op(
                                 "-",
@@ -5146,120 +5276,16 @@ impl Parser {
                                 I32.clone(),
                                 I32.clone(),
                             );
-                            let lo_slot = self.create_unique("rest_lo", &I32);
-                            let hi_slot = self.create_unique("rest_hi", &I32);
-                            let idx = self.create_unique("rest_idx", &I32);
-                            let null_idx = self.null(&I32);
-                            let init = Value::Insert(vec![
-                                v_set(lo_slot, lo_val),
-                                v_set(hi_slot, hi_val),
-                                v_set(idx, null_idx),
-                            ]);
-                            // index step: `idx = !idx ? lo : idx + 1 ; if hi <= idx break ; idx`
-                            let bump = self.conv_op(
-                                "+",
-                                Value::Var(idx),
-                                Value::Int(1),
-                                I32.clone(),
-                                I32.clone(),
-                            );
-                            let not_idx = self.single_op("!", Value::Var(idx), I32.clone());
-                            let advance = v_set(idx, v_if(not_idx, Value::Var(lo_slot), bump));
-                            let past_end = self.conv_op(
-                                "<=",
-                                Value::Var(hi_slot),
-                                Value::Var(idx),
-                                I32.clone(),
-                                I32.clone(),
-                            );
-                            let brk = v_if(past_end, Value::Break(0), Value::Null);
-                            let idx_block = v_block(
-                                vec![advance, brk, Value::Var(idx)],
-                                I32.clone(),
-                                "Iter range",
-                            );
-                            // Element read must match the slice-subscript builder in `fields.rs`
-                            // (`parse_vector_index`): a linked struct derefs its record pointer, a
-                            // base/primitive wraps with `get_val` (e.g. `OpGetInt`/`OpGetText`), a
-                            // tuple unboxes, and an inline struct stays the RAW record DbRef so
-                            // `materialize_iterator`'s `OpCopyRecord` deep-copies it (using the wrong
-                            // read — a `get_field` field-fetch — aliases the subject on the heap path).
-                            let elm_type_def = match self.data.type_elm(&elm_tp) {
-                                u32::MAX => self.data.source_nr(0, "reference"),
-                                e => e,
-                            };
-                            let known = self.data.def(elm_type_def).known_type();
-                            let elm_read = if self.database.is_linked(known) {
-                                self.cl("OpVectorRefNullable", &[Value::Var(v), idx_block])
-                            } else {
-                                let mut r = self.cl(
-                                    "OpGetVectorNullable",
-                                    &[Value::Var(v), elm_size.clone(), idx_block],
-                                );
-                                if self.database.is_base(known) {
-                                    r = self.get_val(
-                                        &elm_tp,
-                                        matches!(elm_tp, Type::Optional(_)),
-                                        0,
-                                        r,
-                                        u32::MAX,
-                                    );
-                                } else if let Type::Tuple(elems) = &elm_tp {
-                                    let elems = elems.clone();
-                                    r = self.unbox_tuple_from_dbref(r, &elems);
-                                }
-                                r
-                            };
-                            let next = v_block(vec![elm_read], elm_tp.clone(), "Vector Index");
-                            let mut mat = Value::Iter(
-                                u16::MAX,
-                                Box::new(init),
-                                Box::new(next),
-                                Box::new(Value::Null),
-                            );
-                            // For a VIEW-read element type (a DbRef INTO the subject: struct /
-                            // vector / struct-enum) the iterator's element type must borrow the
-                            // subject, so the transient per-iteration read temp (`slice_elm` in
-                            // `materialize_iterator`) inherits the dep and the free-analysis treats
-                            // each read as a view — freed once via the copy source, not double-freed.
-                            // This mirrors the `["v"]` dep the real `v[lo..hi]` subscript carries. A
-                            // `text` element is an OWNED copy (`OpGetText`) and a scalar holds no
-                            // DbRef, so both take NO dep — giving text a borrow dep makes the analysis
-                            // free its owned content early (an empty `rest` when it is used in-arm).
-                            let elm_borrowed = match &elm_tp {
-                                Type::Reference(td, _) => Type::Reference(*td, Deps::frame1(v)),
-                                Type::Vector(it, _) => Type::Vector(it.clone(), Deps::frame1(v)),
-                                Type::Enum(td, su, _) => Type::Enum(*td, *su, Deps::frame1(v)),
-                                other => other.clone(),
-                            };
-                            let iter_tp =
-                                Type::Iterator(Box::new(elm_borrowed), Box::new(Type::Null));
-                            self.materialize_iterator(
-                                &mut mat,
-                                &iter_tp,
-                                &Value::Var(rest_var),
-                                &vec_tp,
+                            self.materialize_named_rest(
+                                v,
+                                &elm_tp,
+                                &elm_size,
                                 rest_var,
-                                "=",
+                                &vec_tp,
+                                lo_val,
+                                hi_val,
+                                &mut bindings,
                             );
-                            // The borrow dep was needed on the transient read temp (a view of the
-                            // subject, so the free-analysis frees each read once via the copy source
-                            // rather than double-freeing the subject).  `materialize_iterator` derived
-                            // `rest`'s ELEMENT type from that same borrowed iterator element, which is
-                            // wrong for `rest`: its elements are deep-copied (OpCopyRecord) into its own
-                            // store — INDEPENDENT of the subject.  Leaving the element borrow-dep on
-                            // `rest` makes the analysis treat `rest` as borrowing the subject, so a match
-                            // arm that captures a subject view AND returns it (`[K { w }, ..r] => E { name: w }`)
-                            // suppresses the subject's free → leak.  Reset the ELEMENT type to the clean
-                            // `elm_tp` while PRESERVING `rest`'s vector-level deps (its fresh-store
-                            // dependency `materialize_iterator` set — dropping that gave an empty `len`).
-                            if let Type::Vector(_, vdeps) = self.vars.tp(rest_var).clone() {
-                                self.vars.set_type(
-                                    rest_var,
-                                    Type::Vector(Box::new(elm_tp.clone()), vdeps),
-                                );
-                            }
-                            bindings.push(mat);
                         }
                     }
                 } // end `if !multi_alt`
