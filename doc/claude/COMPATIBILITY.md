@@ -199,6 +199,23 @@ correctness is contract-keying — the owner compels no one and still breaks no 
 the *published* ecosystem; a private artifact its user vendored is held by that user and is carried
 by leg 3 alone.)
 
+**Leg 2 is active work, not passive storage.** "Host forever" is *enforced* by an automated
+compatibility gate at submission (arc B-registry, `pr-validate`) — this is the real cost of the
+promise on our side. Each new library version is checked against the last accepted one on two axes:
+
+- **API verification** — the public surface must be an additive **superset**; a removed or changed
+  public symbol / signature is a contract break.
+- **Old-tests regression** — the previous version's own test suite must still pass against the new
+  implementation; a failure is a break. (As strong as the library's tests + declared surface — the
+  gate cannot see behaviour the author never pinned.)
+
+On a clean submission the new version supersedes as a compatible successor. **On a detected break the
+old version is preserved *first* — snapshot its API/test baseline, keep it hosted — before the new
+version is accepted as a distinct, opt-in breaking version.** So a consumer pinned to the old version
+always keeps a working copy, and the break becomes a *choice*, never a surprise. This holds library
+authors to the *same* never-break discipline loft holds for itself: the gate catches the break
+automatically, instead of asking every author to be careful.
+
 ## The `contract` integer under this promise
 
 Because forward-compatibility is now **guaranteed**, the `contract` version is simpler than
