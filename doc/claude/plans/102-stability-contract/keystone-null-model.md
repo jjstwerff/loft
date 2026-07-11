@@ -17,8 +17,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > operand as null definitely — `null == null` true, `!=` its exact complement, null orders low —
 > matching integer/char, verified on both backends; guard
 > `tests/scripts/pln102-null-comparison-uniform.loft`; the conversion set (docs/tests on the old
-> `x != x` NaN idiom → `== null`) migrated in the same change. **Next: step 3** (guard the
-> collision sites, D-op-null-2), then 4–5.
+> `x != x` NaN idiom → `== null`) migrated in the same change. ✅ **Step 3a — shift collisions
+> guarded:** `1 << 63`/`1 << 100`/`1 << -1` now report + null (like `÷0`, new `ShiftOutOfRange`),
+> not silently masked/nulled; both backends, zero conversion set, guard
+> `pln102-shift-collision-guard.loft`. **Next: step 3b** (the CAST collision sites), then 4–5.
 
 ## The invariant we must be able to state (and today cannot)
 
@@ -145,8 +147,11 @@ rewrite.**
    (single source → both backends via `fill.rs` regen); guard
    `tests/scripts/pln102-null-comparison-uniform.loft`; conversion set (5 sites on the old `x != x`
    idiom) migrated. *(2026-07-10; D-op-null-1 closed.)*
-3. **Guard the collision sites → fault** (the error-audit adds): overflow/shift-OOR/text→int/
-   float→int/int→char producing the sentinel value. *(ops.rs; conversion set ~0.)*
+3. **Guard the collision sites → report + null (like `÷0`)** so a real value never silently
+   becomes null. ✅ **3a — shifts done** (OOR amount / left-result == sentinel → `ShiftOutOfRange`,
+   both backends, zero conversion set). ⬜ **3b — casts** (`float as integer` OOR, `int as
+   character` invalid, `text as integer` of `i64::MIN`) — report-like-`÷0` vs DN4 checked-nullable;
+   decide then guard. *(default/01_code.loft `#rust` bodies; conversion set ~0.)*
 4. **Honest nullable return types** where a fault is reachable (`find`/`min_of` → `τ?`), so the
    silent-non-null-typed-but-actually-null cases go away. *(stdlib signatures + the lib-audit
    keystone rows; conversion set = callers of those fns.)*

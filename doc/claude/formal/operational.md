@@ -184,15 +184,18 @@ closes with keystone step 3 —
 
 ### D-op-null-2 — a computation whose true result is the reserved pattern nulls SILENTLY
 - **Violates:** the `(E-Null)` intent that no real value is silently confused with null.
-- **Where:** `src/ops.rs` shift/bitwise and the `as`/parse casts — `1 << 63`, `abs(i64::MIN)`,
-  `"-9223372036854775808" as integer`, `1e30 as integer`, `1 << 100` — produce the reserved
-  bit-pattern (or saturate) with no report, so a value the user did not intend as null becomes
-  null (or a plausible-wrong finite value) silently.
-- **Effect:** the silent-wrong class the compat promise forbids; frozen if not fixed. (Distinct
-  from C85 *overflow* of ordinary arithmetic, which is a decided edge — see the keystone doc for
-  the fault-vs-report choice at these specific collision sites.)
-- **Close:** step 3 of the keystone — guard the collision sites (fault, or report like `÷0`) so
-  the null is loud, not silent. Conversion set ~0.
+- **Where:** the `as`/parse casts — `"-9223372036854775808" as integer`, `1e30 as integer`,
+  `999999999 as character` — saturate or produce the reserved pattern with no report, so a value
+  the user did not intend as null becomes null (or a plausible-wrong finite value) silently.
+  (Distinct from C85 *overflow* of ordinary arithmetic, which is a decided edge and stays silent.)
+- **✅ SHIFT half closed (keystone step 3a, 2026-07-10):** `OpSLeftInt`/`OpSRightInt` now
+  report + null + continue (like `÷0`, new `ShiftOutOfRange` kind) when the amount is outside
+  `[0, 64)` or a left shift lands on the `i64::MIN` sentinel (`1 << 63`) — loud, not a silent mask
+  or null; null operands stay contagious. Both backends; guard
+  `tests/scripts/pln102-shift-collision-guard.loft`; zero conversion set.
+- **Remaining (step 3b):** the CAST collision sites (`float as integer` out-of-range,
+  `int as character` invalid codepoint, `text as integer` of `i64::MIN`) — decide report-like-`÷0`
+  vs the DN4-style checked-nullable-cast model, then guard. Conversion set ~0.
 
 ### D-op-1 — there is no shared operational semantics; the interpreter is the spec
 - **Violates:** the premise of this doc (a single evaluation relation both backends obey)

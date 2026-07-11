@@ -619,14 +619,34 @@ fn eor_int(s: &mut State) {
 fn s_left_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_shift_left_int(v_v1, v_v2);
+    let new_value = if v_v1 == i64::MIN || v_v2 == i64::MIN {
+        i64::MIN
+    } else if !(0..64).contains(&v_v2) {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange);
+        i64::MIN
+    } else {
+        let r = ops::op_shift_left_int(v_v1, v_v2);
+        if r == i64::MIN {
+            s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange);
+            i64::MIN
+        } else {
+            r
+        }
+    };
     s.put_stack(new_value);
 }
 
 fn s_right_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_shift_right_int(v_v1, v_v2);
+    let new_value = if v_v1 == i64::MIN || v_v2 == i64::MIN {
+        i64::MIN
+    } else if !(0..64).contains(&v_v2) {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange);
+        i64::MIN
+    } else {
+        ops::op_shift_right_int(v_v1, v_v2)
+    };
     s.put_stack(new_value);
 }
 

@@ -192,9 +192,9 @@ fn OpLorInt(v1: integer, v2: integer) -> integer;
 fn OpEorInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_exclusive_or_int(@v1, @v2)"
 fn OpSLeftInt(v1: integer, v2: integer) -> integer;
-#rust"ops::op_shift_left_int(@v1, @v2)"
+#rust"if @v1 == i64::MIN || @v2 == i64::MIN {{ i64::MIN }} else if !(0..64).contains(&@v2) {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange); i64::MIN }} else {{ let r = ops::op_shift_left_int(@v1, @v2); if r == i64::MIN {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange); i64::MIN }} else {{ r }} }}"
 fn OpSRightInt(v1: integer, v2: integer) -> integer;
-#rust"ops::op_shift_right_int(@v1, @v2)"
+#rust"if @v1 == i64::MIN || @v2 == i64::MIN {{ i64::MIN }} else if !(0..64).contains(&@v2) {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange); i64::MIN }} else {{ ops::op_shift_right_int(@v1, @v2) }}"
 fn OpEqInt(v1: integer, v2: integer) -> boolean;
 #rust"@v1 == @v2"
 fn OpNeInt(v1: integer, v2: integer) -> boolean;

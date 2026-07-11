@@ -294,7 +294,8 @@ impl Logger {
             | Rk::IndexOutOfBounds { .. }
             | Rk::NegativeIndex { .. }
             | Rk::NullDereference
-            | Rk::NarrowCastOverflow { .. } => Severity::Warn,
+            | Rk::NarrowCastOverflow { .. }
+            | Rk::ShiftOutOfRange => Severity::Warn,
         };
         let label = kind.label();
         let detail = kind.describe();
