@@ -216,6 +216,34 @@ always keeps a working copy, and the break becomes a *choice*, never a surprise.
 authors to the *same* never-break discipline loft holds for itself: the gate catches the break
 automatically, instead of asking every author to be careful.
 
+**And the gate must *own* its baseline, not borrow the author's.** Even the two checks above are not
+enough, because the author's tests are the *floor*, not the reference: they may be weak, incomplete,
+or weakened over time, so a gate that only re-runs what the author shipped is only as honest as the
+author's diligence. So at submission the registry does two more things:
+
+- **Verify, don't trust** — run the library itself in a sandbox, on every target, and record the
+  result. A claimed pass is not a pass; the registry produces the pass.
+- **Store more than the author made** — capture and keep the registry's OWN compatibility baseline:
+  a behavioural / characterization snapshot + the pinned API surface, **and the built cross-target
+  artifacts** (interpret / native / wasm / html). Future never-break checks reference *that*, not the
+  author's current tests. This is durable two ways: against a later-weakened test suite (the baseline
+  is ours, frozen at acceptance), and against **toolchain drift** — an old library stays runnable
+  because its *built* forms are preserved, not only its source, so a future loft that can no longer
+  rebuild it from source can still serve what was verified working.
+
+This is the deeper cost of the promise: verification infrastructure (a sandboxed, all-target runner)
+plus storage *richer than the submission* — the registry keeps more than any author ever made.
+
+**So admission is a validation *pass*, not a fully automatic gate.** The automation does the
+mechanical work — the API diff, the sandboxed all-target run, the baseline capture — but it only
+verifies what is mechanically checkable. Whether the captured baseline *adequately pins* the
+library's contract (a *passing* test suite is not a *sufficient* one), whether the code is
+trustworthy to serve forever, and whether the perpetual host-verify-serve commitment is worth taking
+on at all — these are judgments. So the registry is **curated**: automation prepares the evidence, a
+human makes the acceptance decision. Admitting a library into the never-break guarantee is a
+deliberate act — because acceptance, like every addition under this promise, is permanent (the same
+ratchet as loft's own surface).
+
 ## The `contract` integer under this promise
 
 Because forward-compatibility is now **guaranteed**, the `contract` version is simpler than
