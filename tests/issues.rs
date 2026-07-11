@@ -16061,7 +16061,11 @@ fn pln102_boolean_integer_comparison_rejected() {
     for stmt in bad {
         let mut p = Parser::new();
         p.parse_dir("default", true, false).unwrap();
-        p.parse_str(&format!("fn main() {{\n  {stmt}\n}}"), "pln102_bool_int", false);
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n}}"),
+            "pln102_bool_int",
+            false,
+        );
         assert!(
             p.diagnostics
                 .lines()
@@ -16080,7 +16084,11 @@ fn pln102_boolean_integer_comparison_rejected() {
     for stmt in ok {
         let mut p = Parser::new();
         p.parse_dir("default", true, false).unwrap();
-        p.parse_str(&format!("fn main() {{\n  {stmt}\n}}"), "pln102_bool_int_ok", false);
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n}}"),
+            "pln102_bool_int_ok",
+            false,
+        );
         assert!(
             p.diagnostics.level() < loft::diagnostics::Level::Error,
             "expected `{stmt}` to compile clean, got: {:?}",
