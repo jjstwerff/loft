@@ -6230,7 +6230,13 @@ impl Parser {
         // Re-read `name : rule` (the peek reverted); then require it be the whole pattern.
         self.lexer.has_identifier(); // name
         self.lexer.token(":");
+        // @PLN35 PC3 — record the sub-rule edge (enclosing rule -> invoked rule) at the invocation
+        // site, so the post-parse termination pass can reject a left-recursive cycle.
+        let site = self.lexer.peek().position.clone();
         self.lexer.has_identifier(); // rule
+        if !self.first_pass && self.context != u32::MAX {
+            self.subrule_edges.push((self.context, fn_nr, site));
+        }
         if !self.first_pass && !self.lexer.peek_token("]") {
             diagnostic!(
                 self.lexer,
@@ -6269,6 +6275,95 @@ impl Parser {
             Some(existing) => Some(v_if(existing, present, Value::Boolean(false))),
             None => Some(present),
         };
+    }
+
+    /// @PLN35 PC3 — well-formedness / termination pass over the sub-rule invocation graph.  Every
+    /// PC2 invocation `[ name: rule ]` is a WHOLE pattern, so the sub-rule runs at cursor position 0
+    /// (nothing consumed before it) and its call is hoisted unconditionally — a CYCLE therefore
+    /// recurses forever (no base-case arm can intervene).  Reject any cycle at compile time as left
+    /// recursion, naming the path.  Runs post-parse over the edges recorded on pass 2.
+    pub(crate) fn check_subrule_termination(&mut self) {
+        // Drain the edges so a re-parse (REPL / multiple files) starts fresh.
+        let edges = std::mem::take(&mut self.subrule_edges);
+        if edges.is_empty() {
+            return;
+        }
+        let mut adj: std::collections::HashMap<u32, Vec<(u32, crate::lexer::Position)>> =
+            std::collections::HashMap::new();
+        for (from, to, pos) in &edges {
+            adj.entry(*from).or_default().push((*to, pos.clone()));
+        }
+        for (site, cycle) in Self::find_subrule_cycles(&adj) {
+            let path = cycle
+                .iter()
+                .map(|nr| Self::rule_display_name(&self.data, *nr))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            let head = Self::rule_display_name(&self.data, cycle[0]);
+            diagnostic_at!(
+                self.lexer,
+                &site,
+                Level::Error,
+                "sub-rule `{head}` is left-recursive ({path}): a cursor `match` invokes a sub-rule \
+                 before consuming any input, so this cycle would recurse forever"
+            );
+        }
+    }
+
+    /// The user-facing name of a rule fn (`n_expr` -> `expr`).
+    fn rule_display_name(data: &crate::data::Data, nr: u32) -> String {
+        let n = data.def(nr).name();
+        n.strip_prefix("n_").unwrap_or(n).to_string()
+    }
+
+    /// DFS the sub-rule graph; return one `(site, cycle-path)` per distinct back-edge.  `cycle` is
+    /// the closed node sequence `callee … node callee`; `site` the invocation position closing it.
+    /// Nodes visited in sorted order for a deterministic report.
+    fn find_subrule_cycles(
+        adj: &std::collections::HashMap<u32, Vec<(u32, crate::lexer::Position)>>,
+    ) -> Vec<(crate::lexer::Position, Vec<u32>)> {
+        let mut color: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+        let mut reported: HashSet<(u32, u32)> = HashSet::new();
+        let mut out: Vec<(crate::lexer::Position, Vec<u32>)> = Vec::new();
+        let mut nodes: Vec<u32> = adj.keys().copied().collect();
+        nodes.sort_unstable();
+        for start in nodes {
+            if color.get(&start).copied().unwrap_or(0) == 0 {
+                Self::dfs_subrule(start, adj, &mut color, &mut Vec::new(), &mut reported, &mut out);
+            }
+        }
+        out
+    }
+
+    fn dfs_subrule(
+        node: u32,
+        adj: &std::collections::HashMap<u32, Vec<(u32, crate::lexer::Position)>>,
+        color: &mut std::collections::HashMap<u32, u8>,
+        path: &mut Vec<u32>,
+        reported: &mut HashSet<(u32, u32)>,
+        out: &mut Vec<(crate::lexer::Position, Vec<u32>)>,
+    ) {
+        color.insert(node, 1); // gray = on the current DFS path
+        path.push(node);
+        if let Some(edges) = adj.get(&node) {
+            for (callee, pos) in edges {
+                match color.get(callee).copied().unwrap_or(0) {
+                    1 => {
+                        // back-edge into a node on the path — a cycle
+                        if reported.insert((node, *callee)) {
+                            let idx = path.iter().position(|x| x == callee).unwrap_or(0);
+                            let mut cycle = path[idx..].to_vec();
+                            cycle.push(*callee);
+                            out.push((pos.clone(), cycle));
+                        }
+                    }
+                    0 => Self::dfs_subrule(*callee, adj, color, path, reported, out),
+                    _ => {}
+                }
+            }
+        }
+        path.pop();
+        color.insert(node, 2); // black = fully explored
     }
 
     fn parse_vector_match(

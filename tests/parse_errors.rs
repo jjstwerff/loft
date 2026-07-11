@@ -1804,6 +1804,15 @@ fn subrule_mixing_deferred() {
         .error("a sub-rule element `e: rule` must currently be the whole slice pattern (mixing a sub-rule with fixed elements is deferred to a follow-up) at subrule_mixing_deferred:5:51");
 }
 
+// @PLN35 PC3 — a left-recursive sub-rule grammar (a cycle in the invocation graph) is a COMPILE
+// error, not a runtime hang: every cursor sub-rule invocation is at position 0, so a cycle cannot
+// consume and would recurse forever.
+#[test]
+fn subrule_left_recursion() {
+    code!("enum Tok { Num { x: integer } }\nstruct Cur { src: vector<Tok>, pos: integer }\nstruct N { v: integer }\nfn expr(c: Cur) -> N { match c { [ Num { x } ] => N { v: x }, [ e: expr ] => e, _ => null } }\nfn f(c: Cur) -> integer { r = match c { [ x: expr ] => x.v, _ => -1 }; r }")
+        .error("sub-rule `expr` is left-recursive (expr -> expr): a cursor `match` invokes a sub-rule before consuming any input, so this cycle would recurse forever at subrule_left_recursion:4:68");
+}
+
 // A user type may be named `T` (a name the stdlib uses as a generic type variable):
 // verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
 // The fix keys vector types by their element (not by a display name two distinct

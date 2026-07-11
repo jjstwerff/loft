@@ -250,9 +250,25 @@ cursor threading + the fail-jump (reuse the P4 backtracking jump).
 the sub-rule; a sub-rule that fails mid-arm reverts the cursor and the arm fails/falls through. Both
 backends; nested/recursive rules (expr→term→factor→expr-in-parens) terminate.
 
-### PC3 — Termination / well-formedness pass (§4.1)
+### PC3 — Termination / well-formedness pass (§4.1) — **DONE (cycle detection), both backends**
 
-**Goal.** A left-recursive or empty-looping grammar is a **compile error**, not a runtime hang.
+**Landed.** PC2 records a sub-rule edge `(enclosing_rule → invoked_rule, site)` on pass 2
+(`subrule_edges`); a post-parse pass (`check_subrule_termination`, run from both `parse` and
+`parse_str`) builds the graph and rejects any CYCLE as left recursion, naming the path (`sub-rule
+`expr` is left-recursive (expr -> term -> expr): …`).  For the current surface this is exactly right
+and complete: every PC2 invocation `[ name: rule ]` is a WHOLE pattern, so the sub-rule runs at
+cursor position 0 (nothing consumed) and its call is hoisted unconditionally — so ANY cycle recurses
+forever (no base-case arm can intervene; confirmed — a self-recursive rule blows the stack at 10k+
+frames without the guard).  Detection is a 3-colour DFS (`find_subrule_cycles`), deterministic node
+order, one report per back-edge; the diagnostic points at the invocation site.  Guard
+`parse_errors::subrule_left_recursion` + `pc3-*` probes (self-rec + mutual A→B→A rejected; acyclic
+DAG wrap→leaf compiles + runs both backends).  **When mixing lands (PC2 follow-up)** a consuming edge
+becomes possible, so the min-consumption refinement (reject only cycles with no intervening consume;
+non-consuming `*`/`+`; opaque sub-rule under `*`/`+`) is the future extension — today all edges are
+non-consuming, so reject-all-cycles is both sound and not over-restrictive (no terminating cycle is
+expressible yet).
+
+**Original goal.** A left-recursive or empty-looping grammar is a **compile error**, not a runtime hang.
 **Design.** After two-pass parsing, walk the sub-rule graph; compute min-consumption; reject
 left-recursion + non-consuming `*`/`+`; refuse opaque sub-rules under `*`/`+`.
 **Code points.** A new well-formedness analysis (new module under `src/parser/`, run post-parse over

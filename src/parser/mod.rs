@@ -287,6 +287,11 @@ pub struct Parser {
     /// len`, not `len == fixed`) and advances `cursor.pos` by the consumed count on a match.  `None`
     /// = a plain vector/stream match (whole-consume) — the default, so those paths are unchanged.
     pub(crate) match_cursor: Option<(u16, u32, usize, u16)>,
+    /// @PLN35 PC3 — sub-rule invocation edges `(enclosing_rule, invoked_rule, site)` recorded on
+    /// pass 2, so a post-parse well-formedness pass can reject a left-recursive grammar (a cycle in
+    /// this graph) at compile time rather than hang at runtime.  Every PC2 invocation is at cursor
+    /// position 0 (whole-pattern), so any cycle is non-consuming — it cannot terminate.
+    pub(crate) subrule_edges: Vec<(u32, u32, Position)>,
     vars: Function,
     /// Last seen line inside the source code, an increase inserts it in the internal code.
     line: u32,
@@ -643,6 +648,7 @@ impl Parser {
             last_range_from: None,
             last_range_till: None,
             match_cursor: None,
+            subrule_edges: Vec::new(),
             vars: Function::new("", "none"),
             line: 0,
             lib_dirs: Vec::new(),
@@ -1119,6 +1125,9 @@ impl Parser {
             self.lexer.switch(filename);
             self.parse_file();
             self.resolve_deferred_unknowns();
+            // @PLN35 PC3 — reject a left-recursive sub-rule grammar (a cycle in the invocation
+            // graph) at compile time, before it can hang at runtime.  Post-parse over pass-2 edges.
+            self.check_subrule_termination();
             #[cfg(debug_assertions)]
             self.assert_pass2_def_attr_stable(&pass1_attr_counts);
         }
@@ -1636,6 +1645,8 @@ impl Parser {
         self.first_pass = false;
         self.parse_file();
         self.resolve_deferred_unknowns();
+        // @PLN35 PC3 — reject a left-recursive sub-rule grammar (see `check_subrule_termination`).
+        self.check_subrule_termination();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
