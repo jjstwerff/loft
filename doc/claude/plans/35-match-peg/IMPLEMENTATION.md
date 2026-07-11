@@ -79,9 +79,10 @@ Golden target-syntax specs in `probes/g-*.loft`.
    The fix needs **copy-on-escape materialization** — the SAME machinery `..rest` is blocked on (below).
    The `mark_slice_element_view` fix covers the capture-used-LOCALLY case; RETURNING a raw heap view is
    the deferred remainder. Repros with a bare slice binding too (not name:pat-specific).
-2. **Native `Str`/`&str` mismatch in a vector-match text arm.** `match v { [..] => fn_returning_text(x),
-   _ => "literal" }` → native E0308 (`expected Str, found &str`). Repros with a SCALAR slice too (the
-   byte-identical corpus proves my edits don't touch it) — a separate native-codegen coercion bug.
+2. **Native `Str`/`&str` mismatch in a vector-match text arm** — FILED as **#552** (`sev:medium`
+   `area:native` `wa:partial`). `match v { [..] => fn_returning_text(x), _ => "literal" }` → native
+   E0308 (`expected Str, found &str`). Vector-match-specific (plain `if`/`else` and scalar-match are
+   fine); repros with a SCALAR slice (the byte-identical corpus proves the PLN35 edits don't touch it).
 
 **Syntax DECIDED: `..rest`** (two dots + adjacent name), NOT `...` — loft lexes `..`, not `...`.
 Docs reconciled to `..rest` throughout.
