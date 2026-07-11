@@ -25,11 +25,19 @@
 
 **Branches.** Phase 0–2 MERGED to `main` (#554, squash). **Phase 3 (L3.7 multi-pattern arms),
 Phase 4 COMPLETE (L3.2 alternation: 4.1 single-element, 4.2 `option<T>` promotion, 4.3
-multi-element sequence branches via the cursor engine), and a fix for a pre-existing crash when a
-user type is named `T`** are on `tuxedo-pln35-phase3-multipat`, rebased onto `main` (NO PR — the
-user does not want one; keep committing to the branch). Full-suite **green** on this box (only the
-environmental `wasm_debug_relay` fails; see memory `wasm-debug-relay-env-fail`). **Nothing is
-half-implemented.**
+multi-element sequence branches via the cursor engine), Phase 5 (L3.3 optional `(a)?` as a
+degenerate `(a | ε)` alternation — one empty branch on the 4.3 engine), and a fix for a
+pre-existing crash when a user type is named `T`** are on `tuxedo-pln35-phase3-multipat`, rebased
+onto `main` (NO PR — the user does not want one; keep committing to the branch). Full-suite
+**green** on this box (only the environmental `wasm_debug_relay` fails; see memory
+`wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+
+**Phase 5 — DONE (optional), both backends.** `(a)?` = degenerate alternation `(a | ε)`: the
+empty branch always matches so the optional never fails; present → bind + advance cursor by `a`'s
+width, absent → ε commits with cursor unmoved and `a`'s captures read null (option-promoted by the
+4.2 hook). `..rest` resumes at the matched width (0 when skipped). Built by pushing one empty
+branch in `parse_multi_element_alternation` + `peek_paren_suffix` detecting the trailing `?`.
+Guard: `tests/scripts/35h-optional.loft` (single + multi-element `(A B)?`, present/absent/partial/empty).
 
 **Phase 4.3 — DONE (steps 1–5), both backends.** `[ (A B | C), ..rest ]`: a branch may be a
 SEQUENCE of varying width, dispatched PREDICTIVELY on the leading tags (ordered `if/else` over
@@ -38,7 +46,7 @@ full commit); `..rest` reads `v[pos..]` from a runtime cursor = the matched bran
 per §3a: step 1 `read_slice_elem` seam (byte-identical refactor), step 2–4 `parse_multi_element_alternation`
 + `peek_multi_element_alt` lexical lookahead, step 5 `materialize_named_rest(lo, hi)` (extracted,
 shared with the fixed-arity path). Guards: `tests/scripts/35g-multi-element-alternation.loft`.
-**Next: Phase 5 (optional `(…)?`), Phase 6 (repetition — the fold hook, §3a step 6), Phase 7
+**Next: Phase 6 (repetition `(…)*` / `(…)+` — the fold hook, §3a step 6), Phase 7
 (iterator input — the accumulating `read(pos)`), then the PC1–PC5 sub-rule layer.**
 
 **Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
@@ -706,20 +714,38 @@ future rule-invocation branch can add `save`/revert without redesign.
 
 ---
 
-### Phase 5 — L3.3: optional `(...)?`
+### Phase 5 — L3.3: optional `(...)?` — DONE
 
-**Goal.** `( Else { body } )?` → `body: option<block>`.
+> **DONE (2026-07-11), both backends.** An optional group `(a)?` in a slice pattern is a
+> **degenerate alternation `(a | ε)`**: the empty ε branch always matches, so the optional
+> NEVER fails — when `a` matches it binds + advances the cursor by `a`'s width; when it does
+> not, the ε branch commits with the cursor UNMOVED and `a`'s captures read null. This fell
+> straight out of the Phase-4.3 cursor engine with almost no new machinery — the whole
+> feature is "push one empty branch."
 
-**Design.** Degenerate alternation: `anchor; try a; on fail revert and bind all of
-`a`'s captures to null`. Reuses Phase-4 cursor + the `Type::optional` promotion.
+**Design (as built).** `(a)?` desugars to the Phase-4.3 multi-element alternation with an
+appended EMPTY branch (width 0, no tag test, predicate `true`). The predictive if/else already
+handles it: tag branches are tried first, the always-true ε branch is the final `else`, so the
+optional commits to ε exactly when `a`'s lead tag is absent. Captures are option-promoted by the
+existing 4.2 hook (a name bound only in the non-empty branch → `option<T>`, null on the ε path).
+`..rest` reads `v[pos..]` where `pos` is the matched branch width — `a`'s width when present, 0
+when absent — so following elements pick up correctly either way. No anchor/revert is needed: the
+cursor only advances on a full commit, so the ε path leaves it where it was for free (the cursor
+CONTRACT).
 
-**Code points.** `parse_pattern` optional case; capture nullable-promotion at the same
-hook as 4.2 (`control.rs:3442`, `Type::optional`).
+**Code points (as built).**
+- `peek_paren_suffix` — after a balanced `( … )`, returns the following token (`?` = optional).
+- Head-loop `(` routing: `( … )?` (or a multi-element alt) routes to `parse_multi_element_alternation`.
+- `parse_multi_element_alternation`: on a trailing `?`, `branches.push(Vec::new())` — the empty
+  ε branch — with the rest of the predictive-dispatch / option-promotion / cursor-rest machinery
+  from 4.3 reused unchanged. Both single-element `(A)?` and multi-element `(A B)?` work.
 
-**Verification.** `35e-optional.loft`: present → `Some`-shaped; absent → null capture;
-following elements still match after a skipped optional (cursor intact); both backends.
+**Verification.** `tests/scripts/35h-optional.loft` (cross-mode, leak-checked): single-element
+`(Kw)?` and multi-element `(Kw Op)?`, each with present / absent / partial-prefix / empty-input
+cases; confirms option-promoted captures (null when absent) and that `..rest` resumes at the
+right cursor for both the taken and the skipped path. PASS on both backends.
 
-**Exit:** optional groups with nullable captures, both backends.
+**Exit:** optional groups with nullable captures, both backends. ✅
 
 ---
 

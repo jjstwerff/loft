@@ -3904,10 +3904,23 @@ impl Parser {
     /// SEQUENCE — another variant name follows — which needs the cursor path.  Skips the first
     /// branch element (variant + a balanced `{ … }`) via `cont()`/`revert()` and peeks whether
     /// another identifier follows.
-    fn peek_multi_element_alt(&mut self) -> bool {
+    /// @PLN35 — lexical lookahead (no parser side effects) at a `(` in a slice pattern:
+    /// does this group route to `parse_multi_element_alternation`?  True when the group is a
+    /// MULTI-element sequence branch (`(A B …)`, Phase 4.3) OR an OPTIONAL single group
+    /// (`(A)?`, Phase 5 — a degenerate `(A | ε)`).  Both are decided from the token that
+    /// follows the FIRST variant sub-pattern, so the scan stops there:
+    ///   • another identifier  → branch 1 is a sequence          → multi-element alt
+    ///   • `)` then `?`         → optional single group `(A)?`    → alt with an ε branch
+    ///   • anything else (`|`, `)` w/o `?`, `,`, `]`) → single-element alt / bare group → false
+    /// Crucially it does NOT scan the whole `( … )`: for a single-element alternation
+    /// `(A | B)` it stops at the `|`, leaving the lexer scan position exactly where a bare
+    /// first-variant read would — so a downstream `not a variant` diagnostic reports the same
+    /// column it would without this lookahead (`revert` restores `peek` but, by design, not the
+    /// forward scan `position` that error rendering reads).
+    fn peek_group_routes_to_alt(&mut self) -> bool {
         let save = self.lexer.link();
         self.lexer.cont(); // past `(`
-        let mut multi = false;
+        let mut routes = false;
         if matches!(self.lexer.peek().has, LexItem::Identifier(_)) {
             self.lexer.cont(); // variant name
             if self.lexer.peek_token("::") {
@@ -3936,11 +3949,17 @@ impl Parser {
                     }
                 }
             }
-            // another variant name (identifier) → the branch is a sequence.
-            multi = matches!(self.lexer.peek().has, LexItem::Identifier(_));
+            if matches!(self.lexer.peek().has, LexItem::Identifier(_)) {
+                // a second variant name → branch 1 is a sequence (multi-element alt).
+                routes = true;
+            } else if self.lexer.peek_token(")") {
+                // `(A)` — an optional group iff a `?` follows the close paren.
+                self.lexer.cont();
+                routes = self.lexer.peek_token("?");
+            }
         }
         self.lexer.revert(save);
-        multi
+        routes
     }
 
     /// @PLN35 Phase 4.3 — a WHOLE-SLICE multi-element alternation
@@ -4045,6 +4064,14 @@ impl Parser {
         self.lexer.token(")");
         if branches.is_empty() {
             return;
+        }
+
+        // @PLN35 Phase 5 (P-Opt) — a trailing `?` makes the group OPTIONAL: append an EMPTY
+        // branch (width 0).  It always matches (`len >= 0`), so the arm never fails and, when the
+        // real branches do not match, the cursor stays put and every capture reads null — exactly
+        // `(a)?`'s "try a; else bind null, cursor unmoved" contract, expressed as `(a | ε)`.
+        if self.lexer.has_token("?") {
+            branches.push(Vec::new());
         }
 
         // Optional `, ..rest` then `]`.
@@ -5095,12 +5122,13 @@ impl Parser {
                     } else if !has_rest
                         && head.is_empty()
                         && self.lexer.peek_token("(")
-                        && self.peek_multi_element_alt()
+                        && self.peek_group_routes_to_alt()
                     {
-                        // @PLN35 Phase 4.3 — a WHOLE-SLICE MULTI-element alternation
-                        // `[ (A B | C) [, ..rest] ]`: predictive dispatch on the leading tags over
-                        // a sequence per branch.  It builds the arm `cond` itself and consumes
-                        // through `]`, so break the element loop and skip the fixed-length gate.
+                        // @PLN35 Phase 4.3 / 5 — a WHOLE-SLICE MULTI-element alternation
+                        // `[ (A B | C) [, ..rest] ]` OR an OPTIONAL group `[ (a)? [, ..rest] ]`
+                        // (a degenerate alternation `(a | ε)`).  Predictive dispatch on the leading
+                        // tags over a sequence per branch; it builds the arm `cond` itself and
+                        // consumes through `]`, so break the element loop and skip the length gate.
                         if let Type::Enum(elm_e_nr, true, _) = &elm_tp {
                             let e_nr = *elm_e_nr;
                             self.parse_multi_element_alternation(
