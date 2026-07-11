@@ -1523,7 +1523,54 @@ impl Output<'_> {
     /// `String`, one borrowed `&str`) and so must be unified via `.to_string()`
     /// (#534).  See [`Self::text_arm_yields_owned_string`].
     fn text_if_mismatched_reps(&self, true_v: &Value, false_v: &Value) -> bool {
-        self.text_arm_yields_owned_string(true_v) != self.text_arm_yields_owned_string(false_v)
+        if self.text_arm_yields_owned_string(true_v) != self.text_arm_yields_owned_string(false_v) {
+            return true;
+        }
+        // #552 — a text-returning CALL yields `Str` (buffered fn) or `String`, a bare text
+        // LITERAL yields `&str`; these never unify at the if-arm level (rustc E0308 "expected
+        // `Str`, found `&str`" — the vector-match desugar's `if <g(x)> else {"lit"}`).  A
+        // buffered `-> Str` fn is NOT `def_returns_owned_text`, so the owned-String check above
+        // misses it; catch the call-vs-literal pairing and unify both arms to owned `String`.
+        (self.text_arm_ends_in_text_call(true_v) && Self::text_arm_is_bare_literal(false_v))
+            || (Self::text_arm_is_bare_literal(true_v) && self.text_arm_ends_in_text_call(false_v))
+    }
+
+    /// True when the arm's tail is a text-returning function call (yields `Str`/`String`),
+    /// walking through Block/Insert to the final value.  #552.
+    fn text_arm_ends_in_text_call(&self, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Block(b) => b
+                .operators
+                .last()
+                .is_some_and(|t| self.text_arm_ends_in_text_call(t)),
+            Value::Insert(items) => items
+                .last()
+                .is_some_and(|t| self.text_arm_ends_in_text_call(t)),
+            Value::Call(d, _) => {
+                (*d as usize) < self.data.definitions.len()
+                    && matches!(self.data.def(*d).returned().base(), Type::Text(_))
+                    // Only a USER text fn yields an owned `Str`/`String`; an `Op*` text op
+                    // (OpConvTextFromNull → STRING_NULL, OpConstText, …) yields `&str`, which
+                    // unifies with a bare literal — excluding them avoids a false mismatch that
+                    // would `.to_string()` an arm inside a `&*(…)` borrow context (E0716).
+                    && !self.data.def(*d).name().starts_with("Op")
+            }
+            _ => false,
+        }
+    }
+
+    /// True when the arm's tail is a BARE text literal (yields `&str`), walking through
+    /// Block/Insert to the final value.  #552.
+    fn text_arm_is_bare_literal(v: &Value) -> bool {
+        match v.unspan() {
+            Value::Block(b) => b
+                .operators
+                .last()
+                .is_some_and(Self::text_arm_is_bare_literal),
+            Value::Insert(items) => items.last().is_some_and(Self::text_arm_is_bare_literal),
+            Value::Text(_) => true,
+            _ => false,
+        }
     }
 
     // @PLAN52 cluster I/VI helper: walk a Block's operators (recursively
