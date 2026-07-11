@@ -169,6 +169,36 @@ This is deliberate, rare, and documented; it is the *only* way an observable beh
 changes, and even then no existing program sees the change. A regression that slips through
 *unintentionally* is not this — it is a bug, fixed stop-the-world.
 
+## Two populations, one promise — fold ours, host theirs
+
+The promise covers two populations the owner relates to differently, because **he cannot compel or
+limit others** — only guarantee what he himself controls:
+
+- **loft's own surface (language + stdlib)** — the owner owns the implementation, so never-break
+  here is additive + **folding** (above): keep the name, fold the code onto the new primitive.
+- **Everyone else's libraries** — the owner owns *neither* the implementation *nor* the authors. He
+  cannot make an author migrate, maintain, or republish, and he does not try. His lever is the one
+  thing he *does* control — the **registry** — and it is enough: **host every published version
+  forever** (append-only; a version is never deleted), and let the **runtime** run each artifact
+  under the `contract` it declared (the escape valve above). An abandoned contract-1 library stays
+  downloadable and runs correctly on any later loft, with *zero* action from its author — and a new
+  program may still depend on it.
+
+So never-break rests on three legs, each a thing the owner actually controls — not a request made of
+anyone else:
+
+1. **loft's surface** — additive + fold (owner owns the code).
+2. **The registry** — permanent hosting (owner owns the host): every published artifact stays
+   available forever. *This* is the registry's primary never-break role; the migration-scan
+   (§ Folding) is secondary.
+3. **The runtime** — contract-keying: loft honors each artifact's declared contract forever.
+
+Together they carry any working program and its dependencies: the deps stay downloadable (2), loft
+still runs them correctly (3), and loft's own surface dropped nothing (1). Availability is hosting,
+correctness is contract-keying — the owner compels no one and still breaks no one. (Hosting covers
+the *published* ecosystem; a private artifact its user vendored is held by that user and is carried
+by leg 3 alone.)
+
 ## The `contract` integer under this promise
 
 Because forward-compatibility is now **guaranteed**, the `contract` version is simpler than
