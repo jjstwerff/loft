@@ -33,6 +33,26 @@ file **useless without that specific build**, and — the load-bearing part — 
 **legally actionable**. The technical measure exists to establish the *legal* position, not to be
 uncrackable.
 
+### The success criterion (the bar — and the bound on effort)
+
+> **The target is: reuse is *troublesome to a skilled adversary* AND *legally actionable*.
+> Explicitly NOT: uncrackable.**
+
+Perfect protection is impossible client-side, so the useful question is never "can it be broken"
+but "**is it more trouble than it's worth**." A good yardstick is a *traditional hacker* — a
+demanding adversary who knows the real cost of reverse-engineering: if the measure troubles *them*,
+it is far above the casual-modder threshold, and casual/generic reuse is where essentially all the
+threat volume lives. The two layers then cover the whole distribution: **troublesome** deters the
+many (who would rip a two-click extract), and the **legal TPM layer** covers the capable few (for
+whom the question becomes "is it worth the anti-circumvention exposure" — usually no).
+
+This bar is also a **bound on effort**: because "uncrackable" is neither achievable nor required,
+the measure must NOT be gold-plated — no heavy crypto, no exotic runtime, no hot-path cost. The
+per-export permutation behind the getter axiom is troublesome in the *structural* ways that matter
+(no cross-build tool; the mapping scattered through compiled code / shader / VRAM; per-build
+reverse-engineering required) at essentially zero runtime cost — which is the right amount. Future
+work should hit this bar and stop, not chase impossibility.
+
 ## The design (the technical measure)
 
 - **Two layout modes of the same logical types.**
