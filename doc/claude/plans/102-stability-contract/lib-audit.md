@@ -172,6 +172,7 @@ Beyond the null-sentinel cluster above:
 | Low | `sum`/`sum_of` confusable near-synonyms; `_of` suffix inconsistent | collapse to one family | `:1547` |
 | Low | `map`/`filter`/comprehension vector-only (INC#2); `#index` invalid on index | accept + DD entry | — |
 | Low | sort direction on the struct type drives every query (INC#12) | accept + DD, or add per-query direction | `LOFT.md:217` |
+| Med | an **inline slice** `v[a..b]` is typed `iterator`, so `v[a..b].len()` errors ("Unknown type iterator") while free `len(v[a..b])` works; once assigned (`s = v[a..b]`, materialised to a vector) BOTH work | give an inline slice the vector method surface (materialise for method dispatch), or reject the free form too for consistency | verified 2026-07-11 |
 
 ### Text & character
 
