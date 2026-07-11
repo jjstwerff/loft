@@ -23,9 +23,23 @@
 
 ## ▶ RESUME HERE — status (2026-07-11)
 
-**Branch** `tuxedo-pln35-match-peg` @ `1975a2eb`, pushed, on current `origin/main`; full-suite
-**green** (`2787/2789` — only the environmental `wasm_debug_relay` fails on this box; see memory
-`wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+**Branches.** Phase 0–2 are on `tuxedo-pln35-match-peg` (PR #554, awaiting merge). **Phase 3
+(L3.7 multi-pattern arms) is on `tuxedo-pln35-phase3-multipat`, stacked on that PR's tip** — do
+NOT fork the next phase off `main` while #554 is open. Full-suite **green** on this box (only the
+environmental `wasm_debug_relay` fails; see memory `wasm-debug-relay-env-fail`). **Nothing is
+half-implemented.**
+
+**Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
+the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
+at compatible types; partial overlap → `option<T>` stays Phase 4) into SHARED slots that each
+listed variant assigns from ITS OWN offsets. Desugars to the hand-expanded `V1 { c } => body; V2 { c }
+=> body` form — proven byte-for-byte in [`bytecode-comparisons/p3-existing-paths-corpus.loft`](bytecode-comparisons/p3-existing-paths-corpus.loft)
+(existing paths stayed byte-identical) and confirmed on both backends. Union exhaustiveness: an arm
+covers the union of its listed variants. Code: `parse_match` arm loop + two helpers (`variant_disc`,
+`parse_multi_pattern_extra_bindings`) in `control.rs`. A guard or a field sub-pattern on a
+multi-pattern arm is rejected with a "Phase 4" diagnostic. Guards: `tests/scripts/35e-multi-pattern-arm.loft`
+(cross-mode, leak-checked, includes the reuse axis), `tests/parse_errors.rs::multi_pattern_*` (5 cases).
+The `|` or-pattern stays the tighter same-shape tag alternation; `,` is the looser cross-shape form.
 
 **Phase 2 (L3.1) `..rest` — COMPLETE (2026-07-11).** It binds a FRESH independent `vector<T>`
 tail by **REUSING the compile-time `#Slice materialise` path** (`materialize_iterator`) — the
@@ -355,7 +369,14 @@ leak-clean; totality enforced.
 
 ---
 
-### Phase 3 — L3.7: multi-pattern arms (comma-separated patterns)
+### Phase 3 — L3.7: multi-pattern arms (comma-separated patterns) — DONE
+
+> **DONE (2026-07-11), both backends** — see the RESUME-HERE summary above. Scoped to the
+> struct-enum/enum handler (`parse_match`): D-simple identical name sets at compatible types,
+> shared capture slots, union exhaustiveness. Deferred to Phase 4 with clear diagnostics: partial
+> name overlap (`option<T>`), a guard on a multi-pattern arm, and a field sub-pattern inside a
+> non-first listed pattern. The cross-shape slice/vector multi-pattern (README's `[…]` + `Parsed{…}`
+> example) needs a union subject type and is out of scope here.
 
 **Goal.** One arm, several shapes; first match commits its captures.
 ```

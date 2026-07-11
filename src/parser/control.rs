@@ -3026,9 +3026,121 @@ impl Parser {
                 );
             }
 
+            // @PLN35 Phase 3 (P-Multi): a `,` here — before the guard/`=>` — begins
+            // ANOTHER whole pattern for the SAME arm (a multi-pattern arm).  In a
+            // single-pattern arm the next token is `=>` or `if`; a `,` before the
+            // arrow is otherwise a parse error, so this collection is purely
+            // additive and leaves every existing path untouched.  Each listed
+            // pattern binds the SAME captures (D-simple) into the shared slots the
+            // first pattern established above; whichever variant matches assigns
+            // those slots from ITS OWN offsets and the one arm body reads them.
+            // Emitted as one `if disc==Vi { binds_i; body }` branch per pattern —
+            // identical to hand-expanding into separate single-pattern arms.
+            let mut multi_branches: Vec<(i32, Vec<Value>)> = Vec::new();
+            if self.lexer.peek_token(",") && valid_enum && e_nr != u32::MAX {
+                let shared: std::collections::HashMap<String, (u16, Type)> = name_aliases
+                    .iter()
+                    .filter_map(|(name, _)| {
+                        let vn = self.vars.var(name);
+                        (vn != u16::MAX).then(|| (name.clone(), (vn, self.vars.tp(vn).clone())))
+                    })
+                    .collect();
+                let first_names: HashSet<String> = shared.keys().cloned().collect();
+                while self.lexer.has_token(",") {
+                    if self.lexer.peek_token("=>") || self.lexer.peek_token("}") {
+                        break; // dangling comma / trailing arm separator
+                    }
+                    let Some(vid) = self.lexer.has_identifier() else {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "expect a variant name after ',' in a multi-pattern arm"
+                            );
+                        }
+                        break;
+                    };
+                    let vname = if self.lexer.has_token("::") {
+                        self.lexer.has_identifier().unwrap_or_else(|| vid.clone())
+                    } else {
+                        vid.clone()
+                    };
+                    let mut ev = self.data.variant_of(e_nr, &vname);
+                    if ev == u32::MAX {
+                        ev = self.data.def_nr(&vname);
+                    }
+                    if ev == u32::MAX
+                        || self.data.def_type(ev) != DefType::EnumValue
+                        || self.data.def(ev).parent() != e_nr
+                    {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "'{}' is not a variant of {}",
+                                vname,
+                                self.data.def(e_nr).name()
+                            );
+                        }
+                        continue;
+                    }
+                    let disc = self.variant_disc(e_nr, is_struct, ev, &vname);
+                    let mut stmts_i: Vec<Value> = Vec::new();
+                    let names_i = if self.lexer.peek_token("{") {
+                        self.parse_multi_pattern_extra_bindings(
+                            ev,
+                            &vname,
+                            &subject_val,
+                            &shared,
+                            &mut stmts_i,
+                        )
+                    } else {
+                        HashSet::new()
+                    };
+                    if !self.first_pass && names_i != first_names {
+                        let want: Vec<String> = first_names.iter().cloned().collect();
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "multi-pattern arm: every listed pattern must bind the same captures ({})",
+                            want.join(", ")
+                        );
+                    }
+                    // Union coverage (M-Total): each listed total pattern counts
+                    // toward exhaustiveness, exactly like the `|` or-pattern arm.
+                    if !self.first_pass {
+                        covered.insert(ev);
+                    }
+                    multi_branches.push((disc, stmts_i));
+                }
+                // A field sub-pattern in the FIRST pattern makes its branch condition
+                // non-trivial (a `field_conditions` guard); that combination is Phase 4.
+                if !multi_branches.is_empty() && !field_conditions.is_empty() && !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "a field sub-pattern is not yet supported in a multi-pattern arm (Phase 4)"
+                    );
+                }
+            }
+
             // parse optional guard clause after pattern + field bindings.
             // Field-bound variables are in scope for the guard expression.
             let guard_opt = self.parse_optional_guard();
+            // @PLN35 Phase 3: a guard on a multi-pattern arm must hold for whichever
+            // pattern matched; replicating it per branch is Phase 4.  Reject for now.
+            let guard_opt = if guard_opt.is_some() && !multi_branches.is_empty() {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "a guard is not yet supported on a multi-pattern arm (Phase 4)"
+                    );
+                }
+                None
+            } else {
+                guard_opt
+            };
             // L2: combine field sub-pattern conditions with the explicit guard (if any).
             let guard_opt = if field_conditions.is_empty() {
                 guard_opt
@@ -3120,6 +3232,14 @@ impl Parser {
                 );
             }
 
+            // @PLN35 Phase 3: capture the raw arm body + type for the extra
+            // multi-pattern branches before the single-arm assembly below consumes
+            // them.  A multi-pattern arm carries no guard and no field sub-pattern
+            // conditions (both rejected above), so each branch is a plain
+            // `block(binds_i; body)`.
+            let multi_extra: Option<(Value, Type)> =
+                (!multi_branches.is_empty()).then(|| (arm_body.clone(), arm_type.clone()));
+
             // When there is a guard, keep field bindings separate — they must
             // be emitted before the guard check so bound variables are available.
             // When there is no guard, wrap them into a block as before.
@@ -3142,6 +3262,27 @@ impl Parser {
                 guard: guard_opt,
                 bindings: binding_stmts,
             });
+            // @PLN35 Phase 3: emit one arm per EXTRA listed pattern, each binding
+            // the shared slots from its own variant offsets then running a CLONE of
+            // the arm body — the hand-expanded form the single arm above equals.
+            if let Some((body, tp)) = multi_extra {
+                for (disc, stmts_i) in multi_branches {
+                    let code_i = if stmts_i.is_empty() {
+                        body.clone()
+                    } else {
+                        let mut ops = stmts_i;
+                        ops.push(body.clone());
+                        v_block(ops, tp.clone(), "match_arm")
+                    };
+                    arms.push(EnumArm {
+                        discs: vec![disc],
+                        code: code_i,
+                        tp: tp.clone(),
+                        guard: None,
+                        bindings: Vec::new(),
+                    });
+                }
+            }
             if self.lexer.peek_token("}") {
                 self.lexer.has_token(","); // optional trailing comma
             } else {
@@ -3594,6 +3735,134 @@ impl Parser {
             }
         }
         self.lexer.token("}");
+    }
+
+    /// The discriminant integer for `variant_def_nr` (a variant of enum `e_nr`).
+    /// Struct-enum variants store it in their own `attributes[0]`; unit variants
+    /// and plain enums read it from the parent enum's attribute for the name.
+    /// Mirrors the inline lookup the first pattern of an arm uses, factored out so
+    /// the extra patterns of a `@PLN35` multi-pattern arm resolve their discs the
+    /// same way.
+    fn variant_disc(
+        &self,
+        e_nr: u32,
+        is_struct: bool,
+        variant_def_nr: u32,
+        variant_name: &str,
+    ) -> i32 {
+        if is_struct
+            && let Some(first) = self.data.def(variant_def_nr).attributes().first()
+            && let Value::Enum(nr, _) = first.value
+        {
+            return i32::from(nr);
+        }
+        if let Some(a_nr) = self.data.def(e_nr).attr_names.get(variant_name)
+            && let Value::Enum(nr, _) = self.data.def(e_nr).attributes()[*a_nr].value
+        {
+            return i32::from(nr);
+        }
+        0
+    }
+
+    /// @PLN35 Phase 3 (P-Multi) — parse the `{ field, … }` bindings of a NON-FIRST
+    /// pattern in a comma-separated multi-pattern arm, REUSING the first pattern's
+    /// capture slots (`shared`: name → (var, type)).  Whichever listed pattern
+    /// matches assigns those shared slots from ITS OWN variant offsets, then the
+    /// single arm body reads them — so a heap capture inherits the first pattern's
+    /// `skip_free` + borrow-dep markings on the shared var for free.
+    ///
+    /// D-simple (P3): every pattern must bind the SAME names at a compatible type.
+    /// A field here the first pattern lacks (partial overlap → `option<T>`) or a
+    /// type that does not unify is a static error, deferred to Phase 4.  Returns
+    /// the set of shared names this pattern bound so the caller can require the
+    /// sets to match.
+    fn parse_multi_pattern_extra_bindings(
+        &mut self,
+        variant_def_nr: u32,
+        pattern_name: &str,
+        subject_val: &Value,
+        shared: &std::collections::HashMap<String, (u16, Type)>,
+        stmts: &mut Vec<Value>,
+    ) -> HashSet<String> {
+        let mut bound: HashSet<String> = HashSet::new();
+        self.lexer.token("{");
+        while let Some(field_name) = self.lexer.has_identifier() {
+            let attr_idx_and_type = {
+                let variant_def = self.data.def(variant_def_nr);
+                variant_def.attributes[1..]
+                    .iter()
+                    .enumerate()
+                    .find(|(_, a)| a.name == field_name)
+                    .map(|(i, a)| (i + 1, a.typedef.clone()))
+            };
+            match attr_idx_and_type {
+                Some((attr_idx, field_type)) => {
+                    // A field sub-pattern (`f: pat`) makes the branch condition
+                    // non-trivial — that is Phase 4.  Reject cleanly and skip.
+                    if self.lexer.has_token(":") {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a field sub-pattern is not yet supported in a multi-pattern arm (Phase 4)"
+                            );
+                        }
+                        self.lexer.has_identifier();
+                    }
+                    match shared.get(&field_name) {
+                        Some((var_nr, shared_ty)) => {
+                            let ok = match_arm_types_unify(shared_ty, &field_type);
+                            if !ok && !self.first_pass {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "multi-pattern arm: capture '{}' is {} in this pattern but {} in the first — every listed pattern must bind the same captures at the same type",
+                                    field_name,
+                                    field_type.name(&self.data),
+                                    shared_ty.name(&self.data)
+                                );
+                            }
+                            // Skip the assignment into the shared slot on a confirmed
+                            // type mismatch — a `text`→`integer` store is incoherent and
+                            // the arm never runs (compile fails).  First pass still binds
+                            // so the two-pass shapes agree.
+                            if ok || self.first_pass {
+                                let field_read =
+                                    self.get_field(variant_def_nr, attr_idx, subject_val.clone());
+                                stmts.push(v_set(*var_nr, field_read));
+                            }
+                            bound.insert(field_name.clone());
+                        }
+                        None => {
+                            if !self.first_pass {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "multi-pattern arm: capture '{}' is not bound by the first pattern (partial overlap → option<T> is Phase 4)",
+                                    field_name
+                                );
+                            }
+                        }
+                    }
+                }
+                None => {
+                    if !self.first_pass {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "variant {} has no field '{}'",
+                            pattern_name,
+                            field_name
+                        );
+                    }
+                }
+            }
+            if !self.lexer.has_token(",") {
+                break;
+            }
+        }
+        self.lexer.token("}");
+        bound
     }
 
     /// Parse an optional `if <expr>` guard clause.
