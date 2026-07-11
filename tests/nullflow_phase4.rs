@@ -24,10 +24,11 @@ fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, S
         .arg(&script)
         .current_dir(workspace_root())
         .env("LOFT_TIMEOUT", "120");
+    // @PLN102 flip — the null-flow model is default-ON; the OFF case opts out with LOFT_NO_NULLFLOW.
     if nullflow {
-        cmd.env("LOFT_NULLFLOW", "1");
+        cmd.env_remove("LOFT_NO_NULLFLOW");
     } else {
-        cmd.env_remove("LOFT_NULLFLOW");
+        cmd.env("LOFT_NO_NULLFLOW", "1");
     }
     let out = cmd.output().expect("failed to invoke loft binary");
     let _ = std::fs::remove_file(&script);

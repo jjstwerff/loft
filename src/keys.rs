@@ -408,19 +408,19 @@ pub fn pln25_dn3_enabled() -> bool {
     pln25_dn1_enabled()
 }
 
-/// `LOFT_NULLFLOW=1` (@PLN102 null-flow generalisation — SPEC-FIRST, IN PROGRESS) — the general
-/// null-flow laws (`doc/claude/formal/types.md` § Null-flow). **Phase 1** turns the `(N-Store)`
-/// teeth into a WARNING (nudge, still compiles + runs, the slot holds null) for a target that
-/// reserves its null distinctly in the NON-null form — full `integer`, `float`, `single`,
-/// `boolean`, `character`, `text`, references, aggregates — and keeps a hard ERROR only for a
-/// NARROW width (`u8`…`u32`, `byte_width < 8`), whose non-null form spends the whole width on real
-/// values so a null cannot sit there. OFF keeps the current uniform hard error. Opt-IN while the
-/// phases land; one cached env read. See
-/// `doc/claude/plans/102-stability-contract/float-null-domain-typing.md` § Implementation plan.
+/// @PLN102 null-flow — the general null-flow laws (`doc/claude/formal/types.md` § Null-flow):
+/// `(N-Store)` warn-unless-narrow (a nullable into a full-width non-null slot WARNS + still runs,
+/// the slot holds null; a NARROW `u8`…`u32` target keeps the hard ERROR — its width has no bit
+/// pattern for null), `(N-Prop)` null propagates through arithmetic, `(N-Domain)` float `/`/`sqrt`/
+/// `ln`/… type `τ?`, `(N-Cast)` a `text as τ` parse is an assertion (bare → error; use `as τ?`).
+/// **FLIPPED DEFAULT-ON (2026-07-11, @PLN102 the null-flow cutover):** this is now the DEFAULT.
+/// `LOFT_NO_NULLFLOW` opts out (the escape hatch while any last consumer settles); the old opt-in
+/// `LOFT_NULLFLOW` is now a redundant no-op. One cached env read. Mirrors `join_own_enabled`. See
+/// `doc/claude/plans/102-stability-contract/nullflow-flip-plan.md`.
 #[must_use]
 pub fn nullflow_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_NULLFLOW").is_some())
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLFLOW").is_none())
 }
 
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
