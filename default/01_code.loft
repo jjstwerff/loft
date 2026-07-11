@@ -136,11 +136,11 @@ fn OpConvBoolFromNull() -> boolean;
 fn OpConvCharacterFromNull() -> character;
 #rust"char::from(0)"
 fn OpConvCharacterFromInt(v1: integer) -> character;
-#rust"char::from_u32((@v1) as u32).unwrap_or(char::from(0))"
+#rust"if @v1 == i64::MIN {{ char::from(0) }} else if let Some(c) = char::from_u32((@v1) as u32) {{ c }} else {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) }}"
 fn OpConstLongText(start: const integer, size: const integer) -> text;
 #rust"s.string_from_texts(@start, @size);"
 fn OpCastIntFromText(v1: text) -> integer;
-#rust"@v1.parse().unwrap_or(i64::MIN)"
+#rust"match @v1.parse::<i64>() {{ Ok(v) if v == i64::MIN => {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); i64::MIN }}, Ok(v) => v, Err(_) => i64::MIN }}"
 fn OpCastSingleFromText(v1: text) -> single;
 #rust"@v1.parse().unwrap_or(f32::NAN)"
 fn OpCastFloatFromText(v1: text) -> float;
@@ -519,7 +519,7 @@ fn OpMinSingleFloat(v1: float) -> float;
 fn OpCastSingleFromFloat(v1: float) -> single;
 #rust"@v1 as f32"
 fn OpCastIntFromFloat(v1: float) -> integer;
-#rust"ops::op_cast_int_from_float(@v1)"
+#rust"if @v1.is_nan() {{ i64::MIN }} else if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&@v1) {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); i64::MIN }} else {{ let r = ops::op_cast_int_from_float(@v1); if r == i64::MIN {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); i64::MIN }} else {{ r }} }}"
 fn OpConvBoolFromFloat(v1: float) -> boolean;
 #rust"!@v1.is_nan()"
 fn OpAddFloat(v1: float, v2: float) -> float;
@@ -790,7 +790,7 @@ fn OpFormatStackText(pos: const u16, val: text, width: integer, dir: const i8, t
 fn OpAppendCharacter(pos: const u16, v1: character);
 fn OpTextCompare(v1: text, v2: character) -> i32;
 fn OpCastCharacterFromInt(v1: i32) -> character;
-#rust"char::from_u32(@v1 as u32).unwrap_or(char::from(0))"
+#rust"if let Some(c) = char::from_u32(@v1 as u32) {{ c }} else {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) }}"
 fn OpConvIntFromCharacter(v1: character) -> i32;
 #rust"if @v1 == char::from(0) {{ i64::MIN }} else {{ i64::from(@v1 as u32) }}"
 type enumerate size(1);

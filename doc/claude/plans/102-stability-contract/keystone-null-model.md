@@ -20,7 +20,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > `x != x` NaN idiom → `== null`) migrated in the same change. ✅ **Step 3a — shift collisions
 > guarded:** `1 << 63`/`1 << 100`/`1 << -1` now report + null (like `÷0`, new `ShiftOutOfRange`),
 > not silently masked/nulled; both backends, zero conversion set, guard
-> `pln102-shift-collision-guard.loft`. **Next: step 3b** (the CAST collision sites), then 4–5.
+> `pln102-shift-collision-guard.loft`. ✅ **Step 3b — cast collisions guarded (D-op-null-2
+> CLOSED):** `float as integer` out-of-range (was: saturate to `i64::MAX`), `int as character`
+> invalid code point (was: silent NUL), and `text as integer` parsing to exactly `i64::MIN` now
+> report + null (new `CastOutOfRange`); both backends, guard `pln102-cast-collision-guard.loft`,
+> one-assertion conversion set (`inf as integer` in `02-floats.loft`). **Next: steps 4–5.**
 
 ## The invariant we must be able to state (and today cannot)
 
@@ -147,11 +151,14 @@ rewrite.**
    (single source → both backends via `fill.rs` regen); guard
    `tests/scripts/pln102-null-comparison-uniform.loft`; conversion set (5 sites on the old `x != x`
    idiom) migrated. *(2026-07-10; D-op-null-1 closed.)*
-3. **Guard the collision sites → report + null (like `÷0`)** so a real value never silently
-   becomes null. ✅ **3a — shifts done** (OOR amount / left-result == sentinel → `ShiftOutOfRange`,
-   both backends, zero conversion set). ⬜ **3b — casts** (`float as integer` OOR, `int as
-   character` invalid, `text as integer` of `i64::MIN`) — report-like-`÷0` vs DN4 checked-nullable;
-   decide then guard. *(default/01_code.loft `#rust` bodies; conversion set ~0.)*
+3. ✅ **Guard the collision sites → report + null (like `÷0`)** so a real value never silently
+   becomes null. **3a — shifts** (OOR amount / left-result == sentinel → `ShiftOutOfRange`, both
+   backends, zero conversion set). **3b — casts** (option A, report-like-`÷0`): `OpCastIntFromFloat`
+   OOR (was: saturate to `i64::MAX`), `OpConvCharacterFromInt`/`OpCastCharacterFromInt` invalid code
+   point (was: silent NUL), `OpCastIntFromText` parsing to exactly `i64::MIN` → all `CastOutOfRange`;
+   an unparseable text stays DN3-nullable → null (unchanged). Both backends, guard
+   `pln102-cast-collision-guard.loft`, one-assertion conversion set (`inf as integer` in
+   `02-floats.loft`). *(2026-07-10; D-op-null-2 closed — `default/01_code.loft` `#rust` bodies.)*
 4. **Honest nullable return types** where a fault is reachable (`find`/`min_of` → `τ?`), so the
    silent-non-null-typed-but-actually-null cases go away. *(stdlib signatures + the lib-audit
    keystone rows; conversion set = callers of those fns.)*

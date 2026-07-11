@@ -87,6 +87,12 @@ pub enum RuntimeErrorKind {
     /// it yields null and continues (like `÷0`), loudly rather than silently
     /// masking or nulling.
     ShiftOutOfRange,
+    /// An `as` cast whose value cannot be represented in the target: a `float`
+    /// outside the integer range, an integer that is not a valid Unicode code
+    /// point, or a text that parses to exactly the reserved `i64::MIN` sentinel
+    /// (@PLN102 D-op-null-2). Yields null and continues (like `÷0`), loudly
+    /// rather than silently saturating or nulling a real value.
+    CastOutOfRange,
     /// Recursion exceeded `State::MAX_CALL_DEPTH`.
     StackOverflow,
     /// `panic("msg")` builtin called from loft code.
@@ -107,6 +113,7 @@ impl RuntimeErrorKind {
             RuntimeErrorKind::NullDereference => "null_dereference",
             RuntimeErrorKind::NarrowCastOverflow { .. } => "narrow_cast_overflow",
             RuntimeErrorKind::ShiftOutOfRange => "shift_out_of_range",
+            RuntimeErrorKind::CastOutOfRange => "cast_out_of_range",
             RuntimeErrorKind::StackOverflow => "stack_overflow",
             RuntimeErrorKind::UserPanic { .. } => "user_panic",
             RuntimeErrorKind::AssertionFailed { .. } => "assertion_failed",
@@ -131,6 +138,9 @@ impl RuntimeErrorKind {
             }
             RuntimeErrorKind::ShiftOutOfRange => {
                 "shift amount out of range [0,64) or result is the reserved null value".to_string()
+            }
+            RuntimeErrorKind::CastOutOfRange => {
+                "cast value cannot be represented in the target type".to_string()
             }
             RuntimeErrorKind::StackOverflow => "call stack overflow".to_string(),
             RuntimeErrorKind::UserPanic { message } => format!("panic: {message}"),

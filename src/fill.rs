@@ -451,7 +451,14 @@ fn conv_character_from_null(s: &mut State) {
 
 fn conv_character_from_int(s: &mut State) {
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = char::from_u32((v_v1) as u32).unwrap_or(char::from(0));
+    let new_value = if v_v1 == i64::MIN {
+        char::from(0)
+    } else if let Some(c) = char::from_u32((v_v1) as u32) {
+        c
+    } else {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+        char::from(0)
+    };
     s.put_stack(new_value);
 }
 
@@ -463,7 +470,14 @@ fn const_long_text(s: &mut State) {
 
 fn cast_int_from_text(s: &mut State) {
     let v_v1 = s.string();
-    let new_value = v_v1.str().parse().unwrap_or(i64::MIN);
+    let new_value = match v_v1.str().parse::<i64>() {
+        Ok(v) if v == i64::MIN => {
+            s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+            i64::MIN
+        }
+        Ok(v) => v,
+        Err(_) => i64::MIN,
+    };
     s.put_stack(new_value);
 }
 
@@ -966,7 +980,20 @@ fn cast_single_from_float(s: &mut State) {
 
 fn cast_int_from_float(s: &mut State) {
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = ops::op_cast_int_from_float(v_v1);
+    let new_value = if v_v1.is_nan() {
+        i64::MIN
+    } else if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&v_v1) {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+        i64::MIN
+    } else {
+        let r = ops::op_cast_int_from_float(v_v1);
+        if r == i64::MIN {
+            s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+            i64::MIN
+        } else {
+            r
+        }
+    };
     s.put_stack(new_value);
 }
 
@@ -1203,7 +1230,12 @@ fn text_compare(s: &mut State) {
 
 fn cast_character_from_int(s: &mut State) {
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = char::from_u32(v_v1 as u32).unwrap_or(char::from(0));
+    let new_value = if let Some(c) = char::from_u32(v_v1 as u32) {
+        c
+    } else {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+        char::from(0)
+    };
     s.put_stack(new_value);
 }
 

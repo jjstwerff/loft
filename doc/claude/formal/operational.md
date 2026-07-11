@@ -166,9 +166,8 @@ share them.
 
 ## Deviations
 
-OPEN: **3** (D-op-1/2 + the null-model keystone deviation D-op-null-2; D-op-null-1 CLOSED
-2026-07-10 by keystone step 2. Opened 2026-07-10 by the @PLN102 pre-freeze audit; D-op-null-2
-closes with keystone step 3 —
+OPEN: **2** (D-op-1/2; the null-model keystone deviations D-op-null-1/2 both CLOSED 2026-07-10 by
+keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
 [the null-model keystone decision](../plans/102-stability-contract/keystone-null-model.md).)
 
 ### D-op-null-1 — CLOSED (2026-07-10, keystone step 2): float/single null comparison now uniform
@@ -182,20 +181,22 @@ closes with keystone step 3 —
   conversion set (docs/tests on the old `x != x` NaN idiom → `== null`) was migrated in the same
   change.
 
-### D-op-null-2 — a computation whose true result is the reserved pattern nulls SILENTLY
-- **Violates:** the `(E-Null)` intent that no real value is silently confused with null.
-- **Where:** the `as`/parse casts — `"-9223372036854775808" as integer`, `1e30 as integer`,
-  `999999999 as character` — saturate or produce the reserved pattern with no report, so a value
-  the user did not intend as null becomes null (or a plausible-wrong finite value) silently.
-  (Distinct from C85 *overflow* of ordinary arithmetic, which is a decided edge and stays silent.)
-- **✅ SHIFT half closed (keystone step 3a, 2026-07-10):** `OpSLeftInt`/`OpSRightInt` now
-  report + null + continue (like `÷0`, new `ShiftOutOfRange` kind) when the amount is outside
-  `[0, 64)` or a left shift lands on the `i64::MIN` sentinel (`1 << 63`) — loud, not a silent mask
-  or null; null operands stay contagious. Both backends; guard
-  `tests/scripts/pln102-shift-collision-guard.loft`; zero conversion set.
-- **Remaining (step 3b):** the CAST collision sites (`float as integer` out-of-range,
-  `int as character` invalid codepoint, `text as integer` of `i64::MIN`) — decide report-like-`÷0`
-  vs the DN4-style checked-nullable-cast model, then guard. Conversion set ~0.
+### D-op-null-2 — CLOSED (2026-07-10, keystone step 3): collision sites report, no longer silent
+- Was: an op whose true result is the reserved `i64::MIN` pattern (or an out-of-range shift/cast)
+  silently masked, saturated, or nulled a real value — the silent-wrong class `(E-Null)` forbids.
+- Fixed at the single `#rust` source (drives BOTH backends), mirroring `÷0` (report + null +
+  continue):
+  - **Shifts** (step 3a): `OpSLeftInt`/`OpSRightInt` report `ShiftOutOfRange` on an amount outside
+    `[0, 64)` or a left shift landing on `i64::MIN` (`1 << 63`); null operands stay contagious.
+  - **Casts** (step 3b): `OpCastIntFromFloat` reports `CastOutOfRange` on a float outside integer
+    range (was: saturate to `i64::MAX`); `OpConvCharacterFromInt`/`OpCastCharacterFromInt` report on
+    an invalid code point (was: silent NUL); `OpCastIntFromText` reports when a *valid* number parses
+    to exactly `i64::MIN` (an unparseable text stays DN3-nullable → null, silently, unchanged). NaN
+    floats and null integers stay contagious.
+- Distinct from **C85** overflow of ordinary arithmetic, which is a decided edge and stays silent.
+- Both backends; guards `tests/scripts/pln102-shift-collision-guard.loft` +
+  `tests/scripts/pln102-cast-collision-guard.loft`; the conversion set was one assertion
+  (`inf as integer` saturate → null in `02-floats.loft`).
 
 ### D-op-1 — there is no shared operational semantics; the interpreter is the spec
 - **Violates:** the premise of this doc (a single evaluation relation both backends obey)

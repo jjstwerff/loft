@@ -130,11 +130,11 @@ fn main() {
   assert(!(nan_val as integer), "NaN as integer is null");
   assert(!(nan_val as integer), "NaN as integer is null");
   inf_pos = (1.0 / 0.0) ?? null;
-  assert(inf_pos as integer == 9223372036854775807, "positive infinity as integer saturates to i64::MAX");
+  // @PLN102 D-op-null-2: an out-of-range float→int no longer silently saturates;
+  // it reports + yields null (like ÷0), so +inf/-inf as integer are both null.
+  assert(!(inf_pos as integer), "positive infinity as integer is null (out of range)");
   inf_neg = (-1.0 / 0.0) ?? null;
-  assert(!(inf_neg as integer), "negative infinity as integer is null (i32::MIN)");
-  assert(!(inf_neg as integer), "negative infinity as integer is null (i64::MIN)");
-  assert(inf_pos as integer > 1000000000, "positive infinity as integer saturates");
+  assert(!(inf_neg as integer), "negative infinity as integer is null (out of range)");
   // --- Float infinity arithmetic (IEEE 754) ---
   assert(inf_pos + inf_pos > 1000000.0, "inf + inf is positive infinity");
   assert(!(inf_pos - inf_pos), "inf - inf is NaN (null)");
