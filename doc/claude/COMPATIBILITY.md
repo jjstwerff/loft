@@ -284,6 +284,13 @@ breaking **epoch** (needs code changes), so the registry can **indicate the API-
 target** before they move. The programmer never has to guess whether an upgrade is safe — we have
 already computed it.
 
+This is **new status the registry does not carry today.** Right now a new version indicates only
+*that* the library changed (a bump); it says nothing about *whether* the change is API-backwards-
+compatible. The design adds a per-version-transition **verdict** — additive superset (drop-in) vs
+breaking epoch — that the gate computes and the registry **records and surfaces**. That is a real
+addition to the registry's data model, part of the arc-B-registry cost, not a reframing of metadata
+we already have; and it is what turns "migration is yours" into "migration is yours *and informed*."
+
 ## The `contract` integer under this promise
 
 Because forward-compatibility is now **guaranteed**, the `contract` version is simpler than
