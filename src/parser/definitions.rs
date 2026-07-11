@@ -1041,7 +1041,10 @@ impl Parser {
         // land with the constant-in-domain elision, step 3.5.)
         if !crate::keys::nullflow_enabled()
             && matches!(result, Type::Optional(_))
-            && matches!(fn_name.as_str(), "sqrt" | "asin" | "acos")
+            && matches!(
+                fn_name.as_str(),
+                "sqrt" | "asin" | "acos" | "ln" | "log" | "log2" | "log10" | "pow"
+            )
         {
             result = result.base().clone();
         }

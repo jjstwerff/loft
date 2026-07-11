@@ -89,3 +89,52 @@ fn sqrt_on_nullable_warns_native() {
     assert!(ok, "{out}");
     assert_eq!(warns, 1, "ON native: sqrt returns float?; out={out}");
 }
+
+// --- 3.3/3.4: ln/log/pow nullable; exp TOTAL stays non-null.  3.5: constant-in-domain elision. ---
+
+fn store(expr: &str) -> String {
+    format!("struct S {{ g: float }}\nfn main() {{ s = S {{ g: 0.0 }}; s.g = {expr}; print(\"r={{s.g}}\\n\"); }}\n")
+}
+
+#[test]
+fn exp_total_stays_non_null_even_on() {
+    // exp is defined off the raw non-null OpPow, so it never gets a spurious `?`.
+    let (ok, warns, out) = run(&store("exp(2.0)"), "--interpret", true, "exp_on");
+    assert!(ok, "{out}");
+    assert_eq!(warns, 0, "exp is total → non-null, no store warning; out={out}");
+    assert!(out.contains("r=7.389"), "{out}");
+}
+#[test]
+fn ln_nullable_warns_on() {
+    let (ok, warns, out) = run(&store("ln(x)").replace("s = S", "x = -1.0; s = S"), "--interpret", true, "ln_on");
+    assert!(ok, "{out}");
+    assert_eq!(warns, 1, "ln(var) is float? → store warns; out={out}");
+}
+#[test]
+fn pow_variable_nullable_warns_on() {
+    let body = store("pow(b, e)").replace("s = S", "b = -2.0; e = 0.5; s = S");
+    let (ok, warns, out) = run(&body, "--interpret", true, "pow_on");
+    assert!(ok, "{out}");
+    assert_eq!(warns, 1, "pow(var,var) is float? → store warns; out={out}");
+}
+#[test]
+fn elision_const_in_domain_is_non_null() {
+    for (expr, tag) in [("sqrt(4.0)", "e1"), ("pow(2.0, 3.0)", "e2"), ("pow(-2.0, 3.0)", "e3"), ("ln(2.0)", "e4"), ("asin(0.5)", "e5")] {
+        let (ok, warns, out) = run(&store(expr), "--interpret", true, tag);
+        assert!(ok, "{expr}: {out}");
+        assert_eq!(warns, 0, "{expr} is provably in-domain → non-null, no warning; out={out}");
+    }
+}
+#[test]
+fn elision_out_of_domain_stays_nullable() {
+    let (ok, warns, out) = run(&store("sqrt(-1.0)"), "--interpret", true, "oob");
+    assert!(ok, "{out}");
+    assert_eq!(warns, 1, "sqrt(-1.0) is out of domain → stays float?; out={out}");
+}
+#[test]
+fn exp_ln_load_off() {
+    // OFF: the flipped stdlib must still load and behave non-null.
+    let (ok, warns, _out) = run(&store("exp(1.0)"), "--interpret", false, "off_load");
+    assert!(ok, "OFF: stdlib must load with the flipped decls stripped");
+    assert_eq!(warns, 0);
+}

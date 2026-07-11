@@ -2865,7 +2865,19 @@ impl Parser {
             }
         }
         if d_nr != u32::MAX {
-            self.call_with_named(code, d_nr, list, types, named_args, true, arg_pos)
+            let ret = self.call_with_named(code, d_nr, list, types, named_args, true, arg_pos);
+            // @PLN102 Phase 3.5 — constant-in-domain elision ("PI blocks it"): a domain-partial
+            // math fn with a provably in-domain CONSTANT argument cannot be null (`sqrt(4.0)`,
+            // `pow(2.0, 3.0)`, `ln(2.0)`), so peel the `τ?` its decl carries. Only under
+            // LOFT_NULLFLOW, and only the constant subset (variable-arg range-tracking is deferred).
+            if crate::keys::nullflow_enabled()
+                && matches!(ret, Type::Optional(_))
+                && Self::math_arg_in_domain(name, list)
+            {
+                ret.base().clone()
+            } else {
+                ret
+            }
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
         } else if name == "len"
@@ -2944,6 +2956,38 @@ impl Parser {
                 }
             }
             Type::Unknown(0)
+        }
+    }
+
+    /// @PLN102 Phase 3.5 — is a call to a domain-partial math fn provably IN its real domain,
+    /// from CONSTANT arguments alone? Then its result is non-null and the `τ?` elides. The
+    /// constant subset of the "provably-fits" elision (variable-arg range-tracking is deferred).
+    fn math_arg_in_domain(name: &str, args: &[Value]) -> bool {
+        fn cval(v: Option<&Value>) -> Option<f64> {
+            match v.map(Value::unspan) {
+                Some(Value::Float(f)) => Some(*f),
+                Some(Value::Single(f)) => Some(f64::from(*f)),
+                Some(Value::Int(n)) => Some(f64::from(*n)),
+                Some(Value::Long(n)) => Some(*n as f64),
+                _ => None,
+            }
+        }
+        let a0 = cval(args.first());
+        let a1 = cval(args.get(1));
+        match name {
+            "sqrt" => matches!(a0, Some(x) if x >= 0.0),
+            "asin" | "acos" => matches!(a0, Some(x) if (-1.0..=1.0).contains(&x)),
+            "ln" | "log2" | "log10" => matches!(a0, Some(x) if x > 0.0),
+            // `log(x, base)`: x > 0 and a valid base (> 0, ≠ 1).
+            "log" => {
+                matches!(a0, Some(x) if x > 0.0) && matches!(a1, Some(b) if b > 0.0 && b != 1.0)
+            }
+            // `pow(base, exp)`: a non-negative base is always defined; a negative base only when
+            // the exponent is a whole number (`pow(-2, 3)` = -8, but `pow(-2, 0.5)` = null).
+            "pow" => {
+                matches!(a0, Some(b) if b >= 0.0) || matches!(a1, Some(e) if e.fract() == 0.0)
+            }
+            _ => false,
         }
     }
 
