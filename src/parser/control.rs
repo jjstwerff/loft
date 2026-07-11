@@ -2669,6 +2669,24 @@ impl Parser {
         // arm ("match requires an enum, struct, or scalar type"). Gate-OFF inert (never Optional).
         let subject_type = subject_type.base().clone();
 
+        // @PLN35 PC1 — a CURSOR subject (a struct with a `vector<T>` source field + an integer
+        // `pos` field) PREFIX-consumes: route to the vector-match over its source with cursor mode
+        // on, so the arm pattern reads/advances relative to `pos`.  A plain struct without that
+        // shape falls through to the normal struct handler.  Routes in BOTH passes so the arm
+        // grammar (slice patterns, not struct patterns) is parsed consistently.
+        if let Some((cursor_def, source_field, pos_field, celm_tp)) =
+            self.cursor_shape(&subject_type)
+        {
+            return self.parse_cursor_match(
+                subject,
+                cursor_def,
+                source_field,
+                pos_field,
+                &celm_tp,
+                code,
+            );
+        }
+
         // Resolve type info from the subject.
         // Accepts: plain enums, struct-enums, struct-enum variants, and plain structs (T1-18).
         let (e_nr, is_struct, valid_enum, is_plain_struct) = match &subject_type {
@@ -3842,6 +3860,15 @@ impl Parser {
     /// replace the read without touching the match logic — so do NOT open-code
     /// `OpGetVector` + `get_field` at a slice element site; call this.
     fn read_slice_elem(&mut self, v: u16, elm_size: &Value, elm_tp: &Type, pos: Value) -> Value {
+        // @PLN35 PC1 — in CURSOR mode a forward read `v[i]` is relative to the cursor's current
+        // `pos`, so it becomes `source[pos + i]`.  Only non-negative literal positions are offset
+        // (a negative/tail read has no meaning for a prefix cursor and is rejected upstream).
+        let pos = match self.match_cursor {
+            Some((_, _, _, pos_var)) if matches!(&pos, Value::Int(i) if *i >= 0) => {
+                self.conv_op("+", Value::Var(pos_var), pos, I32.clone(), I32.clone())
+            }
+            _ => pos,
+        };
         let get = self.cl("OpGetVector", &[Value::Var(v), elm_size.clone(), pos]);
         let td = self.data.type_def_nr(elm_tp);
         self.get_field(td, usize::MAX, get)
@@ -6075,6 +6102,80 @@ impl Parser {
     /// Slice patterns: `[a, b] =>`, `[first, ..] =>`, `[.., last] =>`, `_ =>`.
     /// Each arm generates a length check and element bindings.
     #[allow(clippy::too_many_lines)] // slice pattern parsing with head/tail/rest dispatch
+    /// @PLN35 PC1 — is `subject_type` a CURSOR-shaped struct: a `vector<T>` source field + an
+    /// integer field named `pos`?  Returns `(struct_def, source_field_idx, pos_field_idx, T)`.
+    /// Matching such a subject prefix-consumes; any other struct falls through to the struct handler.
+    fn cursor_shape(&self, subject_type: &Type) -> Option<(u32, usize, usize, Type)> {
+        let d_nr = match subject_type {
+            Type::Reference(d, _) if self.data.def_type(*d) == DefType::Struct => *d,
+            _ => return None,
+        };
+        let attrs = self.data.def(d_nr).attributes();
+        let mut source: Option<(usize, Type)> = None;
+        let mut pos: Option<usize> = None;
+        for (i, a) in attrs.iter().enumerate() {
+            if a.constant {
+                continue;
+            }
+            if let Type::Vector(elem, _) = &a.typedef {
+                if source.is_none() {
+                    source = Some((i, (**elem).clone()));
+                }
+            } else if matches!(a.typedef, Type::Integer(_)) && a.name == "pos" {
+                pos = Some(i);
+            }
+        }
+        match (source, pos) {
+            (Some((si, elm)), Some(pi)) => Some((d_nr, si, pi, elm)),
+            _ => None,
+        }
+    }
+
+    /// @PLN35 PC1 — match over a CURSOR: prefix-consume its source from `pos`, advancing `cursor.pos`
+    /// by the consumed count on a match.  Reads source + pos into temps, sets `match_cursor` so the
+    /// slice machinery goes prefix-relative (`read_slice_elem` offsets by `pos`, the length gate is
+    /// `pos + fixed <= len`), runs the normal vector-match over the source, then clears the mode.
+    fn parse_cursor_match(
+        &mut self,
+        subject: Value,
+        cursor_def: u32,
+        source_field: usize,
+        pos_field: usize,
+        elm_tp: &Type,
+        code: &mut Value,
+    ) -> Type {
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
+        // Use the subject's OWN var as the cursor — a struct is a DbRef, so advancing its `pos`
+        // must reach the caller's cursor (same rule the struct-match path follows).  Copy only a
+        // non-var subject (a temporary cursor's advance is then moot, which is fine).
+        let (cursor_var, copy) = if let Value::Var(cv) = &subject {
+            (*cv, false)
+        } else {
+            let t = self.create_unique("cursor", &Type::Reference(cursor_def, Deps::none()));
+            self.vars.defined(t);
+            (t, true)
+        };
+        let source_var = self.create_unique("cursor_src", &vec_tp);
+        self.vars.defined(source_var);
+        let pos_var = self.create_unique("cursor_pos", &I32);
+        self.vars.defined(pos_var);
+        let read_source = self.get_field(cursor_def, source_field, Value::Var(cursor_var));
+        let read_pos = self.get_field(cursor_def, pos_field, Value::Var(cursor_var));
+        let mut setup = Vec::new();
+        if copy {
+            setup.push(v_set(cursor_var, subject));
+        }
+        setup.push(v_set(source_var, read_source));
+        setup.push(v_set(pos_var, read_pos));
+        self.match_cursor = Some((cursor_var, cursor_def, pos_field, pos_var));
+        let mut match_code = Value::Null;
+        let result_tp = self.parse_vector_match(Value::Var(source_var), &vec_tp, &mut match_code);
+        self.match_cursor = None;
+        setup.push(match_code);
+        *code = v_block(setup, result_tp.clone(), "cursor match");
+        result_tp
+    }
+
     fn parse_vector_match(
         &mut self,
         subject: Value,
@@ -6429,7 +6530,45 @@ impl Parser {
                     let fixed = (head.len() + tail.len()) as i32;
                     // Generate length condition
                     let len_call = self.cursor_len(v);
-                    if has_rest {
+                    if let Some((cursor_var, cursor_def, pos_field, pos_var)) = self.match_cursor {
+                        // @PLN35 PC1 — cursor PREFIX-consume: need `fixed` elements from `pos`
+                        // (`pos + fixed <= len`), and on a match advance `cursor.pos` by `fixed`.
+                        // `pos_var` stays the ENTRY position, so every read AND this write share it.
+                        let ispec = Type::Integer(IntegerSpec {
+                            min: 0,
+                            max: 0,
+                            not_null: false,
+                            forced_size: None,
+                        });
+                        let need = self.conv_op(
+                            "+",
+                            Value::Var(pos_var),
+                            Value::Int(fixed),
+                            I32.clone(),
+                            I32.clone(),
+                        );
+                        self.call_op(
+                            cond.get_or_insert(Value::Null),
+                            "<=",
+                            &[need, len_call],
+                            &[ispec.clone(), ispec],
+                        );
+                        let new_pos = self.conv_op(
+                            "+",
+                            Value::Var(pos_var),
+                            Value::Int(fixed),
+                            I32.clone(),
+                            I32.clone(),
+                        );
+                        let adv = self.set_field(
+                            cursor_def,
+                            pos_field,
+                            0,
+                            Value::Var(cursor_var),
+                            new_pos,
+                        );
+                        bindings.push(adv);
+                    } else if has_rest {
                         // length >= fixed  →  fixed <= length
                         self.call_op(
                             cond.get_or_insert(Value::Null),

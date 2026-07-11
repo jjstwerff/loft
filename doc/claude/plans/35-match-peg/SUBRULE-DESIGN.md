@@ -193,10 +193,22 @@ tuples). Reporting is a collaboration, each part where it belongs:
 Each step is independently shippable and verified on **both backends** (`--interpret` + `--native`),
 leak-checked, with driver-agreement for the static rejects.
 
-### PC1 — Cursor as a first-class value
+### PC1 — Cursor as a first-class value — **DONE (fixed-arity), both backends**
 
-**Goal.** `match` accepts a `Cursor<T>` subject and consumes a prefix; the slice-match desugaring
-routes through the same cursor.
+**Landed (option (c), no generics).** Since generic structs are unsupported, a cursor is a
+CONCRETE struct with a `vector<T>` source field + an integer field named `pos` — recognised by
+shape (`cursor_shape`), no `Cursor<T>` type needed; the token type comes from the pattern variants.
+`match <cursor> { [pat] }` PREFIX-consumes: `parse_cursor_match` reads source + pos into temps, sets
+`match_cursor` so `read_slice_elem` offsets forward reads by `pos` and the length gate flips from
+`len == fixed` (whole) to `pos + fixed <= len` (prefix), then advances `cursor.pos` by the consumed
+count on a match (writing the caller's cursor directly — a struct is a DbRef).  A plain `vector<T>`
+is unchanged (whole-consume).  Guard `tests/scripts/35q-cursor-match.loft` (sequential consume, field
+reads relative to pos, end-of-input, vector-unaffected; cross-mode + leak).  **Deferred to a
+follow-up:** repetition / `..rest` / tail-from-end in cursor mode (the offset+prefix interplay needs
+more than the fixed-arity gate); today only fixed-arity forward patterns prefix-consume.
+
+**Original goal.** `match` accepts a `Cursor<T>` subject and consumes a prefix; the slice-match
+desugaring routes through the same cursor.
 **Design.** Introduce the `Cursor<T>` type + `peek`/`next`/`at_end` + matcher-only `anchor`/`revert`.
 Matching a bare `vector<T>` = wrap in a fresh cursor at 0, whole-consume (`P-Whole`); matching a
 `Cursor<T>` = prefix-consume, advance.

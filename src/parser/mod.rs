@@ -281,6 +281,12 @@ pub struct Parser {
     /// O8.5: range bounds captured by `parse_in_range_body` for const-unroll detection.
     pub(crate) last_range_from: Option<Value>,
     pub(crate) last_range_till: Option<Value>,
+    /// @PLN35 PC1 — set while matching over a CURSOR (a struct with a `vector<T>` source + an
+    /// integer `pos`): `(cursor_var, cursor_def, pos_field_idx, pos_var)`.  `pos_var` holds the
+    /// current position (reads are offset by it); the match PREFIX-consumes (gate `pos + fixed <=
+    /// len`, not `len == fixed`) and advances `cursor.pos` by the consumed count on a match.  `None`
+    /// = a plain vector/stream match (whole-consume) — the default, so those paths are unchanged.
+    pub(crate) match_cursor: Option<(u16, u32, usize, u16)>,
     vars: Function,
     /// Last seen line inside the source code, an increase inserts it in the internal code.
     line: u32,
@@ -636,6 +642,7 @@ impl Parser {
             iterable_context: false,
             last_range_from: None,
             last_range_till: None,
+            match_cursor: None,
             vars: Function::new("", "none"),
             line: 0,
             lib_dirs: Vec::new(),
