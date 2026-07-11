@@ -148,6 +148,36 @@ findings, with conversion cost (the trade-off you weigh):
 - ownership.md's O-Deps "0-open/formal" headline oversells vs the honest-floor body (validation, not
   proof; runtime Join witness) — soften the headline so the freeze records what's proven vs validated.
 
+- **DECISION — freeze the LOGICAL layout, keep the PHYSICAL byte-encoding OUT of the frozen
+  contract (2026-07-10, owner).** The layout freeze must draw its line between *logical* identity
+  and *physical* encoding:
+  - **Frozen (the observable contract):** field identity + logical order, **enum ordering =
+    declaration order** (`e1 < e2` / `sorted<T[enum]>` compare by the variant's declaration index,
+    NOT by its stored discriminant value), `==`/ordering semantics, the format caps (256 variants,
+    65536 stores). These are the durable, portable, self-describing contract the @PLN43 mmap store
+    and save files rely on.
+  - **NOT frozen (a storage detail, permutable):** the concrete byte offsets and the discriminant
+    *values* a variant is stored as.
+  - **Why it matters — two forces need it.** (1) The durable/portable store wants a stable,
+    self-describing canonical encoding. (2) **Protected paid assets** (animations/effects — almost
+    all *library* work, never touching game logic) want a **per-export permuted** physical layout so
+    a shipped asset file can't be ripped by a generic tool; and because they are **mmap'd**
+    (zero-copy, on-disk == in-memory — no load-time decode), the permutation must BE the physical
+    layout read in place. Keeping the physical encoding out of the frozen contract makes that
+    per-export permutation a *legal additive transform*, not a break — the same logical types get
+    two mmap-able physical realizations (canonical + permuted).
+  - **The load-bearing requirement:** enum ordering MUST be defined on the **logical** index, not
+    the physical discriminant — otherwise randomizing the discriminant would silently change every
+    enum comparison/sort per build. This is safe *because* these assets are library-only data never
+    ordered as keys, so permuting the physical discriminant is semantically transparent. The
+    permutation stays **normal codegen over a permuted layout table** (build-time), never a special
+    per-access codegen path — so the per-frame animation/effect loop is untouched.
+  - **Action:** state enum ordering as declaration-order in `layout.md`/`matching.md`; add a
+    DESIGN_DECISIONS entry that the physical byte-encoding (offsets + discriminant values) is
+    explicitly OUTSIDE the frozen contract (permutable), with per-export layout randomization named
+    as the motivating additive feature. This is the same "freeze the observable contract, leave the
+    encoding free" shape as the null-model keystone.
+
 ### Operational / evaluation
 - F2 (compound-assign double-eval), F3 (`&&`/`||` short-circuit), F4 (assignment eval order), F5
   (match guards + non-enum match) above.
