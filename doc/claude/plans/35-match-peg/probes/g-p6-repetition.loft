@@ -1,12 +1,9 @@
-// @PLN35 golden · P6 (L3.4 repetition + separator) — STILL RED after Phase 6.1.
-// Phase 6.1 landed the STRUCT-ENUM form `[ ( [name:] V )* [, ..rest] ]` (guard
-// tests/scripts/35i-repetition.loft, both backends).  THIS scalar/literal form needs two
-// prerequisites the repo still lacks: (a) literal slice elements `[ 1, … ]` (an integer
-// literal as a slice element — currently a parse error), and (b) a scalar `name:Type` capture
-// (type-as-match on a non-enum element).  Graduate to 35f-repetition.loft once those land.
-// Graduates to tests/scripts/35f-repetition.loft. `(a)*` collects into a FRESH vector; `+` needs
-// >=1; a separator is consumed, not captured. Hand-computed (both backends):
-// dispatch([1,5,6,7])=="call/3"; dispatch([1])=="call/0"; dispatch([0,42])=="set 42".
+// @PLN35 golden · P6 (L3.4 repetition + separator) — GREEN (slice 1).  Both prerequisites
+// landed: (a) literal slice elements `[ 1, … ]` (Phase 6.3), and (b) a scalar `name:Type`
+// capture + its `name:Type*` / `+` bare-postfix repetition (slice 1).  This golden now passes
+// on both backends; the maintained guard is tests/scripts/35f-repetition.loft (this file stays
+// as the design reference).  `(a)*` collects into a FRESH vector; `+` needs >=1.  Hand-computed
+// (both backends): dispatch([1,5,6,7])=="call/3"; dispatch([1])=="call/0"; dispatch([0,42])=="set 42".
 
 fn dispatch(v: vector<integer>) -> text {
   match v {

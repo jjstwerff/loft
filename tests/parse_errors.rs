@@ -1741,6 +1741,30 @@ fn unknown_field_annotation() {
     );
 }
 
+// @PLN35 slice 1 — a scalar repetition `name:Type*` whose Type is not the vector's element
+// type is rejected.
+#[test]
+fn scalar_rep_type_mismatch() {
+    code!("fn f(v: vector<integer>) -> integer { match v { [ xs:text* ] => xs.len(), _ => -1 } }")
+        .error("a scalar repetition `xs:text*` must match the vector's element type integer at scalar_rep_type_mismatch:1:59");
+}
+
+// @PLN35 slice 1 — a `..rest` after a scalar repetition is not yet supported (a clean error,
+// not a silent mis-parse).
+#[test]
+fn scalar_rep_rest_unsupported() {
+    code!("fn f(v: vector<integer>) -> integer { match v { [ xs:integer*, .. ] => xs.len(), _ => -1 } }")
+        .error("a `..rest` after a scalar repetition `xs:integer*` is not yet supported at scalar_rep_rest_unsupported:1:66");
+}
+
+// @PLN35 slice 1 — a non-literal element after a scalar repetition is rejected (recovers to
+// `]` so this is the primary error, not a cascade).
+#[test]
+fn scalar_rep_nonliteral_tail() {
+    code!("fn f(v: vector<integer>) -> integer { match v { [ xs:integer*, y ] => xs.len(), _ => -1 } }")
+        .error("only literal elements are supported after a scalar repetition `xs:integer*` at scalar_rep_nonliteral_tail:1:65");
+}
+
 // A user type may be named `T` (a name the stdlib uses as a generic type variable):
 // verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
 // The fix keys vector types by their element (not by a display name two distinct

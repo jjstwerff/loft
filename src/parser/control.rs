@@ -4131,6 +4131,172 @@ impl Parser {
         kind
     }
 
+    /// @PLN35 slice 1 — is the upcoming slice element a scalar type-annotated capture
+    /// `name : Type` (optionally with a `*` / `+` repetition postfix)?  Returns
+    /// `Some(is_repetition)` when the shape matches, else `None`.  ONE save/revert look-ahead —
+    /// robust to the `peek_named_arg` that follows it now the `cont()` replay-buffer duplicate
+    /// is fixed (see `lexer::test::link_revert_repeatable_same_region`).
+    fn peek_scalar_type_capture(&mut self) -> Option<bool> {
+        if !matches!(self.lexer.peek().has, LexItem::Identifier(_)) {
+            return None;
+        }
+        let save = self.lexer.link();
+        let mut res = None;
+        self.lexer.cont(); // name
+        if self.lexer.peek_token(":") {
+            self.lexer.cont(); // `:`
+            // A `_` after `:` is the wildcard sub-pattern (`name:_`), not a type — leave it to
+            // the `name:pat` path.  A real type name identifies the scalar capture.
+            if matches!(&self.lexer.peek().has, LexItem::Identifier(id) if id != "_") {
+                self.lexer.cont(); // Type
+                res = Some(self.lexer.peek_token("*") || self.lexer.peek_token("+"));
+            }
+        }
+        self.lexer.revert(save);
+        res
+    }
+
+    /// @PLN35 slice 1 (L3.4 scalar repetition) — a scalar bare-postfix `name:Type*` / `+` slice
+    /// element (no parens).  `Type` names the vector's scalar element type, so EVERY element
+    /// matches and the run takes exactly the middle: `end = len - tail_len` (no run-loop — unlike
+    /// a struct-enum variant run there is no per-element tag that could stop it early).  `name`
+    /// collects `v[head_len .. end]` as a fresh `vector<elm_tp>`, reusing the `..rest`
+    /// materialisation.  Fixed LITERAL tail elements after the run are matched from the END.
+    /// `*` = zero-or-more (`head_len <= end`); `+` requires a non-empty run (`head_len < end`).
+    /// Assumes the lexer is at `name`; consumes through `]`.  A `..rest` or non-literal tail after
+    /// the run, and a `Type` that is not the element type, are rejected.
+    fn parse_scalar_slice_repetition(
+        &mut self,
+        v: u16,
+        elm_size: &Value,
+        elm_tp: &Type,
+        head_len: i32,
+        cond: &mut Option<Value>,
+        bindings: &mut Vec<Value>,
+    ) {
+        let cap_name = self.lexer.has_identifier().unwrap_or_default();
+        self.lexer.token(":");
+        let tname = self.lexer.has_identifier().unwrap_or_default();
+        let elm_name = elm_tp.name(&self.data);
+        if !self.first_pass && tname != elm_name {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a scalar repetition `{cap_name}:{tname}*` must match the vector's element type {elm_name}"
+            );
+        }
+        let plus = self.lexer.has_token("+");
+        if !plus {
+            self.lexer.token("*");
+        }
+        // Tail: fixed LITERAL elements only (a bind / variant / `..rest` after a scalar run is
+        // deferred, mirroring the struct-enum repetition's tail restriction).
+        let mut tail_lits: Vec<(Value, Type)> = Vec::new();
+        while self.lexer.has_token(",") {
+            if self.lexer.peek_token("..") {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "a `..rest` after a scalar repetition `{cap_name}:{tname}*` is not yet supported"
+                    );
+                }
+                self.lexer.has_token("..");
+                let _ = self.lexer.has_identifier();
+                break;
+            } else if self.peek_is_slice_literal() {
+                let mut lit = Value::Null;
+                let lit_tp = self.expression(&mut lit);
+                tail_lits.push((lit, lit_tp));
+            } else {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "only literal elements are supported after a scalar repetition `{cap_name}:{tname}*`"
+                    );
+                }
+                // Recover to the closing `]` so `token("]")` below succeeds and THIS diagnostic
+                // is the reported error, not a first-pass cascade of "Expect token ]" that aborts
+                // before the second pass ever emits it.
+                while !self.lexer.peek_token("]") && !matches!(self.lexer.peek().has, LexItem::None)
+                {
+                    self.lexer.cont();
+                }
+                break;
+            }
+        }
+        self.lexer.token("]");
+        let tail_len = tail_lits.len() as i32;
+
+        // `end = len - tail_len` — the run takes exactly the middle.
+        let end_var = self.create_unique("srep_end", &I32);
+        self.vars.defined(end_var);
+        let len_call = self.cl("OpLengthVector", &[Value::Var(v)]);
+        let end_expr = self.conv_op(
+            "-",
+            len_call,
+            Value::Int(tail_len),
+            I32.clone(),
+            I32.clone(),
+        );
+        let mut run_ops: Vec<Value> = vec![v_set(end_var, end_expr)];
+        // `*` needs room for head+tail (`head_len <= end`); `+` needs a non-empty run
+        // (`head_len < end`).  `>` has no Int form, so `+` is the swapped `<`.
+        let match_bool = if plus {
+            self.conv_op(
+                "<",
+                Value::Int(head_len),
+                Value::Var(end_var),
+                I32.clone(),
+                I32.clone(),
+            )
+        } else {
+            self.conv_op(
+                "<=",
+                Value::Int(head_len),
+                Value::Var(end_var),
+                I32.clone(),
+                I32.clone(),
+            )
+        };
+        run_ops.push(match_bool);
+        let mut arm_cond = v_block(run_ops, Type::Boolean, "scalar rep cond");
+        // AND the fixed tail-literal conditions (matched from the END, negative index) AFTER the
+        // run boolean; `&&` short-circuits so a too-short slice never reads out of range.
+        for (j, (lit, lit_tp)) in tail_lits.into_iter().enumerate() {
+            let pos = Value::Int(-(tail_len - j as i32));
+            match self.build_literal_match(v, elm_size, elm_tp, &pos, &lit, &lit_tp) {
+                Some(tc) => arm_cond = v_if(arm_cond, tc, Value::Boolean(false)),
+                None if !self.first_pass => self.slice_literal_mismatch(elm_tp, &lit_tp),
+                None => {}
+            }
+        }
+        *cond = match cond.take() {
+            Some(existing) => Some(v_if(existing, arm_cond, Value::Boolean(false))),
+            None => Some(arm_cond),
+        };
+
+        // Capture: `name = v[head_len .. end]` (a fresh `vector<elm_tp>`).  Runs once the arm
+        // commits, after the condition set `end`.
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
+        let cap_var = self.vars.add_variable(&cap_name, &vec_tp, &mut self.lexer);
+        self.vars.defined(cap_var);
+        if !self.first_pass && cap_var != u16::MAX {
+            self.materialize_named_rest(
+                v,
+                elm_tp,
+                elm_size,
+                cap_var,
+                &vec_tp,
+                Value::Int(head_len),
+                Value::Var(end_var),
+                1,
+                bindings,
+            );
+        }
+    }
+
     /// @PLN35 Phase 6 (L3.4, P-Rep) — a repetition `[ head…, ( [name:] V )*[(Sep)] [tail…]
     /// [, ..rest] ]` / `…+`.  The body `V` is one variant of the struct-enum element type; the
     /// repetition matches the MAXIMAL run of `V` starting at `head_len` (the count of fixed head
@@ -5614,6 +5780,68 @@ impl Parser {
                         if let Some(name) = self.lexer.has_identifier() {
                             rest_name = Some(name);
                         }
+                    } else if !has_rest
+                        && !matches!(&elm_tp, Type::Enum(..))
+                        && let Some(is_rep) = self.peek_scalar_type_capture()
+                    {
+                        // @PLN35 slice 1 — a scalar type-annotated capture `name:Type` (single —
+                        // a type-as-match that always holds for the element type) OR its
+                        // `name:Type*` / `+` repetition collected into a `vector<elm_tp>`.  Only
+                        // for a SCALAR element type; enum elements keep the `name:pat` /
+                        // `(x: V)*` paths below.
+                        if is_rep {
+                            let head_len = head.len() as i32;
+                            // Bind any BARE-NAME head element before the run (a literal / sub-
+                            // pattern already emitted its own cond and left a "_").  Safe: the
+                            // arm cond requires `head_len <= end <= len` before bindings run.
+                            for (i, hname) in head.iter().enumerate() {
+                                if hname == "_" {
+                                    continue;
+                                }
+                                let bind_nr =
+                                    self.vars.add_variable(hname, &elm_tp, &mut self.lexer);
+                                self.vars.defined(bind_nr);
+                                let val = self.read_slice_elem(
+                                    v,
+                                    &elm_size,
+                                    &elm_tp,
+                                    Value::Int(i as i32),
+                                );
+                                bindings.push(v_set(bind_nr, val));
+                                self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
+                            }
+                            self.parse_scalar_slice_repetition(
+                                v,
+                                &elm_size,
+                                &elm_tp,
+                                head_len,
+                                &mut cond,
+                                &mut bindings,
+                            );
+                            multi_alt = true;
+                            break;
+                        }
+                        // Single `name:Type`: bind `name = v[pos]`; the annotation matches the
+                        // element type so no condition is needed (a "_" keeps position alignment
+                        // for following bare-name indices).
+                        let position = head.len() as i32;
+                        let name = self.lexer.has_identifier().unwrap();
+                        self.lexer.token(":");
+                        let tname = self.lexer.has_identifier().unwrap_or_default();
+                        let elm_name = elm_tp.name(&self.data);
+                        if !self.first_pass && tname != elm_name {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a scalar capture `{name}:{tname}` must match the element type {elm_name}"
+                            );
+                        }
+                        let bind_nr = self.vars.add_variable(&name, &elm_tp, &mut self.lexer);
+                        self.vars.defined(bind_nr);
+                        let val = self.read_slice_elem(v, &elm_size, &elm_tp, Value::Int(position));
+                        bindings.push(v_set(bind_nr, val));
+                        self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
+                        head.push("_".to_string());
                     } else if !has_rest && self.lexer.peek_named_arg().is_some() {
                         // @PLN35 Phase 2 (P-Cap) — `name:pat` element capture. Bind the whole
                         // element to `name` (a VIEW of the subject, exactly the read a bare head

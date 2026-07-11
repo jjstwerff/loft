@@ -94,11 +94,26 @@ full commit); `..rest` reads `v[pos..]` from a runtime cursor = the matched bran
 per §3a: step 1 `read_slice_elem` seam (byte-identical refactor), step 2–4 `parse_multi_element_alternation`
 + `peek_multi_element_alt` lexical lookahead, step 5 `materialize_named_rest(lo, hi)` (extracted,
 shared with the fixed-arity path). Guards: `tests/scripts/35g-multi-element-alternation.loft`.
-**Next: the scalar bare-postfix `name:Type*` repetition (the last gap for the `vector<integer>`
-golden — literal heads already work via 6.3), per-iteration field capture, non-literal tail
-elements after a repetition; then Phase 7 (iterator
-input — the accumulating `read(pos)`), then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook)
-waits on PC.**
+**Slice 1 — DONE, both backends — scalar type-annotated captures (branch
+`tuxedo-pln35-phase7-scalar-rep`, stacked on the PR-#558 tip).** `[ head…, name:Type*|+ [, lit…] ]`
+on a `vector<Scalar>`: the scalar type matches EVERY element, so the run takes exactly the middle
+(`end = len - tail_len`, no run-loop) and `name` collects `v[head_len..end]` as a fresh
+`vector<Type>` (reusing `materialize_named_rest`); a fixed literal head/tail pins the ends. The
+sibling **single** form `name:Type` (a type-as-match that always holds, previously SILENTLY
+never-matched via `self.expression`) now binds one element. `peek_scalar_type_capture`
+classifies the `name:Type[*|+]` element in ONE save/revert (excludes the `_` wildcard sub-pattern
+and enum elements, which keep the `name:pat` / `(x:V)*` paths). Diagnostics: type≠element,
+`..rest`-after-run, non-literal tail (recovers to `]`). Guards `tests/scripts/35f-repetition.loft`
+(graduates the golden `g-p6-repetition.loft`), `parse_errors::scalar_rep_{type_mismatch,
+rest_unsupported, nonliteral_tail}`. **Prereq fixed first: the lexer `link`/`revert` primitive** —
+`cont()` re-appended a duplicate when replaying the LAST buffered token, so two look-aheads over
+the same region (`peek_named_arg` + the new classifier) desynced the parse; now gated on the
+edge-state captured BEFORE `next()` (guards `lexer::test::link_revert_{repeatable_same_region,
+nested_links}`).
+
+**Next: per-iteration field capture `( V { n } )* → n: vector<T_n>`, non-literal tail elements
+after a repetition; then Phase 7 (iterator input — the accumulating `read(pos)`), then the PC1–PC5
+sub-rule layer. §3a step 6 (fold hook) waits on PC.**
 
 **Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
 the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
@@ -859,11 +874,10 @@ desugar in-session).  A non-`#lexeme` field (e.g. `Ident.name`) is matched struc
 statement grammar), `tests/parse_errors.rs::{lexeme_missing, unknown_field_annotation}`.
 
 **Deferred to a follow-up (with the prerequisites they need):**
-- **The scalar golden form** `[ 1, args:integer* ]` (`g-p6-repetition.loft`) — literal slice
-  elements (6.3) now cover the `[ 1, … ]` head; the remaining gap is a scalar **bare-postfix
-  `name:Type*`** repetition (a `vector<integer>` run where the body type matches every element —
-  no parens, no struct-enum tag). The `#lexeme` token-grammar form is the more idiomatic loft
-  path and already works.
+- ~~**The scalar golden form** `[ 1, args:integer* ]`~~ — **DONE (slice 1).** Scalar bare-postfix
+  `name:Type*` / `+` repetition + the single `name:Type` capture (see § RESUME HERE); guard
+  `tests/scripts/35f-repetition.loft`. The `#lexeme` token-grammar form remains the more idiomatic
+  loft path for struct-enum streams.
 - **Per-iteration field capture** inside the body `( V { n } )* → n: vector<T_n>` (a field
   PROJECTION collect, vs today's whole-element collect) — rejected today with a diagnostic.
 - **Mid-slice repetition** (a non-empty head before the group) — today head-empty only.
