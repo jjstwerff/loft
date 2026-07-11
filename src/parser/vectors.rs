@@ -325,6 +325,30 @@ impl Parser {
             let operand_pos = self.lexer.peek_pos().clone();
             let t = self.parse_part(var_tp, val, parent_tp);
             self.known_var_or_type(val, &operand_pos); // @PLN53 F1-1 (see `!` above)
+            // @PLN102 pre-freeze — the leading `-` binds tighter than `**` (loft's uniform
+            // rule: a unary prefix binds tighter than any binary op — the `-` is the sign of
+            // its operand).  So `-2 ** 2` is `(-2) ** 2` = 4, NOT `-(2 ** 2)` = -4 as in
+            // Python/maths (which treat `-` as a weaker OPERATOR).  For a *literal* base this
+            // matches the intuition "-2 IS a number" and is unsurprising, so stay silent.
+            // We warn only when the base is NOT a literal (`-x ** y`, `-f() ** y`), where the
+            // `-` reads as an operator on a subexpression and the grouping is a genuine
+            // footgun.  The grammar rule itself stays uniform (no special-case `**`
+            // precedence).  `(-x) ** y` (the `-` parses inside the paren primary) and
+            // `-(x ** y)` (the operand is a paren primary, so the next token is `)`/`;`, not
+            // `**`) never reach here.
+            let base_is_literal = matches!(
+                val.unspan(),
+                Value::Int(_) | Value::Long(_) | Value::Float(_) | Value::Single(_)
+            );
+            if !self.first_pass && !base_is_literal && self.lexer.peek_token("**") {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "`-x ** y` parses as `(-x) ** y` — the leading `-` binds to `x` as a sign \
+                     (tighter than `**`), not `-(x ** y)`; parenthesise if you meant to negate \
+                     the power"
+                );
+            }
             let arg = val.clone();
             self.call_op(val, "Min", &[arg], &[t])
         } else if self.lexer.has_token("(") {

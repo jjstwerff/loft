@@ -479,10 +479,15 @@ which is **right-associative**: `2 ** 3 ** 2` is `2 ** (3 ** 2) = 512`. Worked g
 `2 * (3 ** 2) == 18` (power tighter than multiply); `x as integer as float` is
 `(x as integer) as float` (`as` left-associative).
 
-Unary operators: `!` (logical not), `-` (negation), `~` (bitwise NOT). A unary prefix
-binds **tighter than every binary operator** (it is part of the primary expression), so
-`-2 ** 2` is `(-2) ** 2 == 4`, *not* `-(2 ** 2)` — note this differs from Python. Wrap the
-exponent base if you mean the negation to apply last: `-(2 ** 2) == -4`.
+Unary operators: `!` (logical not), `-` (negation / sign), `~` (bitwise NOT). A unary prefix
+binds **tighter than every binary operator** — the `-` is the **sign of its operand**, part of
+the primary expression. So `-2 ** 2` is `(-2) ** 2 == 4` (read `-2` as the number
+*negative two*), *not* `-(2 ** 2) == -4` as in Python/maths (which treat `-` as a weaker
+operator). For a **literal** base this matches the "`-2` is a number" intuition and is silent;
+for a **non-literal** base (`-x ** y`, `-f() ** y`) loft emits a **warning** nudging you to
+parenthesise, since there the `-` reads as an operator on a subexpression. The grammar rule is
+uniform either way — only the reminder is added. Wrap explicitly if you mean the negation to
+apply last: `-(x ** 2)`.
 
 `~x` computes the bitwise complement (all bits flipped): `~0 == -1`, `flags & ~32` clears bit 5.
 Only defined for `integer`; use `as integer` to convert other types first.
