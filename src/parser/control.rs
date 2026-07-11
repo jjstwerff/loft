@@ -2712,9 +2712,10 @@ impl Parser {
             Type::Iterator(elem_box, _) => {
                 let elm_tp = (**elem_box).clone();
                 let iter_tp = subject_type.clone();
-                // First cut: SCALAR element types (channel-0, inline).  A `text` / vector / tuple
-                // element rides a different coroutine `next` channel + append shape — deferred; a
-                // clean error points at the collect idiom that works today.
+                // Supported element types: scalars, `text`, and struct-enums (the token-stream
+                // cases).  A plain enum / vector / tuple / struct element rides a different
+                // coroutine `next` channel or append shape — deferred; a clean error points at the
+                // collect idiom that works today.
                 if !self.first_pass
                     && !matches!(
                         elm_tp.base(),
@@ -2723,13 +2724,15 @@ impl Parser {
                             | Type::Boolean
                             | Type::Character
                             | Type::Single
+                            | Type::Text(_)
+                            | Type::Enum(_, true, _)
                     )
                 {
                     let en = elm_tp.name(&self.data);
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "streaming `match` over an `iterator<{en}>` is not yet supported (only scalar element types) — collect it first: `match [for x in <iter> {{ x }}] {{ … }}`"
+                        "streaming `match` over an `iterator<{en}>` is not yet supported (only scalar, text, or struct-enum element types) — collect it first: `match [for x in <iter> {{ x }}] {{ … }}`"
                     );
                 }
                 let (buf, vec_tp, setup) =
@@ -3877,6 +3880,11 @@ impl Parser {
         let ed_nr = self.data.type_def_nr(elm_tp);
         let elm = self.create_unique("stream_elm", &Type::Reference(ed_nr, Deps::none()));
         self.vars.defined(elm);
+        // `elm` is a TRANSIENT ref to the record just appended into `buf` — it belongs to the
+        // buffer, not to `elm`.  Without skip_free, scope cleanup emits `OpFreeRef(elm)` after the
+        // append and frees that record (harmless for an inline int, but it frees the string for a
+        // `text` element — the null-value bug).  The comprehension avoids this via a buffer-db dep.
+        self.vars.set_skip_free(elm);
 
         // `OpCoroutineNext` value_size: packed `(channel_tag << 8) | byte_size` of the yield type
         // (same encoding `next(gen)` computes — collections.rs `iterator`).

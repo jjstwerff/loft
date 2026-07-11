@@ -1,16 +1,21 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// @PLN35 Phase 7 (Path B, step 2a) — streaming `match` over a COROUTINE iterator<Scalar>.  The
-// subject is materialised into a buffer `vector<Scalar>` (eager pull via explicit next/exhausted —
-// a `for` over a stored coroutine hangs) and the EXISTING vector-match machinery runs over it, so
-// streaming stays entirely behind the Cursor seam.  Scalar element types only for now (text /
-// vector / tuple ride a different coroutine channel — deferred with a clean diagnostic).  Graduates
-// the golden `doc/claude/plans/35-match-peg/probes/g-p7-iterator-match.loft`.  Cross-mode + leak.
+// @PLN35 Phase 7 (Path B) — streaming `match` over a COROUTINE iterator.  The subject is
+// materialised into a buffer (eager pull via explicit next/exhausted — a `for` over a stored
+// coroutine hangs) and the EXISTING vector-match machinery runs over it, so streaming stays
+// entirely behind the Cursor seam.  Supported element types: scalars, `text`, and struct-enums
+// (the token-stream cases); plain enum / vector / tuple ride a different coroutine channel and are
+// deferred with a clean diagnostic.  Graduates the golden
+// `doc/claude/plans/35-match-peg/probes/g-p7-iterator-match.loft`.  Cross-mode + leak-checked.
+
+enum Tok { Num { n: integer }, Op { o: integer } }
 
 fn count() -> iterator<integer> { yield 1; yield 5; yield 6; }
 fn empty() -> iterator<integer> { }
 fn floats() -> iterator<float> { yield 1.5; yield 2.5; yield 3.5; }
 fn bools() -> iterator<boolean> { yield true; yield false; }
+fn words() -> iterator<text> { yield "ab"; yield "cd"; yield "ef"; }
+fn toks() -> iterator<Tok> { yield Num { n: 1 }; yield Num { n: 2 }; yield Op { o: 9 }; }
 
 // The golden shape: a repetition and a scalar-capture arm over an iterator param.
 fn dispatch(g: iterator<integer>) -> text {
@@ -30,6 +35,14 @@ fn main() {
   assert(fr == 3, "floats len 3: {fr}");
   br = match bools() { [ bs:boolean* ] => bs.len(), _ => -1 };
   assert(br == 2, "bools len 2: {br}");
+
+  // text element (token stream): collected strings survive (skip_free on the append record).
+  wr = match words() { [ ws:text* ] => "{ws.len()}:{ws[0]}:{ws[2]}", _ => "?" };
+  assert(wr == "3:ab:ef", "words: {wr}");
+
+  // struct-enum element (token stream): a repetition + `..rest` over the pulled tokens.
+  tr = match toks() { [ (x: Num)*, ..rest ] => x.len() * 10 + rest.len(), _ => -1 };
+  assert(tr == 21, "toks 2 Num + 1 rest: {tr}");
 
   print("35p-iterator-match: PASS");
 }

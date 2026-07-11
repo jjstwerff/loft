@@ -954,9 +954,17 @@ is fed.** So:
    evaporated** — the buffer holds all pulled items, so backtracking is a free index (no anchor/
    revert, no eviction).  text / vector / tuple elements ride a different `next` channel → deferred
    with a clean diagnostic (collect-idiom hint).  Guard `tests/scripts/35p-iterator-match.loft`,
-   `parse_errors::stream_match_text_deferred`.
-2b. LAZY per-read pull (read_slice_elem streaming dispatch — avoid full exhaustion) + `max_lookahead`
-   + text/complex element channels.  Behind the same seam.
+   `parse_errors::stream_match_complex_deferred`.
+2b. **DONE (text + struct-enum element channels).** `iterator<text>` (token strings) and
+   `iterator<StructEnum>` (struct-enum token streams) now stream-match on both backends, leak-clean.
+   The one fix: the append record var (`stream_elm`) needed `skip_free` — without it scope cleanup
+   emitted `OpFreeRef` after the append and freed the just-stored record (harmless for an inline
+   int, but it freed the STRING for a `text` element — the null-value bug).  Supported set now:
+   scalar / text / struct-enum; plain enum / vector / tuple ride a different `next` channel (still
+   gated).  Guard broadened in `35p-iterator-match.loft`.
+2c. LAZY per-read pull (read_slice_elem streaming dispatch — avoid full exhaustion) + `max_lookahead`
+   (bound an unbounded iterator so an always-matching body errors instead of hanging).  Behind the
+   same seam; the eager pull is correct for bounded iterators today.
 3. (folded into 2) — no separate opcode/State work needed.
 
 **Feasibility confirmed:** loft coroutines expose explicit `next(gen)` / `exhausted(gen)`

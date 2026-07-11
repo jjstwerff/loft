@@ -1788,12 +1788,12 @@ fn tail_and_rest_rejected() {
         .error("a fixed tail after a repetition cannot combine with `..rest` (yet) at tail_and_rest_rejected:2:74");
 }
 
-// @PLN35 Phase 7 — streaming `match` over a non-scalar (text) element iterator is deferred with a
-// clean error pointing at the collect idiom.
+// @PLN35 Phase 7 — streaming `match` over an unsupported element type (a tuple; scalar / text /
+// struct-enum DO work) is deferred with a clean error pointing at the collect idiom.
 #[test]
-fn stream_match_text_deferred() {
-    code!("fn w() -> iterator<text> { yield \"a\"; }\nfn f() -> integer { match w() { [ x:text* ] => x.len(), _ => -1 } }")
-        .error("streaming `match` over an `iterator<text>` is not yet supported (only scalar element types) — collect it first: `match [for x in <iter> { x }] { … }` at stream_match_text_deferred:2:32");
+fn stream_match_complex_deferred() {
+    code!("fn g() -> iterator<(integer, integer)> { yield (1, 2); }\nfn f() -> integer { match g() { [ _ ] => 1, _ => -1 } }")
+        .error("streaming `match` over an `iterator<(integer, integer)>` is not yet supported (only scalar, text, or struct-enum element types) — collect it first: `match [for x in <iter> { x }] { … }` at stream_match_complex_deferred:2:32");
 }
 
 // A user type may be named `T` (a name the stdlib uses as a generic type variable):
