@@ -153,6 +153,15 @@ the UB class**: a slot of type `τ` never holds a non-`τ` value — it either f
 op is non-null) or it's `null` (and `(N-Store)` forces you to discharge it). We do **not**
 fake non-null on an op that can miss.
 
+> **The one decided exception — overflow arithmetic ([C85](../DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--)).**
+> `a+b` / `a*b` / `a-b` stay typed **non-null `integer`** (forcing `integer?` on every
+> arithmetic op would poison the common path to guard a fault that essentially never fires),
+> yet on overflow they write the reserved `i64::MIN` sentinel into that non-null slot — which
+> then reads as `null`. So a non-null `integer` slot *can* observably hold `null` after an
+> overflow: `(N-Store)` never fires because the op is typed non-null. This is a **deliberate,
+> bounded soundness edge** (parallel to a non-null `float` holding a `NaN`), not a deviation to
+> close — the reachable-fault ops (`/`, `%`, `v[i]`, parse) stay `τ?` as above.
+
 Nullability is **range-driven**, so the discharge burden is proportional to *real* risk,
 not theoretical: `a op b` and `e as τ` are **non-null when the result provably fits** the
 target range — `b=4; b*100 ⇒ Integer[400]` fits i64, so it's non-null, **no `??`** — and

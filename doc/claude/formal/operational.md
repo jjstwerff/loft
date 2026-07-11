@@ -77,13 +77,22 @@ the in-band model, not a silent one.
 ### Evaluation order — left to right
 
 ```
-  (E-Left)   in a binary form `e₁ op e₂`, reduce e₁ to a value first, then e₂:
+  (E-Left)   in a binary form `e₁ op e₂` (op NOT short-circuiting), reduce e₁ to a value
+             first, then e₂:
                  ⟨e₁, σ⟩ → ⟨e₁', σ'⟩   ⟹   ⟨e₁ op e₂, σ⟩ → ⟨e₁' op e₂, σ'⟩
                  ⟨v₁ op e₂, σ⟩ → ⟨v₁ op e₂', σ'⟩   when   ⟨e₂, σ⟩ → ⟨e₂', σ'⟩
+  (E-And)    `e₁ && e₂` reduces e₁ first; if e₁ is false the whole form is false and e₂ is
+             **NOT** evaluated (short-circuit); otherwise the form reduces to e₂.
+  (E-Or)     `e₁ || e₂` reduces e₁ first; if e₁ is true the whole form is true and e₂ is
+             **NOT** evaluated; otherwise the form reduces to e₂.
 ```
 
 **In words.** Operands evaluate left first, then right — so any side effects (a call that
-mutates the store) happen in source order. Both backends must use this order.
+mutates the store) happen in source order. Both backends must use this order. The **only**
+exception is the short-circuiting logical operators `&&`/`||` (and their `and`/`or` spellings):
+they reduce the left operand, and evaluate the right operand *only* when the left has not
+already decided the result — verified on both backends. Every other binary op (arithmetic,
+comparison, `??`) evaluates both operands under E-Left.
 
 ### Arithmetic — uncomputable yields null (the spreadsheet model)
 
@@ -107,9 +116,10 @@ mutates the store) happen in source order. Both backends must use this order.
 divide/modulo by zero — it yields **null** and the program **keeps running**; it does not
 halt. Comparisons are the exception to contagion: they let you *test* for null (`x == null`)
 and give a **total order** with null sorting first, and this is **uniform across scalar
-types** — `null == null` is always true, never type-dependent. (Today `float`/`single`
-diverge: their null is a NaN, so `null == null` is false and ordering is unordered — a
-deviation, D-op-null-1 below, that step 2 of the null-model keystone closes.) This is the **spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)): a
+types** — `null == null` is always true, never type-dependent. (`float`/`single` null was a
+NaN, so `null == null` used to be false and ordering unordered — deviation D-op-null-1, CLOSED
+by keystone step 2 (2026-07-10); both are now uniform with the integer/char behavior.) This is
+the **spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)): a
 cell that can't compute shows null and never stops the other cells. A fault is *local* — it
 degrades one value, never the whole run. The same holds for every uncomputable step (an
 out-of-bounds index, a deref of an absent value): null, continue.
@@ -152,13 +162,15 @@ E-Uncomp's mode-independence.
 
 ```
   (E-Var)    ⟨x, σ⟩ → ⟨σ(x), σ⟩
-  (E-Asgn)   ⟨x = v, σ⟩ → ⟨v, σ[x ↦ v]⟩                 (the RHS reduces first, by E-Left)
+  (E-Asgn)   ⟨x = v, σ⟩ → ⟨v, σ[x ↦ v]⟩                 (the LHS place reduces first —
+                                                        left-to-right — THEN the RHS, by E-Left)
   (E-Seq)    ⟨v ; s, σ⟩ → ⟨s, σ⟩
   (E-IfT)    ⟨if true { s } else { t }, σ⟩ → ⟨s, σ⟩      (and E-IfF for false)
 ```
 
-**In words.** A variable steps to its stored value; an assignment reduces its right side
-then updates the store; a sequence drops a finished statement; an `if` picks the branch
+**In words.** A variable steps to its stored value; an assignment reduces its left-hand
+place first (left-to-right), then its right side, then updates the store; a sequence drops a
+finished statement; an `if` picks the branch
 its (already-evaluated) condition selected. Standard — pinned here only so both backends
 share them.
 
