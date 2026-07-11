@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN35 Phase 4.3 (steps 1-4): a WHOLE-SLICE multi-element alternation
+// `[ (A B | C) ]` — a branch is a SEQUENCE of variant sub-patterns of varying
+// width.  Dispatch is PREDICTIVE on the leading tags (ordered if/else over pure
+// per-branch conditions); the matching branch's captures bind, option-promoted
+// across branches.  A branch whose first tag matches but sequence fails makes
+// the whole arm fail (no silent fallthrough).  Cross-mode.  (`..rest` from the
+// runtime cursor is step 5.)
+
+enum E { A { p: integer }, B { q: integer }, C { r: integer } }
+
+// varying width: branch 1 = [A, B] (binds p, q), branch 2 = [C] (binds r).
+fn combine(v: vector<E>) -> integer {
+  match v {
+    [ (A { p } B { q } | C { r }) ] => (p ?? 0) + (q ?? 0) + (r ?? 0),
+    _ => -1,
+  }
+}
+
+// same-name capture in BOTH branches (stays integer) + a name in only one (option):
+// branch 1 = [Bin, Un] binds n@0 and m@1; branch 2 = [Un] binds n@0.
+enum Node { Bin { n: integer }, Un { m: integer, n: integer } }
+fn value(v: vector<Node>) -> integer {
+  match v {
+    [ (Bin { n } Un { m } | Un { n }) ] => n + (m ?? 0),
+    _ => -1,
+  }
+}
+
+fn main() {
+  ab: vector<E> = [A { p: 3 }, B { q: 4 }];
+  c: vector<E> = [C { r: 9 }];
+  bad: vector<E> = [A { p: 1 }, C { r: 2 }];   // A then C — branch 1 fails at B, no fallback
+  lone: vector<E> = [A { p: 5 }];              // too short for [A, B]
+  assert(combine(ab) == 7, "AB: {combine(ab)}");
+  assert(combine(c) == 9, "C: {combine(c)}");
+  assert(combine(bad) == -1, "A-not-B fails whole arm: {combine(bad)}");
+  assert(combine(lone) == -1, "lone A too short: {combine(lone)}");
+
+  bu: vector<Node> = [Bin { n: 3 }, Un { m: 4, n: 0 }];
+  u: vector<Node> = [Un { m: 9, n: 5 }];
+  assert(value(bu) == 7, "Bin Un: n=3 + m=4: {value(bu)}");
+  assert(value(u) == 5, "lone Un: n=5, m absent (null): {value(u)}");
+  assert(value([Bin { n: 1 }]) == -1, "single Bin no whole branch: {value([Bin { n: 1 }])}");
+
+  print("35g-multi-element-alternation: PASS");
+}
