@@ -16,6 +16,9 @@ use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
+#[path = "common/mod.rs"]
+mod common;
+
 /// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
 /// binaries + native-build storms) — scale every wait there so timing
 /// reflects the machine, not the meaning.
@@ -39,7 +42,7 @@ fn vm_deadline(secs: u64) -> Instant {
     Instant::now() + Duration::from_secs(secs * scale)
 }
 
-const PORT: u16 = 18089;
+const PORT_BASE: u16 = 18089;
 
 fn loft_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/loft")
@@ -103,6 +106,7 @@ fn harness_env_skip(out: &std::process::Output) -> Option<String> {
 
 #[test]
 fn connector_auto_path_end_to_end() {
+    let port = common::test_port(PORT_BASE);
     if !loft_bin().exists() {
         eprintln!("skipping: release loft not built");
         return;
@@ -117,7 +121,7 @@ struct W {{ tick: integer not null }}
 fn main() {{
   engine_host::sync_class(2);
   w = W {{ tick: 0 }};
-  engine_host::run({PORT}, 100000,
+  engine_host::run({port}, 100000,
     fn(ev: engine_host::Event) {{
       if ev.kind == 1 {{ engine_host::send(ev.cid, "7:{{ev.payload}}"); }}
     }},
@@ -140,7 +144,7 @@ struct C {{ done: boolean not null }}
 fn main() {{
   engine_host::sync_class(2);
   c = C {{ done: false }};
-  engine_host::run_client("127.0.0.1", {PORT}, 100000,
+  engine_host::run_client("127.0.0.1", {port}, 100000,
     fn(ev: engine_host::Event) {{
       if ev.kind == 0 {{
         println("client: connected");
@@ -231,7 +235,7 @@ fn keyframes_survive_total_datagram_loss() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let port = 18090u16;
+    let port = common::test_port(18090);
     let server_prog = test_tmp().join(format!("eh_kf_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
@@ -455,7 +459,7 @@ fn s6_browser_swap_under_living_page() {
         return;
     }
 
-    let port = 18102u16;
+    let port = common::test_port(18102);
     // The relay server: ticks the sync class; relays "pushblob:" payloads
     // verbatim to every client (the bulk-channel role — content-agnostic).
     let server_prog = test_tmp().join(format!("eh_s6_srv_{}.loft", std::process::id()));
@@ -495,7 +499,7 @@ fn main() {{
     let _server = Guard(Some(spawn_loft(&server_prog, false)));
 
     // Serve doc/ for the page + bundle.
-    let http_port = 18103u16;
+    let http_port = common::test_port(18103);
     let mut http = Command::new("python3")
         .args([
             "-m",
@@ -700,7 +704,7 @@ fn browser_kernel_one_script_differential() {
         return;
     }
 
-    let port = 18105u16;
+    let port = common::test_port(18105);
     let server_prog = test_tmp().join(format!("eh_diff_srv_{}.loft", std::process::id()));
     std::fs::write(
         &server_prog,
@@ -796,7 +800,7 @@ fn main() {{
     std::thread::sleep(Duration::from_millis(800));
     // Serve doc/ (the page + bundle); kill the kernel server mid-run so the
     // browser client exits and the page compares its transcript.
-    let http_port = 18106u16;
+    let http_port = common::test_port(18106);
     let mut http = Command::new("python3")
         .args([
             "-m",

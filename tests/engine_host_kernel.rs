@@ -22,6 +22,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[path = "common/mod.rs"]
+mod common;
+
 /// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
 /// binaries + native-build storms) — scale every wait there so timing
 /// reflects the machine, not the meaning.
@@ -125,7 +128,7 @@ fn ws_recv(stream: &TcpStream) -> String {
 
 #[test]
 fn kernel_event_broadcast_and_ticks() {
-    run_kernel_scenario(18087, true);
+    run_kernel_scenario(common::test_port(18087), true);
 }
 
 /// @PLN18 08 scenario S1 — the COMPILED baseline serves the same game:
@@ -134,7 +137,7 @@ fn kernel_event_broadcast_and_ticks() {
 /// run pays the rustc build (cached by content hash afterwards).
 #[test]
 fn s1_native_baseline_matches_interpreted() {
-    run_kernel_scenario(18094, false);
+    run_kernel_scenario(common::test_port(18094), false);
 }
 
 /// @PLN18 08 scenario S3 — edit the interpreted fn; the MIXED build keeps
@@ -151,8 +154,8 @@ fn s1_native_baseline_matches_interpreted() {
 /// the stderr file is the synchronization point for the REJECTED edits.
 #[test]
 fn s3_live_edit_under_native_baseline() {
-    let native = run_s3_scenario(18097, false);
-    let interp = run_s3_scenario(18098, true);
+    let native = run_s3_scenario(common::test_port(18097), false);
+    let interp = run_s3_scenario(common::test_port(18098), true);
     assert!(
         native.stderr.contains("live-dispatch: n_bump_events"),
         "the native leg must dispatch through the interpreter:\n{}",
@@ -428,7 +431,7 @@ fn s5_native_swap_under_running_world() {
     s5_kill_stale(STEM); // a stale orphan from a prior run shares the port
     let _hygiene = S5Hygiene(STEM); // and OUR swap child must die at exit
     std::thread::sleep(Duration::from_millis(200));
-    let port = 18100u16;
+    let port = common::test_port(18100);
     // A test-OWNED always-fails binary: /bin/false varies across platforms
     // and runners (macOS CI refused it — forensics pending); a temp script
     // is deterministic everywhere this unix-only suite runs.
@@ -664,7 +667,7 @@ fn s5_client_swap_under_running_world() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let port = 18116u16;
+    let port = common::test_port(18116);
     const STEM: &str = "/.loft/cache/eh_s5c_";
     s5_kill_stale(STEM);
     let _hygiene = S5Hygiene(STEM);
@@ -852,7 +855,7 @@ fn s7_client_debug_over_its_own_endpoint() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let port = 18115u16;
+    let port = common::test_port(18115);
     const STEM: &str = "/.loft/cache/eh_s7c_";
     s5_kill_stale(STEM);
     let _hygiene = S5Hygiene(STEM);
@@ -1195,7 +1198,7 @@ fn s7_debugger_loop_end_to_end() {
     s5_kill_stale(STEM);
     let _hygiene = S5Hygiene(STEM);
     std::thread::sleep(Duration::from_millis(200));
-    let port = 18108u16;
+    let port = common::test_port(18108);
     // The edit touches ONLY the named fn (lambdas don't reload — the
     // documented v1 boundary); each build's identity shows in the STEP:
     // +1 = original, +100 = the edit (and post-swap, its compiled form).
@@ -1370,7 +1373,7 @@ fn s4_background_rebuild_under_serving_kernel() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let port = 18099u16;
+    let port = common::test_port(18099);
     // Tick step: unique per run -> the rebuild is ALWAYS a cache miss (a
     // real rustc window for (b)/(c)); behavior-equal (ticks just advance).
     let unique_step = (std::process::id() % 1000) + 2;
@@ -1923,7 +1926,7 @@ fn s2_flipped_fn_with_par_survives_repeat_dispatch() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let port = 18121u16;
+    let port = common::test_port(18121);
     let prog = test_tmp().join(format!("eh_f11par_{port}_{}.loft", std::process::id()));
     std::fs::write(
         &prog,
@@ -1998,7 +2001,7 @@ fn debugger_drives_a_running_game_server_over_websocket() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let port = 19312;
+    let port = common::test_port(19312);
     let prog = test_tmp().join(format!("eh_dbg_{port}_{}.loft", std::process::id()));
     std::fs::write(
         &prog,
@@ -2096,7 +2099,7 @@ fn server_relays_debug_frames_to_a_named_client() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let port = 19318;
+    let port = common::test_port(19318);
     let prog = test_tmp().join(format!("eh_relay_{port}_{}.loft", std::process::id()));
     std::fs::write(
         &prog,

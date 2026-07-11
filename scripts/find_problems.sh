@@ -55,8 +55,14 @@ source "$(dirname "${BASH_SOURCE[0]}")/sccache_env.sh"
 # — named by their checkout, so two agents in sibling checkouts (e.g. `loft` and `loft2`) never
 # share a file and `--stop` only ever touches THIS checkout's run.
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
+REPO_HASH=$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)
 REPO_SLUG=$(printf '%s' "$(basename "$REPO_ROOT")" | tr -c 'A-Za-z0-9._-' '_')
-REPO_TAG="$REPO_SLUG.$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)"
+REPO_TAG="$REPO_SLUG.$REPO_HASH"
+# Per-checkout server-test port offset: the engine-host / wasm-relay tests bind FIXED ports, so
+# two concurrent suites (this checkout + a sibling) would collide and flake.  Derive a distinct
+# non-zero offset per checkout (a multiple of 2000 > the ~1200-wide base-port span, so two
+# checkouts' ranges never overlap) and export it for `common::test_port`.
+export LOFT_TEST_PORT_OFFSET=$(( (REPO_HASH % 16 + 1) * 2000 ))
 
 # FFI toolchain guard (E0514 self-heal).  A nightly / sanitizer build run into the
 # shared `target/` leaves `target/release/deps/libloft_ffi-*.rlib` compiled by a

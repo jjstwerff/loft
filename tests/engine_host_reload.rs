@@ -17,6 +17,9 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
+#[path = "common/mod.rs"]
+mod common;
+
 /// VM-aware deadline: CI runners are slow and CONTENDED (parallel test
 /// binaries + native-build storms) — scale every wait there so timing
 /// reflects the machine, not the meaning.
@@ -40,7 +43,7 @@ fn vm_deadline(secs: u64) -> Instant {
     Instant::now() + Duration::from_secs(secs * scale)
 }
 
-const PORT: u16 = 18093;
+const PORT_BASE: u16 = 18093;
 
 fn loft_bin() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("target/release/loft")
@@ -125,6 +128,7 @@ fn await_prefix(ws: &TcpStream, want: &str) -> i64 {
 const BODY_A: &str = "\"A:{p}#{n}\"";
 
 fn program(body: &str, sig: &str) -> String {
+    let port = common::test_port(PORT_BASE);
     format!(
         r#"
 use engine_host;
@@ -138,7 +142,7 @@ struct W {{ n: integer not null }}
 
 fn main() {{
   w = W {{ n: 0 }};
-  engine_host::run({PORT}, 50000,
+  engine_host::run({port}, 50000,
     fn(ev: engine_host::Event) {{
       if ev.kind == 1 {{
         w.n = w.n + 1;
@@ -153,6 +157,7 @@ fn main() {{
 
 #[test]
 fn live_reload_swaps_a_running_fn() {
+    let port = common::test_port(PORT_BASE);
     if !loft_bin().exists() {
         eprintln!("skipping: release loft not built");
         return;
@@ -178,7 +183,7 @@ fn live_reload_swaps_a_running_fn() {
         .expect("spawn server");
     let _guard = Guard(Some(child));
 
-    let ws = ws_connect(PORT);
+    let ws = ws_connect(port);
 
     // Baseline.
     let n0 = await_prefix(&ws, "A:ping");
