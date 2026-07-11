@@ -256,6 +256,18 @@ existing consumer keeps its working old version untouched. The same mechanism a 
 *caught* by, we use *on purpose* — safe precisely because we control both the library and the
 language, so we can guarantee the signal costs no one a break.
 
+**This *is* loft's own deprecation mechanism** — the honest one under this promise, not the
+warn-then-remove kind (there is none). To deprecate an idiom in our own surface or libraries is to
+**signal** the successor (the versioning epoch / contract-keyed behaviour / recommended version) and
+**fold** the old onto the new, while the old keeps working forever. Signal + fold *is* the
+deprecation: it steers without threatening and consolidates without removing. So "deprecated" here
+means *"superseded, still supported, implemented over the new primitive"* — never *"going away."*
+
+We are *allowed* to do this; we do not *want* to. Even a break-free signal spends a new epoch and
+taxes every consumer's attention, so the standing preference is **pure-additive — no signal at all**,
+and this mechanism is held in reserve: reached for reluctantly, rarely, and only when a successor
+genuinely earns the steer. Having the lever is not a reason to pull it.
+
 ## The `contract` integer under this promise
 
 Because forward-compatibility is now **guaranteed**, the `contract` version is simpler than
