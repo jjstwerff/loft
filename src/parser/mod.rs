@@ -2874,7 +2874,24 @@ impl Parser {
                 && matches!(ret, Type::Optional(_))
                 && Self::math_arg_in_domain(name, list)
             {
+                // Phase 3.5 elision: a provably-in-domain constant arg peels the `τ?`.
                 ret.base().clone()
+            } else if (matches!(name, "min" | "max" | "clamp") || crate::keys::nullflow_enabled())
+                && Self::is_null_transparent(name)
+                && !matches!(ret, Type::Optional(_))
+                && Self::is_non_null_scalar(&ret)
+                && types.iter().any(|t| matches!(t, Type::Optional(_)))
+            {
+                // Phase 5.3 propagation: a null-transparent fn with a nullable arg → `τ?` + a
+                // runtime guard (if any arg is null the result is null). `min`/`max`/`clamp` used
+                // to carry this in hand-written `τ?` overloads, which were DEFAULT-ON (DN3), so the
+                // guard runs for them in ALL modes (it replaces those overloads); the rest
+                // (`abs`, `floor`, …) are the new LOFT_NULLFLOW behaviour.
+                if self.first_pass {
+                    Type::optional(ret)
+                } else {
+                    self.wrap_null_transparent(code, types, &ret)
+                }
             } else {
                 ret
             }
@@ -2989,6 +3006,64 @@ impl Parser {
             }
             _ => false,
         }
+    }
+
+    /// @PLN102 Phase 5.3 — a NULL-TRANSPARENT stdlib scalar fn: `f(…, null, …) = null`. A nullable
+    /// argument propagates to a nullable result. One general list drives the [`Self::wrap_null_transparent`]
+    /// guard, replacing the per-function `τ?` overloads. (`sqrt`/`ln`/… already return `τ?`, so they
+    /// are not here.)
+    fn is_null_transparent(name: &str) -> bool {
+        matches!(
+            name,
+            "abs" | "min"
+                | "max"
+                | "clamp"
+                | "floor"
+                | "ceil"
+                | "round"
+                | "sin"
+                | "cos"
+                | "tan"
+                | "atan"
+                | "exp"
+        )
+    }
+
+    /// @PLN102 Phase 5.3 — the GENERAL null-propagation algorithm. A null-transparent call `f(a, b)`
+    /// with one or more nullable args becomes `{ t = a; …; if (t not null && …) { f(t, …) } else
+    /// { null } }` typed `τ?`. Each nullable arg is evaluated ONCE into a temp (used in both the
+    /// null-check and the call). This is the general form of what the `min`/`max` `τ?` overloads did
+    /// by hand — floats propagate NaN on their own, but integer `max`/`abs` need this guard, so it
+    /// runs uniformly. Second-pass only (the caller returns the `τ?` type in the first pass).
+    fn wrap_null_transparent(&mut self, code: &mut Value, arg_types: &[Type], ret_base: &Type) -> Type {
+        let opt = Type::optional(ret_base.clone());
+        let mut sets: Vec<Value> = Vec::new();
+        let mut checks: Vec<(u16, Type)> = Vec::new();
+        if let Value::Call(_d, args) = code.unspan_mut() {
+            for (i, at) in arg_types.iter().enumerate() {
+                if matches!(at, Type::Optional(_)) && i < args.len() {
+                    let tmp = self.create_unique("_ntp", at);
+                    let orig = std::mem::replace(&mut args[i], Value::Var(tmp));
+                    sets.push(crate::data::v_set(tmp, orig));
+                    checks.push((tmp, at.base().clone()));
+                }
+            }
+        } else {
+            return opt;
+        }
+        if checks.is_empty() {
+            return opt;
+        }
+        let mut inner = code.clone();
+        for (tmp, base) in checks.iter().rev() {
+            let mut is_not_null = Value::Var(*tmp);
+            self.convert(&mut is_not_null, base, &Type::Boolean);
+            let null_arm = self.null(ret_base);
+            inner = crate::data::v_if(is_not_null, inner, null_arm);
+        }
+        sets.push(inner);
+        *code = crate::data::v_block(sets, opt.clone(), "null_transparent");
+        opt
     }
 
     /// Scan all definitions for methods named `name` (encoded as
