@@ -23,9 +23,17 @@
 
 ## ▶ RESUME HERE — status (2026-07-11)
 
-**Branch** `tuxedo-pln35-match-peg`, pushed, on current `origin/main`; full-suite
-**green** (`2788/2789` — only the environmental `wasm_debug_relay` fails on this box; see memory
+**Branch** `tuxedo-pln35-match-peg` @ `1975a2eb`, pushed, on current `origin/main`; full-suite
+**green** (`2787/2789` — only the environmental `wasm_debug_relay` fails on this box; see memory
 `wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+
+**Phase 2 (L3.1) `..rest` — COMPLETE (2026-07-11).** It binds a FRESH independent `vector<T>`
+tail by **REUSING the compile-time `#Slice materialise` path** (`materialize_iterator`) — the
+`slice_vector` native primitive the old "BLOCKER" section below planned was NOT needed. The
+store-lifetime work that reuse exposed (3 classes) is fixed and documented in
+[`rest-store-lifetime/ANALYSIS.md`](rest-store-lifetime/ANALYSIS.md); read it before touching the
+slice path. Commits: `d8310875` (class-C slice miscompile), `e2742866` (A/B leaks + oracle + corpus),
+`1975a2eb` (the `..rest` feature). The rest of this section is the historical record.
 
 **Design — COMPLETE.** [README.md](README.md) (draft, reconciled), [FORMAL-DESIGN.md](FORMAL-DESIGN.md)
 (spec-first rules, the `INV-Total` invariant), [SUBRULE-DESIGN.md](SUBRULE-DESIGN.md) (the
@@ -46,7 +54,8 @@ Golden target-syntax specs in `probes/g-*.loft`.
   element, reads `v[pos]`, tag-tests+binds via `parse_field_sub_pattern`; a `"_"` placeholder keeps
   positions aligned). Guard: `tests/scripts/35-nested-match.loft` (cross-mode, leak-checked).
 
-**Phase 2 (L3.1) — LIGHTER BITS LANDED; `..rest` still blocked on materialization.**
+**Phase 2 (L3.1) — COMPLETE.** `name:pat`, M-Total, P-Cap-View (below) + `..rest` (see the
+`..rest` section further down) all landed, both backends, full-suite green.
 
 **LANDED (this cycle), both backends, byte-identical for untouched paths + full-suite green:**
 - **`name:pat` element captures (P-Cap).** An element may be `name:subpattern` — bind the whole
@@ -87,26 +96,26 @@ Golden target-syntax specs in `probes/g-*.loft`.
 **Syntax DECIDED: `..rest`** (two dots + adjacent name), NOT `...` — loft lexes `..`, not `...`.
 Docs reconciled to `..rest` throughout.
 
-**BLOCKER (unchanged) — the tail sub-slice materialization primitive.** `..rest` binds
-  `rest = v[head_len .. len − tail_len]` as a FRESH `vector<T>`. But `v[a..b]` is a lazy
-  `iterator<T>` that materializes only on ASSIGNMENT via a token-parsing comprehension desugar
-  (`objects.rs`: `slice_clamp_bound` + the `#Slice materialise` loop). No stdlib slice fn; a generic
-  loft `fn f<T>(v,lo,hi)->vector<T>{ s=v[lo..hi]; s }` PANICS (interp `keys.rs`) / native E0308
-  (generics don't compose with slicing). `src/vector.rs::alloc_vector_from_bytes` is a BYTE copy —
-  correct for SCALAR elements only; HEAP elements (text/struct/struct-enum — what parser tokens are)
-  need element-type-aware DEEP copy (which is why the existing materialization is a typed per-element
-  loop).
-- **NEXT STEP (chosen: option b) — build `vector::slice_vector`** in `src/vector.rs`:
-  element-type-aware (byte-copy the scalar case via `alloc_vector_from_bytes`; deep-copy the heap case,
-  modeled on the `v[a..b]` per-element materialization + `copy_vector_of_struct` / `copy_record`).
-  Then `fn vector_slice(v: vector, lo: integer, hi: integer) -> vector;` + a `#rust` template in
-  `default/01_code.loft` → `make fill` → native (template or a `codegen_runtime` helper) → wire
-  `..rest` in `parse_vector_match` (detect `..name`; bind `rest = vector_slice(v, head_len,
-  len−tail_len)`). Store-level + lifetime-sensitive → do it **MATRIX-GATED** (engineering-rigor):
-  scalar/text/struct elements × empty/full/negative bounds × value + length + **leak**, both backends.
-- **Lighter Phase-2 bits — DONE** (see "LANDED" above): `name:pat` element captures + the totality
-  gate. The remaining Phase-2 work is `..rest` (blocked on materialization) and the totality
-  diagnostic wiring for a `..rest` arm.
+**~~BLOCKER — the tail sub-slice materialization primitive~~ — RESOLVED by REUSE (2026-07-11).**
+The old plan built a new `vector::slice_vector` native primitive; instead `..rest` in
+`parse_vector_match` (`control.rs`) constructs a minimal slice `Value::Iter` over
+`v[head_len .. len − tail_len]` and hands it to the EXISTING `materialize_iterator`
+(`expressions.rs`, made `pub(crate)`) — the same element-type-aware deep-copy loop that
+`s = v[lo..hi]` uses. No new opcode, no `slice_vector`, no generics. `rest` is a fresh
+independent `vector<T>`: safe to return, mutate, index, pass on. Bug #1 below (heap slice-view
+returned corrupts the subject) is subsumed — the A/B store-lifetime fixes handle the escaping
+capture into an enum / `&text` return. Guards: `tests/scripts/35c-rest-capture.loft`,
+`35d-slice-enum-reuse.loft`.
+
+**Store-lifetime rigor (the payoff of the reuse path).** Reusing `#Slice materialise` exposed
+three store-lifetime classes, all fixed under a @PLN85-style attack (33-probe corpus + a
+reporting OBSERVER oracle `LOFT_REST_ORACLE`, both backends, 0 mismatches). See
+[`rest-store-lifetime/ANALYSIS.md`](rest-store-lifetime/ANALYSIS.md): **A/B** = a `..rest` arm's
+`__vdb` free landed before its alloc for non-hoisted return types (fixed in `insert_free`);
+**C** = a PRE-EXISTING interpret-only miscompile of `v[lo..hi]` on struct-enum vectors (the
+`comp_var = for_var` intermediate dropped the borrow-dep → the free-analysis freed the subject's
+own record; found only by adding the **reuse axis** the corpus first missed; fixed by dropping the
+intermediate and deep-copying the dep-carrying `for_var` directly, unifying both backends).
 
 **Instrument (loft-codegen gate).** `bytecode-comparisons/`: one-fn-per-path corpora + `INSTRUMENT.md`
 — the two-part byte-identical capture (`LOFT_LOG=static` IR + `loft --native-emit` Rust; **warm up
