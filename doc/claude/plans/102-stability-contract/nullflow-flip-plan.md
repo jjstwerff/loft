@@ -151,13 +151,28 @@ bump the version, re-sign, publish (loft-ship skill). Tracks the `registry-valid
 
 ---
 
-## Category F — goldens
+## Category F — goldens — IN-REPO PART DONE (commit 4c29c6fe); rest is F5-coupled
 
-**Cause.** New warnings change diagnostic goldens. **Sites:** `tests/runtime_warnings.rs`
-(`wrong_field_guard_still_rejects`), `tests/features.rs` (`features_examples_interpret`), plus any
-`@EXPECT_ERROR`/golden that pins a message A/B changed. **Step F.** Regenerate after A–D land;
-grep inline `.error(...)` / `@EXPECT_ERROR` for pinned wording (a stale test binary can mask
-message-assertion changes — force a rebuild or trust CI's clean build).
+**Cause.** New warnings change diagnostic goldens. **The audit (2026-07-11) found exactly one
+gate-dependent in-repo golden** — the rest of the "F" flip failures are F5, not wording shifts.
+
+- **`tests/runtime_warnings.rs::wrong_field_guard_still_rejects` — DONE, made gate-robust.** It
+  pinned the gate-off hard-error wording (`"cannot be stored into the return value"`); under
+  LOFT_NULLFLOW the N-Store teeth relax to a WARNING for a full-width `text` return (`"is stored
+  into the return value … becomes null there"`). Both contain `"stored into the return value of the
+  non-null type"` — assert on that shared substring → passes on BOTH gates now (no flip-atomic edit
+  needed). This is the pattern for any error→warning golden: match the shared wording, don't pin the
+  verb.
+- **`tests/features.rs::features_examples_interpret` + `tests/native.rs::native_features` — NOT
+  golden shifts.** They fail only on the GENERATED `F5.loft` bare `"42" as integer` (Category A/F5).
+  The `as integer?` fix is OUTPUT-NEUTRAL (prints `3 42 65` either way), so these goldens do not
+  move — they simply need F5's issue edit + regen, which lands in the flip's outward bundle.
+- **Audit of other pinned wording (no change needed):** `nullflow_phase1.rs` deliberately pins BOTH
+  the gate-off `"cannot be stored"` and gate-on `"is stored into"` (it sets the flag per-case — a
+  positive control, leave it); `threading_chars.rs`/`parse_errors.rs` `"cannot be stored"` are about
+  CLOSURES/references (unrelated); `tests/scripts/102-expected-errors.loft` `@EXPECT_ERROR: … cannot
+  be stored` still fire under the flip (NOT among the 8 flip failures — narrow/element stores keep
+  the hard error). Output goldens are unaffected: the `as τ?` conversions print identical values.
 
 ---
 
@@ -172,7 +187,9 @@ message-assertion changes — force a rebuild or trust CI's clean build).
    F5, and the flip itself.
 3. **E** — republish the ~9 registry libs (loft-libs-*), in parallel; this is the gating item for
    a green `registry-validation`.
-4. **F** — regenerate goldens.
+4. ~~**F** — regenerate goldens.~~ **IN-REPO PART DONE 2026-07-11 (commit 4c29c6fe).** The one
+   gate-dependent golden (`wrong_field_guard_still_rejects`) is now gate-robust. The remaining F
+   flip failures are F5-coupled (features/native) — they move with F5 below.
 5. **The flip** — `nullflow_enabled()` → default-on with `LOFT_NO_NULLFLOW` opt-out
    (`src/keys.rs`); repoint the `tests/nullflow_phase*.rs` OFF cases to `LOFT_NO_NULLFLOW`; bump
    `CONTRACT_VERSION` 0 → 1 (`src/manifest.rs`). Land as ONE coordinated set so nothing stays red.
