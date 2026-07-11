@@ -27,6 +27,11 @@ Uses [operational.md](operational.md)'s `⟨e, σ⟩ → ⟨e', σ'⟩` and [hea
 - `len(src)` is the element count; `elem(src, i)` reads the `i`-th element via `H-Index`
   ([heap.md](heap.md)); both are `null` past the end (they never fault).
 - `x` is the loop variable, bound fresh each round; `body` is the loop body.
+- **Also backs pattern matching** ([matching.md § PEG patterns](matching.md), @PLN35 SPEC-FIRST):
+  the same `⟨i, src⟩` cursor walks a slice pattern — *anchor* = save `i`, *revert* = restore `i` —
+  so backtracking over a vector needs no new primitive; a read past the end is `null` (`I-Done`),
+  never a fault. (An *iterator* pattern cursor cannot re-index, so it adds a memo buffer + two ops —
+  matching.md `P-Anchor`/`P-Revert`.)
 
 ---
 

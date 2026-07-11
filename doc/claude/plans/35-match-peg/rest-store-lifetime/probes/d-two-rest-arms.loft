@@ -1,0 +1,5 @@
+// @DESC two arms each with ..rest
+// @EXPECT 103
+// @LEAK ok
+fn f(v: vector<integer>) -> integer { match v { [a, b, ..r] => len(r) + 100, [a, ..r] => len(r), _ => -1 } }
+fn main() { assert(f([1,2,3,4,5]) == 103, "n={f([1,2,3,4,5])}"); print("PASS"); }

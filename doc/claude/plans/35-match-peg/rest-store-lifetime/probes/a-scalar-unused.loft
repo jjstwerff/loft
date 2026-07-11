@@ -1,0 +1,5 @@
+// @DESC rest materialised but unused (scalar)
+// @EXPECT 42
+// @LEAK ok
+fn f(v: vector<integer>) -> integer { match v { [h, ..rest] => 42, _ => -1 } }
+fn main() { assert(f([10, 20, 30, 40]) == 42, "n={f([10, 20, 30, 40])}"); print("PASS"); }

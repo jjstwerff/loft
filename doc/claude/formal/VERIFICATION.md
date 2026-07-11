@@ -131,6 +131,30 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 - ✓ **M-Wild** — `_` matches any; an arm AFTER `_` REJECTS on both backends (driver-agreement). *Guard.*
 - ✓ **M-Exhaust** — a missing variant REJECTS on both backends (driver-agreement). *Guard: oracle `19`-style.*
 
+## matching.md — PEG patterns (@PLN35, spec-first)
+
+Rules WRITTEN AHEAD OF CODE ([matching.md § Rules — PEG patterns](matching.md)). Every row is ☐
+until its [plans/35-match-peg](../plans/35-match-peg/) phase lands and graduates an oracle program
+(`tests/oracle/35-*.loft`, both-backends + leak + driver-agreement). Design + phase↔rule map:
+[plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
+
+- ☐ **M-Total (the invariant)** — a match with a non-total pattern and no total final arm REJECTS on
+  `--dump` / `--interpret` / `--native` alike (driver-agreement); adding a `_` makes it compile and
+  always select an arm. *Pin: P0 falsifier `35-invariant-*.loft`.*
+- ☐ **P-Point (L2 nested)** — `V { f: Inner { x } }` binds the nested field; both backends. *Pin: P1.*
+- ☐ **P-Seq / P-Whole / P-Rest** — a sequence matches exact length; `[a,b,c]` REJECTS a length-4
+  slice (D-F1 whole-consume); `..rest` binds the sub-slice by value AND length, leak-clean. *Pin: P2.*
+- ☐ **P-Multi** — a multi-pattern arm binds from the first matching shape; both backends. *Pin: P3.*
+- ☐ **P-Alt / P-Atomic** — ordered choice takes the first match; a partial-then-failed alternative
+  leaves the cursor reset (the next element still matches); different-name captures ⟹ `τ?`. *Pin: P4.*
+- ☐ **P-Opt** — present ⟹ bound, absent ⟹ null capture, cursor intact. *Pin: P5.*
+- ☐ **P-Rep** — `(a)*` collects a `vector<τ>` (count + values + length + leak); `+` needs ≥1; a
+  separator is consumed, not captured. *Pin: P6.*
+- ☐ **P-Anchor / P-Revert / P-IterBound** — an iterator match backtracks via the memo buffer; bounded
+  by `max_lookahead` (no hang); native parity via a custom `OpEmitter`. *Pin: P7.*
+- ☐ **Capture typing (types.md § Pattern captures)** — alternation-unify (`⊔`), optional / absent
+  (`τ?`), repetition / rest (`vector<τ>`) — NO new type former. *Pin: P4–P6 typecheck cases.*
+
 ## tuples.md
 
 - ✓ **T-Cons / T-Proj / T-Destr / T-Ret** — construct + `.i` + `(a,b)=…` + tuple return, both

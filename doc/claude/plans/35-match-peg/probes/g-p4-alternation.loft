@@ -1,0 +1,18 @@
+// @PLN35 golden · P4 (L3.2 alternation + capture unification) — RED until Phase 4.
+// Graduates to tests/scripts/35d-alternation.loft. `(a | b)` ordered choice; same-name capture
+// unifies. This is the parser form of the confirmed D2 backtracking (probes/p0-d2-backtrack.loft).
+// Hand-computed (both backends): classify([0,7])==7; classify([1,7])==7; classify([2,7])==-1.
+
+fn classify(v: vector<integer>) -> integer {
+  match v {
+    [ (0 | 1), x ] => x,      // ordered choice on the first element, then bind the second
+    _              => -1,
+  }
+}
+
+fn main() {
+  assert(classify([0, 7]) == 7, "branch 0 then bind x=7");
+  assert(classify([1, 7]) == 7, "branch 1 then bind x=7");
+  assert(classify([2, 7]) == -1, "neither alternative -> _");
+  print("P4 alternation: PASS");
+}

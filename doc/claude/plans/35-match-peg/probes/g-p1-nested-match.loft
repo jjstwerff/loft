@@ -1,0 +1,22 @@
+// @PLN35 golden · P1 (L2 nested patterns) — RED until Phase 1 lands.
+// Graduates to tests/scripts/35-nested-match.loft (cross-mode, leak-checked) when P1 ships.
+// Currently parse-errors: a nested sub-pattern in a field position is rejected ("Expect token }").
+// Hand-computed expected (both backends): describe(O{inner:I{n:7}})=="I 7"; O{inner:J{m:3}}=="J 3".
+
+enum Inner { I { n: integer }, J { m: integer } }
+enum Outer { O { inner: Inner }, Bare { k: integer } }
+
+fn describe(o: Outer) -> text {
+  match o {
+    O { inner: I { n } } => "I {n}",     // L2: nested pattern in a field position (the new capability)
+    O { inner: J { m } } => "J {m}",
+    Bare { k }           => "bare {k}",
+  }
+}
+
+fn main() {
+  assert(describe(O { inner: I { n: 7 } }) == "I 7", "nested I binds n=7");
+  assert(describe(O { inner: J { m: 3 } }) == "J 3", "nested J binds m=3");
+  assert(describe(Bare { k: 9 }) == "bare 9", "single-level still works");
+  print("P1 nested-match: PASS");
+}

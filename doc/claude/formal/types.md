@@ -247,6 +247,35 @@ overflows *at runtime* yields **null and keeps running** (operational.md `E-Unco
               op or cast and appears in the syntax.
 ```
 
+### Pattern captures (@PLN35, SPEC-FIRST · planned, NOT yet implemented)
+
+> **@PLN35 · SPEC-FIRST** — the target for PEG match-pattern capture typing
+> ([matching.md § Rules — PEG patterns](matching.md)), written ahead of the code; pinned per-phase
+> by the @PLN89 oracle as [../plans/35-match-peg/](../plans/35-match-peg/) lands. Design:
+> [../plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
+
+A pattern capture binds a name to a matched sub-result. **The headline is that this introduces NO
+new type former** — every capture lands on `τ`, `τ?`, or `vector<τ>`, unified by the SAME join `⊔`
+and nullable-join `(N-Join)` that already run the integer / nullability model above.
+
+```
+  (P-Cap-Ty)     Γ ⊢ (name:p)  binds  name : τ         where Γ ⊢ p's result ⇒ τ
+  (P-Alt-Same)   (a | b) both bind name : τ_a, τ_b     ⟹   name : τ_a ⊔ τ_b   (the join; if τ_a ⊔ τ_b
+                 is undefined ⟹ STATIC ERROR "alternatives bind name at incompatible types")
+  (P-Alt-Diff)   name bound in only SOME alternatives  ⟹   name : τ?           (via (N-Join))
+  (P-Opt-Ty)     a capture inside (a)?                 ⟹   promoted to τ?       (via (N-Opt))
+  (P-Rep-Ty)     the capture inside (a)* / (a)+        ⟹   vector<τ>            (via (N-Dense))
+  (P-Rest-Ty)    ..name over a vector<τ> subject      ⟹   name : vector<τ>
+```
+
+**In words.** A named capture takes the type of whatever its sub-pattern produced. When two
+alternatives bind the same name, the two types are joined (`integer` and `u8` → `integer`; no join
+⟹ a compile error, exactly like an incompatible integer join). A name only *some* branches bind, or
+a capture inside an optional, becomes nullable (`τ?`) — the same optional-join `(N-Join)` an
+inferred `a = null; a = 5` uses. A repetition or `..rest` collects into a `vector<τ>`. So PEG
+capture typing is a new *source* of the types loft already has; `match` also stays a `τ?` eliminator
+(`(N-Match)` is unchanged — a `null` / `x` arm still discharges an optional).
+
 ---
 
 ## Deviations

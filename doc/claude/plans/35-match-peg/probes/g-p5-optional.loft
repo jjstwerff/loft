@@ -1,0 +1,17 @@
+// @PLN35 golden · P5 (L3.3 optional) — RED until Phase 5.
+// Graduates to tests/scripts/35e-optional.loft. `(a)?` binds its captures to null on absence,
+// cursor unmoved. Hand-computed (both backends): describe([1,2])=="1(2)"; describe([1])=="1(0)".
+
+fn describe(v: vector<integer>) -> text {
+  match v {
+    [ head, (tail)? ] => "{head}({tail ?? 0})",   // tail : integer? — null when the optional is absent
+    _                 => "empty",
+  }
+}
+
+fn main() {
+  assert(describe([1, 2]) == "1(2)", "optional present binds tail=2");
+  assert(describe([1]) == "1(0)", "optional absent -> null -> ?? 0");
+  assert(describe([]) == "empty", "empty falls to _");
+  print("P5 optional: PASS");
+}

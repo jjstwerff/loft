@@ -1,0 +1,6 @@
+// @DESC pass rest to a fn (scalar)
+// @EXPECT 3
+// @LEAK ok
+fn nt(w: vector<integer>) -> integer { len(w) }
+fn f(v: vector<integer>) -> integer { match v { [h, ..rest] => nt(rest), _ => -1 } }
+fn main() { assert(f([10, 20, 30, 40]) == 3, "n={f([10, 20, 30, 40])}"); print("PASS"); }

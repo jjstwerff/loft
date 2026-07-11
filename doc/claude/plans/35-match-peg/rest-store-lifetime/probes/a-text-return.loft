@@ -1,0 +1,5 @@
+// @DESC return rest (text)
+// @EXPECT 3
+// @LEAK ok
+fn f(v: vector<text>) -> vector<text> { match v { [h, ..rest] => rest, w => w } }
+fn main() { r = f(["a", "b", "c", "d"]); assert(len(r) == 3, "len={len(r)}"); print("PASS"); }

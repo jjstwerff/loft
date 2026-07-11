@@ -1,0 +1,34 @@
+name	expect	leak	desc
+a-scalar-return	3	ok	return rest (scalar)
+a-scalar-len	3	ok	len(rest) in-arm (scalar)
+a-scalar-pass	3	ok	pass rest to a fn (scalar)
+a-scalar-unused	42	ok	rest materialised but unused (scalar)
+a-scalar-reuse	3	ok	call ..rest fn twice on the same subject (scalar)
+a-text-return	3	ok	return rest (text)
+a-text-len	3	ok	len(rest) in-arm (text)
+a-text-pass	3	ok	pass rest to a fn (text)
+a-text-unused	42	ok	rest materialised but unused (text)
+a-text-reuse	3	ok	call ..rest fn twice on the same subject (text)
+a-struct-return	3	ok	return rest (struct)
+a-struct-len	3	ok	len(rest) in-arm (struct)
+a-struct-pass	3	ok	pass rest to a fn (struct)
+a-struct-unused	42	ok	rest materialised but unused (struct)
+a-struct-reuse	3	ok	call ..rest fn twice on the same subject (struct)
+a-enum-return	3	ok	return rest (enum)
+a-enum-len	3	ok	len(rest) in-arm (enum)
+a-enum-pass	3	ok	pass rest to a fn (enum)
+a-enum-unused	42	ok	rest materialised but unused (enum)
+a-enum-reuse	3	ok	call ..rest fn twice on the same subject (enum)
+b-varhead-unused-int	3	ok	variant head capture unused, len(rest) int
+b-varhead-escape-text-unused	let	ok	captured head field escapes (&text), rest unused — sub-class B, FIXED
+b-varhead-escape-text-used	let3	ok	captured field + rest into a FORMATTED text (owned, not promoted &text)
+b-varhead-escape-enum-used	3	ok	captured field + nt(rest) into an enum (p1) — sub-class A, FIXED
+b-varhead-escape-struct-used	3	ok	captured field + rest into a struct — sub-class A, FIXED
+b-varhead-return-rest	3	ok	variant head capture unused, return rest vector
+c-namepat-escape	UPS	ok	name:pat ELEMENT capture escapes + ..rest (clean — element, not field)
+d-two-rest-arms	103	ok	two arms each with ..rest
+e-empty-heap-vec-match	0	ok	[] empty heap vector as a match _ arm (no ..rest)
+e-empty-scalar-vec-match	0	ok	[] empty scalar vector as a match _ arm (control)
+d-subject-local	3	ok	subject is a local
+d-nested-match	3	ok	..rest inside a match returned from an outer match
+d-namepat-plus-rest-escape	hi	ok	name:pat head + ..rest, name escapes as text — sub-class B, FIXED

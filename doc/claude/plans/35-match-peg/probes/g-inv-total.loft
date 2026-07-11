@@ -1,0 +1,20 @@
+// @PLN35 golden · INV-Total (the north-star invariant, M-Total) — RED until the gate lands (P0/P1).
+// Graduates to a tests/parse_errors.rs case + an oracle driver-agreement program. A match with a
+// non-total (structural) pattern and NO total final arm MUST be a STATIC ERROR, identically on
+// --dump / --interpret / --native. Adding a `_` arm makes it compile. This preserves loft's
+// promise that a match never fails to select an arm at runtime.
+//
+// @EXPECT_ERROR (once M-Total lands): match is not exhaustive
+//   "a structural pattern can fail; add a `_` arm"
+
+fn bad(v: vector<integer>) -> integer {
+  match v {
+    [ a, b, c ] => a + b + c,     // non-total (length-constrained), NO trailing `_` -> MUST REJECT
+  }
+}
+
+fn main() {
+  // The fix that makes it compile is a total final arm:
+  //   match v { [a, b, c] => a + b + c, _ => 0 }
+  print("INV-Total: this file must be REJECTED once the M-Total gate lands");
+}

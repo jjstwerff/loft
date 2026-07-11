@@ -1,0 +1,6 @@
+// @DESC call ..rest fn twice on the same subject (struct)
+// @EXPECT 3
+// @LEAK ok
+struct P { x: integer, y: integer }
+fn f(v: vector<P>) -> integer { match v { [h, ..rest] => len(rest), _ => -1 } }
+fn main() { s = [P{x:1,y:1}, P{x:2,y:2}, P{x:3,y:3}, P{x:4,y:4}]; a = f(s); b = f(s); assert(a == 3 && b == 3, "reuse: {a},{b}"); print("PASS"); }

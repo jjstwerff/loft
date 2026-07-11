@@ -108,6 +108,11 @@ an argument, **read** / **update** / **append** a field. `Cap-Call`/`Cap-Set`/`C
 evidence it is at the right altitude — an operation that needed a seventh rule would be an
 edge the rules can't express, i.e. a signal the *rule* is wrong (README), not a new case.
 
+> **Pattern matching is capability-neutral (@PLN35, SPEC-FIRST).** PEG match patterns
+> ([matching.md § Rules — PEG patterns](matching.md)) introduce no new host surface — no I/O, no
+> ambient authority. A `match` over an iterator inherits the iterator's own admission (the *pull* is
+> the gated operation, not the match), so no new `Cap-*` rule is owed.
+
 ---
 
 ## Deviations

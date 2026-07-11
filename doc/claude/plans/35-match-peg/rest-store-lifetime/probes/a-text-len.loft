@@ -1,0 +1,5 @@
+// @DESC len(rest) in-arm (text)
+// @EXPECT 3
+// @LEAK ok
+fn f(v: vector<text>) -> integer { match v { [h, ..rest] => len(rest), _ => -1 } }
+fn main() { assert(f(["a", "b", "c", "d"]) == 3, "n={f(["a", "b", "c", "d"])}"); print("PASS"); }

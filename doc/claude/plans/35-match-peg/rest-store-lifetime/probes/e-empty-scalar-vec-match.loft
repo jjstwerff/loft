@@ -1,0 +1,5 @@
+// @DESC [] empty scalar vector as a match _ arm (control)
+// @EXPECT 0
+// @LEAK ok
+fn pick(n: integer, src: vector<integer>) -> vector<integer> { match n { 0 => src, _ => [] } }
+fn main() { a = [1]; assert(len(pick(9, a)) == 0, "n={len(pick(9,a))}"); print("PASS"); }

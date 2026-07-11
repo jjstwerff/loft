@@ -24,7 +24,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > (store alloc/read/write/copy/free), [iteration.md](iteration.md) (`for` + combinators),
 > [coroutines.md](coroutines.md) (generators), [concurrency.md](concurrency.md) (`par`),
 > [calls.md](calls.md) (function call/return + parameter binding), [matching.md](matching.md)
-> (`match` + exhaustiveness), [tuples.md](tuples.md), [closures.md](closures.md) (lambdas /
+> (`match` + exhaustiveness; + PEG patterns and the two new ops `OpMatchAnchor` / `OpMatchRevert`,
+> @PLN35 SPEC-FIRST), [tuples.md](tuples.md), [closures.md](closures.md) (lambdas /
 > closures / fn-refs), [formatting.md](formatting.md) (`"{x}"` interpolation + value→text
 > rendering), and [interfaces.md](interfaces.md) (interfaces + generics — a static/typing area).
 > Every sibling file is now at **0 own deviations** (closures' D-clo-1/2 closed 2026-07-04;

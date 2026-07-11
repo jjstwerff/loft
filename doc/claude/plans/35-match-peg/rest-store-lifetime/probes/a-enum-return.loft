@@ -1,0 +1,6 @@
+// @DESC return rest (enum)
+// @EXPECT 3
+// @LEAK ok
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+fn f(v: vector<Detail>) -> vector<Detail> { match v { [h, ..rest] => rest, w => w } }
+fn main() { r = f([Ship{carrier:"A"}, Pickup{store:2}, Pickup{store:3}, Pickup{store:4}]); assert(len(r) == 3, "len={len(r)}"); print("PASS"); }

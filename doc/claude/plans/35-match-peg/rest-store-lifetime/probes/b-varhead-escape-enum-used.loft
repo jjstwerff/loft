@@ -1,0 +1,9 @@
+// @DESC captured field + nt(rest) into an enum (p1) — sub-class A, FIXED
+// @EXPECT 3
+// @LEAK ok
+enum Tok { Kw { word: text }, Ident { name: text }, Num { value: integer } }
+enum Stmt { LetS { name: text, count: integer }, Other { count: integer } }
+fn nt(w: vector<Tok>) -> integer { len(w) }
+fn parse(ts: vector<Tok>) -> Stmt { match ts { [Kw { word }, ..rest] => LetS { name: word, count: nt(rest) }, whole => Other { count: -1 } } }
+fn cnt(s: Stmt) -> integer { match s { LetS { name, count } => count, Other { count } => count } }
+fn main() { ts = [Kw{word:"let"}, Num{value:1}, Num{value:2}, Num{value:3}]; assert(cnt(parse(ts)) == 3, "c={cnt(parse(ts))}"); print("PASS"); }

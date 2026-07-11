@@ -1,0 +1,55 @@
+// @PLN35 Phase 0 · probe 0.2 — the D2 architecture-bet falsifier. RESULT: PASS both backends
+// (--interpret + --native), 2026-07-10. Confirms slice backtracking = save/reset an index temp,
+// expressible with only `if` + index arithmetic — NO new opcode (D2 holds ⟹ L2–L3.4 are
+// parser-only; opcodes deferred to L3.6 iterator input).
+//
+// Emulates the PEG alternation ( [0,0] | [0,1] ) matched BY HAND against a vector. The sharp
+// case is [0,1]: branch A matches the first 0, FAILS on the second element, and must REVERT the
+// cursor to 0 so branch B can match [0,1]. Without a real revert, B starts at pos 1 and fails.
+// Both backends returning 100 / 200 / -1 pins the revert mechanic (INV-Pure, slice half) AND
+// backend determinism (INV-Det).
+
+fn try_alt(v: vector<integer>) -> integer {
+  pos: integer = 0;
+  result: integer = -1;
+  // --- branch A: sequence [0, 0] ---
+  save_a: integer = pos;
+  ok_a: boolean = false;
+  if len(v) - pos >= 2 {
+    if (v[pos] ?? -9) == 0 {
+      pos = pos + 1;
+      if (v[pos] ?? -9) == 0 {
+        pos = pos + 1;
+        ok_a = true;
+      }
+    }
+  }
+  if ok_a {
+    result = 100;
+  } else {
+    pos = save_a;                 // REVERT the cursor (the whole point of the probe)
+    // --- branch B: sequence [0, 1] ---
+    ok_b: boolean = false;
+    if len(v) - pos >= 2 {
+      if (v[pos] ?? -9) == 0 {
+        pos = pos + 1;
+        if (v[pos] ?? -9) == 1 {
+          pos = pos + 1;
+          ok_b = true;
+        }
+      }
+    }
+    if ok_b {
+      result = 200;
+    }
+  }
+  return result;
+}
+
+fn main() {
+  assert(try_alt([0, 0]) == 100, "branch A matches [0,0]");
+  assert(try_alt([0, 1]) == 200, "revert-then-B matches [0,1]");   // the backtracking case
+  assert(try_alt([3, 4]) == -1, "no branch matches [3,4]");
+  assert(try_alt([0]) == -1, "too short: no match, no crash");
+  print("D2 probe: PASS");
+}

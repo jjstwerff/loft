@@ -1,0 +1,36 @@
+// @PLN35 Phase 2 (lighter bits) — behaviour-preserving corpus for the totality-gate +
+// name:pat edits. These EXISTING slice paths (scalar head/tail/rest/wildcard, heap variant
+// sub-pattern) must stay byte-identical: the totality gate only REJECTS non-total matches
+// (these all carry `_`), and the name:pat branch only fires on new `name:pat` syntax (absent
+// here). One fn per path the edit touches; `main` runs them all as an end-to-end check.
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+
+fn sum3(xs: vector<integer>) -> integer {
+  match xs { [a, b, c] => a + b + c, _ => -1 }
+}
+fn first_of(xs: vector<integer>) -> integer {
+  match xs { [x, ..] => x, _ => -1 }
+}
+fn last_of(xs: vector<integer>) -> integer {
+  match xs { [.., y] => y, _ => -1 }
+}
+fn ends(xs: vector<integer>) -> integer {
+  match xs { [a, .., c] => a + c, _ => -1 }
+}
+fn skip_first(xs: vector<integer>) -> integer {
+  match xs { [_, b] => b, _ => -1 }
+}
+fn head_carrier(ds: vector<Detail>) -> text {
+  match ds { [Ship { carrier }, ..] => carrier, _ => "none" }
+}
+
+fn main() {
+  assert(sum3([1, 2, 3]) == 6, "sum3");
+  assert(first_of([9, 8, 7]) == 9, "first");
+  assert(last_of([9, 8, 7]) == 7, "last");
+  assert(ends([1, 5, 9]) == 10, "ends");
+  assert(skip_first([4, 5]) == 5, "skip");
+  ds = [Ship { carrier: "UPS" }, Pickup { store: 3 }];
+  assert(head_carrier(ds) == "UPS", "head sub-pattern: {head_carrier(ds)}");
+  print("p2-lighter corpus: PASS");
+}
