@@ -9,12 +9,15 @@ use crate::data::Deps;
 /// parser into a native stack overflow (rc=139); past this bound the parser
 /// rejects with a clean diagnostic at LOAD time instead.
 ///
-/// Each nesting level costs roughly 10 KB of native stack (the
-/// expression→operators→part→single chain), so the bound must be REACHABLE
-/// without overflowing the smallest stack the parser runs on: 128 levels ≈ 1.3 MB,
-/// safe on a standard ≥2 MB thread with margin, and still far deeper than any
-/// hand-written script nests.  (Host-configurable later, per the plan.)
-pub(crate) const SANDBOX_MAX_PARSE_DEPTH: u32 = 128;
+/// Each nesting level costs native stack down the expression→operators→part→single
+/// chain, and that chain grew (the @PLN102 null-flow typing added to it) — so the
+/// bound must be REACHABLE before overflowing the smallest stack the parser runs on,
+/// measured under the worst case: an ASan build inflates each frame several-fold, and
+/// at 128 levels that just overflowed the ASan gate's 8 MB thread (~60 KB/level under
+/// ASan). Halved to 64 (≈ 4 MB under ASan — a ~50 % margin; ≈ 0.7 MB non-ASan, ample
+/// on a ≥2 MB thread), still far deeper than any hand-written script nests. (Raise
+/// only with a fresh ASan measurement; host-configurable later, per the plan.)
+pub(crate) const SANDBOX_MAX_PARSE_DEPTH: u32 = 64;
 
 /// @PLN86 2.4 — the leftmost base variable of a field/index LHS: `s.heading` /
 /// `v[i]` / `a.b.c` all descend through the `OpGet*` chain (the base is arg 0) to
