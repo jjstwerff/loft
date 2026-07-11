@@ -1,0 +1,102 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN35 Phase 2 (L3.1, lighter bits): `name:pat` slice-element captures (P-Cap) + the
+// P-Cap-View borrow fix for HEAP element captures.
+//
+// `name:pat` binds the whole element to `name` (a VIEW of the subject) AND requires
+// sub-pattern `pat` to match it. Covered: scalar literal / wildcard, struct-enum variant
+// (with and without payload fields), Reference (plain struct) elements, and mixed positions.
+//
+// P-Cap-View: a slice-element capture of a HEAP element (struct-enum / struct / vector) is a
+// borrowed view. It must carry the subject's borrow-dep and skip the scope-exit free, else
+// the capture's `OpFreeRef` at function exit frees a record the subject owns and corrupts the
+// subject (both backends). The `*_reuse` fns capture a heap element into a LOCAL, use it, then
+// REUSE the subject — the case the fix makes safe.
+//
+// NOTE (deferred): RETURNING a raw heap-element view as a function's result is NOT covered
+// here — the totality-forced `_` arm returns a fresh allocation, so the return classifies
+// OWNED and the caller frees the escaped view. That needs copy-on-escape materialization
+// (the same machinery `..rest` is blocked on). This test only captures-and-uses locally.
+
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+struct Point { x: integer, y: integer }
+
+fn score(d: Detail) -> integer {
+  match d { Ship { carrier } => len(carrier), Pickup { store } => store }
+}
+
+// ── name:pat scalar ─────────────────────────────────────────────────────────
+// literal sub-pattern: bind x (must == 5) and bare y
+fn lit_then(v: vector<integer>) -> integer {
+  match v { [x:5, y] => x + y, _ => -1 }
+}
+// wildcard sub-pattern: `x:_` is exactly a bare binding
+fn wild_cap(v: vector<integer>) -> integer {
+  match v { [x:_, y] => x * 10 + y, _ => -1 }
+}
+
+// ── name:pat struct-enum (heap), capture USED locally (passed to a fn) ─────────
+// bind the whole element + tag-test, no payload fields
+fn head_score(ds: vector<Detail>) -> integer {
+  match ds { [tok:Ship, ..] => score(tok), _ => -1 }
+}
+// bind the whole element AND a payload subfield in one pattern; use both
+fn ship_metrics(ds: vector<Detail>) -> integer {
+  match ds { [tok:Ship { carrier }, ..] => len(carrier) + score(tok), _ => -1 }
+}
+// mixed: bare wildcard, name:pat variant+field, bare wildcard — position alignment
+fn middle_store(ds: vector<Detail>) -> integer {
+  match ds { [_a, tok:Pickup { store }, _c] => store + score(tok), _ => -99 }
+}
+
+// ── P-Cap-View: capture a HEAP element into a LOCAL, use it, then REUSE the subject ──
+fn head_reuse(ds: vector<Detail>) -> integer {
+  el = match ds { [first, ..] => first, _ => Pickup { store: -1 } };   // bare heap view -> local
+  after = match ds { [Ship { carrier }, ..] => len(carrier), _ => -1 };// reuse ds
+  score(el) + after
+}
+fn tail_reuse(ds: vector<Detail>) -> integer {
+  el = match ds { [.., last] => last, _ => Pickup { store: -1 } };     // bare tail heap view
+  after = match ds { [.., last2] => score(last2), _ => -1 };           // reuse ds
+  score(el) + after
+}
+fn namepat_reuse(ds: vector<Detail>) -> integer {
+  el = match ds { [tok:Ship, ..] => tok, _ => Pickup { store: -1 } };  // name:pat heap view
+  after = match ds { [Ship { carrier }, ..] => len(carrier), _ => -1 };
+  score(el) + after
+}
+fn point_reuse(ps: vector<Point>) -> integer {
+  p = match ps { [head, ..] => head, _ => Point { x: -1, y: -1 } };    // Reference view -> local
+  after = match ps { [head2, ..] => head2.x + head2.y, _ => -1 };      // reuse ps
+  p.x + p.y + after
+}
+
+fn main() {
+  // name:pat scalar
+  assert(lit_then([5, 8]) == 13, "lit match: {lit_then([5, 8])}");
+  assert(lit_then([4, 8]) == -1, "lit mismatch (x!=5)");
+  assert(lit_then([5]) == -1, "lit length mismatch");
+  assert(wild_cap([2, 7]) == 27, "wild_cap: {wild_cap([2, 7])}");
+
+  ds = [Ship { carrier: "UPS" }, Pickup { store: 3 }];       // Ship carrier len 3
+  ds2 = [Pickup { store: 9 }, Ship { carrier: "X" }];        // head is Pickup
+
+  // name:pat heap capture used via a fn call, tag-test + fallthrough
+  assert(head_score(ds) == 3, "head_score: {head_score(ds)}");
+  assert(head_score(ds2) == -1, "head_score fallthrough (head not Ship)");
+  assert(ship_metrics(ds) == 6, "ship_metrics (len 3 + score 3): {ship_metrics(ds)}");
+  assert(ship_metrics(ds2) == -1, "ship_metrics fallthrough");
+
+  three = [Ship { carrier: "A" }, Pickup { store: 42 }, Ship { carrier: "B" }];
+  assert(middle_store(three) == 84, "middle_store (42 + score 42): {middle_store(three)}");
+  assert(middle_store([Ship { carrier: "A" }, Ship { carrier: "B" }, Ship { carrier: "C" }]) == -99, "middle_store not Pickup");
+
+  // P-Cap-View: subject must survive a captured-and-used heap view (score 3 + after 3 = 6)
+  assert(head_reuse(ds) == 6, "head_reuse subject survives: {head_reuse(ds)}");
+  assert(tail_reuse(ds) == 6, "tail_reuse subject survives: {tail_reuse(ds)}");
+  assert(namepat_reuse(ds) == 6, "namepat_reuse subject survives: {namepat_reuse(ds)}");
+  pts = [Point { x: 3, y: 4 }, Point { x: 5, y: 6 }];       // p.x+p.y = 7, after = 7
+  assert(point_reuse(pts) == 14, "point_reuse subject survives: {point_reuse(pts)}");
+
+  print("35b-sequence-capture: PASS");
+}

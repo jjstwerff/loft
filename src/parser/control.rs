@@ -3426,6 +3426,40 @@ impl Parser {
         }
     }
 
+    /// @PLN35 Phase 2 (P-Cap-View) — mark a slice-element capture that reads a HEAP
+    /// element as a borrowed VIEW of the subject, the same way a struct-enum field
+    /// binding is (`parse_match_enum_field_bindings`, #429). A slice binding
+    /// `[first, ..] => first` (or `[tok:V, ..]`) reads `OpGetVector(subject, ..)` — a
+    /// DbRef pointing INTO the subject's store, not an owned record. Untreated, it fails
+    /// two ways: scope cleanup emits `OpFreeRef` for the binding at function exit, freeing
+    /// a record the subject owns; and the binding carries empty deps, so when a value
+    /// derived from it is returned, `ref_return` can't walk the borrow chain back to the
+    /// subject parameter — the fn is mis-classified OWNED and the caller whole-store-frees
+    /// the subject (a corrupted subject on BOTH backends when the capture escapes via
+    /// return and the subject is reused afterwards).
+    ///
+    /// Scalars carry no DbRef and a `text` element is an owned copy (`OpGetText`), so
+    /// neither needs this — only `Reference` / `Vector` / struct-enum element types do.
+    /// `src` is the subject's source var (`Value::Var(v)` in `parse_vector_match`).
+    fn mark_slice_element_view(&mut self, bind_nr: u16, elm_tp: &Type, src: u16) {
+        if bind_nr == u16::MAX
+            || !matches!(
+                elm_tp,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            )
+        {
+            return;
+        }
+        self.vars.set_skip_free(bind_nr);
+        let bound_tp = match self.vars.tp(bind_nr).clone() {
+            Type::Reference(td, _) => Type::Reference(td, crate::data::Deps::frame1(src)),
+            Type::Vector(it, _) => Type::Vector(it, crate::data::Deps::frame1(src)),
+            Type::Enum(td, su, _) => Type::Enum(td, su, crate::data::Deps::frame1(src)),
+            other => other,
+        };
+        self.vars.set_type(bind_nr, bound_tp);
+    }
+
     /// Parse field bindings for a struct-enum match arm.
     fn parse_match_enum_field_bindings(
         &mut self,
@@ -4055,6 +4089,11 @@ impl Parser {
         let v = self.create_unique("match_subj", subject_type);
         self.vars.defined(v);
         let elm_size = Value::Int(self.element_store_size(&elm_tp));
+        // @PLN35 P-Cap-View — a heap element view's borrow-dep must name the SUBJECT's
+        // source var (the caller's param/local), not the internal `_match_subj` copy `v`,
+        // so the return-ownership chain reaches the caller's value. Fall back to `v` when
+        // the subject isn't a plain var.
+        let borrow_src = Self::match_borrow_source(&subject).unwrap_or(v);
 
         self.lexer.token("{");
         let mut result_type = Type::Void;
@@ -4080,6 +4119,48 @@ impl Parser {
                     }
                     if self.lexer.has_token("..") {
                         has_rest = true;
+                    } else if !has_rest && self.lexer.peek_named_arg().is_some() {
+                        // @PLN35 Phase 2 (P-Cap) — `name:pat` element capture. Bind the whole
+                        // element to `name` (a VIEW of the subject, exactly the read a bare head
+                        // binding emits) AND require sub-pattern `pat` to match the same element.
+                        // Head position only (before any `..`); a `_` placeholder keeps the
+                        // position count aligned for following bare-name indices, as the variant
+                        // sub-pattern branch does.
+                        let name = self.lexer.has_identifier().unwrap();
+                        self.lexer.token(":");
+                        let position = head.len() as i32;
+                        // Bind name = v[position] — the same read as the head-binding loop below.
+                        let bind_nr = self.vars.add_variable(&name, &elm_tp, &mut self.lexer);
+                        self.vars.defined(bind_nr);
+                        let bget = self.cl(
+                            "OpGetVector",
+                            &[Value::Var(v), elm_size.clone(), Value::Int(position)],
+                        );
+                        let bval = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, bget);
+                        bindings.push(v_set(bind_nr, bval));
+                        self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
+                        // Sub-pattern condition on the SAME element. Read v[position] AGAIN: the
+                        // binding var is assigned only in the arm body (after the condition runs),
+                        // so the condition must read the element directly, never the binding.
+                        let cget = self.cl(
+                            "OpGetVector",
+                            &[Value::Var(v), elm_size.clone(), Value::Int(position)],
+                        );
+                        let cread =
+                            self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, cget);
+                        let mut sub_conds: Vec<Value> = Vec::new();
+                        let mut aliases: Vec<(String, Option<u16>)> = Vec::new();
+                        if let Some(c) = self.parse_field_sub_pattern(
+                            cread,
+                            &elm_tp,
+                            &mut bindings,
+                            &mut sub_conds,
+                            &mut aliases,
+                        ) {
+                            elem_conds.push(c);
+                        }
+                        elem_conds.append(&mut sub_conds);
+                        head.push("_".to_string());
                     } else if !has_rest && {
                         // @PLN35 L2 — is this head element a VARIANT sub-pattern of the element
                         // enum type (`Ship { carrier }` / bare `Ship`)?  Peek without consuming so a
@@ -4121,12 +4202,18 @@ impl Parser {
                         } else {
                             head.push(id);
                         }
-                    } else if !self.first_pass {
-                        diagnostic!(
-                            self.lexer,
-                            Level::Error,
-                            "expected identifier or '..' in slice pattern"
-                        );
+                    } else {
+                        // Unrecognized element token (a literal, `{`, an unsupported tail
+                        // sub-pattern, …). None of the branches above consumed anything, so
+                        // this MUST break to make progress — otherwise the loop spins forever
+                        // on the same token in the first pass (where diagnostics are silent).
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "expected identifier or '..' in slice pattern"
+                            );
+                        }
                         break;
                     }
                     self.lexer.has_token(",");
@@ -4190,6 +4277,7 @@ impl Parser {
                     );
                     let val = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
                     bindings.push(v_set(bind_nr, val));
+                    self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
                 }
                 // Bind tail elements: tail[j] = v[len - tail.len() + j]
                 for (j, name) in tail.iter().enumerate() {
@@ -4202,6 +4290,7 @@ impl Parser {
                     let get = self.cl("OpGetVector", &[Value::Var(v), elm_size.clone(), idx]);
                     let val = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
                     bindings.push(v_set(bind_nr, val));
+                    self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
                 }
                 // @PLN35 L2 — AND element sub-pattern conditions into the arm condition AFTER the
                 // length check, so `&&` short-circuit never reads past the end.
@@ -4223,12 +4312,17 @@ impl Parser {
                     bindings.push(v_set(bind_nr, Value::Var(v)));
                     has_wildcard = true;
                 }
-            } else if !self.first_pass {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "expected slice pattern '[...]' or '_' in vector match arm"
-                );
+            } else {
+                // Unrecognized arm head (not `[…]`, `_`, or a binding). No branch above
+                // consumed a token, so break to make progress — the arm loop would
+                // otherwise spin forever on this token in the first pass (diagnostics silent).
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "expected slice pattern '[...]' or '_' in vector match arm"
+                    );
+                }
                 break;
             }
             // Parse guard
@@ -4272,6 +4366,20 @@ impl Parser {
             }
         }
         self.lexer.token("}");
+
+        // @PLN35 Phase 2 (F6 / M-Total): a slice pattern is length-constrained, so it is
+        // non-total — a well-typed vector can always have a length no fixed arm matches.
+        // The match is exhaustive only if its final arm is total (a `_` or a bare binding,
+        // both of which set `has_wildcard` and force the arm last). Without one, a subject
+        // would fall through with no arm selected; reject it statically, mirroring the enum
+        // exhaustiveness gate in `parse_match`.
+        if !self.first_pass && !has_wildcard {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "match on vector is not exhaustive — a slice pattern can fail (a length no arm matches); add a '_ =>' or a bare-binding final arm"
+            );
+        }
 
         // Build if-else chain from arms
         let fallback = if has_wildcard {

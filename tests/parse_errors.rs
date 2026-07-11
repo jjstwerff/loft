@@ -1646,3 +1646,12 @@ fn keyed_partial_key_in_value_position_is_error() {
         .error("a keyed partial-key match is a `for`-loop iterator, not a value — iterate it directly (`for x in coll[key] { … }`) or give every key field for a single-record lookup at keyed_partial_key_in_value_position_is_error:1:174")
         .warning("Variable x is never read at keyed_partial_key_in_value_position_is_error:1:163");
 }
+
+// @PLN35 Phase 2 (F6 / M-Total): a slice pattern is length-constrained, hence non-total.
+// A vector match is exhaustive only if its final arm is total (a `_` or a bare binding);
+// a slice-only match with no such arm must be a static error, not a silent typed-null.
+#[test]
+fn vector_match_not_exhaustive() {
+    code!("fn f(v: vector<integer>) -> integer { match v { [a] => a, [a, b] => a + b } }\nfn test() { f([1]); }")
+        .error("match on vector is not exhaustive — a slice pattern can fail (a length no arm matches); add a '_ =>' or a bare-binding final arm at vector_match_not_exhaustive:1:78");
+}

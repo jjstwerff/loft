@@ -23,8 +23,8 @@
 
 ## ▶ RESUME HERE — status (2026-07-11)
 
-**Branch** `tuxedo-pln35-match-peg` @ `841ac6b7`, pushed, on current `origin/main`; full-suite
-**green** (`2787/2788` — only the environmental `wasm_debug_relay` fails on this box; see memory
+**Branch** `tuxedo-pln35-match-peg`, pushed, on current `origin/main`; full-suite
+**green** (`2788/2789` — only the environmental `wasm_debug_relay` fails on this box; see memory
 `wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
 
 **Design — COMPLETE.** [README.md](README.md) (draft, reconciled), [FORMAL-DESIGN.md](FORMAL-DESIGN.md)
@@ -46,10 +46,47 @@ Golden target-syntax specs in `probes/g-*.loft`.
   element, reads `v[pos]`, tag-tests+binds via `parse_field_sub_pattern`; a `"_"` placeholder keeps
   positions aligned). Guard: `tests/scripts/35-nested-match.loft` (cross-mode, leak-checked).
 
-**Phase 2 (L3.1) — IN PROGRESS, one blocker precisely identified:**
-- **Syntax DECIDED: `..rest`** (two dots + adjacent name), NOT `...` — loft lexes `..`, not `...`.
-  Docs reconciled to `..rest` throughout.
-- **BLOCKER — the tail sub-slice materialization primitive.** `..rest` binds
+**Phase 2 (L3.1) — LIGHTER BITS LANDED; `..rest` still blocked on materialization.**
+
+**LANDED (this cycle), both backends, byte-identical for untouched paths + full-suite green:**
+- **`name:pat` element captures (P-Cap).** An element may be `name:subpattern` — bind the whole
+  element to `name` (a VIEW of the subject) AND require `subpattern` to match it. Detected with
+  `lexer.peek_named_arg()` (identifier + single `:`); routes the sub-pattern through
+  `parse_field_sub_pattern` (variant / variant+fields / literal / `_`). Head position only.
+- **Totality gate (F6 / `M-Total`).** A vector match is exhaustive only if its FINAL arm is total
+  (a `_` or a bare binding) — a slice pattern is length-constrained, hence non-total. `parse_vector_match`
+  now emits a static error instead of the old silent typed-null fallback. Guard:
+  `tests/parse_errors.rs::vector_match_not_exhaustive`.
+- **P-Cap-View borrow fix (`mark_slice_element_view`).** A slice-element capture of a HEAP element
+  (`Reference`/`Vector`/struct-enum) is a borrowed view: it now carries `Deps::frame1(subject-source)`
+  and `skip_free`, mirroring the #429 struct-field-binding handling. Applied at all THREE sites (head
+  loop, tail loop, name:pat). Fixes a **pre-existing** corruption: bare `[first, ..] => first` over a
+  heap vector, capture used then subject reused, freed the subject's record (both backends). The
+  frame-dep names the real subject source, not the internal `_match_subj` copy.
+- **Parser progress guards.** Both loops in `parse_vector_match` (`element` + `arm`) had
+  `else if !first_pass { break }` which SPINS in the first pass on any unrecognized token (a literal
+  element `[0, x]`, a tail variant sub-pattern `[.., V { f }]`). Now they break unconditionally →
+  clean diagnostic, no hang.
+- Guard test: `tests/scripts/35b-sequence-capture.loft` (cross-mode, leak-clean; scalar/heap/Reference
+  captures × variant/literal/wildcard × capture-used-locally). Byte-identical corpus:
+  `bytecode-comparisons/p2-lighter-corpus.loft`.
+
+**TWO pre-existing bugs SURFACED (not fixed — out of the lighter-bits scope; both repro on `main`):**
+1. **Heap slice-view RETURNED from a fn corrupts the subject.** `fn f(ds) -> Detail { match ds {
+   [tok:Ship, ..] => tok, _ => Pickup {..} } }` then reuse `ds` at the caller → corruption on BOTH
+   backends. Root cause: the return-type join of a borrowed-view arm and a fresh-alloc arm (the
+   totality-forced `_` arm) classifies the fn OWNED, so the caller `OpFreeRef`s the escaped view.
+   The fix needs **copy-on-escape materialization** — the SAME machinery `..rest` is blocked on (below).
+   The `mark_slice_element_view` fix covers the capture-used-LOCALLY case; RETURNING a raw heap view is
+   the deferred remainder. Repros with a bare slice binding too (not name:pat-specific).
+2. **Native `Str`/`&str` mismatch in a vector-match text arm.** `match v { [..] => fn_returning_text(x),
+   _ => "literal" }` → native E0308 (`expected Str, found &str`). Repros with a SCALAR slice too (the
+   byte-identical corpus proves my edits don't touch it) — a separate native-codegen coercion bug.
+
+**Syntax DECIDED: `..rest`** (two dots + adjacent name), NOT `...` — loft lexes `..`, not `...`.
+Docs reconciled to `..rest` throughout.
+
+**BLOCKER (unchanged) — the tail sub-slice materialization primitive.** `..rest` binds
   `rest = v[head_len .. len − tail_len]` as a FRESH `vector<T>`. But `v[a..b]` is a lazy
   `iterator<T>` that materializes only on ASSIGNMENT via a token-parsing comprehension desugar
   (`objects.rs`: `slice_clamp_bound` + the `#Slice materialise` loop). No stdlib slice fn; a generic
@@ -66,9 +103,9 @@ Golden target-syntax specs in `probes/g-*.loft`.
   `..rest` in `parse_vector_match` (detect `..name`; bind `rest = vector_slice(v, head_len,
   len−tail_len)`). Store-level + lifetime-sensitive → do it **MATRIX-GATED** (engineering-rigor):
   scalar/text/struct elements × empty/full/negative bounds × value + length + **leak**, both backends.
-- **Unblocked lighter Phase-2 bits (no materialization):** `name:pat` element captures, and the
-  totality gate (F6 / `M-Total`: a sequence/rest slice arm requires a trailing `_`). Could land
-  before `..rest`.
+- **Lighter Phase-2 bits — DONE** (see "LANDED" above): `name:pat` element captures + the totality
+  gate. The remaining Phase-2 work is `..rest` (blocked on materialization) and the totality
+  diagnostic wiring for a `..rest` arm.
 
 **Instrument (loft-codegen gate).** `bytecode-comparisons/`: one-fn-per-path corpora + `INSTRUMENT.md`
 — the two-part byte-identical capture (`LOFT_LOG=static` IR + `loft --native-emit` Rust; **warm up
