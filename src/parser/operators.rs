@@ -1995,17 +1995,33 @@ impl Parser {
                 {
                     rt = Type::optional(rt.base().clone());
                 }
-                // @PLN25 DN3 — a text→numeric PARSE is fit-failing: unparseable input yields the
-                // null sentinel at runtime (C80, no trap), so the result TYPES `τ?` (like `/` and
-                // `v[i]`). A REACHABLE fault (bad user/file input), unlike overflow which is the
-                // decided edge C85. `s as integer` is `integer?` → discharge with `?? d` or
-                // declare the target `τ?`.
+                // A text→numeric PARSE is fit-failing: unparseable input yields the null sentinel
+                // at runtime (C80, no trap). Two regimes:
+                //  · @PLN25 DN3 (default / OFF): the result auto-TYPES `τ?` (`s as integer` is
+                //    `integer?`; discharge with `?? d` or a `τ?` slot).
+                //  · @PLN102 Phase 4 (N-Cast, LOFT_NULLFLOW): a cast `as τ` is an ASSERTION, and a
+                //    parse can't be proven, so a BARE `text as τ` is a compile error directing to
+                //    the checked `as τ?` (value or null) or the assert-or-default `as τ ?? d`. A
+                //    `?? d` immediately after IS that form — allowed, and typed `τ?` so the `??`
+                //    discharges it (mirrors the DN4 narrowing `coalesced` rule above).
                 if !nullable_cast
                     && crate::keys::pln25_dn1_enabled()
                     && matches!(ctp, Type::Text(_))
                     && matches!(rt.base(), Type::Integer(_) | Type::Float | Type::Single)
                 {
-                    rt = Type::optional(rt.base().clone());
+                    if crate::keys::nullflow_enabled() && !self.lexer.peek_token("??") {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a text parse `as {tps}` may fail — use `{tps}?` for a checked cast \
+                                 (value or null), or `?? <default>`",
+                            );
+                        }
+                        // Keep `rt` non-null (the asserted target) to bound the cascade.
+                    } else {
+                        rt = Type::optional(rt.base().clone());
+                    }
                 }
                 if let Some(owned) = self.conv_owned_result.take() {
                     // @PLN99 Arc C — an allocating user conversion produced a FRESH owned
