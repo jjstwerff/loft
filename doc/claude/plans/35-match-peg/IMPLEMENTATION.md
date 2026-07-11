@@ -55,9 +55,17 @@ EXTENSION lifts this to token streams: a token-enum variant marks its surface-te
 (`build_lexeme_literal_match`) to `tag==Keyword && name=="fn"` (OR'd over eligible variants) —
 `[ "fn", Ident { name }, "(", ")" ]` reads like the grammar. `#lexeme` is a parse-time `Attribute`
 flag (not serialised). Guards `tests/scripts/35l-literal-slice-elements.loft`, `35k-lexeme.loft`,
-`parse_errors::{lexeme_missing, unknown_field_annotation, slice_literal_type_mismatch}`. Filed
-**#557** — pre-existing native text-arm-unification bug (a `vector<text>` subject with mixed
-interpolation/literal returns) surfaced while testing (NOT caused by literal elements).
+`parse_errors::{lexeme_missing, unknown_field_annotation, slice_literal_type_mismatch}`.
+**#557 FIXED** — a pre-existing native text-arm-unification bug (a `vector<text>` subject with
+mixed interpolation/literal returns → `Str::new(String)` E0308) surfaced here (NOT caused by
+literal elements); fixed in `emit.rs` (`block_tail_materialises_string` routes the block through
+the work buffer), guard `tests/scripts/557-vector-text-match-interp-literal.loft`.
+
+**Test-infra (this branch):** `find_problems.sh` runs are now named by checkout
+(`/tmp/loft_test.<dir>.<hash>.…`) with a scoped `--stop` (no more broad `pkill -f nextest`
+killing a sibling checkout's run), and server-test ports are offset per checkout
+(`common::test_port` + `LOFT_TEST_PORT_OFFSET`) so two concurrent suites don't collide on the
+engine-host / wasm-relay fixed ports.
 
 **MID-SLICE repetition + lexeme separators — DONE, both backends — the parser-combinator keystone.**
 A repetition may now sit BETWEEN a fixed head and a fixed literal tail:
