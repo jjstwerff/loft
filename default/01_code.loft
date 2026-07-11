@@ -1528,15 +1528,17 @@ fn __add_int(a: integer, b: integer) -> integer { a + b }
 // Sum of all integer elements. Returns 0 for an empty vector.
 pub fn sum_of(v: vector<integer>) -> integer { reduce(v, 0, __add_int) }
 #pure
-// Smallest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
-pub fn min_of<T: Ordered>(v: vector<T>) -> T {
+// Smallest element in a vector, or null when the vector is empty (@PLN102 keystone
+// step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
+pub fn min_of<T: Ordered>(v: vector<T>) -> T? {
   result = v[0];
   for i in 1..v.len() { if v[i] < result { result = v[i] } };
   result
 }
 #pure
-// Largest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
-pub fn max_of<T: Ordered>(v: vector<T>) -> T {
+// Largest element in a vector, or null when the vector is empty (@PLN102 keystone
+// step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
+pub fn max_of<T: Ordered>(v: vector<T>) -> T? {
   result = v[0];
   for i in 1..v.len() { if result < v[i] { result = v[i] } };
   result

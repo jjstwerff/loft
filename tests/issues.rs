@@ -15921,3 +15921,69 @@ fn main() {
         p.diagnostics.lines()
     );
 }
+
+// @PLN102 keystone step 4 — honest nullable stdlib returns.
+//
+// `find`/`rfind` (text) and `min_of`/`max_of` (vector) can produce null on a
+// reachable path (value absent / vector empty) and are now typed `integer?` /
+// `T?` respectively, so the static type no longer LIES about the null case.
+// The runtime representation is identical to before (in-band sentinel), so a
+// runtime test cannot distinguish `-> integer` from `-> integer?`; the honest
+// type is only observable at a declared-non-null BOUNDARY, where assigning the
+// nullable result to a non-null declaration is a compile error.  This is the
+// non-vacuous guard: it FAILS if a future edit reverts a signature to non-null.
+#[test]
+fn pln102_stdlib_reachable_null_returns_are_typed_nullable() {
+    // Each of these assigns a nullable-returning stdlib call to a declared
+    // NON-NULL local.  With honest `?` return types this is rejected; if the
+    // return type were reverted to non-null it would compile clean (the guard
+    // would then fail to see the expected error → test fails).
+    let cases = [
+        ("find", "n: integer = \"abc\".find(\"z\");"),
+        ("rfind", "n: integer = \"abc\".rfind(\"z\");"),
+        ("min_of", "n: integer = min_of([3, 1, 2]);"),
+        ("max_of", "n: integer = max_of([3, 1, 2]);"),
+    ];
+    for (name, stmt) in cases {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n  println(\"{{n}}\");\n}}"),
+            "pln102_nullable_return",
+            false,
+        );
+        assert!(
+            p.diagnostics.level() >= loft::diagnostics::Level::Error,
+            "{name}: nullable return assigned to a non-null decl should error, got: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.diagnostics
+                .lines()
+                .iter()
+                .any(|l| l.contains("cannot change type") && l.contains("integer?")),
+            "{name}: expected a nullable-mismatch diagnostic mentioning `integer?`, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
+    // Positive control: the INFERRED (nullable) form compiles clean — proves the
+    // error above is specifically the non-null-declaration mismatch, not a broken
+    // program, and that the honest type stays fully usable via inference / `??`.
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse_str(
+        "fn main() {\n  \
+           a = \"abc\".find(\"z\");\n  \
+           b = min_of([3, 1, 2]) ?? 0;\n  \
+           assert(a == null, \"find absent is null\");\n  \
+           assert(b == 1, \"min_of ?? default\");\n\
+         }",
+        "pln102_nullable_return_ok",
+        false,
+    );
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "inferred/`??` nullable use should compile clean, got: {:?}",
+        p.diagnostics.lines()
+    );
+}

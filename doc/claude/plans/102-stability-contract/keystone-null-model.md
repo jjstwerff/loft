@@ -24,7 +24,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > CLOSED):** `float as integer` out-of-range (was: saturate to `i64::MAX`), `int as character`
 > invalid code point (was: silent NUL), and `text as integer` parsing to exactly `i64::MIN` now
 > report + null (new `CastOutOfRange`); both backends, guard `pln102-cast-collision-guard.loft`,
-> one-assertion conversion set (`inf as integer` in `02-floats.loft`). **Next: steps 4–5.**
+> one-assertion conversion set (`inf as integer` in `02-floats.loft`). ✅ **Step 4 — honest nullable
+> returns:** `find`/`rfind` → `integer?`, `min_of`/`max_of` → `T?`; pure static type honesty (same
+> runtime rep), **zero caller breaks** across the full suite, strict compile-rejection guard
+> `pln102_stdlib_reachable_null_returns_are_typed_nullable` (proven non-vacuous). **Next: step 5**
+> (DESIGN_DECISIONS entry + golden tests for the accepted residual).
 
 ## The invariant we must be able to state (and today cannot)
 
@@ -159,9 +163,15 @@ rewrite.**
    an unparseable text stays DN3-nullable → null (unchanged). Both backends, guard
    `pln102-cast-collision-guard.loft`, one-assertion conversion set (`inf as integer` in
    `02-floats.loft`). *(2026-07-10; D-op-null-2 closed — `default/01_code.loft` `#rust` bodies.)*
-4. **Honest nullable return types** where a fault is reachable (`find`/`min_of` → `τ?`), so the
-   silent-non-null-typed-but-actually-null cases go away. *(stdlib signatures + the lib-audit
-   keystone rows; conversion set = callers of those fns.)*
+4. ✅ **Honest nullable return types** where a fault is reachable — `find`/`rfind` → `integer?`
+   (null when absent) and `min_of`/`max_of` → `T?` (null when the vector is empty). The runtime
+   representation is identical (in-band sentinel), so the change is purely static type honesty; it
+   is observable only at a declared-non-null boundary (assigning the result to a non-null decl now
+   errors). **Blast radius measured by running the full suite: ZERO caller breaks** — every caller
+   already used inference / `== null` / `?? default` / a boolean context. Guard =
+   `tests/issues.rs::pln102_stdlib_reachable_null_returns_are_typed_nullable` (a strict compile-
+   rejection test — runtime tests can't distinguish `τ` from `τ?`; proven non-vacuous by injecting
+   a revert). STDLIB.md updated. *(2026-07-11; `default/03_text.loft` + `default/01_code.loft`.)*
 5. **DESIGN_DECISIONS entry + golden tests** for the accepted residual (the one reserved value per
    nullable type; float null = a specific NaN).
 

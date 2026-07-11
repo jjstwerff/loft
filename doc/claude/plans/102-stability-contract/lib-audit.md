@@ -100,6 +100,14 @@ collision, expose the reserved value as a constant, and give `find`/`min_of`/etc
 nullable return types. **Recommendation: settle this before any other lib item** — it changes
 several signatures below, and signatures are the least-forgivable thing to freeze wrong.
 
+**✅ Keystone status (chose "guard + document", not retire the sentinel):** rows above resolved by
+the [null-model keystone](keystone-null-model.md) — row (null == null type-dependent) by **step 2**
+(uniform scalar null comparison); row (`1 << 63` bit-collision) by **step 3a** (shift collisions
+report); row (`find`/`rfind` typed non-null) and row (`min_of`/`max_of` typed non-null) by **step 4**
+(now `integer?` / `T?`, zero caller breaks). Still open (deferred, not blocking freeze): the silent
+integer-**overflow** row (C85 decided edge — stays silent) and the missing `INT_MIN`/bounds
+**constant** exposure (step 5 golden-residual / a separate additive lib item).
+
 ---
 
 ## The must-fix set (High / silent-wrong) — resolve or consciously-accept before the flip

@@ -129,8 +129,8 @@ Functions for working with `text` (UTF-8 strings) and `character` values.
 
 | Function | Description |
 |----------|-------------|
-| `find(self: text, value: text) -> integer` | Returns the byte index of the first occurrence of `value`, or null if not found. |
-| `rfind(self: text, value: text) -> integer` | Returns the byte index of the last occurrence of `value`, or null if not found. |
+| `find(self: text, value: text) -> integer?` | Returns the byte index of the first occurrence of `value`, or **null** if not found (the type is honest about the not-found case — @PLN102). |
+| `rfind(self: text, value: text) -> integer?` | Returns the byte index of the last occurrence of `value`, or **null** if not found (@PLN102). |
 | `contains(self: text, value: text) -> boolean` | Returns true if `value` appears anywhere in `self`. |
 | `starts_with(self: text, value: text) -> boolean` | Returns true if `self` begins with `value`. |
 | `ends_with(self: text, value: text) -> boolean` | Returns true if `self` ends with `value`. |
@@ -209,8 +209,8 @@ Operations on `vector<T>` — the primary ordered collection type.
 | Function | Description |
 |----------|-------------|
 | `sum_of(v: vector<integer>) -> integer` | Sum of all elements; returns 0 for an empty vector. |
-| `min_of(v: vector<integer>) -> integer` | Smallest element. |
-| `max_of(v: vector<integer>) -> integer` | Largest element. |
+| `min_of<T: Ordered>(v: vector<T>) -> T?` | Smallest element, or **null** when the vector is empty (the type is honest about the empty case — @PLN102). |
+| `max_of<T: Ordered>(v: vector<T>) -> T?` | Largest element, or **null** when the vector is empty (@PLN102). |
 
 ### Tree traversal — `tree_walk` and the `Walkable` interface
 
