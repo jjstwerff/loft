@@ -1839,8 +1839,11 @@ impl Parser {
 
     #[allow(clippy::too_many_arguments)]
     /// @PLN25 DN3 — is a division/mod DIVISOR provably non-zero (so `a / v` cannot fault)?
-    /// True for a constant non-zero integer literal, or a var proven non-zero by an enclosing
-    /// `if v != 0` guard (`divisor_nonzero`). Anything else can be zero → the result is `τ?`.
+    /// True for a constant non-zero literal, a var proven non-zero by an enclosing `if v != 0`
+    /// guard (`divisor_nonzero`), or (@PLN102) any expression that const-folds to a non-zero number
+    /// — a named constant like `SFX_RATE`, or a cast of one like `RATE as single` (both inline to a
+    /// literal that `const_eval` reduces). This closes the gap where a direct `x / 600.0` was
+    /// non-null but `x / NAMED_CONST` spuriously typed `τ?`. Anything else can be zero → `τ?`.
     fn divisor_provably_nonzero(&self, divisor: &Value) -> bool {
         match divisor.unspan() {
             Value::Int(n) => *n != 0,
@@ -1851,7 +1854,13 @@ impl Parser {
             Value::Float(f) => *f != 0.0,
             Value::Single(f) => *f != 0.0,
             Value::Var(v) => self.divisor_nonzero.contains(v),
-            _ => false,
+            other => match crate::const_eval::const_eval(other, &self.data) {
+                Some(Value::Int(n)) => n != 0,
+                Some(Value::Long(n)) => n != 0,
+                Some(Value::Float(f)) => f != 0.0,
+                Some(Value::Single(f)) => f != 0.0,
+                _ => false,
+            },
         }
     }
 

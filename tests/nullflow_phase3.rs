@@ -82,6 +82,31 @@ fn float_div_const_stays_non_null() {
     assert!(out.contains("f=0.5"));
 }
 
+/// A NAMED-constant divisor (and a cast of one) const-folds to its non-zero literal, so it is
+/// provably safe just like a bare literal — closing the gap where `x / SFX_RATE as single` (real
+/// graphics-lib code) spuriously typed `single?` and broke under the flip.
+const DIV_NAMED_CONST: &str = "pub RATE = 44100;\nstruct S { g: single }\n\
+fn main() {\n  s = S { g: 0.0f };\n  s.g = 1.0f / RATE as single;\n  print(\"f={s.g}\\n\");\n}\n";
+
+#[test]
+fn float_div_named_const_stays_non_null_interpret() {
+    let (ok, warns, out) = run(DIV_NAMED_CONST, "--interpret", true, "named_i");
+    assert!(ok, "{out}");
+    assert_eq!(
+        warns, 0,
+        "ON: `1.0f / RATE as single` (RATE a nonzero constant) is provably safe → non-null; out={out}"
+    );
+}
+#[test]
+fn float_div_named_const_stays_non_null_native() {
+    let (ok, warns, out) = run(DIV_NAMED_CONST, "--native", true, "named_n");
+    assert!(ok, "{out}");
+    assert_eq!(
+        warns, 0,
+        "ON native: named-const divisor is non-null; out={out}"
+    );
+}
+
 /// `sqrt` of a negative — `float?` under nullflow (decl-gate), non-null when off.
 const SQRT: &str = "struct S { g: float }\n\
 fn main() {\n  x = -1.0;\n  s = S { g: 0.0 };\n  s.g = sqrt(x);\n  print(\"f={s.g}\\n\");\n}\n";
