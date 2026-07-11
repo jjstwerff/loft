@@ -2199,6 +2199,14 @@ impl Stores {
     When a field points to a spatial structure (teardown unimplemented).
     */
     pub fn remove_claims(&mut self, rec: &DbRef, tp: u16) {
+        // A null/absent container (the `store_nr == u16::MAX` sentinel) owns nothing to tear
+        // down — no-op, mirroring `free_named`'s own guard. The `for_each_owned_child` keystone
+        // guards absent CHILDREN (`cur != 0`), but not a null CONTAINER; without this a nullable
+        // DbRef passed as the container would index `allocations[u16::MAX]` and panic. The
+        // invariant now holds HERE, not by every caller pre-checking the container.
+        if rec.store_nr == u16::MAX {
+            return;
+        }
         // TODO prevent removing records twice via secondary structures
         match &self.types[tp as usize].parts {
             Parts::Base if tp == 5 => {
@@ -3305,5 +3313,22 @@ mod p318_hash_deepcopy {
             missing, 0,
             "deep-copied hash lost {missing}/{n} entries (source room {room})"
         );
+    }
+
+    /// @PLN102 heap-free audit — the null/absent container is a no-op at the free/teardown
+    /// chokepoints, safe by CONSTRUCTION not by caller convention. Without the `remove_claims`
+    /// guard this indexes `allocations[u16::MAX]` (`for_each_owned_child` reads `store(rec)`) and
+    /// OOB-panics; the assertion is that it does not. `free_named`/`free` already guarded — pinned
+    /// here too so a future null-container caller can never reintroduce the panic.
+    #[test]
+    fn free_and_teardown_no_op_on_the_null_sentinel() {
+        let mut stores = Stores::new();
+        let cell = stores.structure("NCell", -1);
+        stores.field(cell, "x", 0); // integer
+        stores.finish();
+        // None of these may panic; each is a no-op on the `store_nr == u16::MAX` sentinel.
+        stores.remove_claims(&DbRef::NULL, cell);
+        stores.free_named(&DbRef::NULL, "");
+        stores.free(&DbRef::NULL);
     }
 }

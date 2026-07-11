@@ -665,6 +665,8 @@ pub fn OpReplaceKeyed(cell: &std::cell::UnsafeCell<Stores>, src: DbRef, dest: Db
     }
     if free_source
         && src.store_nr != dest.store_nr
+        // Sentinel guard: the `allocations[..]` prechecks below index by store_nr.
+        && src.store_nr != u16::MAX
         && !stores.is_stack_store(src.store_nr)
         && !stores.allocations[src.store_nr as usize].free
         && !stores.allocations[src.store_nr as usize].read_only
