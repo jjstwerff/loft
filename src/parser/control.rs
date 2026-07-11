@@ -6144,7 +6144,6 @@ impl Parser {
         elm_tp: &Type,
         code: &mut Value,
     ) -> Type {
-        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
         // Use the subject's OWN var as the cursor — a struct is a DbRef, so advancing its `pos`
         // must reach the caller's cursor (same rule the struct-match path follows).  Copy only a
         // non-var subject (a temporary cursor's advance is then moot, which is fine).
@@ -6155,8 +6154,16 @@ impl Parser {
             self.vars.defined(t);
             (t, true)
         };
-        let source_var = self.create_unique("cursor_src", &vec_tp);
+        // `cursor.src` is a vector living INSIDE the caller-owned cursor record, so the read
+        // is a BORROWED view (Deps::frame1(cursor_var)), not an owned temporary. It must NOT
+        // be freed: freeing it frees the cursor's whole record — a use-after-free that lets a
+        // later allocation reuse the slot and silently corrupt the caller's cursor (surfaced
+        // by an arm that returns a freshly-built struct then rebinds it). Mirrors the heap-
+        // capture borrowed-VIEW path (skip_free + a borrow dep on the subject source).
+        let borrowed_vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::frame1(cursor_var));
+        let source_var = self.create_unique("cursor_src", &borrowed_vec_tp);
         self.vars.defined(source_var);
+        self.vars.set_skip_free(source_var);
         let pos_var = self.create_unique("cursor_pos", &I32);
         self.vars.defined(pos_var);
         let read_source = self.get_field(cursor_def, source_field, Value::Var(cursor_var));
@@ -6169,7 +6176,8 @@ impl Parser {
         setup.push(v_set(pos_var, read_pos));
         self.match_cursor = Some((cursor_var, cursor_def, pos_field, pos_var));
         let mut match_code = Value::Null;
-        let result_tp = self.parse_vector_match(Value::Var(source_var), &vec_tp, &mut match_code);
+        let result_tp =
+            self.parse_vector_match(Value::Var(source_var), &borrowed_vec_tp, &mut match_code);
         self.match_cursor = None;
         setup.push(match_code);
         *code = v_block(setup, result_tp.clone(), "cursor match");
