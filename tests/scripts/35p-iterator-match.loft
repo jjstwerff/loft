@@ -1,0 +1,35 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN35 Phase 7 (Path B, step 2a) — streaming `match` over a COROUTINE iterator<Scalar>.  The
+// subject is materialised into a buffer `vector<Scalar>` (eager pull via explicit next/exhausted —
+// a `for` over a stored coroutine hangs) and the EXISTING vector-match machinery runs over it, so
+// streaming stays entirely behind the Cursor seam.  Scalar element types only for now (text /
+// vector / tuple ride a different coroutine channel — deferred with a clean diagnostic).  Graduates
+// the golden `doc/claude/plans/35-match-peg/probes/g-p7-iterator-match.loft`.  Cross-mode + leak.
+
+fn count() -> iterator<integer> { yield 1; yield 5; yield 6; }
+fn empty() -> iterator<integer> { }
+fn floats() -> iterator<float> { yield 1.5; yield 2.5; yield 3.5; }
+fn bools() -> iterator<boolean> { yield true; yield false; }
+
+// The golden shape: a repetition and a scalar-capture arm over an iterator param.
+fn dispatch(g: iterator<integer>) -> text {
+  match g {
+    [ 1, args:integer* ] => "call/{args.len()}",
+    [ 0, one:integer ]   => "set {one}",
+    _                    => "?",
+  }
+}
+
+fn main() {
+  assert(dispatch(count()) == "call/2", "count -> call/2: {dispatch(count())}");
+  assert(dispatch(empty()) == "?", "empty -> ?: {dispatch(empty())}");
+
+  // Direct match on the coroutine call (float / boolean element types).
+  fr = match floats() { [ xs:float* ] => xs.len(), _ => -1 };
+  assert(fr == 3, "floats len 3: {fr}");
+  br = match bools() { [ bs:boolean* ] => bs.len(), _ => -1 };
+  assert(br == 2, "bools len 2: {br}");
+
+  print("35p-iterator-match: PASS");
+}

@@ -1,15 +1,14 @@
-// @PLN35 golden · P7 (L3.6 iterator input) — RED until Phase 7 (the ONLY phase adding opcodes).
-// Graduates to tests/scripts/35g-iterator-match.loft. Matching over an iterator<T> can't
-// re-index, so a failed alternative must replay pulled items — the memo buffer + the two new ops
-// OpMatchAnchor / OpMatchRevert (matching.md P-Anchor/P-Revert), bounded by `max_lookahead`.
-//
-// TARGET SHAPE (exact source wiring finalized in Phase 7, once a coroutine iterator feeds `match`):
-//     match some_iter {
-//         [ 1, (x:integer)* ] => "call/{len(x)}",
-//         _                   => "?",
-//     }
-// The cursor is buffered (Lexer::memory model); a side-effecting pull is UB-by-contract.
+// @PLN35 golden · P7 (L3.6 iterator input) — GREEN (Phase 7 Path B, step 2a; SCALAR elements).
+// Maintained guard: tests/scripts/35p-iterator-match.loft.  A coroutine `iterator<T>` match subject
+// is materialised into a buffer `vector<T>` (eager pull — explicit next/exhausted; a `for` over a
+// STORED coroutine hangs) and the existing vector-match runs over it, so streaming stays behind the
+// Cursor seam (NO OpMatchAnchor/OpMatchRevert needed — the buffer holds all pulled items, so
+// backtracking is a free index; the plan's 2 opcodes evaporated).  Text / vector / tuple element
+// types ride a different coroutine `next` channel — deferred with a clean diagnostic; a lazy
+// per-read pull + max_lookahead is the step-2b refinement.  This golden now RUNS on both backends:
 
+fn count() -> iterator<integer> { yield 1; yield 5; yield 6; }
 fn main() {
-  print("P7 iterator-match: RED (spec only — needs the L3.6 iterator cursor + 2 ops)");
+  r = match count() { [ 1, args:integer* ] => "call/{args.len()}", _ => "?" };
+  print("P7 iterator-match: {r}");   // call/2 (both backends)
 }

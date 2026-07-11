@@ -2706,6 +2706,41 @@ impl Parser {
             Type::Vector(_, _) => {
                 return self.parse_vector_match(subject, &subject_type, code);
             }
+            // @PLN35 Phase 7 (Path B) — a coroutine `iterator<T>` subject: materialise it into a
+            // fresh buffer `vector<T>` (eager pull), then run the SAME vector-match over the buffer.
+            // Streaming stays entirely behind the Cursor seam; the match logic is untouched.
+            Type::Iterator(elem_box, _) => {
+                let elm_tp = (**elem_box).clone();
+                let iter_tp = subject_type.clone();
+                // First cut: SCALAR element types (channel-0, inline).  A `text` / vector / tuple
+                // element rides a different coroutine `next` channel + append shape — deferred; a
+                // clean error points at the collect idiom that works today.
+                if !self.first_pass
+                    && !matches!(
+                        elm_tp.base(),
+                        Type::Integer(_)
+                            | Type::Float
+                            | Type::Boolean
+                            | Type::Character
+                            | Type::Single
+                    )
+                {
+                    let en = elm_tp.name(&self.data);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "streaming `match` over an `iterator<{en}>` is not yet supported (only scalar element types) — collect it first: `match [for x in <iter> {{ x }}] {{ … }}`"
+                    );
+                }
+                let (buf, vec_tp, setup) =
+                    self.collect_iterator_subject(subject, &iter_tp, &elm_tp);
+                let mut match_code = Value::Null;
+                let result_tp = self.parse_vector_match(Value::Var(buf), &vec_tp, &mut match_code);
+                let mut ops = setup;
+                ops.push(match_code);
+                *code = v_block(ops, result_tp.clone(), "stream match");
+                return result_tp;
+            }
             // T1.9: tuple types — dispatch to tuple match handler.
             Type::Tuple(_) => {
                 return self.parse_tuple_match(subject, &subject_type, code);
@@ -3816,6 +3851,81 @@ impl Parser {
     /// to the inline calls this replaced.
     fn cursor_len(&mut self, v: u16) -> Value {
         self.cl("OpLengthVector", &[Value::Var(v)])
+    }
+
+    /// @PLN35 Phase 7 (Path B, step 2a) — materialise a coroutine `iterator<T>` match subject into a
+    /// fresh `vector<T>` buffer (EAGER pull), so the existing vector-match machinery runs over it.
+    /// Emits `gen = subject; done = false; buf = []; while !done { x = next(gen); if exhausted(gen)
+    /// { done = true } else { buf += [x] } }` and returns `(buf_var, setup_ops)`.  The pull uses
+    /// explicit `OpCoroutineNext`/`OpCoroutineExhausted` in a `while` — a `for` over a STORED
+    /// coroutine hangs.  A lazy per-read pull is the step-2b refinement behind the Cursor seam.
+    fn collect_iterator_subject(
+        &mut self,
+        subject: Value,
+        iter_tp: &Type,
+        elm_tp: &Type,
+    ) -> (u16, Type, Vec<Value>) {
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
+        let buf = self.create_unique("stream_buf", &vec_tp);
+        self.vars.defined(buf);
+        let gen_var = self.create_unique("stream_gen", iter_tp);
+        self.vars.defined(gen_var);
+        let done = self.create_unique("stream_done", &Type::Boolean);
+        self.vars.defined(done);
+        let x = self.create_unique("stream_x", elm_tp);
+        self.vars.defined(x);
+        let ed_nr = self.data.type_def_nr(elm_tp);
+        let elm = self.create_unique("stream_elm", &Type::Reference(ed_nr, Deps::none()));
+        self.vars.defined(elm);
+
+        // `OpCoroutineNext` value_size: packed `(channel_tag << 8) | byte_size` of the yield type
+        // (same encoding `next(gen)` computes — collections.rs `iterator`).
+        let byte_size = i32::from(crate::variables::size(
+            elm_tp,
+            &crate::data::Context::Argument,
+        ));
+        let channel_tag = crate::coroutine_layout::channel_tag(elm_tp);
+        let value_size = (channel_tag << 8) | byte_size;
+        // Append triple (scalar/text element): the same `OpNewRecord` / `set_field` / `OpFinishRecord`
+        // a `buf += [x]` comprehension emits.
+        let elem_known = self.vector_of(elm_tp);
+        let known = Value::Int(i32::from(if elem_known == u16::MAX {
+            0
+        } else {
+            elem_known
+        }));
+        let fld = Value::Int(i32::from(u16::MAX));
+
+        let mut setup: Vec<Value> = self.vector_db(&vec_tp, buf);
+        setup.push(v_set(gen_var, subject));
+        setup.push(v_set(done, Value::Boolean(false)));
+
+        let next_call = self.cl(
+            "OpCoroutineNext",
+            &[Value::Var(gen_var), Value::Int(value_size)],
+        );
+        let exhausted = self.cl("OpCoroutineExhausted", &[Value::Var(gen_var)]);
+        let new_rec = self.cl(
+            "OpNewRecord",
+            &[Value::Var(buf), known.clone(), fld.clone()],
+        );
+        let set_val = self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), Value::Var(x));
+        let finish = self.cl(
+            "OpFinishRecord",
+            &[Value::Var(buf), Value::Var(elm), known, fld],
+        );
+        let append = v_block(
+            vec![v_set(elm, new_rec), set_val, finish],
+            Type::Void,
+            "stream append",
+        );
+        let loop_body = vec![
+            v_if(Value::Var(done), Value::Break(0), Value::Null),
+            v_set(x, next_call),
+            v_if(exhausted, v_set(done, Value::Boolean(true)), append),
+        ];
+        setup.push(v_loop(loop_body, "stream pull"));
+        (buf, vec_tp, setup)
     }
 
     /// @PLN35 — materialise a named `..rest` sub-slice `v[lo .. hi]` into a FRESH independent

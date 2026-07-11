@@ -943,12 +943,21 @@ is fed.** So:
   IMPLEMENTATION of the Cursor, not a rewrite of the parser.
 
 **Phased build.**
-1. Define the Cursor seam and route today's match machinery through it (reframe the
-   11 `len`-bounds → `has(pos)`) as a BEHAVIOUR-PRESERVING refactor over the vector
-   cursor — prove IR byte-identical on both backends (loft-codegen Mode-B).  Nothing
-   streams yet; this is the "clear object" that keeps streaming out of the parser.
-2. Add the streaming Cursor (coroutine + lexer-style buffer) behind the same interface.
-3. Wire `match <iterator> { … }` to the streaming cursor; `max_lookahead`; native parity.
+1. **DONE (`d3438259`)** — Cursor len-seam (`cursor_len` beside `read_slice_elem`), the
+   11 `len`-bounds routed through it, byte-identical both backends (Mode-B corpus).
+2a. **DONE — streaming match, SCALAR elements, EAGER (both backends).** `match <iterator<Scalar>>`
+   materialises the coroutine into a buffer `vector<Scalar>` (`collect_iterator_subject` in
+   control.rs: `gen = subject; done = false; buf = []; while !done { x = OpCoroutineNext(gen);
+   if OpCoroutineExhausted(gen) { done = true } else { <append triple> } }`) then runs the existing
+   `parse_vector_match` over `buf` — streaming stays behind the seam, match logic untouched.
+   Pull uses explicit `next`/`exhausted` (a `for` over a stored coroutine HANGS).  **The 2 opcodes
+   evaporated** — the buffer holds all pulled items, so backtracking is a free index (no anchor/
+   revert, no eviction).  text / vector / tuple elements ride a different `next` channel → deferred
+   with a clean diagnostic (collect-idiom hint).  Guard `tests/scripts/35p-iterator-match.loft`,
+   `parse_errors::stream_match_text_deferred`.
+2b. LAZY per-read pull (read_slice_elem streaming dispatch — avoid full exhaustion) + `max_lookahead`
+   + text/complex element channels.  Behind the same seam.
+3. (folded into 2) — no separate opcode/State work needed.
 
 **Feasibility confirmed:** loft coroutines expose explicit `next(gen)` / `exhausted(gen)`
 (not just `for`), so a streaming cursor can pull incrementally; a coroutine is
