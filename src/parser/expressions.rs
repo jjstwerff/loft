@@ -3497,23 +3497,49 @@ use a separate collection or add after the loop"
             // the borrow-dep and removes both faults.)
             let for_next = v_set(for_var, *next);
             let mut lp = vec![for_next];
+            // #553 — the record type of ONE accumulator element.  For a `vector<T>` element it
+            // is the element's OWN vector store type `vector_of(content)` (the same id the
+            // working `s += [a[i]]` append uses); the outer `known`
+            // (`database.vector(known_type(vector<T>))`) is one level too DEEP for a vector
+            // element (it builds a vector-of-vector), though correct for scalar/struct elements.
+            let elm_type_id = if let Type::Vector(content, _) = &elm_tp {
+                Value::Int(i32::from(self.vector_of(content)))
+            } else {
+                known.clone()
+            };
             lp.push(v_set(
                 elm_var,
                 self.cl(
                     "OpNewRecord",
-                    &[Value::Var(var_nr), known.clone(), fld.clone()],
+                    &[Value::Var(var_nr), elm_type_id.clone(), fld.clone()],
                 ),
             ));
-            lp.push(self.set_field(
-                ed_nr,
-                usize::MAX,
-                0,
-                Value::Var(elm_var),
-                Value::Var(for_var),
-            ));
+            // A `vector<T>` element is an AGGREGATE — deep-copy the whole element into the fresh
+            // record (as the struct/Reference case does).  `set_field(ed_nr, f_nr=MAX, …)` PEELS
+            // `vector<τ>` to its inner `τ` and emits a scalar `OpSetInt4`, storing the element's
+            // 12-byte vector DbRef as a 4-byte int — SIGSEGV on interpret, `E0308` on native.
+            // `OpCopyRecord` recurses through nesting.  Scalar / struct elements keep set_field.
+            if matches!(elm_tp, Type::Vector(_, _)) {
+                lp.push(self.cl(
+                    "OpCopyRecord",
+                    &[
+                        Value::Var(for_var),
+                        Value::Var(elm_var),
+                        elm_type_id.clone(),
+                    ],
+                ));
+            } else {
+                lp.push(self.set_field(
+                    ed_nr,
+                    usize::MAX,
+                    0,
+                    Value::Var(elm_var),
+                    Value::Var(for_var),
+                ));
+            }
             lp.push(self.cl(
                 "OpFinishRecord",
-                &[Value::Var(var_nr), Value::Var(elm_var), known, fld],
+                &[Value::Var(var_nr), Value::Var(elm_var), elm_type_id, fld],
             ));
             let needs_db = self.vector_needs_db(var_nr, &elm_tp, true);
             let mut stmts = Vec::new();

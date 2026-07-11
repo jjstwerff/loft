@@ -2104,6 +2104,13 @@ impl Parser {
                 self.data.variant_of(*syn, "Some"),
                 Deps::frame(parent_tp.depend()),
             )
+        } else if let Type::Vector(inner, _) = assign_tp {
+            // #555 — a `vector<T>` element keeps its SPECIFIC type.  `was` routes through
+            // `type_def_nr(vector<T>)`, which collapses EVERY vector to the one generic `vector`
+            // source def (data.rs), so the element var's inner type is shared across all vector
+            // slices in a function — two nested-vector slices then desync (the later one's first
+            // element reads null).  Carrying `assign_tp`'s own inner type keeps them distinct.
+            Type::Vector(inner.clone(), Deps::frame(parent_tp.depend()))
         } else {
             was
         };

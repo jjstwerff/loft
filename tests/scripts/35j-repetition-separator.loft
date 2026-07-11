@@ -1,0 +1,68 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN35 Phase 6.2 (L3.4, P-Rep separator): a repetition with a separator
+// `[ ( [name:] V )*(Sep) [, ..rest] ]` / `…+(Sep)`.  The run is `V (Sep V)*` — `Sep` is one
+// variant CONSUMED between elements but NEVER captured; `name` collects only the V's (a
+// stride-2 read over `v[0..end]` skips the separators).  A trailing separator is NOT part of
+// the list (PEG `V (Sep V)*`), so `[Num, Comma]` is not a clean list — it leaves the `Comma`
+// to `..rest` (or fails a no-rest arm).  Builds on the Phase-6.1 run-loop.  Cross-mode.
+
+enum Tok { Num { n: integer }, Comma { c: integer }, Op { o: integer } }
+
+// (x:Num)*(Comma), no rest — the WHOLE slice must be a clean separated list.
+fn list(v: vector<Tok>) -> integer {
+  match v { [ (x: Num)*(Comma) ] => len(x), _ => -1 }
+}
+
+// (x:Num)*(Comma), ..rest — leading separated list, rest = remainder.
+fn listr(v: vector<Tok>) -> integer {
+  match v { [ (x: Num)*(Comma), ..rest ] => len(x) * 100 + len(rest), _ => -1 }
+}
+
+// +(Comma) requires at least one Num.
+fn plusc(v: vector<Tok>) -> integer {
+  match v { [ (x: Num)+(Comma), .. ] => len(x), _ => -1 }
+}
+
+// value check: the collected `x` holds the Nums, NOT the Commas (read x[0].n, x[1].n by index).
+fn firsttwo(v: vector<Tok>) -> integer {
+  match v {
+    [ (x: Num)*(Comma), .. ] => {
+      a: integer = match x { [ Num { n }, .. ] => n, _ => -1 };
+      b: integer = match x { [ _, Num { n }, .. ] => n, _ => -1 };
+      a * 100 + b
+    },
+    _ => -9,
+  }
+}
+
+fn main() {
+  a: vector<Tok> = [Num { n: 5 }, Comma { c: 0 }, Num { n: 6 }, Comma { c: 0 }, Num { n: 7 }];
+  b: vector<Tok> = [Num { n: 5 }, Comma { c: 0 }, Num { n: 6 }];
+  one: vector<Tok> = [Num { n: 9 }];
+  empty: vector<Tok> = [];
+  trail: vector<Tok> = [Num { n: 1 }, Comma { c: 0 }];       // trailing comma — not a clean list
+  mixed: vector<Tok> = [Num { n: 1 }, Comma { c: 0 }, Num { n: 2 }, Op { o: 0 }, Op { o: 0 }];
+
+  // list (no rest) — whole slice must be a clean separated list
+  assert(list(a) == 3, "list a 3: {list(a)}");
+  assert(list(b) == 2, "list b 2: {list(b)}");
+  assert(list(one) == 1, "list one 1: {list(one)}");
+  assert(list(empty) == 0, "list empty 0: {list(empty)}");
+  assert(list(trail) == -1, "trailing comma is not a clean list: {list(trail)}");
+
+  // listr (rest) — leading list then remainder
+  assert(listr(mixed) == 202, "listr mixed 2 nums + rest 2: {listr(mixed)}");
+  assert(listr(trail) == 101, "listr trail 1 num, rest [Comma]: {listr(trail)}");
+  assert(listr([Op { o: 0 }, Num { n: 3 }]) == 2, "listr Op-first 0 nums rest 2: {listr([Op { o: 0 }, Num { n: 3 }])}");
+
+  // plusc (+) — needs >= 1
+  assert(plusc(one) == 1, "plusc one 1: {plusc(one)}");
+  assert(plusc(empty) == -1, "plusc empty -> _: {plusc(empty)}");
+  assert(plusc([Comma { c: 0 }]) == -1, "plusc leading comma -> _: {plusc([Comma { c: 0 }])}");
+
+  // value check — commas skipped, x = [Num 5, Num 6, Num 7]
+  assert(firsttwo(a) == 506, "firsttwo a (5,6 — commas skipped): {firsttwo(a)}");
+
+  print("35j-repetition-separator: PASS");
+}

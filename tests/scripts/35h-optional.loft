@@ -1,0 +1,44 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN35 Phase 5 (L3.3, P-Opt): an optional group `(a)?` in a slice pattern.
+// It is a DEGENERATE alternation `(a | ε)`: the empty branch always matches, so
+// the optional NEVER fails — when `a` matches it binds + advances the cursor; when
+// it does not, the cursor stays put and `a`'s captures read null.  Reuses the
+// Phase-4.3 cursor engine (predictive dispatch + `..rest` + `option<T>`).  Cross-mode.
+
+enum Tok { Kw { k: integer }, Op { o: integer }, Num { n: integer } }
+
+// single-element optional: `(Kw)?` — k is option<integer>.
+fn lead_kw(v: vector<Tok>) -> integer {
+  match v {
+    [ (Kw { k })?, ..rest ] => (k ?? -1) * 100 + len(rest),
+    _ => -999,
+  }
+}
+
+// multi-element optional: `(Kw Op)?` — the whole 2-element prefix is optional.
+fn lead_pair(v: vector<Tok>) -> integer {
+  match v {
+    [ (Kw { k } Op { o })?, ..rest ] => (k ?? -1) * 1000 + (o ?? -1) * 10 + len(rest),
+    _ => -999,
+  }
+}
+
+fn main() {
+  // single-element optional
+  wk: vector<Tok> = [Kw { k: 5 }, Num { n: 0 }, Num { n: 0 }];
+  nk: vector<Tok> = [Num { n: 1 }, Num { n: 2 }];
+  assert(lead_kw(wk) == 502, "Kw present: {lead_kw(wk)}");        // 5*100 + rest 2
+  assert(lead_kw(nk) == -98, "Kw absent, k null: {lead_kw(nk)}");// -1*100 + rest 2
+  assert(lead_kw([]) == -100, "empty, k null, rest 0: {lead_kw([])}");
+
+  // multi-element optional
+  wp: vector<Tok> = [Kw { k: 3 }, Op { o: 4 }, Num { n: 0 }];   // pair present: k=3,o=4,rest=1
+  np: vector<Tok> = [Num { n: 7 }, Num { n: 8 }];               // pair absent: null, rest=2
+  half: vector<Tok> = [Kw { k: 9 }, Num { n: 0 }];              // Kw but no Op → pair absent, rest=2
+  assert(lead_pair(wp) == 3041, "Kw Op present: {lead_pair(wp)}");   // 3000+40+1
+  assert(lead_pair(np) == -1008, "pair absent: {lead_pair(np)}");    // -1000-10+2
+  assert(lead_pair(half) == -1008, "Kw-not-Op → pair absent: {lead_pair(half)}"); // cursor unmoved, rest 2
+
+  print("35h-optional: PASS");
+}

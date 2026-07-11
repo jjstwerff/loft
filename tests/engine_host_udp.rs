@@ -19,7 +19,10 @@ use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
 
-const PORT: u16 = 18088;
+#[path = "common/mod.rs"]
+mod common;
+
+const PORT_BASE: u16 = 18088;
 /// Long ticks make the conflation window deterministic.
 const TICK_US: u32 = 200_000;
 
@@ -121,6 +124,7 @@ fn unstamp(dgram: &str) -> (i64, String) {
 
 #[test]
 fn udp_sync_channel_end_to_end() {
+    let port = common::test_port(PORT_BASE);
     if !loft_bin().exists() {
         eprintln!("skipping: release loft not built");
         return;
@@ -137,7 +141,7 @@ fn main() {{
   engine_host::sync_class(8);
   engine_host::sync_class(9);
   w = W {{ tick: 0 }};
-  engine_host::run({PORT}, {TICK_US},
+  engine_host::run({port}, {TICK_US},
     fn(ev: engine_host::Event) {{
       if ev.kind == 0 {{
         engine_host::send(ev.cid, "hi:{{ev.cid}}");
@@ -173,7 +177,7 @@ fn main() {{
     // 1. Connect; the cookie rides the 101 upgrade response (X-Loft-UDP) —
     //    transport negotiation is kernel-internal, the loft program above
     //    never references it.
-    let (ws, cookie) = ws_connect(PORT);
+    let (ws, cookie) = ws_connect(port);
     assert_eq!(cookie.len(), 16, "16-hex-char cookie: {cookie:?}");
     let hello_frame = ws_recv(&ws);
     assert_eq!(hello_frame, "hi:0", "ordinary meaning traffic untouched");
@@ -186,7 +190,7 @@ fn main() {{
     // 3. Hello: bind the UDP path; the kernel acks.  Datagrams can drop even
     //    on loopback under load — retry the hello until the ack.
     let udp = UdpSocket::bind("127.0.0.1:0").unwrap();
-    udp.connect(("127.0.0.1", PORT)).unwrap();
+    udp.connect(("127.0.0.1", port)).unwrap();
     udp.set_read_timeout(Some(Duration::from_millis(500)))
         .unwrap();
     let deadline = Instant::now() + Duration::from_secs(10);
@@ -297,7 +301,10 @@ fn probe_server_poses_ride_the_fastest_path_per_client() {
         eprintln!("skipping: release loft not built");
         return;
     }
-    let port = 18084u16; // probe_server_kernel.loft's fixed port
+    // NOT offset: this connects to the external `probe_server_kernel.loft` fixture, which binds
+    // a HARDCODED 18084 — the test's port must match it.  (So this one test can still collide
+    // with a concurrent sibling-checkout run; fixing that needs a port-arg on the fixture.)
+    let port = 18084u16;
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let child = Command::new(loft_bin())
         .arg("--interpret")

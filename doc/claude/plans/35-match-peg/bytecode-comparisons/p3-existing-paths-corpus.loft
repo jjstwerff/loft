@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN35 Phase 3 byte-identical BEFORE/AFTER corpus — one fn per EXISTING
+// enum-match code path that the multi-pattern-arm change sits beside.  The
+// change is purely additive (a `,` before `=>` was a parse error), so every
+// path here must emit BYTE-IDENTICAL IR + native Rust after the change.
+// Capture: `loft introspect this.loft` (IR + bytecode + native Rust, both
+// backends).  See INSTRUMENT.md.
+
+enum Color { Red, Green, Blue }
+enum Shape {
+  Circle { r: integer },
+  Square { pad: integer, r: integer },
+  Triangle { r: integer },
+}
+enum Detail { Ship { carrier: text }, Pickup { store: integer } }
+
+// plain enum: single arms + wildcard
+fn plain_single(c: Color) -> integer {
+  match c { Red => 1, Green => 2, _ => 0 }
+}
+
+// plain enum: `|` or-pattern (tag-only alternation, discriminant OR)
+fn plain_or(c: Color) -> integer {
+  match c { Red | Blue => 1, _ => 0 }
+}
+
+// struct-enum: field binding, one arm + wildcard
+fn se_bind(s: Shape) -> integer {
+  match s { Circle { r } => r, _ => -1 }
+}
+
+// struct-enum: two field-binding arms + wildcard
+fn se_two(s: Shape) -> integer {
+  match s { Circle { r } => r, Square { r } => r, _ => -1 }
+}
+
+// struct-enum: guard on a field binding
+fn se_guard(s: Shape) -> integer {
+  match s { Circle { r } if r > 5 => r, _ => 0 }
+}
+
+// struct-enum: heap (text) field binding
+fn se_text(d: Detail) -> text {
+  match d { Ship { carrier } => carrier, _ => "none" }
+}
+
+// struct-enum: exhaustive (no wildcard) full variant cover
+fn se_exhaustive(s: Shape) -> integer {
+  match s { Circle { r } => r, Square { r } => r, Triangle { r } => r }
+}
+
+fn main() {
+  assert(plain_single(Red) == 1, "plain_single");
+  assert(plain_or(Blue) == 1, "plain_or");
+  assert(se_bind(Circle { r: 3 }) == 3, "se_bind");
+  assert(se_two(Square { pad: 0, r: 7 }) == 7, "se_two");
+  assert(se_guard(Circle { r: 9 }) == 9, "se_guard");
+  assert(se_text(Ship { carrier: "UPS" }) == "UPS", "se_text");
+  assert(se_exhaustive(Triangle { r: 4 }) == 4, "se_exhaustive");
+  print("p3-existing-paths: PASS\n");
+}

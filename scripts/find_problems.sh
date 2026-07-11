@@ -29,6 +29,11 @@
 #   ./scripts/find_problems.sh /tmp/log /tmp/problems  # custom paths
 #   ./scripts/find_problems.sh --peek                  # in-flight peek
 #   ./scripts/find_problems.sh --wait                  # wait for a --bg run
+#   ./scripts/find_problems.sh --stop                  # stop THIS checkout's --bg run
+#
+# All state is keyed by the checkout (dir name + path hash), so `--stop` only ever
+# touches this working tree's run — never a sibling checkout's.  Never use a broad
+# `pkill -f nextest`: it reaches into other checkouts and starts a run-killing battle.
 #
 # Reach for this any time a refactor is expected to surface multiple
 # failures (e.g. after renaming a widely-used API, touching parser
@@ -45,9 +50,19 @@ set -euo pipefail
 # Cache clean/release rebuilds with sccache when present (no-op otherwise).
 source "$(dirname "${BASH_SOURCE[0]}")/sccache_env.sh"
 
-# Per-checkout tag: stable for a given working tree, distinct across trees.
+# Per-checkout tag: the readable dir NAME plus a hash of the full path (distinct even when two
+# checkouts share a basename).  So the log / pid / output files are `/tmp/loft_test.<dir>.<hash>.…`
+# — named by their checkout, so two agents in sibling checkouts (e.g. `loft` and `loft2`) never
+# share a file and `--stop` only ever touches THIS checkout's run.
 REPO_ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)
-REPO_TAG=$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)
+REPO_HASH=$(printf '%s' "$REPO_ROOT" | cksum | cut -d' ' -f1)
+REPO_SLUG=$(printf '%s' "$(basename "$REPO_ROOT")" | tr -c 'A-Za-z0-9._-' '_')
+REPO_TAG="$REPO_SLUG.$REPO_HASH"
+# Per-checkout server-test port offset: the engine-host / wasm-relay tests bind FIXED ports, so
+# two concurrent suites (this checkout + a sibling) would collide and flake.  Derive a distinct
+# non-zero offset per checkout (a multiple of 2000 > the ~1200-wide base-port span, so two
+# checkouts' ranges never overlap) and export it for `common::test_port`.
+export LOFT_TEST_PORT_OFFSET=$(( (REPO_HASH % 16 + 1) * 2000 ))
 
 # FFI toolchain guard (E0514 self-heal).  A nightly / sanitizer build run into the
 # shared `target/` leaves `target/release/deps/libloft_ffi-*.rlib` compiled by a
@@ -364,6 +379,32 @@ if [[ "${1:-}" == "--peek" ]]; then
       { buf[NR] = $0 }
     ' "$LOG"
   fi
+  exit 0
+fi
+
+# `--stop`: stop THIS checkout's background run (its wrapper + the nextest/rustc tree it
+# spawned), scoped by PID file — never a broad `pkill -f nextest`, which would kill a sibling
+# checkout's run and start a battle.
+if [[ "${1:-}" == "--stop" ]]; then
+  if [[ ! -f "$PID_FILE" ]] || ! kill -0 "$(cat "$PID_FILE")" 2>/dev/null; then
+    echo "no background run for $REPO_ROOT (nothing to stop)"
+    rm -f "$PID_FILE"
+    exit 0
+  fi
+  pid=$(cat "$PID_FILE")
+  # Recursively signal the whole descendant tree rooted at THIS wrapper pid (wrapper →
+  # cargo-nextest → nextest runner → test procs), leaves first.  Scoped by pid, so a sibling
+  # checkout's run is never touched — no broad `pkill -f nextest`.
+  kill_tree() {
+    local p=$1 sig=$2 c
+    for c in $(pgrep -P "$p" 2>/dev/null); do kill_tree "$c" "$sig"; done
+    kill "-$sig" "$p" 2>/dev/null || true
+  }
+  kill_tree "$pid" TERM
+  for _ in 1 2 3; do kill -0 "$pid" 2>/dev/null || break; sleep 1; done
+  kill_tree "$pid" KILL
+  rm -f "$PID_FILE"
+  echo "stopped background run (pid $pid) for $REPO_ROOT"
   exit 0
 fi
 

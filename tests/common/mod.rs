@@ -12,6 +12,20 @@
 #[allow(dead_code)]
 pub mod cross_mode;
 
+/// A server-test port, offset by `LOFT_TEST_PORT_OFFSET` (default 0).  The engine-host /
+/// wasm-relay tests bind FIXED ports; two suites run at once — e.g. two agents in sibling
+/// checkouts (`loft` and `loft2`) — collide on them and flake.  `find_problems.sh` exports a
+/// distinct offset per checkout so their port ranges never overlap.  A plain `cargo test` (no
+/// offset) keeps the base ports.
+#[allow(dead_code)]
+pub fn test_port(base: u16) -> u16 {
+    let offset = std::env::var("LOFT_TEST_PORT_OFFSET")
+        .ok()
+        .and_then(|s| s.parse::<u16>().ok())
+        .unwrap_or(0);
+    base.saturating_add(offset)
+}
+
 use loft::data::Data;
 use loft::database::Stores;
 use loft::parser::Parser;

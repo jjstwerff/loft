@@ -1521,6 +1521,7 @@ mod tests {
             alias_d_nr: 3,
             assigned_lambda_d_nr: 99,
             links: vec!["fs#read".into()],
+            lexeme: false,
         }];
 
         // Host record whose field 0 is the root vector<Attribute>.

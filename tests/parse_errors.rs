@@ -1655,3 +1655,93 @@ fn vector_match_not_exhaustive() {
     code!("fn f(v: vector<integer>) -> integer { match v { [a] => a, [a, b] => a + b } }\nfn test() { f([1]); }")
         .error("match on vector is not exhaustive — a slice pattern can fail (a length no arm matches); add a '_ =>' or a bare-binding final arm at vector_match_not_exhaustive:1:78");
 }
+
+// @PLN35 Phase 3 (L3.7, P-Multi): comma-separated multi-pattern arms bind the SAME
+// captures (D-simple) from whichever variant matched.  The guards below pin the
+// D-simple boundary: mismatched capture types, partial name overlap, and the
+// combinations deferred to Phase 4 (a guard / a field sub-pattern on such an arm).
+
+// A same-named capture must have the SAME type in every listed pattern.
+#[test]
+fn multi_pattern_capture_type_mismatch() {
+    code!("enum Rec { Ri { k: integer }, Rt { k: text } }\nfn f(r: Rec) -> integer { match r { Ri { k }, Rt { k } => k, _ => 0 } }")
+        .error("multi-pattern arm: capture 'k' is text in this pattern but integer in the first — every listed pattern must bind the same captures at the same type at multi_pattern_capture_type_mismatch:2:55");
+}
+
+// Partial name overlap (a capture in only some patterns → option<T>) is Phase 4.
+#[test]
+fn multi_pattern_partial_overlap() {
+    code!("enum Rec { Ra { u: integer }, Rb { w: integer } }\nfn f(r: Rec) -> integer { match r { Ra { u }, Rb { w } => u, _ => 0 } }")
+        .error("multi-pattern arm: capture 'w' is not bound by the first pattern (partial overlap → option<T> is Phase 4) at multi_pattern_partial_overlap:2:55")
+        .error("multi-pattern arm: every listed pattern must bind the same captures (u) at multi_pattern_partial_overlap:2:58");
+}
+
+// A guard on a multi-pattern arm (must hold for whichever pattern matched) is Phase 4.
+#[test]
+fn multi_pattern_guard_deferred() {
+    code!("enum Rec { Ra { k: integer }, Rb { k: integer } }\nfn f(r: Rec) -> integer { match r { Ra { k }, Rb { k } if k > 0 => k, _ => 0 } }")
+        .error("a guard is not yet supported on a multi-pattern arm (Phase 4) at multi_pattern_guard_deferred:2:67");
+}
+
+// A field sub-pattern inside a non-first listed pattern is Phase 4.
+#[test]
+fn multi_pattern_subpattern_deferred() {
+    code!("enum Sub { Sp, Sq }\nenum Rec { Ra { i: Sub }, Rb { i: Sub } }\nfn f(r: Rec) -> integer { match r { Ra { i }, Rb { i: Sp } => 0, _ => 1 } }")
+        .error("a field sub-pattern is not yet supported in a multi-pattern arm (Phase 4) at multi_pattern_subpattern_deferred:3:57");
+}
+
+// Union exhaustiveness: the listed variants are ALL covered by the multi-pattern
+// arm, so a still-missing variant must be reported (not silently accepted).
+#[test]
+fn multi_pattern_union_not_exhaustive() {
+    code!("enum Rec { Ra { k: integer }, Rb { k: integer }, Rc { k: integer } }\nfn f(r: Rec) -> integer { match r { Ra { k }, Rb { k } => k } }")
+        .error("match on Rec is not exhaustive — missing: Rc; add the missing variants or a '_ =>' wildcard at multi_pattern_union_not_exhaustive:2:34");
+}
+
+// @PLN35 Phase 4 (L3.2, P-Alt): a single-element alternation `( V1 { f } | V2 { f } )`
+// in a slice element position.  A same-named capture must unify across branches; a
+// name in only some branches promotes to `option<T>` (Phase 4.2 — valid, not an
+// error).  So the only capture-level errors are a type clash and an unknown variant.
+
+// A same-named capture must unify across branches.
+#[test]
+fn alternation_capture_type_mismatch() {
+    code!("enum Tk { Ai { n: integer }, At { n: text } }\nfn f(t: vector<Tk>) -> integer { match t { [ (Ai { n } | At { n }) ] => 0, _ => 1 } }")
+        .error("alternation capture 'n' is text in one branch but integer in another at alternation_capture_type_mismatch:2:69");
+}
+
+// An unknown variant in an alternation branch is a clean error (no panic).
+#[test]
+fn alternation_bad_variant() {
+    code!("enum Tk { Id { n: text }, Str { n: text } }\nfn f(t: vector<Tk>) -> text { match t { [ (Id { n } | Nope { n }) ] => n, _ => \"y\" } }")
+        .error("'Nope' is not a variant of Tk at alternation_bad_variant:2:61");
+}
+
+// @PLN35 Phase 6.3 — a literal slice element on a struct-enum with no `#lexeme` field is a
+// clean error (not a panic): mark a field `#lexeme` or write the variant pattern.
+#[test]
+fn lexeme_missing() {
+    code!("enum Token { Kw { name: text }, Num { value: integer } }\nfn f(v: vector<Token>) -> integer { match v { [ \"x\" ] => 1, _ => -1 } }")
+        .error("Token has no `#lexeme` field a text literal can match — mark a field `#lexeme` or write the variant pattern at lexeme_missing:2:54");
+}
+
+// A literal whose type cannot match the (scalar) slice element type is rejected.
+#[test]
+fn slice_literal_type_mismatch() {
+    code!("fn f(v: vector<integer>) -> integer { match v { [ \"x\" ] => 1, _ => -1 } }").error(
+        "a text literal cannot match a integer slice element at slice_literal_type_mismatch:1:56",
+    );
+}
+
+// An unknown `#`-annotation on an enum field is a clean error.
+#[test]
+fn unknown_field_annotation() {
+    code!("enum Tok { V { #bogus f: text } }").error(
+        "unknown field annotation `#bogus` (expected `#lexeme`) at unknown_field_annotation:1:24",
+    );
+}
+
+// A user type may be named `T` (a name the stdlib uses as a generic type variable):
+// verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
+// The fix keys vector types by their element (not by a display name two distinct
+// `T`s share), so a user `vector<T>` no longer reuses the marker's size-0 entry.

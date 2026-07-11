@@ -23,9 +23,94 @@
 
 ## ▶ RESUME HERE — status (2026-07-11)
 
-**Branch** `tuxedo-pln35-match-peg` @ `1975a2eb`, pushed, on current `origin/main`; full-suite
-**green** (`2787/2789` — only the environmental `wasm_debug_relay` fails on this box; see memory
-`wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+**Branches.** Phase 0–2 MERGED to `main` (#554, squash). **Phase 3 (L3.7 multi-pattern arms),
+Phase 4 COMPLETE (L3.2 alternation: 4.1 single-element, 4.2 `option<T>` promotion, 4.3
+multi-element sequence branches via the cursor engine), Phase 5 (L3.3 optional `(a)?` as a
+degenerate `(a | ε)` alternation — one empty branch on the 4.3 engine), Phase 6.1 (L3.4
+repetition `( [name:] V )*` / `…+` on struct-enums — a runtime run-loop + whole-element
+collect), and a fix for a pre-existing crash when a user type is named `T`** are on
+`tuxedo-pln35-phase3-multipat`, rebased onto `main` (NO PR — the user does not want one; keep
+committing to the branch). Full-suite **green** on this box (only the environmental
+`wasm_debug_relay` fails; see memory `wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+
+**Phase 6.1 + 6.2 — DONE (repetition + separator, struct-enum), both backends.** `[ ( [name:] V )*
+[, ..rest] ]` / `…+`: a runtime run-loop counts the maximal leading `V` run into `end`; `name`
+collects `v[0..end]` (whole `vector<ElemType>`, reusing `..rest`'s `materialize_named_rest`),
+`..rest` gets `v[end..len]`. `*` = zero-or-more (no-rest ⇒ `end == len`); `+` ⇒ `end > 0`. **6.2
+separator** `( V )*(Sep)`: the run becomes `V (Sep V)*` (a `first V; loop (Sep V)` run-loop);
+`Sep` is consumed not captured, so the capture reads `v[0..end]` with a STRIDE of 2 (new `step`
+param on `materialize_named_rest`) to skip separators; trailing `Sep` is not part of the list.
+The run-loop lives in the arm condition (yields the boolean). ONE unified look-ahead
+`peek_group_kind` (`Other`/`Alt`/`Repetition`, single save/revert — two sequential peeks corrupt
+the lexer replay buffer) classifies the group; routing computes `group_kind` once. Guards
+`tests/scripts/35i-repetition.loft`, `35j-repetition-separator.loft`. **#556 FIXED** (was: native
+`for` over a match-arm materialised vector iterated 0×; real cause = a slice-arm block dropped its
+result on native — a much broader bug, now repaired).
+
+**Phase 6.3 (literal slice elements) + `#lexeme` — DONE, both backends — the grammar-reader.** A
+LITERAL element `[ 1, … ]` / `[ "kw", … ]` matches by equality against `v[pos]` (scalar → direct
+`==`; a `"_"` placeholder keeps positions aligned, composes with binds/`..rest`). The `#lexeme`
+EXTENSION lifts this to token streams: a token-enum variant marks its surface-text field
+`#lexeme` (`Keyword { #lexeme name: text }`), so on a struct-enum element a bare `"fn"` desugars
+(`build_lexeme_literal_match`) to `tag==Keyword && name=="fn"` (OR'd over eligible variants) —
+`[ "fn", Ident { name }, "(", ")" ]` reads like the grammar. `#lexeme` is a parse-time `Attribute`
+flag (not serialised). Guards `tests/scripts/35l-literal-slice-elements.loft`, `35k-lexeme.loft`,
+`parse_errors::{lexeme_missing, unknown_field_annotation, slice_literal_type_mismatch}`.
+**#557 FIXED** — a pre-existing native text-arm-unification bug (a `vector<text>` subject with
+mixed interpolation/literal returns → `Str::new(String)` E0308) surfaced here (NOT caused by
+literal elements); fixed in `emit.rs` (`block_tail_materialises_string` routes the block through
+the work buffer), guard `tests/scripts/557-vector-text-match-interp-literal.loft`.
+
+**Test-infra (this branch):** `find_problems.sh` runs are now named by checkout
+(`/tmp/loft_test.<dir>.<hash>.…`) with a scoped `--stop` (no more broad `pkill -f nextest`
+killing a sibling checkout's run), and server-test ports are offset per checkout
+(`common::test_port` + `LOFT_TEST_PORT_OFFSET`) so two concurrent suites don't collide on the
+engine-host / wasm-relay fixed ports.
+
+**MID-SLICE repetition + lexeme separators — DONE, both backends — the parser-combinator keystone.**
+A repetition may now sit BETWEEN a fixed head and a fixed literal tail:
+`[ Ident { name }, "(", (arg: Ident)*(","), ")" ]` reads exactly like a grammar rule for a call.
+`parse_slice_repetition` takes `head_len`; the run starts there, collects `v[head_len..end]`, and a
+fixed LITERAL tail is matched from the END (negative index) so the run must reach exactly
+`len - tail_len` (`end == len - tail_len`; `+` ⇒ `end > head_len`; a rest just needs `head_len <= len`).
+Head bare-names bind before the group; head sub-patterns/literals bind inline. Separators are now a
+`SepSpec` — a variant TAG `(Comma)` OR a LEXEME literal `(",")` — via `sep_match_cond`, so a
+comma-separated token grammar needs no dedicated separator variant. Deferred: non-literal tail
+elements (bind / variant sub-pattern), and a fixed tail + `..rest` together. Guard
+`tests/scripts/35m-mid-slice-repetition.loft` (bracketed lists, function calls, callee-name bind,
+value-by-index, `+`; cross-mode + leak-checked).
+
+**Phase 5 — DONE (optional), both backends.** `(a)?` = degenerate alternation `(a | ε)`: the
+empty branch always matches so the optional never fails; present → bind + advance cursor by `a`'s
+width, absent → ε commits with cursor unmoved and `a`'s captures read null (option-promoted by the
+4.2 hook). `..rest` resumes at the matched width (0 when skipped). Built by pushing one empty
+branch in `parse_multi_element_alternation` + `peek_paren_suffix` detecting the trailing `?`.
+Guard: `tests/scripts/35h-optional.loft` (single + multi-element `(A B)?`, present/absent/partial/empty).
+
+**Phase 4.3 — DONE (steps 1–5), both backends.** `[ (A B | C), ..rest ]`: a branch may be a
+SEQUENCE of varying width, dispatched PREDICTIVELY on the leading tags (ordered `if/else` over
+pure per-branch predicates, no `save`/revert — a tag branch is a pure test that only advances on a
+full commit); `..rest` reads `v[pos..]` from a runtime cursor = the matched branch's width. Built
+per §3a: step 1 `read_slice_elem` seam (byte-identical refactor), step 2–4 `parse_multi_element_alternation`
++ `peek_multi_element_alt` lexical lookahead, step 5 `materialize_named_rest(lo, hi)` (extracted,
+shared with the fixed-arity path). Guards: `tests/scripts/35g-multi-element-alternation.loft`.
+**Next: the scalar bare-postfix `name:Type*` repetition (the last gap for the `vector<integer>`
+golden — literal heads already work via 6.3), per-iteration field capture, non-literal tail
+elements after a repetition; then Phase 7 (iterator
+input — the accumulating `read(pos)`), then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook)
+waits on PC.**
+
+**Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
+the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
+at compatible types; partial overlap → `option<T>` stays Phase 4) into SHARED slots that each
+listed variant assigns from ITS OWN offsets. Desugars to the hand-expanded `V1 { c } => body; V2 { c }
+=> body` form — proven byte-for-byte in [`bytecode-comparisons/p3-existing-paths-corpus.loft`](bytecode-comparisons/p3-existing-paths-corpus.loft)
+(existing paths stayed byte-identical) and confirmed on both backends. Union exhaustiveness: an arm
+covers the union of its listed variants. Code: `parse_match` arm loop + two helpers (`variant_disc`,
+`parse_multi_pattern_extra_bindings`) in `control.rs`. A guard or a field sub-pattern on a
+multi-pattern arm is rejected with a "Phase 4" diagnostic. Guards: `tests/scripts/35e-multi-pattern-arm.loft`
+(cross-mode, leak-checked, includes the reuse axis), `tests/parse_errors.rs::multi_pattern_*` (5 cases).
+The `|` or-pattern stays the tighter same-shape tag alternation; `,` is the looser cross-shape form.
 
 **Phase 2 (L3.1) `..rest` — COMPLETE (2026-07-11).** It binds a FRESH independent `vector<T>`
 tail by **REUSING the compile-time `#Slice materialise` path** (`materialize_iterator`) — the
@@ -200,6 +285,11 @@ before Phase 1 code lands. **D2 and D3 are the ones I'd most want a second look 
   stacks `call_stack`/`coroutines` (`src/state/mod.rs:164,170`), plus the two new
   opcodes. *Rationale:* mirrors the design's own "Validated input shapes" table
   (slice revert cost = 1 word, no memo; iterator needs memo).
+  **Refined by §3a (the matching engine):** backtracking is now the EXCEPTION, not the
+  default — a tag choice is predictive (no anchor), the `save`/revert lives INSIDE a rule
+  that can consume-then-fail (never at the call site), first-sets bound it statically, and
+  left recursion is eliminated into repetition rather than grown. Read §3a before D4's
+  slice-cursor mechanics.
 
 - **D5 — Provisional bindings reuse the existing per-arm name-scoping.** Bindings are
   already permanent slots whose *name* visibility is saved/restored per arm
@@ -224,15 +314,204 @@ parse_pattern(subject_read, subject_type) -> PatternMatch
 ├─ enum variant `V {..}`  → tag test + recurse fields  (Phase 1 — generalize :3403/:3554)
 ├─ slice `[p, p, ..r]`   → len test + recurse elems   (Phase 1/2 — generalize :3960)
 ├─ tuple `(p, p)`         → recurse elems              (Phase 1 — via :4169)
-├─ alternation `(a|b)`    → anchor; try a; revert; try b   (Phase 4)
-├─ optional `(a)?`        → anchor; try a; else bind null   (Phase 5)
-└─ repetition `(a)* (a)+` → bounded loop of anchored a   (Phase 6)
+├─ alternation `(a|b)`    → predictive if/else on leading tag (§3a)   (Phase 4)
+├─ optional `(a)?`        → try a; else bind null (contract: pos unmoved on fail)   (Phase 5)
+└─ repetition `(a)* (a)+` → forward loop of a, predictive stop (§3a)   (Phase 6)
 ```
 
 `PatternMatch { cond: Option<Value>, binds: Vec<Value>, total: bool }` is the
 uniform currency: a handler builds its arm by AND-folding child `cond`s (as
 `control.rs:3016-3028` already does for field sub-conditions + guard) and
 concatenating child `binds`, then `total` drives the exhaustiveness gate (F6).
+
+---
+
+## 3a. The matching engine — the algorithmic core (cursor · backtracking · streaming · recursion)
+
+> The phases below (alternation, optional, repetition, iterator input) **and** the
+> parser-combinator layer ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md)) are all one engine. This
+> section is that engine's design, decided end-to-end (2026-07-11) so the phases build it
+> incrementally without any of them needing a redesign — read it before Phase 4.3 or the PC
+> layer. It **supersedes** the "anchor; try a; revert; try b" sketch in D4 / §3: backtracking
+> is the *exception* here, not the mechanism.
+
+**The substrate — a forward `pos` cursor over a `read(pos)` seam.** Matching walks a sequence
+with one logical position `pos` and reads elements through a SINGLE accessor `read(pos)` —
+never a raw `OpGetVector` scattered through the desugaring. Two backings: a MATERIALIZED
+vector (everything today) where `pos` is an index and `read(pos)` is `OpGetVector(v, size,
+pos)`; and a STREAMED source (Phase 7) where `read(pos)` pulls from a lexer coroutine and
+accumulates (below). Funnelling every element access through `read(pos)` is what lets the
+streamed backing drop in as a substitution, not a rewrite.
+
+**The cursor contract — consume on success, untouched on failure.** Every rule (and the whole
+match) upholds one invariant: on SUCCESS it advances `pos` past what it matched; on FAILURE it
+leaves `pos` exactly where it started. This is the parser-combinator contract, and it is what
+lets rules compose without knowing each other's internals:
+- an ALTERNATION never saves or reverts — a failed branch has already put `pos` back, so the
+  next branch resumes correctly; the choice is just "try each branch; the one that commits
+  advances `pos`";
+- the revert that makes a COMPOSITE rule honour the contract — a *sequence* that matched its
+  first parts then failed later — lives INSIDE that rule: it anchors its own start and
+  restores `pos` before returning failure. `save = start; … ; on fail pos = start` appears
+  ONLY there, as the rule's own responsibility, never the caller's;
+- a TAG branch honours the contract for free — it tests its tags as a pure boolean (reads,
+  moves nothing) and advances `pos` only on a full commit.
+
+Keep the `pos`-advance factored so any rule can own advance-on-commit / restore-on-fail.
+
+**Predictive dispatch — the fast path, no backtracking.** At a choice `( a | b | … )`,
+dispatch on the LEADING element's tag, the way a recursive-descent parser predicts a
+production from its first token. Because a branch condition is pure, the whole choice is an
+ordered `if / else if` over those conditions: the first whose fixed-length tag sequence
+matches commits, binds, and steps `pos` by its width. `&&` short-circuit gives the
+first-lookup failure for free, and branches that share a leading tag just fall one tag deeper.
+The common case (disjoint enum tags) does ZERO backtracking — `pos` only moves forward.
+
+**Bounded backtracking — guaranteed by static first-sets.** Compute, per choice point, the set
+of leading tags each branch can begin with:
+- DISJOINT first-sets → the leading tag determines the branch → no backtracking, *proven at
+  compile time* (predictive dispatch promoted from a runtime accident to a static guarantee);
+- OVERLAPPING first-sets → a graded, explicit response, never silent exponential risk:
+  (1) reject by default ("branches share leading tag `A` — disambiguate"), or (2) allow a
+  STATIC bounded lookahead `k` (LL(k) — reject if the needed depth exceeds `k`), or (3) permit
+  real backtracking only behind an explicit `cut`, capped at `max_lookahead`.
+
+The only way to get backtracking at all is to ask for it, and even then it is bounded by
+construction. This makes **"streamable" a compile-time property** — a rule needing unbounded
+lookahead is flagged at compile time (fine on a materialized vector; will not stream). The
+same first-set analysis closes the "no ambiguity warning" gap. Strict by default.
+
+**Streaming — a lexer property, with monotonic accumulation.** Forward streaming lives in the
+LEXER (a coroutine yielding tokens on demand), NOT the matcher. The matcher stays a `pos`
+cursor over `read(pos)`; for a streamed source `read(pos)` pulls-and-appends from the coroutine
+when `pos` passes the buffered edge. A coroutine can't un-yield, so backtracking needs a
+rewindable WINDOW — three positions, not one:
+- `cursor` — moves forward on consume, back on a rule's restore; the only thing the contract
+  touches;
+- `high-water` — the furthest position ever pulled; MONOTONIC, never moves back; the buffer's
+  leading edge;
+- `evict frontier` — the earliest position any live rule could still backtrack to; nothing
+  below it is reachable, so it is droppable.
+
+The trick that makes an un-re-readable stream compatible with "restore on failure": a failing
+rule rewinds the `cursor` but leaves `high-water` alone — accumulation is monotonic; only the
+cursor reverts. `max_lookahead` bounds `high-water − evict`, keeping the buffer bounded. The
+materialized vector collapses all three (buffer = the whole vector; nothing evicts). The loft
+LEXER already does exactly this at PARSE time (`link()`/`revert()` buffer scanned items) — the
+same mechanism, one layer down at runtime.
+
+**Left recursion — eliminate into repetition, don't seed-and-grow.** `A := A α | β`
+infinite-loops in top-down matching. The general PEG fix (Warth seed-and-grow) is a
+backtracking variant, but it is PACKRAT — it memoises the growing seed and re-parses the whole
+construct from a pinned start, reintroducing full memoisation and an unbounded buffer, which
+breaks streaming and bounded backtracking. The fit-for-this-engine answer is ELIMINATION:
+rewrite `A := A α | β` to `A := β α*` — match one `β`, then iterate `α` forward. That is
+forward-consuming (streaming-safe), predictive per step (peek the next `α`'s first-set), and
+memo-free — and it REUSES the repetition machinery (Phase 6, `(…)*`) rather than adding a
+mechanism. Left recursion becomes a rewrite into iteration. The graded line:
+- static-DETECT left recursion (needed regardless — the PC correctness gate);
+- DIRECT left recursion → auto-rewrite to `β α*` + a left-fold (recovers the associativity the
+  left-recursive form implied);
+- INDIRECT / mutual → reject with a clear diagnostic, or require a manual rewrite (the real
+  complexity lives here; not worth dragging into a streaming engine);
+- OPERATOR grammars → precedence climbing / Pratt layers cleanly on top and gives precedence +
+  associativity as data (usually what you actually want for expressions).
+
+**Associativity, precedence ladders, and the recursion residue.** Recursion is right for
+genuine *structure*; what is NOT healthy is the fixed-depth descent a precedence LADDER
+imposes on every expression. A hand-written ladder is N rules, one per precedence level
+(`expr → assignment → ternary → … → additive → multiplicative → unary → primary`), and each
+call descends the WHOLE tower to reach a leaf — so a bare `1` costs ~15–20 stack frames in a
+real language, not because `1` is nested but because it had to fall through every level to be
+reached. That per-expression constant is the cost to remove. Two moves remove it, both already
+in this engine's vocabulary:
+- **Associativity is a fold direction, not a recursion direction.** A left-associative rung is
+  `B (op B)*` folded LEFT; a right-associative rung — the tail-recursive form `A := B (op A)?`
+  — is the same `B (op B)*` folded RIGHT. Both are the repetition machinery (Phase 6); the
+  author declares the associativity and the engine picks the fold. Neither associativity needs
+  the recursive rule form.
+- **The ladder collapses to one loop.** Expose operators as a declarative table
+  `(operator, precedence, associativity)`; the engine compiles it to a single
+  precedence-climbing loop (consume operators with precedence ≥ the current floor; recurse for
+  the RHS at `prec (+1 for left-assoc)`). Cost becomes **O(operators actually present + genuine
+  nesting depth)**, not O(precedence levels): `1 + 2` is one iteration, `1` is zero. The
+  20-deep descent is gone because precedence is a *parameter*, not a stack level.
+
+**The residue — the one recursion that stays, and should.** Structural nesting
+(`primary := '(' expr ')'`) is genuinely recursive: a `(` opens a fresh sub-expression that can
+nest arbitrarily, and matching brackets is not iterable — it needs a stack. But that recursion
+is bounded by **nesting DEPTH, not input length**: a stream of a million flat `a + b + c + …`
+is one loop and constant stack, while depth only grows with actual `((( … )))` nesting, which
+is small and self-limiting in real code and never threatens streaming. So the target is not
+"no recursion" — it is "no recursion as *overhead*": the ladder's per-level descent is
+eliminated (it encodes precedence, which is data), and recursion is reserved for the one thing
+that is actually a tree — nested structure. That is the healthy shape.
+
+**How the phases build this incrementally.**
+- **4.1 / 4.2 (done)** — single-element alternation: tag disjunction + conditional-offset
+  captures, `option<T>` for partial overlap. A degenerate one-element cursor.
+- **4.3** — multi-element sequence branches + predictive dispatch over a real forward `pos`;
+  `..rest` reads `v[pos..]`. Pure tag branches → no backtracking emitted.
+- **Phase 6 (L3.4)** — repetition `(…)*` / `(…)+`: the iteration left-recursion elimination
+  reuses.
+- **Phase 7 (L3.6)** — iterator input: the ACCUMULATING backing of `read(pos)` (the one place
+  with new opcodes) + `max_lookahead`.
+- **PC1–PC5** ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md)) — named rules + recursion: static
+  first-set analysis (the backtracking bound), rule-invocation branches (each rule owns its
+  cursor discipline — the `save`/revert seam finally used), and left-recursion detect →
+  eliminate.
+
+**Implementation steps this design ADDS (the extra work beyond the original phase list).** The
+engine above is not free — it introduces prep and new scope §4's phases did not name. Ordered,
+mapped to where each lands. These graft onto the numbered phase steps in §4; do them in phase
+order.
+
+*Phase 4.3 — DONE (2026-07-11), both backends. Establishes the cursor:*
+1. **`read(pos)` seam.** Factor every slice-element read behind ONE accessor (a helper that
+   emits the element load) and route today's fixed-position reads through it. A behaviour-
+   PRESERVING refactor first — prove the emitted IR byte-identical (loft-codegen gate) before
+   adding any new case — so Phase 7's accumulating backing swaps in without touching match
+   logic. *This step alone is the biggest piece of the "extra work" and pays for streaming.*
+2. **Runtime `pos` cursor.** A `pos: integer` local, seeded at `head_len`.
+3. **Sequence-branch parse.** Parse a `(` branch as a SEQUENCE (`lexer.link()`/`revert()` to
+   tell a multi-element branch from the single-element one 4.1 already handles).
+4. **Predictive `if / else`.** Emit the ordered choice over PURE per-branch conditions
+   (`len − pos ≥ wᵢ && tag(v[pos])==… && …`); the committing branch binds (conditional,
+   option-promoted per 4.2) and advances `pos` by `wᵢ`.
+5. **`..rest` from `pos`.** Re-point rest materialisation from the compile-time `head_len` lo
+   bound to the runtime `pos` var.
+
+*Phase 6 (L3.4 repetition) — adds the fold:*
+6. **Associativity fold hook.** Repetition already collects a vector; add a fold-direction
+   parameter (left / right) so recursion-elimination (steps 10, 12) can fold either
+   associativity.
+
+*Phase 7 (L3.6 iterator input) — the streaming backing:*
+7. **Accumulating `read(pos)`.** Implement `read(pos)` over a bounded buffer fed by a
+   lexer/iterator coroutine (the phase's new opcodes), tracking the three positions
+   cursor / high-water / evict with `max_lookahead` bounding the buffer.
+8. **Streamability check.** Reject at compile time a rule whose backtrack distance can exceed
+   `max_lookahead` on a streamed input (fine on a materialized vector).
+
+*PC1–PC5 ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md)) — analysis + recursion:*
+9. **First-set computation** per rule + the graded overlap response (reject / static bounded-k
+   / `cut`) — the compile-time backtracking bound AND the ambiguity diagnostic in one pass.
+10. **Left-recursion detect → eliminate.** Direct `A := A α | β` auto-rewrites to `β α*` +
+    left-fold; indirect / mutual is a clear-diagnostic REJECT.
+11. **Rule-invocation branch.** A branch that calls a rule just checks the callee's matched
+    flag; the callee owns its `save`/revert internally (the contract). First place the revert
+    seam is actually emitted.
+
+*New construct — the precedence table (genuinely new scope, slots with/after PC):*
+12. **Declarative operator table → climbing loop.** A `(operator, precedence, associativity)`
+    table compiles to one precedence-climbing loop, so an expression grammar costs
+    O(operators + nesting) not O(precedence levels). Reuses the repetition fold (step 6) +
+    first-sets (step 9) — it is their payoff, not a separate engine.
+
+Sequencing note: steps 1–5 are the whole of Phase 4.3 and are do-able now; 6 waits for Phase 6;
+7–8 wait for Phase 7's opcodes; 9–12 are the PC layer. Step 1 (the `read(pos)` seam) is the one
+that must land *inside* 4.3 even though its payoff (7) is far later — retrofitting the seam
+after the fixed-position reads have spread is the expensive path.
 
 ---
 
@@ -355,7 +634,14 @@ leak-clean; totality enforced.
 
 ---
 
-### Phase 3 — L3.7: multi-pattern arms (comma-separated patterns)
+### Phase 3 — L3.7: multi-pattern arms (comma-separated patterns) — DONE
+
+> **DONE (2026-07-11), both backends** — see the RESUME-HERE summary above. Scoped to the
+> struct-enum/enum handler (`parse_match`): D-simple identical name sets at compatible types,
+> shared capture slots, union exhaustiveness. Deferred to Phase 4 with clear diagnostics: partial
+> name overlap (`option<T>`), a guard on a multi-pattern arm, and a field sub-pattern inside a
+> non-first listed pattern. The cross-shape slice/vector multi-pattern (README's `[…]` + `Parsed{…}`
+> example) needs a union subject type and is out of scope here.
 
 **Goal.** One arm, several shapes; first match commits its captures.
 ```
@@ -388,84 +674,204 @@ identical name sets in P3 and defer partial-overlap to P4).
 
 ### Phase 4 — L3.2: alternation `(a | b)` + capture unification + slice cursor
 
-**Goal.** `[ (Ident { n } | Str { n }), rest… ]` — ordered choice with capture
-promotion.
+> **4.1 + 4.2 DONE (2026-07-11), both backends.** Single-element alternation
+> `[ (V1 { f } | V2 { f }) ]` in a slice element position (`parse_slice_alternation_element`,
+> `control.rs`): a tag-disjunction condition + a conditional-offset capture read
+> (`f = if tag==V1 { f@V1 } else if tag==V2 { f@V2 } … else null`) — the shared-slot idea
+> nested into a slice element. **4.2:** a capture in only SOME branches promotes to
+> `option<T>` (the untaken branches fall through the else-chain to null); a capture in every
+> branch at a compatible type stays at that type. Enum tags are disjoint, so ordered choice
+> is a disjunction — no cursor for single-element branches. Single-element alternation also
+> COMPOSES with a following `..rest` and following elements at fixed positions
+> (`[ (a|b), ..rest ]` and `[ first, (a|b) ]` both work). Guards:
+> `tests/scripts/35f-alternation.loft` (incl. option promotion), `tests/parse_errors.rs::alternation_*`.
+>
+> **4.3 (open) — MULTI-element sequence branches `[ (A B | C), ..rest ]`.** The remaining
+> case: a branch is a SEQUENCE of variable width, so a following `..rest` starts at a runtime
+> position. Design decided below — **predictive dispatch, not blind backtracking.**
 
-**Design.** Introduce the **slice cursor desugaring** (D4, slice half): a `pos: usize`
-temp; anchor = `save = pos`; try `a`; on its `cond` false, `pos = save` and try `b`;
-commit = drop save. All expressible as `If` + `Set` + `OpGetVector` — **no new
-opcode** (this is the F2 payoff). Capture unification: same-name across alternatives
-→ unify types (compile error if incompatible); different names → each promotes to
-`option<T>`.
+**Goal.** `[ (A B | C), ..rest ]` — a branch may be a multi-element sequence of variable
+width; `..rest` picks up after whichever branch matched.
+
+**Design — predictive dispatch on a forward `pos` cursor (decided 2026-07-11).** A
+multi-element alternation `( A B | C )` over variant sub-patterns dispatches on the LEADING
+element's tag — the way a recursive-descent parser predicts a production from its first
+token — NOT a blind try-every-branch-then-revert. A branch's condition is PURE (tag tests
+only; nothing mutates), so the whole alternation is an ordered `if / else if` over those
+conditions: the first branch whose fixed-length tag sequence matches wins, binds its
+captures, and advances a runtime `pos: integer` cursor by that branch's width. `&&`
+short-circuit gives the first-lookup failure for free, and branches that share a leading
+tag just fall one tag deeper — so no first-set-disjointness rule is needed and no
+`save`/revert is emitted. `..rest` then reads `v[pos .. len − tail]` from the runtime `pos`.
+(The no-tail shape `[ (A B | C) ]` is a zero-length rest — a strange edge real parsers
+rarely use, so it is not the design centre.) All expressible as `If` + `Set` +
+`OpGetVector` — **no new opcode**.
+
+**The cursor contract — backtracking lives INSIDE the rule, not at the call site.** Every
+rule (and the whole match) upholds one invariant about `pos`: it **CONSUMES on success**
+(advances `pos` past what it matched) and **leaves `pos` UNTOUCHED on failure** (the
+unmatched input stays available for whatever follows). Two consequences:
+- An **alternation never saves/reverts** around its branches. A failed branch has ALREADY
+  left `pos` where it started, so the next branch resumes from the right place. The
+  ordered `if/else` is just "try each branch; the one that commits advances `pos`."
+- The revert that makes a **composite rule** honour the contract — a *sequence* that
+  matched its first parts then failed later — lives INSIDE that rule: it anchors its own
+  start and restores `pos` before returning failure. That is the only place `save = start;
+  … ; on fail pos = start` appears, and it is the rule's OWN responsibility, never the
+  caller's.
+
+A **tag branch** honours the contract for free: it tests its tags as a PURE boolean (reads,
+moves nothing) and advances `pos` only on a full commit — so 4.3 emits no revert at all.
+When the parser-combinator sub-rule layer ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md), PC1–PC5)
+lands, a rule-INVOCATION branch just calls the rule and checks its matched flag; the invoked
+rule's own body does the anchor/restore internally. **Keep the `pos`-advance factored so a
+rule can own this contract** (advance-on-commit, restore-on-fail) without the alternation
+knowing or caring how a branch matches.
 
 **Code points.**
-- `parse_pattern` gets the alternation case: parse `( … | … )`, emit the
-  anchor/try/revert `If` structure over the shared `pos` temp.
-- Capture typing hook: **before** `create_unique` at `control.rs:3442`, run a unify
-  pass over the branch captures — same-name uses `match_arm_types_unify`
-  (`control.rs:379`); missing-in-some-branch wraps in `Type::optional(...)` (helper
-  used at `:3260`).
-- Longest-partial error position (README open-Q #3, design target): track the max
-  `pos` reached across reverts in a temp; feed the match-fail error. *Optional in P4,
-  can slip to a follow-up.*
+- Detect a multi-element branch at the `(` (parse-time): use `lexer.link()`/`revert()` to
+  look ahead — a second variant before `|`/`)` means a sequence branch (whole-slice /
+  cursor path); a lone variant is the single-element path already built in 4.1.
+- Parse each branch as a SEQUENCE of variant sub-patterns; record per branch its width and,
+  per position, `(disc, variant_def, fields)`.
+- Emit the ordered `if / else if` over the pure per-branch conditions
+  (`len − pos ≥ wᵢ && tag(v[pos])==… && …`), each arm advancing `pos` by `wᵢ`.
+- Capture unification is the 4.2 rule: union the names; a name in every branch at a
+  compatible type stays that type, a name in only some promotes to `option<T>` (untaken
+  branches read null via the else-chain).  Reads use the runtime `pos` (`OpGetVector(v, sz,
+  pos+j)`), not a compile-time index.
+- `..rest` materialises `v[pos .. len − tail]` from the runtime `pos` var (today's `..rest`
+  uses a compile-time `head_len` lo bound — swap it for the `pos` var when the head width is
+  runtime-variable).
 
 **Steps & verification.**
 4.1 Same-name alternation unifies. *Verify:* `35d-alternation.loft` binds `n` at the
     unified type; both backends.
 4.2 Different-name alternation promotes to `option<T>`. *Verify:* absent branch's
     capture reads null.
-4.3 Backtracking correctness. *Verify:* an alternative that partially matches then
-    fails leaves `pos` reset (assert the following element still matches) — the
-    core PEG invariant, on both backends.
+4.3 **DONE (2026-07-11).** Multi-element sequence branches + predictive dispatch —
+    **§3a steps 1–5** (the `read(pos)` seam, the `pos` cursor, sequence-branch parse, the
+    predictive `if/else`, `..rest` from `pos`; guard `tests/scripts/35g-multi-element-alternation.loft`).
+    *Verify:* `[ (A B | C), ..rest ]` — a leading `A` commits branch 1
+    and needs `B` next (else the arm fails, no silent fallthrough); a leading `C` commits
+    branch 2; `..rest` picks up at the right runtime `pos` for EACH branch (assert `len(rest)`
+    differs by branch width); both backends. Backtracking (`save`/revert) is NOT exercised
+    here — 4.3 branches are pure tag sequences; the seam is left for the PC rule-invocation
+    layer. Step 1 (`read(pos)` seam) is a byte-identical refactor gate BEFORE the new cases.
 
-**Exit:** alternation with capture unification + slice backtracking, both backends,
-no new opcodes.
-
----
-
-### Phase 5 — L3.3: optional `(...)?`
-
-**Goal.** `( Else { body } )?` → `body: option<block>`.
-
-**Design.** Degenerate alternation: `anchor; try a; on fail revert and bind all of
-`a`'s captures to null`. Reuses Phase-4 cursor + the `Type::optional` promotion.
-
-**Code points.** `parse_pattern` optional case; capture nullable-promotion at the same
-hook as 4.2 (`control.rs:3442`, `Type::optional`).
-
-**Verification.** `35e-optional.loft`: present → `Some`-shaped; absent → null capture;
-following elements still match after a skipped optional (cursor intact); both backends.
-
-**Exit:** optional groups with nullable captures, both backends.
+**Exit:** multi-element alternation with predictive dispatch + a runtime `pos` cursor +
+capture unification, both backends, no new opcodes.  The `pos` cursor is factored so a
+future rule-invocation branch can add `save`/revert without redesign.
 
 ---
 
-### Phase 6 — L3.4: repetition `(...)*` / `(...)+` + separator
+### Phase 5 — L3.3: optional `(...)?` — DONE
 
-**Goal.** `[ (args:Expr *(Comma))? ]` → `args: vector<Expr>`.
+> **DONE (2026-07-11), both backends.** An optional group `(a)?` in a slice pattern is a
+> **degenerate alternation `(a | ε)`**: the empty ε branch always matches, so the optional
+> NEVER fails — when `a` matches it binds + advances the cursor by `a`'s width; when it does
+> not, the ε branch commits with the cursor UNMOVED and `a`'s captures read null. This fell
+> straight out of the Phase-4.3 cursor engine with almost no new machinery — the whole
+> feature is "push one empty branch."
 
-**Design.** A **bounded loop** over the slice index: each iteration anchors, tries the
-body, on fail reverts and breaks, on success appends captures to an accumulator
-vector. `+` = one mandatory body then `*`. Separator consumed but not captured. For a
-slice the loop bound is `len` (termination guaranteed). Build the loop IR modeled on
-how `for`/`while` construct loop `Value`s in `src/parser/collections.rs` (verify the
-exact constructor there during the phase).
+**Design (as built).** `(a)?` desugars to the Phase-4.3 multi-element alternation with an
+appended EMPTY branch (width 0, no tag test, predicate `true`). The predictive if/else already
+handles it: tag branches are tried first, the always-true ε branch is the final `else`, so the
+optional commits to ε exactly when `a`'s lead tag is absent. Captures are option-promoted by the
+existing 4.2 hook (a name bound only in the non-empty branch → `option<T>`, null on the ε path).
+`..rest` reads `v[pos..]` where `pos` is the matched branch width — `a`'s width when present, 0
+when absent — so following elements pick up correctly either way. No anchor/revert is needed: the
+cursor only advances on a full commit, so the ε path leaves it where it was for free (the cursor
+CONTRACT).
 
-**Code points.**
-- `parse_pattern` repetition case: emit index-cursor loop + accumulator-vector build
-  (reuse vector-build from `src/parser/vectors.rs`).
-- Capture typing: repetition capture wraps element type in `Type::Vector(...)` at the
-  `control.rs:3442` hook.
-- Totality: repetition arm is non-total → the Phase-2 gate applies.
+**Code points (as built).**
+- `peek_paren_suffix` — after a balanced `( … )`, returns the following token (`?` = optional).
+- Head-loop `(` routing: `( … )?` (or a multi-element alt) routes to `parse_multi_element_alternation`.
+- `parse_multi_element_alternation`: on a trailing `?`, `branches.push(Vec::new())` — the empty
+  ε branch — with the rest of the predictive-dispatch / option-promotion / cursor-rest machinery
+  from 4.3 reused unchanged. Both single-element `(A)?` and multi-element `(A B)?` work.
 
-**Steps & verification.**
-6.1 `(p)*` collects into a vector. *Verify:* `35f-repetition.loft` — count + values +
-    **length** + **leak** (accumulator frees) on both backends.
-6.2 `(p)+` requires ≥1; empty input fails the arm.
-6.3 Separator `*(Comma)` consumed not captured. *Verify:* separators absent from the
-    result vector; trailing-separator behavior pinned by a probe.
+**Verification.** `tests/scripts/35h-optional.loft` (cross-mode, leak-checked): single-element
+`(Kw)?` and multi-element `(Kw Op)?`, each with present / absent / partial-prefix / empty-input
+cases; confirms option-promoted captures (null when absent) and that `..rest` resumes at the
+right cursor for both the taken and the skipped path. PASS on both backends.
 
-**Exit:** repetition with separators + vector capture, both backends, leak-clean.
+**Exit:** optional groups with nullable captures, both backends. ✅
+
+---
+
+### Phase 6 — L3.4: repetition + literals — 6.1/6.2 (rep + separator) + 6.3 (literals + `#lexeme`) DONE
+
+> **6.1 DONE (2026-07-11), both backends.** A WHOLE-SLICE repetition
+> `[ ( [name:] V )* [, ..rest] ]` / `…+` where `V` is one variant of the struct-enum element
+> type: it matches the MAXIMAL leading run of consecutive `V`, `name` collects that run as a
+> FRESH `vector<ElemType>` (whole elements, reusing the Phase-4.3 `..rest` materialisation),
+> and a trailing `..rest` (named or a bare `..`) picks up the remainder.
+>
+> **6.2 (separator) DONE (2026-07-11), both backends.** `( [name:] V )*(Sep)` / `…+(Sep)`: the
+> run becomes `V (Sep V)*`.  `Sep` is one variant, CONSUMED between elements but NEVER captured;
+> `name` collects only the V's.  Because the V's sit at every other index (V Sep V Sep …), the
+> capture reads `v[0..end]` with a STRIDE of 2 (`materialize_named_rest` gained a `step` param).
+> The run-loop is `first V; loop (Sep V)` — a trailing separator is not part of the list (PEG
+> `V (Sep V)*`), so `[Num, Comma]` leaves the `Comma` to `..rest` (or fails a no-rest arm).
+> Parsed by `parse_repetition_separator` (the `(Sep)` after `*`/`+`). Guard:
+> `tests/scripts/35j-repetition-separator.loft` (list / list+rest / `+` / trailing-comma /
+> value-by-index proving separators are skipped; cross-mode + leak-checked).
+
+**Design (as built).** A runtime **run-loop** (`Value::Loop` + `Break`) counts the leading
+run into `end`: `end = 0; loop { if len <= end break; if tag(v[end]) != disc break; end += 1 }`.
+The loop lives INSIDE the arm condition (it must run before the bindings materialise the
+sub-slices) and the condition BLOCK yields the match boolean:
+- `*` matches zero-or-more, so a no-rest slice matches only when the run IS the whole slice
+  (`end == len`); with a rest it always matches (the rest absorbs the remainder);
+- `+` additionally requires a non-empty run (`end > 0`, written `0 < end` — `>` has no Int form).
+
+Then `name` (if present) materialises `v[0 .. end]` and `..rest` materialises `v[end .. len]`,
+both via the shared `materialize_named_rest`. Predictive on the tag; no backtracking (the tag
+test is a pure boolean, the cursor only moves forward).
+
+**Code points (as built).** `peek_group_kind` (the ONE unified slice-`(`-group look-ahead —
+`Other` / `Alt` / `Repetition`, decided in a single save/revert; two sequential peeks over the
+same region corrupt the lexer replay buffer) → `SliceGroupKind`; `parse_slice_repetition`
+builds the run-loop + condition + captures. Routing computes `group_kind` ONCE per element.
+Guard: `tests/scripts/35i-repetition.loft` (`*`/`+`, with-rest / no-rest / bare-`..`, run stops
+at the first non-`V`, value-by-index; cross-mode + leak-checked).
+
+**Surfaced (pre-existing, filed):** iterating a match-arm-materialised vector (`..rest` OR a
+repetition capture) with `for e in x { … }` runs ZERO times on **native** (`len`/indexing are
+correct) — **#556**. So 35i verifies collected values by slice-INDEX, not `for`. This limits
+Phase 6's collected vector exactly as it already limits the shipped `..rest`.
+
+**6.3 (literal slice elements) DONE (2026-07-11), both backends.** A LITERAL element `[ 1, … ]`
+/ `[ "kw", … ]` matches by EQUALITY against `v[pos]`.  On a SCALAR element it is a direct `==`
+(`peek_is_slice_literal` + `conv_op("==")`); a `"_"` placeholder keeps the position count + length
+gate aligned, so it composes with binds / `..rest`.  Guard `tests/scripts/35l-literal-slice-elements.loft`.
+
+**`#lexeme` extension DONE (2026-07-11), both backends — the grammar-reader keystone.** A token-enum
+variant marks the field carrying its surface text with `#lexeme`
+(`enum Token { Keyword { #lexeme name: text }, Punct { #lexeme sym: text }, Ident { name: text } }`),
+so on a STRUCT-ENUM element a bare string literal matches against it: `"fn"` stands in for
+`Keyword { name: "fn" }` and reads like the grammar.  It desugars (`build_lexeme_literal_match`) to
+an OR over the eligible variants of `tag(v[pos]) == disc && v[pos].<lexeme> == "fn"` (the field read
+guarded by the tag test).  `#lexeme` is an `Attribute` parse-time flag (not serialised — patterns
+desugar in-session).  A non-`#lexeme` field (e.g. `Ident.name`) is matched structurally, so an
+`Ident` whose text is `"fn"` is NOT the keyword.  Guard `tests/scripts/35k-lexeme.loft` (a tiny
+statement grammar), `tests/parse_errors.rs::{lexeme_missing, unknown_field_annotation}`.
+
+**Deferred to a follow-up (with the prerequisites they need):**
+- **The scalar golden form** `[ 1, args:integer* ]` (`g-p6-repetition.loft`) — literal slice
+  elements (6.3) now cover the `[ 1, … ]` head; the remaining gap is a scalar **bare-postfix
+  `name:Type*`** repetition (a `vector<integer>` run where the body type matches every element —
+  no parens, no struct-enum tag). The `#lexeme` token-grammar form is the more idiomatic loft
+  path and already works.
+- **Per-iteration field capture** inside the body `( V { n } )* → n: vector<T_n>` (a field
+  PROJECTION collect, vs today's whole-element collect) — rejected today with a diagnostic.
+- **Mid-slice repetition** (a non-empty head before the group) — today head-empty only.
+- **§3a step 6 fold hook** (associativity fold direction) — waits on the PC layer that uses it.
+
+*(6.2 separator `*(Sep)` — DONE, see above.)*
+
+**Exit (full):** repetition with separators + vector capture, both backends, leak-clean.
 
 ---
 

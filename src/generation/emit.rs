@@ -551,9 +551,16 @@ impl Output<'_> {
                         // reads from there.
                         let returns_ncc_block = matches!((**val).unspan(), Value::Block(b)
                             if self.block_contains_ncc_skip_free(b));
+                        // #557 — a text Block whose tail `output_block` materialises as an owned
+                        // `String` (a value result followed by a trailing `OpFreeText`, e.g. a
+                        // `vector<text>` match freeing its bound element).  `Str::new(String)`
+                        // would fail E0308, so route it through the buffer like the ncc case.
+                        let returns_materialised_block = matches!((**val).unspan(), Value::Block(b)
+                            if self.block_tail_materialises_string(b));
                         no_work_buffer
                             || returns_local_text
                             || returns_ncc_block
+                            || returns_materialised_block
                             || inner_is_nwb_call
                     };
                     write!(w, "return ")?;
@@ -1523,7 +1530,54 @@ impl Output<'_> {
     /// `String`, one borrowed `&str`) and so must be unified via `.to_string()`
     /// (#534).  See [`Self::text_arm_yields_owned_string`].
     fn text_if_mismatched_reps(&self, true_v: &Value, false_v: &Value) -> bool {
-        self.text_arm_yields_owned_string(true_v) != self.text_arm_yields_owned_string(false_v)
+        if self.text_arm_yields_owned_string(true_v) != self.text_arm_yields_owned_string(false_v) {
+            return true;
+        }
+        // #552 — a text-returning CALL yields `Str` (buffered fn) or `String`, a bare text
+        // LITERAL yields `&str`; these never unify at the if-arm level (rustc E0308 "expected
+        // `Str`, found `&str`" — the vector-match desugar's `if <g(x)> else {"lit"}`).  A
+        // buffered `-> Str` fn is NOT `def_returns_owned_text`, so the owned-String check above
+        // misses it; catch the call-vs-literal pairing and unify both arms to owned `String`.
+        (self.text_arm_ends_in_text_call(true_v) && Self::text_arm_is_bare_literal(false_v))
+            || (Self::text_arm_is_bare_literal(true_v) && self.text_arm_ends_in_text_call(false_v))
+    }
+
+    /// True when the arm's tail is a text-returning function call (yields `Str`/`String`),
+    /// walking through Block/Insert to the final value.  #552.
+    fn text_arm_ends_in_text_call(&self, v: &Value) -> bool {
+        match v.unspan() {
+            Value::Block(b) => b
+                .operators
+                .last()
+                .is_some_and(|t| self.text_arm_ends_in_text_call(t)),
+            Value::Insert(items) => items
+                .last()
+                .is_some_and(|t| self.text_arm_ends_in_text_call(t)),
+            Value::Call(d, _) => {
+                (*d as usize) < self.data.definitions.len()
+                    && matches!(self.data.def(*d).returned().base(), Type::Text(_))
+                    // Only a USER text fn yields an owned `Str`/`String`; an `Op*` text op
+                    // (OpConvTextFromNull → STRING_NULL, OpConstText, …) yields `&str`, which
+                    // unifies with a bare literal — excluding them avoids a false mismatch that
+                    // would `.to_string()` an arm inside a `&*(…)` borrow context (E0716).
+                    && !self.data.def(*d).name().starts_with("Op")
+            }
+            _ => false,
+        }
+    }
+
+    /// True when the arm's tail is a BARE text literal (yields `&str`), walking through
+    /// Block/Insert to the final value.  #552.
+    fn text_arm_is_bare_literal(v: &Value) -> bool {
+        match v.unspan() {
+            Value::Block(b) => b
+                .operators
+                .last()
+                .is_some_and(Self::text_arm_is_bare_literal),
+            Value::Insert(items) => items.last().is_some_and(Self::text_arm_is_bare_literal),
+            Value::Text(_) => true,
+            _ => false,
+        }
     }
 
     // @PLAN52 cluster I/VI helper: walk a Block's operators (recursively
@@ -1540,6 +1594,30 @@ impl Output<'_> {
                         && variables.is_skip_free(*var))
             })
         })
+    }
+
+    /// #557 — will `output_block` emit this TEXT block's tail as an owned `String`
+    /// (`let _ret = <value>; <trailing void op>; _ret.to_string()`)?  That happens when the
+    /// block's value result is followed by a trailing VOID op — e.g. the `OpFreeText(a)` a
+    /// vector-match on a `vector<text>` subject appends to free the bound element.  The
+    /// `Str::new(<block>)` return wrapper then sees `Str::new(String)` (E0308), so the return
+    /// must route the block through the work buffer instead (see `needs_p205_scratch`).  Mirrors
+    /// the `has_trailing_void && !return_value_is_return` gate in `output_block`.
+    fn block_tail_materialises_string(&self, bl: &Block) -> bool {
+        if !matches!(bl.result.base(), Type::Text(_)) {
+            return false;
+        }
+        let Some(ri) = bl.operators.iter().rposition(|v| !self.is_void_value(v)) else {
+            return false;
+        };
+        // A tail that DIVERGES (ends in `Return`) is emitted directly — no `_ret` materialise.
+        if matches!(bl.operators[ri].unspan(), Value::Return(_))
+            || matches!(bl.operators[ri].tail(), Value::Return(_))
+        {
+            return false;
+        }
+        // A trailing VOID op after the value, or the `__ncc_*` skip-free pattern.
+        ri < bl.operators.len().saturating_sub(1) || self.block_contains_ncc_skip_free(bl)
     }
 
     #[allow(clippy::too_many_lines)]

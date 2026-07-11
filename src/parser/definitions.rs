@@ -284,6 +284,27 @@ impl Parser {
                         .set_attr_value(v_nr, e_attr, Value::Enum(nr + 1, u16::MAX));
                 }
                 loop {
+                    // @PLN35 — `#lexeme` marks the field carrying this token variant's surface
+                    // text, so a bare literal in a slice pattern (`[ "fn", … ]`) matches against
+                    // it.  It precedes the field name: `Keyword { #lexeme name: text }`.
+                    let is_lexeme = if self.lexer.has_token("#") {
+                        match self.lexer.has_identifier().as_deref() {
+                            Some("lexeme") => true,
+                            other => {
+                                if !self.first_pass {
+                                    diagnostic!(
+                                        self.lexer,
+                                        Level::Error,
+                                        "unknown field annotation `#{}` (expected `#lexeme`)",
+                                        other.unwrap_or("")
+                                    );
+                                }
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
                     let Some(a_name) = self.lexer.has_identifier() else {
                         diagnostic!(self.lexer, Level::Error, "Expect attribute");
                         return true;
@@ -298,6 +319,12 @@ impl Parser {
                     }
                     self.lexer.token(":");
                     self.parse_field(v_nr, &a_name);
+                    if is_lexeme {
+                        let idx = self.data.attr(v_nr, &a_name);
+                        if idx != usize::MAX {
+                            self.data.definitions[v_nr as usize].attributes[idx].lexeme = true;
+                        }
+                    }
                     // accept trailing comma after the last field,
                     // matching struct parsing (line 1380).
                     if !self.lexer.has_token(",") || self.lexer.peek_token("}") {
@@ -2307,34 +2334,24 @@ impl Parser {
             return true;
         };
         let mut d_nr = self.data.def_nr(&id);
-        // @PLN22 Phase 2 — shadow a prelude/import struct of the same key, EXCEPT a
-        // generic type-var placeholder (empty, self-referential) which keeps its
-        // dedicated "reserved as a generic type variable" diagnostic below.
+        // @PLN22 Phase 2 — shadow a prelude/import struct of the same key.  This
+        // includes the stdlib's generic type-var marker (`<T>`): a user `struct T`
+        // shadows it just like the enum path does, so `T` is a usable type name.
+        // (A SAME-SOURCE clash — the user's own `struct T` plus their own `fn foo<T>`
+        // — keeps `prelude_shadowed` false, so it still hits the "reserved" arm below.)
         if self.prelude_shadowed(&id) {
-            let is_type_var = {
-                let ex = &self.data.definitions[d_nr as usize];
-                ex.attributes.is_empty()
-                    && matches!(&ex.returned, Type::Reference(r, _) if *r == d_nr)
-            };
-            if !is_type_var {
-                d_nr = u32::MAX;
-            }
+            d_nr = u32::MAX;
         }
         if d_nr == u32::MAX {
             d_nr = self.data.add_def(&id, self.lexer.pos(), DefType::Struct);
             self.data.definitions[d_nr as usize].returned =
                 Type::Reference(d_nr, crate::data::Deps::none());
         } else if self.first_pass {
-            // fix-tvscope: a type variable placeholder (e.g., `T` from generic stdlib
-            // functions) blocks user-defined struct of the same name.  Produce a clear
-            // diagnostic rather than the confusing "Redefined struct".
-            let is_type_var = {
-                let ex = &self.data.definitions[d_nr as usize];
-                ex.def_type == DefType::Struct
-                    && ex.attributes.is_empty()
-                    && matches!(&ex.returned, Type::Reference(r, _) if *r == d_nr)
-            };
-            if is_type_var {
+            // fix-tvscope: a SAME-SOURCE type-var placeholder (the user's own
+            // `fn foo<T>` before their `struct T`) blocks the struct — a genuine
+            // clash worth the dedicated diagnostic rather than the confusing
+            // "Redefined struct".  (A cross-source stdlib `<T>` was shadowed above.)
+            if self.data.is_type_var_placeholder(d_nr) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
