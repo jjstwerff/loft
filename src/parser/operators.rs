@@ -1845,6 +1845,11 @@ impl Parser {
         match divisor.unspan() {
             Value::Int(n) => *n != 0,
             Value::Long(n) => *n != 0,
+            // @PLN102 Phase 3 — a constant non-zero float / single divisor is provably safe too
+            // (`1.0 / 2.0` stays non-null). Only consulted for float `/` under LOFT_NULLFLOW; for
+            // integer division these arms never match, so the default path is unchanged.
+            Value::Float(f) => *f != 0.0,
+            Value::Single(f) => *f != 0.0,
             Value::Var(v) => self.divisor_nonzero.contains(v),
             _ => false,
         }
@@ -2297,8 +2302,13 @@ impl Parser {
             // (the `divisor_nonzero` narrowing stack). Captured HERE, before `call_op` consumes
             // `second_code`; the `τ?` wrap is applied after the range-narrowing below. DN1-gated.
             // Makes the type carry the null so `(N-Store)` forces `?? d` / a `τ?` slot at the store.
+            // @PLN102 Phase 3 (N-Domain) — float / single `/` and `%` also fault on a zero
+            // divisor, so they type `τ?` too (like integer `/`). Gated on LOFT_NULLFLOW; the
+            // `divisor_provably_nonzero` elision keeps `x / 2.0` non-null. Integer stays default-on.
             let div_nullable = (operator == "/" || operator == "%")
-                && matches!(ctp.base(), Type::Integer(_))
+                && (matches!(ctp.base(), Type::Integer(_))
+                    || (crate::keys::nullflow_enabled()
+                        && matches!(ctp.base(), Type::Float | Type::Single)))
                 && !self.divisor_provably_nonzero(&second_code);
             // @PLN102 (N-Prop) Phase 2 — capture operand nullability BEFORE `call_op` consumes
             // the operand types. A nullable operand PROPAGATES through a value-preserving scalar
