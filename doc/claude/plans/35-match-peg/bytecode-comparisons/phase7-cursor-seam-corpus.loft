@@ -1,0 +1,20 @@
+// @PLN35 Phase 7 step 1 — Mode-B corpus for the Cursor-seam refactor (centralise the subject's
+// `len` reads behind `cursor_len`).  One function per match-slice path that emits `OpLengthVector`:
+// parse_vector_match (fixed-arity + ..rest), parse_scalar_slice_repetition, parse_slice_repetition
+// (struct-enum rep, separator, non-literal tail), parse_multi_element_alternation, optional.
+// `loft introspect` on this file must be BYTE-IDENTICAL before/after the refactor, both backends.
+
+enum Tok { Num { n: integer }, Comma { k: integer }, End { e: integer }, A { p: integer }, B { q: integer }, C { r: integer } }
+
+fn c_fixed(v: vector<integer>) -> integer { match v { [ a, b ] => a + b, _ => -1 } }
+fn c_rest(v: vector<integer>) -> integer { match v { [ a, ..rest ] => a + rest.len(), _ => -1 } }
+fn c_srep(v: vector<integer>) -> integer { match v { [ 1, xs:integer* ] => xs.len(), _ => -1 } }
+fn c_erep(v: vector<Tok>) -> integer { match v { [ (x: Num)*, ..rest ] => x.len() + rest.len(), _ => -1 } }
+fn c_seprep(v: vector<Tok>) -> integer { match v { [ (x: Num)*(Comma) ] => x.len(), _ => -1 } }
+fn c_tail(v: vector<Tok>) -> integer { match v { [ (x: Num)*, End { e } ] => x.len() + e, _ => -1 } }
+fn c_alt(v: vector<Tok>) -> integer { match v { [ (A { p } B { q } | C { r }) ] => (p ?? 0) + (q ?? 0) + (r ?? 0), _ => -1 } }
+fn c_opt(v: vector<Tok>) -> integer { match v { [ (A { p })?, ..rest ] => (p ?? -1) + rest.len(), _ => -1 } }
+
+fn main() {
+  print("{c_fixed([1, 2])} {c_rest([1, 2, 3])} {c_srep([1, 2, 3])} {c_erep([Num { n: 1 }])} {c_seprep([Num { n: 1 }])} {c_tail([Num { n: 1 }, End { e: 2 }])} {c_alt([C { r: 1 }])} {c_opt([])}");
+}

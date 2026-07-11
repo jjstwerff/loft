@@ -2706,6 +2706,44 @@ impl Parser {
             Type::Vector(_, _) => {
                 return self.parse_vector_match(subject, &subject_type, code);
             }
+            // @PLN35 Phase 7 (Path B) — a coroutine `iterator<T>` subject: materialise it into a
+            // fresh buffer `vector<T>` (eager pull), then run the SAME vector-match over the buffer.
+            // Streaming stays entirely behind the Cursor seam; the match logic is untouched.
+            Type::Iterator(elem_box, _) => {
+                let elm_tp = (**elem_box).clone();
+                let iter_tp = subject_type.clone();
+                // Supported element types: scalars, `text`, and struct-enums (the token-stream
+                // cases).  A plain enum / vector / tuple / struct element rides a different
+                // coroutine `next` channel or append shape — deferred; a clean error points at the
+                // collect idiom that works today.
+                if !self.first_pass
+                    && !matches!(
+                        elm_tp.base(),
+                        Type::Integer(_)
+                            | Type::Float
+                            | Type::Boolean
+                            | Type::Character
+                            | Type::Single
+                            | Type::Text(_)
+                            | Type::Enum(_, true, _)
+                    )
+                {
+                    let en = elm_tp.name(&self.data);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "streaming `match` over an `iterator<{en}>` is not yet supported (only scalar, text, or struct-enum element types) — collect it first: `match [for x in <iter> {{ x }}] {{ … }}`"
+                    );
+                }
+                let (buf, vec_tp, setup) =
+                    self.collect_iterator_subject(subject, &iter_tp, &elm_tp);
+                let mut match_code = Value::Null;
+                let result_tp = self.parse_vector_match(Value::Var(buf), &vec_tp, &mut match_code);
+                let mut ops = setup;
+                ops.push(match_code);
+                *code = v_block(ops, result_tp.clone(), "stream match");
+                return result_tp;
+            }
             // T1.9: tuple types — dispatch to tuple match handler.
             Type::Tuple(_) => {
                 return self.parse_tuple_match(subject, &subject_type, code);
@@ -3809,6 +3847,95 @@ impl Parser {
         self.get_field(td, usize::MAX, get)
     }
 
+    /// @PLN35 Phase 7 — the LENGTH half of the match Cursor seam (`read_slice_elem` is the READ
+    /// half).  The match engine asks the subject "how long are you?" ONLY through here, so a future
+    /// STREAMING cursor can answer differently (pull-to-exhaustion / `max_lookahead`-bounded)
+    /// without any match logic changing.  The vector cursor emits `OpLengthVector`, byte-identical
+    /// to the inline calls this replaced.
+    fn cursor_len(&mut self, v: u16) -> Value {
+        self.cl("OpLengthVector", &[Value::Var(v)])
+    }
+
+    /// @PLN35 Phase 7 (Path B, step 2a) — materialise a coroutine `iterator<T>` match subject into a
+    /// fresh `vector<T>` buffer (EAGER pull), so the existing vector-match machinery runs over it.
+    /// Emits `gen = subject; done = false; buf = []; while !done { x = next(gen); if exhausted(gen)
+    /// { done = true } else { buf += [x] } }` and returns `(buf_var, setup_ops)`.  The pull uses
+    /// explicit `OpCoroutineNext`/`OpCoroutineExhausted` in a `while` — a `for` over a STORED
+    /// coroutine hangs.  A lazy per-read pull is the step-2b refinement behind the Cursor seam.
+    fn collect_iterator_subject(
+        &mut self,
+        subject: Value,
+        iter_tp: &Type,
+        elm_tp: &Type,
+    ) -> (u16, Type, Vec<Value>) {
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
+        let buf = self.create_unique("stream_buf", &vec_tp);
+        self.vars.defined(buf);
+        let gen_var = self.create_unique("stream_gen", iter_tp);
+        self.vars.defined(gen_var);
+        let done = self.create_unique("stream_done", &Type::Boolean);
+        self.vars.defined(done);
+        let x = self.create_unique("stream_x", elm_tp);
+        self.vars.defined(x);
+        let ed_nr = self.data.type_def_nr(elm_tp);
+        let elm = self.create_unique("stream_elm", &Type::Reference(ed_nr, Deps::none()));
+        self.vars.defined(elm);
+        // `elm` is a TRANSIENT ref to the record just appended into `buf` — it belongs to the
+        // buffer, not to `elm`.  Without skip_free, scope cleanup emits `OpFreeRef(elm)` after the
+        // append and frees that record (harmless for an inline int, but it frees the string for a
+        // `text` element — the null-value bug).  The comprehension avoids this via a buffer-db dep.
+        self.vars.set_skip_free(elm);
+
+        // `OpCoroutineNext` value_size: packed `(channel_tag << 8) | byte_size` of the yield type
+        // (same encoding `next(gen)` computes — collections.rs `iterator`).
+        let byte_size = i32::from(crate::variables::size(
+            elm_tp,
+            &crate::data::Context::Argument,
+        ));
+        let channel_tag = crate::coroutine_layout::channel_tag(elm_tp);
+        let value_size = (channel_tag << 8) | byte_size;
+        // Append triple (scalar/text element): the same `OpNewRecord` / `set_field` / `OpFinishRecord`
+        // a `buf += [x]` comprehension emits.
+        let elem_known = self.vector_of(elm_tp);
+        let known = Value::Int(i32::from(if elem_known == u16::MAX {
+            0
+        } else {
+            elem_known
+        }));
+        let fld = Value::Int(i32::from(u16::MAX));
+
+        let mut setup: Vec<Value> = self.vector_db(&vec_tp, buf);
+        setup.push(v_set(gen_var, subject));
+        setup.push(v_set(done, Value::Boolean(false)));
+
+        let next_call = self.cl(
+            "OpCoroutineNext",
+            &[Value::Var(gen_var), Value::Int(value_size)],
+        );
+        let exhausted = self.cl("OpCoroutineExhausted", &[Value::Var(gen_var)]);
+        let new_rec = self.cl(
+            "OpNewRecord",
+            &[Value::Var(buf), known.clone(), fld.clone()],
+        );
+        let set_val = self.set_field(ed_nr, usize::MAX, 0, Value::Var(elm), Value::Var(x));
+        let finish = self.cl(
+            "OpFinishRecord",
+            &[Value::Var(buf), Value::Var(elm), known, fld],
+        );
+        let append = v_block(
+            vec![v_set(elm, new_rec), set_val, finish],
+            Type::Void,
+            "stream append",
+        );
+        let loop_body = vec![
+            v_if(Value::Var(done), Value::Break(0), Value::Null),
+            v_set(x, next_call),
+            v_if(exhausted, v_set(done, Value::Boolean(true)), append),
+        ];
+        setup.push(v_loop(loop_body, "stream pull"));
+        (buf, vec_tp, setup)
+    }
+
     /// @PLN35 — materialise a named `..rest` sub-slice `v[lo .. hi]` into a FRESH independent
     /// `vector<T>` (`rest_var`), by reusing the proven compile-time slice-materialise path
     /// (`materialize_iterator` over a minimal index-range `Iter`).  `lo`/`hi` are `Value`s: a
@@ -3924,6 +4051,86 @@ impl Parser {
             self.vars
                 .set_type(rest_var, Type::Vector(Box::new(elm_tp.clone()), vdeps));
         }
+        bindings.push(mat);
+    }
+
+    /// @PLN35 slice 2 — collect a per-iteration FIELD projection from a struct-enum repetition
+    /// run `( V { field } )*`.  Like `materialize_named_rest`, but the per-element read projects
+    /// `variant.field` (`get_field`) instead of the whole element, so the result is a fresh
+    /// `vector<field_type>` — a scalar/text projection.  The run already tag-tested every element
+    /// against `variant_def_nr`, so the field read is valid at each index.  A scalar/text field is
+    /// an OWNED value (no DbRef into the subject), so — unlike the whole-element case — no borrow
+    /// dep is needed and `materialize_iterator` deep-copies it into the projection's own store.
+    /// Reads `v[lo..hi]` with `step` (2 for a separated run `(V)*(Sep)`).
+    #[allow(clippy::too_many_arguments)]
+    fn materialize_field_projection(
+        &mut self,
+        v: u16,
+        elm_size: &Value,
+        elm_tp: &Type,
+        variant_def_nr: u32,
+        attr_idx: usize,
+        field_type: &Type,
+        proj_var: u16,
+        proj_vec_tp: &Type,
+        lo_val: Value,
+        hi_val: Value,
+        step: i32,
+        bindings: &mut Vec<Value>,
+    ) {
+        let lo_slot = self.create_unique("proj_lo", &I32);
+        let hi_slot = self.create_unique("proj_hi", &I32);
+        let idx = self.create_unique("proj_idx", &I32);
+        let null_idx = self.null(&I32);
+        let init = Value::Insert(vec![
+            v_set(lo_slot, lo_val),
+            v_set(hi_slot, hi_val),
+            v_set(idx, null_idx),
+        ]);
+        // Same index step as `materialize_named_rest`: `idx = !idx ? lo : idx + step; if hi <= idx
+        // break; idx`.  `!idx` is a NULL test (sentinel i32::MIN), so a `lo` of 0 seeds correctly.
+        let bump = self.conv_op(
+            "+",
+            Value::Var(idx),
+            Value::Int(step),
+            I32.clone(),
+            I32.clone(),
+        );
+        let not_idx = self.single_op("!", Value::Var(idx), I32.clone());
+        let advance = v_set(idx, v_if(not_idx, Value::Var(lo_slot), bump));
+        let past_end = self.conv_op(
+            "<=",
+            Value::Var(hi_slot),
+            Value::Var(idx),
+            I32.clone(),
+            I32.clone(),
+        );
+        let brk = v_if(past_end, Value::Break(0), Value::Null);
+        let idx_block = v_block(
+            vec![advance, brk, Value::Var(idx)],
+            I32.clone(),
+            "Iter range",
+        );
+        // Read the enum element at `idx` the same way the head sub-pattern path does
+        // (`read_slice_elem` → an enum value `get_field` can read from), then project the field.
+        let elm_read = self.read_slice_elem(v, elm_size, elm_tp, idx_block);
+        let field_read = self.get_field(variant_def_nr, attr_idx, elm_read);
+        let next = v_block(vec![field_read], field_type.clone(), "Field projection");
+        let mut mat = Value::Iter(
+            u16::MAX,
+            Box::new(init),
+            Box::new(next),
+            Box::new(Value::Null),
+        );
+        let iter_tp = Type::Iterator(Box::new(field_type.clone()), Box::new(Type::Null));
+        self.materialize_iterator(
+            &mut mat,
+            &iter_tp,
+            &Value::Var(proj_var),
+            proj_vec_tp,
+            proj_var,
+            "=",
+        );
         bindings.push(mat);
     }
 
@@ -4131,6 +4338,172 @@ impl Parser {
         kind
     }
 
+    /// @PLN35 slice 1 — is the upcoming slice element a scalar type-annotated capture
+    /// `name : Type` (optionally with a `*` / `+` repetition postfix)?  Returns
+    /// `Some(is_repetition)` when the shape matches, else `None`.  ONE save/revert look-ahead —
+    /// robust to the `peek_named_arg` that follows it now the `cont()` replay-buffer duplicate
+    /// is fixed (see `lexer::test::link_revert_repeatable_same_region`).
+    fn peek_scalar_type_capture(&mut self) -> Option<bool> {
+        if !matches!(self.lexer.peek().has, LexItem::Identifier(_)) {
+            return None;
+        }
+        let save = self.lexer.link();
+        let mut res = None;
+        self.lexer.cont(); // name
+        if self.lexer.peek_token(":") {
+            self.lexer.cont(); // `:`
+            // A `_` after `:` is the wildcard sub-pattern (`name:_`), not a type — leave it to
+            // the `name:pat` path.  A real type name identifies the scalar capture.
+            if matches!(&self.lexer.peek().has, LexItem::Identifier(id) if id != "_") {
+                self.lexer.cont(); // Type
+                res = Some(self.lexer.peek_token("*") || self.lexer.peek_token("+"));
+            }
+        }
+        self.lexer.revert(save);
+        res
+    }
+
+    /// @PLN35 slice 1 (L3.4 scalar repetition) — a scalar bare-postfix `name:Type*` / `+` slice
+    /// element (no parens).  `Type` names the vector's scalar element type, so EVERY element
+    /// matches and the run takes exactly the middle: `end = len - tail_len` (no run-loop — unlike
+    /// a struct-enum variant run there is no per-element tag that could stop it early).  `name`
+    /// collects `v[head_len .. end]` as a fresh `vector<elm_tp>`, reusing the `..rest`
+    /// materialisation.  Fixed LITERAL tail elements after the run are matched from the END.
+    /// `*` = zero-or-more (`head_len <= end`); `+` requires a non-empty run (`head_len < end`).
+    /// Assumes the lexer is at `name`; consumes through `]`.  A `..rest` or non-literal tail after
+    /// the run, and a `Type` that is not the element type, are rejected.
+    fn parse_scalar_slice_repetition(
+        &mut self,
+        v: u16,
+        elm_size: &Value,
+        elm_tp: &Type,
+        head_len: i32,
+        cond: &mut Option<Value>,
+        bindings: &mut Vec<Value>,
+    ) {
+        let cap_name = self.lexer.has_identifier().unwrap_or_default();
+        self.lexer.token(":");
+        let tname = self.lexer.has_identifier().unwrap_or_default();
+        let elm_name = elm_tp.name(&self.data);
+        if !self.first_pass && tname != elm_name {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a scalar repetition `{cap_name}:{tname}*` must match the vector's element type {elm_name}"
+            );
+        }
+        let plus = self.lexer.has_token("+");
+        if !plus {
+            self.lexer.token("*");
+        }
+        // Tail: fixed LITERAL elements only (a bind / variant / `..rest` after a scalar run is
+        // deferred, mirroring the struct-enum repetition's tail restriction).
+        let mut tail_lits: Vec<(Value, Type)> = Vec::new();
+        while self.lexer.has_token(",") {
+            if self.lexer.peek_token("..") {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "a `..rest` after a scalar repetition `{cap_name}:{tname}*` is not yet supported"
+                    );
+                }
+                self.lexer.has_token("..");
+                let _ = self.lexer.has_identifier();
+                break;
+            } else if self.peek_is_slice_literal() {
+                let mut lit = Value::Null;
+                let lit_tp = self.expression(&mut lit);
+                tail_lits.push((lit, lit_tp));
+            } else {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "only literal elements are supported after a scalar repetition `{cap_name}:{tname}*`"
+                    );
+                }
+                // Recover to the closing `]` so `token("]")` below succeeds and THIS diagnostic
+                // is the reported error, not a first-pass cascade of "Expect token ]" that aborts
+                // before the second pass ever emits it.
+                while !self.lexer.peek_token("]") && !matches!(self.lexer.peek().has, LexItem::None)
+                {
+                    self.lexer.cont();
+                }
+                break;
+            }
+        }
+        self.lexer.token("]");
+        let tail_len = tail_lits.len() as i32;
+
+        // `end = len - tail_len` — the run takes exactly the middle.
+        let end_var = self.create_unique("srep_end", &I32);
+        self.vars.defined(end_var);
+        let len_call = self.cursor_len(v);
+        let end_expr = self.conv_op(
+            "-",
+            len_call,
+            Value::Int(tail_len),
+            I32.clone(),
+            I32.clone(),
+        );
+        let mut run_ops: Vec<Value> = vec![v_set(end_var, end_expr)];
+        // `*` needs room for head+tail (`head_len <= end`); `+` needs a non-empty run
+        // (`head_len < end`).  `>` has no Int form, so `+` is the swapped `<`.
+        let match_bool = if plus {
+            self.conv_op(
+                "<",
+                Value::Int(head_len),
+                Value::Var(end_var),
+                I32.clone(),
+                I32.clone(),
+            )
+        } else {
+            self.conv_op(
+                "<=",
+                Value::Int(head_len),
+                Value::Var(end_var),
+                I32.clone(),
+                I32.clone(),
+            )
+        };
+        run_ops.push(match_bool);
+        let mut arm_cond = v_block(run_ops, Type::Boolean, "scalar rep cond");
+        // AND the fixed tail-literal conditions (matched from the END, negative index) AFTER the
+        // run boolean; `&&` short-circuits so a too-short slice never reads out of range.
+        for (j, (lit, lit_tp)) in tail_lits.into_iter().enumerate() {
+            let pos = Value::Int(-(tail_len - j as i32));
+            match self.build_literal_match(v, elm_size, elm_tp, &pos, &lit, &lit_tp) {
+                Some(tc) => arm_cond = v_if(arm_cond, tc, Value::Boolean(false)),
+                None if !self.first_pass => self.slice_literal_mismatch(elm_tp, &lit_tp),
+                None => {}
+            }
+        }
+        *cond = match cond.take() {
+            Some(existing) => Some(v_if(existing, arm_cond, Value::Boolean(false))),
+            None => Some(arm_cond),
+        };
+
+        // Capture: `name = v[head_len .. end]` (a fresh `vector<elm_tp>`).  Runs once the arm
+        // commits, after the condition set `end`.
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
+        let cap_var = self.vars.add_variable(&cap_name, &vec_tp, &mut self.lexer);
+        self.vars.defined(cap_var);
+        if !self.first_pass && cap_var != u16::MAX {
+            self.materialize_named_rest(
+                v,
+                elm_tp,
+                elm_size,
+                cap_var,
+                &vec_tp,
+                Value::Int(head_len),
+                Value::Var(end_var),
+                1,
+                bindings,
+            );
+        }
+    }
+
     /// @PLN35 Phase 6 (L3.4, P-Rep) — a repetition `[ head…, ( [name:] V )*[(Sep)] [tail…]
     /// [, ..rest] ]` / `…+`.  The body `V` is one variant of the struct-enum element type; the
     /// repetition matches the MAXIMAL run of `V` starting at `head_len` (the count of fixed head
@@ -4151,6 +4524,7 @@ impl Parser {
         elm_size: &Value,
         elm_tp: &Type,
         head_len: i32,
+        borrow_src: u16,
         cond: &mut Option<Value>,
         bindings: &mut Vec<Value>,
     ) {
@@ -4190,25 +4564,70 @@ impl Parser {
         } else {
             0
         };
-        // A `{ … }` body would carry per-iteration field captures; deferred in Phase 6.1.
+        // @PLN35 slice 2 — `( V { field, … } )*` captures a per-iteration FIELD PROJECTION: each
+        // named scalar/text field collects into its own fresh `vector<field_type>` (vs a `name:`
+        // prefix, which collects whole elements).  The run tag-tests `V`, so every element carries
+        // the field.  A non-scalar field, or a name that is not a field of `V`, is rejected.
+        let mut field_caps: Vec<(String, usize, Type)> = Vec::new();
         if self.lexer.has_token("{") {
-            if !self.first_pass {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "per-iteration field capture inside a repetition body `( … )*` is not yet supported — bind the whole element with `(name: {real})*` and match each"
-                );
-            }
-            let mut depth = 1i32;
-            while depth > 0 {
-                if self.lexer.has_token("{") {
-                    depth += 1;
-                } else if self.lexer.has_token("}") {
-                    depth -= 1;
-                } else if matches!(self.lexer.peek().has, LexItem::None) {
-                    break;
-                } else {
-                    self.lexer.cont();
+            if valid {
+                while let Some(fname) = self.lexer.has_identifier() {
+                    let found = {
+                        let vd = self.data.def(vdef);
+                        vd.attributes[1..]
+                            .iter()
+                            .enumerate()
+                            .find(|(_, a)| a.name == fname)
+                            .map(|(i, a)| (i + 1, a.typedef.clone()))
+                    };
+                    match found {
+                        Some((attr_idx, ftype))
+                            if matches!(
+                                ftype.base(),
+                                Type::Integer(_)
+                                    | Type::Boolean
+                                    | Type::Float
+                                    | Type::Single
+                                    | Type::Character
+                                    | Type::Text(_)
+                            ) =>
+                        {
+                            field_caps.push((fname, attr_idx, ftype));
+                        }
+                        Some(_) if !self.first_pass => {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "per-iteration capture of the non-scalar field `{fname}` is not yet supported (only scalar/text fields project into a vector)"
+                            );
+                        }
+                        None if !self.first_pass => {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "`{fname}` is not a field of {real}"
+                            );
+                        }
+                        Some(_) | None => {}
+                    }
+                    if !self.lexer.has_token(",") {
+                        break;
+                    }
+                }
+                self.lexer.token("}");
+            } else {
+                // Invalid variant already diagnosed above; skip the body to recover.
+                let mut depth = 1i32;
+                while depth > 0 {
+                    if self.lexer.has_token("{") {
+                        depth += 1;
+                    } else if self.lexer.has_token("}") {
+                        depth -= 1;
+                    } else if matches!(self.lexer.peek().has, LexItem::None) {
+                        break;
+                    } else {
+                        self.lexer.cont();
+                    }
                 }
             }
         }
@@ -4221,33 +4640,116 @@ impl Parser {
         // becomes `V (Sep V)*`.  `Sep` is ONE variant, CONSUMED between elements but never
         // captured (`name` collects only the V's — a stride-2 read skips the separators).
         let sep_disc = self.parse_repetition_separator(e_nr);
-        // After the group: a comma-separated sequence of fixed LITERAL tail elements (`, ")"`),
-        // then optionally `, ..[name]`.  A bare `..` absorbs the remainder; `..name` binds it.
-        // Tail literals are matched from the END, so they are mutually exclusive with `..rest`.
-        let mut tail_lits: Vec<(Value, Type)> = Vec::new();
+        // After the group: a comma-separated tail of fixed elements matched from the END —
+        // literals (`")"`), bare-name binds (`x`), and variant sub-patterns (`V { f }` / bare
+        // `V`) — then optionally `, ..[name]`.  A fixed tail and `..rest` stay mutually exclusive.
+        //
+        // Count the tail elements FIRST (a robust link/revert look-ahead) so each is matched at a
+        // fixed negative index `-(tail_len - j)`.  Reading from the run cursor `v[end + j]` instead
+        // diverges on native: the run's `end`, set in the arm condition, is not reliably visible to
+        // a tail read appended after it.
+        let tail_len = {
+            let save = self.lexer.link();
+            let mut n = 0i32;
+            while self.lexer.has_token(",") {
+                if self.lexer.peek_token("..") {
+                    break;
+                }
+                // Skip one element up to the next top-level `,` or `]` (tracking bracket depth so
+                // a variant's `{ f, g }` counts as one element).
+                let mut depth = 0i32;
+                loop {
+                    match &self.lexer.peek().has {
+                        LexItem::None => break,
+                        LexItem::Token(t) if t == "{" || t == "[" || t == "(" => {
+                            depth += 1;
+                            self.lexer.cont();
+                        }
+                        LexItem::Token(t) if t == "}" || t == "]" || t == ")" => {
+                            if depth == 0 {
+                                break;
+                            }
+                            depth -= 1;
+                            self.lexer.cont();
+                        }
+                        LexItem::Token(t) if t == "," && depth == 0 => break,
+                        _ => self.lexer.cont(),
+                    }
+                }
+                n += 1;
+            }
+            self.lexer.revert(save);
+            n
+        };
+        // Parse the tail with known positions: element `j` is at `-(tail_len - j)` from the end.
+        // A literal / variant sub-pattern contributes a CONDITION (AND'd after the run bool); a
+        // bare-name bind and a variant's field binds are BINDINGS (run once the arm commits).
+        let mut tail_conds: Vec<Value> = Vec::new();
         let mut has_rest = false;
         let mut rest_name: Option<String> = None;
+        let mut j = 0i32;
         while self.lexer.has_token(",") {
             if self.lexer.has_token("..") {
                 has_rest = true;
                 rest_name = self.lexer.has_identifier();
                 break;
-            } else if self.peek_is_slice_literal() {
+            }
+            let pos = Value::Int(-(tail_len - j));
+            if self.peek_is_slice_literal() {
                 let mut lit = Value::Null;
                 let lit_tp = self.expression(&mut lit);
-                tail_lits.push((lit, lit_tp));
+                match self.build_literal_match(v, elm_size, elm_tp, &pos, &lit, &lit_tp) {
+                    Some(tc) => tail_conds.push(tc),
+                    None if !self.first_pass => self.slice_literal_mismatch(elm_tp, &lit_tp),
+                    None => {}
+                }
+            } else if matches!(elm_tp, Type::Enum(te, true, _)
+                if matches!(&self.lexer.peek().has, LexItem::Identifier(id)
+                    if self.data.variant_of(*te, id) != u32::MAX))
+            {
+                // A variant sub-pattern `V { f }` / bare `V`, matched at `pos`.  The DIRECT read
+                // (as the head sub-pattern path uses) drives both the tag-test and the field binds.
+                let elem_read = self.read_slice_elem(v, elm_size, elm_tp, pos.clone());
+                let mut te_binds: Vec<Value> = Vec::new();
+                let mut te_conds: Vec<Value> = Vec::new();
+                let mut aliases: Vec<(String, Option<u16>)> = Vec::new();
+                if let Some(tag) = self.parse_field_sub_pattern(
+                    elem_read,
+                    elm_tp,
+                    &mut te_binds,
+                    &mut te_conds,
+                    &mut aliases,
+                ) {
+                    tail_conds.push(tag);
+                }
+                tail_conds.append(&mut te_conds);
+                bindings.append(&mut te_binds);
+            } else if let Some(name) = self.lexer.has_identifier() {
+                let bind_var = self.vars.add_variable(&name, elm_tp, &mut self.lexer);
+                if bind_var != u16::MAX {
+                    self.vars.defined(bind_var);
+                    let elem_read = self.read_slice_elem(v, elm_size, elm_tp, pos.clone());
+                    bindings.push(v_set(bind_var, elem_read));
+                    self.mark_slice_element_view(bind_var, elm_tp, borrow_src);
+                }
             } else {
                 if !self.first_pass {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "only literal elements are supported after a repetition `( … )*` (a bind or variant sub-pattern here is not yet supported)"
+                        "unexpected element after a repetition `( … )*` — expected a literal, a bind name, a variant sub-pattern, or `..rest`"
                     );
+                }
+                // Recover to `]` so `token("]")` below succeeds and this is the primary error.
+                while !self.lexer.peek_token("]") && !matches!(self.lexer.peek().has, LexItem::None)
+                {
+                    self.lexer.cont();
                 }
                 break;
             }
+            j += 1;
         }
-        if has_rest && !tail_lits.is_empty() && !self.first_pass {
+        if has_rest && tail_len > 0 && !self.first_pass {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -4255,17 +4757,17 @@ impl Parser {
             );
         }
         self.lexer.token("]");
-        let tail_len = tail_lits.len() as i32;
 
-        // Runtime run: `end` = the cursor position after the last matched V (starts at head_len).
+        // `end` = the cursor after the last matched V (starts at head_len).
         let end_var = self.create_unique("rep_end", &I32);
         self.vars.defined(end_var);
+
         let mut run_ops: Vec<Value> = vec![v_set(end_var, Value::Int(head_len))];
         if let Some(sep) = &sep_disc {
             // Separated `V (Sep V)*`: match the first V, then loop `(Sep V)` pairs.
             // First V: `if head_len < len && tag(v[head_len]) == disc { end = head_len + 1 }`.
             let first_v = {
-                let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let lc = self.cursor_len(v);
                 let non_empty =
                     self.conv_op("<", Value::Int(head_len), lc, I32.clone(), I32.clone());
                 let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(head_len));
@@ -4280,7 +4782,7 @@ impl Parser {
             // `(Sep V)*`: `loop { if len <= end+1 break; if tag(v[end]) != sep break;
             //             if tag(v[end+1]) != disc break; end += 2 }`.
             let need_pair_brk = {
-                let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let lc = self.cursor_len(v);
                 let next = self.conv_op(
                     "+",
                     Value::Var(end_var),
@@ -4324,7 +4826,7 @@ impl Parser {
         } else {
             // Contiguous `V*`: `loop { if len <= end break; if tag(v[end]) != disc break; end += 1 }`.
             let len_brk = {
-                let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let lc = self.cursor_len(v);
                 let at_end = self.conv_op("<=", lc, Value::Var(end_var), I32.clone(), I32.clone());
                 v_if(at_end, Value::Break(0), Value::Null)
             };
@@ -4351,10 +4853,10 @@ impl Parser {
         // the fixed tail (`end == len - tail_len`); a rest just needs room for the head
         // (`head_len <= len`).  `+` additionally requires a non-empty run (`end > head_len`).
         let base = if has_rest {
-            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+            let lc = self.cursor_len(v);
             self.conv_op("<=", Value::Int(head_len), lc, I32.clone(), I32.clone())
         } else {
-            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+            let lc = self.cursor_len(v);
             let boundary = self.conv_op("-", lc, Value::Int(tail_len), I32.clone(), I32.clone());
             self.cl("OpEqInt", &[Value::Var(end_var), boundary])
         };
@@ -4373,16 +4875,13 @@ impl Parser {
         };
         run_ops.push(match_bool);
         let mut arm_cond = v_block(run_ops, Type::Boolean, "rep cond");
-        // AND the fixed tail-literal conditions (matched from the END, negative index) AFTER the
-        // run boolean — its `end == len - tail_len` has already guaranteed the slice is long
-        // enough, and `&&` short-circuits so a too-short slice never reads out of range.
-        for (j, (lit, lit_tp)) in tail_lits.clone().into_iter().enumerate() {
-            let pos = Value::Int(-(tail_len - j as i32));
-            match self.build_literal_match(v, elm_size, elm_tp, &pos, &lit, &lit_tp) {
-                Some(tc) => arm_cond = v_if(arm_cond, tc, Value::Boolean(false)),
-                None if !self.first_pass => self.slice_literal_mismatch(elm_tp, &lit_tp),
-                None => {}
-            }
+        // AND the tail conditions (literal matches + variant tag-tests, matched from the END) AFTER
+        // the run boolean — its `end == len - tail_len` already guarantees the slice is long
+        // enough, and `&&` short-circuits so a too-short slice never reads out of range.  The tail
+        // BINDINGS (bare-name binds, variant field binds) were pushed to `bindings` during the tail
+        // parse above, so there is no separate binding pass here.
+        for tc in tail_conds {
+            arm_cond = v_if(arm_cond, tc, Value::Boolean(false));
         }
         *cond = match cond.take() {
             Some(existing) => Some(v_if(existing, arm_cond, Value::Boolean(false))),
@@ -4411,11 +4910,33 @@ impl Parser {
                 );
             }
         }
+        // @PLN35 slice 2 — each `{ field }` projects the run's field into its own vector.
+        for (fname, attr_idx, ftype) in field_caps {
+            let fvec_tp = Type::Vector(Box::new(ftype.clone()), Deps::none());
+            let proj_var = self.vars.add_variable(&fname, &fvec_tp, &mut self.lexer);
+            self.vars.defined(proj_var);
+            if !self.first_pass && proj_var != u16::MAX {
+                self.materialize_field_projection(
+                    v,
+                    elm_size,
+                    elm_tp,
+                    vdef,
+                    attr_idx,
+                    &ftype,
+                    proj_var,
+                    &fvec_tp,
+                    Value::Int(head_len),
+                    Value::Var(end_var),
+                    cap_step,
+                    bindings,
+                );
+            }
+        }
         if let Some(name) = rest_name {
             let rest_var = self.vars.add_variable(&name, &vec_tp, &mut self.lexer);
             self.vars.defined(rest_var);
             if !self.first_pass && rest_var != u16::MAX {
-                let hi_val = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let hi_val = self.cursor_len(v);
                 self.materialize_named_rest(
                     v,
                     elm_tp,
@@ -4639,7 +5160,7 @@ impl Parser {
         let mut branch_conds: Vec<Value> = Vec::new();
         for branch in &branches {
             let w = branch.len() as i32;
-            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+            let lc = self.cursor_len(v);
             let mut c = if has_rest {
                 self.conv_op("<=", Value::Int(w), lc, I32.clone(), I32.clone())
             } else {
@@ -4760,7 +5281,7 @@ impl Parser {
             let rest_var = self.vars.add_variable(&name, &vec_tp, &mut self.lexer);
             self.vars.defined(rest_var);
             if !self.first_pass && rest_var != u16::MAX {
-                let hi_val = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let hi_val = self.cursor_len(v);
                 self.materialize_named_rest(
                     v,
                     elm_tp,
@@ -5614,6 +6135,68 @@ impl Parser {
                         if let Some(name) = self.lexer.has_identifier() {
                             rest_name = Some(name);
                         }
+                    } else if !has_rest
+                        && !matches!(&elm_tp, Type::Enum(..))
+                        && let Some(is_rep) = self.peek_scalar_type_capture()
+                    {
+                        // @PLN35 slice 1 — a scalar type-annotated capture `name:Type` (single —
+                        // a type-as-match that always holds for the element type) OR its
+                        // `name:Type*` / `+` repetition collected into a `vector<elm_tp>`.  Only
+                        // for a SCALAR element type; enum elements keep the `name:pat` /
+                        // `(x: V)*` paths below.
+                        if is_rep {
+                            let head_len = head.len() as i32;
+                            // Bind any BARE-NAME head element before the run (a literal / sub-
+                            // pattern already emitted its own cond and left a "_").  Safe: the
+                            // arm cond requires `head_len <= end <= len` before bindings run.
+                            for (i, hname) in head.iter().enumerate() {
+                                if hname == "_" {
+                                    continue;
+                                }
+                                let bind_nr =
+                                    self.vars.add_variable(hname, &elm_tp, &mut self.lexer);
+                                self.vars.defined(bind_nr);
+                                let val = self.read_slice_elem(
+                                    v,
+                                    &elm_size,
+                                    &elm_tp,
+                                    Value::Int(i as i32),
+                                );
+                                bindings.push(v_set(bind_nr, val));
+                                self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
+                            }
+                            self.parse_scalar_slice_repetition(
+                                v,
+                                &elm_size,
+                                &elm_tp,
+                                head_len,
+                                &mut cond,
+                                &mut bindings,
+                            );
+                            multi_alt = true;
+                            break;
+                        }
+                        // Single `name:Type`: bind `name = v[pos]`; the annotation matches the
+                        // element type so no condition is needed (a "_" keeps position alignment
+                        // for following bare-name indices).
+                        let position = head.len() as i32;
+                        let name = self.lexer.has_identifier().unwrap();
+                        self.lexer.token(":");
+                        let tname = self.lexer.has_identifier().unwrap_or_default();
+                        let elm_name = elm_tp.name(&self.data);
+                        if !self.first_pass && tname != elm_name {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a scalar capture `{name}:{tname}` must match the element type {elm_name}"
+                            );
+                        }
+                        let bind_nr = self.vars.add_variable(&name, &elm_tp, &mut self.lexer);
+                        self.vars.defined(bind_nr);
+                        let val = self.read_slice_elem(v, &elm_size, &elm_tp, Value::Int(position));
+                        bindings.push(v_set(bind_nr, val));
+                        self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
+                        head.push("_".to_string());
                     } else if !has_rest && self.lexer.peek_named_arg().is_some() {
                         // @PLN35 Phase 2 (P-Cap) — `name:pat` element capture. Bind the whole
                         // element to `name` (a VIEW of the subject, exactly the read a bare head
@@ -5716,6 +6299,7 @@ impl Parser {
                                 &elm_size,
                                 &elm_tp,
                                 head_len,
+                                borrow_src,
                                 &mut cond,
                                 &mut bindings,
                             );
@@ -5844,7 +6428,7 @@ impl Parser {
                 if !multi_alt {
                     let fixed = (head.len() + tail.len()) as i32;
                     // Generate length condition
-                    let len_call = self.cl("OpLengthVector", &[Value::Var(v)]);
+                    let len_call = self.cursor_len(v);
                     if has_rest {
                         // length >= fixed  →  fixed <= length
                         self.call_op(
@@ -5930,7 +6514,7 @@ impl Parser {
                         self.vars.defined(rest_var);
                         if !self.first_pass && rest_var != u16::MAX {
                             let lo_val = Value::Int(head.len() as i32);
-                            let len_c = self.cl("OpLengthVector", &[Value::Var(v)]);
+                            let len_c = self.cursor_len(v);
                             let hi_val = self.conv_op(
                                 "-",
                                 len_c,

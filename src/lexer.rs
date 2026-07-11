@@ -1339,6 +1339,14 @@ impl Lexer {
 
     /// Continue the lexer to the next step.
     pub fn cont(&mut self) {
+        // Are we at the live edge (scanning fresh) rather than replaying the memory
+        // buffer?  Capture it BEFORE `next()`, because `next()` bumps `self.link` when
+        // it replays — so testing `link == memory.len()` afterwards cannot tell a
+        // freshly-scanned token (append it to the buffer) apart from a replay of the
+        // LAST buffered token (already in the buffer).  Conflating them re-appended a
+        // duplicate, so two look-aheads that start at the same position desynced the
+        // real parse (guard `link_revert_repeatable_same_region`).
+        let at_edge = self.link == self.memory.len();
         let Some(n) = self.next() else {
             self.end();
             return;
@@ -1354,7 +1362,11 @@ impl Lexer {
             };
             res = n;
         }
-        if self.link == self.memory.len() {
+        // Remember/discard only for a token freshly scanned at the edge with nothing
+        // queued behind it.  `at_edge && link == memory.len()` excludes both a replay
+        // (`at_edge` was false) and a mid-scan queue like `5..10` / `n.v.0.0` (the
+        // number lexer pushed a follow-up token, leaving `link < memory.len()`).
+        if at_edge && self.link == self.memory.len() {
             if self.count_links() > 0 {
                 self.memory.push(res.clone());
                 self.link += 1;
@@ -1907,6 +1919,66 @@ mod test {
         }
         lex.cont();
         assert!(lex.has_token("+="));
+    }
+
+    #[test]
+    fn link_revert_repeatable_same_region() {
+        // @PLN35 — two SEQUENTIAL link/revert look-aheads that start at the SAME
+        // position (the shape `peek_named_arg` + a second classifier peek make) must
+        // leave the stream intact.  The replay buffer must NOT duplicate the last
+        // token replayed by the second peek: `cont()` decided whether to remember a
+        // token from `link == memory.len()` AFTER `next()`, but `next()` bumps `link`
+        // when it replays, so replaying the last buffered token fired the same branch
+        // and re-appended a copy — the real parse then read that token twice.
+        let mut lex = Lexer::from_str("a b c d", "link_repeat");
+        assert_eq!(lex.peek().has, LexItem::Identifier("a".into()));
+
+        // Peek 1: buffer through `b`, then revert to `a`.
+        let l1 = lex.link();
+        lex.cont();
+        assert_eq!(lex.peek().has, LexItem::Identifier("b".into()));
+        lex.revert(l1);
+        assert_eq!(lex.peek().has, LexItem::Identifier("a".into()));
+
+        // Peek 2: SAME start — replay `b` (the last buffered token), then revert.
+        let l2 = lex.link();
+        lex.cont();
+        assert_eq!(lex.peek().has, LexItem::Identifier("b".into()));
+        lex.revert(l2);
+        assert_eq!(lex.peek().has, LexItem::Identifier("a".into()));
+        assert_eq!(lex.count_links(), 0);
+
+        // The real parse must now read a, b, c, d — not a, b, b, … (the corruption).
+        for id in ["a", "b", "c", "d"] {
+            assert_eq!(lex.peek().has, LexItem::Identifier(id.into()));
+            lex.cont();
+        }
+        assert_eq!(lex.peek().has, LexItem::None);
+    }
+
+    #[test]
+    fn link_revert_nested_links() {
+        // Multiple links open at once: an inner link taken while an outer link is
+        // still live, reverted inner-then-outer, must restore cleanly and keep the
+        // full stream intact.
+        let mut lex = Lexer::from_str("a b c d e", "link_nested");
+        let outer = lex.link(); // at `a`
+        lex.cont(); // b
+        let inner = lex.link(); // at `b`
+        lex.cont(); // c
+        assert_eq!(lex.peek().has, LexItem::Identifier("c".into()));
+        assert_eq!(lex.count_links(), 2);
+        lex.revert(inner);
+        assert_eq!(lex.peek().has, LexItem::Identifier("b".into()));
+        assert_eq!(lex.count_links(), 1);
+        lex.revert(outer);
+        assert_eq!(lex.peek().has, LexItem::Identifier("a".into()));
+        assert_eq!(lex.count_links(), 0);
+        for id in ["a", "b", "c", "d", "e"] {
+            assert_eq!(lex.peek().has, LexItem::Identifier(id.into()));
+            lex.cont();
+        }
+        assert_eq!(lex.peek().has, LexItem::None);
     }
 
     #[test]

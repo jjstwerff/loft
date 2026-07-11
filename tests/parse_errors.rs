@@ -1741,6 +1741,61 @@ fn unknown_field_annotation() {
     );
 }
 
+// @PLN35 slice 1 — a scalar repetition `name:Type*` whose Type is not the vector's element
+// type is rejected.
+#[test]
+fn scalar_rep_type_mismatch() {
+    code!("fn f(v: vector<integer>) -> integer { match v { [ xs:text* ] => xs.len(), _ => -1 } }")
+        .error("a scalar repetition `xs:text*` must match the vector's element type integer at scalar_rep_type_mismatch:1:59");
+}
+
+// @PLN35 slice 1 — a `..rest` after a scalar repetition is not yet supported (a clean error,
+// not a silent mis-parse).
+#[test]
+fn scalar_rep_rest_unsupported() {
+    code!("fn f(v: vector<integer>) -> integer { match v { [ xs:integer*, .. ] => xs.len(), _ => -1 } }")
+        .error("a `..rest` after a scalar repetition `xs:integer*` is not yet supported at scalar_rep_rest_unsupported:1:66");
+}
+
+// @PLN35 slice 1 — a non-literal element after a scalar repetition is rejected (recovers to
+// `]` so this is the primary error, not a cascade).
+#[test]
+fn scalar_rep_nonliteral_tail() {
+    code!("fn f(v: vector<integer>) -> integer { match v { [ xs:integer*, y ] => xs.len(), _ => -1 } }")
+        .error("only literal elements are supported after a scalar repetition `xs:integer*` at scalar_rep_nonliteral_tail:1:65");
+}
+
+// @PLN35 slice 2 — a per-iteration capture of a NON-scalar field `( V { heap } )*` is deferred
+// (only scalar/text fields project into a vector today).
+#[test]
+fn field_capture_nonscalar_deferred() {
+    code!("enum Box { B { items: vector<integer> } }\nfn f(v: vector<Box>) -> integer { match v { [ ( B { items } )* ] => 1, _ => -1 } }")
+        .error("per-iteration capture of the non-scalar field `items` is not yet supported (only scalar/text fields project into a vector) at field_capture_nonscalar_deferred:2:63");
+}
+
+// @PLN35 slice 2 — a `{ field }` naming something that is not a field of the run variant.
+#[test]
+fn field_capture_unknown_field() {
+    code!("enum Tok { Num { n: integer } }\nfn f(v: vector<Tok>) -> integer { match v { [ ( Num { nope } )* ] => 1, _ => -1 } }")
+        .error("`nope` is not a field of Num at field_capture_unknown_field:2:64");
+}
+
+// @PLN35 slice 3 — a fixed (non-`..rest`) tail after a repetition and a `..rest` are still
+// mutually exclusive.
+#[test]
+fn tail_and_rest_rejected() {
+    code!("enum Tok { Num { n: integer }, End { e: integer } }\nfn f(v: vector<Tok>) -> integer { match v { [ (Num)*, End { e }, ..rest ] => e + rest.len(), _ => -1 } }")
+        .error("a fixed tail after a repetition cannot combine with `..rest` (yet) at tail_and_rest_rejected:2:74");
+}
+
+// @PLN35 Phase 7 — streaming `match` over an unsupported element type (a tuple; scalar / text /
+// struct-enum DO work) is deferred with a clean error pointing at the collect idiom.
+#[test]
+fn stream_match_complex_deferred() {
+    code!("fn g() -> iterator<(integer, integer)> { yield (1, 2); }\nfn f() -> integer { match g() { [ _ ] => 1, _ => -1 } }")
+        .error("streaming `match` over an `iterator<(integer, integer)>` is not yet supported (only scalar, text, or struct-enum element types) — collect it first: `match [for x in <iter> { x }] { … }` at stream_match_complex_deferred:2:32");
+}
+
 // A user type may be named `T` (a name the stdlib uses as a generic type variable):
 // verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
 // The fix keys vector types by their element (not by a display name two distinct

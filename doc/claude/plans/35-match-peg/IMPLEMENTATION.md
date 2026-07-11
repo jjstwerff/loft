@@ -75,8 +75,8 @@ fixed LITERAL tail is matched from the END (negative index) so the run must reac
 `len - tail_len` (`end == len - tail_len`; `+` ⇒ `end > head_len`; a rest just needs `head_len <= len`).
 Head bare-names bind before the group; head sub-patterns/literals bind inline. Separators are now a
 `SepSpec` — a variant TAG `(Comma)` OR a LEXEME literal `(",")` — via `sep_match_cond`, so a
-comma-separated token grammar needs no dedicated separator variant. Deferred: non-literal tail
-elements (bind / variant sub-pattern), and a fixed tail + `..rest` together. Guard
+comma-separated token grammar needs no dedicated separator variant. Non-literal tail elements
+(bind / variant sub-pattern) now land in slice 3; a fixed tail + `..rest` together stays deferred. Guard
 `tests/scripts/35m-mid-slice-repetition.loft` (bracketed lists, function calls, callee-name bind,
 value-by-index, `+`; cross-mode + leak-checked).
 
@@ -94,11 +94,46 @@ full commit); `..rest` reads `v[pos..]` from a runtime cursor = the matched bran
 per §3a: step 1 `read_slice_elem` seam (byte-identical refactor), step 2–4 `parse_multi_element_alternation`
 + `peek_multi_element_alt` lexical lookahead, step 5 `materialize_named_rest(lo, hi)` (extracted,
 shared with the fixed-arity path). Guards: `tests/scripts/35g-multi-element-alternation.loft`.
-**Next: the scalar bare-postfix `name:Type*` repetition (the last gap for the `vector<integer>`
-golden — literal heads already work via 6.3), per-iteration field capture, non-literal tail
-elements after a repetition; then Phase 7 (iterator
-input — the accumulating `read(pos)`), then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook)
-waits on PC.**
+**Slice 1 — DONE, both backends — scalar type-annotated captures (branch
+`tuxedo-pln35-phase7-scalar-rep`, stacked on the PR-#558 tip).** `[ head…, name:Type*|+ [, lit…] ]`
+on a `vector<Scalar>`: the scalar type matches EVERY element, so the run takes exactly the middle
+(`end = len - tail_len`, no run-loop) and `name` collects `v[head_len..end]` as a fresh
+`vector<Type>` (reusing `materialize_named_rest`); a fixed literal head/tail pins the ends. The
+sibling **single** form `name:Type` (a type-as-match that always holds, previously SILENTLY
+never-matched via `self.expression`) now binds one element. `peek_scalar_type_capture`
+classifies the `name:Type[*|+]` element in ONE save/revert (excludes the `_` wildcard sub-pattern
+and enum elements, which keep the `name:pat` / `(x:V)*` paths). Diagnostics: type≠element,
+`..rest`-after-run, non-literal tail (recovers to `]`). Guards `tests/scripts/35f-repetition.loft`
+(graduates the golden `g-p6-repetition.loft`), `parse_errors::scalar_rep_{type_mismatch,
+rest_unsupported, nonliteral_tail}`. **Prereq fixed first: the lexer `link`/`revert` primitive** —
+`cont()` re-appended a duplicate when replaying the LAST buffered token, so two look-aheads over
+the same region (`peek_named_arg` + the new classifier) desynced the parse; now gated on the
+edge-state captured BEFORE `next()` (guards `lexer::test::link_revert_{repeatable_same_region,
+nested_links}`).
+
+**Slice 2 — DONE, both backends — per-iteration field projection `( V { field, … } )*`.** Each
+named SCALAR/TEXT field of the run's variant collects into its own fresh `vector<field_type>` (a
+projection), vs a `name:` prefix which collects whole elements — the two compose (`( xs: V { n } )*`
+gives both). New `materialize_field_projection` mirrors `materialize_named_rest`'s iterator but the
+per-element read is `read_slice_elem` → `get_field(variant, attr_idx, ·)` (the same field read the
+head sub-pattern path uses; a raw `OpVectorRefNullable` reads null — the pre-fix bug), collecting
+`vector<field_type>` (scalar/text = owned, so no borrow-dep dance). Works with `*`/`+`, a trailing
+`..rest`, a separator `(Sep)` (stride-2), and multiple fields. A non-scalar field, or a name that
+is not a field of `V`, is rejected. Guard `tests/scripts/35n-field-projection.loft`,
+`parse_errors::field_capture_{nonscalar_deferred, unknown_field}`.
+
+**Slice 3 — DONE, both backends — non-literal tail elements after a repetition.** `[ (V)*, x ]`
+(bare-name bind) and `[ (V)*, W { f } ]` (variant sub-pattern), matched from the END at
+`-(tail_len - j)`, mixable with literals and a head; still mutually exclusive with `..rest`. The
+tail is COUNTED first (a link/revert look-ahead — now safe after the `cont()` fix) so every element
+uses a fixed NEGATIVE index; reading from the run cursor `v[end + j]` instead diverges on native
+(the run's `end`, set in the arm condition, isn't reliably visible to a tail read appended after
+it — E0425 / wrong result). A variant tail's tag-test + field binds use the head path's DIRECT read
+(no cross-block temp — a temp assigned in the condition reads back null in the binds on native).
+Guard `tests/scripts/35o-tail-elements.loft`, `parse_errors::tail_and_rest_rejected`.
+
+**Next: Phase 7 (iterator input — the accumulating `read(pos)`, the only phase adding opcodes),
+then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook) waits on PC.**
 
 **Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
 the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
@@ -859,13 +894,14 @@ desugar in-session).  A non-`#lexeme` field (e.g. `Ident.name`) is matched struc
 statement grammar), `tests/parse_errors.rs::{lexeme_missing, unknown_field_annotation}`.
 
 **Deferred to a follow-up (with the prerequisites they need):**
-- **The scalar golden form** `[ 1, args:integer* ]` (`g-p6-repetition.loft`) — literal slice
-  elements (6.3) now cover the `[ 1, … ]` head; the remaining gap is a scalar **bare-postfix
-  `name:Type*`** repetition (a `vector<integer>` run where the body type matches every element —
-  no parens, no struct-enum tag). The `#lexeme` token-grammar form is the more idiomatic loft
-  path and already works.
-- **Per-iteration field capture** inside the body `( V { n } )* → n: vector<T_n>` (a field
-  PROJECTION collect, vs today's whole-element collect) — rejected today with a diagnostic.
+- ~~**The scalar golden form** `[ 1, args:integer* ]`~~ — **DONE (slice 1).** Scalar bare-postfix
+  `name:Type*` / `+` repetition + the single `name:Type` capture (see § RESUME HERE); guard
+  `tests/scripts/35f-repetition.loft`. The `#lexeme` token-grammar form remains the more idiomatic
+  loft path for struct-enum streams.
+- ~~**Per-iteration field capture** inside the body `( V { n } )* → n: vector<T_n>`~~ — **DONE
+  (slice 2).** Scalar/text field projection (see § RESUME HERE); guard
+  `tests/scripts/35n-field-projection.loft`.  A heap-payload field projection is still deferred
+  (rejected with a diagnostic).
 - **Mid-slice repetition** (a non-empty head before the group) — today head-empty only.
 - **§3a step 6 fold hook** (associativity fold direction) — waits on the PC layer that uses it.
 
@@ -875,12 +911,81 @@ statement grammar), `tests/parse_errors.rs::{lexeme_missing, unknown_field_annot
 
 ---
 
-### Phase 7 — L3.6: iterator inputs (the only phase with new opcodes)
+### Phase 7 — L3.6: iterator inputs
 
 **Goal.** `match some_iter { … }` with backtracking over a non-random-access source.
 
-**Design.** An iterator cursor can't reset an index; it must **buffer pulled items**
-while an anchor is live — exactly `Lexer::memory` + the `links` refcount
+**DESIGN REVISION (2026-07-11, user-directed) — the CURSOR is the clear object.**
+The original design below (add `OpMatchAnchor`/`OpMatchRevert` + a `State` memo) is
+superseded. A design-protocol probe FALSIFIED its load-bearing claim ("the backing
+swaps in without touching match logic"): the match machinery has **11 `len`-based
+bounds** (`OpLengthVector`) that don't translate to an unbounded iterator — a raw
+backing swap is impossible. The user's steer resolves it: **streaming must NOT
+influence the parser; the parser works against ONE clear object regardless of how it
+is fed.** So:
+
+- Define a **Cursor** abstraction — the ONLY thing the match engine touches:
+  `read(pos)` (element there), `has(pos)` (is there an element there? — REPLACES raw
+  `len`), and `anchor`/`revert` (backtracking). No `OpGetVector`/`OpLengthVector`/
+  coroutine `next` in the match logic.
+- Two implementations BEHIND the interface, indistinguishable to the parser:
+  1. **Vector cursor** (random access): `read = v[pos]`, `has = pos < len`,
+     anchor/revert = save/restore an index (the F2 "no new op" note).
+  2. **Streaming cursor**: `read(pos)` pulls the coroutine via `next()` and buffers;
+     `has(pos)` pulls until buffered-or-exhausted; anchor/revert = the lexer's
+     `memory`/`link`/`revert` GENERALIZED (evict when no anchor is live). This IS the
+     lexer's mechanism as a coroutine cursor — the buffer = `Lexer::memory`, `anchor`
+     = `link`, `revert` = `revert` (the `cont()` replay-buffer bug fixed this session).
+- The `len` falsification dissolves: the 11 bounds become `has(pos)` queries both
+  impls answer. The one genuinely length-dependent case — tail-from-the-end (slice 3)
+  — needs the stream exhausted to locate the end, so tail-on-a-stream is inherently
+  bounded (finite: fine; unbounded: reject / `max_lookahead`-gate).  Streaming is an
+  IMPLEMENTATION of the Cursor, not a rewrite of the parser.
+
+**Phased build.**
+1. **DONE (`d3438259`)** — Cursor len-seam (`cursor_len` beside `read_slice_elem`), the
+   11 `len`-bounds routed through it, byte-identical both backends (Mode-B corpus).
+2a. **DONE — streaming match, SCALAR elements, EAGER (both backends).** `match <iterator<Scalar>>`
+   materialises the coroutine into a buffer `vector<Scalar>` (`collect_iterator_subject` in
+   control.rs: `gen = subject; done = false; buf = []; while !done { x = OpCoroutineNext(gen);
+   if OpCoroutineExhausted(gen) { done = true } else { <append triple> } }`) then runs the existing
+   `parse_vector_match` over `buf` — streaming stays behind the seam, match logic untouched.
+   Pull uses explicit `next`/`exhausted` (a `for` over a stored coroutine HANGS).  **The 2 opcodes
+   evaporated** — the buffer holds all pulled items, so backtracking is a free index (no anchor/
+   revert, no eviction).  text / vector / tuple elements ride a different `next` channel → deferred
+   with a clean diagnostic (collect-idiom hint).  Guard `tests/scripts/35p-iterator-match.loft`,
+   `parse_errors::stream_match_complex_deferred`.
+2b. **DONE (text + struct-enum element channels).** `iterator<text>` (token strings) and
+   `iterator<StructEnum>` (struct-enum token streams) now stream-match on both backends, leak-clean.
+   The one fix: the append record var (`stream_elm`) needed `skip_free` — without it scope cleanup
+   emitted `OpFreeRef` after the append and freed the just-stored record (harmless for an inline
+   int, but it freed the STRING for a `text` element — the null-value bug).  Supported set now:
+   scalar / text / struct-enum; plain enum / vector / tuple ride a different `next` channel (still
+   gated).  Guard broadened in `35p-iterator-match.loft`.
+2c. **DEFERRED by decision (dogfood).** LAZY per-read pull + per-match `max_lookahead`.  Assessed:
+   the lazy read alone buys nothing because almost every pattern queries `cursor_len` (the fixed
+   gate, the `end == len - tail_len` gate, `..rest`), which on a stream must exhaust — so it also
+   needs the 11 `len`-bounds reframed to `has(pos)`, a large second refactor whose only payoff
+   (matching a bounded pattern over an INFINITE source) has no consumer.  The infinite-iterator
+   hang is already caught by `loft --timeout`.  Documented in CAVEATS.md § "@PLN35 Phase 7 —
+   streaming `match` … is EAGER".  Build the lazy path when a real consumer needs unbounded-stream
+   backtracking.
+
+**Phase 7 is functionally COMPLETE for real use** — `match <iterator<scalar|text|struct-enum>> { … }`
+works on both backends, leak-clean, streaming stays behind the Cursor seam, and the plan's 2 opcodes
+were proven unnecessary.  What remains of @PLN35 overall is the **PC1–PC5 sub-rule layer**.
+3. (folded into 2) — no separate opcode/State work needed.
+
+**Feasibility confirmed:** loft coroutines expose explicit `next(gen)` / `exhausted(gen)`
+(not just `for`), so a streaming cursor can pull incrementally; a coroutine is
+forward-only, and `revert` replays the buffer (never rewinds the source) — exactly the
+lexer, so no coroutine re-entrancy is needed.
+
+---
+
+**Original design (superseded — kept for the add-opcode mechanics reference).** An
+iterator cursor can't reset an index; it must **buffer pulled items** while an anchor
+is live — exactly `Lexer::memory` + the `links` refcount
 (`src/lexer.rs:104,106,1371,1385`). Add:
 - `OpMatchAnchor` / `OpMatchRevert` opcodes.
 - `anchors: Vec<(u32 pos, u32 epoch)>` + a pulled-item memo on `State`
