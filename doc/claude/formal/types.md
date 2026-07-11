@@ -21,7 +21,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   [binding.md](binding.md). In *this* doc it appears only in the conversion relation —
   it reads through to its referent (`C-Ref`).
 - `Integer[a,b]` — an integer type with closed value range `[a, b]` (the `IntegerSpec`
-  min/max). `integer` = `Integer[i64::MIN, i64::MAX]`; `u8` = `Integer[0, 255]`; etc.
+  min/max). `integer` = `Integer[i64::MIN+1, i64::MAX]` (symmetric — the reserved null
+  sentinel `i64::MIN` is EXCLUDED from the value range; see
+  [operational.md `(E-Null)`](operational.md)); `u8` = `Integer[0, 255]` (a *non-null* `u8`;
+  a nullable `u8?` reserves `255` for null, so its non-null values are `[0, 254]`); etc.
 - `τ ⤳ σ` — **conversion**: a value of `τ` is accepted where `σ` is expected, with no
   explicit cast. This is the *only* implicit coercion in the language.
 - `⊔` — the **join** (least type containing both); for integers, the range-union's
@@ -168,10 +171,23 @@ therefore the *correct* runtime behavior (loft already does it for `a*b`); the w
 (optional-of-τ); how the `null` is *stored* follows from the base type and is not part of
 the type:
 
-| base `τ` | `τ?` null representation |
+| base `τ` | `τ?` null representation (the reserved value, per width) |
 |---|---|
-| `Integer` / `Bool` / `Char` / `Float` | the value-slot **null sentinel** (`i32::MIN`, `255`, …) |
-| a struct `S` as a `vector` element | the tagged **`__nullable<S>`** enum (discriminant + payload) |
+| `Integer` (8-byte) | in-band sentinel `i64::MIN` |
+| a narrow `Integer` (`u8`/`i8`/`u16`/`i16`/`i32`) | in-band sentinel = its top stored value (`u8` → `255`); excluded from `τ?`'s non-null range |
+| `Bool` | in-band sentinel `255` |
+| `Char` | in-band sentinel codepoint `0` (collides with a literal `'\0'`) |
+| `Float` / `Single` | in-band sentinel = a reserved `NaN` |
+| a reference | out-of-band `nullref` (a reserved `DbRef`; no collision) |
+| a struct `S` as a `vector` element | the tagged **`__nullable<S>`** enum (discriminant + payload; no collision) |
+
+> The in-band scalar sentinels are **observable, reserved values** — the base type's null is
+> one specific bit-pattern, excluded from the non-null range (`(E-Null)`). This is the
+> deliberate zero-overhead choice ([the null-model keystone](../plans/102-stability-contract/keystone-null-model.md),
+> option B); its cost — a nullable narrow type cannot store its one reserved value — is a
+> documented limitation, and the collision sites that could silently *produce* a sentinel are
+> guarded (D-op-null-2). References and struct-in-vector already avoid the cost with an
+> out-of-band tag.
 
 So `bytes_for(τ?)` and the sentinel-vs-tag choice are *consequences* of `τ`, never declared
 — the same discipline as `bytes_for_range` on integers. **Parametricity holds**: `τ?` and

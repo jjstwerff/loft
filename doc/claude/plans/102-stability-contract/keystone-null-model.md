@@ -5,12 +5,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN102 keystone — the null representation model (the decision)
 
-> **Status: decision drafted 2026-07-10, awaiting the owner's pick (A vs B).** This is the
+> **Status: DECIDED — B (owner, 2026-07-10). Step 1 (spec honesty) landed.** This is the
 > deepest pre-freeze item — it recurs across [lib-audit.md](lib-audit.md) and
 > [formal-audit.md](formal-audit.md) and is the @PLN102/@PLN25 boundary. Worked as a design
 > decision per the audit disposition: the invariant, the alternatives *presented in full* with
-> conversion cost, then a recommendation. **Nothing is implemented yet** — the choice changes what
-> gets built, and it is permanent, so it is the owner's call.
+> conversion cost, then a recommendation. The owner chose **B (confront + guard)**; the concrete
+> work is under "If B" below.
+>
+> **Progress:** ✅ **Step 1 — spec honesty (docs only):** `operational.md` `(E-Null)` rewritten
+> (in-band + observable + reserved + excluded from the value range, dropping the false
+> "encoding is private" claim); `(E-NullArg)` made precise + uniform (definite comparison,
+> `null == null` true, null orders low, same for every scalar); `types.md` range fixed
+> (`integer` = `[i64::MIN+1, i64::MAX]`) + the null-representation table stated per width; the
+> two code divergences filed as `D-op-null-1` (float non-uniform comparison → step 2) and
+> `D-op-null-2` (unguarded collision sites → step 3). Steps 2–5 remain.
 
 ## The invariant we must be able to state (and today cannot)
 
@@ -129,8 +137,9 @@ rewrite.**
 
 ## If B — the concrete work (each with its conversion set, land while contract 0 allows)
 
-1. **Spec:** rewrite E-Null (in-band + observable + reserved), reconcile the sentinel constants
-   across `types.md`/`operational.md`, state the reserved value per width. *(docs only)*
+1. ✅ **Spec:** rewrote E-Null (in-band + observable + reserved), reconciled `types.md`/
+   `operational.md`, stated the reserved value per width, fixed the `integer` range. *(landed
+   2026-07-10; the two remaining code gaps are `D-op-null-1`/`2` in operational.md.)*
 2. **Uniform `null` identity/ordering:** fix `OpEq*`/`OpNe*`/`OpLt*`… so `null == null` is true and
    `null` ordering is uniform across scalar types (decide extreme-vs-contagion). *(ops.rs/fill.rs +
    both backends; conversion set = programs comparing/ordering nulls — golden-corpus first.)*

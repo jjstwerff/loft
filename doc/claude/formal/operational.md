@@ -52,15 +52,27 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ```
   (E-Val)    a value v does not step (it is a normal form).
-  (E-Null)   `null` is a value, represented in-band by a per-type SENTINEL — e.g.
-             `integer`'s null is `i64::MIN`.  Two configs that agree on the abstract
-             value (incl. null) MUST agree, regardless of how a backend stores the sentinel.
+  (E-Null)   `null` is a value, represented IN-BAND by a specific reserved bit-pattern per
+             scalar width — `integer` = `i64::MIN`; a narrow int = its top value (`u8` = 255);
+             `float`/`single` = a reserved NaN; `character` = codepoint 0; a reference =
+             `nullref`.  That pattern is a REAL, OBSERVABLE value, and it is RESERVED: it is
+             EXCLUDED from the non-null range of `τ` (so a non-null `integer` is
+             `[i64::MIN+1, i64::MAX]`, symmetric).  No legitimate non-null value equals it.
+             Both backends MUST agree on the abstract value AND on the reserved pattern per
+             width (the pattern is part of the observable contract, not a private encoding).
 ```
 
-**In words.** A value is "done" — it doesn't evaluate further. `null` is a real value, not
-a separate state; each type reserves one bit pattern for it (an `integer` null is the
-smallest `i64`). The semantics talk about the *abstract* value; how a backend encodes the
-sentinel is its business, but the value it computes must match.
+**In words.** A value is "done" — it doesn't evaluate further. `null` is a real value, not a
+separate state; each scalar **width** reserves ONE bit-pattern for it (an `integer` null is
+the smallest `i64`; a `u8` null is 255; a `float` null is a reserved NaN). That pattern is
+**in-band and observable** — it is a value in the same slot — so the non-null value **range
+excludes it** and no real value can silently be confused with null. (This corrects the earlier
+claim that "how a backend encodes the sentinel is its business": the encoding is in-band, so it
+IS observable and part of the frozen contract — see the null-sentinel keystone,
+[plans/102-stability-contract/keystone-null-model.md](../plans/102-stability-contract/keystone-null-model.md).)
+The cost — a *nullable* narrow type cannot store its one reserved value (`u8?` has no 255,
+`integer?` no `i64::MIN`, `character?` no `'\0'`) — is a deliberate, documented limitation of
+the in-band model, not a silent one.
 
 ### Evaluation order — left to right
 
@@ -81,13 +93,23 @@ mutates the store) happen in source order. Both backends must use this order.
                                                 overflows the type, or op is `/`/`%` with
                                                 v₂ = 0.  The result is **null**; evaluation
                                                 CONTINUES (it never halts).
-  (E-NullArg)   any op with a `null` operand produces `null` (null is contagious),
-                EXCEPT comparisons, which compare against the sentinel.
+  (E-NullArg)   any op with a `null` operand produces `null` (null is CONTAGIOUS),
+                EXCEPT comparisons, which are DEFINITE against the reserved pattern and
+                UNIFORM across every scalar type:
+                  `null == null` → true;  `v == null` / `null == v` → false (v non-null);
+                  `!=` is the exact complement of `==`;
+                  ordering (`<` `>` `<=` `>=`) places `null` at the LOW extreme —
+                  `null < v` → true, `v < null` → false, `null < null` → false —
+                  the SAME for `integer`, `character`, `float`, `single`, `boolean`.
 ```
 
 **In words.** Arithmetic gives the obvious result when it fits. When it *can't* — overflow,
 divide/modulo by zero — it yields **null** and the program **keeps running**; it does not
-halt. This is the **spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)): a
+halt. Comparisons are the exception to contagion: they let you *test* for null (`x == null`)
+and give a **total order** with null sorting first, and this is **uniform across scalar
+types** — `null == null` is always true, never type-dependent. (Today `float`/`single`
+diverge: their null is a NaN, so `null == null` is false and ordering is unordered — a
+deviation, D-op-null-1 below, that step 2 of the null-model keystone closes.) This is the **spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)): a
 cell that can't compute shows null and never stops the other cells. A fault is *local* — it
 degrades one value, never the whole run. The same holds for every uncomputable step (an
 out-of-bounds index, a deref of an absent value): null, continue.
@@ -144,7 +166,31 @@ share them.
 
 ## Deviations
 
-OPEN: **2**
+OPEN: **4** (D-op-1/2 + the two null-model keystone deviations D-op-null-1/2, opened
+2026-07-10 by the @PLN102 pre-freeze audit; closed by steps 2–3 of
+[the null-model keystone decision](../plans/102-stability-contract/keystone-null-model.md))
+
+### D-op-null-1 — `float`/`single` null comparison is not uniform with the other scalars
+- **Violates:** `(E-NullArg)` — comparisons are DEFINITE and UNIFORM across scalar types.
+- **Where:** `src/fill.rs` `OpEqFloat`/`OpEqSingle` guard `!is_nan(a) && !is_nan(b)`, so with
+  float-null = NaN, `null == null` → **false** (not true) and every ordering with a null float
+  is **false** (unordered), where integer/char null is reflexive and orders as the low extreme.
+- **Effect:** `x == null` and even `x == x` behave type-dependently; a program branching on
+  `float? == null` silently mis-behaves. Observable, frozen if not fixed.
+- **Close:** step 2 of the keystone — make the float null-NaN pattern compare reflexively and
+  order as the low extreme, matching `(E-NullArg)`. Both backends; golden-corpus first.
+
+### D-op-null-2 — a computation whose true result is the reserved pattern nulls SILENTLY
+- **Violates:** the `(E-Null)` intent that no real value is silently confused with null.
+- **Where:** `src/ops.rs` shift/bitwise and the `as`/parse casts — `1 << 63`, `abs(i64::MIN)`,
+  `"-9223372036854775808" as integer`, `1e30 as integer`, `1 << 100` — produce the reserved
+  bit-pattern (or saturate) with no report, so a value the user did not intend as null becomes
+  null (or a plausible-wrong finite value) silently.
+- **Effect:** the silent-wrong class the compat promise forbids; frozen if not fixed. (Distinct
+  from C85 *overflow* of ordinary arithmetic, which is a decided edge — see the keystone doc for
+  the fault-vs-report choice at these specific collision sites.)
+- **Close:** step 3 of the keystone — guard the collision sites (fault, or report like `÷0`) so
+  the null is loud, not silent. Conversion set ~0.
 
 ### D-op-1 — there is no shared operational semantics; the interpreter is the spec
 - **Violates:** the premise of this doc (a single evaluation relation both backends obey)
