@@ -3453,7 +3453,7 @@ use a separate collection or add after the loop"
     /// Materialise an iterator (e.g. `v[a..b]` slice) into a vector variable.
     /// Promotes the LHS variable to `Vector<elm_tp>` and builds a loop that appends
     /// each element in-place.
-    fn materialize_iterator(
+    pub(crate) fn materialize_iterator(
         &mut self,
         code: &mut Value,
         s_type: &Type,
@@ -3482,10 +3482,21 @@ use a separate collection or add after the loop"
             let fld = Value::Int(i32::from(u16::MAX));
             let elm_var = self.unique_elm_var(lhs_parent_tp, &elm_tp, var_nr);
             let for_var = self.create_unique("slice_elm", &elm_tp);
-            let comp_var = self.create_unique("comp", &elm_tp);
+            // The per-element source is `for_var = next`, a READ of `subject[i]`.  `for_var`
+            // carries the read's borrow-dep on the subject (`ref(T)["v"]`), so the free-analysis
+            // treats it as BORROWED — never freeing it — and native emits a borrow (no owned
+            // copy).  The element is materialised ONCE, by `set_field` deep-copying it into the
+            // fresh `elm_var` record.  (Historically an intermediate `comp_var = for_var` sat
+            // between the read and the copy; the `= for_var` assignment DROPPED the borrow-dep,
+            // so `comp_var` typed as a plain `ref(T)` looked OWNED: the free-analysis emitted
+            // `OpFreeRef(comp_var)` — a harmless no-op for an inline struct, but for a STRUCT-ENUM
+            // (whose read DEREFERENCES the record pointer) it freed the subject's OWN record,
+            // corrupting it on any later read of the same range.  That was an interpret-only
+            // miscompile of `v[lo..hi]` on struct-enum vectors; native kept its owned copy so it
+            // did not corrupt but paid a redundant copy+free.  Copying `for_var` directly keeps
+            // the borrow-dep and removes both faults.)
             let for_next = v_set(for_var, *next);
             let mut lp = vec![for_next];
-            lp.push(v_set(comp_var, Value::Var(for_var)));
             lp.push(v_set(
                 elm_var,
                 self.cl(
@@ -3498,7 +3509,7 @@ use a separate collection or add after the loop"
                 usize::MAX,
                 0,
                 Value::Var(elm_var),
-                Value::Var(comp_var),
+                Value::Var(for_var),
             ));
             lp.push(self.cl(
                 "OpFinishRecord",
