@@ -163,7 +163,7 @@ for a in <iterable> par(b=<worker_call>, <threads>) {
 
 `<iterable>` may be any for-loop source: a `vector<T>`, an integer range
 (`0..n`), an `iterator<T>`, text (iterates characters), or a keyed collection
-(`hash` / `sorted` / `index` / `spacial`).  Sources that are not already a flat
+(`hash` / `sorted` / `index` / `spatial`).  Sources that are not already a flat
 vector are materialised into one (`materialise_iter_for_par` for ranges /
 iterators / text via the comprehension lowering; `materialise_keyed_for_par`
 for keyed collections) before the queue dispatcher partitions it across
@@ -294,7 +294,7 @@ these paths (the cheaper the better; materialise is the last resort):
 | **Index** | `vector<T>`, tuple-vectors, struct vector-fields | by index range (the current path) | no |
 | **Range** | integer ranges `lo..hi`, `..=`, reverse | split `[lo,hi)` into N sub-ranges | **no** (fast path) |
 | **Fusable map** | `map(src, g)` where `src` is Index/Range and `g` is pure | partition `src`; worker computes `f(g(a))` | **no** (fusion) |
-| **Materialise** | keyed (`sorted`/`hash`/`index`/`spacial`), `filter(...)`, comprehensions, finite custom iterators | drive the for-cursor ONCE into a temp `vector<T>`, then Index path | **yes** — the "absolutely needed" case |
+| **Materialise** | keyed (`sorted`/`hash`/`index`/`spatial`), `filter(...)`, comprehensions, finite custom iterators | drive the for-cursor ONCE into a temp `vector<T>`, then Index path | **yes** — the "absolutely needed" case |
 | **Reject / opt-in** | coroutine generators, infinite / side-effecting `.next()`; `#fields` (compile-time unroll) | not partitionable / no runtime iteration | diagnostic (or opt-in materialise) |
 
 1. **Range — no vector (the headline win).**  `for i in lo..hi par(b =

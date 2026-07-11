@@ -99,7 +99,7 @@ pub enum Type {
     Vector(Box<Type>, Vec<u16>),             // Dynamic array + deps
     Sorted(u32, Vec<(String, bool)>, Vec<u16>), // Ordered set: def_nr, [(field, asc)]
     Index(u32, Vec<(String, bool)>, Vec<u16>),  // Index: def_nr, [(field, asc)]
-    Spacial(u32, Vec<String>, Vec<u16>),        // Spatial index: def_nr, [fields]
+    Spatial(u32, Vec<String>, Vec<u16>),        // Spatial index: def_nr, [fields]
     Hash(u32, Vec<String>, Vec<u16>),           // Hash table: def_nr, [fields]
     Routine(u32),                            // Dynamic routine reference
     Iterator(Box<Type>, Box<Type>),          // (yield_type, internal_state_type)

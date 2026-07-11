@@ -6656,7 +6656,17 @@ impl Parser {
             // I13: check for custom iterator protocol before falling back.
             let next_d_nr = self.data.find_fn(u16::MAX, "next", in_type);
             if next_d_nr != u32::MAX {
-                return self.data.def(next_d_nr).returned().clone();
+                let item = self.data.def(next_d_nr).returned().clone();
+                // @PLN102 D1 — `next(self) -> Item?` uses null as the iteration TERMINATOR: the
+                // loop stops the moment `next` yields null, so the body only ever binds a present
+                // value. Type the loop variable as the non-null `Item`, not `Item?` — otherwise
+                // N-Prop would spuriously nullify `sum += x` on a value that is never null here.
+                // The null-check that ends the loop is structural (`parse_for_iter_setup`), so
+                // peeling the marker does not disturb termination.
+                return match item {
+                    Type::Optional(inner) => *inner,
+                    other => other,
+                };
             }
             in_type.clone()
         } else if !self.first_pass {

@@ -570,6 +570,12 @@ impl Parser {
         // the operator / statement terminator while the operand was parsed.
         let operand_pos = self.lexer.peek_pos().clone();
         let mut current_type = self.parse_operators(var_tp, code, parent_tp, precedence + 1);
+        // @PLN102 pre-freeze — comparison operators are NON-ASSOCIATIVE.  A chain like
+        // `a == b == c` (or `a < b < c`) parses as `(a == b) == c`, silently comparing a
+        // BOOLEAN to the third operand — a classic footgun.  Reject the second comparison at
+        // this level; the explicit `(a == b) == c` still works (its inner compare is a
+        // separate parse inside the paren primary), as does `a < b && b < c`.
+        let mut compared_at_this_level = false;
         loop {
             // a void left operand cannot have any binary operator
             // applied to it. Returning early prevents the pratt loop from
@@ -706,6 +712,20 @@ impl Parser {
                     }
                 }
                 return current_type;
+            }
+            // @PLN102 — non-associative comparison guard (see `compared_at_this_level`).
+            if matches!(operator, "==" | "!=" | "<" | "<=" | ">" | ">=") {
+                if compared_at_this_level && self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "comparison operators do not chain — `{operator}` follows another \
+                         comparison, which would compare a boolean to the next operand; \
+                         parenthesise (e.g. `(a == b) == c`) or combine with `&&` \
+                         (e.g. `a < b && b < c`)"
+                    );
+                }
+                compared_at_this_level = true;
             }
             self.known_var_or_type(code, &operand_pos);
             // Detect '++': not a valid operator in loft. Consume the extra '+',
@@ -1819,14 +1839,28 @@ impl Parser {
 
     #[allow(clippy::too_many_arguments)]
     /// @PLN25 DN3 — is a division/mod DIVISOR provably non-zero (so `a / v` cannot fault)?
-    /// True for a constant non-zero integer literal, or a var proven non-zero by an enclosing
-    /// `if v != 0` guard (`divisor_nonzero`). Anything else can be zero → the result is `τ?`.
+    /// True for a constant non-zero literal, a var proven non-zero by an enclosing `if v != 0`
+    /// guard (`divisor_nonzero`), or (@PLN102) any expression that const-folds to a non-zero number
+    /// — a named constant like `SFX_RATE`, or a cast of one like `RATE as single` (both inline to a
+    /// literal that `const_eval` reduces). This closes the gap where a direct `x / 600.0` was
+    /// non-null but `x / NAMED_CONST` spuriously typed `τ?`. Anything else can be zero → `τ?`.
     fn divisor_provably_nonzero(&self, divisor: &Value) -> bool {
         match divisor.unspan() {
             Value::Int(n) => *n != 0,
             Value::Long(n) => *n != 0,
+            // @PLN102 Phase 3 — a constant non-zero float / single divisor is provably safe too
+            // (`1.0 / 2.0` stays non-null). Only consulted for float `/` under LOFT_NULLFLOW; for
+            // integer division these arms never match, so the default path is unchanged.
+            Value::Float(f) => *f != 0.0,
+            Value::Single(f) => *f != 0.0,
             Value::Var(v) => self.divisor_nonzero.contains(v),
-            _ => false,
+            other => match crate::const_eval::const_eval(other, &self.data) {
+                Some(Value::Int(n)) => n != 0,
+                Some(Value::Long(n)) => n != 0,
+                Some(Value::Float(f)) => f != 0.0,
+                Some(Value::Single(f)) => f != 0.0,
+                _ => false,
+            },
         }
     }
 
@@ -1942,7 +1976,20 @@ impl Parser {
                     // @PLN99 Arc C — clear the owned-conversion signal, then let `convert`
                     // set it iff it dispatches an allocating user conversion (`fn OpConvTFromS`).
                     self.conv_owned_result = None;
-                    if !self.convert(code, ctp, &tp) && !self.cast(code, ctp, &tp) {
+                    // @PLN102 — a nullable SCALAR source (`float?`/`single?`/`integer?`) casts by its
+                    // BASE: the null rides in-band (NaN is the float null, C90; the reserved sentinel
+                    // for integers) and the cast op propagates it (`NaN as integer` = null), so the
+                    // per-type `OpCast` is keyed on the base, not the `Optional`. Peel it here so the
+                    // checked `float? as integer?` resolves instead of reporting "Unknown cast"; the
+                    // result re-wraps `τ?` below (nullable_cast). A BARE `float? as integer` never
+                    // reaches this arm — DN5 rejects it above — so this only enables the checked form.
+                    let cast_src: &Type = if src_may_be_null && Self::is_non_null_scalar(&src_base)
+                    {
+                        &src_base
+                    } else {
+                        ctp
+                    };
+                    if !self.convert(code, cast_src, &tp) && !self.cast(code, cast_src, &tp) {
                         diagnostic!(
                             self.lexer,
                             Level::Error,
@@ -1970,17 +2017,33 @@ impl Parser {
                 {
                     rt = Type::optional(rt.base().clone());
                 }
-                // @PLN25 DN3 — a text→numeric PARSE is fit-failing: unparseable input yields the
-                // null sentinel at runtime (C80, no trap), so the result TYPES `τ?` (like `/` and
-                // `v[i]`). A REACHABLE fault (bad user/file input), unlike overflow which is the
-                // decided edge C85. `s as integer` is `integer?` → discharge with `?? d` or
-                // declare the target `τ?`.
+                // A text→numeric PARSE is fit-failing: unparseable input yields the null sentinel
+                // at runtime (C80, no trap). Two regimes:
+                //  · @PLN25 DN3 (default / OFF): the result auto-TYPES `τ?` (`s as integer` is
+                //    `integer?`; discharge with `?? d` or a `τ?` slot).
+                //  · @PLN102 Phase 4 (N-Cast, LOFT_NULLFLOW): a cast `as τ` is an ASSERTION, and a
+                //    parse can't be proven, so a BARE `text as τ` is a compile error directing to
+                //    the checked `as τ?` (value or null) or the assert-or-default `as τ ?? d`. A
+                //    `?? d` immediately after IS that form — allowed, and typed `τ?` so the `??`
+                //    discharges it (mirrors the DN4 narrowing `coalesced` rule above).
                 if !nullable_cast
                     && crate::keys::pln25_dn1_enabled()
                     && matches!(ctp, Type::Text(_))
                     && matches!(rt.base(), Type::Integer(_) | Type::Float | Type::Single)
                 {
-                    rt = Type::optional(rt.base().clone());
+                    if crate::keys::nullflow_enabled() && !self.lexer.peek_token("??") {
+                        if !self.first_pass {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "a text parse `as {tps}` may fail — use `{tps}?` for a checked cast \
+                                 (value or null), or `?? <default>`",
+                            );
+                        }
+                        // Keep `rt` non-null (the asserted target) to bound the cascade.
+                    } else {
+                        rt = Type::optional(rt.base().clone());
+                    }
                 }
                 if let Some(owned) = self.conv_owned_result.take() {
                     // @PLN99 Arc C — an allocating user conversion produced a FRESH owned
@@ -2088,6 +2151,26 @@ impl Parser {
                 && matches!(second_type.base(), Type::Reference(_, _));
             let ref_null = (operator == "==" || operator == "!=")
                 && ((opt_ref_l && second_type == Type::Null) || (*ctp == Type::Null && opt_ref_r));
+            // @PLN102 pre-freeze — a boolean and an integer are NOT comparable with `==`/`!=`.
+            // The old path coerced the integer to boolean by "is non-null", so `true == 0` was
+            // TRUE and `true == 2` was TRUE (nonsense) — while `bool < int` already errored.
+            // Reject `==`/`!=` too, so the whole comparison family is consistent.  (`null` is
+            // Type::Null, not Integer, so `bool == null` / `bool? == null` are unaffected.)
+            if !self.first_pass
+                && matches!(operator, "==" | "!=")
+                && ((matches!(ctp.base(), Type::Boolean)
+                    && matches!(second_type.base(), Type::Integer(_)))
+                    || (matches!(ctp.base(), Type::Integer(_))
+                        && matches!(second_type.base(), Type::Boolean)))
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot compare a boolean and an integer with `{operator}` — a boolean is \
+                     true/false/null, not 0/1; they are different types (convert one explicitly \
+                     if that is really what you mean)"
+                );
+            }
             if vec_null {
                 // @PLN25: `vector == null` / `vector != null` tests the null
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
@@ -2257,9 +2340,22 @@ impl Parser {
             // (the `divisor_nonzero` narrowing stack). Captured HERE, before `call_op` consumes
             // `second_code`; the `τ?` wrap is applied after the range-narrowing below. DN1-gated.
             // Makes the type carry the null so `(N-Store)` forces `?? d` / a `τ?` slot at the store.
+            // @PLN102 Phase 3 (N-Domain) — float / single `/` and `%` also fault on a zero
+            // divisor, so they type `τ?` too (like integer `/`). Gated on LOFT_NULLFLOW; the
+            // `divisor_provably_nonzero` elision keeps `x / 2.0` non-null. Integer stays default-on.
             let div_nullable = (operator == "/" || operator == "%")
-                && matches!(ctp.base(), Type::Integer(_))
+                && (matches!(ctp.base(), Type::Integer(_))
+                    || (crate::keys::nullflow_enabled()
+                        && matches!(ctp.base(), Type::Float | Type::Single)))
                 && !self.divisor_provably_nonzero(&second_code);
+            // @PLN102 (N-Prop) Phase 2 — capture operand nullability BEFORE `call_op` consumes
+            // the operand types. A nullable operand PROPAGATES through a value-preserving scalar
+            // op: the runtime already carries the null sentinel / NaN through (`n+5`, `5-n`,
+            // `abs(n)` on a null n all stay null). Gated on LOFT_NULLFLOW; the result is wrapped
+            // `τ?` below (beside the div wrap). C85 stays the complement — non-null operands are
+            // untouched here, so overflow of two non-null values still types non-null.
+            let operand_nullable = crate::keys::nullflow_enabled()
+                && (matches!(*ctp, Type::Optional(_)) || matches!(second_type, Type::Optional(_)));
             *ctp = self.call_op(
                 code,
                 operator,
@@ -2297,6 +2393,17 @@ impl Parser {
                 }
             }
             if div_nullable && crate::keys::pln25_dn1_enabled() {
+                *ctp = Type::optional(ctp.clone());
+            } else if operand_nullable
+                && !matches!(*ctp, Type::Optional(_))
+                && matches!(ctp.base(), Type::Integer(_) | Type::Float | Type::Single)
+                && matches!(
+                    operator,
+                    "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>"
+                )
+            {
+                // @PLN102 (N-Prop): a nullable operand rode into a value-preserving scalar op —
+                // the result is nullable too (the null value already flows through at runtime).
                 *ctp = Type::optional(ctp.clone());
             }
             // Plan-07 phase 1, step 1.B.1 — wrap binary fault-prone

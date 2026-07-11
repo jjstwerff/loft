@@ -3,8 +3,8 @@
 // @F5 — GENERATED from loft-lang/features#5 by tools/features/gen.loft — DO NOT EDIT.
 fn main() {
     pi: float = 3.75;
-    whole = pi as integer;     // 3  (drops the fraction)
-    parsed = "42" as integer;  // text turned into a number
-    code = 'A' as integer;     // 65 (the character's code)
+    whole = pi as integer;      // 3  (drops the fraction)
+    parsed = "42" as integer?;  // text turned into a number (or null)
+    code = 'A' as integer;      // 65 (the character's code)
     println("{whole} {parsed} {code}");   // 3 42 65
 }

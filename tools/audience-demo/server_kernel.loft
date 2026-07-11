@@ -55,7 +55,7 @@ fn parse_qrc(payload: text) -> (integer, integer, integer) {
   if i == null {
     (0, 0, 0)
   } else {
-    q = payload[..i] as integer;
+    q = payload[..i] as integer ?? 0;
     rest = payload[i + 1..];
     j = rest.find(",");
     if j == null {
@@ -153,7 +153,7 @@ fn main() {
       } else if ev.kind == 1 {
         i = ev.payload.find(":");
         if i != null {
-          msg_id = ev.payload[..i] as integer;
+          msg_id = ev.payload[..i] as integer ?? 0;
           handle_message(world, ev.cid, msg_id, ev.payload[i + 1..]);
         }
       }

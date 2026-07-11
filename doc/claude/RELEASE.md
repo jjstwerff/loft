@@ -520,7 +520,7 @@ a minor) or too large a change to block the stability contract on.
 | Item | Notes |
 |---|---|
 | A2 logger production mode | Low user impact until logger is widely used |
-| A4 spacial<T> full implementation | After pre-gate added in 0.8.0 |
+| A4 spatial<T> full implementation | After pre-gate added in 0.8.0 |
 | A5 closure capture | Very high effort; depends on P1 |
 | C57 route decorator syntax | `@get` / `@post` / `@ws` annotations |
 | W1.14 WASM Tier 2 | Web Worker pool + `par()` parallelism |

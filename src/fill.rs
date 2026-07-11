@@ -260,7 +260,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     replace_keyed,
     clear_keyed,
     set_keyed,
-    length_spacial,
+    length_spatial,
     static_call,
     create_stack,
     init_create_stack,
@@ -451,7 +451,14 @@ fn conv_character_from_null(s: &mut State) {
 
 fn conv_character_from_int(s: &mut State) {
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = char::from_u32((v_v1) as u32).unwrap_or(char::from(0));
+    let new_value = if v_v1 == i64::MIN {
+        char::from(0)
+    } else if let Some(c) = char::from_u32((v_v1) as u32) {
+        c
+    } else {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+        char::from(0)
+    };
     s.put_stack(new_value);
 }
 
@@ -463,7 +470,14 @@ fn const_long_text(s: &mut State) {
 
 fn cast_int_from_text(s: &mut State) {
     let v_v1 = s.string();
-    let new_value = v_v1.str().parse().unwrap_or(i64::MIN);
+    let new_value = match v_v1.str().parse::<i64>() {
+        Ok(v) if v == i64::MIN => {
+            s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+            i64::MIN
+        }
+        Ok(v) => v,
+        Err(_) => i64::MIN,
+    };
     s.put_stack(new_value);
 }
 
@@ -619,14 +633,34 @@ fn eor_int(s: &mut State) {
 fn s_left_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_shift_left_int(v_v1, v_v2);
+    let new_value = if v_v1 == i64::MIN || v_v2 == i64::MIN {
+        i64::MIN
+    } else if !(0..64).contains(&v_v2) {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange);
+        i64::MIN
+    } else {
+        let r = ops::op_shift_left_int(v_v1, v_v2);
+        if r == i64::MIN {
+            s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange);
+            i64::MIN
+        } else {
+            r
+        }
+    };
     s.put_stack(new_value);
 }
 
 fn s_right_int(s: &mut State) {
     let v_v2 = *s.get_stack::<i64>();
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = ops::op_shift_right_int(v_v1, v_v2);
+    let new_value = if v_v1 == i64::MIN || v_v2 == i64::MIN {
+        i64::MIN
+    } else if !(0..64).contains(&v_v2) {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange);
+        i64::MIN
+    } else {
+        ops::op_shift_right_int(v_v1, v_v2)
+    };
     s.put_stack(new_value);
 }
 
@@ -819,28 +853,29 @@ fn pow_single(s: &mut State) {
 fn eq_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = !v_v1.is_nan() && !v_v2.is_nan() && (v_v1 - v_v2).abs() < 0.000_001f32;
+    let new_value = (v_v1.is_nan() && v_v2.is_nan()) || (v_v1 <= v_v2 && v_v2 <= v_v1);
     s.put_stack(new_value);
 }
 
 fn ne_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = v_v1.is_nan() || v_v2.is_nan() || (v_v1 - v_v2).abs() > 0.000_001f32;
+    let new_value = !((v_v1.is_nan() && v_v2.is_nan()) || (v_v1 <= v_v2 && v_v2 <= v_v1));
     s.put_stack(new_value);
 }
 
 fn lt_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = !v_v1.is_nan() && !v_v2.is_nan() && v_v1 < v_v2;
+    let new_value =
+        (v_v1.is_nan() && !v_v2.is_nan()) || (!v_v1.is_nan() && !v_v2.is_nan() && v_v1 < v_v2);
     s.put_stack(new_value);
 }
 
 fn le_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = !v_v1.is_nan() && !v_v2.is_nan() && v_v1 <= v_v2;
+    let new_value = v_v1.is_nan() || (!v_v2.is_nan() && v_v1 <= v_v2);
     s.put_stack(new_value);
 }
 
@@ -943,7 +978,20 @@ fn cast_single_from_float(s: &mut State) {
 
 fn cast_int_from_float(s: &mut State) {
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = ops::op_cast_int_from_float(v_v1);
+    let new_value = if v_v1.is_nan() {
+        i64::MIN
+    } else if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&v_v1) {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+        i64::MIN
+    } else {
+        let r = ops::op_cast_int_from_float(v_v1);
+        if r == i64::MIN {
+            s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+            i64::MIN
+        } else {
+            r
+        }
+    };
     s.put_stack(new_value);
 }
 
@@ -1015,28 +1063,29 @@ fn rem_float_nullable(s: &mut State) {
 fn eq_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = !v_v1.is_nan() && !v_v2.is_nan() && (v_v1 - v_v2).abs() < 0.000_000_001f64;
+    let new_value = (v_v1.is_nan() && v_v2.is_nan()) || (v_v1 <= v_v2 && v_v2 <= v_v1);
     s.put_stack(new_value);
 }
 
 fn ne_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = v_v1.is_nan() || v_v2.is_nan() || (v_v1 - v_v2).abs() > 0.000_000_001f64;
+    let new_value = !((v_v1.is_nan() && v_v2.is_nan()) || (v_v1 <= v_v2 && v_v2 <= v_v1));
     s.put_stack(new_value);
 }
 
 fn lt_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = !v_v1.is_nan() && !v_v2.is_nan() && v_v1 < v_v2;
+    let new_value =
+        (v_v1.is_nan() && !v_v2.is_nan()) || (!v_v1.is_nan() && !v_v2.is_nan() && v_v1 < v_v2);
     s.put_stack(new_value);
 }
 
 fn le_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = !v_v1.is_nan() && !v_v2.is_nan() && v_v1 <= v_v2;
+    let new_value = v_v1.is_nan() || (!v_v2.is_nan() && v_v1 <= v_v2);
     s.put_stack(new_value);
 }
 
@@ -1177,7 +1226,12 @@ fn text_compare(s: &mut State) {
 
 fn cast_character_from_int(s: &mut State) {
     let v_v1 = *s.get_stack::<i64>();
-    let new_value = char::from_u32(v_v1 as u32).unwrap_or(char::from(0));
+    let new_value = if let Some(c) = char::from_u32(v_v1 as u32) {
+        c
+    } else {
+        s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+        char::from(0)
+    };
     s.put_stack(new_value);
 }
 
@@ -2056,9 +2110,9 @@ fn set_keyed(s: &mut State) {
     s.set_keyed();
 }
 
-fn length_spacial(s: &mut State) {
+fn length_spatial(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
-    let new_value = i64::from(codegen_runtime::spacial_len(&v_r, &s.database.allocations));
+    let new_value = i64::from(codegen_runtime::spatial_len(&v_r, &s.database.allocations));
     s.put_stack(new_value);
 }
 

@@ -7,13 +7,13 @@
 
 // Discharged element into a non-null tuple return — the migration idiom.
 fn parse_pair(s: text) -> (integer, integer) {
-  pp_q = s as integer;
+  pp_q = s as integer?;
   (pp_q ?? 0, 1)
 }
 
 // Declared `τ?` element carries the nullable honestly.
 fn parse_pair_nullable(s: text) -> (integer?, integer) {
-  pn_q = s as integer;
+  pn_q = s as integer?;
   (pn_q, 1)
 }
 
@@ -24,7 +24,7 @@ fn null_first() -> (integer?, integer) {
 
 // Nested tuple: the inner discharged element satisfies the inner non-null slot.
 fn nested(s: text) -> ((integer, integer), integer) {
-  ns_q = s as integer;
+  ns_q = s as integer?;
   ((ns_q ?? 0, 1), 2)
 }
 
@@ -32,7 +32,7 @@ fn nested(s: text) -> ((integer, integer), integer) {
 struct PairBox { t: (integer, integer) }
 
 fn boxed(s: text) -> integer {
-  bx_q = s as integer;
+  bx_q = s as integer?;
   bx_b = PairBox { t: (bx_q ?? 7, 1) };
   bx_b.t.0
 }

@@ -40,13 +40,15 @@ pub fn trim_end(self: text) -> text[self];
 #rust"@self.trim_end()"
 #pure
 // Returns the byte index of the first occurrence of value, or null if not found.
-// Use to locate substrings before slicing.
-pub fn find(self: text, value: text) -> integer;
+// Use to locate substrings before slicing.  Nullable: null when value is absent
+// (@PLN102 keystone step 4 — the type is honest about the not-found case).
+pub fn find(self: text, value: text) -> integer?;
 #rust"if let Some(v) = @self.find(@value) {{ v as i64 }} else {{ i64::MIN }}"
 #pure
 // Returns the byte index of the last occurrence of value, or null if not found.
-// Use to find file extensions or the last path separator.
-pub fn rfind(self: text, value: text) -> integer;
+// Use to find file extensions or the last path separator.  Nullable: null when
+// value is absent (@PLN102 keystone step 4 — the type is honest about not-found).
+pub fn rfind(self: text, value: text) -> integer?;
 #rust"if let Some(v) = @self.rfind(@value) {{ v as i64 }} else {{ i64::MIN }}"
 #pure
 // Returns true if value appears anywhere in self.

@@ -5334,24 +5334,24 @@ fn run() -> text {
     .result(Value::str("a-10"));
 }
 
-// ── P22: spacial<T> diagnostic wording (FIXED) ─────────────────────────
+// ── P22: spatial<T> diagnostic wording (FIXED) ─────────────────────────
 //
-// @PLN48 S2: `spacial<T[x, y]>` now works (the radix tree), so the old
-// "planned 1.1+" gate is gone.  A `spacial<T>` written WITHOUT its coordinate
+// @PLN48 S2: `spatial<T[x, y]>` now works (the radix tree), so the old
+// "planned 1.1+" gate is gone.  A `spatial<T>` written WITHOUT its coordinate
 // key fields is still an error — a spatial index needs coordinates — with a
 // diagnostic that shows the correct bracket-key syntax.
 #[test]
-fn p22_spacial_without_keys_names_the_bracket_syntax() {
+fn p22_spatial_without_keys_names_the_bracket_syntax() {
     code!(
         "struct Point { x: float not null, y: float not null }
-struct World { items: spacial<Point> }
+struct World { items: spatial<Point> }
 fn test() {
     w = World { items: [] };
 }"
     )
     .error(
-        "spacial<T[x, y]> needs coordinate key fields, e.g. spacial<Mob[x, y]> \
-at p22_spacial_without_keys_names_the_bracket_syntax:2:39",
+        "spatial<T[x, y]> needs coordinate key fields, e.g. spatial<Mob[x, y]> \
+at p22_spatial_without_keys_names_the_bracket_syntax:2:39",
     );
 }
 
@@ -6739,7 +6739,7 @@ fn p54_as_number_on_jstring_returns_nan() {
     code!(
         "fn run_annjs() -> boolean {
     x_annjs = json_string(\"hi\").as_number();
-    x_annjs != x_annjs
+    x_annjs == null
 }"
     )
     .expr("run_annjs()")
@@ -6751,7 +6751,7 @@ fn p54_as_number_on_jbool_returns_nan() {
     code!(
         "fn run_annjb() -> boolean {
     x_annjb = json_bool(true).as_number();
-    x_annjb != x_annjb
+    x_annjb == null
 }"
     )
     .expr("run_annjb()")
@@ -9089,7 +9089,12 @@ fn run() -> integer {
 }"
     )
     .error(
-        "Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row { id: 1 }];` (a struct field `struct Db { h: hash<Row[id]> }` works too) at quality_6d_keyed_collection_constructor_hint:3:20",
+        "Indexing a non vector — keyed collections (hash/sorted/index/spatial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row { id: 1 }];` (a struct field `struct Db { h: hash<Row[id]> }` works too) at quality_6d_keyed_collection_constructor_hint:3:20",
+    )
+    // @PLN102 — the malformed `hash<Row[id]>()` parses as `hash < Row[id] > ()`, a `<`…`>`
+    // comparison chain, so the non-associative-comparison guard also fires here.
+    .error(
+        "comparison operators do not chain — `>` follows another comparison, which would compare a boolean to the next operand; parenthesise (e.g. `(a == b) == c`) or combine with `&&` (e.g. `a < b && b < c`) at quality_6d_keyed_collection_constructor_hint:3:23",
     )
     .error(
         "No matching operator '<' on 'unknown' and 'boolean' at quality_6d_keyed_collection_constructor_hint:3:24",
@@ -10735,7 +10740,7 @@ fn p284_vector_float_iteration_terminates() {
 /// "Variable 'x' cannot change type from sorted<…> to vector<…>" —
 /// `parse_vector` re-typed the LHS local to vector<T> before
 /// `parse_assign_op` could route through the keyed-collection element
-/// dispatch.  Same shape would have affected hash / index / spacial
+/// dispatch.  Same shape would have affected hash / index / spatial
 /// locals.  Fixed by an early intercept in `parse_assign_op` that
 /// detects `local_keyed += [literal]` BEFORE `parse_operators` runs,
 /// then per-element parses + dispatches via `new_record` (which
@@ -11379,7 +11384,7 @@ fn test() {
 // store: the slot allocator gave it a position but neither the bytecode
 // codegen nor the native generator emitted an OpDatabase init for keyed
 // collection locals.  After P188, `gen_set_first_keyed_null` (bytecode) and
-// `emit_null_dbref`'s sorted/hash/index/spacial arm (native) allocate the
+// `emit_null_dbref`'s sorted/hash/index/spatial arm (native) allocate the
 // store and zero the root pointer; subsequent `+= T {...}` operations grow
 // the collection in place via record_new's Parts::Sorted/Hash/Index/Radix
 // dispatch.
@@ -11499,7 +11504,7 @@ fn test() {
 }
 
 /// P188 follow-up — `field += elem` for keyed-collection fields
-/// (hash/sorted/index/spacial<T[key]>) and for vector fields with
+/// (hash/sorted/index/spatial<T[key]>) and for vector fields with
 /// struct-literal RHS were broken.  Two bugs:
 ///
 /// 1. The struct-literal RHS (`Score{name:"a", value:10}`) parses
@@ -15920,4 +15925,174 @@ fn main() {
         "expected an 'Unknown field Pt.roads' diagnostic, got: {:?}",
         p.diagnostics.lines()
     );
+}
+
+// @PLN102 keystone step 4 — honest nullable stdlib returns.
+//
+// `find`/`rfind` (text) and `min_of`/`max_of` (vector) can produce null on a
+// reachable path (value absent / vector empty) and are now typed `integer?` /
+// `T?` respectively, so the static type no longer LIES about the null case.
+// The runtime representation is identical to before (in-band sentinel), so a
+// runtime test cannot distinguish `-> integer` from `-> integer?`; the honest
+// type is only observable at a declared-non-null BOUNDARY, where assigning the
+// nullable result to a non-null declaration is a compile error.  This is the
+// non-vacuous guard: it FAILS if a future edit reverts a signature to non-null.
+#[test]
+fn pln102_stdlib_reachable_null_returns_are_typed_nullable() {
+    // Each of these assigns a nullable-returning stdlib call to a declared
+    // NON-NULL local.  With honest `?` return types this is rejected; if the
+    // return type were reverted to non-null it would compile clean (the guard
+    // would then fail to see the expected error → test fails).
+    let cases = [
+        ("find", "n: integer = \"abc\".find(\"z\");"),
+        ("rfind", "n: integer = \"abc\".rfind(\"z\");"),
+        ("min_of", "n: integer = min_of([3, 1, 2]);"),
+        ("max_of", "n: integer = max_of([3, 1, 2]);"),
+    ];
+    for (name, stmt) in cases {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n  println(\"{{n}}\");\n}}"),
+            "pln102_nullable_return",
+            false,
+        );
+        assert!(
+            p.diagnostics.level() >= loft::diagnostics::Level::Error,
+            "{name}: nullable return assigned to a non-null decl should error, got: {:?}",
+            p.diagnostics.lines()
+        );
+        assert!(
+            p.diagnostics
+                .lines()
+                .iter()
+                .any(|l| l.contains("cannot change type") && l.contains("integer?")),
+            "{name}: expected a nullable-mismatch diagnostic mentioning `integer?`, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
+    // Positive control: the INFERRED (nullable) form compiles clean — proves the
+    // error above is specifically the non-null-declaration mismatch, not a broken
+    // program, and that the honest type stays fully usable via inference / `??`.
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse_str(
+        "fn main() {\n  \
+           a = \"abc\".find(\"z\");\n  \
+           b = min_of([3, 1, 2]) ?? 0;\n  \
+           assert(a == null, \"find absent is null\");\n  \
+           assert(b == 1, \"min_of ?? default\");\n\
+         }",
+        "pln102_nullable_return_ok",
+        false,
+    );
+    assert!(
+        p.diagnostics.level() < loft::diagnostics::Level::Error,
+        "inferred/`??` nullable use should compile clean, got: {:?}",
+        p.diagnostics.lines()
+    );
+}
+
+// @PLN102 pre-freeze — comparison operators are NON-ASSOCIATIVE.  A chain like
+// `a == b == c` / `a < b < c` parses left-associatively as `(a OP b) OP c`, silently
+// comparing a BOOLEAN to the third operand — the classic C footgun.  The parser now
+// rejects a second comparison at the same level; the explicit `(a == b) == c`, an `&&`
+// join, and a single comparison all stay legal.  This is the non-vacuous guard (proven
+// to fail if the rule is reverted — the chains would then parse clean).
+#[test]
+fn pln102_comparison_is_non_associative() {
+    let chains = [
+        "b = 2 == 2 == 1;",
+        "b = 1 < 5 < 10;",
+        "b = true == true == true;",
+        "b = 1 == 2 != 3;",
+    ];
+    for stmt in chains {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n}}"),
+            "pln102_nonassoc",
+            false,
+        );
+        assert!(
+            p.diagnostics
+                .lines()
+                .iter()
+                .any(|l| l.contains("do not chain")),
+            "expected a 'do not chain' error for `{stmt}`, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
+    // Positive control: explicit parens, an `&&` join, and a single comparison compile
+    // clean — proves the rule rejects only the CHAIN, not comparison itself.
+    let ok = [
+        "b = (2 == 2) == true;",
+        "b = 1 < 5 && 5 < 10;",
+        "b = 2 == 2;",
+    ];
+    for stmt in ok {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n}}"),
+            "pln102_nonassoc_ok",
+            false,
+        );
+        assert!(
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "expected `{stmt}` to compile clean, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
+}
+
+// @PLN102 pre-freeze — a boolean and an integer are not comparable.  The old `bool == int`
+// coerced the integer to boolean by "is non-null", so `true == 0` was TRUE and `true == 2`
+// was TRUE (nonsense), while `bool < int` already errored.  `==`/`!=` now reject it too.
+#[test]
+fn pln102_boolean_integer_comparison_rejected() {
+    let bad = [
+        "b = true == 1;",
+        "b = true != 0;",
+        "b = 1 == false;",
+        "b = false == 0;",
+    ];
+    for stmt in bad {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n}}"),
+            "pln102_bool_int",
+            false,
+        );
+        assert!(
+            p.diagnostics
+                .lines()
+                .iter()
+                .any(|l| l.contains("cannot compare a boolean and an integer")),
+            "expected `{stmt}` to be rejected, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
+    // Still valid: bool==bool, int==int, and the three-state `boolean? == null`.
+    let ok = [
+        "b = true == false;",
+        "b = 1 == 2;",
+        "n: boolean? = true; b = n == null;",
+    ];
+    for stmt in ok {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n}}"),
+            "pln102_bool_int_ok",
+            false,
+        );
+        assert!(
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "expected `{stmt}` to compile clean, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
 }

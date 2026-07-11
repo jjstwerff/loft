@@ -213,14 +213,14 @@ fn test_type_cycle_indirect() {
   _a = PECycA { val: 1 };
 }
 
-// --- spacial not implemented ---
+// --- spatial not implemented ---
 
 struct PEPoint { x: integer, y: integer }
-struct PEWorld { pts: spacial<PEPoint> }
+struct PEWorld { pts: spatial<PEPoint> }
 
-// @PLN48 S2: spacial<T[x, y]> works now; a spacial WITHOUT its coordinate keys errors.
-// @EXPECT_ERROR: spacial<T[x, y]> needs coordinate key fields
-fn test_spacial_needs_keys() {
+// @PLN48 S2: spatial<T[x, y]> works now; a spatial WITHOUT its coordinate keys errors.
+// @EXPECT_ERROR: spatial<T[x, y]> needs coordinate key fields
+fn test_spatial_needs_keys() {
   _w = PEWorld { pts: [] };
 }
 

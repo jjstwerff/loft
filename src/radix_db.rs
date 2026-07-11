@@ -3,7 +3,7 @@
 // @I90 — Shared utilities & data structures
 
 //! The bridge between the database's keyed collections and [`crate::radix_tree`]
-//! — the counterpart of [`crate::hash`] for the `Radix` kind (`spacial<T[…]>`, and
+//! — the counterpart of [`crate::hash`] for the `Radix` kind (`spatial<T[…]>`, and
 //! later `radix<T[k]>`).  @PLN48 S2.
 //!
 //! The tree keys on an abstract bit-string; this module supplies the one the schema
@@ -36,8 +36,8 @@ use crate::store::Store;
 const PAYLOAD: u32 = 8;
 /// Bits given to each axis.  Uniform so the interleave is a plain Morton code.
 const AXIS_BITS: u32 = 64;
-/// The most axes a spatial key interleaves (`spacial<T[x,y,z]>`).  The parser
-/// rejects a `spacial<T[…]>` with more key fields than this (else the Morton
+/// The most axes a spatial key interleaves (`spatial<T[x,y,z]>`).  The parser
+/// rejects a `spatial<T[…]>` with more key fields than this (else the Morton
 /// interleave indexes past the `[u64; MAX_AXES]` code array — a runtime panic).
 pub const MAX_AXES: usize = 3;
 
@@ -232,7 +232,7 @@ fn code_gt(a: &[u64; MAX_AXES], b: &[u64; MAX_AXES], n: usize) -> bool {
 /// The records whose Morton code lies in `[from, till]` (or `[from, ∞)` when `till`
 /// is `None`), in natural Morton order, capped at `limit` records (`None` = all).
 ///
-/// This is the primitive behind `spacial` range slicing: `xs[(x,y)..]`,
+/// This is the primitive behind `spatial` range slicing: `xs[(x,y)..]`,
 /// `xs[(x,y)..:n]`, and the bounding box `xs[(x1,y1)..(x2,y2)]`.  It is the raw code
 /// interval — for a bounding box that is a *superset* of the geometric box (Z-order
 /// threads through codes outside it), exactly as a keyed range slice is the raw key

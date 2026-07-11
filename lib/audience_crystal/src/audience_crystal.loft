@@ -713,7 +713,7 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
     main_col = pick_segment_color(cell_c, one_away, two_away,
                                   cell_x, cell_y, main_seg_id);
     emit_segment(m, KIND_MAIN, src_x, src_y, src_z, ext_tip_x, ext_tip_y, ext_tip_z, main_col, cs_i);
-    raw_forks = (ray_len_d / branch_spacing_world) as integer;
+    raw_forks = (ray_len_d / branch_spacing_world) as integer? ?? 0;
     n_forks = raw_forks - 1;
     if n_forks < 0 { n_forks = 0; }
     branch_t_per_len = cos(deg30) / ray_len_d;
@@ -1035,7 +1035,7 @@ pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
       age_f = DEFAULT_AGE;
       if main_birth >= 0 { age_f = age_factor(main_birth, tick); }
       // Constant-spacing ±30° side branches; short mains simply get fewer.
-      raw_forks = (ray_len_d / branch_spacing_world) as integer;
+      raw_forks = (ray_len_d / branch_spacing_world) as integer? ?? 0;
       n_forks = raw_forks - 1;
       if n_forks < 0 { n_forks = 0; }
       branch_t_per_len = cos(deg30) / ray_len_d;
@@ -1169,7 +1169,7 @@ pub fn ground_hexes_to_verts(snap: CellSnap, alpha: single) -> vector<single> {
       out += [cxs, 0.0f, czs, 0.0f, 0.0f, 0.0f, r, g, b, alpha];
       out += [(wx + cdx[gh_k]) as single, 0.0f, (wz + cdz[gh_k]) as single,
               0.0f, 0.0f, 0.0f, r, g, b, alpha];
-      out += [(wx + cdx[kk]) as single, 0.0f, (wz + cdz[kk]) as single,
+      out += [(wx + cdx[kk]) as single? ?? 0.0f, 0.0f, (wz + cdz[kk]) as single? ?? 0.0f,
               0.0f, 0.0f, 0.0f, r, g, b, alpha];
     }
   }

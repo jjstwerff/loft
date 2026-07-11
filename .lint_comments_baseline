@@ -669,7 +669,7 @@ src/parser/definitions.rs	8-byte storage. Type::Long is no longer produced.
 src/parser/definitions.rs	@P296-sibling — for a qualified `lib::Type` reference, `tp_nr`
 src/parser/definitions.rs	@PLAN12 — bare `#native` defaults the symbol to the
 src/parser/definitions.rs	@PLAN12 — if the explicit string EQUALS the canonical
-src/parser/definitions.rs	@PLAN52 cluster-IV-Spacial-parser.md. Match the
+src/parser/definitions.rs	@PLAN52 cluster-IV-Spatial-parser.md. Match the
 src/parser/definitions.rs	Copyright (c) 2022-2025 Jurjen Stellingwerff
 src/parser/definitions.rs	I5 (phase 1): factory methods (Self in return without self: Self first param)
 src/parser/definitions.rs	P196 follow-up (2026-05-12): exclude tuples that contain a
@@ -694,7 +694,7 @@ src/parser/expressions.rs	@P277 — `local_keyed += [literal]`. Without this bra
 src/parser/expressions.rs	@P287 — same materialisation, but the LHS is a struct field
 src/parser/expressions.rs	@P292 / @P394 — `local_v = other_var_v` where the RHS is a bare vector
 src/parser/expressions.rs	@P295 — `local_s = keyed_expr` where the LHS is a KEYED-collection
-src/parser/expressions.rs	@P295 — `spacial` reassignment is not yet supported (copy_claims
+src/parser/expressions.rs	@P295 — `spatial` reassignment is not yet supported (copy_claims
 src/parser/expressions.rs	@P300 — prepend `Set(v, Null)` so the destination keeps a
 src/parser/expressions.rs	@P307 — keyed-collection STRUCT FIELD clear: `s.h = []` where
 src/parser/expressions.rs	@P314 — narrow-aware element type (see `append_elem_tp`).
@@ -751,7 +751,7 @@ src/parser/fields.rs	(same reason plan-17 (B) bounded-T dispatch runs on both
 src/parser/fields.rs	@P278/P281 — pass-1 Unknown receiver: consume the
 src/parser/fields.rs	@P281 — when the dot-access is followed by `(args)`
 src/parser/fields.rs	@P285 — a keyed-collection lookup RESULT is nullable (an absent
-src/parser/fields.rs	@P285 — see the Hash/Spacial arm above; the lookup result is nullable.
+src/parser/fields.rs	@P285 — see the Hash/Spatial arm above; the lookup result is nullable.
 src/parser/fields.rs	@P288 — `v.reduce(init, |acc, x| {…})`: the lambda is
 src/parser/fields.rs	@PLAN58 cluster-I (boolean outer-handle stride): a vector-typed element
 src/parser/fields.rs	B2-runtime (2026-04-13): `Sig.Idle` on a mixed struct-enum

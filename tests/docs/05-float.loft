@@ -22,7 +22,7 @@ fn main() {
   // Putting a float inside '{...}' converts it to text for display.
   // You can also go the other way: '"1.5" as float' parses the text back to a number.
   assert(3 as float == 3.0, "Integer to float");
-  assert("1.5" as float == 1.5, "Text to float");
+  assert("1.5" as float? == 1.5, "Text to float");
   assert("{1.5}" == "1.5", "Float formatted as text");
   // ## Formatting Floats
   // Put a colon after the value inside '{...}' to control how it looks.

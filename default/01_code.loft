@@ -136,11 +136,11 @@ fn OpConvBoolFromNull() -> boolean;
 fn OpConvCharacterFromNull() -> character;
 #rust"char::from(0)"
 fn OpConvCharacterFromInt(v1: integer) -> character;
-#rust"char::from_u32((@v1) as u32).unwrap_or(char::from(0))"
+#rust"if @v1 == i64::MIN {{ char::from(0) }} else if let Some(c) = char::from_u32((@v1) as u32) {{ c }} else {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) }}"
 fn OpConstLongText(start: const integer, size: const integer) -> text;
 #rust"s.string_from_texts(@start, @size);"
 fn OpCastIntFromText(v1: text) -> integer;
-#rust"@v1.parse().unwrap_or(i64::MIN)"
+#rust"match @v1.parse::<i64>() {{ Ok(v) if v == i64::MIN => {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); i64::MIN }}, Ok(v) => v, Err(_) => i64::MIN }}"
 fn OpCastSingleFromText(v1: text) -> single;
 #rust"@v1.parse().unwrap_or(f32::NAN)"
 fn OpCastFloatFromText(v1: text) -> float;
@@ -192,9 +192,9 @@ fn OpLorInt(v1: integer, v2: integer) -> integer;
 fn OpEorInt(v1: integer, v2: integer) -> integer;
 #rust"ops::op_exclusive_or_int(@v1, @v2)"
 fn OpSLeftInt(v1: integer, v2: integer) -> integer;
-#rust"ops::op_shift_left_int(@v1, @v2)"
+#rust"if @v1 == i64::MIN || @v2 == i64::MIN {{ i64::MIN }} else if !(0..64).contains(&@v2) {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange); i64::MIN }} else {{ let r = ops::op_shift_left_int(@v1, @v2); if r == i64::MIN {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange); i64::MIN }} else {{ r }} }}"
 fn OpSRightInt(v1: integer, v2: integer) -> integer;
-#rust"ops::op_shift_right_int(@v1, @v2)"
+#rust"if @v1 == i64::MIN || @v2 == i64::MIN {{ i64::MIN }} else if !(0..64).contains(&@v2) {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::ShiftOutOfRange); i64::MIN }} else {{ ops::op_shift_right_int(@v1, @v2) }}"
 fn OpEqInt(v1: integer, v2: integer) -> boolean;
 #rust"@v1 == @v2"
 fn OpNeInt(v1: integer, v2: integer) -> boolean;
@@ -272,13 +272,13 @@ pub fn tan(both: single) -> single {
 #pure
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
 
-pub fn acos(both: single) -> single {
+pub fn acos(both: single) -> single? {
   OpMathFuncSingle(3, both)
 }
 #pure
 // Arc sine. Returns the angle whose sine is v.
 
-pub fn asin(both: single) -> single {
+pub fn asin(both: single) -> single? {
   OpMathFuncSingle(4, both)
 }
 #pure
@@ -310,7 +310,7 @@ pub fn round(both: single) -> single {
 #pure
 // Square root. Use for distances and normalization.
 
-pub fn sqrt(both: single) -> single {
+pub fn sqrt(both: single) -> single? {
   OpMathFuncSingle(9, both)
 }
 #pure
@@ -326,7 +326,7 @@ pub fn atan2(both: single, v2: single) -> single {
 // Logarithm of v in the given base.
 // Use for converting between scales (e.g., decibels).
 
-pub fn log(both: single, v2: single) -> single {
+pub fn log(both: single, v2: single) -> single? {
   OpMathFunc2Single(1, both, v2)
 }
 #pure
@@ -335,19 +335,19 @@ fn OpPowSingle(v1: single, v2: single) -> single;
 #rust"@v1.powf(@v2)"
 // Raises base to the power exp.
 // Use for exponential growth curves and scaling.
-pub fn pow(both: single, v2: single) -> single {
+pub fn pow(both: single, v2: single) -> single? {
   OpPowSingle(both, v2)
 }
 #pure
 
 fn OpEqSingle(v1: single, v2: single) -> boolean;
-#rust"!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() < 0.000_001f32"
+#rust"(@v1.is_nan() && @v2.is_nan()) || (@v1 <= @v2 && @v2 <= @v1)"
 fn OpNeSingle(v1: single, v2: single) -> boolean;
-#rust"@v1.is_nan() || @v2.is_nan() || (@v1 - @v2).abs() > 0.000_001f32"
+#rust"!((@v1.is_nan() && @v2.is_nan()) || (@v1 <= @v2 && @v2 <= @v1))"
 fn OpLtSingle(v1: single, v2: single) -> boolean;
-#rust"!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2"
+#rust"(@v1.is_nan() && !@v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2)"
 fn OpLeSingle(v1: single, v2: single) -> boolean;
-#rust"!@v1.is_nan() && !@v2.is_nan() && @v1 <= @v2"
+#rust"@v1.is_nan() || (!@v2.is_nan() && @v1 <= @v2)"
 fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer, dir: const i8);
 fn OpFormatStackSingle(pos: const u16, val: single, width: integer, precision: integer, dir: const i8);
 // Double-precision (64-bit) floating-point math.
@@ -397,13 +397,13 @@ pub fn tan(both: float) -> float {
 #pure
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
 
-pub fn acos(both: float) -> float {
+pub fn acos(both: float) -> float? {
   OpMathFuncFloat(3, both)
 }
 #pure
 // Arc sine. Returns the angle whose sine is v.
 
-pub fn asin(both: float) -> float {
+pub fn asin(both: float) -> float? {
   OpMathFuncFloat(4, both)
 }
 #pure
@@ -435,7 +435,7 @@ pub fn round(both: float) -> float {
 #pure
 // Square root. Use for distances and normalization.
 
-pub fn sqrt(both: float) -> float {
+pub fn sqrt(both: float) -> float? {
   OpMathFuncFloat(9, both)
 }
 #pure
@@ -451,7 +451,7 @@ pub fn atan2(both: float, v2: float) -> float {
 // Logarithm of v in the given base.
 // Use for converting between scales (e.g., decibels).
 
-pub fn log(both: float, v2: float) -> float {
+pub fn log(both: float, v2: float) -> float? {
   OpMathFunc2Float(1, both, v2)
 }
 #pure
@@ -460,7 +460,7 @@ fn OpPowFloat(v1: float, v2: float) -> float;
 #rust"@v1.powf(@v2)"
 // Raises base to the power exp.
 // Use for exponential growth curves and scaling.
-pub fn pow(both: float, v2: float) -> float {
+pub fn pow(both: float, v2: float) -> float? {
   OpPowFloat(both, v2)
 }
 #pure
@@ -468,48 +468,48 @@ pub fn pow(both: float, v2: float) -> float {
 // Raises E (2.71828…) to the power v. Use for exponential growth models.
 
 pub fn exp(both: single) -> single {
-  pow(E as single, both)
+  OpPowSingle(E as single, both)
 }
 #pure
 
 // Double-precision exp (e^v).
 pub fn exp(both: float) -> float {
-  pow(E, both)
+  OpPowFloat(E, both)
 }
 #pure
 // Natural logarithm (base E). Use for growth rates and information entropy.
 
-pub fn ln(both: single) -> single {
+pub fn ln(both: single) -> single? {
   log(both, E as single)
 }
 #pure
 
 // Double-precision natural logarithm.
-pub fn ln(both: float) -> float {
+pub fn ln(both: float) -> float? {
   log(both, E)
 }
 #pure
 // Base-2 logarithm. Use for bit-count calculations and information theory.
 
-pub fn log2(both: single) -> single {
+pub fn log2(both: single) -> single? {
   log(both, 2.0f)
 }
 #pure
 
 // Double-precision base-2 logarithm.
-pub fn log2(both: float) -> float {
+pub fn log2(both: float) -> float? {
   log(both, 2.0)
 }
 #pure
 // Base-10 logarithm. Use for decibels, orders of magnitude, and display scales.
 
-pub fn log10(both: single) -> single {
+pub fn log10(both: single) -> single? {
   log(both, 10.0f)
 }
 #pure
 
 // Double-precision base-10 logarithm.
-pub fn log10(both: float) -> float {
+pub fn log10(both: float) -> float? {
   log(both, 10.0)
 }
 #pure
@@ -519,7 +519,7 @@ fn OpMinSingleFloat(v1: float) -> float;
 fn OpCastSingleFromFloat(v1: float) -> single;
 #rust"@v1 as f32"
 fn OpCastIntFromFloat(v1: float) -> integer;
-#rust"ops::op_cast_int_from_float(@v1)"
+#rust"if @v1.is_nan() {{ i64::MIN }} else if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&@v1) {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); i64::MIN }} else {{ let r = ops::op_cast_int_from_float(@v1); if r == i64::MIN {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); i64::MIN }} else {{ r }} }}"
 fn OpConvBoolFromFloat(v1: float) -> boolean;
 #rust"!@v1.is_nan()"
 fn OpAddFloat(v1: float, v2: float) -> float;
@@ -545,13 +545,13 @@ fn OpDivFloatNullable(v1: float, v2: float) -> float;
 fn OpRemFloatNullable(v1: float, v2: float) -> float;
 #rust"@v1 % @v2"
 fn OpEqFloat(v1: float, v2: float) -> boolean;
-#rust"!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() < 0.000_000_001f64"
+#rust"(@v1.is_nan() && @v2.is_nan()) || (@v1 <= @v2 && @v2 <= @v1)"
 fn OpNeFloat(v1: float, v2: float) -> boolean;
-#rust"@v1.is_nan() || @v2.is_nan() || (@v1 - @v2).abs() > 0.000_000_001f64"
+#rust"!((@v1.is_nan() && @v2.is_nan()) || (@v1 <= @v2 && @v2 <= @v1))"
 fn OpLtFloat(v1: float, v2: float) -> boolean;
-#rust"!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2"
+#rust"(@v1.is_nan() && !@v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2)"
 fn OpLeFloat(v1: float, v2: float) -> boolean;
-#rust"!@v1.is_nan() && !@v2.is_nan() && @v1 <= @v2"
+#rust"@v1.is_nan() || (!@v2.is_nan() && @v1 <= @v2)"
 fn OpFormatFloat(pos: const u16, val: float, width: integer, precision: integer, dir: const i8);
 fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: integer, dir: const i8);
 // --- min / max / clamp ---
@@ -571,32 +571,8 @@ pub fn min(both: integer, b: integer) -> integer {
   }
 }
 #pure
-// Smallest of two nullable integer values; null if either is null.
-pub fn min(both: integer?, b: integer?) -> integer? {
-  if !both || !b {
-    return null;
-  }
-  if both <= b {
-    both
-  } else {
-    b
-  }
-}
-#pure
 // Largest of two integer values.
 pub fn max(both: integer, b: integer) -> integer {
-  if both >= b {
-    both
-  } else {
-    b
-  }
-}
-#pure
-// Largest of two nullable integer values; null if either is null.
-pub fn max(both: integer?, b: integer?) -> integer? {
-  if !both || !b {
-    return null;
-  }
   if both >= b {
     both
   } else {
@@ -609,26 +585,9 @@ pub fn clamp(both: integer, lo: integer, hi: integer) -> integer {
   min(max(both, lo), hi)
 }
 #pure
-// Clamps a nullable v into [lo, hi]; null if any argument is null.
-pub fn clamp(both: integer?, lo: integer?, hi: integer?) -> integer? {
-  min(max(both, lo), hi)
-}
-#pure
 
 // Smallest of two single-precision float values.
 pub fn min(both: single, b: single) -> single {
-  if both <= b {
-    both
-  } else {
-    b
-  }
-}
-#pure
-// Smallest of two nullable single values; null if either is null.
-pub fn min(both: single?, b: single?) -> single? {
-  if !both || !b {
-    return null;
-  }
   if both <= b {
     both
   } else {
@@ -645,42 +604,13 @@ pub fn max(both: single, b: single) -> single {
   }
 }
 #pure
-// Largest of two nullable single values; null if either is null.
-pub fn max(both: single?, b: single?) -> single? {
-  if !both || !b {
-    return null;
-  }
-  if both >= b {
-    both
-  } else {
-    b
-  }
-}
-#pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
 pub fn clamp(both: single, lo: single, hi: single) -> single {
   min(max(both, lo), hi)
 }
 #pure
-// Clamps a nullable v into [lo, hi]; null if any argument is null.
-pub fn clamp(both: single?, lo: single?, hi: single?) -> single? {
-  min(max(both, lo), hi)
-}
-#pure
 // Smallest of two double-precision float values.
 pub fn min(both: float, b: float) -> float {
-  if both <= b {
-    both
-  } else {
-    b
-  }
-}
-#pure
-// Smallest of two nullable float values; null if either is null.
-pub fn min(both: float?, b: float?) -> float? {
-  if !both || !b {
-    return null;
-  }
   if both <= b {
     both
   } else {
@@ -697,26 +627,22 @@ pub fn max(both: float, b: float) -> float {
   }
 }
 #pure
-// Largest of two nullable float values; null if either is null.
-pub fn max(both: float?, b: float?) -> float? {
-  if !both || !b {
-    return null;
-  }
-  if both >= b {
-    both
-  } else {
-    b
-  }
-}
-#pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
 pub fn clamp(both: float, lo: float, hi: float) -> float {
   min(max(both, lo), hi)
 }
 #pure
-// Clamps a nullable v into [lo, hi]; null if any argument is null.
-pub fn clamp(both: float?, lo: float?, hi: float?) -> float? {
-  min(max(both, lo), hi)
+// Approximate equality: true when a and b differ by at most eps (inclusive).
+// `==` on float/single is EXACT IEEE equality (@PLN102) — use `approx` when you want a
+// tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) * sqrt(2.0), 2.0, 1e-9)`.
+// A null (NaN) operand is not approximately equal to anything, so the result is false.
+pub fn approx(both: float, b: float, eps: float) -> boolean {
+  if !both || !b { false } else { abs(both - b) <= eps }
+}
+#pure
+// Approximate equality for single-precision floats (see the float overload).
+pub fn approx(both: single, b: single, eps: single) -> boolean {
+  if !both || !b { false } else { abs(both - b) <= eps }
 }
 #pure
 // --- Text ---
@@ -790,7 +716,7 @@ fn OpFormatStackText(pos: const u16, val: text, width: integer, dir: const i8, t
 fn OpAppendCharacter(pos: const u16, v1: character);
 fn OpTextCompare(v1: text, v2: character) -> i32;
 fn OpCastCharacterFromInt(v1: i32) -> character;
-#rust"char::from_u32(@v1 as u32).unwrap_or(char::from(0))"
+#rust"if let Some(c) = char::from_u32(@v1 as u32) {{ c }} else {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) }}"
 fn OpConvIntFromCharacter(v1: character) -> i32;
 #rust"if @v1 == char::from(0) {{ i64::MIN }} else {{ i64::from(@v1 as u32) }}"
 type enumerate size(1);
@@ -876,7 +802,7 @@ fn OpSetDbRef(v1: reference, fld: const u16, val: reference);
 #rust"{{let db = @v1; let r = @val; let off = db.pos + u32::from(@fld); let store = stores.store_mut(&db); store.set_u32_raw(db.rec, off, u32::from(r.store_nr)); store.set_u32_raw(db.rec, off + 4, r.rec); store.set_u32_raw(db.rec, off + 8, r.pos);}}"
 fn OpGetDbRef(v1: reference, fld: const u16) -> reference;
 #rust"{{let db = @v1; let store = stores.store(&db); let off = db.pos + u32::from(@fld); let store_nr = store.get_u32_raw(db.rec, off) as u16; let rec = store.get_u32_raw(db.rec, off + 4); let pos = store.get_u32_raw(db.rec, off + 8); DbRef {{ store_nr, rec, pos }}}}"
-// Get a direct field reference for a structure: vector, index, hash or spacial
+// Get a direct field reference for a structure: vector, index, hash or spatial
 // These always point to a field what value can change depending on the content.
 fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
 #rust"DbRef {{store_nr: @v1.store_nr, rec: @v1.rec, pos: @v1.pos + u32::from(@fld)}}"
@@ -1133,28 +1059,28 @@ fn OpHashRemove(data: reference, rec: reference, tp: const u16);
 // call with the hash's type id; direct user calls need to supply the
 // id via `sizeof`-style introspection (not yet exposed).  Inefficient
 // by design — walks + sorts all records per call.  See CAVEATS.md C60.
-pub fn hash_sorted(h: reference, tp: integer) -> reference;
+fn hash_sorted(h: reference, tp: integer) -> reference;
 #impure(parent_write)
 // Raw bucket-walk sibling of `hash_sorted` for `for e in h par(...)`.
 // Same fresh vector<reference<T>> scratch, but in storage order — skips the
 // key sort because the parallel queue has no use for a hash's order.  The
 // parser desugars the par form of `for e in h` into this call.
-pub fn hash_unsorted(h: reference, tp: integer) -> reference;
+fn hash_unsorted(h: reference, tp: integer) -> reference;
 #pure
-// @PLN48 — iterate a spacial/radix collection in its NATURAL key order (the tree's
+// @PLN48 — iterate a spatial/radix collection in its NATURAL key order (the tree's
 // in-order walk = Morton/Z-order for a spatial index).  Returns a fresh
 // vector<reference<T>> of the records already in order — no sort, unlike
 // `hash_sorted`, because a radix tree is ordered by construction.  The parser
 // desugars `for e in xs { … }` into this call with the collection's type id.
-pub fn radix_sorted(r: reference, tp: integer) -> reference;
+fn radix_sorted(r: reference, tp: integer) -> reference;
 #impure(parent_write)
-// @PLN48 S3 — a spacial range slice `xs[(fx,fy)..(tx,ty)]` / `xs[(fx,fy)..:limit]`.
+// @PLN48 S3 — a spatial range slice `xs[(fx,fy)..(tx,ty)]` / `xs[(fx,fy)..:limit]`.
 // Returns a fresh vector<reference<T>> of the records whose Morton code is in the
 // interval (has_till=0 = open end; limit<0 = no cap), in natural order.  The parser
 // rewrites the slice expression, injecting the collection's type id.  Coordinates
 // carry up to MAX_AXES (3) axes; the range builder reads only the collection's own
-// axis count, so `fz`/`tz` are ignored (0) for a 2D `spacial<T[x,y]>`.
-pub fn spacial_range(r: reference, tp: integer, fx: integer, fy: integer, fz: integer, has_till: integer, tx: integer, ty: integer, tz: integer, limit: integer) -> reference;
+// axis count, so `fz`/`tz` are ignored (0) for a 2D `spatial<T[x,y]>`.
+fn spatial_range(r: reference, tp: integer, fx: integer, fy: integer, fz: integer, has_till: integer, tx: integer, ty: integer, tz: integer, limit: integer) -> reference;
 #impure(parent_write)
 type index size(4);
 
@@ -1274,19 +1200,19 @@ type iterator;
 // Forward-declared builtin collection type-keywords: reserved names whose full
 // implementation lands with the crawler/moros/dryopea library work.  Declaring
 // them (rather than leaving them as bare parser keywords) makes them real
-// `DefType::Type` definitions, so `struct radix` / `enum spacial` are cleanly
+// `DefType::Type` definitions, so `struct radix` / `enum spatial` are cleanly
 // rejected as a name conflict instead of being silently swallowed (struct) or
 // panicking in `complete_definition` (enum/type).
 type radix;
-type spacial;
-// @PLN48 — number of elements in a spacial<T[x,y]> (radix / Morton tree).  Reads
+type spatial;
+// @PLN48 — number of elements in a spatial<T[x,y]> (radix / Morton tree).  Reads
 // the tree's cached length word (O(1)), mirroring `len(both: hash)`.  Declared
-// after `type spacial` so the parameter type resolves.
-fn OpLengthSpacial(r: spacial) -> integer;
-#rust"i64::from(codegen_runtime::spacial_len(&@r, &s.database.allocations))"
-// Number of elements in a spacial (radix / Morton tree) collection.
-pub fn len(both: spacial) -> integer {
-  OpLengthSpacial(both)
+// after `type spatial` so the parameter type resolves.
+fn OpLengthSpatial(r: spatial) -> integer;
+#rust"i64::from(codegen_runtime::spatial_len(&@r, &s.database.allocations))"
+// Number of elements in a spatial (radix / Morton tree) collection.
+pub fn len(both: spatial) -> integer {
+  OpLengthSpatial(both)
 }
 #pure
 // Call a predefined system function (but not an operator).
@@ -1528,15 +1454,17 @@ fn __add_int(a: integer, b: integer) -> integer { a + b }
 // Sum of all integer elements. Returns 0 for an empty vector.
 pub fn sum_of(v: vector<integer>) -> integer { reduce(v, 0, __add_int) }
 #pure
-// Smallest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
-pub fn min_of<T: Ordered>(v: vector<T>) -> T {
+// Smallest element in a vector, or null when the vector is empty (@PLN102 keystone
+// step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
+pub fn min_of<T: Ordered>(v: vector<T>) -> T? {
   result = v[0];
   for i in 1..v.len() { if v[i] < result { result = v[i] } };
   result
 }
 #pure
-// Largest element in a non-empty vector.  Works on any type satisfying Ordered (op <).
-pub fn max_of<T: Ordered>(v: vector<T>) -> T {
+// Largest element in a vector, or null when the vector is empty (@PLN102 keystone
+// step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
+pub fn max_of<T: Ordered>(v: vector<T>) -> T? {
   result = v[0];
   for i in 1..v.len() { if result < v[i] { result = v[i] } };
   result

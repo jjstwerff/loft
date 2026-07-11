@@ -21,7 +21,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   [binding.md](binding.md). In *this* doc it appears only in the conversion relation —
   it reads through to its referent (`C-Ref`).
 - `Integer[a,b]` — an integer type with closed value range `[a, b]` (the `IntegerSpec`
-  min/max). `integer` = `Integer[i64::MIN, i64::MAX]`; `u8` = `Integer[0, 255]`; etc.
+  min/max). `integer` = `Integer[i64::MIN+1, i64::MAX]` (symmetric — the reserved null
+  sentinel `i64::MIN` is EXCLUDED from the value range; see
+  [operational.md `(E-Null)`](operational.md)); `u8` = `Integer[0, 255]` (a *non-null* `u8`;
+  a nullable `u8?` reserves `255` for null, so its non-null values are `[0, 254]`); etc.
 - `τ ⤳ σ` — **conversion**: a value of `τ` is accepted where `σ` is expected, with no
   explicit cast. This is the *only* implicit coercion in the language.
 - `⊔` — the **join** (least type containing both); for integers, the range-union's
@@ -130,6 +133,13 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
   (N-Join)     an INFERRED `a = e₁ … a = eₙ` (no annotation) has type `⨆ᵢ τᵢ`, made OPTIONAL
                iff some `τᵢ` is optional.  `?` rides the SAME join as integer width `(I-Join)`
                — `integer ⊔ integer? = integer?`.
+
+  @PLN102 (spec-first — see § Null-flow, the general laws below):
+   · (N-Prop)   null PROPAGATES through arithmetic (a:τ? op b ⇒ τ?), across every type.
+   · (N-Parse)  FOLDS INTO (N-Cast): a parse is a cast — `s as τ` asserts (non-null), `s as
+                τ?` checks.  The auto-`τ?` reading above is superseded.
+   · (N-Store)  becomes a WARNING (not ill-typed) EXCEPT narrow widths (u8…u32), where the
+                null collides with a real value and it stays a hard error.
 ```
 
 > **The case that proves the declaration means something** (`do we allow a:integer=2; a=v[i]`?):
@@ -150,6 +160,15 @@ the UB class**: a slot of type `τ` never holds a non-`τ` value — it either f
 op is non-null) or it's `null` (and `(N-Store)` forces you to discharge it). We do **not**
 fake non-null on an op that can miss.
 
+> **The one decided exception — overflow arithmetic ([C85](../DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--)).**
+> `a+b` / `a*b` / `a-b` stay typed **non-null `integer`** (forcing `integer?` on every
+> arithmetic op would poison the common path to guard a fault that essentially never fires),
+> yet on overflow they write the reserved `i64::MIN` sentinel into that non-null slot — which
+> then reads as `null`. So a non-null `integer` slot *can* observably hold `null` after an
+> overflow: `(N-Store)` never fires because the op is typed non-null. This is a **deliberate,
+> bounded soundness edge** (parallel to a non-null `float` holding a `NaN`), not a deviation to
+> close — the reachable-fault ops (`/`, `%`, `v[i]`, parse) stay `τ?` as above.
+
 Nullability is **range-driven**, so the discharge burden is proportional to *real* risk,
 not theoretical: `a op b` and `e as τ` are **non-null when the result provably fits** the
 target range — `b=4; b*100 ⇒ Integer[400]` fits i64, so it's non-null, **no `??`** — and
@@ -168,10 +187,23 @@ therefore the *correct* runtime behavior (loft already does it for `a*b`); the w
 (optional-of-τ); how the `null` is *stored* follows from the base type and is not part of
 the type:
 
-| base `τ` | `τ?` null representation |
+| base `τ` | `τ?` null representation (the reserved value, per width) |
 |---|---|
-| `Integer` / `Bool` / `Char` / `Float` | the value-slot **null sentinel** (`i32::MIN`, `255`, …) |
-| a struct `S` as a `vector` element | the tagged **`__nullable<S>`** enum (discriminant + payload) |
+| `Integer` (8-byte) | in-band sentinel `i64::MIN` |
+| a narrow `Integer` (`u8`/`i8`/`u16`/`i16`/`i32`) | in-band sentinel = its top stored value (`u8` → `255`); excluded from `τ?`'s non-null range |
+| `Bool` | in-band sentinel `255` |
+| `Char` | in-band sentinel codepoint `0` (collides with a literal `'\0'`) |
+| `Float` / `Single` | in-band sentinel = a reserved `NaN` |
+| a reference | out-of-band `nullref` (a reserved `DbRef`; no collision) |
+| a struct `S` as a `vector` element | the tagged **`__nullable<S>`** enum (discriminant + payload; no collision) |
+
+> The in-band scalar sentinels are **observable, reserved values** — the base type's null is
+> one specific bit-pattern, excluded from the non-null range (`(E-Null)`). This is the
+> deliberate zero-overhead choice ([the null-model keystone](../plans/102-stability-contract/keystone-null-model.md),
+> option B); its cost — a nullable narrow type cannot store its one reserved value — is a
+> documented limitation, and the collision sites that could silently *produce* a sentinel are
+> guarded (D-op-null-2). References and struct-in-vector already avoid the cost with an
+> out-of-band tag.
 
 So `bytes_for(τ?)` and the sentinel-vs-tag choice are *consequences* of `τ`, never declared
 — the same discipline as `bytes_for_range` on integers. **Parametricity holds**: `τ?` and
@@ -180,6 +212,77 @@ So `bytes_for(τ?)` and the sentinel-vs-tag choice are *consequences* of `τ`, n
 
 (Design + the evidence that the old implicit default-nullable rewrite broke parametricity
 and forced materialisation: [../plans/25-nullable-sequences/storage-vs-access-nullability.md](../plans/25-nullable-sequences/storage-vs-access-nullability.md).)
+
+### Null-flow — the general laws, across EVERY type (@PLN102, 2026-07-11)
+
+The `(N-*)` rules are stated on `τ` and hold for **every** type, not just `integer`. The null
+model is ONE model: each type reserves exactly one null ([C90](../DESIGN_DECISIONS.md); table
+below), and four general laws govern how a null is *produced*, *propagated*, *asserted away*,
+and *stored*. They are checked **throughout the stack** by a cross-type conformance matrix
+(each type × each law, both backends), so a gap in any one type is a caught deviation, not a
+silent hole.
+
+**Spec-first (2026-07-11):** (N-Prop), the (N-Store) warn/error split, the (N-Domain)
+generalisation, and folding (N-Parse) into (N-Cast) are the @PLN102 target — the code does not
+fully conform yet (float `/` still types non-null; the store is a uniform hard error;
+`text as τ` still auto-wraps to `τ?`). Tracked in
+[../plans/102-stability-contract/float-null-domain-typing.md](../plans/102-stability-contract/float-null-domain-typing.md).
+
+```
+(N-Domain)  a PARTIAL OPERATION that can yield the reserved null from a REACHABLE input types
+            its result τ?  —  ÷0 / %0 (Integer / Float / Single); sqrt(<0), ln·log(≤0),
+            asin·acos(∉[-1,1]), pow(neg ^ frac) (Float / Single); v[i] / s[i] OOB (ANY element
+            τ).  Non-null when the input is PROVABLY in-domain (constant / range / guard) — the
+            same "provably-fits" elision as (N-Arith) / (N-Cast).  Generalises (N-Div) /
+            (N-Index) to every type + partial op.  Runtime = null + continue (C80); the reserved
+            null is the VALUE, NEVER a runtime error.
+
+(N-Prop)    an operation with a NULLABLE operand whose runtime carries the null through types
+            its result nullable:  a:τ? op b  ⟹  τ?  (either operand).  Arithmetic on
+            Integer / Float / Single (the sentinel / NaN propagates), text `?`-concat, etc.
+            The type tracks the propagation the runtime ALREADY performs (verified: `n+5`,
+            `5-n`, `abs(n)` on a null n stay null).  C85 is the COMPLEMENT — non-null operands
+            stay non-null; a sentinel PRODUCED by overflow is a result, not a propagated INPUT.
+
+(N-Cast)    an explicit cast `as τ` is an ASSERTION → non-null τ (compile error if the fit is
+            not provable — use `as τ?` / `?? d`).  A text→numeric PARSE is a cast, so it obeys
+            (N-Cast) / (N-Cast?): `s as float` asserts (non-null), `s as float?` checks (→
+            float?), `s as float ?? d` is assert-or-default.  This SUPERSEDES the old auto-`τ?`
+            reading of (N-Parse): the `?` on a cast is the programmer's explicit choice, never
+            inferred, for EVERY τ.  (An OPERATION's `?` is inherent (N-Domain); a CAST's is not.)
+
+(N-Store)   storing e:τ? into a non-null τ slot is —
+            · a WARNING (nudge, compiles + runs, the slot holds null) when the null is
+              REPRESENTABLE-AND-DISTINCT in τ's non-null form: a stored null reads back as null,
+              spreadsheet model intact;
+            · a hard ERROR when the null sentinel is a VALID non-null value of τ (a collision),
+              so the null cannot be stored faithfully — discharge (`?? d`) or widen the slot to
+              `τ?`.
+            Representability is a property of τ (table).  REFINES the old uniform-error
+            (N-Store): every type warns EXCEPT the narrow widths, which error.
+```
+
+**Per-type null + store verdict** — the verdict follows the *representability* test, not
+per-type taste ([C90](../DESIGN_DECISIONS.md) fixes the reserved value):
+
+| τ | reserved null | distinct in the NON-null form? | `τ?` → `τ` store |
+|---|---|---|---|
+| `integer` (i64) | `i64::MIN` — reserved even non-null (`[MIN+1, MAX]`) | yes | **warn** |
+| `float` / `single` | `NaN` | yes (`NaN` ≠ any real) | **warn** |
+| `boolean` | `255` (three-state, C73) | yes (non-null = 0 / 1) | **warn** |
+| `character` | codepoint `0` / NUL — reserved even non-null (`0 as character` reads null) | yes | **warn** |
+| `text` | out-of-band (heap) | yes | **warn** |
+| reference | out-of-band `nullref` | yes | **warn** |
+| struct in `vector` | tagged `__nullable<S>` | yes | **warn** |
+| narrow `u8`/`i8`/`u16`/`i16`/`i32`/`u32` | top width value — reserved ONLY in the `τ?` form | **no** — non-null uses the full width (`255` is a real `u8`) | **error** |
+
+The narrow widths are the **sole error case**: they are the only types whose non-null form
+spends the whole width on real values (C90 gives them a sentinel only in `τ?`, to keep the
+range full), so a null cannot sit in a non-null narrow slot. Every other type reserves its
+null distinctly even non-null — the C85 in-band-sentinel property — so a stored null is
+observable and a warning suffices. (Composite `τ?` — tuples, multi-field aggregates — inherits
+its elements' out-of-band tags and warns; per-element vs whole-tuple nullability is an open
+gap, see [../plans/102-stability-contract/formal-audit.md](../plans/102-stability-contract/formal-audit.md).)
 
 ### The integer model — one type; the rest is notation
 
@@ -280,9 +383,12 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **0** — the nullability flip (DN1–DN6) landed 2026-07-02 and D1/D2/D4 are closed
-by fix/reconciliation; every entry below is CLOSED, retained as the record.  Per-situation
-mitigation catalogue: [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+OPEN: **1** (spec-first) — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02);
+D1/D2/D4 closed by fix/reconciliation.  The one open item is the **@PLN102 DN3-Float
+extension** (below): the rule is written 2026-07-11 ahead of the code (spec-first), so
+float `/`/`%` and the domain-partial float functions still type non-null until it lands.
+Every DN1–DN6 entry is CLOSED, retained as the record.  Per-situation mitigation
+catalogue: [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
 ### DN1 — CLOSED (2026-07-02): scalar / field storage is non-null by default
 `(N-Dense)` now holds for scalars + struct fields, not just vector elements: a plain
@@ -366,6 +472,76 @@ the first `= null` allocated, sound only when Null and `τ?` share it (an in-slo
 widening it underflowed `fn_return`'s discard / native E0308), so a text null-start must annotate
 `s: text? = null`. Regression: `tests/scripts/25-null-join.loft` + reject twins in
 `102-expected-errors.loft`.
+
+### DN3-Float — @PLN102 pre-freeze (spec-first, 2026-07-11): float/single `/`, `%`, and domain-partial functions type `τ?`
+
+> This is the **float instance** of the general **§ Null-flow laws** (N-Domain / N-Prop /
+> N-Cast / N-Store) above — those laws hold for every type; this entry records the float
+> classification (which ops) and the conversion set.
+
+DN3 typed integer `/`/`%`, indexing, and text-parse `τ?`, but its division wrap is **gated
+to `Type::Integer`** (`src/parser/operators.rs:2300`), so float/single `/`/`%` — and the
+domain-partial float functions — keep a **non-null** `float`/`single` return while
+producing null (a reserved NaN) at runtime. The type therefore **lies** about a null the
+integer side already surfaces: `f.g = 1.0 / b` and `f.g = ln(-1.0)` store null straight
+into a non-null `float` field with no diagnostic, where the integer `s.f = 10 / y`
+equivalent is a compile error. Return types freeze at contract 1, so the honest signature
+is chosen now (pre-freeze-only).
+
+**Rule.** A float/single op types its result `τ?` **iff it can yield the reserved NaN-null
+from an input a normal program reaches** — the DN3 boundary read across to floats, with
+[C85](../DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--)
+(overflow → non-null) as its complement:
+
+- **`τ?`:** `/` and `%` (÷0 — mirror of integer `/`; the existing `divisor_provably_nonzero`
+  proof keeps `x / 2.0` and a guarded `if b != 0.0` non-null); `sqrt` (arg `< 0`);
+  `ln`/`log`/`log2`/`log10` (arg `≤ 0`); `asin`/`acos` (arg outside `[-1, 1]`); `pow` (base
+  `< 0` ∧ fractional exp — resolved 2026-07-11: a genuine domain error, folded in). A
+  **provably-in-domain constant argument blocks the `τ?`** — `sqrt(4.0)`, `sqrt(PI)`,
+  `ln(2.0)` stay non-null (the function analogue of the constant-non-zero divisor); a
+  *variable* argument is `τ?`. A constant *out-of-domain* argument (`sqrt(-1.0)`) may warn
+  *"always null"*, the parallel of the existing constant-`/0` warning.
+- **Non-null (C85-style decided edge):** `sin`/`cos`/`tan`/`atan`/`atan2`/`exp`/`abs`/
+  `ceil`/`floor`/`round` — a *finite* argument is always finite; NaN arises only from an
+  `±inf` argument, itself reachable only through a C85 overflow, so forcing `?` on the
+  ubiquitous op is disproportionate.
+
+**Runtime is UNCHANGED** — null + continue (C80); **no runtime error is added** (owner:
+*"a null is fine, errors never"*). Two type-level rules do the work, refining DN3 **across
+the shipped integer model** (@PLN25) too — the runtime *already* propagates the null
+sentinel through arithmetic (`n+5` / `n*5` / `5-n` / `abs(n)` on a null `n` all stay null,
+both backends), so the type only has to stop lying:
+
+- **(N-Prop) — nullability propagates through arithmetic.** An arithmetic op with any
+  nullable operand yields a nullable result: `integer? + integer → integer?`,
+  `float - float? → float?` (either operand position). Already true for `text? + text`; now
+  uniform over `integer` / `float` / `single`. **C85 is untouched** — non-null × non-null
+  stays non-null (overflow → sentinel silently, no `?` forced); propagation fires only when
+  an operand is *already* nullable, so the two compose (non-null arithmetic stays non-null;
+  a null, once present, stays visible).
+- **(N-Warn) — a nullable into a non-null slot is a WARNING, not an error — EXCEPT narrow
+  width types.** The relaxation applies where the target's null pattern is available in its
+  *non-null* form: `integer` (reserves `i64::MIN` even non-null — a stored null reads back as
+  null), `float`/`single` (NaN), `text` (out-of-band). There the program still compiles + runs
+  (the slot holds null) and the warning nudges toward `?? d` / `match` — a warning because a
+  hard error would break every existing non-null store of a `sqrt` / float-`/` result
+  (compatibility) and Goal F reserves warnings as the programmer-billing channel; this RELAXES
+  DN3's current integer *hard error* to a warning. **Narrow width integers**
+  (`u8`/`i8`/`u16`/`i16`/`i32`/`u32`) spend their whole width on real values (a non-null `u8`
+  holds `255`), so they have no spare bit-pattern for null — a null there is unrepresentable
+  and would silently corrupt to a real value. They **keep the hard error** (`?? d`, or widen
+  the target to `u8?`). Split principle: *warn iff the null is representable-and-observable in
+  the non-null slot* — the in-band-sentinel property C85 already relies on. Narrow stores
+  already error (DN1/DN4/DN5), so keeping them costs zero compatibility.
+
+Together, a `float?` rides through inference, arithmetic, comparison, interpolation, and
+calls, and is nudged only at a non-null STORAGE site (field / return / explicitly-typed
+local). Mechanism: extend the
+`div_nullable` gate to `Float`/`Single` (the nullable runtime peers `OpDiv{Float,Single}Nullable`
++ the `??`-swap already exist, phase 4f.5); set the domain-partial function return types in
+`default/01_code.loft` to `float?`/`single?`. **Spec-first: the code does NOT yet conform;
+implementation, the pow / domain-proving forks, and the conversion set are tracked in
+[../plans/102-stability-contract/float-null-domain-typing.md](../plans/102-stability-contract/float-null-domain-typing.md).**
 
 ### D2 — CLOSED by reconciliation (2026-06-24): `integer` = i64 is a *user-visible* contract met by a *compact* internal encoding
 

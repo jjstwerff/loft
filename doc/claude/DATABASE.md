@@ -32,8 +32,8 @@ The runtime data layer is split across multiple source files that together imple
 | `src/vector.rs` | Dynamic arrays: by-value (Vector), by-reference (Array/Ordered) |
 | `src/tree.rs` | Left-leaning red-black tree for `sorted<T>` / `index<T>` |
 | `src/hash.rs` | Open-addressing hash table for `hash<T>` / `index<T>` by hash |
-| `src/radix_tree.rs` | Store-backed binary PATRICIA/radix tree over an abstract bit-key oracle (backs `spacial<T>`) |
-| `src/radix_db.rs` | DB↔tree bridge: Morton/Z-order key interleaving + range/proximity primitives for `spacial<T>` |
+| `src/radix_tree.rs` | Store-backed binary PATRICIA/radix tree over an abstract bit-key oracle (backs `spatial<T>`) |
+| `src/radix_db.rs` | DB↔tree bridge: Morton/Z-order key interleaving + range/proximity primitives for `spatial<T>` |
 | `src/spatial.rs` | Morton-coded near/within/nearest geometry algorithms used by `src/radix_db.rs` |
 
 ---
@@ -181,7 +181,7 @@ pub struct Type {
 | `Ordered(u16, Vec<(u16,bool)>)` | Ordered array (binary search) by key fields |
 | `Hash(u16, Vec<u16>)` | Open-addressing hash table; field indices as hash keys |
 | `Index(u16, Vec<(u16,bool)>, u16)` | Combo: sorted tree + hash table for a single collection |
-| `Radix(u16, Vec<u16>)` | Spatial index for `spacial<T[x,y]>` / `spacial<T[x,y,z]>` — Morton/Z-order radix tree, 1–3 coordinate axes (renamed from `Spacial`) |
+| `Radix(u16, Vec<u16>)` | Spatial index for `spatial<T[x,y]>` / `spatial<T[x,y,z]>` — Morton/Z-order radix tree, 1–3 coordinate axes (renamed from `Spatial`) |
 
 ### Field struct
 
@@ -638,12 +638,12 @@ An element at `idx` with ideal slot `ideal` moves to `hole` when `d_hole < d_idx
 
 ## Spatial Index (`src/radix_tree.rs`)
 
-`spacial<T[x,y]>` / `spacial<T[x,y,z]>` (@PLN48) is a fully implemented keyed
+`spatial<T[x,y]>` / `spatial<T[x,y,z]>` (@PLN48) is a fully implemented keyed
 collection on both backends (interpreter + `--native`). The `Radix(u16,
 Vec<u16>)` variant of `Parts` is the schema-level marker — content type nr
 plus the coordinate key field indices; the runtime `Type::Radix(content,
 coord_fields, deps)` (`src/data.rs`) mirrors it. This was renamed from
-`Spacial` to `Radix` (storage-honest — the language keyword stays `spacial`).
+`Spatial` to `Radix` (storage-honest — the language keyword stays `spatial`).
 
 The backing structure is a **store-backed binary PATRICIA/radix tree**
 (`src/radix_tree.rs`) over an abstract bit-key oracle. `src/radix_db.rs` is
@@ -653,20 +653,20 @@ Z-order** key and implements `add`/`find`/`remove`/`count`/`records`/`range`.
 `radix_db.rs` builds on.
 
 **Dimensionality: 1 to 3 coordinate axes** (`MAX_AXES = 3` in
-`src/radix_db.rs`). The parser rejects a `spacial<T[a,b,c,d]>` with more than
-3 axes with a diagnostic (*"spacial<T[…] > supports at most 3 coordinate
-axes, got N"*); a bare `spacial<T>` with no key fields is also rejected
-(*"needs coordinate key fields"*). See `tests/parse_errors.rs::spacial_needs_coordinate_keys`
-and `::spacial_rejects_more_than_three_axes`.
+`src/radix_db.rs`). The parser rejects a `spatial<T[a,b,c,d]>` with more than
+3 axes with a diagnostic (*"spatial<T[…] > supports at most 3 coordinate
+axes, got N"*); a bare `spatial<T>` with no key fields is also rejected
+(*"needs coordinate key fields"*). See `tests/parse_errors.rs::spatial_needs_coordinate_keys`
+and `::spatial_rejects_more_than_three_axes`.
 
 Supported operations, all working on both backends:
-- **Construct**: `xs: spacial<Mob[x, y]> = [];`, including as a struct field.
+- **Construct**: `xs: spatial<Mob[x, y]> = [];`, including as a struct field.
 - **Append**: `xs += [Mob{x: 1, y: 2}];`.
 - **Iterate**: `for m in xs { … }` — yields records in the tree's natural
   Morton/Z-order (no sort, unlike `hash`).
 - **Length**: `xs.len()` — O(1), reads the tree's cached length word.
 - **Range slices** — the language surface for proximity queries (no
-  `.near`/`.within`/`.nearest` methods; spacial reuses ordinary slicing):
+  `.near`/`.within`/`.nearest` methods; spatial reuses ordinary slicing):
   `xs[(x,y)..]` (open outward walk, caller `break`s), `xs[(x,y)..:n]` (capped
   at `n`), and `xs[(x1,y1)..(x2,y2)]` (bounding-box). All three are the raw
   Morton-code interval — a bounding box is a *superset* of the geometric box

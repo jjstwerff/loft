@@ -157,16 +157,16 @@ edges (a `?? null` unsoundness, the call-arg N-Store hole — see gate 2 above).
 pending merge**: its tracked store-lifetime bugs are all CLOSED (#460 / #461 / #462 / #465, and A1b via
 @PLN90 #516), its fuzz-proof stands (@PLN53/@PLN54 closed, #547), the Cluster C fold landed, and the
 nightly DA + `stack_align_guard` gates were widened to the whole in-process interpreter corpus — all on
-`tuxedo-cluster-c`, which just needs to merge to `main` green. **Gate 5 (@PLN102) is now the active next
-gate** — its arc B-mechanical (a real version-constraint parser that stops silently accepting
-constraints it does not honour) is **IMPLEMENTED** (`check_version` → `VersionCheck`; binds bounds/ranges,
-rejects the unparseable loudly), and its **pivot — the language-versioning decision — is now DECIDED**
-(plans/102-stability-contract/versioning-decision.md): a monotone integer `contract` version separate from
-the calver release tag, `1.0` == contract 1, so the pivot and arc E's "1.0 line" are the same milestone —
-newly concrete now the type surface is feature-complete on `main` and the last syntax changes are in
-flight. Remaining: arc B-semantic (now unblocked), the policy arcs A/C/D/E, the registry range check. The
-registry-validation graphics leg was fixed this session, so `hex_terrain` (the @PLN102 exemplar) is its
-sole remaining red — and needs a library republish, not a loft fix.
+`tuxedo-cluster-c`, **merged to `main` 2026-07-10 (#551, squash `58a3f08e`)** — gate 1 sealed. **Gate 5
+(@PLN102) is now the active gate**, and well underway: **arc B is COMPLETE** (mechanical — a real
+version-constraint parser, `check_version` → `VersionCheck`; and semantic — the `contract` axis,
+`check_contract` → `ContractCheck`, `CONTRACT_VERSION = 0` inert pending the 1.0 freeze); the **pivot is
+DECIDED** (a monotone integer `contract` version, `1.0` == contract 1 — [versioning-decision.md](plans/102-stability-contract/versioning-decision.md));
+and **arc A is DRAFTED** ([COMPATIBILITY.md](COMPATIBILITY.md) — the silent/loud/additive breaking-change
+policy per surface, the per-tier maker obligations, and the misclassification detectors). Remaining: the
+`CONTRACT_VERSION` 0→1 flip at the freeze, and policy arcs **C** (deprecation channel), **D** (public
+bug-intake), **E** (the 1.0 line) + the omitted-bump CI gates + the registry range check. `hex_terrain`
+remains registry-validation's sole red — a library republish, not a loft fix.
 
 **Why the tracker is empty — and what to read instead.** This stream's standing rule at the top of
 this file is *fix, don't file*, and the cycle runs under a warm feature freeze

@@ -1014,7 +1014,7 @@ enum FieldPhase {
 /// (collection-typed fields that reference a bare Vector / Sorted /
 /// Hash / Index created during `output_init`'s first pass).
 fn is_collection_field(tp: &Type) -> bool {
-    // Radix backs `spacial<T[x,y]>` (@PLN48) — same Phase-2 bare-type
+    // Radix backs `spatial<T[x,y]>` (@PLN48) — same Phase-2 bare-type
     // reference shape as Hash, so it is classified alongside the family.
     matches!(
         tp,
@@ -1345,7 +1345,7 @@ extern crate loft;"
                 let stores_loft_ref =
                     matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
                 // A heap-typed arg (Reference / Vector / data-enum / sorted /
-                // hash / index / spacial) is passed as a `LoftStore` + `LoftRef`
+                // hash / index / spatial) is passed as a `LoftStore` + `LoftRef`
                 // handle, exactly as the interpreter's `ArgT::Ref`/`ArgT::Vec`
                 // marshal it — NOT a raw `(ptr, count)` pair.  `heap_dep()` is the
                 // canonical set of those types (the same union the interpreter
@@ -1470,7 +1470,7 @@ extern crate loft;"
                 }
                 // A store handle is the first parameter when the fn writes
                 // the store: a heap-typed arg (Reference / Vector / data-enum /
-                // sorted / hash / index / spacial) the cdylib reads or mutates,
+                // sorted / hash / index / spatial) the cdylib reads or mutates,
                 // or a Vector/Reference return it allocates.  `heap_dep()` is the
                 // canonical set of heap types — the same union the interpreter
                 // marshals as a `LoftRef` handle (`compute_sig`); reuse it so
@@ -2064,7 +2064,7 @@ extern crate loft;"
                 crate::database::Parts::Hash(c, keys) if !field_keyed.contains(&tid) => {
                     bare_io.push((tid, BareIo::Hash(*c, keys.clone())));
                 }
-                // @PLN48 — a local-only Radix (`spacial<T[…]>`) minted for a var,
+                // @PLN48 — a local-only Radix (`spatial<T[…]>`) minted for a var,
                 // referenced by no field: emit it here so it does not leave a gap in
                 // the runtime type-id sequence (else `content(tp)` reads u16::MAX and
                 // `record_new` panics), exactly as the local-only Hash arm above.
@@ -2420,8 +2420,8 @@ extern crate loft;"
                     .map(|&k| format!("\"{}\".to_string()", self.bare_field_name(*c, k)))
                     .collect::<Vec<_>>()
                     .join(", ");
-                // `db.spacial` is the surface constructor for the shared Radix kind.
-                writeln!(w, "    let t{tid} = db.spacial({c_ref}, &[{keys_str}]);")?;
+                // `db.spatial` is the surface constructor for the shared Radix kind.
+                writeln!(w, "    let t{tid} = db.spatial({c_ref}, &[{keys_str}]);")?;
             }
             BareIo::Index(c, keys) => {
                 let c_ref = type_id_ref(*c);
@@ -3035,9 +3035,9 @@ extern crate loft;"
             )?;
             return Ok(());
         }
-        // @PLN48 — a `spacial<T[x,y]>` field: keyed like Hash but the runtime
+        // @PLN48 — a `spatial<T[x,y]>` field: keyed like Hash but the runtime
         // structure is a radix (Morton) tree.  Same key-name emission as Hash;
-        // `db.spacial(content, keys)` builds the Radix Part.
+        // `db.spatial(content, keys)` builds the Radix Part.
         if let Type::Radix(c_nr, keys, _) = typedef {
             let c_tp = self.data.def(*c_nr).known_type();
             let c_ref = type_id_ref(c_tp);
@@ -3050,8 +3050,8 @@ extern crate loft;"
                 w,
                 s_var,
                 field_name,
-                "spacial",
-                &format!("db.spacial({c_ref}, &[{keys_str}])"),
+                "spatial",
+                &format!("db.spatial({c_ref}, &[{keys_str}])"),
             )?;
             return Ok(());
         }
@@ -3716,7 +3716,7 @@ extern crate loft;"
                 return Self::output_wasm_bridge_call(w, def, &target);
             }
             // A NON-vector heap arg (Reference / data-enum / sorted / hash / index /
-            // spacial) makes this a store-touching native with no host-import shape →
+            // spatial) makes this a store-touching native with no host-import shape →
             // graceful stub.  D-html-vec: a `vector<T>` arg is EXCLUDED — it is a real
             // host import marshalled as `(ptr, count)` below (the pre-#423 behaviour the
             // GL upload/matrix natives rely on); #423 lumped it in here and stubbed the
@@ -3832,7 +3832,7 @@ extern crate loft;"
         // `make_loft_store(stores, first_ref_store(args))` at
         // `src/extensions.rs:981`).
         // Any heap-typed arg (Reference / Vector / data-enum / sorted / hash /
-        // index / spacial) pins the store and rides as a `LoftRef`, exactly as
+        // index / spatial) pins the store and rides as a `LoftRef`, exactly as
         // the interpreter's `ref_arg_store` picks the first `LoftTag::Ref` arg
         // (a marshalled vector carries that tag too).  `heap_dep()` is the
         // canonical heap set; the outer DbRef's `.store_nr` is the store for
@@ -3962,7 +3962,7 @@ extern crate loft;"
                         "unsafe {{ std::mem::transmute_copy(&loft::codegen_runtime::to_loft_ref(loft::keys::DbRef {{ store_nr: var_{var}.store_nr, rec: _vr_{var}, pos: 0 }})) }}"
                     )?;
                 }
-                // Reference / data-enum / sorted / hash / index / spacial: a
+                // Reference / data-enum / sorted / hash / index / spatial: a
                 // heap-typed arg whose DbRef points DIRECTLY at the record
                 // (no outer→inner deref, unlike Vector).  Matched via
                 // `heap_dep()` so every keyed-collection kind shares the

@@ -188,7 +188,7 @@ impl Parser {
         v_block(next, Type::Character, "for text next")
     }
 
-    #[allow(clippy::too_many_lines)] // sorted/index/spacial iterator setup — splitting would lose context
+    #[allow(clippy::too_many_lines)] // sorted/index/spatial iterator setup — splitting would lose context
     /// The ONE home for a vector's per-element ITERATION stride — the byte
     /// step `vector::get_vector(size, idx)` walks per element.  Both the
     /// direct for-loop emission (the `Type::Vector` arm below) and the
@@ -1704,12 +1704,12 @@ use #count instead"
                     "n_hash_sorted"
                 };
                 // @PLN48 S3 — `for m in xs.within(…)`: the `.within` intercept already
-                // rewrote `expr` to an `n_spacial_within(…)` call that BUILDS the
+                // rewrote `expr` to an `n_spatial_within(…)` call that BUILDS the
                 // ordered scratch.  Use it directly — do not wrap it in n_radix_sorted
                 // (which would walk the scratch as if it were a tree).
                 let already_scratch = matches!(
                     expr.unspan(),
-                    Value::Call(d, _) if self.data.def(*d).name() == "n_spacial_range"
+                    Value::Call(d, _) if self.data.def(*d).name() == "n_spatial_range"
                 );
                 if already_scratch {
                     fill = v_set(scratch_var, expr.clone());
@@ -1751,7 +1751,7 @@ use #count instead"
                 self.lexer.has_identifier(); // consume "par"
                 // Plan-06 phase 4d.B — par-over-keyed-collection
                 // desugar.  When the input is sorted/hash/index/
-                // spacial, the par dispatcher's flat-vector iteration
+                // spatial, the par dispatcher's flat-vector iteration
                 // doesn't know how to walk the tree/hashmap layout.
                 // Pre-materialise into a `vector<reference<T>>` and
                 // re-route par() to use the materialised vector.
@@ -2212,7 +2212,7 @@ use #count instead"
     }
 
     /// Plan-06 phase 4d.B — materialise a keyed-collection input
-    /// (`sorted/hash/index/spacial<T[key]>`) into a temporary
+    /// (`sorted/hash/index/spatial<T[key]>`) into a temporary
     /// `vector<reference<T>>` so the par dispatcher's flat-vector
     /// path can iterate it.  Returns `(fill_ir, mat_var, mat_in_type)`
     /// or None if the source can't be unwrapped.  Mirrors the IR

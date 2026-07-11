@@ -542,7 +542,7 @@ safety invariants beyond type-checking:
 
 **For-loop mutation guard (`parse_assign`, `variables/`):**
 When parsing `v += items`, if the type is a collection (`Vector`, `Sorted`, `Index`, or
-`Spacial`) and `v` resolves to a `Value::Var(v_nr)`, the parser calls `vars.is_iterated_var(v_nr)`.
+`Spatial`) and `v` resolves to a `Value::Var(v_nr)`, the parser calls `vars.is_iterated_var(v_nr)`.
 This walks the `current_loop` chain in `variables/` comparing against each loop's `coll_var`
 (original collection variable, set via `set_coll_var()` in `parse_for`). If the variable is
 currently being iterated, a compile error is emitted:
@@ -756,7 +756,7 @@ Carries the static type of a `Value`. Key variants:
 | `Enum(def_nr, is_ref, deps)` | Enum type; `is_ref` true for struct-enum references |
 | `Reference(def_nr, deps)` | Record reference (pointer into a Store) |
 | `Vector(Box<Type>, deps)` | Dynamic array |
-| `Sorted/Index/Hash/Spacial` | Keyed collections |
+| `Sorted/Index/Hash/Spatial` | Keyed collections |
 | `RefVar(Box<Type>)` | Stack reference (`&T` parameter) |
 | `Iterator(result, state)` | Iterator type |
 | `Function(Vec<Type>, Box<Type>)` | First-class function type (arg types + return type); runtime value is `i32` d_nr; variables of this type are callable via normal call syntax |

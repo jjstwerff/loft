@@ -33,9 +33,14 @@ motivated it), #399 (narrow-int storage).
   at `(rec = 1, pos = 8)`. Every record begins with an `i32` **size word** (in 8-byte words; a
   NEGATIVE size marks a free block), so the chain is walkable by `rec += |size|`. Addressing is
   **word-based**: `rec` is a word index, byte offset `= rec · 8`; a sub-reference is a `u32` at
-  `(rec, pos)`. This frame is what makes a store file **self-describing and portable** (native ↔
+  `(rec, pos)`. This frame is what makes a store file **self-describing and native-endian** (native ↔
   wasm, RAM ↔ disk) and lets a reader walk it by byte offset — the basis of the #522 remote
-  working-set range-reader.
+  working-set range-reader. The multi-byte words (the `i32` size, the `u32` sub-references, the
+signature) are written **native-endian** (`store.rs` `to_ne_bytes`/`from_ne_bytes`), so a store
+is portable among **like-endian** hosts — every current target (native and wasm) is
+little-endian; a big-endian reader needs a byte-swap (only the `.dcache` sidecar is fixed
+little-endian). Endianness is thus a **physical-encoding** detail, outside the frozen logical
+layout contract (which pins field/enum identity + order, not byte encoding).
 - **record** — a value of type τ occupies `size(τ)` contiguous bytes; a field/element sits at a
   fixed byte offset within it. `H[r ⊕ n]` (heap.md) reads at `r.pos + n`.
 - **`DbRef`** = `(store_nr: u16, rec: u32, pos: u32)` (`src/keys.rs`) — the universal pointer. A

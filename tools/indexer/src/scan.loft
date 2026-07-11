@@ -1279,7 +1279,7 @@ fn severity_is_open(sev: text) -> boolean {
     n = lower.len();
     pos = 0;
     while pos < n {
-        rel = lower[pos..n].find("open");
+        rel = lower[pos..n].find("open") ?? -1;
         if rel < 0 { return false; }
         at = pos + rel;
         ok_lead = at == 0;
@@ -1489,7 +1489,7 @@ fn find_last_closed_date(body: text) -> text {
     n = body.len();
     pos = 0;
     while pos < n {
-        rel = body[pos..n].find(needle);
+        rel = body[pos..n].find(needle) ?? -1;
         if rel < 0 { return last; }
         at = pos + rel + needle.len();
         // Expect YYYY-MM-DD at `at` (10 chars) followed by ')'.

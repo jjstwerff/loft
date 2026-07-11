@@ -325,6 +325,30 @@ impl Parser {
             let operand_pos = self.lexer.peek_pos().clone();
             let t = self.parse_part(var_tp, val, parent_tp);
             self.known_var_or_type(val, &operand_pos); // @PLN53 F1-1 (see `!` above)
+            // @PLN102 pre-freeze — the leading `-` binds tighter than `**` (loft's uniform
+            // rule: a unary prefix binds tighter than any binary op — the `-` is the sign of
+            // its operand).  So `-2 ** 2` is `(-2) ** 2` = 4, NOT `-(2 ** 2)` = -4 as in
+            // Python/maths (which treat `-` as a weaker OPERATOR).  For a *literal* base this
+            // matches the intuition "-2 IS a number" and is unsurprising, so stay silent.
+            // We warn only when the base is NOT a literal (`-x ** y`, `-f() ** y`), where the
+            // `-` reads as an operator on a subexpression and the grouping is a genuine
+            // footgun.  The grammar rule itself stays uniform (no special-case `**`
+            // precedence).  `(-x) ** y` (the `-` parses inside the paren primary) and
+            // `-(x ** y)` (the operand is a paren primary, so the next token is `)`/`;`, not
+            // `**`) never reach here.
+            let base_is_literal = matches!(
+                val.unspan(),
+                Value::Int(_) | Value::Long(_) | Value::Float(_) | Value::Single(_)
+            );
+            if !self.first_pass && !base_is_literal && self.lexer.peek_token("**") {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "`-x ** y` parses as `(-x) ** y` — the leading `-` binds to `x` as a sign \
+                     (tighter than `**`), not `-(x ** y)`; parenthesise if you meant to negate \
+                     the power"
+                );
+            }
             let arg = val.clone();
             self.call_op(val, "Min", &[arg], &[t])
         } else if self.lexer.has_token("(") {
@@ -2400,7 +2424,7 @@ impl Parser {
             self.lexer.pos()
         );
         // P188: when the LHS local is a keyed collection
-        // (sorted/hash/index/spacial<T[key]>), the container type id
+        // (sorted/hash/index/spatial<T[key]>), the container type id
         // must be the keyed-collection's own known_type so OpNewRecord
         // dispatches to sorted_new / hash::add / tree::add / etc.
         // Falling back to `vector_of(in_t)` returns the wrap-`vector<T>`
@@ -2452,7 +2476,7 @@ impl Parser {
             }
             Some(Type::Radix(td, key, _)) => {
                 let c = self.data.def(*td).known_type();
-                (c != u16::MAX).then(|| self.database.spacial(c, key))
+                (c != u16::MAX).then(|| self.database.spatial(c, key))
             }
             _ => None,
         };
@@ -2926,10 +2950,10 @@ impl Parser {
                 self.database.hash(c_tp, key)
             }
             Type::Radix(tp, key, _) => {
-                // @PLN48 — mirror Hash: resolve the spacial<T[…]> db type id, and
+                // @PLN48 — mirror Hash: resolve the spatial<T[…]> db type id, and
                 // register it on demand for a local-only var (whose type would else
                 // be absent from the schema, so iteration/`get_type` sees u16::MAX).
-                let mut name = "spacial<".to_string() + self.data.def(*tp).name() + "[";
+                let mut name = "spatial<".to_string() + self.data.def(*tp).name() + "[";
                 self.database
                     .field_name(self.data.def(*tp).known_type(), key, &mut name);
                 let r = self.database.name(&name);
@@ -2940,7 +2964,7 @@ impl Parser {
                 if c_tp == u16::MAX {
                     return u16::MAX;
                 }
-                self.database.spacial(c_tp, key)
+                self.database.spatial(c_tp, key)
             }
             Type::Sorted(tp, key, _) => {
                 let mut name = "sorted<".to_string() + self.data.def(*tp).name() + "[";

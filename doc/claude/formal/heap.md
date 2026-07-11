@@ -125,10 +125,13 @@ only that local's own store (see `H-Copy`) — the exact fact [capabilities.md](
 ### Copy vs view — a whole-value / vector bind COPIES; a struct-typed projection is a VIEW
 
 ```
-  (H-Copy)   ⟨x = r, ⟨ρ, H⟩⟩ → ⟨r', ⟨ρ[x ↦ r'], H'⟩⟩            when r is a WHOLE VALUE — a local
-               variable, or a VECTOR-typed projection (`fv = e.items`) — where r' = (fresh(H),0,0)
-               and H'[store(r')] := deep-copy of the record graph at r.  x and the source are then
-               INDEPENDENT (C86, #415).
+  (H-Copy)   ⟨x = r, ⟨ρ, H⟩⟩ → ⟨r', ⟨ρ[x ↦ r'], H'⟩⟩            when x = r is a PLAIN bind of a
+               WHOLE VALUE — a local variable, or a VECTOR-typed projection (`fv = e.items`) —
+               where r' = (fresh(H),0,0) and H'[store(r')] := deep-copy of the record graph at r.
+               x and the source are then INDEPENDENT (C86, #415).
+  (H-Ref)    ⟨x = &r, ⟨ρ, H⟩⟩ → ⟨r, ⟨ρ[x ↦ r], H⟩⟩              an EXPLICIT `&`-bind aliases: x
+               shares r's backing (NO fresh store), so `x[0] = 99` mutates r (C77).  This is the
+               vector twin of a parameter — both reach the source; only a plain bind copies.
   (H-View)   ⟨x = r, ⟨ρ, H⟩⟩ → ⟨r, ⟨ρ[x ↦ r], H⟩⟩               when r is a STRUCT-TYPED PROJECTION
                — a struct FIELD (`c = o.i`) or a struct ELEMENT of a vector (`s = v[0]`).  x is a
                VIEW: it aliases the place inside the container, so a write through x mutates the
@@ -138,10 +141,14 @@ only that local's own store (see `H-Copy`) — the exact fact [capabilities.md](
 **In words.** Whether a bind copies or aliases depends on **what is bound** — and the two backends
 agree exactly (verified):
 
-- **COPY** — binding a whole heap **value**: a local variable (`c = o`, `c = v`), or a
-  **vector-typed** projection (`fv = e.items`, even `r = &v` for a vector). A fresh store is
-  allocated and the graph duplicated, so the two are independent: `fv = e.items; fv[0] = 99` leaves
-  `e.items[0] == 1`; `c = o; c.v = 9` leaves `o.v == 1`.
+- **COPY** — a **plain** bind of a whole heap **value**: a local variable (`c = o`, `c = v`), or a
+  **vector-typed** projection (`fv = e.items`). A fresh store is allocated and the graph
+  duplicated, so the two are independent: `fv = e.items; fv[0] = 99` leaves `e.items[0] == 1`;
+  `c = o; c.v = 9` leaves `o.v == 1`.
+- **ALIAS** — an **explicit `&`-bind** (`r = &v`) binds a **live reference** ([C77](../DESIGN_DECISIONS.md#c77--binding-ownership-heap-aliases-by-default--binds-a-live-reference)),
+  NOT a copy: `r = &v; r[0] = 99` makes `v[0] == 99` (verified both backends). This is why a `&`
+  is written — to share the backing, not duplicate it. (A vector **parameter** likewise aliases
+  the caller — see the invariant below.)
 - **VIEW** — binding a **struct-typed projection**: a struct field (`c = o.i`) or a struct element
   of a vector (`s = v[0]`). `x` aliases the place, so a write through it mutates the container:
   `c = o.i; c.v = 9` makes `o.i.v == 9`; `s = v[0]; s.v = 9` makes `v[0].v == 9`.
@@ -151,8 +158,11 @@ This is the [DESIGN_DECISIONS.md C86](../DESIGN_DECISIONS.md) (`#415`) copy vs [
 [capabilities.md](capabilities.md)'s raw-write rule (D-cap-3) already encodes: a **vector** local is
 owned (copies, so writing it is `Cap-Own`), a **struct-typed** local may be a view of host data (so
 its writes are host-gated). The invariant a raw write rests on is therefore *the target ROOT*: a
-write reaches another binding's state only when its root is a parameter OR a struct-typed view of
-one — never a copy.
+write reaches another binding's state only when its root is a **parameter**, an **explicit
+`&`-reference bind** (`r = &v`, whose dep chain reaches the aliased source — possibly a
+parameter), OR a **struct-typed view** of one — never a plain copy. The capability gate
+(D-cap-3) enforces this by **following the vector's dep chain**: a local vector that aliases a
+parameter (via `&`) is host, a genuinely-copied one is script-owned.
 
 ### Free — release a store, in LIFO order, never the stack, never twice
 
@@ -224,12 +234,14 @@ contract (this file). What remains is the SAME meta-deviation, not a heap-specif
 
 The rules are checkable directly, and every check is a program both backends must agree on:
 
-- **Copy vs view (`H-Copy` / `H-View`)** — proven both backends: a whole-value / vector bind
-  COPIES — `c = o; c.v = 9` ⇒ `o.v == 1`; `fv = e.items; fv[0] = 99` ⇒ `e.items[0] == 1`;
-  `r = &v; r[0] = 99` ⇒ `v[0] == 1`. A STRUCT-typed projection is a VIEW — `c = o.i; c.v = 9` ⇒
-  `o.i.v == 9`; `s = v[0]; s.v = 9` ⇒ `v[0].v == 9` (a struct element of a vector). This split is
-  the same one capabilities.md's raw-write rule encodes (vector = owned copy, struct = possible
-  host view).
+- **Copy vs alias vs view (`H-Copy` / `H-Ref` / `H-View`)** — proven both backends: a PLAIN
+  whole-value / vector bind COPIES — `c = o; c.v = 9` ⇒ `o.v == 1`; `fv = e.items; fv[0] = 99` ⇒
+  `e.items[0] == 1`. An EXPLICIT `&`-bind ALIASES — `r = &v; r[0] = 99` ⇒ `v[0] == 99` (a live
+  reference, C77; the vector twin of a parameter). A STRUCT-typed projection is a VIEW —
+  `c = o.i; c.v = 9` ⇒ `o.i.v == 9`; `s = v[0]; s.v = 9` ⇒ `v[0].v == 9` (a struct element of a
+  vector). capabilities.md's raw-write rule encodes this: a plain-copied vector is owned, a
+  `&`-aliased or parameter-rooted vector is host (D-cap-3 follows the dep chain), a struct is a
+  possible host view.
 - **Null/OOB continue (`H-ReadNull` / `H-Index`)** — reading a field of `nullref`, or `v[i]`
   with `i ≥ len(v)`, is **null** and the program continues; it never halts (operational.md
   C80, extended to the heap).

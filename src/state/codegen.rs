@@ -1434,7 +1434,7 @@ impl State {
 
     /// P188: first-assignment init for a keyed-collection local
     /// (`sorted<T[key]>`, `hash<T[key]>`, `index<T[key]>`,
-    /// `spacial<T[key]>`).  Allocates a fresh store and claims a
+    /// `spatial<T[key]>`).  Allocates a fresh store and claims a
     /// record sized for the collection type at the local's slot.
     /// `set_default_value` zero-initialises the root-pointer field;
     /// subsequent `OpNewRecord` / `OpFinishRecord` operations will
@@ -1490,7 +1490,7 @@ impl State {
             return;
         }
         // Resolve the database type id for the specific keyed-collection
-        // instantiation.  `database.sorted/hash/index/spacial` is idempotent —
+        // instantiation.  `database.sorted/hash/index/spatial` is idempotent —
         // it returns the existing registered type id when the (content, key)
         // pair has been registered (every struct field of the same shape
         // does so via `fill_database`), otherwise registers a new one.
@@ -1510,7 +1510,7 @@ impl State {
             }
             Type::Radix(td, key, _) => {
                 let c = stack.data.def(*td).known_type();
-                self.database.spacial(c, key)
+                self.database.spatial(c, key)
             }
             _ => unreachable!("gen_keyed_null on non-keyed type"),
         };

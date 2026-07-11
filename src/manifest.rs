@@ -694,14 +694,19 @@ pub enum ContractCheck {
 /// Check a library's `contract` requirement against loft's `current` contract.
 ///
 /// The requirement is an integer window folded from comma-separated predicates:
-/// a bare integer or `=K` is the exact "tested-at" epoch (`[K, K]`); `>=K` opens
-/// the ceiling (`[K, ∞)`, asserting forward-coverage); `<=M`/`<M`/`>K` bound the
-/// other side; a range `">=K, <=M"` is `[K, M]`.  Then `current < lo` →
+/// a **bare integer `N` or `>=N` is a lower bound `[N, ∞)`** — the capability
+/// floor a program needs; `=K` pins the exact epoch `[K, K]`; `<=M`/`<M`/`>K`
+/// bound the range; `">=K, <=M"` is `[K, M]`.  Then `current < lo` →
 /// [`ContractCheck::TooOld`], `current > hi` → [`ContractCheck::Drifted`], else
 /// [`ContractCheck::Ok`].  An empty requirement is `Ok` (library declares no
-/// contract — grandfathered).  Unlike a release-version bound, a BARE contract
-/// is "tested-at" (exact), NOT `>=`: forward-compatibility is the thing this axis
-/// refuses to assume silently.
+/// contract — grandfathered).
+///
+/// A bare contract is **forward-open (`>=`), NOT "tested-at"**: the compatibility
+/// promise ([COMPATIBILITY.md](../doc/claude/COMPATIBILITY.md)) guarantees loft
+/// never breaks a working program forward, so there is nothing to warn about on a
+/// newer loft — `Drifted` only ever fires for an *explicit* upper bound an author
+/// opted into. (This supersedes the original "tested-at + drift" default, which
+/// predated the absolute-compat commitment.)
 #[must_use]
 pub fn check_contract(required: &str, current: u32) -> ContractCheck {
     let required = required.trim();
@@ -728,7 +733,7 @@ pub fn check_contract(required: &str, current: u32) -> ContractCheck {
         } else if let Some(r) = part.strip_prefix('=') {
             (VersionOp::Eq, r)
         } else if part.starts_with(|c: char| c.is_ascii_digit()) {
-            (VersionOp::Eq, part) // bare contract → exact "tested-at" epoch
+            (VersionOp::Ge, part) // bare contract → lower bound (forward-open; the promise guarantees no forward break)
         } else {
             return ContractCheck::Malformed(format!(
                 "unsupported contract constraint '{part}' — use an integer, or >=, <=, >, <, =, or a comma range"
@@ -1199,10 +1204,13 @@ n_demo_fn_b = "demo_fn_b"
     fn arc_b_semantic_contract_check() {
         use ContractCheck::{Drifted, Malformed, Ok, TooOld};
 
-        // Bare integer = exact tested-at epoch: below → TooOld, at → Ok, above → Drifted.
+        // Bare integer = lower bound (forward-open): below → TooOld, at or above → Ok.
+        // The compat promise guarantees no forward break, so a newer loft never drifts.
         assert_eq!(check_contract("1", 0), TooOld { required_min: 1 });
         assert_eq!(check_contract("1", 1), Ok);
-        assert_eq!(check_contract("1", 3), Drifted { tested_max: 1 });
+        assert_eq!(check_contract("1", 3), Ok);
+        assert_eq!(check_contract("1", 99), Ok);
+        // An EXPLICIT exact/upper bound still binds (opt-in; rarely needed under the promise).
         assert_eq!(check_contract("=2", 2), Ok);
         assert_eq!(check_contract("=2", 4), Drifted { tested_max: 2 });
 

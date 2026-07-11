@@ -69,7 +69,7 @@
 //! `doc/claude/plans/48-spacial-index/RADIX_TREE.md`.
 
 // The tree is exercised only by its own tests until @PLN48 deliverable S2 wires it
-// to `spacial<T[…]>`; the unit tests are what hold it correct in the meantime.
+// to `spatial<T[…]>`; the unit tests are what hold it correct in the meantime.
 #![allow(dead_code)]
 
 use crate::store::Store;
@@ -99,7 +99,7 @@ pub struct KeySpec {
 /// How the tree reads a record's key.  Every `rtree_*` operation is generic over this,
 /// so a caller may key on anything — a fixed `KeySpec` of `fn` pointers (the tests and
 /// `spatial::MORTON2D`), or a value that carries runtime state, such as the list of
-/// coordinate fields a `spacial<T[…]>` schema discovers.  The bound is `Copy`, met by
+/// coordinate fields a `spatial<T[…]>` schema discovers.  The bound is `Copy`, met by
 /// `KeySpec` and by a shared reference, so the database passes `&its_oracle`.
 pub trait KeyOracle {
     /// 64 key bits of `rec` starting at bit `word * 64`; see [`WordFn`].

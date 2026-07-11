@@ -2081,6 +2081,23 @@ impl Parser {
             )
         {
             let nm = inner.name(&self.data);
+            // @PLN102 (N-Store) Phase 1 — the warn/error split (types.md § Null-flow, (N-Store)).
+            // WARN (a nudge; the store PROCEEDS — `convert` peels the Optional and the slot holds
+            // the null sentinel) where τ reserves its null DISTINCTLY even in the non-null form
+            // (full `integer`, `float`, `single`, `boolean`, `character`, `text`, refs, aggregates).
+            // Keep the hard ERROR only for a NARROW width (`byte_width < 8`), whose non-null form
+            // spends the whole width on real values, so a null there would silently corrupt.
+            // Gate OFF → the current uniform hard error (this branch stays byte-identical).
+            let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            if crate::keys::nullflow_enabled() && !narrow {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?? <default>` or `match` if that is not intended",
+                    target_tp.name(&self.data)
+                );
+                return false; // store proceeds — `convert` peels the Optional and stores the sentinel
+            }
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -2100,6 +2117,18 @@ impl Parser {
             && Self::is_non_null_scalar(target_tp)
         {
             let nm = target_tp.name(&self.data);
+            // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
+            // into a NON-narrow scalar target warns (the slot reserves its null distinctly, so it
+            // holds null and reads back null); a NARROW width keeps the hard error (no room).
+            let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            if crate::keys::nullflow_enabled() && !narrow {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "`null` is stored into {what} of the non-null scalar type `{nm}` — the slot holds null; declare it `{nm}?` to make that explicit"
+                );
+                return false;
+            }
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -2640,7 +2669,7 @@ impl Parser {
             {
                 return true;
             }
-            // A keyed-collection argument (hash / sorted / index / spacial)
+            // A keyed-collection argument (hash / sorted / index / spatial)
             // also satisfies a bare `reference` parameter — its handle is a
             // `DbRef`.  Mirrors the `convert` branch; used by
             // `store_persist_bind`.
@@ -2656,7 +2685,7 @@ impl Parser {
             {
                 return true;
             }
-            // Bare collection parameter (sorted / hash / index / spacial)
+            // Bare collection parameter (sorted / hash / index / spatial)
             // accepts the corresponding parameterised collection
             // argument.  Mirrors how `Type::Vector(_, _)` matches via
             // is_same: the parameter type carries no element-type
@@ -2669,7 +2698,7 @@ impl Parser {
                     || (r == self.data.def_nr("hash") && matches!(test_type, Type::Hash(_, _, _)))
                     || (r == self.data.def_nr("index")
                         && matches!(test_type, Type::Index(_, _, _)))
-                    || (r == self.data.def_nr("spacial")
+                    || (r == self.data.def_nr("spatial")
                         && matches!(test_type, Type::Radix(_, _, _)));
                 if bare {
                     return true;
@@ -2836,7 +2865,36 @@ impl Parser {
             }
         }
         if d_nr != u32::MAX {
-            self.call_with_named(code, d_nr, list, types, named_args, true, arg_pos)
+            let ret = self.call_with_named(code, d_nr, list, types, named_args, true, arg_pos);
+            // @PLN102 Phase 3.5 — constant-in-domain elision ("PI blocks it"): a domain-partial
+            // math fn with a provably in-domain CONSTANT argument cannot be null (`sqrt(4.0)`,
+            // `pow(2.0, 3.0)`, `ln(2.0)`), so peel the `τ?` its decl carries. Only under
+            // LOFT_NULLFLOW, and only the constant subset (variable-arg range-tracking is deferred).
+            if crate::keys::nullflow_enabled()
+                && matches!(ret, Type::Optional(_))
+                && Self::math_arg_in_domain(name, list)
+            {
+                // Phase 3.5 elision: a provably-in-domain constant arg peels the `τ?`.
+                ret.base().clone()
+            } else if (matches!(name, "min" | "max" | "clamp") || crate::keys::nullflow_enabled())
+                && Self::is_null_transparent(name)
+                && !matches!(ret, Type::Optional(_))
+                && Self::is_non_null_scalar(&ret)
+                && types.iter().any(|t| matches!(t, Type::Optional(_)))
+            {
+                // Phase 5.3 propagation: a null-transparent fn with a nullable arg → `τ?` + a
+                // runtime guard (if any arg is null the result is null). `min`/`max`/`clamp` used
+                // to carry this in hand-written `τ?` overloads, which were DEFAULT-ON (DN3), so the
+                // guard runs for them in ALL modes (it replaces those overloads); the rest
+                // (`abs`, `floor`, …) are the new LOFT_NULLFLOW behaviour.
+                if self.first_pass {
+                    Type::optional(ret)
+                } else {
+                    self.wrap_null_transparent(code, types, &ret)
+                }
+            } else {
+                ret
+            }
         } else if self.first_pass && !self.default {
             Type::Unknown(0)
         } else if name == "len"
@@ -2916,6 +2974,104 @@ impl Parser {
             }
             Type::Unknown(0)
         }
+    }
+
+    /// @PLN102 Phase 3.5 — is a call to a domain-partial math fn provably IN its real domain,
+    /// from CONSTANT arguments alone? Then its result is non-null and the `τ?` elides. The
+    /// constant subset of the "provably-fits" elision (variable-arg range-tracking is deferred).
+    // These are exact domain-boundary checks, not approximate arithmetic: a `Long` too large to
+    // represent exactly in `f64` is trivially outside any bounded domain, and `base != 1.0` is the
+    // genuine boundary (a `log` base of exactly 1 is undefined), so the two lints do not apply.
+    #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
+    fn math_arg_in_domain(name: &str, args: &[Value]) -> bool {
+        fn cval(v: Option<&Value>) -> Option<f64> {
+            match v.map(Value::unspan) {
+                Some(Value::Float(f)) => Some(*f),
+                Some(Value::Single(f)) => Some(f64::from(*f)),
+                Some(Value::Int(n)) => Some(f64::from(*n)),
+                Some(Value::Long(n)) => Some(*n as f64),
+                _ => None,
+            }
+        }
+        let a0 = cval(args.first());
+        let a1 = cval(args.get(1));
+        match name {
+            "sqrt" => matches!(a0, Some(x) if x >= 0.0),
+            "asin" | "acos" => matches!(a0, Some(x) if (-1.0..=1.0).contains(&x)),
+            "ln" | "log2" | "log10" => matches!(a0, Some(x) if x > 0.0),
+            // `log(x, base)`: x > 0 and a valid base (> 0, ≠ 1).
+            "log" => {
+                matches!(a0, Some(x) if x > 0.0) && matches!(a1, Some(b) if b > 0.0 && b != 1.0)
+            }
+            // `pow(base, exp)`: a non-negative base is always defined; a negative base only when
+            // the exponent is a whole number (`pow(-2, 3)` = -8, but `pow(-2, 0.5)` = null).
+            "pow" => matches!(a0, Some(b) if b >= 0.0) || matches!(a1, Some(e) if e.fract() == 0.0),
+            _ => false,
+        }
+    }
+
+    /// @PLN102 Phase 5.3 — a NULL-TRANSPARENT stdlib scalar fn: `f(…, null, …) = null`. A nullable
+    /// argument propagates to a nullable result. One general list drives the [`Self::wrap_null_transparent`]
+    /// guard, replacing the per-function `τ?` overloads. (`sqrt`/`ln`/… already return `τ?`, so they
+    /// are not here.)
+    fn is_null_transparent(name: &str) -> bool {
+        matches!(
+            name,
+            "abs"
+                | "min"
+                | "max"
+                | "clamp"
+                | "floor"
+                | "ceil"
+                | "round"
+                | "sin"
+                | "cos"
+                | "tan"
+                | "atan"
+                | "exp"
+        )
+    }
+
+    /// @PLN102 Phase 5.3 — the GENERAL null-propagation algorithm. A null-transparent call `f(a, b)`
+    /// with one or more nullable args becomes `{ t = a; …; if (t not null && …) { f(t, …) } else
+    /// { null } }` typed `τ?`. Each nullable arg is evaluated ONCE into a temp (used in both the
+    /// null-check and the call). This is the general form of what the `min`/`max` `τ?` overloads did
+    /// by hand — floats propagate NaN on their own, but integer `max`/`abs` need this guard, so it
+    /// runs uniformly. Second-pass only (the caller returns the `τ?` type in the first pass).
+    fn wrap_null_transparent(
+        &mut self,
+        code: &mut Value,
+        arg_types: &[Type],
+        ret_base: &Type,
+    ) -> Type {
+        let opt = Type::optional(ret_base.clone());
+        let mut sets: Vec<Value> = Vec::new();
+        let mut checks: Vec<(u16, Type)> = Vec::new();
+        if let Value::Call(_d, args) = code.unspan_mut() {
+            for (i, at) in arg_types.iter().enumerate() {
+                if matches!(at, Type::Optional(_)) && i < args.len() {
+                    let tmp = self.create_unique("_ntp", at);
+                    let orig = std::mem::replace(&mut args[i], Value::Var(tmp));
+                    sets.push(crate::data::v_set(tmp, orig));
+                    checks.push((tmp, at.base().clone()));
+                }
+            }
+        } else {
+            return opt;
+        }
+        if checks.is_empty() {
+            return opt;
+        }
+        let mut inner = code.clone();
+        for (tmp, base) in checks.iter().rev() {
+            let mut is_not_null = Value::Var(*tmp);
+            self.convert(&mut is_not_null, base, &Type::Boolean);
+            let null_arm = self.null(ret_base);
+            inner = crate::data::v_if(is_not_null, inner, null_arm);
+        }
+        sets.push(inner);
+        *code = crate::data::v_block(sets, opt.clone(), "null_transparent");
+        opt
     }
 
     /// Scan all definitions for methods named `name` (encoded as
@@ -10249,6 +10405,19 @@ mod plan86_admission_tests {
                     &["code", "prog"],
                     &[],
                     "fn evil(v: vector<integer>) -> integer { v[0] = 9; v[0] }\n",
+                ),
+            ),
+            (
+                // @PLN102 F6 — `r = &v` ALIASES the param `v` (proven: `r[0]=99` mutates the
+                // caller's `v[0]`), so laundering a host-vector write through a `&`-bound
+                // local must ALSO be rejected — the `Type::Vector => owned` gate must not
+                // treat an alias of a parameter as script-owned.
+                "raw-write: & alias launders param",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    "fn evil(v: vector<integer>) -> integer { r = &v; r[0] = 9; r[0] }\n",
                 ),
             ),
             (

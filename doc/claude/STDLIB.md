@@ -72,12 +72,17 @@ In the tables below, **N** = `integer | single | float` for general functions, a
 
 ### General (N = integer | single | float)
 
+These are **method-or-free** functions: the first parameter is the `both` dispatch marker, so
+each is callable as a method (`x.abs()`), free (`abs(x)`), or with the named form `abs(both: x)`
+(the named keyword is literally `both`, not `v`/`a` — see `exists(both:)` below).
+
 | Function | Description |
 |----------|-------------|
-| `abs(v: N) -> N` | Absolute value. |
-| `min(a: N, b: N) -> N` | Smaller of two values. Returns null if either is null. |
-| `max(a: N, b: N) -> N` | Larger of two values. Returns null if either is null. |
-| `clamp(v: N, lo: N, hi: N) -> N` | Clamps `v` to `[lo, hi]`. Returns null if any arg is null. |
+| `abs(both: N) -> N` | Absolute value. |
+| `min(both: N, b: N) -> N` | Smaller of two values. Returns null if either is null. |
+| `max(both: N, b: N) -> N` | Larger of two values. Returns null if either is null. |
+| `clamp(both: N, lo: N, hi: N) -> N` | Clamps to `[lo, hi]`. Returns null if any arg is null. |
+| `approx(both: F, b: F, eps: F) -> boolean` | True when `a`/`b` (F = single \| float) differ by ≤ `eps`. `==` on float/single is **exact IEEE** (@PLN102); use `approx` for tolerance. A null (NaN) operand → false. |
 
 ### Rounding and roots (F = single | float)
 
@@ -129,8 +134,8 @@ Functions for working with `text` (UTF-8 strings) and `character` values.
 
 | Function | Description |
 |----------|-------------|
-| `find(self: text, value: text) -> integer` | Returns the byte index of the first occurrence of `value`, or null if not found. |
-| `rfind(self: text, value: text) -> integer` | Returns the byte index of the last occurrence of `value`, or null if not found. |
+| `find(self: text, value: text) -> integer?` | Returns the byte index of the first occurrence of `value`, or **null** if not found (the type is honest about the not-found case — @PLN102). |
+| `rfind(self: text, value: text) -> integer?` | Returns the byte index of the last occurrence of `value`, or **null** if not found (@PLN102). |
 | `contains(self: text, value: text) -> boolean` | Returns true if `value` appears anywhere in `self`. |
 | `starts_with(self: text, value: text) -> boolean` | Returns true if `self` begins with `value`. |
 | `ends_with(self: text, value: text) -> boolean` | Returns true if `self` ends with `value`. |
@@ -209,8 +214,8 @@ Operations on `vector<T>` — the primary ordered collection type.
 | Function | Description |
 |----------|-------------|
 | `sum_of(v: vector<integer>) -> integer` | Sum of all elements; returns 0 for an empty vector. |
-| `min_of(v: vector<integer>) -> integer` | Smallest element. |
-| `max_of(v: vector<integer>) -> integer` | Largest element. |
+| `min_of<T: Ordered>(v: vector<T>) -> T?` | Smallest element, or **null** when the vector is empty (the type is honest about the empty case — @PLN102). |
+| `max_of<T: Ordered>(v: vector<T>) -> T?` | Largest element, or **null** when the vector is empty (@PLN102). |
 
 ### Tree traversal — `tree_walk` and the `Walkable` interface
 
@@ -258,14 +263,14 @@ All three keyed collection types share a common lookup and removal syntax handle
 
 These are parser-level operations; they compile to `OpGetRecord`, `OpHashRemove`, and `OpRemove` respectively. There are no corresponding callable functions.
 
-### `spacial<T[x,y]>` / `spacial<T[x,y,z]>` — spatial keyed collection
+### `spatial<T[x,y]>` / `spatial<T[x,y,z]>` — spatial keyed collection
 
 A keyed collection backed by a Morton/Z-order radix tree, with 1–3
 coordinate key fields (@PLN48):
 
 | Syntax | Description |
 |--------|-------------|
-| `xs: spacial<Mob[x, y]> = [];` | Construct; also legal as a struct field (`mobs: spacial<Mob[x,y]>`). |
+| `xs: spatial<Mob[x, y]> = [];` | Construct; also legal as a struct field (`mobs: spatial<Mob[x,y]>`). |
 | `xs += [Mob{x: 1, y: 2}];` | Append. |
 | `for m in xs { … }` | Iterate in the tree's natural Morton/Z-order — no sort (unlike `hash`, which sorts via its internal ordered index). |
 | `xs.len()` | Element count — O(1), reads the tree's cached length word. |

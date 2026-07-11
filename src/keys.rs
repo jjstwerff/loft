@@ -408,6 +408,21 @@ pub fn pln25_dn3_enabled() -> bool {
     pln25_dn1_enabled()
 }
 
+/// @PLN102 null-flow — the general null-flow laws (`doc/claude/formal/types.md` § Null-flow):
+/// `(N-Store)` warn-unless-narrow (a nullable into a full-width non-null slot WARNS + still runs,
+/// the slot holds null; a NARROW `u8`…`u32` target keeps the hard ERROR — its width has no bit
+/// pattern for null), `(N-Prop)` null propagates through arithmetic, `(N-Domain)` float `/`/`sqrt`/
+/// `ln`/… type `τ?`, `(N-Cast)` a `text as τ` parse is an assertion (bare → error; use `as τ?`).
+/// **FLIPPED DEFAULT-ON (2026-07-11, @PLN102 the null-flow cutover):** this is now the DEFAULT.
+/// `LOFT_NO_NULLFLOW` opts out (the escape hatch while any last consumer settles); the old opt-in
+/// `LOFT_NULLFLOW` is now a redundant no-op. One cached env read. Mirrors `join_own_enabled`. See
+/// `doc/claude/plans/102-stability-contract/nullflow-flip-plan.md`.
+#[must_use]
+pub fn nullflow_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLFLOW").is_none())
+}
+
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
 /// (`integer`, `text`, `bool`, …) is NON-NULL by default; `τ?` is the only nullable form. Turns
 /// `IntegerSpec.not_null` default `false → true` (and the analog for other scalars rides

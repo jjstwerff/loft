@@ -46,7 +46,7 @@ fn main() {
   assert(3 != abs(a), "long ne");
   assert(0x0102030405060708 == 72623859790382856, "long hex literal");
   // --- Conversions ---
-  assert("123" as integer == 123, "text to int");
+  assert("123" as integer? == 123, "text to int");
   assert("{42}" == "42", "int to text via format");
   assert(3 as float == 3.0, "int to float");
   assert(3 as integer == 3, "int to long");
@@ -146,13 +146,13 @@ fn main() {
   assert(!(1 << n_sh), "int << null is null");
   assert(!(1 >> n_sh), "int >> null is null");
   // --- Text-to-int parse edge cases ---
-  assert(!("abc" as integer), "parse non-numeric text yields null");
-  assert(!("123abc" as integer), "parse partial-numeric text yields null");
-  assert(!("" as integer), "parse empty text yields null");
-  assert(!(" 42 " as integer), "parse text with leading/trailing spaces yields null");
+  assert(!("abc" as integer?), "parse non-numeric text yields null");
+  assert(!("123abc" as integer?), "parse partial-numeric text yields null");
+  assert(!("" as integer?), "parse empty text yields null");
+  assert(!(" 42 " as integer?), "parse text with leading/trailing spaces yields null");
   // Long text-to-long parse edge cases:
-  assert(!("xyz" as integer), "parse non-numeric text to long yields null");
-  assert(!("" as integer), "parse empty text to long yields null");
+  assert(!("xyz" as integer?), "parse non-numeric text to long yields null");
+  assert(!("" as integer?), "parse empty text to long yields null");
   // --- Null-preserving cross-type casts (GAPS §3) ---
   // i32::MIN (integer null) widens to i64::MIN (long null); does not become -2147483648L.
   n_int = null as integer?;

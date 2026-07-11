@@ -320,7 +320,7 @@ pub fn int(self: Lexer) -> integer? {
   if self.scanned != Integer {
     return null;
   }
-  result = self.data[self.start..self.index] as integer;
+  result = self.data[self.start..self.index] as integer?;
   if result {
     self.scan();
     result
@@ -338,7 +338,7 @@ pub fn long_int(self: Lexer) -> integer? {
   if self.data[to - 1] == 'l' {
     to -= 1;
   }
-  result = self.data[self.start..to] as integer;
+  result = self.data[self.start..to] as integer?;
   if result {
     self.scan();
     result
@@ -352,7 +352,7 @@ pub fn get_float(self: Lexer) -> float? {
   if self.scanned != Float {
     return null;
   }
-  result = self.data[self.start..self.index] as float;
+  result = self.data[self.start..self.index] as float?;
   if result {
     self.scan();
     result
@@ -366,7 +366,7 @@ pub fn get_single(self: Lexer) -> single? {
   if self.scanned != Float {
     return null;
   }
-  result = self.data[self.start..self.index] as single;
+  result = self.data[self.start..self.index] as single?;
   if result {
     self.scan();
     result

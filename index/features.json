@@ -27,7 +27,7 @@
     "number": 5,
     "title": "Type conversions — implicit, format-only, and explicit `as`",
     "kind": "feature",
-    "body": "## What it is\n\nThe `as` cast converts a value from one type to another on purpose: `pi as integer`, `\"42\" as integer`, `'A' as integer`. You ask for the conversion, so it happens exactly where you write it.\n\n## How it aids you\n\nYou get to move between types deliberately — round a decimal down to a whole number, read a number out of text, get a character's code — with the conversion visible in the code. Nothing silently changes type behind your back.\n\n## Example\n\n```loft\nfn main() {\n    pi: float = 3.75;\n    whole = pi as integer;     // 3  (drops the fraction)\n    parsed = \"42\" as integer;  // text turned into a number\n    code = 'A' as integer;     // 65 (the character's code)\n    println(\"{whole} {parsed} {code}\");   // 3 42 65\n}\n```\n"
+    "body": "## What it is\n\nThe `as` cast converts a value from one type to another on purpose: `pi as integer`, `\"42\" as integer?`, `'A' as integer`. You ask for the conversion, so it happens exactly where you write it.\n\n## How it aids you\n\nYou get to move between types deliberately — round a decimal down to a whole number, read a number out of text, get a character's code — with the conversion visible in the code. Nothing silently changes type behind your back.\n\n## Example\n\n```loft\nfn main() {\n    pi: float = 3.75;\n    whole = pi as integer;      // 3  (drops the fraction)\n    parsed = \"42\" as integer?;  // text turned into a number (or null)\n    code = 'A' as integer;      // 65 (the character's code)\n    println(\"{whole} {parsed} {code}\");   // 3 42 65\n}\n```\n"
   },
   {
     "number": 6,

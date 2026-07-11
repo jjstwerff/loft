@@ -201,7 +201,7 @@ internal utility should one become necessary.
 | `hash<T[field1, field2]>`          | Hash-indexed collection of `T` on the given fields    |
 | `index<T[field1, -field2]>`        | B-tree index (ascending/descending)                   |
 | `sorted<T[field]>`                 | Sorted vector on the given fields                     |
-| `spacial<T[x,y]>` / `spacial<T[x,y,z]>` | Spatial keyed collection, 1–3 coordinate axes, Morton/Z-order radix tree |
+| `spatial<T[x,y]>` / `spatial<T[x,y,z]>` | Spatial keyed collection, 1–3 coordinate axes, Morton/Z-order radix tree |
 | `reference<T>`                     | Reference (pointer) to a stored `T` record            |
 | `iterator<T, I>`                   | Iterator yielding `T` using internal state `I`        |
 | `fn(T1, T2) -> R`                  | First-class function type                             |
@@ -420,7 +420,7 @@ falls back to the imported-library and standard-library *prelude*:
   library's via `lib::Name`).
 - **Built-in type keywords are reserved** and cannot be shadowed: `integer`, `float`,
   `single`, `text`, `boolean`, `character`, `vector`, `hash`, `sorted`, `index`,
-  `radix`, `spacial`, `iterator`, `reference`, and the sized integers
+  `radix`, `spatial`, `iterator`, `reference`, and the sized integers
   `i8`/`i16`/`i32`/`u8`/`u16`/`u32`. `struct integer { … }` errors with *"conflicts
   with a type"* (for `struct`, `enum`, and `type` alike).
 
@@ -479,10 +479,27 @@ which is **right-associative**: `2 ** 3 ** 2` is `2 ** (3 ** 2) = 512`. Worked g
 `2 * (3 ** 2) == 18` (power tighter than multiply); `x as integer as float` is
 `(x as integer) as float` (`as` left-associative).
 
-Unary operators: `!` (logical not), `-` (negation), `~` (bitwise NOT). A unary prefix
-binds **tighter than every binary operator** (it is part of the primary expression), so
-`-2 ** 2` is `(-2) ** 2 == 4`, *not* `-(2 ** 2)` — note this differs from Python. Wrap the
-exponent base if you mean the negation to apply last: `-(2 ** 2) == -4`.
+**Comparisons do not chain (non-associative).** The comparison operators
+(`==`, `!=`, `<`, `<=`, `>`, `>=`) are **non-associative**: writing two at the same level —
+`a == b == c`, `1 < x < 10` — is a **compile error**, because left-associative grouping would
+make it `(a == b) == c`, silently comparing a *boolean* to the third operand (the classic C
+footgun). Parenthesise if you truly mean the boolean compare (`(a == b) == c`), or combine with
+`&&` for a range test (`1 < x && x < 10`).
+
+**A boolean and an integer are not comparable.** `true == 1`, `flag != 0` and the like are a
+**compile error** — a `boolean` is `true`/`false`/`null`, not `0`/`1`, so the two are different
+types (consistent with `bool < int`, which was always rejected). Convert explicitly if you
+really mean it. (`b == null` on a `boolean?` is fine — `null` is not an integer.)
+
+Unary operators: `!` (logical not), `-` (negation / sign), `~` (bitwise NOT). A unary prefix
+binds **tighter than every binary operator** — the `-` is the **sign of its operand**, part of
+the primary expression. So `-2 ** 2` is `(-2) ** 2 == 4` (read `-2` as the number
+*negative two*), *not* `-(2 ** 2) == -4` as in Python/maths (which treat `-` as a weaker
+operator). For a **literal** base this matches the "`-2` is a number" intuition and is silent;
+for a **non-literal** base (`-x ** y`, `-f() ** y`) loft emits a **warning** nudging you to
+parenthesise, since there the `-` reads as an operator on a subexpression. The grammar rule is
+uniform either way — only the reminder is added. Wrap explicitly if you mean the negation to
+apply last: `-(x ** 2)`.
 
 `~x` computes the bitwise complement (all bits flipped): `~0 == -1`, `flags & ~32` clears bit 5.
 Only defined for `integer`; use `as integer` to convert other types first.
@@ -744,7 +761,7 @@ add5(10)               // 15
 
 **Limitations:**
 - Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.
-- `spacial<T>` collections cannot store closures.
+- `spatial<T>` collections cannot store closures.
 
 See [THREADING.md](THREADING.md) § fn Expression for how function references are used with `par(...)`.
 
@@ -1282,7 +1299,7 @@ collections.  When porting code between collection types, treat these gaps
 as structural differences rather than bugs — they are intentional and not
 planned to close.
 
-**`spacial<T[x,y]>` / `spacial<T[x,y,z]>` (1–3 coordinate axes, @PLN48) is a
+**`spatial<T[x,y]>` / `spatial<T[x,y,z]>` (1–3 coordinate axes, @PLN48) is a
 related keyed collection** backed by a Morton/Z-order radix tree.  It shares
 `+=` append, `for` iteration (visited in the tree's natural Morton order —
 no sort, unlike `hash`), and `.len()`.  Proximity queries use range-slice

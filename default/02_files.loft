@@ -387,7 +387,7 @@ pub fn store_durable_seal(path: text) -> boolean fs#update;
 //   pw = PaintedWorld { painted: [] }   // painted's declared type is hash<PaintedHex[q, r]>
 //   store_persist_bind(pw.painted, "dryopea_world.store")
 //   // …mutations to pw.painted now hit mmap'd bytes…
-// `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spacial`
+// `r` is any store-rooted collection — `hash`, `sorted`, `index`, `spatial`
 // (each keyed local/field is its own dedicated Store).  A bare `reference`
 // parameter accepts them all; `bind_path` is collection-agnostic (it
 // snapshots the whole Store's bytes).  `hash` carries its bucket seed in its

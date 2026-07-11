@@ -452,7 +452,7 @@ LLRB free-space tree provides O(log F) allocation for most cases. `validate()` a
 
 ## 15. Radix Tree (Spatial Index)
 
-**Goal.** Provide a compact bit-indexed tree for the `Spacial` collection type, supporting O(log N) insert and range/nearest-neighbour queries via bit-by-bit key decomposition.
+**Goal.** Provide a compact bit-indexed tree for the `Spatial` collection type, supporting O(log N) insert and range/nearest-neighbour queries via bit-by-bit key decomposition.
 
 **Functions.**
 

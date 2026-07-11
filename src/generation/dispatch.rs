@@ -1015,7 +1015,7 @@ impl Output<'_> {
                         } else {
                             let prefix = match &var_tp {
                                 Type::Hash(_, _, _) => "hash",
-                                Type::Radix(_, _, _) => "spacial",
+                                Type::Radix(_, _, _) => "spatial",
                                 _ => unreachable!(),
                             };
                             let mut name =
@@ -1146,7 +1146,7 @@ fn tuple_has_text_leaf(elems: &[Type]) -> bool {
 
 /// True iff `elems` contains a leaf type that doesn't impl `Copy` in
 /// generated Rust — text, references, vectors, hash/index/sorted/
-/// spacial, iterators, struct-enums.  Used by `nested_tuple_clone`
+/// spatial, iterators, struct-enums.  Used by `nested_tuple_clone`
 /// (P247) to decide whether `let __ref_N = var_t.0;` needs a
 /// `.clone()` to avoid moving non-Copy data out of the parent tuple.
 /// Plain integers / floats / booleans / characters / plain enums

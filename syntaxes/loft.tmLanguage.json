@@ -150,7 +150,7 @@
         },
         {
           "name": "support.type.collection.loft",
-          "match": "\\b(vector|sorted|hash|index|spacial|iterator)\\b"
+          "match": "\\b(vector|sorted|hash|index|spatial|iterator)\\b"
         }
       ]
     },

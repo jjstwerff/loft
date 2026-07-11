@@ -70,19 +70,22 @@ fn main() {
   assert(5 << 0 == 5, "shift left by 0: identity");
   assert(5 >> 0 == 5, "shift right by 0: identity");
 
-  // ## Float null is NaN
-  // Floats represent null as `NaN` (Not a Number). Null floats behave
-  // consistently with other null types: null is not equal to anything
-  // (including itself), and null is not-equal to everything.
+  // ## Float null compares uniformly with every other scalar
+  // Floats store null as `NaN` internally, but null COMPARISON is uniform with
+  // every other scalar type (@PLN102 null model): `null == null` is TRUE, null is
+  // not equal to any real value, and null orders as the low extreme. Detect a
+  // null float with `f == null` (or `!f` / `f ?? default`) — NOT the old `f != f`
+  // trick, which no longer works now that `null == null` is true.
   // Both the defended and the undefended division yield null and continue
   // (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft);
   // the undefended site additionally reports a warning.
   bad = 0.0 / 0.0 ?? null;
-  assert(!bad, "NaN is falsy — this is how you detect null floats");
-  assert(!(bad == bad), "null == null is false");
-  assert(bad != bad, "null != null is true");
+  assert(!bad, "a null float is falsy");
+  assert(bad == null, "detect a null float with `== null`");
+  assert(bad == bad, "null == null is true (uniform null model)");
+  assert(!(bad != null), "a null float `!= null` is false");
   assert(bad != 0.0, "null != 0.0 is true");
-  // Use `!f` or `f ?? default` to check for null floats.
+  // Use `f == null`, `!f`, or `f ?? default` to check for null floats.
 
   // ## Text length counts bytes, not characters
   // `len()` on text returns the number of UTF-8 bytes, not the number of

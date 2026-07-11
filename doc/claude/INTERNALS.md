@@ -165,7 +165,7 @@ Called by the `png()` stdlib function in the default library when a `File` is de
 
 **Status: partially implemented.** The insert, first, last, and find operations are functional; the iteration `next` method and the `remove` and `optimize` helpers are stubs. The module is gated with `#![allow(dead_code)]`.
 
-The radix tree is the planned backing structure for the `Spacial` collection type (`Parts::Spacial` in `database.rs`). It provides a compact, bit-indexed spatial index over arbitrary record keys.
+The radix tree is the planned backing structure for the `Spatial` collection type (`Parts::Spatial` in `database.rs`). It provides a compact, bit-indexed spatial index over arbitrary record keys.
 
 ### Record Layout
 

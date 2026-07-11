@@ -52,26 +52,47 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ```
   (E-Val)    a value v does not step (it is a normal form).
-  (E-Null)   `null` is a value, represented in-band by a per-type SENTINEL — e.g.
-             `integer`'s null is `i64::MIN`.  Two configs that agree on the abstract
-             value (incl. null) MUST agree, regardless of how a backend stores the sentinel.
+  (E-Null)   `null` is a value, represented IN-BAND by a specific reserved bit-pattern per
+             scalar width — `integer` = `i64::MIN`; a narrow int = its top value (`u8` = 255);
+             `float`/`single` = a reserved NaN; `character` = codepoint 0; a reference =
+             `nullref`.  That pattern is a REAL, OBSERVABLE value, and it is RESERVED: it is
+             EXCLUDED from the non-null range of `τ` (so a non-null `integer` is
+             `[i64::MIN+1, i64::MAX]`, symmetric).  No legitimate non-null value equals it.
+             Both backends MUST agree on the abstract value AND on the reserved pattern per
+             width (the pattern is part of the observable contract, not a private encoding).
 ```
 
-**In words.** A value is "done" — it doesn't evaluate further. `null` is a real value, not
-a separate state; each type reserves one bit pattern for it (an `integer` null is the
-smallest `i64`). The semantics talk about the *abstract* value; how a backend encodes the
-sentinel is its business, but the value it computes must match.
+**In words.** A value is "done" — it doesn't evaluate further. `null` is a real value, not a
+separate state; each scalar **width** reserves ONE bit-pattern for it (an `integer` null is
+the smallest `i64`; a `u8` null is 255; a `float` null is a reserved NaN). That pattern is
+**in-band and observable** — it is a value in the same slot — so the non-null value **range
+excludes it** and no real value can silently be confused with null. (This corrects the earlier
+claim that "how a backend encodes the sentinel is its business": the encoding is in-band, so it
+IS observable and part of the frozen contract — see the null-sentinel keystone,
+[plans/102-stability-contract/keystone-null-model.md](../plans/102-stability-contract/keystone-null-model.md).)
+The cost — a *nullable* narrow type cannot store its one reserved value (`u8?` has no 255,
+`integer?` no `i64::MIN`, `character?` no `'\0'`) — is a deliberate, documented limitation of
+the in-band model, not a silent one.
 
 ### Evaluation order — left to right
 
 ```
-  (E-Left)   in a binary form `e₁ op e₂`, reduce e₁ to a value first, then e₂:
+  (E-Left)   in a binary form `e₁ op e₂` (op NOT short-circuiting), reduce e₁ to a value
+             first, then e₂:
                  ⟨e₁, σ⟩ → ⟨e₁', σ'⟩   ⟹   ⟨e₁ op e₂, σ⟩ → ⟨e₁' op e₂, σ'⟩
                  ⟨v₁ op e₂, σ⟩ → ⟨v₁ op e₂', σ'⟩   when   ⟨e₂, σ⟩ → ⟨e₂', σ'⟩
+  (E-And)    `e₁ && e₂` reduces e₁ first; if e₁ is false the whole form is false and e₂ is
+             **NOT** evaluated (short-circuit); otherwise the form reduces to e₂.
+  (E-Or)     `e₁ || e₂` reduces e₁ first; if e₁ is true the whole form is true and e₂ is
+             **NOT** evaluated; otherwise the form reduces to e₂.
 ```
 
 **In words.** Operands evaluate left first, then right — so any side effects (a call that
-mutates the store) happen in source order. Both backends must use this order.
+mutates the store) happen in source order. Both backends must use this order. The **only**
+exception is the short-circuiting logical operators `&&`/`||` (and their `and`/`or` spellings):
+they reduce the left operand, and evaluate the right operand *only* when the left has not
+already decided the result — verified on both backends. Every other binary op (arithmetic,
+comparison, `??`) evaluates both operands under E-Left.
 
 ### Arithmetic — uncomputable yields null (the spreadsheet model)
 
@@ -81,13 +102,24 @@ mutates the store) happen in source order. Both backends must use this order.
                                                 overflows the type, or op is `/`/`%` with
                                                 v₂ = 0.  The result is **null**; evaluation
                                                 CONTINUES (it never halts).
-  (E-NullArg)   any op with a `null` operand produces `null` (null is contagious),
-                EXCEPT comparisons, which compare against the sentinel.
+  (E-NullArg)   any op with a `null` operand produces `null` (null is CONTAGIOUS),
+                EXCEPT comparisons, which are DEFINITE against the reserved pattern and
+                UNIFORM across every scalar type:
+                  `null == null` → true;  `v == null` / `null == v` → false (v non-null);
+                  `!=` is the exact complement of `==`;
+                  ordering (`<` `>` `<=` `>=`) places `null` at the LOW extreme —
+                  `null < v` → true, `v < null` → false, `null < null` → false —
+                  the SAME for `integer`, `character`, `float`, `single`, `boolean`.
 ```
 
 **In words.** Arithmetic gives the obvious result when it fits. When it *can't* — overflow,
 divide/modulo by zero — it yields **null** and the program **keeps running**; it does not
-halt. This is the **spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)): a
+halt. Comparisons are the exception to contagion: they let you *test* for null (`x == null`)
+and give a **total order** with null sorting first, and this is **uniform across scalar
+types** — `null == null` is always true, never type-dependent. (`float`/`single` null was a
+NaN, so `null == null` used to be false and ordering unordered — deviation D-op-null-1, CLOSED
+by keystone step 2 (2026-07-10); both are now uniform with the integer/char behavior.) This is
+the **spreadsheet model** ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)): a
 cell that can't compute shows null and never stops the other cells. A fault is *local* — it
 degrades one value, never the whole run. The same holds for every uncomputable step (an
 out-of-bounds index, a deref of an absent value): null, continue.
@@ -130,13 +162,15 @@ E-Uncomp's mode-independence.
 
 ```
   (E-Var)    ⟨x, σ⟩ → ⟨σ(x), σ⟩
-  (E-Asgn)   ⟨x = v, σ⟩ → ⟨v, σ[x ↦ v]⟩                 (the RHS reduces first, by E-Left)
+  (E-Asgn)   ⟨x = v, σ⟩ → ⟨v, σ[x ↦ v]⟩                 (the LHS place reduces first —
+                                                        left-to-right — THEN the RHS, by E-Left)
   (E-Seq)    ⟨v ; s, σ⟩ → ⟨s, σ⟩
   (E-IfT)    ⟨if true { s } else { t }, σ⟩ → ⟨s, σ⟩      (and E-IfF for false)
 ```
 
-**In words.** A variable steps to its stored value; an assignment reduces its right side
-then updates the store; a sequence drops a finished statement; an `if` picks the branch
+**In words.** A variable steps to its stored value; an assignment reduces its left-hand
+place first (left-to-right), then its right side, then updates the store; a sequence drops a
+finished statement; an `if` picks the branch
 its (already-evaluated) condition selected. Standard — pinned here only so both backends
 share them.
 
@@ -144,7 +178,37 @@ share them.
 
 ## Deviations
 
-OPEN: **2**
+OPEN: **2** (D-op-1/2; the null-model keystone deviations D-op-null-1/2 both CLOSED 2026-07-10 by
+keystone steps 2–3. Opened 2026-07-10 by the @PLN102 pre-freeze audit —
+[the null-model keystone decision](../plans/102-stability-contract/keystone-null-model.md).)
+
+### D-op-null-1 — CLOSED (2026-07-10, keystone step 2): float/single null comparison now uniform
+- Was: `float`/`single` null (a NaN) made `null == null` **false** and ordering unordered, where
+  integer/char null is reflexive and orders low — violating `(E-NullArg)`'s uniformity.
+- Fixed at the single source: the `Op{Eq,Ne,Lt,Le}{Float,Single}` `#rust` bodies in
+  `default/01_code.loft` (which drive BOTH the interpreter via `fill.rs` regen and native codegen)
+  now treat a NaN operand as null definitely — `null == null` true, `!=` its exact complement,
+  null orders at the low extreme — matching `(E-NullArg)` and the integer/char behavior. Verified
+  both backends against the matrix; guard `tests/scripts/pln102-null-comparison-uniform.loft`. The
+  conversion set (docs/tests on the old `x != x` NaN idiom → `== null`) was migrated in the same
+  change.
+
+### D-op-null-2 — CLOSED (2026-07-10, keystone step 3): collision sites report, no longer silent
+- Was: an op whose true result is the reserved `i64::MIN` pattern (or an out-of-range shift/cast)
+  silently masked, saturated, or nulled a real value — the silent-wrong class `(E-Null)` forbids.
+- Fixed at the single `#rust` source (drives BOTH backends), mirroring `÷0` (report + null +
+  continue):
+  - **Shifts** (step 3a): `OpSLeftInt`/`OpSRightInt` report `ShiftOutOfRange` on an amount outside
+    `[0, 64)` or a left shift landing on `i64::MIN` (`1 << 63`); null operands stay contagious.
+  - **Casts** (step 3b): `OpCastIntFromFloat` reports `CastOutOfRange` on a float outside integer
+    range (was: saturate to `i64::MAX`); `OpConvCharacterFromInt`/`OpCastCharacterFromInt` report on
+    an invalid code point (was: silent NUL); `OpCastIntFromText` reports when a *valid* number parses
+    to exactly `i64::MIN` (an unparseable text stays DN3-nullable → null, silently, unchanged). NaN
+    floats and null integers stay contagious.
+- Distinct from **C85** overflow of ordinary arithmetic, which is a decided edge and stays silent.
+- Both backends; guards `tests/scripts/pln102-shift-collision-guard.loft` +
+  `tests/scripts/pln102-cast-collision-guard.loft`; the conversion set was one assertion
+  (`inf as integer` saturate → null in `02-floats.loft`).
 
 ### D-op-1 — there is no shared operational semantics; the interpreter is the spec
 - **Violates:** the premise of this doc (a single evaluation relation both backends obey)

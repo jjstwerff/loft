@@ -971,25 +971,25 @@ bounds, partial-key match iteration, and vector comprehensions over key ranges.
 
 ### A4  Spatial index operations (full implementation)
 **Sources:** PROBLEMS #22
-**Description:** `spacial<T>` collection type: insert, lookup, and iteration operations
+**Description:** `spatial<T>` collection type: insert, lookup, and iteration operations
 are not implemented.  The pre-gate (compile error) was added 2026-03-15.
 **Fix path:**
 
 **Phase 1 — Insert and exact lookup** (`src/database/`, `src/fill.rs`):
-Implement `spacial.insert(elem)` and `spacial[key]` for point queries.  Remove the
-compile-error pre-gate for these two operations only; all other `spacial` ops remain gated.
+Implement `spatial.insert(elem)` and `spatial[key]` for point queries.  Remove the
+compile-error pre-gate for these two operations only; all other `spatial` ops remain gated.
 *Tests:* insert 3 points, retrieve each by exact key; null returned for missing key.
 
 **Phase 2 — Bounding-box range query** (`src/database/`, `src/parser/collections.rs`):
-Implement `for e in spacial[x1..x2, y1..y2]` returning all elements within a bounding box.
+Implement `for e in spatial[x1..x2, y1..y2]` returning all elements within a bounding box.
 *Tests:* 10 points; query a sub-region; verify count and identity of results.
 
 **Phase 3 — Removal** (`src/database/`):
-Implement `spacial[key] = null` and `remove` inside an active iterator.
+Implement `spatial[key] = null` and `remove` inside an active iterator.
 *Tests:* insert 5, remove 2, verify 3 remain and removed points are never returned.
 
 **Phase 4 — Full iteration** (`src/database/`, `src/state/io.rs`):
-Implement `for e in spacial` visiting all elements; compatible with the existing iterator
+Implement `for e in spatial` visiting all elements; compatible with the existing iterator
 protocol (sorted/index/vector).  Remove the remaining pre-gate.
 *Tests:* insert N points, iterate all, count matches N; reverse iteration produces correct order.
 

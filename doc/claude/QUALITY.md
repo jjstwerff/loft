@@ -1294,7 +1294,7 @@ strategy:
    `walk_parsed_struct` + `walk_primitive_into` in
    `src/database/structures.rs`.  Dispatches on every `Parts::*`
    variant (Base, Struct, EnumValue, Enum, Vector/Sorted/Array/
-   Ordered/Hash/Spacial/Index, Byte, Short).  `Stores::parse`
+   Ordered/Hash/Spatial/Index, Byte, Short).  `Stores::parse`
    and `parse_message` route unified-first with legacy fallback
    gated for error-path position reporting.
 4. **Verify** via the existing test scripts (`57-json.loft`,
