@@ -634,7 +634,7 @@ impl Stores {
             Parts::Ordered(_, _) => "ordered",
             Parts::Hash(_, _) => "hash",
             Parts::Index(_, _, _) => "index",
-            Parts::Radix(_, _) => "spacial",
+            Parts::Radix(_, _) => "spatial",
             _ => "<other>",
         };
         let _ = writeln!(
@@ -1154,8 +1154,8 @@ impl Stores {
         }
     }
 
-    pub fn spacial(&mut self, content: u16, key: &[String]) -> u16 {
-        let mut name = "spacial<".to_string() + &self.types[content as usize].name + "[";
+    pub fn spatial(&mut self, content: u16, key: &[String]) -> u16 {
+        let mut name = "spatial<".to_string() + &self.types[content as usize].name + "[";
         let key_nrs = self.field_name(content, key, &mut name);
         if let Some(nr) = self.names.get(&name) {
             *nr
@@ -1815,7 +1815,7 @@ impl Stores {
             }
             Parts::Radix(e, keys) => {
                 format!(
-                    "spacial<{}>(keys={keys:?},elem_size={})",
+                    "spatial<{}>(keys={keys:?},elem_size={})",
                     name(*e),
                     self.size(*e)
                 )
@@ -1827,7 +1827,7 @@ impl Stores {
 
     /// Plan-06 phase 2 — true iff `tp` (a struct or struct-enum-variant)
     /// contains any field that owns out-of-line data: text, references,
-    /// vectors, hashes, sorted/index/spacial, or nested struct-enums.
+    /// vectors, hashes, sorted/index/spatial, or nested struct-enums.
     ///
     /// When this returns false, a struct of type `tp` can be safely
     /// `copy_block`-copied across stores without further deep-copy
@@ -1927,7 +1927,7 @@ impl Stores {
             Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
                 fields.iter().any(|f| self.is_field_owned(f.content))
             }
-            // Owning types: vector, hash, sorted, index, spacial, array.
+            // Owning types: vector, hash, sorted, index, spatial, array.
             _ => true,
         }
     }
@@ -2571,8 +2571,8 @@ mod layout_tests {
     }
 
     #[test]
-    fn spacial_registers_its_coordinate_keys() {
-        // @PLN48 S2: a `spacial<Mob[x, y]>` must resolve its two coordinate fields to
+    fn spatial_registers_its_coordinate_keys() {
+        // @PLN48 S2: a `spatial<Mob[x, y]>` must resolve its two coordinate fields to
         // `keys`, in list order, exactly as a `hash` does — that list is what the
         // Morton oracle interleaves.
         let mut s = Stores::new();
@@ -2580,7 +2580,7 @@ mod layout_tests {
         let tp = s.structure("Mob", 0);
         s.field(tp, "x", int_c);
         s.field(tp, "y", int_c);
-        let sp = s.spacial(tp, &["x".to_string(), "y".to_string()]);
+        let sp = s.spatial(tp, &["x".to_string(), "y".to_string()]);
         s.finish();
 
         let keys = &s.types[sp as usize].keys;

@@ -445,7 +445,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("i_parse_error_push", i_parse_error_push),
     ("n_hash_sorted", n_hash_sorted),
     ("n_radix_sorted", n_radix_sorted),
-    ("n_spacial_range", n_spacial_range),
+    ("n_spatial_range", n_spatial_range),
     ("n_hash_unsorted", n_hash_unsorted),
     // Plan-12 phase 1a (2026-05-23) — crypto `n_*` symbols
     // (`n_sha256`, `n_hmac_sha256`, `n_hmac_sha256_raw`,
@@ -2624,7 +2624,7 @@ fn n_hash_unsorted(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result);
 }
 
-/// @PLN48 — iterate a `spacial`/`radix` collection in natural key order.  Wraps
+/// @PLN48 — iterate a `spatial`/`radix` collection in natural key order.  Wraps
 /// `Stores::build_radix_sorted_vec`; no sort — the tree walk is already ordered.
 fn n_radix_sorted(stores: &mut Stores, stack: &mut DbRef) {
     let v_tp = *stores.get::<i64>(stack) as u16;
@@ -2633,8 +2633,8 @@ fn n_radix_sorted(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result);
 }
 
-/// @PLN48 S3 — a spacial range slice.  Args pop in reverse declaration order.
-fn n_spacial_range(stores: &mut Stores, stack: &mut DbRef) {
+/// @PLN48 S3 — a spatial range slice.  Args pop in reverse declaration order.
+fn n_spatial_range(stores: &mut Stores, stack: &mut DbRef) {
     let limit = *stores.get::<i64>(stack);
     let tz = *stores.get::<i64>(stack);
     let ty = *stores.get::<i64>(stack);

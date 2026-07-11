@@ -3,7 +3,7 @@
 // @I90 — Shared utilities & data structures
 
 //! Proximity queries over moving 2D points — @PLN48 deliverable S3, at the Rust
-//! layer that `spacial<T[x,y]>` will call.
+//! layer that `spatial<T[x,y]>` will call.
 //!
 //! A point is a store record with two `u32` coordinates, `x` at byte offset 4 and
 //! `y` at offset 8.  Its key in the [`crate::radix_tree`] is the **Morton (Z-order)
@@ -115,7 +115,7 @@ fn scatter(v: u32, stride: u32, bits: u32) -> u64 {
 /// A Morton key assembled at run time from a record's coordinate fields, rather than
 /// from a compile-time [`KeySpec`].
 ///
-/// This is the shape `spacial<T[…]>` needs: the interleaved axes are not known when
+/// This is the shape `spatial<T[…]>` needs: the interleaved axes are not known when
 /// the code is written, they are the coordinate key fields a schema discovers, so the
 /// oracle must *carry* their byte offsets.  Each axis is a `u32` at the listed offset;
 /// they interleave LSB-aligned, the first axis into bit 0, the next into bit 1, and so
@@ -533,7 +533,7 @@ mod tests {
 
     /// S5 — the runtime key is the compile-time key.
     ///
-    /// The bridge that unblocks the database: a `spacial<T[…]>` will build a
+    /// The bridge that unblocks the database: a `spatial<T[…]>` will build a
     /// [`MortonKey`] from schema-discovered coordinate offsets, not from a fixed
     /// [`KeySpec`].  This inserts the same points into two trees — one keyed by the
     /// `fn`-pointer `MORTON2D`, one by a `MortonKey` over the same two offsets — and

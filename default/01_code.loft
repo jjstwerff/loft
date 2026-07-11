@@ -889,7 +889,7 @@ fn OpSetDbRef(v1: reference, fld: const u16, val: reference);
 #rust"{{let db = @v1; let r = @val; let off = db.pos + u32::from(@fld); let store = stores.store_mut(&db); store.set_u32_raw(db.rec, off, u32::from(r.store_nr)); store.set_u32_raw(db.rec, off + 4, r.rec); store.set_u32_raw(db.rec, off + 8, r.pos);}}"
 fn OpGetDbRef(v1: reference, fld: const u16) -> reference;
 #rust"{{let db = @v1; let store = stores.store(&db); let off = db.pos + u32::from(@fld); let store_nr = store.get_u32_raw(db.rec, off) as u16; let rec = store.get_u32_raw(db.rec, off + 4); let pos = store.get_u32_raw(db.rec, off + 8); DbRef {{ store_nr, rec, pos }}}}"
-// Get a direct field reference for a structure: vector, index, hash or spacial
+// Get a direct field reference for a structure: vector, index, hash or spatial
 // These always point to a field what value can change depending on the content.
 fn OpGetField(v1: reference, fld: const u16) -> reference[v1];
 #rust"DbRef {{store_nr: @v1.store_nr, rec: @v1.rec, pos: @v1.pos + u32::from(@fld)}}"
@@ -1154,20 +1154,20 @@ fn hash_sorted(h: reference, tp: integer) -> reference;
 // parser desugars the par form of `for e in h` into this call.
 fn hash_unsorted(h: reference, tp: integer) -> reference;
 #pure
-// @PLN48 — iterate a spacial/radix collection in its NATURAL key order (the tree's
+// @PLN48 — iterate a spatial/radix collection in its NATURAL key order (the tree's
 // in-order walk = Morton/Z-order for a spatial index).  Returns a fresh
 // vector<reference<T>> of the records already in order — no sort, unlike
 // `hash_sorted`, because a radix tree is ordered by construction.  The parser
 // desugars `for e in xs { … }` into this call with the collection's type id.
 fn radix_sorted(r: reference, tp: integer) -> reference;
 #impure(parent_write)
-// @PLN48 S3 — a spacial range slice `xs[(fx,fy)..(tx,ty)]` / `xs[(fx,fy)..:limit]`.
+// @PLN48 S3 — a spatial range slice `xs[(fx,fy)..(tx,ty)]` / `xs[(fx,fy)..:limit]`.
 // Returns a fresh vector<reference<T>> of the records whose Morton code is in the
 // interval (has_till=0 = open end; limit<0 = no cap), in natural order.  The parser
 // rewrites the slice expression, injecting the collection's type id.  Coordinates
 // carry up to MAX_AXES (3) axes; the range builder reads only the collection's own
-// axis count, so `fz`/`tz` are ignored (0) for a 2D `spacial<T[x,y]>`.
-fn spacial_range(r: reference, tp: integer, fx: integer, fy: integer, fz: integer, has_till: integer, tx: integer, ty: integer, tz: integer, limit: integer) -> reference;
+// axis count, so `fz`/`tz` are ignored (0) for a 2D `spatial<T[x,y]>`.
+fn spatial_range(r: reference, tp: integer, fx: integer, fy: integer, fz: integer, has_till: integer, tx: integer, ty: integer, tz: integer, limit: integer) -> reference;
 #impure(parent_write)
 type index size(4);
 
@@ -1287,19 +1287,19 @@ type iterator;
 // Forward-declared builtin collection type-keywords: reserved names whose full
 // implementation lands with the crawler/moros/dryopea library work.  Declaring
 // them (rather than leaving them as bare parser keywords) makes them real
-// `DefType::Type` definitions, so `struct radix` / `enum spacial` are cleanly
+// `DefType::Type` definitions, so `struct radix` / `enum spatial` are cleanly
 // rejected as a name conflict instead of being silently swallowed (struct) or
 // panicking in `complete_definition` (enum/type).
 type radix;
-type spacial;
-// @PLN48 — number of elements in a spacial<T[x,y]> (radix / Morton tree).  Reads
+type spatial;
+// @PLN48 — number of elements in a spatial<T[x,y]> (radix / Morton tree).  Reads
 // the tree's cached length word (O(1)), mirroring `len(both: hash)`.  Declared
-// after `type spacial` so the parameter type resolves.
-fn OpLengthSpacial(r: spacial) -> integer;
-#rust"i64::from(codegen_runtime::spacial_len(&@r, &s.database.allocations))"
-// Number of elements in a spacial (radix / Morton tree) collection.
-pub fn len(both: spacial) -> integer {
-  OpLengthSpacial(both)
+// after `type spatial` so the parameter type resolves.
+fn OpLengthSpatial(r: spatial) -> integer;
+#rust"i64::from(codegen_runtime::spatial_len(&@r, &s.database.allocations))"
+// Number of elements in a spatial (radix / Morton tree) collection.
+pub fn len(both: spatial) -> integer {
+  OpLengthSpatial(both)
 }
 #pure
 // Call a predefined system function (but not an operator).

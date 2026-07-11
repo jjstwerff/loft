@@ -263,14 +263,14 @@ All three keyed collection types share a common lookup and removal syntax handle
 
 These are parser-level operations; they compile to `OpGetRecord`, `OpHashRemove`, and `OpRemove` respectively. There are no corresponding callable functions.
 
-### `spacial<T[x,y]>` / `spacial<T[x,y,z]>` — spatial keyed collection
+### `spatial<T[x,y]>` / `spatial<T[x,y,z]>` — spatial keyed collection
 
 A keyed collection backed by a Morton/Z-order radix tree, with 1–3
 coordinate key fields (@PLN48):
 
 | Syntax | Description |
 |--------|-------------|
-| `xs: spacial<Mob[x, y]> = [];` | Construct; also legal as a struct field (`mobs: spacial<Mob[x,y]>`). |
+| `xs: spatial<Mob[x, y]> = [];` | Construct; also legal as a struct field (`mobs: spatial<Mob[x,y]>`). |
 | `xs += [Mob{x: 1, y: 2}];` | Append. |
 | `for m in xs { … }` | Iterate in the tree's natural Morton/Z-order — no sort (unlike `hash`, which sorts via its internal ordered index). |
 | `xs.len()` | Element count — O(1), reads the tree's cached length word. |

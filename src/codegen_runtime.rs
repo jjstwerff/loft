@@ -105,7 +105,7 @@ pub const CODEGEN_RUNTIME_FNS: &[RuntimeFn] = &[
     RuntimeFn { name: "n_hash_sorted",                abi: Abi::Cell },
     RuntimeFn { name: "n_hash_unsorted",              abi: Abi::Cell },
     RuntimeFn { name: "n_radix_sorted",               abi: Abi::Cell },
-    RuntimeFn { name: "n_spacial_range",              abi: Abi::Cell },
+    RuntimeFn { name: "n_spatial_range",              abi: Abi::Cell },
     // P268 — JSON ecosystem (P54 sprint).  Native runtime wrappers
     // around `crate::native::json_parse_into_stores` + the JsonValue
     // method natives so `--native` programs can read/parse JSON
@@ -768,12 +768,12 @@ pub fn OpLengthCharacter(_cell: &std::cell::UnsafeCell<Stores>, c: i32) -> i64 {
     }
 }
 
-/// Number of elements in a `spacial<T[x,y]>` (radix / Morton tree) collection.
+/// Number of elements in a `spatial<T[x,y]>` (radix / Morton tree) collection.
 /// Thin wrapper over the crate-private `radix_db::count` so the `#rust` `len`
 /// template reaches it through the pub `codegen_runtime` module on both backends
 /// (mirrors how `hash::count` backs `len(both: hash)`).
 #[must_use]
-pub fn spacial_len(coll: &DbRef, stores: &[crate::store::Store]) -> u32 {
+pub fn spatial_len(coll: &DbRef, stores: &[crate::store::Store]) -> u32 {
     crate::radix_db::count(coll, stores)
 }
 
@@ -2079,7 +2079,7 @@ pub fn n_hash_unsorted(cell: &std::cell::UnsafeCell<Stores>, h: DbRef, tp: i64) 
     stores.build_hash_unsorted_vec(&h, tp as u16)
 }
 
-/// @PLN48 — iterate a `spacial`/`radix` collection in natural key order.  No sort:
+/// @PLN48 — iterate a `spatial`/`radix` collection in natural key order.  No sort:
 /// the tree walk is ordered by construction.  Bytecode equivalent: `n_radix_sorted`
 /// in `src/native.rs`; result iterated via Ordered (on=3).
 pub fn n_radix_sorted(cell: &std::cell::UnsafeCell<Stores>, r: DbRef, tp: i64) -> DbRef {
@@ -2087,9 +2087,9 @@ pub fn n_radix_sorted(cell: &std::cell::UnsafeCell<Stores>, r: DbRef, tp: i64) -
     stores.build_radix_sorted_vec(&r, tp as u16)
 }
 
-/// @PLN48 S3 — a spacial range slice.  Bytecode equivalent: `n_spacial_range`.
+/// @PLN48 S3 — a spatial range slice.  Bytecode equivalent: `n_spatial_range`.
 #[allow(clippy::too_many_arguments)]
-pub fn n_spacial_range(
+pub fn n_spatial_range(
     cell: &std::cell::UnsafeCell<Stores>,
     r: DbRef,
     tp: i64,

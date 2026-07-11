@@ -909,7 +909,7 @@ impl Parser {
     /// width per field (no length prefix), so any variable-width field breaks the
     /// round-trip: a `text`/`vector` field writes payload bytes the fixed-width
     /// read can't locate (W10 — it read past the record and panicked), and the
-    /// collection kinds (sorted/index/hash/spacial) hold store-internal pointers
+    /// collection kinds (sorted/index/hash/spatial) hold store-internal pointers
     /// that don't serialise at all.  Nested plain structs ARE fixed-width and
     /// round-trip (W11), so recurse into them — reporting the offending field as
     /// `outer.inner`.  Callers emit a compile-time error when this returns `Some`.
@@ -2622,7 +2622,7 @@ impl Parser {
     /// @P308 — the specific keyed-collection db type id (the id
     /// `OpReplaceKeyed` / `copy_claims` need) to deep-copy a `hash`/`sorted`/
     /// `index` field from an expression, else `None` (the caller keeps the
-    /// bare-push).  `spacial` is excluded (`copy_claims` unimplemented, per
+    /// bare-push).  `spatial` is excluded (`copy_claims` unimplemented, per
     /// @P295).  Mirrors the keyed-LOCAL `keyed_kt` logic in
     /// `expressions.rs::parse_assign_op`.  (Sorted/index were briefly
     /// HASH-only while @P309 — a deep-copy data-loss/hang when `index<T>`
@@ -2642,12 +2642,12 @@ impl Parser {
                 let c = self.data.def(*d).known_type();
                 (c != u16::MAX).then(|| self.database.index(c, key))
             }
-            // @PLN48 — a `spacial` STRUCT FIELD is keyed like the others; without this
+            // @PLN48 — a `spatial` STRUCT FIELD is keyed like the others; without this
             // arm `keyed_field_kt` returned None and the field construction crashed
             // (`record_new` resolved the wrong field index).
             Type::Radix(d, key, _) => {
                 let c = self.data.def(*d).known_type();
-                (c != u16::MAX).then(|| self.database.spacial(c, key))
+                (c != u16::MAX).then(|| self.database.spatial(c, key))
             }
             _ => None,
         }

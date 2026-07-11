@@ -1671,7 +1671,7 @@ impl Parser {
         } else {
             self.data.def_nr(type_name)
         };
-        if self.first_pass && tp_nr == u32::MAX && type_name != "spacial" {
+        if self.first_pass && tp_nr == u32::MAX && type_name != "spatial" {
             // @P296-sibling — for a qualified `lib::Type` reference, `tp_nr`
             // was computed as `source_nr(source, name)` (the type, e.g.
             // `CellSnap`), but the pass-1 placeholder is keyed on
@@ -2037,12 +2037,12 @@ impl Parser {
                         self.parse_fields(true, &mut fields);
                         Type::Sorted(sub_nr, fields, crate::data::Deps::none())
                     }
-                    "spacial" => {
-                        // @PLN48 S2 — `spacial<T[x, y]>` lowers to the shared `Radix`
+                    "spatial" => {
+                        // @PLN48 S2 — `spatial<T[x, y]>` lowers to the shared `Radix`
                         // runtime kind (RADIX_TREE.md §8.1): the coordinate key fields
                         // become the Morton-interleaved axes.  Mirrors the `hash` arm;
                         // a spatial index needs its coordinate keys, so a bare
-                        // `spacial<T>` (no key-spec) is a helpful error rather than a
+                        // `spatial<T>` (no key-spec) is a helpful error rather than a
                         // silent empty key.
                         self.has_deprecated_not_null();
                         if self.lexer.peek_token("[") {
@@ -2059,7 +2059,7 @@ impl Parser {
                                 diagnostic!(
                                     self.lexer,
                                     Level::Error,
-                                    "spacial<T[…]> supports at most {} coordinate axes, got {}",
+                                    "spatial<T[…]> supports at most {} coordinate axes, got {}",
                                     crate::radix_db::MAX_AXES,
                                     f.len()
                                 );
@@ -2070,7 +2070,7 @@ impl Parser {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,
-                                "spacial<T[x, y]> needs coordinate key fields, e.g. spacial<Mob[x, y]>"
+                                "spatial<T[x, y]> needs coordinate key fields, e.g. spatial<Mob[x, y]>"
                             );
                             Type::Unknown(0)
                         }

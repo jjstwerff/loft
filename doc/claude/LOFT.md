@@ -201,7 +201,7 @@ internal utility should one become necessary.
 | `hash<T[field1, field2]>`          | Hash-indexed collection of `T` on the given fields    |
 | `index<T[field1, -field2]>`        | B-tree index (ascending/descending)                   |
 | `sorted<T[field]>`                 | Sorted vector on the given fields                     |
-| `spacial<T[x,y]>` / `spacial<T[x,y,z]>` | Spatial keyed collection, 1–3 coordinate axes, Morton/Z-order radix tree |
+| `spatial<T[x,y]>` / `spatial<T[x,y,z]>` | Spatial keyed collection, 1–3 coordinate axes, Morton/Z-order radix tree |
 | `reference<T>`                     | Reference (pointer) to a stored `T` record            |
 | `iterator<T, I>`                   | Iterator yielding `T` using internal state `I`        |
 | `fn(T1, T2) -> R`                  | First-class function type                             |
@@ -420,7 +420,7 @@ falls back to the imported-library and standard-library *prelude*:
   library's via `lib::Name`).
 - **Built-in type keywords are reserved** and cannot be shadowed: `integer`, `float`,
   `single`, `text`, `boolean`, `character`, `vector`, `hash`, `sorted`, `index`,
-  `radix`, `spacial`, `iterator`, `reference`, and the sized integers
+  `radix`, `spatial`, `iterator`, `reference`, and the sized integers
   `i8`/`i16`/`i32`/`u8`/`u16`/`u32`. `struct integer { … }` errors with *"conflicts
   with a type"* (for `struct`, `enum`, and `type` alike).
 
@@ -744,7 +744,7 @@ add5(10)               // 15
 
 **Limitations:**
 - Capturing closures in `vector<fn(...)>` is supported only for non-capturing lambdas or when all elements are the same closure type.
-- `spacial<T>` collections cannot store closures.
+- `spatial<T>` collections cannot store closures.
 
 See [THREADING.md](THREADING.md) § fn Expression for how function references are used with `par(...)`.
 
@@ -1282,7 +1282,7 @@ collections.  When porting code between collection types, treat these gaps
 as structural differences rather than bugs — they are intentional and not
 planned to close.
 
-**`spacial<T[x,y]>` / `spacial<T[x,y,z]>` (1–3 coordinate axes, @PLN48) is a
+**`spatial<T[x,y]>` / `spatial<T[x,y,z]>` (1–3 coordinate axes, @PLN48) is a
 related keyed collection** backed by a Morton/Z-order radix tree.  It shares
 `+=` append, `for` iteration (visited in the tree's natural Morton order —
 no sort, unlike `hash`), and `.len()`.  Proximity queries use range-slice

@@ -33,7 +33,7 @@ The grammar implements the scope mapping documented in
 | `null` | `constant.language.null.loft` |
 | `assert`, `debug_assert`, `panic`, `sizeof`, `self`, `par`, `print`, `log_*`, `len` | `keyword.other.loft` |
 | `integer`, `boolean`, `float`, `single`, `long`, `character`, `text`, `byte`, `void`, `reference`, `enumerate`, `i8/i16/i32`, `u8/u16/u32` | `support.type.primitive.loft` |
-| `vector`, `sorted`, `hash`, `index`, `spacial`, `iterator` | `support.type.collection.loft` |
+| `vector`, `sorted`, `hash`, `index`, `spatial`, `iterator` | `support.type.collection.loft` |
 | `not null` modifier | `storage.modifier.loft` |
 | `CamelCase` identifiers | `entity.name.type.loft` |
 | `UPPER_SNAKE` identifiers | `constant.other.loft` |

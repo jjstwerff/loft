@@ -224,7 +224,7 @@ fn coverage(p: &Parts) -> (&'static str, Cover) {
         ),
         Parts::Radix(..) => (
             "Radix",
-            Cover::Gap("spacial<T[key]> — planned 1.1+, errors today"),
+            Cover::Gap("spatial<T[key]> — planned 1.1+, errors today"),
         ),
         Parts::Array(_) => (
             "Array",

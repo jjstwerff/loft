@@ -4479,7 +4479,7 @@ impl Scopes {
                     }
                     // @PLN85 p188 — a discarded (or inline-unbound) owned KEYED
                     // collection return (`build() -> sorted<T[k]>`, and the
-                    // index/hash/spacial siblings) leaks its by-value store exactly
+                    // index/hash/spatial siblings) leaks its by-value store exactly
                     // like the vector case above — the `Drop` lift binds it to a
                     // `__lift_N` temp so `get_free_vars` emits the store's
                     // `OpFreeRef` (both backends).  Empty dep = OWNED (fresh); a

@@ -1,4 +1,4 @@
-// @PLN48 S3 — spacial range slicing (no methods, no new functions): the bounding
+// @PLN48 S3 — spatial range slicing (no methods, no new functions): the bounding
 // box `xs[(x1,y1)..(x2,y2)]`, the open outward walk `xs[(x,y)..]` with a break, and
 // the count-limited `xs[(x,y)..:n]`.  Both backends, Morton order.  2D and 3D — the
 // slice ABI carries up to MAX_AXES (3) coordinate axes.
@@ -6,7 +6,7 @@ struct SLMob { x: integer, y: integer }
 struct SLMob3 { x: integer, y: integer, z: integer }
 
 fn main() {
-  xs: spacial<SLMob[x, y]> = [];
+  xs: spatial<SLMob[x, y]> = [];
   xs += [SLMob{x: 5,  y: 5}];
   xs += [SLMob{x: 1,  y: 1}];
   xs += [SLMob{x: 8,  y: 8}];
@@ -32,7 +32,7 @@ fn main() {
   assert(lim == 1, "limit :1 yields one record");
 
   // 3D — the same slice forms carry a third axis.
-  ps: spacial<SLMob3[x, y, z]> = [];
+  ps: spatial<SLMob3[x, y, z]> = [];
   ps += [SLMob3{x: 1, y: 1, z: 1}];
   ps += [SLMob3{x: 2, y: 2, z: 2}];
   ps += [SLMob3{x: 8, y: 8, z: 8}];

@@ -59,7 +59,7 @@ pub fn complete_definition(_lexer: &mut Lexer, data: &mut Data, d_nr: u32) {
             data.set_returned(d_nr, Type::Character);
             data.definitions[d_nr as usize].known_type = 6;
         }
-        "radix" | "hash" | "reference" | "index" | "sorted" | "spacial" => {
+        "radix" | "hash" | "reference" | "index" | "sorted" | "spatial" => {
             data.set_returned(d_nr, Type::Reference(d_nr, Deps::none()));
         }
         "keys_definition" => {
@@ -353,7 +353,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
         }
     }
     // P191 — pre-register database types for local-var keyed
-    // collections (index/hash/spacial) so their bookkeeping fields
+    // collections (index/hash/spatial) so their bookkeeping fields
     // get appended to the content struct BEFORE database.finish()
     // runs finish_type to assign positions.
     //
@@ -361,7 +361,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
     // to the content struct; Hash/Radix just create an entry in
     // self.types without struct mutation.  But registering all three
     // here keeps the codepath uniform with what gen_set_first_keyed_null
-    // would do later — and is idempotent (database.{index,hash,spacial}
+    // would do later — and is idempotent (database.{index,hash,spatial}
     // dedup on name).
     //
     // Sorted is NOT in this loop — sorted doesn't append bookkeeping
@@ -401,7 +401,7 @@ pub fn fill_all(data: &mut Data, database: &mut Stores, lexer: &mut Lexer, start
                 Type::Radix(c, key, _) => {
                     let c_tp = data.def(c).known_type;
                     if c_tp != u16::MAX {
-                        database.spacial(c_tp, &key);
+                        database.spatial(c_tp, &key);
                     }
                 }
                 _ => {}
@@ -787,7 +787,7 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                         c_tp = data.def(c_nr).known_type;
                     }
                     set_mutable(data, c_nr, &key_fields);
-                    database.spacial(c_tp, &key_fields)
+                    database.spatial(c_tp, &key_fields)
                 }
                 Type::Enum(t, _, _) if data.def(t).name == "enumerate" => database.byte(0, false),
                 Type::Function(_, _, _) => {

@@ -944,7 +944,7 @@ impl Stores {
         self.build_rec_scratch(coll, &recs)
     }
 
-    /// @PLN48 S3 — a `spacial` range slice as an iterable scratch vector, feeding the
+    /// @PLN48 S3 — a `spatial` range slice as an iterable scratch vector, feeding the
     /// same Ordered (on=3) path as `build_radix_sorted_vec`.  Records whose Morton code
     /// lies in `[from, till]` (or `[from, ∞)` when `has_till == 0`), in natural order,
     /// capped at `limit` (`< 0` = no cap).  Backs `xs[(x,y)..]`, `xs[(x,y)..:n]`, and the
@@ -1879,7 +1879,7 @@ impl Stores {
     /**
     Copy string fields and substructures from `rec` to `to`.
     # Panics
-    When a field points to a spacial structure.
+    When a field points to a spatial structure.
     */
     pub fn copy_claims(&mut self, rec: &DbRef, to: &DbRef, tp: u16) {
         // TODO prevent copying secondary structures
@@ -2196,7 +2196,7 @@ impl Stores {
     in, then frees the container block and clears the field pointer.  Only the text
     leaf and the (unimplemented) `Radix` teardown stay special-cased.
     # Panics
-    When a field points to a spacial structure (teardown unimplemented).
+    When a field points to a spatial structure (teardown unimplemented).
     */
     pub fn remove_claims(&mut self, rec: &DbRef, tp: u16) {
         // TODO prevent removing records twice via secondary structures

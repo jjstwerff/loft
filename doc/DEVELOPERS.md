@@ -638,7 +638,7 @@ layouts and allocates memory via the word-addressed `Store` heap allocator.
 | `src/vector.rs` | `vector<T>` — dynamic array |
 | `src/tree.rs` | `sorted<T>` and `index<T>` — Red-Black tree |
 | `src/hash.rs` | `hash<T>` — open-addressing hash table |
-| `src/radix_tree.rs` | `spacial<T>` — radix tree (incomplete) |
+| `src/radix_tree.rs` | `spatial<T>` — radix tree (incomplete) |
 
 **When to modify.** When adding a new collection type, add a new `Parts` variant in
 `src/database/mod.rs`, register it in `typedef.rs`, implement the core operations
@@ -707,7 +707,7 @@ loft. Otherwise, prefer writing the function in `default/*.loft`.
 | `Stores::free()` | Does not enforce LIFO order (root cause of Issue 27) | Always free stores in exact reverse allocation order |
 | Red-Black tree | Negative values encode back-links — easy to misread | Read the layout comment in `src/tree.rs` before modifying |
 | Hash table | Open-addressing with 75% load threshold | Rehash doubles capacity; probe chains stay short |
-| `spacial<T>` | Radix tree iteration and removal are stubs | Do not use; emits a compile-time error |
+| `spatial<T>` | Radix tree iteration and removal are stubs | Do not use; emits a compile-time error |
 | Library imports | `use lib::*` and `use lib::Name` are supported (T1-2) | — |
 
 ---

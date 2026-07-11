@@ -72,7 +72,7 @@ the `as`-sanctioned widenings/narrowings).
  (C-Ref→En)  Reference(S) ⤳ Enum(E, ref)        ─ if S is a variant of E
  (C-Null)    Enum(__nullable<S>, ref) ⤳ Reference(S)   ─ dense-slot payload (@PLN25 E2)
  (C-EnTag)   Enum(E, value) ⤳ Integer(_)        ─ plain enum tag rides the scalar
- (C-Bare)    Sorted/Hash/Index/Spacial(..) ⤳ Reference(bare collection)
+ (C-Bare)    Sorted/Hash/Index/Spatial(..) ⤳ Reference(bare collection)
 ```
 
 > **Rough spot R2 — width lives outside `⤳`.** `is_equal` collapses every

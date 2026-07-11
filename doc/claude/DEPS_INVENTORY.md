@@ -7,7 +7,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 [STABILITY_HOTSPOTS.md](STABILITY_HOTSPOTS.md) **H2 step 1** (2026-06-11).
 The dep vector carried by `Type::Text/Reference/Vector/Enum/Sorted/Hash/
-Index/Spacial/Function` encodes at least FIVE distinct meanings; readers
+Index/Spatial/Function` encodes at least FIVE distinct meanings; readers
 must know which one the writer intended and nothing checks it.  This
 inventory fixes the semantic model in writing, classifies every reader /
 writer / converter, records what a corpus probe found, and designs the

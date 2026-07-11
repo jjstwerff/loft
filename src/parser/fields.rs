@@ -685,15 +685,15 @@ impl Parser {
             for k in keys {
                 key_types.push(self.data.attr_type(el, self.data.attr(el, k)).clone());
             }
-            // @PLN48 S3 — a `spacial` RANGE SLICE `xs[(fx,fy)..(tx,ty)]` /
+            // @PLN48 S3 — a `spatial` RANGE SLICE `xs[(fx,fy)..(tx,ty)]` /
             // `xs[(fx,fy)..:n]` / `xs[(fx,fy)..]`: iterate the records whose Morton
             // code is in the interval (a bounding box is the raw code interval), in
-            // natural order.  Lowers to `n_spacial_range(xs, tp, fx, fy, has_till, tx,
+            // natural order.  Lowers to `n_spatial_range(xs, tp, fx, fy, has_till, tx,
             // ty, limit)` — the same scratch path as iteration — and returns the Radix
             // type so `parse_for` iterates the already-built scratch.  A `(` opens the
             // coordinate tuple.
             if matches!(t, Type::Radix(_, _, _)) && self.lexer.peek_token("(") {
-                elm_type = self.parse_spacial_slice(code, &t, &key_types);
+                elm_type = self.parse_spatial_slice(code, &t, &key_types);
             } else {
                 self.parse_key(code, &t, &key_types);
             }
@@ -824,7 +824,7 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row {{ id: 1 }}];` (a struct field `struct Db {{ h: hash<Row[id]> }}` works too)"
+                "Indexing a non vector — keyed collections (hash/sorted/index/spatial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row {{ id: 1 }}];` (a struct field `struct Db {{ h: hash<Row[id]> }}` works too)"
             );
             Type::Unknown(0)
         }
@@ -1095,11 +1095,11 @@ impl Parser {
         }
     }
 
-    /// @PLN48 S3 — parse a `spacial` range slice `xs[(fx,fy)..(tx,ty)]`,
+    /// @PLN48 S3 — parse a `spatial` range slice `xs[(fx,fy)..(tx,ty)]`,
     /// `xs[(fx,fy)..:n]`, or the open `xs[(fx,fy)..]`, and lower it to an
-    /// `n_spacial_range` scratch-builder call.  Returns the Radix `typedef` so the
+    /// `n_spatial_range` scratch-builder call.  Returns the Radix `typedef` so the
     /// enclosing `for` iterates the scratch it builds.  `(` has already been peeked.
-    fn parse_spacial_slice(
+    fn parse_spatial_slice(
         &mut self,
         code: &mut Value,
         typedef: &Type,
@@ -1107,7 +1107,7 @@ impl Parser {
     ) -> Type {
         // Parse a `(c0, c1, …)` coordinate tuple with exactly one value per axis of the
         // collection (`key_types.len()`), padded to MAX_AXES with `0` for the fixed-arity
-        // `n_spacial_range` call.  The collection's own axis count drives how many the
+        // `n_spatial_range` call.  The collection's own axis count drives how many the
         // range builder reads, so the padding is inert.
         let axes = key_types.len();
         let max_axes = crate::radix_db::MAX_AXES;
@@ -1119,7 +1119,7 @@ impl Parser {
                 let mut v = Value::Null;
                 let vt = s.expression(&mut v);
                 if !s.convert(&mut v, &vt, &key_types[i.min(axes - 1)]) {
-                    diagnostic!(s.lexer, Level::Error, "Invalid spacial coordinate");
+                    diagnostic!(s.lexer, Level::Error, "Invalid spatial coordinate");
                 }
                 out.push(v);
                 if !s.lexer.has_token(",") {
@@ -1131,7 +1131,7 @@ impl Parser {
                 diagnostic!(
                     s.lexer,
                     Level::Error,
-                    "a spacial coordinate needs {axes} axes, got {}",
+                    "a spatial coordinate needs {axes} axes, got {}",
                     out.len()
                 );
             }
@@ -1143,7 +1143,7 @@ impl Parser {
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "a spacial slice needs a range: `xs[(x,y)..]`, `xs[(x,y)..:n]`, or `xs[(x1,y1)..(x2,y2)]`"
+                "a spatial slice needs a range: `xs[(x,y)..]`, `xs[(x,y)..:n]`, or `xs[(x1,y1)..(x2,y2)]`"
             );
         }
         // The `..` is followed by a till tuple `(tx,ty,…)`, a limit `:n`, or nothing.
@@ -1156,7 +1156,7 @@ impl Parser {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
-                    "spacial slice limit must be an integer"
+                    "spatial slice limit must be an integer"
                 );
             }
             (Value::Int(0), vec![Value::Int(0); max_axes], n)
@@ -1165,7 +1165,7 @@ impl Parser {
         };
         if !self.first_pass {
             let tp = self.get_type(typedef);
-            let fn_nr = self.data.def_nr("n_spacial_range");
+            let fn_nr = self.data.def_nr("n_spatial_range");
             if tp != u16::MAX && fn_nr != u32::MAX {
                 let mut args = vec![code.clone(), Value::Int(i32::from(tp))];
                 args.extend(from); // fx, fy, fz

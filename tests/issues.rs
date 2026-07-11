@@ -5334,24 +5334,24 @@ fn run() -> text {
     .result(Value::str("a-10"));
 }
 
-// ── P22: spacial<T> diagnostic wording (FIXED) ─────────────────────────
+// ── P22: spatial<T> diagnostic wording (FIXED) ─────────────────────────
 //
-// @PLN48 S2: `spacial<T[x, y]>` now works (the radix tree), so the old
-// "planned 1.1+" gate is gone.  A `spacial<T>` written WITHOUT its coordinate
+// @PLN48 S2: `spatial<T[x, y]>` now works (the radix tree), so the old
+// "planned 1.1+" gate is gone.  A `spatial<T>` written WITHOUT its coordinate
 // key fields is still an error — a spatial index needs coordinates — with a
 // diagnostic that shows the correct bracket-key syntax.
 #[test]
-fn p22_spacial_without_keys_names_the_bracket_syntax() {
+fn p22_spatial_without_keys_names_the_bracket_syntax() {
     code!(
         "struct Point { x: float not null, y: float not null }
-struct World { items: spacial<Point> }
+struct World { items: spatial<Point> }
 fn test() {
     w = World { items: [] };
 }"
     )
     .error(
-        "spacial<T[x, y]> needs coordinate key fields, e.g. spacial<Mob[x, y]> \
-at p22_spacial_without_keys_names_the_bracket_syntax:2:39",
+        "spatial<T[x, y]> needs coordinate key fields, e.g. spatial<Mob[x, y]> \
+at p22_spatial_without_keys_names_the_bracket_syntax:2:39",
     );
 }
 
@@ -9089,7 +9089,7 @@ fn run() -> integer {
 }"
     )
     .error(
-        "Indexing a non vector — keyed collections (hash/sorted/index/spacial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row { id: 1 }];` (a struct field `struct Db { h: hash<Row[id]> }` works too) at quality_6d_keyed_collection_constructor_hint:3:20",
+        "Indexing a non vector — keyed collections (hash/sorted/index/spatial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row { id: 1 }];` (a struct field `struct Db { h: hash<Row[id]> }` works too) at quality_6d_keyed_collection_constructor_hint:3:20",
     )
     .error(
         "No matching operator '<' on 'unknown' and 'boolean' at quality_6d_keyed_collection_constructor_hint:3:24",
@@ -10735,7 +10735,7 @@ fn p284_vector_float_iteration_terminates() {
 /// "Variable 'x' cannot change type from sorted<…> to vector<…>" —
 /// `parse_vector` re-typed the LHS local to vector<T> before
 /// `parse_assign_op` could route through the keyed-collection element
-/// dispatch.  Same shape would have affected hash / index / spacial
+/// dispatch.  Same shape would have affected hash / index / spatial
 /// locals.  Fixed by an early intercept in `parse_assign_op` that
 /// detects `local_keyed += [literal]` BEFORE `parse_operators` runs,
 /// then per-element parses + dispatches via `new_record` (which
@@ -11379,7 +11379,7 @@ fn test() {
 // store: the slot allocator gave it a position but neither the bytecode
 // codegen nor the native generator emitted an OpDatabase init for keyed
 // collection locals.  After P188, `gen_set_first_keyed_null` (bytecode) and
-// `emit_null_dbref`'s sorted/hash/index/spacial arm (native) allocate the
+// `emit_null_dbref`'s sorted/hash/index/spatial arm (native) allocate the
 // store and zero the root pointer; subsequent `+= T {...}` operations grow
 // the collection in place via record_new's Parts::Sorted/Hash/Index/Radix
 // dispatch.
@@ -11499,7 +11499,7 @@ fn test() {
 }
 
 /// P188 follow-up — `field += elem` for keyed-collection fields
-/// (hash/sorted/index/spacial<T[key]>) and for vector fields with
+/// (hash/sorted/index/spatial<T[key]>) and for vector fields with
 /// struct-literal RHS were broken.  Two bugs:
 ///
 /// 1. The struct-literal RHS (`Score{name:"a", value:10}`) parses

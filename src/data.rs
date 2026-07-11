@@ -1324,7 +1324,7 @@ pub enum Type {
     Character,
     /// A text with the linked variables.
     Text(Deps),
-    /// Description of the possible keys on a structure (hash, index, spacial, sorted)
+    /// Description of the possible keys on a structure (hash, index, spatial, sorted)
     Keys,
     /// An enum value. With definition with enum type itself. With value true it is a reference.
     Enum(u32, bool, Deps),
@@ -1703,7 +1703,7 @@ impl Type {
             Type::Hash(tp, key, _) => format!("hash<{},{key:?}>", data.def(*tp).name),
             Type::Index(tp, key, _) => format!("index<{},{key:?}>", data.def(*tp).name),
             Type::Radix(tp, key, _) => {
-                format!("spacial<{},{key:?}>", data.def(*tp).name)
+                format!("spatial<{},{key:?}>", data.def(*tp).name)
             }
             Type::Routine(tp) => format!("fn {}[{tp}]", data.def(*tp).name),
             // Plan-07 phase 6.1 — explicit user-facing rendering for the
@@ -1782,7 +1782,7 @@ impl Type {
             ),
             Type::Radix(tp, key, dep) => {
                 format!(
-                    "spacial<{},{key:?}>{}",
+                    "spatial<{},{key:?}>{}",
                     data.def(*tp).name,
                     Self::dep_var(dep, vars)
                 )
@@ -4898,7 +4898,7 @@ impl Data {
             Type::Sorted(_, _, _) => self.source_nr(0, "sorted"),
             Type::Index(_, _, _) => self.source_nr(0, "index"),
             Type::Hash(_, _, _) => self.source_nr(0, "hash"),
-            Type::Radix(_, _, _) => self.source_nr(0, "spacial"),
+            Type::Radix(_, _, _) => self.source_nr(0, "spatial"),
             // P189: look up the synthetic tuple struct registered by
             // `tuple_def` at parse time.  Returns u32::MAX if the
             // tuple shape was never registered (caller must register
@@ -4994,7 +4994,7 @@ impl Data {
             }
             Type::Iterator(inner, _) => format!("iterator<{}>", self.type_name_str(inner)),
             Type::Rewritten(inner) => self.type_name_str(inner),
-            Type::Radix(d_nr, _, _) => format!("spacial<{}>", self.def(*d_nr).name),
+            Type::Radix(d_nr, _, _) => format!("spatial<{}>", self.def(*d_nr).name),
             Type::Tuple(elems) => {
                 let es: Vec<String> = elems.iter().map(|e| self.type_name_str(e)).collect();
                 format!("({})", es.join(", "))

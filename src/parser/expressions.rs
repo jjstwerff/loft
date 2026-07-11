@@ -1573,7 +1573,7 @@ use a separate collection or add after the loop"
             return Type::Void;
         }
         // P188 — local-var collection `+= elem` for keyed collections
-        // (sorted/hash/index/spacial) ONLY.  Routes the singleton element
+        // (sorted/hash/index/spatial) ONLY.  Routes the singleton element
         // through OpNewRecord + OpFinishRecord (per-kind dispatch via
         // record_finish: hash::add / sorted_finish / tree::add /
         // ordered_finish).  Returns Type::Void before change_var fires
@@ -2098,12 +2098,12 @@ use a separate collection or add after the loop"
                     let c = self.data.def(*td).known_type();
                     (c != u16::MAX).then(|| self.database.index(c, key))
                 }
-                // @PLN48 — Radix reassignment (return/pass a spacial) now deep-copies
+                // @PLN48 — Radix reassignment (return/pass a spatial) now deep-copies
                 // via OpReplaceKeyed like the other keyed kinds; copy_claims_radix_body
                 // backs it.  Replaces the old @P295 "not yet supported" gate.
                 Type::Radix(td, key, _) => {
                     let c = self.data.def(*td).known_type();
-                    (c != u16::MAX).then(|| self.database.spacial(c, key))
+                    (c != u16::MAX).then(|| self.database.spatial(c, key))
                 }
                 _ => None,
             }
@@ -2264,7 +2264,7 @@ use a separate collection or add after the loop"
             return Type::Void;
         }
         // P192 follow-up: `field += elem` for keyed-collection fields
-        // (hash/sorted/index/spacial<T[key]>) AND vector fields when
+        // (hash/sorted/index/spatial<T[key]>) AND vector fields when
         // the RHS is a struct literal (Value::Insert).  Without this,
         // `db.h += Score{...}` emitted raw `OpSetText` / `OpSetInt`
         // writes targeting the field itself — which for hash/index
@@ -2329,7 +2329,7 @@ use a separate collection or add after the loop"
         // fire there would report spurious "cannot assign X to
         // unknown(0)" errors.
         // Restrict to scalar target types: collection targets
-        // (`vector`, `hash`, `sorted`, `index`, `spacial`) and
+        // (`vector`, `hash`, `sorted`, `index`, `spatial`) and
         // `Reference` / `RefVar` compound types have their own
         // handling paths (`towards_set`, `copy_ref`, …).  Running
         // `convert()` on them would flag legitimate initialisations

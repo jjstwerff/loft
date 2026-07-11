@@ -87,7 +87,7 @@ fn is_scalar_type(t: &Type) -> bool {
 /// boundary.
 ///
 /// **Parameters** may be any bridge type — scalars **plus** the `DbRef`-backed
-/// aggregates (`vector`/`reference`/data-`enum`/sorted/index/hash/spacial), passed
+/// aggregates (`vector`/`reference`/data-`enum`/sorted/index/hash/spatial), passed
 /// as the raw stack `DbRef`.  **Returns** may be scalar, `void`, or a `vector`.  A
 /// `vector` return triggers `--native`'s **hidden destination-parameter** convention
 /// (`ref_return` appends a trailing `DbRef` work-vector marked `Attribute::hidden`
@@ -192,7 +192,7 @@ pub fn classify_bridge_attr(a: &crate::data::Attribute, ret_text: bool) -> Optio
 /// A type passable through the shared-store `LibArg` bridge **as a parameter**: a
 /// scalar (by value), a `text` (as `&str` — ptr+len borrowed from the shared
 /// store), or a `DbRef`-backed aggregate (`vector`/`reference`/data-`enum`/sorted/
-/// index/hash/spacial), the latter shared by pointer through the caller's store.
+/// index/hash/spatial), the latter shared by pointer through the caller's store.
 /// (A `text` *return* is gated separately — it needs the `text_return` work
 /// buffer, not just a slot.)
 fn is_bridge_type(t: &Type) -> bool {

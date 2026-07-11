@@ -2640,7 +2640,7 @@ impl Parser {
             {
                 return true;
             }
-            // A keyed-collection argument (hash / sorted / index / spacial)
+            // A keyed-collection argument (hash / sorted / index / spatial)
             // also satisfies a bare `reference` parameter — its handle is a
             // `DbRef`.  Mirrors the `convert` branch; used by
             // `store_persist_bind`.
@@ -2656,7 +2656,7 @@ impl Parser {
             {
                 return true;
             }
-            // Bare collection parameter (sorted / hash / index / spacial)
+            // Bare collection parameter (sorted / hash / index / spatial)
             // accepts the corresponding parameterised collection
             // argument.  Mirrors how `Type::Vector(_, _)` matches via
             // is_same: the parameter type carries no element-type
@@ -2669,7 +2669,7 @@ impl Parser {
                     || (r == self.data.def_nr("hash") && matches!(test_type, Type::Hash(_, _, _)))
                     || (r == self.data.def_nr("index")
                         && matches!(test_type, Type::Index(_, _, _)))
-                    || (r == self.data.def_nr("spacial")
+                    || (r == self.data.def_nr("spatial")
                         && matches!(test_type, Type::Radix(_, _, _)));
                 if bare {
                     return true;

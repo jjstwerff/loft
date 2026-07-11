@@ -32,7 +32,7 @@ struct SortKey {       // one (String, bool) entry of a sort/index key list
   asc: boolean
 }
 
-struct NameRef {       // one String entry of a Vec<String> (spacial/hash keys)
+struct NameRef {       // one String entry of a Vec<String> (spatial/hash keys)
   name: text
 }
 

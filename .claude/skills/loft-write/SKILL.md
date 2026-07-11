@@ -672,7 +672,7 @@ Use `_` for an unused loop variable to keep the build warning-clean.
 - **Built-in TYPE-KEYWORDS are reserved** — you cannot define `struct integer`,
   `enum vector`, etc. (it errors: "conflicts with a type").  Reserved: `integer`,
   `float`, `single`, `text`, `boolean`, `character`, `vector`, `hash`, `sorted`,
-  `index`, `radix`, `spacial`, `iterator`, `i8`/`i16`/`i32`, `u8`/`u16`/`u32`,
+  `index`, `radix`, `spatial`, `iterator`, `i8`/`i16`/`i32`, `u8`/`u16`/`u32`,
   `reference`.  This holds for `struct`, `enum`, and `type` alike.
 - **A few builtin names break as a local variable name** — the literal `null`
   (`Not implemented operation = for type null`), the special `ticks`
