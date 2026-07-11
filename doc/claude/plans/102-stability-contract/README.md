@@ -139,6 +139,11 @@ accept/reject divergence here is a Goal-D violation).
 | **D** — Public bug-intake path: the fix-not-file discipline is internal and does not reach strangers | [ISSUE_TRACKING.md](../../ISSUE_TRACKING.md) | Open |
 | **E** — The 1.0 line: what is frozen vs still moving, **and the pre-freeze AUDIT** | [RELEASE.md](../../RELEASE.md), [COMPATIBILITY.md § Before the flip](../../COMPATIBILITY.md), [INCONSISTENCIES.md](../../INCONSISTENCIES.md) | Open — **the critical path.** The `0→1` flip is a ONE-WAY DOOR gated on a thorough surface-by-surface audit (semantics · syntax · errors · stdlib · formats): fix every wart we'd regret while contract 0 still allows. A miss is permanent (live-with-it, engineer-around). Anchor on INCONSISTENCIES.md (High=silent-wrong=must-fix). This is the largest remaining 1.0 work item. **Dual-phase (owner): (1) close the open plans → settle the language [underway], then (2) a dedicated unhurried pass on the LIB side (stdlib + core libs — equally permanent).** Only then is the flip earned. **Worklists PREPPED:** [lib-audit.md](lib-audit.md) (stdlib surface — 4-agent survey) + [formal-audit.md](formal-audit.md) (language basis + error surface — 6-agent survey over `formal/*` + the error surface). Both share **the null-sentinel keystone**; the formal/error half adds float-`==`, compound-assign double-eval, `&&`/`||` short-circuit, the `&v` copy-vs-alias spec contradiction, the format sub-language, layout persistence, and the diagnostic-identity fix. Each item worked as a design decision — alternatives presented + conversion set enumerated; the error surface is one-directional (drop, never add → be strict now). |
 
+**Build plan for arcs B-registry + C (the never-break mechanism):**
+[compat-gate-build.md](compat-gate-build.md) — component-by-component with steps + code-points (C1
+API-surface diff = keystone · C2 the registry gate · C3 the new per-version compat status · C4
+contract-keying [mostly done] · C5 the folding discipline), a build order, and the falsification list.
+
 ## Phase ordering
 
 Refined 2026-07-10 to separate the two halves of arc B and to surface the pivot the
