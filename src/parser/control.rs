@@ -3888,48 +3888,48 @@ impl Parser {
         }
         elem_conds.push(cond);
 
-        // Phase 4.1: require identical capture-name sets across branches.
-        let names0: HashSet<&String> = alts[0].2.iter().map(|(n, _, _)| n).collect();
-        for (_, _, fields) in &alts[1..] {
-            let names: HashSet<&String> = fields.iter().map(|(n, _, _)| n).collect();
-            if !self.first_pass && names != names0 {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "alternation branches must bind the same captures (partial overlap → option<T> is a later Phase-4 step)"
-                );
+        // Capture unification (P-Alt-Same ⊔ / P-Alt-Diff N-Join).  Union the capture
+        // names across all branches; a name in EVERY branch (compatible type) binds at
+        // that type, a name in only SOME becomes `option<T>` — the absent branches read
+        // null through the else-chain.  Order follows first appearance.
+        let mut names: Vec<(String, Type)> = Vec::new();
+        for (_, _, fields) in &alts {
+            for (fname, _, ftype) in fields {
+                if let Some((_, seen)) = names.iter().find(|(n, _)| n == fname) {
+                    if !self.first_pass && !match_arm_types_unify(seen, ftype) {
+                        diagnostic!(
+                            self.lexer,
+                            Level::Error,
+                            "alternation capture '{}' is {} in one branch but {} in another",
+                            fname,
+                            ftype.name(&self.data),
+                            seen.name(&self.data)
+                        );
+                    }
+                } else {
+                    names.push((fname.clone(), ftype.clone()));
+                }
             }
         }
 
-        // One shared slot per capture, assigned by a conditional-offset read.
-        let canon: Vec<(String, Type)> = alts[0]
-            .2
-            .iter()
-            .map(|(n, _, t)| (n.clone(), t.clone()))
-            .collect();
-        for (fname, ftype) in &canon {
-            for (_, _, fields) in &alts[1..] {
-                if let Some((_, _, ta)) = fields.iter().find(|(n, _, _)| n == fname)
-                    && !self.first_pass
-                    && !match_arm_types_unify(ftype, ta)
-                {
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "alternation capture '{}' is {} in one branch but {} in another",
-                        fname,
-                        ta.name(&self.data),
-                        ftype.name(&self.data)
-                    );
-                }
-            }
-            let v_nr = self.create_unique(&format!("mv_{fname}"), ftype);
+        for (fname, ftype) in &names {
+            let present_in_all = alts
+                .iter()
+                .all(|(_, _, fields)| fields.iter().any(|(n, _, _)| n == fname));
+            let var_type = if present_in_all {
+                ftype.clone()
+            } else {
+                Type::optional(ftype.clone())
+            };
+            let v_nr = self.create_unique(&format!("mv_{fname}"), &var_type);
             if v_nr == u16::MAX {
                 continue;
             }
             self.vars.defined(v_nr);
-            // if tag==V0 { f@V0 } else if tag==V1 { f@V1 } … else <typed null>
-            let mut acc = self.null(ftype);
+            // if tag==V0 { f@V0 } else if tag==V1 { f@V1 } … else <null>.  A branch
+            // lacking `f` is simply skipped — its tag falls through to the null else,
+            // which is exactly the `option<T>` null a partial-overlap capture wants.
+            let mut acc = self.null(&var_type);
             for (disc, vdef, fields) in alts.iter().rev() {
                 if let Some((_, attr_idx, _)) = fields.iter().find(|(n, _, _)| n == fname) {
                     let read = self.get_field(*vdef, *attr_idx, elem.clone());
@@ -3939,25 +3939,29 @@ impl Parser {
                 }
             }
             bindings.push(v_set(v_nr, acc));
-            let old = self.vars.set_name(fname, v_nr);
-            let _ = old; // slice-element captures stay in scope for the arm body (as sub-patterns do)
+            self.vars.set_name(fname, v_nr); // stays in scope for the arm body (as sub-patterns do)
             // A heap capture is a borrowed VIEW of the subject element: skip its free
             // and record the borrow dep on the subject source (mirrors the field-
             // sub-pattern path); a text payload is an OWNED copy (freed normally).
+            // The underlying `ftype` drives this even when the slot is `option<T>`.
             if !matches!(ftype.base(), Type::Text(_)) {
                 self.vars.set_skip_free(v_nr);
             }
-            if matches!(
-                ftype,
-                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-            ) {
-                let bound_tp = match self.vars.tp(v_nr).clone() {
-                    Type::Reference(td, _) => Type::Reference(td, Deps::frame1(borrow_src)),
-                    Type::Vector(it, _) => Type::Vector(it, Deps::frame1(borrow_src)),
-                    Type::Enum(td, su, _) => Type::Enum(td, su, Deps::frame1(borrow_src)),
-                    other => other,
-                };
-                self.vars.set_type(v_nr, bound_tp);
+            let bs = borrow_src;
+            let borrowed = |t: Type| -> Option<Type> {
+                match t {
+                    Type::Reference(td, _) => Some(Type::Reference(td, Deps::frame1(bs))),
+                    Type::Vector(it, _) => Some(Type::Vector(it, Deps::frame1(bs))),
+                    Type::Enum(td, su, _) => Some(Type::Enum(td, su, Deps::frame1(bs))),
+                    _ => None,
+                }
+            };
+            let bound_tp = match self.vars.tp(v_nr).clone() {
+                Type::Optional(inner) => borrowed(*inner).map(Type::optional),
+                other => borrowed(other),
+            };
+            if let Some(b) = bound_tp {
+                self.vars.set_type(v_nr, b);
             }
         }
     }

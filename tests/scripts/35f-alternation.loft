@@ -34,6 +34,16 @@ fn any_tok(toks: vector<Tok>) -> text {
   }
 }
 
+// Phase 4.2 — DIFFERENT-name alternation: `x` is in both branches (stays integer),
+// `y` is only in Add, so it promotes to `option<integer>` (null when Neg matched).
+enum Expr { Add { x: integer, y: integer }, Neg { x: integer } }
+fn eval(es: vector<Expr>) -> integer {
+  match es {
+    [ (Add { x, y } | Neg { x }) ] => x + (y ?? 0),
+    _ => -1,
+  }
+}
+
 fn main() {
   assert(first_name([Ident { n: "foo" }]) == "foo", "Ident n");
   assert(first_name([Str { pad: 7, n: "bar" }]) == "bar", "Str n (text region)");
@@ -46,6 +56,10 @@ fn main() {
 
   assert(any_tok([Num { v: 1 }]) == "one", "bare 3-way alt matches");
   assert(any_tok([]) == "many-or-none", "empty falls through");
+
+  // 4.2 option promotion
+  assert(eval([Add { x: 3, y: 4 }]) == 7, "Add x+y");
+  assert(eval([Neg { x: 5 }]) == 5, "Neg x, y promoted to null");
 
   print("35f-alternation: PASS");
 }

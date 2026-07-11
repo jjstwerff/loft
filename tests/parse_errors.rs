@@ -1699,15 +1699,9 @@ fn multi_pattern_union_not_exhaustive() {
 }
 
 // @PLN35 Phase 4 (L3.2, P-Alt): a single-element alternation `( V1 { f } | V2 { f } )`
-// in a slice element position.  Phase 4.1 requires identical capture names at
-// compatible types across the branches; partial overlap (option<T>) is a later step.
-
-// Branches must bind the same capture names (partial overlap is deferred).
-#[test]
-fn alternation_capture_names_differ() {
-    code!("enum Tk { Id { n: text }, Nm { v: integer } }\nfn f(t: vector<Tk>) -> text { match t { [ (Id { n } | Nm { v }) ] => \"x\", _ => \"y\" } }")
-        .error("alternation branches must bind the same captures (partial overlap → option<T> is a later Phase-4 step) at alternation_capture_names_differ:2:66");
-}
+// in a slice element position.  A same-named capture must unify across branches; a
+// name in only some branches promotes to `option<T>` (Phase 4.2 — valid, not an
+// error).  So the only capture-level errors are a type clash and an unknown variant.
 
 // A same-named capture must unify across branches.
 #[test]
