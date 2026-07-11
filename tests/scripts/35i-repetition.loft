@@ -8,9 +8,10 @@
 // more (a no-rest slice matches only when the run IS the whole slice, `end == len`); `+`
 // additionally requires a non-empty run.  Cross-mode + leak-checked.
 //
-// NOTE: collected values are verified by slice-match INDEXING (`match x { [Num { n }, .. ] }`),
-// NOT `for e in x { … }` — the latter iterates 0 times on native over any match-arm
-// materialised vector (a pre-existing bug that also affects `..rest`; tracked as #556).
+// NOTE: collected values are verified by slice-match INDEXING (`match x { [Num { n }, .. ] }`).
+// `for e in x { … }` also works now that #556 is fixed (a slice-arm block dropped its result on
+// native, so a `for`-accumulator arm returned 0); the index checks stay as they are independent
+// of that path.  See tests/scripts/556-slice-arm-block-result.loft.
 
 enum Tok { Num { n: integer }, Op { o: integer } }
 

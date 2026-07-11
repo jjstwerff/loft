@@ -5609,7 +5609,17 @@ impl Parser {
             };
             self.expect_match_arm_arrow();
             let mut arm_code = Value::Null;
-            let arm_type = self.expression(&mut arm_code);
+            // #556 — a `{ … }` arm body is a VALUE position (its result is the match value), so
+            // parse it as a `match_arm` block with an INFERRED (`Unknown`) result type, exactly
+            // as the enum/scalar match arm does.  Routing it through `self.expression` instead
+            // delegated to `parse_block("block", …, &Type::Void)`, which DROPS the trailing
+            // result expression (`{ c = 5; c }` → `c = 5; drop c`) — the block then yielded void,
+            // so native delivered 0 (interpret happened to still surface the value).
+            let arm_type = if self.lexer.peek_token("{") {
+                self.parse_block("match_arm", &mut arm_code, &Type::Unknown(0))
+            } else {
+                self.expression(&mut arm_code)
+            };
             if result_type == Type::Void {
                 result_type = arm_type.clone();
             }
