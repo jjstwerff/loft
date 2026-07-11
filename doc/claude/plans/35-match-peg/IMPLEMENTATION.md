@@ -399,6 +399,58 @@ that is actually a tree — nested structure. That is the healthy shape.
   cursor discipline — the `save`/revert seam finally used), and left-recursion detect →
   eliminate.
 
+**Implementation steps this design ADDS (the extra work beyond the original phase list).** The
+engine above is not free — it introduces prep and new scope §4's phases did not name. Ordered,
+mapped to where each lands. These graft onto the numbered phase steps in §4; do them in phase
+order.
+
+*Phase 4.3 — first, because it establishes the cursor:*
+1. **`read(pos)` seam.** Factor every slice-element read behind ONE accessor (a helper that
+   emits the element load) and route today's fixed-position reads through it. A behaviour-
+   PRESERVING refactor first — prove the emitted IR byte-identical (loft-codegen gate) before
+   adding any new case — so Phase 7's accumulating backing swaps in without touching match
+   logic. *This step alone is the biggest piece of the "extra work" and pays for streaming.*
+2. **Runtime `pos` cursor.** A `pos: integer` local, seeded at `head_len`.
+3. **Sequence-branch parse.** Parse a `(` branch as a SEQUENCE (`lexer.link()`/`revert()` to
+   tell a multi-element branch from the single-element one 4.1 already handles).
+4. **Predictive `if / else`.** Emit the ordered choice over PURE per-branch conditions
+   (`len − pos ≥ wᵢ && tag(v[pos])==… && …`); the committing branch binds (conditional,
+   option-promoted per 4.2) and advances `pos` by `wᵢ`.
+5. **`..rest` from `pos`.** Re-point rest materialisation from the compile-time `head_len` lo
+   bound to the runtime `pos` var.
+
+*Phase 6 (L3.4 repetition) — adds the fold:*
+6. **Associativity fold hook.** Repetition already collects a vector; add a fold-direction
+   parameter (left / right) so recursion-elimination (steps 10, 12) can fold either
+   associativity.
+
+*Phase 7 (L3.6 iterator input) — the streaming backing:*
+7. **Accumulating `read(pos)`.** Implement `read(pos)` over a bounded buffer fed by a
+   lexer/iterator coroutine (the phase's new opcodes), tracking the three positions
+   cursor / high-water / evict with `max_lookahead` bounding the buffer.
+8. **Streamability check.** Reject at compile time a rule whose backtrack distance can exceed
+   `max_lookahead` on a streamed input (fine on a materialized vector).
+
+*PC1–PC5 ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md)) — analysis + recursion:*
+9. **First-set computation** per rule + the graded overlap response (reject / static bounded-k
+   / `cut`) — the compile-time backtracking bound AND the ambiguity diagnostic in one pass.
+10. **Left-recursion detect → eliminate.** Direct `A := A α | β` auto-rewrites to `β α*` +
+    left-fold; indirect / mutual is a clear-diagnostic REJECT.
+11. **Rule-invocation branch.** A branch that calls a rule just checks the callee's matched
+    flag; the callee owns its `save`/revert internally (the contract). First place the revert
+    seam is actually emitted.
+
+*New construct — the precedence table (genuinely new scope, slots with/after PC):*
+12. **Declarative operator table → climbing loop.** A `(operator, precedence, associativity)`
+    table compiles to one precedence-climbing loop, so an expression grammar costs
+    O(operators + nesting) not O(precedence levels). Reuses the repetition fold (step 6) +
+    first-sets (step 9) — it is their payoff, not a separate engine.
+
+Sequencing note: steps 1–5 are the whole of Phase 4.3 and are do-able now; 6 waits for Phase 6;
+7–8 wait for Phase 7's opcodes; 9–12 are the PC layer. Step 1 (the `read(pos)` seam) is the one
+that must land *inside* 4.3 even though its payoff (7) is far later — retrofitting the seam
+after the fixed-position reads have spread is the expensive path.
+
 ---
 
 ## 4. Phases
@@ -635,12 +687,14 @@ knowing or caring how a branch matches.
     unified type; both backends.
 4.2 Different-name alternation promotes to `option<T>`. *Verify:* absent branch's
     capture reads null.
-4.3 Multi-element sequence branches + predictive dispatch. *Verify:* `[ (A B | C), ..rest ]`
-    — a leading `A` commits branch 1 and needs `B` next (else the arm fails, no silent
-    fallthrough); a leading `C` commits branch 2; `..rest` picks up at the right runtime
-    `pos` for EACH branch (assert `len(rest)` differs by branch width); both backends.
-    Backtracking (`save`/revert) is NOT exercised here — 4.3 branches are pure tag
-    sequences; the seam is left for the PC rule-invocation layer.
+4.3 Multi-element sequence branches + predictive dispatch — **§3a steps 1–5** (the
+    `read(pos)` seam, the `pos` cursor, sequence-branch parse, the predictive `if/else`,
+    `..rest` from `pos`). *Verify:* `[ (A B | C), ..rest ]` — a leading `A` commits branch 1
+    and needs `B` next (else the arm fails, no silent fallthrough); a leading `C` commits
+    branch 2; `..rest` picks up at the right runtime `pos` for EACH branch (assert `len(rest)`
+    differs by branch width); both backends. Backtracking (`save`/revert) is NOT exercised
+    here — 4.3 branches are pure tag sequences; the seam is left for the PC rule-invocation
+    layer. Step 1 (`read(pos)` seam) is a byte-identical refactor gate BEFORE the new cases.
 
 **Exit:** multi-element alternation with predictive dispatch + a runtime `pos` cursor +
 capture unification, both backends, no new opcodes.  The `pos` cursor is factored so a
