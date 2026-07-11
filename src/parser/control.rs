@@ -4397,6 +4397,7 @@ impl Parser {
         elm_size: &Value,
         elm_tp: &Type,
         head_len: i32,
+        borrow_src: u16,
         cond: &mut Option<Value>,
         bindings: &mut Vec<Value>,
     ) {
@@ -4512,33 +4513,116 @@ impl Parser {
         // becomes `V (Sep V)*`.  `Sep` is ONE variant, CONSUMED between elements but never
         // captured (`name` collects only the V's — a stride-2 read skips the separators).
         let sep_disc = self.parse_repetition_separator(e_nr);
-        // After the group: a comma-separated sequence of fixed LITERAL tail elements (`, ")"`),
-        // then optionally `, ..[name]`.  A bare `..` absorbs the remainder; `..name` binds it.
-        // Tail literals are matched from the END, so they are mutually exclusive with `..rest`.
-        let mut tail_lits: Vec<(Value, Type)> = Vec::new();
+        // After the group: a comma-separated tail of fixed elements matched from the END —
+        // literals (`")"`), bare-name binds (`x`), and variant sub-patterns (`V { f }` / bare
+        // `V`) — then optionally `, ..[name]`.  A fixed tail and `..rest` stay mutually exclusive.
+        //
+        // Count the tail elements FIRST (a robust link/revert look-ahead) so each is matched at a
+        // fixed negative index `-(tail_len - j)`.  Reading from the run cursor `v[end + j]` instead
+        // diverges on native: the run's `end`, set in the arm condition, is not reliably visible to
+        // a tail read appended after it.
+        let tail_len = {
+            let save = self.lexer.link();
+            let mut n = 0i32;
+            while self.lexer.has_token(",") {
+                if self.lexer.peek_token("..") {
+                    break;
+                }
+                // Skip one element up to the next top-level `,` or `]` (tracking bracket depth so
+                // a variant's `{ f, g }` counts as one element).
+                let mut depth = 0i32;
+                loop {
+                    match &self.lexer.peek().has {
+                        LexItem::None => break,
+                        LexItem::Token(t) if t == "{" || t == "[" || t == "(" => {
+                            depth += 1;
+                            self.lexer.cont();
+                        }
+                        LexItem::Token(t) if t == "}" || t == "]" || t == ")" => {
+                            if depth == 0 {
+                                break;
+                            }
+                            depth -= 1;
+                            self.lexer.cont();
+                        }
+                        LexItem::Token(t) if t == "," && depth == 0 => break,
+                        _ => self.lexer.cont(),
+                    }
+                }
+                n += 1;
+            }
+            self.lexer.revert(save);
+            n
+        };
+        // Parse the tail with known positions: element `j` is at `-(tail_len - j)` from the end.
+        // A literal / variant sub-pattern contributes a CONDITION (AND'd after the run bool); a
+        // bare-name bind and a variant's field binds are BINDINGS (run once the arm commits).
+        let mut tail_conds: Vec<Value> = Vec::new();
         let mut has_rest = false;
         let mut rest_name: Option<String> = None;
+        let mut j = 0i32;
         while self.lexer.has_token(",") {
             if self.lexer.has_token("..") {
                 has_rest = true;
                 rest_name = self.lexer.has_identifier();
                 break;
-            } else if self.peek_is_slice_literal() {
+            }
+            let pos = Value::Int(-(tail_len - j));
+            if self.peek_is_slice_literal() {
                 let mut lit = Value::Null;
                 let lit_tp = self.expression(&mut lit);
-                tail_lits.push((lit, lit_tp));
+                match self.build_literal_match(v, elm_size, elm_tp, &pos, &lit, &lit_tp) {
+                    Some(tc) => tail_conds.push(tc),
+                    None if !self.first_pass => self.slice_literal_mismatch(elm_tp, &lit_tp),
+                    None => {}
+                }
+            } else if matches!(elm_tp, Type::Enum(te, true, _)
+                if matches!(&self.lexer.peek().has, LexItem::Identifier(id)
+                    if self.data.variant_of(*te, id) != u32::MAX))
+            {
+                // A variant sub-pattern `V { f }` / bare `V`, matched at `pos`.  The DIRECT read
+                // (as the head sub-pattern path uses) drives both the tag-test and the field binds.
+                let elem_read = self.read_slice_elem(v, elm_size, elm_tp, pos.clone());
+                let mut te_binds: Vec<Value> = Vec::new();
+                let mut te_conds: Vec<Value> = Vec::new();
+                let mut aliases: Vec<(String, Option<u16>)> = Vec::new();
+                if let Some(tag) = self.parse_field_sub_pattern(
+                    elem_read,
+                    elm_tp,
+                    &mut te_binds,
+                    &mut te_conds,
+                    &mut aliases,
+                ) {
+                    tail_conds.push(tag);
+                }
+                tail_conds.append(&mut te_conds);
+                bindings.append(&mut te_binds);
+            } else if let Some(name) = self.lexer.has_identifier() {
+                let bind_var = self.vars.add_variable(&name, elm_tp, &mut self.lexer);
+                if bind_var != u16::MAX {
+                    self.vars.defined(bind_var);
+                    let elem_read = self.read_slice_elem(v, elm_size, elm_tp, pos.clone());
+                    bindings.push(v_set(bind_var, elem_read));
+                    self.mark_slice_element_view(bind_var, elm_tp, borrow_src);
+                }
             } else {
                 if !self.first_pass {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
-                        "only literal elements are supported after a repetition `( … )*` (a bind or variant sub-pattern here is not yet supported)"
+                        "unexpected element after a repetition `( … )*` — expected a literal, a bind name, a variant sub-pattern, or `..rest`"
                     );
+                }
+                // Recover to `]` so `token("]")` below succeeds and this is the primary error.
+                while !self.lexer.peek_token("]") && !matches!(self.lexer.peek().has, LexItem::None)
+                {
+                    self.lexer.cont();
                 }
                 break;
             }
+            j += 1;
         }
-        if has_rest && !tail_lits.is_empty() && !self.first_pass {
+        if has_rest && tail_len > 0 && !self.first_pass {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -4546,11 +4630,11 @@ impl Parser {
             );
         }
         self.lexer.token("]");
-        let tail_len = tail_lits.len() as i32;
 
-        // Runtime run: `end` = the cursor position after the last matched V (starts at head_len).
+        // `end` = the cursor after the last matched V (starts at head_len).
         let end_var = self.create_unique("rep_end", &I32);
         self.vars.defined(end_var);
+
         let mut run_ops: Vec<Value> = vec![v_set(end_var, Value::Int(head_len))];
         if let Some(sep) = &sep_disc {
             // Separated `V (Sep V)*`: match the first V, then loop `(Sep V)` pairs.
@@ -4664,16 +4748,13 @@ impl Parser {
         };
         run_ops.push(match_bool);
         let mut arm_cond = v_block(run_ops, Type::Boolean, "rep cond");
-        // AND the fixed tail-literal conditions (matched from the END, negative index) AFTER the
-        // run boolean — its `end == len - tail_len` has already guaranteed the slice is long
-        // enough, and `&&` short-circuits so a too-short slice never reads out of range.
-        for (j, (lit, lit_tp)) in tail_lits.clone().into_iter().enumerate() {
-            let pos = Value::Int(-(tail_len - j as i32));
-            match self.build_literal_match(v, elm_size, elm_tp, &pos, &lit, &lit_tp) {
-                Some(tc) => arm_cond = v_if(arm_cond, tc, Value::Boolean(false)),
-                None if !self.first_pass => self.slice_literal_mismatch(elm_tp, &lit_tp),
-                None => {}
-            }
+        // AND the tail conditions (literal matches + variant tag-tests, matched from the END) AFTER
+        // the run boolean — its `end == len - tail_len` already guarantees the slice is long
+        // enough, and `&&` short-circuits so a too-short slice never reads out of range.  The tail
+        // BINDINGS (bare-name binds, variant field binds) were pushed to `bindings` during the tail
+        // parse above, so there is no separate binding pass here.
+        for tc in tail_conds {
+            arm_cond = v_if(arm_cond, tc, Value::Boolean(false));
         }
         *cond = match cond.take() {
             Some(existing) => Some(v_if(existing, arm_cond, Value::Boolean(false))),
@@ -6091,6 +6172,7 @@ impl Parser {
                                 &elm_size,
                                 &elm_tp,
                                 head_len,
+                                borrow_src,
                                 &mut cond,
                                 &mut bindings,
                             );

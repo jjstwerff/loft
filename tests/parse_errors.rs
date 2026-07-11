@@ -1780,6 +1780,14 @@ fn field_capture_unknown_field() {
         .error("`nope` is not a field of Num at field_capture_unknown_field:2:64");
 }
 
+// @PLN35 slice 3 — a fixed (non-`..rest`) tail after a repetition and a `..rest` are still
+// mutually exclusive.
+#[test]
+fn tail_and_rest_rejected() {
+    code!("enum Tok { Num { n: integer }, End { e: integer } }\nfn f(v: vector<Tok>) -> integer { match v { [ (Num)*, End { e }, ..rest ] => e + rest.len(), _ => -1 } }")
+        .error("a fixed tail after a repetition cannot combine with `..rest` (yet) at tail_and_rest_rejected:2:74");
+}
+
 // A user type may be named `T` (a name the stdlib uses as a generic type variable):
 // verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
 // The fix keys vector types by their element (not by a display name two distinct

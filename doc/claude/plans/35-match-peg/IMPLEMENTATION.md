@@ -75,8 +75,8 @@ fixed LITERAL tail is matched from the END (negative index) so the run must reac
 `len - tail_len` (`end == len - tail_len`; `+` ⇒ `end > head_len`; a rest just needs `head_len <= len`).
 Head bare-names bind before the group; head sub-patterns/literals bind inline. Separators are now a
 `SepSpec` — a variant TAG `(Comma)` OR a LEXEME literal `(",")` — via `sep_match_cond`, so a
-comma-separated token grammar needs no dedicated separator variant. Deferred: non-literal tail
-elements (bind / variant sub-pattern), and a fixed tail + `..rest` together. Guard
+comma-separated token grammar needs no dedicated separator variant. Non-literal tail elements
+(bind / variant sub-pattern) now land in slice 3; a fixed tail + `..rest` together stays deferred. Guard
 `tests/scripts/35m-mid-slice-repetition.loft` (bracketed lists, function calls, callee-name bind,
 value-by-index, `+`; cross-mode + leak-checked).
 
@@ -122,8 +122,18 @@ head sub-pattern path uses; a raw `OpVectorRefNullable` reads null — the pre-f
 is not a field of `V`, is rejected. Guard `tests/scripts/35n-field-projection.loft`,
 `parse_errors::field_capture_{nonscalar_deferred, unknown_field}`.
 
-**Next: non-literal tail elements after a repetition; then Phase 7 (iterator input — the
-accumulating `read(pos)`), then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook) waits on PC.**
+**Slice 3 — DONE, both backends — non-literal tail elements after a repetition.** `[ (V)*, x ]`
+(bare-name bind) and `[ (V)*, W { f } ]` (variant sub-pattern), matched from the END at
+`-(tail_len - j)`, mixable with literals and a head; still mutually exclusive with `..rest`. The
+tail is COUNTED first (a link/revert look-ahead — now safe after the `cont()` fix) so every element
+uses a fixed NEGATIVE index; reading from the run cursor `v[end + j]` instead diverges on native
+(the run's `end`, set in the arm condition, isn't reliably visible to a tail read appended after
+it — E0425 / wrong result). A variant tail's tag-test + field binds use the head path's DIRECT read
+(no cross-block temp — a temp assigned in the condition reads back null in the binds on native).
+Guard `tests/scripts/35o-tail-elements.loft`, `parse_errors::tail_and_rest_rejected`.
+
+**Next: Phase 7 (iterator input — the accumulating `read(pos)`, the only phase adding opcodes),
+then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook) waits on PC.**
 
 **Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
 the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
