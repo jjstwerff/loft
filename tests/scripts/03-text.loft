@@ -58,8 +58,8 @@ fn main() {
   assert(trim("  hello  ") == "hello", "trim both sides");
   assert(trim("no spaces") == "no spaces", "trim unchanged");
   // --- Conversions ---
-  assert("123" as integer == 123, "text to int");
-  assert("1.5" as float == 1.5, "text to float");
+  assert("123" as integer? == 123, "text to int");
+  assert("1.5" as float? == 1.5, "text to float");
   assert("{42}" == "42", "int to text");
   assert("{true}" == "true", "bool to text");
   // --- Case conversion ---
@@ -168,10 +168,10 @@ fn main() {
   assert("café".to_uppercase() == "CAFÉ", "to_uppercase non-ASCII");
   assert("CAFÉ".to_lowercase() == "café", "to_lowercase non-ASCII");
   // --- Text-to-float parse edge cases ---
-  assert(!("abc" as float), "parse non-numeric text to float yields null");
-  assert(!("" as float), "parse empty text to float yields null");
-  assert("3.14" as float == 3.14, "parse valid float text");
-  assert("-2.5" as float == -2.5, "parse negative float text");
+  assert(!("abc" as float?), "parse non-numeric text to float yields null");
+  assert(!("" as float?), "parse empty text to float yields null");
+  assert("3.14" as float? == 3.14, "parse valid float text");
+  assert("-2.5" as float? == -2.5, "parse negative float text");
   // --- split ---
   parts = "a,b,c".split(',');
   assert(len(parts) == 3, "split 3 parts: len={len(parts)}");

@@ -18,8 +18,8 @@ fn main() {
   // If the text cannot be parsed, the result is null — not a crash.
   v = 4;
   assert("{v}" == "4", "Format integer as text");
-  assert("123" as integer == 123, "Parse text to integer");
-  assert(!("abc" as integer), "Unparseable text gives null");
+  assert("123" as integer? == 123, "Parse text to integer");
+  assert(!("abc" as integer?), "Unparseable text gives null");
   // ## Arithmetic and operator precedence
   // Loft follows standard mathematical precedence: '*' and '/' before '+' and '-'.
   // Bitwise operators (<<, &, ^) have their own precedence — when mixing them with

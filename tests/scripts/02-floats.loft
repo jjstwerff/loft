@@ -53,7 +53,7 @@ fn main() {
   assert(3.0 >= 3.0, "float ge");
   // --- Conversions ---
   assert(3 as float == 3.0, "int to float");
-  assert("1.5" as float == 1.5, "text to float");
+  assert("1.5" as float? == 1.5, "text to float");
   assert("{1.5}" == "1.5", "float to text");
   assert(3.0 as integer == 3, "float to int truncates");
   assert(3 as float == 3.0, "long to float");
@@ -129,8 +129,8 @@ fn main() {
   assert(!approx(1.0f + 0.0000015f, 1.0f, 0.000001f), "approx: a 1.5e-6 offset exceeds 1e-6");
   // --- Float-to-int cast edge cases ---
   nan_val = sqrt(-1.0);
-  assert(!(nan_val as integer), "NaN as integer is null");
-  assert(!(nan_val as integer), "NaN as integer is null");
+  assert(!(nan_val as integer?), "NaN as integer is null");
+  assert(!(nan_val as integer?), "NaN as integer is null");
   inf_pos = (1.0 / 0.0) ?? null;
   // @PLN102 D-op-null-2: an out-of-range float→int no longer silently saturates;
   // it reports + yields null (like ÷0), so +inf/-inf as integer are both null.
