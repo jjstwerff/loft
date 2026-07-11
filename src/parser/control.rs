@@ -3809,6 +3809,15 @@ impl Parser {
         self.get_field(td, usize::MAX, get)
     }
 
+    /// @PLN35 Phase 7 — the LENGTH half of the match Cursor seam (`read_slice_elem` is the READ
+    /// half).  The match engine asks the subject "how long are you?" ONLY through here, so a future
+    /// STREAMING cursor can answer differently (pull-to-exhaustion / `max_lookahead`-bounded)
+    /// without any match logic changing.  The vector cursor emits `OpLengthVector`, byte-identical
+    /// to the inline calls this replaced.
+    fn cursor_len(&mut self, v: u16) -> Value {
+        self.cl("OpLengthVector", &[Value::Var(v)])
+    }
+
     /// @PLN35 — materialise a named `..rest` sub-slice `v[lo .. hi]` into a FRESH independent
     /// `vector<T>` (`rest_var`), by reusing the proven compile-time slice-materialise path
     /// (`materialize_iterator` over a minimal index-range `Iter`).  `lo`/`hi` are `Value`s: a
@@ -4312,7 +4321,7 @@ impl Parser {
         // `end = len - tail_len` — the run takes exactly the middle.
         let end_var = self.create_unique("srep_end", &I32);
         self.vars.defined(end_var);
-        let len_call = self.cl("OpLengthVector", &[Value::Var(v)]);
+        let len_call = self.cursor_len(v);
         let end_expr = self.conv_op(
             "-",
             len_call,
@@ -4640,7 +4649,7 @@ impl Parser {
             // Separated `V (Sep V)*`: match the first V, then loop `(Sep V)` pairs.
             // First V: `if head_len < len && tag(v[head_len]) == disc { end = head_len + 1 }`.
             let first_v = {
-                let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let lc = self.cursor_len(v);
                 let non_empty =
                     self.conv_op("<", Value::Int(head_len), lc, I32.clone(), I32.clone());
                 let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(head_len));
@@ -4655,7 +4664,7 @@ impl Parser {
             // `(Sep V)*`: `loop { if len <= end+1 break; if tag(v[end]) != sep break;
             //             if tag(v[end+1]) != disc break; end += 2 }`.
             let need_pair_brk = {
-                let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let lc = self.cursor_len(v);
                 let next = self.conv_op(
                     "+",
                     Value::Var(end_var),
@@ -4699,7 +4708,7 @@ impl Parser {
         } else {
             // Contiguous `V*`: `loop { if len <= end break; if tag(v[end]) != disc break; end += 1 }`.
             let len_brk = {
-                let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let lc = self.cursor_len(v);
                 let at_end = self.conv_op("<=", lc, Value::Var(end_var), I32.clone(), I32.clone());
                 v_if(at_end, Value::Break(0), Value::Null)
             };
@@ -4726,10 +4735,10 @@ impl Parser {
         // the fixed tail (`end == len - tail_len`); a rest just needs room for the head
         // (`head_len <= len`).  `+` additionally requires a non-empty run (`end > head_len`).
         let base = if has_rest {
-            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+            let lc = self.cursor_len(v);
             self.conv_op("<=", Value::Int(head_len), lc, I32.clone(), I32.clone())
         } else {
-            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+            let lc = self.cursor_len(v);
             let boundary = self.conv_op("-", lc, Value::Int(tail_len), I32.clone(), I32.clone());
             self.cl("OpEqInt", &[Value::Var(end_var), boundary])
         };
@@ -4809,7 +4818,7 @@ impl Parser {
             let rest_var = self.vars.add_variable(&name, &vec_tp, &mut self.lexer);
             self.vars.defined(rest_var);
             if !self.first_pass && rest_var != u16::MAX {
-                let hi_val = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let hi_val = self.cursor_len(v);
                 self.materialize_named_rest(
                     v,
                     elm_tp,
@@ -5033,7 +5042,7 @@ impl Parser {
         let mut branch_conds: Vec<Value> = Vec::new();
         for branch in &branches {
             let w = branch.len() as i32;
-            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+            let lc = self.cursor_len(v);
             let mut c = if has_rest {
                 self.conv_op("<=", Value::Int(w), lc, I32.clone(), I32.clone())
             } else {
@@ -5154,7 +5163,7 @@ impl Parser {
             let rest_var = self.vars.add_variable(&name, &vec_tp, &mut self.lexer);
             self.vars.defined(rest_var);
             if !self.first_pass && rest_var != u16::MAX {
-                let hi_val = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let hi_val = self.cursor_len(v);
                 self.materialize_named_rest(
                     v,
                     elm_tp,
@@ -6301,7 +6310,7 @@ impl Parser {
                 if !multi_alt {
                     let fixed = (head.len() + tail.len()) as i32;
                     // Generate length condition
-                    let len_call = self.cl("OpLengthVector", &[Value::Var(v)]);
+                    let len_call = self.cursor_len(v);
                     if has_rest {
                         // length >= fixed  →  fixed <= length
                         self.call_op(
@@ -6387,7 +6396,7 @@ impl Parser {
                         self.vars.defined(rest_var);
                         if !self.first_pass && rest_var != u16::MAX {
                             let lo_val = Value::Int(head.len() as i32);
-                            let len_c = self.cl("OpLengthVector", &[Value::Var(v)]);
+                            let len_c = self.cursor_len(v);
                             let hi_val = self.conv_op(
                                 "-",
                                 len_c,

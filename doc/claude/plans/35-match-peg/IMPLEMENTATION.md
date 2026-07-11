@@ -911,12 +911,55 @@ statement grammar), `tests/parse_errors.rs::{lexeme_missing, unknown_field_annot
 
 ---
 
-### Phase 7 — L3.6: iterator inputs (the only phase with new opcodes)
+### Phase 7 — L3.6: iterator inputs
 
 **Goal.** `match some_iter { … }` with backtracking over a non-random-access source.
 
-**Design.** An iterator cursor can't reset an index; it must **buffer pulled items**
-while an anchor is live — exactly `Lexer::memory` + the `links` refcount
+**DESIGN REVISION (2026-07-11, user-directed) — the CURSOR is the clear object.**
+The original design below (add `OpMatchAnchor`/`OpMatchRevert` + a `State` memo) is
+superseded. A design-protocol probe FALSIFIED its load-bearing claim ("the backing
+swaps in without touching match logic"): the match machinery has **11 `len`-based
+bounds** (`OpLengthVector`) that don't translate to an unbounded iterator — a raw
+backing swap is impossible. The user's steer resolves it: **streaming must NOT
+influence the parser; the parser works against ONE clear object regardless of how it
+is fed.** So:
+
+- Define a **Cursor** abstraction — the ONLY thing the match engine touches:
+  `read(pos)` (element there), `has(pos)` (is there an element there? — REPLACES raw
+  `len`), and `anchor`/`revert` (backtracking). No `OpGetVector`/`OpLengthVector`/
+  coroutine `next` in the match logic.
+- Two implementations BEHIND the interface, indistinguishable to the parser:
+  1. **Vector cursor** (random access): `read = v[pos]`, `has = pos < len`,
+     anchor/revert = save/restore an index (the F2 "no new op" note).
+  2. **Streaming cursor**: `read(pos)` pulls the coroutine via `next()` and buffers;
+     `has(pos)` pulls until buffered-or-exhausted; anchor/revert = the lexer's
+     `memory`/`link`/`revert` GENERALIZED (evict when no anchor is live). This IS the
+     lexer's mechanism as a coroutine cursor — the buffer = `Lexer::memory`, `anchor`
+     = `link`, `revert` = `revert` (the `cont()` replay-buffer bug fixed this session).
+- The `len` falsification dissolves: the 11 bounds become `has(pos)` queries both
+  impls answer. The one genuinely length-dependent case — tail-from-the-end (slice 3)
+  — needs the stream exhausted to locate the end, so tail-on-a-stream is inherently
+  bounded (finite: fine; unbounded: reject / `max_lookahead`-gate).  Streaming is an
+  IMPLEMENTATION of the Cursor, not a rewrite of the parser.
+
+**Phased build.**
+1. Define the Cursor seam and route today's match machinery through it (reframe the
+   11 `len`-bounds → `has(pos)`) as a BEHAVIOUR-PRESERVING refactor over the vector
+   cursor — prove IR byte-identical on both backends (loft-codegen Mode-B).  Nothing
+   streams yet; this is the "clear object" that keeps streaming out of the parser.
+2. Add the streaming Cursor (coroutine + lexer-style buffer) behind the same interface.
+3. Wire `match <iterator> { … }` to the streaming cursor; `max_lookahead`; native parity.
+
+**Feasibility confirmed:** loft coroutines expose explicit `next(gen)` / `exhausted(gen)`
+(not just `for`), so a streaming cursor can pull incrementally; a coroutine is
+forward-only, and `revert` replays the buffer (never rewinds the source) — exactly the
+lexer, so no coroutine re-entrancy is needed.
+
+---
+
+**Original design (superseded — kept for the add-opcode mechanics reference).** An
+iterator cursor can't reset an index; it must **buffer pulled items** while an anchor
+is live — exactly `Lexer::memory` + the `links` refcount
 (`src/lexer.rs:104,106,1371,1385`). Add:
 - `OpMatchAnchor` / `OpMatchRevert` opcodes.
 - `anchors: Vec<(u32 pos, u32 epoch)>` + a pulled-item memo on `State`
