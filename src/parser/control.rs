@@ -18,6 +18,22 @@ pub(crate) enum RetSite {
     MidReturn,
 }
 
+/// @PLN35 — what a `( … )` group in a slice pattern desugars to, decided by ONE lexical
+/// look-ahead (`peek_group_kind`).  A single peek (never two sequential save/reverts over the
+/// same region — those corrupt the lexer's replay buffer) keeps the scan minimal and the
+/// downstream diagnostic columns stable.
+#[derive(PartialEq, Clone, Copy)]
+enum SliceGroupKind {
+    /// A single-element alternation `(A | B)` or a bare group — handled by the fall-through
+    /// (`parse_slice_alternation_element`); the peek stops early so it does not over-scan.
+    Other,
+    /// A multi-element sequence alternation `(A B | C)` (Phase 4.3) or an optional `(a)?`
+    /// (Phase 5, a degenerate `(a | ε)`) — `parse_multi_element_alternation`.
+    Alt,
+    /// A repetition `( [name:] V )*` / `…+` (Phase 6) — `parse_slice_repetition`.
+    Repetition,
+}
+
 /// @PLN85 text-return analysis framework (SHADOW — not yet wired to codegen).
 ///
 /// The ONE property behind the stacked per-shape promotion predicates (2d
@@ -3904,25 +3920,31 @@ impl Parser {
     /// SEQUENCE — another variant name follows — which needs the cursor path.  Skips the first
     /// branch element (variant + a balanced `{ … }`) via `cont()`/`revert()` and peeks whether
     /// another identifier follows.
-    /// @PLN35 — lexical lookahead (no parser side effects) at a `(` in a slice pattern:
-    /// does this group route to `parse_multi_element_alternation`?  True when the group is a
-    /// MULTI-element sequence branch (`(A B …)`, Phase 4.3) OR an OPTIONAL single group
-    /// (`(A)?`, Phase 5 — a degenerate `(A | ε)`).  Both are decided from the token that
-    /// follows the FIRST variant sub-pattern, so the scan stops there:
-    ///   • another identifier  → branch 1 is a sequence          → multi-element alt
-    ///   • `)` then `?`         → optional single group `(A)?`    → alt with an ε branch
-    ///   • anything else (`|`, `)` w/o `?`, `,`, `]`) → single-element alt / bare group → false
-    /// Crucially it does NOT scan the whole `( … )`: for a single-element alternation
-    /// `(A | B)` it stops at the `|`, leaving the lexer scan position exactly where a bare
-    /// first-variant read would — so a downstream `not a variant` diagnostic reports the same
-    /// column it would without this lookahead (`revert` restores `peek` but, by design, not the
-    /// forward scan `position` that error rendering reads).
-    fn peek_group_routes_to_alt(&mut self) -> bool {
+    /// @PLN35 — ONE lexical look-ahead (no parser side effects) at a `(` in a slice pattern
+    /// that classifies the group in a single save/revert.  (Two sequential peeks over the same
+    /// region corrupt the lexer's replay buffer — a later peek reads stale state — so all the
+    /// group kinds share this one scan.)  Skips an optional `name:` capture prefix and a
+    /// balanced `{ … }` body, then decides from the token following the FIRST variant
+    /// sub-pattern — stopping there so a non-routed group `(A | B)` does not over-scan and
+    /// shift a downstream diagnostic column (`revert` restores `peek` but, by design, not the
+    /// forward scan `position` that error rendering reads):
+    ///   • another identifier    → branch 1 is a sequence         → `Alt` (multi-element)
+    ///   • `)` then `?`           → optional `(A)?`                → `Alt` (degenerate `(A|ε)`)
+    ///   • `)` then `*` / `+`     → repetition `(A)*` / `(A)+`     → `Repetition`
+    ///   • anything else (`|`, `)` bare, `,`) → single-element alt / bare group → `Other`
+    fn peek_group_kind(&mut self) -> SliceGroupKind {
         let save = self.lexer.link();
         self.lexer.cont(); // past `(`
-        let mut routes = false;
+        let mut kind = SliceGroupKind::Other;
         if matches!(self.lexer.peek().has, LexItem::Identifier(_)) {
-            self.lexer.cont(); // variant name
+            self.lexer.cont(); // first identifier (a `name:` prefix or the variant itself)
+            if self.lexer.peek_token(":") {
+                // it was a `name:` capture prefix — the variant name follows.
+                self.lexer.cont(); // `:`
+                if matches!(self.lexer.peek().has, LexItem::Identifier(_)) {
+                    self.lexer.cont(); // variant name
+                }
+            }
             if self.lexer.peek_token("::") {
                 self.lexer.cont();
                 if matches!(self.lexer.peek().has, LexItem::Identifier(_)) {
@@ -3951,15 +3973,208 @@ impl Parser {
             }
             if matches!(self.lexer.peek().has, LexItem::Identifier(_)) {
                 // a second variant name → branch 1 is a sequence (multi-element alt).
-                routes = true;
+                kind = SliceGroupKind::Alt;
             } else if self.lexer.peek_token(")") {
-                // `(A)` — an optional group iff a `?` follows the close paren.
+                // `(A)` — the suffix after `)` decides: `?` optional, `*`/`+` repetition.
                 self.lexer.cont();
-                routes = self.lexer.peek_token("?");
+                if self.lexer.peek_token("?") {
+                    kind = SliceGroupKind::Alt;
+                } else if self.lexer.peek_token("*") || self.lexer.peek_token("+") {
+                    kind = SliceGroupKind::Repetition;
+                }
             }
         }
         self.lexer.revert(save);
-        routes
+        kind
+    }
+
+    /// @PLN35 Phase 6 (L3.4, P-Rep) — a WHOLE-SLICE repetition `[ ( [name:] V )* [, ..rest] ]`
+    /// / `…+`.  The body `V` is one variant of the struct-enum element type; the repetition
+    /// matches the MAXIMAL run of consecutive `V` from the cursor.  A runtime run-loop counts
+    /// that run into `end`; `name` (if given) collects the run `v[0 .. end]` as a FRESH
+    /// `vector<ElemType>` (whole elements, via the shared `materialize_named_rest`), and a
+    /// trailing `..rest` picks up `v[end .. len]`.  `*` matches zero-or-more (so the arm only
+    /// fails a no-rest slice when a non-`V` remains, i.e. `end != len`); `+` additionally
+    /// requires `end > 0`.  The run-loop lives INSIDE the arm condition (it must run before the
+    /// bindings materialise the sub-slices), yielding the match boolean.  Assumes the lexer is
+    /// at the `(` and the repetition is the whole slice content (head empty); consumes through
+    /// `]`.  Per-iteration field capture inside the body is deferred (rejected here).
+    #[allow(clippy::too_many_arguments)]
+    fn parse_slice_repetition(
+        &mut self,
+        e_nr: u32,
+        v: u16,
+        elm_size: &Value,
+        elm_tp: &Type,
+        cond: &mut Option<Value>,
+        bindings: &mut Vec<Value>,
+    ) {
+        self.lexer.token("(");
+        // Optional `name:` capture prefix.
+        let mut cap_name: Option<String> = None;
+        if let Some(named) = self.lexer.peek_named_arg() {
+            cap_name = Some(named);
+            self.lexer.has_identifier();
+            self.lexer.token(":");
+        }
+        // The body variant.
+        let vname = self.lexer.has_identifier().unwrap_or_default();
+        let real = if self.lexer.has_token("::") {
+            self.lexer.has_identifier().unwrap_or_else(|| vname.clone())
+        } else {
+            vname.clone()
+        };
+        let mut vdef = self.data.variant_of(e_nr, &real);
+        if vdef == u32::MAX {
+            vdef = self.data.def_nr(&real);
+        }
+        let valid = vdef != u32::MAX
+            && self.data.def_type(vdef) == DefType::EnumValue
+            && self.data.def(vdef).parent() == e_nr;
+        if !valid && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "'{}' is not a variant of {}",
+                real,
+                self.data.def(e_nr).name()
+            );
+        }
+        let disc = if valid {
+            self.variant_disc(e_nr, true, vdef, &real)
+        } else {
+            0
+        };
+        // A `{ … }` body would carry per-iteration field captures; deferred in Phase 6.1.
+        if self.lexer.has_token("{") {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "per-iteration field capture inside a repetition body `( … )*` is not yet supported — bind the whole element with `(name: {real})*` and match each"
+                );
+            }
+            let mut depth = 1i32;
+            while depth > 0 {
+                if self.lexer.has_token("{") {
+                    depth += 1;
+                } else if self.lexer.has_token("}") {
+                    depth -= 1;
+                } else if matches!(self.lexer.peek().has, LexItem::None) {
+                    break;
+                } else {
+                    self.lexer.cont();
+                }
+            }
+        }
+        self.lexer.token(")");
+        let plus = self.lexer.has_token("+");
+        if !plus {
+            self.lexer.token("*");
+        }
+        // Optional trailing `, ..` — a bare `..` absorbs the remainder (no capture); `..name`
+        // additionally binds it.  Either way the run is a PREFIX, not the whole slice.
+        let mut has_rest = false;
+        let mut rest_name: Option<String> = None;
+        if self.lexer.has_token(",") && self.lexer.has_token("..") {
+            has_rest = true;
+            rest_name = self.lexer.has_identifier();
+        }
+        self.lexer.token("]");
+
+        // Runtime run-loop: `end = 0; loop { if len <= end break; if tag(v[end]) != disc break;
+        // end += 1 }`.  `end` is the length of the maximal leading `V` run.
+        let end_var = self.create_unique("rep_end", &I32);
+        self.vars.defined(end_var);
+        let len_brk = {
+            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+            let at_end = self.conv_op("<=", lc, Value::Var(end_var), I32.clone(), I32.clone());
+            v_if(at_end, Value::Break(0), Value::Null)
+        };
+        let tag_brk = {
+            let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Var(end_var));
+            let tag = self.elem_tag_int(elem);
+            let is_v = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
+            v_if(is_v, Value::Null, Value::Break(0))
+        };
+        let step = {
+            let bump = self.conv_op(
+                "+",
+                Value::Var(end_var),
+                Value::Int(1),
+                I32.clone(),
+                I32.clone(),
+            );
+            v_set(end_var, bump)
+        };
+        let run_loop = v_loop(vec![len_brk, tag_brk, step], "rep run");
+
+        // Match boolean (after the loop): no-rest requires the run to be the WHOLE slice
+        // (`end == len`); `+` additionally requires a non-empty run (`end > 0`).
+        let base = if has_rest {
+            Value::Boolean(true)
+        } else {
+            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+            self.cl("OpEqInt", &[Value::Var(end_var), lc])
+        };
+        let match_bool = if plus {
+            // `end > 0`, written `0 < end` — `>` has no Int form (desugars to a swapped `<`).
+            let gt0 = self.conv_op(
+                "<",
+                Value::Int(0),
+                Value::Var(end_var),
+                I32.clone(),
+                I32.clone(),
+            );
+            v_if(base, gt0, Value::Boolean(false)) // base && end > 0
+        } else {
+            base
+        };
+        let rep_cond = v_block(
+            vec![v_set(end_var, Value::Int(0)), run_loop, match_bool],
+            Type::Boolean,
+            "rep cond",
+        );
+        *cond = match cond.take() {
+            Some(existing) => Some(v_if(existing, rep_cond, Value::Boolean(false))),
+            None => Some(rep_cond),
+        };
+
+        // Captures materialise AFTER the condition set `end` (bindings run once the arm commits).
+        let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
+        if let Some(name) = cap_name {
+            let cap_var = self.vars.add_variable(&name, &vec_tp, &mut self.lexer);
+            self.vars.defined(cap_var);
+            if !self.first_pass && cap_var != u16::MAX {
+                self.materialize_named_rest(
+                    v,
+                    elm_tp,
+                    elm_size,
+                    cap_var,
+                    &vec_tp,
+                    Value::Int(0),
+                    Value::Var(end_var),
+                    bindings,
+                );
+            }
+        }
+        if let Some(name) = rest_name {
+            let rest_var = self.vars.add_variable(&name, &vec_tp, &mut self.lexer);
+            self.vars.defined(rest_var);
+            if !self.first_pass && rest_var != u16::MAX {
+                let hi_val = self.cl("OpLengthVector", &[Value::Var(v)]);
+                self.materialize_named_rest(
+                    v,
+                    elm_tp,
+                    elm_size,
+                    rest_var,
+                    &vec_tp,
+                    Value::Var(end_var),
+                    hi_val,
+                    bindings,
+                );
+            }
+        }
     }
 
     /// @PLN35 Phase 4.3 — a WHOLE-SLICE multi-element alternation
@@ -5043,6 +5258,14 @@ impl Parser {
                     if self.lexer.has_token("]") {
                         break;
                     }
+                    // @PLN35 — classify a leading whole-slice `( … )` group ONCE per element
+                    // (a second look-ahead over the same region corrupts the lexer replay
+                    // buffer).  Only meaningful at a head-empty `(`; `Other` everywhere else.
+                    let group_kind = if !has_rest && head.is_empty() && self.lexer.peek_token("(") {
+                        self.peek_group_kind()
+                    } else {
+                        SliceGroupKind::Other
+                    };
                     if self.lexer.has_token("..") {
                         has_rest = true;
                         // @PLN35 Phase 2 (P-Rest) — `..name` with the name ADJACENT to `..` (no
@@ -5119,11 +5342,34 @@ impl Parser {
                         }
                         elem_conds.append(&mut sub_conds);
                         head.push("_".to_string());
-                    } else if !has_rest
-                        && head.is_empty()
-                        && self.lexer.peek_token("(")
-                        && self.peek_group_routes_to_alt()
-                    {
+                    } else if group_kind == SliceGroupKind::Repetition {
+                        // @PLN35 Phase 6 — a WHOLE-SLICE repetition `[ ( [name:] V )* [, ..rest] ]`
+                        // / `…+`: match the maximal leading run of `V`, collect it (named), then
+                        // `..rest`.  Builds the arm `cond` (a run-loop that yields the boolean) +
+                        // bindings itself and consumes through `]`, so break the element loop.
+                        if let Type::Enum(elm_e_nr, true, _) = &elm_tp {
+                            let e_nr = *elm_e_nr;
+                            self.parse_slice_repetition(
+                                e_nr,
+                                v,
+                                &elm_size,
+                                &elm_tp,
+                                &mut cond,
+                                &mut bindings,
+                            );
+                            multi_alt = true;
+                        } else {
+                            if !self.first_pass {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "a repetition `( … )*` slice element needs a struct-enum element type"
+                                );
+                            }
+                            self.lexer.token("(");
+                        }
+                        break;
+                    } else if group_kind == SliceGroupKind::Alt {
                         // @PLN35 Phase 4.3 / 5 — a WHOLE-SLICE MULTI-element alternation
                         // `[ (A B | C) [, ..rest] ]` OR an OPTIONAL group `[ (a)? [, ..rest] ]`
                         // (a degenerate alternation `(a | ε)`).  Predictive dispatch on the leading

@@ -26,11 +26,25 @@
 **Branches.** Phase 0–2 MERGED to `main` (#554, squash). **Phase 3 (L3.7 multi-pattern arms),
 Phase 4 COMPLETE (L3.2 alternation: 4.1 single-element, 4.2 `option<T>` promotion, 4.3
 multi-element sequence branches via the cursor engine), Phase 5 (L3.3 optional `(a)?` as a
-degenerate `(a | ε)` alternation — one empty branch on the 4.3 engine), and a fix for a
-pre-existing crash when a user type is named `T`** are on `tuxedo-pln35-phase3-multipat`, rebased
-onto `main` (NO PR — the user does not want one; keep committing to the branch). Full-suite
-**green** on this box (only the environmental `wasm_debug_relay` fails; see memory
-`wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+degenerate `(a | ε)` alternation — one empty branch on the 4.3 engine), Phase 6.1 (L3.4
+repetition `( [name:] V )*` / `…+` on struct-enums — a runtime run-loop + whole-element
+collect), and a fix for a pre-existing crash when a user type is named `T`** are on
+`tuxedo-pln35-phase3-multipat`, rebased onto `main` (NO PR — the user does not want one; keep
+committing to the branch). Full-suite **green** on this box (only the environmental
+`wasm_debug_relay` fails; see memory `wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+
+**Phase 6.1 — DONE (repetition, struct-enum), both backends.** `[ ( [name:] V )* [, ..rest] ]`
+/ `…+`: a runtime run-loop counts the maximal leading `V` run into `end`; `name` collects
+`v[0..end]` (whole `vector<ElemType>`, reusing `..rest`'s `materialize_named_rest`), `..rest`
+gets `v[end..len]`. `*` = zero-or-more (no-rest ⇒ `end == len`); `+` ⇒ `end > 0`. The run-loop
+lives in the arm condition (yields the boolean). ONE unified look-ahead `peek_group_kind`
+(`Other`/`Alt`/`Repetition`, single save/revert — two sequential peeks corrupt the lexer replay
+buffer) classifies the group; routing computes `group_kind` once. Guard
+`tests/scripts/35i-repetition.loft`. Deferred (see the Phase 6 section): scalar/literal golden
+form (needs literal slice elements + scalar `name:Type`), per-iteration field capture,
+mid-slice repetition, separators. **Filed #556** — native `for e in x` over ANY match-arm
+materialised vector (`..rest` or a repetition capture) iterates 0 times (len/index are fine); so
+35i verifies collected values by index, not `for`.
 
 **Phase 5 — DONE (optional), both backends.** `(a)?` = degenerate alternation `(a | ε)`: the
 empty branch always matches so the optional never fails; present → bind + advance cursor by `a`'s
@@ -46,8 +60,9 @@ full commit); `..rest` reads `v[pos..]` from a runtime cursor = the matched bran
 per §3a: step 1 `read_slice_elem` seam (byte-identical refactor), step 2–4 `parse_multi_element_alternation`
 + `peek_multi_element_alt` lexical lookahead, step 5 `materialize_named_rest(lo, hi)` (extracted,
 shared with the fixed-arity path). Guards: `tests/scripts/35g-multi-element-alternation.loft`.
-**Next: Phase 6 (repetition `(…)*` / `(…)+` — the fold hook, §3a step 6), Phase 7
-(iterator input — the accumulating `read(pos)`), then the PC1–PC5 sub-rule layer.**
+**Next: Phase 6.2/6.3 (separators + the scalar/literal golden form, once its prerequisites —
+literal slice elements + scalar `name:Type` — land), Phase 7 (iterator input — the accumulating
+`read(pos)`), then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook) waits on PC.**
 
 **Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
 the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
@@ -749,32 +764,51 @@ right cursor for both the taken and the skipped path. PASS on both backends.
 
 ---
 
-### Phase 6 — L3.4: repetition `(...)*` / `(...)+` + separator
+### Phase 6 — L3.4: repetition `(...)*` / `(...)+` — 6.1 DONE (struct-enum), 6.2/6.3 pending
 
-**Goal.** `[ (args:Expr *(Comma))? ]` → `args: vector<Expr>`.
+> **6.1 DONE (2026-07-11), both backends.** A WHOLE-SLICE repetition
+> `[ ( [name:] V )* [, ..rest] ]` / `…+` where `V` is one variant of the struct-enum element
+> type: it matches the MAXIMAL leading run of consecutive `V`, `name` collects that run as a
+> FRESH `vector<ElemType>` (whole elements, reusing the Phase-4.3 `..rest` materialisation),
+> and a trailing `..rest` (named or a bare `..`) picks up the remainder.
 
-**Design.** A **bounded loop** over the slice index: each iteration anchors, tries the
-body, on fail reverts and breaks, on success appends captures to an accumulator
-vector. `+` = one mandatory body then `*`. Separator consumed but not captured. For a
-slice the loop bound is `len` (termination guaranteed). Build the loop IR modeled on
-how `for`/`while` construct loop `Value`s in `src/parser/collections.rs` (verify the
-exact constructor there during the phase).
+**Design (as built).** A runtime **run-loop** (`Value::Loop` + `Break`) counts the leading
+run into `end`: `end = 0; loop { if len <= end break; if tag(v[end]) != disc break; end += 1 }`.
+The loop lives INSIDE the arm condition (it must run before the bindings materialise the
+sub-slices) and the condition BLOCK yields the match boolean:
+- `*` matches zero-or-more, so a no-rest slice matches only when the run IS the whole slice
+  (`end == len`); with a rest it always matches (the rest absorbs the remainder);
+- `+` additionally requires a non-empty run (`end > 0`, written `0 < end` — `>` has no Int form).
 
-**Code points.**
-- `parse_pattern` repetition case: emit index-cursor loop + accumulator-vector build
-  (reuse vector-build from `src/parser/vectors.rs`).
-- Capture typing: repetition capture wraps element type in `Type::Vector(...)` at the
-  `control.rs:3442` hook.
-- Totality: repetition arm is non-total → the Phase-2 gate applies.
+Then `name` (if present) materialises `v[0 .. end]` and `..rest` materialises `v[end .. len]`,
+both via the shared `materialize_named_rest`. Predictive on the tag; no backtracking (the tag
+test is a pure boolean, the cursor only moves forward).
 
-**Steps & verification.**
-6.1 `(p)*` collects into a vector. *Verify:* `35f-repetition.loft` — count + values +
-    **length** + **leak** (accumulator frees) on both backends.
-6.2 `(p)+` requires ≥1; empty input fails the arm.
-6.3 Separator `*(Comma)` consumed not captured. *Verify:* separators absent from the
-    result vector; trailing-separator behavior pinned by a probe.
+**Code points (as built).** `peek_group_kind` (the ONE unified slice-`(`-group look-ahead —
+`Other` / `Alt` / `Repetition`, decided in a single save/revert; two sequential peeks over the
+same region corrupt the lexer replay buffer) → `SliceGroupKind`; `parse_slice_repetition`
+builds the run-loop + condition + captures. Routing computes `group_kind` ONCE per element.
+Guard: `tests/scripts/35i-repetition.loft` (`*`/`+`, with-rest / no-rest / bare-`..`, run stops
+at the first non-`V`, value-by-index; cross-mode + leak-checked).
 
-**Exit:** repetition with separators + vector capture, both backends, leak-clean.
+**Surfaced (pre-existing, filed):** iterating a match-arm-materialised vector (`..rest` OR a
+repetition capture) with `for e in x { … }` runs ZERO times on **native** (`len`/indexing are
+correct) — **#556**. So 35i verifies collected values by slice-INDEX, not `for`. This limits
+Phase 6's collected vector exactly as it already limits the shipped `..rest`.
+
+**Deferred to 6.2 / a follow-up (with the prerequisites they need):**
+- **The scalar / literal golden form** `[ 1, args:integer* ]` (`g-p6-repetition.loft`) needs
+  two prerequisites this repo lacks: (a) **literal slice elements** `[ 1, … ]` (an integer
+  literal as a slice element with an equality gate — currently a parse error), and (b) a scalar
+  **`name:Type`** capture (type-as-match on a non-enum element). Both are their own small
+  features; file/route before graduating the scalar golden.
+- **Per-iteration field capture** inside the body `( V { n } )* → n: vector<T_n>` (a field
+  PROJECTION collect, vs today's whole-element collect) — rejected today with a diagnostic.
+- **Mid-slice repetition** (a non-empty head before the group) — today head-empty only.
+- **6.3 separator** `*(Comma)` (consume-not-capture).
+- **§3a step 6 fold hook** (associativity fold direction) — waits on the PC layer that uses it.
+
+**Exit (full):** repetition with separators + vector capture, both backends, leak-clean.
 
 ---
 

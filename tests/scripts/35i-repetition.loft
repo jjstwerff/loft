@@ -1,0 +1,85 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// @PLN35 Phase 6 (L3.4, P-Rep): a WHOLE-SLICE repetition `[ ( [name:] V )* [, ..rest] ]`
+// / `…+`.  The body `V` is one variant of the struct-enum element type; the repetition
+// matches the MAXIMAL leading run of consecutive `V`.  A runtime run-loop counts that run;
+// `name` collects it as a FRESH `vector<ElemType>` (whole elements, reusing the Phase-4.3
+// `..rest` materialisation) and a trailing `..rest` picks up the remainder.  `*` = zero-or-
+// more (a no-rest slice matches only when the run IS the whole slice, `end == len`); `+`
+// additionally requires a non-empty run.  Cross-mode + leak-checked.
+//
+// NOTE: collected values are verified by slice-match INDEXING (`match x { [Num { n }, .. ] }`),
+// NOT `for e in x { … }` — the latter iterates 0 times on native over any match-arm
+// materialised vector (a pre-existing bug that also affects `..rest`; tracked as #556).
+
+enum Tok { Num { n: integer }, Op { o: integer } }
+
+// `*` with rest: run*100 + rest.
+fn take(v: vector<Tok>) -> integer {
+  match v {
+    [ (x: Num)*, ..rest ] => len(x) * 100 + len(rest),
+    _ => -1,
+  }
+}
+
+// `*` no rest: the whole slice must be Num (end == len), else fall through to `_`.
+fn allnum(v: vector<Tok>) -> integer {
+  match v {
+    [ (x: Num)* ] => len(x),
+    _ => -1,
+  }
+}
+
+// `+` with rest: at least one Num, else fall through.
+fn plus(v: vector<Tok>) -> integer {
+  match v {
+    [ (x: Num)+, ..rest ] => len(x) * 100 + len(rest),
+    _ => -1,
+  }
+}
+
+// value check: the run holds the RIGHT leading element (read x[0] via a head sub-pattern).
+// Uses a bare `..` (unnamed rest) — the run is still a prefix, the remainder is absorbed.
+fn firstof(v: vector<Tok>) -> integer {
+  match v {
+    [ (x: Num)*, .. ] => match x { [ Num { n }, .. ] => n, _ => -1 },
+    _ => -9,
+  }
+}
+
+fn main() {
+  a: vector<Tok> = [Num { n: 5 }, Num { n: 6 }, Op { o: 0 }, Op { o: 0 }];  // run 2, rest 2
+  b: vector<Tok> = [Op { o: 0 }, Num { n: 1 }];                             // run 0, rest 2
+  c: vector<Tok> = [Num { n: 1 }, Num { n: 2 }, Num { n: 3 }];             // run 3, rest 0
+  e: vector<Tok> = [];                                                     // run 0, rest 0
+  // run STOPS at the first Op — must NOT grab the later Num{9}.
+  d: vector<Tok> = [Num { n: 7 }, Op { o: 0 }, Num { n: 9 }];              // run 1, rest 2
+
+  // `*` with rest
+  assert(take(a) == 202, "take a run2 rest2: {take(a)}");
+  assert(take(b) == 2, "take b run0 rest2: {take(b)}");
+  assert(take(c) == 300, "take c run3 rest0: {take(c)}");
+  assert(take(e) == 0, "take empty: {take(e)}");
+
+  // `*` no rest — whole-slice gate
+  assert(allnum(c) == 3, "allnum c all Num: {allnum(c)}");
+  assert(allnum(a) == -1, "allnum a has Op -> _: {allnum(a)}");
+  assert(allnum(e) == 0, "allnum empty -> 0: {allnum(e)}");
+
+  // `+` with rest — needs >= 1
+  assert(plus(a) == 202, "plus a run2 rest2: {plus(a)}");
+  assert(plus(b) == -1, "plus b run0 -> _: {plus(b)}");
+  assert(plus(c) == 300, "plus c run3: {plus(c)}");
+  assert(plus(e) == -1, "plus empty -> _: {plus(e)}");
+
+  // run STOPS at the first Op: d run 1 (just Num{7}), rest 2 ([Op, Num{9}]).
+  assert(take(d) == 102, "take d run1 rest2 (stops at Op): {take(d)}");
+
+  // value check (x[0]): a -> 5 ; c -> 1 ; d -> 7 ; b -> empty run -> -1
+  assert(firstof(a) == 5, "firstof a: {firstof(a)}");
+  assert(firstof(c) == 1, "firstof c: {firstof(c)}");
+  assert(firstof(d) == 7, "firstof d (Num{{7}} only, not Num{{9}}): {firstof(d)}");
+  assert(firstof(b) == -1, "firstof b empty run: {firstof(b)}");
+
+  print("35i-repetition: PASS");
+}
