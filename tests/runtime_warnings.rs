@@ -985,9 +985,11 @@ fn main() {
 fn wrong_field_guard_still_rejects() {
     // @PLN25 index flip — a guard proves `i < len(self.v)` but the index is on a DIFFERENT
     // field `self.w` (different VecKey), so `self.w[i]` stays `text?`. The runtime-null
-    // warning is retired; the TYPE now enforces it HARDER — returning the `text?` into the
-    // non-null `-> text` is an `(N-Store)` REJECT. (A correct `i < len(self.w)` guard, or a
-    // `?? ""` discharge, compiles.)
+    // warning is retired; the TYPE now enforces it — returning the `text?` into the non-null
+    // `-> text` produces an `(N-Store)` diagnostic: a hard REJECT by default, relaxed to a
+    // WARNING under `LOFT_NULLFLOW` (@PLN102 N-Warn — `text` reserves its null out-of-band).
+    // Either way the diagnostic fires; assert on the wording shared by both. (A correct
+    // `i < len(self.w)` guard, or a `?? ""` discharge, is clean.)
     let source = "\
 struct S { v: vector<text> not null, w: vector<text> not null }
 fn rd(self: S, i: integer) -> text {
@@ -1000,8 +1002,9 @@ fn main() {
 ";
     let (_stdout, diag, _code) = run_with_warnings("wrong_field_guard", source);
     assert!(
-        diag.contains("cannot be stored into the return value"),
-        "a guard on a DIFFERENT field does not prove fit → the `text?` is an N-Store reject; got stderr={diag:?}"
+        diag.contains("stored into the return value of the non-null type"),
+        "a guard on a DIFFERENT field does not prove fit → the `text?` produces an N-Store \
+         diagnostic (a hard reject by default; a warning under LOFT_NULLFLOW); got stderr={diag:?}"
     );
 }
 
