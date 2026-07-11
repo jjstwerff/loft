@@ -18,17 +18,27 @@ fn workspace_root() -> std::path::PathBuf {
 
 /// `(success, warning_count, stdout)`.
 fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, usize, String) {
-    let script =
-        std::env::temp_dir().join(format!("loft_nf3_{}_{tag}.loft", std::process::id()));
+    let script = std::env::temp_dir().join(format!("loft_nf3_{}_{tag}.loft", std::process::id()));
     std::fs::write(&script, body).expect("write script");
     let mut cmd = Command::new(loft_bin());
-    cmd.arg(backend).arg(&script).current_dir(workspace_root()).env("LOFT_TIMEOUT", "120");
-    if nullflow { cmd.env("LOFT_NULLFLOW", "1"); } else { cmd.env_remove("LOFT_NULLFLOW"); }
+    cmd.arg(backend)
+        .arg(&script)
+        .current_dir(workspace_root())
+        .env("LOFT_TIMEOUT", "120");
+    if nullflow {
+        cmd.env("LOFT_NULLFLOW", "1");
+    } else {
+        cmd.env_remove("LOFT_NULLFLOW");
+    }
     let out = cmd.output().expect("failed to invoke loft binary");
     let _ = std::fs::remove_file(&script);
     let stderr = String::from_utf8_lossy(&out.stderr);
     let warns = stderr.lines().filter(|l| l.starts_with("warning:")).count();
-    (out.status.success(), warns, String::from_utf8_lossy(&out.stdout).into_owned())
+    (
+        out.status.success(),
+        warns,
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+    )
 }
 
 /// float `/` a VARIABLE divisor — `float?` under nullflow.
@@ -48,7 +58,10 @@ fn float_div_var_off_launders() {
 fn float_div_var_on_is_nullable_interpret() {
     let (ok, warns, out) = run(DIV_VAR, "--interpret", true, "var_on_i");
     assert!(ok, "{out}");
-    assert_eq!(warns, 1, "ON: float / var is float?, so the store warns; out={out}");
+    assert_eq!(
+        warns, 1,
+        "ON: float / var is float?, so the store warns; out={out}"
+    );
     assert!(out.contains("f=null"));
 }
 #[test]
@@ -62,7 +75,10 @@ fn float_div_var_on_is_nullable_native() {
 fn float_div_const_stays_non_null() {
     let (ok, warns, out) = run(DIV_CONST, "--interpret", true, "const_on");
     assert!(ok, "{out}");
-    assert_eq!(warns, 0, "ON: a constant non-zero divisor is provably safe → non-null");
+    assert_eq!(
+        warns, 0,
+        "ON: a constant non-zero divisor is provably safe → non-null"
+    );
     assert!(out.contains("f=0.5"));
 }
 
@@ -73,14 +89,20 @@ fn main() {\n  x = -1.0;\n  s = S { g: 0.0 };\n  s.g = sqrt(x);\n  print(\"f={s.
 #[test]
 fn sqrt_off_non_null_no_warning() {
     let (ok, warns, out) = run(SQRT, "--interpret", false, "sqrt_off");
-    assert!(ok, "OFF: stdlib must load with sqrt stripped to non-null float: {out}");
+    assert!(
+        ok,
+        "OFF: stdlib must load with sqrt stripped to non-null float: {out}"
+    );
     assert_eq!(warns, 0, "OFF: sqrt returns non-null float");
 }
 #[test]
 fn sqrt_on_nullable_warns_interpret() {
     let (ok, warns, out) = run(SQRT, "--interpret", true, "sqrt_on_i");
     assert!(ok, "{out}");
-    assert_eq!(warns, 1, "ON: sqrt returns float?, the store warns; out={out}");
+    assert_eq!(
+        warns, 1,
+        "ON: sqrt returns float?, the store warns; out={out}"
+    );
     assert!(out.contains("f=null"));
 }
 #[test]
@@ -93,7 +115,9 @@ fn sqrt_on_nullable_warns_native() {
 // --- 3.3/3.4: ln/log/pow nullable; exp TOTAL stays non-null.  3.5: constant-in-domain elision. ---
 
 fn store(expr: &str) -> String {
-    format!("struct S {{ g: float }}\nfn main() {{ s = S {{ g: 0.0 }}; s.g = {expr}; print(\"r={{s.g}}\\n\"); }}\n")
+    format!(
+        "struct S {{ g: float }}\nfn main() {{ s = S {{ g: 0.0 }}; s.g = {expr}; print(\"r={{s.g}}\\n\"); }}\n"
+    )
 }
 
 #[test]
@@ -101,12 +125,20 @@ fn exp_total_stays_non_null_even_on() {
     // exp is defined off the raw non-null OpPow, so it never gets a spurious `?`.
     let (ok, warns, out) = run(&store("exp(2.0)"), "--interpret", true, "exp_on");
     assert!(ok, "{out}");
-    assert_eq!(warns, 0, "exp is total → non-null, no store warning; out={out}");
+    assert_eq!(
+        warns, 0,
+        "exp is total → non-null, no store warning; out={out}"
+    );
     assert!(out.contains("r=7.389"), "{out}");
 }
 #[test]
 fn ln_nullable_warns_on() {
-    let (ok, warns, out) = run(&store("ln(x)").replace("s = S", "x = -1.0; s = S"), "--interpret", true, "ln_on");
+    let (ok, warns, out) = run(
+        &store("ln(x)").replace("s = S", "x = -1.0; s = S"),
+        "--interpret",
+        true,
+        "ln_on",
+    );
     assert!(ok, "{out}");
     assert_eq!(warns, 1, "ln(var) is float? → store warns; out={out}");
 }
@@ -119,17 +151,29 @@ fn pow_variable_nullable_warns_on() {
 }
 #[test]
 fn elision_const_in_domain_is_non_null() {
-    for (expr, tag) in [("sqrt(4.0)", "e1"), ("pow(2.0, 3.0)", "e2"), ("pow(-2.0, 3.0)", "e3"), ("ln(2.0)", "e4"), ("asin(0.5)", "e5")] {
+    for (expr, tag) in [
+        ("sqrt(4.0)", "e1"),
+        ("pow(2.0, 3.0)", "e2"),
+        ("pow(-2.0, 3.0)", "e3"),
+        ("ln(2.0)", "e4"),
+        ("asin(0.5)", "e5"),
+    ] {
         let (ok, warns, out) = run(&store(expr), "--interpret", true, tag);
         assert!(ok, "{expr}: {out}");
-        assert_eq!(warns, 0, "{expr} is provably in-domain → non-null, no warning; out={out}");
+        assert_eq!(
+            warns, 0,
+            "{expr} is provably in-domain → non-null, no warning; out={out}"
+        );
     }
 }
 #[test]
 fn elision_out_of_domain_stays_nullable() {
     let (ok, warns, out) = run(&store("sqrt(-1.0)"), "--interpret", true, "oob");
     assert!(ok, "{out}");
-    assert_eq!(warns, 1, "sqrt(-1.0) is out of domain → stays float?; out={out}");
+    assert_eq!(
+        warns, 1,
+        "sqrt(-1.0) is out of domain → stays float?; out={out}"
+    );
 }
 #[test]
 fn exp_ln_load_off() {

@@ -24,8 +24,7 @@ fn workspace_root() -> std::path::PathBuf {
 /// Returns `(success, stdout, stderr)`.  `tag` keeps the temp script unique across the
 /// parallel tests.
 fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, String) {
-    let script =
-        std::env::temp_dir().join(format!("loft_nf_{}_{tag}.loft", std::process::id()));
+    let script = std::env::temp_dir().join(format!("loft_nf_{}_{tag}.loft", std::process::id()));
     std::fs::write(&script, body).expect("write script");
     let mut cmd = Command::new(loft_bin());
     cmd.arg(backend)
@@ -65,7 +64,10 @@ fn off_full_integer_stays_hard_error() {
 #[test]
 fn on_full_integer_warns_and_runs_interpret() {
     let (ok, out, err) = run(FULL, "--interpret", true, "on_full_i");
-    assert!(ok, "ON: the full-integer store should compile + run; stderr: {err}");
+    assert!(
+        ok,
+        "ON: the full-integer store should compile + run; stderr: {err}"
+    );
     assert!(
         err.contains("is stored into") && !err.contains("cannot be stored"),
         "expected a WARNING, not an error: {err}"
@@ -76,13 +78,22 @@ fn on_full_integer_warns_and_runs_interpret() {
 #[test]
 fn on_full_integer_warns_and_runs_native() {
     let (ok, out, err) = run(FULL, "--native", true, "on_full_n");
-    assert!(ok, "ON native: the store should compile + run; stderr: {err}");
-    assert!(out.contains("f=null"), "native: the slot should hold null: {out}");
+    assert!(
+        ok,
+        "ON native: the store should compile + run; stderr: {err}"
+    );
+    assert!(
+        out.contains("f=null"),
+        "native: the slot should hold null: {out}"
+    );
 }
 
 #[test]
 fn on_narrow_u8_stays_hard_error() {
     let (ok, _out, err) = run(NARROW, "--interpret", true, "on_narrow");
-    assert!(!ok, "ON: a narrow store must stay a hard error (no room for the null)");
+    assert!(
+        !ok,
+        "ON: a narrow store must stay a hard error (no room for the null)"
+    );
     assert!(err.contains("cannot be stored"), "narrow stderr: {err}");
 }

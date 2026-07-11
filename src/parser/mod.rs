@@ -2979,6 +2979,10 @@ impl Parser {
     /// @PLN102 Phase 3.5 — is a call to a domain-partial math fn provably IN its real domain,
     /// from CONSTANT arguments alone? Then its result is non-null and the `τ?` elides. The
     /// constant subset of the "provably-fits" elision (variable-arg range-tracking is deferred).
+    // These are exact domain-boundary checks, not approximate arithmetic: a `Long` too large to
+    // represent exactly in `f64` is trivially outside any bounded domain, and `base != 1.0` is the
+    // genuine boundary (a `log` base of exactly 1 is undefined), so the two lints do not apply.
+    #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
     fn math_arg_in_domain(name: &str, args: &[Value]) -> bool {
         fn cval(v: Option<&Value>) -> Option<f64> {
             match v.map(Value::unspan) {
@@ -3001,9 +3005,7 @@ impl Parser {
             }
             // `pow(base, exp)`: a non-negative base is always defined; a negative base only when
             // the exponent is a whole number (`pow(-2, 3)` = -8, but `pow(-2, 0.5)` = null).
-            "pow" => {
-                matches!(a0, Some(b) if b >= 0.0) || matches!(a1, Some(e) if e.fract() == 0.0)
-            }
+            "pow" => matches!(a0, Some(b) if b >= 0.0) || matches!(a1, Some(e) if e.fract() == 0.0),
             _ => false,
         }
     }
@@ -3015,7 +3017,8 @@ impl Parser {
     fn is_null_transparent(name: &str) -> bool {
         matches!(
             name,
-            "abs" | "min"
+            "abs"
+                | "min"
                 | "max"
                 | "clamp"
                 | "floor"
@@ -3035,7 +3038,12 @@ impl Parser {
     /// null-check and the call). This is the general form of what the `min`/`max` `τ?` overloads did
     /// by hand — floats propagate NaN on their own, but integer `max`/`abs` need this guard, so it
     /// runs uniformly. Second-pass only (the caller returns the `τ?` type in the first pass).
-    fn wrap_null_transparent(&mut self, code: &mut Value, arg_types: &[Type], ret_base: &Type) -> Type {
+    fn wrap_null_transparent(
+        &mut self,
+        code: &mut Value,
+        arg_types: &[Type],
+        ret_base: &Type,
+    ) -> Type {
         let opt = Type::optional(ret_base.clone());
         let mut sets: Vec<Value> = Vec::new();
         let mut checks: Vec<(u16, Type)> = Vec::new();

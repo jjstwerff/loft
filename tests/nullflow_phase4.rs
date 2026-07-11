@@ -9,20 +9,33 @@
 
 use std::process::Command;
 
-fn loft_bin() -> std::path::PathBuf { std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft")) }
-fn workspace_root() -> std::path::PathBuf { std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")) }
+fn loft_bin() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft"))
+}
+fn workspace_root() -> std::path::PathBuf {
+    std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+}
 
 fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, String) {
     let script = std::env::temp_dir().join(format!("loft_nf4_{}_{tag}.loft", std::process::id()));
     std::fs::write(&script, body).expect("write script");
     let mut cmd = Command::new(loft_bin());
-    cmd.arg(backend).arg(&script).current_dir(workspace_root()).env("LOFT_TIMEOUT", "120");
-    if nullflow { cmd.env("LOFT_NULLFLOW", "1"); } else { cmd.env_remove("LOFT_NULLFLOW"); }
+    cmd.arg(backend)
+        .arg(&script)
+        .current_dir(workspace_root())
+        .env("LOFT_TIMEOUT", "120");
+    if nullflow {
+        cmd.env("LOFT_NULLFLOW", "1");
+    } else {
+        cmd.env_remove("LOFT_NULLFLOW");
+    }
     let out = cmd.output().expect("failed to invoke loft binary");
     let _ = std::fs::remove_file(&script);
-    (out.status.success(),
-     String::from_utf8_lossy(&out.stdout).into_owned(),
-     String::from_utf8_lossy(&out.stderr).into_owned())
+    (
+        out.status.success(),
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+    )
 }
 
 const BARE: &str = "fn main() { s = \"3.14\"; x = s as float; print(\"r={x}\\n\"); }\n";
@@ -32,19 +45,28 @@ const CHECKED: &str = "fn main() { s = \"abc\"; x = s as float?; print(\"r={x ??
 #[test]
 fn bare_text_cast_off_is_auto_nullable() {
     let (ok, out, _e) = run(BARE, "--interpret", false, "bare_off");
-    assert!(ok, "OFF: bare `text as float` stays the DN3 auto-nullable parse: {out}");
+    assert!(
+        ok,
+        "OFF: bare `text as float` stays the DN3 auto-nullable parse: {out}"
+    );
     assert!(out.contains("r=3.14"));
 }
 #[test]
 fn bare_text_cast_on_is_a_compile_error() {
     let (ok, _o, err) = run(BARE, "--interpret", true, "bare_on");
     assert!(!ok, "ON: a bare `text as float` must be a compile error");
-    assert!(err.contains("may fail") && err.contains("float?"), "stderr: {err}");
+    assert!(
+        err.contains("may fail") && err.contains("float?"),
+        "stderr: {err}"
+    );
 }
 #[test]
 fn text_cast_coalesce_on_ok_interpret() {
     let (ok, out, err) = run(COAL, "--interpret", true, "coal_i");
-    assert!(ok, "ON: `as float ?? d` is the assert-or-default form; stderr: {err}");
+    assert!(
+        ok,
+        "ON: `as float ?? d` is the assert-or-default form; stderr: {err}"
+    );
     assert!(out.contains("r=3.14"), "{out}");
 }
 #[test]
@@ -57,5 +79,8 @@ fn text_cast_coalesce_on_ok_native() {
 fn text_cast_checked_on_yields_null_on_bad_parse() {
     let (ok, out, err) = run(CHECKED, "--interpret", true, "chk_i");
     assert!(ok, "ON: `as float?` is the checked cast; stderr: {err}");
-    assert!(out.contains("r=-1"), "bad parse → null → ?? -1.0; out={out}");
+    assert!(
+        out.contains("r=-1"),
+        "bad parse → null → ?? -1.0; out={out}"
+    );
 }

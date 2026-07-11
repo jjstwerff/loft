@@ -21,8 +21,7 @@ fn workspace_root() -> std::path::PathBuf {
 
 /// `(success, stdout, warning_count)`.  `tag` keeps the temp script unique across parallel tests.
 fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, usize) {
-    let script =
-        std::env::temp_dir().join(format!("loft_nf2_{}_{tag}.loft", std::process::id()));
+    let script = std::env::temp_dir().join(format!("loft_nf2_{}_{tag}.loft", std::process::id()));
     std::fs::write(&script, body).expect("write script");
     let mut cmd = Command::new(loft_bin());
     cmd.arg(backend)
@@ -64,7 +63,10 @@ fn main() {\n  a = 3; b = 4;\n  s = S { f: 0 };\n  s.f = a * b;\n  print(\"f={s.
 fn prop_int_off_launders_no_warning() {
     let (ok, out, warns) = run(PROP_INT, "--interpret", false, "int_off");
     assert!(ok, "OFF should compile+run: {out}");
-    assert_eq!(warns, 0, "OFF: n+1 launders to non-null, so the store must NOT warn");
+    assert_eq!(
+        warns, 0,
+        "OFF: n+1 launders to non-null, so the store must NOT warn"
+    );
     assert!(out.contains("f=6"));
 }
 
@@ -72,7 +74,10 @@ fn prop_int_off_launders_no_warning() {
 fn prop_int_on_propagates_and_warns_interpret() {
     let (ok, out, warns) = run(PROP_INT, "--interpret", true, "int_on_i");
     assert!(ok, "ON should compile+run: {out}");
-    assert_eq!(warns, 1, "ON: n+1 is integer? (N-Prop), so the store must warn once");
+    assert_eq!(
+        warns, 1,
+        "ON: n+1 is integer? (N-Prop), so the store must warn once"
+    );
     assert!(out.contains("f=6"), "value still flows: {out}");
 }
 
@@ -80,7 +85,10 @@ fn prop_int_on_propagates_and_warns_interpret() {
 fn prop_int_on_propagates_and_warns_native() {
     let (ok, out, warns) = run(PROP_INT, "--native", true, "int_on_n");
     assert!(ok, "ON native: {out}");
-    assert_eq!(warns, 1, "ON native: the store must warn once (N-Prop): {out}");
+    assert_eq!(
+        warns, 1,
+        "ON native: the store must warn once (N-Prop): {out}"
+    );
     assert!(out.contains("f=6"));
 }
 
@@ -88,7 +96,10 @@ fn prop_int_on_propagates_and_warns_native() {
 fn prop_float_on_right_operand_propagates() {
     let (ok, out, warns) = run(PROP_FLOAT, "--interpret", true, "flt_on");
     assert!(ok, "ON: {out}");
-    assert_eq!(warns, 1, "ON: 1.0 - float? is float? (N-Prop on the right operand)");
+    assert_eq!(
+        warns, 1,
+        "ON: 1.0 - float? is float? (N-Prop on the right operand)"
+    );
     assert!(out.contains("g=null"), "the null flows through: {out}");
 }
 
@@ -96,6 +107,9 @@ fn prop_float_on_right_operand_propagates() {
 fn c85_non_null_arithmetic_stays_non_null() {
     let (ok, out, warns) = run(C85, "--interpret", true, "c85");
     assert!(ok, "ON: {out}");
-    assert_eq!(warns, 0, "C85: two non-null operands → non-null result, no store warning");
+    assert_eq!(
+        warns, 0,
+        "C85: two non-null operands → non-null result, no store warning"
+    );
     assert!(out.contains("f=12"));
 }
