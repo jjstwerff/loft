@@ -28,7 +28,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > returns:** `find`/`rfind` → `integer?`, `min_of`/`max_of` → `T?`; pure static type honesty (same
 > runtime rep), **zero caller breaks** across the full suite, strict compile-rejection guard
 > `pln102_stdlib_reachable_null_returns_are_typed_nullable` (proven non-vacuous). ✅ **Step 5 —
-> residual frozen:** [DESIGN_DECISIONS.md § C89](../../DESIGN_DECISIONS.md) ratifies option B and
+> residual frozen:** [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md) ratifies option B and
 > freezes the per-type reserved-value table; golden pin `pln102-null-residual-golden.loft` (both
 > backends). **KEYSTONE COMPLETE (steps 1–5).**
 
@@ -176,14 +176,14 @@ rewrite.**
    a revert). STDLIB.md updated. *(2026-07-11; `default/03_text.loft` + `default/01_code.loft`.)*
 5. ✅ **DESIGN_DECISIONS entry + golden tests** for the accepted residual — the one reserved value
    per nullable scalar is now a conscious, frozen decision:
-   [DESIGN_DECISIONS.md § C89](../../DESIGN_DECISIONS.md#c89--each-nullable-scalar-reserves-one-bit-pattern-for-null-the-in-band-sentinel-residual-accepted-frozen)
+   [DESIGN_DECISIONS.md § C90](../../DESIGN_DECISIONS.md#c90--each-nullable-scalar-reserves-one-bit-pattern-for-null-the-in-band-sentinel-residual-accepted-frozen)
    (option B ratified; per-type reserved-value table part of the contract-1 freeze). Golden pin
    `tests/scripts/pln102-null-residual-golden.loft` freezes each reserved value as a boundary (the
    pattern reads null; an adjacent value does not) on both backends. *(2026-07-11.)*
 
 **Keystone COMPLETE** (steps 1–5). The null model is honest in the spec, uniform in comparison,
 guarded at every silent-collision site, honest in stdlib return types, and its accepted residual is
-a frozen design decision with a golden pin. D-op-null-1/2 CLOSED; C89 recorded.
+a frozen design decision with a golden pin. D-op-null-1/2 CLOSED; C90 recorded.
 
 ## If A — the shape of the work (so the choice is informed)
 A new tagged runtime representation for nullable scalars (extend the `__nullable<S>` machinery to
