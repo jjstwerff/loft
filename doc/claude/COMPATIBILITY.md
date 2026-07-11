@@ -244,6 +244,18 @@ human makes the acceptance decision. Admitting a library into the never-break gu
 deliberate act — because acceptance, like every addition under this promise, is permanent (the same
 ratchet as loft's own surface).
 
+**Our own published libraries are the hybrid — and there the mechanism is a *signal*.** loft's own
+libs (`web`, `server`, `graphics`, …) live in the registry and pass the same curated gate as
+anyone's, so they are *hosted* like a third party's — but we also own their code, so we can *fold*
+them like our own surface. That gives us a lever third parties do not have: we can trigger the
+versioning mechanism **deliberately** — mark a new version as a breaking epoch, key a new behaviour on
+the `contract` — **not because we want to break** (we never do: we fold, host, and key, so no consumer
+is harmed) **but as a signal.** It is arc C's recommended-idiom signpost delivered *through the
+mechanism itself*: the new epoch *tells* the ecosystem "the preferred idiom moved here," while every
+existing consumer keeps its working old version untouched. The same mechanism a third party is
+*caught* by, we use *on purpose* — safe precisely because we control both the library and the
+language, so we can guarantee the signal costs no one a break.
+
 ## The `contract` integer under this promise
 
 Because forward-compatibility is now **guaranteed**, the `contract` version is simpler than
