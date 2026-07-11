@@ -219,9 +219,28 @@ the P4 mechanic; the P7 memo for streams.
 **Verify.** `match cur { [A, B] => … }` over a Cursor consumes exactly 2 and leaves `pos` at 2;
 matching a vector still whole-consumes. Both backends; leak-clean.
 
-### PC2 — Sub-rule invocation `name: rule`
+### PC2 — Sub-rule invocation `name: rule` — **DONE (whole-pattern), both backends**
 
-**Goal.** The `parse_fn` example (§1) parses and runs.
+**Landed (first cut).** In a cursor match, a slice element `[ name: rule ]` where `rule` names a
+`fn(cursor) -> Node` is a sub-rule invocation (`peek_subrule_capture` — an `n_<rule>` fn returning a
+`Reference`; disjoint from `name: Variant` sub-patterns, which have no `n_<...>` fn).  It desugars to
+the proven hand-form `r = rule(cursor); if r != null { name = r; … }`: the sub-rule prefix-matches
+over the SAME cursor (PC1 semantics — advances `pos` on a match, leaves it on a miss, returns null on
+a miss), so the call HOISTS above the arm if-chain (`prechain`, a match-level binding visible to every
+arm — a cond sub-block scopes it away on native) and runs once; the arm gates on `name != null`
+(`OpNeRef(name, OpNullRefSentinel())` — the ref path the hand-form uses, NOT `OpRefIsNull`, which
+misreads a fn-returned null struct on the interpreter).  `multi_alt` skips the fixed-length gate +
+pos-advance — the sub-rule owns the pos.  A sub-rule may consume MANY tokens (pos jumps by its width),
+and sequential top-level matches walk the stream, so recursive descent composes today.  Guard
+`tests/scripts/35r-subrule-invoke.loft` (1- and 2-token sub-rules, hit/miss/wildcard, sequential
+walk; both backends, leak-clean) + `parse_errors::subrule_mixing_deferred`.  **DEFERRED:** mixing a
+sub-rule with fixed elements in the same pattern (`[ Fn, params: rule, RP ]`) — needs the running-pos
++ revert (a variable-width sub-rule advances by a runtime amount, so later elements read at a runtime
+pos); today a sub-rule must be the WHOLE slice pattern.  Match bindings leak to the enclosing scope
+(pre-existing), so reusing a binding name across sub-rules of different return types collides — use
+distinct names.
+
+**Original goal.** The `parse_fn` example (§1) parses and runs.
 **Design.** At a pattern element, resolve an identifier that names a function of type
 `fn(&Cursor<T>) -> option<R>` as a sub-rule; desugar to the anchor/call/null-check/bind/thread of §3.
 **Code points.** `src/parser/control.rs` pattern parsing (the `parse_pattern` element loop from P1)

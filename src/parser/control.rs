@@ -6184,6 +6184,93 @@ impl Parser {
         result_tp
     }
 
+    /// @PLN35 PC2 — is the upcoming slice element `name : rule`, where `rule` names a sub-rule
+    /// FUNCTION (`n_<rule>` returning a struct)?  ONE save/revert look-ahead, mirroring
+    /// `peek_scalar_type_capture`.  A variant name (`name : Variant`) has no `n_<...>` fn, so this
+    /// stays disjoint from the sub-pattern path.  Returns `(name, fn_def_nr, return_type)`.
+    fn peek_subrule_capture(&mut self) -> Option<(String, u32, Type)> {
+        let name = match &self.lexer.peek().has {
+            LexItem::Identifier(id) if id != "_" => id.clone(),
+            _ => return None,
+        };
+        let save = self.lexer.link();
+        let mut result = None;
+        self.lexer.cont(); // name
+        if self.lexer.peek_token(":") {
+            self.lexer.cont(); // `:`
+            if let LexItem::Identifier(rule) = self.lexer.peek().has.clone() {
+                let fn_nr = self.data.def_nr(&format!("n_{rule}"));
+                if fn_nr != u32::MAX {
+                    let ret = self.data.def(fn_nr).returned().clone();
+                    if matches!(ret, Type::Reference(..)) {
+                        result = Some((name, fn_nr, ret));
+                    }
+                }
+            }
+        }
+        self.lexer.revert(save);
+        result
+    }
+
+    /// @PLN35 PC2 — emit a sub-rule invocation slice element `[ name: rule ]` (cursor mode,
+    /// whole-pattern).  Desugars to the proven hand-form `r = rule(cursor); if r != null { name = r
+    /// … }`: the sub-rule prefix-matches over the SAME cursor (advancing its `pos` on a match,
+    /// leaving it on a miss), so no fixed-length gate or pos-advance is needed here (`multi_alt`
+    /// skips them).  The call is evaluated ONCE inside the arm cond (a side-effecting block) so a
+    /// miss never double-advances; `name` binds the (owned) result and the arm gates on `name != null`.
+    fn parse_subrule_slice_element(
+        &mut self,
+        name: &str,
+        fn_nr: u32,
+        ret_tp: &Type,
+        cond: &mut Option<Value>,
+        prechain: &mut Vec<Value>,
+    ) {
+        let cursor_var = self.match_cursor.map_or(0, |(cv, ..)| cv);
+        // Re-read `name : rule` (the peek reverted); then require it be the whole pattern.
+        self.lexer.has_identifier(); // name
+        self.lexer.token(":");
+        self.lexer.has_identifier(); // rule
+        if !self.first_pass && !self.lexer.peek_token("]") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a sub-rule element `{name}: rule` must currently be the whole slice pattern \
+                 (mixing a sub-rule with fixed elements is deferred to a follow-up)"
+            );
+        }
+        while !self.lexer.peek_token("]") && !matches!(self.lexer.peek().has, LexItem::None) {
+            self.lexer.cont();
+        }
+        self.lexer.token("]");
+        let name_var = self.vars.add_variable(name, ret_tp, &mut self.lexer);
+        self.vars.defined(name_var);
+        let cursor_tp = self.vars.tp(cursor_var).clone();
+        let mut call = Value::Null;
+        self.call_nr(
+            &mut call,
+            fn_nr,
+            &[Value::Var(cursor_var)],
+            &[cursor_tp],
+            false,
+            &[],
+        );
+        // Hoist `name = rule(cursor)` above the if-chain: the call runs ONCE (a miss leaves `pos`
+        // unchanged, so unconditional evaluation is safe), and `name` is a match-level binding
+        // visible to every arm body (a cond sub-block would scope it away on native).  The arm
+        // then gates on `name != null`.
+        prechain.push(v_set(name_var, call));
+        // Presence test == the hand-form `name != null`: `OpNeRef(name, OpNullRefSentinel())`.
+        // (NOT `OpRefIsNull` — that tests the store_nr sentinel, for `enum == null`, and misreads
+        // a fn-returned null struct on the interpreter; `OpNeRef` vs the sentinel is the ref path.)
+        let sentinel = self.cl("OpNullRefSentinel", &[]);
+        let present = self.cl("OpNeRef", &[Value::Var(name_var), sentinel]);
+        *cond = match cond.take() {
+            Some(existing) => Some(v_if(existing, present, Value::Boolean(false))),
+            None => Some(present),
+        };
+    }
+
     fn parse_vector_match(
         &mut self,
         subject: Value,
@@ -6204,6 +6291,11 @@ impl Parser {
         let mut result_type = Type::Void;
         let mut arms: Vec<(Option<Value>, Value, Type)> = Vec::new();
         let mut has_wildcard = false;
+        // @PLN35 PC2 — statements hoisted BEFORE the arm if-chain (evaluated once, at match-level
+        // scope so a binding is visible to every arm body — native scopes cond sub-blocks away).
+        // A sub-rule call goes here: `name = rule(cursor)` runs unconditionally, then each arm's
+        // cond null-checks `name` (mirrors the hand-form `r = rule(c); if r != null { … }`).
+        let mut prechain: Vec<Value> = Vec::new();
         loop {
             if self.lexer.peek_token("}") {
                 break;
@@ -6244,6 +6336,27 @@ impl Parser {
                         if let Some(name) = self.lexer.has_identifier() {
                             rest_name = Some(name);
                         }
+                    } else if self.match_cursor.is_some()
+                        && head.is_empty()
+                        && !has_rest
+                        && let Some((name, fn_nr, ret_tp)) = self.peek_subrule_capture()
+                    {
+                        // @PLN35 PC2 — sub-rule invocation `[ name: rule ]` in cursor mode: call
+                        // `rule(cursor)` (which prefix-matches over the SAME cursor, advancing its
+                        // `pos` on a match and leaving it on a miss — PC1 semantics), bind `name` to
+                        // the result, and gate the arm on `name != null`.  Whole-pattern only for
+                        // now (the running-pos + revert needed to mix a variable-width sub-rule with
+                        // fixed elements is deferred).  `multi_alt` skips the fixed length gate +
+                        // pos-advance — the sub-rule owns the pos.
+                        self.parse_subrule_slice_element(
+                            &name,
+                            fn_nr,
+                            &ret_tp,
+                            &mut cond,
+                            &mut prechain,
+                        );
+                        multi_alt = true;
+                        break;
                     } else if !has_rest
                         && !matches!(&elm_tp, Type::Enum(..))
                         && let Some(is_rep) = self.peek_scalar_type_capture()
@@ -6797,11 +6910,10 @@ impl Parser {
                 chain = arm_code;
             }
         }
-        *code = v_block(
-            vec![v_set(v, subject), chain],
-            result_type.clone(),
-            "vector_match",
-        );
+        let mut block_ops = vec![v_set(v, subject)];
+        block_ops.append(&mut prechain);
+        block_ops.push(chain);
+        *code = v_block(block_ops, result_type.clone(), "vector_match");
         result_type
     }
 
