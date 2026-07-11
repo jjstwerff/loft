@@ -124,6 +124,40 @@ channel that may bill the programmer, and even this one bills nothing you must a
 never means *"this will be removed."* That is arc C's channel, and arc C inherits this
 constraint: it warns, it does not threaten.
 
+## Folding — how we engineer around never-remove
+
+"Never break" **plus no usage telemetry** makes the callable surface a **one-way ratchet**: you
+can add and steer, but you can never prove zero holdouts, so you can never remove. Deprecation-
+toward-removal is therefore *structurally impossible* here — a "deprecation" never reaches a
+removal, so it is really **recommended-idiom signposting**, not a path to a break. (The word
+"deprecation" survives only for familiarity; it never means here what it means elsewhere.) You can
+entice users onto a nicer method, but you will never *know* the last holdout migrated — so the old
+method stays forever. The way out is not removal; it is **folding** — we *engineer around* the
+constraint. The cost splits across two axes, and only one of them has to grow:
+
+- **The interface** (the callable name / idiom) grows forever — genuinely. The lever is never
+  removal; it is **discipline at the door**: because every addition is permanent, add slowly and
+  rarely. The ratchet pays the cost *upfront* (add carefully) instead of downstream (deprecate
+  later) — this is the operative meaning of "we add carefully."
+- **The implementation** does **not** have to grow. *"Never drop the old one"* means never drop the
+  callable **name**, not carry its independent **code** forever. When a nicer primitive arrives,
+  **fold** the old idiom onto it: reimplement the old name as a thin shim over the new primitive and
+  delete the old implementation. The permanent *surface* stops meaning permanent *duplicate code*.
+
+So the collectible win of a steer is the **fold** — fewer independent implementations — never
+surface shrinkage. Every recommended-idiom steer should ship *with* its fold, or it buys nothing but
+more surface to maintain.
+
+**Folding's limit.** It works only when the new primitive is a genuine **superset** — same
+observable semantics, nicer form. A semantically-*different* replacement cannot be folded (the old
+behavior is not expressible over the new), so there you carry both — which is exactly why a semantic
+replacement must be rare and **contract-keyed** (the escape valve below), never casual.
+
+**The one visibility we do have: the registry.** We can statically scan every published library and
+know precisely which *public* libs still use an old idiom. That cannot authorize removal (private
+programs are invisible, so zero is unprovable), but it maps the public ecosystem's migration state —
+enough to prioritize *which* folds are worth doing and to target the author-facing steer.
+
 ## The escape valve for the genuinely unavoidable — key it on the contract
 
 Some change is occasionally forced (a security fix; an API whose old behavior is actively
