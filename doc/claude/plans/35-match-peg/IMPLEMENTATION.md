@@ -355,6 +355,36 @@ mechanism. Left recursion becomes a rewrite into iteration. The graded line:
 - OPERATOR grammars → precedence climbing / Pratt layers cleanly on top and gives precedence +
   associativity as data (usually what you actually want for expressions).
 
+**Associativity, precedence ladders, and the recursion residue.** Recursion is right for
+genuine *structure*; what is NOT healthy is the fixed-depth descent a precedence LADDER
+imposes on every expression. A hand-written ladder is N rules, one per precedence level
+(`expr → assignment → ternary → … → additive → multiplicative → unary → primary`), and each
+call descends the WHOLE tower to reach a leaf — so a bare `1` costs ~15–20 stack frames in a
+real language, not because `1` is nested but because it had to fall through every level to be
+reached. That per-expression constant is the cost to remove. Two moves remove it, both already
+in this engine's vocabulary:
+- **Associativity is a fold direction, not a recursion direction.** A left-associative rung is
+  `B (op B)*` folded LEFT; a right-associative rung — the tail-recursive form `A := B (op A)?`
+  — is the same `B (op B)*` folded RIGHT. Both are the repetition machinery (Phase 6); the
+  author declares the associativity and the engine picks the fold. Neither associativity needs
+  the recursive rule form.
+- **The ladder collapses to one loop.** Expose operators as a declarative table
+  `(operator, precedence, associativity)`; the engine compiles it to a single
+  precedence-climbing loop (consume operators with precedence ≥ the current floor; recurse for
+  the RHS at `prec (+1 for left-assoc)`). Cost becomes **O(operators actually present + genuine
+  nesting depth)**, not O(precedence levels): `1 + 2` is one iteration, `1` is zero. The
+  20-deep descent is gone because precedence is a *parameter*, not a stack level.
+
+**The residue — the one recursion that stays, and should.** Structural nesting
+(`primary := '(' expr ')'`) is genuinely recursive: a `(` opens a fresh sub-expression that can
+nest arbitrarily, and matching brackets is not iterable — it needs a stack. But that recursion
+is bounded by **nesting DEPTH, not input length**: a stream of a million flat `a + b + c + …`
+is one loop and constant stack, while depth only grows with actual `((( … )))` nesting, which
+is small and self-limiting in real code and never threatens streaming. So the target is not
+"no recursion" — it is "no recursion as *overhead*": the ladder's per-level descent is
+eliminated (it encodes precedence, which is data), and recursion is reserved for the one thing
+that is actually a tree — nested structure. That is the healthy shape.
+
 **How the phases build this incrementally.**
 - **4.1 / 4.2 (done)** — single-element alternation: tag disjunction + conditional-offset
   captures, `option<T>` for partial overlap. A degenerate one-element cursor.
