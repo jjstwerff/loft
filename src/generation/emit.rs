@@ -551,9 +551,16 @@ impl Output<'_> {
                         // reads from there.
                         let returns_ncc_block = matches!((**val).unspan(), Value::Block(b)
                             if self.block_contains_ncc_skip_free(b));
+                        // #557 — a text Block whose tail `output_block` materialises as an owned
+                        // `String` (a value result followed by a trailing `OpFreeText`, e.g. a
+                        // `vector<text>` match freeing its bound element).  `Str::new(String)`
+                        // would fail E0308, so route it through the buffer like the ncc case.
+                        let returns_materialised_block = matches!((**val).unspan(), Value::Block(b)
+                            if self.block_tail_materialises_string(b));
                         no_work_buffer
                             || returns_local_text
                             || returns_ncc_block
+                            || returns_materialised_block
                             || inner_is_nwb_call
                     };
                     write!(w, "return ")?;
@@ -1587,6 +1594,30 @@ impl Output<'_> {
                         && variables.is_skip_free(*var))
             })
         })
+    }
+
+    /// #557 — will `output_block` emit this TEXT block's tail as an owned `String`
+    /// (`let _ret = <value>; <trailing void op>; _ret.to_string()`)?  That happens when the
+    /// block's value result is followed by a trailing VOID op — e.g. the `OpFreeText(a)` a
+    /// vector-match on a `vector<text>` subject appends to free the bound element.  The
+    /// `Str::new(<block>)` return wrapper then sees `Str::new(String)` (E0308), so the return
+    /// must route the block through the work buffer instead (see `needs_p205_scratch`).  Mirrors
+    /// the `has_trailing_void && !return_value_is_return` gate in `output_block`.
+    fn block_tail_materialises_string(&self, bl: &Block) -> bool {
+        if !matches!(bl.result.base(), Type::Text(_)) {
+            return false;
+        }
+        let Some(ri) = bl.operators.iter().rposition(|v| !self.is_void_value(v)) else {
+            return false;
+        };
+        // A tail that DIVERGES (ends in `Return`) is emitted directly — no `_ret` materialise.
+        if matches!(bl.operators[ri].unspan(), Value::Return(_))
+            || matches!(bl.operators[ri].tail(), Value::Return(_))
+        {
+            return false;
+        }
+        // A trailing VOID op after the value, or the `__ncc_*` skip-free pattern.
+        ri < bl.operators.len().saturating_sub(1) || self.block_contains_ncc_skip_free(bl)
     }
 
     #[allow(clippy::too_many_lines)]
