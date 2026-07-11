@@ -111,9 +111,19 @@ the same region (`peek_named_arg` + the new classifier) desynced the parse; now 
 edge-state captured BEFORE `next()` (guards `lexer::test::link_revert_{repeatable_same_region,
 nested_links}`).
 
-**Next: per-iteration field capture `( V { n } )* → n: vector<T_n>`, non-literal tail elements
-after a repetition; then Phase 7 (iterator input — the accumulating `read(pos)`), then the PC1–PC5
-sub-rule layer. §3a step 6 (fold hook) waits on PC.**
+**Slice 2 — DONE, both backends — per-iteration field projection `( V { field, … } )*`.** Each
+named SCALAR/TEXT field of the run's variant collects into its own fresh `vector<field_type>` (a
+projection), vs a `name:` prefix which collects whole elements — the two compose (`( xs: V { n } )*`
+gives both). New `materialize_field_projection` mirrors `materialize_named_rest`'s iterator but the
+per-element read is `read_slice_elem` → `get_field(variant, attr_idx, ·)` (the same field read the
+head sub-pattern path uses; a raw `OpVectorRefNullable` reads null — the pre-fix bug), collecting
+`vector<field_type>` (scalar/text = owned, so no borrow-dep dance). Works with `*`/`+`, a trailing
+`..rest`, a separator `(Sep)` (stride-2), and multiple fields. A non-scalar field, or a name that
+is not a field of `V`, is rejected. Guard `tests/scripts/35n-field-projection.loft`,
+`parse_errors::field_capture_{nonscalar_deferred, unknown_field}`.
+
+**Next: non-literal tail elements after a repetition; then Phase 7 (iterator input — the
+accumulating `read(pos)`), then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook) waits on PC.**
 
 **Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
 the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
@@ -878,8 +888,10 @@ statement grammar), `tests/parse_errors.rs::{lexeme_missing, unknown_field_annot
   `name:Type*` / `+` repetition + the single `name:Type` capture (see § RESUME HERE); guard
   `tests/scripts/35f-repetition.loft`. The `#lexeme` token-grammar form remains the more idiomatic
   loft path for struct-enum streams.
-- **Per-iteration field capture** inside the body `( V { n } )* → n: vector<T_n>` (a field
-  PROJECTION collect, vs today's whole-element collect) — rejected today with a diagnostic.
+- ~~**Per-iteration field capture** inside the body `( V { n } )* → n: vector<T_n>`~~ — **DONE
+  (slice 2).** Scalar/text field projection (see § RESUME HERE); guard
+  `tests/scripts/35n-field-projection.loft`.  A heap-payload field projection is still deferred
+  (rejected with a diagnostic).
 - **Mid-slice repetition** (a non-empty head before the group) — today head-empty only.
 - **§3a step 6 fold hook** (associativity fold direction) — waits on the PC layer that uses it.
 

@@ -1765,6 +1765,21 @@ fn scalar_rep_nonliteral_tail() {
         .error("only literal elements are supported after a scalar repetition `xs:integer*` at scalar_rep_nonliteral_tail:1:65");
 }
 
+// @PLN35 slice 2 — a per-iteration capture of a NON-scalar field `( V { heap } )*` is deferred
+// (only scalar/text fields project into a vector today).
+#[test]
+fn field_capture_nonscalar_deferred() {
+    code!("enum Box { B { items: vector<integer> } }\nfn f(v: vector<Box>) -> integer { match v { [ ( B { items } )* ] => 1, _ => -1 } }")
+        .error("per-iteration capture of the non-scalar field `items` is not yet supported (only scalar/text fields project into a vector) at field_capture_nonscalar_deferred:2:63");
+}
+
+// @PLN35 slice 2 — a `{ field }` naming something that is not a field of the run variant.
+#[test]
+fn field_capture_unknown_field() {
+    code!("enum Tok { Num { n: integer } }\nfn f(v: vector<Tok>) -> integer { match v { [ ( Num { nope } )* ] => 1, _ => -1 } }")
+        .error("`nope` is not a field of Num at field_capture_unknown_field:2:64");
+}
+
 // A user type may be named `T` (a name the stdlib uses as a generic type variable):
 // verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
 // The fix keys vector types by their element (not by a display name two distinct

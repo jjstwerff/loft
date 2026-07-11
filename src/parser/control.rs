@@ -3927,6 +3927,86 @@ impl Parser {
         bindings.push(mat);
     }
 
+    /// @PLN35 slice 2 — collect a per-iteration FIELD projection from a struct-enum repetition
+    /// run `( V { field } )*`.  Like `materialize_named_rest`, but the per-element read projects
+    /// `variant.field` (`get_field`) instead of the whole element, so the result is a fresh
+    /// `vector<field_type>` — a scalar/text projection.  The run already tag-tested every element
+    /// against `variant_def_nr`, so the field read is valid at each index.  A scalar/text field is
+    /// an OWNED value (no DbRef into the subject), so — unlike the whole-element case — no borrow
+    /// dep is needed and `materialize_iterator` deep-copies it into the projection's own store.
+    /// Reads `v[lo..hi]` with `step` (2 for a separated run `(V)*(Sep)`).
+    #[allow(clippy::too_many_arguments)]
+    fn materialize_field_projection(
+        &mut self,
+        v: u16,
+        elm_size: &Value,
+        elm_tp: &Type,
+        variant_def_nr: u32,
+        attr_idx: usize,
+        field_type: &Type,
+        proj_var: u16,
+        proj_vec_tp: &Type,
+        lo_val: Value,
+        hi_val: Value,
+        step: i32,
+        bindings: &mut Vec<Value>,
+    ) {
+        let lo_slot = self.create_unique("proj_lo", &I32);
+        let hi_slot = self.create_unique("proj_hi", &I32);
+        let idx = self.create_unique("proj_idx", &I32);
+        let null_idx = self.null(&I32);
+        let init = Value::Insert(vec![
+            v_set(lo_slot, lo_val),
+            v_set(hi_slot, hi_val),
+            v_set(idx, null_idx),
+        ]);
+        // Same index step as `materialize_named_rest`: `idx = !idx ? lo : idx + step; if hi <= idx
+        // break; idx`.  `!idx` is a NULL test (sentinel i32::MIN), so a `lo` of 0 seeds correctly.
+        let bump = self.conv_op(
+            "+",
+            Value::Var(idx),
+            Value::Int(step),
+            I32.clone(),
+            I32.clone(),
+        );
+        let not_idx = self.single_op("!", Value::Var(idx), I32.clone());
+        let advance = v_set(idx, v_if(not_idx, Value::Var(lo_slot), bump));
+        let past_end = self.conv_op(
+            "<=",
+            Value::Var(hi_slot),
+            Value::Var(idx),
+            I32.clone(),
+            I32.clone(),
+        );
+        let brk = v_if(past_end, Value::Break(0), Value::Null);
+        let idx_block = v_block(
+            vec![advance, brk, Value::Var(idx)],
+            I32.clone(),
+            "Iter range",
+        );
+        // Read the enum element at `idx` the same way the head sub-pattern path does
+        // (`read_slice_elem` → an enum value `get_field` can read from), then project the field.
+        let elm_read = self.read_slice_elem(v, elm_size, elm_tp, idx_block);
+        let field_read = self.get_field(variant_def_nr, attr_idx, elm_read);
+        let next = v_block(vec![field_read], field_type.clone(), "Field projection");
+        let mut mat = Value::Iter(
+            u16::MAX,
+            Box::new(init),
+            Box::new(next),
+            Box::new(Value::Null),
+        );
+        let iter_tp = Type::Iterator(Box::new(field_type.clone()), Box::new(Type::Null));
+        self.materialize_iterator(
+            &mut mat,
+            &iter_tp,
+            &Value::Var(proj_var),
+            proj_vec_tp,
+            proj_var,
+            "=",
+        );
+        bindings.push(mat);
+    }
+
     /// @PLN35 Phase 6.3 — is the next token the start of a LITERAL slice element (`[ 1, … ]`,
     /// `[ "kw", … ]`, `[ 'c', … ]`, `[ -1, … ]`)?  A pure peek — consumes nothing.
     fn peek_is_slice_literal(&self) -> bool {
@@ -4356,25 +4436,70 @@ impl Parser {
         } else {
             0
         };
-        // A `{ … }` body would carry per-iteration field captures; deferred in Phase 6.1.
+        // @PLN35 slice 2 — `( V { field, … } )*` captures a per-iteration FIELD PROJECTION: each
+        // named scalar/text field collects into its own fresh `vector<field_type>` (vs a `name:`
+        // prefix, which collects whole elements).  The run tag-tests `V`, so every element carries
+        // the field.  A non-scalar field, or a name that is not a field of `V`, is rejected.
+        let mut field_caps: Vec<(String, usize, Type)> = Vec::new();
         if self.lexer.has_token("{") {
-            if !self.first_pass {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "per-iteration field capture inside a repetition body `( … )*` is not yet supported — bind the whole element with `(name: {real})*` and match each"
-                );
-            }
-            let mut depth = 1i32;
-            while depth > 0 {
-                if self.lexer.has_token("{") {
-                    depth += 1;
-                } else if self.lexer.has_token("}") {
-                    depth -= 1;
-                } else if matches!(self.lexer.peek().has, LexItem::None) {
-                    break;
-                } else {
-                    self.lexer.cont();
+            if valid {
+                while let Some(fname) = self.lexer.has_identifier() {
+                    let found = {
+                        let vd = self.data.def(vdef);
+                        vd.attributes[1..]
+                            .iter()
+                            .enumerate()
+                            .find(|(_, a)| a.name == fname)
+                            .map(|(i, a)| (i + 1, a.typedef.clone()))
+                    };
+                    match found {
+                        Some((attr_idx, ftype))
+                            if matches!(
+                                ftype.base(),
+                                Type::Integer(_)
+                                    | Type::Boolean
+                                    | Type::Float
+                                    | Type::Single
+                                    | Type::Character
+                                    | Type::Text(_)
+                            ) =>
+                        {
+                            field_caps.push((fname, attr_idx, ftype));
+                        }
+                        Some(_) if !self.first_pass => {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "per-iteration capture of the non-scalar field `{fname}` is not yet supported (only scalar/text fields project into a vector)"
+                            );
+                        }
+                        None if !self.first_pass => {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "`{fname}` is not a field of {real}"
+                            );
+                        }
+                        Some(_) | None => {}
+                    }
+                    if !self.lexer.has_token(",") {
+                        break;
+                    }
+                }
+                self.lexer.token("}");
+            } else {
+                // Invalid variant already diagnosed above; skip the body to recover.
+                let mut depth = 1i32;
+                while depth > 0 {
+                    if self.lexer.has_token("{") {
+                        depth += 1;
+                    } else if self.lexer.has_token("}") {
+                        depth -= 1;
+                    } else if matches!(self.lexer.peek().has, LexItem::None) {
+                        break;
+                    } else {
+                        self.lexer.cont();
+                    }
                 }
             }
         }
@@ -4570,6 +4695,28 @@ impl Parser {
                     elm_size,
                     cap_var,
                     &vec_tp,
+                    Value::Int(head_len),
+                    Value::Var(end_var),
+                    cap_step,
+                    bindings,
+                );
+            }
+        }
+        // @PLN35 slice 2 — each `{ field }` projects the run's field into its own vector.
+        for (fname, attr_idx, ftype) in field_caps {
+            let fvec_tp = Type::Vector(Box::new(ftype.clone()), Deps::none());
+            let proj_var = self.vars.add_variable(&fname, &fvec_tp, &mut self.lexer);
+            self.vars.defined(proj_var);
+            if !self.first_pass && proj_var != u16::MAX {
+                self.materialize_field_projection(
+                    v,
+                    elm_size,
+                    elm_tp,
+                    vdef,
+                    attr_idx,
+                    &ftype,
+                    proj_var,
+                    &fvec_tp,
                     Value::Int(head_len),
                     Value::Var(end_var),
                     cap_step,
