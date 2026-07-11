@@ -4340,6 +4340,19 @@ impl Data {
         v_nr
     }
 
+    /// A generic type-variable placeholder: the attribute-less, self-referential
+    /// `Struct` the parser registers for a `<T>` type parameter (e.g. stdlib
+    /// `min_of<T>`) so the template body's types resolve.  It has store size 0 and
+    /// is an INTERNAL construct — it must never resolve as a real type outside the
+    /// default files that declare it.
+    #[must_use]
+    pub fn is_type_var_placeholder(&self, d_nr: u32) -> bool {
+        let d = &self.definitions[d_nr as usize];
+        d.def_type == DefType::Struct
+            && d.attributes.is_empty()
+            && matches!(&d.returned, Type::Reference(r, _) if *r == d_nr)
+    }
+
     /// Get the corresponding number from a definition on name.
     /// This will test both the own source file or the standard library data.
     #[must_use]

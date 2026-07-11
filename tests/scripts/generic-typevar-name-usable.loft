@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+// A user type may be named `T` (or any single letter the stdlib uses as a generic
+// type variable).  The stdlib's `<T>` in `min_of<T>` / `max_of<T>` registers an
+// INTERNAL type-var marker; it must never leak as a real type into user code, so a
+// user `enum T` / `struct T` resolves to its OWN definition — not the size-0 marker
+// (which previously divided by zero on `vector<T>` construction).  Cross-mode.
+
+enum T { Circle { r: integer }, Square { pad: integer, r: integer } }
+struct U { label: text }
+
+fn radius(shapes: vector<T>) -> integer {
+  match shapes {
+    [ (Circle { r } | Square { r }) ] => r,
+    _ => -1,
+  }
+}
+
+fn main() {
+  // a user `vector<T>` where T is the user's own enum
+  a: vector<T> = [Circle { r: 5 }];
+  b: vector<T> = [Square { pad: 9, r: 7 }];
+  assert(radius(a) == 5, "Circle r: {radius(a)}");
+  assert(radius(b) == 7, "Square r (own offset): {radius(b)}");
+
+  // a user `struct U` in a vector, alongside
+  us: vector<U> = [U { label: "hi" }];
+  assert(us[0].label == "hi", "struct U field");
+
+  // the stdlib generics that USE <T> internally still work in the same program
+  nums: vector<integer> = [3, 1, 2];
+  assert(min_of(nums) == 1, "min_of still works");
+  assert(max_of(nums) == 3, "max_of still works");
+
+  print("generic-typevar-name-usable: PASS");
+}

@@ -1716,3 +1716,8 @@ fn alternation_bad_variant() {
     code!("enum Tk { Id { n: text }, Str { n: text } }\nfn f(t: vector<Tk>) -> text { match t { [ (Id { n } | Nope { n }) ] => n, _ => \"y\" } }")
         .error("'Nope' is not a variant of Tk at alternation_bad_variant:2:61");
 }
+
+// A user type may be named `T` (a name the stdlib uses as a generic type variable):
+// verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
+// The fix keys vector types by their element (not by a display name two distinct
+// `T`s share), so a user `vector<T>` no longer reuses the marker's size-0 entry.

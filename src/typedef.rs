@@ -572,6 +572,13 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     if data.def(d_nr).name == "Unknown(0)" {
         return;
     }
+    // The generic type-var marker (`<T>`) is a single shared def referenced by every
+    // `vector<T>` param across the stdlib generics; fill it ONCE.  A second fill for
+    // another such param must be a no-op or `database.structure` would panic on the
+    // mangled name below.
+    if data.is_type_var_placeholder(d_nr) && data.def(d_nr).known_type != u16::MAX {
+        return;
+    }
     let mut enum_value = 0;
     if let Type::Enum(nr, true, _) = data.def(d_nr).returned {
         for (a_nr, a) in data.def(nr).attributes.iter().enumerate() {
@@ -615,7 +622,15 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     } else {
         None
     };
-    let reg_name = if let Some(name) = synth_variant_name {
+    let reg_name = if data.is_type_var_placeholder(d_nr) {
+        // The generic type-var marker (`<T>`) is an INTERNAL compile-time construct.
+        // Register its runtime type under a name a user type can never share, so
+        // nothing it derives (`vector<T>`) collides in the name-keyed type table with
+        // a user type of the same name (`enum T`) — which made the user's `vector<T>`
+        // reuse the marker's size-0 entry and divide by zero.  The DEF name stays `T`
+        // for stdlib `<T>` resolution; only the runtime type name is mangled.
+        format!("__typevar_{}", data.def(d_nr).name)
+    } else if let Some(name) = synth_variant_name {
         name
     } else if database.has_type(&data.def(d_nr).name) {
         data.qualified_type_name(d_nr)
