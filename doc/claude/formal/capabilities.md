@@ -168,23 +168,29 @@ granted.
   local of a script-defined struct) but rejected EVERY write whose root type was not a
   `Reference(struct)` — so a **script-owned vector element write** `v[i] = e` on a local `v`
   fell to host and was rejected. Sound but incomplete.
-- **The probe redrew the boundary (the design note's `ownership_of` plan was NOT needed).** The
-  adversarial matrix + behavioural tests on BOTH backends proved that a local vector NEVER aliases
-  host state: every whole-value vector bind COPIES — a literal, a copy `c = v`, a projection
-  `fv = e.items`, AND even a `r = &v` ref-bind all leave the source untouched (`r[0] = 99` ⇒ the
-  caller's `orig[0] == 1`). The ONLY write that mutates host/caller state is a DIRECT write to a
-  **parameter** root (`v[i] = …` ⇒ caller's `orig[0] == 99`), whose root is an argument. So the
-  invariant is simply *a raw write is host iff its target root is a host parameter (or a host-typed
-  struct local)* — the `arguments()` check already IS the vector boundary; no `ownership_of`
-  consultation, no aliasing residual to fear (the feared `&`/projection cases are provably copies).
-- **The fix.** `raw_write_is_host_owned` gained a `Type::Vector(..) => false` (owned) arm: a
-  non-parameter local vector is script-owned, so `v[i] = e` is `Cap-Own`. A `&`/`RefVar` borrow, a
-  scalar, or an unresolvable base still falls to the conservative host default; a parameter root is
-  still caught by the `arguments()` check first. The struct handling is unchanged.
-- **Proven by:** the escape `raw-write: index` (a `v[i] = …` on a PARAMETER root → rejected, the
-  host effect) + the new control `script-owned vector element write (D-cap-3)` (a `v[i] = …` on a
-  LOCAL → admitted) in `admission_escape_suite_rejects_every_breakout`; 39 plan86 + 625 lib +
-  interp suite green. RESIDUAL (conservative, safe): a `v[i] = …` on a locally-owned KEYED
+- **The boundary — corrected by @PLN102 F6 (2026-07-11).** A **plain** vector bind copies (a
+  literal, `c = v`, a projection `fv = e.items`, a slice `s = v[0..2]` — all leave the source
+  untouched, `x[0] = 99` ⇒ `orig[0] == 1`), so a plain-copied local vector is script-owned. But
+  the original close made a **false claim** — that "even `r = &v` copies". It does NOT: an explicit
+  `&`-bind is a **live reference** (heap.md `H-Ref`, C77), so `r = &v; r[0] = 99` ⇒ `v[0] == 99`.
+  A vector **parameter** likewise aliases the caller. So a write is host iff its target root is a
+  **parameter OR aliases one through a `&`-bind** (directly `r = &v`, or transitively `b = &a;
+  a = &v`) — not merely "the root is a parameter".
+- **The hole this left (found + closed).** The first fix keyed only on `arguments()` (the direct
+  parameter root). A `r = &param` binds `r` typed `Vector` (with a dep on the arg), so `r[i] = e`
+  slipped past the `arguments()` check into the owned arm and was **admitted** — laundering a host
+  write. The admission escape suite's `raw-write: & alias launders param` confirmed it.
+- **The fix.** `raw_write_is_host_owned`'s `Type::Vector` arm now **follows the dep chain**
+  (`root_aliases_argument`): a local vector whose deps reach a parameter is host; a genuinely-copied
+  one (deps only on a fresh local store) stays script-owned (`Cap-Own`). A `&`/`RefVar` scalar
+  borrow, an iterator (an inline slice), a scalar, or an unresolvable base still falls to the
+  conservative host default; a direct parameter root is still caught by `arguments()` first. The
+  struct handling is unchanged. So there is **no aliasing residual** — the `&` cases are no longer
+  assumed copies, they are followed.
+- **Proven by:** the escapes `raw-write: index` (a `v[i] = …` on a PARAMETER root → rejected) and
+  `raw-write: & alias launders param` (a `r = &v; r[i] = …` alias of a parameter → rejected, the
+  F6 fix) + the control `script-owned vector element write (D-cap-3)` (a `v[i] = …` on a plain
+  LOCAL → admitted) in `admission_escape_suite_rejects_every_breakout`; lib suite green (722). RESIDUAL (conservative, safe): a `v[i] = …` on a locally-owned KEYED
   collection (hash/sorted/…) still falls to the host default — rarer, and an over-reject not an
   escape; widen the arm the same way if a consumer needs it.
 
@@ -202,8 +208,17 @@ controls (a granted call, a read, a script-owned mutation) are the `Cap-Call` / 
 non-default value to a locked parameter) — each a program whose admission flips to the exact rule
 above, its GREEN twin proving the rejection is the rule firing, not an incidental reject.
 
-The area is **formal — OPEN has reached 0** (2026-07-04): every host-touching operation in a
-restricted context is decided by exactly one of the six rules — the call gate (incl. closures),
-field read/update/append, the parameter `#default` lock, and script-owned mutation — so an
-admitted script provably performs no host effect outside its profile, by construction. The
-falsifying escape suite + the RED/GREEN access corpus are the standing evidence.
+The area is **formal — OPEN 0** (re-established 2026-07-11 after F6): every host-touching
+operation in a restricted context is decided by exactly one of the six rules — the call gate
+(incl. closures), field read/update/append, the parameter `#default` lock, and script-owned
+mutation — so an admitted script provably performs no host effect outside its profile, by
+construction. The falsifying escape suite + the RED/GREEN access corpus are the standing evidence.
+
+> **History — the D-cap-3 gap (@PLN102 F6).** From 2026-07-04 to 2026-07-11 this "OPEN 0" claim
+> was **over-stated**: the script-owned-vector rule rested on a false memory-model premise ("even
+> `r = &v` copies"), leaving a real escape — a `r = &param; r[i] = e` laundered a host-vector
+> write past the gate. It was found the right way, by *extending the falsifying suite* with the
+> `&`-alias case, and closed by making the gate follow the dep chain (above). The lesson the
+> freeze records: "OPEN 0 / by construction" is only as strong as the escape suite is complete —
+> here a spec contradiction (heap.md said `r = &v` copies; reality aliases) was the tell that the
+> suite had a blind spot.
