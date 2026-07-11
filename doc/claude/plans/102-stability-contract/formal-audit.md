@@ -172,11 +172,25 @@ findings, with conversion cost (the trade-off you weigh):
     ordered as keys, so permuting the physical discriminant is semantically transparent. The
     permutation stays **normal codegen over a permuted layout table** (build-time), never a special
     per-access codegen path — so the per-frame animation/effect loop is untouched.
-  - **Action:** state enum ordering as declaration-order in `layout.md`/`matching.md`; add a
-    DESIGN_DECISIONS entry that the physical byte-encoding (offsets + discriminant values) is
-    explicitly OUTSIDE the frozen contract (permutable), with per-export layout randomization named
-    as the motivating additive feature. This is the same "freeze the observable contract, leave the
-    encoding free" shape as the null-model keystone.
+  - **The mechanism (the seam):** field/enum access is a **getter axiom** — its *logical* contract
+    (read field X → its value) is the frozen thing; its *physical* realization (offset, permuted
+    discriminant, decode) is behind it and unfrozen, and is the one place a build specializes to its
+    permutation (no per-access special codegen; `OpGetField` is already getter-shaped). The
+    **decode location** (CPU-at-upload vs GPU-in-shader — the animation hot path is on the GPU) is
+    likewise below the axiom and unfrozen, so a later CPU→GPU move is additive.
+  - **The *why* (ecosystem + legal):** the maker ships free games/assets and needs none of this,
+    but a **small indie dev selling paid assets** does — without it loft is unusable for that
+    commercial slice. And the proprietary/opaque format is legally load-bearing: an opaque,
+    per-export-permuted, schema-stripped, decode-compiled measure is defensibly a **technological
+    protection measure**, which unlocks **anti-circumvention** protection (DMCA §1201 / EU Art. 6)
+    on top of copyright + license — the self-describing canonical mode is deliberately NOT a TPM.
+    Full rationale + caveats (jurisdictional; mechanism not guarantee; general info, not legal
+    advice): [protected-assets.md](protected-assets.md).
+  - **Action:** state enum ordering as declaration-order in `layout.md`/`matching.md`; pin field/enum
+    access as a getter axiom (logical frozen, physical/decode-location unfrozen); add a
+    DESIGN_DECISIONS entry that the physical byte-encoding is explicitly OUTSIDE the frozen contract
+    (permutable), with the per-export protected-asset mode named as the motivating additive feature.
+    Same "freeze the observable contract, leave the encoding free" shape as the null-model keystone.
 
 ### Operational / evaluation
 - F2 (compound-assign double-eval), F3 (`&&`/`||` short-circuit), F4 (assignment eval order), F5
