@@ -23,13 +23,20 @@
 
 ## ▶ RESUME HERE — status (2026-07-11)
 
-**Branches.** Phase 0–2 are on `tuxedo-pln35-match-peg` (PR #554, awaiting merge). **Phase 3
-(L3.7 multi-pattern arms) AND Phase 4.1 (L3.2 single-element alternation) are on
-`tuxedo-pln35-phase3-multipat`, stacked on that PR's tip** — do NOT fork the next phase off `main`
-while #554 is open. Full-suite **green** on this box (only the environmental `wasm_debug_relay`
-fails; see memory `wasm-debug-relay-env-fail`). **Nothing is half-implemented.** Next open steps:
-Phase 4.2 (different-name alternation → `option<T>`) and 4.3 (varying-width branches → the slice
-`pos` cursor + backtracking); then Phases 5–7 and the PC1–PC5 sub-rule layer.
+**Branches.** Phase 0–2 MERGED to `main` (#554, squash). **Phase 3 (L3.7 multi-pattern arms),
+Phase 4.1 + 4.2 (L3.2 single-element alternation incl. `option<T>` promotion), and a fix for a
+pre-existing crash when a user type is named `T`** are on `tuxedo-pln35-phase3-multipat`, rebased
+onto `main` (NO PR — the user does not want one; keep committing to the branch). Full-suite
+**green** on this box (only the environmental `wasm_debug_relay` fails; see memory
+`wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+
+**Next: Phase 4.3 — multi-element sequence alternation `[ (A B | C), ..rest ]`.** Design DECIDED
+(see the Phase 4 § below): **predictive dispatch on a forward `pos` cursor** (dispatch on the
+leading element's tag, ordered `if/else` over pure conditions, no `save`/revert), `..rest` reads
+`v[pos..]`. Backtracking is allowed on the same cursor but emitted only for a future
+rule-invocation branch (PC layer), not for 4.3's pure tag branches. Single-element alternation
+already composes with `..rest`/following elements at fixed positions, so 4.3 is only the
+variable-width branch case. Then Phases 5–7 and the PC1–PC5 sub-rule layer.
 
 **Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
 the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
@@ -411,51 +418,80 @@ identical name sets in P3 and defer partial-overlap to P4).
 
 ### Phase 4 — L3.2: alternation `(a | b)` + capture unification + slice cursor
 
-> **4.1 DONE (2026-07-11), both backends.** Single-element alternation
-> `[ (V1 { f } | V2 { f }) ]` in a slice element position: `parse_slice_alternation_element`
-> (`control.rs`) emits a tag-disjunction condition + a conditional-offset capture read
+> **4.1 + 4.2 DONE (2026-07-11), both backends.** Single-element alternation
+> `[ (V1 { f } | V2 { f }) ]` in a slice element position (`parse_slice_alternation_element`,
+> `control.rs`): a tag-disjunction condition + a conditional-offset capture read
 > (`f = if tag==V1 { f@V1 } else if tag==V2 { f@V2 } … else null`) — the shared-slot idea
-> nested into a slice element. Enum tags are disjoint, so ordered choice reduces to a
-> disjunction (no cursor needed for single-element branches). Scope: identical capture
-> names at compatible types across branches. Guards: `tests/scripts/35f-alternation.loft`
-> (cross-mode, leak-checked, scalar+text captures, genuinely-different offsets),
-> `tests/parse_errors.rs::alternation_*` (3 cases). **4.2 (different-name → `option<T>`)
-> and 4.3 (varying-width MULTI-element branches → the slice `pos` cursor + anchor/revert
-> backtracking, per `probes/p0-d2-backtrack.loft`) are still open** — the cursor is only
-> needed once a branch consumes a runtime-variable width.
+> nested into a slice element. **4.2:** a capture in only SOME branches promotes to
+> `option<T>` (the untaken branches fall through the else-chain to null); a capture in every
+> branch at a compatible type stays at that type. Enum tags are disjoint, so ordered choice
+> is a disjunction — no cursor for single-element branches. Single-element alternation also
+> COMPOSES with a following `..rest` and following elements at fixed positions
+> (`[ (a|b), ..rest ]` and `[ first, (a|b) ]` both work). Guards:
+> `tests/scripts/35f-alternation.loft` (incl. option promotion), `tests/parse_errors.rs::alternation_*`.
+>
+> **4.3 (open) — MULTI-element sequence branches `[ (A B | C), ..rest ]`.** The remaining
+> case: a branch is a SEQUENCE of variable width, so a following `..rest` starts at a runtime
+> position. Design decided below — **predictive dispatch, not blind backtracking.**
 
-**Goal.** `[ (Ident { n } | Str { n }), rest… ]` — ordered choice with capture
-promotion.
+**Goal.** `[ (A B | C), ..rest ]` — a branch may be a multi-element sequence of variable
+width; `..rest` picks up after whichever branch matched.
 
-**Design.** Introduce the **slice cursor desugaring** (D4, slice half): a `pos: usize`
-temp; anchor = `save = pos`; try `a`; on its `cond` false, `pos = save` and try `b`;
-commit = drop save. All expressible as `If` + `Set` + `OpGetVector` — **no new
-opcode** (this is the F2 payoff). Capture unification: same-name across alternatives
-→ unify types (compile error if incompatible); different names → each promotes to
-`option<T>`.
+**Design — predictive dispatch on a forward `pos` cursor (decided 2026-07-11).** A
+multi-element alternation `( A B | C )` over variant sub-patterns dispatches on the LEADING
+element's tag — the way a recursive-descent parser predicts a production from its first
+token — NOT a blind try-every-branch-then-revert. A branch's condition is PURE (tag tests
+only; nothing mutates), so the whole alternation is an ordered `if / else if` over those
+conditions: the first branch whose fixed-length tag sequence matches wins, binds its
+captures, and advances a runtime `pos: integer` cursor by that branch's width. `&&`
+short-circuit gives the first-lookup failure for free, and branches that share a leading
+tag just fall one tag deeper — so no first-set-disjointness rule is needed and no
+`save`/revert is emitted. `..rest` then reads `v[pos .. len − tail]` from the runtime `pos`.
+(The no-tail shape `[ (A B | C) ]` is a zero-length rest — a strange edge real parsers
+rarely use, so it is not the design centre.) All expressible as `If` + `Set` +
+`OpGetVector` — **no new opcode**.
+
+**Backtracking is ALLOWED, not emitted here.** The `pos` cursor is the shared substrate. A
+PURE tag branch never reverts — its condition moves nothing; only the committed branch
+advances `pos`. A branch that INVOKES A NAMED RULE / calls a function (consumes input and
+can fail AFTER advancing) genuinely needs the anchor: `save = pos; try; on fail pos = save`
+— the same `pos` cursor with a per-branch save, slotting in without redesign. Phase 4.3 has
+only tag branches, so it emits the predictive form with no revert; the parser-combinator
+sub-rule layer ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md), PC1–PC5) emits the anchor/revert
+around a rule-invocation branch when it lands. **Keep the `pos`-advance site factored so the
+revert hook is obvious.**
 
 **Code points.**
-- `parse_pattern` gets the alternation case: parse `( … | … )`, emit the
-  anchor/try/revert `If` structure over the shared `pos` temp.
-- Capture typing hook: **before** `create_unique` at `control.rs:3442`, run a unify
-  pass over the branch captures — same-name uses `match_arm_types_unify`
-  (`control.rs:379`); missing-in-some-branch wraps in `Type::optional(...)` (helper
-  used at `:3260`).
-- Longest-partial error position (README open-Q #3, design target): track the max
-  `pos` reached across reverts in a temp; feed the match-fail error. *Optional in P4,
-  can slip to a follow-up.*
+- Detect a multi-element branch at the `(` (parse-time): use `lexer.link()`/`revert()` to
+  look ahead — a second variant before `|`/`)` means a sequence branch (whole-slice /
+  cursor path); a lone variant is the single-element path already built in 4.1.
+- Parse each branch as a SEQUENCE of variant sub-patterns; record per branch its width and,
+  per position, `(disc, variant_def, fields)`.
+- Emit the ordered `if / else if` over the pure per-branch conditions
+  (`len − pos ≥ wᵢ && tag(v[pos])==… && …`), each arm advancing `pos` by `wᵢ`.
+- Capture unification is the 4.2 rule: union the names; a name in every branch at a
+  compatible type stays that type, a name in only some promotes to `option<T>` (untaken
+  branches read null via the else-chain).  Reads use the runtime `pos` (`OpGetVector(v, sz,
+  pos+j)`), not a compile-time index.
+- `..rest` materialises `v[pos .. len − tail]` from the runtime `pos` var (today's `..rest`
+  uses a compile-time `head_len` lo bound — swap it for the `pos` var when the head width is
+  runtime-variable).
 
 **Steps & verification.**
 4.1 Same-name alternation unifies. *Verify:* `35d-alternation.loft` binds `n` at the
     unified type; both backends.
 4.2 Different-name alternation promotes to `option<T>`. *Verify:* absent branch's
     capture reads null.
-4.3 Backtracking correctness. *Verify:* an alternative that partially matches then
-    fails leaves `pos` reset (assert the following element still matches) — the
-    core PEG invariant, on both backends.
+4.3 Multi-element sequence branches + predictive dispatch. *Verify:* `[ (A B | C), ..rest ]`
+    — a leading `A` commits branch 1 and needs `B` next (else the arm fails, no silent
+    fallthrough); a leading `C` commits branch 2; `..rest` picks up at the right runtime
+    `pos` for EACH branch (assert `len(rest)` differs by branch width); both backends.
+    Backtracking (`save`/revert) is NOT exercised here — 4.3 branches are pure tag
+    sequences; the seam is left for the PC rule-invocation layer.
 
-**Exit:** alternation with capture unification + slice backtracking, both backends,
-no new opcodes.
+**Exit:** multi-element alternation with predictive dispatch + a runtime `pos` cursor +
+capture unification, both backends, no new opcodes.  The `pos` cursor is factored so a
+future rule-invocation branch can add `save`/revert without redesign.
 
 ---
 
