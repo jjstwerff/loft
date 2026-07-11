@@ -63,29 +63,25 @@ integer?` used to report "Unknown cast" (the per-type `OpCast` is base-keyed); i
 
 ---
 
-## Category B — nullable stored into a non-null slot (warning) — LEFT AS N-WARN NUDGES
+## Category B — nullable stored into a non-null slot (warning) — MOSTLY FIXED (commit cf87333f)
 
 **Cause.** A nullable value (div / `sqrt` / … result) flows into a non-null return. Full-width types
 (`integer`/`float`/…) WARN (compile + run); this is the nudge, not a break.
 
-**Resolution (2026-07-11): left in place — they are non-blocking and cannot be cleanly discharged.**
-Each B site is a genuine "compiler can't prove it non-null" nudge, not a wrong result:
-- `audience_crystal` `connect_factor`/`fill_factor`: `x as float / CONNECT_TICKS as float` — a
-  *named-constant* divisor. A LITERAL divisor already stays non-null (`x / 600.0` and even
-  `x / (600 as float)` do NOT warn), but the divisor-nonzero proof does not resolve a named global,
-  so `CONNECT_TICKS as float` (=600.0) is treated as maybe-zero → the division is `float?`.
-- `testlib::distance`: `sqrt(self.x*self.x + self.y*self.y)` — the sum-of-squares is always ≥ 0 but
-  the compiler can't prove it (full range-tracking deferred, per the design), so `sqrt` is `float?`.
+**The named-constant-divisor B sites are now FIXED at the source** by the divisor const-fold
+(commit cf87333f — see § E). `audience_crystal` `connect_factor`/`fill_factor`
+(`x as float / CONNECT_TICKS as float`) went from 3 warnings → 0: the compiler now const-folds a
+named-constant divisor to its nonzero literal, so the division is non-null — closing the exact gap
+the design's `PI`-style constant subset anticipated. This was the same fix graphics-0.3.0 needed, so
+one compiler change cleared both.
 
-They can't be discharged without cost: `(...) ?? d` is REDUNDANT on the gate-off path (the division/
-`sqrt` is non-null there), so a `?? d` sweep just moves the warning to gate-off — a *current*-state
-regression. And nothing fails on them: **`library_suite` checks exit code + crash/`test result`
-markers, not warnings** (verified pass under `LOFT_NULLFLOW`), and the standalone tests exit 0. The
-honest fix is future compiler recognition of a named-constant nonzero divisor (the `PI`-style
-constant subset the design already anticipates). Until then the nudge is correct and harmless.
-
-**Sites:** `lib/audience_crystal/src/audience_crystal.loft` (3, via `connect_factor`/`fill_factor`)
-· `lib/testlib.loft` (1, `distance`) surfaced through `tests/docs/17-libraries.loft`.
+**One genuine nudge remains, correctly:** `testlib::distance` — `sqrt(self.x*self.x + self.y*self.y)`.
+The sum-of-squares is always ≥ 0 but the compiler can't prove it (full range-tracking is deferred by
+design), so `sqrt` is honestly `float?`. It can't be discharged cheaply (`?? d` is redundant on the
+gate-off path, a current-state regression) and nothing fails on it (`library_suite` checks exit code
++ crash/`test result` markers, not warnings — verified pass under `LOFT_NULLFLOW`). Left as the
+correct N-Warn nudge until range-tracking lands. Same class as hex_terrain's `sqrt(max(x,0.01))` /
+`sqrt(dx²+dy²)` (§ E).
 
 ---
 
@@ -135,19 +131,31 @@ matrix/vector math now benefit from the SAME fix at the source — the mat4 mult
 
 ---
 
-## Category E — external registry libs (the one-way blocker)
+## Category E — external registry libs — SUITE-BLOCKING PART DONE at the source; 2 libs need republish
 
-**Cause.** Libs under `~/.loft/registry` were compiled against pre-flip behaviour. They break on
-A/B/C/D and CANNOT be fixed in this repo. **Fix:** republish each from its loft-libs-* source
-(the consumer agent's half of the dogfood split).
+**Audit (2026-07-11, all 14 installed libs under `LOFT_NULLFLOW=1`).** The blast radius was far
+smaller than feared, and the biggest hit was fixed in the COMPILER, not by republishing:
 
-**Candidate libs to audit + republish** (installed set — verify each with `LOFT_NULLFLOW=1`):
-`graphics-0.3.0` (mat4 — D), `gridmesh-0.1.2`, `hex_grid-0.1.0`, `hex_terrain-0.1.0`,
-`hex_world-0.1.2`, `glb-0.1.0`, `crypto-0.3.5`, `markdown-0.1.0`. Numeric ones (graphics/gridmesh/
-hex_*) are the likely hits; text ones may hit A.
+- **graphics-0.3.0 — WORKS AS-IS, no republish.** Its two breaks were the mat4 multiply (cleared by
+  **D1** — the `m[k*4+row]` matrix index) and `sd_ph = (… + sd_f / SFX_RATE as single) % 1.0f` (a
+  named-constant divisor, cleared by the **divisor const-fold**, commit cf87333f — § B). Because
+  both fixes are in the compiler, the *installed* graphics-0.3.0 now compiles clean under the flip.
+  `p310_graphics_vector_ffi`, `moros_glb_cli_end_to_end`, and `p171_native_copy` all pass.
+- **hex_world-0.1.2, gridmesh, hex_grid, glb, crypto, markdown, mesh3d, shapes, time, web — CLEAN.**
+  (hex_world's per-file "errors" in the first pass were cross-module standalone-compile artifacts;
+  its entry compiles clean.)
 
-**Step E.** For each: run its tests under `LOFT_NULLFLOW=1`, convert (A/B/C) or benefit from D1,
-bump the version, re-sign, publish (loft-ship skill). Tracks the `registry-validation` CI leg.
+**Two libs still break — NOT suite-blocking (no failing test exercises them under the flip), so
+they're ecosystem-completeness, republished from their loft-libs-* source (the consumer half):**
+- **hex_terrain-0.1.0** (`loft-libs-world`): 4 sites, all `sqrt` of a provably-non-negative but
+  not-compiler-provable arg — `sqrt(max(x, 0.01))`, `sqrt(dx²+dy²)`. Same class as `testlib::distance`
+  (§ B); no cheap compiler fix (range-tracking deferred). Source fix: `?? 0.0` on the `sqrt` results.
+- **server-0.3.0** (`loft-libs-net`): 3 bare `payload… as integer` text-parses (Category A). Source
+  fix: `as integer?` / `?? 0`.
+
+**Step E (remaining).** For hex_terrain + server: convert in the loft-libs-* source, bump version,
+re-sign, publish (loft-ship skill — touch-gated signing). Tracks the `registry-validation` CI leg.
+The touch-gated signing is an owner action.
 
 ---
 
@@ -181,12 +189,14 @@ gate-dependent in-repo golden** — the rest of the "F" flip failures are F5, no
 1. ~~**D1 first (recommended)** — vector-index range-tracking, so numeric code (in-tree D + much of
    E) needs no `??`.~~ **DONE 2026-07-11 (commit 21ec7837).** In-tree D closed; E's numeric libs
    benefit at the source.
-2. ~~**A, then B+C** in-repo.~~ **A DONE (ccbac29f), C DONE (4ee284e5), B left as N-Warn nudges —
-   all 2026-07-11.** 43/44 A converted (F5 at the flip); C discharged with `as τ? ?? d`; B are
-   non-blocking design nudges (see § B). In-repo conversion work is COMPLETE; what remains is E, F,
-   F5, and the flip itself.
-3. **E** — republish the ~9 registry libs (loft-libs-*), in parallel; this is the gating item for
-   a green `registry-validation`.
+2. ~~**A, then B+C** in-repo.~~ **A DONE (ccbac29f), C DONE (4ee284e5), B mostly fixed by the divisor
+   const-fold (cf87333f) — all 2026-07-11.** 43/44 A converted (F5 at the flip); C discharged with
+   `as τ? ?? d`; B's named-const-divisor sites now non-null (one `sqrt` nudge remains, § B).
+3. ~~**E** — republish the ~9 registry libs.~~ **SUITE-BLOCKING PART DONE at the source
+   (2026-07-11).** graphics + hex_world + 9 others compile clean under the flip with NO republish
+   (D1 + divisor const-fold in the compiler). Only **hex_terrain** (`loft-libs-world`, `sqrt` nudges)
+   and **server** (`loft-libs-net`, text-parse) still need a source `?? d` + republish — neither is
+   suite-blocking (§ E). Republish is touch-gated (owner action).
 4. ~~**F** — regenerate goldens.~~ **IN-REPO PART DONE 2026-07-11 (commit 4c29c6fe).** The one
    gate-dependent golden (`wrong_field_guard_still_rejects`) is now gate-robust. The remaining F
    flip failures are F5-coupled (features/native) — they move with F5 below.
