@@ -63,33 +63,48 @@ integer?` used to report "Unknown cast" (the per-type `OpCast` is base-keyed); i
 
 ---
 
-## Category B — nullable stored into a non-null slot (warning)
+## Category B — nullable stored into a non-null slot (warning) — LEFT AS N-WARN NUDGES
 
-**Cause.** A nullable value (div / `sqrt` / `abs` / … result, or a `τ?` field) flows into a
-non-null return/field/local. Full-width types (`integer`/`float`/…) WARN (compile + run, the slot
-holds null); this is the nudge, not a break. **Fix per site:** discharge with `?? <default>` at
-the return, or declare the return / field `τ?` if null is a real outcome.
+**Cause.** A nullable value (div / `sqrt` / … result) flows into a non-null return. Full-width types
+(`integer`/`float`/…) WARN (compile + run); this is the nudge, not a break.
 
-**Sites (18):**
-- `lib/audience_crystal/src/audience_crystal.loft` (4) + its tests
-  `tests/01-editor-helpers.loft` / `02-gridmesh-equiv.loft` / `03-crystal-incr.loft` (4 each)
-- `tests/docs/17-libraries.loft` (1) · `lib/testlib.loft` (1)
+**Resolution (2026-07-11): left in place — they are non-blocking and cannot be cleanly discharged.**
+Each B site is a genuine "compiler can't prove it non-null" nudge, not a wrong result:
+- `audience_crystal` `connect_factor`/`fill_factor`: `x as float / CONNECT_TICKS as float` — a
+  *named-constant* divisor. A LITERAL divisor already stays non-null (`x / 600.0` and even
+  `x / (600 as float)` do NOT warn), but the divisor-nonzero proof does not resolve a named global,
+  so `CONNECT_TICKS as float` (=600.0) is treated as maybe-zero → the division is `float?`.
+- `testlib::distance`: `sqrt(self.x*self.x + self.y*self.y)` — the sum-of-squares is always ≥ 0 but
+  the compiler can't prove it (full range-tracking deferred, per the design), so `sqrt` is `float?`.
 
-**Step B.** audience_crystal is the concentration — a numeric consumer lib; convert its returns
-(`?? d` / `τ?`) and its 3 test files move with it. The 2 stragglers are one-liners.
+They can't be discharged without cost: `(...) ?? d` is REDUNDANT on the gate-off path (the division/
+`sqrt` is non-null there), so a `?? d` sweep just moves the warning to gate-off — a *current*-state
+regression. And nothing fails on them: **`library_suite` checks exit code + crash/`test result`
+markers, not warnings** (verified pass under `LOFT_NULLFLOW`), and the standalone tests exit 0. The
+honest fix is future compiler recognition of a named-constant nonzero divisor (the `PI`-style
+constant subset the design already anticipates). Until then the nudge is correct and harmless.
+
+**Sites:** `lib/audience_crystal/src/audience_crystal.loft` (3, via `connect_factor`/`fill_factor`)
+· `lib/testlib.loft` (1, `distance`) surfaced through `tests/docs/17-libraries.loft`.
 
 ---
 
-## Category C — cast of a nullable to a non-null scalar (`float? as integer`)
+## Category C — cast of a nullable to a non-null scalar (`float? as integer`) — DONE (commit 4ee284e5)
 
-**Cause.** DN5: a `possibly-null` value cast to a non-null scalar. **Fix per site:** `as τ?`
-(checked) or `?? d` before the cast.
+**Cause.** DN5: a `possibly-null` value cast to a non-null scalar. **Fix used:** `as τ? ?? d` (the
+checked cast — enabled for nullable scalar sources by 60e2937c — discharged with a default; this is
+clean on both gates because `as τ?` is always nullable so the `??` is never redundant).
 
-**Sites (18):**
-- `lib/audience_crystal/src/audience_crystal.loft` (4) + its 3 test files (4 each)
-- `tests/scripts/02-floats.loft` (2)
+**Sites — all cleared:**
+- `lib/audience_crystal/src/audience_crystal.loft` (4): the two `(ray_len_d / branch_spacing_world)
+  as integer` fork counts → `as integer? ?? 0`; the `cdx[kk]`/`cdz[kk]` vertex casts (kk is a
+  reassigned local, NOT covered by D1) → `as single? ?? 0.0f`. `cdx[gh_k]` (loop var) is already
+  non-null via D1. All 3 crystal test files `use` this source, so they move with it.
+- `tests/scripts/02-floats.loft` (2) — done under A.
+- **Also surfaced + fixed:** `tools/audience-demo/server_kernel.loft` (2 bare `payload[..i] as
+  integer` text-parses → `?? 0`), which broke `engine_host_audience::kernel_port_matches_original`.
 
-**Step C.** Same files as B (audience_crystal) — do B and C together per file.
+Verified: `engine_host_audience` + `library_suite` pass under `LOFT_NULLFLOW`; default suite green.
 
 ---
 
@@ -151,9 +166,10 @@ message-assertion changes — force a rebuild or trust CI's clean build).
 1. ~~**D1 first (recommended)** — vector-index range-tracking, so numeric code (in-tree D + much of
    E) needs no `??`.~~ **DONE 2026-07-11 (commit 21ec7837).** In-tree D closed; E's numeric libs
    benefit at the source.
-2. ~~**A, then B+C** in-repo.~~ **A DONE 2026-07-11 (commit ccbac29f);** 43/44 converted, F5 at
-   the flip. **B+C NEXT** (share the audience_crystal files; the nullable-scalar cast fix already
-   clears C's `float?`-source casts). Verify each file `LOFT_NULLFLOW=1` on BOTH backends.
+2. ~~**A, then B+C** in-repo.~~ **A DONE (ccbac29f), C DONE (4ee284e5), B left as N-Warn nudges —
+   all 2026-07-11.** 43/44 A converted (F5 at the flip); C discharged with `as τ? ?? d`; B are
+   non-blocking design nudges (see § B). In-repo conversion work is COMPLETE; what remains is E, F,
+   F5, and the flip itself.
 3. **E** — republish the ~9 registry libs (loft-libs-*), in parallel; this is the gating item for
    a green `registry-validation`.
 4. **F** — regenerate goldens.
