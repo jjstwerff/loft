@@ -87,7 +87,7 @@ findings, with conversion cost (the trade-off you weigh):
 | High | `1 << 100` → masked (`1<<36`); `1 << -1` → **null** (`1<<63`) | out-of-range shift silently masked/nulled | compile error for constant OOR shift + runtime fault for variable | ~0 |
 | High | **`NarrowCastOverflow` is defined but never raised** | narrowing overflow silently wrong | wire the fault | low |
 | Med | `999999999 as character` → **NUL** (renders as null) | invalid codepoint silently `'\0'` | fault or `character?` | low |
-| Med | `sqrt(-1)`/`log(-1)`/`asin(2)` → **NaN → null** | math domain error invisible | fault or `float?` | low |
+| — | `sqrt(-1)`/`log(-1)`/`asin(2)` → **null** (NaN = the float null, C90) | already the honest "undefined" value; composes via `?? d` / null-propagation | **ACCEPT: null, NO error** — the [C80](../../DESIGN_DECISIONS.md) spreadsheet model already governs (undefined → null, never a runtime error). A fault would fork the total rule and add a corner case, not solve one. No new decision needed. | — |
 
 ### Semantics changes — must be pre-freeze (changing an observed value is a later regression)
 | Sev | Item | Fix | Conv. cost |

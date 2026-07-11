@@ -204,7 +204,7 @@ Beyond the null-sentinel cluster above:
 | Med | no `pow(integer,integer)` (coerces to float, inexact past 2⁵³) | add checked integer `pow` | `:338,463` |
 | Med | no numeric constants (`INT_MAX`/`INT_MIN`/`TAU`/`INFINITY`/`NAN`/float `MAX/MIN/EPSILON`) | ship a constant set | `:374` |
 | Med | `min`/`max`/`clamp` got `τ?` nullable overloads; `abs`/`sqrt`/`floor`/… did not | add `τ?` overloads across the math set (uniform null-lifting) | `:575` |
-| Med | domain-error math (`sqrt(-1)`, `acos(2)`) returns non-null **NaN** typed `float` | return `τ?` null, align with div-by-zero | `ops.rs` |
+| — | domain-error math (`sqrt(-1)`, `acos(2)`) → **null** (NaN = the float null, C90) | **ACCEPT: null, NO error** — governed by the existing [C80](../../DESIGN_DECISIONS.md) spreadsheet model (undefined → null, never a runtime error); already conforms on both backends. No new decision needed. | `ops.rs` |
 | Med | div-by-zero result depends on syntactic context (`x/0` null vs `(x/0)??d` sees Inf) | accept + DD + golden, or make paths agree | `:531–546` |
 | Med | shift ops: `<<` masks in release / debug-asserts; `>>` no range check + sign-extends | define one rule for out-of-range/negative shifts | `ops.rs:408–428` |
 | Med | integer `/` truncates, `%` takes dividend sign; no `rem_euclid`/`div_floor` | add floored variants | `ops.rs:255` |
