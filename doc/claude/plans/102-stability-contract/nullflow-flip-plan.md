@@ -22,7 +22,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 | | Category | Fix | In-tree sites | Scope |
 |---|---|---|---|---|
-| **A** | bare `text as numeric` → error (N-Cast, Phase 4) | `as τ?` or `?? d` | 44 (13 files) | this repo |
+| **A** | bare `text as numeric` → error (N-Cast, Phase 4) | **DONE — `as τ?`** | ~~44~~ **43 done**, F5 at flip | this repo |
 | **B** | nullable returned/stored into a non-null slot → warning | `?? d`, or declare `τ?` | 18 (5 files) | this repo |
 | **C** | `possibly-null as non-null` (e.g. `float? as integer`) → error | `as τ?` or `?? d` | 18 (5 files) | this repo |
 | **D** | matrix / vector arithmetic `v[i]*v[j]` → `τ?` (DN3-index × N-Prop) | **DONE — range-track (D1)** | ~~3 (2 files)~~ **0 in-tree**; helps EXTERNAL | this repo + range-tracking |
@@ -35,21 +35,31 @@ vector-index range-tracking) beats a mechanical `?? d` sweep.
 
 ---
 
-## Category A — text-parse assertion (`text as numeric` → error)
+## Category A — text-parse assertion (`text as numeric` → error) — DONE (commit ccbac29f)
 
 **Cause.** Phase 4: a cast `as τ` is an assertion, and a text parse can't be proven, so bare
-`s as integer` / `s as float` is a compile error. **Fix per site:** the checked `as τ?` (when the
-value is used nullably or the parse may fail) or `s as τ ?? <default>` (assert-or-default). For
-test data known to parse, `as τ ?? 0` is usually right.
+`s as integer` / `s as float` is a compile error. **Fix used: uniformly the checked `as τ?`** — it
+is faithful because the pre-flip DN3 N-Parse ALREADY auto-wraps `text as numeric` to `τ?`, so the
+gate-off type is unchanged AND the null-on-bad-parse test cases (`!("abc" as integer?)`) keep their
+meaning. (`?? d` would force non-null and destroy those cases; only reach for it where a *non-null*
+value is genuinely needed.) Verified each file clean on both gates.
 
-**Sites (44):**
+**Sites (44) — 43 converted:**
 - `tests/scripts/01-integers.loft` (7) · `03-text.loft` (6) · `25-tuple-nstore.loft` (4) ·
-  `52-single.loft` (2) · `02-floats.loft` (1)
-- `tests/docs/16-parser.loft` (4) · `15-lexer.loft` (4) · `03-integer.loft` (2) ·
-  `05-float.loft` (1) · `features/F5.loft` (1)  ← `features/` is GENERATED: fix the @F5 issue body, then `make features-gen`
-- `lib/parser.loft` (4) · `lib/lexer.loft` (4) · `lib/docs.loft` (4)
+  `52-single.loft` (2) · `02-floats.loft` (1 A + its 2 C `float?`-source casts, see below)
+- `tests/docs/03-integer.loft` (2) · `05-float.loft` (1). **`16-parser.loft`/`15-lexer.loft`/
+  `lib/parser.loft`/`lib/docs.loft` needed NO direct edit** — all four number-parse casts live in
+  the shared **`lib/lexer.loft`** (`int`/`long_int`/`get_float`/`get_single`, each returns `τ?` and
+  null-checks `result`), so fixing it once cleared every consumer.
+- **`features/F5.loft` (1) — DEFERRED to the flip landing.** It is GENERATED from the canonical
+  `loft-lang/features#5`; the drift guard forbids editing the generated file, so the fix is an
+  ISSUE edit (`"42" as integer` → `as integer?`) + `make features-fetch && make features-gen`.
+  Bundled with the flip's other outward steps (E republish, contract bump).
 
-**Step A.** Convert each site; re-run `LOFT_NULLFLOW=1 loft <file>` until clean, both backends.
+**Bonus (commit 60e2937c) — the checked cast now accepts a nullable SCALAR source.** `float? as
+integer?` used to report "Unknown cast" (the per-type `OpCast` is base-keyed); it now peels the
+`Optional`, letting the runtime propagate the in-band null. This also pre-clears the category-C
+`float?`/`single? as integer` sites — a `?? d` sweep is NOT needed for them, just `as τ?`.
 
 ---
 
@@ -141,8 +151,9 @@ message-assertion changes — force a rebuild or trust CI's clean build).
 1. ~~**D1 first (recommended)** — vector-index range-tracking, so numeric code (in-tree D + much of
    E) needs no `??`.~~ **DONE 2026-07-11 (commit 21ec7837).** In-tree D closed; E's numeric libs
    benefit at the source.
-2. **A, then B+C** in-repo (B+C share the audience_crystal files). Verify each file
-   `LOFT_NULLFLOW=1` on BOTH backends.
+2. ~~**A, then B+C** in-repo.~~ **A DONE 2026-07-11 (commit ccbac29f);** 43/44 converted, F5 at
+   the flip. **B+C NEXT** (share the audience_crystal files; the nullable-scalar cast fix already
+   clears C's `float?`-source casts). Verify each file `LOFT_NULLFLOW=1` on BOTH backends.
 3. **E** — republish the ~9 registry libs (loft-libs-*), in parallel; this is the gating item for
    a green `registry-validation`.
 4. **F** — regenerate goldens.
