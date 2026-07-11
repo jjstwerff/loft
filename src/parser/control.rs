@@ -3809,6 +3809,7 @@ impl Parser {
     /// (Phase 4.3 step 5).  Reads from the subject SOURCE var `v` (not the `_match_subj` copy),
     /// matching the `x = v[lo..hi]` path.  Pushes the materialisation into `bindings`.
     #[allow(clippy::too_many_arguments)]
+    #[allow(clippy::too_many_arguments)]
     fn materialize_named_rest(
         &mut self,
         v: u16,
@@ -3818,6 +3819,7 @@ impl Parser {
         vec_tp: &Type,
         lo_val: Value,
         hi_val: Value,
+        step: i32,
         bindings: &mut Vec<Value>,
     ) {
         let lo_slot = self.create_unique("rest_lo", &I32);
@@ -3829,11 +3831,15 @@ impl Parser {
             v_set(hi_slot, hi_val),
             v_set(idx, null_idx),
         ]);
-        // index step: `idx = !idx ? lo : idx + 1 ; if hi <= idx break ; idx`
+        // index step: `idx = !idx ? lo : idx + step ; if hi <= idx break ; idx`.  `step` is 1 for
+        // a contiguous sub-slice (`..rest`, a bare `(V)*` run) and 2 for a SEPARATED run
+        // `(V)*(Sep)` — the V's sit at every other index (V Sep V Sep …), so a stride of 2 skips
+        // the separators.  `!idx` is a NULL test (the null sentinel is i32::MIN, not 0), so a `lo`
+        // of 0 seeds correctly and never re-triggers the first-iteration branch.
         let bump = self.conv_op(
             "+",
             Value::Var(idx),
-            Value::Int(1),
+            Value::Int(step),
             I32.clone(),
             I32.clone(),
         );
@@ -4072,6 +4078,10 @@ impl Parser {
         if !plus {
             self.lexer.token("*");
         }
+        // @PLN35 Phase 6.2 — an optional separator group `(Sep)` after the `*`/`+`: the run
+        // becomes `V (Sep V)*`.  `Sep` is ONE variant, CONSUMED between elements but never
+        // captured (`name` collects only the V's — a stride-2 read skips the separators).
+        let sep_disc = self.parse_repetition_separator(e_nr);
         // Optional trailing `, ..` — a bare `..` absorbs the remainder (no capture); `..name`
         // additionally binds it.  Either way the run is a PREFIX, not the whole slice.
         let mut has_rest = false;
@@ -4082,32 +4092,96 @@ impl Parser {
         }
         self.lexer.token("]");
 
-        // Runtime run-loop: `end = 0; loop { if len <= end break; if tag(v[end]) != disc break;
-        // end += 1 }`.  `end` is the length of the maximal leading `V` run.
+        // Runtime run: `end` = the cursor position after the last matched V.
         let end_var = self.create_unique("rep_end", &I32);
         self.vars.defined(end_var);
-        let len_brk = {
-            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
-            let at_end = self.conv_op("<=", lc, Value::Var(end_var), I32.clone(), I32.clone());
-            v_if(at_end, Value::Break(0), Value::Null)
-        };
-        let tag_brk = {
-            let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Var(end_var));
-            let tag = self.elem_tag_int(elem);
-            let is_v = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
-            v_if(is_v, Value::Null, Value::Break(0))
-        };
-        let step = {
-            let bump = self.conv_op(
-                "+",
-                Value::Var(end_var),
-                Value::Int(1),
-                I32.clone(),
-                I32.clone(),
-            );
-            v_set(end_var, bump)
-        };
-        let run_loop = v_loop(vec![len_brk, tag_brk, step], "rep run");
+        let mut run_ops: Vec<Value> = vec![v_set(end_var, Value::Int(0))];
+        if let Some(sep) = sep_disc {
+            // Separated `V (Sep V)*`: match the first V, then loop `(Sep V)` pairs.
+            // First V: `if 0 < len && tag(v[0]) == disc { end = 1 }`.
+            let first_v = {
+                let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let non_empty = self.conv_op("<", Value::Int(0), lc, I32.clone(), I32.clone());
+                let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(0));
+                let tag = self.elem_tag_int(elem);
+                let is_v = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
+                v_if(
+                    non_empty,
+                    v_if(is_v, v_set(end_var, Value::Int(1)), Value::Null),
+                    Value::Null,
+                )
+            };
+            // `(Sep V)*`: `loop { if len <= end+1 break; if tag(v[end]) != sep break;
+            //             if tag(v[end+1]) != disc break; end += 2 }`.
+            let need_pair_brk = {
+                let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let next = self.conv_op(
+                    "+",
+                    Value::Var(end_var),
+                    Value::Int(1),
+                    I32.clone(),
+                    I32.clone(),
+                );
+                let short = self.conv_op("<=", lc, next, I32.clone(), I32.clone());
+                v_if(short, Value::Break(0), Value::Null)
+            };
+            let sep_brk = {
+                let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Var(end_var));
+                let tag = self.elem_tag_int(elem);
+                let is_sep = self.cl("OpEqInt", &[tag, Value::Int(sep)]);
+                v_if(is_sep, Value::Null, Value::Break(0))
+            };
+            let v_brk = {
+                let next = self.conv_op(
+                    "+",
+                    Value::Var(end_var),
+                    Value::Int(1),
+                    I32.clone(),
+                    I32.clone(),
+                );
+                let elem = self.read_slice_elem(v, elm_size, elm_tp, next);
+                let tag = self.elem_tag_int(elem);
+                let is_v = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
+                v_if(is_v, Value::Null, Value::Break(0))
+            };
+            let bump2 = {
+                let b = self.conv_op(
+                    "+",
+                    Value::Var(end_var),
+                    Value::Int(2),
+                    I32.clone(),
+                    I32.clone(),
+                );
+                v_set(end_var, b)
+            };
+            let sep_loop = v_loop(vec![need_pair_brk, sep_brk, v_brk, bump2], "rep sep run");
+            run_ops.push(first_v);
+            run_ops.push(sep_loop);
+        } else {
+            // Contiguous `V*`: `loop { if len <= end break; if tag(v[end]) != disc break; end += 1 }`.
+            let len_brk = {
+                let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+                let at_end = self.conv_op("<=", lc, Value::Var(end_var), I32.clone(), I32.clone());
+                v_if(at_end, Value::Break(0), Value::Null)
+            };
+            let tag_brk = {
+                let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Var(end_var));
+                let tag = self.elem_tag_int(elem);
+                let is_v = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
+                v_if(is_v, Value::Null, Value::Break(0))
+            };
+            let step = {
+                let bump = self.conv_op(
+                    "+",
+                    Value::Var(end_var),
+                    Value::Int(1),
+                    I32.clone(),
+                    I32.clone(),
+                );
+                v_set(end_var, bump)
+            };
+            run_ops.push(v_loop(vec![len_brk, tag_brk, step], "rep run"));
+        }
 
         // Match boolean (after the loop): no-rest requires the run to be the WHOLE slice
         // (`end == len`); `+` additionally requires a non-empty run (`end > 0`).
@@ -4130,17 +4204,17 @@ impl Parser {
         } else {
             base
         };
-        let rep_cond = v_block(
-            vec![v_set(end_var, Value::Int(0)), run_loop, match_bool],
-            Type::Boolean,
-            "rep cond",
-        );
+        run_ops.push(match_bool);
+        let rep_cond = v_block(run_ops, Type::Boolean, "rep cond");
         *cond = match cond.take() {
             Some(existing) => Some(v_if(existing, rep_cond, Value::Boolean(false))),
             None => Some(rep_cond),
         };
 
         // Captures materialise AFTER the condition set `end` (bindings run once the arm commits).
+        // A SEPARATED run puts the V's at every other index (V Sep V Sep …), so the capture reads
+        // `v[0 .. end]` with a stride of 2 to collect only the V's; a bare run uses stride 1.
+        let cap_step = if sep_disc.is_some() { 2 } else { 1 };
         let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
         if let Some(name) = cap_name {
             let cap_var = self.vars.add_variable(&name, &vec_tp, &mut self.lexer);
@@ -4154,6 +4228,7 @@ impl Parser {
                     &vec_tp,
                     Value::Int(0),
                     Value::Var(end_var),
+                    cap_step,
                     bindings,
                 );
             }
@@ -4171,10 +4246,65 @@ impl Parser {
                     &vec_tp,
                     Value::Var(end_var),
                     hi_val,
+                    1,
                     bindings,
                 );
             }
         }
+    }
+
+    /// @PLN35 Phase 6.2 — parse an OPTIONAL separator group `(Sep)` following a repetition's
+    /// `*` / `+`.  `Sep` is ONE variant of the element enum, consumed BETWEEN elements but never
+    /// captured.  Returns its discriminant, or `None` when no `(` follows (a bare repetition).
+    fn parse_repetition_separator(&mut self, e_nr: u32) -> Option<i32> {
+        if !self.lexer.peek_token("(") {
+            return None;
+        }
+        self.lexer.token("(");
+        let sname = self.lexer.has_identifier().unwrap_or_default();
+        let real = if self.lexer.has_token("::") {
+            self.lexer.has_identifier().unwrap_or_else(|| sname.clone())
+        } else {
+            sname.clone()
+        };
+        let mut sdef = self.data.variant_of(e_nr, &real);
+        if sdef == u32::MAX {
+            sdef = self.data.def_nr(&real);
+        }
+        let valid = sdef != u32::MAX
+            && self.data.def_type(sdef) == DefType::EnumValue
+            && self.data.def(sdef).parent() == e_nr;
+        if !valid && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "separator '{}' is not a variant of {}",
+                real,
+                self.data.def(e_nr).name()
+            );
+        }
+        let disc = if valid {
+            self.variant_disc(e_nr, true, sdef, &real)
+        } else {
+            0
+        };
+        // A `{ … }` field body on the separator is deferred (like the repetition body): skip it.
+        if self.lexer.has_token("{") {
+            let mut depth = 1i32;
+            while depth > 0 {
+                if self.lexer.has_token("{") {
+                    depth += 1;
+                } else if self.lexer.has_token("}") {
+                    depth -= 1;
+                } else if matches!(self.lexer.peek().has, LexItem::None) {
+                    break;
+                } else {
+                    self.lexer.cont();
+                }
+            }
+        }
+        self.lexer.token(")");
+        Some(disc)
     }
 
     /// @PLN35 Phase 4.3 — a WHOLE-SLICE multi-element alternation
@@ -4432,6 +4562,7 @@ impl Parser {
                     &vec_tp,
                     Value::Var(pos_var),
                     hi_val,
+                    1,
                     bindings,
                 );
             }
@@ -5558,6 +5689,7 @@ impl Parser {
                                 &vec_tp,
                                 lo_val,
                                 hi_val,
+                                1,
                                 &mut bindings,
                             );
                         }
