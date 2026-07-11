@@ -2108,6 +2108,26 @@ impl Parser {
                 && matches!(second_type.base(), Type::Reference(_, _));
             let ref_null = (operator == "==" || operator == "!=")
                 && ((opt_ref_l && second_type == Type::Null) || (*ctp == Type::Null && opt_ref_r));
+            // @PLN102 pre-freeze — a boolean and an integer are NOT comparable with `==`/`!=`.
+            // The old path coerced the integer to boolean by "is non-null", so `true == 0` was
+            // TRUE and `true == 2` was TRUE (nonsense) — while `bool < int` already errored.
+            // Reject `==`/`!=` too, so the whole comparison family is consistent.  (`null` is
+            // Type::Null, not Integer, so `bool == null` / `bool? == null` are unaffected.)
+            if !self.first_pass
+                && matches!(operator, "==" | "!=")
+                && ((matches!(ctp.base(), Type::Boolean)
+                    && matches!(second_type.base(), Type::Integer(_)))
+                    || (matches!(ctp.base(), Type::Integer(_))
+                        && matches!(second_type.base(), Type::Boolean)))
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "cannot compare a boolean and an integer with `{operator}` — a boolean is \
+                     true/false/null, not 0/1; they are different types (convert one explicitly \
+                     if that is really what you mean)"
+                );
+            }
             if vec_null {
                 // @PLN25: `vector == null` / `vector != null` tests the null
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,

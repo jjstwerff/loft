@@ -16046,3 +16046,45 @@ fn pln102_comparison_is_non_associative() {
         );
     }
 }
+
+// @PLN102 pre-freeze — a boolean and an integer are not comparable.  The old `bool == int`
+// coerced the integer to boolean by "is non-null", so `true == 0` was TRUE and `true == 2`
+// was TRUE (nonsense), while `bool < int` already errored.  `==`/`!=` now reject it too.
+#[test]
+fn pln102_boolean_integer_comparison_rejected() {
+    let bad = [
+        "b = true == 1;",
+        "b = true != 0;",
+        "b = 1 == false;",
+        "b = false == 0;",
+    ];
+    for stmt in bad {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(&format!("fn main() {{\n  {stmt}\n}}"), "pln102_bool_int", false);
+        assert!(
+            p.diagnostics
+                .lines()
+                .iter()
+                .any(|l| l.contains("cannot compare a boolean and an integer")),
+            "expected `{stmt}` to be rejected, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
+    // Still valid: bool==bool, int==int, and the three-state `boolean? == null`.
+    let ok = [
+        "b = true == false;",
+        "b = 1 == 2;",
+        "n: boolean? = true; b = n == null;",
+    ];
+    for stmt in ok {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(&format!("fn main() {{\n  {stmt}\n}}"), "pln102_bool_int_ok", false);
+        assert!(
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "expected `{stmt}` to compile clean, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
+}

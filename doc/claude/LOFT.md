@@ -486,6 +486,11 @@ make it `(a == b) == c`, silently comparing a *boolean* to the third operand (th
 footgun). Parenthesise if you truly mean the boolean compare (`(a == b) == c`), or combine with
 `&&` for a range test (`1 < x && x < 10`).
 
+**A boolean and an integer are not comparable.** `true == 1`, `flag != 0` and the like are a
+**compile error** — a `boolean` is `true`/`false`/`null`, not `0`/`1`, so the two are different
+types (consistent with `bool < int`, which was always rejected). Convert explicitly if you
+really mean it. (`b == null` on a `boolean?` is fine — `null` is not an integer.)
+
 Unary operators: `!` (logical not), `-` (negation / sign), `~` (bitwise NOT). A unary prefix
 binds **tighter than every binary operator** — the `-` is the **sign of its operand**, part of
 the primary expression. So `-2 ** 2` is `(-2) ** 2 == 4` (read `-2` as the number
