@@ -6277,12 +6277,13 @@ impl Parser {
         };
     }
 
-    /// @PLN35 PC3 — well-formedness / termination pass over the sub-rule invocation graph.  Every
-    /// PC2 invocation `[ name: rule ]` is a WHOLE pattern, so the sub-rule runs at cursor position 0
-    /// (nothing consumed before it) and its call is hoisted unconditionally — a CYCLE therefore
-    /// recurses forever (no base-case arm can intervene).  Reject any cycle at compile time as left
-    /// recursion, naming the path.  Runs post-parse over the edges recorded on pass 2.
-    pub(crate) fn check_subrule_termination(&mut self) {
+    /// @PLN35 PC3+PC4 — well-formedness pass over the sub-rule invocation graph, run post-parse over
+    /// the edges recorded on pass 2.  **PC3 (termination):** every PC2 invocation `[ name: rule ]` is
+    /// a WHOLE pattern, so the sub-rule runs at cursor position 0 (nothing consumed) and its call is
+    /// hoisted unconditionally — a CYCLE therefore recurses forever (no base-case arm can intervene),
+    /// so reject any cycle as left recursion.  **PC4 (purity):** an invoked sub-rule must be pure —
+    /// the hoisted, possibly-backtracked call makes any observable side effect leak.
+    pub(crate) fn check_subrule_wellformedness(&mut self) {
         // Drain the edges so a re-parse (REPL / multiple files) starts fresh.
         let edges = std::mem::take(&mut self.subrule_edges);
         if edges.is_empty() {
@@ -6293,7 +6294,8 @@ impl Parser {
         for (from, to, pos) in &edges {
             adj.entry(*from).or_default().push((*to, pos.clone()));
         }
-        for (site, cycle) in Self::find_subrule_cycles(&adj) {
+        let cycles = Self::find_subrule_cycles(&adj);
+        for (site, cycle) in &cycles {
             let path = cycle
                 .iter()
                 .map(|nr| Self::rule_display_name(&self.data, *nr))
@@ -6302,11 +6304,34 @@ impl Parser {
             let head = Self::rule_display_name(&self.data, cycle[0]);
             diagnostic_at!(
                 self.lexer,
-                &site,
+                site,
                 Level::Error,
                 "sub-rule `{head}` is left-recursive ({path}): a cursor `match` invokes a sub-rule \
                  before consuming any input, so this cycle would recurse forever"
             );
+        }
+        // @PLN35 PC4 — an invoked sub-rule must be PURE: a cursor `match` hoists its call
+        // unconditionally (so it runs even when the arm is not taken) and may backtrack over it, so
+        // an observable side effect (I/O, host mutation, prng) would leak.  Skip callees already in
+        // a rejected cycle (that error stands).  One report per impure callee.
+        let in_cycle: HashSet<u32> = cycles.iter().flat_map(|(_, c)| c.iter().copied()).collect();
+        let mut checked: HashSet<u32> = HashSet::new();
+        for (_from, callee, site) in &edges {
+            if in_cycle.contains(callee) || !checked.insert(*callee) {
+                continue;
+            }
+            if !crate::scopes::sub_rule_is_pure(&self.data, *callee) {
+                let name = Self::rule_display_name(&self.data, *callee);
+                diagnostic_at!(
+                    self.lexer,
+                    site,
+                    Level::Error,
+                    "sub-rule `{name}` is not pure — a cursor `match` may invoke it speculatively \
+                     (even when its arm is not taken) and backtrack over it, so its side effects \
+                     would be observable; a sub-rule must only advance the cursor and return (no \
+                     I/O, host mutation, or randomness)"
+                );
+            }
         }
     }
 

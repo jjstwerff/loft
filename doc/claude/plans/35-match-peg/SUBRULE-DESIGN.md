@@ -277,9 +277,26 @@ the def graph); emit diagnostics through the standard path.
 empty-matching `p` rejects; a well-formed grammar compiles. Hand-check the min-consumption on a
 mutually-recursive grammar.
 
-### PC4 — Purity pass (§4.2)
+### PC4 — Purity pass (§4.2) — **DONE, both backends**
 
-**Goal.** An impure sub-rule is a compile error.
+**Landed.** An invoked sub-rule must be pure, or it is a compile error.  Runs in the same post-parse
+pass as PC3 (`check_subrule_wellformedness`): for each invoked sub-rule (callee), `scopes::
+sub_rule_is_pure` descends the call graph and rejects it if it reaches an OBSERVABLE / non-
+deterministic / concurrent effect.  Confirmed hazard: with the unconditional hoist, an impure
+sub-rule's `print` fires even when the arm MISSES (`[noisy] side effect!` before `r=-1`).
+**Category calibration (the crux):** loft's effect analysis annotates the impure builtins, but
+`#impure(parent_write)` covers record construction AND the cursor advance (`OpNewRecord` / `OpSetInt`
+/ `OpFinishRecord`) — every sub-rule uses it internally — so `parent_write` CANNOT disqualify; only
+`host_io` / `io` / `prng` / `par_call` do.  An un-annotated native builtin is pure (every observable
+builtin is annotated `#impure`, so the un-annotated natives are pure reads / arithmetic / record
+ops).  A recursion cycle breaks optimistically (PC3 rejects left recursion separately); an indirect
+`CallRef` is conservatively impure.  Guard `parse_errors::subrule_impure_rejected` (direct + a
+transitive helper both rejected) + `35r` extended with a sub-rule that calls a PURE helper (allowed,
+runs).  **Deferred:** writing EXTERNAL shared state (vs the result record / cursor) is a `parent_write`
+too, so backtracking over such a write is not caught at this category granularity — needs a
+local-vs-external write distinction (the deps/ownership analysis).
+
+**Original goal.** An impure sub-rule is a compile error.
 **Design.** Reuse the capability/effect analysis to require sub-rule purity.
 **Code points.** `src/sandbox.rs` / the `capabilities.md` machinery (`mark_lambda_sandboxed` and
 kin); hook the purity check at the sub-rule reference site.

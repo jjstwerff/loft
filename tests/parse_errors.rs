@@ -1813,6 +1813,14 @@ fn subrule_left_recursion() {
         .error("sub-rule `expr` is left-recursive (expr -> expr): a cursor `match` invokes a sub-rule before consuming any input, so this cycle would recurse forever at subrule_left_recursion:4:68");
 }
 
+// @PLN35 PC4 — an invoked sub-rule must be pure: a cursor `match` hoists its call unconditionally
+// (runs even when the arm is not taken) and may backtrack over it, so any observable effect leaks.
+#[test]
+fn subrule_impure_rejected() {
+    code!("enum Tok { Id { x: integer }, LP { x: integer } }\nstruct Cur { src: vector<Tok>, pos: integer }\nstruct N { v: integer }\nfn noisy(c: Cur) -> N { print(\"hi\"); match c { [ Id { x } ] => N { v: x }, _ => null } }\nfn f(c: Cur) -> integer { r = match c { [ n: noisy ] => n.v, _ => -1 }; r }")
+        .error("sub-rule `noisy` is not pure — a cursor `match` may invoke it speculatively (even when its arm is not taken) and backtrack over it, so its side effects would be observable; a sub-rule must only advance the cursor and return (no I/O, host mutation, or randomness) at subrule_impure_rejected:5:46");
+}
+
 // A user type may be named `T` (a name the stdlib uses as a generic type variable):
 // verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
 // The fix keys vector types by their element (not by a display name two distinct

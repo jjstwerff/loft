@@ -22,6 +22,13 @@ fn parse_head(c: Cur) -> HeadNode {
   match c { [ Fn, Id { x } ] => HeadNode { arg: x }, _ => null }
 }
 
+// PC4 — a sub-rule may call a PURE helper (arithmetic + record construction are pure); only
+// OBSERVABLE effects (I/O, host mutation, randomness) are rejected.
+fn dbl(x: integer) -> integer { x * 2 }
+fn parse_dbl(c: Cur) -> IdNode {
+  match c { [ Id { x } ] => IdNode { name: dbl(x) }, _ => null }
+}
+
 fn main() {
   c = Cur { src: [Fn { x: 0 }, Id { x: 7 }, LP { x: 3 }], pos: 0 };
 
@@ -42,6 +49,11 @@ fn main() {
   assert(a == 1, "first id: {a}");
   assert(b == 2, "second id: {b}");
   assert(d.pos == 2, "two ids consumed -> pos 2: {d.pos}");
+
+  // PC4 — a sub-rule calling a pure helper compiles + runs (dbl(4) = 8).
+  g = Cur { src: [Id { x: 4 }], pos: 0 };
+  pd = match g { [ node: parse_dbl ] => node.name, _ => -1 };
+  assert(pd == 8, "parse_dbl (pure helper): {pd}");
 
   print("35r-subrule-invoke: PASS");
 }
