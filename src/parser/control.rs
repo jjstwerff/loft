@@ -3772,6 +3772,19 @@ impl Parser {
         self.cl("OpConvIntFromEnum", &[get_enum])
     }
 
+    /// @PLN35 Phase 4.3 — the single `read(pos)` seam for a slice element.  EVERY element
+    /// read in a slice pattern goes through here: `get_field(elm_type, whole, OpGetVector(v,
+    /// size, pos))`.  `pos` is a `Value` — a compile-time `Int` for a fixed position today, a
+    /// runtime `Var` (or `pos + offset`) once a variable-width alternation advances a cursor.
+    /// Funnelling all reads here is what lets a streamed/accumulating backing (Phase 7)
+    /// replace the read without touching the match logic — so do NOT open-code
+    /// `OpGetVector` + `get_field` at a slice element site; call this.
+    fn read_slice_elem(&mut self, v: u16, elm_size: &Value, elm_tp: &Type, pos: Value) -> Value {
+        let get = self.cl("OpGetVector", &[Value::Var(v), elm_size.clone(), pos]);
+        let td = self.data.type_def_nr(elm_tp);
+        self.get_field(td, usize::MAX, get)
+    }
+
     /// @PLN35 Phase 4 (P-Alt) — parse a single-element alternation
     /// `( V1 { f… } | V2 { f… } | … )` in a slice element position and emit its
     /// tag-disjunction condition (into `elem_conds`) + shared-slot capture bindings
@@ -4611,22 +4624,15 @@ impl Parser {
                         // Bind name = v[position] — the same read as the head-binding loop below.
                         let bind_nr = self.vars.add_variable(&name, &elm_tp, &mut self.lexer);
                         self.vars.defined(bind_nr);
-                        let bget = self.cl(
-                            "OpGetVector",
-                            &[Value::Var(v), elm_size.clone(), Value::Int(position)],
-                        );
-                        let bval = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, bget);
+                        let bval =
+                            self.read_slice_elem(v, &elm_size, &elm_tp, Value::Int(position));
                         bindings.push(v_set(bind_nr, bval));
                         self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
                         // Sub-pattern condition on the SAME element. Read v[position] AGAIN: the
                         // binding var is assigned only in the arm body (after the condition runs),
                         // so the condition must read the element directly, never the binding.
-                        let cget = self.cl(
-                            "OpGetVector",
-                            &[Value::Var(v), elm_size.clone(), Value::Int(position)],
-                        );
                         let cread =
-                            self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, cget);
+                            self.read_slice_elem(v, &elm_size, &elm_tp, Value::Int(position));
                         let mut sub_conds: Vec<Value> = Vec::new();
                         let mut aliases: Vec<(String, Option<u16>)> = Vec::new();
                         if let Some(c) = self.parse_field_sub_pattern(
@@ -4657,11 +4663,8 @@ impl Parser {
                         // Read v[pos] and tag-test + bind via parse_field_sub_pattern; a "_"
                         // placeholder keeps the position count so following bare-name indices align.
                         let position = head.len() as i32;
-                        let get = self.cl(
-                            "OpGetVector",
-                            &[Value::Var(v), elm_size.clone(), Value::Int(position)],
-                        );
-                        let read = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
+                        let read =
+                            self.read_slice_elem(v, &elm_size, &elm_tp, Value::Int(position));
                         let mut sub_conds: Vec<Value> = Vec::new();
                         let mut aliases: Vec<(String, Option<u16>)> = Vec::new();
                         if let Some(c) = self.parse_field_sub_pattern(
@@ -4684,12 +4687,8 @@ impl Parser {
                         if let Type::Enum(elm_e_nr, true, _) = &elm_tp {
                             let e_nr = *elm_e_nr;
                             let position = head.len() as i32;
-                            let get = self.cl(
-                                "OpGetVector",
-                                &[Value::Var(v), elm_size.clone(), Value::Int(position)],
-                            );
                             let read =
-                                self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
+                                self.read_slice_elem(v, &elm_size, &elm_tp, Value::Int(position));
                             self.parse_slice_alternation_element(
                                 e_nr,
                                 &read,
@@ -4784,11 +4783,7 @@ impl Parser {
                     }
                     let bind_nr = self.vars.add_variable(name, &elm_tp, &mut self.lexer);
                     self.vars.defined(bind_nr);
-                    let get = self.cl(
-                        "OpGetVector",
-                        &[Value::Var(v), elm_size.clone(), Value::Int(i as i32)],
-                    );
-                    let val = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
+                    let val = self.read_slice_elem(v, &elm_size, &elm_tp, Value::Int(i as i32));
                     bindings.push(v_set(bind_nr, val));
                     self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
                 }
@@ -4800,8 +4795,7 @@ impl Parser {
                     let bind_nr = self.vars.add_variable(name, &elm_tp, &mut self.lexer);
                     self.vars.defined(bind_nr);
                     let idx = Value::Int(-((tail.len() - j) as i32));
-                    let get = self.cl("OpGetVector", &[Value::Var(v), elm_size.clone(), idx]);
-                    let val = self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
+                    let val = self.read_slice_elem(v, &elm_size, &elm_tp, idx);
                     bindings.push(v_set(bind_nr, val));
                     self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
                 }
