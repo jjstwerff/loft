@@ -10252,6 +10252,19 @@ mod plan86_admission_tests {
                 ),
             ),
             (
+                // @PLN102 F6 — `r = &v` ALIASES the param `v` (proven: `r[0]=99` mutates the
+                // caller's `v[0]`), so laundering a host-vector write through a `&`-bound
+                // local must ALSO be rejected — the `Type::Vector => owned` gate must not
+                // treat an alias of a parameter as script-owned.
+                "raw-write: & alias launders param",
+                adm(
+                    &["fn:evil"],
+                    &["code", "prog"],
+                    &[],
+                    "fn evil(v: vector<integer>) -> integer { r = &v; r[0] = 9; r[0] }\n",
+                ),
+            ),
+            (
                 "raw-write: nested field",
                 adm(
                     &["fn:evil"],

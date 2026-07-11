@@ -2605,7 +2605,8 @@ use a separate collection or add after the loop"
         };
         // A PARAMETER root is host data — `v[i] = …` / `e.f = …` on a parameter mutates the
         // CALLER's value (proven: `fn f(v){ v[0]=99 }` leaves the caller's `orig[0]==99`).
-        if self.vars.arguments().contains(&root) {
+        let args = self.vars.arguments();
+        if args.contains(&root) {
             return true;
         }
         match self.vars.tp(root) {
@@ -2622,18 +2623,40 @@ use a separate collection or add after the loop"
                     .and_then(|n| self.sandbox.profiles.get(n));
                 profile.is_none_or(|p| p.allows_lib(&lib))
             }
-            // @PLN86 D-cap-3 — a NON-parameter local VECTOR is script-owned. Every whole-value
-            // vector bind COPIES (proven on BOTH backends — a literal, a copy `c = v`, a
-            // projection `fv = e.items`, and even a `r = &v` ref-bind all leave the source
-            // untouched: `r[0]=99` gives `orig[0]==1`), so a local vector NEVER aliases host
-            // state — writing its elements is `Cap-Own`. The only host-vector write is a DIRECT
-            // write to a PARAMETER root (`v[i] = …` / `e.items[i] = …`), whose root is an
-            // argument and is already rejected by the `arguments()` check above. Closes the
-            // owned-collection-element gap without an aliasing escape.
-            Type::Vector(..) => false,
+            // @PLN86 D-cap-3 + @PLN102 F6 — a NON-parameter local VECTOR is script-owned, so
+            // `v[i] = e` is `Cap-Own` — EXCEPT one that ALIASES a parameter through a `&`-bind
+            // (`r = &v`, even transitively `b = &a; a = &v`).  Such a local is TYPED `Vector`
+            // yet a write through it reaches the caller's vector (proven: `r = &v; r[0] = 99`
+            // ⇒ `v[0] == 99` — the earlier "even `r = &v` copies" premise was FALSE).  A
+            // genuine copy (`c = v`, a literal, a slice) deps on a FRESH local store and never
+            // reaches an argument.  Follow the dep CHAIN: a vector whose deps reach a parameter
+            // is host; a genuinely-owned one is script.
+            Type::Vector(..) => self.root_aliases_argument(root, &args),
             // A `&`/`RefVar` borrow, a scalar, or an unresolvable base → host, conservatively.
             _ => true,
         }
+    }
+
+    /// True when a local vector `root` ALIASES a parameter through a `&`-bind chain — a write
+    /// through it mutates the caller's vector, so it is host, not script-owned.  Follows the
+    /// dep chain (`b` deps on `a`, `a` on the param `p`); a genuine copy deps only on a fresh
+    /// local store and never reaches an argument.  @PLN102 F6 (closes the `r = &param` launder).
+    fn root_aliases_argument(&self, root: u16, args: &[u16]) -> bool {
+        let mut stack = vec![root];
+        let mut seen: Vec<u16> = Vec::new();
+        while let Some(v) = stack.pop() {
+            if seen.contains(&v) {
+                continue;
+            }
+            seen.push(v);
+            if args.contains(&v) {
+                return true;
+            }
+            for d in self.vars.tp(v).depend() {
+                stack.push(d);
+            }
+        }
+        false
     }
 
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
