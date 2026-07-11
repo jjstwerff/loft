@@ -37,7 +37,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
    0      ??                                 ← loosest (groups last / outermost)
    1      ||   or
    2      &&   and
-   3      ==   !=   <   <=   >   >=
+   3      ==   !=   <   <=   >   >=          (comparison — NON-associative; no chaining)
    4      |                                  (bitwise or)
    5      ^                                  (bitwise xor)
    6      &                                  (bitwise AND — infix `&`, see below)
@@ -52,17 +52,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
   (G-Prec)   for binary operators, level N binds tighter than level N-1.  Parsing is
              precedence-climbing: `parse_operators(p)` parses operands at level p+1, so a
              higher level groups deeper.
-  (G-Assoc)  binary levels are LEFT-associative, EXCEPT `**` (power), which is RIGHT-assoc:
+  (G-Assoc)  binary levels are LEFT-associative, EXCEPT `**` (power = RIGHT-assoc) and the
+             comparison level 3 (NON-associative — chaining is rejected):
                  2 ** 3 ** 2  ==  2 ** (3 ** 2)  ==  512       (matches maths / most languages)
                  x as integer as float  ==  (x as integer) as float   (`as` stays left-assoc)
+                 a == b == c   → COMPILE ERROR (would be `(a == b) == c`, a bool vs c compare;
+                                parenthesise, or use `&&` for a range: `1 < x && x < 10`)
 ```
 
 **In words.** loft has one precedence ladder, twelve rungs. The closer to the bottom
 (`as`, `**`, `*`), the tighter an operator grips its operands; the closer to the top
-(`??`, `||`), the later it groups. Operators group left-to-right, with **one exception**:
+(`??`, `||`), the later it groups. Operators group left-to-right, with **two exceptions**:
 `**` (power) is **right**-associative, so `2 ** 3 ** 2` is `2 ** (3 ** 2) = 512` — matching
 maths and most languages (it was left-associative = 64 before; the maker should not carry a
-surprise there).
+surprise there); and the **comparison** level is **non-associative** — `a == b == c` /
+`1 < x < 10` are rejected at parse time, because left-associative grouping would silently
+compare a boolean to the third operand. Parenthesise, or use `&&` for a range test.
 
 ### Prefix `&` is NOT an operator — it is the reference annotation
 

@@ -570,6 +570,12 @@ impl Parser {
         // the operator / statement terminator while the operand was parsed.
         let operand_pos = self.lexer.peek_pos().clone();
         let mut current_type = self.parse_operators(var_tp, code, parent_tp, precedence + 1);
+        // @PLN102 pre-freeze — comparison operators are NON-ASSOCIATIVE.  A chain like
+        // `a == b == c` (or `a < b < c`) parses as `(a == b) == c`, silently comparing a
+        // BOOLEAN to the third operand — a classic footgun.  Reject the second comparison at
+        // this level; the explicit `(a == b) == c` still works (its inner compare is a
+        // separate parse inside the paren primary), as does `a < b && b < c`.
+        let mut compared_at_this_level = false;
         loop {
             // a void left operand cannot have any binary operator
             // applied to it. Returning early prevents the pratt loop from
@@ -706,6 +712,20 @@ impl Parser {
                     }
                 }
                 return current_type;
+            }
+            // @PLN102 — non-associative comparison guard (see `compared_at_this_level`).
+            if matches!(operator, "==" | "!=" | "<" | "<=" | ">" | ">=") {
+                if compared_at_this_level && self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "comparison operators do not chain — `{operator}` follows another \
+                         comparison, which would compare a boolean to the next operand; \
+                         parenthesise (e.g. `(a == b) == c`) or combine with `&&` \
+                         (e.g. `a < b && b < c`)"
+                    );
+                }
+                compared_at_this_level = true;
             }
             self.known_var_or_type(code, &operand_pos);
             // Detect '++': not a valid operator in loft. Consume the extra '+',

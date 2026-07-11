@@ -9091,6 +9091,11 @@ fn run() -> integer {
     .error(
         "Indexing a non vector — keyed collections (hash/sorted/index/spatial) have no generic-constructor expression; name the key via a type annotation and initialise from a vector literal: `h: hash<Row[id]> = [Row { id: 1 }];` (a struct field `struct Db { h: hash<Row[id]> }` works too) at quality_6d_keyed_collection_constructor_hint:3:20",
     )
+    // @PLN102 — the malformed `hash<Row[id]>()` parses as `hash < Row[id] > ()`, a `<`…`>`
+    // comparison chain, so the non-associative-comparison guard also fires here.
+    .error(
+        "comparison operators do not chain — `>` follows another comparison, which would compare a boolean to the next operand; parenthesise (e.g. `(a == b) == c`) or combine with `&&` (e.g. `a < b && b < c`) at quality_6d_keyed_collection_constructor_hint:3:23",
+    )
     .error(
         "No matching operator '<' on 'unknown' and 'boolean' at quality_6d_keyed_collection_constructor_hint:3:24",
     );
@@ -15986,4 +15991,58 @@ fn pln102_stdlib_reachable_null_returns_are_typed_nullable() {
         "inferred/`??` nullable use should compile clean, got: {:?}",
         p.diagnostics.lines()
     );
+}
+
+// @PLN102 pre-freeze — comparison operators are NON-ASSOCIATIVE.  A chain like
+// `a == b == c` / `a < b < c` parses left-associatively as `(a OP b) OP c`, silently
+// comparing a BOOLEAN to the third operand — the classic C footgun.  The parser now
+// rejects a second comparison at the same level; the explicit `(a == b) == c`, an `&&`
+// join, and a single comparison all stay legal.  This is the non-vacuous guard (proven
+// to fail if the rule is reverted — the chains would then parse clean).
+#[test]
+fn pln102_comparison_is_non_associative() {
+    let chains = [
+        "b = 2 == 2 == 1;",
+        "b = 1 < 5 < 10;",
+        "b = true == true == true;",
+        "b = 1 == 2 != 3;",
+    ];
+    for stmt in chains {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n}}"),
+            "pln102_nonassoc",
+            false,
+        );
+        assert!(
+            p.diagnostics
+                .lines()
+                .iter()
+                .any(|l| l.contains("do not chain")),
+            "expected a 'do not chain' error for `{stmt}`, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
+    // Positive control: explicit parens, an `&&` join, and a single comparison compile
+    // clean — proves the rule rejects only the CHAIN, not comparison itself.
+    let ok = [
+        "b = (2 == 2) == true;",
+        "b = 1 < 5 && 5 < 10;",
+        "b = 2 == 2;",
+    ];
+    for stmt in ok {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(
+            &format!("fn main() {{\n  {stmt}\n}}"),
+            "pln102_nonassoc_ok",
+            false,
+        );
+        assert!(
+            p.diagnostics.level() < loft::diagnostics::Level::Error,
+            "expected `{stmt}` to compile clean, got: {:?}",
+            p.diagnostics.lines()
+        );
+    }
 }

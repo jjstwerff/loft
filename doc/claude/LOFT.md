@@ -479,6 +479,13 @@ which is **right-associative**: `2 ** 3 ** 2` is `2 ** (3 ** 2) = 512`. Worked g
 `2 * (3 ** 2) == 18` (power tighter than multiply); `x as integer as float` is
 `(x as integer) as float` (`as` left-associative).
 
+**Comparisons do not chain (non-associative).** The comparison operators
+(`==`, `!=`, `<`, `<=`, `>`, `>=`) are **non-associative**: writing two at the same level —
+`a == b == c`, `1 < x < 10` — is a **compile error**, because left-associative grouping would
+make it `(a == b) == c`, silently comparing a *boolean* to the third operand (the classic C
+footgun). Parenthesise if you truly mean the boolean compare (`(a == b) == c`), or combine with
+`&&` for a range test (`1 < x && x < 10`).
+
 Unary operators: `!` (logical not), `-` (negation / sign), `~` (bitwise NOT). A unary prefix
 binds **tighter than every binary operator** — the `-` is the **sign of its operand**, part of
 the primary expression. So `-2 ** 2` is `(-2) ** 2 == 4` (read `-2` as the number
