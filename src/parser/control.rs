@@ -34,6 +34,14 @@ enum SliceGroupKind {
     Repetition,
 }
 
+/// @PLN35 Phase 6.2 — how a repetition separator `( … )` matches: a variant TAG `(Comma)` or a
+/// LEXEME literal `(",")` (a `#lexeme`/scalar equality, so a comma-separated token grammar reads
+/// `(arg)*(",")` instead of needing a dedicated separator variant).
+enum SepSpec {
+    Variant(i32),
+    Lexeme(Value, Type),
+}
+
 /// @PLN85 text-return analysis framework (SHADOW — not yet wired to codegen).
 ///
 /// The ONE property behind the stacked per-shape promotion predicates (2d
@@ -3962,7 +3970,7 @@ impl Parser {
         v: u16,
         elm_size: &Value,
         elm_tp: &Type,
-        pos: i32,
+        pos: &Value,
         lit: &Value,
         lit_tp: &Type,
     ) -> Option<Value> {
@@ -3994,10 +4002,10 @@ impl Parser {
                 continue;
             };
             let disc = self.variant_disc(e_nr, true, vdef, &vname);
-            let tag_elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(pos));
+            let tag_elem = self.read_slice_elem(v, elm_size, elm_tp, pos.clone());
             let tag = self.elem_tag_int(tag_elem);
             let tag_eq = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
-            let field_elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(pos));
+            let field_elem = self.read_slice_elem(v, elm_size, elm_tp, pos.clone());
             let field = self.get_field(vdef, lex_idx, field_elem);
             let field_eq = self.conv_op("==", field, lit.clone(), lex_tp, lit_tp.clone());
             let branch = v_if(tag_eq, field_eq, Value::Boolean(false)); // tag && field
@@ -4007,6 +4015,52 @@ impl Parser {
             });
         }
         acc
+    }
+
+    /// @PLN35 Phase 6.3 — the equality condition for a LITERAL element at `pos` (a position
+    /// VALUE, so callers pass `Int(i)` for a head element or `Int(-(tail_len-j))` for a tail
+    /// element read from the end).  A SCALAR element compares directly; a STRUCT-ENUM element
+    /// matches its `#lexeme` field.  `None` = the literal cannot match this element type.
+    fn build_literal_match(
+        &mut self,
+        v: u16,
+        elm_size: &Value,
+        elm_tp: &Type,
+        pos: &Value,
+        lit: &Value,
+        lit_tp: &Type,
+    ) -> Option<Value> {
+        if let Type::Enum(e_nr, true, _) = elm_tp {
+            self.build_lexeme_literal_match(*e_nr, v, elm_size, elm_tp, pos, lit, lit_tp)
+        } else if Self::slice_literal_compatible(elm_tp, lit_tp) {
+            let read = self.read_slice_elem(v, elm_size, elm_tp, pos.clone());
+            Some(self.conv_op("==", read, lit.clone(), elm_tp.clone(), lit_tp.clone()))
+        } else {
+            None
+        }
+    }
+
+    /// @PLN35 — the diagnostic when a literal slice element cannot match `elm_tp` (raised when
+    /// `build_literal_match` returns `None`): a `#lexeme` hint for a struct-enum, a type mismatch
+    /// for a scalar.
+    fn slice_literal_mismatch(&mut self, elm_tp: &Type, lit_tp: &Type) {
+        if let Type::Enum(e_nr, true, _) = elm_tp {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "{} has no `#lexeme` field a {} literal can match — mark a field `#lexeme` or write the variant pattern",
+                self.data.def(*e_nr).name(),
+                lit_tp.name(&self.data)
+            );
+        } else {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a {} literal cannot match a {} slice element",
+                lit_tp.name(&self.data),
+                elm_tp.name(&self.data)
+            );
+        }
     }
 
     /// @PLN35 — ONE lexical look-ahead (no parser side effects) at a `(` in a slice pattern
@@ -4077,17 +4131,18 @@ impl Parser {
         kind
     }
 
-    /// @PLN35 Phase 6 (L3.4, P-Rep) — a WHOLE-SLICE repetition `[ ( [name:] V )* [, ..rest] ]`
-    /// / `…+`.  The body `V` is one variant of the struct-enum element type; the repetition
-    /// matches the MAXIMAL run of consecutive `V` from the cursor.  A runtime run-loop counts
-    /// that run into `end`; `name` (if given) collects the run `v[0 .. end]` as a FRESH
-    /// `vector<ElemType>` (whole elements, via the shared `materialize_named_rest`), and a
-    /// trailing `..rest` picks up `v[end .. len]`.  `*` matches zero-or-more (so the arm only
-    /// fails a no-rest slice when a non-`V` remains, i.e. `end != len`); `+` additionally
-    /// requires `end > 0`.  The run-loop lives INSIDE the arm condition (it must run before the
-    /// bindings materialise the sub-slices), yielding the match boolean.  Assumes the lexer is
-    /// at the `(` and the repetition is the whole slice content (head empty); consumes through
-    /// `]`.  Per-iteration field capture inside the body is deferred (rejected here).
+    /// @PLN35 Phase 6 (L3.4, P-Rep) — a repetition `[ head…, ( [name:] V )*[(Sep)] [tail…]
+    /// [, ..rest] ]` / `…+`.  The body `V` is one variant of the struct-enum element type; the
+    /// repetition matches the MAXIMAL run of `V` starting at `head_len` (the count of fixed head
+    /// elements already parsed).  A runtime run-loop counts that run into `end`; `name` (if given)
+    /// collects the run `v[head_len .. end]` as a FRESH `vector<ElemType>`.  Fixed LITERAL `tail`
+    /// elements after the group are matched from the END, so the run must reach exactly
+    /// `len - tail_len`; a trailing `..rest` (mutually exclusive with a fixed tail) picks up
+    /// `v[end .. len]`.  `*` = zero-or-more (no-rest ⇒ `end == len - tail_len`); `+` ⇒
+    /// `end > head_len` (≥1 body element).  The run-loop lives INSIDE the arm condition (before
+    /// the bindings materialise), yielding the match boolean.  Assumes the lexer is at the `(`;
+    /// consumes through `]`.  Per-iteration field capture inside the body, and non-literal tail
+    /// elements, are deferred (rejected here).
     #[allow(clippy::too_many_arguments)]
     fn parse_slice_repetition(
         &mut self,
@@ -4095,6 +4150,7 @@ impl Parser {
         v: u16,
         elm_size: &Value,
         elm_tp: &Type,
+        head_len: i32,
         cond: &mut Option<Value>,
         bindings: &mut Vec<Value>,
     ) {
@@ -4165,32 +4221,59 @@ impl Parser {
         // becomes `V (Sep V)*`.  `Sep` is ONE variant, CONSUMED between elements but never
         // captured (`name` collects only the V's — a stride-2 read skips the separators).
         let sep_disc = self.parse_repetition_separator(e_nr);
-        // Optional trailing `, ..` — a bare `..` absorbs the remainder (no capture); `..name`
-        // additionally binds it.  Either way the run is a PREFIX, not the whole slice.
+        // After the group: a comma-separated sequence of fixed LITERAL tail elements (`, ")"`),
+        // then optionally `, ..[name]`.  A bare `..` absorbs the remainder; `..name` binds it.
+        // Tail literals are matched from the END, so they are mutually exclusive with `..rest`.
+        let mut tail_lits: Vec<(Value, Type)> = Vec::new();
         let mut has_rest = false;
         let mut rest_name: Option<String> = None;
-        if self.lexer.has_token(",") && self.lexer.has_token("..") {
-            has_rest = true;
-            rest_name = self.lexer.has_identifier();
+        while self.lexer.has_token(",") {
+            if self.lexer.has_token("..") {
+                has_rest = true;
+                rest_name = self.lexer.has_identifier();
+                break;
+            } else if self.peek_is_slice_literal() {
+                let mut lit = Value::Null;
+                let lit_tp = self.expression(&mut lit);
+                tail_lits.push((lit, lit_tp));
+            } else {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "only literal elements are supported after a repetition `( … )*` (a bind or variant sub-pattern here is not yet supported)"
+                    );
+                }
+                break;
+            }
+        }
+        if has_rest && !tail_lits.is_empty() && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a fixed tail after a repetition cannot combine with `..rest` (yet)"
+            );
         }
         self.lexer.token("]");
+        let tail_len = tail_lits.len() as i32;
 
-        // Runtime run: `end` = the cursor position after the last matched V.
+        // Runtime run: `end` = the cursor position after the last matched V (starts at head_len).
         let end_var = self.create_unique("rep_end", &I32);
         self.vars.defined(end_var);
-        let mut run_ops: Vec<Value> = vec![v_set(end_var, Value::Int(0))];
-        if let Some(sep) = sep_disc {
+        let mut run_ops: Vec<Value> = vec![v_set(end_var, Value::Int(head_len))];
+        if let Some(sep) = &sep_disc {
             // Separated `V (Sep V)*`: match the first V, then loop `(Sep V)` pairs.
-            // First V: `if 0 < len && tag(v[0]) == disc { end = 1 }`.
+            // First V: `if head_len < len && tag(v[head_len]) == disc { end = head_len + 1 }`.
             let first_v = {
                 let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
-                let non_empty = self.conv_op("<", Value::Int(0), lc, I32.clone(), I32.clone());
-                let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(0));
+                let non_empty =
+                    self.conv_op("<", Value::Int(head_len), lc, I32.clone(), I32.clone());
+                let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(head_len));
                 let tag = self.elem_tag_int(elem);
                 let is_v = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
                 v_if(
                     non_empty,
-                    v_if(is_v, v_set(end_var, Value::Int(1)), Value::Null),
+                    v_if(is_v, v_set(end_var, Value::Int(head_len + 1)), Value::Null),
                     Value::Null,
                 )
             };
@@ -4209,9 +4292,7 @@ impl Parser {
                 v_if(short, Value::Break(0), Value::Null)
             };
             let sep_brk = {
-                let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Var(end_var));
-                let tag = self.elem_tag_int(elem);
-                let is_sep = self.cl("OpEqInt", &[tag, Value::Int(sep)]);
+                let is_sep = self.sep_match_cond(sep, v, elm_size, elm_tp, Value::Var(end_var));
                 v_if(is_sep, Value::Null, Value::Break(0))
             };
             let v_brk = {
@@ -4266,37 +4347,51 @@ impl Parser {
             run_ops.push(v_loop(vec![len_brk, tag_brk, step], "rep run"));
         }
 
-        // Match boolean (after the loop): no-rest requires the run to be the WHOLE slice
-        // (`end == len`); `+` additionally requires a non-empty run (`end > 0`).
+        // Match boolean (after the loop): no-rest requires the run to reach exactly the start of
+        // the fixed tail (`end == len - tail_len`); a rest just needs room for the head
+        // (`head_len <= len`).  `+` additionally requires a non-empty run (`end > head_len`).
         let base = if has_rest {
-            Value::Boolean(true)
+            let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
+            self.conv_op("<=", Value::Int(head_len), lc, I32.clone(), I32.clone())
         } else {
             let lc = self.cl("OpLengthVector", &[Value::Var(v)]);
-            self.cl("OpEqInt", &[Value::Var(end_var), lc])
+            let boundary = self.conv_op("-", lc, Value::Int(tail_len), I32.clone(), I32.clone());
+            self.cl("OpEqInt", &[Value::Var(end_var), boundary])
         };
         let match_bool = if plus {
-            // `end > 0`, written `0 < end` — `>` has no Int form (desugars to a swapped `<`).
-            let gt0 = self.conv_op(
+            // `end > head_len`, written `head_len < end` — `>` has no Int form (swapped `<`).
+            let gt = self.conv_op(
                 "<",
-                Value::Int(0),
+                Value::Int(head_len),
                 Value::Var(end_var),
                 I32.clone(),
                 I32.clone(),
             );
-            v_if(base, gt0, Value::Boolean(false)) // base && end > 0
+            v_if(base, gt, Value::Boolean(false))
         } else {
             base
         };
         run_ops.push(match_bool);
-        let rep_cond = v_block(run_ops, Type::Boolean, "rep cond");
+        let mut arm_cond = v_block(run_ops, Type::Boolean, "rep cond");
+        // AND the fixed tail-literal conditions (matched from the END, negative index) AFTER the
+        // run boolean — its `end == len - tail_len` has already guaranteed the slice is long
+        // enough, and `&&` short-circuits so a too-short slice never reads out of range.
+        for (j, (lit, lit_tp)) in tail_lits.clone().into_iter().enumerate() {
+            let pos = Value::Int(-(tail_len - j as i32));
+            match self.build_literal_match(v, elm_size, elm_tp, &pos, &lit, &lit_tp) {
+                Some(tc) => arm_cond = v_if(arm_cond, tc, Value::Boolean(false)),
+                None if !self.first_pass => self.slice_literal_mismatch(elm_tp, &lit_tp),
+                None => {}
+            }
+        }
         *cond = match cond.take() {
-            Some(existing) => Some(v_if(existing, rep_cond, Value::Boolean(false))),
-            None => Some(rep_cond),
+            Some(existing) => Some(v_if(existing, arm_cond, Value::Boolean(false))),
+            None => Some(arm_cond),
         };
 
         // Captures materialise AFTER the condition set `end` (bindings run once the arm commits).
-        // A SEPARATED run puts the V's at every other index (V Sep V Sep …), so the capture reads
-        // `v[0 .. end]` with a stride of 2 to collect only the V's; a bare run uses stride 1.
+        // `name` = the run `v[head_len .. end]`; a SEPARATED run puts the V's at every other index
+        // (V Sep V Sep …), so it reads with a stride of 2 to skip separators (a bare run: 1).
         let cap_step = if sep_disc.is_some() { 2 } else { 1 };
         let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
         if let Some(name) = cap_name {
@@ -4309,7 +4404,7 @@ impl Parser {
                     elm_size,
                     cap_var,
                     &vec_tp,
-                    Value::Int(0),
+                    Value::Int(head_len),
                     Value::Var(end_var),
                     cap_step,
                     bindings,
@@ -4336,14 +4431,21 @@ impl Parser {
         }
     }
 
-    /// @PLN35 Phase 6.2 — parse an OPTIONAL separator group `(Sep)` following a repetition's
-    /// `*` / `+`.  `Sep` is ONE variant of the element enum, consumed BETWEEN elements but never
-    /// captured.  Returns its discriminant, or `None` when no `(` follows (a bare repetition).
-    fn parse_repetition_separator(&mut self, e_nr: u32) -> Option<i32> {
+    /// @PLN35 Phase 6.2 — parse an OPTIONAL separator group after a repetition's `*` / `+`,
+    /// consumed BETWEEN elements but never captured.  It is a variant TAG `(Comma)` OR a LEXEME
+    /// literal `(",")` (a comma-separated token grammar → `(arg)*(",")`).  `None` = no `(` follows.
+    fn parse_repetition_separator(&mut self, e_nr: u32) -> Option<SepSpec> {
         if !self.lexer.peek_token("(") {
             return None;
         }
         self.lexer.token("(");
+        if self.peek_is_slice_literal() {
+            // Lexeme separator `(",")` — matched by `#lexeme`/scalar equality per element.
+            let mut lit = Value::Null;
+            let lit_tp = self.expression(&mut lit);
+            self.lexer.token(")");
+            return Some(SepSpec::Lexeme(lit, lit_tp));
+        }
         let sname = self.lexer.has_identifier().unwrap_or_default();
         let real = if self.lexer.has_token("::") {
             self.lexer.has_identifier().unwrap_or_else(|| sname.clone())
@@ -4387,7 +4489,29 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        Some(disc)
+        Some(SepSpec::Variant(disc))
+    }
+
+    /// @PLN35 Phase 6.2 — the boolean "does `v[pos]` match the separator" for a repetition
+    /// separator: a variant TAG test, or a `#lexeme`/scalar equality for a lexeme separator.
+    fn sep_match_cond(
+        &mut self,
+        sep: &SepSpec,
+        v: u16,
+        elm_size: &Value,
+        elm_tp: &Type,
+        pos: Value,
+    ) -> Value {
+        match sep {
+            SepSpec::Variant(disc) => {
+                let elem = self.read_slice_elem(v, elm_size, elm_tp, pos);
+                let tag = self.elem_tag_int(elem);
+                self.cl("OpEqInt", &[tag, Value::Int(*disc)])
+            }
+            SepSpec::Lexeme(lit, lit_tp) => self
+                .build_literal_match(v, elm_size, elm_tp, &pos, lit, lit_tp)
+                .unwrap_or(Value::Boolean(false)),
+        }
     }
 
     /// @PLN35 Phase 4.3 — a WHOLE-SLICE multi-element alternation
@@ -5472,10 +5596,11 @@ impl Parser {
                     if self.lexer.has_token("]") {
                         break;
                     }
-                    // @PLN35 — classify a leading whole-slice `( … )` group ONCE per element
-                    // (a second look-ahead over the same region corrupts the lexer replay
-                    // buffer).  Only meaningful at a head-empty `(`; `Other` everywhere else.
-                    let group_kind = if !has_rest && head.is_empty() && self.lexer.peek_token("(") {
+                    // @PLN35 — classify a `( … )` group ONCE per element (a second look-ahead
+                    // over the same region corrupts the lexer replay buffer).  A `Repetition`
+                    // may sit MID-slice (fixed head before it); an `Alt` is whole-slice only, so
+                    // its branch keeps the `head.is_empty()` guard.
+                    let group_kind = if !has_rest && self.lexer.peek_token("(") {
                         self.peek_group_kind()
                     } else {
                         SliceGroupKind::Other
@@ -5557,17 +5682,40 @@ impl Parser {
                         elem_conds.append(&mut sub_conds);
                         head.push("_".to_string());
                     } else if group_kind == SliceGroupKind::Repetition {
-                        // @PLN35 Phase 6 — a WHOLE-SLICE repetition `[ ( [name:] V )* [, ..rest] ]`
-                        // / `…+`: match the maximal leading run of `V`, collect it (named), then
-                        // `..rest`.  Builds the arm `cond` (a run-loop that yields the boolean) +
-                        // bindings itself and consumes through `]`, so break the element loop.
+                        // @PLN35 Phase 6 — a repetition `[ head…, ( [name:] V )*[(Sep)] [tail…]
+                        // [, ..rest] ]` / `…+`.  `head` is any fixed prefix already parsed (its
+                        // binds/conds are in `bindings`/`elem_conds`); the run starts at `head_len`
+                        // and any fixed `tail` after the group is matched from the END.
+                        // `parse_slice_repetition` builds the run-loop cond + collection and
+                        // consumes through `]`, so break the element loop.
                         if let Type::Enum(elm_e_nr, true, _) = &elm_tp {
                             let e_nr = *elm_e_nr;
+                            let head_len = head.len() as i32;
+                            // Bind any BARE-NAME head element (a variant sub-pattern / literal
+                            // already emitted its own bind/cond and left a "_").  These are safe:
+                            // the arm's `cond` requires `len >= head_len` before bindings run.
+                            for (i, name) in head.iter().enumerate() {
+                                if name == "_" {
+                                    continue;
+                                }
+                                let bind_nr =
+                                    self.vars.add_variable(name, &elm_tp, &mut self.lexer);
+                                self.vars.defined(bind_nr);
+                                let val = self.read_slice_elem(
+                                    v,
+                                    &elm_size,
+                                    &elm_tp,
+                                    Value::Int(i as i32),
+                                );
+                                bindings.push(v_set(bind_nr, val));
+                                self.mark_slice_element_view(bind_nr, &elm_tp, borrow_src);
+                            }
                             self.parse_slice_repetition(
                                 e_nr,
                                 v,
                                 &elm_size,
                                 &elm_tp,
+                                head_len,
                                 &mut cond,
                                 &mut bindings,
                             );
@@ -5583,7 +5731,7 @@ impl Parser {
                             self.lexer.token("(");
                         }
                         break;
-                    } else if group_kind == SliceGroupKind::Alt {
+                    } else if group_kind == SliceGroupKind::Alt && head.is_empty() {
                         // @PLN35 Phase 4.3 / 5 — a WHOLE-SLICE MULTI-element alternation
                         // `[ (A B | C) [, ..rest] ]` OR an OPTIONAL group `[ (a)? [, ..rest] ]`
                         // (a degenerate alternation `(a | ε)`).  Predictive dispatch on the leading
@@ -5653,39 +5801,19 @@ impl Parser {
                         let position = head.len() as i32;
                         let mut lit = Value::Null;
                         let lit_tp = self.expression(&mut lit);
-                        if let Type::Enum(e_nr, true, _) = &elm_tp {
-                            let e_nr = *e_nr;
-                            match self.build_lexeme_literal_match(
-                                e_nr, v, &elm_size, &elm_tp, position, &lit, &lit_tp,
-                            ) {
-                                Some(cond) => elem_conds.push(cond),
-                                None => {
-                                    if !self.first_pass {
-                                        diagnostic!(
-                                            self.lexer,
-                                            Level::Error,
-                                            "{} has no `#lexeme` field a {} literal can match — mark a field `#lexeme` or write the variant pattern",
-                                            self.data.def(e_nr).name(),
-                                            lit_tp.name(&self.data)
-                                        );
-                                    }
-                                }
+                        match self.build_literal_match(
+                            v,
+                            &elm_size,
+                            &elm_tp,
+                            &Value::Int(position),
+                            &lit,
+                            &lit_tp,
+                        ) {
+                            Some(c) => elem_conds.push(c),
+                            None if !self.first_pass => {
+                                self.slice_literal_mismatch(&elm_tp, &lit_tp)
                             }
-                        } else {
-                            if !self.first_pass && !Self::slice_literal_compatible(&elm_tp, &lit_tp)
-                            {
-                                diagnostic!(
-                                    self.lexer,
-                                    Level::Error,
-                                    "a {} literal cannot match a {} slice element",
-                                    lit_tp.name(&self.data),
-                                    elm_tp.name(&self.data)
-                                );
-                            }
-                            let read =
-                                self.read_slice_elem(v, &elm_size, &elm_tp, Value::Int(position));
-                            let eq = self.conv_op("==", read, lit, elm_tp.clone(), lit_tp.clone());
-                            elem_conds.push(eq);
+                            None => {}
                         }
                         head.push("_".to_string());
                     } else if let Some(id) = self.lexer.has_identifier() {

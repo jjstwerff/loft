@@ -59,6 +59,19 @@ flag (not serialised). Guards `tests/scripts/35l-literal-slice-elements.loft`, `
 **#557** — pre-existing native text-arm-unification bug (a `vector<text>` subject with mixed
 interpolation/literal returns) surfaced while testing (NOT caused by literal elements).
 
+**MID-SLICE repetition + lexeme separators — DONE, both backends — the parser-combinator keystone.**
+A repetition may now sit BETWEEN a fixed head and a fixed literal tail:
+`[ Ident { name }, "(", (arg: Ident)*(","), ")" ]` reads exactly like a grammar rule for a call.
+`parse_slice_repetition` takes `head_len`; the run starts there, collects `v[head_len..end]`, and a
+fixed LITERAL tail is matched from the END (negative index) so the run must reach exactly
+`len - tail_len` (`end == len - tail_len`; `+` ⇒ `end > head_len`; a rest just needs `head_len <= len`).
+Head bare-names bind before the group; head sub-patterns/literals bind inline. Separators are now a
+`SepSpec` — a variant TAG `(Comma)` OR a LEXEME literal `(",")` — via `sep_match_cond`, so a
+comma-separated token grammar needs no dedicated separator variant. Deferred: non-literal tail
+elements (bind / variant sub-pattern), and a fixed tail + `..rest` together. Guard
+`tests/scripts/35m-mid-slice-repetition.loft` (bracketed lists, function calls, callee-name bind,
+value-by-index, `+`; cross-mode + leak-checked).
+
 **Phase 5 — DONE (optional), both backends.** `(a)?` = degenerate alternation `(a | ε)`: the
 empty branch always matches so the optional never fails; present → bind + advance cursor by `a`'s
 width, absent → ε commits with cursor unmoved and `a`'s captures read null (option-promoted by the
@@ -74,8 +87,8 @@ per §3a: step 1 `read_slice_elem` seam (byte-identical refactor), step 2–4 `p
 + `peek_multi_element_alt` lexical lookahead, step 5 `materialize_named_rest(lo, hi)` (extracted,
 shared with the fixed-arity path). Guards: `tests/scripts/35g-multi-element-alternation.loft`.
 **Next: the scalar bare-postfix `name:Type*` repetition (the last gap for the `vector<integer>`
-golden — literal heads already work via 6.3), per-iteration field capture, mid-slice repetition;
-then Phase 7 (iterator
+golden — literal heads already work via 6.3), per-iteration field capture, non-literal tail
+elements after a repetition; then Phase 7 (iterator
 input — the accumulating `read(pos)`), then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook)
 waits on PC.**
 
