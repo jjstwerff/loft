@@ -33,6 +33,18 @@ tables.
   [plans/finished/22-mutable-closures/](plans/finished/22-mutable-closures).
   Regression guard: `tests/scripts/56-closures.loft::test_capture_timing`.
 
+- **@PLN35 Phase 7 — streaming `match` over an `iterator<T>` is EAGER (materialise-then-match).**
+  `match some_iter { … }` pulls the whole coroutine into a buffer `vector<T>` (behind the Cursor
+  seam), then runs the normal vector-match.  Consequences: (1) the source must be FINITE — an
+  unbounded iterator loops forever pulling (caught by `loft --timeout`, not a silent hang); (2) a
+  side-effecting `next()` is UB-by-contract (the pull order is the buffer order); (3) the whole
+  stream is buffered, so it is not memory-lazy.  A truly LAZY per-read pull + a per-match
+  `max_lookahead` bound was scoped and DEFERRED: it needs `read_slice_elem`/`cursor_len` to pull
+  incrementally AND the 11 `len`-bounds reframed to `has(pos)` (else `cursor_len` still exhausts) —
+  a large refactor whose only payoff (bounded-pattern matching over an infinite source) has no
+  consumer yet.  Build it when one appears; today collect explicitly for an unbounded source.
+  Guard `tests/scripts/35p-iterator-match.loft`.
+
 ---
 
 ## Native build — same-symbol cross-package `#native` collision (fix deferred → @PLN26)

@@ -962,9 +962,18 @@ is fed.** So:
    int, but it freed the STRING for a `text` element — the null-value bug).  Supported set now:
    scalar / text / struct-enum; plain enum / vector / tuple ride a different `next` channel (still
    gated).  Guard broadened in `35p-iterator-match.loft`.
-2c. LAZY per-read pull (read_slice_elem streaming dispatch — avoid full exhaustion) + `max_lookahead`
-   (bound an unbounded iterator so an always-matching body errors instead of hanging).  Behind the
-   same seam; the eager pull is correct for bounded iterators today.
+2c. **DEFERRED by decision (dogfood).** LAZY per-read pull + per-match `max_lookahead`.  Assessed:
+   the lazy read alone buys nothing because almost every pattern queries `cursor_len` (the fixed
+   gate, the `end == len - tail_len` gate, `..rest`), which on a stream must exhaust — so it also
+   needs the 11 `len`-bounds reframed to `has(pos)`, a large second refactor whose only payoff
+   (matching a bounded pattern over an INFINITE source) has no consumer.  The infinite-iterator
+   hang is already caught by `loft --timeout`.  Documented in CAVEATS.md § "@PLN35 Phase 7 —
+   streaming `match` … is EAGER".  Build the lazy path when a real consumer needs unbounded-stream
+   backtracking.
+
+**Phase 7 is functionally COMPLETE for real use** — `match <iterator<scalar|text|struct-enum>> { … }`
+works on both backends, leak-clean, streaming stays behind the Cursor seam, and the plan's 2 opcodes
+were proven unnecessary.  What remains of @PLN35 overall is the **PC1–PC5 sub-rule layer**.
 3. (folded into 2) — no separate opcode/State work needed.
 
 **Feasibility confirmed:** loft coroutines expose explicit `next(gen)` / `exhausted(gen)`
