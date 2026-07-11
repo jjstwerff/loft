@@ -2064,3 +2064,36 @@ Never, for tuple variants (a permanent non-goal).  The PEG readability bar is a 
 @PLN35's per-operator syntax choices (e.g. how a repetition separator is spelled) — each decided
 against "reads like grammar" in
 [plans/35-match-peg/FORMAL-DESIGN.md](plans/35-match-peg/FORMAL-DESIGN.md).
+## C90 — Each nullable scalar reserves ONE bit-pattern for null (the in-band sentinel residual; accepted, frozen)
+
+**Catalogue:** @F1 (null / Optional), @F3 (scalar types), @F4 (width integers). Closes the @PLN102 pre-freeze [null-model keystone](plans/102-stability-contract/keystone-null-model.md) (option B); the sibling of [C85](#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--) (overflow yields the sentinel) and [C80](#c80--the-spreadsheet-fault-model-nothing-stops-a-running-calculation) (the spreadsheet model).
+
+### Question
+
+`null` for a scalar is stored **in-band** — a single reserved bit-pattern in the value slot itself, not an out-of-band tag (formal/types.md § null-representation). This is zero-overhead (a `τ?` is the same width as `τ`; a `vector<integer?>` is as dense as `vector<integer>`), but it costs one representable value per type: the reserved pattern cannot also be stored as *data*. Before freezing the contract, should loft **retire** the sentinel — give nullable scalars a tagged representation (option A) so no value is lost — or **keep** it and confront the residual (option B)?
+
+The reserved value per type (frozen by this decision):
+
+| type | reserved null value |
+|---|---|
+| `integer` (8-byte) | `i64::MIN` (`-9223372036854775808`); the value range is `[i64::MIN+1, i64::MAX]` |
+| narrow `u8`/`i8`/`u16`/`i16`/`i32` | the top stored width value (`u8?` → `255`), excluded from the `τ?` non-null range |
+| `boolean` | `255` (three-state false/true/null — [C73](#c73--boolean-is-three-state-false--true--null--is-raw-truthiness-coerces)) |
+| `character` | codepoint `0` (NUL, `'\0'`) |
+| `float` / `single` | a reserved `NaN` (`+inf`/`-inf` are **real** values) |
+| a reference | out-of-band `nullref` — **no** collision (a reserved `DbRef`) |
+| a struct `S` in a `vector` | the tagged `__nullable<S>` enum — **no** collision |
+
+### Evaluation
+
+**Keep it (option B).** Option A (a tag bit / tagged rep for every nullable scalar) buys back the one lost value per type, but at a cost the whole stack pays forever: a `τ?` grows wider than `τ`, `vector<τ?>` loses its density, the store layout gains per-field tags (revising L-Null, the layout hash, @PLN97's golden layout, and the eval-stack/op rewrites on both backends), and materialization pressure returns — the exact machinery @PLN25 removed. The residual it removes is *bounded and cheap to live with*:
+
+- **References and struct-in-vector — the aggregate cases — already pay ZERO cost**, out-of-band by construction (`nullref`, `__nullable<S>`). The residual is *only* the scalar leaves.
+- **The lost value is one extreme, unreachable in normal data.** `i64::MIN` (use `long`/full-range or the sentinel is off by one from your data), NUL as a data character, a `u8?` needing to store exactly `255` — all rare; the everyday range is intact. `not null` reclaims the value where a field genuinely needs it.
+- **The three silent hazards the sentinel *could* cause are now guarded**, which is what makes the residual merely a *storage* limitation rather than a correctness one: null comparison is uniform across every scalar (D-op-null-1 — `null == null` true, null orders low); an op whose result *lands on* the sentinel reports rather than silently masking (D-op-null-2 — shift/cast collisions raise `Shift/CastOutOfRange` like `÷0`); and the stdlib functions that can legitimately produce null on a reachable path are typed `τ?` so the type does not lie (`find`/`rfind`/`min_of`/`max_of` — keystone step 4).
+
+This is the same taste as C85: pay a bounded, documented soundness edge to keep the common path zero-overhead, rather than tax every value to erase an extreme almost no program stores.
+
+### Decision
+
+**Each nullable scalar keeps its single in-band reserved value; the specific pattern per type (table above) is part of the contract-1 freeze.** A `τ?` is bit-identical in width to `τ`; the reserved value is observable and excluded from the base type's non-null range (`(E-Null)`). The residual — a nullable scalar cannot store its one reserved value as data — is an accepted, documented limitation, not a deviation to close. The collision sites that could *silently produce* a sentinel are guarded (D-op-null-1/2 CLOSED); reachable-fault stdlib returns are honest `τ?` (step 4). Golden pin: `tests/scripts/pln102-null-residual-golden.loft` freezes each reserved value as a boundary (the pattern reads null; an adjacent value does not) on both backends.
