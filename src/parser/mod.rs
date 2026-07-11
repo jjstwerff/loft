@@ -2081,6 +2081,23 @@ impl Parser {
             )
         {
             let nm = inner.name(&self.data);
+            // @PLN102 (N-Store) Phase 1 — the warn/error split (types.md § Null-flow, (N-Store)).
+            // WARN (a nudge; the store PROCEEDS — `convert` peels the Optional and the slot holds
+            // the null sentinel) where τ reserves its null DISTINCTLY even in the non-null form
+            // (full `integer`, `float`, `single`, `boolean`, `character`, `text`, refs, aggregates).
+            // Keep the hard ERROR only for a NARROW width (`byte_width < 8`), whose non-null form
+            // spends the whole width on real values, so a null there would silently corrupt.
+            // Gate OFF → the current uniform hard error (this branch stays byte-identical).
+            let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            if crate::keys::nullflow_enabled() && !narrow {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?? <default>` or `match` if that is not intended",
+                    target_tp.name(&self.data)
+                );
+                return false; // store proceeds — `convert` peels the Optional and stores the sentinel
+            }
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -2100,6 +2117,18 @@ impl Parser {
             && Self::is_non_null_scalar(target_tp)
         {
             let nm = target_tp.name(&self.data);
+            // @PLN102 (N-Store) Phase 1 — same warn/error split as the DN3 branch: a bare `null`
+            // into a NON-narrow scalar target warns (the slot reserves its null distinctly, so it
+            // holds null and reads back null); a NARROW width keeps the hard error (no room).
+            let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
+            if crate::keys::nullflow_enabled() && !narrow {
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "`null` is stored into {what} of the non-null scalar type `{nm}` — the slot holds null; declare it `{nm}?` to make that explicit"
+                );
+                return false;
+            }
             diagnostic!(
                 self.lexer,
                 Level::Error,
