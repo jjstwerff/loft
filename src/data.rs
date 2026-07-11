@@ -2281,6 +2281,13 @@ pub struct Attribute {
     /// keeps its links instead of losing them with the parser side-maps.  Empty = an
     /// unlinked member.
     pub links: Vec<String>,
+    /// @PLN35 — the field marked `#lexeme` on a token-enum variant carries the token's surface
+    /// text, so a bare literal in a slice pattern (`[ "fn", … ]`) matches against it (see
+    /// `parse_vector_match`'s literal-element path).  A PARSE-TIME marker only — set while
+    /// parsing the enum, consumed when a pattern desugars; it is not written to the IR store
+    /// (a round-trip defaults it to `false`, which is fine: patterns compile in-session, after
+    /// the enum is parsed and before any store handoff).
+    pub lexeme: bool,
 }
 
 impl Debug for Attribute {
@@ -3484,6 +3491,7 @@ impl Data {
             alias_d_nr: u32::MAX,
             assigned_lambda_d_nr: u32::MAX,
             links: Vec::new(),
+            lexeme: false,
         };
         let next_attr = self.def(on_def).attributes.len();
         let def = &mut self.definitions[on_def as usize];

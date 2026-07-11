@@ -3919,13 +3919,96 @@ impl Parser {
         bindings.push(mat);
     }
 
-    /// @PLN35 Phase 4.3 — lexical lookahead (no parser side effects) at a `(` in a slice
-    /// pattern: does the FIRST alternation branch consume MORE THAN ONE element?  A
-    /// single-element branch is `Variant [::Variant] [{ … }]` immediately followed by `|` or
-    /// `)` (the Phase-4.1 fixed-position path handles it).  A multi-element branch is a
-    /// SEQUENCE — another variant name follows — which needs the cursor path.  Skips the first
-    /// branch element (variant + a balanced `{ … }`) via `cont()`/`revert()` and peeks whether
-    /// another identifier follows.
+    /// @PLN35 Phase 6.3 — is the next token the start of a LITERAL slice element (`[ 1, … ]`,
+    /// `[ "kw", … ]`, `[ 'c', … ]`, `[ -1, … ]`)?  A pure peek — consumes nothing.
+    fn peek_is_slice_literal(&self) -> bool {
+        matches!(
+            self.lexer.peek().has,
+            LexItem::Integer(..)
+                | LexItem::Long(_)
+                | LexItem::Float(_)
+                | LexItem::Single(_)
+                | LexItem::CString(_)
+                | LexItem::Character(_)
+        ) || self.lexer.peek_token("-")
+    }
+
+    /// @PLN35 Phase 6.3 — may a literal of `lit_tp` match a slice element of `elm_tp`?  Same
+    /// category (numeric / text / character / boolean), allowing the int→float widening the
+    /// expression parser already applies to a numeric literal.
+    fn slice_literal_compatible(elm_tp: &Type, lit_tp: &Type) -> bool {
+        matches!(
+            (elm_tp.base(), lit_tp.base()),
+            (Type::Integer(_), Type::Integer(_))
+                | (Type::Float, Type::Float | Type::Integer(_))
+                | (Type::Single, Type::Single | Type::Float | Type::Integer(_))
+                | (Type::Text(_), Type::Text(_))
+                | (Type::Character, Type::Character)
+                | (Type::Boolean, Type::Boolean)
+        )
+    }
+
+    /// @PLN35 Phase 6.3 (`#lexeme`) — desugar a LITERAL slice element `[ "fn", … ]` on a
+    /// struct-enum (token) element into a match against the `#lexeme` field.  A bare `"fn"`
+    /// matches iff the element is SOME variant whose `#lexeme` field (compatible with the
+    /// literal's type) equals the literal — an OR over the eligible variants of
+    /// `tag(v[pos]) == disc && v[pos].<lexeme> == lit`.  The field read sits inside the tag
+    /// test's `then`, so a non-matching variant never reads at the wrong offset.  Returns the
+    /// condition, or `None` if the enum has no `#lexeme` field the literal can match.
+    #[allow(clippy::too_many_arguments)]
+    fn build_lexeme_literal_match(
+        &mut self,
+        e_nr: u32,
+        v: u16,
+        elm_size: &Value,
+        elm_tp: &Type,
+        pos: i32,
+        lit: &Value,
+        lit_tp: &Type,
+    ) -> Option<Value> {
+        let variant_names: Vec<String> = self
+            .data
+            .def(e_nr)
+            .attributes()
+            .iter()
+            .map(|a| a.name.clone())
+            .collect();
+        let mut acc: Option<Value> = None;
+        for vname in variant_names {
+            let vdef = self.data.variant_of(e_nr, &vname);
+            if vdef == u32::MAX {
+                continue;
+            }
+            // The variant's `#lexeme` field (skip attr 0, the discriminant) of a type the
+            // literal can match.
+            let lex = self
+                .data
+                .def(vdef)
+                .attributes()
+                .iter()
+                .enumerate()
+                .skip(1)
+                .find(|(_, a)| a.lexeme && Self::slice_literal_compatible(&a.typedef, lit_tp))
+                .map(|(i, a)| (i, a.typedef.clone()));
+            let Some((lex_idx, lex_tp)) = lex else {
+                continue;
+            };
+            let disc = self.variant_disc(e_nr, true, vdef, &vname);
+            let tag_elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(pos));
+            let tag = self.elem_tag_int(tag_elem);
+            let tag_eq = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
+            let field_elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(pos));
+            let field = self.get_field(vdef, lex_idx, field_elem);
+            let field_eq = self.conv_op("==", field, lit.clone(), lex_tp, lit_tp.clone());
+            let branch = v_if(tag_eq, field_eq, Value::Boolean(false)); // tag && field
+            acc = Some(match acc {
+                Some(a) => v_if(a, Value::Boolean(true), branch), // a || branch
+                None => branch,
+            });
+        }
+        acc
+    }
+
     /// @PLN35 — ONE lexical look-ahead (no parser side effects) at a `(` in a slice pattern
     /// that classifies the group in a single save/revert.  (Two sequential peeks over the same
     /// region corrupt the lexer's replay buffer — a later peek reads stale state — so all the
@@ -5559,6 +5642,52 @@ impl Parser {
                             self.lexer.token("("); // consume to make progress
                             break;
                         }
+                    } else if !has_rest && self.peek_is_slice_literal() {
+                        // @PLN35 Phase 6.3 (P-Lit) — a LITERAL head element `[ 1, … ]` /
+                        // `[ "kw", … ]`.  On a SCALAR element it matches by direct EQUALITY
+                        // against `v[pos]`.  On a STRUCT-ENUM element (a token stream) it matches
+                        // against the variant's `#lexeme` field — so `"fn"` reads like the
+                        // grammar, standing in for `Keyword { name: "fn" }`.  A "_" placeholder
+                        // keeps following bare-name indices AND the length gate aligned, and the
+                        // condition is AND'd into the arm like a variant tag test.  Head only.
+                        let position = head.len() as i32;
+                        let mut lit = Value::Null;
+                        let lit_tp = self.expression(&mut lit);
+                        if let Type::Enum(e_nr, true, _) = &elm_tp {
+                            let e_nr = *e_nr;
+                            match self.build_lexeme_literal_match(
+                                e_nr, v, &elm_size, &elm_tp, position, &lit, &lit_tp,
+                            ) {
+                                Some(cond) => elem_conds.push(cond),
+                                None => {
+                                    if !self.first_pass {
+                                        diagnostic!(
+                                            self.lexer,
+                                            Level::Error,
+                                            "{} has no `#lexeme` field a {} literal can match — mark a field `#lexeme` or write the variant pattern",
+                                            self.data.def(e_nr).name(),
+                                            lit_tp.name(&self.data)
+                                        );
+                                    }
+                                }
+                            }
+                        } else {
+                            if !self.first_pass && !Self::slice_literal_compatible(&elm_tp, &lit_tp)
+                            {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "a {} literal cannot match a {} slice element",
+                                    lit_tp.name(&self.data),
+                                    elm_tp.name(&self.data)
+                                );
+                            }
+                            let read =
+                                self.read_slice_elem(v, &elm_size, &elm_tp, Value::Int(position));
+                            let eq = self.conv_op("==", read, lit, elm_tp.clone(), lit_tp.clone());
+                            elem_conds.push(eq);
+                        }
+                        head.push("_".to_string());
                     } else if let Some(id) = self.lexer.has_identifier() {
                         if has_rest {
                             tail.push(id);
@@ -5566,15 +5695,15 @@ impl Parser {
                             head.push(id);
                         }
                     } else {
-                        // Unrecognized element token (a literal, `{`, an unsupported tail
-                        // sub-pattern, …). None of the branches above consumed anything, so
-                        // this MUST break to make progress — otherwise the loop spins forever
-                        // on the same token in the first pass (where diagnostics are silent).
+                        // Unrecognized element token (`{`, an unsupported tail sub-pattern, …).
+                        // None of the branches above consumed anything, so this MUST break to make
+                        // progress — otherwise the loop spins forever on the same token in the
+                        // first pass (where diagnostics are silent).
                         if !self.first_pass {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,
-                                "expected identifier or '..' in slice pattern"
+                                "expected identifier, literal, or '..' in slice pattern"
                             );
                         }
                         break;

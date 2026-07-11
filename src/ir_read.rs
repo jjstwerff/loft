@@ -692,6 +692,8 @@ fn read_attribute(stores: &Stores, r: Record) -> Attribute {
             .split_whitespace()
             .map(str::to_string)
             .collect(),
+        // @PLN35 — `#lexeme` is a parse-time-only marker, not stored; defaults to false.
+        lexeme: false,
     }
 }
 

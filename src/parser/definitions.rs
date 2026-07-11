@@ -284,6 +284,27 @@ impl Parser {
                         .set_attr_value(v_nr, e_attr, Value::Enum(nr + 1, u16::MAX));
                 }
                 loop {
+                    // @PLN35 — `#lexeme` marks the field carrying this token variant's surface
+                    // text, so a bare literal in a slice pattern (`[ "fn", … ]`) matches against
+                    // it.  It precedes the field name: `Keyword { #lexeme name: text }`.
+                    let is_lexeme = if self.lexer.has_token("#") {
+                        match self.lexer.has_identifier().as_deref() {
+                            Some("lexeme") => true,
+                            other => {
+                                if !self.first_pass {
+                                    diagnostic!(
+                                        self.lexer,
+                                        Level::Error,
+                                        "unknown field annotation `#{}` (expected `#lexeme`)",
+                                        other.unwrap_or("")
+                                    );
+                                }
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
                     let Some(a_name) = self.lexer.has_identifier() else {
                         diagnostic!(self.lexer, Level::Error, "Expect attribute");
                         return true;
@@ -298,6 +319,12 @@ impl Parser {
                     }
                     self.lexer.token(":");
                     self.parse_field(v_nr, &a_name);
+                    if is_lexeme {
+                        let idx = self.data.attr(v_nr, &a_name);
+                        if idx != usize::MAX {
+                            self.data.definitions[v_nr as usize].attributes[idx].lexeme = true;
+                        }
+                    }
                     // accept trailing comma after the last field,
                     // matching struct parsing (line 1380).
                     if !self.lexer.has_token(",") || self.lexer.peek_token("}") {

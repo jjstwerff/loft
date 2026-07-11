@@ -918,6 +918,8 @@ fn attribute_from_parsed(p: &Parsed) -> Result<Attribute, TypeDecodeError> {
             Ok(f) => as_str(f)?.split_whitespace().map(str::to_string).collect(),
             Err(_) => Vec::new(),
         },
+        // @PLN35 — `#lexeme` is a parse-time-only marker, not stored; defaults to false.
+        lexeme: false,
     })
 }
 
@@ -2069,6 +2071,7 @@ mod tests {
             alias_d_nr: 42,
             assigned_lambda_d_nr: u32::MAX,
             links: vec!["stats#read".to_string(), "stats#update".to_string()],
+            lexeme: false,
         }
     }
 
@@ -2102,6 +2105,7 @@ mod tests {
             alias_d_nr: u32::MAX,
             assigned_lambda_d_nr: u32::MAX,
             links: Vec::new(),
+            lexeme: false,
         };
         let json = attribute_to_json(&a);
         let back = attribute_from_json(&json).expect("decode");
@@ -2126,6 +2130,7 @@ mod tests {
             alias_d_nr: 0,
             assigned_lambda_d_nr: 0,
             links: Vec::new(),
+            lexeme: false,
         };
         assert_eq!(
             attribute_to_json(&a),
@@ -2174,6 +2179,7 @@ mod tests {
                     alias_d_nr: u32::MAX,
                     assigned_lambda_d_nr: u32::MAX,
                     links: Vec::new(),
+                    lexeme: false,
                 },
                 Attribute {
                     name: "y".to_string(),
@@ -2190,6 +2196,7 @@ mod tests {
                     alias_d_nr: u32::MAX,
                     assigned_lambda_d_nr: u32::MAX,
                     links: Vec::new(),
+                    lexeme: false,
                 },
             ],
             attr_names: std::collections::HashMap::new(),

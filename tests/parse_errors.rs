@@ -1717,6 +1717,30 @@ fn alternation_bad_variant() {
         .error("'Nope' is not a variant of Tk at alternation_bad_variant:2:61");
 }
 
+// @PLN35 Phase 6.3 — a literal slice element on a struct-enum with no `#lexeme` field is a
+// clean error (not a panic): mark a field `#lexeme` or write the variant pattern.
+#[test]
+fn lexeme_missing() {
+    code!("enum Token { Kw { name: text }, Num { value: integer } }\nfn f(v: vector<Token>) -> integer { match v { [ \"x\" ] => 1, _ => -1 } }")
+        .error("Token has no `#lexeme` field a text literal can match — mark a field `#lexeme` or write the variant pattern at lexeme_missing:2:54");
+}
+
+// A literal whose type cannot match the (scalar) slice element type is rejected.
+#[test]
+fn slice_literal_type_mismatch() {
+    code!("fn f(v: vector<integer>) -> integer { match v { [ \"x\" ] => 1, _ => -1 } }").error(
+        "a text literal cannot match a integer slice element at slice_literal_type_mismatch:1:56",
+    );
+}
+
+// An unknown `#`-annotation on an enum field is a clean error.
+#[test]
+fn unknown_field_annotation() {
+    code!("enum Tok { V { #bogus f: text } }").error(
+        "unknown field annotation `#bogus` (expected `#lexeme`) at unknown_field_annotation:1:24",
+    );
+}
+
 // A user type may be named `T` (a name the stdlib uses as a generic type variable):
 // verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
 // The fix keys vector types by their element (not by a display name two distinct

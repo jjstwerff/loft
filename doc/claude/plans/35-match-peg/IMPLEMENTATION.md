@@ -43,11 +43,21 @@ param on `materialize_named_rest`) to skip separators; trailing `Sep` is not par
 The run-loop lives in the arm condition (yields the boolean). ONE unified look-ahead
 `peek_group_kind` (`Other`/`Alt`/`Repetition`, single save/revert — two sequential peeks corrupt
 the lexer replay buffer) classifies the group; routing computes `group_kind` once. Guards
-`tests/scripts/35i-repetition.loft`, `35j-repetition-separator.loft`. Deferred (see the Phase 6
-section): scalar/literal golden form (needs literal slice elements + scalar `name:Type`),
-per-iteration field capture, mid-slice repetition. **#556 FIXED** (was: native `for` over a
-match-arm materialised vector iterated 0×; real cause = a slice-arm block dropped its result on
-native — a much broader bug, now repaired).
+`tests/scripts/35i-repetition.loft`, `35j-repetition-separator.loft`. **#556 FIXED** (was: native
+`for` over a match-arm materialised vector iterated 0×; real cause = a slice-arm block dropped its
+result on native — a much broader bug, now repaired).
+
+**Phase 6.3 (literal slice elements) + `#lexeme` — DONE, both backends — the grammar-reader.** A
+LITERAL element `[ 1, … ]` / `[ "kw", … ]` matches by equality against `v[pos]` (scalar → direct
+`==`; a `"_"` placeholder keeps positions aligned, composes with binds/`..rest`). The `#lexeme`
+EXTENSION lifts this to token streams: a token-enum variant marks its surface-text field
+`#lexeme` (`Keyword { #lexeme name: text }`), so on a struct-enum element a bare `"fn"` desugars
+(`build_lexeme_literal_match`) to `tag==Keyword && name=="fn"` (OR'd over eligible variants) —
+`[ "fn", Ident { name }, "(", ")" ]` reads like the grammar. `#lexeme` is a parse-time `Attribute`
+flag (not serialised). Guards `tests/scripts/35l-literal-slice-elements.loft`, `35k-lexeme.loft`,
+`parse_errors::{lexeme_missing, unknown_field_annotation, slice_literal_type_mismatch}`. Filed
+**#557** — pre-existing native text-arm-unification bug (a `vector<text>` subject with mixed
+interpolation/literal returns) surfaced while testing (NOT caused by literal elements).
 
 **Phase 5 — DONE (optional), both backends.** `(a)?` = degenerate alternation `(a | ε)`: the
 empty branch always matches so the optional never fails; present → bind + advance cursor by `a`'s
@@ -63,8 +73,9 @@ full commit); `..rest` reads `v[pos..]` from a runtime cursor = the matched bran
 per §3a: step 1 `read_slice_elem` seam (byte-identical refactor), step 2–4 `parse_multi_element_alternation`
 + `peek_multi_element_alt` lexical lookahead, step 5 `materialize_named_rest(lo, hi)` (extracted,
 shared with the fixed-arity path). Guards: `tests/scripts/35g-multi-element-alternation.loft`.
-**Next: the scalar/literal golden form (once its prerequisites — literal slice elements + scalar
-`name:Type` — land), per-iteration field capture, mid-slice repetition; then Phase 7 (iterator
+**Next: the scalar bare-postfix `name:Type*` repetition (the last gap for the `vector<integer>`
+golden — literal heads already work via 6.3), per-iteration field capture, mid-slice repetition;
+then Phase 7 (iterator
 input — the accumulating `read(pos)`), then the PC1–PC5 sub-rule layer. §3a step 6 (fold hook)
 waits on PC.**
 
@@ -768,7 +779,7 @@ right cursor for both the taken and the skipped path. PASS on both backends.
 
 ---
 
-### Phase 6 — L3.4: repetition `(...)*` / `(...)+` — 6.1 + 6.2 (separator) DONE (struct-enum)
+### Phase 6 — L3.4: repetition + literals — 6.1/6.2 (rep + separator) + 6.3 (literals + `#lexeme`) DONE
 
 > **6.1 DONE (2026-07-11), both backends.** A WHOLE-SLICE repetition
 > `[ ( [name:] V )* [, ..rest] ]` / `…+` where `V` is one variant of the struct-enum element
@@ -810,12 +821,28 @@ repetition capture) with `for e in x { … }` runs ZERO times on **native** (`le
 correct) — **#556**. So 35i verifies collected values by slice-INDEX, not `for`. This limits
 Phase 6's collected vector exactly as it already limits the shipped `..rest`.
 
-**Deferred to 6.2 / a follow-up (with the prerequisites they need):**
-- **The scalar / literal golden form** `[ 1, args:integer* ]` (`g-p6-repetition.loft`) needs
-  two prerequisites this repo lacks: (a) **literal slice elements** `[ 1, … ]` (an integer
-  literal as a slice element with an equality gate — currently a parse error), and (b) a scalar
-  **`name:Type`** capture (type-as-match on a non-enum element). Both are their own small
-  features; file/route before graduating the scalar golden.
+**6.3 (literal slice elements) DONE (2026-07-11), both backends.** A LITERAL element `[ 1, … ]`
+/ `[ "kw", … ]` matches by EQUALITY against `v[pos]`.  On a SCALAR element it is a direct `==`
+(`peek_is_slice_literal` + `conv_op("==")`); a `"_"` placeholder keeps the position count + length
+gate aligned, so it composes with binds / `..rest`.  Guard `tests/scripts/35l-literal-slice-elements.loft`.
+
+**`#lexeme` extension DONE (2026-07-11), both backends — the grammar-reader keystone.** A token-enum
+variant marks the field carrying its surface text with `#lexeme`
+(`enum Token { Keyword { #lexeme name: text }, Punct { #lexeme sym: text }, Ident { name: text } }`),
+so on a STRUCT-ENUM element a bare string literal matches against it: `"fn"` stands in for
+`Keyword { name: "fn" }` and reads like the grammar.  It desugars (`build_lexeme_literal_match`) to
+an OR over the eligible variants of `tag(v[pos]) == disc && v[pos].<lexeme> == "fn"` (the field read
+guarded by the tag test).  `#lexeme` is an `Attribute` parse-time flag (not serialised — patterns
+desugar in-session).  A non-`#lexeme` field (e.g. `Ident.name`) is matched structurally, so an
+`Ident` whose text is `"fn"` is NOT the keyword.  Guard `tests/scripts/35k-lexeme.loft` (a tiny
+statement grammar), `tests/parse_errors.rs::{lexeme_missing, unknown_field_annotation}`.
+
+**Deferred to a follow-up (with the prerequisites they need):**
+- **The scalar golden form** `[ 1, args:integer* ]` (`g-p6-repetition.loft`) — literal slice
+  elements (6.3) now cover the `[ 1, … ]` head; the remaining gap is a scalar **bare-postfix
+  `name:Type*`** repetition (a `vector<integer>` run where the body type matches every element —
+  no parens, no struct-enum tag). The `#lexeme` token-grammar form is the more idiomatic loft
+  path and already works.
 - **Per-iteration field capture** inside the body `( V { n } )* → n: vector<T_n>` (a field
   PROJECTION collect, vs today's whole-element collect) — rejected today with a diagnostic.
 - **Mid-slice repetition** (a non-empty head before the group) — today head-empty only.
