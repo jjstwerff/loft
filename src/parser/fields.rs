@@ -746,10 +746,12 @@ impl Parser {
     }
 
     /// @PLN25 DN3 (index) — is a vector index provably in-bounds, so `v[i]` cannot be OOB-null?
-    /// True for a non-negative constant literal (the developer typed it), or a for-loop iteration
-    /// variable (`for i in <range> { v[i] }` — the loop's bound is the contract). Everything else
-    /// (a general var, a computed index) can overrun → the read types `τ?`. Mirrors the pass-2
-    /// warning walk's skip patterns 2/3; the `i < len(v)` guard (pattern 5) is added separately.
+    /// True for a non-negative constant literal (the developer typed it), a for-loop iteration
+    /// variable (`for i in <range> { v[i] }` — the loop's bound is the contract), or (@PLN102 D1)
+    /// an integer-arithmetic index built purely from those trusted leaves (`m[k*4+row]` — the
+    /// matrix-indexing contract). Everything else (a general var, an index touching an untrusted
+    /// var) can overrun → the read types `τ?`. Mirrors the pass-2 warning walk's skip patterns 2/3;
+    /// the `i < len(v)` guard (pattern 5) is added separately.
     fn index_provably_fit(&self, index: &Value, vec: &Value) -> bool {
         // A compile-time-constant index — positive OR negative (`v[-1]` is the Python-style
         // last-element idiom; `-1` lowers to a negation, so use `const_int`, not a literal match)
@@ -774,8 +776,52 @@ impl Parser {
                         .any(|(iv, ik)| *iv == *v && *ik == vk)
                 })
             }
+            // @PLN102 D1 — a computed index like `m[k*4+row]` is the matrix-indexing contract: an
+            // integer-arithmetic tree over constants and active loop vars. Trust it exactly as a
+            // bare loop var (a real OOB still faults → null at runtime, C80). This deliberately does
+            // NOT thread the `i < len(v)` guard through arithmetic — that proof is specific to
+            // `v[i]` and does not survive `v[i*2]` — so `index_arith_trusted` reads only the two
+            // by-contract leaves, never `index_bounded`.
+            _ => self.index_arith_trusted(index),
+        }
+    }
+
+    /// @PLN102 D1 — is `index` an integer-arithmetic expression built purely from trusted leaves
+    /// (constants and active for-loop iteration variables)? The recursive half of
+    /// `index_provably_fit` for computed matrix/vector indices (`k * 4 + row`, `col * stride + k`).
+    /// A leaf is a constant (`const_int`) or an active loop var; a node is one of the integer
+    /// arithmetic ops. Any other var (a plain local, a guard-bounded var) or non-arithmetic call
+    /// (`len(w)`, `f(i)`) breaks the chain → `false`, keeping the read `τ?`.
+    fn index_arith_trusted(&self, index: &Value) -> bool {
+        if self.const_int(index).is_some() {
+            return true;
+        }
+        match index.unspan() {
+            Value::Var(v) => self.vars.is_active_loop_var(*v),
+            Value::Call(op, args) if self.is_index_arith_op(*op) => {
+                args.iter().all(|a| self.index_arith_trusted(a))
+            }
             _ => false,
         }
+    }
+
+    /// @PLN102 D1 — is `op` one of the integer/long arithmetic operators an index expression can be
+    /// composed from (`+ - * / %`)? Bitwise / shift / comparison ops are intentionally excluded:
+    /// the trusted set is ordinary index arithmetic, nothing wider.
+    fn is_index_arith_op(&self, op: u32) -> bool {
+        matches!(
+            self.data.def(op).name.as_str(),
+            "OpAddInt"
+                | "OpMinInt"
+                | "OpMulInt"
+                | "OpDivInt"
+                | "OpModInt"
+                | "OpAddLong"
+                | "OpMinLong"
+                | "OpMulLong"
+                | "OpDivLong"
+                | "OpModLong"
+        )
     }
 
     pub(crate) fn index_type(&mut self, t: &Type) -> Type {
