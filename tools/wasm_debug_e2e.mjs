@@ -24,12 +24,13 @@ const URL = 'ws://127.0.0.1:' + process.argv[3] + '/ws';
 const enc = new TextEncoder(), dec = new TextDecoder();
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 
-let mem = null; const inQ = [];
+let mem = null; const inQ = []; let registered = false;
 const client = new WebSocket(URL);
 await new Promise((res, rej) => { client.onopen = res; client.onerror = rej; });
 client.binaryType = 'arraybuffer';
 client.onmessage = (e) => {
   const msg = typeof e.data === 'string' ? e.data : dec.decode(new Uint8Array(e.data));
+  if (msg === 'D:registered alice') registered = true;
   if (msg.startsWith('D!:')) inQ.push(enc.encode(msg));
 };
 const io = {
@@ -55,8 +56,18 @@ const agent = new WebSocket(URL);
 await new Promise((res, rej) => { agent.onopen = res; agent.onerror = rej; });
 agent.binaryType = 'arraybuffer';
 agent.onmessage = (e) => { got.push(typeof e.data === 'string' ? e.data : dec.decode(new Uint8Array(e.data))); };
-await sleep(700);
-for (const c of ['bp compute', 'run', 'eval n', 'eval n + 2', 'resume']) { agent.send('D!:@alice:' + c); await sleep(400); }
+// Event-driven, not a fixed sleep: under the full suite's parallel load the 4MB wasm
+// instantiate + stdlib parse + `iam` round-trip can exceed any fixed delay, and the
+// agent would then address an unregistered name ("D:err no debug client alice").
+// Wait for the server's registration ack (the pump keeps running between awaits).
+for (let t = 0; !registered && t < 15000; t += 20) await sleep(20);
+for (const c of ['bp compute', 'run', 'eval n', 'eval n + 2', 'resume']) { agent.send('D!:@alice:' + c); await sleep(300); }
+// Drain: keep pumping until the replies stop arriving, so a slow last reply under
+// load isn't cut off by clearInterval (the fixed post-loop tail used to race).
+for (let stable = 0, last = -1, t = 0; stable < 300 && t < 5000; t += 50) {
+  if (got.length !== last) { last = got.length; stable = 0; } else stable += 50;
+  await sleep(50);
+}
 clearInterval(pump);
 console.log('AGENT_GOT=' + JSON.stringify(got.filter(m => m.startsWith('D:'))));
 process.exit(0);
