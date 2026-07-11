@@ -105,9 +105,10 @@ fn main() {
   // --- sqrt ---
   assert(sqrt(9.0) == 3.0, "sqrt(9) == 3");
   assert(sqrt(0.0) == 0.0, "sqrt(0) == 0");
-  // --- Float comparison epsilon boundary (tolerance = 1e-9) ---
-  assert(1.0 + 0.0000000005 == 1.0, "within float epsilon (5e-10): equal");
-  assert(1.0 + 0.0000000015 != 1.0, "outside float epsilon (1.5e-9): not equal");
+  // --- Float equality is EXACT IEEE (@PLN102); use approx() for tolerance ---
+  assert(1.0 + 0.0000000005 != 1.0, "exact ==: a 5e-10 offset is a distinct double");
+  assert(approx(1.0 + 0.0000000005, 1.0, 0.000000001), "approx(a, b, 1e-9): within tolerance");
+  assert(!approx(1.0 + 0.0000000015, 1.0, 0.000000001), "approx: a 1.5e-9 offset exceeds 1e-9");
   // --- Single (f32) domain boundaries ---
   assert(!sqrt(-1.0f), "single sqrt of negative is null");
   assert(!asin(2.0f), "single asin out of domain is null");
@@ -122,9 +123,10 @@ fn main() {
   assert(sqrt(4.0f) == 2.0f, "single sqrt(4) == 2");
   assert(round(asin(1.0f) * 1000.0f) == round(PI as single / 2.0f * 1000.0f), "single asin(1) == PI/2");
   assert(acos(1.0f) == 0.0f, "single acos(1) == 0");
-  // --- Single comparison epsilon boundary (tolerance = 1e-6) ---
-  assert(1.0f + 0.0000005f == 1.0f, "within single epsilon (5e-7): equal");
-  assert(1.0f + 0.0000015f != 1.0f, "outside single epsilon (1.5e-6): not equal");
+  // --- Single equality is EXACT IEEE (@PLN102); use approx() for tolerance ---
+  assert(1.0f + 0.0000005f != 1.0f, "exact ==: a 5e-7 offset is a distinct single");
+  assert(approx(1.0f + 0.0000005f, 1.0f, 0.000001f), "approx(a, b, 1e-6): within tolerance");
+  assert(!approx(1.0f + 0.0000015f, 1.0f, 0.000001f), "approx: a 1.5e-6 offset exceeds 1e-6");
   // --- Float-to-int cast edge cases ---
   nan_val = sqrt(-1.0);
   assert(!(nan_val as integer), "NaN as integer is null");

@@ -853,16 +853,14 @@ fn pow_single(s: &mut State) {
 fn eq_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = (v_v1.is_nan() && v_v2.is_nan())
-        || (!v_v1.is_nan() && !v_v2.is_nan() && (v_v1 - v_v2).abs() < 0.000_001f32);
+    let new_value = (v_v1.is_nan() && v_v2.is_nan()) || (v_v1 <= v_v2 && v_v2 <= v_v1);
     s.put_stack(new_value);
 }
 
 fn ne_single(s: &mut State) {
     let v_v2 = *s.get_stack::<f32>();
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = (v_v1.is_nan() != v_v2.is_nan())
-        || (!v_v1.is_nan() && !v_v2.is_nan() && (v_v1 - v_v2).abs() >= 0.000_001f32);
+    let new_value = !((v_v1.is_nan() && v_v2.is_nan()) || (v_v1 <= v_v2 && v_v2 <= v_v1));
     s.put_stack(new_value);
 }
 
@@ -1065,16 +1063,14 @@ fn rem_float_nullable(s: &mut State) {
 fn eq_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = (v_v1.is_nan() && v_v2.is_nan())
-        || (!v_v1.is_nan() && !v_v2.is_nan() && (v_v1 - v_v2).abs() < 0.000_000_001f64);
+    let new_value = (v_v1.is_nan() && v_v2.is_nan()) || (v_v1 <= v_v2 && v_v2 <= v_v1);
     s.put_stack(new_value);
 }
 
 fn ne_float(s: &mut State) {
     let v_v2 = *s.get_stack::<f64>();
     let v_v1 = *s.get_stack::<f64>();
-    let new_value = (v_v1.is_nan() != v_v2.is_nan())
-        || (!v_v1.is_nan() && !v_v2.is_nan() && (v_v1 - v_v2).abs() >= 0.000_000_001f64);
+    let new_value = !((v_v1.is_nan() && v_v2.is_nan()) || (v_v1 <= v_v2 && v_v2 <= v_v1));
     s.put_stack(new_value);
 }
 

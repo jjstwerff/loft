@@ -341,9 +341,9 @@ pub fn pow(both: single, v2: single) -> single {
 #pure
 
 fn OpEqSingle(v1: single, v2: single) -> boolean;
-#rust"(@v1.is_nan() && @v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() < 0.000_001f32)"
+#rust"(@v1.is_nan() && @v2.is_nan()) || (@v1 <= @v2 && @v2 <= @v1)"
 fn OpNeSingle(v1: single, v2: single) -> boolean;
-#rust"(@v1.is_nan() != @v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() >= 0.000_001f32)"
+#rust"!((@v1.is_nan() && @v2.is_nan()) || (@v1 <= @v2 && @v2 <= @v1))"
 fn OpLtSingle(v1: single, v2: single) -> boolean;
 #rust"(@v1.is_nan() && !@v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2)"
 fn OpLeSingle(v1: single, v2: single) -> boolean;
@@ -545,9 +545,9 @@ fn OpDivFloatNullable(v1: float, v2: float) -> float;
 fn OpRemFloatNullable(v1: float, v2: float) -> float;
 #rust"@v1 % @v2"
 fn OpEqFloat(v1: float, v2: float) -> boolean;
-#rust"(@v1.is_nan() && @v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() < 0.000_000_001f64)"
+#rust"(@v1.is_nan() && @v2.is_nan()) || (@v1 <= @v2 && @v2 <= @v1)"
 fn OpNeFloat(v1: float, v2: float) -> boolean;
-#rust"(@v1.is_nan() != @v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && (@v1 - @v2).abs() >= 0.000_000_001f64)"
+#rust"!((@v1.is_nan() && @v2.is_nan()) || (@v1 <= @v2 && @v2 <= @v1))"
 fn OpLtFloat(v1: float, v2: float) -> boolean;
 #rust"(@v1.is_nan() && !@v2.is_nan()) || (!@v1.is_nan() && !@v2.is_nan() && @v1 < @v2)"
 fn OpLeFloat(v1: float, v2: float) -> boolean;
@@ -717,6 +717,19 @@ pub fn clamp(both: float, lo: float, hi: float) -> float {
 // Clamps a nullable v into [lo, hi]; null if any argument is null.
 pub fn clamp(both: float?, lo: float?, hi: float?) -> float? {
   min(max(both, lo), hi)
+}
+#pure
+// Approximate equality: true when a and b differ by at most eps (inclusive).
+// `==` on float/single is EXACT IEEE equality (@PLN102) — use `approx` when you want a
+// tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) * sqrt(2.0), 2.0, 1e-9)`.
+// A null (NaN) operand is not approximately equal to anything, so the result is false.
+pub fn approx(both: float, b: float, eps: float) -> boolean {
+  if !both || !b { false } else { abs(both - b) <= eps }
+}
+#pure
+// Approximate equality for single-precision floats (see the float overload).
+pub fn approx(both: single, b: single, eps: single) -> boolean {
+  if !both || !b { false } else { abs(both - b) <= eps }
 }
 #pure
 // --- Text ---
@@ -1133,20 +1146,20 @@ fn OpHashRemove(data: reference, rec: reference, tp: const u16);
 // call with the hash's type id; direct user calls need to supply the
 // id via `sizeof`-style introspection (not yet exposed).  Inefficient
 // by design — walks + sorts all records per call.  See CAVEATS.md C60.
-pub fn hash_sorted(h: reference, tp: integer) -> reference;
+fn hash_sorted(h: reference, tp: integer) -> reference;
 #impure(parent_write)
 // Raw bucket-walk sibling of `hash_sorted` for `for e in h par(...)`.
 // Same fresh vector<reference<T>> scratch, but in storage order — skips the
 // key sort because the parallel queue has no use for a hash's order.  The
 // parser desugars the par form of `for e in h` into this call.
-pub fn hash_unsorted(h: reference, tp: integer) -> reference;
+fn hash_unsorted(h: reference, tp: integer) -> reference;
 #pure
 // @PLN48 — iterate a spacial/radix collection in its NATURAL key order (the tree's
 // in-order walk = Morton/Z-order for a spatial index).  Returns a fresh
 // vector<reference<T>> of the records already in order — no sort, unlike
 // `hash_sorted`, because a radix tree is ordered by construction.  The parser
 // desugars `for e in xs { … }` into this call with the collection's type id.
-pub fn radix_sorted(r: reference, tp: integer) -> reference;
+fn radix_sorted(r: reference, tp: integer) -> reference;
 #impure(parent_write)
 // @PLN48 S3 — a spacial range slice `xs[(fx,fy)..(tx,ty)]` / `xs[(fx,fy)..:limit]`.
 // Returns a fresh vector<reference<T>> of the records whose Morton code is in the
@@ -1154,7 +1167,7 @@ pub fn radix_sorted(r: reference, tp: integer) -> reference;
 // rewrites the slice expression, injecting the collection's type id.  Coordinates
 // carry up to MAX_AXES (3) axes; the range builder reads only the collection's own
 // axis count, so `fz`/`tz` are ignored (0) for a 2D `spacial<T[x,y]>`.
-pub fn spacial_range(r: reference, tp: integer, fx: integer, fy: integer, fz: integer, has_till: integer, tx: integer, ty: integer, tz: integer, limit: integer) -> reference;
+fn spacial_range(r: reference, tp: integer, fx: integer, fy: integer, fz: integer, has_till: integer, tx: integer, ty: integer, tz: integer, limit: integer) -> reference;
 #impure(parent_write)
 type index size(4);
 

@@ -72,12 +72,17 @@ In the tables below, **N** = `integer | single | float` for general functions, a
 
 ### General (N = integer | single | float)
 
+These are **method-or-free** functions: the first parameter is the `both` dispatch marker, so
+each is callable as a method (`x.abs()`), free (`abs(x)`), or with the named form `abs(both: x)`
+(the named keyword is literally `both`, not `v`/`a` — see `exists(both:)` below).
+
 | Function | Description |
 |----------|-------------|
-| `abs(v: N) -> N` | Absolute value. |
-| `min(a: N, b: N) -> N` | Smaller of two values. Returns null if either is null. |
-| `max(a: N, b: N) -> N` | Larger of two values. Returns null if either is null. |
-| `clamp(v: N, lo: N, hi: N) -> N` | Clamps `v` to `[lo, hi]`. Returns null if any arg is null. |
+| `abs(both: N) -> N` | Absolute value. |
+| `min(both: N, b: N) -> N` | Smaller of two values. Returns null if either is null. |
+| `max(both: N, b: N) -> N` | Larger of two values. Returns null if either is null. |
+| `clamp(both: N, lo: N, hi: N) -> N` | Clamps to `[lo, hi]`. Returns null if any arg is null. |
+| `approx(both: F, b: F, eps: F) -> boolean` | True when `a`/`b` (F = single \| float) differ by ≤ `eps`. `==` on float/single is **exact IEEE** (@PLN102); use `approx` for tolerance. A null (NaN) operand → false. |
 
 ### Rounding and roots (F = single | float)
 
