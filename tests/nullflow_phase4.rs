@@ -84,3 +84,46 @@ fn text_cast_checked_on_yields_null_on_bad_parse() {
         "bad parse → null → ?? -1.0; out={out}"
     );
 }
+
+// @PLN102 — a nullable SCALAR source can take the CHECKED cast `as τ?`: the null rides in-band
+// (NaN is the float null, C90) and the cast op propagates it, so `float? as integer?` resolves to
+// the base `OpCast` instead of reporting "Unknown cast". A bare `float? as integer` still errors
+// (DN5). This is what makes the "use `as integer?`" advice on a `float?` source actually work.
+const NULLABLE_SRC_VALUE: &str =
+    "fn main(){ a = \"5.7\" as float?; b = a as integer?; print(\"r={b ?? -99}\\n\"); }\n";
+const NULLABLE_SRC_NULL: &str =
+    "fn main(){ n = sqrt(-1.0); m = n as integer?; print(\"r={m ?? -1}\\n\"); }\n";
+const NULLABLE_SRC_BARE: &str =
+    "fn main(){ a = \"5.7\" as float?; b = a as integer; print(\"r={b}\\n\"); }\n";
+
+#[test]
+fn nullable_scalar_checked_cast_value_interpret() {
+    let (ok, out, err) = run(NULLABLE_SRC_VALUE, "--interpret", true, "nsv_i");
+    assert!(ok, "ON: `float? as integer?` must resolve; stderr: {err}");
+    assert!(out.contains("r=5"), "5.7 → 5: {out}");
+}
+#[test]
+fn nullable_scalar_checked_cast_value_native() {
+    let (ok, out, err) = run(NULLABLE_SRC_VALUE, "--native", true, "nsv_n");
+    assert!(ok, "ON native: {err}");
+    assert!(out.contains("r=5"), "native 5.7 → 5: {out}");
+}
+#[test]
+fn nullable_scalar_checked_cast_propagates_null() {
+    let (ok, out, err) = run(NULLABLE_SRC_NULL, "--interpret", true, "nsn_i");
+    assert!(
+        ok,
+        "ON: a null `float?` casts to null, not a value; stderr: {err}"
+    );
+    assert!(out.contains("r=-1"), "null → null → ?? -1: {out}");
+}
+#[test]
+fn nullable_scalar_bare_cast_still_errors() {
+    // The over-reach guard: only the CHECKED form is enabled; a bare cast keeps the DN5 error.
+    let (ok, _o, err) = run(NULLABLE_SRC_BARE, "--interpret", true, "nsb_i");
+    assert!(!ok, "ON: a bare `float? as integer` must still be rejected");
+    assert!(
+        err.contains("possibly-null") && err.contains("integer?"),
+        "expected the DN5 error advising `as integer?`: {err}"
+    );
+}

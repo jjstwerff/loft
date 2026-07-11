@@ -1967,7 +1967,20 @@ impl Parser {
                     // @PLN99 Arc C — clear the owned-conversion signal, then let `convert`
                     // set it iff it dispatches an allocating user conversion (`fn OpConvTFromS`).
                     self.conv_owned_result = None;
-                    if !self.convert(code, ctp, &tp) && !self.cast(code, ctp, &tp) {
+                    // @PLN102 — a nullable SCALAR source (`float?`/`single?`/`integer?`) casts by its
+                    // BASE: the null rides in-band (NaN is the float null, C90; the reserved sentinel
+                    // for integers) and the cast op propagates it (`NaN as integer` = null), so the
+                    // per-type `OpCast` is keyed on the base, not the `Optional`. Peel it here so the
+                    // checked `float? as integer?` resolves instead of reporting "Unknown cast"; the
+                    // result re-wraps `τ?` below (nullable_cast). A BARE `float? as integer` never
+                    // reaches this arm — DN5 rejects it above — so this only enables the checked form.
+                    let cast_src: &Type = if src_may_be_null && Self::is_non_null_scalar(&src_base)
+                    {
+                        &src_base
+                    } else {
+                        ctp
+                    };
+                    if !self.convert(code, cast_src, &tp) && !self.cast(code, cast_src, &tp) {
                         diagnostic!(
                             self.lexer,
                             Level::Error,
