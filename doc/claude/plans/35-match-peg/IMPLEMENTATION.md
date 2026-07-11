@@ -24,19 +24,22 @@
 ## ▶ RESUME HERE — status (2026-07-11)
 
 **Branches.** Phase 0–2 MERGED to `main` (#554, squash). **Phase 3 (L3.7 multi-pattern arms),
-Phase 4.1 + 4.2 (L3.2 single-element alternation incl. `option<T>` promotion), and a fix for a
-pre-existing crash when a user type is named `T`** are on `tuxedo-pln35-phase3-multipat`, rebased
-onto `main` (NO PR — the user does not want one; keep committing to the branch). Full-suite
-**green** on this box (only the environmental `wasm_debug_relay` fails; see memory
-`wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
+Phase 4 COMPLETE (L3.2 alternation: 4.1 single-element, 4.2 `option<T>` promotion, 4.3
+multi-element sequence branches via the cursor engine), and a fix for a pre-existing crash when a
+user type is named `T`** are on `tuxedo-pln35-phase3-multipat`, rebased onto `main` (NO PR — the
+user does not want one; keep committing to the branch). Full-suite **green** on this box (only the
+environmental `wasm_debug_relay` fails; see memory `wasm-debug-relay-env-fail`). **Nothing is
+half-implemented.**
 
-**Next: Phase 4.3 — multi-element sequence alternation `[ (A B | C), ..rest ]`.** Design DECIDED
-(see the Phase 4 § below): **predictive dispatch on a forward `pos` cursor** (dispatch on the
-leading element's tag, ordered `if/else` over pure conditions, no `save`/revert), `..rest` reads
-`v[pos..]`. Backtracking is allowed on the same cursor but emitted only for a future
-rule-invocation branch (PC layer), not for 4.3's pure tag branches. Single-element alternation
-already composes with `..rest`/following elements at fixed positions, so 4.3 is only the
-variable-width branch case. Then Phases 5–7 and the PC1–PC5 sub-rule layer.
+**Phase 4.3 — DONE (steps 1–5), both backends.** `[ (A B | C), ..rest ]`: a branch may be a
+SEQUENCE of varying width, dispatched PREDICTIVELY on the leading tags (ordered `if/else` over
+pure per-branch predicates, no `save`/revert — a tag branch is a pure test that only advances on a
+full commit); `..rest` reads `v[pos..]` from a runtime cursor = the matched branch's width. Built
+per §3a: step 1 `read_slice_elem` seam (byte-identical refactor), step 2–4 `parse_multi_element_alternation`
++ `peek_multi_element_alt` lexical lookahead, step 5 `materialize_named_rest(lo, hi)` (extracted,
+shared with the fixed-arity path). Guards: `tests/scripts/35g-multi-element-alternation.loft`.
+**Next: Phase 5 (optional `(…)?`), Phase 6 (repetition — the fold hook, §3a step 6), Phase 7
+(iterator input — the accumulating `read(pos)`), then the PC1–PC5 sub-rule layer.**
 
 **Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
 the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
@@ -404,7 +407,7 @@ engine above is not free — it introduces prep and new scope §4's phases did n
 mapped to where each lands. These graft onto the numbered phase steps in §4; do them in phase
 order.
 
-*Phase 4.3 — first, because it establishes the cursor:*
+*Phase 4.3 — DONE (2026-07-11), both backends. Establishes the cursor:*
 1. **`read(pos)` seam.** Factor every slice-element read behind ONE accessor (a helper that
    emits the element load) and route today's fixed-position reads through it. A behaviour-
    PRESERVING refactor first — prove the emitted IR byte-identical (loft-codegen gate) before
@@ -687,9 +690,10 @@ knowing or caring how a branch matches.
     unified type; both backends.
 4.2 Different-name alternation promotes to `option<T>`. *Verify:* absent branch's
     capture reads null.
-4.3 Multi-element sequence branches + predictive dispatch — **§3a steps 1–5** (the
-    `read(pos)` seam, the `pos` cursor, sequence-branch parse, the predictive `if/else`,
-    `..rest` from `pos`). *Verify:* `[ (A B | C), ..rest ]` — a leading `A` commits branch 1
+4.3 **DONE (2026-07-11).** Multi-element sequence branches + predictive dispatch —
+    **§3a steps 1–5** (the `read(pos)` seam, the `pos` cursor, sequence-branch parse, the
+    predictive `if/else`, `..rest` from `pos`; guard `tests/scripts/35g-multi-element-alternation.loft`).
+    *Verify:* `[ (A B | C), ..rest ]` — a leading `A` commits branch 1
     and needs `B` next (else the arm fails, no silent fallthrough); a leading `C` commits
     branch 2; `..rest` picks up at the right runtime `pos` for EACH branch (assert `len(rest)`
     differs by branch width); both backends. Backtracking (`save`/revert) is NOT exercised
