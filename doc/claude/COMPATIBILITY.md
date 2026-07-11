@@ -290,6 +290,9 @@ compatible. The design adds a per-version-transition **verdict** — additive su
 breaking epoch — that the gate computes and the registry **records and surfaces**. That is a real
 addition to the registry's data model, part of the arc-B-registry cost, not a reframing of metadata
 we already have; and it is what turns "migration is yours" into "migration is yours *and informed*."
+The field is **computed automatically by the gate on import** — derived from the API diff at publish,
+never author-declared — so it stays honest (the registry produces the verdict; an author cannot
+*claim* compatibility) and always current (set on every version imported, no manual upkeep).
 
 ## The `contract` integer under this promise
 
