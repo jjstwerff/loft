@@ -21,9 +21,9 @@ fn main() {
   zero = 0.0f;
   bad = (zero / zero) ?? null;
   assert(!bad, "single nan is null");
-  assert(!(bad == bad), "single null == null is false");
-  assert(bad != bad, "single null != null is true");
-  assert(!(bad < 0.0f), "single null < 0 is false");
+  assert(bad == bad, "single null == null is true (uniform null model)");
+  assert(!(bad != bad), "single null != null is false");
+  assert(bad < 0.0f, "single null < 0 is true (null orders low)");
   assert(!(bad > 0.0f), "single null > 0 is false");
   assert(!(bad == 0.0f), "single null == 0 is false");
   // --- Null propagation ---

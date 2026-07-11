@@ -6739,7 +6739,7 @@ fn p54_as_number_on_jstring_returns_nan() {
     code!(
         "fn run_annjs() -> boolean {
     x_annjs = json_string(\"hi\").as_number();
-    x_annjs != x_annjs
+    x_annjs == null
 }"
     )
     .expr("run_annjs()")
@@ -6751,7 +6751,7 @@ fn p54_as_number_on_jbool_returns_nan() {
     code!(
         "fn run_annjb() -> boolean {
     x_annjb = json_bool(true).as_number();
-    x_annjb != x_annjb
+    x_annjb == null
 }"
     )
     .expr("run_annjb()")

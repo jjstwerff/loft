@@ -36,13 +36,14 @@ fn main() {
   // guarded by tests/scripts/184-i333-div-zero-null-continues.loft).
   bad = n / n ?? null;
   assert(!bad, "float nan is null");
-  // Null float comparisons: null is not equal to anything, not even itself.
-  assert(!(bad == bad), "null == null is false");
-  assert(bad != bad, "null != null is true");
+  // Null float comparisons are UNIFORM with every scalar (@PLN102): null == null
+  // is true, null != a real value, null orders as the low extreme.
+  assert(bad == bad, "null == null is true (uniform null model)");
+  assert(!(bad != bad), "null != null is false");
   assert(bad != 0.0, "null != 0.0 is true");
   assert(!(bad == 0.0), "null == 0.0 is false");
-  assert(!(bad < 0.0), "null < 0.0 is false");
-  assert(!(bad <= 0.0), "null <= 0.0 is false");
+  assert(bad < 0.0, "null < 0.0 is true (null orders low)");
+  assert(bad <= 0.0, "null <= 0.0 is true (null orders low)");
   // Null-coalescing works correctly on floats:
   assert((bad ?? 99.0) == 99.0, "null ?? default returns default");
   // --- Comparisons ---
@@ -138,11 +139,11 @@ fn main() {
   assert(inf_pos + inf_pos > 1000000.0, "inf + inf is positive infinity");
   assert(!(inf_pos - inf_pos), "inf - inf is NaN (null)");
   assert(!(inf_pos * 0.0), "inf * 0.0 is NaN (null)");
-  // --- NaN comparisons return false (not null) ---
+  // --- null (NaN) comparisons are uniform: null orders as the low extreme ---
   nan_cmp = (0.0 / 0.0) ?? null;
-  assert(!(nan_cmp < 0.0), "nan < 0.0 is false");
-  assert(!(0.0 < nan_cmp), "0.0 < nan is false");
-  assert(!(nan_cmp <= nan_cmp), "nan <= nan is false");
+  assert(nan_cmp < 0.0, "null < 0.0 is true (null orders low)");
+  assert(!(0.0 < nan_cmp), "0.0 < null is false (null is the low extreme)");
+  assert(nan_cmp <= nan_cmp, "null <= null is true (uniform null model)");
   // --- Truncation toward zero (not floor) ---
   assert((-3.9) as integer == -3, "(-3.9) as integer truncates toward zero");
   assert(3.9 as integer == 3, "3.9 as integer truncates toward zero");

@@ -166,19 +166,21 @@ share them.
 
 ## Deviations
 
-OPEN: **4** (D-op-1/2 + the two null-model keystone deviations D-op-null-1/2, opened
-2026-07-10 by the @PLN102 pre-freeze audit; closed by steps 2–3 of
-[the null-model keystone decision](../plans/102-stability-contract/keystone-null-model.md))
+OPEN: **3** (D-op-1/2 + the null-model keystone deviation D-op-null-2; D-op-null-1 CLOSED
+2026-07-10 by keystone step 2. Opened 2026-07-10 by the @PLN102 pre-freeze audit; D-op-null-2
+closes with keystone step 3 —
+[the null-model keystone decision](../plans/102-stability-contract/keystone-null-model.md).)
 
-### D-op-null-1 — `float`/`single` null comparison is not uniform with the other scalars
-- **Violates:** `(E-NullArg)` — comparisons are DEFINITE and UNIFORM across scalar types.
-- **Where:** `src/fill.rs` `OpEqFloat`/`OpEqSingle` guard `!is_nan(a) && !is_nan(b)`, so with
-  float-null = NaN, `null == null` → **false** (not true) and every ordering with a null float
-  is **false** (unordered), where integer/char null is reflexive and orders as the low extreme.
-- **Effect:** `x == null` and even `x == x` behave type-dependently; a program branching on
-  `float? == null` silently mis-behaves. Observable, frozen if not fixed.
-- **Close:** step 2 of the keystone — make the float null-NaN pattern compare reflexively and
-  order as the low extreme, matching `(E-NullArg)`. Both backends; golden-corpus first.
+### D-op-null-1 — CLOSED (2026-07-10, keystone step 2): float/single null comparison now uniform
+- Was: `float`/`single` null (a NaN) made `null == null` **false** and ordering unordered, where
+  integer/char null is reflexive and orders low — violating `(E-NullArg)`'s uniformity.
+- Fixed at the single source: the `Op{Eq,Ne,Lt,Le}{Float,Single}` `#rust` bodies in
+  `default/01_code.loft` (which drive BOTH the interpreter via `fill.rs` regen and native codegen)
+  now treat a NaN operand as null definitely — `null == null` true, `!=` its exact complement,
+  null orders at the low extreme — matching `(E-NullArg)` and the integer/char behavior. Verified
+  both backends against the matrix; guard `tests/scripts/pln102-null-comparison-uniform.loft`. The
+  conversion set (docs/tests on the old `x != x` NaN idiom → `== null`) was migrated in the same
+  change.
 
 ### D-op-null-2 — a computation whose true result is the reserved pattern nulls SILENTLY
 - **Violates:** the `(E-Null)` intent that no real value is silently confused with null.

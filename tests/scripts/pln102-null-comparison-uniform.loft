@@ -1,0 +1,41 @@
+// @PLN102 null-model keystone, step 2 (D-op-null-1) — scalar null comparison is
+// UNIFORM: `null == null` is true, `!=` its exact complement, and null orders at
+// the LOW extreme, identically for float/single/integer/character. Regression
+// guard for the fix in default/01_code.loft's Op{Eq,Ne,Lt,Le}{Float,Single}
+// #rust bodies (the single source for both backends via fill.rs regen).
+fn main() {
+  // float
+  nf: float? = null;
+  fa: float = 5.0;
+  fc: float = 3.0;
+  assert(nf == nf, "float null==null");
+  assert(!(nf == fa), "float null==x false");
+  assert(!(nf != nf), "float null!=null false");
+  assert(nf != fa, "float null!=x true");
+  assert(nf < fa, "float null<x (low extreme)");
+  assert(!(fa < nf), "float x<null false");
+  assert(!(nf < nf), "float null<null false");
+  assert(nf <= nf, "float null<=null true");
+  assert(fa > nf, "float x>null true");
+  assert(fa >= nf, "float x>=null true");
+  assert(fc < fa, "float non-null order unchanged");
+  assert(fa == 5.0, "float non-null eq unchanged");
+
+  // single
+  ns: single? = null;
+  sa: single = 5.0 as single;
+  assert(ns == ns, "single null==null");
+  assert(!(ns != ns), "single null!=null false");
+  assert(ns < sa, "single null<x");
+  assert(sa > ns, "single x>null");
+
+  // integer + character already uniform (raw sentinel compare) — pin them too.
+  ni: integer? = null;
+  ia: integer = 5;
+  assert(ni == ni, "integer null==null");
+  assert(ni < ia, "integer null<x");
+  nc: character? = null;
+  assert(nc == nc, "character null==null");
+
+  print("null-comparison-uniform ok\n");
+}

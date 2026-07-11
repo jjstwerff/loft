@@ -12,13 +12,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > conversion cost, then a recommendation. The owner chose **B (confront + guard)**; the concrete
 > work is under "If B" below.
 >
-> **Progress:** ✅ **Step 1 — spec honesty (docs only):** `operational.md` `(E-Null)` rewritten
-> (in-band + observable + reserved + excluded from the value range, dropping the false
-> "encoding is private" claim); `(E-NullArg)` made precise + uniform (definite comparison,
-> `null == null` true, null orders low, same for every scalar); `types.md` range fixed
-> (`integer` = `[i64::MIN+1, i64::MAX]`) + the null-representation table stated per width; the
-> two code divergences filed as `D-op-null-1` (float non-uniform comparison → step 2) and
-> `D-op-null-2` (unguarded collision sites → step 3). Steps 2–5 remain.
+> **Progress:** ✅ **Step 1 — spec honesty (docs).** ✅ **Step 2 — uniform null comparison
+> (D-op-null-1 CLOSED).** The `Op{Eq,Ne,Lt,Le}{Float,Single}` `#rust` bodies now treat a NaN
+> operand as null definitely — `null == null` true, `!=` its exact complement, null orders low —
+> matching integer/char, verified on both backends; guard
+> `tests/scripts/pln102-null-comparison-uniform.loft`; the conversion set (docs/tests on the old
+> `x != x` NaN idiom → `== null`) migrated in the same change. **Next: step 3** (guard the
+> collision sites, D-op-null-2), then 4–5.
 
 ## The invariant we must be able to state (and today cannot)
 
@@ -140,9 +140,11 @@ rewrite.**
 1. ✅ **Spec:** rewrote E-Null (in-band + observable + reserved), reconciled `types.md`/
    `operational.md`, stated the reserved value per width, fixed the `integer` range. *(landed
    2026-07-10; the two remaining code gaps are `D-op-null-1`/`2` in operational.md.)*
-2. **Uniform `null` identity/ordering:** fix `OpEq*`/`OpNe*`/`OpLt*`… so `null == null` is true and
-   `null` ordering is uniform across scalar types (decide extreme-vs-contagion). *(ops.rs/fill.rs +
-   both backends; conversion set = programs comparing/ordering nulls — golden-corpus first.)*
+2. ✅ **Uniform `null` identity/ordering** — `null == null` true, `!=` its complement, null at the
+   LOW extreme, uniform across scalars. Landed at the `Op{Eq,Ne,Lt,Le}{Float,Single}` `#rust` bodies
+   (single source → both backends via `fill.rs` regen); guard
+   `tests/scripts/pln102-null-comparison-uniform.loft`; conversion set (5 sites on the old `x != x`
+   idiom) migrated. *(2026-07-10; D-op-null-1 closed.)*
 3. **Guard the collision sites → fault** (the error-audit adds): overflow/shift-OOR/text→int/
    float→int/int→char producing the sentinel value. *(ops.rs; conversion set ~0.)*
 4. **Honest nullable return types** where a fault is reachable (`find`/`min_of` → `τ?`), so the
