@@ -272,13 +272,13 @@ pub fn tan(both: single) -> single {
 #pure
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
 
-pub fn acos(both: single) -> single {
+pub fn acos(both: single) -> single? {
   OpMathFuncSingle(3, both)
 }
 #pure
 // Arc sine. Returns the angle whose sine is v.
 
-pub fn asin(both: single) -> single {
+pub fn asin(both: single) -> single? {
   OpMathFuncSingle(4, both)
 }
 #pure
@@ -310,7 +310,7 @@ pub fn round(both: single) -> single {
 #pure
 // Square root. Use for distances and normalization.
 
-pub fn sqrt(both: single) -> single {
+pub fn sqrt(both: single) -> single? {
   OpMathFuncSingle(9, both)
 }
 #pure
@@ -397,13 +397,13 @@ pub fn tan(both: float) -> float {
 #pure
 // Arc cosine. Returns the angle (in radians) whose cosine is v.
 
-pub fn acos(both: float) -> float {
+pub fn acos(both: float) -> float? {
   OpMathFuncFloat(3, both)
 }
 #pure
 // Arc sine. Returns the angle whose sine is v.
 
-pub fn asin(both: float) -> float {
+pub fn asin(both: float) -> float? {
   OpMathFuncFloat(4, both)
 }
 #pure
@@ -435,7 +435,7 @@ pub fn round(both: float) -> float {
 #pure
 // Square root. Use for distances and normalization.
 
-pub fn sqrt(both: float) -> float {
+pub fn sqrt(both: float) -> float? {
   OpMathFuncFloat(9, both)
 }
 #pure

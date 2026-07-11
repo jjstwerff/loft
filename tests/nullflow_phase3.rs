@@ -65,3 +65,27 @@ fn float_div_const_stays_non_null() {
     assert_eq!(warns, 0, "ON: a constant non-zero divisor is provably safe → non-null");
     assert!(out.contains("f=0.5"));
 }
+
+/// `sqrt` of a negative — `float?` under nullflow (decl-gate), non-null when off.
+const SQRT: &str = "struct S { g: float }\n\
+fn main() {\n  x = -1.0;\n  s = S { g: 0.0 };\n  s.g = sqrt(x);\n  print(\"f={s.g}\\n\");\n}\n";
+
+#[test]
+fn sqrt_off_non_null_no_warning() {
+    let (ok, warns, out) = run(SQRT, "--interpret", false, "sqrt_off");
+    assert!(ok, "OFF: stdlib must load with sqrt stripped to non-null float: {out}");
+    assert_eq!(warns, 0, "OFF: sqrt returns non-null float");
+}
+#[test]
+fn sqrt_on_nullable_warns_interpret() {
+    let (ok, warns, out) = run(SQRT, "--interpret", true, "sqrt_on_i");
+    assert!(ok, "{out}");
+    assert_eq!(warns, 1, "ON: sqrt returns float?, the store warns; out={out}");
+    assert!(out.contains("f=null"));
+}
+#[test]
+fn sqrt_on_nullable_warns_native() {
+    let (ok, warns, out) = run(SQRT, "--native", true, "sqrt_on_n");
+    assert!(ok, "{out}");
+    assert_eq!(warns, 1, "ON native: sqrt returns float?; out={out}");
+}

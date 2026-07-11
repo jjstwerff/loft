@@ -1033,6 +1033,18 @@ impl Parser {
         } else {
             Type::Void
         };
+        // @PLN102 Phase 3 (N-Domain) — the domain-partial math fns are declared `-> τ?` in the
+        // stdlib (they yield the reserved null out of their real domain). When LOFT_NULLFLOW is
+        // OFF, strip the `?` so their return stays non-null and the default surface is byte-
+        // identical until the flag flips default-on. Self-contained fns only (no desugar cascade):
+        // sqrt / asin / acos. (pow / log — and their desugar consumers exp / ln / log2 / log10 —
+        // land with the constant-in-domain elision, step 3.5.)
+        if !crate::keys::nullflow_enabled()
+            && matches!(result, Type::Optional(_))
+            && matches!(fn_name.as_str(), "sqrt" | "asin" | "acos")
+        {
+            result = result.base().clone();
+        }
         // @PLN86 P6.2 — the call-gate capability link in the SIGNATURE, after the output
         // (`-> int fs#read`, or a void fn's `) fs#update`): a first-class part of the
         // contract beside the params + return, NOT in the `#native`/`#impure`/`#wasm`
