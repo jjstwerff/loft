@@ -223,6 +223,11 @@ before Phase 1 code lands. **D2 and D3 are the ones I'd most want a second look 
   stacks `call_stack`/`coroutines` (`src/state/mod.rs:164,170`), plus the two new
   opcodes. *Rationale:* mirrors the design's own "Validated input shapes" table
   (slice revert cost = 1 word, no memo; iterator needs memo).
+  **Refined by §3a (the matching engine):** backtracking is now the EXCEPTION, not the
+  default — a tag choice is predictive (no anchor), the `save`/revert lives INSIDE a rule
+  that can consume-then-fail (never at the call site), first-sets bound it statically, and
+  left recursion is eliminated into repetition rather than grown. Read §3a before D4's
+  slice-cursor mechanics.
 
 - **D5 — Provisional bindings reuse the existing per-arm name-scoping.** Bindings are
   already permanent slots whose *name* visibility is saved/restored per arm
@@ -247,15 +252,122 @@ parse_pattern(subject_read, subject_type) -> PatternMatch
 ├─ enum variant `V {..}`  → tag test + recurse fields  (Phase 1 — generalize :3403/:3554)
 ├─ slice `[p, p, ..r]`   → len test + recurse elems   (Phase 1/2 — generalize :3960)
 ├─ tuple `(p, p)`         → recurse elems              (Phase 1 — via :4169)
-├─ alternation `(a|b)`    → anchor; try a; revert; try b   (Phase 4)
-├─ optional `(a)?`        → anchor; try a; else bind null   (Phase 5)
-└─ repetition `(a)* (a)+` → bounded loop of anchored a   (Phase 6)
+├─ alternation `(a|b)`    → predictive if/else on leading tag (§3a)   (Phase 4)
+├─ optional `(a)?`        → try a; else bind null (contract: pos unmoved on fail)   (Phase 5)
+└─ repetition `(a)* (a)+` → forward loop of a, predictive stop (§3a)   (Phase 6)
 ```
 
 `PatternMatch { cond: Option<Value>, binds: Vec<Value>, total: bool }` is the
 uniform currency: a handler builds its arm by AND-folding child `cond`s (as
 `control.rs:3016-3028` already does for field sub-conditions + guard) and
 concatenating child `binds`, then `total` drives the exhaustiveness gate (F6).
+
+---
+
+## 3a. The matching engine — the algorithmic core (cursor · backtracking · streaming · recursion)
+
+> The phases below (alternation, optional, repetition, iterator input) **and** the
+> parser-combinator layer ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md)) are all one engine. This
+> section is that engine's design, decided end-to-end (2026-07-11) so the phases build it
+> incrementally without any of them needing a redesign — read it before Phase 4.3 or the PC
+> layer. It **supersedes** the "anchor; try a; revert; try b" sketch in D4 / §3: backtracking
+> is the *exception* here, not the mechanism.
+
+**The substrate — a forward `pos` cursor over a `read(pos)` seam.** Matching walks a sequence
+with one logical position `pos` and reads elements through a SINGLE accessor `read(pos)` —
+never a raw `OpGetVector` scattered through the desugaring. Two backings: a MATERIALIZED
+vector (everything today) where `pos` is an index and `read(pos)` is `OpGetVector(v, size,
+pos)`; and a STREAMED source (Phase 7) where `read(pos)` pulls from a lexer coroutine and
+accumulates (below). Funnelling every element access through `read(pos)` is what lets the
+streamed backing drop in as a substitution, not a rewrite.
+
+**The cursor contract — consume on success, untouched on failure.** Every rule (and the whole
+match) upholds one invariant: on SUCCESS it advances `pos` past what it matched; on FAILURE it
+leaves `pos` exactly where it started. This is the parser-combinator contract, and it is what
+lets rules compose without knowing each other's internals:
+- an ALTERNATION never saves or reverts — a failed branch has already put `pos` back, so the
+  next branch resumes correctly; the choice is just "try each branch; the one that commits
+  advances `pos`";
+- the revert that makes a COMPOSITE rule honour the contract — a *sequence* that matched its
+  first parts then failed later — lives INSIDE that rule: it anchors its own start and
+  restores `pos` before returning failure. `save = start; … ; on fail pos = start` appears
+  ONLY there, as the rule's own responsibility, never the caller's;
+- a TAG branch honours the contract for free — it tests its tags as a pure boolean (reads,
+  moves nothing) and advances `pos` only on a full commit.
+
+Keep the `pos`-advance factored so any rule can own advance-on-commit / restore-on-fail.
+
+**Predictive dispatch — the fast path, no backtracking.** At a choice `( a | b | … )`,
+dispatch on the LEADING element's tag, the way a recursive-descent parser predicts a
+production from its first token. Because a branch condition is pure, the whole choice is an
+ordered `if / else if` over those conditions: the first whose fixed-length tag sequence
+matches commits, binds, and steps `pos` by its width. `&&` short-circuit gives the
+first-lookup failure for free, and branches that share a leading tag just fall one tag deeper.
+The common case (disjoint enum tags) does ZERO backtracking — `pos` only moves forward.
+
+**Bounded backtracking — guaranteed by static first-sets.** Compute, per choice point, the set
+of leading tags each branch can begin with:
+- DISJOINT first-sets → the leading tag determines the branch → no backtracking, *proven at
+  compile time* (predictive dispatch promoted from a runtime accident to a static guarantee);
+- OVERLAPPING first-sets → a graded, explicit response, never silent exponential risk:
+  (1) reject by default ("branches share leading tag `A` — disambiguate"), or (2) allow a
+  STATIC bounded lookahead `k` (LL(k) — reject if the needed depth exceeds `k`), or (3) permit
+  real backtracking only behind an explicit `cut`, capped at `max_lookahead`.
+
+The only way to get backtracking at all is to ask for it, and even then it is bounded by
+construction. This makes **"streamable" a compile-time property** — a rule needing unbounded
+lookahead is flagged at compile time (fine on a materialized vector; will not stream). The
+same first-set analysis closes the "no ambiguity warning" gap. Strict by default.
+
+**Streaming — a lexer property, with monotonic accumulation.** Forward streaming lives in the
+LEXER (a coroutine yielding tokens on demand), NOT the matcher. The matcher stays a `pos`
+cursor over `read(pos)`; for a streamed source `read(pos)` pulls-and-appends from the coroutine
+when `pos` passes the buffered edge. A coroutine can't un-yield, so backtracking needs a
+rewindable WINDOW — three positions, not one:
+- `cursor` — moves forward on consume, back on a rule's restore; the only thing the contract
+  touches;
+- `high-water` — the furthest position ever pulled; MONOTONIC, never moves back; the buffer's
+  leading edge;
+- `evict frontier` — the earliest position any live rule could still backtrack to; nothing
+  below it is reachable, so it is droppable.
+
+The trick that makes an un-re-readable stream compatible with "restore on failure": a failing
+rule rewinds the `cursor` but leaves `high-water` alone — accumulation is monotonic; only the
+cursor reverts. `max_lookahead` bounds `high-water − evict`, keeping the buffer bounded. The
+materialized vector collapses all three (buffer = the whole vector; nothing evicts). The loft
+LEXER already does exactly this at PARSE time (`link()`/`revert()` buffer scanned items) — the
+same mechanism, one layer down at runtime.
+
+**Left recursion — eliminate into repetition, don't seed-and-grow.** `A := A α | β`
+infinite-loops in top-down matching. The general PEG fix (Warth seed-and-grow) is a
+backtracking variant, but it is PACKRAT — it memoises the growing seed and re-parses the whole
+construct from a pinned start, reintroducing full memoisation and an unbounded buffer, which
+breaks streaming and bounded backtracking. The fit-for-this-engine answer is ELIMINATION:
+rewrite `A := A α | β` to `A := β α*` — match one `β`, then iterate `α` forward. That is
+forward-consuming (streaming-safe), predictive per step (peek the next `α`'s first-set), and
+memo-free — and it REUSES the repetition machinery (Phase 6, `(…)*`) rather than adding a
+mechanism. Left recursion becomes a rewrite into iteration. The graded line:
+- static-DETECT left recursion (needed regardless — the PC correctness gate);
+- DIRECT left recursion → auto-rewrite to `β α*` + a left-fold (recovers the associativity the
+  left-recursive form implied);
+- INDIRECT / mutual → reject with a clear diagnostic, or require a manual rewrite (the real
+  complexity lives here; not worth dragging into a streaming engine);
+- OPERATOR grammars → precedence climbing / Pratt layers cleanly on top and gives precedence +
+  associativity as data (usually what you actually want for expressions).
+
+**How the phases build this incrementally.**
+- **4.1 / 4.2 (done)** — single-element alternation: tag disjunction + conditional-offset
+  captures, `option<T>` for partial overlap. A degenerate one-element cursor.
+- **4.3** — multi-element sequence branches + predictive dispatch over a real forward `pos`;
+  `..rest` reads `v[pos..]`. Pure tag branches → no backtracking emitted.
+- **Phase 6 (L3.4)** — repetition `(…)*` / `(…)+`: the iteration left-recursion elimination
+  reuses.
+- **Phase 7 (L3.6)** — iterator input: the ACCUMULATING backing of `read(pos)` (the one place
+  with new opcodes) + `max_lookahead`.
+- **PC1–PC5** ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md)) — named rules + recursion: static
+  first-set analysis (the backtracking bound), rule-invocation branches (each rule owns its
+  cursor discipline — the `save`/revert seam finally used), and left-recursion detect →
+  eliminate.
 
 ---
 
