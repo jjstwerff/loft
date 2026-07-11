@@ -10,6 +10,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > Flipping it against the full suite gave **24/2826 failures**; this doc enumerates them by
 > category with the fix steps and the EXACT sites (measured by running the corpus under
 > `LOFT_NULLFLOW=1` — reproduce with `LOFT_NULLFLOW=1 loft <file>`).
+>
+> **D1 LANDED (2026-07-11, commit 21ec7837).** Category D is closed in-tree by two source-level
+> language fixes (no consumer `?? d` churn): a computed integer-arithmetic index over constants +
+> active loop vars (`m[k*4+row]`) now types non-null (`index_provably_fit`/`index_arith_trusted`),
+> and a custom iterator's `next(self) -> Item?` binds the loop variable non-null (`for_type` peels
+> the terminator `?`). This also removes the mat4-multiply friction from E's numeric libs at the
+> source. Remaining: A, B, C, E, F, then the flip.
 
 ## The categories at a glance
 
@@ -18,7 +25,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | **A** | bare `text as numeric` → error (N-Cast, Phase 4) | `as τ?` or `?? d` | 44 (13 files) | this repo |
 | **B** | nullable returned/stored into a non-null slot → warning | `?? d`, or declare `τ?` | 18 (5 files) | this repo |
 | **C** | `possibly-null as non-null` (e.g. `float? as integer`) → error | `as τ?` or `?? d` | 18 (5 files) | this repo |
-| **D** | matrix / vector arithmetic `v[i]*v[j]` → `τ?` (DN3-index × N-Prop) | range-track, or `?? d` | 3 (2 files) in-tree; the bulk is EXTERNAL | this repo + range-tracking |
+| **D** | matrix / vector arithmetic `v[i]*v[j]` → `τ?` (DN3-index × N-Prop) | **DONE — range-track (D1)** | ~~3 (2 files)~~ **0 in-tree**; helps EXTERNAL | this repo + range-tracking |
 | **E** | external registry libs break | republish | ~9 libs | loft-libs-* (out of repo) |
 | **F** | goldens shift (new warnings) | regenerate | 2 test files | this repo |
 
@@ -83,16 +90,23 @@ multiply, so `sum += v[i]*v[j]` fails (`cannot change type … to …?`). **This
 where a `?? d` sweep is the WRONG fix** — the honest fix is better range-tracking so a
 provably-in-bounds index (`m[k*4+row]` with bounded `k`,`row`) stays non-null.
 
-**In-tree sites (3, small):**
-- `tests/scripts/81-iterator-protocol.loft` · `85-yield-resume.loft`
+**In-tree sites — DONE (2026-07-11, commit 21ec7837).** Both cleared by the D1 language fix, no
+`?? d` churn, verified on both backends + both gates (`tests/nullflow_index_dn.rs` guards them):
+- `tests/scripts/85-yield-resume.loft` — the mat4-multiply `ma.m[mul_k*4+mul_row] * mb.m[…]`: the
+  computed index is now trusted non-null. Fix: `index_arith_trusted` in `src/parser/fields.rs`
+  recurses through `+ - * / %` when every leaf is a constant or an **active loop var** (the
+  matrix-indexing contract — trusted like a bare loop var; a real OOB still faults → null, C80). It
+  deliberately does **not** thread the `i < len(v)` guard through arithmetic (that proof is specific
+  to `v[i]`, not `v[i*2]`).
+- `tests/scripts/81-iterator-protocol.loft` — a DIFFERENT root cause the original triage lumped in
+  here: a custom iterator's `next(self) -> integer?` returns null as the loop **terminator**, so
+  `for x in c` never binds null in the body, yet `x` typed `integer?` and N-Prop nullified
+  `total + x`. Fix: `for_type` (`src/parser/control.rs`) peels the `Optional` off the custom-iterator
+  element type; termination is structural (`parse_for_iter_setup`), so peeling is safe.
 
-**External (the bulk):** `graphics-0.3.0/src/math.loft` (mat4 multiply), and any registry lib
-doing matrix/vector math (see E).
-
-**Step D (decision — do FIRST if chosen).** Either (D1) extend index range-tracking so
-`v[<provably-in-bounds>]` is non-null (removes the friction at the source, no consumer churn — the
-right fix for numeric code), or (D2) accept the friction and `?? d` the 3 in-tree sites + document
-it. Recommend **D1** before the flip; it also shrinks E's conversion burden.
+**External (the bulk):** `graphics-0.3.0/src/math.loft` (mat4 multiply) and any registry lib doing
+matrix/vector math now benefit from the SAME fix at the source — the mat4 multiply no longer needs a
+`?? d` sweep once republished (see E). Verify per-lib under `LOFT_NULLFLOW=1`.
 
 ---
 
@@ -124,8 +138,9 @@ message-assertion changes — force a rebuild or trust CI's clean build).
 
 ## Ordering + the flip itself
 
-1. **D1 first (recommended)** — vector-index range-tracking, so numeric code (in-tree D + much of
-   E) needs no `??`. Biggest leverage; least churn.
+1. ~~**D1 first (recommended)** — vector-index range-tracking, so numeric code (in-tree D + much of
+   E) needs no `??`.~~ **DONE 2026-07-11 (commit 21ec7837).** In-tree D closed; E's numeric libs
+   benefit at the source.
 2. **A, then B+C** in-repo (B+C share the audience_crystal files). Verify each file
    `LOFT_NULLFLOW=1` on BOTH backends.
 3. **E** — republish the ~9 registry libs (loft-libs-*), in parallel; this is the gating item for
