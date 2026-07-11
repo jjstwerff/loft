@@ -2300,6 +2300,14 @@ impl Parser {
             let div_nullable = (operator == "/" || operator == "%")
                 && matches!(ctp.base(), Type::Integer(_))
                 && !self.divisor_provably_nonzero(&second_code);
+            // @PLN102 (N-Prop) Phase 2 — capture operand nullability BEFORE `call_op` consumes
+            // the operand types. A nullable operand PROPAGATES through a value-preserving scalar
+            // op: the runtime already carries the null sentinel / NaN through (`n+5`, `5-n`,
+            // `abs(n)` on a null n all stay null). Gated on LOFT_NULLFLOW; the result is wrapped
+            // `τ?` below (beside the div wrap). C85 stays the complement — non-null operands are
+            // untouched here, so overflow of two non-null values still types non-null.
+            let operand_nullable = crate::keys::nullflow_enabled()
+                && (matches!(*ctp, Type::Optional(_)) || matches!(second_type, Type::Optional(_)));
             *ctp = self.call_op(
                 code,
                 operator,
@@ -2337,6 +2345,17 @@ impl Parser {
                 }
             }
             if div_nullable && crate::keys::pln25_dn1_enabled() {
+                *ctp = Type::optional(ctp.clone());
+            } else if operand_nullable
+                && !matches!(*ctp, Type::Optional(_))
+                && matches!(ctp.base(), Type::Integer(_) | Type::Float | Type::Single)
+                && matches!(
+                    operator,
+                    "+" | "-" | "*" | "/" | "%" | "&" | "|" | "^" | "<<" | ">>"
+                )
+            {
+                // @PLN102 (N-Prop): a nullable operand rode into a value-preserving scalar op —
+                // the result is nullable too (the null value already flows through at runtime).
                 *ctp = Type::optional(ctp.clone());
             }
             // Plan-07 phase 1, step 1.B.1 — wrap binary fault-prone
