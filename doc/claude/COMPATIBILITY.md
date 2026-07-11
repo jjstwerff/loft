@@ -268,6 +268,22 @@ taxes every consumer's attention, so the standing preference is **pure-additive 
 and this mechanism is held in reserve: reached for reluctantly, rarely, and only when a successor
 genuinely earns the steer. Having the lever is not a reason to pull it.
 
+## What it means for the programmer — old works; migration is yours, and informed
+
+Under all of this the contract never moves *under a program*: it keeps working, unchanged, on every
+later loft — that is the whole promise, and it holds with the programmer doing nothing. The only cost
+of *staying* is **opportunity**: an old version may lack **new features** — and, in the rare
+unavoidable case, a **security fix**. We try hard to keep even security fixes *additive* and backport
+them into the old epoch, so staying safe never *requires* migrating; a *breaking* security fix is the
+one place that can fail, and we treat it as the emergency it is, not a routine break.
+
+Nothing *pushes* the programmer forward — **migration is their choice and their work**, taken when a
+newer version is worth it to them. And we make that choice *informed*: the same gate that enforces
+never-break already knows whether a newer version is an additive **superset** (a drop-in upgrade) or a
+breaking **epoch** (needs code changes), so the registry can **indicate the API-compatibility of the
+target** before they move. The programmer never has to guess whether an upgrade is safe — we have
+already computed it.
+
 ## The `contract` integer under this promise
 
 Because forward-compatibility is now **guaranteed**, the `contract` version is simpler than
