@@ -451,15 +451,26 @@ tag just fall one tag deeper — so no first-set-disjointness rule is needed and
 rarely use, so it is not the design centre.) All expressible as `If` + `Set` +
 `OpGetVector` — **no new opcode**.
 
-**Backtracking is ALLOWED, not emitted here.** The `pos` cursor is the shared substrate. A
-PURE tag branch never reverts — its condition moves nothing; only the committed branch
-advances `pos`. A branch that INVOKES A NAMED RULE / calls a function (consumes input and
-can fail AFTER advancing) genuinely needs the anchor: `save = pos; try; on fail pos = save`
-— the same `pos` cursor with a per-branch save, slotting in without redesign. Phase 4.3 has
-only tag branches, so it emits the predictive form with no revert; the parser-combinator
-sub-rule layer ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md), PC1–PC5) emits the anchor/revert
-around a rule-invocation branch when it lands. **Keep the `pos`-advance site factored so the
-revert hook is obvious.**
+**The cursor contract — backtracking lives INSIDE the rule, not at the call site.** Every
+rule (and the whole match) upholds one invariant about `pos`: it **CONSUMES on success**
+(advances `pos` past what it matched) and **leaves `pos` UNTOUCHED on failure** (the
+unmatched input stays available for whatever follows). Two consequences:
+- An **alternation never saves/reverts** around its branches. A failed branch has ALREADY
+  left `pos` where it started, so the next branch resumes from the right place. The
+  ordered `if/else` is just "try each branch; the one that commits advances `pos`."
+- The revert that makes a **composite rule** honour the contract — a *sequence* that
+  matched its first parts then failed later — lives INSIDE that rule: it anchors its own
+  start and restores `pos` before returning failure. That is the only place `save = start;
+  … ; on fail pos = start` appears, and it is the rule's OWN responsibility, never the
+  caller's.
+
+A **tag branch** honours the contract for free: it tests its tags as a PURE boolean (reads,
+moves nothing) and advances `pos` only on a full commit — so 4.3 emits no revert at all.
+When the parser-combinator sub-rule layer ([SUBRULE-DESIGN.md](SUBRULE-DESIGN.md), PC1–PC5)
+lands, a rule-INVOCATION branch just calls the rule and checks its matched flag; the invoked
+rule's own body does the anchor/restore internally. **Keep the `pos`-advance factored so a
+rule can own this contract** (advance-on-commit, restore-on-fail) without the alternation
+knowing or caring how a branch matches.
 
 **Code points.**
 - Detect a multi-element branch at the `(` (parse-time): use `lexer.link()`/`revert()` to
