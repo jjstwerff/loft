@@ -303,10 +303,27 @@ kin); hook the purity check at the sub-rule reference site.
 **Verify.** A sub-rule doing I/O (or host mutation) used in a pattern rejects; a pure one compiles.
 Both backends / driver-agreement.
 
-### PC5 — Reporting (§5)
+### PC5 — Reporting (§5) — **DONE (farthest primitive + reporting-as-a-value), both backends**
 
-**Goal.** A failing parse yields a lexer-quality diagnostic (`file:line:col` + caret) pointing at the
-farthest token — as a value, never a trap.
+**Landed (the compiler-essential core).** The PEG farthest-failure primitive: a cursor may carry an
+OPTIONAL `farthest: integer` field (opt-in — a plain `{ src, pos }` cursor is unaffected), and the
+match maintains it as a monotonic high-water mark `farthest = max(farthest, new_pos)` at every
+advance.  It is a MAX (never rewound by a backtrack) and rides the SHARED cursor, so it propagates
+through sub-rules automatically — after a failed parse `cursor.farthest` names the deepest token
+reached.  Detected in `parse_cursor_match` (`match_cursor_farthest`), emitted beside the pos-advance.
+"Never a trap" already holds (a failed match returns null); PC5 adds the POSITION.  Reporting is then
+a VALUE built with existing features: read `src[farthest]` and format a message (guard
+`35s-farthest.loft` — `parse error at token 1: expected identifier, found `(`` — both backends,
+leak-clean; plain-cursor unaffected).  **The library layer (parts a/c/d) is a convention, not a
+compiler feature:** spans on tokens are the user's token type (like `lib/lexer.loft`'s
+`line`/`pos`/`Anchor` + `at()`), and `report(span, msg)` is string interpolation over `farthest`
+(the `lib/parser.loft` `log.error("…{lexer.at()}")` pattern) — no new runtime hook needed.
+**Deferred:** `farthest` is the deepest CONSUMED position, not the deepest ATTEMPTED (a whole-pattern
+arm that matches a prefix then fails does not advance, so its partial reach is not recorded) — precise
+farthest-failure needs updating on every read, and the authored-cut (`~`) refinement is future work.
+
+**Original goal.** A failing parse yields a lexer-quality diagnostic (`file:line:col` + caret)
+pointing at the farthest token — as a value, never a trap.
 **Design.** (a) `lib/lexer.loft` tokens carry a `Span`; (b) thread the monotonic `farthest` through
 the desugared match; expose `cur.farthest`; (c) expose the @PLN28 renderer as `report(span, msg)`;
 (d) *optional* cut (`~`) for authored messages.

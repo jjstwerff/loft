@@ -6175,10 +6175,16 @@ impl Parser {
         setup.push(v_set(source_var, read_source));
         setup.push(v_set(pos_var, read_pos));
         self.match_cursor = Some((cursor_var, cursor_def, pos_field, pos_var));
+        // @PLN35 PC5 — an OPTIONAL `farthest: integer` field is a monotonic high-water mark the
+        // match maintains at every advance (opt-in; a plain `{ src, pos }` cursor has none).
+        self.match_cursor_farthest = self.data.def(cursor_def).attributes().iter().position(|a| {
+            !a.constant && matches!(a.typedef, Type::Integer(_)) && a.name == "farthest"
+        });
         let mut match_code = Value::Null;
         let result_tp =
             self.parse_vector_match(Value::Var(source_var), &borrowed_vec_tp, &mut match_code);
         self.match_cursor = None;
+        self.match_cursor_farthest = None;
         setup.push(match_code);
         *code = v_block(setup, result_tp.clone(), "cursor match");
         result_tp
@@ -6806,9 +6812,27 @@ impl Parser {
                             pos_field,
                             0,
                             Value::Var(cursor_var),
-                            new_pos,
+                            new_pos.clone(),
                         );
                         bindings.push(adv);
+                        // @PLN35 PC5 — maintain the farthest high-water mark: `farthest =
+                        // max(farthest, new_pos)`.  Monotonic across arms + sub-rules (the shared
+                        // cursor carries it), so after a failed parse it names the deepest token
+                        // reached.  Opt-in — only when the cursor has a `farthest` field.
+                        if let Some(ff) = self.match_cursor_farthest {
+                            let old_far = self.get_field(cursor_def, ff, Value::Var(cursor_var));
+                            let is_less = self.conv_op(
+                                "<",
+                                old_far.clone(),
+                                new_pos.clone(),
+                                I32.clone(),
+                                I32.clone(),
+                            );
+                            let maxed = v_if(is_less, new_pos, old_far);
+                            let set_far =
+                                self.set_field(cursor_def, ff, 0, Value::Var(cursor_var), maxed);
+                            bindings.push(set_far);
+                        }
                     } else if has_rest {
                         // length >= fixed  →  fixed <= length
                         self.call_op(

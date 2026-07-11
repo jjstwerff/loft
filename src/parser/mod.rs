@@ -287,6 +287,12 @@ pub struct Parser {
     /// len`, not `len == fixed`) and advances `cursor.pos` by the consumed count on a match.  `None`
     /// = a plain vector/stream match (whole-consume) — the default, so those paths are unchanged.
     pub(crate) match_cursor: Option<(u16, u32, usize, u16)>,
+    /// @PLN35 PC5 — the attribute index of an OPTIONAL `farthest: integer` field on the cursor
+    /// struct, if present.  The match maintains it as a monotonic high-water mark (`max(farthest,
+    /// new_pos)`) at every advance, so after a failed parse `cursor.farthest` is the PEG
+    /// farthest-reached position — the token to point an error at.  `None` = the cursor has no such
+    /// field (tracking is opt-in, so a plain `{ src, pos }` cursor is unaffected).
+    pub(crate) match_cursor_farthest: Option<usize>,
     /// @PLN35 PC3 — sub-rule invocation edges `(enclosing_rule, invoked_rule, site)` recorded on
     /// pass 2, so a post-parse well-formedness pass can reject a left-recursive grammar (a cycle in
     /// this graph) at compile time rather than hang at runtime.  Every PC2 invocation is at cursor
@@ -648,6 +654,7 @@ impl Parser {
             last_range_from: None,
             last_range_till: None,
             match_cursor: None,
+            match_cursor_farthest: None,
             subrule_edges: Vec::new(),
             vars: Function::new("", "none"),
             line: 0,
@@ -1127,7 +1134,7 @@ impl Parser {
             self.resolve_deferred_unknowns();
             // @PLN35 PC3 — reject a left-recursive sub-rule grammar (a cycle in the invocation
             // graph) at compile time, before it can hang at runtime.  Post-parse over pass-2 edges.
-            self.check_subrule_termination();
+            self.check_subrule_wellformedness();
             #[cfg(debug_assertions)]
             self.assert_pass2_def_attr_stable(&pass1_attr_counts);
         }
@@ -1646,7 +1653,7 @@ impl Parser {
         self.parse_file();
         self.resolve_deferred_unknowns();
         // @PLN35 PC3 — reject a left-recursive sub-rule grammar (see `check_subrule_termination`).
-        self.check_subrule_termination();
+        self.check_subrule_wellformedness();
         self.diagnostics.fill(self.lexer.diagnostics());
     }
 
