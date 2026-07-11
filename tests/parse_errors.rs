@@ -1697,3 +1697,28 @@ fn multi_pattern_union_not_exhaustive() {
     code!("enum Rec { Ra { k: integer }, Rb { k: integer }, Rc { k: integer } }\nfn f(r: Rec) -> integer { match r { Ra { k }, Rb { k } => k } }")
         .error("match on Rec is not exhaustive — missing: Rc; add the missing variants or a '_ =>' wildcard at multi_pattern_union_not_exhaustive:2:34");
 }
+
+// @PLN35 Phase 4 (L3.2, P-Alt): a single-element alternation `( V1 { f } | V2 { f } )`
+// in a slice element position.  Phase 4.1 requires identical capture names at
+// compatible types across the branches; partial overlap (option<T>) is a later step.
+
+// Branches must bind the same capture names (partial overlap is deferred).
+#[test]
+fn alternation_capture_names_differ() {
+    code!("enum Tk { Id { n: text }, Nm { v: integer } }\nfn f(t: vector<Tk>) -> text { match t { [ (Id { n } | Nm { v }) ] => \"x\", _ => \"y\" } }")
+        .error("alternation branches must bind the same captures (partial overlap → option<T> is a later Phase-4 step) at alternation_capture_names_differ:2:66");
+}
+
+// A same-named capture must unify across branches.
+#[test]
+fn alternation_capture_type_mismatch() {
+    code!("enum Tk { Ai { n: integer }, At { n: text } }\nfn f(t: vector<Tk>) -> integer { match t { [ (Ai { n } | At { n }) ] => 0, _ => 1 } }")
+        .error("alternation capture 'n' is text in one branch but integer in another at alternation_capture_type_mismatch:2:69");
+}
+
+// An unknown variant in an alternation branch is a clean error (no panic).
+#[test]
+fn alternation_bad_variant() {
+    code!("enum Tk { Id { n: text }, Str { n: text } }\nfn f(t: vector<Tk>) -> text { match t { [ (Id { n } | Nope { n }) ] => n, _ => \"y\" } }")
+        .error("'Nope' is not a variant of Tk at alternation_bad_variant:2:61");
+}

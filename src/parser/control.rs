@@ -3764,6 +3764,204 @@ impl Parser {
         0
     }
 
+    /// The integer-discriminant read `OpConvIntFromEnum(OpGetEnum(elem, 0))` for a
+    /// struct-enum element value — the same tag read a top-level struct-enum match
+    /// emits, used by a slice-element alternation to tag-test each branch.
+    fn elem_tag_int(&mut self, elem: Value) -> Value {
+        let get_enum = self.cl("OpGetEnum", &[elem, Value::Int(0)]);
+        self.cl("OpConvIntFromEnum", &[get_enum])
+    }
+
+    /// @PLN35 Phase 4 (P-Alt) — parse a single-element alternation
+    /// `( V1 { f… } | V2 { f… } | … )` in a slice element position and emit its
+    /// tag-disjunction condition (into `elem_conds`) + shared-slot capture bindings
+    /// (into `bindings`).  Each alternative is a variant sub-pattern of the element
+    /// enum; the element matches if ANY branch's tag matches, and each capture is
+    /// read from WHICHEVER variant matched, at THAT variant's own offset (a
+    /// conditional-offset read `f = if tag==V1 { f@V1 } else if tag==V2 { f@V2 } …`).
+    /// Enum tags are disjoint, so ordered choice reduces to a disjunction here.
+    ///
+    /// Phase 4.1 scope: every branch binds the SAME captures at compatible types
+    /// (partial overlap → `option<T>` is Phase 4.2; a varying-width MULTI-element
+    /// alternative needs the slice cursor, Phase 4.3).  `elem` is the element value
+    /// at this position; it is cloned for each tag test and field read.
+    fn parse_slice_alternation_element(
+        &mut self,
+        e_nr: u32,
+        elem: &Value,
+        borrow_src: u16,
+        bindings: &mut Vec<Value>,
+        elem_conds: &mut Vec<Value>,
+    ) {
+        self.lexer.token("(");
+        // (disc, variant_def_nr, fields: [(name, attr_idx, type)])
+        let mut alts: Vec<(i32, u32, Vec<(String, usize, Type)>)> = Vec::new();
+        loop {
+            let Some(vname) = self.lexer.has_identifier() else {
+                if !self.first_pass {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "expect a variant name in an alternation `( … | … )`"
+                    );
+                }
+                break;
+            };
+            let mut vdef = self.data.variant_of(e_nr, &vname);
+            if vdef == u32::MAX {
+                vdef = self.data.def_nr(&vname);
+            }
+            let valid = vdef != u32::MAX
+                && self.data.def_type(vdef) == DefType::EnumValue
+                && self.data.def(vdef).parent() == e_nr;
+            if !valid && !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "'{}' is not a variant of {}",
+                    vname,
+                    self.data.def(e_nr).name()
+                );
+            }
+            // Only touch the definition table when the variant resolved — `def(u32::MAX)`
+            // panics (Unknown definition).  An invalid branch still consumes its `{ … }`
+            // so the loop makes progress, but contributes no disc / fields / alt entry.
+            let disc = if valid {
+                self.variant_disc(e_nr, true, vdef, &vname)
+            } else {
+                0
+            };
+            let mut fields: Vec<(String, usize, Type)> = Vec::new();
+            if self.lexer.has_token("{") {
+                while let Some(fname) = self.lexer.has_identifier() {
+                    let attr = if valid {
+                        let vd = self.data.def(vdef);
+                        vd.attributes[1..]
+                            .iter()
+                            .enumerate()
+                            .find(|(_, a)| a.name == fname)
+                            .map(|(i, a)| (i + 1, a.typedef.clone()))
+                    } else {
+                        None
+                    };
+                    match attr {
+                        Some((idx, ty)) => fields.push((fname, idx, ty)),
+                        None => {
+                            if valid && !self.first_pass {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "variant {} has no field '{}'",
+                                    vname,
+                                    fname
+                                );
+                            }
+                        }
+                    }
+                    if !self.lexer.has_token(",") {
+                        break;
+                    }
+                }
+                self.lexer.token("}");
+            }
+            if valid {
+                alts.push((disc, vdef, fields));
+            }
+            if !self.lexer.has_token("|") {
+                break;
+            }
+        }
+        self.lexer.token(")");
+        if alts.is_empty() {
+            return;
+        }
+
+        // Tag-disjunction: OR of each branch's tag test on the element.
+        let mut cond = {
+            let tag = self.elem_tag_int(elem.clone());
+            self.cl("OpEqInt", &[tag, Value::Int(alts[0].0)])
+        };
+        for (disc, _, _) in &alts[1..] {
+            let tag = self.elem_tag_int(elem.clone());
+            let t = self.cl("OpEqInt", &[tag, Value::Int(*disc)]);
+            cond = v_if(cond, Value::Boolean(true), t);
+        }
+        elem_conds.push(cond);
+
+        // Phase 4.1: require identical capture-name sets across branches.
+        let names0: HashSet<&String> = alts[0].2.iter().map(|(n, _, _)| n).collect();
+        for (_, _, fields) in &alts[1..] {
+            let names: HashSet<&String> = fields.iter().map(|(n, _, _)| n).collect();
+            if !self.first_pass && names != names0 {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "alternation branches must bind the same captures (partial overlap → option<T> is a later Phase-4 step)"
+                );
+            }
+        }
+
+        // One shared slot per capture, assigned by a conditional-offset read.
+        let canon: Vec<(String, Type)> = alts[0]
+            .2
+            .iter()
+            .map(|(n, _, t)| (n.clone(), t.clone()))
+            .collect();
+        for (fname, ftype) in &canon {
+            for (_, _, fields) in &alts[1..] {
+                if let Some((_, _, ta)) = fields.iter().find(|(n, _, _)| n == fname)
+                    && !self.first_pass
+                    && !match_arm_types_unify(ftype, ta)
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "alternation capture '{}' is {} in one branch but {} in another",
+                        fname,
+                        ta.name(&self.data),
+                        ftype.name(&self.data)
+                    );
+                }
+            }
+            let v_nr = self.create_unique(&format!("mv_{fname}"), ftype);
+            if v_nr == u16::MAX {
+                continue;
+            }
+            self.vars.defined(v_nr);
+            // if tag==V0 { f@V0 } else if tag==V1 { f@V1 } … else <typed null>
+            let mut acc = self.null(ftype);
+            for (disc, vdef, fields) in alts.iter().rev() {
+                if let Some((_, attr_idx, _)) = fields.iter().find(|(n, _, _)| n == fname) {
+                    let read = self.get_field(*vdef, *attr_idx, elem.clone());
+                    let tag = self.elem_tag_int(elem.clone());
+                    let test = self.cl("OpEqInt", &[tag, Value::Int(*disc)]);
+                    acc = v_if(test, read, acc);
+                }
+            }
+            bindings.push(v_set(v_nr, acc));
+            let old = self.vars.set_name(fname, v_nr);
+            let _ = old; // slice-element captures stay in scope for the arm body (as sub-patterns do)
+            // A heap capture is a borrowed VIEW of the subject element: skip its free
+            // and record the borrow dep on the subject source (mirrors the field-
+            // sub-pattern path); a text payload is an OWNED copy (freed normally).
+            if !matches!(ftype.base(), Type::Text(_)) {
+                self.vars.set_skip_free(v_nr);
+            }
+            if matches!(
+                ftype,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            ) {
+                let bound_tp = match self.vars.tp(v_nr).clone() {
+                    Type::Reference(td, _) => Type::Reference(td, Deps::frame1(borrow_src)),
+                    Type::Vector(it, _) => Type::Vector(it, Deps::frame1(borrow_src)),
+                    Type::Enum(td, su, _) => Type::Enum(td, su, Deps::frame1(borrow_src)),
+                    other => other,
+                };
+                self.vars.set_type(v_nr, bound_tp);
+            }
+        }
+    }
+
     /// @PLN35 Phase 3 (P-Multi) — parse the `{ field, … }` bindings of a NON-FIRST
     /// pattern in a comma-separated multi-pattern arm, REUSING the first pattern's
     /// capture slots (`shared`: name → (var, type)).  Whichever listed pattern
@@ -4473,6 +4671,40 @@ impl Parser {
                         }
                         elem_conds.append(&mut sub_conds);
                         head.push("_".to_string());
+                    } else if !has_rest && self.lexer.peek_token("(") {
+                        // @PLN35 Phase 4 (P-Alt) — a parenthesized single-element alternation
+                        // `( V1 { f } | V2 { f } )` in a head slice-element position. Tag-test
+                        // the element against each branch and bind the shared captures from the
+                        // matching variant's offsets. A `_` placeholder keeps position alignment
+                        // for following bare-name indices, as the variant sub-pattern branch does.
+                        if let Type::Enum(elm_e_nr, true, _) = &elm_tp {
+                            let e_nr = *elm_e_nr;
+                            let position = head.len() as i32;
+                            let get = self.cl(
+                                "OpGetVector",
+                                &[Value::Var(v), elm_size.clone(), Value::Int(position)],
+                            );
+                            let read =
+                                self.get_field(self.data.type_def_nr(&elm_tp), usize::MAX, get);
+                            self.parse_slice_alternation_element(
+                                e_nr,
+                                &read,
+                                borrow_src,
+                                &mut bindings,
+                                &mut elem_conds,
+                            );
+                            head.push("_".to_string());
+                        } else {
+                            if !self.first_pass {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "an alternation `( … | … )` slice element needs a struct-enum element type"
+                                );
+                            }
+                            self.lexer.token("("); // consume to make progress
+                            break;
+                        }
                     } else if let Some(id) = self.lexer.has_identifier() {
                         if has_rest {
                             tail.push(id);

@@ -24,10 +24,12 @@
 ## ▶ RESUME HERE — status (2026-07-11)
 
 **Branches.** Phase 0–2 are on `tuxedo-pln35-match-peg` (PR #554, awaiting merge). **Phase 3
-(L3.7 multi-pattern arms) is on `tuxedo-pln35-phase3-multipat`, stacked on that PR's tip** — do
-NOT fork the next phase off `main` while #554 is open. Full-suite **green** on this box (only the
-environmental `wasm_debug_relay` fails; see memory `wasm-debug-relay-env-fail`). **Nothing is
-half-implemented.**
+(L3.7 multi-pattern arms) AND Phase 4.1 (L3.2 single-element alternation) are on
+`tuxedo-pln35-phase3-multipat`, stacked on that PR's tip** — do NOT fork the next phase off `main`
+while #554 is open. Full-suite **green** on this box (only the environmental `wasm_debug_relay`
+fails; see memory `wasm-debug-relay-env-fail`). **Nothing is half-implemented.** Next open steps:
+Phase 4.2 (different-name alternation → `option<T>`) and 4.3 (varying-width branches → the slice
+`pos` cursor + backtracking); then Phases 5–7 and the PC1–PC5 sub-rule layer.
 
 **Phase 3 (L3.7) multi-pattern arms — COMPLETE (2026-07-11).** `V1 { c }, V2 { c } => body` runs
 the body for whichever variant matches, binding the SAME captures (D-simple: identical name sets
@@ -408,6 +410,19 @@ identical name sets in P3 and defer partial-overlap to P4).
 ---
 
 ### Phase 4 — L3.2: alternation `(a | b)` + capture unification + slice cursor
+
+> **4.1 DONE (2026-07-11), both backends.** Single-element alternation
+> `[ (V1 { f } | V2 { f }) ]` in a slice element position: `parse_slice_alternation_element`
+> (`control.rs`) emits a tag-disjunction condition + a conditional-offset capture read
+> (`f = if tag==V1 { f@V1 } else if tag==V2 { f@V2 } … else null`) — the shared-slot idea
+> nested into a slice element. Enum tags are disjoint, so ordered choice reduces to a
+> disjunction (no cursor needed for single-element branches). Scope: identical capture
+> names at compatible types across branches. Guards: `tests/scripts/35f-alternation.loft`
+> (cross-mode, leak-checked, scalar+text captures, genuinely-different offsets),
+> `tests/parse_errors.rs::alternation_*` (3 cases). **4.2 (different-name → `option<T>`)
+> and 4.3 (varying-width MULTI-element branches → the slice `pos` cursor + anchor/revert
+> backtracking, per `probes/p0-d2-backtrack.loft`) are still open** — the cursor is only
+> needed once a branch consumes a runtime-variable width.
 
 **Goal.** `[ (Ident { n } | Str { n }), rest… ]` — ordered choice with capture
 promotion.
