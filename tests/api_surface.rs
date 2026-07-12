@@ -80,3 +80,44 @@ fn closure_is_transitive() {
         "Inner not sealed (transitive):\n{s}"
     );
 }
+
+#[test]
+fn signatures_over_every_kind() {
+    // Commit 2 — resolved signatures attached, in the clean user-facing type spelling.
+    let s = api_surface(
+        "struct Widget { x: integer, tag: text }\n\
+         enum Shape { Circle { r: integer }, Square { side: integer }, Point }\n\
+         pub struct Public { v: integer }\n\
+         pub fn make(n: integer, label: text) -> Widget { Widget { x: n, tag: label } }\n\
+         pub fn maybe(a: integer) -> Widget? { if a > 0 { Widget { x: a, tag: \"\" } } else { null } }\n\
+         pub fn area(s: Shape) -> integer { 0 }\n",
+    );
+    let has = |line: &str| s.lines().any(|l| l == line);
+    // fn: params (name: type) + return; a nullable return renders as `?`.
+    assert!(
+        has("make · fn · public · (n: integer, label: text) -> Widget"),
+        "make sig:\n{s}"
+    );
+    assert!(
+        has("maybe · fn · public · (a: integer) -> Widget?"),
+        "nullable return:\n{s}"
+    );
+    assert!(
+        has("area · fn · public · (s: Shape) -> integer"),
+        "area sig:\n{s}"
+    );
+    // struct fields — a public root and a sealed closure member.
+    assert!(
+        has("Public · struct · public · { v: integer }"),
+        "Public sig:\n{s}"
+    );
+    assert!(
+        has("Widget · struct · sealed · { x: integer, tag: text }"),
+        "Widget sig:\n{s}"
+    );
+    // enum variants, with the synthetic `enum` discriminant tag filtered out.
+    assert!(
+        has("Shape · enum · sealed · { Circle { r: integer }, Square { side: integer }, Point }"),
+        "enum sig:\n{s}"
+    );
+}

@@ -2,8 +2,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! @PLN102 C1 — the library's OBSERVABLE public surface: the input to the compat-verdict
-//! engine. **Commit 1 (this file): membership + visibility TIER only** — no signatures yet
-//! (those land in commit 2).
+//! engine. Commits 1–2 (this file): membership + visibility TIER (commit 1) + each member's
+//! resolved SIGNATURE (commit 2). Byte layout is the separate layout axis (commit 5);
+//! canonical determinism is commit 3.
 //!
 //! The surface is not the `pub`-marked set but the OBSERVABLE CLOSURE: the `pub` roots
 //! plus every library type reachable through a `pub` signature, INCLUDING non-`pub` ones —
@@ -37,12 +38,17 @@ impl Tier {
     }
 }
 
-/// One member of the public surface. Commit 1: identity only (`name · kind · tier`).
+/// One member of the public surface: identity (`name · kind · tier`) + its resolved
+/// SIGNATURE — a fn's `(params) -> return`, a struct's `{ fields }`, an enum's
+/// `{ variants }`, a typedef's `= target`. Type spellings are the clean user-facing form
+/// (`Data::type_name_str`: nullability as `?`, no internal ownership deps). Byte layout is
+/// NOT here — that is the separate layout axis (commit 5).
 #[derive(Debug, Clone)]
 pub struct Member {
     pub name: String,
     pub kind: &'static str,
     pub tier: Tier,
+    pub signature: String,
 }
 
 /// The observable public surface of the library whose definitions were parsed from
@@ -75,7 +81,13 @@ pub fn surface(data: &Data, lib_file: &str) -> Vec<Member> {
         } else {
             Tier::Sealed
         };
-        members.push(Member { name, kind, tier });
+        let signature = signature_of(data, d, kind);
+        members.push(Member {
+            name,
+            kind,
+            tier,
+            signature,
+        });
         for r in referenced_defs_of(data, d) {
             if in_lib(r) && classify(data, r).is_some() && seen.insert(r) {
                 work.push(r);
@@ -128,6 +140,51 @@ fn method_name(raw: &str) -> String {
         }
     }
     raw.to_string()
+}
+
+/// The resolved signature of a member, in the clean user-facing type spelling
+/// (`Data::type_name_str` — nullability as `?`, no internal deps). Hidden
+/// return-mechanism params are skipped; order follows declaration order (canonical
+/// ordering is commit 3).
+fn signature_of(data: &Data, d: u32, kind: &str) -> String {
+    let def = data.def(d);
+    let ty = |t: &Type| data.type_name_str(t);
+    // Skip hidden return-mechanism params and the synthetic `enum` discriminant tag
+    // (`enum` is a reserved keyword, so it is never a user-declared field).
+    let named = |atts: &[crate::data::Attribute]| -> Vec<String> {
+        atts.iter()
+            .filter(|a| !a.hidden && a.name != "enum")
+            .map(|a| format!("{}: {}", a.name, ty(&a.typedef)))
+            .collect()
+    };
+    match kind {
+        "fn" | "method" | "operator" => {
+            format!(
+                "({}) -> {}",
+                named(def.attributes()).join(", "),
+                ty(&def.returned)
+            )
+        }
+        "struct" => format!("{{ {} }}", named(def.attributes()).join(", ")),
+        "enum" => {
+            let mut variants = Vec::new();
+            for v in 0..data.definitions() {
+                let vd = data.def(v);
+                if vd.parent == d && vd.def_type == DefType::EnumValue {
+                    let fields = named(vd.attributes());
+                    variants.push(if fields.is_empty() {
+                        vd.name.clone()
+                    } else {
+                        format!("{} {{ {} }}", vd.name, fields.join(", "))
+                    });
+                }
+            }
+            format!("{{ {} }}", variants.join(", "))
+        }
+        "typedef" => format!("= {}", ty(&def.returned)),
+        "constant" => format!(": {}", ty(&def.returned)),
+        _ => String::new(),
+    }
 }
 
 /// Every library def referenced through `d`'s SIGNATURE — the observable edges: a fn's

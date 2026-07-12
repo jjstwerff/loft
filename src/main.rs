@@ -3588,7 +3588,13 @@ fn run_api_surface_command(file: &str) -> i32 {
         return 1;
     }
     for m in loft::api_surface::surface(&p.data, &abs_str) {
-        println!("{} · {} · {}", m.name, m.kind, m.tier.as_str());
+        println!(
+            "{} · {} · {} · {}",
+            m.name,
+            m.kind,
+            m.tier.as_str(),
+            m.signature
+        );
     }
     0
 }
