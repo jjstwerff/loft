@@ -79,7 +79,10 @@ fn registry_predates_dn1() -> bool {
     if out.status.success() {
         return false;
     }
-    let err = String::from_utf8_lossy(&out.stderr);
+    // Normalise `\` → `/` so the registry-path match fires on Windows too (the
+    // compiler prints `...\.loft\registry\...` there — this job is ubuntu-only today,
+    // but keep the guard OS-agnostic like the multiplayer ones).
+    let err = String::from_utf8_lossy(&out.stderr).replace('\\', "/");
     if err.contains("/.loft/registry/") {
         eprintln!(
             "SKIP viewer smoke: the installed registry package predates the DN1 null \

@@ -9,11 +9,14 @@ use crate::data::Deps;
 /// parser into a native stack overflow (rc=139); past this bound the parser
 /// rejects with a clean diagnostic at LOAD time instead.
 ///
-/// Each nesting level costs roughly 10 KB of native stack (the
-/// expression→operators→part→single chain), so the bound must be REACHABLE
-/// without overflowing the smallest stack the parser runs on: 128 levels ≈ 1.3 MB,
-/// safe on a standard ≥2 MB thread with margin, and still far deeper than any
-/// hand-written script nests.  (Host-configurable later, per the plan.)
+/// Each nesting level costs ≈15 KB of native stack (measured; the
+/// `expression → operators → part → single` chain — #559's null-flow parse logic
+/// grew it from ≈10 KB), so the bound must be REACHABLE without overflowing the
+/// stack the parser runs on: 128 levels ≈ 1.8 MB.  The parser runs on the process
+/// main thread (8 MB default), so that is a ≈4.5× margin, and 128 is still far
+/// deeper than any hand-written script nests.  (Host-configurable later, per the
+/// plan.)  NB the margin against a bare ≥2 MB embedding is now thin — restoring it
+/// would mean shrinking the per-level frame or lowering this bound.
 pub(crate) const SANDBOX_MAX_PARSE_DEPTH: u32 = 128;
 
 /// @PLN86 2.4 — the leftmost base variable of a field/index LHS: `s.heading` /
