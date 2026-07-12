@@ -3,6 +3,20 @@
 
 # @PLN35 — Match PEG Patterns · Implementation Plan (step-by-step, verifiable)
 
+**Status — DONE / SHIPPED, CLOSED 2026-07-12.** All phases **P1–P7** + the **PC1–PC5** sub-rule /
+parser-combinator cursor layer + streaming shipped to `main` across four PRs — #554 (design + P1 nested +
+P2 `name:pat`/M-Total/`..rest`), #558 (P3–P6: multi-pattern arms, alternation, optional, repetition +
+separators, literal elements + `#lexeme`), #561 (scalar captures, field projection, non-literal tails +
+P7 streaming-iterator match), #562 (PC1–PC5 + the cursor-repetition fix). The plan's "Exit (full)"
+criteria are met; nothing is half-implemented.
+[`@PLN35`](https://github.com/loft-lang/plans/issues/35) is **`status:finished` / closed**. **This file
+is now the closed historical record** (design rationale + what shipped + how it was verified); the living
+reference is [LOFT.md](../../LOFT.md) (match / patterns) plus the `tests/scripts/35*.loft` guards this doc
+points at. **Deferred refinements** (each a graceful limitation rejected with a diagnostic, or a future
+enhancement — none a core gap): heap-payload field projection, PEG cut `~`/`!~`, sub-rule + fixed-element
+mixing in one pattern, lazy streaming (eager materialise-then-match shipped), and non-scalar stream
+channels (tuple / vector iterator elements). Reactivate any via a fresh issue when a consumer needs it.
+
 > **Companion to [README.md](README.md)** (the design draft) and
 > **[FORMAL-DESIGN.md](FORMAL-DESIGN.md)** (the strict-spec changes that GATE this
 > build — read it first: the rules are the target these phases are built to satisfy,
@@ -21,7 +35,11 @@
 
 ---
 
-## ▶ RESUME HERE — status (2026-07-11)
+## Status snapshot (historical — 2026-07-11, before the final merges)
+
+> ⚠ Superseded by the **CLOSED** banner at the top of this file. This section predates the final merges;
+> every branch it names below is now on `main` (#554/#558/#561/#562). Kept verbatim as the build-order
+> record — do NOT resume from here.
 
 **Branches.** Phase 0–2 MERGED to `main` (#554, squash). **Phase 3 (L3.7 multi-pattern arms),
 Phase 4 COMPLETE (L3.2 alternation: 4.1 single-element, 4.2 `option<T>` promotion, 4.3
@@ -946,7 +964,9 @@ statement grammar), `tests/parse_errors.rs::{lexeme_missing, unknown_field_annot
   (slice 2).** Scalar/text field projection (see § RESUME HERE); guard
   `tests/scripts/35n-field-projection.loft`.  A heap-payload field projection is still deferred
   (rejected with a diagnostic).
-- **Mid-slice repetition** (a non-empty head before the group) — today head-empty only.
+- ~~**Mid-slice repetition** (a non-empty head before the group)~~ — **DONE** (the parser-combinator
+  keystone `[ Ident { name }, "(", (arg: Ident)*(","), ")" ]`; a repetition may sit between a fixed head
+  and a fixed literal/lexeme tail). Guard `tests/scripts/35m-mid-slice-repetition.loft`.
 - **§3a step 6 fold hook** (associativity fold direction) — waits on the PC layer that uses it.
 
 *(6.2 separator `*(Sep)` — DONE, see above.)*
