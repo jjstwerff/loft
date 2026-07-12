@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @F48 — the `loft` CLI: engine behind the `loft api-surface` subcommand (@PLN102 C1).
 
 //! @PLN102 C1 commit 4 — the STRICT, tier-aware API diff: two canonical surfaces
 //! ([`crate::api_surface::Member`]) → a [`Verdict`]. **Identical-or-added is the whole

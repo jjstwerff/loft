@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @F48 — the `loft` CLI: engine behind the `loft api-surface` subcommand (@PLN102 C1).
 
 //! @PLN102 C1 — the library's OBSERVABLE public surface: the input to the compat-verdict
 //! engine. Commits 1–3 (this file): membership + visibility TIER (commit 1) + each member's
