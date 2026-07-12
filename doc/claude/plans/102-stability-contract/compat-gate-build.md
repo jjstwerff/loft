@@ -122,15 +122,20 @@ useful (our own libs, CI) before any registry work.
 
 #### C1 — the commit ladder (the MVP: Tier 1, small verifiable steps)
 
-> **Landed: commits 1–2** (2026-07-12) — `loft api-surface <file>` + `src/api_surface.rs`:
+> **Landed: commits 1–3** (2026-07-12) — `loft api-surface <file>` + `src/api_surface.rs`:
 > the tier-tagged observable closure (public / sealed) with each member's resolved signature,
-> `name · kind · tier · signature` per member (clean `Data::type_name_str` spellings,
-> nullability as `?`, synthetic enum tag filtered). Tests: `tests/api_surface.rs` (membership
-> + tiers + transitive closure + signatures over every kind). Commits 3–7 pending. Known gap
-> for commit 3: keyed-collection key fields (`sorted<T>` drops `[k]`). (The pre-existing typed-
-> declaration-with-unknown-type parser crash that `loft api-surface` surfaced — a `typedef`
-> typo, the keyword is `type` — was fixed separately: `Function::change_var_type` now guards
-> the no-variable sentinel and diagnoses instead of panicking.)
+> canonicalised for determinism. `name · kind · tier · signature` per member; clean
+> `Data::type_name_str` spellings (nullability `?`, synthetic enum tag filtered); struct
+> fields / enum variants sorted (named → order not API), fn params kept ordered (positional →
+> order IS API). Tests: `tests/api_surface.rs` — membership + tiers + transitive closure +
+> signatures over every kind + a **determinism corpus** (5 cosmetic-invariance pairs
+> byte-identical: reordered defs / fields / variants / whitespace / alias-vs-expanded; 4
+> positive controls differ: return-type / param-reorder / field-type / added-field). Commits
+> 4–7 pending. Completeness follow-up (NOT determinism, so not commit 3): keyed-collection key
+> fields — `sorted<T>` drops `[k]`, a false-NEGATIVE (a key change is missed), addressed with
+> a keys-aware type spelling later. (The `typedef`-typo parser crash `loft api-surface`
+> surfaced was fixed separately — `Function::change_var_type` now guards the no-variable
+> sentinel.)
 
 Seven commits, each complete + tested before the next (PLANNING.md § goal 5). **The deliverable is
 commit 7** — the author-facing non-blocking PR check; commits 1–6 build the **two-axis** verdict it

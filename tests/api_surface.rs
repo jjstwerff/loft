@@ -106,18 +106,82 @@ fn signatures_over_every_kind() {
         has("area · fn · public · (s: Shape) -> integer"),
         "area sig:\n{s}"
     );
-    // struct fields — a public root and a sealed closure member.
+    // struct fields — a public root and a sealed closure member. Fields are sorted by name
+    // (commit 3 canonicalisation: named construction → field order is not API), so `tag`
+    // precedes `x` regardless of declaration order.
     assert!(
         has("Public · struct · public · { v: integer }"),
         "Public sig:\n{s}"
     );
     assert!(
-        has("Widget · struct · sealed · { x: integer, tag: text }"),
+        has("Widget · struct · sealed · { tag: text, x: integer }"),
         "Widget sig:\n{s}"
     );
-    // enum variants, with the synthetic `enum` discriminant tag filtered out.
+    // enum variants, sorted by name, with the synthetic `enum` discriminant tag filtered out.
     assert!(
-        has("Shape · enum · sealed · { Circle { r: integer }, Square { side: integer }, Point }"),
+        has("Shape · enum · sealed · { Circle { r: integer }, Point, Square { side: integer } }"),
         "enum sig:\n{s}"
+    );
+}
+
+#[test]
+fn determinism_corpus() {
+    // Commit 3 — the make-or-break. Cosmetically-different-but-identical surfaces MUST
+    // produce byte-identical descriptors (a strict check has no escape valve for a false
+    // break); a genuinely-different surface MUST differ.
+    let same = |a: &str, b: &str, why: &str| {
+        assert_eq!(api_surface(a), api_surface(b), "must be identical: {why}");
+    };
+    let differ = |a: &str, b: &str, why: &str| {
+        assert_ne!(api_surface(a), api_surface(b), "must differ: {why}");
+    };
+
+    // --- invariances: a cosmetic edit is NOT a diff ---
+    same(
+        "pub fn f() -> integer { 1 }\nstruct S { a: integer }\npub fn g() -> S { S{a:1} }\n",
+        "struct S { a: integer }\npub fn g() -> S { S{a:1} }\npub fn f() -> integer { 1 }\n",
+        "reordered top-level defs",
+    );
+    same(
+        "pub struct W { x: integer, tag: text }\n",
+        "pub struct W { tag: text, x: integer }\n",
+        "reordered struct fields (named construction → not API)",
+    );
+    same(
+        "pub enum E { A { p: integer, q: text }, B }\n",
+        "pub enum E { B, A { q: text, p: integer } }\n",
+        "reordered enum variants + variant fields",
+    );
+    same(
+        "pub struct W{x:integer}\n",
+        "pub struct W {  x : integer  }\n",
+        "whitespace / formatting",
+    );
+    same(
+        "type Score = integer;\npub fn f() -> Score { 1 }\n",
+        "pub fn f() -> integer { 1 }\n",
+        "a transparent alias vs its expansion",
+    );
+
+    // --- real changes MUST differ (positive controls — no vacuous determinism) ---
+    differ(
+        "pub fn f() -> integer { 1 }\n",
+        "pub fn f() -> text { \"\" }\n",
+        "return type change",
+    );
+    differ(
+        "pub fn f(a: integer, b: text) -> integer { a }\n",
+        "pub fn f(b: text, a: integer) -> integer { a }\n",
+        "fn param REORDER (positional — a real API change, must NOT be canonicalised away)",
+    );
+    differ(
+        "pub struct W { x: integer }\n",
+        "pub struct W { x: text }\n",
+        "field type change",
+    );
+    differ(
+        "pub struct W { x: integer }\n",
+        "pub struct W { x: integer, y: text }\n",
+        "added field",
     );
 }

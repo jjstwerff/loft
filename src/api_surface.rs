@@ -2,9 +2,11 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! @PLN102 C1 — the library's OBSERVABLE public surface: the input to the compat-verdict
-//! engine. Commits 1–2 (this file): membership + visibility TIER (commit 1) + each member's
-//! resolved SIGNATURE (commit 2). Byte layout is the separate layout axis (commit 5);
-//! canonical determinism is commit 3.
+//! engine. Commits 1–3 (this file): membership + visibility TIER (commit 1) + each member's
+//! resolved SIGNATURE (commit 2) + canonical determinism (commit 3) — members sorted, and
+//! struct fields / enum variants sorted by name (named construction → their order is not API,
+//! only layout), while fn params keep declaration order (positional → their order IS API).
+//! Byte layout is the separate layout axis (commit 5).
 //!
 //! The surface is not the `pub`-marked set but the OBSERVABLE CLOSURE: the `pub` roots
 //! plus every library type reachable through a `pub` signature, INCLUDING non-`pub` ones —
@@ -149,37 +151,52 @@ fn method_name(raw: &str) -> String {
 fn signature_of(data: &Data, d: u32, kind: &str) -> String {
     let def = data.def(d);
     let ty = |t: &Type| data.type_name_str(t);
-    // Skip hidden return-mechanism params and the synthetic `enum` discriminant tag
-    // (`enum` is a reserved keyword, so it is never a user-declared field).
-    let named = |atts: &[crate::data::Attribute]| -> Vec<String> {
-        atts.iter()
+    // Render a field/parameter list. Skip hidden return-mechanism params and the synthetic
+    // `enum` discriminant tag (`enum` is a reserved keyword, never a user field). `sort`
+    // CANONICALISES by name: struct/enum fields use NAMED construction, so their order is
+    // not part of the API — a reorder is a layout change (commit 5's axis), not an API break,
+    // so sorting kills that false diff. Function PARAMS are positional (calls bind by
+    // position), so their order IS the API and is preserved (`sort = false`).
+    let render = |atts: &[crate::data::Attribute], sort: bool| -> Vec<String> {
+        let mut v: Vec<(&str, String)> = atts
+            .iter()
             .filter(|a| !a.hidden && a.name != "enum")
-            .map(|a| format!("{}: {}", a.name, ty(&a.typedef)))
-            .collect()
+            .map(|a| (a.name.as_str(), format!("{}: {}", a.name, ty(&a.typedef))))
+            .collect();
+        if sort {
+            v.sort_by(|a, b| a.0.cmp(b.0));
+        }
+        v.into_iter().map(|(_, s)| s).collect()
     };
     match kind {
         "fn" | "method" | "operator" => {
             format!(
                 "({}) -> {}",
-                named(def.attributes()).join(", "),
+                render(def.attributes(), false).join(", "),
                 ty(&def.returned)
             )
         }
-        "struct" => format!("{{ {} }}", named(def.attributes()).join(", ")),
+        "struct" => format!("{{ {} }}", render(def.attributes(), true).join(", ")),
         "enum" => {
-            let mut variants = Vec::new();
+            // Variants are matched/constructed by name, so variant ORDER is not API either —
+            // sort the variants, and each variant's fields, by name (the discriminant value a
+            // reorder would shift is a layout concern, commit 5).
+            let mut variants: Vec<(String, String)> = Vec::new();
             for v in 0..data.definitions() {
                 let vd = data.def(v);
                 if vd.parent == d && vd.def_type == DefType::EnumValue {
-                    let fields = named(vd.attributes());
-                    variants.push(if fields.is_empty() {
+                    let fields = render(vd.attributes(), true);
+                    let rendered = if fields.is_empty() {
                         vd.name.clone()
                     } else {
                         format!("{} {{ {} }}", vd.name, fields.join(", "))
-                    });
+                    };
+                    variants.push((vd.name.clone(), rendered));
                 }
             }
-            format!("{{ {} }}", variants.join(", "))
+            variants.sort_by(|a, b| a.0.cmp(&b.0));
+            let rendered: Vec<String> = variants.into_iter().map(|(_, s)| s).collect();
+            format!("{{ {} }}", rendered.join(", "))
         }
         "typedef" => format!("= {}", ty(&def.returned)),
         "constant" => format!(": {}", ty(&def.returned)),
