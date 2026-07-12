@@ -77,9 +77,9 @@ fn handle_hello(srv: server::Server, count: ServerCount, cid: integer, payload: 
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 18093 } else { port_raw as integer };
+  port = if port_raw == "" { 18093 } else { port_raw as integer? ?? 18093 };
   count_raw = env_variable("LOFT_T3_CLIENTS");
-  expected = if count_raw == "" { 5 } else { count_raw as integer };
+  expected = if count_raw == "" { 5 } else { count_raw as integer? ?? 5 };
 
   srv = server::listen(port);
   if srv.handle < 0 {

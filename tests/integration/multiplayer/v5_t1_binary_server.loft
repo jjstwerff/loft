@@ -23,7 +23,7 @@ use web;
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 18091 } else { port_raw as integer };
+  port = if port_raw == "" { 18091 } else { port_raw as integer? ?? 18091 };
 
   srv = server::listen(port);
   if srv.handle < 0 {

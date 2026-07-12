@@ -233,8 +233,8 @@ fn handle_ws_session(ws: server::WebSocket) {
       println("v3-game: malformed click \"{msg}\"");
       continue;
     }
-    r = body[..comma] as integer;
-    c = body[comma + 1..] as integer;
+    r = body[..comma] as integer? ?? -1;
+    c = body[comma + 1..] as integer? ?? -1;
     if r < 0 || r > 2 || c < 0 || c > 2 {
       println("v3-game: out-of-range click r={r} c={c}");
       continue;
@@ -276,7 +276,7 @@ fn handle_ws_session(ws: server::WebSocket) {
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 7878 } else { port_raw as integer };
+  port = if port_raw == "" { 7878 } else { port_raw as integer? ?? 7878 };
 
   srv = server::listen(port);
   if srv.handle < 0 {

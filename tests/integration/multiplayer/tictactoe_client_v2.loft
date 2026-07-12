@@ -52,7 +52,7 @@ fn install_map(reg: Registry, payload: text) {
     eq = entry.find("=");
     if eq != null {
       n = entry[..eq];
-      v = entry[eq + 1..] as integer;
+      v = entry[eq + 1..] as integer? ?? -1;
       install(reg, n, v);
     }
   }
@@ -161,7 +161,7 @@ fn main() {
   // ~200 ms; the single-client test leaves it unset (no delay).
   delay_raw = env_variable("LOFT_TICTACTOE_CLIENT_DELAY_MS");
   if delay_raw != "" {
-    sleep_ms(delay_raw as integer);
+    sleep_ms(delay_raw as integer? ?? 0);
   }
 
   // Phase 2 — short warmup so a second client can join (3 polls).
