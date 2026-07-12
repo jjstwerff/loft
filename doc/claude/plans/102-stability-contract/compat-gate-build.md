@@ -126,10 +126,11 @@ useful (our own libs, CI) before any registry work.
 > the tier-tagged observable closure (public / sealed) with each member's resolved signature,
 > `name · kind · tier · signature` per member (clean `Data::type_name_str` spellings,
 > nullability as `?`, synthetic enum tag filtered). Tests: `tests/api_surface.rs` (membership
-> + tiers + transitive closure + signatures over every kind). Commits 3–7 pending. Known gaps
-> for commit 3: keyed-collection key fields (`sorted<T>` drops `[k]`) and the pre-existing
-> top-level `typedef` parse crash (untested feature, crashes `loft --interpret`; unrelated to
-> the flip — reproduces under `LOFT_NO_NULLFLOW`).
+> + tiers + transitive closure + signatures over every kind). Commits 3–7 pending. Known gap
+> for commit 3: keyed-collection key fields (`sorted<T>` drops `[k]`). (The pre-existing typed-
+> declaration-with-unknown-type parser crash that `loft api-surface` surfaced — a `typedef`
+> typo, the keyword is `type` — was fixed separately: `Function::change_var_type` now guards
+> the no-variable sentinel and diagnoses instead of panicking.)
 
 Seven commits, each complete + tested before the next (PLANNING.md § goal 5). **The deliverable is
 commit 7** — the author-facing non-blocking PR check; commits 1–6 build the **two-axis** verdict it
