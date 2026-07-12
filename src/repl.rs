@@ -589,6 +589,7 @@ fn process_line<W: Write>(
             "bytecode" => session.introspect(Section::Bytecode, filter),
             "rust" => session.introspect(Section::Rust, filter),
             "slots" => session.introspect(Section::Slots, filter),
+            "ownership" => session.introspect(Section::Ownership, filter),
             "fns" => session.list_fns(),
             "vars" => match session.show_vars() {
                 Ok(true) => {}

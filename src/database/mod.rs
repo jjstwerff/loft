@@ -13,6 +13,7 @@ pub mod snapshot;
 mod structures;
 mod types;
 
+pub use allocation::timeline_summary;
 pub use journal::Journal;
 pub use types::Type;
 

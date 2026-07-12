@@ -1,0 +1,17 @@
+// @PLN103 P0.1 — F1 falsification probe.
+// A vector-returning match with a BORROWED arm (`items` = a field view of `e`) beside
+// an OWNED literal arm. Delivery synthesis wraps the borrowed arm's RESULT in an owned
+// copy (`jo_arm_copy` → `_mvcopy_1`), so `ownership_of` on the arm's delivered result
+// reads Owned. BUT the borrowed SOURCE binding `_mv_items_1 = OpGetField(e,…)` survives
+// in the committed `def.code`, and `ownership_of(Var(_mv_items_1))` reads Borrowed(base=e).
+// CONCLUSION: the static overlay renders PER-BINDING ownership over the FINAL IR — no
+// pre-synthesis snapshot needed. Verified 2026-07-12 (both join_own on and off).
+enum Tok { V { n: integer } }
+enum Cell { Filled { items: vector<Tok> }, Empty }
+fn f1_borrow(e: Cell) -> vector<Tok> { match e { Filled { items } => items, Empty => [V{n:9}] } }
+fn main() {
+  c: Cell = Filled { items: [V{n:1}, V{n:2}] };
+  r = f1_borrow(c);
+  assert(len(r) == 2, "f1_borrow: {len(r)}");
+  print("f1-join-recovery: PASS");
+}

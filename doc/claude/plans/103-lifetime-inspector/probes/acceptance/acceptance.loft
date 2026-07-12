@@ -1,0 +1,44 @@
+// @PLN103 P0.2 — acceptance corpus: one fn per invisible-fact-kind, each exercising a
+// borrowed/owned/view/copy/delivery distinction the overlay (P1) must render. All the
+// historical bugs are FIXED on main, so this runs clean and WARNING-FREE on BOTH backends;
+// the hand-verified per-binding ownership verdicts live in acceptance.expected.
+enum Tok { V { n: integer } }
+enum Cell { Filled { items: vector<Tok> }, Empty }
+
+// K1+K4 — borrowed field arm (`items` = view of e) beside an owned literal arm (the join,
+// collapsed by jo_arm_copy). The borrowed SOURCE binding survives on the final IR (P0.1).
+fn k1_borrowed_arm(e: Cell) -> vector<Tok> { match e { Filled { items } => items, Empty => [V{n:9}] } }
+
+// K2 — a whole-value vector bind COPIES (owns its store); a projection read is a VIEW.
+fn k2_copy_vs_view(src: vector<Tok>) -> integer {
+  b = src;        // whole-value vector bind → COPY (owns its store)
+  first = b[0];   // projection read → VIEW of b's element
+  first.n
+}
+
+// K4 — empty-arm slice match (return context): materialize_null_slice_arms (#562) makes the
+// `[]` arm a fresh vector so native does not emit `()` (E0308).
+fn k4_emptyarm(v: vector<Tok>) -> vector<Tok> { match v { [ _, ..rest ] => rest, _ => [] } }
+
+// K1 — owned on one path, a borrowed VIEW on the other: a genuine runtime JOIN (#316/#495).
+// The owned `V{n:0}` is live when `use_pool` is false, so it is NOT a dead store; when true,
+// `r` becomes a view of `pool` — the owned store must be freed at the transition.
+fn k1_owned_or_borrow(pool: vector<Tok>, i: integer, use_pool: boolean) -> Tok {
+  r: Tok = V{n:0};
+  if use_pool { r = pool[i] ?? V{n:1}; }
+  r
+}
+
+fn main() {
+  full: vector<Tok> = [V{n:1}, V{n:2}, V{n:3}];
+  empty: vector<Tok> = [];
+  c: Cell = Filled { items: full };
+  assert(len(k1_borrowed_arm(c)) == 3, "k1_borrowed_arm filled");
+  assert(len(k1_borrowed_arm(Empty)) == 1, "k1_borrowed_arm empty");
+  assert(k2_copy_vs_view(full) == 1, "k2 copy/view");
+  assert(len(k4_emptyarm(full)) == 2, "k4 rest");
+  assert(len(k4_emptyarm(empty)) == 0, "k4 empty arm");
+  assert(k1_owned_or_borrow(full, 1, true).n == 2, "k1 join borrow path");
+  assert(k1_owned_or_borrow(full, 1, false).n == 0, "k1 join owned path");
+  print("acceptance: PASS");
+}

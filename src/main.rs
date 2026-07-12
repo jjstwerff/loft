@@ -4113,6 +4113,8 @@ fn main() {
             introspect_sections.push(loft::introspect::Section::Slots);
         } else if a == "--show-types" {
             introspect_sections.push(loft::introspect::Section::Types);
+        } else if a == "--show-ownership" {
+            introspect_sections.push(loft::introspect::Section::Ownership);
         } else if a == "--bytecode-out" {
             introspect_bytecode_out = argv.get(i).cloned();
             i += 1;

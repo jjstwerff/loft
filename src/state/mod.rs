@@ -4050,6 +4050,10 @@ impl State {
             );
         }
         let leaked = self.collect_store_leaks();
+        // @PLN103 P3.3 — the store-timeline working-set-vs-leak summary (no-op unless
+        // `LOFT_STORES=timeline`), reconciled with the authoritative leak count so the
+        // interp eval-stack/const infrastructure is not false-positived as a leak.
+        crate::database::timeline_summary(leaked.len());
         if !leaked.is_empty() {
             let count = leaked.len();
             let preview = if count <= 5 {

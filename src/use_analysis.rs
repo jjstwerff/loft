@@ -1683,7 +1683,7 @@ fn own_kind(own: Own) -> &'static str {
 
 /// A readable `Owned` / `Borrowed(base=<name>)` / `Join(base=<name>)`, resolving the
 /// base var to its name in `func`'s space (`?` when unresolved).
-fn fmt_own(own: Own, func: &Function) -> String {
+pub fn fmt_own(own: Own, func: &Function) -> String {
     let base = |b: u16| {
         if b == u16::MAX {
             "?".to_string()
@@ -1695,6 +1695,51 @@ fn fmt_own(own: Own, func: &Function) -> String {
         Own::Owned => "Owned".to_string(),
         Own::Borrowed { base: b } => format!("Borrowed(base={})", base(b)),
         Own::Join { base: b } => format!("Join(base={})", base(b)),
+    }
+}
+
+/// @PLN103 P1.4 — is `name` a SYNTHESIZED owned buffer (a var whose store the var
+/// itself owns: the vector-delivery / NRVO / materialise-copy / return buffers)?
+/// A `Borrowed` verdict whose base is one of these (or the var itself) is really an
+/// OWNED store held via that buffer, not an alias of a live sibling (P0.2 finding).
+#[must_use]
+pub fn is_synth_buffer(name: &str) -> bool {
+    name.starts_with("__vdb")
+        || name.starts_with("__ref")
+        || name.starts_with("_mvcopy")
+        || name == "__retbuf"
+}
+
+/// @PLN103 P1.4 — render `own` for the ownership overlay (the P0.2 rendering rule,
+/// corrected in P1): `ownership_of` reports a bare argument as `Borrowed{base=self}`
+/// (self-base) and an owned delivery buffer as `Borrowed{base=<buffer>}`, neither of
+/// which is a dangerous alias — so translate them:
+/// - **self-base** (`base == v`): the var is an argument with no local def → it borrows
+///   the CALLER's value → `Borrowed(caller-arg)`.
+/// - **synthesized-buffer base** (`base != v`, [`is_synth_buffer`]): the var OWNS its
+///   store, held via that delivery buffer → `Owned (backing=<name>)`.
+/// - any other `Borrowed{base=X}` → a genuine ALIAS of a live sibling `X` (the dangerous
+///   case) → `Borrowed(base=<name>)`.
+///
+/// `Join` is NEVER translated (a real runtime split). RENDERER-ONLY — `ownership_of`
+/// stays faithful (Out-of-scope §1); `v` is the var being classified (for self-base).
+#[must_use]
+pub fn render_own(own: Own, func: &Function, v: u16) -> String {
+    let name = |b: u16| {
+        if b == u16::MAX {
+            "?".to_string()
+        } else {
+            func.name(b).to_string()
+        }
+    };
+    match own {
+        Own::Owned => "Owned".to_string(),
+        Own::Borrowed { base: b } if b == v => "Borrowed(caller-arg)".to_string(),
+        Own::Borrowed { base: b } if b != u16::MAX && is_synth_buffer(func.name(b)) => {
+            format!("Owned (backing={})", name(b))
+        }
+        Own::Borrowed { base: b } => format!("Borrowed(base={})", name(b)),
+        Own::Join { base: b } => format!("Join(base={})", name(b)),
     }
 }
 

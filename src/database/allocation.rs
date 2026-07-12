@@ -11,6 +11,53 @@ use crate::store::Store;
 use crate::tree;
 use crate::vector;
 
+// @PLN103 P3 — the `LOFT_STORES=timeline` runtime store timeline. A pure diagnostic
+// (gated on the env var), so its state lives thread-local rather than on `Stores` — no
+// struct/constructor ripple. A per-logical-store id is `<store_nr>.<seq>`: `store_nr` is a
+// REUSED slot index (P0.4), so `seq` (a monotonic alloc counter) disambiguates slot reuse.
+// `live` maps each live slot to its current seq so a free prints the SAME id as its alloc.
+#[derive(Default)]
+struct TimelineState {
+    seq: u64,
+    live: std::collections::HashMap<u16, u64>,
+    peak_live: usize,
+    total_alloc: u64,
+    total_free: u64,
+}
+
+thread_local! {
+    static TIMELINE: std::cell::RefCell<TimelineState> = std::cell::RefCell::new(TimelineState::default());
+}
+
+/// True when `LOFT_STORES=timeline` (cached per thread — the env is stable for a run).
+fn timeline_on() -> bool {
+    thread_local! { static ON: bool = std::env::var("LOFT_STORES").as_deref() == Ok("timeline"); }
+    ON.with(|b| *b)
+}
+
+/// @PLN103 P3.3 — the working-set-vs-leak summary (the disambiguation `LOFT_STORES=warn`
+/// cannot make): **peak concurrency** (the working set) vs a real leak. `real_leaked` is the
+/// AUTHORITATIVE count from `collect_store_leaks()` (which excludes the eval-stack / const /
+/// locked runtime infrastructure the raw timeline `live` map would false-positive on — the
+/// interp-vs-native divergence this reconciles). Called at exit; no-op unless timeline mode.
+pub fn timeline_summary(real_leaked: usize) {
+    if !timeline_on() {
+        return;
+    }
+    TIMELINE.with(|t| {
+        let t = t.borrow();
+        let verdict = if real_leaked == 0 {
+            "NO leak (every user store freed)".to_string()
+        } else {
+            format!("{real_leaked} user store(s) LEAKED — see the leak warning for which")
+        };
+        eprintln!(
+            "[timeline] SUMMARY: {} allocs, {} frees, peak {} concurrently-live (working set) — {verdict}",
+            t.total_alloc, t.total_free, t.peak_live
+        );
+    });
+}
+
 /// One owned nested-heap child of a container record, as enumerated by
 /// [`Stores::for_each_owned_child`] — the single per-`Parts` heap-cascade walk
 /// that `remove_claims` and `copy_claims_hash_body` read instead of each
@@ -440,6 +487,22 @@ impl Stores {
                     self.max, result.store_nr
                 );
             }
+            Ok("timeline") => {
+                let seq = TIMELINE.with(|t| {
+                    let mut t = t.borrow_mut();
+                    let s = t.seq;
+                    t.seq += 1;
+                    t.total_alloc += 1;
+                    t.live.insert(result.store_nr, s);
+                    t.peak_live = t.peak_live.max(t.live.len());
+                    s
+                });
+                let label = if name.is_empty() { "·" } else { name };
+                eprintln!(
+                    "[timeline] alloc #{}.{seq}  {label:<14} live={active} size={size}",
+                    result.store_nr
+                );
+            }
             _ => {}
         }
         result
@@ -573,13 +636,30 @@ impl Stores {
                 Vec::new()
             }
         };
-        if std::env::var("LOFT_STORES").as_deref() == Ok("log") {
-            let active = self.allocations.iter().filter(|s| !s.free).count();
-            let label = if name.is_empty() { "" } else { name };
-            eprintln!(
-                "[store] - free   #{al} {label:>12} | active={:<4} max={}",
-                active, self.max
-            );
+        match std::env::var("LOFT_STORES").as_deref() {
+            Ok("log") => {
+                let active = self.allocations.iter().filter(|s| !s.free).count();
+                let label = if name.is_empty() { "" } else { name };
+                eprintln!(
+                    "[store] - free   #{al} {label:>12} | active={:<4} max={}",
+                    active, self.max
+                );
+            }
+            Ok("timeline") => {
+                // @PLN103 P3 — print the SAME `<store_nr>.<seq>` id the alloc printed, so
+                // a reader matches alloc↔free across slot reuse. `?` = a free with no live
+                // alloc record (a double-free or a pre-timeline store).
+                let (seq, live_after) = TIMELINE.with(|t| {
+                    let mut t = t.borrow_mut();
+                    t.total_free += 1;
+                    let s = t.live.remove(&al);
+                    (s, t.live.len())
+                });
+                let seq = seq.map_or_else(|| "?".to_string(), |s| s.to_string());
+                let label = if name.is_empty() { "·" } else { name };
+                eprintln!("[timeline] free  #{al}.{seq}  {label:<14} live={live_after}");
+            }
+            _ => {}
         }
         // S36: clear the lock before marking free.
         let store = &mut self.allocations[al as usize];

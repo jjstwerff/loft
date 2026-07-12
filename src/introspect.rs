@@ -14,7 +14,7 @@
 //! for the surface design.
 
 use crate::compile;
-use crate::data::{Data, DefType};
+use crate::data::{Data, DefType, Value};
 use crate::diagnostics::Level;
 use crate::generation;
 use crate::log_config::LogConfig;
@@ -40,6 +40,12 @@ pub enum Section {
     /// from that text, and compare to the original byte stream.  Proves
     /// the labelled disassembly is a faithful, editable representation.
     Roundtrip,
+    /// @PLN103 — per-binding store-ownership: each variable's resolved
+    /// `Owned` / `Borrowed(base)` / `Join(base)` verdict (via
+    /// `use_analysis::ownership_of`), with owned backing buffers rendered
+    /// as `Owned (backing=…)`.  Surfaces the borrowed-vs-owned fact behind
+    /// the store-lifetime bug corpus.  Opt-in (`--show-ownership`).
+    Ownership,
 }
 
 /// Options for `loft --introspect`.
@@ -247,6 +253,20 @@ pub fn emit_all(
             emit_types(&mut writer, data, end_def, opts)?;
         }
     }
+    // @PLN103 — opt-in only (`--show-ownership`), NOT part of the no-flags
+    // "all sections" default, so a plain `introspect <file>` is unchanged.
+    if opts.sections.contains(&Section::Ownership) {
+        if diff_mode {
+            writeln!(buffer)?;
+            writeln!(buffer, "=== ownership ===")?;
+            emit_ownership(&mut buffer, data, end_def, opts)?;
+        } else {
+            let mut writer = stdout.lock();
+            writeln!(writer)?;
+            writeln!(writer, "=== ownership ===")?;
+            emit_ownership(&mut writer, data, end_def, opts)?;
+        }
+    }
     // Opt-in only (a verification check, not a dump) — NOT part of the
     // no-flags "all sections" default, so it never pollutes a plain dump.
     if opts.sections.contains(&Section::Roundtrip) {
@@ -448,6 +468,100 @@ fn emit_slots(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> s
 /// etc.).  Designed to surface dep-propagation bugs at a glance —
 /// e.g. P197 showed `s: text` (no deps) for a tuple-element text
 /// read that should have inherited the host's `[a]` dependency.
+/// @PLN103 P1 — per-binding store ownership.
+///
+/// For each user function, resolve every variable's ownership via
+/// `use_analysis::ownership_of` over the COMMITTED `def.code` (P0.1: the borrowed
+/// SOURCE binding survives synthesis, so no pre-synthesis snapshot is needed), and
+/// render it with the P0.2 rule (`render_own`): an owned backing buffer reads
+/// `Owned (backing=…)`, a genuine alias reads `Borrowed(base=…)`, a runtime split
+/// reads `Join(base=…)`.  The function header shows `return_ownership`.
+fn emit_ownership(
+    w: &mut dyn Write,
+    data: &Data,
+    end_def: u32,
+    opts: &Options,
+) -> std::io::Result<()> {
+    // @PLN103 P2.0 — ownership is BACKEND-SHARED: the interp bytecode and native Rust
+    // lower this SAME verdict (both read `use_analysis::ownership_of`), so there is no
+    // per-backend column. A runtime interp≠native value-identity split is a codegen bug,
+    // caught by the differential value oracle / leak+ASan gates (and P3's per-backend timeline).
+    writeln!(
+        w,
+        "# store ownership is backend-shared (interp + native lower the same verdict)"
+    )?;
+    for d_nr in 0..end_def {
+        let def = data.def(d_nr);
+        if def.def_type != DefType::Function {
+            continue;
+        }
+        if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
+            continue;
+        }
+        if !opts.all_fns && crate::compile::is_default_file(&def.position.file) {
+            continue;
+        }
+        if !opts.fn_filter.is_empty()
+            && !opts
+                .fn_filter
+                .iter()
+                .any(|f| def.name == *f || def.name == format!("n_{f}") || def.name.contains(f))
+        {
+            continue;
+        }
+        if def.variables.count() == 0 {
+            continue;
+        }
+        let vars = &def.variables;
+        let ret = crate::use_analysis::return_ownership(data, d_nr);
+        writeln!(
+            w,
+            "fn {} -> {}:",
+            def.name,
+            crate::use_analysis::fmt_own(ret, vars)
+        )?;
+        writeln!(w, "  {:<4} {:<4} {:<22} ownership", "#", "arg", "name")?;
+        writeln!(w, "  {}", "-".repeat(66))?;
+        for v in 0..vars.count() {
+            let arg = if vars.is_argument(v) { "arg" } else { "" };
+            // Only heap-backed vars have store ownership; a scalar is by-value.
+            let rendered = if vars.tp(v).heap_dep().is_some() {
+                let own = crate::use_analysis::ownership_of(data, d_nr, &Value::Var(v));
+                crate::use_analysis::render_own(own, vars, v)
+            } else {
+                "—  (scalar)".to_string()
+            };
+            writeln!(w, "  {v:<4} {arg:<4} {:<22} {rendered}", vars.name(v))?;
+        }
+        // @PLN103 P1.5 — delivery lens: the delivery OUTCOME for a heap (vector/reference)
+        // return, read from `def.returned`'s deps on the COMMITTED IR — `["__retbuf"]` (a
+        // synth buffer) = MATERIALISED into the return buffer, `[arg]` = a borrowed VIEW
+        // returned, empty = OWNED fresh store. (Read from the return type, so it is robust;
+        // a per-arm walk of the delivered IR was tried and dropped — post-synthesis the arm
+        // structure is rewritten, so per-arm `ownership_of` is misleading. The per-arm
+        // delivery target needs the parser to PERSIST its `Delivery` verdict — a later step.)
+        if let Some(deps) = def.returned.heap_dep() {
+            let note = if deps.is_empty() {
+                "owned (fresh store)".to_string()
+            } else if deps
+                .iter()
+                .any(|&d| d != u16::MAX && crate::use_analysis::is_synth_buffer(vars.name(d)))
+            {
+                "materialised → return buffer".to_string()
+            } else {
+                let names: Vec<&str> = deps
+                    .iter()
+                    .map(|&d| if d == u16::MAX { "?" } else { vars.name(d) })
+                    .collect();
+                format!("borrows {} (view returned)", names.join(", "))
+            };
+            writeln!(w, "  delivery: {}  — {note}", def.returned.show(data, vars))?;
+        }
+        writeln!(w)?;
+    }
+    Ok(())
+}
+
 fn emit_types(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> std::io::Result<()> {
     for d_nr in 0..end_def {
         let def = data.def(d_nr);

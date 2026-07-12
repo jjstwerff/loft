@@ -138,6 +138,127 @@ fn fn_filter_restricts_to_one() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// @PLN103 — the `--show-ownership` overlay + `LOFT_STORES=timeline` summary.
+// Assertion-based (not byte-golden): each check pins one SEMANTIC invariant per
+// fact-kind, so a harmless var-number/format shift doesn't force a re-bless, but a
+// regression in the ownership verdict (e.g. reverting the per-binding classification)
+// turns a `Borrowed`/`Join` back into `Owned` and fails.
+// ---------------------------------------------------------------------------
+
+/// Run `introspect --show-ownership <flags> tests/data/ownership_corpus.loft`.
+fn ownership(flags: &[&str]) -> String {
+    let corpus = workspace_root().join("tests/data/ownership_corpus.loft");
+    let out = Command::new(loft_bin())
+        .arg("introspect")
+        .arg("--show-ownership")
+        .args(flags)
+        .arg(&corpus)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    assert!(
+        out.status.success(),
+        "introspect --show-ownership should exit 0; stderr:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
+
+/// The overlay renders every invisible-fact-kind correctly on the committed IR.
+#[test]
+fn show_ownership_renders_each_fact_kind() {
+    let out = ownership(&[]);
+    // The verdict is backend-shared (P2.0) — the overlay says so.
+    assert!(
+        out.contains("backend-shared"),
+        "missing the backend-shared note:\n{out}"
+    );
+    // K1 — a borrowed field projection is a genuine alias of its source param.
+    assert!(
+        out.contains("_mv_items_1") && out.contains("Borrowed(base=e)"),
+        "K1: borrowed field projection not flagged as Borrowed(base=e):\n{out}"
+    );
+    // K2 — a whole-value bind COPIES (Owned); a projection read is a VIEW (Borrowed).
+    let k2 = section_fn(&out, "n_k2_copy_vs_view");
+    assert!(
+        k2.contains("\n  1         b                      Owned"),
+        "K2: `b = src` should be an Owned copy:\n{k2}"
+    );
+    assert!(
+        k2.contains("first") && k2.contains("Borrowed(base="),
+        "K2: `b[0]` should be a Borrowed view:\n{k2}"
+    );
+    // K4 — the empty `[]` arm is a REAL owned vector (the #562 fix), not a bare null;
+    // and the return delivers via the return buffer.
+    let k4 = section_fn(&out, "n_k4_emptyarm");
+    assert!(
+        k4.contains("_empty_arm_1") && k4.contains("Owned (backing="),
+        "K4: empty-arm should own a fresh store:\n{k4}"
+    );
+    assert!(
+        k4.contains("delivery:") && k4.contains("materialised"),
+        "K4: return delivery should be materialised:\n{k4}"
+    );
+    // K1 runtime JOIN — owned on one path, a borrowed view on the other; scalars elided.
+    let kj = section_fn(&out, "n_k1_owned_or_borrow");
+    assert!(
+        kj.contains("Join(base=pool)"),
+        "K1-join: `r`/return should be Join(base=pool):\n{kj}"
+    );
+    assert!(
+        kj.contains("(scalar)"),
+        "scalars should render `— (scalar)`:\n{kj}"
+    );
+}
+
+/// The overlay is deterministic (two runs identical) — safe to diff/golden.
+#[test]
+fn show_ownership_is_deterministic() {
+    assert_eq!(ownership(&[]), ownership(&[]));
+}
+
+/// `LOFT_STORES=timeline` distinguishes a large WORKING SET from a leak — the
+/// disambiguation `=warn` cannot make. A clean program: peak > 0, `NO leak`.
+#[test]
+fn timeline_summary_reports_working_set_no_leak() {
+    let corpus = workspace_root().join("tests/data/ownership_corpus.loft");
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(&corpus)
+        .env("LOFT_STORES", "timeline")
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("[timeline] SUMMARY:") && err.contains("(working set)"),
+        "missing timeline SUMMARY:\n{err}"
+    );
+    assert!(
+        err.contains("NO leak"),
+        "a clean program should report NO leak:\n{err}"
+    );
+    // Stable ids: at least one `alloc #<nr>.<seq>` with a dotted seq.
+    assert!(
+        err.contains("[timeline] alloc #") && err.contains('.'),
+        "missing stable per-store ids:\n{err}"
+    );
+}
+
+/// The text of one function's `--show-ownership` block, up to the next `fn ` header.
+fn section_fn<'a>(stdout: &'a str, fn_name: &str) -> &'a str {
+    let header = format!("fn {fn_name} ");
+    let start = stdout
+        .find(&header)
+        .unwrap_or_else(|| panic!("no `{header}` in:\n{stdout}"));
+    let rest = &stdout[start + header.len()..];
+    let end = rest
+        .find("\nfn ")
+        .map_or(stdout.len(), |e| start + header.len() + e);
+    &stdout[start..end]
+}
+
 /// CLI error — a missing input file exits non-zero.
 #[test]
 fn missing_file_errors() {
