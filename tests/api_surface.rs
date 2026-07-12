@@ -34,6 +34,31 @@ fn api_surface(src: &str) -> String {
     String::from_utf8_lossy(&out.stdout).into_owned()
 }
 
+/// Run `loft api-surface --diff <base> <new> [--json]`; return (stdout, exit code).
+fn api_diff_cli(base: &str, new: &str, json: bool) -> (String, i32) {
+    let dir = std::env::temp_dir().join(format!(
+        "loft_apidiff_{}_{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let fb = dir.join("base.loft");
+    let fn_ = dir.join("new.loft");
+    std::fs::write(&fb, base).unwrap();
+    std::fs::write(&fn_, new).unwrap();
+    let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+    cmd.arg("api-surface").arg("--diff").arg(&fb).arg(&fn_);
+    if json {
+        cmd.arg("--json");
+    }
+    let out = cmd.output().expect("run loft api-surface --diff");
+    let _ = std::fs::remove_dir_all(&dir);
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
 #[test]
 fn surface_membership_and_tiers() {
     let s = api_surface(
@@ -183,5 +208,54 @@ fn determinism_corpus() {
         "pub struct W { x: integer }\n",
         "pub struct W { x: integer, y: text }\n",
         "added field",
+    );
+}
+
+#[test]
+fn diff_cli_verdict_and_exit_codes() {
+    // Commit 6 — `--diff` wires the surface reader to the diff engine.
+    // Superset (added a fn) → exit 0, "drop-in".
+    let (out, code) = api_diff_cli(
+        "pub fn make() -> integer { 1 }\n",
+        "pub fn make() -> integer { 1 }\npub fn extra(a: integer) -> integer { a }\n",
+        false,
+    );
+    assert_eq!(code, 0, "superset exits 0:\n{out}");
+    assert!(out.contains("drop-in"), "superset human text:\n{out}");
+    // Break (changed return type) → exit 1, names the broken symbol.
+    let (out, code) = api_diff_cli(
+        "pub fn make() -> integer { 1 }\n",
+        "pub fn make() -> text { \"\" }\n",
+        false,
+    );
+    assert_eq!(code, 1, "break exits 1:\n{out}");
+    assert!(
+        out.contains("BREAK") && out.contains("make"),
+        "break human names make:\n{out}"
+    );
+}
+
+#[test]
+fn diff_cli_json() {
+    let (out, code) = api_diff_cli(
+        "pub fn make() -> integer { 1 }\n",
+        "pub fn make() -> text { \"\" }\n",
+        true,
+    );
+    assert_eq!(code, 1);
+    assert!(
+        out.contains(r#""verdict":"break""#),
+        "json break verdict:\n{out}"
+    );
+    assert!(out.contains("make"), "json names make:\n{out}");
+    let (out, code) = api_diff_cli(
+        "pub fn make() -> integer { 1 }\n",
+        "pub fn make() -> integer { 1 }\npub fn g() -> integer { 2 }\n",
+        true,
+    );
+    assert_eq!(code, 0);
+    assert!(
+        out.contains(r#""verdict":"superset""#),
+        "json superset verdict:\n{out}"
     );
 }

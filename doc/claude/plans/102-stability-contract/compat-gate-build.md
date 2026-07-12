@@ -122,6 +122,13 @@ useful (our own libs, CI) before any registry work.
 
 #### C1 — the commit ladder (the MVP: Tier 1, small verifiable steps)
 
+> **Landed: commits 1–4 + 6** (2026-07-12); commit 5 (layout axis) + commit 7 (PR check) pending.
+> **Commit 6** — `loft api-surface --diff <base> <new> [--json]` (`src/main.rs`): loads + surfaces
+> both files, runs the diff, prints the verdict as human text (PR comment) or machine JSON
+> (`{"api":{"verdict":…,"broken":[…]}}` — `layout` slots in beside `api` when commit 5 lands).
+> Exit 0 = drop-in · 1 = break (a non-required CI check goes red) · 2 = load error. Tests:
+> `tests/api_surface.rs::{diff_cli_verdict_and_exit_codes, diff_cli_json}`.
+>
 > **Landed: commits 1–4** (2026-07-12). **Commit 4** — `src/api_diff.rs`: the STRICT,
 > tier-aware diff, two surfaces → `Verdict::{Superset, Break(named symbols)}`. Identical-or-
 > added is the whole rule (a "safe" widening still breaks). Tier-aware via **sealed inlining**:

@@ -3556,14 +3556,12 @@ fn run_file_debugger() -> ! {
     std::process::exit(code);
 }
 
-/// @PLN102 C1 commit 1 — `loft api-surface <file>`: print the library's OBSERVABLE
-/// public surface (membership + visibility tier) — one `name · kind · tier` line per
-/// member, sorted. Self-contained + early-exit, like `loft layout`; no signatures yet.
-fn run_api_surface_command(file: &str) -> i32 {
+/// @PLN102 C1 — load `file` (stdlib + the file), parse, and return its public surface, or an
+/// error string on a missing file / parse failure. Shared by the descriptor and `--diff` modes.
+fn api_surface_of(file: &str) -> Result<Vec<loft::api_surface::Member>, String> {
     let entry = std::path::PathBuf::from(file);
     if !entry.exists() {
-        eprintln!("loft api-surface: file {file} not found");
-        return 1;
+        return Err(format!("file {file} not found"));
     }
     let abs = std::fs::canonicalize(&entry).unwrap_or_else(|_| entry.clone());
     let exe_dir = std::env::current_exe()
@@ -3584,19 +3582,103 @@ fn run_api_surface_command(file: &str) -> i32 {
     let abs_str = abs.to_string_lossy().to_string();
     p.parse(&abs_str, false);
     if p.diagnostics.level() >= loft::diagnostics::Level::Error {
-        eprintln!("loft api-surface: {file} did not parse cleanly");
-        return 1;
+        return Err(format!("{file} did not parse cleanly"));
     }
-    for m in loft::api_surface::surface(&p.data, &abs_str) {
-        println!(
-            "{} · {} · {} · {}",
-            m.name,
-            m.kind,
-            m.tier.as_str(),
-            m.signature
-        );
+    Ok(loft::api_surface::surface(&p.data, &abs_str))
+}
+
+/// @PLN102 C1 — `loft api-surface <file>` prints the surface descriptor; `loft api-surface
+/// --diff <base> <new> [--json]` prints the compatibility verdict (human text, or machine JSON
+/// for a CI check). Exit: 0 = drop-in / printed · 1 = a BREAK (so a non-required CI check goes
+/// red) · 2 = a usage / load error.
+fn run_api_surface_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+
+    if args.iter().any(|a| a == "--diff") {
+        let (Some(base), Some(new)) = (positional.first(), positional.get(1)) else {
+            eprintln!("loft api-surface: usage: loft api-surface --diff <base> <new> [--json]");
+            return 2;
+        };
+        let (old_s, new_s) = match (api_surface_of(base), api_surface_of(new)) {
+            (Ok(o), Ok(n)) => (o, n),
+            (Err(e), _) | (_, Err(e)) => {
+                eprintln!("loft api-surface: {e}");
+                return 2;
+            }
+        };
+        let verdict = loft::api_diff::diff(&old_s, &new_s);
+        print_api_verdict(&verdict, json);
+        return i32::from(matches!(verdict, loft::api_diff::Verdict::Break(_)));
     }
-    0
+
+    let Some(file) = positional.first() else {
+        eprintln!("loft api-surface: usage: loft api-surface <file>  |  --diff <base> <new>");
+        return 2;
+    };
+    match api_surface_of(file) {
+        Ok(surface) => {
+            for m in surface {
+                println!(
+                    "{} · {} · {} · {}",
+                    m.name,
+                    m.kind,
+                    m.tier.as_str(),
+                    m.signature
+                );
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("loft api-surface: {e}");
+            2
+        }
+    }
+}
+
+/// Print a compat verdict as machine JSON (a CI check parses it) or human text (a PR comment).
+/// Shaped `{"api":{"verdict":…,"broken":[…]}}` — the `layout` axis (@PLN97, commit 5) slots in
+/// beside `api` when it lands.
+fn print_api_verdict(verdict: &loft::api_diff::Verdict, json: bool) {
+    use loft::api_diff::Verdict;
+    if json {
+        match verdict {
+            Verdict::Superset => println!(r#"{{"api":{{"verdict":"superset","broken":[]}}}}"#),
+            Verdict::Break(broken) => {
+                let items: Vec<String> = broken.iter().map(|s| api_json_string(s)).collect();
+                println!(
+                    r#"{{"api":{{"verdict":"break","broken":[{}]}}}}"#,
+                    items.join(",")
+                );
+            }
+        }
+    } else {
+        match verdict {
+            Verdict::Superset => {
+                println!("API: drop-in — the new surface is a superset (additions only).");
+            }
+            Verdict::Break(broken) => {
+                println!("API: BREAK — {} symbol(s):", broken.len());
+                for b in broken {
+                    println!("  - {b}");
+                }
+            }
+        }
+    }
+}
+
+/// Minimal JSON string encoding (escape `"` and `\`; the symbols are identifiers + backticks).
+fn api_json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
 }
 
 /// @PLN97 Phase F — `loft layout <accept|check> <file>`: the compiler migration
@@ -4592,12 +4674,10 @@ fn main() {
             let code = scaffold_library(&name, native, chunk);
             std::process::exit(code);
         } else if a == "api-surface" {
-            // @PLN102 C1 — `loft api-surface <file>`. Self-contained + early-exit.
-            let Some(file) = argv.get(i).cloned() else {
-                eprintln!("loft api-surface: usage: loft api-surface <file>");
-                std::process::exit(1);
-            };
-            std::process::exit(run_api_surface_command(&file));
+            // @PLN102 C1 — `loft api-surface <file>` | `--diff <base> <new> [--json]`.
+            // Self-contained + early-exit.
+            let rest: Vec<String> = argv[i..].to_vec();
+            std::process::exit(run_api_surface_command(&rest));
         } else if a == "layout" {
             // @PLN97 Phase F — `loft layout <accept|check> <file>`. Self-contained
             // + early-exit: never touches the normal build path (zero cost).
