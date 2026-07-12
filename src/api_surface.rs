@@ -53,6 +53,58 @@ pub struct Member {
     pub signature: String,
 }
 
+impl Member {
+    /// The stable one-line form: `name · kind · tier · signature`. This IS the descriptor
+    /// output and the checked-in baseline line (commit 7); [`Member::from_line`] round-trips it.
+    #[must_use]
+    pub fn to_line(&self) -> String {
+        format!(
+            "{} · {} · {} · {}",
+            self.name,
+            self.kind,
+            self.tier.as_str(),
+            self.signature
+        )
+    }
+
+    /// Parse a `name · kind · tier · signature` line (a baseline member), or `None` if it is not
+    /// one (a comment / blank / malformed line). The signature never contains ` · `, so a
+    /// 4-way split is exact.
+    #[must_use]
+    pub fn from_line(line: &str) -> Option<Member> {
+        let mut it = line.splitn(4, " · ");
+        let name = it.next()?.to_string();
+        let kind = kind_from_str(it.next()?)?;
+        let tier = match it.next()? {
+            "public" => Tier::Public,
+            "sealed" => Tier::Sealed,
+            _ => return None,
+        };
+        let signature = it.next()?.to_string();
+        Some(Member {
+            name,
+            kind,
+            tier,
+            signature,
+        })
+    }
+}
+
+/// Map a printed kind back to its `&'static str` (the inverse of [`classify`]'s labels).
+fn kind_from_str(s: &str) -> Option<&'static str> {
+    Some(match s {
+        "fn" => "fn",
+        "method" => "method",
+        "operator" => "operator",
+        "struct" => "struct",
+        "enum" => "enum",
+        "typedef" => "typedef",
+        "constant" => "constant",
+        "interface" => "interface",
+        _ => return None,
+    })
+}
+
 /// The observable public surface of the library whose definitions were parsed from
 /// `lib_file` (matched on `Definition.position.file`), as the tier-tagged closure. Stdlib
 /// and dependency defs come from other files and are not this library's to break, so they

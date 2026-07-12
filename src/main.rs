@@ -3610,6 +3610,52 @@ fn run_api_surface_command(args: &[String]) -> i32 {
     let json = args.iter().any(|a| a == "--json");
     let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
 
+    // Commit 7 — the PR check: emit a checked-in baseline, and check current-vs-baseline.
+    if args.iter().any(|a| a == "--emit-baseline") {
+        let Some(file) = positional.first() else {
+            eprintln!("loft api-surface: usage: loft api-surface <file> --emit-baseline");
+            return 2;
+        };
+        return match api_surface_of(file) {
+            Ok((surface, identity)) => {
+                print!("{}", emit_baseline(&surface, &identity));
+                0
+            }
+            Err(e) => {
+                eprintln!("loft api-surface: {e}");
+                2
+            }
+        };
+    }
+    if args.iter().any(|a| a == "--check") {
+        let (Some(baseline_path), Some(file)) = (positional.first(), positional.get(1)) else {
+            eprintln!(
+                "loft api-surface: usage: loft api-surface --check <baseline> <file> [--json]"
+            );
+            return 2;
+        };
+        let Ok(text) = std::fs::read_to_string(baseline_path.as_str()) else {
+            eprintln!("loft api-surface: cannot read baseline {baseline_path}");
+            return 2;
+        };
+        let Some((old_s, old_id)) = parse_baseline(&text) else {
+            eprintln!("loft api-surface: {baseline_path} is not a valid api-surface baseline");
+            return 2;
+        };
+        let (new_s, new_id) = match api_surface_of(file) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("loft api-surface: {e}");
+                return 2;
+            }
+        };
+        let api = loft::api_diff::diff(&old_s, &new_s);
+        let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+        print_verdict(&api, &layout, json);
+        let broke = matches!(api, loft::api_diff::Verdict::Break(_)) || layout_reshaped(&layout);
+        return i32::from(broke);
+    }
+
     if args.iter().any(|a| a == "--diff") {
         let (Some(base), Some(new)) = (positional.first(), positional.get(1)) else {
             eprintln!("loft api-surface: usage: loft api-surface --diff <base> <new> [--json]");
@@ -3638,13 +3684,7 @@ fn run_api_surface_command(args: &[String]) -> i32 {
     match api_surface_of(file) {
         Ok((surface, _identity)) => {
             for m in surface {
-                println!(
-                    "{} · {} · {} · {}",
-                    m.name,
-                    m.kind,
-                    m.tier.as_str(),
-                    m.signature
-                );
+                println!("{}", m.to_line());
             }
             0
         }
@@ -3727,6 +3767,41 @@ fn api_json_string(s: &str) -> String {
     }
     out.push('"');
     out
+}
+
+/// Serialize a surface + its layout identity to a checked-in baseline (regenerated on release):
+/// the API-surface member lines, a `--layout--` divider, then the @PLN97 layout sidecar.
+fn emit_baseline(
+    surface: &[loft::api_surface::Member],
+    identity: &loft::schema_sidecar::LayoutIdentity,
+) -> String {
+    let mut s = String::from(
+        "# loft api-surface baseline v1 — regenerate on release: \
+         `loft api-surface <file> --emit-baseline`\n",
+    );
+    for m in surface {
+        s.push_str(&m.to_line());
+        s.push('\n');
+    }
+    s.push_str("--layout--\n");
+    s.push_str(&identity.to_sidecar());
+    s
+}
+
+/// Parse a baseline back into (members, layout identity); `None` on a malformed file.
+fn parse_baseline(
+    text: &str,
+) -> Option<(
+    Vec<loft::api_surface::Member>,
+    loft::schema_sidecar::LayoutIdentity,
+)> {
+    let (surf, layout) = text.split_once("\n--layout--\n")?;
+    let members: Vec<loft::api_surface::Member> = surf
+        .lines()
+        .filter_map(loft::api_surface::Member::from_line)
+        .collect();
+    let identity = loft::schema_sidecar::LayoutIdentity::from_sidecar(layout)?;
+    Some((members, identity))
 }
 
 /// @PLN97 Phase F — `loft layout <accept|check> <file>`: the compiler migration

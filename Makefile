@@ -102,7 +102,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check
+.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -591,6 +591,18 @@ features-check: features-gen  ## Drift guard: fail if the committed shadow is st
 	    exit 1; \
 	fi
 	@echo "features shadow in sync with index/features.json."
+
+api-compat:  ## @PLN102 — check bundled api-surface baselines are still a drop-in (CI: red, non-blocking)
+	@cargo build --release --bin loft
+	@rc=0; for base in tests/fixtures/api_compat/*.api-baseline; do \
+	    src="$${base%.api-baseline}.loft"; \
+	    echo "== api-compat: $$src =="; \
+	    target/release/loft api-surface --check "$$base" "$$src" || rc=1; \
+	done; \
+	if [ $$rc -ne 0 ]; then \
+	    echo "NOT a drop-in. On an INTENTIONAL change, regenerate: loft api-surface <lib> --emit-baseline > <lib>.api-baseline"; \
+	fi; \
+	exit $$rc
 
 view: view-refresh
 	@if [ ! -f tools/viewer/src/main.loft ]; then \

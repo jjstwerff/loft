@@ -122,7 +122,20 @@ useful (our own libs, CI) before any registry work.
 
 #### C1 — the commit ladder (the MVP: Tier 1, small verifiable steps)
 
-> **Landed: commits 1–6** (2026-07-12); only commit 7 (the non-blocking PR check) remains.
+> **✅ C1 COMPLETE — commits 1–7 landed** (2026-07-12). **Commit 7 (the deliverable)** — the
+> non-blocking PR check. CLI: `loft api-surface <file> --emit-baseline` writes a checked-in
+> baseline (member lines + the @PLN97 layout sidecar; `Member::{to_line,from_line}` round-trip
+> it); `loft api-surface --check <baseline> <file>` reports the two-axis verdict vs the baseline,
+> exit 1 (red) on an API break OR a layout reshape. Wiring: `make api-compat` (checks
+> `tests/fixtures/api_compat/*.api-baseline`, propagates the exit for CI) + `.github/workflows/
+> api-compat.yml` (a NON-required job → red-but-non-blocking). Dogfood: a committed fixture +
+> baseline, green today. Tests: `pr_check_baseline_round_trip` (positive control — injected API
+> break AND layout reshape both red; a drop-in green) + `committed_dogfood_baseline_is_a_drop_in`.
+>
+> The MVP now works end to end: read a library's observable public surface, diff or check two
+> versions across the API + layout axes, and red-but-non-blocking on a break — "release small
+> library changes with confidence."
+>
 > **Commit 5** — the LAYOUT axis, reusing @PLN97 (`src/main.rs`, `schema_sidecar`): `api_surface_of`
 > also returns the `LayoutIdentity` (per-type store-layout, from the compiled database), computed
 > ONLY for `--diff` (kept out of the descriptor so a layout-only edit does not perturb the

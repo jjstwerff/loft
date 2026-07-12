@@ -1,0 +1,45 @@
+# @PLN102 C1 — the api-surface COMPATIBILITY check (the non-blocking PR check).
+#
+# Runs `make api-compat`: for each bundled baseline, `loft api-surface --check` reports whether
+# the current source is still a drop-in — the API axis (strict, tier-aware) AND the @PLN97 layout
+# axis (a value-type reshape is a silent data break). A break fails this job → a RED status on the
+# PR. Keep this check OUT of the branch's required status checks so it is NON-BLOCKING: it INFORMS
+# ("this PR is not backwards compatible"), it never blocks the merge — the doctrine is folding +
+# hosting, not prevention (see doc/claude/COMPATIBILITY.md).
+#
+# Regenerate a baseline on an INTENTIONAL change:
+#   loft api-surface <lib> --emit-baseline > <lib>.api-baseline
+name: api-compat
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  api-compat:
+    name: API compatibility (non-blocking)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      - name: Cache cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-apicompat-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-apicompat-
+            ${{ runner.os }}-cargo-
+      - name: Check api-surface compatibility
+        run: make api-compat

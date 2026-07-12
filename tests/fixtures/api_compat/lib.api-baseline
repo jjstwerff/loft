@@ -1,0 +1,10 @@
+# loft api-surface baseline v1 — regenerate on release: `loft api-surface <file> --emit-baseline`
+Version · struct · public · { major: integer, minor: integer }
+compare · fn · public · (a: Version, b: Version) -> integer
+current · fn · public · () -> Version
+--layout--
+LOFT-DSCHEMA v1
+hash=2161255419440299298
+--
+Version	size=16	struct{major@0:integer, minor@8:integer}
+integer	size=8	base

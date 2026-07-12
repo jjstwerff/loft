@@ -59,6 +59,46 @@ fn api_diff_cli(base: &str, new: &str, json: bool) -> (String, i32) {
     )
 }
 
+/// Commit 7 — the PR-check round-trip: `--emit-baseline` on `released`, then `--check` the
+/// baseline against `current`. Returns (stdout, exit code).
+fn emit_and_check(released: &str, current: &str) -> (String, i32) {
+    let dir = std::env::temp_dir().join(format!(
+        "loft_apibase_{}_{}",
+        std::process::id(),
+        SEQ.fetch_add(1, Ordering::Relaxed)
+    ));
+    std::fs::create_dir_all(&dir).unwrap();
+    let released_f = dir.join("released.loft");
+    let baseline_f = dir.join("lib.api-baseline");
+    let current_f = dir.join("current.loft");
+    std::fs::write(&released_f, released).unwrap();
+    std::fs::write(&current_f, current).unwrap();
+    let emit = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("api-surface")
+        .arg(&released_f)
+        .arg("--emit-baseline")
+        .output()
+        .expect("emit-baseline");
+    assert!(
+        emit.status.success(),
+        "emit-baseline failed: {}",
+        String::from_utf8_lossy(&emit.stderr)
+    );
+    std::fs::write(&baseline_f, &emit.stdout).unwrap();
+    let chk = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("api-surface")
+        .arg("--check")
+        .arg(&baseline_f)
+        .arg(&current_f)
+        .output()
+        .expect("check");
+    let _ = std::fs::remove_dir_all(&dir);
+    (
+        String::from_utf8_lossy(&chk.stdout).into_owned(),
+        chk.status.code().unwrap_or(-1),
+    )
+}
+
 #[test]
 fn surface_membership_and_tiers() {
     let s = api_surface(
@@ -298,5 +338,69 @@ fn diff_json_carries_both_axes() {
     assert!(
         out.contains(r#""layout":{"verdict":"changed""#) && out.contains("Point"),
         "json layout changed names Point:\n{out}"
+    );
+}
+
+#[test]
+fn pr_check_baseline_round_trip() {
+    // Commit 7 — the deliverable. Emit a baseline of the released source, then check current
+    // against it: a drop-in stays green (exit 0); an injected API break OR layout reshape reds
+    // (exit 1) — the positive control per axis, no vacuous green.
+    let released = "pub struct Point { x: integer, y: integer }\npub fn make(a: integer) -> Point { Point{x:a,y:0} }\n";
+
+    // drop-in: add a fn
+    let (out, code) = emit_and_check(
+        released,
+        &format!("{released}pub fn extra() -> integer {{ 0 }}\n"),
+    );
+    assert_eq!(code, 0, "drop-in exits 0:\n{out}");
+    assert!(
+        out.contains("drop-in") && out.contains("Layout: stable"),
+        "drop-in clean on both axes:\n{out}"
+    );
+
+    // injected API break: drop a param
+    let (out, code) = emit_and_check(
+        released,
+        "pub struct Point { x: integer, y: integer }\npub fn make() -> Point { Point{x:0,y:0} }\n",
+    );
+    assert_eq!(code, 1, "an API break reds:\n{out}");
+    assert!(
+        out.contains("API: BREAK") && out.contains("make"),
+        "names make:\n{out}"
+    );
+
+    // injected layout reshape: reorder fields (an API drop-in but a data break)
+    let (out, code) = emit_and_check(
+        released,
+        "pub struct Point { y: integer, x: integer }\npub fn make(a: integer) -> Point { Point{x:a,y:0} }\n",
+    );
+    assert_eq!(code, 1, "a layout reshape reds:\n{out}");
+    assert!(
+        out.contains("API: drop-in") && out.contains("Layout: CHANGED"),
+        "API drop-in but layout changed:\n{out}"
+    );
+}
+
+#[test]
+fn committed_dogfood_baseline_is_a_drop_in() {
+    // The committed fixture must stay a drop-in against its committed baseline — `make
+    // api-compat`'s green case. Catches a `lib.loft` change that forgot to regenerate the
+    // baseline, and a loft change that reshapes its layout.
+    let root = env!("CARGO_MANIFEST_DIR");
+    let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("api-surface")
+        .arg("--check")
+        .arg(format!("{root}/tests/fixtures/api_compat/lib.api-baseline"))
+        .arg(format!("{root}/tests/fixtures/api_compat/lib.loft"))
+        .output()
+        .expect("check committed baseline");
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "committed dogfood baseline is not a drop-in — regenerate it with \
+         `loft api-surface tests/fixtures/api_compat/lib.loft --emit-baseline`:\n{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
     );
 }
