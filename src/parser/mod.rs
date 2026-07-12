@@ -9281,16 +9281,26 @@ mod plan86_nesting_guard_tests {
     }
 
     /// @PLN86 0.1 — hostile deep nesting inside a sandboxed def is a clean
-    /// LOAD-time parse error, NOT a native stack overflow (rc=139).  Runs on an
-    /// explicit 8 MB stack so the result is deterministic across CI harnesses
-    /// (a stack overflow aborts the whole process, it is not a catchable panic):
-    /// WITH the guard, 2000-deep parens bail at the limit (~1.3 MB); WITHOUT it
-    /// they overflow even 8 MB (2000 × ~10 KB ≈ 20 MB).  Process surviving + the
-    /// latched diagnostic together prove the guard fired.
+    /// LOAD-time parse error, NOT a native stack overflow (rc=139).  The
+    /// definitive check is the pair of asserts below (a depth error was emitted
+    /// AND it is the nesting-depth diagnostic); the explicit stack size only has
+    /// to be large enough that the process REACHES those asserts before the guard
+    /// trips at 128 — a stack overflow aborts the whole process, it is not a
+    /// catchable panic.
+    ///
+    /// Sizing: one nesting level costs ≈15 KB of native stack (measured; the
+    /// `expression → operators → part → single` chain — the null-flow parse logic
+    /// in #559 grew it from ≈10 KB), so 128 levels ≈ 1.8 MB uninstrumented.  The
+    /// ASan gate inflates every frame ≈4.4× (redzones + shadow), pushing 128
+    /// levels to ≈8–9 MB — which overflowed the former 8 MB thread here and turned
+    /// the ASan gate red (a guard that fires correctly, starved of stack).  64 MB
+    /// clears 128 ASan-inflated levels with margin, while a runaway (broken guard →
+    /// 2000 levels ≈ 128 MB under ASan) still overflows, so a regressed guard is
+    /// caught either by the asserts or by an overflow.
     #[test]
     fn deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash() {
         let (has_error, has_msg) = std::thread::Builder::new()
-            .stack_size(8 * 1024 * 1024)
+            .stack_size(64 * 1024 * 1024)
             .spawn(|| {
                 let depth = 2000; // >> SANDBOX_MAX_PARSE_DEPTH and into the overflow zone
                 let src = format!(
