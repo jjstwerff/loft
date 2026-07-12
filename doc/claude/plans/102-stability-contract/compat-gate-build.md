@@ -58,6 +58,30 @@ useful (our own libs, CI) before any registry work.
 - *Verify:* run C1 on our own libs across their published version pairs (`web` 0.2→0.3,
   `server` 0.2→0.3, …) and hand-check the verdicts.
 
+#### C1 — the commit ladder (small verifiable steps)
+
+Seven commits, each complete + tested before the next (PLANNING.md § goal 5). **Ordering
+principle: front-load determinism** — the canonical descriptor and its fixture corpus are
+locked *before* the diff consumes them, because a non-canonical surface makes every verdict
+noise (§ Falsification names this the make-or-break). C1 is independently shippable at commit
+6 (it gates our OWN libs' additivity before any registry exists), so the keystone earns its
+keep before C2/C3 depend on it. Dogfood closes.
+
+| # | Commit | Code-points | Verify | E |
+|---|---|---|---|---|
+| 1 | **`api-surface`: enumerate the public surface** — new `loft api-surface <path>` subcommand + `src/api_surface.rs`; walk `Data` for `pub`-marked, `[library] entry`-reachable defs (fn / struct / enum / typedef / operator); emit `name · kind`, sorted. No signatures yet. | dispatch beside `introspect` (`src/main.rs:~3851`); pub-mark (`src/parser/mod.rs:216`,`:6526`); `Definition.def_type` (`src/data.rs:2513`); `[library] entry` (`src/manifest.rs:102`) | a fixture lib prints exactly its N pub symbols; a sibling fixture with `pub` / non-`pub` / unreachable defs proves the filter excludes private + unreachable | S |
+| 2 | **Attach resolved signatures** — each entry gains fn params (name+type) + return (+ `returned_not_null`), struct/enum field & variant layout (value types), operator sigs. Spellings via `Type::show`. | `Definition.{returned,returned_not_null,variables}` (`src/data.rs:2526`+); `Type::show` (`src/data.rs:1751`) | golden descriptor for a fixture covering every kind (nullable-return fn, value struct, enum, typedef, operator) matches byte-for-byte | S |
+| 3 | **Canonicalise → determinism (THE make-or-break)** — normalise type spellings + ordering so a cosmetic edit is not a diff: canonical type form (alias resolution, stable rendering), stable sort key, whitespace-normalised. | `src/api_surface.rs` canonicaliser; `Type::show` normalisation | **determinism corpus**: cosmetically-different-but-identical-surface pairs (reordered defs, renamed private local, reformatted, alias-vs-expanded type) → byte-identical descriptors; a genuinely-different pair → differs. Over-invest here. | M |
+| 4 | **The diff engine: `Superset` vs `Break`** — new `src/api_diff.rs`, a pure fn over two canonical descriptors: every old symbol present with a compatible sig + additions-only → `Superset` (drop-in); else `Break`, naming the offending symbols. | new `src/api_diff.rs` | a fixture pair per verdict class (pure additions → Superset; removed symbol → Break; layout change → Break) | S |
+| 5 | **Signature-compatibility rules (the policy, isolated)** — factor "compatible signature" into one explicit rule set matching arc A: widened param OK, added-nullable / `?`-relax OK, removed / renamed / narrowed → break. Separate from the diff walk so the policy is one testable place. | `src/api_diff.rs` rule module; policy = `COMPATIBILITY.md` arc A | rule-matrix unit test (old-sig × new-sig → compatible \| break), one row per rule | S |
+| 6 | **Verdict output — machine + human** — `loft api-surface <path>` writes the descriptor; `--diff <old> <new>` prints the verdict as machine JSON (for the C2 gate) + human text (for `loft upgrade`). | `src/main.rs` (`--diff` flag, cf. the `introspect --diff` precedent); `src/api_surface.rs` writer | JSON round-trips; human text names broken symbols; a `--diff` smoke on two fixture versions | S |
+| 7 | **Dogfood + CI additivity gate** — run C1 on our own published pairs (`web` 0.2→0.3, `server` 0.2→0.3, …), hand-check verdicts; wire a `make ci` check that our libs' surface stays additive (flags an intended break). | `make ci`; `tests/` fixture pairs graduated from earlier commits | hand-checked verdicts match reality; the gate is green now AND **fires on an injected break** (positive control — no vacuous green) | S |
+
+Shape: keystone with the risk in commit 3 and the proof (dogfood + positive control) in commit
+7. Commits 1–3 = design's C1.1 · 4–5 = C1.2 · 6 = C1.3 · 7 = the *Verify* line above, made a
+standing gate. Nothing here touches the registry — C1 is entirely in-repo, which is why it's
+buildable now while C2/C3 wait on it.
+
 ### C2 — The registry compatibility gate (arc B-registry) · repo: loft-lang/registry
 
 `pr-validate` becomes the curated gate from COMPATIBILITY.md § Two populations. It ORCHESTRATES the
