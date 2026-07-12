@@ -190,7 +190,11 @@ fn registry_predates_dn1(server_script: &str) -> bool {
     if out.status.success() {
         return false;
     }
-    let err = String::from_utf8_lossy(&out.stderr);
+    // Normalise `\` → `/` so the registry-path match fires on Windows too: the
+    // compiler prints `...\.loft\registry\...` there, so a bare `/.loft/registry/`
+    // substring check missed it — the self-heal SKIP never fired and the server's
+    // doomed compile burned the full 60s timeout as a hard failure instead of a skip.
+    let err = String::from_utf8_lossy(&out.stderr).replace('\\', "/");
     if err.contains("/.loft/registry/") {
         eprintln!(
             "SKIP {server_script}: the installed registry package predates the DN1 null \
