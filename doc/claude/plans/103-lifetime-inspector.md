@@ -5,11 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 103 — Lifetime inspector: render the ownership fact the store-lifetime bugs kept hiding
 
-**Status — IN PROGRESS / P0 (2026-07-12).** ✅ P0.1 (F1 falsification) — the load-bearing gate cleared,
-and it SIMPLIFIED the design (per-binding classification over the final IR; no pre-synthesis snapshot).
-✅ P0.4 (timeline seam) — hooks documented + the `(store_nr, alloc_seq)` id fix identified. Remaining:
-P0.2 acceptance corpus + P0.3 dump-harden (the empty-arm cell needs loft PR #562 on main; the rest are
-main-compatible). Canonical id
+**Status — P0 COMPLETE, P1 next (2026-07-12).** ✅ P0.1 (F1 falsification — the load-bearing gate;
+SIMPLIFIED the design to per-binding classification over the final IR, no pre-synthesis snapshot). ✅ P0.2
+(acceptance corpus + expected — the semantically-important borrows + the runtime JOIN classify correctly;
+surfaced the one renderer rule). ✅ P0.3 (dump path clean over the corpus). ✅ P0.4 (timeline seam +
+`(store_nr, alloc_seq)` id fix). Branch rebased onto `main` (with #562). Next: P1 — the static overlay
+`loft introspect ownership`. Canonical id
 [`@PLN103`](https://github.com/loft-lang/plans/issues/103) (`status:future`, `subject:loft`). Serves the
 ongoing @PLN85 store-lifetime-retirement arc and **supersedes the "Dep-graph / lifetime visualizer"
 scope deferred on 2026-05-13** (DEBUG.md). This file is the design + the coverage-driving corpus + the
@@ -308,20 +309,26 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
   unpopulated); reproduce with a temporary per-binding dump in `use_analysis::dump_all` gated on an env
   var (that is how this was verified). **GATE CLEARED** — P1.3/P1.4 proceed on the per-binding design.
 
-- **P0.2 — acceptance corpus + hand-written verdicts.** Write `probes/acceptance/` — one fn per fact-kind
-  drawn from the corpus: `k1-306-borrowed-return`, `k1-316-owned-to-borrow`, `k2-338-view-swap`,
-  `k2-415-field-copy`, `k4-492-doubled`, `k4-emptyarm-return-and-bind`, `k5-classC-reuse` — plus
-  `acceptance.expected` listing, per binding, the hand-computed `{Own, VIEW/COPY, Delivery, free-flags}`.
-  **VERIFY:** every file compiles and runs clean on BOTH backends
-  (`for f in probes/acceptance/*.loft; do loft --interpret "$f" && loft --native "$f"; done` all exit 0,
-  no leak under `LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK=1`). A file that does not compile is a
-  vacuous cell (the run-checked-control lesson) — fix or drop it. This file is the ORACLE for P1–P3.
+- **P0.2 — acceptance corpus + hand-written verdicts.** ✅ DONE (2026-07-12). `probes/acceptance/`
+  = `acceptance.loft` (one fn per fact-kind: `k1_borrowed_arm` K1+K4, `k2_copy_vs_view` K2,
+  `k4_emptyarm` K4, `k1_owned_or_borrow` K1 runtime-join) + `acceptance.expected` (per-binding verdicts,
+  hand-checked). Runs clean, **warning-free** (`LOFT_DENY_WARNINGS=1`) and leak-clean on BOTH backends.
+  **✅ RESULT:** the semantically-important borrows are all CORRECT on the final IR — the borrowed field
+  projection (`_mv_items_1 = Borrowed(base=e)`), the projection view (`first = Borrowed(base=b)`), and
+  critically the runtime JOIN (`r` and `return` = `Join(base=pool)` in `k1_owned_or_borrow`, the
+  #316/#495 shape the oracle nails). **P1 FINDING (folded into P1.4):** an owned copy/materialise buffer
+  classifies as `Borrowed(base=X)` where X is the var's OWN backing store (a synthesized `__vdb_*` /
+  `__ref_*` / `_mvcopy_*`, or a self-base) — defensible but reads as an alias; the overlay's renderer
+  must translate `base ∈ {self, synthesized-buffer}` → "Owned (backing=X)", reserving "Borrowed(base=X)"
+  for a base naming a USER var/param. (Two originally-listed cells — the #338 in-place swap and a
+  `cap = match` bind — were folded into `k2`/the K1 join to keep the corpus compiling clean; the swap
+  is a mutation-order fact better shown by the P3 timeline than the static overlay.)
 
-- **P0.3 — F4: the dump path survives the corpus.** Run `loft introspect {types,bytecode,rust,slots}`
-  over every `probes/**/*.loft`. **VERIFY:**
-  `for f in probes/**/*.loft; do for s in types bytecode rust slots; do loft introspect "$f" >/dev/null 2>&1 || echo "FAIL $s $f"; done; done`
-  prints nothing. Fix any panic/`unwrap`/unreachable at its site (a dump must never invoke the leak-check
-  that aborts at `debug.rs:1333`/`:1339`).
+- **P0.3 — F4: the dump path survives the corpus.** ✅ DONE (2026-07-12). `loft introspect` bare + each
+  of `--show-bytecode` / `--show-rust` / `--show-slots` / `--show-types` over both probes: all exit 0,
+  no panic/`unwrap`/unreachable. (CLI note for the runner: sections are FLAGS — `introspect --show-bytecode <file>`
+  — not positional; bare `introspect <file>` emits all.) No dump-path crash surfaced on this corpus;
+  re-run when the corpus grows.
 
 - **P0.4 — timeline seam feasibility.** ✅ DONE (2026-07-12). **Hooks:** alloc = `Stores::allocate`
   (`database/allocation.rs:429`, the `LOFT_STORES=log` branch, `+ alloc #<store_nr> <name>`); free =
@@ -338,12 +345,11 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
   and record the alloc-time `name` on the `Store` so the lifeline is labeled by alloc-name. **Feasible:
   two hook sites + one `u64` + repurpose an existing dead field.**
 
-- **GATE P0:** ✅ P0.1 answered (per-binding on the final IR — no snapshot). ✅ P0.4 documented (seam +
-  the `(store_nr, alloc_seq)` id fix). **Remaining: P0.2/P0.3** — the acceptance corpus green on both
-  backends + the dump path clean over it. NOTE: the `k4-emptyarm-*` cell needs the @PLN35 empty-arm fix
-  (loft PR #562's `materialize_null_slice_arms`) to compile clean on native; the other cells (K1/K2/K4
-  struct-enum/#492) are main-compatible. So P0.2 fully lands either after #562 merges to main (then
-  rebase this branch) or on a branch stacked on #562. The main-compatible cells can be built now.
+- **GATE P0 — ✅ CLEARED (2026-07-12).** P0.1 (per-binding on the final IR — no snapshot), P0.2
+  (acceptance corpus + expected, green/warning-free/leak-clean both backends; the runtime-JOIN verdict
+  confirmed correct), P0.3 (dump path clean over the corpus), P0.4 (timeline seam + `(store_nr,
+  alloc_seq)` id fix). This branch is rebased onto `main` (which now carries #562's empty-arm fix).
+  **P1 may proceed.**
 
 ### P1 — static overlay `loft introspect ownership`, single backend (interp)
 
@@ -362,9 +368,13 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
 - **P1.4 — per-slot rows.** Render, per binding: `Own` verdict (`ownership_of`+`fmt_own`), backing store,
   VIEW/COPY (`classify_vec_bind`/`VecBind` + whole-value-vs-projection), free sites (`free_sites`) with
   double-free / free-before-alloc / free-before-use / orphaned flags, and the reassign timeline
-  (`reassign_sites` + `displaced_owned_slots`). **VERIFY:**
-  `loft introspect ownership probes/acceptance/*.loft` diffed against `acceptance.expected` (K1/K2/K3
-  columns) is empty on interp.
+  (`reassign_sites` + `displaced_owned_slots`). **Apply the P0.2 rendering rule** (do NOT print raw
+  `fmt_own`): when `Own::Borrowed{base}`'s base is the var itself (self-base) or a synthesized buffer
+  (`__vdb_*`/`__ref_*`/`_mvcopy_*`/`__retbuf`), render **"Owned (backing=<base>)"**; reserve
+  "Borrowed(base=X)" for a base naming a user var/param/other-binding. This is a renderer heuristic in the
+  overlay, NOT a change to `ownership_of` (Out-of-scope §1). **VERIFY:**
+  `loft introspect ownership probes/acceptance/acceptance.loft` matches `acceptance.expected` (the ✓ rows
+  verbatim, the ⚠ rows via the translation) on interp.
 - **P1.5 — per-return/arm delivery.** Render the `Delivery` verdict (`classify_vector_delivery`) + each
   arm's delivery target + static type + append-vs-replace occupancy. **VERIFY:** `k4-emptyarm-*` flags
   the `[]` arm as "null/() UNDELIVERED" on the pre-fix shape and "fresh vector" on the fixed shape;
