@@ -3556,6 +3556,43 @@ fn run_file_debugger() -> ! {
     std::process::exit(code);
 }
 
+/// @PLN102 C1 commit 1 — `loft api-surface <file>`: print the library's OBSERVABLE
+/// public surface (membership + visibility tier) — one `name · kind · tier` line per
+/// member, sorted. Self-contained + early-exit, like `loft layout`; no signatures yet.
+fn run_api_surface_command(file: &str) -> i32 {
+    let entry = std::path::PathBuf::from(file);
+    if !entry.exists() {
+        eprintln!("loft api-surface: file {file} not found");
+        return 1;
+    }
+    let abs = std::fs::canonicalize(&entry).unwrap_or_else(|_| entry.clone());
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    let default_dir = exe_dir.join("../default");
+    let default_str = if default_dir.exists() {
+        default_dir.to_string_lossy().to_string()
+    } else {
+        format!("{}/default", project_dir())
+    };
+    let mut p = parser::Parser::new();
+    if let Some(src_dir) = entry.parent() {
+        p.lib_dirs.push(src_dir.to_string_lossy().to_string());
+    }
+    let _ = p.parse_dir(&default_str, true, false);
+    let abs_str = abs.to_string_lossy().to_string();
+    p.parse(&abs_str, false);
+    if p.diagnostics.level() >= loft::diagnostics::Level::Error {
+        eprintln!("loft api-surface: {file} did not parse cleanly");
+        return 1;
+    }
+    for m in loft::api_surface::surface(&p.data, &abs_str) {
+        println!("{} · {} · {}", m.name, m.kind, m.tier.as_str());
+    }
+    0
+}
+
 /// @PLN97 Phase F — `loft layout <accept|check> <file>`: the compiler migration
 /// aid as an explicit, opt-in command (a normal build pays nothing). `accept`
 /// records the program's current layout as the baseline (`.loft/layout.lock`);
@@ -4548,6 +4585,13 @@ fn main() {
             };
             let code = scaffold_library(&name, native, chunk);
             std::process::exit(code);
+        } else if a == "api-surface" {
+            // @PLN102 C1 — `loft api-surface <file>`. Self-contained + early-exit.
+            let Some(file) = argv.get(i).cloned() else {
+                eprintln!("loft api-surface: usage: loft api-surface <file>");
+                std::process::exit(1);
+            };
+            std::process::exit(run_api_surface_command(&file));
         } else if a == "layout" {
             // @PLN97 Phase F — `loft layout <accept|check> <file>`. Self-contained
             // + early-exit: never touches the normal build path (zero cost).

@@ -122,6 +122,10 @@ useful (our own libs, CI) before any registry work.
 
 #### C1 — the commit ladder (the MVP: Tier 1, small verifiable steps)
 
+> **Landed: commit 1** (2026-07-12) — `loft api-surface <file>` + `src/api_surface.rs`: the
+> tier-tagged observable closure (public / sealed), `name · kind · tier` per member. Tests:
+> `tests/api_surface.rs` (membership + tiers + transitive closure). Commits 2–7 pending.
+
 Seven commits, each complete + tested before the next (PLANNING.md § goal 5). **The deliverable is
 commit 7** — the author-facing non-blocking PR check; commits 1–6 build the **two-axis** verdict it
 posts (**API**: superset | break · **layout**: stable | changed — the layout axis reuses @PLN97's
