@@ -5,7 +5,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 103 — Lifetime inspector: render the ownership fact the store-lifetime bugs kept hiding
 
-**Status — PROPOSED / design (2026-07-12).** Not started. Canonical id
+**Status — IN PROGRESS / P0 (2026-07-12).** P0.1 (F1 falsification) ✅ DONE — the load-bearing gate is
+cleared and it SIMPLIFIED the design (per-binding classification over the final IR; no pre-synthesis
+snapshot). P0.2–P0.4 next. Canonical id
 [`@PLN103`](https://github.com/loft-lang/plans/issues/103) (`status:future`, `subject:loft`). Serves the
 ongoing @PLN85 store-lifetime-retirement arc and **supersedes the "Dep-graph / lifetime visualizer"
 scope deferred on 2026-05-13** (DEBUG.md). This file is the design + the coverage-driving corpus + the
@@ -176,15 +178,24 @@ sites + per-store timeline, and none renders it **per-backend side by side**.
 
 ## Failure paths first (the design's core — how a naive inspector breaks)
 
-### F1 — sampling ownership AFTER delivery synthesis collapses the join (the fatal one)
-`dispatch_vector_delivery` (`control.rs:1463`) and the `match_return` jo-arm pre-pass
-(`control.rs:9964-10003`) **rewrite a borrowed arm in place** — `_mv_items = OpGetField(e,…)` becomes
-`Insert([OpClearVector(__retbuf), OpAppendVector(__retbuf, _mv_items,…), …, Var(__retbuf)])` — BEFORE
-`ownership_of` at block_result can see the owned-vs-borrowed split (agent-C limit 3). A tool that reads
-the *delivered* IR reports `Owned` everywhere and is useless for exactly the K4 bugs it must catch
-(#492, empty-arm, D-own-1). **⇒ The overlay MUST sample the oracle on the PRE-delivery IR** (run the
-analysis on a snapshot taken before synthesis, or hook the pre-pass), and label every fact with the
-phase it was sampled at. This is the single load-bearing architectural decision.
+### F1 — classifying the arm's *result* value reports Owned (RESOLVED by P0.1 — simpler than feared)
+The `ref_return` jo-arm synthesis (`control.rs:9972`, gated `keys::join_own_enabled()`) **wraps a
+borrowed arm's RESULT in an owned copy** before `block_result`: the arm `Filled { items } => items`
+becomes `Block{name:"jo_arm_copy", ops:[OpCopyRecord(_mvcopy_1, _mv_items_1, …), Var(_mvcopy_1)]}`, so
+`ownership_of` on the arm's *delivered result value* (and on the function's `return_ownership`) reads
+`Owned`. A naive overlay that classifies the delivered tail value therefore reports `Owned` everywhere
+and is useless for exactly the K4 bugs.
+
+**BUT P0.1 proved the borrow is DISPLACED, not destroyed** (probe `f1-join-recovery.loft`, both
+join_own on and off): the borrowed SOURCE binding `_mv_items_1 = OpGetField(e,…)` survives verbatim in
+the committed `def.code`, and `ownership_of(&data, d_nr, Var(_mv_items_1))` reads `Borrowed(base=e)`
+on the FINAL IR. **⇒ The overlay renders PER-BINDING ownership** — classify each `Set(v, rhs)`'s
+variable over the committed `def.code` — and links each delivered arm to the source binding its
+`jo_arm_copy` consumed. **No pre-synthesis snapshot / parser hook is needed** — this was the design's
+feared load-bearing risk, and it is retired: `ownership_of` reads `data.def(d_nr).code`, which is exactly
+what `introspect` already holds post-parse. (The one caveat: `ownership_of` cannot be called *during*
+the parse of a function — `def.code` is unpopulated until the body is committed — so the overlay runs
+post-parse, which is where `introspect` runs anyway.)
 
 ### F2 — a static one-row-per-var table cannot state a runtime join or a time-varying dep
 `Join{base}` (#495, #496, over-free) is owned on one path and borrowed on another; deps change across
@@ -210,7 +221,8 @@ today — do not assume a specific crash; find the real ones by running the corp
 
 ### A1 — Tool 1: static ownership/delivery overlay — `loft introspect ownership`
 A new `Section::Ownership` beside `Types` (`introspect.rs:31`/`emit_types` `:451`), consuming the
-existing oracle + classifiers (no new analysis). Per function it renders, sampled **pre-synthesis** (F1):
+existing oracle + classifiers (no new analysis). Per function it renders, **per-binding over the
+committed `def.code`** (P0.1 proved the borrowed source survives there — no pre-synthesis snapshot, F1):
 
 - **Per slot / binding:** the resolved `Own` verdict (`Owned` / `Borrowed(base=name)` / `Join(base=name)`
   via `ownership_of` + `fmt_own`), the backing store, and the **VIEW vs COPY** disposition of its
@@ -257,10 +269,9 @@ delivered-by-@PLN103 in DEBUG.md.
 
 ## Probes to falsify FIRST (P0 — before building)
 
-1. **F1 mitigation is real** — sample `ownership_of` on the pre-synthesis IR for #492 / empty-arm /
-   D-own-1 and confirm it recovers the owned-vs-borrowed split the delivered IR has lost. If it cannot,
-   the whole static overlay is downgraded to "deps-suffix + delivery verdict" and K1/K4 precision drops
-   — decide that before writing the section.
+1. **F1 mitigation is real** — ✅ DONE (2026-07-12, see the P0.1 ladder step). The borrowed source
+   binding survives on the FINAL IR (`ownership_of(Var(_mv_items_1)) = Borrowed(base=e)`), so the overlay
+   classifies per-binding post-parse — no pre-synthesis snapshot, no downgrade. F1 retired.
 2. **F4 harden** — run the dump/introspect path across the full acceptance corpus and fix any panic /
    `unwrap` / unreachable it hits; the path must survive the match-heavy, enum-payload shapes these bugs
    live in.
@@ -281,14 +292,19 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
 ### P0 — falsify + harden (prove the design's load-bearing assumptions BEFORE any overlay code)
 
 - **P0.1 — F1 is real: the join is only visible pre-synthesis.** Write `probes/f1-join-recovery.loft`
-  with the borrowed-arm-beside-owned-arm shapes (`Filled { items } => items, _ => []`; the #492 append
-  shape; the empty-arm return AND `cap = match …` bind). Add a throwaway `#[test]` that calls
-  `use_analysis::ownership_of(data, d_nr, <arm>)` at TWO points — (a) on `def.code` immediately after
-  parse, before `dispatch_vector_delivery`/the jo-arm pre-pass; (b) on the delivered `def.code`.
-  **VERIFY:** at (a) the borrowed arm is `Borrowed{base}` and the `[]`/owned arm is `Owned`; at (b) both
-  read `Owned`. Expected: `assert_ne!(a_borrowed_arm, b_borrowed_arm)` and `a == Borrowed`, `b == Owned`.
-  **GATE for the plan:** if (a) does NOT distinguish, STOP and downgrade the overlay to "deps-suffix +
-  delivery verdict" (record it here) — do not write P1.3/P1.4 on a false premise.
+  with the borrowed-arm-beside-owned-arm shape (`Filled { items } => items, Empty => [V{n:9}]` — an
+  owned *literal* arm; a struct-enum `_ => []` fails to type-infer, a separate quirk). Classify each
+  binding of the COMMITTED `def.code` via `ownership_of(&data, d_nr, Var(v))` and check the borrowed
+  source binding is visible.
+  **✅ RESULT (2026-07-12) — PASS, with a design SIMPLIFICATION.** On the committed IR:
+  `Var(_mv_items_1) = Borrowed(base=e)` (the field projection), `Var(_mvcopy_1)` / `Var(__retbuf)` =
+  owned buffers — stable with join_own ON and OFF. The arm's *result* reads `Owned` (the `jo_arm_copy`
+  wrap), but the borrowed SOURCE binding survives and classifies correctly. **So the overlay classifies
+  PER-BINDING over the FINAL IR — the feared pre-synthesis snapshot is NOT needed** (F1 retired). Probe
+  `probes/f1-join-recovery.loft` (runs clean both backends). Method note: `ownership_of` reads
+  `data.def(d_nr).code`, so it must run POST-parse (mid-parse every var reads `Owned` — `def.code`
+  unpopulated); reproduce with a temporary per-binding dump in `use_analysis::dump_all` gated on an env
+  var (that is how this was verified). **GATE CLEARED** — P1.3/P1.4 proceed on the per-binding design.
 
 - **P0.2 — acceptance corpus + hand-written verdicts.** Write `probes/acceptance/` — one fn per fact-kind
   drawn from the corpus: `k1-306-borrowed-return`, `k1-316-owned-to-borrow`, `k2-338-view-swap`,
@@ -310,7 +326,7 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
   the id-stability fix (agent-E flagged `LOFT_STORES=log` logs a store under its *free*-time name — P3
   must also capture the alloc-time name so one id spans the lifeline).
 
-- **GATE P0:** P0.1 answered (join visible pre-synthesis, or the documented downgrade); `acceptance/`
+- **GATE P0:** ✅ P0.1 answered (per-binding on the final IR — no snapshot). Remaining: `acceptance/`
   green on both backends; the dump path clean over all probes; the timeline seam documented.
 
 ### P1 — static overlay `loft introspect ownership`, single backend (interp)
@@ -321,10 +337,11 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
 - **P1.2 — wire the CLI verb.** Add `Section::Ownership` (`introspect.rs:31`) + the `ownership` verb
   (`repl.rs:589`, `main.rs:3851`). **VERIFY:** `loft introspect ownership <file>` dispatches (stub OK);
   `loft introspect` with no/unknown section still behaves as before (no regression to existing verbs).
-- **P1.3 — pre-synthesis sampling (the F1 mitigation from P0.1).** Capture ownership verdicts on
-  `def.code` before delivery synthesis (either run `ownership_of` in-pass and stash by `(d_nr, var|arm)`,
-  or hold a pre-synthesis clone — whichever P0.1 proved). `emit_ownership` reads that snapshot.
-  **VERIFY:** on `k4-emptyarm-*` and `k4-492-doubled` the overlay prints the borrowed/owned split, NOT
+- **P1.3 — per-binding classification over the final IR (the P0.1 design).** In `emit_ownership`, for
+  each function walk `def.code` and classify every binding via `ownership_of(&data, d_nr, Var(v))`; link
+  each delivered arm to the source binding its `jo_arm_copy`/materialise consumed (so the row shows both
+  "delivered result = Owned copy" AND "source = Borrowed(base=e)"). No pre-synthesis snapshot, no parser
+  hook (P0.1). **VERIFY:** on `k4-emptyarm-*` and `k4-492-doubled` the overlay prints the borrowed/owned split, NOT
   all-`Owned` (the exact fact the delivered IR loses).
 - **P1.4 — per-slot rows.** Render, per binding: `Own` verdict (`ownership_of`+`fmt_own`), backing store,
   VIEW/COPY (`classify_vec_bind`/`VecBind` + whole-value-vs-projection), free sites (`free_sites`) with
