@@ -52,6 +52,12 @@ library's own repo. Entirely in this repo — no registry, no hosting, no app te
 - **Strict.** At the library level *any* change to the existing public surface is a break — even a
   "safe" widening. No per-consumer cleverness, no compat-rules grace: **identical-or-added** is the
   whole rule. Strictness is what makes a green mean something.
+- **Two axes.** The verdict is not one boolean but two: an **API axis** (superset | break — the
+  strict signature diff) and a **layout axis** (stable | changed — a value type's on-disk/in-store
+  layout, reusing @PLN97's layout-hash, *not* a second comparator). They are distinct consumer
+  concerns: a method-only consumer reads the API axis; a consumer who *persists* a value struct reads
+  the layout axis. A field reorder is `API: superset` + `layout: changed` — the silent data break the
+  API axis alone would green-light, and exactly the "+ its data" half of the never-break promise.
 - **The baseline is a checked-in `api-surface.json`, regenerated on release.** Backwards-compat is a
   claim about the last *release*, not the previous commit — so the PR check regenerates the surface
   from the branch and diffs it against the committed baseline; refresh the baseline when you cut a
@@ -116,26 +122,29 @@ useful (our own libs, CI) before any registry work.
 
 #### C1 — the commit ladder (the MVP: Tier 1, small verifiable steps)
 
-Six commits, each complete + tested before the next (PLANNING.md § goal 5). **The deliverable is
-commit 6** — the author-facing non-blocking PR check; commits 1–5 build the verdict it posts.
-**Ordering principle: front-load determinism** — the canonical descriptor and its corpus are locked
-*before* the diff consumes them, because under a STRICT check a cosmetic re-spelling turns into a
-false red on every unrelated PR, and a check you learn to ignore is worthless (§ Falsification names
-this the make-or-break). Entirely in-repo — no registry.
+Seven commits, each complete + tested before the next (PLANNING.md § goal 5). **The deliverable is
+commit 7** — the author-facing non-blocking PR check; commits 1–6 build the **two-axis** verdict it
+posts (**API**: superset | break · **layout**: stable | changed — the layout axis reuses @PLN97's
+layout-hash, *not* a second comparator). **Ordering principle: front-load determinism** — the
+canonical descriptor and its corpus are locked *before* the diff consumes them, because under a
+STRICT check a cosmetic re-spelling turns into a false red on every unrelated PR, and a check you
+learn to ignore is worthless (§ Falsification names this the make-or-break). Entirely in-repo — no
+registry.
 
 | # | Commit | Code-points | Verify | E |
 |---|---|---|---|---|
 | 1 | **`api-surface`: enumerate the public surface** — new `loft api-surface <path>` + `src/api_surface.rs`; walk `Data` for `pub`-marked, `[library] entry`-reachable defs (fn / struct / enum / typedef / operator); emit `name · kind`, sorted. No signatures yet. | dispatch beside `introspect` (`src/main.rs:~3851`); pub-mark (`src/parser/mod.rs:216`,`:6526`); `Definition.def_type` (`src/data.rs:2513`); `[library] entry` (`src/manifest.rs:102`) | a fixture prints exactly its N pub symbols; a `pub` / non-`pub` / unreachable fixture proves the filter | S |
-| 2 | **Attach resolved signatures** — fn params (name+type) + return (+ `returned_not_null`), struct/enum field & variant layout (value types), operator sigs; spellings via `Type::show`. | `Definition.{returned,returned_not_null,variables}` (`src/data.rs:2526`+); `Type::show` (`src/data.rs:1751`) | golden descriptor over every kind matches byte-for-byte | S |
+| 2 | **Attach resolved API signatures** — fn params (name+type) + return (+ `returned_not_null`), struct/enum fields & variants *by name+type*, operator sigs; spellings via `Type::show`. (Byte layout is NOT here — it is the separate layout axis, commit 5.) | `Definition.{returned,returned_not_null,variables}` (`src/data.rs:2526`+); `Type::show` (`src/data.rs:1751`) | golden descriptor over every kind matches byte-for-byte | S |
 | 3 | **Canonicalise → determinism (THE make-or-break)** — normalise type spellings + ordering so a cosmetic edit is not a diff: canonical type form (alias resolution, stable rendering), stable sort key, whitespace-normalised. | `src/api_surface.rs` canonicaliser; `Type::show` normalisation | **determinism corpus**: cosmetically-different-identical-surface pairs (reordered defs, renamed private local, reformatted, alias-vs-expanded) → byte-identical; a real change → differs. Over-invest — strict has no escape valve for a false break. | M |
-| 4 | **The diff engine — strict `Superset` vs `Break`** — new `src/api_diff.rs`, a pure fn over two canonical descriptors. **Identical-or-added is the whole rule:** every existing symbol present byte-for-byte + additions-only → `Superset`; ANY change to an existing symbol → `Break`, naming it. No "compatible widening" grace — that *is* the strictness (and it collapses the old separate compat-rules step). | new `src/api_diff.rs` | a fixture pair per class (pure additions → Superset; changed / removed / reordered-layout → Break; a "safe" widening → Break, proving strict) | S |
-| 5 | **Verdict output — machine + human** — `loft api-surface <path>` writes the descriptor; `--diff <base> <new>` emits the verdict as machine JSON (for the CI to annotate) + human text (the PR comment), **naming the broken symbols** (the break points Tier-2's C-app later consumes). | `src/main.rs` (`--diff` flag, cf. `introspect --diff`); `src/api_surface.rs` writer | JSON round-trips; human text names broken symbols; a `--diff` smoke on two fixture versions | S |
-| 6 | **The non-blocking PR check (THE deliverable)** — a checked-in `api-surface.json` baseline per library (regenerated on release); a CI job regenerates the surface from the branch, `--diff`s against the baseline, and posts **red-but-non-blocking** on a non-superset, naming the symbols. Dogfood on our own libs. | CI workflow (a NON-required status / annotation); `make ci`; committed `api-surface.json`; run over `web` / `server` / … | on our libs: green today; **fires red on an injected break** (positive control — no vacuous green); the red does **not** block merge | S |
+| 4 | **The API diff — strict `Superset` vs `Break`** — new `src/api_diff.rs`, a pure fn over two canonical descriptors. **Identical-or-added is the whole rule:** every existing symbol present byte-for-byte + additions-only → `Superset`; ANY change to an existing symbol (rename, type change, removal) → `Break`, naming it. No "compatible widening" grace. | new `src/api_diff.rs` | a fixture pair per class (pure additions → Superset; renamed / retyped / removed → Break; a "safe" widening → Break, proving strict) | S |
+| 5 | **The layout axis — reuse @PLN97's layout-hash** — the descriptor gains a per-value-type layout hash (from @PLN97's store-layout contract, NOT a new comparator); the diff gains a SECOND verdict: `layout: stable` if every value type's hash is unchanged, else `changed`, naming the moved types. A field REORDER (same names+types) is `API: superset` + `layout: changed` — the silent data break the API axis alone green-lights. | @PLN97 layout-hash (`src/ss.rs` / the layout-contract machinery); `src/api_diff.rs` | a value-struct field reorder → `API: superset` + `layout: changed`; a pure method-add → `layout: stable`; a persisted-record fixture proves the axis catches the data break | S |
+| 6 | **Verdict output — machine + human** — `loft api-surface <path>` writes the descriptor (API surface + layout hashes); `--diff <base> <new>` emits BOTH axes as machine JSON (CI annotation) + human text (PR comment), naming broken symbols AND moved value types (the break points Tier-2's C-app later consumes). | `src/main.rs` (`--diff` flag, cf. `introspect --diff`); `src/api_surface.rs` writer | JSON round-trips both axes; human text names broken symbols + moved layouts; a `--diff` smoke | S |
+| 7 | **The non-blocking PR check (THE deliverable)** — a checked-in `api-surface.json` baseline per library (regenerated on release, carrying both axes); a CI job regenerates + `--diff`s against it and posts **red-but-non-blocking** on EITHER axis non-clean, **labelled by axis** (`API break` vs `layout changed`) so a pure-API lib and a data lib each read the one that matters. Dogfood on our own libs. | CI workflow (a NON-required status / annotation); `make ci`; committed `api-surface.json`; run over `web` / `server` / … | on our libs: green today; **fires red on an injected API break AND on an injected layout change** (positive control per axis — no vacuous green); neither blocks merge | S |
 
-Shape: keystone with the risk in commit 3 and the proof (dogfood + positive control) in commit 6.
-Commits 1–3 = design's C1.1 · 4 = C1.2 (strict, so the old compat-rules step is gone) · 5 = C1.3 ·
-6 = the author-facing PR check — the whole Tier-1 MVP. Entirely in-repo — no registry — which is why
-it is buildable now while Tier 2 waits on it.
+Shape: keystone with the risk in commit 3 and the proof (per-axis dogfood + positive control) in
+commit 7. Commits 1–3 = design's C1.1 · 4–5 = the two-axis C1.2 (API strict + layout via @PLN97) · 6
+= C1.3 · 7 = the author-facing PR check — the whole Tier-1 MVP. Entirely in-repo — no registry — which
+is why it is buildable now while Tier 2 waits on it.
 
 ### C2 — The registry: independently-verified label + preserve (arc B-registry) · TIER 2, DEFERRED · repo: loft-lang/registry
 
