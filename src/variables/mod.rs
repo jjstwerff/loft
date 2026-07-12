@@ -1233,6 +1233,13 @@ impl Function {
         data: &Data,
         lexer: &mut Lexer,
     ) -> bool {
+        // A `u16::MAX` / out-of-range `var_nr` is the "no variable" sentinel — nothing to
+        // retype (matches the guards in `tp`/`name`/`set_type`). Without it, malformed input
+        // whose assignment LHS never resolved to a real variable (`Foo x = 5` with an unknown
+        // type `Foo`) panics here instead of being diagnosed.
+        if var_nr == u16::MAX || (var_nr as usize) >= self.variables.len() {
+            return false;
+        }
         let var_tp = &self.variables[var_nr as usize].type_def;
         // `_` is the universal unused variable — allow type changes silently.
         if self.variables[var_nr as usize].name == "_" && !type_def.is_unknown() {
