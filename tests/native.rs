@@ -60,14 +60,14 @@ const NATIVE_SKIP: &[&str] = &[
     // `--native`; the skip is removed so `native_dir` now gates this file
     // as a regression guard for cell 5.
     //
-    // 14-image (`use imaging`) + 21-random (`use random`): validated via the
-    // `loft` binary; gendoc renders their HTML.  Skipped because THIS native
-    // doc harness builds native code without `out.native_cabi =
-    // native_cabi_enabled()` (unlike src/test_runner.rs:838), so it emits the
-    // legacy `extern crate <pkg>` path and rustc E0463s (no rlib) while the link
-    // provides the C-ABI cdylib.  NOT @P389 (resolved by C-ABI): the `loft`
-    // binary compiles two native packages fine.  Un-skip once this harness sets
-    // native_cabi (test-fidelity fix — it currently tests a path prod doesn't use).
+    // 14-image (`use imaging`) + 21-random (`use random`): test-backed on BOTH
+    // backends via `tests/doc_lib_examples.rs` (subprocess through the real `loft`
+    // binary, interpret == native).  Skipped in THIS in-process harness because it
+    // builds native code without `out.native_cabi = native_cabi_enabled()` (unlike
+    // src/test_runner.rs:838), so it emits the legacy `extern crate <pkg>` path and
+    // rustc E0463s (no rlib) while the link provides the C-ABI cdylib.  NOT @P389
+    // (resolved by C-ABI): the `loft` binary compiles two native packages fine.
+    // A test-fidelity follow-up (set native_cabi here) would let these run inline too.
     "14-image.loft",
     "21-random.loft",
 ];

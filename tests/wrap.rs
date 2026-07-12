@@ -42,13 +42,13 @@ static WRAP_LOCK: Mutex<()> = Mutex::new(());
 /// Remove an entry here once the underlying issue is fixed.
 const SUITE_SKIP: &[&str] = &[
     // Library-backed doc examples: `14-image` (`use imaging`) + `21-random`
-    // (`use random`).  Their code + library connection are validated via the
-    // `loft` binary and gendoc renders their HTML.  Skipped only because this
-    // EMBEDDED interpreter harness can't provision a #native library's cdylib
-    // against its own loft-ffi (the `.so` must exist + match; the harness never
-    // builds it) — a test-infra gap, NOT @P389 (that two-native-package link
-    // bug is resolved by the C-ABI rework; `loft --native` links both fine).
-    // Un-skip when the doc harness gains per-package cdylib provisioning.
+    // (`use random`).  Skipped HERE because this embedded interpreter harness
+    // can't provision a #native library's cdylib against its own loft-ffi (it
+    // never builds the `.so`).  They are NOT untested: `tests/doc_lib_examples.rs`
+    // drives the real `loft` binary as a subprocess on BOTH backends (interpret
+    // == native) — the highest-fidelity check.  gendoc still renders their HTML.
+    // (This is a test-infra gap, NOT @P389 — that two-native-package link bug is
+    // resolved by the C-ABI rework; `loft --native` links both fine.)
     "14-image.loft",
     "21-random.loft",
 ];
