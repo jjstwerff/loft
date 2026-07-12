@@ -45,11 +45,29 @@ fn main() {
   assert(len(take_two(two)) == 2, "two: rebuilt");
   assert(len(take_two(full)) == 0, "two: len 3 falls to []");
 
+  // ASSIGN-TO-LOCAL (bind context, no return buffer): the match value is COPIED into the
+  // local (`ownership_of == Owned` → CopyMatch in parse_assign_op), so the local owns its
+  // store and the `[]` arm is a fresh empty vector — not a bare null.
+  cap_rest = match full { [ _, ..rest ] => rest, _ => [] };
+  assert(len(cap_rest) == 2, "bind ..rest: {len(cap_rest)}");
+  cap_rep = match full { [ (ys: V)* ] => ys, _ => [] };
+  assert(len(cap_rep) == 3, "bind rep: {len(cap_rep)}");
+  cap_empty = match empty { [ (zs: V)* ] => zs, _ => [] };
+  assert(len(cap_empty) == 0, "bind rep empty-subject: {len(cap_empty)}");
+  cap_two = match two { [ a2, b2 ] => [a2, b2], _ => [] };
+  assert(len(cap_two) == 2, "bind rebuild: {len(cap_two)}");
+  // the bound copy is INDEPENDENT of the source (value semantics)
+  cap_ind = match full { [ (ws: V)* ] => ws, _ => [] };
+  full += [V{n:9}];
+  assert(len(cap_ind) == 3 && len(full) == 4, "bind copy independent of source");
+
   // Reuse axis: hit the empty-arm path repeatedly (no store leak / stale buffer).
   sum = 0;
   for _i in 0..4 {
     sum += len(take_rep(empty));
     sum += len(take_rest(one));   // one -> rest len 0
+    r_bind = match empty { [ (qs: V)* ] => qs, _ => [] };
+    sum += len(r_bind);
   }
   assert(sum == 0, "reuse empty arms stay empty: {sum}");
 

@@ -1472,19 +1472,9 @@ impl Parser {
                 // @P377 / S1: collapse `cv = inner_call(...); cv` so the inner
                 // call's hidden buffer arg points at cv directly.
                 self.nrvo_collapse_tail_set(l, &ws);
-                // @PLN85 — an EMPTY `[]` arm (lowered to bare `null`) does not deliver
-                // into the renamed buffer, so native emits `()` (the `_ => []`-fallback
-                // E0308).  Rewrite it to yield the pre-cleared buffer (an empty vector) —
-                // but ONLY for the SLICE model (a capture materialised straight into the
-                // buffer).  The struct-enum join_own model appends a borrowed field into
-                // the buffer and already delivers `[]` as an empty `else ;`; rewriting it
-                // would change its ownership classification (Join → Borrowed).
-                let last = l.len() - 1;
-                if self.tail_has_slice_binding(&l[last])
-                    && let Some((_, buf)) = self.return_buffer()
-                {
-                    self.deliver_empty_arms_into_buffer(&mut l[last], buf);
-                }
+                // NOTE: a `[]`/empty slice arm is already a REAL fresh vector here —
+                // `parse_vector_match::materialize_null_slice_arms` rewrote it before
+                // this delivery, so there is no bare `null` arm left to handle.
                 true
             }
             Delivery::CopyBorrow(ls) => {
@@ -7164,6 +7154,19 @@ impl Parser {
                 chain = arm_code;
             }
         }
+        // @PLN85 — a bare `[]` arm (`_ => []`) lowers to a `null` of the result type, which the
+        // native backend emits as `()` where a vector (`DbRef`) is expected.  In a RETURN context
+        // the delivery renames it onto `__retbuf`; but when the match value is BOUND to a local
+        // (`cap = match v { … , _ => [] }`, copy-on-bind in `parse_assign_op`) the copy's
+        // `OpAppendVector(cap, <match>)` needs every arm to be a real vector.  Materialise each
+        // null arm as a FRESH empty vector — ONLY when the match RESULT is a vector (a
+        // cursor/prefix match that returns a struct/scalar, `[ n: rule ] => …, _ => null`, keeps
+        // its genuine `null` arm; the result's OWN element type is used, not the subject's).
+        if !self.first_pass
+            && let Type::Vector(result_elm, _) = result_type.clone()
+        {
+            self.materialize_null_slice_arms(&mut chain, &result_elm);
+        }
         let mut block_ops = vec![v_set(v, subject)];
         block_ops.append(&mut prechain);
         block_ops.push(chain);
@@ -8406,71 +8409,47 @@ impl Parser {
         }
     }
 
-    /// @PLN85 — deliver an EMPTY `[]` arm of a vector-return `match`/`if` tail into the
-    /// return buffer `buf`.  `[]` lowers to a bare `null`, so an arm that yields it does
-    /// NOT write the buffer the surrounding delivery renames onto `__retbuf`; native then
-    /// emits `()` where a vector (`DbRef`) is expected — the `_ => []`-fallback E0308.
-    /// Rewrite each such arm to `{ clear(buf); buf }`, yielding the (preamble-cleared)
-    /// buffer — an EMPTY vector — exactly as a struct-enum match's `[]` arm delivers
-    /// (`else ;`).  Arms are mutually exclusive, so re-clearing here can never drop a
-    /// sibling arm's data; a non-null arm is left untouched (its own value already
-    /// delivers into `buf`), and a nested `if` (else-if) chain is descended.
-    fn deliver_empty_arms_into_buffer(&mut self, tail: &mut Value, buf: u16) {
+    /// @PLN85 — rewrite each `null` arm of a slice-match tail to a FRESH empty vector
+    /// (`{ OpDatabase(o); o }`), so a `[]` arm bound to a local (whose copy-on-bind
+    /// appends the whole match value) is a real `DbRef`, not a bare `null` native emits
+    /// as `()`.  Descends `if`/block/insert; a non-null arm is left untouched.
+    fn materialize_null_slice_arms(&mut self, tail: &mut Value, elm_tp: &Type) {
         match tail {
-            Value::Span(b) => self.deliver_empty_arms_into_buffer(&mut b.1, buf),
+            Value::Span(b) => self.materialize_null_slice_arms(&mut b.1, elm_tp),
             Value::Return(inner) | Value::Drop(inner) => {
-                self.deliver_empty_arms_into_buffer(inner, buf);
+                self.materialize_null_slice_arms(inner, elm_tp);
             }
             Value::Block(bl) => {
                 if let Some(last) = bl.operators.last_mut() {
-                    self.deliver_empty_arms_into_buffer(last, buf);
+                    self.materialize_null_slice_arms(last, elm_tp);
                 }
             }
             Value::Insert(ops) => {
                 if let Some(last) = ops.last_mut() {
-                    self.deliver_empty_arms_into_buffer(last, buf);
+                    self.materialize_null_slice_arms(last, elm_tp);
                 }
             }
             Value::If(_, t, f) => {
-                self.rewrite_empty_arm_into_buffer(t, buf);
-                self.rewrite_empty_arm_into_buffer(f, buf);
+                self.rewrite_null_arm_fresh(t, elm_tp);
+                self.rewrite_null_arm_fresh(f, elm_tp);
             }
             _ => {}
         }
     }
 
-    fn rewrite_empty_arm_into_buffer(&mut self, arm: &mut Value, buf: u16) {
+    fn rewrite_null_arm_fresh(&mut self, arm: &mut Value, elm_tp: &Type) {
         if self.arm_is_null(arm) {
-            let clear = self.cl("OpClearVector", &[Value::Var(buf)]);
-            *arm = Value::Insert(vec![clear, Value::Var(buf)]);
-        } else {
-            // A non-null arm delivers its own value; descend so an else-if chain's
-            // nested `[]` arms are still reached.
-            self.deliver_empty_arms_into_buffer(arm, buf);
-        }
-    }
-
-    /// Is `node` the tail of a SLICE match (`parse_vector_match` — a `[ … ]` pattern
-    /// over a vector), identified by a `slice_binding`-labelled arm block?  Only the
-    /// slice model needs `deliver_empty_arms_into_buffer`: its `..rest`/`(V)*` captures
-    /// materialise straight into the buffer, leaving a `[]` arm as an undelivered
-    /// `null`.  A struct-enum match (`match e { V { … } => … }`) delivers each arm
-    /// itself (its `[]` arm is already an empty `else ;`); rewriting it there would
-    /// change its ownership classification.  This is mode-independent, unlike a check
-    /// for the join_own `OpAppendVector` (absent under `LOFT_NO_JOIN_OWN`).
-    fn tail_has_slice_binding(&self, node: &Value) -> bool {
-        if let Value::Block(bl) = node.unspan()
-            && bl.name == "slice_binding"
-        {
-            return true;
-        }
-        let mut found = false;
-        node.unspan().for_each_child(&mut |c| {
-            if !found {
-                found = self.tail_has_slice_binding(c);
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
+            let o = self.create_unique("empty_arm", &vec_tp);
+            if o != u16::MAX {
+                self.vars.defined(o);
+                let mut ops = self.vector_db(&vec_tp, o);
+                ops.push(Value::Var(o));
+                *arm = Value::Insert(ops);
             }
-        });
-        found
+        } else {
+            self.materialize_null_slice_arms(arm, elm_tp);
+        }
     }
 
     /// #425 — if the return tail is a struct/enum FIELD projection

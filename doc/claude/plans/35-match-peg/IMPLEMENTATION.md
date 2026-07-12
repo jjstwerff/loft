@@ -51,29 +51,31 @@ high-water update mirrored. Guard: `tests/scripts/35t-cursor-repetition.loft` (p
 `pos > 0` with value check, `*`/`+`, `..rest`, a driver loop, sub-rule tail form; cross-mode +
 leak-checked).
 
-**Pre-existing NATIVE `[]`-empty-arm E0308 — FIXED for the function-RETURN context (@PLN85 delivery
-unification).** In a VECTOR-returning `match`, an EMPTY `[]` arm (`_ => []` / `_ => { [] }`) lowers to a
-bare `null`, and native emitted that `null` as `()` where a vector (`DbRef`) is expected → E0308.
-Reproduced in plain VECTOR mode (predates the cursor work) whenever a materialised vector is returned
-beside an empty arm: `fn f(v) -> vector<T> { match v { [x, ..rest] => rest, _ => [] } }`, `[ (xs:V)* ]
-=> xs`, `[a,b] => [a,b]`. ROOT (proven-sibling IR diff — a struct-enum `match` with the SAME shape
-works): the delivery renames each arm onto `__retbuf`, and the STRUCT-ENUM model (join_own) appends each
-arm's value into the pre-cleared buffer, so its `[]` arm is a harmless empty `else ;`; but the SLICE
-model (`parse_vector_match`) materialises its `..rest`/`(V)*` capture STRAIGHT into the buffer and left
-its `[]` arm as an undelivered `null`. FIX: in the `Delivery::Rename` dispatch, rewrite a null arm of a
-SLICE-match tail (identified by its `slice_binding` arm block — mode-independent, unlike an
-`OpAppendVector` check which is absent under `LOFT_NO_JOIN_OWN`) to `{ clear(buf); buf }`, yielding the
-pre-cleared buffer — an empty vector — WITHOUT touching the struct-enum model (whose ownership
-classification must stay `Join`). Two earlier dead-ends recorded for the next reader: (a) lifting the
-`vec_match_candidate` `!tail_if_has_null_arm` gate + a blanket `Value::Null` materialise DOUBLES a
-borrowed struct-enum return (materialising drops the preamble clear the join_own append relies on → the
-append accumulates); (b) gating on the `ownership_of` oracle at `block_result` CANNOT distinguish the
-models — the join_own synthesis has already rewritten the borrowed arm to an owned buffer copy before
-that point. Guard `tests/scripts/85-store-lifetime-empty-vector-match-arm.loft` (both backends,
-leak-clean). **STILL open: the ASSIGN-TO-LOCAL context** (`cap = match v { [(xs:V)* ] => xs, _ => [] }`)
-— not a return delivery (no `__retbuf`); the capture is read as a view (`["xs"]`) of a dying match-local,
-so it needs the capture-ownership (last-use move) work, a separate @PLN85 step. The sub-rule FN-tail
-idiom (both `arguments` + `35t`) sidesteps it.
+**Pre-existing NATIVE `[]`-empty-arm E0308 — FIXED, BOTH contexts (function-return AND
+assign-to-local).** In a VECTOR-returning `match`, an EMPTY `[]` arm (`_ => []` / `_ => { [] }`) lowered
+to a bare `null`, which native emitted as `()` where a vector (`DbRef`) is expected → E0308. Reproduced
+in plain VECTOR mode (predates the cursor work) whenever a materialised vector sits beside an empty arm —
+`fn f(v) -> vector<T> { match v { [x, ..rest] => rest, _ => [] } }`, `[ (xs:V)* ] => xs`, `[a,b] =>
+[a,b]` — and `cap = match v { … , _ => [] }`. ROOT (proven-sibling IR diff — a struct-enum `match` of the
+SAME shape works because its arms all deliver into the pre-cleared `__retbuf`, so its `[]` is a harmless
+empty `else ;`; the SLICE model materialises its `..rest`/`(V)*` capture STRAIGHT into a store and left
+the `[]` arm an undelivered `null`). **FIX (one mechanism): `parse_vector_match::materialize_null_slice_
+arms`** — when the match RESULT is a vector, rewrite each `null` arm of the tail to a FRESH empty vector
+`{ OpDatabase(o); o }` (using the RESULT's own element type). Now every arm is a real vector: the
+function-return delivery renames it onto `__retbuf` as usual, and an assign-to-local `cap = <match>` just
+ALIASES the owned match result (leak-free — verified to 200 iterations both backends; the earlier
+interp `2→0` was a stale-build/two-match-file artifact, not real). Gated on `result_type == Vector` so a
+CURSOR/prefix match returning a struct/scalar (`[ n: rule ] => …, _ => null`) keeps its genuine `null`
+arm (the `35r` regression that gate fixed). **Dead-ends recorded for the next reader** (each
+suite-caught): (a) a `Delivery::Rename` rewrite delivering `[]` into `__retbuf` — worked for the return
+context but is now subsumed by the materialise (removed); (b) lifting the `vec_match_candidate`
+`!tail_if_has_null_arm` gate + a blanket `Value::Null` materialise DOUBLES a borrowed struct-enum return
+(drops the preamble clear the join_own append relies on); (c) gating on `ownership_of` at `block_result`
+can't tell the models apart (the join_own synthesis already rewrote the borrowed arm); (d) a `CopyMatch`
+verdict COPYING the match into `cap` (oracle-driven, values correct) LEAKED the match-internal store
+(the copy orphans it) — unnecessary once the alias path is leak-free. Guard
+`tests/scripts/85-store-lifetime-empty-vector-match-arm.loft` (return + bind + block-form + reuse; both
+backends, leak-clean).
 
 **Phase 6.1 + 6.2 — DONE (repetition + separator, struct-enum), both backends.** `[ ( [name:] V )*
 [, ..rest] ]` / `…+`: a runtime run-loop counts the maximal leading `V` run into `end`; `name`
