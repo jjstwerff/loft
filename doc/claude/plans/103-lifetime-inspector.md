@@ -5,12 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 103 — Lifetime inspector: render the ownership fact the store-lifetime bugs kept hiding
 
-**Status — P1 LANDED; P2 FALSIFIED; P3 core LANDED (2026-07-12).** P3: `LOFT_STORES=timeline` ships on
-BOTH backends — a stable per-store id `#<store_nr>.<seq>` (seq disambiguates slot reuse) on every
-alloc/free, plus an exit SUMMARY reporting **peak concurrency (working set) reconciled with the
-authoritative leak count**. Headline win: on the 85 probe, `LOFT_STORES=warn` false-alarms "possible
-leak" 14×, while the timeline reports "peak 33 (working set) — NO leak". Deferred: P3.2b (borrow/copy
-events), P3.4b (K5 event-level divergence demo). Next: P4 (consolidation) or the P1/P3 deferrals. P0 ✅. **P1:** the static overlay
+**Status — P0–P4 core COMPLETE (2026-07-12).** Shipped: `loft introspect --show-ownership` (static
+per-binding ownership + delivery lens, backend-shared) and `LOFT_STORES=timeline` (runtime per-store
+lifeline + working-set-vs-leak summary, both backends). P2 falsified (ownership is backend-shared). Docs
+updated + the long-deferred dep-graph visualizer marked delivered; guarded by non-vacuous `tests/`
+regressions. **Remaining (all deferred, optional):** P4.3 (retire `LOFT_REST_ORACLE`, needs P1.4b),
+P1.4b (free-site/reassign rows), P1.5b (persisted per-arm delivery), P3.2b (borrow/copy events), P3.4b
+(K5 event-level divergence demo). P0 ✅. **P1:** the static overlay
 `loft introspect --show-ownership` ships — per-binding `ownership_of` over the final IR (corrected render
 rule: self-base = caller-arg, synth-buffer = Owned-via-backing, else genuine alias; scalars elided) + a
 per-return `delivery:` line (materialised/owned/borrows). Deterministic, opt-in, golden-matched, `--diff`
@@ -459,17 +460,23 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
 
 ### P4 — consolidation
 
-- **P4.1 — docs.** Add the two views to DEBUG.md / LIFETIME.md / TESTING.md `LOFT_LOG` ref; mark the
-  deferred dep-graph visualizer (DEBUG.md, 2026-05-13) delivered-by-@PLN103. **VERIFY:** `make doc_hygiene`
-  (or the doc drift guard) passes.
-- **P4.2 — graduate the corpus.** Add a Rust test asserting the overlay output for `acceptance/` and a
-  `.loft` guard for the timeline. **VERIFY:** `make test` green; the test FAILS if a verdict is reverted
-  (prove it by temporarily reverting P1.3 → red).
-- **P4.3 — retire the routine one-off oracles.** Reproduce `LOFT_REST_ORACLE`'s free/alloc-order
-  predictions from the overlay's free-flags on the 29-probe `..rest` corpus. **VERIFY:** the overlay's
-  flags agree with `rest-store-lifetime/ORACLE.txt` on all 29 (then alias/retire `LOFT_REST_ORACLE`,
-  `LOFT_MATERIALIZE_DUMP`, `LOFT_TRACE_RR`; keep the deep-dive detectors).
-- **GATE P4:** `make ci` green; docs consistent; the acceptance corpus + timeline guarded in `tests/`.
+- **P4.1 — docs.** ✅ DONE (2026-07-12). DEBUG.md: a `--show-ownership` row in the introspect table, a
+  `LOFT_STORES=timeline` row in the store-env table (with a `=warn` over-warns caveat), and the deferred
+  **"Dep-graph / lifetime visualizer" (2026-05-13) struck through as DELIVERED-by-@PLN103** (two text
+  views, not a DOT graph). **VERIFY ✅:** `make doc_hygiene` passes (run in the P4 gate).
+- **P4.2 — graduate the corpus to a regression guard.** ✅ DONE. Fixture `tests/data/ownership_corpus.loft`
+  (the fact-kind corpus) + three `tests/introspect.rs` tests: `show_ownership_renders_each_fact_kind`
+  (one SEMANTIC invariant per K1/K2/K4/join — assertion-based, not byte-golden),
+  `show_ownership_is_deterministic`, and `timeline_summary_reports_working_set_no_leak` (runs
+  `LOFT_STORES=timeline`, asserts the SUMMARY + `NO leak` + a dotted stable id). **VERIFY ✅:** all three
+  pass; PROVEN non-vacuous — sabotaging `render_own` (Borrowed→"Owned") turns the fact-kind test RED
+  (`tests/introspect.rs:178`), then reverted.
+- **P4.3 — retire the routine one-off oracles.** ⏳ DEFERRED — BLOCKED on P1.4b. Reproducing
+  `LOFT_REST_ORACLE`'s free/alloc-order predictions needs the overlay's **free-site flags**, which are the
+  deferred P1.4b rows (`free_sites`/`reassign_sites`). Do P1.4b first, then this. (The overlay already
+  subsumes `LOFT_MATERIALIZE_DUMP`'s per-fn ownership verdict.)
+- **GATE P4 — ✅ core cleared:** docs updated + drift-guard green; the overlay + timeline guarded by
+  non-vacuous `tests/` regressions; `make ci` green (run below). Deferred: P4.3 (after P1.4b).
 
 ### Definition of done (the whole plan)
 
