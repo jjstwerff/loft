@@ -122,6 +122,16 @@ useful (our own libs, CI) before any registry work.
 
 #### C1 — the commit ladder (the MVP: Tier 1, small verifiable steps)
 
+> **Landed: commits 1–4** (2026-07-12). **Commit 4** — `src/api_diff.rs`: the STRICT,
+> tier-aware diff, two surfaces → `Verdict::{Superset, Break(named symbols)}`. Identical-or-
+> added is the whole rule (a "safe" widening still breaks). Tier-aware via **sealed inlining**:
+> each sealed type's shape is inlined (recursively) into the public signatures that return it,
+> then only public members are compared by name — so a sealed RENAME (same shape) is a drop-in
+> while a sealed FIELD change flows into the public sig and breaks, named on the public members
+> a consumer calls. Unit tests (7): additions→Superset · public rename→Break · safe
+> widening→Break · sealed rename→Superset · sealed field change→Break · break-point names the
+> public member · nested sealed change breaks transitively. Below: commits 1–3.
+>
 > **Landed: commits 1–3** (2026-07-12) — `loft api-surface <file>` + `src/api_surface.rs`:
 > the tier-tagged observable closure (public / sealed) with each member's resolved signature,
 > canonicalised for determinism. `name · kind · tier · signature` per member; clean

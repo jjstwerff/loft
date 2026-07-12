@@ -66,6 +66,7 @@ unsafe extern "C" {
 
 #[macro_use]
 pub mod diagnostics;
+pub mod api_diff;
 pub mod api_surface;
 pub mod base64;
 pub mod build_phase;
