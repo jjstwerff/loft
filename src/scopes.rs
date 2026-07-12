@@ -5414,6 +5414,63 @@ fn call_purity_safe(callee: u32, data: &Data, user_fn: &mut dyn FnMut(u32, &Data
     }
 }
 
+/// @PLN35 PC4 — is a sub-rule PURE, hence safe to invoke speculatively and backtrack over?  This is
+/// COMPLEMENTARY to par-safety (which bans only parent-store writes): a sub-rule's effect must be
+/// UNOBSERVABLE, because a cursor `match` may invoke it even when the arm is not taken (the call is
+/// hoisted unconditionally) and, once mixing lands, may backtrack over it.  So the OBSERVABLE /
+/// non-deterministic / concurrent categories (host I/O, I/O, prng, par-call) disqualify it; a
+/// `parent_write` does NOT (record construction + the cursor advance ARE parent writes — internal
+/// and unavoidable), and an un-annotated native builtin is pure (every observable builtin is
+/// annotated `#impure`).  Descends the call graph; a recursion cycle is optimistically pure (it must
+/// consume through a base case — and PC3 already rejects left-recursive sub-rules).  An indirect
+/// `CallRef` is conservatively impure (its target is not statically known).
+pub fn sub_rule_is_pure(data: &Data, d_nr: u32) -> bool {
+    let mut visited = HashSet::new();
+    walk_sub_rule_pure(data, d_nr, &mut visited)
+}
+
+fn walk_sub_rule_pure(data: &Data, d_nr: u32, visited: &mut HashSet<u32>) -> bool {
+    if !visited.insert(d_nr) {
+        return true; // cycle — break optimistically (PC3 rejects left recursion separately)
+    }
+    if d_nr == u32::MAX || (d_nr as usize) >= data.definitions.len() {
+        return false;
+    }
+    let def = &data.definitions[d_nr as usize];
+    if !matches!(def.def_type, DefType::Function) {
+        return false;
+    }
+    match def.purity {
+        Purity::Pure => true,
+        // OBSERVABLE / non-deterministic / concurrent effects disqualify a sub-rule.
+        Purity::Impure(
+            ImpureCategory::HostIo
+            | ImpureCategory::Io
+            | ImpureCategory::Prng
+            | ImpureCategory::ParCall,
+        ) => false,
+        // A parent-store WRITE is how a sub-rule builds its result record and advances the cursor
+        // (OpNewRecord / OpSetInt / OpFinishRecord are `#impure(parent_write)`) — unavoidable and
+        // internal, so allowed.  The narrow case of writing EXTERNAL shared state and then
+        // backtracking over it is not distinguishable at this category granularity — deferred.
+        Purity::Impure(ImpureCategory::ParentWrite) => true,
+        Purity::Unknown => {
+            if matches!(def.code, Value::Null) {
+                // A native builtin with NO annotation is pure: every OBSERVABLE builtin (I/O, host)
+                // IS annotated `#impure`, so the un-annotated natives are pure reads / arithmetic /
+                // record ops (OpGetField, OpGetVector, OpNeRef, …).
+                true
+            } else {
+                !def.code.any_node(&mut |n| match n {
+                    Value::Call(callee, _) => !walk_sub_rule_pure(data, *callee, visited),
+                    Value::CallRef(_, _) => true, // indirect call — cannot analyze
+                    _ => false,
+                })
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod par_safety_tests {
     use super::is_par_safe;

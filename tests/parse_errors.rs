@@ -1796,6 +1796,31 @@ fn stream_match_complex_deferred() {
         .error("streaming `match` over an `iterator<(integer, integer)>` is not yet supported (only scalar, text, or struct-enum element types) — collect it first: `match [for x in <iter> { x }] { … }` at stream_match_complex_deferred:2:32");
 }
 
+// @PLN35 PC2 — a sub-rule invocation `[ name: rule ]` in a cursor match must be the WHOLE slice
+// pattern for now; mixing it with fixed elements (the running-pos + revert) is deferred.
+#[test]
+fn subrule_mixing_deferred() {
+    code!("enum Tok { Id { x: integer }, LP { x: integer } }\nstruct Cur { src: vector<Tok>, pos: integer }\nstruct N { v: integer }\nfn parse_id(c: Cur) -> N { match c { [ Id { x } ] => N { v: x }, _ => null } }\nfn f(c: Cur) -> integer { match c { [ e: parse_id, y ] => e.v, _ => -1 } }")
+        .error("a sub-rule element `e: rule` must currently be the whole slice pattern (mixing a sub-rule with fixed elements is deferred to a follow-up) at subrule_mixing_deferred:5:51");
+}
+
+// @PLN35 PC3 — a left-recursive sub-rule grammar (a cycle in the invocation graph) is a COMPILE
+// error, not a runtime hang: every cursor sub-rule invocation is at position 0, so a cycle cannot
+// consume and would recurse forever.
+#[test]
+fn subrule_left_recursion() {
+    code!("enum Tok { Num { x: integer } }\nstruct Cur { src: vector<Tok>, pos: integer }\nstruct N { v: integer }\nfn expr(c: Cur) -> N { match c { [ Num { x } ] => N { v: x }, [ e: expr ] => e, _ => null } }\nfn f(c: Cur) -> integer { r = match c { [ x: expr ] => x.v, _ => -1 }; r }")
+        .error("sub-rule `expr` is left-recursive (expr -> expr): a cursor `match` invokes a sub-rule before consuming any input, so this cycle would recurse forever at subrule_left_recursion:4:68");
+}
+
+// @PLN35 PC4 — an invoked sub-rule must be pure: a cursor `match` hoists its call unconditionally
+// (runs even when the arm is not taken) and may backtrack over it, so any observable effect leaks.
+#[test]
+fn subrule_impure_rejected() {
+    code!("enum Tok { Id { x: integer }, LP { x: integer } }\nstruct Cur { src: vector<Tok>, pos: integer }\nstruct N { v: integer }\nfn noisy(c: Cur) -> N { print(\"hi\"); match c { [ Id { x } ] => N { v: x }, _ => null } }\nfn f(c: Cur) -> integer { r = match c { [ n: noisy ] => n.v, _ => -1 }; r }")
+        .error("sub-rule `noisy` is not pure — a cursor `match` may invoke it speculatively (even when its arm is not taken) and backtrack over it, so its side effects would be observable; a sub-rule must only advance the cursor and return (no I/O, host mutation, or randomness) at subrule_impure_rejected:5:46");
+}
+
 // A user type may be named `T` (a name the stdlib uses as a generic type variable):
 // verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
 // The fix keys vector types by their element (not by a display name two distinct

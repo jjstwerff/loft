@@ -193,10 +193,22 @@ tuples). Reporting is a collaboration, each part where it belongs:
 Each step is independently shippable and verified on **both backends** (`--interpret` + `--native`),
 leak-checked, with driver-agreement for the static rejects.
 
-### PC1 — Cursor as a first-class value
+### PC1 — Cursor as a first-class value — **DONE (fixed-arity), both backends**
 
-**Goal.** `match` accepts a `Cursor<T>` subject and consumes a prefix; the slice-match desugaring
-routes through the same cursor.
+**Landed (option (c), no generics).** Since generic structs are unsupported, a cursor is a
+CONCRETE struct with a `vector<T>` source field + an integer field named `pos` — recognised by
+shape (`cursor_shape`), no `Cursor<T>` type needed; the token type comes from the pattern variants.
+`match <cursor> { [pat] }` PREFIX-consumes: `parse_cursor_match` reads source + pos into temps, sets
+`match_cursor` so `read_slice_elem` offsets forward reads by `pos` and the length gate flips from
+`len == fixed` (whole) to `pos + fixed <= len` (prefix), then advances `cursor.pos` by the consumed
+count on a match (writing the caller's cursor directly — a struct is a DbRef).  A plain `vector<T>`
+is unchanged (whole-consume).  Guard `tests/scripts/35q-cursor-match.loft` (sequential consume, field
+reads relative to pos, end-of-input, vector-unaffected; cross-mode + leak).  **Deferred to a
+follow-up:** repetition / `..rest` / tail-from-end in cursor mode (the offset+prefix interplay needs
+more than the fixed-arity gate); today only fixed-arity forward patterns prefix-consume.
+
+**Original goal.** `match` accepts a `Cursor<T>` subject and consumes a prefix; the slice-match
+desugaring routes through the same cursor.
 **Design.** Introduce the `Cursor<T>` type + `peek`/`next`/`at_end` + matcher-only `anchor`/`revert`.
 Matching a bare `vector<T>` = wrap in a fresh cursor at 0, whole-consume (`P-Whole`); matching a
 `Cursor<T>` = prefix-consume, advance.
@@ -207,9 +219,28 @@ the P4 mechanic; the P7 memo for streams.
 **Verify.** `match cur { [A, B] => … }` over a Cursor consumes exactly 2 and leaves `pos` at 2;
 matching a vector still whole-consumes. Both backends; leak-clean.
 
-### PC2 — Sub-rule invocation `name: rule`
+### PC2 — Sub-rule invocation `name: rule` — **DONE (whole-pattern), both backends**
 
-**Goal.** The `parse_fn` example (§1) parses and runs.
+**Landed (first cut).** In a cursor match, a slice element `[ name: rule ]` where `rule` names a
+`fn(cursor) -> Node` is a sub-rule invocation (`peek_subrule_capture` — an `n_<rule>` fn returning a
+`Reference`; disjoint from `name: Variant` sub-patterns, which have no `n_<...>` fn).  It desugars to
+the proven hand-form `r = rule(cursor); if r != null { name = r; … }`: the sub-rule prefix-matches
+over the SAME cursor (PC1 semantics — advances `pos` on a match, leaves it on a miss, returns null on
+a miss), so the call HOISTS above the arm if-chain (`prechain`, a match-level binding visible to every
+arm — a cond sub-block scopes it away on native) and runs once; the arm gates on `name != null`
+(`OpNeRef(name, OpNullRefSentinel())` — the ref path the hand-form uses, NOT `OpRefIsNull`, which
+misreads a fn-returned null struct on the interpreter).  `multi_alt` skips the fixed-length gate +
+pos-advance — the sub-rule owns the pos.  A sub-rule may consume MANY tokens (pos jumps by its width),
+and sequential top-level matches walk the stream, so recursive descent composes today.  Guard
+`tests/scripts/35r-subrule-invoke.loft` (1- and 2-token sub-rules, hit/miss/wildcard, sequential
+walk; both backends, leak-clean) + `parse_errors::subrule_mixing_deferred`.  **DEFERRED:** mixing a
+sub-rule with fixed elements in the same pattern (`[ Fn, params: rule, RP ]`) — needs the running-pos
++ revert (a variable-width sub-rule advances by a runtime amount, so later elements read at a runtime
+pos); today a sub-rule must be the WHOLE slice pattern.  Match bindings leak to the enclosing scope
+(pre-existing), so reusing a binding name across sub-rules of different return types collides — use
+distinct names.
+
+**Original goal.** The `parse_fn` example (§1) parses and runs.
 **Design.** At a pattern element, resolve an identifier that names a function of type
 `fn(&Cursor<T>) -> option<R>` as a sub-rule; desugar to the anchor/call/null-check/bind/thread of §3.
 **Code points.** `src/parser/control.rs` pattern parsing (the `parse_pattern` element loop from P1)
@@ -219,9 +250,25 @@ cursor threading + the fail-jump (reuse the P4 backtracking jump).
 the sub-rule; a sub-rule that fails mid-arm reverts the cursor and the arm fails/falls through. Both
 backends; nested/recursive rules (expr→term→factor→expr-in-parens) terminate.
 
-### PC3 — Termination / well-formedness pass (§4.1)
+### PC3 — Termination / well-formedness pass (§4.1) — **DONE (cycle detection), both backends**
 
-**Goal.** A left-recursive or empty-looping grammar is a **compile error**, not a runtime hang.
+**Landed.** PC2 records a sub-rule edge `(enclosing_rule → invoked_rule, site)` on pass 2
+(`subrule_edges`); a post-parse pass (`check_subrule_termination`, run from both `parse` and
+`parse_str`) builds the graph and rejects any CYCLE as left recursion, naming the path (`sub-rule
+`expr` is left-recursive (expr -> term -> expr): …`).  For the current surface this is exactly right
+and complete: every PC2 invocation `[ name: rule ]` is a WHOLE pattern, so the sub-rule runs at
+cursor position 0 (nothing consumed) and its call is hoisted unconditionally — so ANY cycle recurses
+forever (no base-case arm can intervene; confirmed — a self-recursive rule blows the stack at 10k+
+frames without the guard).  Detection is a 3-colour DFS (`find_subrule_cycles`), deterministic node
+order, one report per back-edge; the diagnostic points at the invocation site.  Guard
+`parse_errors::subrule_left_recursion` + `pc3-*` probes (self-rec + mutual A→B→A rejected; acyclic
+DAG wrap→leaf compiles + runs both backends).  **When mixing lands (PC2 follow-up)** a consuming edge
+becomes possible, so the min-consumption refinement (reject only cycles with no intervening consume;
+non-consuming `*`/`+`; opaque sub-rule under `*`/`+`) is the future extension — today all edges are
+non-consuming, so reject-all-cycles is both sound and not over-restrictive (no terminating cycle is
+expressible yet).
+
+**Original goal.** A left-recursive or empty-looping grammar is a **compile error**, not a runtime hang.
 **Design.** After two-pass parsing, walk the sub-rule graph; compute min-consumption; reject
 left-recursion + non-consuming `*`/`+`; refuse opaque sub-rules under `*`/`+`.
 **Code points.** A new well-formedness analysis (new module under `src/parser/`, run post-parse over
@@ -230,19 +277,53 @@ the def graph); emit diagnostics through the standard path.
 empty-matching `p` rejects; a well-formed grammar compiles. Hand-check the min-consumption on a
 mutually-recursive grammar.
 
-### PC4 — Purity pass (§4.2)
+### PC4 — Purity pass (§4.2) — **DONE, both backends**
 
-**Goal.** An impure sub-rule is a compile error.
+**Landed.** An invoked sub-rule must be pure, or it is a compile error.  Runs in the same post-parse
+pass as PC3 (`check_subrule_wellformedness`): for each invoked sub-rule (callee), `scopes::
+sub_rule_is_pure` descends the call graph and rejects it if it reaches an OBSERVABLE / non-
+deterministic / concurrent effect.  Confirmed hazard: with the unconditional hoist, an impure
+sub-rule's `print` fires even when the arm MISSES (`[noisy] side effect!` before `r=-1`).
+**Category calibration (the crux):** loft's effect analysis annotates the impure builtins, but
+`#impure(parent_write)` covers record construction AND the cursor advance (`OpNewRecord` / `OpSetInt`
+/ `OpFinishRecord`) — every sub-rule uses it internally — so `parent_write` CANNOT disqualify; only
+`host_io` / `io` / `prng` / `par_call` do.  An un-annotated native builtin is pure (every observable
+builtin is annotated `#impure`, so the un-annotated natives are pure reads / arithmetic / record
+ops).  A recursion cycle breaks optimistically (PC3 rejects left recursion separately); an indirect
+`CallRef` is conservatively impure.  Guard `parse_errors::subrule_impure_rejected` (direct + a
+transitive helper both rejected) + `35r` extended with a sub-rule that calls a PURE helper (allowed,
+runs).  **Deferred:** writing EXTERNAL shared state (vs the result record / cursor) is a `parent_write`
+too, so backtracking over such a write is not caught at this category granularity — needs a
+local-vs-external write distinction (the deps/ownership analysis).
+
+**Original goal.** An impure sub-rule is a compile error.
 **Design.** Reuse the capability/effect analysis to require sub-rule purity.
 **Code points.** `src/sandbox.rs` / the `capabilities.md` machinery (`mark_lambda_sandboxed` and
 kin); hook the purity check at the sub-rule reference site.
 **Verify.** A sub-rule doing I/O (or host mutation) used in a pattern rejects; a pure one compiles.
 Both backends / driver-agreement.
 
-### PC5 — Reporting (§5)
+### PC5 — Reporting (§5) — **DONE (farthest primitive + reporting-as-a-value), both backends**
 
-**Goal.** A failing parse yields a lexer-quality diagnostic (`file:line:col` + caret) pointing at the
-farthest token — as a value, never a trap.
+**Landed (the compiler-essential core).** The PEG farthest-failure primitive: a cursor may carry an
+OPTIONAL `farthest: integer` field (opt-in — a plain `{ src, pos }` cursor is unaffected), and the
+match maintains it as a monotonic high-water mark `farthest = max(farthest, new_pos)` at every
+advance.  It is a MAX (never rewound by a backtrack) and rides the SHARED cursor, so it propagates
+through sub-rules automatically — after a failed parse `cursor.farthest` names the deepest token
+reached.  Detected in `parse_cursor_match` (`match_cursor_farthest`), emitted beside the pos-advance.
+"Never a trap" already holds (a failed match returns null); PC5 adds the POSITION.  Reporting is then
+a VALUE built with existing features: read `src[farthest]` and format a message (guard
+`35s-farthest.loft` — `parse error at token 1: expected identifier, found `(`` — both backends,
+leak-clean; plain-cursor unaffected).  **The library layer (parts a/c/d) is a convention, not a
+compiler feature:** spans on tokens are the user's token type (like `lib/lexer.loft`'s
+`line`/`pos`/`Anchor` + `at()`), and `report(span, msg)` is string interpolation over `farthest`
+(the `lib/parser.loft` `log.error("…{lexer.at()}")` pattern) — no new runtime hook needed.
+**Deferred:** `farthest` is the deepest CONSUMED position, not the deepest ATTEMPTED (a whole-pattern
+arm that matches a prefix then fails does not advance, so its partial reach is not recorded) — precise
+farthest-failure needs updating on every read, and the authored-cut (`~`) refinement is future work.
+
+**Original goal.** A failing parse yields a lexer-quality diagnostic (`file:line:col` + caret)
+pointing at the farthest token — as a value, never a trap.
 **Design.** (a) `lib/lexer.loft` tokens carry a `Span`; (b) thread the monotonic `farthest` through
 the desugared match; expose `cur.farthest`; (c) expose the @PLN28 renderer as `report(span, msg)`;
 (d) *optional* cut (`~`) for authored messages.

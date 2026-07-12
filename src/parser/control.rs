@@ -1472,6 +1472,9 @@ impl Parser {
                 // @P377 / S1: collapse `cv = inner_call(...); cv` so the inner
                 // call's hidden buffer arg points at cv directly.
                 self.nrvo_collapse_tail_set(l, &ws);
+                // NOTE: a `[]`/empty slice arm is already a REAL fresh vector here —
+                // `parse_vector_match::materialize_null_slice_arms` rewrote it before
+                // this delivery, so there is no bare `null` arm left to handle.
                 true
             }
             Delivery::CopyBorrow(ls) => {
@@ -2669,6 +2672,24 @@ impl Parser {
         // arm ("match requires an enum, struct, or scalar type"). Gate-OFF inert (never Optional).
         let subject_type = subject_type.base().clone();
 
+        // @PLN35 PC1 — a CURSOR subject (a struct with a `vector<T>` source field + an integer
+        // `pos` field) PREFIX-consumes: route to the vector-match over its source with cursor mode
+        // on, so the arm pattern reads/advances relative to `pos`.  A plain struct without that
+        // shape falls through to the normal struct handler.  Routes in BOTH passes so the arm
+        // grammar (slice patterns, not struct patterns) is parsed consistently.
+        if let Some((cursor_def, source_field, pos_field, celm_tp)) =
+            self.cursor_shape(&subject_type)
+        {
+            return self.parse_cursor_match(
+                subject,
+                cursor_def,
+                source_field,
+                pos_field,
+                &celm_tp,
+                code,
+            );
+        }
+
         // Resolve type info from the subject.
         // Accepts: plain enums, struct-enums, struct-enum variants, and plain structs (T1-18).
         let (e_nr, is_struct, valid_enum, is_plain_struct) = match &subject_type {
@@ -3842,6 +3863,15 @@ impl Parser {
     /// replace the read without touching the match logic — so do NOT open-code
     /// `OpGetVector` + `get_field` at a slice element site; call this.
     fn read_slice_elem(&mut self, v: u16, elm_size: &Value, elm_tp: &Type, pos: Value) -> Value {
+        // @PLN35 PC1 — in CURSOR mode a forward read `v[i]` is relative to the cursor's current
+        // `pos`, so it becomes `source[pos + i]`.  Only non-negative literal positions are offset
+        // (a negative/tail read has no meaning for a prefix cursor and is rejected upstream).
+        let pos = match self.match_cursor {
+            Some((_, _, _, pos_var)) if matches!(&pos, Value::Int(i) if *i >= 0) => {
+                self.conv_op("+", Value::Var(pos_var), pos, I32.clone(), I32.clone())
+            }
+            _ => pos,
+        };
         let get = self.cl("OpGetVector", &[Value::Var(v), elm_size.clone(), pos]);
         let td = self.data.type_def_nr(elm_tp);
         self.get_field(td, usize::MAX, get)
@@ -4758,24 +4788,70 @@ impl Parser {
         }
         self.lexer.token("]");
 
-        // `end` = the cursor after the last matched V (starts at head_len).
+        // @PLN35 PC — a CURSOR-mode repetition PREFIX-consumes: the run begins at the
+        // ABSOLUTE index `pos + head_len` and, on a match, advances `cursor.pos` to the
+        // run end — matching the MAXIMAL V run and LEAVING any following non-V tokens
+        // (a plain vector must instead consume through to its end).  `base` is that
+        // absolute start: plain `head_len` in vector mode (so the emitted IR stays
+        // byte-identical there), a `pos + head_len` temp in cursor mode.  A fixed tail
+        // matched from the END has no meaning for a prefix cursor — its "end" is the
+        // whole source, not the consumed prefix — so reject it.
+        let cursor_ctx = self.match_cursor;
+        if cursor_ctx.is_some() && tail_len > 0 && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a fixed tail after a repetition is not supported in a cursor match \
+                 (it would match from the source end, not the consumed prefix)"
+            );
+        }
+        let (base_val, base_setup) = if let Some((_, _, _, pos_var)) = cursor_ctx {
+            let b = self.create_unique("rep_base", &I32);
+            self.vars.defined(b);
+            let add = self.conv_op(
+                "+",
+                Value::Var(pos_var),
+                Value::Int(head_len),
+                I32.clone(),
+                I32.clone(),
+            );
+            (Value::Var(b), Some(v_set(b, add)))
+        } else {
+            (Value::Int(head_len), None)
+        };
+
+        // `end` = the cursor after the last matched V (starts at `base`).
         let end_var = self.create_unique("rep_end", &I32);
         self.vars.defined(end_var);
 
-        let mut run_ops: Vec<Value> = vec![v_set(end_var, Value::Int(head_len))];
+        let mut run_ops: Vec<Value> = Vec::new();
+        if let Some(bs) = base_setup {
+            run_ops.push(bs);
+        }
+        run_ops.push(v_set(end_var, base_val.clone()));
         if let Some(sep) = &sep_disc {
             // Separated `V (Sep V)*`: match the first V, then loop `(Sep V)` pairs.
             // First V: `if head_len < len && tag(v[head_len]) == disc { end = head_len + 1 }`.
             let first_v = {
                 let lc = self.cursor_len(v);
-                let non_empty =
-                    self.conv_op("<", Value::Int(head_len), lc, I32.clone(), I32.clone());
-                let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(head_len));
+                let non_empty = self.conv_op("<", base_val.clone(), lc, I32.clone(), I32.clone());
+                let elem = self.read_slice_elem(v, elm_size, elm_tp, base_val.clone());
                 let tag = self.elem_tag_int(elem);
                 let is_v = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
+                let one_more = if cursor_ctx.is_some() {
+                    self.conv_op(
+                        "+",
+                        base_val.clone(),
+                        Value::Int(1),
+                        I32.clone(),
+                        I32.clone(),
+                    )
+                } else {
+                    Value::Int(head_len + 1)
+                };
                 v_if(
                     non_empty,
-                    v_if(is_v, v_set(end_var, Value::Int(head_len + 1)), Value::Null),
+                    v_if(is_v, v_set(end_var, one_more), Value::Null),
                     Value::Null,
                 )
             };
@@ -4852,19 +4928,24 @@ impl Parser {
         // Match boolean (after the loop): no-rest requires the run to reach exactly the start of
         // the fixed tail (`end == len - tail_len`); a rest just needs room for the head
         // (`head_len <= len`).  `+` additionally requires a non-empty run (`end > head_len`).
-        let base = if has_rest {
+        let base = if has_rest || cursor_ctx.is_some() {
+            // A cursor PREFIX-consumes: the run took the maximal V prefix and any
+            // non-V tail simply stays unconsumed, so the arm matches whenever the head
+            // fits (`base <= len`).  A vector `..rest` matches on the same "room for the
+            // head" test.  Only a vector WITHOUT a rest must reach the fixed tail
+            // exactly (`end == len - tail_len`, the whole-consume boundary).
             let lc = self.cursor_len(v);
-            self.conv_op("<=", Value::Int(head_len), lc, I32.clone(), I32.clone())
+            self.conv_op("<=", base_val.clone(), lc, I32.clone(), I32.clone())
         } else {
             let lc = self.cursor_len(v);
             let boundary = self.conv_op("-", lc, Value::Int(tail_len), I32.clone(), I32.clone());
             self.cl("OpEqInt", &[Value::Var(end_var), boundary])
         };
         let match_bool = if plus {
-            // `end > head_len`, written `head_len < end` — `>` has no Int form (swapped `<`).
+            // `end > base`, written `base < end` — `>` has no Int form (swapped `<`).
             let gt = self.conv_op(
                 "<",
-                Value::Int(head_len),
+                base_val.clone(),
                 Value::Var(end_var),
                 I32.clone(),
                 I32.clone(),
@@ -4903,7 +4984,7 @@ impl Parser {
                     elm_size,
                     cap_var,
                     &vec_tp,
-                    Value::Int(head_len),
+                    base_val.clone(),
                     Value::Var(end_var),
                     cap_step,
                     bindings,
@@ -4925,7 +5006,7 @@ impl Parser {
                     &ftype,
                     proj_var,
                     &fvec_tp,
-                    Value::Int(head_len),
+                    base_val.clone(),
                     Value::Var(end_var),
                     cap_step,
                     bindings,
@@ -4948,6 +5029,45 @@ impl Parser {
                     1,
                     bindings,
                 );
+            }
+        }
+
+        // @PLN35 PC — advance the cursor by the consumed prefix.  On a plain vector
+        // there is no cursor and nothing to advance.  On a cursor the run consumed up
+        // to `end`; a trailing `..rest` additionally consumed the remainder, so the
+        // cursor lands on the source end.  Mirrors the fixed-arity advance in
+        // `parse_vector_match` (including the PC5 `farthest` high-water update).
+        if let Some((cursor_var, cursor_def, pos_field, pos_var)) = cursor_ctx {
+            let _ = pos_var;
+            let advance_to = if has_rest {
+                let lc = self.cursor_len(v);
+                let t = self.create_unique("rep_adv", &I32);
+                self.vars.defined(t);
+                bindings.push(v_set(t, lc));
+                Value::Var(t)
+            } else {
+                Value::Var(end_var)
+            };
+            let adv = self.set_field(
+                cursor_def,
+                pos_field,
+                0,
+                Value::Var(cursor_var),
+                advance_to.clone(),
+            );
+            bindings.push(adv);
+            if let Some(ff) = self.match_cursor_farthest {
+                let old_far = self.get_field(cursor_def, ff, Value::Var(cursor_var));
+                let is_less = self.conv_op(
+                    "<",
+                    old_far.clone(),
+                    advance_to.clone(),
+                    I32.clone(),
+                    I32.clone(),
+                );
+                let maxed = v_if(is_less, advance_to, old_far);
+                let set_far = self.set_field(cursor_def, ff, 0, Value::Var(cursor_var), maxed);
+                bindings.push(set_far);
             }
         }
     }
@@ -6075,6 +6195,308 @@ impl Parser {
     /// Slice patterns: `[a, b] =>`, `[first, ..] =>`, `[.., last] =>`, `_ =>`.
     /// Each arm generates a length check and element bindings.
     #[allow(clippy::too_many_lines)] // slice pattern parsing with head/tail/rest dispatch
+    /// @PLN35 PC1 — is `subject_type` a CURSOR-shaped struct: a `vector<T>` source field + an
+    /// integer field named `pos`?  Returns `(struct_def, source_field_idx, pos_field_idx, T)`.
+    /// Matching such a subject prefix-consumes; any other struct falls through to the struct handler.
+    fn cursor_shape(&self, subject_type: &Type) -> Option<(u32, usize, usize, Type)> {
+        let d_nr = match subject_type {
+            Type::Reference(d, _) if self.data.def_type(*d) == DefType::Struct => *d,
+            _ => return None,
+        };
+        let attrs = self.data.def(d_nr).attributes();
+        let mut source: Option<(usize, Type)> = None;
+        let mut pos: Option<usize> = None;
+        for (i, a) in attrs.iter().enumerate() {
+            if a.constant {
+                continue;
+            }
+            if let Type::Vector(elem, _) = &a.typedef {
+                if source.is_none() {
+                    source = Some((i, (**elem).clone()));
+                }
+            } else if matches!(a.typedef, Type::Integer(_)) && a.name == "pos" {
+                pos = Some(i);
+            }
+        }
+        match (source, pos) {
+            (Some((si, elm)), Some(pi)) => Some((d_nr, si, pi, elm)),
+            _ => None,
+        }
+    }
+
+    /// @PLN35 PC1 — match over a CURSOR: prefix-consume its source from `pos`, advancing `cursor.pos`
+    /// by the consumed count on a match.  Reads source + pos into temps, sets `match_cursor` so the
+    /// slice machinery goes prefix-relative (`read_slice_elem` offsets by `pos`, the length gate is
+    /// `pos + fixed <= len`), runs the normal vector-match over the source, then clears the mode.
+    fn parse_cursor_match(
+        &mut self,
+        subject: Value,
+        cursor_def: u32,
+        source_field: usize,
+        pos_field: usize,
+        elm_tp: &Type,
+        code: &mut Value,
+    ) -> Type {
+        // Use the subject's OWN var as the cursor — a struct is a DbRef, so advancing its `pos`
+        // must reach the caller's cursor (same rule the struct-match path follows).  Copy only a
+        // non-var subject (a temporary cursor's advance is then moot, which is fine).
+        let (cursor_var, copy) = if let Value::Var(cv) = &subject {
+            (*cv, false)
+        } else {
+            let t = self.create_unique("cursor", &Type::Reference(cursor_def, Deps::none()));
+            self.vars.defined(t);
+            (t, true)
+        };
+        // `cursor.src` is a vector living INSIDE the caller-owned cursor record, so the read
+        // is a BORROWED view (Deps::frame1(cursor_var)), not an owned temporary. It must NOT
+        // be freed: freeing it frees the cursor's whole record — a use-after-free that lets a
+        // later allocation reuse the slot and silently corrupt the caller's cursor (surfaced
+        // by an arm that returns a freshly-built struct then rebinds it). Mirrors the heap-
+        // capture borrowed-VIEW path (skip_free + a borrow dep on the subject source).
+        let borrowed_vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::frame1(cursor_var));
+        let source_var = self.create_unique("cursor_src", &borrowed_vec_tp);
+        self.vars.defined(source_var);
+        self.vars.set_skip_free(source_var);
+        let pos_var = self.create_unique("cursor_pos", &I32);
+        self.vars.defined(pos_var);
+        let read_source = self.get_field(cursor_def, source_field, Value::Var(cursor_var));
+        let read_pos = self.get_field(cursor_def, pos_field, Value::Var(cursor_var));
+        let mut setup = Vec::new();
+        if copy {
+            setup.push(v_set(cursor_var, subject));
+        }
+        setup.push(v_set(source_var, read_source));
+        setup.push(v_set(pos_var, read_pos));
+        self.match_cursor = Some((cursor_var, cursor_def, pos_field, pos_var));
+        // @PLN35 PC5 — an OPTIONAL `farthest: integer` field is a monotonic high-water mark the
+        // match maintains at every advance (opt-in; a plain `{ src, pos }` cursor has none).
+        self.match_cursor_farthest = self.data.def(cursor_def).attributes().iter().position(|a| {
+            !a.constant && matches!(a.typedef, Type::Integer(_)) && a.name == "farthest"
+        });
+        let mut match_code = Value::Null;
+        let result_tp =
+            self.parse_vector_match(Value::Var(source_var), &borrowed_vec_tp, &mut match_code);
+        self.match_cursor = None;
+        self.match_cursor_farthest = None;
+        setup.push(match_code);
+        *code = v_block(setup, result_tp.clone(), "cursor match");
+        result_tp
+    }
+
+    /// @PLN35 PC2 — is the upcoming slice element `name : rule`, where `rule` names a sub-rule
+    /// FUNCTION (`n_<rule>` returning a struct)?  ONE save/revert look-ahead, mirroring
+    /// `peek_scalar_type_capture`.  A variant name (`name : Variant`) has no `n_<...>` fn, so this
+    /// stays disjoint from the sub-pattern path.  Returns `(name, fn_def_nr, return_type)`.
+    fn peek_subrule_capture(&mut self) -> Option<(String, u32, Type)> {
+        let name = match &self.lexer.peek().has {
+            LexItem::Identifier(id) if id != "_" => id.clone(),
+            _ => return None,
+        };
+        let save = self.lexer.link();
+        let mut result = None;
+        self.lexer.cont(); // name
+        if self.lexer.peek_token(":") {
+            self.lexer.cont(); // `:`
+            if let LexItem::Identifier(rule) = self.lexer.peek().has.clone() {
+                let fn_nr = self.data.def_nr(&format!("n_{rule}"));
+                if fn_nr != u32::MAX {
+                    let ret = self.data.def(fn_nr).returned().clone();
+                    if matches!(ret, Type::Reference(..)) {
+                        result = Some((name, fn_nr, ret));
+                    }
+                }
+            }
+        }
+        self.lexer.revert(save);
+        result
+    }
+
+    /// @PLN35 PC2 — emit a sub-rule invocation slice element `[ name: rule ]` (cursor mode,
+    /// whole-pattern).  Desugars to the proven hand-form `r = rule(cursor); if r != null { name = r
+    /// … }`: the sub-rule prefix-matches over the SAME cursor (advancing its `pos` on a match,
+    /// leaving it on a miss), so no fixed-length gate or pos-advance is needed here (`multi_alt`
+    /// skips them).  The call is evaluated ONCE inside the arm cond (a side-effecting block) so a
+    /// miss never double-advances; `name` binds the (owned) result and the arm gates on `name != null`.
+    fn parse_subrule_slice_element(
+        &mut self,
+        name: &str,
+        fn_nr: u32,
+        ret_tp: &Type,
+        cond: &mut Option<Value>,
+        prechain: &mut Vec<Value>,
+    ) {
+        let cursor_var = self.match_cursor.map_or(0, |(cv, ..)| cv);
+        // Re-read `name : rule` (the peek reverted); then require it be the whole pattern.
+        self.lexer.has_identifier(); // name
+        self.lexer.token(":");
+        // @PLN35 PC3 — record the sub-rule edge (enclosing rule -> invoked rule) at the invocation
+        // site, so the post-parse termination pass can reject a left-recursive cycle.
+        let site = self.lexer.peek().position.clone();
+        self.lexer.has_identifier(); // rule
+        if !self.first_pass && self.context != u32::MAX {
+            self.subrule_edges.push((self.context, fn_nr, site));
+        }
+        if !self.first_pass && !self.lexer.peek_token("]") {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a sub-rule element `{name}: rule` must currently be the whole slice pattern \
+                 (mixing a sub-rule with fixed elements is deferred to a follow-up)"
+            );
+        }
+        while !self.lexer.peek_token("]") && !matches!(self.lexer.peek().has, LexItem::None) {
+            self.lexer.cont();
+        }
+        self.lexer.token("]");
+        let name_var = self.vars.add_variable(name, ret_tp, &mut self.lexer);
+        self.vars.defined(name_var);
+        let cursor_tp = self.vars.tp(cursor_var).clone();
+        let mut call = Value::Null;
+        self.call_nr(
+            &mut call,
+            fn_nr,
+            &[Value::Var(cursor_var)],
+            &[cursor_tp],
+            false,
+            &[],
+        );
+        // Hoist `name = rule(cursor)` above the if-chain: the call runs ONCE (a miss leaves `pos`
+        // unchanged, so unconditional evaluation is safe), and `name` is a match-level binding
+        // visible to every arm body (a cond sub-block would scope it away on native).  The arm
+        // then gates on `name != null`.
+        prechain.push(v_set(name_var, call));
+        // Presence test == the hand-form `name != null`: `OpNeRef(name, OpNullRefSentinel())`.
+        // (NOT `OpRefIsNull` — that tests the store_nr sentinel, for `enum == null`, and misreads
+        // a fn-returned null struct on the interpreter; `OpNeRef` vs the sentinel is the ref path.)
+        let sentinel = self.cl("OpNullRefSentinel", &[]);
+        let present = self.cl("OpNeRef", &[Value::Var(name_var), sentinel]);
+        *cond = match cond.take() {
+            Some(existing) => Some(v_if(existing, present, Value::Boolean(false))),
+            None => Some(present),
+        };
+    }
+
+    /// @PLN35 PC3+PC4 — well-formedness pass over the sub-rule invocation graph, run post-parse over
+    /// the edges recorded on pass 2.  **PC3 (termination):** every PC2 invocation `[ name: rule ]` is
+    /// a WHOLE pattern, so the sub-rule runs at cursor position 0 (nothing consumed) and its call is
+    /// hoisted unconditionally — a CYCLE therefore recurses forever (no base-case arm can intervene),
+    /// so reject any cycle as left recursion.  **PC4 (purity):** an invoked sub-rule must be pure —
+    /// the hoisted, possibly-backtracked call makes any observable side effect leak.
+    pub(crate) fn check_subrule_wellformedness(&mut self) {
+        // Drain the edges so a re-parse (REPL / multiple files) starts fresh.
+        let edges = std::mem::take(&mut self.subrule_edges);
+        if edges.is_empty() {
+            return;
+        }
+        let mut adj: std::collections::HashMap<u32, Vec<(u32, crate::lexer::Position)>> =
+            std::collections::HashMap::new();
+        for (from, to, pos) in &edges {
+            adj.entry(*from).or_default().push((*to, pos.clone()));
+        }
+        let cycles = Self::find_subrule_cycles(&adj);
+        for (site, cycle) in &cycles {
+            let path = cycle
+                .iter()
+                .map(|nr| Self::rule_display_name(&self.data, *nr))
+                .collect::<Vec<_>>()
+                .join(" -> ");
+            let head = Self::rule_display_name(&self.data, cycle[0]);
+            diagnostic_at!(
+                self.lexer,
+                site,
+                Level::Error,
+                "sub-rule `{head}` is left-recursive ({path}): a cursor `match` invokes a sub-rule \
+                 before consuming any input, so this cycle would recurse forever"
+            );
+        }
+        // @PLN35 PC4 — an invoked sub-rule must be PURE: a cursor `match` hoists its call
+        // unconditionally (so it runs even when the arm is not taken) and may backtrack over it, so
+        // an observable side effect (I/O, host mutation, prng) would leak.  Skip callees already in
+        // a rejected cycle (that error stands).  One report per impure callee.
+        let in_cycle: HashSet<u32> = cycles.iter().flat_map(|(_, c)| c.iter().copied()).collect();
+        let mut checked: HashSet<u32> = HashSet::new();
+        for (_from, callee, site) in &edges {
+            if in_cycle.contains(callee) || !checked.insert(*callee) {
+                continue;
+            }
+            if !crate::scopes::sub_rule_is_pure(&self.data, *callee) {
+                let name = Self::rule_display_name(&self.data, *callee);
+                diagnostic_at!(
+                    self.lexer,
+                    site,
+                    Level::Error,
+                    "sub-rule `{name}` is not pure — a cursor `match` may invoke it speculatively \
+                     (even when its arm is not taken) and backtrack over it, so its side effects \
+                     would be observable; a sub-rule must only advance the cursor and return (no \
+                     I/O, host mutation, or randomness)"
+                );
+            }
+        }
+    }
+
+    /// The user-facing name of a rule fn (`n_expr` -> `expr`).
+    fn rule_display_name(data: &crate::data::Data, nr: u32) -> String {
+        let n = data.def(nr).name();
+        n.strip_prefix("n_").unwrap_or(n).to_string()
+    }
+
+    /// DFS the sub-rule graph; return one `(site, cycle-path)` per distinct back-edge.  `cycle` is
+    /// the closed node sequence `callee … node callee`; `site` the invocation position closing it.
+    /// Nodes visited in sorted order for a deterministic report.
+    fn find_subrule_cycles(
+        adj: &std::collections::HashMap<u32, Vec<(u32, crate::lexer::Position)>>,
+    ) -> Vec<(crate::lexer::Position, Vec<u32>)> {
+        let mut color: std::collections::HashMap<u32, u8> = std::collections::HashMap::new();
+        let mut reported: HashSet<(u32, u32)> = HashSet::new();
+        let mut out: Vec<(crate::lexer::Position, Vec<u32>)> = Vec::new();
+        let mut nodes: Vec<u32> = adj.keys().copied().collect();
+        nodes.sort_unstable();
+        for start in nodes {
+            if color.get(&start).copied().unwrap_or(0) == 0 {
+                Self::dfs_subrule(
+                    start,
+                    adj,
+                    &mut color,
+                    &mut Vec::new(),
+                    &mut reported,
+                    &mut out,
+                );
+            }
+        }
+        out
+    }
+
+    fn dfs_subrule(
+        node: u32,
+        adj: &std::collections::HashMap<u32, Vec<(u32, crate::lexer::Position)>>,
+        color: &mut std::collections::HashMap<u32, u8>,
+        path: &mut Vec<u32>,
+        reported: &mut HashSet<(u32, u32)>,
+        out: &mut Vec<(crate::lexer::Position, Vec<u32>)>,
+    ) {
+        color.insert(node, 1); // gray = on the current DFS path
+        path.push(node);
+        if let Some(edges) = adj.get(&node) {
+            for (callee, pos) in edges {
+                match color.get(callee).copied().unwrap_or(0) {
+                    1 => {
+                        // back-edge into a node on the path — a cycle
+                        if reported.insert((node, *callee)) {
+                            let idx = path.iter().position(|x| x == callee).unwrap_or(0);
+                            let mut cycle = path[idx..].to_vec();
+                            cycle.push(*callee);
+                            out.push((pos.clone(), cycle));
+                        }
+                    }
+                    0 => Self::dfs_subrule(*callee, adj, color, path, reported, out),
+                    _ => {}
+                }
+            }
+        }
+        path.pop();
+        color.insert(node, 2); // black = fully explored
+    }
+
     fn parse_vector_match(
         &mut self,
         subject: Value,
@@ -6095,6 +6517,11 @@ impl Parser {
         let mut result_type = Type::Void;
         let mut arms: Vec<(Option<Value>, Value, Type)> = Vec::new();
         let mut has_wildcard = false;
+        // @PLN35 PC2 — statements hoisted BEFORE the arm if-chain (evaluated once, at match-level
+        // scope so a binding is visible to every arm body — native scopes cond sub-blocks away).
+        // A sub-rule call goes here: `name = rule(cursor)` runs unconditionally, then each arm's
+        // cond null-checks `name` (mirrors the hand-form `r = rule(c); if r != null { … }`).
+        let mut prechain: Vec<Value> = Vec::new();
         loop {
             if self.lexer.peek_token("}") {
                 break;
@@ -6135,6 +6562,27 @@ impl Parser {
                         if let Some(name) = self.lexer.has_identifier() {
                             rest_name = Some(name);
                         }
+                    } else if self.match_cursor.is_some()
+                        && head.is_empty()
+                        && !has_rest
+                        && let Some((name, fn_nr, ret_tp)) = self.peek_subrule_capture()
+                    {
+                        // @PLN35 PC2 — sub-rule invocation `[ name: rule ]` in cursor mode: call
+                        // `rule(cursor)` (which prefix-matches over the SAME cursor, advancing its
+                        // `pos` on a match and leaving it on a miss — PC1 semantics), bind `name` to
+                        // the result, and gate the arm on `name != null`.  Whole-pattern only for
+                        // now (the running-pos + revert needed to mix a variable-width sub-rule with
+                        // fixed elements is deferred).  `multi_alt` skips the fixed length gate +
+                        // pos-advance — the sub-rule owns the pos.
+                        self.parse_subrule_slice_element(
+                            &name,
+                            fn_nr,
+                            &ret_tp,
+                            &mut cond,
+                            &mut prechain,
+                        );
+                        multi_alt = true;
+                        break;
                     } else if !has_rest
                         && !matches!(&elm_tp, Type::Enum(..))
                         && let Some(is_rep) = self.peek_scalar_type_capture()
@@ -6429,7 +6877,63 @@ impl Parser {
                     let fixed = (head.len() + tail.len()) as i32;
                     // Generate length condition
                     let len_call = self.cursor_len(v);
-                    if has_rest {
+                    if let Some((cursor_var, cursor_def, pos_field, pos_var)) = self.match_cursor {
+                        // @PLN35 PC1 — cursor PREFIX-consume: need `fixed` elements from `pos`
+                        // (`pos + fixed <= len`), and on a match advance `cursor.pos` by `fixed`.
+                        // `pos_var` stays the ENTRY position, so every read AND this write share it.
+                        let ispec = Type::Integer(IntegerSpec {
+                            min: 0,
+                            max: 0,
+                            not_null: false,
+                            forced_size: None,
+                        });
+                        let need = self.conv_op(
+                            "+",
+                            Value::Var(pos_var),
+                            Value::Int(fixed),
+                            I32.clone(),
+                            I32.clone(),
+                        );
+                        self.call_op(
+                            cond.get_or_insert(Value::Null),
+                            "<=",
+                            &[need, len_call],
+                            &[ispec.clone(), ispec],
+                        );
+                        let new_pos = self.conv_op(
+                            "+",
+                            Value::Var(pos_var),
+                            Value::Int(fixed),
+                            I32.clone(),
+                            I32.clone(),
+                        );
+                        let adv = self.set_field(
+                            cursor_def,
+                            pos_field,
+                            0,
+                            Value::Var(cursor_var),
+                            new_pos.clone(),
+                        );
+                        bindings.push(adv);
+                        // @PLN35 PC5 — maintain the farthest high-water mark: `farthest =
+                        // max(farthest, new_pos)`.  Monotonic across arms + sub-rules (the shared
+                        // cursor carries it), so after a failed parse it names the deepest token
+                        // reached.  Opt-in — only when the cursor has a `farthest` field.
+                        if let Some(ff) = self.match_cursor_farthest {
+                            let old_far = self.get_field(cursor_def, ff, Value::Var(cursor_var));
+                            let is_less = self.conv_op(
+                                "<",
+                                old_far.clone(),
+                                new_pos.clone(),
+                                I32.clone(),
+                                I32.clone(),
+                            );
+                            let maxed = v_if(is_less, new_pos, old_far);
+                            let set_far =
+                                self.set_field(cursor_def, ff, 0, Value::Var(cursor_var), maxed);
+                            bindings.push(set_far);
+                        }
+                    } else if has_rest {
                         // length >= fixed  →  fixed <= length
                         self.call_op(
                             cond.get_or_insert(Value::Null),
@@ -6650,11 +7154,23 @@ impl Parser {
                 chain = arm_code;
             }
         }
-        *code = v_block(
-            vec![v_set(v, subject), chain],
-            result_type.clone(),
-            "vector_match",
-        );
+        // @PLN85 — a bare `[]` arm (`_ => []`) lowers to a `null` of the result type, which the
+        // native backend emits as `()` where a vector (`DbRef`) is expected.  In a RETURN context
+        // the delivery renames it onto `__retbuf`; but when the match value is BOUND to a local
+        // (`cap = match v { … , _ => [] }`, copy-on-bind in `parse_assign_op`) the copy's
+        // `OpAppendVector(cap, <match>)` needs every arm to be a real vector.  Materialise each
+        // null arm as a FRESH empty vector — ONLY when the match RESULT is a vector (a
+        // cursor/prefix match that returns a struct/scalar, `[ n: rule ] => …, _ => null`, keeps
+        // its genuine `null` arm; the result's OWN element type is used, not the subject's).
+        if !self.first_pass
+            && let Type::Vector(result_elm, _) = result_type.clone()
+        {
+            self.materialize_null_slice_arms(&mut chain, &result_elm);
+        }
+        let mut block_ops = vec![v_set(v, subject)];
+        block_ops.append(&mut prechain);
+        block_ops.push(chain);
+        *code = v_block(block_ops, result_type.clone(), "vector_match");
         result_type
     }
 
@@ -7890,6 +8406,49 @@ impl Parser {
             Value::Block(bl) => bl.operators.last().is_some_and(|x| self.arm_is_null(x)),
             Value::Insert(ops) => ops.last().is_some_and(|x| self.arm_is_null(x)),
             _ => false,
+        }
+    }
+
+    /// @PLN85 — rewrite each `null` arm of a slice-match tail to a FRESH empty vector
+    /// (`{ OpDatabase(o); o }`), so a `[]` arm bound to a local (whose copy-on-bind
+    /// appends the whole match value) is a real `DbRef`, not a bare `null` native emits
+    /// as `()`.  Descends `if`/block/insert; a non-null arm is left untouched.
+    fn materialize_null_slice_arms(&mut self, tail: &mut Value, elm_tp: &Type) {
+        match tail {
+            Value::Span(b) => self.materialize_null_slice_arms(&mut b.1, elm_tp),
+            Value::Return(inner) | Value::Drop(inner) => {
+                self.materialize_null_slice_arms(inner, elm_tp);
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    self.materialize_null_slice_arms(last, elm_tp);
+                }
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    self.materialize_null_slice_arms(last, elm_tp);
+                }
+            }
+            Value::If(_, t, f) => {
+                self.rewrite_null_arm_fresh(t, elm_tp);
+                self.rewrite_null_arm_fresh(f, elm_tp);
+            }
+            _ => {}
+        }
+    }
+
+    fn rewrite_null_arm_fresh(&mut self, arm: &mut Value, elm_tp: &Type) {
+        if self.arm_is_null(arm) {
+            let vec_tp = Type::Vector(Box::new(elm_tp.clone()), Deps::none());
+            let o = self.create_unique("empty_arm", &vec_tp);
+            if o != u16::MAX {
+                self.vars.defined(o);
+                let mut ops = self.vector_db(&vec_tp, o);
+                ops.push(Value::Var(o));
+                *arm = Value::Insert(ops);
+            }
+        } else {
+            self.materialize_null_slice_arms(arm, elm_tp);
         }
     }
 
