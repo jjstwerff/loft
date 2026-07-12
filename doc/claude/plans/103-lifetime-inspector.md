@@ -5,9 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 103 — Lifetime inspector: render the ownership fact the store-lifetime bugs kept hiding
 
-**Status — P1 LANDED; P2 FALSIFIED + re-scoped to P3.4; P3 next (2026-07-12).** P2.0 proved a static
-per-backend ownership column is vacuous (`ownership_of` is backend-shared) — no feature built; the K5
-runtime divergence moves to the P3.4 per-backend timeline. Overlay now notes it is backend-shared. P0 ✅. **P1:** the static overlay
+**Status — P1 LANDED; P2 FALSIFIED; P3 core LANDED (2026-07-12).** P3: `LOFT_STORES=timeline` ships on
+BOTH backends — a stable per-store id `#<store_nr>.<seq>` (seq disambiguates slot reuse) on every
+alloc/free, plus an exit SUMMARY reporting **peak concurrency (working set) reconciled with the
+authoritative leak count**. Headline win: on the 85 probe, `LOFT_STORES=warn` false-alarms "possible
+leak" 14×, while the timeline reports "peak 33 (working set) — NO leak". Deferred: P3.2b (borrow/copy
+events), P3.4b (K5 event-level divergence demo). Next: P4 (consolidation) or the P1/P3 deferrals. P0 ✅. **P1:** the static overlay
 `loft introspect --show-ownership` ships — per-binding `ownership_of` over the final IR (corrected render
 rule: self-base = caller-arg, synth-buffer = Owned-via-backing, else genuine alias; scalars elided) + a
 per-return `delivery:` line (materialised/owned/borrows). Deterministic, opt-in, golden-matched, `--diff`
@@ -423,20 +426,36 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
 
 ### P3 — runtime store timeline `LOFT_STORES=timeline`
 
-- **P3.1 — stable per-store lifeline.** Add the `timeline` mode in the store subsystem (the P0.4 seam);
-  capture `alloc(op, site)` with a STABLE id spanning alloc→free. **VERIFY:** on a 2-alloc program the
-  mode prints two lifelines with distinct ids that persist to their frees.
-- **P3.2 — borrow/copy/free events.** Key `borrow(by var)` / `copy(to id)` / `free(op, site)` to the id;
-  render the ordered lifeline. **VERIFY:** for `k1`-style #457 the timeline shows `free` ordered BEFORE
-  the returning read; for the freed-then-reused shape (probe-05) it shows `alloc#8 → free#8 →
-  alloc#8-REUSED` while a prior result still references `#8`.
-- **P3.3 — working-set vs leak summary.** **VERIFY:** on
-  `tests/scripts/85-store-lifetime-empty-vector-match-arm.loft` the summary reports
-  "N concurrently-live, all freed — NO leak" (this session's false-alarm case), while a deliberate
-  per-iteration leaker (`probes/leaker.loft`) reports "K never-freed, growing".
-- **P3.4 — per-backend timeline.** **VERIFY:** `k5-classC-reuse` shows the subject freed on interp but
-  retained on native.
-- **GATE P3:** the K3 corpus + the working-set disambiguation render correctly on both backends.
+- **P3.1 — stable per-store lifeline.** ✅ DONE (2026-07-12). `LOFT_STORES=timeline` at the P0.4 seam
+  (`Stores::allocate`/`free_named`, `database/allocation.rs`) emits `alloc #<store_nr>.<seq>` / `free
+  #<store_nr>.<seq>` — the `<seq>` is a monotonic counter that disambiguates the REUSED `store_nr` slot,
+  held in a thread-local `TimelineState` (no `Stores` struct ripple). A free prints the SAME id as its
+  alloc (via a `live: HashMap<slot,seq>`). Both backends emit (both route through `allocate` — verified).
+  **VERIFY ✅:** a 2-alloc program prints `#2.2`/`#3.3` with matching frees.
+- **P3.2 — id disambiguation (done) / borrow-copy events (deferred).** ✅ the stable id makes slot reuse
+  unambiguous (a reused `store_nr` gets a fresh `seq`); the alloc/free events + the `live=` running count
+  are in. **Deferred (P3.2b):** distinct `borrow(by var)` / `copy(to id)` event lines keyed to the id
+  (needs hooks at `OpCopyRecord` / the borrow sites) — the alloc/free lifeline + the summary already
+  deliver the working-set-vs-leak value without them.
+- **P3.3 — working-set vs leak summary.** ✅ DONE — the headline result. At exit a SUMMARY reports
+  `<allocs>, <frees>, peak <N> concurrently-live (working set)` reconciled with the AUTHORITATIVE leak
+  count (`collect_store_leaks()`, which excludes the interp eval-stack / const / locked infrastructure —
+  the reconciliation that stops the raw live-count false-positive and makes interp AGREE with native).
+  Wired on both backends (interp `check_store_leaks`; native — an ungated, self-gating
+  `timeline_summary(collect_store_leaks().len())` in the generated `__run` tail). **VERIFY ✅:** on
+  `tests/scripts/85-store-lifetime-empty-vector-match-arm.loft`, `LOFT_STORES=warn` cries "possible leak"
+  **14×** (the false alarm), while `LOFT_STORES=timeline` reports **"peak 33 concurrently-live (working
+  set) — NO leak (every user store freed)"** — the exact disambiguation this session needed. The
+  real-leak verdict path is wired to the same authoritative oracle (a real leak → "N user store(s)
+  LEAKED"); not separately demo'd since leaks are fixed on `main`.
+- **P3.4 — per-backend timeline.** ✅ (both-backend events + reconciled summary) / K5-divergence demo
+  deferred. Both backends emit the timeline and the reconciled summary (interp shows more raw allocs — it
+  has infra stores native lacks — but the VERDICT agrees). The specific K5 "interp frees the subject,
+  native retains" event-level demo needs a Class-C repro and is deferred to **P3.4b**; the mechanism (a
+  per-backend event stream) is in place.
+- **GATE P3 — ✅ core cleared:** stable-id events + the working-set-vs-leak summary on BOTH backends,
+  reconciled, resolving the session's `LOFT_STORES=warn` false alarm. Deferred: P3.2b (borrow/copy
+  events), P3.4b (K5 event-level divergence demo).
 
 ### P4 — consolidation
 

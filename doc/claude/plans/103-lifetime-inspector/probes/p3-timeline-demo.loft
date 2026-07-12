@@ -1,0 +1,15 @@
+// @PLN103 P3 — LOFT_STORES=timeline demo. Run:
+//   LOFT_STORES=timeline loft --interpret p3-timeline-demo.loft
+//   LOFT_STORES=timeline loft --native    p3-timeline-demo.loft
+// Each store gets a STABLE id `#<store_nr>.<seq>` (seq disambiguates slot reuse, since
+// store_nr is a reused slot index). At exit a SUMMARY reports peak concurrency (the
+// working set) reconciled with the authoritative leak count — so a high working set is
+// NOT mistaken for a leak (the LOFT_STORES=warn false alarm this replaces).
+enum Tok { V { n: integer } }
+fn make() -> vector<Tok> { [V{n:1}, V{n:2}] }
+fn main() {
+  a: vector<Tok> = make();
+  b: vector<Tok> = make();
+  assert(len(a) + len(b) == 4, "demo");
+  print("p3-timeline-demo: PASS");
+}
