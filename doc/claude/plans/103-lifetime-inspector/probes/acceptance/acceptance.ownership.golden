@@ -10,6 +10,7 @@ fn n_k1_borrowed_arm -> Join(base=_mvcopy_1):
   4         _vec_1                 Owned (backing=__vdb_1)
   5         _elm_1                 Owned
   6         __vdb_1                Owned
+  delivery: vector<ref(Tok)>["__retbuf"]  — materialised → return buffer
 
 fn n_k2_copy_vs_view -> Owned:
   #    arg  name                   ownership
@@ -34,6 +35,7 @@ fn n_k4_emptyarm -> Owned:
   8         _slice_elm_1           Borrowed(base=_match_subj_1)
   9         _empty_arm_1           Owned (backing=__vdb_1)
   10        __vdb_1                Owned
+  delivery: vector<ref(Tok)>["__retbuf"]  — materialised → return buffer
 
 fn n_k1_owned_or_borrow -> Join(base=pool):
   #    arg  name                   ownership
@@ -46,4 +48,5 @@ fn n_k1_owned_or_borrow -> Join(base=pool):
   5         __ncc_1                Borrowed(base=pool)
   6         __ref_1                Owned
   7         __ref_2                Owned
+  delivery: ref(Tok)  — owned (fresh store)
 

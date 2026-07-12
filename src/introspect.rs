@@ -14,7 +14,7 @@
 //! for the surface design.
 
 use crate::compile;
-use crate::data::{Data, DefType};
+use crate::data::{Data, DefType, Value};
 use crate::diagnostics::Level;
 use crate::generation;
 use crate::log_config::LogConfig;
@@ -482,7 +482,6 @@ fn emit_ownership(
     end_def: u32,
     opts: &Options,
 ) -> std::io::Result<()> {
-    use crate::data::Value;
     for d_nr in 0..end_def {
         let def = data.def(d_nr);
         if def.def_type != DefType::Function {
@@ -525,6 +524,30 @@ fn emit_ownership(
                 "—  (scalar)".to_string()
             };
             writeln!(w, "  {v:<4} {arg:<4} {:<22} {rendered}", vars.name(v))?;
+        }
+        // @PLN103 P1.5 — delivery lens: the delivery OUTCOME for a heap (vector/reference)
+        // return, read from `def.returned`'s deps on the COMMITTED IR — `["__retbuf"]` (a
+        // synth buffer) = MATERIALISED into the return buffer, `[arg]` = a borrowed VIEW
+        // returned, empty = OWNED fresh store. (Read from the return type, so it is robust;
+        // a per-arm walk of the delivered IR was tried and dropped — post-synthesis the arm
+        // structure is rewritten, so per-arm `ownership_of` is misleading. The per-arm
+        // delivery target needs the parser to PERSIST its `Delivery` verdict — a later step.)
+        if let Some(deps) = def.returned.heap_dep() {
+            let note = if deps.is_empty() {
+                "owned (fresh store)".to_string()
+            } else if deps
+                .iter()
+                .any(|&d| d != u16::MAX && crate::use_analysis::is_synth_buffer(vars.name(d)))
+            {
+                "materialised → return buffer".to_string()
+            } else {
+                let names: Vec<&str> = deps
+                    .iter()
+                    .map(|&d| if d == u16::MAX { "?" } else { vars.name(d) })
+                    .collect();
+                format!("borrows {} (view returned)", names.join(", "))
+            };
+            writeln!(w, "  delivery: {}  — {note}", def.returned.show(data, vars))?;
         }
         writeln!(w)?;
     }

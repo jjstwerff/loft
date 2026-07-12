@@ -5,11 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 103 — Lifetime inspector: render the ownership fact the store-lifetime bugs kept hiding
 
-**Status — P1 core LANDED, P1.5 next (2026-07-12).** P0 ✅ (all four steps). **P1 ✅ core:** the static
-overlay `loft introspect --show-ownership` ships — per-binding `ownership_of` over the final IR, the
-corrected render rule (self-base = caller-arg, synth-buffer = Owned-via-backing, else genuine alias),
-scalars elided, deterministic, opt-in, matches the acceptance golden, `--diff` works. **Remaining P1:**
-P1.5 (delivery-model lens) + P1.4b (free-site / reassign rows). Then P2 (per-backend), P3 (timeline). Canonical id
+**Status — P1 LANDED (core + P1.5 delivery line), P2 next (2026-07-12).** P0 ✅. **P1:** the static overlay
+`loft introspect --show-ownership` ships — per-binding `ownership_of` over the final IR (corrected render
+rule: self-base = caller-arg, synth-buffer = Owned-via-backing, else genuine alias; scalars elided) + a
+per-return `delivery:` line (materialised/owned/borrows). Deterministic, opt-in, golden-matched, `--diff`
+works, clippy clean, suite green. **Deferred within P1:** P1.4b (free-site/reassign rows) + P1.5b (the
+per-arm delivery target — needs the parser to persist its `Delivery` verdict). **Next: P2** (per-backend
+divergence), then P3 (runtime store timeline). Canonical id
 [`@PLN103`](https://github.com/loft-lang/plans/issues/103) (`status:future`, `subject:loft`). Serves the
 ongoing @PLN85 store-lifetime-retirement arc and **supersedes the "Dep-graph / lifetime visualizer"
 scope deferred on 2026-05-13** (DEBUG.md). This file is the design + the coverage-driving corpus + the
@@ -373,9 +375,18 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
   `acceptance.expected`/`.golden` — the runtime JOIN (`r`/`return = Join(base=pool)`) and every dangerous
   alias render correctly. (Deferred to a P1.4b follow-up: the free-site flags + reassign timeline via
   `free_sites`/`reassign_sites`/`displaced_owned_slots` — additive rows, not yet rendered.)
-- **P1.5 — per-return/arm delivery.** ⏳ TODO. Render the `Delivery` verdict (`classify_vector_delivery`)
-  + per-arm target/type + append-vs-replace. The empty-arm/#492 delivery facts. (The per-binding overlay
-  already exposes the underlying ownership; this adds the delivery-model lens.)
+- **P1.5 — per-return delivery lens.** ✅ DONE (outcome line) / per-arm DEFERRED. `emit_ownership` now
+  prints a `delivery:` line for each heap-returning fn, read robustly from `def.returned`'s deps on the
+  committed IR: a synth-buffer dep (`["__retbuf"]`) → "materialised → return buffer", empty → "owned
+  (fresh store)", a user-var dep → "borrows <name> (view returned)". **Scope finding:** the per-ARM
+  delivery target does NOT survive on the committed IR — the jo-arm/materialise synthesis rewrites the
+  arm structure, so a post-parse per-arm `ownership_of` walk is misleading (tried: k1's else-arm mis-read
+  as the whole-match `Join`, k4's arms not even found). This is the same "don't re-derive a non-local
+  fact from downstream IR" lesson as F1. The reliable per-arm target needs the parser to PERSIST its
+  `Delivery` verdict (`control.rs:175`) on the `Definition` — a small parser change with a serialization
+  ripple (ir_read/ir_schema/ir_store, like the `#lexeme` attr) — deferred to **P1.5b**. **VERIFY ✅:** the
+  delivery line renders "materialised → return buffer" for k1/k4 and "owned (fresh store)" for
+  k1_owned_or_borrow; in the golden.
 - **P1.6 — `--diff <baseline>`.** ✅ DONE (free via the existing introspect `--diff`). Verified: identical
   → exit 0; a mutated baseline → exit 1, with `--show-ownership`.
 - **GATE P1:** ✅ core cleared — `acceptance/` overlay == `.golden`, deterministic, opt-in, clippy-clean.
