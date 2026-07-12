@@ -5,12 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 103 — Lifetime inspector: render the ownership fact the store-lifetime bugs kept hiding
 
-**Status — P0 COMPLETE, P1 next (2026-07-12).** ✅ P0.1 (F1 falsification — the load-bearing gate;
-SIMPLIFIED the design to per-binding classification over the final IR, no pre-synthesis snapshot). ✅ P0.2
-(acceptance corpus + expected — the semantically-important borrows + the runtime JOIN classify correctly;
-surfaced the one renderer rule). ✅ P0.3 (dump path clean over the corpus). ✅ P0.4 (timeline seam +
-`(store_nr, alloc_seq)` id fix). Branch rebased onto `main` (with #562). Next: P1 — the static overlay
-`loft introspect ownership`. Canonical id
+**Status — P1 core LANDED, P1.5 next (2026-07-12).** P0 ✅ (all four steps). **P1 ✅ core:** the static
+overlay `loft introspect --show-ownership` ships — per-binding `ownership_of` over the final IR, the
+corrected render rule (self-base = caller-arg, synth-buffer = Owned-via-backing, else genuine alias),
+scalars elided, deterministic, opt-in, matches the acceptance golden, `--diff` works. **Remaining P1:**
+P1.5 (delivery-model lens) + P1.4b (free-site / reassign rows). Then P2 (per-backend), P3 (timeline). Canonical id
 [`@PLN103`](https://github.com/loft-lang/plans/issues/103) (`status:future`, `subject:loft`). Serves the
 ongoing @PLN85 store-lifetime-retirement arc and **supersedes the "Dep-graph / lifetime visualizer"
 scope deferred on 2026-05-13** (DEBUG.md). This file is the design + the coverage-driving corpus + the
@@ -353,36 +352,34 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
 
 ### P1 — static overlay `loft introspect ownership`, single backend (interp)
 
-- **P1.1 — expose renderers.** Make `fmt_own` / `own_kind` (`use_analysis.rs:1686`/`:1676`) `pub`.
-  **VERIFY:** `cargo build` clean; a scratch call `use_analysis::fmt_own(Own::Owned, func)` compiles from
-  `introspect.rs`.
-- **P1.2 — wire the CLI verb.** Add `Section::Ownership` (`introspect.rs:31`) + the `ownership` verb
-  (`repl.rs:589`, `main.rs:3851`). **VERIFY:** `loft introspect ownership <file>` dispatches (stub OK);
-  `loft introspect` with no/unknown section still behaves as before (no regression to existing verbs).
-- **P1.3 — per-binding classification over the final IR (the P0.1 design).** In `emit_ownership`, for
-  each function walk `def.code` and classify every binding via `ownership_of(&data, d_nr, Var(v))`; link
-  each delivered arm to the source binding its `jo_arm_copy`/materialise consumed (so the row shows both
-  "delivered result = Owned copy" AND "source = Borrowed(base=e)"). No pre-synthesis snapshot, no parser
-  hook (P0.1). **VERIFY:** on `k4-emptyarm-*` and `k4-492-doubled` the overlay prints the borrowed/owned split, NOT
-  all-`Owned` (the exact fact the delivered IR loses).
-- **P1.4 — per-slot rows.** Render, per binding: `Own` verdict (`ownership_of`+`fmt_own`), backing store,
-  VIEW/COPY (`classify_vec_bind`/`VecBind` + whole-value-vs-projection), free sites (`free_sites`) with
-  double-free / free-before-alloc / free-before-use / orphaned flags, and the reassign timeline
-  (`reassign_sites` + `displaced_owned_slots`). **Apply the P0.2 rendering rule** (do NOT print raw
-  `fmt_own`): when `Own::Borrowed{base}`'s base is the var itself (self-base) or a synthesized buffer
-  (`__vdb_*`/`__ref_*`/`_mvcopy_*`/`__retbuf`), render **"Owned (backing=<base>)"**; reserve
-  "Borrowed(base=X)" for a base naming a user var/param/other-binding. This is a renderer heuristic in the
-  overlay, NOT a change to `ownership_of` (Out-of-scope §1). **VERIFY:**
-  `loft introspect ownership probes/acceptance/acceptance.loft` matches `acceptance.expected` (the ✓ rows
-  verbatim, the ⚠ rows via the translation) on interp.
-- **P1.5 — per-return/arm delivery.** Render the `Delivery` verdict (`classify_vector_delivery`) + each
-  arm's delivery target + static type + append-vs-replace occupancy. **VERIFY:** `k4-emptyarm-*` flags
-  the `[]` arm as "null/() UNDELIVERED" on the pre-fix shape and "fresh vector" on the fixed shape;
-  `k4-492-doubled` flags "append into non-empty buffer".
-- **P1.6 — `--diff <baseline>`.** Mirror the existing introspect diff. **VERIFY:** capture the overlay at
-  the parent of the empty-arm fix (`git stash`-free: use `git show <rev>:file` — never touch the tree),
-  then at the fix; the diff shows the arm verdict flip from UNDELIVERED→fresh-vector.
-- **GATE P1:** `acceptance/` overlay == `.expected` on interp for all K1/K2/K3/K4 columns.
+- **P1.1 — expose renderers.** ✅ DONE. `fmt_own` (`use_analysis.rs`) made `pub`; added `pub render_own`
+  (the P1 rendering rule) + `pub is_synth_buffer`. Build clean.
+- **P1.2 — wire the section.** ✅ DONE. `Section::Ownership` (`introspect.rs`), `--show-ownership` CLI flag
+  (`main.rs`), `:ownership` REPL verb (`repl.rs`). OPT-IN (like `Roundtrip`) — bare `introspect <file>` is
+  unchanged (verified: 0 ownership sections in the default dump). NOTE: sections are FLAGS
+  (`--show-ownership`), not the positional `introspect ownership` the draft assumed.
+- **P1.3 — per-binding classification over the final IR (the P0.1 design).** ✅ DONE. `emit_ownership`
+  walks each user fn's vars and classifies via `ownership_of(&data, d_nr, Var(v))` over the committed
+  `def.code`; the function header shows `return_ownership`. No snapshot, no parser hook. Confirmed on the
+  corpus: `_mv_items_1 = Borrowed(base=e)` and `_empty_arm_1 = Owned (backing=__vdb_1)` — the borrowed
+  source + the fixed empty-arm are both visible, not all-`Owned`.
+- **P1.4 — per-slot rows + the render rule.** ✅ DONE (core). Renders `#/arg/name/ownership`; a non-heap
+  var → `—  (scalar)`. **RENDER RULE (corrected here from the P0.2 draft — a real fix): self-base
+  ≠ owned buffer.** `ownership_of` reports a bare arg as `Borrowed{base=self}` and an owned delivery
+  buffer as `Borrowed{base=<buffer>}`; the P0.2 draft wrongly folded BOTH self-base and synth-base into
+  "Owned", which mislabels params (`e`, `pool`) as owned. Corrected `render_own`: self-base →
+  "Borrowed(caller-arg)"; synth-buffer base (≠ self) → "Owned (backing=X)"; any other base → the genuine
+  alias "Borrowed(base=X)"; `Join` untranslated. **VERIFY ✅:** overlay is deterministic and matches
+  `acceptance.expected`/`.golden` — the runtime JOIN (`r`/`return = Join(base=pool)`) and every dangerous
+  alias render correctly. (Deferred to a P1.4b follow-up: the free-site flags + reassign timeline via
+  `free_sites`/`reassign_sites`/`displaced_owned_slots` — additive rows, not yet rendered.)
+- **P1.5 — per-return/arm delivery.** ⏳ TODO. Render the `Delivery` verdict (`classify_vector_delivery`)
+  + per-arm target/type + append-vs-replace. The empty-arm/#492 delivery facts. (The per-binding overlay
+  already exposes the underlying ownership; this adds the delivery-model lens.)
+- **P1.6 — `--diff <baseline>`.** ✅ DONE (free via the existing introspect `--diff`). Verified: identical
+  → exit 0; a mutated baseline → exit 1, with `--show-ownership`.
+- **GATE P1:** ✅ core cleared — `acceptance/` overlay == `.golden`, deterministic, opt-in, clippy-clean.
+  Remaining for full P1: P1.5 (delivery lens) + P1.4b (free/reassign rows).
 
 ### P2 — per-backend divergence (the K5 class)
 

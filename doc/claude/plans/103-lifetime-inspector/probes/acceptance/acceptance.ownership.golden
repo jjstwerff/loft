@@ -1,0 +1,49 @@
+
+=== ownership ===
+fn n_k1_borrowed_arm -> Join(base=_mvcopy_1):
+  #    arg  name                   ownership
+  ------------------------------------------------------------------
+  0    arg  e                      Borrowed(caller-arg)
+  1         __retbuf               Owned
+  2         _mv_items_1            Borrowed(base=e)
+  3    arg  _mvcopy_1              Borrowed(caller-arg)
+  4         _vec_1                 Owned (backing=__vdb_1)
+  5         _elm_1                 Owned
+  6         __vdb_1                Owned
+
+fn n_k2_copy_vs_view -> Owned:
+  #    arg  name                   ownership
+  ------------------------------------------------------------------
+  0    arg  src                    Borrowed(caller-arg)
+  1         b                      Owned
+  2         first                  Borrowed(base=src)
+  3         _elm_1                 Owned
+  4         __vdb_1                Owned
+
+fn n_k4_emptyarm -> Owned:
+  #    arg  name                   ownership
+  ------------------------------------------------------------------
+  0    arg  v                      Borrowed(caller-arg)
+  1         __retbuf               Owned
+  2         _match_subj_1          Borrowed(base=v)
+  3    arg  rest                   Borrowed(caller-arg)
+  4         _rest_lo_1             —  (scalar)
+  5         _rest_hi_1             —  (scalar)
+  6         _rest_idx_1            —  (scalar)
+  7         _elm_1                 Owned
+  8         _slice_elm_1           Borrowed(base=_match_subj_1)
+  9         _empty_arm_1           Owned (backing=__vdb_1)
+  10        __vdb_1                Owned
+
+fn n_k1_owned_or_borrow -> Join(base=pool):
+  #    arg  name                   ownership
+  ------------------------------------------------------------------
+  0    arg  pool                   Borrowed(caller-arg)
+  1    arg  i                      —  (scalar)
+  2    arg  use_pool               —  (scalar)
+  3    arg  __retbuf               Borrowed(caller-arg)
+  4         r                      Join(base=pool)
+  5         __ncc_1                Borrowed(base=pool)
+  6         __ref_1                Owned
+  7         __ref_2                Owned
+

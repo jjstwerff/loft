@@ -1,71 +1,51 @@
-@PLN103 P0.2 — acceptance.expected
-Hand-verified per-binding ownership verdicts for acceptance.loft, captured from
-`ownership_of` over the committed def.code (2026-07-12, on main + #562) and checked
-against semantic truth. This is the ORACLE the P1 `Section::Ownership` overlay must
-reproduce. Legend: ✓ = oracle matches semantic truth; ⚠ = a rendering the overlay
-must TRANSLATE (a real, defensible oracle output that reads misleadingly raw).
+@PLN103 — acceptance.expected  (semantic oracle for the ownership overlay)
 
-Capture method (reproducible): a temp per-binding dump in `use_analysis::dump_all`
-gated on `LOFT_PLN103_DUMP` for `n_k*` fns; run
-`LOFT_MATERIALIZE_DUMP=1 LOFT_PLN103_DUMP=1 loft --interpret acceptance.loft`.
+The literal overlay output is captured in `acceptance.ownership.golden` (the P4
+regression golden). THIS file is the hand-verified SEMANTIC check: for each
+fact-kind, the binding that matters and why the rendered verdict is correct. Produced
+by `loft introspect --show-ownership acceptance.loft` (2026-07-12, main + #562);
+`render_own` translates the raw `ownership_of` verdicts per the P1 rule below.
 
-────────────────────────────────────────────────────────────────────────────────
-fn k1_borrowed_arm(e: Cell) -> vector<Tok>     return = Join(base=_mvcopy_1)
-  Var(e)          = Borrowed(base=e)      ✓  param — borrowed-of-itself (convention)
-  Var(_mv_items_1)= Borrowed(base=e)      ✓  KEY: the borrowed field projection survives
-                                              on the final IR (P0.1). This is the fact
-                                              a naive "classify the delivered result"
-                                              overlay would MISS (it reads Owned).
-  Var(_mvcopy_1)  = Borrowed(base=_mvcopy_1) ⚠ owned jo copy buffer; self-base — render
-                                              as "Owned (backing=_mvcopy_1)".
-  Var(__vdb_1)    = Owned                  ✓  buffer
-  return          = Join(base=_mvcopy_1)  ✓  owned-copy path vs owned-literal path
-
-fn k2_copy_vs_view(src) -> integer             return = Owned (scalar)
-  Var(src)        = Borrowed(base=src)    ✓  param
-  Var(b)          = Borrowed(base=__vdb_1) ⚠ `b = src` COPIES; b owns the copy via
-                                              __vdb_1 — render "Owned (backing=__vdb_1)".
-  Var(first)      = Borrowed(base=b)      ✓  KEY: `b[0]` is a VIEW of b (not a copy) —
-                                              the K2 view-vs-copy distinction, correct.
-
-fn k4_emptyarm(v) -> vector<Tok>               return = Borrowed(base=rest)
-  Var(v)          = Borrowed(base=v)      ✓  param
-  Var(_match_subj_1) = Borrowed(base=v)   ✓  the match subject borrows v
-  Var(rest)       = Borrowed(base=rest)   ⚠ `..rest` is a FRESH materialized vector
-                                              (owned); self-base — render "Owned".
-  Var(_slice_elm_1)= Borrowed(base=_match_subj_1) ✓ a slice element VIEW
-  Var(_empty_arm_1)= Borrowed(base=__vdb_1) ✓/⚠ the `[]` arm is a REAL vector (owns
-                                              __vdb_1) — confirms the #562 fix; render
-                                              "Owned (backing=__vdb_1)" NOT a bare null.
-
-fn k1_owned_or_borrow(pool,i,use_pool) -> Tok  return = Join(base=pool)
-  Var(pool)       = Borrowed(base=pool)   ✓  param
-  Var(r)          = Join(base=pool)       ✓✓ THE HARD ONE: r is owned (V{n:0}) on the
-                                              use_pool=false path, a VIEW of pool on the
-                                              true path — a genuine runtime JOIN, and
-                                              the oracle identifies it exactly (#316/#495).
-  Var(__ncc_1)    = Borrowed(base=pool)   ✓  the ??-temp holds pool[i], a view of pool
-  Var(__ref_1/2)  = Owned                 ✓  buffers
-  return          = Join(base=pool)       ✓  the join propagates to the return
+THE RENDER RULE (render_own, corrected in P1 from the P0.2 first draft):
+  • self-base  Borrowed{base=v}            → "Borrowed(caller-arg)"  (an arg; borrows the caller)
+  • synth-buffer base (__vdb/__ref/_mvcopy/__retbuf, ≠ self) → "Owned (backing=X)"
+  • any other Borrowed{base=X}             → "Borrowed(base=X)"  (a genuine ALIAS of live sibling X)
+  • Join{base=X}                           → "Join(base=X)"      (a real runtime split; never translated)
+  • a non-heap (scalar) var                → "—  (scalar)"       (by-value; no store ownership)
 
 ────────────────────────────────────────────────────────────────────────────────
-FINDINGS FOR P1 (what the overlay must do, learned here):
+k1_borrowed_arm  (K1+K4)   return = Join(base=_mvcopy_1)
+  _mv_items_1 = Borrowed(base=e)     ✓ KEY: the borrowed field projection — a genuine
+                                       alias of param e. The delivered arm RESULT is an
+                                       owned copy (jo_arm_copy), but this SOURCE binding
+                                       survives on the final IR (P0.1) and is flagged.
+  e           = Borrowed(caller-arg) ✓ param borrows the caller
+  _vec_1      = Owned (backing=__vdb_1) ✓ owns its store via the delivery buffer
 
-1. The semantically-important borrows are all CORRECT on the final IR — borrowed
-   field projections, element views, and (critically) the runtime JOIN r/return in
-   k1_owned_or_borrow. No pre-synthesis snapshot needed (P0.1 confirmed, P0.2 widened
-   the evidence to view/copy and runtime-join shapes).
+k2_copy_vs_view  (K2)      return = Owned
+  b     = Owned                      ✓ `b = src` COPIES — b owns its store (NOT an alias)
+  first = Borrowed(base=src)         ✓ KEY: `b[0]` is a VIEW — a genuine alias, not a copy
+                                       (base resolves transitively to src; the alias fact
+                                       is what matters, the exact base name is precision)
 
-2. THE ONE RENDERING RULE (⚠ rows): an owned buffer/copy classifies as
-   `Borrowed(base=X)` where X is the var's OWN backing store — a synthesized buffer
-   (`__vdb_*`, `__ref_*`, `_mvcopy_*`) or the var itself (self-base). This is
-   defensible (the var's store IS X) but reads as an alias of a live sibling. The
-   overlay MUST translate: base ∈ {self, a synthesized buffer name} ⇒ render
-   "Owned (backing=X)"; a base naming a USER var/param/other-binding ⇒ a genuine
-   "Borrowed(base=X)". This heuristic is the difference between a readable overlay
-   and a confusing one, and it belongs in P1.4's renderer, not in `ownership_of`
-   (which stays faithful — Out-of-scope §1).
+k4_emptyarm  (K4)          return = Owned
+  _empty_arm_1 = Owned (backing=__vdb_1) ✓ KEY: the `[]` arm is a REAL owned vector
+                                           (the #562 materialize_null_slice_arms fix) —
+                                           NOT a bare null. This is the K4 bug, now visible.
+  _slice_elm_1 = Borrowed(base=_match_subj_1) ✓ a slice-element VIEW
+  _match_subj_1= Borrowed(base=v)    ✓ the match subject borrows v
+  _rest_*      = —  (scalar)         ✓ loop cursors, no store ownership
 
-3. `return_ownership` alone is insufficient (it reads Owned/Join at the delivered
-   result); the per-binding walk is what exposes the borrowed sources. Confirms the
-   A1 per-binding design.
+k1_owned_or_borrow  (K1 runtime join)   return = Join(base=pool)
+  r      = Join(base=pool)           ✓✓ THE HARD ONE: owned (V{n:0}) on use_pool=false,
+                                        a VIEW of pool on true — a genuine runtime JOIN
+                                        (#316/#495), identified exactly. The return joins too.
+  __ncc_1= Borrowed(base=pool)       ✓ the ??-temp holds pool[i], an alias of pool
+  pool   = Borrowed(caller-arg)      ✓ param
+  i, use_pool = —  (scalar)          ✓
+
+────────────────────────────────────────────────────────────────────────────────
+VERDICT: every semantically-important fact renders correctly — the dangerous aliases
+(_mv_items_1, first, _slice_elm_1, __ncc_1), the owned copy (b), the fixed empty-arm
+(_empty_arm_1), and the runtime JOIN (r/return). This is the P1 gate. The literal
+golden is `acceptance.ownership.golden`; a P4 Rust test diffs the overlay against it.
