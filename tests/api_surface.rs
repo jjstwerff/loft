@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
 //! @PLN102 C1 commit 1 — `loft api-surface`: the observable public surface as membership
-//! + visibility TIER. Proves the closure walk (a non-`pub` type reachable through a `pub`
+//! and visibility TIER. Proves the closure walk (a non-`pub` type reachable through a `pub`
 //! signature is SEALED, not dropped) and the exclusions (a private / unreachable non-`pub`
 //! type and a non-`pub` fn are not in the surface).
 
