@@ -3556,9 +3556,18 @@ fn run_file_debugger() -> ! {
     std::process::exit(code);
 }
 
-/// @PLN102 C1 — load `file` (stdlib + the file), parse, and return its public surface, or an
-/// error string on a missing file / parse failure. Shared by the descriptor and `--diff` modes.
-fn api_surface_of(file: &str) -> Result<Vec<loft::api_surface::Member>, String> {
+/// @PLN102 C1 — load `file` (stdlib + the file), parse, and return its public surface PLUS its
+/// @PLN97 layout identity (the two verdict axes), or an error string on a missing file / parse
+/// failure. Shared by the descriptor and `--diff` modes.
+fn api_surface_of(
+    file: &str,
+) -> Result<
+    (
+        Vec<loft::api_surface::Member>,
+        loft::schema_sidecar::LayoutIdentity,
+    ),
+    String,
+> {
     let entry = std::path::PathBuf::from(file);
     if !entry.exists() {
         return Err(format!("file {file} not found"));
@@ -3584,7 +3593,13 @@ fn api_surface_of(file: &str) -> Result<Vec<loft::api_surface::Member>, String> 
     if p.diagnostics.level() >= loft::diagnostics::Level::Error {
         return Err(format!("{file} did not parse cleanly"));
     }
-    Ok(loft::api_surface::surface(&p.data, &abs_str))
+    let surface = loft::api_surface::surface(&p.data, &abs_str);
+    // Layout axis (@PLN97): the per-type store-layout identity, computed from the COMPILED
+    // database — kept OUT of the descriptor so a layout-only edit (a field reorder) does not
+    // perturb the API-axis determinism, and compared as its own axis in `--diff`.
+    let roots = loft::schema_sidecar::program_roots(&p.data);
+    let identity = loft::schema_sidecar::LayoutIdentity::of(&p.database, &roots);
+    Ok((surface, identity))
 }
 
 /// @PLN102 C1 — `loft api-surface <file>` prints the surface descriptor; `loft api-surface
@@ -3600,16 +3615,20 @@ fn run_api_surface_command(args: &[String]) -> i32 {
             eprintln!("loft api-surface: usage: loft api-surface --diff <base> <new> [--json]");
             return 2;
         };
-        let (old_s, new_s) = match (api_surface_of(base), api_surface_of(new)) {
+        let ((old_s, old_id), (new_s, new_id)) = match (api_surface_of(base), api_surface_of(new)) {
             (Ok(o), Ok(n)) => (o, n),
             (Err(e), _) | (_, Err(e)) => {
                 eprintln!("loft api-surface: {e}");
                 return 2;
             }
         };
-        let verdict = loft::api_diff::diff(&old_s, &new_s);
-        print_api_verdict(&verdict, json);
-        return i32::from(matches!(verdict, loft::api_diff::Verdict::Break(_)));
+        let api = loft::api_diff::diff(&old_s, &new_s);
+        let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+        print_verdict(&api, &layout, json);
+        // Red on EITHER axis: a public API break, or a value-type reshape (a silent DATA break
+        // for a persisting consumer that the API axis alone green-lights).
+        let broke = matches!(api, loft::api_diff::Verdict::Break(_)) || layout_reshaped(&layout);
+        return i32::from(broke);
     }
 
     let Some(file) = positional.first() else {
@@ -3617,7 +3636,7 @@ fn run_api_surface_command(args: &[String]) -> i32 {
         return 2;
     };
     match api_surface_of(file) {
-        Ok(surface) => {
+        Ok((surface, _identity)) => {
             for m in surface {
                 println!(
                     "{} · {} · {} · {}",
@@ -3636,24 +3655,44 @@ fn run_api_surface_command(args: &[String]) -> i32 {
     }
 }
 
-/// Print a compat verdict as machine JSON (a CI check parses it) or human text (a PR comment).
-/// Shaped `{"api":{"verdict":…,"broken":[…]}}` — the `layout` axis (@PLN97, commit 5) slots in
-/// beside `api` when it lands.
-fn print_api_verdict(verdict: &loft::api_diff::Verdict, json: bool) {
+/// True iff the layout diff RESHAPED a value type — a silent DATA break for a persisting
+/// consumer, distinct from a pure add/drop (which the API axis handles).
+fn layout_reshaped(handoff: &loft::schema_sidecar::Handoff) -> bool {
+    matches!(handoff, loft::schema_sidecar::Handoff::Changed(d) if !d.changed.is_empty())
+}
+
+/// Print the TWO-axis compat verdict as machine JSON (a CI check parses it) or human text (a PR
+/// comment). JSON: `{"api":{"verdict":…,"broken":[…]},"layout":{"verdict":"stable|changed",
+/// "types":[…]}}`. The axes are distinct consumer concerns — a method-only consumer reads
+/// `api`; one that persists a value struct reads `layout`.
+fn print_verdict(
+    api: &loft::api_diff::Verdict,
+    layout: &loft::schema_sidecar::Handoff,
+    json: bool,
+) {
     use loft::api_diff::Verdict;
+    use loft::schema_sidecar::Handoff;
+    let reshaped: Vec<&str> = match layout {
+        Handoff::Changed(d) => d.changed.iter().map(String::as_str).collect(),
+        Handoff::Identical => Vec::new(),
+    };
     if json {
-        match verdict {
-            Verdict::Superset => println!(r#"{{"api":{{"verdict":"superset","broken":[]}}}}"#),
+        let api_json = match api {
+            Verdict::Superset => r#"{"verdict":"superset","broken":[]}"#.to_string(),
             Verdict::Break(broken) => {
                 let items: Vec<String> = broken.iter().map(|s| api_json_string(s)).collect();
-                println!(
-                    r#"{{"api":{{"verdict":"break","broken":[{}]}}}}"#,
-                    items.join(",")
-                );
+                format!(r#"{{"verdict":"break","broken":[{}]}}"#, items.join(","))
             }
-        }
+        };
+        let layout_json = if reshaped.is_empty() {
+            r#"{"verdict":"stable","types":[]}"#.to_string()
+        } else {
+            let items: Vec<String> = reshaped.iter().copied().map(api_json_string).collect();
+            format!(r#"{{"verdict":"changed","types":[{}]}}"#, items.join(","))
+        };
+        println!(r#"{{"api":{api_json},"layout":{layout_json}}}"#);
     } else {
-        match verdict {
+        match api {
             Verdict::Superset => {
                 println!("API: drop-in — the new surface is a superset (additions only).");
             }
@@ -3663,6 +3702,15 @@ fn print_api_verdict(verdict: &loft::api_diff::Verdict, json: bool) {
                     println!("  - {b}");
                 }
             }
+        }
+        if reshaped.is_empty() {
+            println!("Layout: stable.");
+        } else {
+            println!(
+                "Layout: CHANGED — {} type(s) reshaped: {}",
+                reshaped.len(),
+                reshaped.join(", ")
+            );
         }
     }
 }

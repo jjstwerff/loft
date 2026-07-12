@@ -122,7 +122,16 @@ useful (our own libs, CI) before any registry work.
 
 #### C1 — the commit ladder (the MVP: Tier 1, small verifiable steps)
 
-> **Landed: commits 1–4 + 6** (2026-07-12); commit 5 (layout axis) + commit 7 (PR check) pending.
+> **Landed: commits 1–6** (2026-07-12); only commit 7 (the non-blocking PR check) remains.
+> **Commit 5** — the LAYOUT axis, reusing @PLN97 (`src/main.rs`, `schema_sidecar`): `api_surface_of`
+> also returns the `LayoutIdentity` (per-type store-layout, from the compiled database), computed
+> ONLY for `--diff` (kept out of the descriptor so a layout-only edit does not perturb the
+> API-axis determinism). `--diff` now emits a SECOND verdict via `ss::classify` — `layout: stable`
+> or `changed` naming the reshaped types. A field REORDER is `API: drop-in` + `Layout: CHANGED`
+> (the silent data break the API axis alone green-lights); the check reds (exit 1) on EITHER axis.
+> Tests: `layout_axis_field_reorder_is_api_dropin_but_layout_changed`, `layout_axis_stable_on_pure_addition`,
+> `diff_json_carries_both_axes`.
+>
 > **Commit 6** — `loft api-surface --diff <base> <new> [--json]` (`src/main.rs`): loads + surfaces
 > both files, runs the diff, prints the verdict as human text (PR comment) or machine JSON
 > (`{"api":{"verdict":…,"broken":[…]}}` — `layout` slots in beside `api` when commit 5 lands).

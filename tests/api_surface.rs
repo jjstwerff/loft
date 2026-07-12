@@ -259,3 +259,44 @@ fn diff_cli_json() {
         "json superset verdict:\n{out}"
     );
 }
+
+// Commit 5 — the @PLN97 LAYOUT axis: a second verdict beside the API axis.
+const POINT_V1: &str = "pub struct Point { x: integer, y: integer }\n\
+                        pub fn make() -> Point { Point{x:1,y:2} }\n";
+const POINT_REORDERED: &str = "pub struct Point { y: integer, x: integer }\n\
+                               pub fn make() -> Point { Point{x:1,y:2} }\n";
+
+#[test]
+fn layout_axis_field_reorder_is_api_dropin_but_layout_changed() {
+    // A field REORDER is a named-construction API drop-in (commit 3 sorts fields), but a store
+    // LAYOUT change — the silent DATA break for a persisting consumer that the API axis alone
+    // green-lights. It must red (exit 1) on the layout axis and name the reshaped type.
+    let (out, code) = api_diff_cli(POINT_V1, POINT_REORDERED, false);
+    assert!(out.contains("API: drop-in"), "API drop-in:\n{out}");
+    assert!(
+        out.contains("Layout: CHANGED") && out.contains("Point"),
+        "layout changed names Point:\n{out}"
+    );
+    assert_eq!(code, 1, "a layout reshape reds:\n{out}");
+}
+
+#[test]
+fn layout_axis_stable_on_pure_addition() {
+    let added = format!("{POINT_V1}pub fn g() -> integer {{ 0 }}\n");
+    let (out, code) = api_diff_cli(POINT_V1, &added, false);
+    assert!(out.contains("Layout: stable"), "layout stable:\n{out}");
+    assert_eq!(code, 0, "both axes clean → exit 0:\n{out}");
+}
+
+#[test]
+fn diff_json_carries_both_axes() {
+    let (out, _) = api_diff_cli(POINT_V1, POINT_REORDERED, true);
+    assert!(
+        out.contains(r#""api":{"verdict":"superset""#),
+        "json api superset:\n{out}"
+    );
+    assert!(
+        out.contains(r#""layout":{"verdict":"changed""#) && out.contains("Point"),
+        "json layout changed names Point:\n{out}"
+    );
+}
