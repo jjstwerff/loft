@@ -5,7 +5,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 103 — Lifetime inspector: render the ownership fact the store-lifetime bugs kept hiding
 
-**Status — P1 LANDED (core + P1.5 delivery line), P2 next (2026-07-12).** P0 ✅. **P1:** the static overlay
+**Status — P1 LANDED; P2 FALSIFIED + re-scoped to P3.4; P3 next (2026-07-12).** P2.0 proved a static
+per-backend ownership column is vacuous (`ownership_of` is backend-shared) — no feature built; the K5
+runtime divergence moves to the P3.4 per-backend timeline. Overlay now notes it is backend-shared. P0 ✅. **P1:** the static overlay
 `loft introspect --show-ownership` ships — per-binding `ownership_of` over the final IR (corrected render
 rule: self-base = caller-arg, synth-buffer = Owned-via-backing, else genuine alias; scalars elided) + a
 per-return `delivery:` line (materialised/owned/borrows). Deterministic, opt-in, golden-matched, `--diff`
@@ -251,10 +253,12 @@ actually leak, who freed what when, was it freed-then-reused while a live result
 is this a working-set high-water or a real leak* (the exact ambiguity this session hit — 32 "possible
 leak" lines that were a working set). Covers K3 + the K1 runtime-join witness. Rendered per backend.
 
-### A3 — per-backend rendering (F3)
-Both tools accept a backend selector and a `both` mode that prints interp and native columns side by
-side with divergences highlighted. This is what turns the entire K5 class from "diff two runs by eye"
-into a single glance.
+### A3 — per-backend rendering (F3) — REVISED by P2.0 (the STATIC overlay cannot; the RUNTIME timeline can)
+P2.0 falsified a static per-backend ownership column: `ownership_of` is backend-shared, so the two
+columns would be identical (see P2). The per-backend split is therefore ONLY meaningful at RUNTIME —
+Tool 2's **per-backend timeline** (P3.4) renders it, since interp-frees-subject-where-native-copies shows
+as genuinely different alloc/free EVENTS. The static overlay (Tool 1) instead carries a one-line note
+that its verdict is backend-shared. So F3 is served by the timeline, not the overlay.
 
 ### A4 — consolidation
 Once A1–A3 land, repoint the routine env-vars/docs at the two views (keeping the deep-dive detectors —
@@ -269,7 +273,7 @@ delivered-by-@PLN103 in DEBUG.md.
 | K2 view/copy | A1 binding | VIEW vs COPY + alias edge | #338, #415, #261, #390, #260 |
 | K3 free order | A1 free flags + A2 timeline | alloc↔free order, init-dominates-free, abort-unreachable frees | Class A/B, #457, @P377, @P383, @P356, #322 |
 | K4 delivery | A1 return/arm | `Delivery` verdict + per-arm target/type + occupancy | D-own-1, empty-arm + 4 dead-ends, #492, #409/#410 |
-| K5 divergence | A3 both-backend | same verdict, interp vs native, highlighted | @P383, #356, #496, #347, p9, Class C |
+| K5 divergence | P3.4 per-backend TIMELINE (not the static overlay — P2.0) + @PLN89 differential oracle | divergent alloc/free events, interp vs native | @P383, #356, #496, #347, p9, Class C |
 
 ## Probes to falsify FIRST (P0 — before building)
 
@@ -392,17 +396,30 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
 - **GATE P1:** ✅ core cleared — `acceptance/` overlay == `.golden`, deterministic, opt-in, clippy-clean.
   Remaining for full P1: P1.5 (delivery lens) + P1.4b (free/reassign rows).
 
-### P2 — per-backend divergence (the K5 class)
+### P2 — per-backend divergence (the K5 class) — PREMISE FALSIFIED, RE-SCOPED to P3
 
-- **P2.1 — backend selector.** Add `--backend interp|native|both` to the overlay; render native's
-  value-identity facts (stack-ref vs deref, `&str` vs `String`) from the generation-side consumers of
-  `ownership_of` (`generation/dispatch.rs`). **VERIFY:** `--backend both` prints two columns per binding.
-- **P2.2 — divergence highlight + `--only-divergent`.** **VERIFY:**
-  `loft introspect ownership --backend both --only-divergent probes/acceptance/k5-classC-reuse.loft`
-  lists exactly the binding where interp frees the subject and native copies; the K5 corpus rows
-  (@P383 block-tail text, #347 indexed-text compare) each show a highlighted interp≠native cell.
-- **GATE P2:** every K5 `.expected` divergence is rendered and highlighted; no false-positive divergence
-  on a K1/K2 row that both backends agree on.
+- **P2.0 — falsify the "two ownership columns" design (the gate).** ✅ DONE (2026-07-12).
+  **RESULT: FALSIFIED.** The proposed `--backend interp|native|both` static overlay is VACUOUS, because
+  ownership is **backend-shared**: both generators call the IDENTICAL
+  `use_analysis::ownership_of(self.data, self.def_nr, value)` — native at `generation/dispatch.rs:53`/
+  `:213`/`:466`, interp at `state/codegen.rs:1753`/`:3700` — and the shared per-function
+  `returns_borrowed_view()` (`data.rs:2723`). So a static "native column" would be BYTE-IDENTICAL to the
+  interp column. The genuine K5 divergence (native `.to_string()` copy vs interp borrow; `&str` vs
+  `String`; stack-ref vs deref) is NOT an ownership verdict — it is the two EMITTERS lowering the same
+  shared fact differently, decided by scattered inline `if` conditions in `emit.rs`/`codegen.rs`, with NO
+  single queryable per-value fact to render. Re-deriving those conditions post-parse is exactly the
+  "don't re-derive a non-local fact from downstream artifacts" anti-pattern (F1, P1.5). And the one clean
+  static fact that DOES drive native's borrow-return divergence — `returns_borrowed_view()` (the #306/#496
+  root) — is already surfaced by P1.5's `delivery: … borrows <name> (view returned)` line.
+- **Re-scope.** The static overlay is INHERENTLY both-backends (one shared verdict) — there is no second
+  column. The true interp-vs-native **runtime** value-identity divergence (interp frees the subject where
+  native copies — Class C; interp borrows a block-tail where native owns it — @P383) is a **runtime**
+  fact and moves to **P3.4 (per-backend timeline)**, where it shows as genuinely different alloc/free
+  EVENTS, plus the existing @PLN89 differential value oracle + leak/ASan gates already catch it at
+  runtime. The only static addition kept from P2: a one-line note on the overlay that the verdict is
+  backend-shared (so a reader never asks "which backend is this?").
+- **GATE P2 — ✅ CLEARED by falsification.** No feature built (correctly); the K5 coverage is delegated to
+  P3.4 + the runtime oracles. Overlay annotated as backend-shared.
 
 ### P3 — runtime store timeline `LOFT_STORES=timeline`
 

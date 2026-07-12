@@ -1,5 +1,6 @@
 
 === ownership ===
+# store ownership is backend-shared (interp + native lower the same verdict)
 fn n_k1_borrowed_arm -> Join(base=_mvcopy_1):
   #    arg  name                   ownership
   ------------------------------------------------------------------

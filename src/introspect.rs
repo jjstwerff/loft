@@ -482,6 +482,14 @@ fn emit_ownership(
     end_def: u32,
     opts: &Options,
 ) -> std::io::Result<()> {
+    // @PLN103 P2.0 — ownership is BACKEND-SHARED: the interp bytecode and native Rust
+    // lower this SAME verdict (both read `use_analysis::ownership_of`), so there is no
+    // per-backend column. A runtime interp≠native value-identity split is a codegen bug,
+    // caught by the differential value oracle / leak+ASan gates (and P3's per-backend timeline).
+    writeln!(
+        w,
+        "# store ownership is backend-shared (interp + native lower the same verdict)"
+    )?;
     for d_nr in 0..end_def {
         let def = data.def(d_nr);
         if def.def_type != DefType::Function {
