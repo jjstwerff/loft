@@ -56,12 +56,15 @@ fn main() {
   }
   // Four(4), One(1), Three(3), Two(2), Zero(0) → 4*10+1=41, *10+3=413, *10+2=4132, *10+0=41320
   assert(rev_sum == 41320, "Reverse iteration total: {rev_sum}");
-  // ## Loop Helpers: #first, #count, and #remove
+  // ## Loop Helpers: #first, #count, #index, and #remove
   // 'v#first' is true for the very first element visited.
   // 'v#count' is a running index starting at 0.
+  // 'v#index' is a sequential counter over the visited elements, also starting
+  // at 0 — on a sorted collection it advances in step with '#count'.
   // 'v#remove' removes the current element while iterating.
   first_key = "";
   labels = "";
+  index_sum = 0;
   for v in db.map {
     if v#first {
       first_key = v.key
@@ -69,10 +72,14 @@ fn main() {
     if !v#first {
       labels += ","
     }
+    // '#index' matches '#count' here: both run 0,1,2,3,4 over the five elements.
+    assert(v#index == v#count, "index tracks count: {v#index} vs {v#count}");
+    index_sum += v#index;
     labels += "{v#count}:{v.key}"
   }
   assert(first_key == "Zero", "First element: {first_key}");
   assert(labels == "0:Zero,1:Two,2:Three,3:One,4:Four", "Labels: {labels}");
+  assert(index_sum == 10, "0+1+2+3+4 = {index_sum}");
   // Remove elements with value > 2 while iterating.
   for v in db.map if v.value > 2 {
     v#remove
@@ -102,7 +109,9 @@ fn main() {
     sum3 += v.value
   }
   assert(sum3 == 40, "Sum after key removal: {sum3}");
-  // Note: #index is not available on sorted — use #count for a sequential counter.
+  // Note: '#index' works on a sorted collection — it is a sequential counter that
+  // advances one per visited element (see the loop above). It is only 'index<T>'
+  // collections that reject '#index' — use '#count' there instead (see 11-index).
 }
 
 struct Word {

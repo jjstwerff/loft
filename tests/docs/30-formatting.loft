@@ -7,6 +7,7 @@
 // precision, number base, and output style.
 // ## Basic interpolation
 // Any expression inside `{...}` is evaluated and converted to text.
+struct Point { x: integer, y: integer }
 fn main() {
   name = "world";
   assert("hello {name}" == "hello world", "basic interpolation");
@@ -65,13 +66,20 @@ fn main() {
   v = [1, 2, 3];
   assert("{v}" == "[1,2,3]", "default vector format");
   assert("{for fmt_n in 1..4 {fmt_n * 10}:04}" == "[0010,0020,0030]", "formatted vector elements");
-  // ## Long and single types
-  // Long integers and single-precision floats use the same format specifiers.
+  // ## Large integers and single-precision floats
+  // `integer` is a 64-bit type, so even large values format like any other
+  // number; single-precision floats use the same specifiers too.
   n = 1000000;
-  assert("{n}" == "1000000", "long default");
-  assert("{n:>10}" == "   1000000", "long right-aligned");
+  assert("{n}" == "1000000", "integer default");
+  assert("{n:>10}" == "   1000000", "integer right-aligned");
   f = 1.5f;
   assert("{f}" == "1.5", "single default");
+  // ## Pretty-printing a struct
+  // The `:#` specifier expands a struct across a spaced, readable layout
+  // instead of the compact default form.
+  p = Point { x: 1, y: 2 };
+  assert("{p}" == "{{x:1,y:2}}", "default struct format is compact");
+  assert("{p:#}" == "{{ x: 1, y: 2 }}", "`:#` pretty-prints with spaces");
   // ## Character format
   c = 'A';
   assert("{c}" == "A", "character default");

@@ -13,6 +13,12 @@
 // or a `_` wildcard must appear — the compiler checks exhaustiveness.
 enum Direction { North, South, East, West }
 
+// A struct-enum: its variants carry named fields, which a match arm can destructure.
+enum Shape {
+  Circle { radius: integer },
+  Rect { w: integer, h: integer },
+}
+
 fn direction_name(d: Direction) -> text {
   match d {
     North => "north",
@@ -38,6 +44,12 @@ fn main() {
   //   Circle { radius } — binds the 'radius' field to a local variable
   //   Rect { w, h }     — binds both 'w' and 'h'
   // The variable names must match the field names exactly.
+  shape = Rect { w: 3, h: 4 };
+  shape_area = match shape {
+    Circle { radius } => radius * radius * 3,
+    Rect { w, h }     => w * h,
+  };
+  assert(shape_area == 12, "struct-enum destructure: {shape_area}");
   // ## Guards
   // Add `if condition` after a pattern to restrict when the arm matches.
   // The guard can reference variables bound by the pattern.
@@ -69,6 +81,25 @@ fn main() {
     _ => "many",
   };
   assert(name == "three", "integer match: {name}");
+  // ## Range patterns
+  // A numeric arm can match a whole inclusive range with `low..=high` — handy for
+  // grading, bucketing, or any "is it in this band" test.
+  grade = match 95 {
+    90..=100 => "A",
+    80..=89  => "B",
+    _        => "lower",
+  };
+  assert(grade == "A", "range pattern: {grade}");
+  // ## Null patterns
+  // When the subject is nullable, a `null` arm handles the absent case explicitly.
+  // With null-flow this is the idiomatic way to branch on a `T?` inside a match.
+  maybe: integer? = null;
+  presence = match maybe {
+    null => "absent",
+    0    => "zero",
+    _    => "present",
+  };
+  assert(presence == "absent", "null pattern: {presence}");
   // ## Text matching
   // Match also works on text values.
   greeting = "hi";

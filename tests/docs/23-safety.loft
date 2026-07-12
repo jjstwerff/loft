@@ -22,8 +22,7 @@ fn main() {
   // That reserved value looks like any other value, so be aware of what it
   // is for each type:
   // - `boolean`         — `false` is the null value
-  // - `integer`         — the most negative 32-bit integer (-2 147 483 648) is null
-  // - `long`            — the most negative 64-bit integer is null
+  // - `integer`         — the most negative 64-bit integer (-9 223 372 036 854 775 808) is null
   // - `float`/`single`  — `NaN` (Not a Number) is null
   // - `character`       — the NUL character (code point 0) is null
   // - `text`            — a single NUL character (`'\0'`) is null; the empty string `""` is NOT null
@@ -31,14 +30,14 @@ fn main() {
   // - plain `enum`      — byte value 255 is null (limits enums to 255 variants)
   //
   // This means there is one value per type that you cannot distinguish from
-  // null. For integers, that is -2 147 483 648.  When defended with
-  // `?? null` (or a following null-check), division by zero produces
+  // null. For integers, that is -9 223 372 036 854 775 808.  When defended
+  // with `?? null` (or a following null-check), division by zero produces
   // this same value, so both paths look the same to your code:
   zero = 0;
   n = 1 / zero ?? null;
   assert(!n, "div-by-zero defended with `?? null` is null");
-  assert(n != 0, "null is not zero; it is -2 147 483 648");
-  assert(n < 0, "i32::MIN is the most negative 32-bit integer");
+  assert(n != 0, "null is not zero; it is -9 223 372 036 854 775 808");
+  assert(n < 0, "i64::MIN is the most negative 64-bit integer");
   // Arithmetic on null propagates: null plus anything is null.
   assert(!(n + 1), "null + 1 is still null");
   // Text null is the NUL character ('\0'), not the empty string.
@@ -47,8 +46,18 @@ fn main() {
   assert(!holder.s, "missing JSON text field is null (the NUL sentinel)");
   empty = "";
   assert(empty, "empty string is NOT null — this surprises most newcomers");
-  // Mitigation: Use `long` when you need the full 32-bit integer range, or
-  // declare struct fields as `not null` so that reserved value can be used as data.
+  // Mitigation: declare struct fields as `not null` so that reserved value can
+  // be used as data.
+
+  // ## Parsing text to a number needs a fallback
+  // An unchecked `text as integer` is a COMPILE error: parsing can fail, and
+  // loft refuses to let that failure slip through as a silent null. Ask for a
+  // checked cast with `integer?` (yields the number or null), or supply a
+  // default with `?? <value>`. The same rule applies to `float`.
+  parsed = "42" as integer?;
+  assert(parsed == 42, "checked cast `as integer?` yields the number");
+  fallback = "oops" as integer? ?? -1;
+  assert(fallback == -1, "unparseable text falls back to the default");
 
   // ## Integer overflow yields null
   // A calculation that overflows the integer range is uncomputable, so loft
@@ -193,8 +202,11 @@ fn main() {
 
   // ## XOR is `^`, not exponentiation
   // Unlike some languages where `^` means "power", in loft `^` is bitwise
-  // XOR. The `**` operator (Python/Ruby exponentiation) does not exist either.
-  // Use the `pow()` function for exponentiation.
+  // XOR. For exponentiation use the `**` operator (`2 ** 10 == 1024`,
+  // `2.0 ** 3.0 == 8.0`) or the `pow()` function. Watch one precedence footgun:
+  // `-x ** y` parses as `-(x ** y)`, so loft warns on it — write `(-x) ** y`
+  // when you mean to raise a negated base.
   assert((0b1010 ^ 0b1100) == 0b0110, "^ is XOR");
-  assert(pow(2.0, 3.0) == 8.0, "use pow() for power");
+  assert(2 ** 10 == 1024, "** is the power operator");
+  assert(pow(2.0, 3.0) == 8.0, "pow() also computes powers");
 }

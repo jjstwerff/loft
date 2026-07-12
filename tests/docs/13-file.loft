@@ -48,7 +48,8 @@ fn main() {
   // Wrapping the file handle in a block ensures the file closes the moment
   // the block ends. Set `f#format` to LittleEndian or BigEndian before
   // writing binary data. Use `f += value` to append the raw bytes of any
-  // scalar value (u8, u16, i32, long, single, float, or text).
+  // scalar value (u8, u16, i32, integer, single, float, or text). An `integer`
+  // is 8 bytes wide (see the size assertions below).
  {f = file("test.bin");
   assert(f#format == NotExists, "File should not exist yet.");
   f#format = BigEndian;  // BigEndian: most-significant byte written first.

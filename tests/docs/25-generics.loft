@@ -57,8 +57,9 @@ fn test_vector_generics() {
 //   Ordered    — comparison operators (<, <=, >, >=)
 //   Equatable  — equality operators (==, !=)
 //   Addable    — addition and subtraction (+, -)
-//   Numeric    — all arithmetic (+, -, *, /, %)
-//   Scalable   — multiplication by integer (* integer)
+//   Numeric    — all four scalar operators (+, -, *, /)
+//   Scalable   — multiplication by a float factor (* float)
+//   Printable  — text conversion (to_text)
 fn gen_max<T: Ordered>(gen_x: T, gen_y: T) -> T {
   if gen_x > gen_y { gen_x } else { gen_y }
 }

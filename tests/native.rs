@@ -59,6 +59,17 @@ const NATIVE_SKIP: &[&str] = &[
     // this file) and a struct-T instantiation compile + run correctly on
     // `--native`; the skip is removed so `native_dir` now gates this file
     // as a regression guard for cell 5.
+    //
+    // 14-image (`use imaging`) + 21-random (`use random`): validated via the
+    // `loft` binary; gendoc renders their HTML.  Skipped because THIS native
+    // doc harness builds native code without `out.native_cabi =
+    // native_cabi_enabled()` (unlike src/test_runner.rs:838), so it emits the
+    // legacy `extern crate <pkg>` path and rustc E0463s (no rlib) while the link
+    // provides the C-ABI cdylib.  NOT @P389 (resolved by C-ABI): the `loft`
+    // binary compiles two native packages fine.  Un-skip once this harness sets
+    // native_cabi (test-fidelity fix — it currently tests a path prod doesn't use).
+    "14-image.loft",
+    "21-random.loft",
 ];
 
 /// Script files to skip in native mode.

@@ -100,7 +100,8 @@ fn main() {
   // ## Missing fields get null
   // When a field is absent from the JSON, the struct field gets its null sentinel.
   // For text, that is the NUL character '\0' (not the empty string ""); for integer
-  // it is the minimum i32 value. Check with '!' before use, or assign a default with '??'.
+  // it is the minimum i64 value (integer is 64-bit). Check with '!' before use, or
+  // assign a default with '??'.
   partial = User.parse(`{{"id":1}}`);
   assert(partial.id == 1, "partial id");
   assert(!partial.name, "missing name is null");

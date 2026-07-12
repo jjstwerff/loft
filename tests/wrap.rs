@@ -40,7 +40,18 @@ static WRAP_LOCK: Mutex<()> = Mutex::new(());
 /// Files in `tests/docs/` that are known to be broken (open issues).
 /// `dir` skips these so that all other docs files are still exercised.
 /// Remove an entry here once the underlying issue is fixed.
-const SUITE_SKIP: &[&str] = &[];
+const SUITE_SKIP: &[&str] = &[
+    // Library-backed doc examples: `14-image` (`use imaging`) + `21-random`
+    // (`use random`).  Their code + library connection are validated via the
+    // `loft` binary and gendoc renders their HTML.  Skipped only because this
+    // EMBEDDED interpreter harness can't provision a #native library's cdylib
+    // against its own loft-ffi (the `.so` must exist + match; the harness never
+    // builds it) — a test-infra gap, NOT @P389 (that two-native-package link
+    // bug is resolved by the C-ABI rework; `loft --native` links both fine).
+    // Un-skip when the doc harness gains per-package cdylib provisioning.
+    "14-image.loft",
+    "21-random.loft",
+];
 
 /// Docs files that are known to fail in `--native-wasm` mode.
 const WASM_SKIP: &[&str] = &[
@@ -51,6 +62,11 @@ const WASM_SKIP: &[&str] = &[
     // #268 (wasip2 codegen calls undeclared `loft_host_print`).  (Also moot today
     // — `wasm_dir` sweeps tests/docs, not tests/scripts.)  Un-skip when #268 lands.
     "191-source-dir.loft",
+    // Library-backed (`use imaging` / `use random`): the wasm bridge for these
+    // native packages is not wired for the doc harness — same reason they are in
+    // SUITE_SKIP / NATIVE_SKIP.  Validated via the `loft` binary; HTML rendered.
+    "14-image.loft",
+    "21-random.loft",
 ];
 
 /// Compile a `.loft` file to a WebAssembly binary via the loft codegen + rustc, then

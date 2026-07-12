@@ -7,7 +7,7 @@
 //   now()     — milliseconds since the Unix epoch (wall-clock time).
 //   ticks()   — microseconds elapsed since program start (monotonic clock).
 //
-// Both return a 'long'.
+// Both return an 'integer' (loft's 64-bit integer).
 //
 // Use 'now()' for timestamps, log entries, and date calculations.
 // Use 'ticks()' for benchmarks and frame timing — it is unaffected by
@@ -50,8 +50,9 @@ fn main() {
   // Timestamp a log entry (seconds since epoch):
   //   seconds = now() / 1000
   //
-  // Seed the random number generator with the current time:
-  //   rand_seed(now() as integer)
+  // Seed the random number generator with the current time
+  // (now() already returns an integer, so no cast is needed):
+  //   rand_seed(now())
   //
   // Simple stopwatch:
   //   start = ticks()
