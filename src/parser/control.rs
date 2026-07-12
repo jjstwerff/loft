@@ -4785,24 +4785,70 @@ impl Parser {
         }
         self.lexer.token("]");
 
-        // `end` = the cursor after the last matched V (starts at head_len).
+        // @PLN35 PC — a CURSOR-mode repetition PREFIX-consumes: the run begins at the
+        // ABSOLUTE index `pos + head_len` and, on a match, advances `cursor.pos` to the
+        // run end — matching the MAXIMAL V run and LEAVING any following non-V tokens
+        // (a plain vector must instead consume through to its end).  `base` is that
+        // absolute start: plain `head_len` in vector mode (so the emitted IR stays
+        // byte-identical there), a `pos + head_len` temp in cursor mode.  A fixed tail
+        // matched from the END has no meaning for a prefix cursor — its "end" is the
+        // whole source, not the consumed prefix — so reject it.
+        let cursor_ctx = self.match_cursor;
+        if cursor_ctx.is_some() && tail_len > 0 && !self.first_pass {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "a fixed tail after a repetition is not supported in a cursor match \
+                 (it would match from the source end, not the consumed prefix)"
+            );
+        }
+        let (base_val, base_setup) = if let Some((_, _, _, pos_var)) = cursor_ctx {
+            let b = self.create_unique("rep_base", &I32);
+            self.vars.defined(b);
+            let add = self.conv_op(
+                "+",
+                Value::Var(pos_var),
+                Value::Int(head_len),
+                I32.clone(),
+                I32.clone(),
+            );
+            (Value::Var(b), Some(v_set(b, add)))
+        } else {
+            (Value::Int(head_len), None)
+        };
+
+        // `end` = the cursor after the last matched V (starts at `base`).
         let end_var = self.create_unique("rep_end", &I32);
         self.vars.defined(end_var);
 
-        let mut run_ops: Vec<Value> = vec![v_set(end_var, Value::Int(head_len))];
+        let mut run_ops: Vec<Value> = Vec::new();
+        if let Some(bs) = base_setup {
+            run_ops.push(bs);
+        }
+        run_ops.push(v_set(end_var, base_val.clone()));
         if let Some(sep) = &sep_disc {
             // Separated `V (Sep V)*`: match the first V, then loop `(Sep V)` pairs.
             // First V: `if head_len < len && tag(v[head_len]) == disc { end = head_len + 1 }`.
             let first_v = {
                 let lc = self.cursor_len(v);
-                let non_empty =
-                    self.conv_op("<", Value::Int(head_len), lc, I32.clone(), I32.clone());
-                let elem = self.read_slice_elem(v, elm_size, elm_tp, Value::Int(head_len));
+                let non_empty = self.conv_op("<", base_val.clone(), lc, I32.clone(), I32.clone());
+                let elem = self.read_slice_elem(v, elm_size, elm_tp, base_val.clone());
                 let tag = self.elem_tag_int(elem);
                 let is_v = self.cl("OpEqInt", &[tag, Value::Int(disc)]);
+                let one_more = if cursor_ctx.is_some() {
+                    self.conv_op(
+                        "+",
+                        base_val.clone(),
+                        Value::Int(1),
+                        I32.clone(),
+                        I32.clone(),
+                    )
+                } else {
+                    Value::Int(head_len + 1)
+                };
                 v_if(
                     non_empty,
-                    v_if(is_v, v_set(end_var, Value::Int(head_len + 1)), Value::Null),
+                    v_if(is_v, v_set(end_var, one_more), Value::Null),
                     Value::Null,
                 )
             };
@@ -4879,19 +4925,24 @@ impl Parser {
         // Match boolean (after the loop): no-rest requires the run to reach exactly the start of
         // the fixed tail (`end == len - tail_len`); a rest just needs room for the head
         // (`head_len <= len`).  `+` additionally requires a non-empty run (`end > head_len`).
-        let base = if has_rest {
+        let base = if has_rest || cursor_ctx.is_some() {
+            // A cursor PREFIX-consumes: the run took the maximal V prefix and any
+            // non-V tail simply stays unconsumed, so the arm matches whenever the head
+            // fits (`base <= len`).  A vector `..rest` matches on the same "room for the
+            // head" test.  Only a vector WITHOUT a rest must reach the fixed tail
+            // exactly (`end == len - tail_len`, the whole-consume boundary).
             let lc = self.cursor_len(v);
-            self.conv_op("<=", Value::Int(head_len), lc, I32.clone(), I32.clone())
+            self.conv_op("<=", base_val.clone(), lc, I32.clone(), I32.clone())
         } else {
             let lc = self.cursor_len(v);
             let boundary = self.conv_op("-", lc, Value::Int(tail_len), I32.clone(), I32.clone());
             self.cl("OpEqInt", &[Value::Var(end_var), boundary])
         };
         let match_bool = if plus {
-            // `end > head_len`, written `head_len < end` — `>` has no Int form (swapped `<`).
+            // `end > base`, written `base < end` — `>` has no Int form (swapped `<`).
             let gt = self.conv_op(
                 "<",
-                Value::Int(head_len),
+                base_val.clone(),
                 Value::Var(end_var),
                 I32.clone(),
                 I32.clone(),
@@ -4930,7 +4981,7 @@ impl Parser {
                     elm_size,
                     cap_var,
                     &vec_tp,
-                    Value::Int(head_len),
+                    base_val.clone(),
                     Value::Var(end_var),
                     cap_step,
                     bindings,
@@ -4952,7 +5003,7 @@ impl Parser {
                     &ftype,
                     proj_var,
                     &fvec_tp,
-                    Value::Int(head_len),
+                    base_val.clone(),
                     Value::Var(end_var),
                     cap_step,
                     bindings,
@@ -4975,6 +5026,45 @@ impl Parser {
                     1,
                     bindings,
                 );
+            }
+        }
+
+        // @PLN35 PC — advance the cursor by the consumed prefix.  On a plain vector
+        // there is no cursor and nothing to advance.  On a cursor the run consumed up
+        // to `end`; a trailing `..rest` additionally consumed the remainder, so the
+        // cursor lands on the source end.  Mirrors the fixed-arity advance in
+        // `parse_vector_match` (including the PC5 `farthest` high-water update).
+        if let Some((cursor_var, cursor_def, pos_field, pos_var)) = cursor_ctx {
+            let _ = pos_var;
+            let advance_to = if has_rest {
+                let lc = self.cursor_len(v);
+                let t = self.create_unique("rep_adv", &I32);
+                self.vars.defined(t);
+                bindings.push(v_set(t, lc));
+                Value::Var(t)
+            } else {
+                Value::Var(end_var)
+            };
+            let adv = self.set_field(
+                cursor_def,
+                pos_field,
+                0,
+                Value::Var(cursor_var),
+                advance_to.clone(),
+            );
+            bindings.push(adv);
+            if let Some(ff) = self.match_cursor_farthest {
+                let old_far = self.get_field(cursor_def, ff, Value::Var(cursor_var));
+                let is_less = self.conv_op(
+                    "<",
+                    old_far.clone(),
+                    advance_to.clone(),
+                    I32.clone(),
+                    I32.clone(),
+                );
+                let maxed = v_if(is_less, advance_to, old_far);
+                let set_far = self.set_field(cursor_def, ff, 0, Value::Var(cursor_var), maxed);
+                bindings.push(set_far);
             }
         }
     }
@@ -6360,7 +6450,14 @@ impl Parser {
         nodes.sort_unstable();
         for start in nodes {
             if color.get(&start).copied().unwrap_or(0) == 0 {
-                Self::dfs_subrule(start, adj, &mut color, &mut Vec::new(), &mut reported, &mut out);
+                Self::dfs_subrule(
+                    start,
+                    adj,
+                    &mut color,
+                    &mut Vec::new(),
+                    &mut reported,
+                    &mut out,
+                );
             }
         }
         out

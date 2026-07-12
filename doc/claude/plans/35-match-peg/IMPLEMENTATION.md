@@ -33,6 +33,46 @@ collect), and a fix for a pre-existing crash when a user type is named `T`** are
 committing to the branch). Full-suite **green** on this box (only the environmental
 `wasm_debug_relay` fails; see memory `wasm-debug-relay-env-fail`). **Nothing is half-implemented.**
 
+**Cursor-mode repetition fixed (2026-07-12, `tuxedo-pln35-pc-subrule`) — surfaced by the
+`arguments` dogfood library.** A repetition `( [name:] V )*` / `+` inside a CURSOR match was only
+correct at `pos == 0`: it read the run through `read_slice_elem(Var(end))` (which does NOT offset a
+`Var` by the cursor `pos`, so it read absolute `source[end]`), it required the run to reach the
+source END (`end == len − tail_len` — the whole-vector boundary, which rejected a prefix stop), and
+it never advanced `cursor.pos` (the `Repetition` branch sets `multi_alt = true`, skipping the
+fixed-arity advance, and `parse_slice_repetition` had no `match_cursor` writeback). Fix in
+`parse_slice_repetition`: in cursor mode the run starts at an ABSOLUTE `base = pos + head_len`
+(vector mode keeps `Value::Int(head_len)`, so the emitted IR stays byte-identical — 8 existing
+repetition/cursor scripts unchanged on both backends, and a vector introspect shows zero
+`rep_base`/`rep_adv` scaffolding), the match boolean becomes the prefix test `base <= len` (so a
+trailing `(V)*` consumes the maximal run and LEAVES any non-V tail), a fixed tail after the group is
+REJECTED on a cursor (its "end" is the source end, meaningless for a prefix), and the cursor is
+advanced to the run end (or to `len` when a `..rest` consumed the remainder), with the PC5 `farthest`
+high-water update mirrored. Guard: `tests/scripts/35t-cursor-repetition.loft` (prefix-stop, run at
+`pos > 0` with value check, `*`/`+`, `..rest`, a driver loop, sub-rule tail form; cross-mode +
+leak-checked).
+
+**Discovered, NOT fixed — a pre-existing NATIVE gap, diagnosed but it needs the ownership oracle
+(a dedicated @PLN85 step).** In a VECTOR-returning `match`, an EMPTY `[]` arm (`_ => []`) lowers to a
+bare `null`, and native emits that `null` as `()` where a vector (`DbRef`) is expected → `slice_binding_…
+else { () }` E0308. Reproduces in plain VECTOR mode (predates the cursor work) whenever a materialised
+vector is returned beside an empty arm: `fn f(v) -> vector<T> { match v { [x, ..rest] => rest, _ => []
+} }`, `[ (xs:V)* ] => xs`, `[a,b] => [a,b]`, all with `_ => []`. ROOT (traced via a working/proven-
+sibling IR diff): the `_ => v`-else works because the arm-delivery translator (`materialize_vector_arms_
+collect`) rewrites a `Var` arm to `OpClearVector(w); OpAppendVector(w,v); w` (deliver into the return
+buffer), but has NO case for a `null`/empty arm; AND the empty arm never reaches that translator because
+`vec_match_candidate`'s `!tail_if_has_null_arm` gate EXCLUDES any match with a null-looking arm from
+materialisation. **Why the obvious fix is NOT safe (two suite-caught regressions):** lifting the gate +
+adding a `Value::Null → OpClearVector(w); w` delivery fixes the owned cases but DOUBLES a BORROWED
+return (`match e:Cell { Filled { items } => items, _ => [] }` — `items` borrows the subject and is
+delivered by the join_own borrow-copy synthesis; materialising it on top appends twice → `len` 3 becomes
+6). Gating the lift on an ad-hoc "result is owned-fresh" heuristic (`deps` are non-arg, non-`skip_free`)
+still mis-classifies `items` under `LOFT_JOIN_OWN` + allocation pressure (`use_analysis::join_own_match_
+return_synthesis_both_backends`, `443-borrowed-match-return`). The correct fix must read the REAL
+ownership fact (the `use_analysis` oracle `ownership_of`), not re-derive owned-vs-borrowed at this site —
+i.e. a proper @PLN85 D-own step, tracked in [OWNERSHIP_MODEL.md](../../OWNERSHIP_MODEL.md). Until then,
+the idiom sidesteps it: return the capture via a sub-rule FUNCTION tail, or reference it only in a
+block-arm STATEMENT with a scalar/literal tail (both the `arguments` library and `35t` do this).
+
 **Phase 6.1 + 6.2 — DONE (repetition + separator, struct-enum), both backends.** `[ ( [name:] V )*
 [, ..rest] ]` / `…+`: a runtime run-loop counts the maximal leading `V` run into `end`; `name`
 collects `v[0..end]` (whole `vector<ElemType>`, reusing `..rest`'s `materialize_named_rest`),
