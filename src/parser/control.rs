@@ -1472,6 +1472,19 @@ impl Parser {
                 // @P377 / S1: collapse `cv = inner_call(...); cv` so the inner
                 // call's hidden buffer arg points at cv directly.
                 self.nrvo_collapse_tail_set(l, &ws);
+                // @PLN85 — an EMPTY `[]` arm (lowered to bare `null`) does not deliver
+                // into the renamed buffer, so native emits `()` (the `_ => []`-fallback
+                // E0308).  Rewrite it to yield the pre-cleared buffer (an empty vector) —
+                // but ONLY for the SLICE model (a capture materialised straight into the
+                // buffer).  The struct-enum join_own model appends a borrowed field into
+                // the buffer and already delivers `[]` as an empty `else ;`; rewriting it
+                // would change its ownership classification (Join → Borrowed).
+                let last = l.len() - 1;
+                if self.tail_has_slice_binding(&l[last])
+                    && let Some((_, buf)) = self.return_buffer()
+                {
+                    self.deliver_empty_arms_into_buffer(&mut l[last], buf);
+                }
                 true
             }
             Delivery::CopyBorrow(ls) => {
@@ -8391,6 +8404,73 @@ impl Parser {
             Value::Insert(ops) => ops.last().is_some_and(|x| self.arm_is_null(x)),
             _ => false,
         }
+    }
+
+    /// @PLN85 — deliver an EMPTY `[]` arm of a vector-return `match`/`if` tail into the
+    /// return buffer `buf`.  `[]` lowers to a bare `null`, so an arm that yields it does
+    /// NOT write the buffer the surrounding delivery renames onto `__retbuf`; native then
+    /// emits `()` where a vector (`DbRef`) is expected — the `_ => []`-fallback E0308.
+    /// Rewrite each such arm to `{ clear(buf); buf }`, yielding the (preamble-cleared)
+    /// buffer — an EMPTY vector — exactly as a struct-enum match's `[]` arm delivers
+    /// (`else ;`).  Arms are mutually exclusive, so re-clearing here can never drop a
+    /// sibling arm's data; a non-null arm is left untouched (its own value already
+    /// delivers into `buf`), and a nested `if` (else-if) chain is descended.
+    fn deliver_empty_arms_into_buffer(&mut self, tail: &mut Value, buf: u16) {
+        match tail {
+            Value::Span(b) => self.deliver_empty_arms_into_buffer(&mut b.1, buf),
+            Value::Return(inner) | Value::Drop(inner) => {
+                self.deliver_empty_arms_into_buffer(inner, buf);
+            }
+            Value::Block(bl) => {
+                if let Some(last) = bl.operators.last_mut() {
+                    self.deliver_empty_arms_into_buffer(last, buf);
+                }
+            }
+            Value::Insert(ops) => {
+                if let Some(last) = ops.last_mut() {
+                    self.deliver_empty_arms_into_buffer(last, buf);
+                }
+            }
+            Value::If(_, t, f) => {
+                self.rewrite_empty_arm_into_buffer(t, buf);
+                self.rewrite_empty_arm_into_buffer(f, buf);
+            }
+            _ => {}
+        }
+    }
+
+    fn rewrite_empty_arm_into_buffer(&mut self, arm: &mut Value, buf: u16) {
+        if self.arm_is_null(arm) {
+            let clear = self.cl("OpClearVector", &[Value::Var(buf)]);
+            *arm = Value::Insert(vec![clear, Value::Var(buf)]);
+        } else {
+            // A non-null arm delivers its own value; descend so an else-if chain's
+            // nested `[]` arms are still reached.
+            self.deliver_empty_arms_into_buffer(arm, buf);
+        }
+    }
+
+    /// Is `node` the tail of a SLICE match (`parse_vector_match` — a `[ … ]` pattern
+    /// over a vector), identified by a `slice_binding`-labelled arm block?  Only the
+    /// slice model needs `deliver_empty_arms_into_buffer`: its `..rest`/`(V)*` captures
+    /// materialise straight into the buffer, leaving a `[]` arm as an undelivered
+    /// `null`.  A struct-enum match (`match e { V { … } => … }`) delivers each arm
+    /// itself (its `[]` arm is already an empty `else ;`); rewriting it there would
+    /// change its ownership classification.  This is mode-independent, unlike a check
+    /// for the join_own `OpAppendVector` (absent under `LOFT_NO_JOIN_OWN`).
+    fn tail_has_slice_binding(&self, node: &Value) -> bool {
+        if let Value::Block(bl) = node.unspan()
+            && bl.name == "slice_binding"
+        {
+            return true;
+        }
+        let mut found = false;
+        node.unspan().for_each_child(&mut |c| {
+            if !found {
+                found = self.tail_has_slice_binding(c);
+            }
+        });
+        found
     }
 
     /// #425 — if the return tail is a struct/enum FIELD projection

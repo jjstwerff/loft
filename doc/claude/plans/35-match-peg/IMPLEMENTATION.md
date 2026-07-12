@@ -51,27 +51,29 @@ high-water update mirrored. Guard: `tests/scripts/35t-cursor-repetition.loft` (p
 `pos > 0` with value check, `*`/`+`, `..rest`, a driver loop, sub-rule tail form; cross-mode +
 leak-checked).
 
-**Discovered, NOT fixed — a pre-existing NATIVE gap, diagnosed but it needs the ownership oracle
-(a dedicated @PLN85 step).** In a VECTOR-returning `match`, an EMPTY `[]` arm (`_ => []`) lowers to a
-bare `null`, and native emits that `null` as `()` where a vector (`DbRef`) is expected → `slice_binding_…
-else { () }` E0308. Reproduces in plain VECTOR mode (predates the cursor work) whenever a materialised
-vector is returned beside an empty arm: `fn f(v) -> vector<T> { match v { [x, ..rest] => rest, _ => []
-} }`, `[ (xs:V)* ] => xs`, `[a,b] => [a,b]`, all with `_ => []`. ROOT (traced via a working/proven-
-sibling IR diff): the `_ => v`-else works because the arm-delivery translator (`materialize_vector_arms_
-collect`) rewrites a `Var` arm to `OpClearVector(w); OpAppendVector(w,v); w` (deliver into the return
-buffer), but has NO case for a `null`/empty arm; AND the empty arm never reaches that translator because
-`vec_match_candidate`'s `!tail_if_has_null_arm` gate EXCLUDES any match with a null-looking arm from
-materialisation. **Why the obvious fix is NOT safe (two suite-caught regressions):** lifting the gate +
-adding a `Value::Null → OpClearVector(w); w` delivery fixes the owned cases but DOUBLES a BORROWED
-return (`match e:Cell { Filled { items } => items, _ => [] }` — `items` borrows the subject and is
-delivered by the join_own borrow-copy synthesis; materialising it on top appends twice → `len` 3 becomes
-6). Gating the lift on an ad-hoc "result is owned-fresh" heuristic (`deps` are non-arg, non-`skip_free`)
-still mis-classifies `items` under `LOFT_JOIN_OWN` + allocation pressure (`use_analysis::join_own_match_
-return_synthesis_both_backends`, `443-borrowed-match-return`). The correct fix must read the REAL
-ownership fact (the `use_analysis` oracle `ownership_of`), not re-derive owned-vs-borrowed at this site —
-i.e. a proper @PLN85 D-own step, tracked in [OWNERSHIP_MODEL.md](../../OWNERSHIP_MODEL.md). Until then,
-the idiom sidesteps it: return the capture via a sub-rule FUNCTION tail, or reference it only in a
-block-arm STATEMENT with a scalar/literal tail (both the `arguments` library and `35t` do this).
+**Pre-existing NATIVE `[]`-empty-arm E0308 — FIXED for the function-RETURN context (@PLN85 delivery
+unification).** In a VECTOR-returning `match`, an EMPTY `[]` arm (`_ => []` / `_ => { [] }`) lowers to a
+bare `null`, and native emitted that `null` as `()` where a vector (`DbRef`) is expected → E0308.
+Reproduced in plain VECTOR mode (predates the cursor work) whenever a materialised vector is returned
+beside an empty arm: `fn f(v) -> vector<T> { match v { [x, ..rest] => rest, _ => [] } }`, `[ (xs:V)* ]
+=> xs`, `[a,b] => [a,b]`. ROOT (proven-sibling IR diff — a struct-enum `match` with the SAME shape
+works): the delivery renames each arm onto `__retbuf`, and the STRUCT-ENUM model (join_own) appends each
+arm's value into the pre-cleared buffer, so its `[]` arm is a harmless empty `else ;`; but the SLICE
+model (`parse_vector_match`) materialises its `..rest`/`(V)*` capture STRAIGHT into the buffer and left
+its `[]` arm as an undelivered `null`. FIX: in the `Delivery::Rename` dispatch, rewrite a null arm of a
+SLICE-match tail (identified by its `slice_binding` arm block — mode-independent, unlike an
+`OpAppendVector` check which is absent under `LOFT_NO_JOIN_OWN`) to `{ clear(buf); buf }`, yielding the
+pre-cleared buffer — an empty vector — WITHOUT touching the struct-enum model (whose ownership
+classification must stay `Join`). Two earlier dead-ends recorded for the next reader: (a) lifting the
+`vec_match_candidate` `!tail_if_has_null_arm` gate + a blanket `Value::Null` materialise DOUBLES a
+borrowed struct-enum return (materialising drops the preamble clear the join_own append relies on → the
+append accumulates); (b) gating on the `ownership_of` oracle at `block_result` CANNOT distinguish the
+models — the join_own synthesis has already rewritten the borrowed arm to an owned buffer copy before
+that point. Guard `tests/scripts/85-store-lifetime-empty-vector-match-arm.loft` (both backends,
+leak-clean). **STILL open: the ASSIGN-TO-LOCAL context** (`cap = match v { [(xs:V)* ] => xs, _ => [] }`)
+— not a return delivery (no `__retbuf`); the capture is read as a view (`["xs"]`) of a dying match-local,
+so it needs the capture-ownership (last-use move) work, a separate @PLN85 step. The sub-rule FN-tail
+idiom (both `arguments` + `35t`) sidesteps it.
 
 **Phase 6.1 + 6.2 — DONE (repetition + separator, struct-enum), both backends.** `[ ( [name:] V )*
 [, ..rest] ]` / `…+`: a runtime run-loop counts the maximal leading `V` run into `end`; `name`
