@@ -5,9 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 103 — Lifetime inspector: render the ownership fact the store-lifetime bugs kept hiding
 
-**Status — IN PROGRESS / P0 (2026-07-12).** P0.1 (F1 falsification) ✅ DONE — the load-bearing gate is
-cleared and it SIMPLIFIED the design (per-binding classification over the final IR; no pre-synthesis
-snapshot). P0.2–P0.4 next. Canonical id
+**Status — IN PROGRESS / P0 (2026-07-12).** ✅ P0.1 (F1 falsification) — the load-bearing gate cleared,
+and it SIMPLIFIED the design (per-binding classification over the final IR; no pre-synthesis snapshot).
+✅ P0.4 (timeline seam) — hooks documented + the `(store_nr, alloc_seq)` id fix identified. Remaining:
+P0.2 acceptance corpus + P0.3 dump-harden (the empty-arm cell needs loft PR #562 on main; the rest are
+main-compatible). Canonical id
 [`@PLN103`](https://github.com/loft-lang/plans/issues/103) (`status:future`, `subject:loft`). Serves the
 ongoing @PLN85 store-lifetime-retirement arc and **supersedes the "Dep-graph / lifetime visualizer"
 scope deferred on 2026-05-13** (DEBUG.md). This file is the design + the coverage-driving corpus + the
@@ -321,13 +323,27 @@ ordered so each depends only on the ones above it. Bound every ad-hoc run (`LOFT
   prints nothing. Fix any panic/`unwrap`/unreachable at its site (a dump must never invoke the leak-check
   that aborts at `debug.rs:1333`/`:1339`).
 
-- **P0.4 — timeline seam feasibility.** Read `src/store.rs` + `src/database/` and document (in this file)
-  the exact alloc/free event hooks and the per-store id. **VERIFY:** a written note naming the hooks and
-  the id-stability fix (agent-E flagged `LOFT_STORES=log` logs a store under its *free*-time name — P3
-  must also capture the alloc-time name so one id spans the lifeline).
+- **P0.4 — timeline seam feasibility.** ✅ DONE (2026-07-12). **Hooks:** alloc = `Stores::allocate`
+  (`database/allocation.rs:429`, the `LOFT_STORES=log` branch, `+ alloc #<store_nr> <name>`); free =
+  `Stores::free_named` (`allocation.rs:576`, `- free #<store_nr> <name>`). Both backends route allocation
+  through `Stores::allocate` (native calls the same runtime), so ONE instrumentation covers both.
+  **The id-stability catch (confirmed):** `store_nr` is a SLOT index REUSED on realloc (`allocate` reuses
+  a `free` slot, `allocation.rs:406-412`), so one `store_nr` names different logical stores over the run
+  — a per-`store_nr` lifeline conflates them (this IS the freed-then-reused ambiguity P3 must resolve).
+  Also the free line uses the FREE-CALL's `name`, which differs from the alloc-time name (agent-E's
+  flag, confirmed at `allocation.rs:578`). `Store.generation` (`store.rs:170`) is NOT the fix — it counts
+  claim/resize MUTATIONS (coroutine staleness), resets per store. **P3 fix:** add a global monotonic
+  `alloc_seq: u64` on `Stores`, stamp it into the currently-unused `Store.created_at` (`store.rs:186`,
+  set to 0 at `allocation.rs:414`) at `allocate`, key every timeline event by `(store_nr, alloc_seq)`,
+  and record the alloc-time `name` on the `Store` so the lifeline is labeled by alloc-name. **Feasible:
+  two hook sites + one `u64` + repurpose an existing dead field.**
 
-- **GATE P0:** ✅ P0.1 answered (per-binding on the final IR — no snapshot). Remaining: `acceptance/`
-  green on both backends; the dump path clean over all probes; the timeline seam documented.
+- **GATE P0:** ✅ P0.1 answered (per-binding on the final IR — no snapshot). ✅ P0.4 documented (seam +
+  the `(store_nr, alloc_seq)` id fix). **Remaining: P0.2/P0.3** — the acceptance corpus green on both
+  backends + the dump path clean over it. NOTE: the `k4-emptyarm-*` cell needs the @PLN35 empty-arm fix
+  (loft PR #562's `materialize_null_slice_arms`) to compile clean on native; the other cells (K1/K2/K4
+  struct-enum/#492) are main-compatible. So P0.2 fully lands either after #562 merges to main (then
+  rebase this branch) or on a branch stacked on #562. The main-compatible cells can be built now.
 
 ### P1 — static overlay `loft introspect ownership`, single backend (interp)
 
