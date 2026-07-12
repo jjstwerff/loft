@@ -486,6 +486,9 @@ impl Stores {
         }
         if free_source
             && value.store_nr != coll.store_nr
+            // Sentinel guard: the `allocations[..]` prechecks below index by store_nr, so a null
+            // source must short-circuit here (the eventual `free` is already sentinel-safe).
+            && value.store_nr != u16::MAX
             && !self.is_stack_store(value.store_nr)
             && !self.allocations[value.store_nr as usize].free
             && !self.allocations[value.store_nr as usize].read_only

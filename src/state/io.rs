@@ -1689,6 +1689,8 @@ impl State {
         }
         if free_source
             && src.store_nr != dest.store_nr
+            // Sentinel guard: the `allocations[..]` prechecks below index by store_nr.
+            && src.store_nr != u16::MAX
             && !self.database.is_stack_store(src.store_nr)
             && !self.database.allocations[src.store_nr as usize].free
             && !self.database.allocations[src.store_nr as usize].read_only

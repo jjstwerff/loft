@@ -1639,6 +1639,17 @@ impl Stores {
         );
         for (i, elm) in elems.into_iter().enumerate() {
             let i = u32::try_from(i).unwrap_or(u32::MAX);
+            // @PLN102 heap copy/alias audit — an `elm == 0` slot is an ABSENT element
+            // (no record). Every runtime path keeps `length` in sync with the filled
+            // slots (append/copy fill, `#remove` compacts, nullable elements stay inline
+            // so a null is never a 0 rec-id), so this is unreachable today — but the walk
+            // must NOT dereference record 0 (it is reserved). Preserve the hole (slot ← 0)
+            // and skip the deref, keeping positions and the length header intact rather
+            // than fabricating an element from record 0. Mirrors the free-side skip below.
+            if elm == 0 {
+                self.store_mut(to).set_u32_raw(into, 8 + 4 * i, 0);
+                continue;
+            }
             let new = self.store_mut(to).claim(size.div_ceil(8));
             self.copy_block(
                 &DbRef {
@@ -2199,6 +2210,14 @@ impl Stores {
     When a field points to a spatial structure (teardown unimplemented).
     */
     pub fn remove_claims(&mut self, rec: &DbRef, tp: u16) {
+        // A null/absent container (the `store_nr == u16::MAX` sentinel) owns nothing to tear
+        // down — no-op, mirroring `free_named`'s own guard. The `for_each_owned_child` keystone
+        // guards absent CHILDREN (`cur != 0`), but not a null CONTAINER; without this a nullable
+        // DbRef passed as the container would index `allocations[u16::MAX]` and panic. The
+        // invariant now holds HERE, not by every caller pre-checking the container.
+        if rec.store_nr == u16::MAX {
+            return;
+        }
         // TODO prevent removing records twice via secondary structures
         match &self.types[tp as usize].parts {
             Parts::Base if tp == 5 => {
@@ -2256,6 +2275,16 @@ impl Stores {
             _ => {
                 let walk = self.for_each_owned_child(rec, tp);
                 for c in walk.children {
+                    // @PLN102 heap-free audit — an `owning_elem == Some(0)` slot is an
+                    // ABSENT element record (Array/Ordered/Hash/Index). Recursing into it
+                    // would walk reserved record 0 as if it were a live element, and the
+                    // `delete(0)` below would free it. Unreachable today (the length/slots
+                    // invariant holds it off), guarded by construction so a future desync
+                    // can never fault here. Mirrors the copy-side skip in
+                    // `copy_claims_array_body`.
+                    if c.owning_elem == Some(0) {
+                        continue;
+                    }
                     self.remove_claims(&c.child, c.child_tp);
                     if let Some(elm) = c.owning_elem {
                         self.store_mut(rec).delete(elm);
@@ -3158,6 +3187,7 @@ fn build_padded_store_image(src: &[u8], src_words: u32, target_words: u32) -> Op
 
 #[cfg(test)]
 mod p318_hash_deepcopy {
+    use crate::database::Parts;
     use crate::database::Stores;
     use crate::keys::DbRef;
 
@@ -3305,5 +3335,112 @@ mod p318_hash_deepcopy {
             missing, 0,
             "deep-copied hash lost {missing}/{n} entries (source room {room})"
         );
+    }
+
+    /// @PLN102 heap-free audit — the null/absent container is a no-op at the free/teardown
+    /// chokepoints, safe by CONSTRUCTION not by caller convention. Without the `remove_claims`
+    /// guard this indexes `allocations[u16::MAX]` (`for_each_owned_child` reads `store(rec)`) and
+    /// OOB-panics; the assertion is that it does not. `free_named`/`free` already guarded — pinned
+    /// here too so a future null-container caller can never reintroduce the panic.
+    #[test]
+    fn free_and_teardown_no_op_on_the_null_sentinel() {
+        let mut stores = Stores::new();
+        let cell = stores.structure("NCell", -1);
+        stores.field(cell, "x", 0); // integer
+        stores.finish();
+        // None of these may panic; each is a no-op on the `store_nr == u16::MAX` sentinel.
+        stores.remove_claims(&DbRef::NULL, cell);
+        stores.free_named(&DbRef::NULL, "");
+        stores.free(&DbRef::NULL);
+    }
+
+    /// @PLN102 heap copy/alias audit — positive control for the `elm == 0` (absent element)
+    /// guards in `copy_claims_array_body` (copy) and `remove_claims` (free). A `vector<S>`
+    /// field alongside an `index<S[k]>` over the SAME `S` becomes a record-per-element `Array`;
+    /// every runtime path keeps its length in sync with the filled slots, so a 0 rec-id slot
+    /// is unreachable in practice. Here we hand-build that state (slot0 = real element,
+    /// slot1 = 0) and assert the walks treat the 0 slot as an absent hole — the copy preserves
+    /// it as 0 (never fabricating an element from reserved record 0) and the free skips it
+    /// (never `delete(0)` nor recursing into record 0). Proven to FAIL without the copy guard:
+    /// the absent slot then copies as a bogus non-zero record id.
+    #[test]
+    fn array_copy_and_free_skip_an_absent_element_slot() {
+        let mut stores = Stores::new();
+        let cell = stores.structure("ACell", -1);
+        stores.field(cell, "k", 0); // integer key
+        stores.field(cell, "v", 0); // integer
+        stores.finish();
+        let vec_tp = stores.vector(cell);
+        // An `index<ACell[k]>` field marks `ACell` LINKED, so the sibling `vector<ACell>`
+        // is laid out record-per-element (`Array`) rather than inline (`Vector`).
+        let idx_tp = stores.index(cell, &[("k".to_string(), false)]);
+        let holder = stores.structure("AHolder", -1);
+        stores.field(holder, "list", vec_tp);
+        stores.field(holder, "ix", idx_tp);
+        stores.finish();
+
+        assert!(
+            matches!(stores.types[vec_tp as usize].parts, Parts::Array(_)),
+            "setup: a linked vector<ACell> must lay out as an Array (got {:?})",
+            stores.types[vec_tp as usize].parts
+        );
+
+        let words = |sz: u16| 1 + ((u32::from(sz) + 7) >> 3);
+        let cell_words = words(stores.size(cell));
+        let holder_words = words(stores.size(holder));
+        let Parts::Struct(fields) = &stores.types[holder as usize].parts else {
+            unreachable!("holder is a struct")
+        };
+        let list_pos = u32::from(fields[0].position);
+
+        // Source holder whose Array container has slot0 = a real element, slot1 = 0 (absent).
+        let src = stores.database(holder_words);
+        let list_src = DbRef {
+            store_nr: src.store_nr,
+            rec: src.rec,
+            pos: src.pos + list_pos,
+        };
+        let elem = stores.store_mut(&src).claim(cell_words);
+        stores.store_mut(&src).set_int(elem, 4, 7); // element payload
+        let cur = stores.store_mut(&src).claim(2); // container: header word + one slot word (len 2)
+        stores.store_mut(&src).set_u32_raw(cur, 4, 2); // length header = 2
+        stores.store_mut(&src).set_u32_raw(cur, 8, elem); // slot0 → real element
+        stores.store_mut(&src).set_u32_raw(cur, 12, 0); // slot1 → ABSENT (the guarded state)
+        stores
+            .store_mut(&list_src)
+            .set_u32_raw(list_src.rec, list_src.pos, cur);
+
+        // COPY — the absent slot must copy as a hole (0), never a record fabricated from rec 0.
+        let dest = stores.database(holder_words);
+        let list_dest = DbRef {
+            store_nr: dest.store_nr,
+            rec: dest.rec,
+            pos: dest.pos + list_pos,
+        };
+        stores.copy_claims(&list_src, &list_dest, vec_tp);
+        let dcur = stores
+            .store(&list_dest)
+            .get_u32_raw(list_dest.rec, list_dest.pos);
+        assert_ne!(dcur, 0, "copied Array container must exist");
+        assert_eq!(
+            stores.store(&list_dest).get_u32_raw(dcur, 4),
+            2,
+            "copied length header preserved"
+        );
+        assert_ne!(
+            stores.store(&list_dest).get_u32_raw(dcur, 8),
+            0,
+            "slot0 (real element) is copied"
+        );
+        assert_eq!(
+            stores.store(&list_dest).get_u32_raw(dcur, 12),
+            0,
+            "slot1 (absent element) stays a hole — copy MUST NOT dereference record 0"
+        );
+
+        // FREE — teardown must not recurse into / delete record 0 for the absent slots
+        // (both the hand-built source and the copied destination carry one).
+        stores.remove_claims(&src, holder);
+        stores.free(&dest);
     }
 }

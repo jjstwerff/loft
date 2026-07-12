@@ -227,6 +227,43 @@ of the programmer's own rename, free to ignore), so a forgotten rename is never 
 *silent* data drop.  loft has no setter concept today, so this is a small new
 language feature — its own plan when picked up, out of scope here.
 
+### Minimum syntax, maximum value
+
+loft is, at heart, a **thought experiment: how much value can a *limited* syntax
+deliver?** The small surface is not a constraint the language fights — it is the
+point. Capability is meant to be **derived from a compact, learnable core** (the
+store, the type system, reachability) rather than **added as more syntax**, so the
+language a maker must hold in their head stays small while what they can express
+keeps growing. This serves the maker-side purpose directly: every keyword the maker
+does *not* have to learn is ceremony that never reaches them.
+
+The tell that it is working is when a capability **falls out of the architecture**
+instead of needing its own grammar:
+
+- **Three visibility tiers from one keyword.** `pub` plus reachability already
+  yields *private* / *sealed* (a value-exposed non-`pub` type — read, but not
+  nameable or constructable: the factory pattern) / *public*, with no `sealed`
+  keyword to learn.
+- **Every keyed collection is a type, not a new syntax.** `hash<T[k]>`,
+  `sorted<T[k]>`, `index<T[k]>`, `spatial<T[x,y]>` are one shape over the one store,
+  and a spatial range query *reuses range syntax* — `xs[(0,0)..(10,10)]` — rather
+  than inventing a query language.
+- **The whole fallible-value story is `?` and `??`.** No exceptions, no
+  `try`/`catch`; a computation yields a value or `null`, and `??` supplies the
+  default at the point of use.
+- **A tool as involved as the compatibility check needs no new surface.** A
+  library's public API is *already* fully described by `pub` + the type graph, so
+  `loft api-surface` derives the whole thing (@PLN102 C1) without adding a keyword.
+
+The design rule this implies: **a feature earns new syntax only when it genuinely
+cannot fall out of the core** — prefer deriving it from what is already there (fold
+it in — [COMPATIBILITY.md](COMPATIBILITY.md) § Folding), and reach for new grammar
+last, not first. The honest cost is **implicitness**: economy can trade an explicit
+declaration for emergent behaviour (the sealed tier is *implied* by a signature, not
+stated), so the discipline is to keep each derivation **legible** — economy in
+service of a maker who can still predict what the code does, never cleverness for its
+own sake.
+
 The six goals below are **foundation goals**: loft must be sound (A), shipped and
 clear (B), capable (C), portable (D), predictable (E), and friction-free (F). A
 crack in the foundation becomes a crack in everything above it. The same bar holds

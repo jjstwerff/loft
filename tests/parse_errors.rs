@@ -1825,3 +1825,18 @@ fn subrule_impure_rejected() {
 // verified as a real user program in tests/scripts/generic-typevar-name-usable.loft.
 // The fix keys vector types by their element (not by a display name two distinct
 // `T`s share), so a user `vector<T>` no longer reuses the marker's size-0 entry.
+
+// Regression: the typedef keyword is `type`, not `typedef`. A typed declaration with an
+// UNKNOWN type (`Foo x = 5`, or the common `typedef T = integer` typo) once PANICKED in
+// `change_var_type` (`index 65535 into empty variables` — the no-variable sentinel) instead
+// of diagnosing. The sentinel guard in `Function::change_var_type` makes it diagnose.
+#[test]
+fn unknown_type_typed_decl_diagnoses_not_panics() {
+    code!("Foo x = 5")
+        .error("Expect token = at unknown_type_typed_decl_diagnoses_not_panics:1:6")
+        .error(
+            "Expect constants to be in upper case style at \
+             unknown_type_typed_decl_diagnoses_not_panics:1:6",
+        )
+        .error("Expect token ; at unknown_type_typed_decl_diagnoses_not_panics:1:10");
+}

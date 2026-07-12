@@ -12,6 +12,9 @@
 //!
 //! Skips cleanly when node / the wasm32 target / the release binary are missing.
 
+#![cfg(unix)]
+
+use std::os::unix::process::CommandExt;
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
 use std::time::{Duration, Instant};
@@ -41,11 +44,20 @@ fn wasm32_installed() -> bool {
         .is_some_and(|s| s.lines().any(|l| l == "wasm32-unknown-unknown"))
 }
 
-/// Kill the spawned server process (and its group) on drop.
+/// Kill the whole PROCESS GROUP on drop. A default (`--native`) server run spawns
+/// the compiled binary as a GRANDCHILD of the loft driver; killing only the child
+/// orphans the real server, which keeps LISTENing. With SO_REUSEPORT the orphans
+/// co-bind the port and the kernel spreads connections across them, so a later run's
+/// client and agent land on DIFFERENT servers and the relay silently fails ("relayed
+/// alice" to a dead socket, or "no debug client alice"). Same fix as
+/// `engine_host_kernel.rs`.
 struct Guard(Option<Child>);
 impl Drop for Guard {
     fn drop(&mut self) {
         if let Some(mut c) = self.0.take() {
+            unsafe {
+                libc::killpg(c.id() as i32, libc::SIGKILL);
+            }
             let _ = c.kill();
             let _ = c.wait();
         }
@@ -111,6 +123,7 @@ fn agent_debugs_a_browser_wasm_client_through_the_server_relay() {
         .current_dir(&root)
         .stdout(Stdio::null())
         .stderr(Stdio::null())
+        .process_group(0) // own group, so the Guard's killpg reaps the --native grandchild
         .spawn()
         .expect("spawn server");
     let _guard = Guard(Some(server));

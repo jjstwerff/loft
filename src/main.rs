@@ -3556,6 +3556,254 @@ fn run_file_debugger() -> ! {
     std::process::exit(code);
 }
 
+/// @PLN102 C1 — load `file` (stdlib + the file), parse, and return its public surface PLUS its
+/// @PLN97 layout identity (the two verdict axes), or an error string on a missing file / parse
+/// failure. Shared by the descriptor and `--diff` modes.
+fn api_surface_of(
+    file: &str,
+) -> Result<
+    (
+        Vec<loft::api_surface::Member>,
+        loft::schema_sidecar::LayoutIdentity,
+    ),
+    String,
+> {
+    let entry = std::path::PathBuf::from(file);
+    if !entry.exists() {
+        return Err(format!("file {file} not found"));
+    }
+    let abs = std::fs::canonicalize(&entry).unwrap_or_else(|_| entry.clone());
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    let default_dir = exe_dir.join("../default");
+    let default_str = if default_dir.exists() {
+        default_dir.to_string_lossy().to_string()
+    } else {
+        format!("{}/default", project_dir())
+    };
+    let mut p = parser::Parser::new();
+    if let Some(src_dir) = entry.parent() {
+        p.lib_dirs.push(src_dir.to_string_lossy().to_string());
+    }
+    let _ = p.parse_dir(&default_str, true, false);
+    let abs_str = abs.to_string_lossy().to_string();
+    p.parse(&abs_str, false);
+    if p.diagnostics.level() >= loft::diagnostics::Level::Error {
+        return Err(format!("{file} did not parse cleanly"));
+    }
+    let surface = loft::api_surface::surface(&p.data, &abs_str);
+    // Layout axis (@PLN97): the per-type store-layout identity, computed from the COMPILED
+    // database — kept OUT of the descriptor so a layout-only edit (a field reorder) does not
+    // perturb the API-axis determinism, and compared as its own axis in `--diff`.
+    let roots = loft::schema_sidecar::program_roots(&p.data);
+    let identity = loft::schema_sidecar::LayoutIdentity::of(&p.database, &roots);
+    Ok((surface, identity))
+}
+
+/// @PLN102 C1 — `loft api-surface <file>` prints the surface descriptor; `loft api-surface
+/// --diff <base> <new> [--json]` prints the compatibility verdict (human text, or machine JSON
+/// for a CI check). Exit: 0 = drop-in / printed · 1 = a BREAK (so a non-required CI check goes
+/// red) · 2 = a usage / load error.
+fn run_api_surface_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with("--")).collect();
+
+    // Commit 7 — the PR check: emit a checked-in baseline, and check current-vs-baseline.
+    if args.iter().any(|a| a == "--emit-baseline") {
+        let Some(file) = positional.first() else {
+            eprintln!("loft api-surface: usage: loft api-surface <file> --emit-baseline");
+            return 2;
+        };
+        return match api_surface_of(file) {
+            Ok((surface, identity)) => {
+                print!("{}", emit_baseline(&surface, &identity));
+                0
+            }
+            Err(e) => {
+                eprintln!("loft api-surface: {e}");
+                2
+            }
+        };
+    }
+    if args.iter().any(|a| a == "--check") {
+        let (Some(baseline_path), Some(file)) = (positional.first(), positional.get(1)) else {
+            eprintln!(
+                "loft api-surface: usage: loft api-surface --check <baseline> <file> [--json]"
+            );
+            return 2;
+        };
+        let Ok(text) = std::fs::read_to_string(baseline_path.as_str()) else {
+            eprintln!("loft api-surface: cannot read baseline {baseline_path}");
+            return 2;
+        };
+        let Some((old_s, old_id)) = parse_baseline(&text) else {
+            eprintln!("loft api-surface: {baseline_path} is not a valid api-surface baseline");
+            return 2;
+        };
+        let (new_s, new_id) = match api_surface_of(file) {
+            Ok(v) => v,
+            Err(e) => {
+                eprintln!("loft api-surface: {e}");
+                return 2;
+            }
+        };
+        let api = loft::api_diff::diff(&old_s, &new_s);
+        let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+        print_verdict(&api, &layout, json);
+        let broke = matches!(api, loft::api_diff::Verdict::Break(_)) || layout_reshaped(&layout);
+        return i32::from(broke);
+    }
+
+    if args.iter().any(|a| a == "--diff") {
+        let (Some(base), Some(new)) = (positional.first(), positional.get(1)) else {
+            eprintln!("loft api-surface: usage: loft api-surface --diff <base> <new> [--json]");
+            return 2;
+        };
+        let ((old_s, old_id), (new_s, new_id)) = match (api_surface_of(base), api_surface_of(new)) {
+            (Ok(o), Ok(n)) => (o, n),
+            (Err(e), _) | (_, Err(e)) => {
+                eprintln!("loft api-surface: {e}");
+                return 2;
+            }
+        };
+        let api = loft::api_diff::diff(&old_s, &new_s);
+        let layout = loft::schema_sidecar::classify(&old_id, &new_id);
+        print_verdict(&api, &layout, json);
+        // Red on EITHER axis: a public API break, or a value-type reshape (a silent DATA break
+        // for a persisting consumer that the API axis alone green-lights).
+        let broke = matches!(api, loft::api_diff::Verdict::Break(_)) || layout_reshaped(&layout);
+        return i32::from(broke);
+    }
+
+    let Some(file) = positional.first() else {
+        eprintln!("loft api-surface: usage: loft api-surface <file>  |  --diff <base> <new>");
+        return 2;
+    };
+    match api_surface_of(file) {
+        Ok((surface, _identity)) => {
+            for m in surface {
+                println!("{}", m.to_line());
+            }
+            0
+        }
+        Err(e) => {
+            eprintln!("loft api-surface: {e}");
+            2
+        }
+    }
+}
+
+/// True iff the layout diff RESHAPED a value type — a silent DATA break for a persisting
+/// consumer, distinct from a pure add/drop (which the API axis handles).
+fn layout_reshaped(handoff: &loft::schema_sidecar::Handoff) -> bool {
+    matches!(handoff, loft::schema_sidecar::Handoff::Changed(d) if !d.changed.is_empty())
+}
+
+/// Print the TWO-axis compat verdict as machine JSON (a CI check parses it) or human text (a PR
+/// comment). JSON: `{"api":{"verdict":…,"broken":[…]},"layout":{"verdict":"stable|changed",
+/// "types":[…]}}`. The axes are distinct consumer concerns — a method-only consumer reads
+/// `api`; one that persists a value struct reads `layout`.
+fn print_verdict(
+    api: &loft::api_diff::Verdict,
+    layout: &loft::schema_sidecar::Handoff,
+    json: bool,
+) {
+    use loft::api_diff::Verdict;
+    use loft::schema_sidecar::Handoff;
+    let reshaped: Vec<&str> = match layout {
+        Handoff::Changed(d) => d.changed.iter().map(String::as_str).collect(),
+        Handoff::Identical => Vec::new(),
+    };
+    if json {
+        let api_json = match api {
+            Verdict::Superset => r#"{"verdict":"superset","broken":[]}"#.to_string(),
+            Verdict::Break(broken) => {
+                let items: Vec<String> = broken.iter().map(|s| api_json_string(s)).collect();
+                format!(r#"{{"verdict":"break","broken":[{}]}}"#, items.join(","))
+            }
+        };
+        let layout_json = if reshaped.is_empty() {
+            r#"{"verdict":"stable","types":[]}"#.to_string()
+        } else {
+            let items: Vec<String> = reshaped.iter().copied().map(api_json_string).collect();
+            format!(r#"{{"verdict":"changed","types":[{}]}}"#, items.join(","))
+        };
+        println!(r#"{{"api":{api_json},"layout":{layout_json}}}"#);
+    } else {
+        match api {
+            Verdict::Superset => {
+                println!("API: drop-in — the new surface is a superset (additions only).");
+            }
+            Verdict::Break(broken) => {
+                println!("API: BREAK — {} symbol(s):", broken.len());
+                for b in broken {
+                    println!("  - {b}");
+                }
+            }
+        }
+        if reshaped.is_empty() {
+            println!("Layout: stable.");
+        } else {
+            println!(
+                "Layout: CHANGED — {} type(s) reshaped: {}",
+                reshaped.len(),
+                reshaped.join(", ")
+            );
+        }
+    }
+}
+
+/// Minimal JSON string encoding (escape `"` and `\`; the symbols are identifiers + backticks).
+fn api_json_string(s: &str) -> String {
+    let mut out = String::from("\"");
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            _ => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+/// Serialize a surface + its layout identity to a checked-in baseline (regenerated on release):
+/// the API-surface member lines, a `--layout--` divider, then the @PLN97 layout sidecar.
+fn emit_baseline(
+    surface: &[loft::api_surface::Member],
+    identity: &loft::schema_sidecar::LayoutIdentity,
+) -> String {
+    let mut s = String::from(
+        "# loft api-surface baseline v1 — regenerate on release: \
+         `loft api-surface <file> --emit-baseline`\n",
+    );
+    for m in surface {
+        s.push_str(&m.to_line());
+        s.push('\n');
+    }
+    s.push_str("--layout--\n");
+    s.push_str(&identity.to_sidecar());
+    s
+}
+
+/// Parse a baseline back into (members, layout identity); `None` on a malformed file.
+fn parse_baseline(
+    text: &str,
+) -> Option<(
+    Vec<loft::api_surface::Member>,
+    loft::schema_sidecar::LayoutIdentity,
+)> {
+    let (surf, layout) = text.split_once("\n--layout--\n")?;
+    let members: Vec<loft::api_surface::Member> = surf
+        .lines()
+        .filter_map(loft::api_surface::Member::from_line)
+        .collect();
+    let identity = loft::schema_sidecar::LayoutIdentity::from_sidecar(layout)?;
+    Some((members, identity))
+}
+
 /// @PLN97 Phase F — `loft layout <accept|check> <file>`: the compiler migration
 /// aid as an explicit, opt-in command (a normal build pays nothing). `accept`
 /// records the program's current layout as the baseline (`.loft/layout.lock`);
@@ -4548,6 +4796,11 @@ fn main() {
             };
             let code = scaffold_library(&name, native, chunk);
             std::process::exit(code);
+        } else if a == "api-surface" {
+            // @PLN102 C1 — `loft api-surface <file>` | `--diff <base> <new> [--json]`.
+            // Self-contained + early-exit.
+            let rest: Vec<String> = argv[i..].to_vec();
+            std::process::exit(run_api_surface_command(&rest));
         } else if a == "layout" {
             // @PLN97 Phase F — `loft layout <accept|check> <file>`. Self-contained
             // + early-exit: never touches the normal build path (zero cost).

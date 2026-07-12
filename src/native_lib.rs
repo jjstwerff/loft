@@ -757,35 +757,102 @@ fn extra_externs(deps: &std::path::Path) -> Vec<(String, std::path::PathBuf)> {
 /// colliding StableCrateId values" — the zero-trust native blocker, and the same
 /// failure behind p171/p310/imaging.
 ///
-/// rmeta records the dependency by SVH, not by the filename hash, so we can't
-/// string-match it.  Instead pick the candidate whose mtime is closest to
-/// `libloft`'s: a crate and the dependency it links are produced by one cargo
-/// invocation and share a build time, while a stray copy from another build sits far
-/// off.  (A heuristic — a precise SVH match is the follow-up hardening.)
+/// The filename hash (`-<hash>` in `libloft_ffi-<hash>.rlib`) is the crate's
+/// `-Cextra-filename`, NOT its SVH, and rmeta records the dependency by SVH — so we
+/// cannot string-match libloft's dep to a filename.  We resolve it by VERIFICATION
+/// instead: order the candidates by mtime-closeness to `libloft` (a crate and the dep
+/// it links usually share a build time — a good first guess), then confirm the guess
+/// with a throwaway `rustc` probe.  A trivial crate that names both `loft` and
+/// `loft_ffi` links cleanly ONLY when the pinned copy's SVH matches the one `libloft`
+/// records; a mismatched copy makes rustc pull `libloft`'s real dep from `-L` too and
+/// reproduces the "colliding StableCrateId" abort.
+///
+/// This is precise and rustc-release-proof: after a toolchain bump cargo rebuilds
+/// `loft_ffi` (new SVH) and leaves the OLD rlib in `deps/` (cargo never GCs it) — the
+/// exact recurring trigger — but the stale copy now fails the probe, so the fresh copy
+/// wins with no manual `cargo clean` between rustc updates.  The probe runs ONLY when
+/// two-or-more copies coexist; the common single-copy case takes the fast path.
 pub fn loft_ffi_for_libloft(
     libloft: &std::path::Path,
     deps: &std::path::Path,
 ) -> Option<std::path::PathBuf> {
-    let anchor = libloft.metadata().and_then(|m| m.modified()).ok()?;
-    let mut best: Option<(std::path::PathBuf, std::time::Duration)> = None;
+    let anchor = libloft.metadata().and_then(|m| m.modified()).ok();
+    let mut candidates: Vec<(std::path::PathBuf, std::time::Duration)> = Vec::new();
     for e in std::fs::read_dir(deps).ok()?.flatten() {
         let n = e.file_name().to_string_lossy().into_owned();
         if !n.starts_with("libloft_ffi-") || !has_rlib_ext(&n) {
             continue;
         }
-        let Ok(mtime) = e.metadata().and_then(|m| m.modified()) else {
-            continue;
+        // Symmetric gap to `libloft`'s mtime (clock direction ignored); a missing
+        // mtime on either side sorts the candidate last via `Duration::MAX`.
+        let gap = match (anchor, e.metadata().and_then(|m| m.modified()).ok()) {
+            (Some(a), Some(m)) => m
+                .duration_since(a)
+                .or_else(|_| a.duration_since(m))
+                .unwrap_or_default(),
+            _ => std::time::Duration::MAX,
         };
-        // Symmetric gap so clock direction does not matter.
-        let gap = mtime
-            .duration_since(anchor)
-            .or_else(|_| anchor.duration_since(mtime))
-            .unwrap_or_default();
-        if best.as_ref().is_none_or(|(_, b)| gap < *b) {
-            best = Some((e.path(), gap));
+        candidates.push((e.path(), gap));
+    }
+    // Closest-mtime first: the best guess, and the order the probe walks.
+    candidates.sort_by_key(|(_, gap)| *gap);
+    match candidates.len() {
+        0 => None,
+        // Single copy — unambiguous, no probe.
+        1 => Some(candidates.remove(0).0),
+        // Two-or-more copies — verify by SVH, walking closest-mtime first.
+        _ => {
+            for (cand, _) in &candidates {
+                if loft_ffi_candidate_links(libloft, cand, deps) {
+                    return Some(cand.clone());
+                }
+            }
+            // No copy verified (no `rustc`, or a probe env fault that fails all
+            // equally) — fall back to the mtime-closest so the pin is still emitted
+            // rather than dropped (dropping it re-opens the collision).
+            Some(candidates.remove(0).0)
         }
     }
-    best.map(|(p, _)| p)
+}
+
+/// True iff a throwaway crate naming both `loft` and `loft_ffi` compiles with
+/// `--extern loft_ffi=cand` — i.e. `cand`'s SVH is the one `libloft` records for its
+/// `loft_ffi` dependency.  A mismatched `cand` forces rustc to load a SECOND
+/// `loft_ffi` (libloft's real dep, resolved via `-L dependency`), which aborts with
+/// "colliding StableCrateId".  Metadata-only (`--emit=metadata`, no codegen), so it
+/// is cheap; used only to disambiguate two-or-more coexisting copies.
+fn loft_ffi_candidate_links(
+    libloft: &std::path::Path,
+    cand: &std::path::Path,
+    deps: &std::path::Path,
+) -> bool {
+    let Some(stem) = cand.file_stem().and_then(|s| s.to_str()) else {
+        return false;
+    };
+    let dir = std::env::temp_dir().join(format!("loft_ffi_probe_{}_{stem}", std::process::id()));
+    if std::fs::create_dir_all(&dir).is_err() {
+        return false;
+    }
+    let src = dir.join("probe.rs");
+    let ok = std::fs::write(&src, "extern crate loft;\nextern crate loft_ffi;\n").is_ok()
+        && std::process::Command::new("rustc")
+            .arg("--edition=2024")
+            .arg("--crate-type")
+            .arg("rlib")
+            .arg("--emit=metadata")
+            .arg("-o")
+            .arg(dir.join("probe.rmeta"))
+            .arg("--extern")
+            .arg(format!("loft={}", libloft.display()))
+            .arg("--extern")
+            .arg(format!("loft_ffi={}", cand.display()))
+            .arg("-L")
+            .arg(format!("dependency={}", deps.display()))
+            .arg(&src)
+            .output()
+            .is_ok_and(|o| o.status.success());
+    let _ = std::fs::remove_dir_all(&dir);
+    ok
 }
 
 /// On Windows MSVC, the build-script output dirs holding native import libraries
