@@ -7989,6 +7989,61 @@ impl Parser {
     /// RETURNED monomorph result (`run() -> text { first(nums) }`) also needs the
     /// caller to promote, which the def_nr backward-ref gate blocks (monomorph
     /// minted after the caller) — that half awaits the forward-ref pre-pass.
+    /// @PLN104 P2 — the oracle pass (REPORT-ONLY, env-gated `LOFT_TRET_REPORT`).
+    /// After pass 2, flag every user text-returning fn that returns `Owned` text
+    /// (`use_analysis::return_ownership`) WITHOUT a hidden `&text` retbuf — the
+    /// owned-by-value shape the interpreter orphans (loft-lang/loft#568). These are
+    /// exactly the defs P3's promotion must act on. No transform here — this only
+    /// proves the predicate flags the leaking paths and skips the delivered/borrowed
+    /// ones, against the bytecode-comparison corpus.
+    pub(crate) fn report_tret_promotions(&self) {
+        if std::env::var_os("LOFT_TRET_REPORT").is_none() {
+            return;
+        }
+        for d in 0..self.data.definitions() {
+            let def = self.data.def(d);
+            if def.def_type != DefType::Function || def.source != crate::data::MAIN_SOURCE {
+                continue;
+            }
+            if !matches!(def.returned().base(), Type::Text(_)) {
+                continue;
+            }
+            // `has_work_buf`: already delivered through a hidden `&text` retbuf.
+            let has_buf = def.attributes().iter().any(
+                |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
+            );
+            if has_buf {
+                continue;
+            }
+            // The real class: a text return backed by a store that DIES with the
+            // frame — `Owned` (a fresh local store) OR `Borrowed{base}` of a LOCAL
+            // (not an argument, which the caller owns and outlives the frame). Both
+            // dangle/orphan without a retbuf; a `Borrowed` of an argument does not.
+            // Skip a return that BORROWS an argument — the caller owns it and it
+            // outlives the frame (no leak). Everything else backed frame-locally —
+            // `Owned`, or a `Borrowed`/`Join` of a LOCAL / unresolved base (base ==
+            // u16::MAX = names no visible param) — dies with the frame and must
+            // materialise into a retbuf.
+            let borrows_arg = |base: u16| base != u16::MAX && def.variables.is_argument(base);
+            let kind = match crate::use_analysis::return_ownership(&self.data, d) {
+                crate::use_analysis::Own::Owned => Some("owned-by-value"),
+                crate::use_analysis::Own::Borrowed { base } if !borrows_arg(base) => {
+                    Some("view-of-local")
+                }
+                crate::use_analysis::Own::Join { base, .. } if !borrows_arg(base) => {
+                    Some("join-of-local")
+                }
+                _ => None,
+            };
+            if let Some(kind) = kind {
+                eprintln!(
+                    "[tret-promote] def #{d} `{}` ({kind}), no retbuf — needs promotion (#568)",
+                    def.original_name()
+                );
+            }
+        }
+    }
+
     pub(crate) fn promote_monomorph_text_return(&mut self, d_nr: u32) {
         // Only plain `text` / `text?` returns (tuple-of-text is a separate arc).
         if !matches!(

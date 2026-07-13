@@ -52,3 +52,29 @@ loft introspect --show-ownership corpus.loft
 
 `broken.ir` is the captured baseline. `good.ir` (P3) is the post-fix capture; the
 diff must be confined to `ret_fnref` + `ret_index` (+ their call sites in `main`).
+
+## P2 result — the oracle pass + the two-class partition
+
+`report_tret_promotions` (env `LOFT_TRET_REPORT`, `parser/control.rs`, run after
+`mod.rs:1139`) flags a user text-returning def for promotion iff it has **no** hidden
+`&text` retbuf AND its return is backed **frame-locally**:
+
+- `return_ownership == Owned` (a fresh local store — `ret_fnref`), OR
+- `Borrowed{base}` / `Join{base}` where `base` is **not an argument** (a view of a
+  local — `ret_index`, `base == u16::MAX` = names no visible param → a local view).
+
+A `Borrowed` of an **argument** (`ret_borrow`, `base = 0 = s`) is skipped — the caller
+owns it and it outlives the frame. Verified: flags `ret_fnref` + `ret_index`, skips
+`ret_borrow`/`ret_local`/`ret_interp`.
+
+**On the real nightly leakers it partitions the class:**
+
+| class | files | P2 |
+|---|---|---|
+| text-return-tail (this fix) | 387, 85-poison-return-tail-uaf, 85-ncc-container-text-return, 552, 553, 557 | flags |
+| **match field-projection (SEPARATE)** | 35n-field-projection, 35p-iterator-match | flags 0 |
+
+`35n`/`35p` leak despite `words` already carrying its `__work_1` retbuf — the orphan is
+the match's extracted `w: vector<text>` temporary, not the text return. That is a
+distinct bug outside #568's scope (own investigation). The oracle pass making this
+boundary visible is P2's main deliverable.

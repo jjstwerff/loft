@@ -1137,6 +1137,8 @@ impl Parser {
             self.check_subrule_wellformedness();
             #[cfg(debug_assertions)]
             self.assert_pass2_def_attr_stable(&pass1_attr_counts);
+            // @PLN104 P2 — oracle pass (report-only unless LOFT_TRET_REPORT is set).
+            self.report_tret_promotions();
         }
         self.backfill_native_symbol_crates();
         // Plan-07 phase 4h — emit `not null` field-reminder hints
