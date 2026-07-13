@@ -131,10 +131,14 @@ is-reference flag is polluted).  Now decides value-vs-reference from the enum DE
 type: a value enum tests the disc (`OpConvIntFromEnum == 0`), only a struct-enum keeps OpRefIsNull.
 Correct on both backends (present → false, read through a null receiver → true, C80).  Text fields
 were never mis-codegened (they use `OpEqText` + the text null) — the E0308 note conflated them.
-**RESIDUAL (cosmetic, OPEN):** the spurious "Redundant null check — always false" WARNING still fires
-for `field == null` on a NULLABLE receiver (the value is already correct); suppressing it needs the
-receiver's nullability threaded into `get_field`, a broader analysis change (a too-broad attempt
-suppressed the *genuine* `p285` warning too).
+**RESIDUAL — FIXED (c9fc8153).** The spurious "Redundant null check" / "Redundant null coalescing"
+warning on `field == null` / `field ?? d` for a NULLABLE receiver: `field()` now clears
+`expr_not_null` when the receiver's TYPE is `Optional` (a field of a nullable receiver reads null when
+the receiver is absent, C80).  The signal is the receiver TYPE, not `expr_not_null` — a non-null
+CONSTRUCTED struct (`g = P285G{…}`) leaves `expr_not_null` false too, so the earlier type-agnostic
+attempt wrongly killed the genuine p285 warning.  Only the lint is cleared (the type is unchanged;
+widening to `Optional` would force `?? d` on every nullable-receiver field read).  Nested
+`w.inner.tag` propagates.  So `field == null` on a non-nullable field is now fully resolved.
 
 ### Tier 1 — RE-MEASURED 2026-07-13 (`tuxedo-compat-gate-design`)
 Running the current tree flipped most of the table below: the runtime already reads NULL for
