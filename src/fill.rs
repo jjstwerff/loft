@@ -737,7 +737,23 @@ fn min_single_single(s: &mut State) {
 
 fn cast_int_from_single(s: &mut State) {
     let v_v1 = *s.get_stack::<f32>();
-    let new_value = ops::op_cast_int_from_single(v_v1);
+    let new_value = {
+        let f = v_v1 as f64;
+        if f.is_nan() {
+            i64::MIN
+        } else if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) {
+            s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+            i64::MIN
+        } else {
+            let r = ops::op_cast_int_from_single(v_v1);
+            if r == i64::MIN {
+                s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange);
+                i64::MIN
+            } else {
+                r
+            }
+        }
+    };
     s.put_stack(new_value);
 }
 

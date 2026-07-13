@@ -230,7 +230,13 @@ pub fn abs(both: single) -> single {
 fn OpMinSingleSingle(v1: single) -> single;
 #rust"-@v1"
 fn OpCastIntFromSingle(v1: single) -> integer;
-#rust"ops::op_cast_int_from_single(@v1)"
+// @PLN102 pre-freeze (E2 Tier-1) — mirror OpCastIntFromFloat: an out-of-range
+// (or NaN) `single as integer` reads NULL (the i64::MIN sentinel + soft
+// CastOutOfRange), not a SATURATED i64::MAX.  The bare `as i64` used to clamp,
+// so `(1e30 as single) as integer` was a plausible-wrong 9223372036854775807
+// while `1e30 as integer` (float) was already null — an inconsistency (C80: an
+// undefined narrowing reads null, never a saturated value).
+#rust"{{ let f = @v1 as f64; if f.is_nan() {{ i64::MIN }} else if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); i64::MIN }} else {{ let r = ops::op_cast_int_from_single(@v1); if r == i64::MIN {{ s.raise_recoverable(crate::runtime_error::RuntimeErrorKind::CastOutOfRange); i64::MIN }} else {{ r }} }} }}"
 fn OpConvFloatFromSingle(v1: single) -> float;
 #rust"f64::from(@v1)"
 fn OpConvBoolFromSingle(v1: single) -> boolean;
