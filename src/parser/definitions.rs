@@ -1549,8 +1549,37 @@ impl Parser {
                 // argument is (`convert` then `validate_convert`, mod.rs:5907).
                 // An unchecked default (`text = 42`) otherwise reaches runtime and
                 // the interpreter uses the wrong-typed value as a pointer → SIGSEGV;
-                // `float = 5` here coerces to `5.0` just as `f(5)` would.
-                if !typedef.is_unknown() && !self.convert(&mut t, &dtype, &typedef) {
+                // `float = 5` here coerces to `5.0` just as `f(5)` would.  Only a
+                // definite KNOWN-vs-KNOWN mismatch is rejected; the check is skipped
+                // when either side is not a concrete type to check against:
+                //   * a literal `null` default — the internal "no default" sentinel
+                //     and a valid absent-value default for any type (C80 in-band
+                //     null), e.g. a `&Data = null` mutable-reference param;
+                //   * an `unknown` default type — an untyped literal that takes its
+                //     type from the parameter (e.g. `&vector<integer> = []`, an
+                //     empty vector whose element type is only fixed by context);
+                //   * an `unknown` parameter type (nothing to check against).
+                // A `Rewritten(T)` marker wraps an untyped literal whose type is
+                // fixed by context later (e.g. `[]` parses as `Rewritten(Unknown)`);
+                // look through it so such a literal counts as unknown here.
+                let dtype_concrete = match &dtype {
+                    Type::Rewritten(inner) => inner.as_ref(),
+                    other => other,
+                };
+                // A by-reference param (`&T`, `Type::RefVar`) is exempt: `convert`
+                // would ref-coerce the default into a `text_ref`-style block that
+                // takes `&Var(slot)` of the DEFINING frame — valid transiently at a
+                // call site but a dangling reference once the default is stored and
+                // re-injected at each caller (segfaults at runtime).  Such a default
+                // is kept raw here; the reference is taken at injection time (the
+                // pre-check behaviour).  The check still guards by-VALUE params, which
+                // is where the wrong-type-as-pointer SIGSEGV (`text = 42`) lives.
+                if !typedef.is_unknown()
+                    && !dtype_concrete.is_unknown()
+                    && !matches!(t, Value::Null)
+                    && !matches!(typedef, Type::RefVar(_))
+                    && !self.convert(&mut t, &dtype, &typedef)
+                {
                     self.validate_convert("default value", &dtype, &typedef, &dpos);
                 }
                 // Rewrite Var(injected_slot) → Var(arg_index) so the stored
