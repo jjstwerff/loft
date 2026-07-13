@@ -121,3 +121,21 @@ orphans (1 interp leak; native RAII-clean).
 **Fix direction:** exclude the fn-ref's freed intermediate buffer from return-dep
 candidacy (it is `FreeText`'d in-body, so not a delivery), OR mint `___tret_1` such
 that it resolves first. NOT the third-pass machinery, which is correct. Next increment.
+
+### CORRECTION — the return-dep verdict was NOT the root cause
+
+Attempted the return-dep fix: in `use_analysis::classify`, an ARGUMENT var →
+`Borrowed{base=self}` regardless of any `Set` RHS (so a retbuf arg isn't followed
+back to a freed local). It DID correct the verdict — `--show-ownership` then reports
+`run_t -> Borrowed(base=___tret_1)` (the retbuf, not `__work_1`) — but the runtime
+`append_text` leak **persisted** (min.loft + corpus, both still 1). So the mis-resolved
+verdict was a *symptom*, not the cause. Reverted (a non-gated change to the shared
+oracle that doesn't fix the leak isn't worth the risk).
+
+**Net:** the promoted `run_t` is functionally equivalent to the verified-clean
+`r=f(x);r` workaround (same native Rust, same interp opcode stream, and — after the
+above — the same ownership verdict), yet leaks where the workaround doesn't. The
+remaining difference is the VAR ORDER / slot assignment (`__work_1`@2 vs `___tret_1`@3),
+and the leak survives every static fix tried. This needs a **runtime** diagnostic
+(live debugger / store trace to catch the exact un-freed allocation at execution
+time), not more static IR analysis — the next increment's starting point.
