@@ -68,11 +68,21 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 > | runtime errors | ✅ **stable kinds** | `RuntimeErrorKind::{CastOutOfRange,DivideByZero,ShiftOutOfRange}` |
 > | layout guard wired | ✅ | `allocation.rs:2726` refuses a mismatched-layout load |
 >
-> **Genuinely OPEN:** **E1** (compile-time diagnostics — 457 `diagnostic!` sites, still `DiagEntry` =
-> level+message, no code) · **F9** (guard is wired, but `layout_algo_hash` at `types.rs:1674` still
-> omits **endianness** + the **not-null↔nullable** distinction) · **F7** (`ref ==` is identity, not
-> structural — a decision, not just a fix) · **F4** (assign place/RHS eval order — re-verify) · **E2**
-> (the error-surface adds) · spec-honesty for the ✅-behavior rows (`heap.md` F6, `matching.md` F5).
+> **E1 — DISSOLVED (owner decision 2026-07-13).** *"The error texts are not frozen; we freeze WHEN we
+> throw an error, and can only LIMIT the space we error for."* → Diagnostic **prose is not a frozen
+> surface** — it stays freely improvable forever (the goldens are our own tests, they update with the
+> prose). No stable codes are needed. What freezes is the **error BOUNDARY** (which programs error),
+> and it is **one-directional: the error space can only shrink post-freeze** (stop erroring on X →
+> additive; never start erroring on a program that used to compile). So E1 becomes a **one-line
+> contract statement** in COMPATIBILITY.md, not 457 codes.
+>
+> **This makes E2 the pre-freeze headline:** be **maximally strict NOW** — every error we will ever
+> want must land before the flip, because we can never add one after. See § The error surface.
+>
+> **Genuinely OPEN:** **E2** (the error-boundary maximal-strictness audit — *the* priority) · **F9**
+> (guard is wired, but `layout_algo_hash` at `types.rs:1674` omits **endianness** + the
+> **not-null↔nullable** distinction) · **F7** (`ref ==` is identity, not structural — a decision) ·
+> **F4** (assign place/RHS eval order — re-verify) · spec-honesty for the ✅-behavior rows.
 
 Several of these are **semantic changes, not just added errors** — they can *only* land while
 contract 0 allows, because after the freeze changing an observed value is a regression:
