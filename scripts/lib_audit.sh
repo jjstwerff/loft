@@ -8,6 +8,8 @@
 #          an open PR, or UNTRACKED unknown work (a gate failure).
 #   Q4     correctness — interpreter + native tests vs current loft.
 #   Q5     registry currency — wraps check_registry_coverage.sh.
+#   +      advisory C86 write-through lint (scripts/c86_lint.py) — REPORT-only,
+#          never gates; runs for every package incl. those with no tests/.
 #
 # THE INVARIANT: the report never says OK for something broken, never FAIL for
 # something fine, and never silently omits a target.  A verification tool that
@@ -74,7 +76,7 @@ head() { printf '\n%s== %s ==%s\n' "$c_dim" "$*" "$c_off"; }
 # Accumulators.  GATE_FAILS is the single source of the exit code; REPORTS are
 # surfaced but never gate.  INTENDED/REACHED enforce "no partial run" (C2).
 declare -a GATE_FAILS=() REPORTS=() PRUNABLE=() ROWS=()
-declare -a INTENDED=() REACHED=()
+declare -a INTENDED=() REACHED=() C86_FINDINGS=()
 gate()   { GATE_FAILS+=("$1"); }
 report() { REPORTS+=("$1"); }
 
@@ -215,6 +217,13 @@ for repo in $REPOS; do
   for toml in "$wt"/*/loft.toml; do
     [ -e "$toml" ] || continue
     p=$(dirname "$toml"); name=$(basename "$p")
+    # C86 write-through lint — REPORT-only, never gates.  Runs BEFORE the no-tests
+    # skip so EMPTY-suite packages (their only C86 guard) are still scanned.
+    if command -v python3 >/dev/null 2>&1; then
+      while IFS= read -r cl; do
+        [ -n "$cl" ] && C86_FINDINGS+=("$repo/${cl#"$wt"/}")
+      done < <(python3 "$ROOT/scripts/c86_lint.py" "$p" 2>/dev/null)
+    fi
     [ -d "$p/tests" ] || { ROWS+=("$repo/$name|interp -|native -|no tests/"); continue; }
     INTENDED+=("loft-libs-$repo/$name"); REACHED+=("loft-libs-$repo/$name")
     IFS='|' read -r iv inote <<<"$(run_tests interpret "$p")"
@@ -249,6 +258,14 @@ head "correctness matrix  (loft @ $LOFT_SHA)"
 for r in "${ROWS[@]}"; do IFS='|' read -r a b c d <<<"$r"; printf '  %-26s %-14s %-16s %s\n' "$a" "$b" "$c" "${c_dim}$d${c_off}"; done
 
 [ ${#PRUNABLE[@]} -gt 0 ] && { head "prunable (merged) branches"; for x in "${PRUNABLE[@]}"; do say "  $x"; done; [ "$DRY" = 1 ] && say "  ${c_dim}(re-run with --prune to delete)${c_off}"; }
+
+# C86 write-through lint — advisory (REPORT), never gates.  A one-liner also lands
+# in "reported (non-gating)" via report() so it shows in the summary tally.
+[ ${#C86_FINDINGS[@]} -gt 0 ] && {
+  head "C86 write-through lint (advisory — plain field bind may need &)"
+  for x in "${C86_FINDINGS[@]}"; do say "  ${c_yel}?${c_off} $x"; done
+  report "C86 lint: ${#C86_FINDINGS[@]} write-through bind(s) may need \`&\` — see § C86 write-through lint (not gated)"
+}
 
 [ ${#REPORTS[@]} -gt 0 ] && { head "reported (non-gating)"; for x in "${REPORTS[@]}"; do say "  - $x"; done; }
 
