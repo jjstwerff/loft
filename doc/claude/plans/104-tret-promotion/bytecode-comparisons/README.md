@@ -139,3 +139,30 @@ remaining difference is the VAR ORDER / slot assignment (`__work_1`@2 vs `___tre
 and the leak survives every static fix tried. This needs a **runtime** diagnostic
 (live debugger / store trace to catch the exact un-freed allocation at execution
 time), not more static IR analysis — the next increment's starting point.
+
+### Runtime-trace session (2026-07-13) — the premise is in doubt; fix local tooling first
+
+Instrumented `State::append_text`/`append_stack_text`/`format_stack_int` (alloc) and
+`free_text` (free) with a per-text ptr+content trace (`LOFT_TEXT_TRACE`, reverted).
+Result on `min.loft`, RELIABLE (unlike the ASan counts):
+
+- baseline / +LOFT_TRET_FIX / `r=f(x);r` workaround ALL show the SAME balanced trace:
+  2 text allocs (`v`→`v1`, `v1`), 2 frees — every text buffer freed, in all three.
+- `State::append_text` (the ASan-named leak site) is NEVER CALLED for this program.
+
+So: (1) the CI `append_text` leak label is **inlining noise** — the leak is NOT a
+text-return-delivery orphan; (2) `min.loft` has no text-level leak, so it likely does
+NOT faithfully reproduce the CI bug, and the earlier "min.loft leaks 1" reads were
+`ir_read` noise.
+
+**Root local-tooling gap:** this box has NO `llvm-symbolizer`, so LSan can't apply the
+`leak:ir_read` suppression — every local leak count is polluted by the intentional
+interner allocations (the third pass amplifies them to ~300). All wobbling measurements
+trace to this.
+
+**Next session MUST start here:** install `llvm-symbolizer`; re-verify the ACTUAL CI
+leakers (`387`, `85-poison-return-tail-uaf`, `85-ncc-container-text-return`, `552`/`553`/
+`557`) with `scripts/asan_leak_scan.sh` + the symbolizer (clean signal); get the true
+symbolized (ir_read-suppressed) leak stack; re-derive a FAITHFUL minimal repro. Only
+then judge whether the P1–P3 text-promotion direction is right — the runtime trace says
+it may be a red herring.
