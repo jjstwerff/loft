@@ -130,15 +130,33 @@ non-null, runtime reads null (the C80 in-band sentinel) — a real interp/native
 divergence. Out of scope for the Tier-0 crashes; a Tier-1 candidate (native codegen failure is
 arguably higher). `558-*` sidesteps it by rendering (`"{f}" == "null"`) instead of `f == null`.
 
-### Add now — silent-wrong, NOT yet a decided design (near-zero conversion cost)
-| Sev | Missing error | Now | Fix | Conv. cost |
-|---|---|---|---|---|
-| High | `"-9223372036854775808" as integer` → **null** (parses to the sentinel) | silent loss of a valid value | fault, or reserve the sentinel | ~0 |
-| High | `1e30 as integer` → **i64::MAX**, `-1e30 as integer` → **null** (saturate + sentinel) | plausible-wrong one way, null the other | fault (extend `NarrowCastOverflow` to float→int) or type `integer?` | low |
-| High | `1 << 100` → masked (`1<<36`); `1 << -1` → **null** (`1<<63`) | out-of-range shift silently masked/nulled | compile error for constant OOR shift + runtime fault for variable | ~0 |
-| High | **`NarrowCastOverflow` is defined but never raised** | narrowing overflow silently wrong | wire the fault | low |
-| Med | `999999999 as character` → **NUL** (renders as null) | invalid codepoint silently `'\0'` | fault or `character?` | low |
-| — | `sqrt(-1)`/`log(-1)`/`asin(2)` → **null** (NaN = the float null, C90) | already the honest "undefined" value; composes via `?? d` / null-propagation | **ACCEPT: null, NO error** — the [C80](../../DESIGN_DECISIONS.md) spreadsheet model already governs (undefined → null, never a runtime error). A fault would fork the total rule and add a corner case, not solve one. No new decision needed. | — |
+### Tier 1 — RE-MEASURED 2026-07-13 (`tuxedo-compat-gate-design`)
+Running the current tree flipped most of the table below: the runtime already reads NULL for
+out-of-range operations (C80), so the "silently MASKED to a wrong value" concern is largely gone.
+The only genuine silent-*wrong values* were two, both FIXED; the rest are already-resolved or
+sentinel-collision edges the owner's C80 rule says accept.
+
+| Item (re-measured) | Status |
+|---|---|
+| **cross-type `==`/`!=` → truthiness** (`5 == "banana"` → **true**) | **FIXED** (449c4f64) — reject at compile, like the ordering ops. See § below the K-table note. |
+| **`single as integer` overflow → i64::MAX** (saturates; `float as integer` already nulled) | **FIXED** (b230b957) — mirrors float→int: overflow reads null (C80). |
+| `1e30 as integer` (float) → **null** | already C80-correct (bounds check → i64::MIN). No add. |
+| `"…" as integer` (text parse) → **null** | already a COMPILE ERROR (`as integer` "may fail — use `integer?`"). No add. |
+| `1 << 100` / `1 << -1` (out-of-range shift) → **null** | already C80-correct (`ShiftOutOfRange` → i64::MIN). No add. |
+| `999999999 as character` → NUL | renders null; C80-adjacent. No genuine wrong value. |
+| `sqrt(-1)` / `log(-1)` / `asin(2)` → **null** | **ACCEPT** ([C80](../../DESIGN_DECISIONS.md): undefined → null, never a fault). No decision needed. |
+
+**Debatable — need the owner's call (do NOT unilaterally add; each conflicts with "null is a valid
+result / no runtime errors"):**
+- **Sentinel collisions** — a VALID value that equals the null sentinel reads as null: `1 << 63`,
+  `abs(i64::MIN)`, and the (already compile-rejected) `"-9223372036854775808" as integer` all land
+  on `i64::MIN`. Fix = reserve the sentinel (a representation change — `data.rs:96` already reserves
+  `MIN+1` for the *declared range*, so the collision is narrow) OR accept. C80 leans accept.
+- **Constant out-of-range as a COMPILE error** (`1 << 100`, `1e30 as integer` where the operand is a
+  literal) — the runtime already nulls these (C80-correct), so a compile error would reject a program
+  with well-defined (null) behaviour. Stricter, but arguably against the spreadsheet model.
+- **`enum == int`** (`Color.Green == 1` → **false**) — a defined-but-useless cross-type compare;
+  candidate for the same "No matching operator" reject as the other cross-type pairs, but low value.
 
 ### Semantics changes — must be pre-freeze (changing an observed value is a later regression)
 | Sev | Item | Fix | Conv. cost |
