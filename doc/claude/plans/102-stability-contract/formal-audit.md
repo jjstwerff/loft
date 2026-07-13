@@ -156,13 +156,21 @@ result / no runtime errors"):**
 - **Constant out-of-range as a COMPILE error** (`1 << 100`, `1e30 as integer` where the operand is a
   literal) — the runtime already nulls these (C80-correct), so a compile error would reject a program
   with well-defined (null) behaviour. Stricter, but arguably against the spreadsheet model.
-**Surfaced while taking the enum==int reject — a PRE-EXISTING bug (baseline confirms), NOT the
-reject:** a **nullable enum variable can't be null-checked or coalesced.** `n: Color? = null` renders
-`null` correctly, but `n == null` → **false** and `n ?? default` → **null** (no coalesce). Root: the
-comparison lowers to `OpEqInt(OpConvIntFromEnum(n), OpConvIntFromNull())` — it tests the enum's
-DISCRIMINANT (0 for a null enum) against the INTEGER null sentinel (`i64::MIN`), which never matches;
-it should compare the discriminant to 0 (the absent-variant marker). A real nullability-model gap,
-worth its own fix (separate from the cross-type rejects).
+**Nullable value-enum null-check — FIXED (9582a70a).** `n: Color? = null` rendered `null` but
+`n == null` was false, `n ?? d` didn't coalesce, `if !n` read present.  Root at the PRODUCER:
+`convert(Null, Enum)` skipped `OpConvEnumFromNull` (the `FromNull` loop matches by RETURN type, and
+that op returns the generic `enumerate`, never `is_equal` to a specific `Enum(Color)`), so the slot
+held a bare-null byte 0 while every consumer tests the 255 sentinel.  Fixed by converting a null
+value-enum target to its typed null (255) — variables, reassignment, returns, inline struct fields,
+both backends.  A `vector<Color?>` null literal stays rejected (`parse_vector` guard; the per-element
+null slot is unwired).  Tests: scripts/560, parse_errors.
+
+**Regression found + fixed while doing the above (b8a80870).** The cross-type-`==` guard (449c4f64)
+refused `OpEqBool` for ALL non-boolean operands, but `DT? == DT?` (a nullable STRUCT-REF, two present
+refs) legitimately uses `OpEqBool` as its null-ness test (no `OpEqRef` coercion exists for
+`Optional(Reference)`) — the guard stranded it with "No matching operator".  Earlier suite runs missed
+it on a STALE test binary.  Restricted the reject to VALUE operands (scalars + enums); references keep
+their behaviour.  Lesson: a `touch src/*.rs` / clean rebuild before trusting a green `wrap loft_suite`.
 
 ### Semantics changes — must be pre-freeze (changing an observed value is a later regression)
 | Sev | Item | Fix | Conv. cost |
