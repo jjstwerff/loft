@@ -109,6 +109,27 @@ contract 0 allows, because after the freeze changing an observed value is a regr
 Post-freeze loft can only DROP errors, so **add every error we might want now.** The too-permissive
 findings, with conversion cost (the trade-off you weigh):
 
+### Tier 0 — soundness CRASHES (both FIXED 2026-07-13, `tuxedo-compat-gate-design`)
+The E2 sweep found two SIGSEGVs (both backends) where C80 requires null/drop, not a crash. Neither
+is a "missing error" — they are the interpreter using a bad value as a pointer. Both fixed:
+- **default-arg type mismatch** (`fn f(x: text = 42)`) — an unchecked wrong-typed default reached
+  runtime as a pointer. Fix (72bc5302): type-check + coerce the default against the param type at
+  parse time, like a call-site arg; only a KNOWN-vs-KNOWN by-VALUE mismatch is rejected (27329716
+  narrows: skip `null` / untyped-literal / by-reference-param defaults, which `convert` would
+  mis-coerce). `text = 42` → clean error; `float = 5` → `5.0`.
+- **null-struct field access** (`o: T? = null; o.field`) — read/write of a field of a null struct hit
+  `store()`/`store_mut()` with the null `store_nr` (65535) → OOB `allocations` panic. Fix (91246f2d):
+  every scalar field op guards `rec == 0` at the `#rust`-template chokepoint (feeds both backends) —
+  read → the field type's null, write → drop (C80). Regression: `tests/scripts/558-*`.
+
+**Surfaced, still OPEN (separate from the crashes):** a **non-nullable field typed `not null` breaks
+`field == null`** — the static nullability analysis types a struct's non-nullable field as `not null`,
+so `w.field == null` (where `w: T?` is genuinely null at runtime) folds to "always false" (interp
+warning) and MIS-CODEGENS on native (`E0610`/`E0308` — `.store_nr` on a scalar). Static says
+non-null, runtime reads null (the C80 in-band sentinel) — a real interp/native + static/runtime
+divergence. Out of scope for the Tier-0 crashes; a Tier-1 candidate (native codegen failure is
+arguably higher). `558-*` sidesteps it by rendering (`"{f}" == "null"`) instead of `f == null`.
+
 ### Add now — silent-wrong, NOT yet a decided design (near-zero conversion cost)
 | Sev | Missing error | Now | Fix | Conv. cost |
 |---|---|---|---|---|
