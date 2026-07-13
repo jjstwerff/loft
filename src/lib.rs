@@ -77,6 +77,7 @@ pub mod data;
 pub mod data_store;
 pub mod database;
 pub mod debugger;
+pub mod ffi_deliver;
 pub mod hash;
 pub mod ir_node;
 pub mod ir_read;

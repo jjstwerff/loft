@@ -11349,6 +11349,28 @@ impl Parser {
             return self.parse_call_diagnostic(val, name, list, types, call_pos);
         }
         match name {
+            // @PLN105 Phase 1 — deliver(tag, value): hand the value's descriptor
+            // handle to the host. Lower to OpDeliver(tag, value, db_tp), filling
+            // db_tp from the value's static type. The value is passed by VALUE (its
+            // code), so `@val` is the record DbRef on both backends (no OpCreateStack
+            // slot indirection) — one #rust body ⇒ interpret == native.
+            "deliver" if types.len() == 2 => {
+                if self.first_pass {
+                    return Type::Void;
+                }
+                let val_type = types[1].clone();
+                let db_tp = self.get_type(&val_type);
+                let op = self.data.def_nr("OpDeliver");
+                *val = Value::Call(
+                    op,
+                    vec![
+                        list[0].clone(),
+                        list[1].clone(),
+                        Value::Int(i32::from(db_tp)),
+                    ],
+                );
+                return Type::Void;
+            }
             "parallel_for" => return self.parse_parallel_for(val, list, types),
             "par_fold" => return self.parse_par_fold(val, list, types),
             "map" => return self.parse_map(val, list, types),

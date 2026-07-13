@@ -79,6 +79,15 @@ fn OpMoveFile(from: text, to: text) -> boolean fs#update;
 #rust"codegen_runtime::fs_move(&s.database.resolve_path(@from), &s.database.resolve_path(@to))"
 fn OpTruncateFile(self: File, size: integer) -> boolean fs#update;
 fn OpSyncFile(self: File) -> boolean fs#update;
+// @PLN105 Phase 1 — deliver a live value's descriptor handle to the host.
+// LOOPBACK host (both backends): reconstruct the value via its layout descriptor
+// (@PLN105 Phase 0) + print a deterministic line, so interpret == native. The value
+// is passed BY VALUE (its code, not an OpCreateStack ref) so `@val` is the record
+// DbRef on both backends — one `#rust` body serves both. `deliver(tag, value)` is
+// lowered in the parser's `dispatch_call`, which fills `db_tp` from the value's
+// static type.
+fn OpDeliver(tag: integer, val: reference, db_tp: const u16) fs#update;
+#rust"stores.deliver_reconstruct(@tag, @val, @db_tp);"
 // Dynamic dispatch through a runtime function reference (fn-ref variable).
 // Placed here — after all file-I/O operators — so that it receives op_code 252 without
 // renumbering the operators defined earlier in this file.  Logically it beintegers near

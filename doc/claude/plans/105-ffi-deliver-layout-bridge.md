@@ -180,7 +180,7 @@ byte-for-byte, so `layout_hash() == layout_algo_hash` (the F9 integrity check fa
 reader *refuses* it (`Err`, not panic). Purely additive Rust (no codegen/stdlib), so both-backend
 parity is untouched and the @PLN97 golden is unperturbed.
 
-### Phase 1 — `deliver` / `expose` stdlib + lowering + host imports
+### Phase 1 — `deliver` stdlib + lowering + loopback host — ✅ DONE (interp+native; `expose`/wasm → Phase 2)
 
 Wire the boundary with a **loopback host** in the test harness (no browser). `deliver`
 hands `(tag, store_nr, rec, pos, typeId)`; the harness host reads the descriptor + memory
@@ -194,6 +194,29 @@ and reconstructs the value.
   join the asyncify set, unlike `loft_host_http_get`).
 - **Falsifier / test:** loopback deliver of the Phase-0 value on **both backends**; assert
   reconstructed value == original. **Parity gate: interpret == native.**
+
+**Landed** (`src/ffi_deliver.rs`, `default/02_files.loft` `OpDeliver`, `src/parser/control.rs`
+`dispatch_call`, `tests/deliver_parity.rs`, `tests/common/cross_mode.rs`). `deliver(tag, value)`
+lowers (in `dispatch_call`) to `OpDeliver(tag, value, db_tp)` with `db_tp` filled from the value's
+static type; the op is a single `#rust` body `stores.deliver_reconstruct(@tag, @val, @db_tp)` that
+feeds **both** backends (fill.rs interpreter handler + native codegen from the one template — the
+`native_rs_functions_up_to_date` and `fill_rs_up_to_date` guards stay green). The loopback host
+reconstructs the value from its layout descriptor (Phase 0's `read_via_descriptor`) and prints a
+deterministic line. **Key design move:** the value is passed BY VALUE (its code, not an
+`OpCreateStack` reference), so `@val` is the record `DbRef` on both backends — matching native's
+`file_to_bytes(self)` convention and sidestepping the interp/native slot-vs-record deref asymmetry
+(@PLN85 p9); one body, no divergence. **Parity gate green:** `tests/deliver_parity.rs` runs a flat
+struct and a nested `Record{text, inline Record, vector<integer>, boolean}` under both backends and
+asserts byte-identical stdout AND the exact expected bytes (non-vacuous). This is the "read deep into
+record + vector without knowing the layout" capability, end-to-end.
+
+- **Deferred to Phase 2** (not blocking): `expose` (long-lived pinning has meaning only with the
+  real host / borrow window across frames — a fake loopback alias would be dishonest surface); the
+  wasm/`--html` host-imports + asyncify wiring (they need the JS host, which is Phase 2 — wiring an
+  import with no host would break `--native-wasm`/`--html`); top-level bare-scalar / bare-vector
+  delivery (structs, which recurse into vectors/records/scalars, are the meaty case and are done).
+  The descriptor-in-loopback IS descriptor-driven here (uses `read_via_descriptor`), so it is
+  already a faithful JS stand-in.
 
 ### Phase 2 — the generic JS reader
 
