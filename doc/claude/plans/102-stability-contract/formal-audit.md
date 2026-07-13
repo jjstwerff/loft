@@ -157,12 +157,15 @@ sentinel-collision edges the owner's C80 rule says accept.
 | `999999999 as character` → NUL | renders null; C80-adjacent. No genuine wrong value. |
 | `sqrt(-1)` / `log(-1)` / `asin(2)` → **null** | **ACCEPT** ([C80](../../DESIGN_DECISIONS.md): undefined → null, never a fault). No decision needed. |
 
-**Debatable — need the owner's call (do NOT unilaterally add; each conflicts with "null is a valid
-result / no runtime errors"):**
-- **Sentinel collisions** — a VALID value that equals the null sentinel reads as null: `1 << 63`,
-  `abs(i64::MIN)`, and the (already compile-rejected) `"-9223372036854775808" as integer` all land
-  on `i64::MIN`. Fix = reserve the sentinel (a representation change — `data.rs:96` already reserves
-  `MIN+1` for the *declared range*, so the collision is narrow) OR accept. C80 leans accept.
+**Sentinel collisions — DECIDED: ACCEPTED (owner ruling 2026-07-13, [C85](../../DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--)).**
+A value equal to the null sentinel (`i64::MAX+1`, `abs(i64::MIN)`, `1<<63`, a literal
+`-9223372036854775808`) reads as null. This is semantically **just an overflow** ("don't rely on it;
+the program may malfunction") and strictly BETTER than a two's-complement wrap because null is
+*detectable/handleable* (`??`, `== null`) where a wrapped value corrupts silently. Not an error to
+add, not a flip blocker — the consistent consequence of the total-null model. Off the debatable list.
+
+**Debatable — need the owner's call (do NOT unilaterally add; conflicts with "null is a valid result
+/ no runtime errors"):**
 - **Constant out-of-range as a COMPILE error** (`1 << 100`, `1e30 as integer` where the operand is a
   literal) — the runtime already nulls these (C80-correct), so a compile error would reject a program
   with well-defined (null) behaviour. Stricter, but arguably against the spreadsheet model.

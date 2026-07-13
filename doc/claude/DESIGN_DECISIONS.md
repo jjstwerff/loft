@@ -1885,6 +1885,32 @@ overflow-arith is a decided edge, not a deviation to close. Forcing nullability 
 arithmetic operation would be consistency at the expense of good taste — and, given no traps, it
 would make the compiler block a game over a fault its player will never hit.
 
+### Ratified: the in-band sentinel COLLISION is accepted, not a bug (2026-07-13)
+
+The residual above has a concrete face: because null is an **in-band sentinel** (`i64::MIN` for
+`integer`), a value that equals that sentinel reads as null — `i64::MAX + 1`, `abs(i64::MIN)`,
+`1 << 63`, or a legitimate `-9223372036854775808` arriving as *data* (a file / wire / input) all
+compare `== null`. This was carried on the @PLN102 pre-freeze **debatable** list ("silent loss of a
+valid value"). The owner's ruling closes it as **accepted**:
+
+- **Semantically it is just an overflow.** The contract is "don't rely on it; the program may
+  malfunction" — identical to what a programmer already owes any overflow. It is not a new hazard
+  class beyond the arithmetic edge C85 already accepts.
+- **It is strictly BETTER than the two's-complement alternative.** A wrapped `i64::MIN` is a value
+  that looks completely valid, so it corrupts silently and unrecoverably. The null bit-pattern is
+  **detectable and handleable** — `x ?? d`, `if x == null`, null-propagation through the rest of the
+  expression — so a program that cares can recover, and one that doesn't malfunctions exactly as it
+  would under wrap. Detectability is a gain, not a cost.
+- **Computed overflow and received `i64::MIN` reduce to one rule.** `i64::MIN` simply is not a valid
+  non-null `integer` in loft — it *is* the null. Reserving one value out of 2⁶⁴ to make "undefined →
+  null" total across every type is a clean trade; a program using the extreme edge of the range is in
+  the same "know your representation" territory as one relying on wrap.
+
+So the collision is **not** an error to add and **not** a flip blocker — it is the consistent,
+already-decided consequence of the C80 total-null model and this C85 rule. (Same shape for the other
+in-band sentinels: `NaN` for `float`/`single`, `255` for `u8`/`bool`, disc-0 for enums, `"\0"` for
+`text` — each reserves one value so the null rule stays total.)
+
 ## C86 — Whole-value heap binds COPY; aliasing is a last-use ELISION (the rustc rule)
 
 **Catalogue:** @F21 (references), @I60 (deps) — the ownership model's bind semantics.
