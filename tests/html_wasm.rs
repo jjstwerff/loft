@@ -254,14 +254,15 @@ fn p137_html_arithmetic_loop_runs() {
 /// `src/database/io.rs::get_file` returns `Format::NotExists` and
 /// `src/state/io.rs::get_file_text` leaves the buffer untouched.
 /// A `--html` program calling `file("x").content()` must therefore
-/// return an empty string without crashing.  This test exercises
-/// the full `--html` build → browser repro harness path.
+/// read as `null` — a MISSING file (@PLN102 H4: `content() -> text?`,
+/// missing → null, distinct from an empty file) — without crashing.
+/// This test exercises the full `--html` build → browser repro path.
 #[test]
 fn q9_html_file_content_returns_empty_on_wasm() {
     let src = "fn main() {
     f = file(\"/definitely_missing_on_wasm.txt\");
     t = f.content();
-    println(\"len={t.len()}\");
+    println(\"missing={t == null}\");
 }
 ";
     let Some((stdout, stderr, ok)) = run_html_wasm("q9_file_content", src) else {
@@ -269,8 +270,9 @@ fn q9_html_file_content_returns_empty_on_wasm() {
     };
     assert!(ok, "WASM trapped on file().content() call.\n{stderr}");
     assert!(
-        stdout.contains("len=0"),
-        "expected 'len=0' (empty-string content on wasm32 stub).\nstdout: {stdout}\nstderr: {stderr}"
+        stdout.contains("missing=true"),
+        "expected 'missing=true' (a missing file reads as null on the wasm32 stub, @PLN102 H4).\
+         \nstdout: {stdout}\nstderr: {stderr}"
     );
 }
 

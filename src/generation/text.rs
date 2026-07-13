@@ -270,17 +270,22 @@ impl Output<'_> {
             // statement; without it, rustc rejects the
             // String-returning Block with E0308 (`expected &str,
             // found String`).
+            // `.base()` peels `Optional`: a `text?`-returning call produces an owned
+            // `Str`/`String` (holding the null sentinel) exactly like a `text` one, so
+            // it needs the same `&*` wrap. `format_text` renders the sentinel as
+            // `null`, so `&*` is null-safe. (@PLN102 H4 surfaced this via `content()
+            // -> text?`; the general #534 native text-branch E0308 class.)
             let val_str = if let Value::Call(d, _) = val.unspan()
-                && matches!(self.data.def(*d).returned(), Type::Text(_))
+                && matches!(self.data.def(*d).returned().base(), Type::Text(_))
             {
                 format!("&*({val_expr})")
             } else if let Value::CallRef(v_nr, _) = val.unspan()
                 && let Type::Function(_, ret, _) = self.data.def(self.def_nr).variables().tp(*v_nr)
-                && matches!(**ret, Type::Text(_))
+                && matches!(ret.base(), Type::Text(_))
             {
                 format!("&*({val_expr})")
             } else if let Value::Block(b) = val.unspan()
-                && matches!(b.result, Type::Text(_))
+                && matches!(b.result.base(), Type::Text(_))
             {
                 format!("&*({val_expr})")
             } else {
