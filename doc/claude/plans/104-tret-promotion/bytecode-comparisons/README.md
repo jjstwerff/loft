@@ -99,3 +99,25 @@ re-lowers with the buffer.
 dep mis-tracks the delivery, so the `append_text` result still orphans (1 real
 interp leak persists; native RAII-clean). Fix is in the promotion's return-dep
 computation (`text_return` / the fn-ref-buffer interaction), NOT the machinery.
+
+### P3 root cause pinned (2026-07-13) — var-order dep resolution
+
+The full IR diff (`min.loft` +LOFT_TRET_FIX vs the verified-clean `r=f(x);r`
+workaround) shows the promoted `run_t` is FUNCTIONALLY identical — same native Rust,
+same interp bytecode — with one real divergence in the ownership resolution:
+
+```
+--show-ownership:  fix → text["__work_1"]     workaround → text["RB"(=r)]
+var order:         fix: __work_1@2, ___tret_1@3   workaround: r@2, __work_1@3
+```
+
+`do_tret_bind` mints `___tret_1` (the retbuf) AFTER the fn-ref call's intermediate
+buffer `__work_1`, so it gets a higher var index. `use_analysis::return_ownership`
+resolves the return dep to the FIRST hidden `&text`/text buffer — `__work_1`, which is
+a LOCAL freed inside `run_t` (`FreeText(__work_1)`), not the retbuf. That mis-resolved
+dep makes the interpreter deliver/free the wrong buffer, so the `append_text` result
+orphans (1 interp leak; native RAII-clean).
+
+**Fix direction:** exclude the fn-ref's freed intermediate buffer from return-dep
+candidacy (it is `FreeText`'d in-body, so not a delivery), OR mint `___tret_1` such
+that it resolves first. NOT the third-pass machinery, which is correct. Next increment.
