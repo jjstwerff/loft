@@ -707,12 +707,22 @@ impl Stores {
     pub fn fs_list_dir(&mut self, path: &str) -> DbRef {
         // #255 / @PLN9: re-home a relative dir path against the program anchor.
         let resolved = self.resolve_path(path);
+        // @PLN102 H4 — a MISSING / non-directory path lists as NULL (the null
+        // vector), distinct from an EMPTY-but-present directory (a length-0 vector).
         #[cfg(feature = "wasm")]
-        let mut names = crate::wasm::host_fs_list_dir(&resolved);
+        let names: Option<Vec<String>> = {
+            // The host bridge can't cheaply distinguish empty-vs-missing here; treat
+            // a non-directory as absent via the is-dir probe.
+            if crate::wasm::host_fs_is_dir(&resolved) {
+                Some(crate::wasm::host_fs_list_dir(&resolved))
+            } else {
+                None
+            }
+        };
         #[cfg(not(feature = "wasm"))]
-        let mut names: Vec<String> = {
-            let mut v = Vec::new();
-            if let Ok(iter) = std::fs::read_dir(std::path::Path::new(&resolved)) {
+        let names: Option<Vec<String>> = match std::fs::read_dir(std::path::Path::new(&resolved)) {
+            Ok(iter) => {
+                let mut v = Vec::new();
                 for entry in iter.flatten() {
                     // Keep only the final path component; skip non-UTF-8 names
                     // (that ENTRY degrades, never the whole listing).
@@ -720,8 +730,12 @@ impl Stores {
                         v.push(name.to_owned());
                     }
                 }
+                Some(v)
             }
-            v
+            Err(_) => None,
+        };
+        let Some(mut names) = names else {
+            return DbRef::NULL;
         };
         names.sort();
         self.text_vector(&names)
@@ -736,14 +750,22 @@ impl Stores {
     pub fn fs_read_bytes(&mut self, path: &str) -> DbRef {
         // #255 / @PLN9: re-home against the program anchor.
         let resolved = self.resolve_path(path);
+        // @PLN102 H4 — a MISSING / unreadable file reads as NULL (the null vector),
+        // distinct from an EMPTY-but-present file (a length-0 vector).  `None` is the
+        // absent case; `Some(v)` (possibly empty) is a real read.
         #[cfg(feature = "wasm")]
-        let data: Vec<u8> = {
-            // VirtFS read: size the file then read it whole.
-            let n = crate::wasm::host_fs_file_size(&resolved).max(0) as usize;
-            crate::wasm::host_fs_read_bytes(&resolved, n).unwrap_or_default()
+        let data: Option<Vec<u8>> = {
+            // VirtFS read: a negative size is the host's "no such file" signal.
+            let sz = crate::wasm::host_fs_file_size(&resolved);
+            if sz < 0 {
+                None
+            } else {
+                crate::wasm::host_fs_read_bytes(&resolved, sz as usize)
+            }
         };
         #[cfg(not(feature = "wasm"))]
-        let data: Vec<u8> = std::fs::read(std::path::Path::new(&resolved)).unwrap_or_default();
+        let data: Option<Vec<u8>> = std::fs::read(std::path::Path::new(&resolved)).ok();
+        let Some(data) = data else { return DbRef::NULL };
         // Owning field is a 4-byte vector pointer; the inner record holds the
         // bytes one-per-element (length at offset 4, payload at offset 8).
         let vec = self.database(4);

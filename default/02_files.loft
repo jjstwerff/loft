@@ -94,7 +94,10 @@ fn OpMkdirAll(path: text) -> boolean fs#update;
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
 
-pub fn content(self: File) -> text fs#read {
+pub fn content(self: File) -> text? fs#read {
+  // @PLN102 H4 — a MISSING file reads as null, distinct from an EMPTY file (""),
+  // so a missing config is not silently indistinguishable from an empty one.
+  if self.format == Format.NotExists { return null }
   result = "";
   txt = "";
   OpGetFileText(self, txt);
@@ -110,7 +113,8 @@ pub fn content(self: File) -> text fs#read {
 
 pub fn lines(self: File) -> vector < text > fs#read {
   result =[];
-  c = self.content();
+  // @PLN102 H4 — content() is now `text?`; a missing file has no lines.
+  c = self.content() ?? "";
   p = 0;
   prev_cr = false;
   for ch in c {
@@ -303,15 +307,17 @@ pub fn is_file(path: text) -> boolean fs#read;
 #rust"codegen_runtime::fs_is_file(&s.database.resolve_path(@path))"
 #impure(io)
 // Lists the entry NAMES of directory `path` (base names, not full paths),
-// sorted.  Returns an empty vector when `path` is not a readable directory.
+// sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct
+// from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape.
 // Use to enumerate a directory; join with `path` to build full child paths.
-pub fn list_dir(path: text) -> vector < text > fs#read;
+pub fn list_dir(path: text) -> vector < text > ? fs#read;
 #rust"stores.fs_list_dir(@path)"
 #impure(io)
-// Reads the whole file `path` as raw bytes.  Returns an empty vector on a
-// missing file or IO error.  Binary-exact (round-trips with write_bytes);
-// use for non-UTF-8 data — for text prefer `file(path).content()`.
-pub fn read_bytes(path: text) -> vector < u8 > fs#read;
+// Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable
+// file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []`
+// to keep the old shape.  Binary-exact (round-trips with write_bytes); use for
+// non-UTF-8 data — for text prefer `file(path).content()`.
+pub fn read_bytes(path: text) -> vector < u8 > ? fs#read;
 #rust"stores.fs_read_bytes(@path)"
 #impure(io)
 // Writes `bytes` to file `path`, truncating any existing content.  Returns
