@@ -5656,16 +5656,8 @@ impl Parser {
                 possible.push(*pos);
             }
             for pos in possible {
-                // skip OpEqBool when comparing character with text —
-                // prevents 'a' == "b" from resolving as true == true.
-                if self.data.def(pos).name() == "OpEqBool"
-                    && types.len() >= 2
-                    && ((matches!(types[0], Type::Character) && matches!(types[1], Type::Text(_)))
-                        || (matches!(types[0], Type::Text(_))
-                            && matches!(types[1], Type::Character)))
-                {
-                    continue;
-                }
+                // `OpEqBool` truthiness-fallback guard lives in `call_nr` (the single
+                // chokepoint all three resolution sub-paths share) — see there.
                 let tp = self.call_nr(code, pos, list, types, false, &[]);
                 if tp != Type::Null {
                     // We cannot compare two different types of enums, both will be integers in the same range
@@ -5751,6 +5743,33 @@ impl Parser {
         report: bool,
         arg_pos: &[Position],
     ) -> Type {
+        // @PLN102 pre-freeze — `OpEqBool`/`OpNeBool` are BOOLEAN (in)equality; they must
+        // not be the implicit truthiness fallback for mismatched types.  Without this,
+        // `5 == "banana"` resolves as `OpEqBool(OpConvBoolFromInt(5),
+        // OpConvBoolFromText("banana"))` = `true == true` = **true** (likewise
+        // `float == text`, `char == float`, `bool == text`, and their `!=` twins).  These
+        // reach here via THREE call_op sub-paths (find_op_method, the `possible` loop, and
+        // find_fn — the last resolves the boolean's own operator), so the guard lives at
+        // this single chokepoint they all share: refuse the boolean (in)equality op unless
+        // both operands are genuinely boolean, returning "no match" so the caller falls
+        // through to a numeric/same-type op or the "No matching operator" reject (as the
+        // ordering operators `<`/`<=`/… already do).  A `null` operand is EXEMPT: a bare
+        // `boolean?`/`integer?`/… `== null` null-check legitimately lowers through the
+        // boolean op (no separate bool-null branch upstream), so only reject when BOTH
+        // operands are concrete non-null and not both boolean.
+        if matches!(self.data.def(d_nr).name(), "OpEqBool" | "OpNeBool") && types.len() >= 2 {
+            let (a, b) = (types[0].base(), types[1].base());
+            let has_null = matches!(a, Type::Null) || matches!(b, Type::Null);
+            let both_bool = matches!(a, Type::Boolean) && matches!(b, Type::Boolean);
+            // A boolean-vs-integer comparison is rejected UPSTREAM (parser/operators.rs)
+            // with a bespoke "a boolean is true/false/null, not 0/1" message; leave that
+            // pair to it (this guard would otherwise pre-empt it with the generic reject).
+            let bool_int = (matches!(a, Type::Boolean) && matches!(b, Type::Integer(_)))
+                || (matches!(a, Type::Integer(_)) && matches!(b, Type::Boolean));
+            if !has_null && !both_bool && !bool_int {
+                return Type::Null;
+            }
+        }
         let mut all_types = Vec::from(types);
         if self.data.def_type(d_nr) == DefType::Dynamic {
             for a_nr in 0..self.data.attributes(d_nr) {

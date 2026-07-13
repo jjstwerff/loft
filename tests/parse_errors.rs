@@ -188,6 +188,37 @@ fn wrong_plus() {
         .error("No matching operator '+' on 'integer' and 'text' at wrong_plus:1:20");
 }
 
+// @PLN102 pre-freeze (E2 Tier-1) — `==`/`!=` between incompatible types used to
+// resolve through the boolean TRUTHINESS fallback (both operands coerced to "is
+// truthy"), so `5 == "banana"` was `true == true` = **true**.  Reject them at
+// compile time — the same "No matching operator" the ordering operators (`<` …)
+// already give.  Same-type and numeric (int↔float, int↔char) comparisons and
+// `x == null` null-checks stay valid (covered by the script suite).
+#[test]
+fn cross_type_eq_int_text() {
+    code!("fn test() { b = 5 == \"x\"; }")
+        .error("No matching operator '==' on 'integer' and 'text' at cross_type_eq_int_text:1:25");
+}
+
+#[test]
+fn cross_type_eq_bool_text() {
+    code!("fn test() { b = true == \"x\"; }")
+        .error("No matching operator '==' on 'boolean' and 'text' at cross_type_eq_bool_text:1:28");
+}
+
+#[test]
+fn cross_type_ne_int_text() {
+    code!("fn test() { b = 5 != \"x\"; }")
+        .error("No matching operator '!=' on 'integer' and 'text' at cross_type_ne_int_text:1:25");
+}
+
+#[test]
+fn cross_type_eq_bool_float() {
+    code!("fn test() { b = true == 5.0; }").error(
+        "No matching operator '==' on 'boolean' and 'float' at cross_type_eq_bool_float:1:28",
+    );
+}
+
 #[test]
 fn wrong_if() {
     code!("fn test() {if 1 > 0 { 2 } else {\"a\"}\n}")
