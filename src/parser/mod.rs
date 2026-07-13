@@ -5770,6 +5770,22 @@ impl Parser {
                 return Type::Null;
             }
         }
+        // @PLN102 pre-freeze — an enum compared to a RAW integer coerces the enum to
+        // its INTERNAL discriminant (`OpConvIntFromEnum`, +1-biased so variant 0 is
+        // disc 1), so `Color.Green == 1` leaks that encoding and reads a confusing
+        // false (Green's disc is 2).  Reject the enum-vs-integer pair like the other
+        // cross-type comparisons — `enum == enum` is untouched (BOTH sides convert, so
+        // both operands are `Enum` here, not one enum + one integer; a bare `enum ==
+        // null` is `Enum` + `Null`).  The internal is-absent lowering builds `OpEqInt`
+        // via `self.cl` with an already-integer discriminant, bypassing this path.
+        if matches!(self.data.def(d_nr).name(), "OpEqInt" | "OpNeInt") && types.len() >= 2 {
+            let (a, b) = (types[0].base(), types[1].base());
+            let enum_int = (matches!(a, Type::Enum(..)) && matches!(b, Type::Integer(_)))
+                || (matches!(a, Type::Integer(_)) && matches!(b, Type::Enum(..)));
+            if enum_int {
+                return Type::Null;
+            }
+        }
         let mut all_types = Vec::from(types);
         if self.data.def_type(d_nr) == DefType::Dynamic {
             for a_nr in 0..self.data.attributes(d_nr) {

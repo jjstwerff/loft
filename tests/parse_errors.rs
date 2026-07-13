@@ -219,6 +219,22 @@ fn cross_type_eq_bool_float() {
     );
 }
 
+// @PLN102 pre-freeze (E2 Tier-1) — an enum vs a raw integer coerced the enum to
+// its INTERNAL +1-biased discriminant, so `Color.Green == 1` leaked the encoding
+// and read a confusing `false` (Green's disc is 2).  Reject it like every other
+// cross-type compare; `enum == enum` and `enum == null` are unaffected.
+#[test]
+fn cross_type_eq_enum_int() {
+    code!("enum Color { Red, Green, Blue }\nfn test() { c = Color.Green; b = c == 1; }")
+        .error("No matching operator '==' on 'Color' and 'integer' at cross_type_eq_enum_int:2:40");
+}
+
+#[test]
+fn cross_type_ne_int_enum() {
+    code!("enum Color { Red, Green, Blue }\nfn test() { c = Color.Green; b = 0 != c; }")
+        .error("No matching operator '!=' on 'integer' and 'Color' at cross_type_ne_int_enum:2:40");
+}
+
 #[test]
 fn wrong_if() {
     code!("fn test() {if 1 > 0 { 2 } else {\"a\"}\n}")

@@ -738,7 +738,7 @@ fn min_single_single(s: &mut State) {
 fn cast_int_from_single(s: &mut State) {
     let v_v1 = *s.get_stack::<f32>();
     let new_value = {
-        let f = v_v1 as f64;
+        let f = f64::from(v_v1);
         if f.is_nan() {
             i64::MIN
         } else if !(-9_223_372_036_854_775_808.0..9_223_372_036_854_775_808.0).contains(&f) {
