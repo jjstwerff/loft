@@ -122,13 +122,19 @@ is a "missing error" — they are the interpreter using a bad value as a pointer
   every scalar field op guards `rec == 0` at the `#rust`-template chokepoint (feeds both backends) —
   read → the field type's null, write → drop (C80). Regression: `tests/scripts/558-*`.
 
-**Surfaced, still OPEN (separate from the crashes):** a **non-nullable field typed `not null` breaks
-`field == null`** — the static nullability analysis types a struct's non-nullable field as `not null`,
-so `w.field == null` (where `w: T?` is genuinely null at runtime) folds to "always false" (interp
-warning) and MIS-CODEGENS on native (`E0610`/`E0308` — `.store_nr` on a scalar). Static says
-non-null, runtime reads null (the C80 in-band sentinel) — a real interp/native + static/runtime
-divergence. Out of scope for the Tier-0 crashes; a Tier-1 candidate (native codegen failure is
-arguably higher). `558-*` sidesteps it by rendering (`"{f}" == "null"`) instead of `f == null`.
+**`field == null` on a non-nullable field — codegen FIXED (7bc01e1e).** The MIS-CODEGEN was
+enum-specific: `s.c == null` for a value-enum field lowered to `OpRefIsNull(OpGetEnum(s,off))` — a
+store_nr sentinel test on the enum DISC BYTE — so native emitted `.store_nr` on a `u8` (E0610) and
+the interpreter returned the wrong value.  Root: the enum_null branch used OpRefIsNull for every
+non-`__nullable` enum, and a value-enum field access is typed `Enum(_, true, _)` (the access-context
+is-reference flag is polluted).  Now decides value-vs-reference from the enum DEFINITION's `returned`
+type: a value enum tests the disc (`OpConvIntFromEnum == 0`), only a struct-enum keeps OpRefIsNull.
+Correct on both backends (present → false, read through a null receiver → true, C80).  Text fields
+were never mis-codegened (they use `OpEqText` + the text null) — the E0308 note conflated them.
+**RESIDUAL (cosmetic, OPEN):** the spurious "Redundant null check — always false" WARNING still fires
+for `field == null` on a NULLABLE receiver (the value is already correct); suppressing it needs the
+receiver's nullability threaded into `get_field`, a broader analysis change (a too-broad attempt
+suppressed the *genuine* `p285` warning too).
 
 ### Tier 1 — RE-MEASURED 2026-07-13 (`tuxedo-compat-gate-design`)
 Running the current tree flipped most of the table below: the runtime already reads NULL for
