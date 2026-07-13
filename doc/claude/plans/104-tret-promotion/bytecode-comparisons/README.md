@@ -78,3 +78,24 @@ owns it and it outlives the frame. Verified: flags `ret_fnref` + `ret_index`, sk
 the match's extracted `w: vector<text>` temporary, not the text return. That is a
 distinct bug outside #568's scope (own investigation). The oracle pass making this
 boundary visible is P2's main deliverable.
+
+## P3 status — third-pass promotion WORKS structurally; one dep bug remains
+
+`force_tret` (`parser/mod.rs`) + the gate `|| self.force_tret.contains(&self.context)`
+(`control.rs`) + a **third `parse_file` pass** (opt-in `LOFT_TRET_FIX`, `mod.rs` after
+`:1139`) implement the forward-ref-safe promotion: P2 marks the flagged defs, then the
+third pass promotes them with the retbuf attr present from the start, so every caller
+re-lowers with the buffer.
+
+**Verified working (corpus + min.loft, both backends):**
+- flagged defs gain the `___tret` retbuf; output correct on interp AND native;
+- callers allocate + pass + free the buffer (balanced: 4 allocs / 4 frees in corpus main);
+- the promoted `ret_fnref` body is byte-identical to the verified-clean workaround
+  (`r = f(x); r`) EXCEPT the return-type dep.
+
+**The one remaining bug (blocks leak-free):** the promoted `run_t` return type is
+`text["__work_1"]` (the fn-ref call's INTERMEDIATE buffer) where it must be
+`text["___tret_1"]` (the retbuf) — cf. the clean workaround's `text["r"]`. That wrong
+dep mis-tracks the delivery, so the `append_text` result still orphans (1 real
+interp leak persists; native RAII-clean). Fix is in the promotion's return-dep
+computation (`text_return` / the fn-ref-buffer interaction), NOT the machinery.

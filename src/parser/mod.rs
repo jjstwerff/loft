@@ -269,6 +269,11 @@ pub struct Parser {
     // count snapshot compared end-of-pass-1 vs end-of-pass-2 in debug/armed
     // builds, so any future cross-pass divergence fails loud (H5).
     first_pass: bool,
+    /// @PLN104 P3 — def_nrs the post-pass-2 oracle (`report_tret_promotions`) marks
+    /// for `__tret` retbuf promotion (a frame-local text return with no buffer). Read
+    /// by `do_tret_bind`'s gate on the THIRD pass so the promotion is forward-ref-safe:
+    /// the attr is decided before the pass, so every caller re-lowers with the buffer.
+    force_tret: std::collections::HashSet<u32>,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
@@ -649,6 +654,7 @@ impl Parser {
             default: false,
             context: u32::MAX,
             first_pass: true,
+            force_tret: std::collections::HashSet::new(),
             reverse_iterator: false,
             iterable_context: false,
             last_range_from: None,
@@ -1137,8 +1143,27 @@ impl Parser {
             self.check_subrule_wellformedness();
             #[cfg(debug_assertions)]
             self.assert_pass2_def_attr_stable(&pass1_attr_counts);
-            // @PLN104 P2 — oracle pass (report-only unless LOFT_TRET_REPORT is set).
+            // @PLN104 P2 — oracle pass (report-only unless LOFT_TRET_REPORT is set;
+            // populates `force_tret` under LOFT_TRET_FIX).
             self.report_tret_promotions();
+            // @PLN104 P3 (opt-in) — third pass: re-lower with the flagged frame-local
+            // text returns promoted to a `__tret` retbuf.  The promotion is decided
+            // BEFORE this pass (force_tret), so every caller — forward- OR backward-ref
+            // — re-lowers with the buffer (no ABI-growth crash).  Post-H5, so the extra
+            // attrs never trip the pass1==pass2 contract.
+            if !self.force_tret.is_empty() {
+                self.applied_imports.clear();
+                self.deferred_unknown.clear();
+                self.data.reset();
+                if !default {
+                    self.data.source = crate::data::MAIN_SOURCE;
+                }
+                self.lambda_counter = 0;
+                self.fn_lambdas.clear();
+                self.lexer.switch(filename);
+                self.parse_file();
+                self.resolve_deferred_unknowns();
+            }
         }
         self.backfill_native_symbol_crates();
         // Plan-07 phase 4h — emit `not null` field-reminder hints

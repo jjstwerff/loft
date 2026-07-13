@@ -828,7 +828,9 @@ impl Parser {
             // evaluates the verdict directly; the attr it mints persists into pass
             // 2, so a genuinely pass-stable tail like `res.name` still promotes on
             // both passes.)
-            && (self.first_pass || self.def_has_tret_attr());
+            && (self.first_pass
+                || self.def_has_tret_attr()
+                || self.force_tret.contains(&self.context));
         if do_tret_bind {
             let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
             if tv != u16::MAX {
@@ -7996,10 +7998,13 @@ impl Parser {
     /// exactly the defs P3's promotion must act on. No transform here — this only
     /// proves the predicate flags the leaking paths and skips the delivered/borrowed
     /// ones, against the bytecode-comparison corpus.
-    pub(crate) fn report_tret_promotions(&self) {
-        if std::env::var_os("LOFT_TRET_REPORT").is_none() {
+    pub(crate) fn report_tret_promotions(&mut self) {
+        let report = std::env::var_os("LOFT_TRET_REPORT").is_some();
+        let fix = std::env::var_os("LOFT_TRET_FIX").is_some();
+        if !report && !fix {
             return;
         }
+        let mut flagged: Vec<u32> = Vec::new();
         for d in 0..self.data.definitions() {
             let def = self.data.def(d);
             if def.def_type != DefType::Function || def.source != crate::data::MAIN_SOURCE {
@@ -8036,10 +8041,18 @@ impl Parser {
                 _ => None,
             };
             if let Some(kind) = kind {
-                eprintln!(
-                    "[tret-promote] def #{d} `{}` ({kind}), no retbuf — needs promotion (#568)",
-                    def.original_name()
-                );
+                if report {
+                    eprintln!(
+                        "[tret-promote] def #{d} `{}` ({kind}), no retbuf — needs promotion (#568)",
+                        def.original_name()
+                    );
+                }
+                flagged.push(d);
+            }
+        }
+        if fix {
+            for d in flagged {
+                self.force_tret.insert(d);
             }
         }
     }
