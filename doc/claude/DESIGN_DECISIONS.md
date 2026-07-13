@@ -2123,3 +2123,36 @@ This is the same taste as C85: pay a bounded, documented soundness edge to keep 
 ### Decision
 
 **Each nullable scalar keeps its single in-band reserved value; the specific pattern per type (table above) is part of the contract-1 freeze.** A `τ?` is bit-identical in width to `τ`; the reserved value is observable and excluded from the base type's non-null range (`(E-Null)`). The residual — a nullable scalar cannot store its one reserved value as data — is an accepted, documented limitation, not a deviation to close. The collision sites that could *silently produce* a sentinel are guarded (D-op-null-1/2 CLOSED); reachable-fault stdlib returns are honest `τ?` (step 4). Golden pin: `tests/scripts/pln102-null-residual-golden.loft` freezes each reserved value as a boundary (the pattern reads null; an adjacent value does not) on both backends.
+
+## C91 — `==` is value-by-value / reference-by-identity (bounded, never a reference-chase); `===` reserved for opt-in deep equality
+
+**Catalogue:** @F1 (null / equality), @F2 (operators). Closes the @PLN102 pre-freeze **F7** ("`ref ==` is identity, not structural — a decision"). Sibling of [C86](#c86--whole-value-heap-binds-copy-aliasing-is-a-last-use-elision-the-rustc-rule) (whole-value copy) and [C90](#c90--each-nullable-scalar-reserves-one-bit-pattern-for-null-the-in-band-sentinel-residual-accepted-frozen) (the in-band sentinels).
+
+### Question
+
+`==` on two struct references is **identity**, not structural, and it composes with C86 (whole-value bind COPIES) into two footguns:
+
+```loft
+struct P { x: integer, y: integer }
+a = P { x: 1, y: 2 };  b = P { x: 1, y: 2 };  c = a;
+a == b   // false — two constructions, two records, identity says unequal
+a == c   // false — `c = a` COPIED (C86), so c is a distinct record
+```
+
+Should `==` on a struct stay identity, become structural (deep content), or something in between? A **deep** `==` would be the intuitive answer but is a recursive crawl that can loop through many megabytes of nested vectors/structs on an operator a programmer reaches for constantly. A **shallow** `==` (compare the record's own fields, identity for nested references) is cheap but **internally inconsistent** — `P{1,2} == P{1,2}` is true yet `P{items:[]} == P{items:[]}` is false, for a reason that lives in the layout, not the language; a programmer can't state one rule for what `==` does, and that unpredictability is more dangerous than either honest extreme.
+
+### Evaluation
+
+The deciding constraints (owner, 2026-07-13): **`==` must be quick — never an automatic crawler over the data it points at — and it must not be internally inconsistent.** Both rule out the shallow hybrid *and* the deep crawl. What remains is one uniform, cheap rule, and loft already lives it: `5 == 5` and `"a" == "a"` are value/content, `P{…} == P{…}` is identity. The honest statement of that is not "`==` is identity" (text disproves it) but:
+
+> **`==` compares values by value and references by identity.**
+
+- **It is bounded, never a reference-chase.** A value is compared over its OWN storage — a scalar's slot, a text's bytes, a `value struct`'s flat record ([C101](#)/flat by construction). A reference is compared as its handle — O(1). Neither case follows a pointer into another store, so `==` is never the megabyte crawler; the only per-element work is text/`value struct`, which is the value's own bytes.
+- **It is consistent.** One sentence describes `==` across the whole type system; the split tracks the type's value-vs-reference nature, which the language already exposes (`value struct` vs `struct`). `value P{1,2} == value P{1,2}` is `true` (matching its copy semantics); the reference `struct P` above stays identity.
+- **Progressive disclosure is the ergonomic win.** A programmer reaches for the simplest syntax (`==`) first; when the cheap answer is not what they want, they escalate to the more semantically-complete but more expensive alternative — deliberately, by typing a third `=`. The simple tool is cheap and predictable; the correct-but-costly tool is opt-in and clearly marked.
+
+### Decision
+
+- **`==` / `!=`** — value types (`integer`, `float`, `single`, `character`, `boolean`, `text`, `value struct`, unit enum) compare **by value/content**, bounded by the value's own storage and **never chasing a reference into another store**; reference types (`struct`, `vector`, `hash`, `index`, …) compare **by identity**, O(1). One uniform rule; part of the contract-1 freeze.
+- **`===` / `!==`** — RESERVED for opt-in **deep structural** equality (recurse through references, all the way down). Not shipped by this decision — the contract (that deep equality is a distinct, explicit, more-expensive operator, never the `==` default) is fixed now; `===` itself ships when a consumer needs it. When built it MUST be **consistently deep** (recurse into everything — a shallow `===` reintroduces the inconsistency this decision rejects) and **cycle-safe** (reference structs can form cycles; a naive deep walk loops forever).
+- **Rejected:** a shallow/hybrid `==` (structural for a record's own fields, identity for nested references) — internally inconsistent and therefore dangerous, regardless of its speed.

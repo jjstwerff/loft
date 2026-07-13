@@ -81,8 +81,12 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 >
 > **Genuinely OPEN:** **E2** (the error-boundary maximal-strictness audit — *the* priority) · **F9**
 > (guard is wired, but `layout_algo_hash` at `types.rs:1674` omits **endianness** + the
-> **not-null↔nullable** distinction) · **F7** (`ref ==` is identity, not structural — a decision) ·
-> **F4** (assign place/RHS eval order — re-verify) · spec-honesty for the ✅-behavior rows.
+> **not-null↔nullable** distinction) · **F4** (assign place/RHS eval order — re-verify) ·
+> spec-honesty for the ✅-behavior rows.
+> **F7 — DECIDED (C91, 2026-07-13):** `==` = value-by-value / reference-by-identity (one uniform rule,
+> bounded by the value's own storage, NEVER chasing a reference — so `==` is never a deep crawl);
+> `===` reserved for opt-in deep structural equality. A shallow/hybrid `==` was rejected as internally
+> inconsistent. Off the open list.
 
 Several of these are **semantic changes, not just added errors** — they can *only* land while
 contract 0 allows, because after the freeze changing an observed value is a regression:
@@ -96,7 +100,7 @@ contract 0 allows, because after the freeze changing an observed value is a regr
 | F4 | **assignment place-vs-RHS eval order unspecified** (`a[f()] = g()`); E-Asgn prose "RHS first" contradicts observed LHS-first | evaluation-order gap = the canonical silent-freeze trap | verified `[L][R]` |
 | F5 | **`match` guards have no formal semantics**; **`match` on non-enum** (int/range/literal) unspecified | a shipped feature freezes as impl-defined | `matching.md` |
 | F6 | **`&v` on a vector: `heap.md`+`capabilities.md` say COPIES; `binding.md`+reality say ALIASES** — and the sandbox soundness proof rests on the false "copies" premise | a memory-model spec contradiction + a possible sandbox-admission hole; must reconcile AND verify the `&`-alias-into-host write is gated | verified `v[0]==99` |
-| F7 | **reference `==` defaults to identity, not structural** — unspecified, observable (a view equals its source, two field-equal structs don't) | frozen identity-vs-structural split with no rule | `01_code.loft:862`; `mod.rs:5429` |
+| F7 | **reference `==` defaults to identity, not structural** — ~~unspecified~~ **DECIDED (C91)**: `==` = value-by-value / reference-by-identity (uniform, bounded, no reference-chase); `===` reserved for opt-in deep equality; shallow hybrid rejected as inconsistent | ~~a decision~~ | `DESIGN_DECISIONS.md` C91 |
 | F8 | **comparison operators are one left-assoc level** — `a == b == c` type-checks and misbehaves on booleans | non-associative comparison is a grouping change (pre-freeze-only) | `grammar.md` level 3 |
 | F9 | **layout persistence guard not wired into the load path** (D-layout-1); layout hash ignores **endianness** and can't see a **not-null↔nullable** schema flip | the frozen persistence promise's own detector doesn't run; a stale/foreign store reads raw | `@PLN97`; `types.rs:1674` |
 | E1 | **diagnostics have no stable identity code** (`DiagEntry` = level+message) + 41 golden baselines → loft freezes **error prose as identity** | add a stable code/kind now → prose stays improvable forever behind a frozen code | `diagnostics.rs:16` |
