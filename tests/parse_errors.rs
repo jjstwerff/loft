@@ -21,6 +21,15 @@ fn wrong_boolean() {
         .warning("Parameter t is never read at wrong_boolean:2:19");
 }
 
+#[test]
+fn default_arg_type_mismatch() {
+    // @PLN102 arc-E E2 Tier-0: a wrong-typed default (`text = 42`) used to reach
+    // runtime and SIGSEGV the interpreter (the int used as a text pointer). It
+    // must be rejected at DEFINITION, exactly like a call-site argument mismatch.
+    code!("fn f(x: text = 42) { print(\"{x}\"); }\nfn test() { f(); }")
+        .error("expected text, got integer on default value at default_arg_type_mismatch:1:18");
+}
+
 // @PLN101 — a `value struct` is stored inline (no `store_nr` null sentinel), so `<value struct>?`
 // has no representation and is rejected.
 #[test]

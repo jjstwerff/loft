@@ -1541,8 +1541,18 @@ impl Parser {
                 Vec::new()
             };
             let val = if self.lexer.has_token("=") {
+                let dpos = self.lexer.pos().clone();
                 let mut t = Value::Var(arguments.len() as u16);
-                self.expression(&mut t);
+                let dtype = self.expression(&mut t);
+                // @PLN102 arc-E (E2 Tier-0): type-check + coerce the default
+                // expression against the parameter type, exactly as a call-site
+                // argument is (`convert` then `validate_convert`, mod.rs:5907).
+                // An unchecked default (`text = 42`) otherwise reaches runtime and
+                // the interpreter uses the wrong-typed value as a pointer → SIGSEGV;
+                // `float = 5` here coerces to `5.0` just as `f(5)` would.
+                if !typedef.is_unknown() && !self.convert(&mut t, &dtype, &typedef) {
+                    self.validate_convert("default value", &dtype, &typedef, &dpos);
+                }
                 // Rewrite Var(injected_slot) → Var(arg_index) so the stored
                 // default is portable across call sites.
                 for (_name, slot, arg_idx) in &injected {
