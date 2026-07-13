@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 mod allocation;
+mod descriptor;
 mod format;
 mod io;
 pub mod journal;
@@ -14,6 +15,7 @@ mod structures;
 mod types;
 
 pub use allocation::timeline_summary;
+pub use descriptor::{BaseKind, Iterated, LayoutDesc, LayoutField, LayoutNode};
 pub use journal::Journal;
 pub use types::Type;
 

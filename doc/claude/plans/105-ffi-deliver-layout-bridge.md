@@ -154,7 +154,7 @@ foreign reader. The F9 layout-hash is the natural integrity check on the descrip
 Each phase lands behind the parity gate and states the probe that could prove it wrong
 *before* the code. Loft-side first (no FFI), then the boundary, then JS, then the consumer.
 
-### Phase 0 — descriptor emitter (read-only twin of `read_data`), pure loft-side
+### Phase 0 — descriptor emitter (read-only twin of `read_data`), pure loft-side — ✅ DONE
 
 Emit the descriptor from `Parts`; **no FFI yet**. The falsifier is a round-trip entirely
 inside loft: a generic reader driven *by the descriptor* must reproduce byte-for-byte what
@@ -168,6 +168,17 @@ inside loft: a generic reader driven *by the descriptor* must reproduce byte-for
   `--interpret` (no FFI). Positive control: a `hash<T>`/`index<T>` field must emit
   `Iterated` (assert it does **not** panic the way `read_data:213` does on the same input).
 - **Integrity:** descriptor hash == the @PLN97 F9 layout-hash for the same typeId.
+
+**Landed** (`src/database/descriptor.rs`, `tests/layout_descriptor.rs`): `LayoutNode`/`LayoutDesc`
++ `Stores::layout_descriptor` (exhaustive `Parts` transcription over the shared `layout_closure`)
++ `Stores::read_via_descriptor` (the descriptor-driven byte reader). Three independent oracles pass
+on `--interpret`: **faithfulness** — `LayoutDesc::render_dump` reproduces `Stores::layout_dump`
+byte-for-byte, so `layout_hash() == layout_algo_hash` (the F9 integrity check falls out for free);
+**sufficiency** — three-way `hand-computed truth == read_data == read_via_descriptor` on a nested
+`Record{text, inline Record{integer,single}, vector<integer>, boolean}`, plus an anti-vacuity cell
+(a corrupted descriptor DIVERGES); **boundary** — a `hash<T>` field emits `Iterated::Hash` and the
+reader *refuses* it (`Err`, not panic). Purely additive Rust (no codegen/stdlib), so both-backend
+parity is untouched and the @PLN97 golden is unperturbed.
 
 ### Phase 1 — `deliver` / `expose` stdlib + lowering + host imports
 
