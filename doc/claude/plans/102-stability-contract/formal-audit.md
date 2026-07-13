@@ -54,6 +54,26 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 
 ## The must-fix set (High) — pre-freeze-only, in decision order
 
+> **RECONCILED against `main` 2026-07-13 (verified live on both backends).** Most of this set has
+> since landed — the table below is kept for the analysis, but the true open set is much smaller:
+>
+> | Item | Status now | Evidence |
+> |---|---|---|
+> | F1 float `==` | ✅ **exact** | `1.0 == 1.0000000001` → false; `!=` exact complement |
+> | F2 compound-assign | ✅ **single-eval** | `v[idx()] += 5` calls `idx()` once |
+> | F3 `&&`/`\|\|` short-circuit | ✅ **specified** | `operational.md` E-And/E-Or; E-Left scoped to non-short-circuit |
+> | F5 match non-enum + guards | ✅ **works** (spec = confirm `matching.md` states it) | `match x { 2..=5 => … }` + `n if n>2` run |
+> | F6 `&v` alias | ✅ **aliases** + sandbox hole closed | `w=&v; w[0]=99` → `v[0]==99` (reconcile `heap.md` "copies" prose) |
+> | F8 comparison chaining | ✅ **rejected** (non-assoc) | `1 == 2 == 3` → "comparison operators do not chain" |
+> | runtime errors | ✅ **stable kinds** | `RuntimeErrorKind::{CastOutOfRange,DivideByZero,ShiftOutOfRange}` |
+> | layout guard wired | ✅ | `allocation.rs:2726` refuses a mismatched-layout load |
+>
+> **Genuinely OPEN:** **E1** (compile-time diagnostics — 457 `diagnostic!` sites, still `DiagEntry` =
+> level+message, no code) · **F9** (guard is wired, but `layout_algo_hash` at `types.rs:1674` still
+> omits **endianness** + the **not-null↔nullable** distinction) · **F7** (`ref ==` is identity, not
+> structural — a decision, not just a fix) · **F4** (assign place/RHS eval order — re-verify) · **E2**
+> (the error-surface adds) · spec-honesty for the ✅-behavior rows (`heap.md` F6, `matching.md` F5).
+
 Several of these are **semantic changes, not just added errors** — they can *only* land while
 contract 0 allows, because after the freeze changing an observed value is a regression:
 
