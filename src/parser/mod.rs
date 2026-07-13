@@ -2531,6 +2531,27 @@ impl Parser {
             *code = Value::Call(sentinel_nr, vec![]);
             return true;
         }
+        // @PLN102 — `null` assigned to a value-enum target (`n: Color? = null`, a
+        // return, an arg, a field) must become the enum's typed null
+        // (`OpConvEnumFromNull` → the 255 sentinel), NOT stay a bare `Value::Null`
+        // (byte 0).  The `FromNull` loop below matches by RETURN type, but
+        // `OpConvEnumFromNull` returns the generic `enumerate`, never `is_equal` to a
+        // specific `Enum(Color)` — so the conversion was skipped and the slot held 0
+        // while every consumer (`== null`, `??`, `!`, `{n}`) tests the 255 sentinel,
+        // leaving the value un-null-checkable.  Mirrors `Parser::null`'s Enum arm.
+        // Inline `__nullable<S>` fields keep their own disc-0 representation (excluded);
+        // a value-enum VECTOR element has no wired per-element null and is rejected in
+        // `parse_vector` (which no longer relies on this convert failing).
+        if *is_type == Type::Null
+            && let Type::Enum(tp, _, _) = should.base()
+            && !self.data.def(*tp).name.starts_with("__nullable<")
+        {
+            *code = self.cl(
+                "OpConvEnumFromNull",
+                &[Value::Int(i32::from(self.data.def(*tp).known_type()))],
+            );
+            return true;
+        }
         // @PLN99 Arc C — a struct/reference-returning user conversion carries a hidden
         // destination parameter (attributes() > 1), so it must go through `call_nr` (whose
         // `add_defaults` appends the dest).  But `call_nr` needs `&mut self`, and this scan

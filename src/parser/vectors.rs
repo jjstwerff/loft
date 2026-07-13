@@ -2261,6 +2261,20 @@ impl Parser {
             steps.extend(self.build_some_present(some_d, Value::Var(elm), src));
             p = Value::Insert(steps);
             t = in_t.clone();
+        } else if matches!(t, Type::Null) && matches!(in_t.base(), Type::Enum(_, false, _)) {
+            // @PLN102 — a `null` element in a value-enum vector (`vector<Color?>`) has
+            // no wired per-element null slot (elements pack the raw disc byte, no
+            // sentinel).  Reject it explicitly: the scalar `convert(Null, Enum)` →
+            // typed-null path (which null-check-fixes `n: Color? = null` VARIABLES) now
+            // SUCCEEDS, so the "cannot store" diagnostic below no longer fires here.
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "cannot store null elements in a vector<{}> (would lose precision); \
+                 cast each element explicitly with 'as {}'",
+                in_t.name(&self.data),
+                in_t.name(&self.data)
+            );
         } else if !self.convert(&mut p, &t, in_t) {
             if declared {
                 // @P315 — the element type is DECLARED (typed local / struct

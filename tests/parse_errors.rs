@@ -235,6 +235,16 @@ fn cross_type_ne_int_enum() {
         .error("No matching operator '!=' on 'integer' and 'Color' at cross_type_ne_int_enum:2:40");
 }
 
+// @PLN102 — a value-enum vector has no wired per-element null slot, so a `null`
+// element in a `vector<Color?>` literal stays rejected even though a nullable-enum
+// VARIABLE's `= null` now converts to the typed null (parse_errors is the guard so
+// the scalar fix doesn't silently enable the unwired vector form).
+#[test]
+fn null_element_in_value_enum_vector_rejected() {
+    code!("enum Color { Red, Green, Blue }\nfn test() { v: vector<Color?> = [Color.Red, null]; }")
+        .error("cannot store null elements in a vector<Color> (would lose precision); cast each element explicitly with 'as Color' at null_element_in_value_enum_vector_rejected:2:50");
+}
+
 #[test]
 fn wrong_if() {
     code!("fn test() {if 1 > 0 { 2 } else {\"a\"}\n}")
