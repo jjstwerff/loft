@@ -140,6 +140,7 @@ sentinel-collision edges the owner's C80 rule says accept.
 |---|---|
 | **cross-type `==`/`!=` → truthiness** (`5 == "banana"` → **true**) | **FIXED** (449c4f64) — reject at compile, like the ordering ops. See § below the K-table note. |
 | **`single as integer` overflow → i64::MAX** (saturates; `float as integer` already nulled) | **FIXED** (b230b957) — mirrors float→int: overflow reads null (C80). |
+| **`enum == int` → discriminant leak** (`Color.Green == 1` → **false**, comparing the +1-biased internal disc) | **FIXED** (b5d33b5d) — reject at compile, "No matching operator"; enum==enum / enum==null untouched. |
 | `1e30 as integer` (float) → **null** | already C80-correct (bounds check → i64::MIN). No add. |
 | `"…" as integer` (text parse) → **null** | already a COMPILE ERROR (`as integer` "may fail — use `integer?`"). No add. |
 | `1 << 100` / `1 << -1` (out-of-range shift) → **null** | already C80-correct (`ShiftOutOfRange` → i64::MIN). No add. |
@@ -155,8 +156,13 @@ result / no runtime errors"):**
 - **Constant out-of-range as a COMPILE error** (`1 << 100`, `1e30 as integer` where the operand is a
   literal) — the runtime already nulls these (C80-correct), so a compile error would reject a program
   with well-defined (null) behaviour. Stricter, but arguably against the spreadsheet model.
-- **`enum == int`** (`Color.Green == 1` → **false**) — a defined-but-useless cross-type compare;
-  candidate for the same "No matching operator" reject as the other cross-type pairs, but low value.
+**Surfaced while taking the enum==int reject — a PRE-EXISTING bug (baseline confirms), NOT the
+reject:** a **nullable enum variable can't be null-checked or coalesced.** `n: Color? = null` renders
+`null` correctly, but `n == null` → **false** and `n ?? default` → **null** (no coalesce). Root: the
+comparison lowers to `OpEqInt(OpConvIntFromEnum(n), OpConvIntFromNull())` — it tests the enum's
+DISCRIMINANT (0 for a null enum) against the INTEGER null sentinel (`i64::MIN`), which never matches;
+it should compare the discriminant to 0 (the absent-variant marker). A real nullability-model gap,
+worth its own fix (separate from the cross-type rejects).
 
 ### Semantics changes — must be pre-freeze (changing an observed value is a later regression)
 | Sev | Item | Fix | Conv. cost |
