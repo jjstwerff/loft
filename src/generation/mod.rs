@@ -416,11 +416,13 @@ pub fn duplicate_fn_names(data: &Data) -> HashSet<String> {
 /// source, is robust where the per-site rewrite was not.
 fn scrub_generated_crate_refs(src: &[u8]) -> Vec<u8> {
     let s = String::from_utf8_lossy(src);
-    if !s.contains("crate::rpc::") && !s.contains("crate::store::") {
+    if !s.contains("crate::rpc::") && !s.contains("crate::store::") && !s.contains("crate::state::")
+    {
         return src.to_vec();
     }
     s.replace("crate::rpc::", "loft::rpc::")
         .replace("crate::store::", "loft::store::")
+        .replace("crate::state::", "loft::state::")
         .into_bytes()
 }
 

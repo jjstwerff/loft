@@ -1416,9 +1416,11 @@ fn set_ref(s: &mut State) {
     {
         let db = v_v1;
         let v = v_val;
-        s.database
-            .store_mut(&db)
-            .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v.rec);
+        if db.rec != 0 {
+            s.database
+                .store_mut(&db)
+                .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v.rec);
+        }
     }
 }
 
@@ -1429,11 +1431,13 @@ fn set_db_ref(s: &mut State) {
     {
         let db = v_v1;
         let r = v_val;
-        let off = db.pos + u32::from(v_fld);
-        let store = s.database.store_mut(&db);
-        store.set_u32_raw(db.rec, off, u32::from(r.store_nr));
-        store.set_u32_raw(db.rec, off + 4, r.rec);
-        store.set_u32_raw(db.rec, off + 8, r.pos);
+        if db.rec != 0 {
+            let off = db.pos + u32::from(v_fld);
+            let store = s.database.store_mut(&db);
+            store.set_u32_raw(db.rec, off, u32::from(r.store_nr));
+            store.set_u32_raw(db.rec, off + 4, r.rec);
+            store.set_u32_raw(db.rec, off + 8, r.pos);
+        }
     }
 }
 
@@ -1442,12 +1446,16 @@ fn get_db_ref(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        let store = s.database.store(&db);
-        let off = db.pos + u32::from(v_fld);
-        let store_nr = store.get_u32_raw(db.rec, off) as u16;
-        let rec = store.get_u32_raw(db.rec, off + 4);
-        let pos = store.get_u32_raw(db.rec, off + 8);
-        DbRef { store_nr, rec, pos }
+        if db.rec == 0 {
+            DbRef::NULL
+        } else {
+            let store = s.database.store(&db);
+            let off = db.pos + u32::from(v_fld);
+            let store_nr = store.get_u32_raw(db.rec, off) as u16;
+            let rec = store.get_u32_raw(db.rec, off + 4);
+            let pos = store.get_u32_raw(db.rec, off + 8);
+            DbRef { store_nr, rec, pos }
+        }
     };
     s.put_stack(new_value);
 }
@@ -1503,9 +1511,13 @@ fn get_single(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        s.database
-            .store(&db)
-            .get_single(db.rec, db.pos + u32::from(v_fld))
+        if db.rec == 0 {
+            f32::NAN
+        } else {
+            s.database
+                .store(&db)
+                .get_single(db.rec, db.pos + u32::from(v_fld))
+        }
     };
     s.put_stack(new_value);
 }
@@ -1515,9 +1527,13 @@ fn get_float(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        s.database
-            .store(&db)
-            .get_float(db.rec, db.pos + u32::from(v_fld))
+        if db.rec == 0 {
+            f64::NAN
+        } else {
+            s.database
+                .store(&db)
+                .get_float(db.rec, db.pos + u32::from(v_fld))
+        }
     };
     s.put_stack(new_value);
 }
@@ -1589,9 +1605,11 @@ fn set_enum(s: &mut State) {
     {
         let db = v_v1;
         let v = v_val;
-        s.database
-            .store_mut(&db)
-            .set_byte(db.rec, db.pos + u32::from(v_fld), 0, i32::from(v));
+        if db.rec != 0 {
+            s.database
+                .store_mut(&db)
+                .set_byte(db.rec, db.pos + u32::from(v_fld), 0, i32::from(v));
+        }
     }
 }
 
@@ -1600,11 +1618,15 @@ fn get_boolean(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        let r = s
-            .database
-            .store(&db)
-            .get_byte(db.rec, db.pos + u32::from(v_fld), 0);
-        if r < 0 { 255u8 } else { r as u8 }
+        if db.rec == 0 {
+            255u8
+        } else {
+            let r = s
+                .database
+                .store(&db)
+                .get_byte(db.rec, db.pos + u32::from(v_fld), 0);
+            if r < 0 { 255u8 } else { r as u8 }
+        }
     };
     s.put_stack(new_value);
 }
@@ -1616,9 +1638,11 @@ fn set_boolean(s: &mut State) {
     {
         let db = v_v1;
         let v = v_val;
-        s.database
-            .store_mut(&db)
-            .set_byte(db.rec, db.pos + u32::from(v_fld), 0, i32::from(v));
+        if db.rec != 0 {
+            s.database
+                .store_mut(&db)
+                .set_byte(db.rec, db.pos + u32::from(v_fld), 0, i32::from(v));
+        }
     }
 }
 
@@ -1628,14 +1652,19 @@ fn get_short(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        let r =
-            s.database
-                .store(&db)
-                .get_short(db.rec, db.pos + u32::from(v_fld), i32::from(v_min));
-        if r == i32::MIN {
+        if db.rec == 0 {
             i64::MIN
         } else {
-            i64::from(r)
+            let r = s.database.store(&db).get_short(
+                db.rec,
+                db.pos + u32::from(v_fld),
+                i32::from(v_min),
+            );
+            if r == i32::MIN {
+                i64::MIN
+            } else {
+                i64::from(r)
+            }
         }
     };
     s.put_stack(new_value);
@@ -1646,8 +1675,12 @@ fn get_text(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        let store = s.database.store(&db);
-        Str::new(store.get_str(store.get_u32_raw(db.rec, db.pos + u32::from(v_fld))))
+        if db.rec == 0 {
+            Str::new(crate::state::STRING_NULL)
+        } else {
+            let store = s.database.store(&db);
+            Str::new(store.get_str(store.get_u32_raw(db.rec, db.pos + u32::from(v_fld))))
+        }
     };
     s.put_stack(new_value);
 }
@@ -1659,9 +1692,11 @@ fn set_int(s: &mut State) {
     {
         let db = v_v1;
         let v = v_val;
-        s.database
-            .store_mut(&db)
-            .set_int(db.rec, db.pos + u32::from(v_fld), v);
+        if db.rec != 0 {
+            s.database
+                .store_mut(&db)
+                .set_int(db.rec, db.pos + u32::from(v_fld), v);
+        }
     }
 }
 
@@ -1672,9 +1707,11 @@ fn set_character(s: &mut State) {
     {
         let db = v_v1;
         let v = v_val;
-        s.database
-            .store_mut(&db)
-            .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v as u32);
+        if db.rec != 0 {
+            s.database
+                .store_mut(&db)
+                .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v as u32);
+        }
     }
 }
 
@@ -1685,9 +1722,11 @@ fn set_single(s: &mut State) {
     {
         let db = v_v1;
         let v = v_val;
-        s.database
-            .store_mut(&db)
-            .set_single(db.rec, db.pos + u32::from(v_fld), v);
+        if db.rec != 0 {
+            s.database
+                .store_mut(&db)
+                .set_single(db.rec, db.pos + u32::from(v_fld), v);
+        }
     }
 }
 
@@ -1698,9 +1737,11 @@ fn set_float(s: &mut State) {
     {
         let db = v_v1;
         let v = v_val;
-        s.database
-            .store_mut(&db)
-            .set_float(db.rec, db.pos + u32::from(v_fld), v);
+        if db.rec != 0 {
+            s.database
+                .store_mut(&db)
+                .set_float(db.rec, db.pos + u32::from(v_fld), v);
+        }
     }
 }
 
@@ -1712,12 +1753,14 @@ fn set_byte(s: &mut State) {
     {
         let db = v_v1;
         let v = v_val;
-        s.database.store_mut(&db).set_byte(
-            db.rec,
-            db.pos + u32::from(v_fld),
-            i32::from(v_min),
-            v as i32,
-        );
+        if db.rec != 0 {
+            s.database.store_mut(&db).set_byte(
+                db.rec,
+                db.pos + u32::from(v_fld),
+                i32::from(v_min),
+                v as i32,
+            );
+        }
     }
 }
 
@@ -1733,8 +1776,10 @@ fn set_byte_nullable(s: &mut State) {
         } else {
             v_val as i32
         };
-        s.database
-            .set_byte_nullable(&db, db.pos + u32::from(v_fld), i32::from(v_min), v);
+        if db.rec != 0 {
+            s.database
+                .set_byte_nullable(&db, db.pos + u32::from(v_fld), i32::from(v_min), v);
+        }
     }
 }
 
@@ -1750,8 +1795,10 @@ fn set_short(s: &mut State) {
         } else {
             v_val as i32
         };
-        s.database
-            .set_short_nullable(&db, db.pos + u32::from(v_fld), i32::from(v_min), v);
+        if db.rec != 0 {
+            s.database
+                .set_short_nullable(&db, db.pos + u32::from(v_fld), i32::from(v_min), v);
+        }
     }
 }
 
@@ -1760,14 +1807,18 @@ fn get_int4(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        let r = s
-            .database
-            .store(&db)
-            .get_i32_raw(db.rec, db.pos + u32::from(v_fld));
-        if r == i32::MIN {
+        if db.rec == 0 {
             i64::MIN
         } else {
-            i64::from(r)
+            let r = s
+                .database
+                .store(&db)
+                .get_i32_raw(db.rec, db.pos + u32::from(v_fld));
+            if r == i32::MIN {
+                i64::MIN
+            } else {
+                i64::from(r)
+            }
         }
     };
     s.put_stack(new_value);
@@ -1784,9 +1835,11 @@ fn set_int4(s: &mut State) {
         } else {
             v_val as i32
         };
-        s.database
-            .store_mut(&db)
-            .set_i32_raw(db.rec, db.pos + u32::from(v_fld), v);
+        if db.rec != 0 {
+            s.database
+                .store_mut(&db)
+                .set_i32_raw(db.rec, db.pos + u32::from(v_fld), v);
+        }
     }
 }
 
@@ -1796,14 +1849,19 @@ fn get_short_raw(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        let r =
-            s.database
-                .store(&db)
-                .get_i16_raw(db.rec, db.pos + u32::from(v_fld), i32::from(v_min));
-        if r == i32::MIN {
+        if db.rec == 0 {
             i64::MIN
         } else {
-            i64::from(r)
+            let r = s.database.store(&db).get_i16_raw(
+                db.rec,
+                db.pos + u32::from(v_fld),
+                i32::from(v_min),
+            );
+            if r == i32::MIN {
+                i64::MIN
+            } else {
+                i64::from(r)
+            }
         }
     };
     s.put_stack(new_value);
@@ -1821,12 +1879,14 @@ fn set_short_raw(s: &mut State) {
         } else {
             v_val as i32
         };
-        s.database.store_mut(&db).set_i16_raw(
-            db.rec,
-            db.pos + u32::from(v_fld),
-            i32::from(v_min),
-            v,
-        );
+        if db.rec != 0 {
+            s.database.store_mut(&db).set_i16_raw(
+                db.rec,
+                db.pos + u32::from(v_fld),
+                i32::from(v_min),
+                v,
+            );
+        }
     }
 }
 
@@ -1836,11 +1896,15 @@ fn get_short_full(s: &mut State) {
     let v_v1 = *s.get_stack::<DbRef>();
     let new_value = {
         let db = v_v1;
-        i64::from(s.database.store(&db).get_short_full(
-            db.rec,
-            db.pos + u32::from(v_fld),
-            i32::from(v_min),
-        ))
+        if db.rec == 0 {
+            i64::MIN
+        } else {
+            i64::from(s.database.store(&db).get_short_full(
+                db.rec,
+                db.pos + u32::from(v_fld),
+                i32::from(v_min),
+            ))
+        }
     };
     s.put_stack(new_value);
 }
@@ -1852,9 +1916,11 @@ fn set_text(s: &mut State) {
     {
         let db = v_v1;
         let s_val = v_val.str().to_string();
-        let store = s.database.store_mut(&db);
-        let s_pos = store.set_str(&s_val);
-        store.set_u32_raw(db.rec, db.pos + u32::from(v_fld), s_pos);
+        if db.rec != 0 {
+            let store = s.database.store_mut(&db);
+            let s_pos = store.set_str(&s_val);
+            store.set_u32_raw(db.rec, db.pos + u32::from(v_fld), s_pos);
+        }
     }
 }
 

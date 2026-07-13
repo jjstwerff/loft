@@ -428,7 +428,7 @@ impl Output<'_> {
             && let Some(vi) = def_fn.attributes().iter().position(|a| a.name == "val")
             && matches!(vals.get(vi), Some(Value::Null))
         {
-            res = "{{let db = @v1; stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), 0u32);}}".to_string();
+            res = "{{let db = @v1; if db.rec != 0 {{ stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), 0u32); }}}}".to_string();
         }
         // Bytecode templates wrap text values in Str::new(...) for put_stack compatibility.
         // Native code uses &str directly — strip the wrapper by extracting its argument.
