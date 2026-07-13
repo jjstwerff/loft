@@ -11,6 +11,7 @@
 
 enum Color { Red, Green, Blue }
 struct Box { c: Color? }
+struct NN { col: Color }
 fn pick(present: boolean) -> Color? { if present { Color.Red } else { null } }
 
 fn test() {
@@ -45,4 +46,14 @@ fn test() {
   assert(b.c == null, "null enum struct field == null");
   assert(b2.c != null, "present enum struct field != null");
   assert((b.c ?? Color.Blue) == Color.Blue, "null enum field coalesces");
+
+  // --- NON-NULLABLE enum field == null ---
+  // A value-enum field read is a disc byte (null = disc 0), NOT a store_nr
+  // sentinel: `field == null` must test the disc, not OpRefIsNull — which used to
+  // apply `.store_nr` to a u8 (native E0610) and read a wrong value.  On a present
+  // struct the field is never null; through a NULL struct receiver it reads null.
+  se: NN = NN { col: Color.Green };
+  assert(!(se.col == null), "non-null enum field of present struct is not null");
+  sn: NN? = null;
+  assert(sn.col == null, "non-null enum field read through a null struct is null");
 }

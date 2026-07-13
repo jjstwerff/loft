@@ -2229,14 +2229,30 @@ impl Parser {
                     // IS the store_nr sentinel (E1) — keep OpRefIsNull for it.
                     let inline =
                         e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
+                    // A VALUE enum (`Color`, no payload variants) is a disc byte whose
+                    // null is discriminant 0 — test `OpConvIntFromEnum(v) == 0`, NOT
+                    // OpRefIsNull (its store_nr sentinel test on a u8 field-read →
+                    // native E0610 `.store_nr` on a primitive).  Read the value/reference
+                    // shape from the enum DEFINITION's `returned` type: the ACCESS type
+                    // is polluted — a field read of a simple enum comes back
+                    // `Enum(_, true, _)` even though the enum itself is a value enum.
+                    // Only a genuine struct-enum (`returned` = `Enum(_, true, _)`) is a
+                    // DbRef and keeps OpRefIsNull.
+                    let value_enum = e_def != u32::MAX
+                        && matches!(self.data.def(e_def).returned, Type::Enum(_, false, _));
                     let is_null = if inline {
                         let get_enum = self.cl("OpGetEnum", &[e_code, Value::Int(0)]);
                         let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
                         self.cl("OpEqInt", &[disc, Value::Int(0)])
+                    } else if value_enum {
+                        // `e_code` is the disc byte already (a field read / a value var);
+                        // disc 0 is the absent variant.
+                        let disc = self.cl("OpConvIntFromEnum", &[e_code]);
+                        self.cl("OpEqInt", &[disc, Value::Int(0)])
                     } else {
-                        // Test the null sentinel via store_nr (OpRefIsNull), NOT OpEqRef's
-                        // rec==0: a present enum is inline-represented on native and carries
-                        // rec==0, which rec==0 would misread as null.
+                        // A struct-enum reference: null IS the store_nr sentinel
+                        // (OpRefIsNull), NOT OpEqRef's rec==0 (a present enum is
+                        // inline-represented on native and carries rec==0).
                         self.cl("OpRefIsNull", &[e_code])
                     };
                     *code = if operator == "==" {
