@@ -1,14 +1,11 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
-# Plan — layout-aware zero-copy FFI delivery (`deliver` / the loft→JS binary bridge)
+# @PLN105 — layout-aware zero-copy FFI delivery (`deliver` / the loft→JS binary bridge)
 
-> **STATUS: PRE-ISSUE DRAFT.** This is the plan body, written ready to file as a
-> [`loft-lang/plans`](https://github.com/loft-lang/plans) issue. It is **not filed yet** —
-> filing an issue / opening a PR needs an explicit ask (branch policy). On "file it":
-> `gh issue create --repo loft-lang/plans` with the labels below, read the number `n`,
-> then rename this file to `plans/<n>-ffi-deliver-layout-bridge.md`.
+> **Issue:** [loft-lang/plans#105](https://github.com/loft-lang/plans/issues/105) ·
+> **Labels:** `subject:loft` · `status:next` · **Filed 2026-07-13.**
+> This file is the living source of truth; the issue is the cross-ecosystem id.
+> Additive (`deliver`/`expose` + host-imports) → **post-freeze**, not part of @PLN102.
 >
-> - **Title:** `layout-aware zero-copy FFI delivery (deliver / loft→JS binary bridge)`
-> - **Labels:** `subject:interop` · `status:next` (additive → post-freeze; see § Freeze relationship)
 > - **Motivation (consumer):** `../routing/docs/loft-binary-bridge.md` — the base-map `view`
 >   serializes ~230k features to text in wasm, which JS re-parses with `parseFloat` over
 >   millions of coordinate strings. This is the front-end bottleneck. Games want the same
