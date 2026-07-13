@@ -11,7 +11,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status (REQUIRED)
 
-Open — design ready, no implementation.  Motivated by a concrete miss: `loft-libs-net`
+**Shipped** — `scripts/lib_audit.sh` implements Q1–Q5 (commit 772b1857) and runs
+read-only in the nightly `.github/workflows/miri.yml` (`--no-native`); § First live
+run records the 2026-07-12 results.  Originally motivated by a concrete miss: `loft-libs-net`
 sat **unvalidated against current loft for ~2 weeks** — its `main` CI last ran
 2026-05-31 (before June's #354/#357/#361 stability work), its one in-flight branch
 had no PR so `on: pull_request` never fired, and the only live cross-check
@@ -235,12 +237,12 @@ replaces, or leaves alone) so the plan neither reinvents nor silently drops a to
 
 | Item | Disposition | Status |
 |---|---|---|
-| **P1** — inventory: enumerate repos + packages (`*/loft.toml`), pin current-loft SHA, build loft once | foundation | Open |
-| **P2** — branch & PR hygiene: decision table, `--dry-run` default, `--prune` deletes (re-verified) | Q1–Q3 | Open |
-| **P3** — correctness: per-package interp+native with cache-clear + native-ran proof + verdict enum | Q4 | Open |
-| **P4** — registry currency: wrap `check_registry_coverage.sh` | Q5 | Open |
-| **P5** — report + exit status: intended-vs-reached, verdict tally, provenance stamp | invariant gate | Open |
-| **P6** — automation: nightly scheduled job (interp every PR is cheap; native nightly per #363 wall-clock) | C1 fix | Open |
+| **P1** — inventory: enumerate repos + packages (`*/loft.toml`), pin current-loft SHA, build loft once | foundation | **Done** — `lib_audit.sh` |
+| **P2** — branch & PR hygiene: decision table, `--dry-run` default, `--prune` deletes (re-verified) | Q1–Q3 | **Done** |
+| **P3** — correctness: per-package interp+native with cache-clear + native-ran proof + verdict enum | Q4 | **Done** — verdict enum live; A1 native-ran proof is output-grep (not the artifact-freshness ideal), A2 cache-clear is `--clean-cache` opt-in |
+| **P4** — registry currency: wrap `check_registry_coverage.sh` | Q5 | **Done** |
+| **P5** — report + exit status: intended-vs-reached, verdict tally, provenance stamp | invariant gate | **Done** |
+| **P6** — automation: nightly scheduled job (interp every PR is cheap; native nightly per #363 wall-clock) | C1 fix | **Partial** — interp nightly in `miri.yml`; native-nightly still open (q. 3) |
 
 ## Phase ordering
 
@@ -248,6 +250,51 @@ replaces, or leaves alone) so the plan neither reinvents nor silently drops a to
    verdict taxonomy (the A-class mitigations).  2. P2 + P4 (branch hygiene, registry)
    reuse existing query scripts and are independent.  3. P5 ties verdicts to the exit
    code.  4. P6 wires automation last, once the local command is trusted.
+
+## First live run (2026-07-12)
+
+`scripts/lib_audit.sh --no-native` against loft `acb9bd63` → **NOT GREEN, 6 gate
+failures** (registry current).  The run is itself the design's first validation:
+every non-OK verdict is one the taxonomy exists to produce, and none is a
+false-clean.
+
+- **Branch hygiene (Q1–Q3) behaved as specified.** `net/tuxedo-add-to-project`
+  resolved **merged** via the PR-merged signal — a squash-merge that ancestry alone
+  would miss (the exact false-"unmerged" C86 fix motivates) → prunable, not a gate
+  failure.  `graphics`'s three branches are all PR-tracked (#2 / #7 / #10) → known,
+  acceptable.  Four branches are **untracked unknown work** and fail the gate:
+  `core/cbor`, `core/crypto-v0.3.0`, `core/fix/cbor-loft-2026.6.0-narrowing`, and
+  `world/tuxedo-nullflow-compat`.
+- **Two correctness reds (Q4):** `graphics/graphics`
+  (`tests/canvas.loft::test_set_get_pixel`) and `world/hex_terrain`
+  (`tests/01-hex-terrain.loft::main`).  Both trace to **one** root cause, and
+  **neither is a loft regression.**
+
+### The two reds — "library lagging a deliberate language change"
+
+Both libraries rely on **pre-C86 vector alias-by-default** semantics.  Under the
+current model a whole-value heap bind **COPIES** and `&` opts into shared mutation
+(`OWNERSHIP_MODEL.md`, `DESIGN_DECISIONS.md` C86, regression test
+`tests/scripts/503-vector-reference-alias.loft`), so a plain bind `x = obj.field`
+copies and writes through `x` never reach `obj.field`.
+
+- **`graphics/graphics`** — the Canvas draw methods do `d = self.data; d[i] = color`
+  → the write lands in a copy, so `set_pixel` then `get_pixel` disagree.  **Fix
+  already in review:** `graphics` PR #10 `tuxedo-canvas-writable-ref` switches them
+  to `&self.data`; merging it clears the red.
+- **`world/hex_terrain`** — `build_world` binds `th = t.tr_h` / `tmo = t.tr_moist` /
+  `tmat = t.tr_mat` then mutates the locals; the writes are lost, heights stay 0,
+  and the island reports 0 land cells.  Adding `&` to those three binds flips the
+  first assertion to pass, then the **same pattern recurs inside the library source**
+  (`terrain_hydrology`, `terrain_relief_pass`) → it needs a systematic `&` sweep,
+  not a one-liner.  The existing `world/tuxedo-nullflow-compat` branch is a **red
+  herring**: it discharges `sqrt` results (`?? 0.0`) for an unrelated null-flow
+  concern and, checked out under current loft, still reports 0 land cells.
+
+**Disposition:** no loft issue (not a language defect); library-side C86 migration.
+The gate rule already fits it — a fix PR that tracks the migration (graphics #10) is
+*known/acceptable*; no working fix (hex_terrain) means the work is still owed.  See
+Open question 5 for whether this deserves its own verdict tag.
 
 ## Open design questions
 
@@ -262,6 +309,11 @@ replaces, or leaves alone) so the plan neither reinvents nor silently drops a to
 4. **Supersede or fold in `verify_external_libs.sh`** — this audit is its honest
    superset (auto-discovery + verdict taxonomy + branch/registry); decide whether to
    retire it or keep it as the thin local subset.
+5. **A `LAGGING` verdict?** The first run's two reds (§ First live run) are libraries
+   lagging a *deliberate* loft change (C86), not library bugs.  Consider a distinct
+   REPORT tag so a migration-gap reads differently from a true `FAIL` — and, like
+   untracked work, counts as *known* once a fix PR tracks it (graphics #10) rather
+   than owed (hex_terrain).
 
 ## Cross-arc dependencies
 
