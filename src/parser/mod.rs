@@ -5759,14 +5759,31 @@ impl Parser {
         // operands are concrete non-null and not both boolean.
         if matches!(self.data.def(d_nr).name(), "OpEqBool" | "OpNeBool") && types.len() >= 2 {
             let (a, b) = (types[0].base(), types[1].base());
-            let has_null = matches!(a, Type::Null) || matches!(b, Type::Null);
+            // Only a VALUE-vs-value mismatch is the truthiness bug: in-band scalars
+            // plus enums (`Color.Green == 1` truthiness-coerces both).  A reference /
+            // heap operand (`DT? == DT?`, a nullable struct-ref) legitimately reaches
+            // OpEqBool as its null-ness comparison — blocking it there would strand it
+            // with "No matching operator" (there is no OpEqRef coercion for it).  So
+            // require BOTH operands to be value types before rejecting.
+            let value = |t: &Type| {
+                matches!(
+                    t,
+                    Type::Integer(_)
+                        | Type::Float
+                        | Type::Single
+                        | Type::Text(_)
+                        | Type::Character
+                        | Type::Boolean
+                        | Type::Enum(..)
+                )
+            };
             let both_bool = matches!(a, Type::Boolean) && matches!(b, Type::Boolean);
             // A boolean-vs-integer comparison is rejected UPSTREAM (parser/operators.rs)
             // with a bespoke "a boolean is true/false/null, not 0/1" message; leave that
             // pair to it (this guard would otherwise pre-empt it with the generic reject).
             let bool_int = (matches!(a, Type::Boolean) && matches!(b, Type::Integer(_)))
                 || (matches!(a, Type::Integer(_)) && matches!(b, Type::Boolean));
-            if !has_null && !both_bool && !bool_int {
+            if value(a) && value(b) && !both_bool && !bool_int {
                 return Type::Null;
             }
         }
