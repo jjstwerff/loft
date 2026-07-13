@@ -642,15 +642,21 @@ impl Stores {
         false
     }
 
-    pub fn write_file(&mut self, file: &DbRef, v: &str) {
+    /// Write `v` as UTF-8 text to `file`.  Returns whether the OS write
+    /// succeeded — `false` on a failed create (perm denied, bad path) or a
+    /// failed `write_all` (disk full, closed handle) — so the `write` builtin can
+    /// surface a `FileResult` instead of swallowing the failure (H3).
+    pub fn write_file(&mut self, file: &DbRef, v: &str) -> bool {
         #[cfg(feature = "wasm")]
         {
-            // FS-E: write text content via JS host bridge.
+            // FS-E: write text content via JS host bridge (best-effort; the host
+            // shim does not return a status, so a browser write reports success).
             let file_path = {
                 let s = self.store_mut(file);
                 s.get_str(s.get_u32_raw(file.rec, file.pos + 24)).to_owned()
             };
             crate::wasm::host_fs_write_text(&file_path, v);
+            true
         }
         #[cfg(not(feature = "wasm"))]
         {
@@ -680,12 +686,14 @@ impl Stores {
                         eprintln!(
                             "loft: cannot create {resolved_name} for writing: {e} — write skipped"
                         );
-                        return;
+                        return false;
                     }
                 }
             }
             if let Some(Some(f)) = self.files.get_mut(file_ref as usize) {
-                f.write_all(v.as_bytes()).unwrap_or_default();
+                f.write_all(v.as_bytes()).is_ok()
+            } else {
+                false
             }
         }
     }

@@ -540,10 +540,19 @@ pub fn files(self: File) -> vector < File > fs#read {
   result
 }
 #impure(io)
-// Writes v as UTF-8 text to the file. Overwrites existing content.
-
-pub fn write(self: File, v: text) fs#update;
-#rust"{{ let __wf_v = @v; stores.write_file(&@self, __wf_v); }}"
+// Raw text write returning whether the OS write succeeded — internal; `write`
+// wraps it in a FileResult.
+fn write_text_raw(file: File, v: text) -> boolean fs#update;
+#rust"{{ let __wf_v = @v; stores.write_file(&@file, __wf_v) }}"
+#impure(io)
+// Writes v as UTF-8 text to the file, overwriting existing content.  Returns
+// FileResult.Ok on success and FileResult.Other on an OS write failure (disk
+// full, permission denied, a bad path) — a failed write is OBSERVABLE, not
+// silently swallowed.  Discarding callers (`f.write(s)` as a statement) are
+// unaffected; check with `f.write(s).ok()` or match the result.
+pub fn write(self: File, v: text) -> FileResult fs#update {
+  if write_text_raw(self, v) { FileResult.Ok } else { FileResult.Other }
+}
 #impure(io)
 // --- Environment ---
 // Returns all environment variables as a vector of EnvVariable records (fields: name, value).

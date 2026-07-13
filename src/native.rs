@@ -104,7 +104,7 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_log_warn", n_log_warn),
     ("n_log_error", n_log_error),
     ("n_log_fatal", n_log_fatal),
-    ("t_4File_write", t_4File_write),
+    ("n_write_text_raw", n_write_text_raw),
     ("n_env_variables", n_env_variables),
     // @PLN10 Phase 2 — env_variable dest-passing (os_variable now owns its String).
     ("n_env_variable_dest", n_env_variable_dest),
@@ -937,10 +937,13 @@ fn n_log_fatal(stores: &mut Stores, stack: &mut DbRef) {
     }
 }
 
-fn t_4File_write(stores: &mut Stores, stack: &mut DbRef) {
+// Interpreter handler for `write_text_raw` — mirrors its `#rust` template.
+// `write` (a loft fn) wraps the bool into a FileResult; this pushes the bool.
+fn n_write_text_raw(stores: &mut Stores, stack: &mut DbRef) {
     let v_v = *stores.get::<Str>(stack);
-    let v_self = *stores.get::<DbRef>(stack);
-    stores.write_file(&v_self, v_v.str());
+    let v_file = *stores.get::<DbRef>(stack);
+    let new_value = stores.write_file(&v_file, v_v.str());
+    stores.put(stack, new_value);
 }
 
 fn n_env_variables(stores: &mut Stores, stack: &mut DbRef) {
