@@ -1618,9 +1618,10 @@ pub fn text_return_orphan_risk(data: &Data, d_nr: u32) -> Option<&'static str> {
     if !matches!(def.returned().base(), Type::Text(_)) {
         return None;
     }
-    let has_buf = def.attributes().iter().any(
-        |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
-    );
+    let has_buf = def
+        .attributes()
+        .iter()
+        .any(|a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))));
     if has_buf {
         return None;
     }

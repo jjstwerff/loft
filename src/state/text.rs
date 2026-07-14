@@ -258,7 +258,12 @@ impl State {
         let before = (v1.as_ptr() as usize, v1.capacity());
         *v1 += text.str();
         if let Some(fn_nr) = tl_fn {
-            text_tl_grow(fn_nr, before, (v1.as_ptr() as usize, v1.capacity()), v1.as_str());
+            text_tl_grow(
+                fn_nr,
+                before,
+                (v1.as_ptr() as usize, v1.capacity()),
+                v1.as_str(),
+            );
         }
     }
 
@@ -310,7 +315,12 @@ impl State {
         let before = (v1.as_ptr() as usize, v1.capacity());
         *v1 += text.str();
         if let Some(fn_nr) = tl_fn {
-            text_tl_grow(fn_nr, before, (v1.as_ptr() as usize, v1.capacity()), v1.as_str());
+            text_tl_grow(
+                fn_nr,
+                before,
+                (v1.as_ptr() as usize, v1.capacity()),
+                v1.as_str(),
+            );
         }
     }
 
@@ -635,7 +645,9 @@ impl State {
         let val = *self.get_stack::<f64>();
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos - 24);
-        text_tl_fmt(tl_fn, s, |s| ops::format_float(s, val, width, precision, dir));
+        text_tl_fmt(tl_fn, s, |s| {
+            ops::format_float(s, val, width, precision, dir)
+        });
     }
 
     pub fn format_stack_float(&mut self) {
@@ -646,7 +658,9 @@ impl State {
         let val = *self.get_stack::<f64>();
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_ref_mut(pos - 24); // f64(8)+i64(8)+i64(8) = 24 bytes popped
-        text_tl_fmt(tl_fn, s, |s| ops::format_float(s, val, width, precision, dir));
+        text_tl_fmt(tl_fn, s, |s| {
+            ops::format_float(s, val, width, precision, dir)
+        });
     }
 
     pub fn format_single(&mut self) {
@@ -660,7 +674,9 @@ impl State {
         let n = (self.stack_step(8) + self.stack_step(8) + self.stack_step(4)) as u16;
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos - n);
-        text_tl_fmt(tl_fn, s, |s| ops::format_single(s, val, width, precision, dir));
+        text_tl_fmt(tl_fn, s, |s| {
+            ops::format_single(s, val, width, precision, dir)
+        });
     }
 
     pub fn format_stack_single(&mut self) {
@@ -673,7 +689,9 @@ impl State {
         let n = (self.stack_step(8) + self.stack_step(8) + self.stack_step(4)) as u16;
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_ref_mut(pos - n);
-        text_tl_fmt(tl_fn, s, |s| ops::format_single(s, val, width, precision, dir));
+        text_tl_fmt(tl_fn, s, |s| {
+            ops::format_single(s, val, width, precision, dir)
+        });
     }
 
     pub fn format_text(&mut self) {
@@ -684,7 +702,9 @@ impl State {
         let val = self.string();
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos - 8 - size_ptr() as u16);
-        text_tl_fmt(tl_fn, s, |s| ops::format_text(s, val.str(), width, dir, token));
+        text_tl_fmt(tl_fn, s, |s| {
+            ops::format_text(s, val.str(), width, dir, token)
+        });
     }
 
     pub fn format_stack_text(&mut self) {
@@ -695,6 +715,8 @@ impl State {
         let val = self.string();
         let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_ref_mut(pos - 8 - size_ptr() as u16);
-        text_tl_fmt(tl_fn, s, |s| ops::format_text(s, val.str(), width, dir, token));
+        text_tl_fmt(tl_fn, s, |s| {
+            ops::format_text(s, val.str(), width, dir, token)
+        });
     }
 }

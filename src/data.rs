@@ -2199,7 +2199,9 @@ mod renumber_frame_deps_tests {
             Deps::frame(vec![2]),
         );
         f.renumber_frame_deps(2, 99);
-        let Type::Function(args, ret, d) = &f else { panic!() };
+        let Type::Function(args, ret, d) = &f else {
+            panic!()
+        };
         assert_eq!(args[0].depend(), vec![99]);
         assert_eq!(ret.depend(), vec![99]);
         assert_eq!(&d.items, &vec![99]);

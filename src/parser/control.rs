@@ -8311,7 +8311,10 @@ impl Parser {
                 continue;
             }
             let saved_ctx = self.context;
-            std::mem::swap(&mut self.vars, &mut self.data.definitions[c as usize].variables);
+            std::mem::swap(
+                &mut self.vars,
+                &mut self.data.definitions[c as usize].variables,
+            );
             self.context = c;
             let before: std::collections::HashSet<u16> =
                 self.vars.work_texts().into_iter().collect();
@@ -8338,7 +8341,10 @@ impl Parser {
                 }
             }
             self.data.definitions[c as usize].code = code;
-            std::mem::swap(&mut self.vars, &mut self.data.definitions[c as usize].variables);
+            std::mem::swap(
+                &mut self.vars,
+                &mut self.data.definitions[c as usize].variables,
+            );
             self.context = saved_ctx;
         }
     }
@@ -8361,10 +8367,7 @@ impl Parser {
                     }
                 }
             }
-            Value::CallRef(_, xs)
-            | Value::Insert(xs)
-            | Value::Tuple(xs)
-            | Value::Parallel(xs) => {
+            Value::CallRef(_, xs) | Value::Insert(xs) | Value::Tuple(xs) | Value::Parallel(xs) => {
                 for x in xs {
                     self.patch_tret_call(x, force);
                 }

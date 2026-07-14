@@ -297,7 +297,15 @@ fn swap_in_hset(s: &mut HashSet<u16>, a: u16, b: u16) {
 
 /// Swap `a`/`b` in BOTH the keys and the values of a var→var map.
 fn swap_map_indices(m: &mut HashMap<u16, u16>, a: u16, b: u16) {
-    let swap1 = |x: u16| if x == a { b } else if x == b { a } else { x };
+    let swap1 = |x: u16| {
+        if x == a {
+            b
+        } else if x == b {
+            a
+        } else {
+            x
+        }
+    };
     *m = m.iter().map(|(&k, &v)| (swap1(k), swap1(v))).collect();
 }
 
