@@ -5,8 +5,20 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # tuxedo-work — scope for two tracks (flaky test-infra + loft Android target)
 
-Working notes for the `tuxedo-work` branch (stacked on the @PLN104 PR #569 until it
-merges, then rebase onto `main`). Two independent tracks the user grouped here.
+Working notes for the `tuxedo-work` branch. Two independent tracks the user grouped here.
+
+## Resume state (2026-07-14, post-#569 merge)
+
+- **PLN104 / loft#568 — DONE, MERGED to main** (PR #569, squash). This branch was stacked on
+  it and has now been **rebased onto `origin/main`** (7 commits ahead, 0 behind, builds green).
+- **Track A — fix LANDED, soaking** (§ below): `reap_port` hardening + stderr flake-probe in
+  `tests/engine_host_kernel.rs`. Root cause pinned (leaked swap-child orphan the stem pgrep
+  misses); "flake gone" UNPROVEN (intermittent, could not force). RESUME: soak-watch s5/s7 in
+  CI; file a `loft-lang/loft` bug (pre-existing, both-mode).
+- **Track B — DESIGN only** (`android-build-target.md`): loft Android target for `../ssh_home`.
+  RESUME: run the concrete **B0 spike** (needs an NDK) to falsify the invariant, then open a
+  `loft-lang/plans` issue.
+- No PR on this branch yet. Nothing is blocking.
 
 ## Track A — the s5/s7 full-suite flake (test-infra hardening)
 
