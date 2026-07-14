@@ -15,15 +15,19 @@ Working notes for the `tuxedo-work` branch. Two independent tracks the user grou
   `tests/engine_host_kernel.rs`. Root cause pinned (leaked swap-child orphan the stem pgrep
   misses); "flake gone" UNPROVEN (intermittent, could not force). RESUME: soak-watch s5/s7 in
   CI; file a `loft-lang/loft` bug (pre-existing, both-mode).
-- **Track B — B0 CONFIRMED + B1 LANDED** (`106-android-build-target.md`, tracked as
-  **@PLN106**): loft Android target for `../ssh_home`. Invariant held (generated core
-  cross-compiles to `aarch64-linux-android` unchanged); `loft --native-android prog.loft`
+- **Track B — B0 CONFIRMED + B1 LANDED + B2 SPIKE PROVEN** (`106-android-build-target/`,
+  tracked as **@PLN106**): loft Android target for `../ssh_home`. Invariant held (generated
+  core cross-compiles to `aarch64-linux-android` unchanged); `loft --native-android prog.loft`
   produces a bionic AArch64 `.so`. Code: `src/android.rs` + `--native-android` in `main.rs` +
-  `tests/android_target.rs`. NDK r27c installed at `~/android-ndk-r27c` (set
-  `ANDROID_NDK_HOME`). RESUME (all in @PLN106): B2 (APK packaging), B3 (EGL/ANativeWindow),
-  B4 (touch/IME) — validatable locally on the KVM Android emulator (build the x86_64 twin via
-  `LOFT_ANDROID_TARGET=x86_64-linux-android`), not device-blocked. Networking/TLS (`ring`) is
-  a later feature-flag on the runtime rlib (design §5).
+  `tests/android_target.rs`. **B2 spike** (`106-android-build-target/b2-spike/`) proved the
+  APK pipeline end to end: a NativeActivity APK launched on a headless KVM emulator, logcat
+  showed `android_main reached` + the loft program's output (`sum of squares 0..8 = 140`).
+  Toolchain installed locally: NDK r27c (`~/android-ndk-r27c`), Android SDK
+  (`~/Android/Sdk` — platform-tools/build-tools 34/platform 34/emulator/x86_64 image), JDK 17
+  (`~/jdk17`). RESUME (all in @PLN106): B2 *feature* (emit `android_main` from
+  `--native-android` instead of the hand wrapper), B3 (EGL/ANativeWindow GL surface), B4
+  (touch/IME). Emulator target is x86_64 (`LOFT_ANDROID_TARGET=x86_64-linux-android`);
+  ship target stays aarch64. Networking/TLS (`ring`) is a later runtime-rlib feature-flag.
 - No PR on this branch yet. Nothing is blocking.
 
 ## Track A — the s5/s7 full-suite flake (test-infra hardening)

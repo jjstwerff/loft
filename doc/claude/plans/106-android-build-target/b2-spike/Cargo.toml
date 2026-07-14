@@ -1,0 +1,23 @@
+[package]
+name = "loft_android_spike"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[lib]
+# NativeActivity loads the app as a .so; android-activity (native-activity)
+# exports ANativeActivity_onCreate and calls our #[no_mangle] android_main.
+crate-type = ["cdylib"]
+
+[dependencies]
+android-activity = { version = "0.6", features = ["native-activity"] }
+log = "0.4"
+android_logger = "0.14"
+libc = "0.2"
+# The loft runtime, lean (matches the B1 --native-android runtime rlib): no
+# ureq/ring, so no NDK C compiler is needed for the runtime itself.
+# Point `path` at your loft checkout.
+loft = { path = "../../../../..", default-features = false, features = ["random", "threading"] }
+
+[profile.release]
+opt-level = 2

@@ -1,0 +1,5 @@
+prog.rs is GENERATED, not committed. Produce it with:
+  loft --native-emit src/prog.rs <your>.loft
+  sed -i '/^#!\[/d' src/prog.rs
+  sed -i 's/^fn main() {/pub fn main() {/' src/prog.rs
+See ../README.md step 1.

@@ -137,9 +137,15 @@ A phase is DONE only when its gate passes on-device, not in prose.
   into `target/loft/android/`. **Verified:** a headless struct/fn/for-loop program links to a
   bionic AArch64 `.so` (`tests/android_target.rs`); interpreter/`--native`/`--native-android`
   agree on the same source. Host-tested with an NDK; no device/emulator yet.
-- **B2 — APK packaging.** `android-activity` entry, manifest, `.so` → aligned/signed APK.
-  **Verify:** the APK installs + launches a black-screen loft program on an emulator (or a
-  device); `android_main` reached.
+- **B2 — APK packaging. ✅ SPIKE PROVEN (2026-07-14).** The full pipeline
+  (`android-activity` `android_main` entry → manifest → aligned/signed APK → headless KVM
+  emulator) is demonstrated in [`b2-spike/`](b2-spike/README.md): the APK installs +
+  launches and logcat shows `android_main reached` **and** the loft program's own output
+  (`sum of squares 0..8 = 140`, matching the interpreter) — loft code ran on-device. The
+  remaining B2 *feature* work is to move that hand-written wrapper INTO loft's android
+  backend (emit `android_main` + drive the APK build from `--native-android`), replacing the
+  B1 cdylib's stray `fn main` (the runtime-entry descriptor field). **Verify:** as the spike
+  — the APK installs + launches + `android_main` reached on the emulator.
 - **B3 — `lib/graphics` EGL/ANativeWindow backend.** GLES-3.0 context on the
   `android-activity` window; port the `gl_*` surface. **Verify:** ssh_home's step-0.1 solid
   clear-color golden renders on-device (same golden as the Linux build — the surface is the
