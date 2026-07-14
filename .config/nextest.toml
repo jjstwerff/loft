@@ -59,11 +59,19 @@ path = "target/nextest/junit.xml"
 html-wasm-serial = { max-threads = 1 }
 # Serialise the CPU-heavy native-build tests (each spawns many concurrent rustc)
 # TOGETHER WITH the timing-sensitive networked tests (multiplayer websocket
-# games), so a native rustc storm never runs alongside — and starves into an
-# empty response / timeout — a server test.  Only one test from this group runs
-# at a time; everything else stays fully parallel.  Subsumes the old
-# `multiplayer-v2-serial`.  (The markdown viewer smoke test runs in its own
-# isolated advisory job instead — see ci.yml.)
+# games; the wasm debug relay), so a native rustc storm never runs alongside —
+# and starves into an empty response / timeout — a server test.  Only one test
+# from this group runs at a time; everything else stays fully parallel.  Subsumes
+# the old `multiplayer-v2-serial`.  (The markdown viewer smoke test runs in its
+# own isolated advisory job instead — see ci.yml.)
+#
+# wasm_debug_relay is BOTH a builder and a victim: it does a `--html --debug`
+# wasm build AND spawns a `--native` engine_host server, then runs a timing-
+# sensitive agent→server→client relay (a 15s server-accept deadline + the node
+# driver's relay handshake).  Under parallel rustc-storm load the handshake
+# starves ("agent did not receive the relayed reply") — the multiplayer-class
+# flake — so it joins the group.  It passes in isolation; this closes the
+# starvation window (it still gets the ci profile's one retry on top).
 #
 # multiplayer_v5 is deliberately NOT in this group — it stays fully parallel.
 # It had the same exposure (its `use web` triggers a COLD loft_web cdylib build
@@ -81,7 +89,7 @@ filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
 
 [[profile.default.overrides]]
-filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3)'
+filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3) + binary(wasm_debug_relay)'
 test-group = 'heavy-serial'
 
 [[profile.ci.overrides]]
@@ -89,5 +97,5 @@ filter = 'binary(html_wasm)'
 test-group = 'html-wasm-serial'
 
 [[profile.ci.overrides]]
-filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3)'
+filter = 'binary(native) + binary(n2_cdylib) + binary(n3_parity) + binary(n3_use_native) + binary(multiplayer_v2) + binary(multiplayer_v3) + binary(wasm_debug_relay)'
 test-group = 'heavy-serial'
