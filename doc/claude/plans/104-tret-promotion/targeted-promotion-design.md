@@ -51,18 +51,26 @@ to the promoted set so Phase B patches exactly the changed callers.
 `text_return_analysis` ✅, `index_hygiene` ✅, `wrap loft_suite` ✅ (the 553 view-of-local
 crash is now deferred), `s5_local_swap_hands_over` ✅, `s7_debugger_loop_end_to_end` ✅ — the
 third-pass's diagnostic (mode 1), ABI-record-id (mode 2), and tooling (mode 4) collateral are
-GONE under the targeted pass. `native_scripts` **436/439**: the 3 residual (`387-text-fn-ref`
-run_t reused across an assert condition+message; `85_optional_return_freeops_tail`;
-`repro_p265` result flowing into a `cb(…)` dispatch) are one class — a **promoted
-retbuf-taking callee whose call is emitted in a native fn-ref-dispatch / multi-call-per-
-statement context**, where the retbuf work-text lifetime fails rustc's borrow checker
-(E0506/E0499) or the dispatch references the pre-promotion name (E0425). This is native
-codegen work (`src/generation` `output_call_ref` / the `_pre_N` arg hoist), the deferred
-v2/(d) class — NOT collateral, and interp-clean.
+GONE under the targeted pass. `native_scripts` **439/439** (commit `19e7c97d`, after the native fix below). ALL FIVE
+former-default-on groups now PASS under V2.
 
-**Next (to reach default-on, §Verification 5):** fix the native fn-ref-dispatch retbuf
-codegen for those 3 (or exclude that call-context from v1), then flip V2 default-on, verify
-the full suite, and delete the third pass.
+**Native codegen fix (commit `19e7c97d`) — two root causes behind the 3 residuals:**
+1. *Retbuf work-text COLLISION* (`387-text-fn-ref`, `85-optional-return-freeops-tail`;
+   E0506/E0499). A caller parsed against the UNPROMOTED callee has a `work_text` pooling
+   counter that lags the `__work_N` already in its `names` (a format-arg buffer). Phase B's
+   `add_defaults` re-derives `__work_1`, finds it in `names`, and ALIASES the live format
+   buffer as the retbuf — same buffer passed as both an arg AND the return slot of one call.
+   Fix: `Function::sync_work_text_counter` advances the counter past every existing
+   `__work_N` before `add_defaults` (called once per caller in `patch_tret_callers`).
+2. *Reachability gap for a call nested in a fn-ref dispatch* (`repro_p265`; E0425).
+   `generation::collect_calls` fell through `CallRef` to `_ => {}`, so a nested `Call` in
+   `cb(f(x))` was never marked reachable. Before promotion `f` was reachable as a zero-param
+   test-fn ENTRY; promotion gives it a retbuf param, dropping it from the entry set, and the
+   CallRef gap then hid it. Fix: recurse into `callref_args` (reachability is an
+   over-approximation → always safe; un-gated, verified no default regression).
+
+**Next (to reach default-on, §Verification 5):** flip V2 default-on, run the FULL suite,
+then delete the third pass.
 
 ## Why the third pass must go — one root, many symptoms
 
