@@ -1,0 +1,28 @@
+// @PLN104 corpus — one fn per text-return delivery path (see loft-lang/loft#568).
+// GOOD delivers an Owned text via a hidden __tret retbuf (caller allocates + frees);
+// BROKEN (main-tip, post-#551) returns fn-ref/index/method Owned tails BY VALUE, which
+// the interpreter orphans (native RAII drops it).  Each `main` line exercises one path.
+fn mk_fmt(n: integer) -> text { "v{n}" }
+
+// P1  fn-ref call tail          — Owned:FnRefCall (pass-2 only) — LEAKS
+fn ret_fnref(f: fn(integer) -> text, x: integer) -> text { f(x) }
+
+// P2  index-of-local tail       — Owned:ViewOfLocal (pass-2 only) — LEAKS
+fn ret_index() -> text { v: vector<text> = ["a{1}", "b{2}"]; v[0] }
+
+// P3  borrowed arg return       — Borrow(Argument) — MUST NOT promote, no leak
+fn ret_borrow(s: text) -> text { s }
+
+// P4  bind-to-local tail        — Owned:BuiltLocal (pass-stable) — promotes, clean
+fn ret_local(f: fn(integer) -> text, x: integer) -> text { r = f(x); r }
+
+// P5  literal/interp tail       — Owned:BuiltLocal (pass-stable) — promotes, clean
+fn ret_interp(n: integer) -> text { "n={n}" }
+
+fn main() {
+  print(ret_fnref(mk_fmt, 1)); print("\n");
+  print(ret_index()); print("\n");
+  print(ret_borrow("z")); print("\n");
+  print(ret_local(mk_fmt, 2)); print("\n");
+  print(ret_interp(3)); print("\n");
+}

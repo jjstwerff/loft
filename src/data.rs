@@ -1270,6 +1270,27 @@ impl Deps {
         self.items.contains(&u16::MAX)
     }
 
+    /// @PLN104 — renumber FRAME-variable entries in place for a variable swap:
+    /// every plain entry equal to `from` becomes `to`.  Skips the `u16::MAX`
+    /// pointer/share markers (they name no frame var).  FRAME-space only: a
+    /// variable swap never relocates attribute indices, so applying this to an
+    /// attr-space list would corrupt it (debug-asserted).  Used by the text-return
+    /// retbuf renumber (`Type::renumber_frame_deps`).
+    pub fn renumber_frame(&mut self, from: u16, to: u16) {
+        #[cfg(debug_assertions)]
+        debug_assert_ne!(
+            self.space,
+            DepSpace::Attr,
+            "renumber_frame on attr-space deps ({:?})",
+            self.items
+        );
+        for e in &mut self.items {
+            if *e != u16::MAX && *e == from {
+                *e = to;
+            }
+        }
+    }
+
     /// A copy extended with `on` at the front (the `depending()` shape);
     /// inherits this value's space.
     #[must_use]
@@ -1366,6 +1387,62 @@ pub enum Type {
 }
 
 impl Type {
+    /// @PLN104 — renumber a FRAME-variable index (`from` → `to`) through every
+    /// [`Deps`] this type carries, recursing into nested element / argument / return
+    /// types.  Frame-space only (expression + variable-table types); the
+    /// attribute-space `Definition.returned` must NOT be passed here.  Companion to
+    /// the `Value`-tree walker (`Parser::renumber_frame_var`): together they move a
+    /// variable's every reference — IR nodes AND embedded type deps — in tandem, which
+    /// a `Function::swap_variables` needs so the body and the variable table stay in
+    /// sync (loft-lang/loft#568; the `remap_var_deep`-only swap desynced the cref
+    /// buffer's `Block.result` dep).
+    pub fn renumber_frame_deps(&mut self, from: u16, to: u16) {
+        match self {
+            Type::Text(d)
+            | Type::Reference(_, d)
+            | Type::Enum(_, _, d)
+            | Type::Sorted(_, _, d)
+            | Type::Index(_, _, d)
+            | Type::Radix(_, _, d)
+            | Type::Hash(_, _, d) => d.renumber_frame(from, to),
+            Type::Vector(inner, d) => {
+                inner.renumber_frame_deps(from, to);
+                d.renumber_frame(from, to);
+            }
+            Type::Function(args, ret, d) => {
+                for a in args {
+                    a.renumber_frame_deps(from, to);
+                }
+                ret.renumber_frame_deps(from, to);
+                d.renumber_frame(from, to);
+            }
+            Type::RefVar(inner) | Type::Rewritten(inner) | Type::Optional(inner) => {
+                inner.renumber_frame_deps(from, to);
+            }
+            Type::Iterator(step, state) => {
+                step.renumber_frame_deps(from, to);
+                state.renumber_frame_deps(from, to);
+            }
+            Type::Tuple(items) => {
+                for t in items {
+                    t.renumber_frame_deps(from, to);
+                }
+            }
+            // scalar / dep-free variants
+            Type::Unknown(_)
+            | Type::Null
+            | Type::Void
+            | Type::Never
+            | Type::Integer(_)
+            | Type::Boolean
+            | Type::Float
+            | Type::Single
+            | Type::Character
+            | Type::Keys
+            | Type::Routine(_) => {}
+        }
+    }
+
     /// @PLN25 — the idempotent `τ?` former. `Optional(Optional(τ)) → Optional(τ)`
     /// (N-Idem); `Optional(Never|Null) → Never|Null` (no junk optional over a non-value).
     /// Everything else becomes `Optional(Box::new(inner))`.
@@ -2075,6 +2152,74 @@ pub fn stored_tuple_offsets_for_def(
         out.push(f.position);
     }
     Some(out)
+}
+
+#[cfg(test)]
+mod renumber_frame_deps_tests {
+    //! @PLN104 — the type-dep half of a variable renumber (the piece the
+    //! `remap_var_deep`-only retbuf swap was missing, loft-lang/loft#568).
+    use super::{Deps, Type};
+
+    fn text(dep: Vec<u16>) -> Type {
+        Type::Text(Deps::frame(dep))
+    }
+
+    #[test]
+    fn plain_frame_dep_moves() {
+        let mut t = text(vec![2]);
+        t.renumber_frame_deps(2, 99);
+        assert_eq!(t.depend(), vec![99]);
+    }
+
+    #[test]
+    fn non_matching_dep_untouched() {
+        let mut t = text(vec![5]);
+        t.renumber_frame_deps(2, 99);
+        assert_eq!(t.depend(), vec![5]);
+    }
+
+    #[test]
+    fn u16_max_marker_preserved() {
+        let mut t = text(vec![u16::MAX, 2]);
+        t.renumber_frame_deps(2, 99);
+        assert_eq!(t.depend(), vec![u16::MAX, 99]);
+    }
+
+    #[test]
+    fn recurses_into_vector_and_function() {
+        let mut v = Type::Vector(Box::new(text(vec![2])), Deps::frame(vec![2]));
+        v.renumber_frame_deps(2, 99);
+        let Type::Vector(inner, d) = &v else { panic!() };
+        assert_eq!(inner.depend(), vec![99]);
+        assert_eq!(&d.items, &vec![99]);
+
+        let mut f = Type::Function(
+            vec![text(vec![2])],
+            Box::new(text(vec![2])),
+            Deps::frame(vec![2]),
+        );
+        f.renumber_frame_deps(2, 99);
+        let Type::Function(args, ret, d) = &f else {
+            panic!()
+        };
+        assert_eq!(args[0].depend(), vec![99]);
+        assert_eq!(ret.depend(), vec![99]);
+        assert_eq!(&d.items, &vec![99]);
+    }
+
+    #[test]
+    fn three_way_swap_exchanges_two_indices() {
+        // swap frame vars 2 and 3 via the temp-index dance the caller uses.
+        let mut t = Type::Tuple(vec![text(vec![2]), text(vec![3]), text(vec![2, 3])]);
+        let tmp = 100u16;
+        t.renumber_frame_deps(2, tmp);
+        t.renumber_frame_deps(3, 2);
+        t.renumber_frame_deps(tmp, 3);
+        let Type::Tuple(items) = &t else { panic!() };
+        assert_eq!(items[0].depend(), vec![3]); // was 2
+        assert_eq!(items[1].depend(), vec![2]); // was 3
+        assert_eq!(items[2].depend(), vec![3, 2]); // was [2,3]
+    }
 }
 
 #[cfg(test)]

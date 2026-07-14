@@ -267,6 +267,48 @@ pub struct Function {
     rebind_orig: HashMap<u16, u16>,
 }
 
+/// @PLN104 — swap membership of two indices in a set (for `Function::swap_variables`).
+/// An index in the set moves to the other; if both or neither are present, no change.
+fn swap_in_bset(s: &mut BTreeSet<u16>, a: u16, b: u16) {
+    let (ha, hb) = (s.contains(&a), s.contains(&b));
+    if ha != hb {
+        if ha {
+            s.remove(&a);
+            s.insert(b);
+        } else {
+            s.remove(&b);
+            s.insert(a);
+        }
+    }
+}
+
+fn swap_in_hset(s: &mut HashSet<u16>, a: u16, b: u16) {
+    let (ha, hb) = (s.contains(&a), s.contains(&b));
+    if ha != hb {
+        if ha {
+            s.remove(&a);
+            s.insert(b);
+        } else {
+            s.remove(&b);
+            s.insert(a);
+        }
+    }
+}
+
+/// Swap `a`/`b` in BOTH the keys and the values of a var→var map.
+fn swap_map_indices(m: &mut HashMap<u16, u16>, a: u16, b: u16) {
+    let swap1 = |x: u16| {
+        if x == a {
+            b
+        } else if x == b {
+            a
+        } else {
+            x
+        }
+    };
+    *m = m.iter().map(|(&k, &v)| (swap1(k), swap1(v))).collect();
+}
+
 impl Display for Function {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         for v in &self.variables {
@@ -1434,6 +1476,41 @@ impl Function {
         self.variables[var_nr as usize].stack_allocated = true;
     }
 
+    /// @PLN104 — renumber a FRAME variable `from` → `to` through every variable's
+    /// TYPEDEF deps (frame space).  The variable-table companion to the IR walker
+    /// (`Parser::renumber_frame_var`) and `swap_variables`: a var swap must move the
+    /// deps a typedef holds on OTHER vars too, or the type table desyncs.
+    pub fn renumber_frame_in_types(&mut self, from: u16, to: u16) {
+        for v in &mut self.variables {
+            v.type_def.renumber_frame_deps(from, to);
+        }
+    }
+
+    /// @PLN104 — swap variable slots `a` and `b`, updating EVERY index-keyed table
+    /// that references them (the variable-numbering namespace is a shared medium).
+    /// Relocates a late-promoted text retbuf (minted after an inherited body local,
+    /// so its variable index exceeds its attribute index) into the slot matching its
+    /// attribute index — the `a == v` the returned-type dep needs (loft-lang/loft#568).
+    /// SCOPE-keyed tables (`loop_scopes`, `loop_seq_ranges`, `scope_origins`) are left
+    /// alone — they key on scope numbers, not variable numbers.  The CALLER must
+    /// renumber the IR body and the typedef deps in tandem (`renumber_frame_var` +
+    /// `renumber_frame_in_types`), or the code and the table desync.
+    pub fn swap_variables(&mut self, a: u16, b: u16) {
+        self.variables.swap(a as usize, b as usize);
+        // name → index: the two names now resolve to the swapped slots.
+        let na = self.variables[a as usize].name.clone();
+        let nb = self.variables[b as usize].name.clone();
+        self.names.insert(na, a);
+        self.names.insert(nb, b);
+        swap_in_bset(&mut self.work_texts, a, b);
+        swap_in_bset(&mut self.work_refs, a, b);
+        swap_in_bset(&mut self.arm_consumed, a, b);
+        swap_in_bset(&mut self.inline_ref_vars, a, b);
+        swap_in_hset(&mut self.annotated, a, b);
+        swap_map_indices(&mut self.closure_var_map, a, b);
+        swap_map_indices(&mut self.rebind_orig, a, b);
+    }
+
     /// @PLAN59 (H1): drop a var from the argument set — used to retire the
     /// signature-time `__retbuf` placeholder when `ref_return` promotes a
     /// real local into the buffer role (the promoted local takes the
@@ -1643,6 +1720,20 @@ impl Function {
         }
     }
 
+    /// Advance the pooling counter past every `__work_N` already in `names`, so the next
+    /// `work_text()` mints a genuinely-fresh buffer instead of aliasing a live one.  Needed
+    /// when a def's work-texts live in `names` but the counter is out of sync — e.g. a
+    /// post-parse retbuf injection into an already-parsed caller (loft#568 @PLN104 Phase B),
+    /// where re-using `__work_1` would collide with a live format-arg buffer in the SAME call.
+    pub fn sync_work_text_counter(&mut self) {
+        for name in self.names.keys() {
+            if let Some(rest) = name.strip_prefix("__work_")
+                && let Ok(k) = rest.parse::<u16>()
+            {
+                self.work_text = self.work_text.max(k);
+            }
+        }
+    }
     pub fn work_text(&mut self, lexer: &mut Lexer) -> u16 {
         let n = format!("__work_{}", self.work_text + 1);
         self.work_text += 1;

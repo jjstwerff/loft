@@ -4054,6 +4054,10 @@ impl State {
         // `LOFT_STORES=timeline`), reconciled with the authoritative leak count so the
         // interp eval-stack/const infrastructure is not false-positived as a leak.
         crate::database::timeline_summary(leaked.len());
+        // @PLN104 — the text-buffer analogue: orphaned stack-frame `String`s (loft#568),
+        // which the store timeline above cannot see (they are not loft stores). No-op unless
+        // `LOFT_TEXT_TIMELINE`.
+        crate::state::text::text_timeline_summary();
         if !leaked.is_empty() {
             let count = leaked.len();
             let preview = if count <= 5 {

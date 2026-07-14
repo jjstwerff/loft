@@ -269,6 +269,11 @@ pub struct Parser {
     // count snapshot compared end-of-pass-1 vs end-of-pass-2 in debug/armed
     // builds, so any future cross-pass divergence fails loud (H5).
     first_pass: bool,
+    /// @PLN104 P3 — def_nrs the post-pass-2 oracle (`report_tret_promotions`) marks
+    /// for `__tret` retbuf promotion (a frame-local text return with no buffer). Read
+    /// by `do_tret_bind`'s gate on the THIRD pass so the promotion is forward-ref-safe:
+    /// the attr is decided before the pass, so every caller re-lowers with the buffer.
+    force_tret: std::collections::HashSet<u32>,
     /// Set by `parse_in_range` when `rev(collection)` (without a `..` range) is parsed.
     /// Consumed by `fill_iter` to add the reverse bit (64) into the `on` byte of OpIterate/OpStep.
     reverse_iterator: bool,
@@ -649,6 +654,7 @@ impl Parser {
             default: false,
             context: u32::MAX,
             first_pass: true,
+            force_tret: std::collections::HashSet::new(),
             reverse_iterator: false,
             iterable_context: false,
             last_range_from: None,
@@ -1137,6 +1143,22 @@ impl Parser {
             self.check_subrule_wellformedness();
             #[cfg(debug_assertions)]
             self.assert_pass2_def_attr_stable(&pass1_attr_counts);
+            // @PLN104 P2 — oracle pass: flag frame-local text returns the interpreter would
+            // orphan (#568) into `force_tret` (default-on; opt out with LOFT_NO_TRET_FIX).
+            self.report_tret_promotions();
+            // @PLN104 P3 — the targeted promotion: promote each flagged frame-local text
+            // return (`force_tret`) to a `__tret` retbuf IN PLACE on the pass-2 IR and patch
+            // only its direct callers to push the buffer.  The promotion set is decided BEFORE
+            // this (in `report_tret_promotions`), so every caller — forward- OR backward-ref —
+            // gets the retbuf without an ABI-growth crash; post-H5, so the extra attrs never
+            // trip the pass1==pass2 contract.  This replaced a whole-file re-parse ("third
+            // pass") whose non-idempotent re-lowering corrupted unrelated defs (var__vec /
+            // diagnostics / s5-s7); touching only the promoted defs + their callers removes
+            // that collateral class by construction.  See
+            // doc/claude/plans/104-tret-promotion/targeted-promotion-design.md.
+            if !self.force_tret.is_empty() {
+                self.targeted_tret_promotion();
+            }
         }
         self.backfill_native_symbol_crates();
         // Plan-07 phase 4h — emit `not null` field-reminder hints
