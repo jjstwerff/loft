@@ -38,9 +38,10 @@ impl Stores {
         let mut bytes = Vec::new();
         match self.read_via_descriptor(&desc, &val, db_tp, true, &mut bytes) {
             Ok(()) => {
+                use std::fmt::Write as _;
                 let mut hex = String::with_capacity(bytes.len() * 2);
                 for b in &bytes {
-                    hex.push_str(&format!("{b:02x}"));
+                    let _ = write!(hex, "{b:02x}");
                 }
                 println!("deliver tag={tag} type={name} bytes={hex}");
             }
