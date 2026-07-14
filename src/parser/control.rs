@@ -8240,8 +8240,47 @@ impl Parser {
     /// before B (callers need the promoted signature).  Runs post-pass-2, pre-`scopes::check`,
     /// so the added work-text delivery/frees are woven in by the normal scope pass.
     pub(crate) fn targeted_tret_promotion(&mut self) {
-        let force: Vec<u32> = self.force_tret.iter().copied().collect();
-        for &d in &force {
+        // v1 SCOPE — promote only the class Phase A/B lower correctly on BOTH backends:
+        // an **owned-by-value** text return (the fn-ref-call / built-local #568 tail) on a
+        // def that is CALLED directly.  Defer, with a loud log, the classes that need more
+        // than a retbuf rebind (see targeted-promotion-design.md § Verification):
+        //   - view-of-local / join-of-local: the return ALIASES a frame-local, so the retbuf
+        //     must be filled by MATERIALISING the view (deep-copy), which Phase A does not
+        //     emit — a bare rebind SIGSEGVs both backends (553 `textslice` returns `ts[0][0]`).
+        //   - address-taken defs (used as a fn-ref VALUE `FnRef(d,…)`): promotion changes the
+        //     signature, so every fn-pointer to it stops type-checking (native E0308/E0425).
+        let mut addr_taken: std::collections::HashSet<u32> = std::collections::HashSet::new();
+        for c in 0..self.data.definitions.len() as u32 {
+            self.data.def(c).code.walk(&mut |v| {
+                if let Value::FnRef(d, _, _) = v
+                    && *d >= 0
+                {
+                    addr_taken.insert(*d as u32);
+                }
+            });
+        }
+        let promote: Vec<u32> = self
+            .force_tret
+            .iter()
+            .copied()
+            .filter(|&d| {
+                crate::use_analysis::text_return_orphan_risk(&self.data, d)
+                    == Some("owned-by-value")
+                    && !addr_taken.contains(&d)
+            })
+            .collect();
+        let deferred = self.force_tret.len() - promote.len();
+        if deferred > 0 && std::env::var_os("LOFT_TRET_TRACE").is_some() {
+            eprintln!(
+                "[tret-v2] promoting {}/{} force_tret defs ({deferred} deferred: view/join/address-taken)",
+                promote.len(),
+                self.force_tret.len(),
+            );
+        }
+        // Narrow force_tret to the promoted set so Phase B (`patch_tret_callers`) patches
+        // callers of exactly the defs whose signature actually changed.
+        self.force_tret = promote.iter().copied().collect();
+        for &d in &promote {
             self.promote_text_return_def(d);
         }
         self.patch_tret_callers();
