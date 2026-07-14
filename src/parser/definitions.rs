@@ -1297,6 +1297,15 @@ impl Parser {
             // (e.g. a later dead-assignment).  Save the true position and
             // restore it once the passes finish so they are position-neutral.
             let warn_pos = self.lexer.at();
+            // @PLN107 S1 — observable dead-store classification dump (gated on
+            // LOFT_DUMP_READS; no warning). Runs before test_used so the read/write-target
+            // split can be inspected against the corpus.
+            {
+                let ctx = self.context as usize;
+                let body = self.data.definitions[ctx].code();
+                let fn_name = self.data.definitions[ctx].name();
+                self.vars.debug_dead_store_dump(fn_name, body, &self.data);
+            }
             if !is_stub {
                 self.vars.test_used(&mut self.lexer, &self.data);
             }

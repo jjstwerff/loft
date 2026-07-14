@@ -5,8 +5,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN107 — Dead-code lint: never-read local (unused variable + dead store)
 
-**Status — FUTURE (design captured 2026-07-14).** Spec + mechanism + false-positive
-guards below; implementation deferred to a dedicated session. **Key finding:** loft
+**Status — IN PROGRESS (2026-07-14). S0 + S1 landed** on `tuxedo-work` (oracle +
+decoupled read/write classifier, both verified; see [the step plan](#implementation--small-verifiable-steps)).
+Next: **S2** (turn the `reads=0, write_targets>0` signal into a gated warning). **Key finding:** loft
 **already ships** `unused_variables` (`Function::test_used`, `src/variables/mod.rs:1666`)
 — it correctly flags W-scalar/W-accumulator/N-effectful *today*; the real gap is that its
 `uses` counter treats a write-**target** as a read, so it misses **W-copy** (the graphics
@@ -180,14 +181,22 @@ positives before flipping default-on.
   **Verify:** `cargo test --test dead_code_lint` green; adding a read of `d` to the W-copy row
   flips it → proves the harness can fail. *Risk: none. Payoff: the regression net for every
   later step.*
-- **S1 — Observable read count, NO warning (the subtle part, isolated).** Add
-  `write_target_uses: u16` to `Variable`; at the element/field-write base site in the
-  `d[i]=x`/`d.f=x` assign path (`expressions.rs`, where the base is currently `in_use`'d), also
-  bump `write_target_uses`. Derive `reads() = uses − write_target_uses`. Expose via a gated
-  dump (per user var: `uses`, `write_target_uses`, `reads`). **Verify (hand-computed):** on
-  spec.loft, `d`@W-copy → `uses=1, wtu=1, reads=0`; `d`@N-read → `reads ≥ 1`; `e`@N-fresh →
-  `reads ≥ 1` (passed to a call). **S0 oracle unchanged** (`uses` untouched ⇒ codegen
-  byte-identical). *This proves the classifier before anything trusts it.*
+- **S1 — Observable read count, NO warning (the subtle part, isolated). ✅ DONE 2026-07-14.**
+  Implemented as a **decoupled post-parse IR walk** (`use_analysis::dead_store_accesses`),
+  returning per-var `(reads, write_targets)` — NOT the originally-sketched
+  `reads = uses − write_target_uses`. **Why the sketch was wrong:** the dump showed `uses` and
+  true value-reads diverge — `a += 1`'s self-read bumps the walk's `reads` but not `uses`
+  (uses=0), so subtraction would mis-count. The walk classifies a `Var` as a write-target only
+  at arg 0 of an `OpSet*` (descending projection chains); every other `Var` is a read; `uses`
+  is never touched. Exposed via a gated dump (`LOFT_DUMP_READS`) — no warning. **The dump did
+  its job:** it caught a bug — the copy-fill `d = b.data` lowers to `OpAppendVector(Var(d),…)`,
+  whose arg-0 `d` was falsely counted as a read (W-copy showed `reads=1`); fixed by treating
+  arg 0 of the whole `first_arg_write_ops` set as a write-DESTINATION (never a read), while
+  counting `write_targets` only for the `OpSet*` subset. **Verified** (`tests/dead_code_lint.rs
+  ::s1_classifier_isolates_w_copy_dead_store`): `d`@W-copy → `(reads=0, wt=1)` (the signal);
+  N-read/N-fresh `reads ≥ 1`; N-copy-read `wt=0`; W-scalar `a` / N-effectful `x` present no
+  signal (so S2 won't double-warn what `test_used` owns). **S0 oracle byte-identical** on both
+  backends ⇒ `uses`/codegen untouched; the walk is inert unless `LOFT_DUMP_READS` is set.
 - **S2 — Emit the warning behind an off-by-default flag.** In a sibling `test_dead_stores`
   (next to `test_used`): `reads() == 0 && write_target_uses > 0 && !argument && !captured &&
   name∉{_*, *#*, global}` → Warning *"'d' is mutated but its value is never read — the mutation

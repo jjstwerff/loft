@@ -1685,6 +1685,30 @@ impl Function {
         }
     }
 
+    /// @PLN107 S1 — observable dump of the dead-store access classification (value-observing
+    /// READS vs `OpSet*` WRITE-TARGET bases), gated on `LOFT_DUMP_READS`. Purely diagnostic:
+    /// no warning is emitted, so the classifier can be verified against the shape corpus
+    /// before S2 wires it into a lint. `uses` is printed alongside to make the read /
+    /// write-target split visible against the codegen counter it deliberately does NOT change
+    /// (`reads == 0 && write_targets > 0` is the future S2 dead-store signal — see
+    /// `doc/claude/plans/107-dead-code-lint/`).
+    pub fn debug_dead_store_dump(&self, fn_name: &str, body: &Value, data: &Data) {
+        if std::env::var_os("LOFT_DUMP_READS").is_none() {
+            return;
+        }
+        let acc = crate::use_analysis::dead_store_accesses(body, self.variables.len(), data);
+        for (i, var) in self.variables.iter().enumerate() {
+            if var.name.starts_with('_') || var.name.contains('#') || var.argument {
+                continue;
+            }
+            let (reads, write_targets) = acc.get(i).copied().unwrap_or((0, 0));
+            eprintln!(
+                "dead-store-dbg: fn={fn_name} var={} uses={} reads={reads} write_targets={write_targets}",
+                var.name, var.uses,
+            );
+        }
+    }
+
     /// Warn on UPPER_CASE non-const locals (P246 follow-up).  The
     /// UPPER_CASE convention is reserved for constants — file-scope
     /// `const NAME = expr;` / `NAME = expr;` and in-fn `const FOO =

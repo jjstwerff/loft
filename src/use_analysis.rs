@@ -182,6 +182,114 @@ fn base_var(node: &Value, get_field: u32) -> Option<u16> {
     }
 }
 
+/// @PLN107 S1 — per-variable ACCESS classification for the dead-store lint. Returns, indexed
+/// by `var_nr`, `(reads, write_targets)`: how many times each local is READ (its value
+/// observed) versus used only as the WRITE-TARGET base of an element/field/keyed setter
+/// (`d[i]=x`, `d.f=x`).
+///
+/// Deliberately DECOUPLED from `Function::uses` (which drives codegen last-use elision and
+/// MUST NOT change): a `Var(d)` at arg 0 of an `OpSet*` bumps `uses` but is a write-target,
+/// not a read. WRITES are restricted to the `OpSet*` family on purpose — the copy-fill
+/// `OpAppendVector` that lowers `d = s.f` is a DEFINITION, not a user mutation, and counting
+/// it would misread an unused copy as a dead store. Projection handling mirrors
+/// [`projection_ops`]: `d.f[i]=x` → `OpSetInt(OpGetField(Var(d),f), i, v)` descends to the
+/// root var `d`, and the projection's INDEX args are ordinary reads.
+pub(crate) fn dead_store_accesses(body: &Value, n_vars: usize, data: &Data) -> Vec<(u16, u16)> {
+    let projs = projection_ops(data);
+    let writes = first_arg_write_ops(data);
+    let mut acc = vec![(0u16, 0u16); n_vars];
+    let cx = AccessCx {
+        data,
+        projs: &projs,
+        writes: &writes,
+    };
+    classify_access(body, &cx, &mut acc);
+    acc
+}
+
+/// Shared read-only context for the access walk (op-name sets computed once).
+struct AccessCx<'a> {
+    data: &'a Data,
+    /// Projection ops (`OpGetField`/`OpGetVector`/…) — a write through one of these
+    /// propagates the write context to arg 0.
+    projs: &'a HashSet<u32>,
+    /// Ops that write through arg 0 (`first_arg_write_ops`): their arg-0 base is a
+    /// write-DESTINATION, never a read (this is what makes the `d = s.f` copy-fill append
+    /// stop counting `d` as read).
+    writes: &'a HashSet<u32>,
+}
+
+fn is_setter(op: u32, data: &Data) -> bool {
+    data.def(op).name().starts_with("OpSet")
+}
+
+fn bump_read(acc: &mut [(u16, u16)], v: u16) {
+    if let Some(slot) = acc.get_mut(v as usize) {
+        slot.0 = slot.0.saturating_add(1);
+    }
+}
+
+fn bump_write(acc: &mut [(u16, u16)], v: u16) {
+    if let Some(slot) = acc.get_mut(v as usize) {
+        slot.1 = slot.1.saturating_add(1);
+    }
+}
+
+/// Classify every `Var` occurrence reachable from `node`. Only the write-introducing /
+/// var-carrying variants are special-cased; everything else delegates to `for_each_child`
+/// (whose `Var` children are all value-observing reads). `Set`/`Iter` TARGET vars are NOT
+/// visited by `for_each_child`, so a plain definition/reassignment correctly counts as
+/// neither a read nor a copy-mutate write.
+fn classify_access(node: &Value, cx: &AccessCx, acc: &mut [(u16, u16)]) {
+    match node.unspan() {
+        Value::Var(v) | Value::TupleGet(v, _) | Value::FnRefDnr(v) => bump_read(acc, *v),
+        Value::FnRef(_, clos, _) => bump_read(acc, *clos),
+        Value::TuplePut(v, _, inner) => {
+            bump_write(acc, *v);
+            classify_access(inner, cx, acc);
+        }
+        Value::CallRef(v, args) => {
+            bump_read(acc, *v);
+            for a in args {
+                classify_access(a, cx, acc);
+            }
+        }
+        // Any op that writes through arg 0: arg-0 base is a write-DESTINATION (not a read).
+        // Count it as a copy-mutate WRITE-TARGET only for the `OpSet*` family — append/insert/
+        // clear are definitional/bulk fills (the `d = s.f` copy-fill lands here) and are neither
+        // a read nor the dead-store mutation signal. The remaining args are ordinary reads.
+        Value::Call(op, args) if cx.writes.contains(op) && !args.is_empty() => {
+            classify_write_base(&args[0], cx, acc, is_setter(*op, cx.data));
+            for a in &args[1..] {
+                classify_access(a, cx, acc);
+            }
+        }
+        other => other.for_each_child(&mut |c| classify_access(c, cx, acc)),
+    }
+}
+
+/// Descend the write-destination base (`args[0]` of a write-through op) through its
+/// projection chain (`d.f[i]=x` → `OpSet…(OpGetField(Var(d),f), …)`) to the root var,
+/// counting projection INDEX args as ordinary reads. The root var is recorded as a
+/// write-target only when `count_target` (an `OpSet*` mutation); otherwise it is a
+/// definitional/bulk destination — neither read nor target.
+fn classify_write_base(node: &Value, cx: &AccessCx, acc: &mut [(u16, u16)], count_target: bool) {
+    match node.unspan() {
+        Value::Var(v) => {
+            if count_target {
+                bump_write(acc, *v);
+            }
+        }
+        Value::Call(op, args) if cx.projs.contains(op) && !args.is_empty() => {
+            classify_write_base(&args[0], cx, acc, count_target);
+            for a in &args[1..] {
+                classify_access(a, cx, acc);
+            }
+        }
+        other => classify_access(other, cx, acc),
+    }
+}
+
 struct Uses {
     get_field: u32,
     op_append: u32,

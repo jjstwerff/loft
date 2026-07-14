@@ -19,6 +19,7 @@
 //! Why the binary (not the in-process harness): these are end-to-end compile diagnostics on
 //! stderr — same approach as `tests/runtime_warnings.rs`.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process::Command;
 
@@ -116,4 +117,94 @@ fn s0_baseline_interpret() {
 #[test]
 fn s0_baseline_native() {
     assert_baseline("--native");
+}
+
+// ── S1: the read / write-target classifier (observable; no warning yet) ─────────────────
+//
+// `LOFT_DUMP_READS` prints `dead-store-dbg: fn=F var=V uses=U reads=R write_targets=W` per
+// user local. S1 adds the classifier that separates a value-observing READ from an `OpSet*`
+// WRITE-TARGET base — decoupled from `uses` (codegen) — so the W-copy dead store becomes
+// visible as `reads=0, write_targets>0`. This locks those numbers so S2 (which turns the
+// signal into a warning) has a regression net for the classifier itself.
+
+/// Parse the `LOFT_DUMP_READS` dump into `(fn, var) -> (reads, write_targets)`.
+fn classifier_dump() -> HashMap<(String, String), (u32, u32)> {
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(spec_path())
+        .env("LOFT_DUMP_READS", "1")
+        .env("LOFT_TIMEOUT", "180")
+        .output()
+        .expect("failed to invoke loft binary");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let mut m = HashMap::new();
+    for line in stderr.lines() {
+        let Some(rest) = line.strip_prefix("dead-store-dbg: ") else {
+            continue;
+        };
+        let (mut f, mut v, mut r, mut w) = (None, None, None, None);
+        for tok in rest.split_whitespace() {
+            if let Some(x) = tok.strip_prefix("fn=") {
+                f = Some(x.to_string());
+            } else if let Some(x) = tok.strip_prefix("var=") {
+                v = Some(x.to_string());
+            } else if let Some(x) = tok.strip_prefix("reads=") {
+                r = x.parse().ok();
+            } else if let Some(x) = tok.strip_prefix("write_targets=") {
+                w = x.parse().ok();
+            }
+        }
+        if let (Some(f), Some(v), Some(r), Some(w)) = (f, v, r, w) {
+            m.insert((f, v), (r, w));
+        }
+    }
+    m
+}
+
+#[test]
+fn s1_classifier_isolates_w_copy_dead_store() {
+    let m = classifier_dump();
+    // user fns are stored as `n_<name>`.
+    let cell = |f: &str, v: &str| -> (u32, u32) {
+        *m.get(&(f.to_string(), v.to_string())).unwrap_or_else(|| {
+            let mut keys: Vec<_> = m.keys().collect();
+            keys.sort();
+            panic!("no classifier dump for {f}/{v}; keys={keys:?}")
+        })
+    };
+
+    // THE signal — W-copy `d` is mutated (`d[0]=9`) but its value is never read. The copy-fill
+    // `d = b.data` (an OpAppendVector) must NOT count as a read here (reads stays 0).
+    assert_eq!(
+        cell("n_w_copy", "d"),
+        (0, 1),
+        "W-copy d must be reads=0 write_targets=1 (the S2 dead-store signal)"
+    );
+
+    // Non-signals — every N-row either keeps a real read or has no write-target.
+    assert!(
+        cell("n_n_read", "d").0 >= 1,
+        "N-read d must have reads>=1 (d[0] is read back)"
+    );
+    assert!(
+        cell("n_n_fresh_used", "e").0 >= 1,
+        "N-fresh e must have reads>=1 (passed to a call)"
+    );
+    assert_eq!(
+        cell("n_n_copy_read", "d").1,
+        0,
+        "N-copy-read d must have write_targets=0 (no OpSet)"
+    );
+
+    // `test_used`-owned scalars must NOT present the S2 signal → no double warning at S2.
+    assert_eq!(
+        cell("n_w_scalar", "a"),
+        (1, 0),
+        "W-scalar a: self-read only, no OpSet write-target"
+    );
+    assert_eq!(
+        cell("n_n_effectful", "x"),
+        (0, 0),
+        "N-effectful x: no write-target"
+    );
 }
