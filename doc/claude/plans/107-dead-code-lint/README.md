@@ -113,22 +113,33 @@ N-method-escape** are the false positives that summary must avoid.
 
 ## What loft already has (verified 2026-07-14)
 
-Running [`spec.loft`](spec.loft) shows loft **already ships `unused_variables`** —
-`Function::test_used` (`src/variables/mod.rs:1666`) warns "`Variable X is never read`"
-when `var.uses == 0`. It fires **correctly today** on:
+Running [`spec.loft`](spec.loft) shows loft **already ships two** dead-code lints:
 
-- **W-scalar** (`a = 3; a += 1`, a unread) ✓
-- **W-accumulator** (`total = 0; for … { total += i }`, total unread) ✓
-- **N-effectful** (`x = use_int(42)`, x unread) ✓ — warns on the binding, exactly right
+1. **`unused_variables`** — `Function::test_used` (`src/variables/mod.rs:1666`) warns
+   "`Variable X is never read`" when `var.uses == 0`. Fires correctly today on **W-scalar**
+   (`a = 3; a += 1` — note `a += 1` does *not* bump `uses`, so the self-read doesn't rescue
+   it), **W-accumulator**, and **N-effectful** (warns on the binding — exactly right).
+2. **`unused_assignments`** — `Function::track_write` (`src/variables/mod.rs:987`, called from
+   the whole-var `var = expr` path at `expressions.rs:1384`) warns "`Dead assignment — X is
+   overwritten before being read`" when a **whole-variable** reassignment overwrites a prior
+   write with no read between (`uses == uses_at_write`, tracked via `write_source` /
+   `uses_at_write`, with branch save/restore).
 
-It does **not** fire on the two cases that actually motivate @PLN107:
+So this is **not greenfield**. The two gaps that motivate @PLN107 are precise:
 
-- **W-copy** (`d = b.data; d[0] = 9`) — `d.uses > 0` because the write-target `d` in
-  `d[0]=9` bumps `uses` via `mark_used`. The lint thinks `d` is used.
-- **W-reassign** — the dead second store to an otherwise-live var.
+- **W-copy** (`d = b.data; d[0] = 9`, d unread) — the motivating footgun. `d.uses > 0`
+  because the write-target base `d` in `d[0]=9` is `in_use`'d (element writes read the base
+  to locate the slot), so `test_used` thinks d is used; and `d[0]=9` is **not** a whole-var
+  reassignment, so `track_write` never sees it. Falls through **both** lints.
+- **W-reassign-final** (`a = 3; print(a); a = 5`, a unread after) — `track_write` only checks
+  at the *next* write, and there is none after `a = 5`; `test_used` sees `uses > 0` (the
+  print). The dead *final* store falls through both. (`a = 3; a = 5` with no read between **is**
+  caught by `track_write` today.)
 
-So this is **not greenfield**. `unused_variables` exists; the gap is that `uses` conflates
-a value-observing **read** with a write-**target** reference.
+The single root cause of the W-copy gap: **`uses` conflates a value-observing read with a
+write-target base reference.** `uses` also drives codegen (last-use elision; `uses == 1`
+checks in `state/codegen.rs`, `parser/operators.rs`, `parser/collections.rs`), so it **must
+not change** — the fix ADDS a counter and derives a read count for the lint only.
 
 ## Mechanism — split `reads` from write-targets in the existing lint
 
@@ -155,21 +166,55 @@ and lower-risk than the from-scratch `use_analysis.rs` pass first sketched. The 
 `use_analysis.rs` classification (`first_arg_write_ops`, `Ctx::ReaderArg`) is the reference
 for *which op positions are writes*; the emission stays in `test_used`.
 
-## Phasing
+## Implementation — small verifiable steps
 
-- **Phase 1 — whole-variable deadness, direct writes only (v1).** Warn when a local is
-  *never* observably read, counting only **direct** mutations (`d.f=x`, `d[i]=x`, `d op= x`,
-  plain reassign) as the dead work (covers W-scalar, W-copy, W-accumulator). Simplest, zero
-  false positives (every direct write's effect is local, so deadness is decidable without
-  interprocedural info). Gate behind a flag first; default-on only after the full suite is
-  clean. **Method calls on the dead receiver are left live in Phase 1.**
-- **Phase 2 — per-store deadness + the effect summary.** (a) Warn on an individual dead
-  store to an otherwise-live variable (W-reassign) — per-store liveness (dead iff the var
-  is not live *immediately after* the store). (b) Build the **self-mutation-only** function
-  effect summary and extend the lint to method-mediated deadness (W-method-mut) without
-  tripping N-method-effect/return/escape.
-- **Phase 3 — default-on + polish.** Flip default; refine the message (list dead
-  mutation sites; distinguish "unused binding, effectful RHS" from "fully dead").
+Phase 1 closes the **W-copy** gap (the motivating footgun). Each step is independently
+landable (compiles + suite green), and each has a concrete pass/fail check against the
+**S0 oracle**. The order front-loads the risk: make the read/write classifier *observable*
+and prove *zero behaviour change* before any warning depends on it; sweep for false
+positives before flipping default-on.
+
+- **S0 — Lock the oracle (test-only, no product change).** Add `tests/dead_code_lint.rs`:
+  compile [`spec.loft`](spec.loft) on **both** backends, collect emitted warnings, assert the
+  *current* set (W-scalar/W-accumulator/N-effectful warn; W-copy + W-reassign-final silent).
+  **Verify:** `cargo test --test dead_code_lint` green; adding a read of `d` to the W-copy row
+  flips it → proves the harness can fail. *Risk: none. Payoff: the regression net for every
+  later step.*
+- **S1 — Observable read count, NO warning (the subtle part, isolated).** Add
+  `write_target_uses: u16` to `Variable`; at the element/field-write base site in the
+  `d[i]=x`/`d.f=x` assign path (`expressions.rs`, where the base is currently `in_use`'d), also
+  bump `write_target_uses`. Derive `reads() = uses − write_target_uses`. Expose via a gated
+  dump (per user var: `uses`, `write_target_uses`, `reads`). **Verify (hand-computed):** on
+  spec.loft, `d`@W-copy → `uses=1, wtu=1, reads=0`; `d`@N-read → `reads ≥ 1`; `e`@N-fresh →
+  `reads ≥ 1` (passed to a call). **S0 oracle unchanged** (`uses` untouched ⇒ codegen
+  byte-identical). *This proves the classifier before anything trusts it.*
+- **S2 — Emit the warning behind an off-by-default flag.** In a sibling `test_dead_stores`
+  (next to `test_used`): `reads() == 0 && write_target_uses > 0 && !argument && !captured &&
+  name∉{_*, *#*, global}` → Warning *"'d' is mutated but its value is never read — the mutation
+  is lost. A whole-value bind (`d = s.f`) COPIES; write through the field (`s.f[i] = …`) or take
+  `&`."* Gate on `LOFT_DEAD_STORES` (default OFF), mirroring `report_copies_enabled()`.
+  **Verify:** flag on → S0 oracle expects exactly **+W-copy**, all N-* silent; flag off →
+  byte-identical to S1.
+- **S3 — Escape + branch hardening.** Add corpus rows: escape-after-mutate (`d[0]=9; sink(d)`,
+  `return d`), conditional read (`if c { use(d) }`), loop cross-iteration read. Each must keep
+  `reads() > 0` (pass-to-call / return / any-path read bumps `uses` but **not**
+  `write_target_uses`). **Verify:** oracle — every N-escape row silent, W-copy still warns, both
+  backends.
+- **S4 — Suite-wide false-positive sweep (the cry-wolf gate).** Run `LOFT_DEAD_STORES=1 make
+  test` + `default/*.loft` + fixtures + consumers. Triage each new warning: real bug → fix;
+  false positive → add a guard + a corpus row; iterate to **zero FPs**. **Verify:** the suite
+  emits only intended warnings; record the real bugs found (expect lib/graphics-class hits).
+  *This is the gate that earns default-on.*
+- **S5 — Flip default-on + graduate.** Default `LOFT_DEAD_STORES` on with `LOFT_NO_DEAD_STORES`
+  opt-out (mirror the @PLN28 diagnostic toggles); fix real hits; graduate `spec.loft` to
+  `tests/scripts/`; document in STDLIB/diagnostics + the `LOFT_LOG` quick-ref. **Verify:**
+  `make ci` green, default-on, oracle locks behaviour on both backends.
+
+**Phase 2 (later, separate steps).** *P2a — dead FINAL store* (W-reassign-final): extend
+`track_write` with a scope-end flush that re-checks the last write's `uses == uses_at_write`.
+*P2b — method-on-dead-receiver* (W-method-mut): build the **self-mutation-only** effect summary
+(§ interprocedural frontier) and extend the lint to `d.push(9)` without tripping
+N-method-effect/return/escape.
 
 ## False-positive guards (the entire risk)
 
