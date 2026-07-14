@@ -3,15 +3,19 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Design — loft Android build target (`aarch64-linux-android`)
+# @PLN106 — loft Android build target (`aarch64-linux-android`)
+
+**Tracker:** [`loft-lang/plans#106`](https://github.com/loft-lang/plans/issues/106) — the
+B2–B4 arc (APK packaging · EGL/GL surface · touch/IME). B0/B1 are this doc's §0–§1b.
 
 **Status:** **B0 CONFIRMED + B1 LANDED** (2026-07-14, on `tuxedo-work`). The invariant
 held: loft's target-agnostic generated core cross-compiles to `aarch64-linux-android`
 unchanged, and `loft --native-android <prog>` now produces a genuine bionic AArch64
-`.so`. B2–B4 (APK packaging, EGL/ANativeWindow, touch/IME) remain — they need a device
-or emulator, so they are the next phases. **Consumer / dogfood:** `../ssh_home` (a
-pure-loft SSH phone terminal) is unblocked for its headless slice; its GL surface waits on
-B3. **Branch:** `tuxedo-work` (graduates to its own `loft-lang/plans` issue for B2+).
+`.so`. B2–B4 remain and are tracked in @PLN106; they are validatable **locally on the
+KVM-accelerated Android emulator** (build the x86_64 twin via
+`LOFT_ANDROID_TARGET=x86_64-linux-android`), so they are not device-blocked. **Consumer /
+dogfood:** `../ssh_home` (a pure-loft SSH phone terminal) is unblocked for its headless
+slice; its GL surface waits on B3. **Branch:** `tuxedo-work`.
 
 ## 0. What B0 found (the falsification pass — run, not guessed)
 
