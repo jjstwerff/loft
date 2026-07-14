@@ -40,6 +40,24 @@ exists. Verify by running the full nextest suite 3× (they must pass every time)
 isolated test (which already passes). This is a **separate GitHub issue** against the
 engine-host/live-flip harness — file it (pre-existing, both-mode).
 
+**Investigation update (do not fix on a guess — the mechanism is not yet pinned):**
+- **RULED OUT — s5/s7 mutual port collision.** `test_port(base) = base + LOFT_TEST_PORT_OFFSET`
+  (offset per-checkout), so distinct bases give distinct ports; s5 uses 18100, s7 uses 18108,
+  and the kernel tests' bases are all distinct — no cross-talk between them.
+- **Narrowed to load-dependence.** The engine binary passes 16/16 (threaded, one process,
+  V2 on AND off); the flake needs the FULL nextest suite (process-per-test, max CPU
+  pressure). The s5 subprocess is `loft` on the DEFAULT backend = `--native` → a rustc
+  compile per spawn, then a live rebuild for S3/S4 — all slow under load. The first-ask
+  `v2:a#47` (version already flipped + 47 events before the test's first `ask`) is consistent
+  with the subprocess running far ahead by the time the test connects under pressure, OR a
+  `ws_recv` returning a queued/later frame. Both are timing, not logic.
+- **Disambiguation step (before any fix):** reproduce under artificial load (run the kernel
+  binary under `nextest` at high `--test-threads` with a CPU stressor) and capture the
+  subprocess `err_path` on a failing run — the stderr shows the real event/flip sequence,
+  which separates "extra events fired" (→ option 2 delta-relativize) from "ws frame desync"
+  (→ drain/resync before the baseline ask) from "deadline too tight" (→ scale the deadlines
+  with a load factor). Fix the pinned mechanism, then verify 3× full-suite.
+
 ## Track B — loft Android build target (for ssh_home; loft-side feature)
 
 `../ssh_home` (a pure-loft SSH phone terminal) needs loft to grow an Android target. From
