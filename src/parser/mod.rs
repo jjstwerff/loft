@@ -1151,11 +1151,12 @@ impl Parser {
             // BEFORE this pass (force_tret), so every caller — forward- OR backward-ref
             // — re-lowers with the buffer (no ABI-growth crash).  Post-H5, so the extra
             // attrs never trip the pass1==pass2 contract.
-            if !self.force_tret.is_empty() && std::env::var_os("LOFT_TRET_V2").is_some() {
-                // @PLN104 — the TARGETED promotion (redesign): promote only the force_tret
-                // callees + patch only their direct callers, IN PLACE on the pass-2 IR. No
-                // whole-file re-parse → no non-idempotent collateral (var__vec / diagnostics
-                // / s5-s7). Replaces the third pass below once it verifies green default-on.
+            if !self.force_tret.is_empty() && std::env::var_os("LOFT_TRET_THIRD_PASS").is_none() {
+                // @PLN104 — the TARGETED promotion (redesign, now DEFAULT): promote only the
+                // force_tret callees + patch only their direct callers, IN PLACE on the pass-2
+                // IR. No whole-file re-parse → no non-idempotent collateral (var__vec /
+                // diagnostics / s5-s7). The third pass below is kept, opt-in via
+                // LOFT_TRET_THIRD_PASS, only for comparison until it is deleted.
                 self.targeted_tret_promotion();
             } else if !self.force_tret.is_empty() {
                 // @PLN104 — the third pass is a re-lowering, not a fresh analysis: it

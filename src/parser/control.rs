@@ -8049,7 +8049,9 @@ impl Parser {
     /// `LOFT_TRET_REPORT` additionally prints each flagged def.
     pub(crate) fn report_tret_promotions(&mut self) {
         let report = std::env::var_os("LOFT_TRET_REPORT").is_some();
-        let fix = std::env::var_os("LOFT_TRET_FIX").is_some();
+        // @PLN104 default-on trial: the targeted promotion (V2) is now the default fix for
+        // the #568 owned-text-return leak; opt OUT with LOFT_NO_TRET_FIX.
+        let fix = std::env::var_os("LOFT_NO_TRET_FIX").is_none();
         if !report && !fix {
             return;
         }
