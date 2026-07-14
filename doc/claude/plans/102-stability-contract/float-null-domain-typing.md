@@ -5,13 +5,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN102 — Float domain-partial ops type `τ?` (the DN3 float extension)
 
-> **Status: design, spec-first (2026-07-11).** The formal rule is written into
-> [types.md](../../formal/types.md) (DN3 float extension) BEFORE any code — this doc is
-> the detailed design behind it. A pre-freeze-only change (it alters a frozen SIGNATURE
-> surface, so it can only land while `contract` is still 0). **No runtime error is
-> added** — this is entirely a compile-time *type* change. Owner directive that shaped
-> it: *"a null is fine, errors never"* + *"use the types to give warnings about potential
-> nulls"* (DESIGN_DECISIONS [C80](../../DESIGN_DECISIONS.md), the spreadsheet fault model).
+> **Status: SHIPPED — FLIPPED DEFAULT-ON (2026-07-11, the @PLN102 null-flow cutover).**
+> This doc was written spec-first; the implementation landed the same day and is now the
+> default (`nullflow_enabled()` in `src/keys.rs` — true unless `LOFT_NO_NULLFLOW`; the old
+> opt-in `LOFT_NULLFLOW` is a redundant no-op). Live on `main`: the domain functions in
+> `default/01_code.loft` return `float?`/`single?` (`sqrt`/`asin`/`acos`/`ln`/`log`/`log2`/
+> `log10`/`pow`), the float `/`/`%` div gate types `float?`, and (N-Prop)/(N-Warn)/(N-Cast)
+> are enforced (verified: `return sqrt(y)` into a non-null `float` warns; `sqrt(y)+1.0`
+> stays `float?`; both compile and run). The rest of this doc is the design record behind
+> the shipped feature. A pre-freeze-only change (it alters a frozen SIGNATURE surface, so
+> it landed while `contract` is still 0). **No runtime error added** — entirely a
+> compile-time *type* change. Owner directive: *"a null is fine, errors never"* + *"use the
+> types to give warnings about potential nulls"* (DESIGN_DECISIONS
+> [C80](../../DESIGN_DECISIONS.md), the spreadsheet fault model).
 
 ## The problem — the float type lies about null, the integer type does not
 
