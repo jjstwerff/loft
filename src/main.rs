@@ -5862,7 +5862,11 @@ fn main() {
                 std::process::exit(1);
             }
         }
-        let result = target.build(&rs_path, std::path::Path::new(&android_out));
+        let result = target.build(
+            &rs_path,
+            std::path::Path::new(&android_out),
+            &p.data.native_packages,
+        );
         if std::env::var("LOFT_KEEP_NATIVE_RS").is_err() {
             let _ = std::fs::remove_file(&rs_path);
         } else {

@@ -103,6 +103,21 @@ impl AndroidTarget {
             .join(format!("{}{}-clang", self.triple, self.api))
     }
 
+    /// The NDK's `libc++_shared.so` for this triple — bundled into the APK because
+    /// the generated cdylib links it (`-lc++_shared`, for `oboe`'s C++).
+    fn libcxx_shared(&self) -> PathBuf {
+        self.ndk
+            .join("toolchains")
+            .join("llvm")
+            .join("prebuilt")
+            .join(host_tag())
+            .join("sysroot")
+            .join("usr")
+            .join("lib")
+            .join(&self.triple)
+            .join("libc++_shared.so")
+    }
+
     /// Wrap the emitted program `rs_path` in a `NativeActivity` cdylib and build
     /// it into `out_path` — the whole `--native-android` pipeline. `main.rs` only
     /// emits the program `.rs` and calls this. The output type is the extension:
@@ -115,7 +130,12 @@ impl AndroidTarget {
     /// dep, then `cargo build --release --target <triple>`. Cargo (not hand-rolled
     /// rustc) owns the `android-activity` dep tree and the cross-build of loft, so
     /// there is no transitive-rlib bookkeeping here.
-    pub(crate) fn build(&self, rs_path: &Path, out_path: &Path) -> Result<(), String> {
+    pub(crate) fn build(
+        &self,
+        rs_path: &Path,
+        out_path: &Path,
+        native_packages: &[(String, String)],
+    ) -> Result<(), String> {
         let tree = crate::native_utils::loft_source_tree().ok_or_else(|| {
             "loft: --native-android needs loft's source tree to cross-build its Android \
              runtime; run it from a loft checkout (a downloaded release ships no Android \
@@ -140,15 +160,25 @@ impl AndroidTarget {
             let _ = f.lock();
         }
 
+        // A windowing native package (lib/graphics) needs the `AndroidApp` handed to
+        // it before the program runs (the OS entry lives here, not in the package —
+        // see android_gl.rs); the entry tail passes it via `loft_gl_android_set_app`.
+        let needs_gl_app = native_packages
+            .iter()
+            .any(|(c, _)| c == "loft-graphics-native");
+
         // Crate root = the emitted program (its crate-level `#![allow]` attrs and
         // `fn main` stay valid at the root) + the android_main entry tail.
         let program = std::fs::read_to_string(rs_path)
             .map_err(|e| format!("loft: read emitted program {}: {e}", rs_path.display()))?;
-        let lib_rs = format!("{program}\n{ANDROID_MAIN_TAIL}");
+        let lib_rs = format!("{program}\n{}", android_main_tail(needs_gl_app));
         std::fs::write(src_dir.join("lib.rs"), lib_rs)
             .map_err(|e| format!("loft: write lib.rs: {e}"))?;
-        std::fs::write(crate_dir.join("Cargo.toml"), cargo_toml(&tree))
-            .map_err(|e| format!("loft: write Cargo.toml: {e}"))?;
+        std::fs::write(
+            crate_dir.join("Cargo.toml"),
+            cargo_toml(&tree, native_packages),
+        )
+        .map_err(|e| format!("loft: write Cargo.toml: {e}"))?;
 
         let linker = self.linker();
         let mut cmd = std::process::Command::new("cargo");
@@ -159,13 +189,22 @@ impl AndroidTarget {
             .env(cargo_linker_var(&self.triple), &linker)
             .env(format!("CC_{}", self.triple), &linker)
             .env(
+                format!("CXX_{}", self.triple),
+                self.toolchain_bin()
+                    .join(format!("{}{}-clang++", self.triple, self.api)),
+            )
+            .env(
                 format!("AR_{}", self.triple),
                 self.toolchain_bin().join("llvm-ar"),
             )
             // Host RUSTFLAGS (target-cpu etc.) are host-specific and would break the
-            // Android build — this crate is target-defined, not host-flag-defined.
-            .env_remove("RUSTFLAGS")
+            // Android build. Replace them with just the one link-arg the Android
+            // cdylib needs: link the NDK's `libc++_shared` so a C++ dependency
+            // (rodio's `oboe` audio backend) resolves `__cxa_pure_virtual` etc.
+            // `package_apk` bundles `libc++_shared.so` next to the app `.so`.
+            // link-args are ignored for the rlib deps, so this only affects the cdylib.
             .env_remove("CARGO_ENCODED_RUSTFLAGS")
+            .env("RUSTFLAGS", "-Clink-arg=-lc++_shared")
             .stdout(std::process::Stdio::inherit())
             .stderr(std::process::Stdio::inherit());
         let status = cmd
@@ -240,6 +279,12 @@ impl AndroidTarget {
             .map_err(|e| format!("loft: create {}: {e}", lib_dir.display()))?;
         std::fs::copy(so_path, lib_dir.join(format!("lib{LIB_NAME}.so")))
             .map_err(|e| format!("loft: stage .so: {e}"))?;
+        // Bundle libc++_shared.so (the app .so links it for oboe's C++).
+        let libcxx = self.libcxx_shared();
+        if libcxx.is_file() {
+            std::fs::copy(&libcxx, lib_dir.join("libc++_shared.so"))
+                .map_err(|e| format!("loft: stage libc++_shared.so: {e}"))?;
+        }
         let manifest = work.join("AndroidManifest.xml");
         std::fs::write(&manifest, android_manifest(&app, LIB_NAME))
             .map_err(|e| format!("loft: write manifest: {e}"))?;
@@ -265,9 +310,9 @@ impl AndroidTarget {
             "aapt2 link",
         )?;
 
-        // Add lib/<abi>/lib*.so to the APK zip via the JDK `jar` (no separate `zip`
-        // dependency; `-M` keeps jar from injecting a MANIFEST.MF that would collide
-        // with apksigner's signing block).
+        // Add the whole `lib/<abi>/` tree (the app .so + libc++_shared.so) to the APK
+        // zip via the JDK `jar` (no separate `zip` dependency; `-M` keeps jar from
+        // injecting a MANIFEST.MF that would collide with apksigner's signing block).
         run_tool(
             std::process::Command::new(sdk.jar())
                 .current_dir(work.join("staging"))
@@ -275,8 +320,8 @@ impl AndroidTarget {
                 .arg("--no-manifest")
                 .arg("--file")
                 .arg(&base)
-                .arg(format!("lib/{}/lib{LIB_NAME}.so", self.abi())),
-            "jar (add native lib)",
+                .arg("lib"),
+            "jar (add native libs)",
         )?;
 
         let aligned = work.join("aligned.apk");
@@ -544,13 +589,34 @@ fn highest_platform(dir: &Path) -> Option<(PathBuf, u32)> {
 }
 
 /// The generated crate's `Cargo.toml`: a `cdylib` NativeActivity app depending on
-/// `android-activity` (+ logging + libc) and a lean `loft` path dep (matching the B1
-/// runtime: `random` + `threading`, no `ring`/registry). The empty `[workspace]`
-/// stops cargo walking up into the loft package that contains this directory. The
-/// path is Debug-quoted via a `String` (not the `Path`, which the lint rejects as
-/// lossy) so it lands as a properly-escaped TOML string.
-fn cargo_toml(tree: &Path) -> String {
-    let tree = tree.display().to_string();
+/// `android-activity` (+ logging + libc), a lean `loft` path dep (B1 runtime:
+/// `random` + `threading`, no `ring`/registry), and each of the program's native
+/// packages as a **path (rlib) dep** — the generated code names them with `extern
+/// crate` (the non-C-ABI path), and linking them as rlibs (not sealed cdylibs)
+/// unifies `android-activity` so the graphics backend and the entry share one
+/// `AndroidApp` type. `[patch.crates-io]` points the packages' `loft-ffi` /
+/// `loft-ffi-macros` at loft's own copies so there is ONE `loft-ffi` (no colliding
+/// `StableCrateId`). The empty `[workspace]` stops cargo walking up into the loft
+/// package that contains this directory. Paths are Debug-quoted via `String` (not
+/// `Path`, which the lint rejects as lossy) so they land as escaped TOML strings.
+fn cargo_toml(tree: &Path, native_packages: &[(String, String)]) -> String {
+    let tree_s = tree.display().to_string();
+    let mut pkg_deps = String::new();
+    for (crate_name, pkg_dir) in native_packages {
+        let native_dir = Path::new(pkg_dir).join("native").display().to_string();
+        pkg_deps.push_str(&format!("{crate_name} = {{ path = {native_dir:?} }}\n"));
+    }
+    let patch = if native_packages.is_empty() {
+        String::new()
+    } else {
+        let ffi = tree.join("loft-ffi").display().to_string();
+        let ffi_macros = tree.join("loft-ffi-macros").display().to_string();
+        format!(
+            "\n[patch.crates-io]\n\
+             loft-ffi = {{ path = {ffi:?} }}\n\
+             loft-ffi-macros = {{ path = {ffi_macros:?} }}\n"
+        )
+    };
     format!(
         "[package]\n\
          name = \"loft_android_app\"\n\
@@ -565,19 +631,36 @@ fn cargo_toml(tree: &Path) -> String {
          log = \"0.4\"\n\
          android_logger = \"0.14\"\n\
          libc = \"0.2\"\n\
-         loft = {{ path = {tree:?}, default-features = false, features = [\"random\", \"threading\"] }}\n\n\
+         loft = {{ path = {tree_s:?}, default-features = false, features = [\"random\", \"threading\"] }}\n\
+         {pkg_deps}\n\
          [profile.release]\n\
-         opt-level = 2\n"
+         opt-level = 2\n\
+         {patch}"
     )
 }
 
-/// The Android `NativeActivity` entry, appended verbatim to the emitted program's
-/// crate root. `android-activity` (native-activity) exports `ANativeActivity_onCreate`
-/// and calls this `android_main` on a dedicated thread; we run the loft program's
-/// `main` in it and forward the program's stdout into logcat so `print()` output is
-/// visible via `adb logcat`.
-const ANDROID_MAIN_TAIL: &str = r#"
-// ---- @PLN106 B2: Android NativeActivity entry (emitted by --native-android) ----
+/// The Android `NativeActivity` entry, appended to the emitted program's crate root.
+/// `android-activity` (native-activity) exports `ANativeActivity_onCreate` and calls
+/// this `android_main` on a dedicated thread; we run the loft program's `main` in it
+/// and forward the program's stdout into logcat so `print()` shows up in `adb logcat`.
+///
+/// When the program uses the graphics backend (`needs_gl_app`), the entry first hands
+/// the `AndroidApp` to it via `loft_gl_android_set_app` (the seam in
+/// `lib/graphics`'s `android_gl.rs`), so `loft_gl_create_window` can reach the
+/// `ANativeWindow`. Sound because loft links the graphics crate as a unified rlib on
+/// Android (see `cargo_toml`), so the `AndroidApp` type is shared.
+fn android_main_tail(needs_gl_app: bool) -> String {
+    let set_app = if needs_gl_app {
+        "    unsafe extern \"C\" { fn loft_gl_android_set_app(app_ptr: *const std::ffi::c_void); }\n\
+         \x20   unsafe { loft_gl_android_set_app(&app as *const _ as *const std::ffi::c_void); }\n"
+    } else {
+        ""
+    };
+    [ANDROID_TAIL_PREFIX, set_app, ANDROID_TAIL_SUFFIX].concat()
+}
+
+const ANDROID_TAIL_PREFIX: &str = r#"
+// ---- @PLN106 B2/B3: Android NativeActivity entry (emitted by --native-android) ----
 fn __loft_android_redirect_stdio_to_logcat() {
     #[link(name = "log")]
     unsafe extern "C" {
@@ -634,7 +717,11 @@ extern "C" fn android_main(app: android_activity::AndroidApp) {
     );
     log::info!("loft --native-android: android_main reached");
     __loft_android_redirect_stdio_to_logcat();
-    // Run the loft program (its `fn main`); stdout is now piped into logcat.
+"#;
+
+/// The rest of the entry: run the program's `main`, then keep the activity alive.
+/// `android_main_tail` splices the graphics seam (if any) between the prefix and this.
+const ANDROID_TAIL_SUFFIX: &str = r#"    // Run the loft program (its `fn main`); stdout is now piped into logcat.
     main();
     log::info!("loft --native-android: program returned");
     // Stay alive to drain lifecycle events (a real app renders here) until the OS
