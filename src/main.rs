@@ -124,7 +124,8 @@ fn print_help() {
     println!("                                (default: .loft/<script>.rs beside the script)");
     println!("  --native-wasm [out.wasm]      compile to WebAssembly (wasm32-wasip2)");
     println!(
-        "  --native-android [out.so]     cross-compile to an Android cdylib .so (needs ANDROID_NDK_HOME)"
+        "  --native-android [out.so]     cross-compile to an Android NativeActivity .so \
+         (android_main entry; needs ANDROID_NDK_HOME)"
     );
     println!("                                (default: .loft/<script>.wasm beside the script)");
     println!("                                for headless/WASI (wasmtime); NOT the browser build");
@@ -5794,10 +5795,11 @@ fn main() {
         return;
     }
 
-    // Android cross-compile pipeline: --native-android (@PLN-android B1).
+    // Android cross-compile pipeline: --native-android (@PLN106 B1+B2).
     // Emits the SAME target-agnostic Rust as --native / --native-wasm and hands
-    // it to the Android descriptor (src/android.rs), which cross-builds loft's
-    // Android runtime rlib and links a bionic-AArch64 cdylib `.so`.
+    // it to the Android descriptor (src/android.rs), which wraps it in a generated
+    // NativeActivity crate (an `android_main` entry) and cross-builds a bionic
+    // cdylib `.so` with cargo + the NDK toolchain.
     if let Some(ref android_out) = native_android {
         let android_out = if android_out.is_empty() {
             default_artifact_path(&abs_file, "so")
@@ -5815,6 +5817,15 @@ fn main() {
             }
         };
         let end_def = p.data.definitions();
+        // The generated `android_main` runs the program's `fn main`, so an Android
+        // app needs one (unlike a `--native` test file, which can be entry-less).
+        if p.data.def_nr("n_main") >= end_def {
+            eprintln!(
+                "loft: --native-android needs a `fn main` (it becomes the app's \
+                 android_main entry); '{abs_file}' defines none."
+            );
+            std::process::exit(1);
+        }
         // Per-process scratch so parallel --native-android runs never share the
         // generated source (one rustc reading another's program).
         let build_dir = platform::build_scratch_dir("android");

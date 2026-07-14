@@ -1,14 +1,15 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN-android B1 — the `--native-android` build target (src/android.rs).
+// @PLN106 B1+B2 — the `--native-android` build target (src/android.rs).
 //
-// The design's invariant (doc/claude/plans/android-build-target.md): a loft build
-// target is a *descriptor* over ONE target-agnostic generated-Rust core, so the
-// same source `--native` compiles for the host cross-compiles to a bionic AArch64
-// `.so` with only toolchain/entry/packaging differences — no Android codegen path.
-// B0 confirmed the core cross-compiles; this checks the loft-driven pipeline
-// (emit → cross-build runtime rlib → link cdylib) end to end.
+// The design's invariant (doc/claude/plans/106-android-build-target/README.md): a
+// loft build target is a *descriptor* over ONE target-agnostic generated-Rust core,
+// so the same source `--native` compiles for the host cross-compiles to a bionic
+// AArch64 `.so` with only toolchain/entry/packaging differences — no Android codegen
+// path. This checks the loft-driven pipeline end to end: emit → wrap in a generated
+// NativeActivity crate → cross-build a cdylib that exports `android_main` +
+// `ANativeActivity_onCreate` (the B2 runtime entry).
 //
 // The build test needs the Android NDK, which the normal CI images lack, so it is
 // a SEPARATE, opt-in leg gated on `ANDROID_NDK_HOME` (like the daily Windows leg,
@@ -43,9 +44,18 @@ fn is_aarch64_elf(path: &std::path::Path) -> bool {
         && u16::from_le_bytes([bytes[18], bytes[19]]) == 183 // EM_AARCH64
 }
 
+/// True if the `.so` contains `sym` in its (dynamic) symbol string table. A raw
+/// byte scan — enough to confirm an exported entry without an NDK `readelf` on the
+/// test host (the name lives verbatim in `.dynstr`).
+fn so_names_symbol(path: &std::path::Path, sym: &str) -> bool {
+    std::fs::read(path).is_ok_and(|bytes| bytes.windows(sym.len()).any(|w| w == sym.as_bytes()))
+}
+
 /// `--native-android` on a non-trivial program (struct + fn + for-loop + string
-/// interpolation) produces a real AArch64 shared object.  Skipped unless
-/// `ANDROID_NDK_HOME` is set, so a normal `cargo test` run never needs an NDK.
+/// interpolation) produces a real AArch64 `NativeActivity` shared object — a valid
+/// AArch64 ELF that exports the `android_main` + `ANativeActivity_onCreate` entry
+/// (B2). Skipped unless `ANDROID_NDK_HOME` is set, so a normal `cargo test` run
+/// never needs an NDK.
 #[test]
 fn android_native_so_is_aarch64_elf() {
     if std::env::var_os("ANDROID_NDK_HOME").is_none()
@@ -75,7 +85,7 @@ fn main() {
         .arg("--native-android")
         .arg(&out_so)
         .arg(&probe)
-        // The runtime-rlib cross-build can take a minute cold; give it room.
+        // The cargo cross-build of android-activity + loft can take a minute cold.
         .env("LOFT_TIMEOUT", "600")
         .output()
         .expect("spawn loft");
@@ -91,6 +101,14 @@ fn main() {
         out_so.display(),
         String::from_utf8_lossy(&out.stderr)
     );
+    // The B2 runtime entry: the .so is a NativeActivity, not a bare cdylib.
+    for sym in ["android_main", "ANativeActivity_onCreate"] {
+        assert!(
+            so_names_symbol(&out_so, sym),
+            "output {} does not export `{sym}` (not a NativeActivity)",
+            out_so.display()
+        );
+    }
 }
 
 /// Without an NDK, `--native-android` fails fast with a message that names the env

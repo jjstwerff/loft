@@ -9,10 +9,17 @@ This throwaway spike proved the @PLN106 **B2 (R) gate end to end**: a loft progr
 wrapped in an Android `NativeActivity`, installs + launches on a headless emulator and
 runs — `android_main` reached, and the loft program computed the right answer on-device.
 
-**It is a spike, not the feature.** The real B2 has *loft itself* emit the `android_main`
-entry + package the APK (the runtime-entry descriptor field of `src/android.rs`); this
-crate hand-wraps the loft-emitted `.rs` to de-risk the pipeline and pin the exact working
-recipe. The files here are reference — reproduce, don't depend.
+> **UPDATE (2026-07-14): the wrapper is now emitted by loft itself.** `loft
+> --native-android` generates the `android_main` `NativeActivity` entry (see
+> `src/android.rs` `ANDROID_MAIN_TAIL`), so `Cargo.toml` / `src/lib.rs` / `cargo-config.toml`
+> here are **historical** — you no longer hand-write them. What is still live: **`build_apk.sh`
+> + `run_emulator_test.sh`** are the packaging + emulator recipe (loft emits the `.so`;
+> wrapping it into a signed APK and launching it is still manual). Point `SO=` at loft's
+> `--native-android` output.
+
+**It was a spike, not the feature.** It hand-wrapped the loft-emitted `.rs` to de-risk the
+pipeline and pin the exact working recipe before that wrapper moved into loft. The crate
+files are reference — reproduce, don't depend.
 
 ## Proof (emulator logcat, x86_64 system image, API 34)
 
