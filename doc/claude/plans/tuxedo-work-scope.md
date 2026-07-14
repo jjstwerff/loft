@@ -51,12 +51,26 @@ engine-host/live-flip harness — file it (pre-existing, both-mode).
   `v2:a#47` (version already flipped + 47 events before the test's first `ask`) is consistent
   with the subprocess running far ahead by the time the test connects under pressure, OR a
   `ws_recv` returning a queued/later frame. Both are timing, not logic.
-- **Disambiguation step (before any fix):** reproduce under artificial load (run the kernel
-  binary under `nextest` at high `--test-threads` with a CPU stressor) and capture the
-  subprocess `err_path` on a failing run — the stderr shows the real event/flip sequence,
-  which separates "extra events fired" (→ option 2 delta-relativize) from "ws frame desync"
-  (→ drain/resync before the baseline ask) from "deadline too tight" (→ scale the deadlines
-  with a load factor). Fix the pinned mechanism, then verify 3× full-suite.
+- **RULED OUT — generic CPU load.** s5+s7 pass 10/10 under 16-core saturation in isolation,
+  so raw pressure is not it; the trigger is *concurrent engine_host tests* (full-suite only).
+- **PINNED (commit `3ff5cf56`) — leaked swap-child orphan on the port.** `s5_kill_stale` greps
+  `pgrep -f <cache-stem>`, but the native SWAP CHILD (hot-swapped v2 build) runs from
+  `loft_native_bin_*` in the scratch dir — its command line lacks the stem, so the stem pgrep
+  MISSES it. When a prior run's `Guard::drop` process-group kill is skipped (nextest SIGKILLs
+  a timed-out test → no unwinding → no Drop), the orphan survives on the port and the next
+  `ws_connect(port)` binds the stale, already-flipped, high-count world → `v2:a#47` /
+  `got:a#236`. **Confirmed empirically:** 30 leaked `loft_native_bin_*` orphans from local
+  runs, NONE matched by the stem pgrep (`pgrep -af 18100` → empty).
+- **Fix landed:** `reap_port(port)` (lsof) reaps ANY process bound to the port before the test
+  reuses it — after `s5_kill_stale`, before spawn. Plus the s5 first-ask assertion now dumps
+  subprocess stderr so a future CI flake captures the proof directly. Verified: s5+s7 isolated
+  green, full engine binary 16/16, fmt+clippy clean, 30 local orphans reaped to 0.
+- **Caveat (honest):** the flake is intermittent and I could not force it on demand (it needs a
+  prior run to have leaked an orphan on THIS test's exact port), so I could not prove the flake
+  is gone — only that the confirmed reaping gap is closed and the rest is instrumented. Final
+  confirmation is soak: watch these two in CI; if one still flakes, the new stderr dump tells us
+  whether it is the orphan (empty err file) or in-subprocess event accumulation (`LOFT_LIVE_FLIP`
+  auto-flip) — the one mechanism I did not fully trace.
 
 ## Track B — loft Android build target (for ssh_home; loft-side feature)
 
