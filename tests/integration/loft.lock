@@ -11,9 +11,9 @@ source = "registry"
 
 [[package]]
 name = "server"
-version = "0.3.0"
-url = "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.3.0/server-0.3.0.tar.gz"
-sha256 = "86357ff67899a7c0c18e99c41b0116acffd9e435d45aa0d72807a8160dee5420"
+version = "0.3.1"
+url = "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.3.1/server-0.3.1.tar.gz"
+sha256 = "bed2e9b00b8034bde442bc4c7f71acb72761bbf6abdf4ed8c641bd39a2543d99"
 source = "registry"
 deps = ["web"]
 
