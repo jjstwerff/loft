@@ -1324,44 +1324,14 @@ impl Parser {
                 // @PLN25 slice (c): `.base()` — a `-> text?` return dispatches to the same
                 // work-buffer conversion as `-> text` (text_return re-applies the `?`).
                 self.text_return(ls);
-                // @PLN104 (b2) — restore `a == v` for a late-promoted retbuf. On the
-                // third pass `do_tret_bind` mints the retbuf variable AFTER the inherited
-                // `__work_1`, so its variable index `tv` exceeds its attribute index `a`.
-                // The returned-type dep is resolved in BOTH attribute-space (the signature
-                // render) AND variable-space (the block dep + delivery), so `a != v`
-                // orphans the owned text on the interpreter (loft-lang/loft#568). Renumber
-                // the retbuf into the slot matching its attribute index (its position among
-                // `arguments()`): the IR body + embedded type deps (`renumber_frame_var`),
-                // the typedef deps (`renumber_frame_in_types`), and the variable table
-                // (`swap_variables`) move in tandem. Gated on `force_tret`, so the 2-pass
-                // flow is untouched. The `r = f(x); r` workaround gets `a == v` for free.
-                if self.force_tret.contains(&self.context)
-                    && ls.len() == 1
-                    && let Some(a) = self
-                        .vars
-                        .arguments()
-                        .iter()
-                        .position(|&x| x == ls[0])
-                        .map(|p| p as u16)
-                {
-                    let tv = ls[0];
-                    if a != tv {
-                        // 3-way swap `a <-> tv` of every frame reference; `tmp` is a fresh
-                        // scratch index (one past the live vars), fully undone below.
-                        let tmp = self.vars.count();
-                        for op in l.iter_mut() {
-                            Self::renumber_frame_var(op, a, tmp);
-                            Self::renumber_frame_var(op, tv, a);
-                            Self::renumber_frame_var(op, tmp, tv);
-                        }
-                        self.vars.renumber_frame_in_types(a, tmp);
-                        self.vars.renumber_frame_in_types(tv, a);
-                        self.vars.renumber_frame_in_types(tmp, tv);
-                        self.vars.swap_variables(a, tv);
-                    }
-                    // block dep names the retbuf's (post-swap) slot `a`; the returned dep
-                    // (attribute-space `a`, set by `text_return`) resolves there too.
-                    tp = Type::Text(Deps::frame1(a));
+                // @PLN104 — restore `a == v` for a late-promoted retbuf (the third-pass
+                // `do_tret_bind` mints it AFTER the inherited `__work_1`, so its variable
+                // index exceeds its attribute index; the returned dep, resolved in BOTH
+                // spaces, then orphans the owned text — loft#568).  Shared with the targeted
+                // promotion's Phase A (`av_renumber_retbuf`).  Gated on `force_tret`, so the
+                // 2-pass flow is untouched.
+                if self.force_tret.contains(&self.context) && ls.len() == 1 {
+                    tp = self.av_renumber_retbuf(l, ls[0]);
                 }
             } else if !vec_arm_handled && let Type::Vector(elm, ls) = t {
                 // @PLN85 / D-own-1 — classify ONCE from the deps fact + tail shape,
@@ -1402,6 +1372,41 @@ impl Parser {
             }
         }
         tp
+    }
+
+    /// @PLN104 — restore the `a == v` invariant for a promoted text retbuf `tv` (its return
+    /// dep is resolved in BOTH attribute- and variable-space, so the two indices must agree,
+    /// else the owned text orphans on the interpreter — loft#568).  Swap `tv` into the
+    /// variable slot matching its attribute index (its position among `arguments()`), moving
+    /// the body IR `l`, the typedef deps, and the variable table in tandem.  Returns the block
+    /// type naming the retbuf's (post-swap) slot.  Shared by `block_result`'s third-pass swap
+    /// and the targeted promotion's Phase A.  `self.vars` / `self.context` must already be the
+    /// promoted def's (block_result is inside its parse; Phase A swaps them in first).
+    fn av_renumber_retbuf(&mut self, l: &mut [Value], tv: u16) -> Type {
+        let Some(a) = self
+            .vars
+            .arguments()
+            .iter()
+            .position(|&x| x == tv)
+            .map(|p| p as u16)
+        else {
+            return Type::Text(Deps::frame1(tv));
+        };
+        if a != tv {
+            // 3-way swap `a <-> tv` of every frame reference; `tmp` is a fresh scratch index
+            // (one past the live vars), fully undone below.
+            let tmp = self.vars.count();
+            for op in l.iter_mut() {
+                Self::renumber_frame_var(op, a, tmp);
+                Self::renumber_frame_var(op, tv, a);
+                Self::renumber_frame_var(op, tmp, tv);
+            }
+            self.vars.renumber_frame_in_types(a, tmp);
+            self.vars.renumber_frame_in_types(tv, a);
+            self.vars.renumber_frame_in_types(tmp, tv);
+            self.vars.swap_variables(a, tv);
+        }
+        Type::Text(Deps::frame1(a))
     }
 
     /// @PLN85 / D-own-1 — the SELECTOR for an implicit-tail `t == Vector` return:
@@ -8169,6 +8174,182 @@ impl Parser {
             &mut self.data.definitions[d_nr as usize].variables,
         );
         self.context = saved_ctx;
+    }
+
+    /// @PLN104 targeted promotion — Phase A (CALLEE): promote a `force_tret` def's owned-text
+    /// return to a hidden `&text` retbuf IN PLACE on the pass-2 IR — NO whole-file re-parse
+    /// (the third pass re-lowers every def non-idempotently, damaging unpromoted collateral —
+    /// the `var__vec` / diagnostic / s5-s7 class).  Mirrors `promote_monomorph_text_return`
+    /// (swap the def's var table + code onto `self`, rebind the tail + early returns through
+    /// `__tret`, `text_return`), THEN the `a == v` renumber + stamps the block type.  The
+    /// promotion is already DECIDED (`force_tret`), so there is no tail-promotability gate.
+    /// Phase B (`patch_tret_callers`) pushes the retbuf arg at each call site.
+    pub(crate) fn promote_text_return_def(&mut self, d_nr: u32) {
+        if !matches!(
+            self.data.definitions[d_nr as usize].returned.base(),
+            Type::Text(_)
+        ) {
+            return;
+        }
+        let saved_ctx = self.context;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = d_nr;
+        let mut code =
+            std::mem::replace(&mut self.data.definitions[d_nr as usize].code, Value::Null);
+        if let Value::Block(bl) = &mut code
+            && !bl.operators.is_empty()
+        {
+            let tv = self.create_unique("__tret", &Type::Text(Deps::none()));
+            if tv != u16::MAX {
+                // Route every EARLY `return <e>` through the buffer, then the tail:
+                // bare `<call>` → `Set(__tret, <call>); __tret`; `return <call>` likewise.
+                let last = bl.operators.len() - 1;
+                for op in &mut bl.operators[..last] {
+                    Self::rewrite_text_returns_into(op, tv);
+                }
+                if matches!(bl.operators[last].unspan(), Value::Return(_)) {
+                    let ret = std::mem::replace(
+                        &mut bl.operators[last],
+                        Value::Return(Box::new(Value::Var(tv))),
+                    );
+                    bl.operators
+                        .insert(last, crate::data::v_set(tv, Self::peel_to_inner_call(ret)));
+                } else {
+                    let call = std::mem::replace(&mut bl.operators[last], Value::Var(tv));
+                    bl.operators.insert(last, crate::data::v_set(tv, call));
+                }
+                // Stamp the hidden `&text` retbuf attr + returned type, then align `a == v`.
+                self.text_return(&[tv]);
+                bl.result = self.av_renumber_retbuf(&mut bl.operators, tv);
+            }
+        }
+        self.data.definitions[d_nr as usize].code = code;
+        std::mem::swap(
+            &mut self.vars,
+            &mut self.data.definitions[d_nr as usize].variables,
+        );
+        self.context = saved_ctx;
+    }
+
+    /// @PLN104 targeted promotion — the entry point, replacing the whole-file third pass.
+    /// Phase A promotes each `force_tret` callee IN PLACE (its signature gains the `&text`
+    /// retbuf); Phase B then patches each direct caller to push the retbuf arg.  A must run
+    /// before B (callers need the promoted signature).  Runs post-pass-2, pre-`scopes::check`,
+    /// so the added work-text delivery/frees are woven in by the normal scope pass.
+    pub(crate) fn targeted_tret_promotion(&mut self) {
+        let force: Vec<u32> = self.force_tret.iter().copied().collect();
+        for &d in &force {
+            self.promote_text_return_def(d);
+        }
+        self.patch_tret_callers();
+    }
+
+    /// @PLN104 targeted promotion — Phase B (CALLER): for every def whose code calls a
+    /// promoted `force_tret` def, push the retbuf arg at each such `Call` by re-running
+    /// `add_defaults` against the now-promoted signature (its `RefVar(Text)` arm builds the
+    /// caller-side work-text buffer — mod.rs).  No re-parse: the pass-2 call carries exactly
+    /// the declared args (probed), so `add_defaults` appends precisely the one retbuf.
+    fn patch_tret_callers(&mut self) {
+        let force = self.force_tret.clone();
+        if force.is_empty() {
+            return;
+        }
+        for c in 0..self.data.definitions.len() as u32 {
+            let calls_promoted = {
+                let mut hit = false;
+                self.data.def(c).code.walk(&mut |v| {
+                    if let Value::Call(d, _) = v
+                        && force.contains(d)
+                    {
+                        hit = true;
+                    }
+                });
+                hit
+            };
+            if !calls_promoted {
+                continue;
+            }
+            let saved_ctx = self.context;
+            std::mem::swap(&mut self.vars, &mut self.data.definitions[c as usize].variables);
+            self.context = c;
+            let before: std::collections::HashSet<u16> =
+                self.vars.work_texts().into_iter().collect();
+            let mut code =
+                std::mem::replace(&mut self.data.definitions[c as usize].code, Value::Null);
+            self.patch_tret_call(&mut code, &force);
+            // `add_defaults` minted the caller-side retbuf as a fresh work-text but did
+            // NOT declare it at the caller's top level; without a top-level first-def
+            // `scopes::check` scopes it to the arg block and frees it there — before the
+            // callee fills it — orphaning the delivered text (loft#568).  Re-parse hoists
+            // these decls in `expression_value`; post-parse we replay that hoist here for
+            // ONLY the newly-minted work-texts, so each frees at the caller's scope exit.
+            if let Value::Block(bl) = &mut code {
+                for wt in self.vars.work_texts() {
+                    if !before.contains(&wt) {
+                        bl.operators
+                            .insert(0, v_set(wt, Value::Text(String::new())));
+                    }
+                }
+            }
+            self.data.definitions[c as usize].code = code;
+            std::mem::swap(&mut self.vars, &mut self.data.definitions[c as usize].variables);
+            self.context = saved_ctx;
+        }
+    }
+
+    /// Recurse `node`, appending the retbuf arg to every `Call(d, …)` with `d ∈ force`.
+    fn patch_tret_call(&mut self, node: &mut Value, force: &std::collections::HashSet<u32>) {
+        match node {
+            Value::Call(d, args) => {
+                for a in args.iter_mut() {
+                    self.patch_tret_call(a, force);
+                }
+                if force.contains(d) {
+                    let d = *d;
+                    let n_attrs = self.data.attributes(d) as usize;
+                    if args.len() < n_attrs {
+                        let mut actual = std::mem::take(args);
+                        let mut types = vec![Type::Unknown(0); actual.len()];
+                        self.add_defaults(d, &mut actual, &mut types);
+                        *args = actual;
+                    }
+                }
+            }
+            Value::CallRef(_, xs)
+            | Value::Insert(xs)
+            | Value::Tuple(xs)
+            | Value::Parallel(xs) => {
+                for x in xs {
+                    self.patch_tret_call(x, force);
+                }
+            }
+            Value::Block(bl) | Value::Loop(bl) => {
+                for op in &mut bl.operators {
+                    self.patch_tret_call(op, force);
+                }
+            }
+            Value::If(c, t, e) => {
+                self.patch_tret_call(c, force);
+                self.patch_tret_call(t, force);
+                self.patch_tret_call(e, force);
+            }
+            Value::Set(_, inner)
+            | Value::Return(inner)
+            | Value::Drop(inner)
+            | Value::Yield(inner)
+            | Value::BreakWith(_, inner)
+            | Value::TuplePut(_, _, inner) => self.patch_tret_call(inner, force),
+            Value::Span(b) => self.patch_tret_call(&mut b.1, force),
+            Value::Iter(_, a, b, c) => {
+                self.patch_tret_call(a, force);
+                self.patch_tret_call(b, force);
+                self.patch_tret_call(c, force);
+            }
+            _ => {}
+        }
     }
 
     /// @PLN85 corpus — true when a NON-tail `return` in `op` delivers a text that
