@@ -2692,6 +2692,24 @@ use a separate collection or add after the loop"
 
     // <assign> ::= <operators> [ '=' | '+=' | '-=' | '*=' | '%=' | '/=' <operators> ]
     #[allow(clippy::too_many_lines)]
+    /// @PLN102 F2 — does this IR contain a call to a non-builtin (a user fn `n_*`
+    /// or method `t_*`) — i.e. a potentially side-effecting / non-idempotent
+    /// sub-expression?  Builtin `Op*` accessors/arithmetic are pure given stable
+    /// args and may be re-evaluated freely; a place addressing sub-expression that
+    /// reaches a user call must be bound once (compound-assign place-once, C92).
+    fn ir_has_user_call(&self, v: &Value) -> bool {
+        match v {
+            Value::Span(b) => self.ir_has_user_call(&b.1),
+            Value::Call(d, args) => {
+                !self.data.def(*d).name.starts_with("Op")
+                    || args.iter().any(|a| self.ir_has_user_call(a))
+            }
+            // A dynamic call through a fn-ref is always a user call (non-idempotent).
+            Value::CallRef(_, _) => true,
+            _ => false,
+        }
+    }
+
     pub(crate) fn parse_assign(&mut self, code: &mut Value) -> Type {
         let mut parent_tp = Type::Null;
         // @PLN87 D-bind-7 — does THIS statement begin with a prefix `&`?  No valid
@@ -2961,7 +2979,7 @@ use a separate collection or add after the loop"
             self.expression(&mut discard);
             return Type::Void;
         }
-        let to = code.clone();
+        let mut to = code.clone();
         for op in ["=", "+=", "-=", "*=", "%=", "/="] {
             if self.lexer.has_token(op) {
                 // Mark the variable as defined only once we have confirmed the `=` token
@@ -3048,6 +3066,42 @@ use a separate collection or add after the loop"
                         self.sandbox_raw_writes.entry(self.context).or_insert(pos);
                     }
                 }
+                // @PLN102 F2 (C92) — a compound assign evaluates its place ONCE.
+                // When the place reads a heap scalar slot through a NON-idempotent
+                // accessor (`w[idx()]`, `m[i()][j()]`, `getvec()[0]` — the index or
+                // base calls a fn/method), bind that accessor's DbRef to a `_place`
+                // RefVar temp evaluated ONCE and retarget the compound to it — the
+                // internal form of `p = &w[idx()]; p op= rhs`.  A const/var index
+                // carries no user call → no rewrite → byte-identical; `=` reads the
+                // place once already.  The temp reads/writes via the uniform RefVar
+                // deref (`OpGet*/OpSet*(place, 0)`), so the accessor's calls run once.
+                let f2_accessor = if op != "=" && !self.first_pass {
+                    match to.unspan() {
+                        Value::Call(get_d, gargs)
+                            if self.data.def(*get_d).name.starts_with("OpGet")
+                                && gargs.len() == 2
+                                && matches!(gargs[1].unspan(), Value::Int(0))
+                                && self.ir_has_user_call(&gargs[0]) =>
+                        {
+                            Some(gargs[0].clone())
+                        }
+                        _ => None,
+                    }
+                } else {
+                    None
+                };
+                let mut f2_setup: Option<Value> = None;
+                if let Some(accessor) = f2_accessor {
+                    // The temp is a reference to the element SLOT (`&integer`), so use the
+                    // non-null base — the `?` on a dynamic index is OOB-safety on the read,
+                    // not the slot's type; `&integer?` would trip the compound retype guard.
+                    let ref_tp = Type::RefVar(Box::new(f_type.base().clone()));
+                    let place_var = self.create_unique("_place", &ref_tp);
+                    f2_setup = Some(v_set(place_var, accessor));
+                    to = Value::Var(place_var);
+                    *code = Value::Var(place_var);
+                    f_type = ref_tp;
+                }
                 let var_nr = self.assign_var_nr(code, op, &f_type, &mut parent_tp);
                 // Handle `f += X` for File variables before type-changing logic.
                 if op == "+="
@@ -3061,6 +3115,11 @@ use a separate collection or add after the loop"
                 // NOTE: must come AFTER parse_assign_op because that is where the RHS
                 // lambda is parsed and last_closure_work_var gets set by emit_lambda_code.
                 let result = self.parse_assign_op(code, op, &f_type, &to, parent_tp, var_nr);
+                // @PLN102 F2 — run the once-evaluated place binding before the compound.
+                if let Some(setup) = f2_setup {
+                    let assign = std::mem::replace(code, Value::Null);
+                    *code = Value::Insert(vec![setup, assign]);
+                }
                 // @PLN25 DN3: reassigning a proven-non-null var invalidates its narrowing. The
                 // RHS above was parsed WITH the narrowing (so `if a!=null { a = a+1 }` reads `a`
                 // non-null), but any read AFTER this point widens back to `τ?` — the proof no
