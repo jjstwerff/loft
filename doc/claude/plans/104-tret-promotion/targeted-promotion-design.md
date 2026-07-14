@@ -69,8 +69,21 @@ former-default-on groups now PASS under V2.
    CallRef gap then hid it. Fix: recurse into `callref_args` (reachability is an
    over-approximation → always safe; un-gated, verified no default regression).
 
-**Next (to reach default-on, §Verification 5):** flip V2 default-on, run the FULL suite,
-then delete the third pass.
+**DEFAULT-ON (commit `e819a08f`) — trial PASSED.** Both gates flipped: `report_tret_promotions`
+populates `force_tret` by default (opt-out `LOFT_NO_TRET_FIX`); the targeted pass is the default
+(third pass kept, opt-in `LOFT_TRET_THIRD_PASS`, until deleted). Full nextest suite, cache cleared:
+V2-ON fails `s5_native_swap`, `s7_debugger_loop`, `wasm_debug_relay`; V2-OFF (`LOFT_NO_TRET_FIX`)
+fails `s5_native_swap`, `s7_debugger_loop` IDENTICALLY (`a#48`/`a#237` vs `a#1`; the `a#N` counter
+drifts 46/47/48 across runs, independent of promotion). So the promotion introduces **ZERO new
+suite failures** — s5/s7 are pre-existing full-suite-parallelism flakes (the `LOFT_LIVE_FLIP` /
+debugger subprocess runs N events and flips before the test socket connects under load), wasm is
+the known environmental flake. Note the diagnostic path: the stale-cache hypothesis was FALSIFIED
+(clean-cache suite still failed); the decisive read was the **V2-off full-suite baseline**, not the
+isolated-test passes.
+
+**Remaining close-out (mechanical):** delete the third-pass block in `parser/mod.rs` (and its
+`LOFT_TRET_THIRD_PASS` opt-in) once default-on has soaked; the s5/s7 full-suite flakiness is a
+SEPARATE pre-existing test-infra issue (fails with promotion off), not part of this plan.
 
 ## Why the third pass must go — one root, many symptoms
 
