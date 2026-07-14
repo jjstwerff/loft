@@ -61,13 +61,36 @@ the descriptor is wrong.
 
 ## 4. Phased plan (each phase independently landable + dogfooded by ssh_home)
 
-- **B0 — spike / falsify the invariant (design-only if no NDK here).** Take the Rust that
-  `loft --native-emit` produces for a trivial loft program, and attempt
-  `rustc --target aarch64-linux-android --crate-type cdylib` against an NDK sysroot. Record
-  the FIRST blocker (linker path, `libc`/`android` runtime symbols, `std` availability for
-  the triple, panic strategy). **Output:** either "invariant holds, blockers are toolchain
-  wiring" → proceed; or "codegen assumes host" → the invariant is wrong and the plan changes.
-  Do NOT build B1+ before B0 answers this.
+**Verification legend** (each phase is gated by ONE concrete, checkable artifact — mirrors
+`../ssh_home/PLAN.md`): **(C)** compiles/links (a named `.so`/rlib exists); **(R)** runs on an
+emulator/device (a specific `logcat`/stdout line); **(G)** golden PNG (`gl_screenshot` == a
+committed golden under tolerance); **(I)** an input event produces a named on-screen effect.
+A phase is DONE only when its gate passes on-device, not in prose.
+
+- **B0 — spike / falsify the invariant (CONCRETE, runnable when an NDK is present).**
+  The exact steps that either compile or name the blocker:
+  ```sh
+  # 0. one-time: rustup target + NDK (r26+); NDK provides the clang linker + sysroot
+  rustup target add aarch64-linux-android
+  export NDK=$ANDROID_NDK_HOME AT=$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin
+  # 1. capture loft's generated Rust for a TRIVIAL program (no GL, just prints)
+  echo 'fn main() { print("hi\n"); }' > /tmp/b0.loft
+  LOFT_KEEP_NATIVE_RS=1 loft --native /tmp/b0.loft   # note the /tmp/loft_native_*.rs path it prints
+  # 2. cross-compile that .rs as a cdylib against the NDK clang linker
+  rustc --target aarch64-linux-android --crate-type cdylib \
+        -C linker=$AT/aarch64-linux-android24-clang \
+        --extern loft=<libloft-aarch64.rlib> /tmp/loft_native_*.rs -o /tmp/libb0.so
+  # 3. the load-bearing sub-question: does libloft ITSELF cross-compile?
+  cargo build --release --lib --target aarch64-linux-android   # (with .cargo/config linker set)
+  ```
+  **Pass/fail:** step 3 producing `libloft.rlib` for the triple + step 2 producing `libb0.so`
+  = **invariant holds** (blockers are toolchain wiring → proceed to B1). A codegen error that
+  is host-specific (a `#[cfg(target_os)]` the generated Rust hard-codes, a host-only intrinsic)
+  = **invariant is WRONG** → the plan changes (the generated core is not target-agnostic).
+  Record the FIRST blocker either way (linker, `std`/`libc` symbols, `ring`/build-script host
+  assumption, panic strategy). Do NOT build B1+ before B0 answers this. **If no NDK is available
+  in the working env, B0 is a spec to run on a machine that has one — it is not skippable, it is
+  the gate.**
 - **B1 — the target descriptor + cross `rustc`.** Introduce the descriptor struct (§1) and an
   `android` target that sets triple + NDK linker + `cdylib`; reuse the `main.rs:3454` dep-rlib
   cross-build for the NDK triple. **Verify:** the `.so` links for a headless (no-GL) loft
