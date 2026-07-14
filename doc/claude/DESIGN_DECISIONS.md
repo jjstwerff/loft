@@ -2156,3 +2156,29 @@ The deciding constraints (owner, 2026-07-13): **`==` must be quick — never an 
 - **`==` / `!=`** — value types (`integer`, `float`, `single`, `character`, `boolean`, `text`, `value struct`, unit enum) compare **by value/content**, bounded by the value's own storage and **never chasing a reference into another store**; reference types (`struct`, `vector`, `hash`, `index`, …) compare **by identity**, O(1). One uniform rule; part of the contract-1 freeze.
 - **`===` / `!==`** — RESERVED for opt-in **deep structural** equality (recurse through references, all the way down). Not shipped by this decision — the contract (that deep equality is a distinct, explicit, more-expensive operator, never the `==` default) is fixed now; `===` itself ships when a consumer needs it. When built it MUST be **consistently deep** (recurse into everything — a shallow `===` reintroduces the inconsistency this decision rejects) and **cycle-safe** (reference structs can form cycles; a naive deep walk loops forever).
 - **Rejected:** a shallow/hybrid `==` (structural for a record's own fields, identity for nested references) — internally inconsistent and therefore dangerous, regardless of its speed.
+
+## C92 — Compound assignment evaluates its place expression exactly once
+
+**Catalogue:** @F2 (operators). Closes the @PLN102 pre-freeze **F2** ("compound-assign double-evaluates its place"). Same class as the F4 assignment eval-order item — an evaluation count/order that would otherwise freeze as impl-defined.
+
+### Question
+
+`w[idx()] += 5` today evaluates the place **twice** — the desugaring `w[idx()] = w[idx()] + 5` emits the index sub-expression `idx()` for both the read and the write (verified 2026-07-14, both backends; nested `m[i()][j()] += 5` evaluates it **four** times). For a pure index this is a wasted read; for a *side-effecting or divergent* index it is a live silent-wrong:
+
+```loft
+w[next()] += 5   // next() returns 1 then 2 → reads w[1], writes w[2]: lands on the WRONG slot
+w[log()] += 5    // any side effect fires twice
+```
+
+Should a compound assignment evaluate its place once, or is double-evaluation accepted and frozen?
+
+### Evaluation
+
+Evaluation count of the place is observable semantics, so it freezes at contract 1 — the choice is forced pre-freeze. Double-evaluation is not merely a footgun: a divergent index makes the read and the write target *different* slots, a plausible-wrong value with no error — exactly the class the compat model resolves to correct function before the freeze ([COMPATIBILITY.md](COMPATIBILITY.md) § the error surface: "a would-be-error is first a rewrite-to-correct-function"). Every mainstream language (C, Rust, Python) evaluates an lvalue's addressing sub-expressions once. The once-eval lowering is **byte-identical** for the common case — a constant or variable index (an idempotent read) — so the fix converts only side-effecting-place programs, of which there are essentially none in-tree (measured at implementation).
+
+### Decision
+
+- A compound assignment `place op= rhs` (and its keyed-collection forms) evaluates the **addressing sub-expressions of `place`** — index expressions, container-producing calls — **exactly once**: bind them to hoisted temps, then read and write through the *same* temps. The stored result and the number/order of place-side effects are then well-defined. Part of the contract-1 freeze.
+- Owner ruling 2026-07-14 ("evaluate the place once").
+- **Rejected:** freezing double-evaluation — the divergent-index corruption makes it a silent-wrong, not a defensible edge.
+- Fix scope + plan: [compound-assign-place-once.md](plans/102-stability-contract/compound-assign-place-once.md).
