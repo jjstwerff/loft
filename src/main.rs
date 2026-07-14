@@ -5847,6 +5847,13 @@ fn main() {
             // across libraries (no-op without a collision).
             p.data.namespace_colliding_native_fns();
             let mut out = generation::Output::new(&p.data, &state.database);
+            // @PLN106 B3 — call native-package functions through the C-ABI marshalling
+            // (loft_ffi types + `#[link_name]` decls) exactly as the host binary does;
+            // the non-C-ABI extern-crate call path can't express their `loft_ffi`
+            // signatures. Android still links the package as a unified rlib (an
+            // `extern crate` prefix in src/android.rs force-links it), so the
+            // `#[link_name]` decls resolve to the rlib's `#[no_mangle]` symbols.
+            out.native_cabi = native_utils::native_cabi_enabled();
             // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
             if lean {
                 out.emit_live = false;

@@ -168,10 +168,16 @@ impl AndroidTarget {
             .any(|(c, _)| c == "loft-graphics-native");
 
         // Crate root = the emitted program (its crate-level `#![allow]` attrs and
-        // `fn main` stay valid at the root) + the android_main entry tail.
+        // `fn main` stay valid at the root) + `extern crate <pkg>` for each native
+        // package (the C-ABI call path names the package's symbols by `#[link_name]`
+        // but never `use`s the crate, so force-link its rlib) + the android_main tail.
         let program = std::fs::read_to_string(rs_path)
             .map_err(|e| format!("loft: read emitted program {}: {e}", rs_path.display()))?;
-        let lib_rs = format!("{program}\n{}", android_main_tail(needs_gl_app));
+        let externs: String = native_packages
+            .iter()
+            .map(|(c, _)| format!("extern crate {};\n", c.replace('-', "_")))
+            .collect();
+        let lib_rs = format!("{program}\n{externs}{}", android_main_tail(needs_gl_app));
         std::fs::write(src_dir.join("lib.rs"), lib_rs)
             .map_err(|e| format!("loft: write lib.rs: {e}"))?;
         std::fs::write(
@@ -606,6 +612,20 @@ fn cargo_toml(tree: &Path, native_packages: &[(String, String)]) -> String {
         let native_dir = Path::new(pkg_dir).join("native").display().to_string();
         pkg_deps.push_str(&format!("{crate_name} = {{ path = {native_dir:?} }}\n"));
     }
+    // The C-ABI call marshalling names `loft_ffi::LoftStr` etc., so the generated
+    // crate needs `loft-ffi` in scope (loft's own copy — the `[patch]` unifies it).
+    if !native_packages.is_empty() {
+        let ffi = tree.join("loft-ffi").display().to_string();
+        pkg_deps.push_str(&format!("loft-ffi = {{ path = {ffi:?} }}\n"));
+    }
+    // Native packages (e.g. lib/graphics) dispatch their registered functions
+    // through `loft::native_call`, which is behind the `native-extensions` feature —
+    // add it so the generated `extern crate <pkg>` calls resolve.
+    let loft_features = if native_packages.is_empty() {
+        "\"random\", \"threading\""
+    } else {
+        "\"random\", \"threading\", \"native-extensions\""
+    };
     let patch = if native_packages.is_empty() {
         String::new()
     } else {
@@ -631,7 +651,7 @@ fn cargo_toml(tree: &Path, native_packages: &[(String, String)]) -> String {
          log = \"0.4\"\n\
          android_logger = \"0.14\"\n\
          libc = \"0.2\"\n\
-         loft = {{ path = {tree_s:?}, default-features = false, features = [\"random\", \"threading\"] }}\n\
+         loft = {{ path = {tree_s:?}, default-features = false, features = [{loft_features}] }}\n\
          {pkg_deps}\n\
          [profile.release]\n\
          opt-level = 2\n\

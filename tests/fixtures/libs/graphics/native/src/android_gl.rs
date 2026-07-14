@@ -220,6 +220,16 @@ pub(crate) fn create_gl_state_android(width: u32, height: u32) -> Result<GlState
 /// Present the frame — the `loft_gl_swap_buffers` android path.
 pub(crate) fn swap(state: &GlState) {
     unsafe {
+        // @PLN106 B3 diagnostic: surface the first GL error each frame (once) so
+        // GLES-3.0 draw-pipeline problems are visible in logcat.
+        let e = gl::GetError();
+        if e != 0 {
+            use std::sync::atomic::{AtomicBool, Ordering};
+            static LOGGED: AtomicBool = AtomicBool::new(false);
+            if !LOGGED.swap(true, Ordering::Relaxed) {
+                eprintln!("loft-gl: GL error 0x{e:x} during draw");
+            }
+        }
         eglSwapBuffers(state.android.display, state.android.surface);
     }
 }
