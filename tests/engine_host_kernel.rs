@@ -414,6 +414,29 @@ fn s5_kill_stale(stem: &str) {
     }
 }
 
+/// Reap ANY process still bound to `port` before this test reuses it.  `s5_kill_stale`
+/// greps for the cache-path stem, but a leaked native **swap child** (the hot-swapped v2
+/// build) runs from a `loft_native_bin_*` path in the scratch dir — its command line does
+/// NOT contain the stem, so the stem `pgrep` misses it.  If a prior run's `Guard::drop`
+/// (the process-group kill) was skipped — e.g. nextest SIGKILLs a timed-out test, bypassing
+/// unwinding — that orphan survives on the port, and the next `ws_connect(port)` binds to
+/// it (a stale, already-flipped, high-count world → the s5/s7 full-suite flake).  A
+/// port-scoped reap closes that gap regardless of the orphan's command line.  Call AFTER
+/// `s5_kill_stale` and BEFORE spawning this run's child, so it never kills our own child.
+fn reap_port(port: u16) {
+    if let Ok(out) = Command::new("lsof")
+        .arg("-ti")
+        .arg(format!("tcp:{port}"))
+        .output()
+    {
+        for pid in String::from_utf8_lossy(&out.stdout).split_whitespace() {
+            if let Ok(pid) = pid.parse::<i32>() {
+                unsafe { libc::kill(pid, libc::SIGKILL) };
+            }
+        }
+    }
+}
+
 struct S5Hygiene(&'static str);
 impl Drop for S5Hygiene {
     fn drop(&mut self) {
@@ -432,6 +455,7 @@ fn s5_native_swap_under_running_world() {
     let _hygiene = S5Hygiene(STEM); // and OUR swap child must die at exit
     std::thread::sleep(Duration::from_millis(200));
     let port = common::test_port(18100);
+    reap_port(port); // reap a leaked swap-child orphan the stem pgrep misses (flake guard)
     // A test-OWNED always-fails binary: /bin/false varies across platforms
     // and runners (macOS CI refused it — forensics pending); a temp script
     // is deterministic everywhere this unix-only suite runs.
@@ -527,7 +551,8 @@ fn main() {{
             .to_string()
             + "t"
             + r.rsplit_once('t').unwrap().1,
-        "shape"
+        "shape — first-ask flake probe: raw={r:?} count={count}; subprocess stderr:\n{}",
+        stderr_now()
     );
     assert!(r.starts_with(&format!("v1:a#{count}t")), "baseline: {r}");
     assert!(stderr_now().contains("live-dispatch: n_bump_events"));
@@ -1199,6 +1224,7 @@ fn s7_debugger_loop_end_to_end() {
     let _hygiene = S5Hygiene(STEM);
     std::thread::sleep(Duration::from_millis(200));
     let port = common::test_port(18108);
+    reap_port(port); // reap a leaked swap-child orphan the stem pgrep misses (flake guard)
     // The edit touches ONLY the named fn (lambdas don't reload — the
     // documented v1 boundary); each build's identity shows in the STEP:
     // +1 = original, +100 = the edit (and post-swap, its compiled form).
