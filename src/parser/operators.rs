@@ -2179,12 +2179,35 @@ impl Parser {
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
                 // whose rec==0 null test would also match an empty `[]`.
                 if !self.first_pass {
-                    let vec_code = if matches!(ctp.base(), Type::Vector(_, _)) {
-                        code.clone()
+                    let (vec_code, vec_tp) = if matches!(ctp.base(), Type::Vector(_, _)) {
+                        (code.clone(), ctp.clone())
                     } else {
-                        second_code
+                        (second_code, second_type.clone())
                     };
-                    let is_null = self.cl("OpVectorIsNull", &[vec_code]);
+                    // A heap-owning vector TEMP (a call result / non-var) consumed by the
+                    // null test would be orphaned: OpVectorIsNull reads only the sentinel and
+                    // discards the vector store. Capture it in a work-ref so scopes.rs emits
+                    // its OpFreeRef (the nullable-vector-return-consumed-inline leak — a plain
+                    // `f() != null` where `f() -> vector<T>?`). A Var operand already owns its
+                    // store, so it needs no work-ref.
+                    let w = if matches!(vec_code.unspan(), Value::Var(_)) {
+                        u16::MAX
+                    } else {
+                        self.vars.work_refs(&vec_tp, &mut self.lexer)
+                    };
+                    let is_null = if w == u16::MAX {
+                        self.cl("OpVectorIsNull", &[vec_code])
+                    } else {
+                        self.vars.mark_inline_ref(w);
+                        crate::data::v_block(
+                            vec![
+                                crate::data::v_set(w, vec_code),
+                                self.cl("OpVectorIsNull", &[Value::Var(w)]),
+                            ],
+                            Type::Boolean,
+                            "vec-null-workref",
+                        )
+                    };
                     *code = if operator == "==" {
                         is_null
                     } else {
