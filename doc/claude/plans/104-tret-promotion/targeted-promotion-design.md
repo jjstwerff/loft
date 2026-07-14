@@ -40,8 +40,29 @@ already-buffered fn) and card (two #568-class calls, results simultaneously live
 leak-free on interp AND native; V2 touches only the promoted def + its caller (unrelated
 defs untouched → the collateral class is gone by construction). Unit tests 738/0.
 
-**Next:** run the former default-on failures under V2 (§Verification 4), then make V2 the
-default and drop the gate (§Verification 5) — see the checklist below.
+**v1 scope filter (commit `ab1a61cb`):** `targeted_tret_promotion` promotes only
+**owned-by-value** tails on defs whose **address is never taken** (`FnRef` walk). It defers,
+with a `LOFT_TRET_TRACE` log, the classes Phase A/B can't lower — view-of-local /
+join-of-local (need view materialisation; 553 `textslice` SIGSEGV'd both backends without
+this) and address-taken defs (signature change breaks fn-pointers). `force_tret` is narrowed
+to the promoted set so Phase B patches exactly the changed callers.
+
+**Former default-on failures under V2 (§Verification 4) — RESULT (commit `ab1a61cb`):**
+`text_return_analysis` ✅, `index_hygiene` ✅, `wrap loft_suite` ✅ (the 553 view-of-local
+crash is now deferred), `s5_local_swap_hands_over` ✅, `s7_debugger_loop_end_to_end` ✅ — the
+third-pass's diagnostic (mode 1), ABI-record-id (mode 2), and tooling (mode 4) collateral are
+GONE under the targeted pass. `native_scripts` **436/439**: the 3 residual (`387-text-fn-ref`
+run_t reused across an assert condition+message; `85_optional_return_freeops_tail`;
+`repro_p265` result flowing into a `cb(…)` dispatch) are one class — a **promoted
+retbuf-taking callee whose call is emitted in a native fn-ref-dispatch / multi-call-per-
+statement context**, where the retbuf work-text lifetime fails rustc's borrow checker
+(E0506/E0499) or the dispatch references the pre-promotion name (E0425). This is native
+codegen work (`src/generation` `output_call_ref` / the `_pre_N` arg hoist), the deferred
+v2/(d) class — NOT collateral, and interp-clean.
+
+**Next (to reach default-on, §Verification 5):** fix the native fn-ref-dispatch retbuf
+codegen for those 3 (or exclude that call-context from v1), then flip V2 default-on, verify
+the full suite, and delete the third pass.
 
 ## Why the third pass must go — one root, many symptoms
 
