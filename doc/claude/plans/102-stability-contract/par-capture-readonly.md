@@ -5,10 +5,28 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN102 — `par` captured state is read-only (fix scope)
 
-> **Status: DECIDED, NOT YET IMPLEMENTED (2026-07-14).** Owner ruling: the parent state a
-> `par` worker captures is read-only inside the worker; a write to it is a compile error at the
-> write site — *no runtime error, ever* (C80): a data race can't be resolved to a null, so it is
-> DISALLOWED, not defined. Decision record: [DESIGN_DECISIONS.md C93](../../DESIGN_DECISIONS.md).
+> **Status: IMPLEMENTED for `par(worker, n)` writes (2026-07-14).** Owner ruling: the parent
+> state a `par` worker captures is read-only; a write to it is a compile error — *no runtime
+> error, ever* (C80): a data race can't be resolved to a null, so it is DISALLOWED, not defined.
+> Decision record: [DESIGN_DECISIONS.md C93](../../DESIGN_DECISIONS.md).
+>
+> **Done:** a raw `OpSet*` write to a captured (non-local param) reference/struct/vector inside a
+> `par(worker, n)` worker (direct or transitive) is now a **clean compile error** at the
+> par-safety check (`scopes.rs::worker_calls_parent_write_deep` + `raw_write_to_captured`),
+> replacing the `codegen.rs:3235` slot-panic. Reads / worker-locals / `HostIo`/`Prng` still
+> compile. Test `tests/scripts/pln102-c93-par-write.loft`.
+>
+> **Two par constructs, handled separately:** `parallel { }` (the arm form) already cleanly
+> rejects enclosing-scope writes ("cannot write or mutate enclosing-scope variable" —
+> `tests/scripts/170-parallel-capture-soundness.loft`); this change covers the `for … par(worker,
+> n)` FOLD form, whose worker-fn param-writes used to crash.
+>
+> **Residual (SEPARATE pre-existing soundness bug, NOT the C93 write-decision):** a worker that
+> only READS a captured *reference* argument (`vector`/`struct`) still crashes codegen
+> (`Incorrect var x[65535]`, `codegen.rs:3235`) — the same bug test 170 documents for
+> `parallel {}` ("param capture (read) — SIGSEGVs; copy to a local first"). C93 says reads are
+> fine; making them so is a codegen fix (the par reference-arg slot assignment), independent of
+> the read-only *write* rule decided here. Scalar-arg workers read fine. Route as its own issue.
 
 ## The current behaviour (verified 2026-07-14, interpret)
 

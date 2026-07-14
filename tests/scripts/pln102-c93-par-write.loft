@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 C93 — a `par(worker, n)` worker's captured parent state is READ-ONLY.
+// A worker (or a fn it calls) that writes a captured reference/struct/vector
+// argument is a data race; loft DISALLOWS it (a clean COMPILE error at the
+// par-safety check), rather than run it — and rather than the codegen slot-panic
+// it used to crash with (no runtime errors, ever). Reads/locals/HostIo are fine
+// (covered by the pass tests). Sibling of `parallel {}` capture soundness (170).
+//
+// @EXPECT_ERROR: worker bump writes captured `s`
+// @EXPECT_ERROR: worker vw writes captured `cap`
+// @EXPECT_ERROR: worker outer → bump writes captured `s`
+
+struct S { n: integer }
+fn bump(s: S, x: integer) -> integer { s.n = s.n + x; x }       // direct param write
+fn vw(cap: vector<integer>, x: integer) -> integer { cap[0] = x; x }  // vector-element write
+fn outer(s: S, x: integer) -> integer { bump(s, x) }            // transitive
+
+fn use_direct() { sh = S { n: 0 }; for x in [1, 2, 3] par(r = bump(sh, x), 3) { } }
+fn use_vec() { cv = [0]; for x in [1, 2, 3] par(r = vw(cv, x), 3) { } }
+fn use_indirect() { sh = S { n: 0 }; for x in [1, 2, 3] par(r = outer(sh, x), 3) { } }
+
+fn main() { }

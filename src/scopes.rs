@@ -6022,7 +6022,7 @@ pub fn worker_calls_parent_write_deep(data: &Data, worker_d_nr: u32) -> Option<S
     }
     let mut visited = std::collections::HashSet::new();
     let def = &data.definitions[worker_d_nr as usize];
-    let worker_name = def.name.clone();
+    let worker_name = def.name.strip_prefix("n_").unwrap_or(&def.name).to_string();
     walk_deep_parent_write(&def.code, data, worker_d_nr, &mut visited).map(|chain| {
         if chain == worker_name {
             chain
@@ -6041,6 +6041,17 @@ fn walk_deep_parent_write(
 ) -> Option<String> {
     match value {
         Value::Call(callee, args) => {
+            // @PLN102 C93 — a RAW field/element write (`OpSet*`) whose accessor root is a
+            // NON-LOCAL PARAMETER is a write to captured/parent state: in a `par` worker the
+            // captured state is read-only, so this is the race the deep check must reject
+            // (the tagged-stdlib ParentWrite path below only catches `+=`/`hash_set`/… — a
+            // bare `s.n = v` / `cap[i] = v` lowers to `OpSet*`, a "safe" primitive, and used
+            // to slip through into a codegen slot-panic).  A write to a worker-LOCAL (or the
+            // hidden return-buffer destination) is fine — same locality test as
+            // `first_arg_is_local_var`.
+            if let Some(var) = raw_write_to_captured(*callee, args, current_fn, data) {
+                return Some(format!(" writes captured `{var}`"));
+            }
             if let Some(chain) = call_deep_parent_write(*callee, args, data, current_fn, visited) {
                 return Some(chain);
             }
@@ -6127,6 +6138,53 @@ fn first_arg_is_local_var(args: &[Value], current_fn: u32, data: &Data) -> bool 
     def.attributes.iter().any(|a| a.hidden && a.name == name)
 }
 
+/// @PLN102 C93 — walk an accessor chain (`OpGet*(base, …)` / `Var`, span-transparent)
+/// down to its root variable.  The base of an `OpSet*` write target is arg 0.
+fn accessor_root_var(v: &Value, data: &Data) -> Option<u16> {
+    match v {
+        Value::Var(n) => Some(*n),
+        Value::Span(b) => accessor_root_var(&b.1, data),
+        Value::Call(d, args)
+            if (*d as usize) < data.definitions.len()
+                && data.definitions[*d as usize].name.starts_with("OpGet") =>
+        {
+            args.first().and_then(|a| accessor_root_var(a, data))
+        }
+        _ => None,
+    }
+}
+
+/// @PLN102 C93 — is this call a RAW field/element write (`OpSet*`) whose accessor root is
+/// a NON-LOCAL PARAMETER of `current_fn` (captured/parent state)?  Returns the captured
+/// var's name if so.  A write to a worker-LOCAL variable, or to the hidden return-buffer
+/// destination (a promoted `ref_return` output), is safe.  Mirrors `first_arg_is_local_var`.
+fn raw_write_to_captured(
+    callee: u32,
+    args: &[Value],
+    current_fn: u32,
+    data: &Data,
+) -> Option<String> {
+    if (callee as usize) >= data.definitions.len()
+        || !data.definitions[callee as usize].name.starts_with("OpSet")
+    {
+        return None;
+    }
+    let root = args.first().and_then(|a| accessor_root_var(a, data))?;
+    if current_fn == u32::MAX || (current_fn as usize) >= data.definitions.len() {
+        return None;
+    }
+    let def = &data.definitions[current_fn as usize];
+    if !def.variables.is_argument(root) {
+        return None; // a worker-local write — fine
+    }
+    let name = def.variables.name(root).to_string();
+    // hidden return-buffer destination = the worker's own output, not parent state.
+    if def.attributes.iter().any(|a| a.hidden && a.name == name) {
+        return None;
+    }
+    Some(name)
+}
+
 #[allow(dead_code)]
 fn call_deep_parent_write(
     callee: u32,
@@ -6151,7 +6209,10 @@ fn call_deep_parent_write(
             if first_arg_is_local_var(args, current_fn, data) {
                 None
             } else {
-                Some(format!(" → {}", def.name))
+                Some(format!(
+                    " → {}",
+                    def.name.strip_prefix("n_").unwrap_or(&def.name)
+                ))
             }
         }
         Purity::Unknown => {
@@ -6163,8 +6224,13 @@ fn call_deep_parent_write(
                 // is_par_safe / fixpoint convergence).
                 None
             } else {
-                walk_deep_parent_write(&def.code, data, callee, visited)
-                    .map(|chain| format!(" → {}{}", def.name, chain))
+                walk_deep_parent_write(&def.code, data, callee, visited).map(|chain| {
+                    format!(
+                        " → {}{}",
+                        def.name.strip_prefix("n_").unwrap_or(&def.name),
+                        chain
+                    )
+                })
             }
         }
     }
