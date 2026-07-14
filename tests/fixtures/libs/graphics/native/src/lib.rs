@@ -16,13 +16,22 @@
 
 use loft_ffi_macros::loft_native;
 
-use glutin::prelude::*;
 use std::cell::{Cell, RefCell};
+// The desktop backend (glutin+winit) — cfg'd off on Android, which uses `android_gl`
+// (raw EGL/GLES on the ANativeWindow) instead. See `android_gl.rs`.
+#[cfg(not(target_os = "android"))]
+use glutin::prelude::*;
+#[cfg(not(target_os = "android"))]
 use std::time::Duration;
+#[cfg(not(target_os = "android"))]
 use winit::application::ApplicationHandler;
+#[cfg(not(target_os = "android"))]
 use winit::event::WindowEvent;
+#[cfg(not(target_os = "android"))]
 use winit::event_loop::ActiveEventLoop;
+#[cfg(not(target_os = "android"))]
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
+#[cfg(not(target_os = "android"))]
 use winit::window::WindowId;
 
 // Re-export audio functions at the crate root so external crates
@@ -37,10 +46,11 @@ use audio::n_audio_play_raw;
 // Plan-25 F4: the audio bridges live in the `audio` module; bring them into
 // scope so `loft_register_bridges!` (which takes bare idents) can see them.
 use audio::{
-    loft_audio_load__loft_bridge, loft_audio_play__loft_bridge,
-    loft_audio_set_volume__loft_bridge, loft_audio_stop__loft_bridge,
-    n_audio_play_raw__loft_bridge,
+    loft_audio_load__loft_bridge, loft_audio_play__loft_bridge, loft_audio_set_volume__loft_bridge,
+    loft_audio_stop__loft_bridge, n_audio_play_raw__loft_bridge,
 };
+#[cfg(target_os = "android")]
+pub mod android_gl;
 mod shader;
 mod text;
 mod window;
@@ -48,11 +58,18 @@ mod window;
 // ── Thread-local GL state ───────────────────────────────────────────────
 
 struct GlState {
+    #[cfg(not(target_os = "android"))]
     #[allow(dead_code)] // kept alive to prevent window destruction
     window: winit::window::Window,
+    #[cfg(not(target_os = "android"))]
     surface: glutin::surface::Surface<glutin::surface::WindowSurface>,
+    #[cfg(not(target_os = "android"))]
     context: glutin::context::PossiblyCurrentContext,
+    #[cfg(not(target_os = "android"))]
     event_loop: winit::event_loop::EventLoop<()>,
+    // Android: raw EGL/GLES surface on the ANativeWindow (see `android_gl`).
+    #[cfg(target_os = "android")]
+    android: android_gl::AndroidGl,
     should_close: bool,
     // GL viewport size chosen at creation (selected-monitor size for
     // fullscreen) — returned by the window-size getters so callers don't
@@ -111,7 +128,8 @@ thread_local! {
     static PENDING_RESIZE: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
 }
 
-// Map winit key codes to a simple 0-255 index.
+// Map winit key codes to a simple 0-255 index. Desktop-only; Android input is B4.
+#[cfg(not(target_os = "android"))]
 fn key_index(key: &winit::keyboard::Key) -> Option<u8> {
     use winit::keyboard::NamedKey;
     match key {
@@ -156,10 +174,12 @@ fn key_index(key: &winit::keyboard::Key) -> Option<u8> {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 struct JsonApp {
     should_close: bool,
 }
 
+#[cfg(not(target_os = "android"))]
 impl ApplicationHandler for JsonApp {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
     fn window_event(&mut self, _el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -267,14 +287,20 @@ pub extern "C" fn loft_gl_create_fullscreen_window(title_ptr: *const u8, title_l
 #[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_set_fullscreen(on: bool) {
-    use winit::window::Fullscreen;
-    with_gl(|s| {
-        if on {
-            s.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
-        } else {
-            s.window.set_fullscreen(None);
-        }
-    });
+    #[cfg(not(target_os = "android"))]
+    {
+        use winit::window::Fullscreen;
+        with_gl(|s| {
+            if on {
+                s.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+            } else {
+                s.window.set_fullscreen(None);
+            }
+        });
+    }
+    // An Android NativeActivity is always fullscreen — nothing to toggle.
+    #[cfg(target_os = "android")]
+    let _ = on;
 }
 
 /// Current window inner size in physical pixels.  Needed because a
@@ -299,6 +325,11 @@ pub extern "C" fn loft_gl_window_height() -> i64 {
 #[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_poll_events() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        return with_gl_mut(android_gl::poll).unwrap_or(false);
+    }
+    #[cfg(not(target_os = "android"))]
     with_gl_mut(|s| {
         let mut handler = JsonApp {
             should_close: false,
@@ -346,7 +377,10 @@ pub extern "C" fn loft_gl_swap_buffers() {
         gl::ColorMask(gl::TRUE, gl::TRUE, gl::TRUE, gl::TRUE);
     }
     with_gl(|s| {
+        #[cfg(not(target_os = "android"))]
         let _ = s.surface.swap_buffers(&s.context);
+        #[cfg(target_os = "android")]
+        android_gl::swap(s);
     });
 }
 
@@ -1048,7 +1082,12 @@ pub extern "C" fn loft_gl_draw_elements(vao: i64, n_indices: i64, mode: i64) {
     };
     unsafe {
         gl::BindVertexArray(vao as u32);
-        gl::DrawElements(gl_mode, n_indices as i32, gl::UNSIGNED_INT, std::ptr::null());
+        gl::DrawElements(
+            gl_mode,
+            n_indices as i32,
+            gl::UNSIGNED_INT,
+            std::ptr::null(),
+        );
         gl::BindVertexArray(0);
     }
 }

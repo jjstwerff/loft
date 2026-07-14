@@ -4,18 +4,46 @@
 //! Window creation + OpenGL context initialization using glutin + winit.
 
 use super::GlState;
+#[cfg(not(target_os = "android"))]
 use glutin::config::ConfigTemplateBuilder;
+#[cfg(not(target_os = "android"))]
 use glutin::context::{ContextApi, ContextAttributesBuilder, Version};
+#[cfg(not(target_os = "android"))]
 use glutin::display::GetGlDisplay;
+#[cfg(not(target_os = "android"))]
 use glutin::prelude::*;
+#[cfg(not(target_os = "android"))]
 use glutin::surface::SwapInterval;
+#[cfg(not(target_os = "android"))]
 use glutin_winit::{DisplayBuilder, GlWindow};
+#[cfg(not(target_os = "android"))]
 use raw_window_handle::HasWindowHandle;
+#[cfg(not(target_os = "android"))]
 use std::num::NonZeroU32;
+#[cfg(not(target_os = "android"))]
 use winit::dpi::LogicalSize;
+#[cfg(not(target_os = "android"))]
 use winit::event_loop::EventLoop;
+#[cfg(not(target_os = "android"))]
 use winit::window::{Fullscreen, WindowAttributes};
 
+/// Android: attach a GLES-3.0 context to the OS-provided `ANativeWindow`
+/// (`android_gl`); `title` is unused (no window chrome). `width`/`height` are a
+/// fallback viewport hint — the real size comes from the window.
+#[cfg(target_os = "android")]
+pub fn create_gl_state(width: u32, height: u32, title: &str) -> Result<GlState, String> {
+    let _ = title;
+    crate::android_gl::create_gl_state_android(width, height)
+}
+
+/// Android: a NativeActivity is always fullscreen, so this is the same attach.
+#[cfg(target_os = "android")]
+pub fn create_gl_state_fullscreen(title: &str) -> Result<GlState, String> {
+    let _ = title;
+    crate::android_gl::create_gl_state_android(0, 0)
+}
+
+#[cfg(not(target_os = "android"))]
 pub fn create_gl_state(width: u32, height: u32, title: &str) -> Result<GlState, String> {
     let attrs = WindowAttributes::default()
         .with_title(title)
@@ -29,6 +57,7 @@ pub fn create_gl_state(width: u32, height: u32, title: &str) -> Result<GlState, 
 /// against monitor connector names, e.g. "HDMI") to target a specific
 /// output — useful for putting the demo on a beamer.  The GL viewport is
 /// sized from the actual window size after creation.
+#[cfg(not(target_os = "android"))]
 pub fn create_gl_state_fullscreen(title: &str) -> Result<GlState, String> {
     let attrs = WindowAttributes::default()
         .with_title(title)
@@ -36,6 +65,7 @@ pub fn create_gl_state_fullscreen(title: &str) -> Result<GlState, String> {
     create_gl_state_with_attrs(attrs, None, true)
 }
 
+#[cfg(not(target_os = "android"))]
 fn create_gl_state_with_attrs(
     mut window_attrs: WindowAttributes,
     initial_viewport: Option<(u32, u32)>,
