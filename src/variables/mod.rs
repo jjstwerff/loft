@@ -1712,6 +1712,20 @@ impl Function {
         }
     }
 
+    /// Advance the pooling counter past every `__work_N` already in `names`, so the next
+    /// `work_text()` mints a genuinely-fresh buffer instead of aliasing a live one.  Needed
+    /// when a def's work-texts live in `names` but the counter is out of sync — e.g. a
+    /// post-parse retbuf injection into an already-parsed caller (loft#568 @PLN104 Phase B),
+    /// where re-using `__work_1` would collide with a live format-arg buffer in the SAME call.
+    pub fn sync_work_text_counter(&mut self) {
+        for name in self.names.keys() {
+            if let Some(rest) = name.strip_prefix("__work_")
+                && let Ok(k) = rest.parse::<u16>()
+            {
+                self.work_text = self.work_text.max(k);
+            }
+        }
+    }
     pub fn work_text(&mut self, lexer: &mut Lexer) -> u16 {
         let n = format!("__work_{}", self.work_text + 1);
         self.work_text += 1;

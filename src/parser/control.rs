@@ -8316,6 +8316,11 @@ impl Parser {
             self.context = c;
             let before: std::collections::HashSet<u16> =
                 self.vars.work_texts().into_iter().collect();
+            // The caller was parsed against the UNPROMOTED callee, so its work-text pooling
+            // counter may lag the `__work_N` already in `names` (a format-arg buffer, say).
+            // Sync it first so every retbuf `add_defaults` mints below is a FRESH buffer,
+            // never an alias of a live arg buffer in the same call (native E0506/E0499).
+            self.vars.sync_work_text_counter();
             let mut code =
                 std::mem::replace(&mut self.data.definitions[c as usize].code, Value::Null);
             self.patch_tret_call(&mut code, &force);

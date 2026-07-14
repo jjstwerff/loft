@@ -169,6 +169,16 @@ fn collect_calls(node: IrNode, data: &Data, calls: &mut HashSet<u32>) {
                 collect_calls(op, data, calls);
             }
         }
+        // A fn-ref call `cb(f(x))` lowers to `CallRef(cb, [Call(f, …)])`; its target
+        // is resolved by `collect_fn_ref_literals`, but its ARGS can nest ordinary
+        // `Call`s (e.g. a text-returning callee promoted to take a retbuf — loft#568).
+        // Without recursing here the nested callee is never marked reachable and rustc
+        // fails E0425.  Reachability is an over-approximation, so recursing is always safe.
+        ValueType::CallRef => {
+            for a in node.callref_args().iter() {
+                collect_calls(a, data, calls);
+            }
+        }
         ValueType::Iter => {
             collect_calls(node.iter_create(), data, calls);
             collect_calls(node.iter_next(), data, calls);
