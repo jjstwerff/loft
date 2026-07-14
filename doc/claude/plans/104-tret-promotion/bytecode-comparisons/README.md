@@ -140,29 +140,69 @@ and the leak survives every static fix tried. This needs a **runtime** diagnosti
 (live debugger / store trace to catch the exact un-freed allocation at execution
 time), not more static IR analysis — the next increment's starting point.
 
-### Runtime-trace session (2026-07-13) — the premise is in doubt; fix local tooling first
+### RECHECK (2026-07-13) — the "premise in doubt" was WRONG; P1–P3 proven not to fix it
 
-Instrumented `State::append_text`/`append_stack_text`/`format_stack_int` (alloc) and
-`free_text` (free) with a per-text ptr+content trace (`LOFT_TEXT_TRACE`, reverted).
-Result on `min.loft`, RELIABLE (unlike the ASan counts):
+The prior "runtime-trace session" concluded `min.loft` doesn't leak and the direction
+is a red herring. **Both halves were wrong**, and the recheck reverses them with
+reliable measurements.
 
-- baseline / +LOFT_TRET_FIX / `r=f(x);r` workaround ALL show the SAME balanced trace:
-  2 text allocs (`v`→`v1`, `v1`), 2 frees — every text buffer freed, in all three.
-- `State::append_text` (the ASan-named leak site) is NEVER CALLED for this program.
+**Measurement method that finally works locally** (no `llvm-symbolizer` needed): an
+ASan build with `-Cforce-frame-pointers=yes` (deep AND fast stacks) + slow unwind
+(`ASAN_OPTIONS=fast_unwind_on_malloc=0`) + a Python post-filter (`realleak.py`) that
+symbolizes with `addr2line` and drops `ir_read` frames — the interner suppression the
+missing runtime symbolizer couldn't apply. Runs are slow (the third pass amplifies
+`ir_read` to ~300); run each in the background so LSan reports instead of timing out.
 
-So: (1) the CI `append_text` leak label is **inlining noise** — the leak is NOT a
-text-return-delivery orphan; (2) `min.loft` has no text-level leak, so it likely does
-NOT faithfully reproduce the CI bug, and the earlier "min.loft leaks 1" reads were
-`ir_read` noise.
+Three-way, reliable (each run finished, ir_read-suppressed):
 
-**Root local-tooling gap:** this box has NO `llvm-symbolizer`, so LSan can't apply the
-`leak:ir_read` suppression — every local leak count is polluted by the intentional
-interner allocations (the third pass amplifies them to ~300). All wobbling measurements
-trace to this.
+| program | leak |
+|---|---|
+| baseline `min.loft` (bare `f(x)` tail) | **1** `fill::append_text` |
+| `min.loft` + `LOFT_TRET_FIX=1` (P3) | **1** — identical to baseline |
+| `min_wa.loft` (`r = f(x); r`) | **0** — clean |
 
-**Next session MUST start here:** install `llvm-symbolizer`; re-verify the ACTUAL CI
-leakers (`387`, `85-poison-return-tail-uaf`, `85-ncc-container-text-return`, `552`/`553`/
-`557`) with `scripts/asan_leak_scan.sh` + the symbolizer (clean signal); get the true
-symbolized (ir_read-suppressed) leak stack; re-derive a FAITHFUL minimal repro. Only
-then judge whether the P1–P3 text-promotion direction is right — the runtime trace says
-it may be a red herring.
+So `min.loft` **is a faithful repro** (baseline leaks). The earlier "all freed" trace
+was instrumenting the wrong function — it hooked `State::append_text` where the ASan
+leak's inlined site is the SAME method but the trace logic missed the call; a corrected
+per-pointer trace (`LOFT_PTR_TRACE`, reverted) shows the append buffer orphans.
+
+**The pointer trace pins it** — two `"v1"` allocations exist; the leak is the appended
+one, never freed:
+
+- baseline/fix: `run_t` runs `AppendText` → allocates `"v1"` at ptr **A** (never freed);
+  a copy **B** is freed. **A leaks.** Fix trace is byte-identical to baseline.
+- workaround: **no append at all** — the buffer is *moved/renamed*; both copies freed.
+
+**The definitive bytecode diff (`run_t`, fix vs workaround) — the real fault:**
+
+| | signature | delivery op |
+|---|---|---|
+| workaround (clean) | `(f, x, r:&text) -> text["r"]` | `AppendStackText(r)` — into the caller's buffer via the ref |
+| fix (leaks) | `(f, x) -> text` — **no retbuf** | `AppendText(__ret_1)` — into an owned local, returned by value |
+
+The P3 retbuf **is present in the IR** (`___tret_1:&text -> text["___tret_1"]`) but is
+**dropped during compilation** — the compiled `run_t` has signature `-> text` with an
+owned `__ret_1` + `AppendText`, exactly the leaking owned-text-by-value return. That is
+why the runtime never changed: the promotion never reaches codegen.
+
+**Root blocker — pass timing.** The workaround's `r` is promoted on **pass 1**, so its
+`&text` retbuf param is baked into the signature `compile.rs` reads. P3's `__tret` is
+promoted on the **third pass** (the `use_analysis` oracle can't classify a fn-ref /
+local-index tail until after pass 2), *after* the signature was finalized on pass 2 —
+so compile emits the pass-2 signature (no retbuf). Promoting on pass 2 instead violates
+the H5 two-pass attribute-count contract (`assert_pass2_def_attr_stable`) — that is
+exactly the crash #551 gated off, reintroducing this leak.
+
+**The IR-level fixes tried this session (kept, gated on `LOFT_TRET_FIX`):** block-dep
+then frame-dep preservation in `block_result`'s `Type::Text` arm — they make the IR
+block type `text["___tret_1"]` (matching the workaround's `text["r"]`), but the leak
+persists because the fault is downstream in codegen, not the IR block dep. Necessary
+housekeeping, insufficient alone.
+
+**The direction that CAN work (next increment):** make the fn-ref-call / local-index
+text-return promotion land in the finalized signature `compile.rs` reads — options:
+(a) classify these tails on **pass 1** (needs pass-1 lowering to recognise the shape),
+or (b) let the third pass **re-finalize the def signature** so `compile.rs` emits the
+retbuf `AppendStackText` path (honor the post-pass-2 retbuf) instead of the owned
+`__ret_1` `AppendText` fallback. The target bytecode is captured above — the workaround's
+`run_t` is the byte-exact goal.

@@ -520,6 +520,17 @@ fn emit_ownership(
             def.name,
             crate::use_analysis::fmt_own(ret, vars)
         )?;
+        // @PLN104 — surface the loft#568 interpreter-orphan risk STATICALLY: a text return
+        // backed frame-locally with no hidden `&text` retbuf hands owned text back by value,
+        // which the interpreter orphans (native RAII drops it).  Same predicate the promotion
+        // oracle uses, so the overlay names the leaker class without ASan.
+        if let Some(kind) = crate::use_analysis::text_return_orphan_risk(data, d_nr) {
+            writeln!(
+                w,
+                "  ⚠ loft#568: owned text returned by value ({kind}) — no &text retbuf; \
+                 interpreter orphans it"
+            )?;
+        }
         writeln!(w, "  {:<4} {:<4} {:<22} ownership", "#", "arg", "name")?;
         writeln!(w, "  {}", "-".repeat(66))?;
         for v in 0..vars.count() {

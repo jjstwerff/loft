@@ -1324,6 +1324,45 @@ impl Parser {
                 // @PLN25 slice (c): `.base()` — a `-> text?` return dispatches to the same
                 // work-buffer conversion as `-> text` (text_return re-applies the `?`).
                 self.text_return(ls);
+                // @PLN104 (b2) — restore `a == v` for a late-promoted retbuf. On the
+                // third pass `do_tret_bind` mints the retbuf variable AFTER the inherited
+                // `__work_1`, so its variable index `tv` exceeds its attribute index `a`.
+                // The returned-type dep is resolved in BOTH attribute-space (the signature
+                // render) AND variable-space (the block dep + delivery), so `a != v`
+                // orphans the owned text on the interpreter (loft-lang/loft#568). Renumber
+                // the retbuf into the slot matching its attribute index (its position among
+                // `arguments()`): the IR body + embedded type deps (`renumber_frame_var`),
+                // the typedef deps (`renumber_frame_in_types`), and the variable table
+                // (`swap_variables`) move in tandem. Gated on `force_tret`, so the 2-pass
+                // flow is untouched. The `r = f(x); r` workaround gets `a == v` for free.
+                if self.force_tret.contains(&self.context)
+                    && ls.len() == 1
+                    && let Some(a) = self
+                        .vars
+                        .arguments()
+                        .iter()
+                        .position(|&x| x == ls[0])
+                        .map(|p| p as u16)
+                {
+                    let tv = ls[0];
+                    if a != tv {
+                        // 3-way swap `a <-> tv` of every frame reference; `tmp` is a fresh
+                        // scratch index (one past the live vars), fully undone below.
+                        let tmp = self.vars.count();
+                        for op in l.iter_mut() {
+                            Self::renumber_frame_var(op, a, tmp);
+                            Self::renumber_frame_var(op, tv, a);
+                            Self::renumber_frame_var(op, tmp, tv);
+                        }
+                        self.vars.renumber_frame_in_types(a, tmp);
+                        self.vars.renumber_frame_in_types(tv, a);
+                        self.vars.renumber_frame_in_types(tmp, tv);
+                        self.vars.swap_variables(a, tv);
+                    }
+                    // block dep names the retbuf's (post-swap) slot `a`; the returned dep
+                    // (attribute-space `a`, set by `text_return`) resolves there too.
+                    tp = Type::Text(Deps::frame1(a));
+                }
             } else if !vec_arm_handled && let Type::Vector(elm, ls) = t {
                 // @PLN85 / D-own-1 — classify ONCE from the deps fact + tail shape,
                 // then emit. The three old inline branches (recover-hidden-refs /
@@ -7991,13 +8030,18 @@ impl Parser {
     /// RETURNED monomorph result (`run() -> text { first(nums) }`) also needs the
     /// caller to promote, which the def_nr backward-ref gate blocks (monomorph
     /// minted after the caller) — that half awaits the forward-ref pre-pass.
-    /// @PLN104 P2 — the oracle pass (REPORT-ONLY, env-gated `LOFT_TRET_REPORT`).
-    /// After pass 2, flag every user text-returning fn that returns `Owned` text
-    /// (`use_analysis::return_ownership`) WITHOUT a hidden `&text` retbuf — the
-    /// owned-by-value shape the interpreter orphans (loft-lang/loft#568). These are
-    /// exactly the defs P3's promotion must act on. No transform here — this only
-    /// proves the predicate flags the leaking paths and skips the delivered/borrowed
-    /// ones, against the bytecode-comparison corpus.
+    /// @PLN104 — after pass 2, flag every user text-returning fn that returns `Owned`
+    /// text (`use_analysis::return_ownership`) WITHOUT a hidden `&text` retbuf — the
+    /// owned-by-value shape the interpreter orphans (loft-lang/loft#568). Flagged defs
+    /// go into `force_tret`, which drives the third pass to re-lower them with a `&text`
+    /// retbuf (`do_tret_bind` + the `a==v` renumber in `block_result`). OPT-IN via
+    /// `LOFT_TRET_FIX` (default-off): the promotion is correct for the fn-ref-call tail
+    /// (the min.loft/#568 primary) but a default-on trial regressed 7 suite tests —
+    /// spurious third-pass diagnostics, runtime shape changes (s5/s7), 4 native
+    /// compile failures, and tooling — so it stays gated until those are closed (see
+    /// `doc/claude/plans/104-tret-promotion/option-b-scope.md` § "Default-on trial").
+    /// Test env-gated via `LOFT_NO_CACHE=1` (the whole-program cache ignores this flag).
+    /// `LOFT_TRET_REPORT` additionally prints each flagged def.
     pub(crate) fn report_tret_promotions(&mut self) {
         let report = std::env::var_os("LOFT_TRET_REPORT").is_some();
         let fix = std::env::var_os("LOFT_TRET_FIX").is_some();
@@ -8010,45 +8054,18 @@ impl Parser {
             if def.def_type != DefType::Function || def.source != crate::data::MAIN_SOURCE {
                 continue;
             }
-            if !matches!(def.returned().base(), Type::Text(_)) {
+            // The #568 orphan predicate lives in ONE place (`use_analysis`) so this oracle
+            // and the `--show-ownership` overlay flag exactly the same class.
+            let Some(kind) = crate::use_analysis::text_return_orphan_risk(&self.data, d) else {
                 continue;
-            }
-            // `has_work_buf`: already delivered through a hidden `&text` retbuf.
-            let has_buf = def.attributes().iter().any(
-                |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
-            );
-            if has_buf {
-                continue;
-            }
-            // The real class: a text return backed by a store that DIES with the
-            // frame — `Owned` (a fresh local store) OR `Borrowed{base}` of a LOCAL
-            // (not an argument, which the caller owns and outlives the frame). Both
-            // dangle/orphan without a retbuf; a `Borrowed` of an argument does not.
-            // Skip a return that BORROWS an argument — the caller owns it and it
-            // outlives the frame (no leak). Everything else backed frame-locally —
-            // `Owned`, or a `Borrowed`/`Join` of a LOCAL / unresolved base (base ==
-            // u16::MAX = names no visible param) — dies with the frame and must
-            // materialise into a retbuf.
-            let borrows_arg = |base: u16| base != u16::MAX && def.variables.is_argument(base);
-            let kind = match crate::use_analysis::return_ownership(&self.data, d) {
-                crate::use_analysis::Own::Owned => Some("owned-by-value"),
-                crate::use_analysis::Own::Borrowed { base } if !borrows_arg(base) => {
-                    Some("view-of-local")
-                }
-                crate::use_analysis::Own::Join { base, .. } if !borrows_arg(base) => {
-                    Some("join-of-local")
-                }
-                _ => None,
             };
-            if let Some(kind) = kind {
-                if report {
-                    eprintln!(
-                        "[tret-promote] def #{d} `{}` ({kind}), no retbuf — needs promotion (#568)",
-                        def.original_name()
-                    );
-                }
-                flagged.push(d);
+            if report {
+                eprintln!(
+                    "[tret-promote] def #{d} `{}` ({kind}), no retbuf — needs promotion (#568)",
+                    def.original_name()
+                );
             }
+            flagged.push(d);
         }
         if fix {
             for d in flagged {

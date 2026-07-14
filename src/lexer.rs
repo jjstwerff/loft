@@ -550,6 +550,13 @@ impl Lexer {
         &self.diagnostics
     }
 
+    /// @PLN104 — drop diagnostics accumulated after index `n` (see
+    /// [`Diagnostics::truncate_to`]).  Used to discard the retbuf-promotion third
+    /// pass's re-emitted diagnostics, keeping pass 2's authoritative set.
+    pub fn truncate_diagnostics(&mut self, n: usize) {
+        self.diagnostics.truncate_to(n);
+    }
+
     pub fn mode(&self) -> Mode {
         self.mode.clone()
     }

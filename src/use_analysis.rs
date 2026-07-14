@@ -1603,6 +1603,36 @@ pub fn return_ownership(data: &Data, d_nr: u32) -> Own {
     Ownership::new(data).return_ownership(d_nr)
 }
 
+/// @PLN104 — the loft#568 interpreter-orphan predicate, in ONE place so the promotion
+/// oracle (`report_tret_promotions`) and the `--show-ownership` overlay name the same
+/// class.  Returns the risk kind when a text-returning fn hands owned text back BY VALUE:
+/// its return is backed FRAME-LOCALLY (`Owned`, or a `Borrowed`/`Join` of a LOCAL — not an
+/// argument the caller owns and outlives the frame) AND is not already delivered through a
+/// hidden `&text` retbuf.  The interpreter orphans such a return (the `String` dies with
+/// the frame); native RAII drops it.  `None` = safe: already buffered, borrows an argument,
+/// or not a text return.
+#[must_use]
+pub fn text_return_orphan_risk(data: &Data, d_nr: u32) -> Option<&'static str> {
+    use crate::data::Type;
+    let def = data.def(d_nr);
+    if !matches!(def.returned().base(), Type::Text(_)) {
+        return None;
+    }
+    let has_buf = def.attributes().iter().any(
+        |a| matches!(a.typedef, Type::RefVar(ref t) if matches!(**t, Type::Text(_))),
+    );
+    if has_buf {
+        return None;
+    }
+    let borrows_arg = |base: u16| base != u16::MAX && def.variables.is_argument(base);
+    match return_ownership(data, d_nr) {
+        Own::Owned => Some("owned-by-value"),
+        Own::Borrowed { base } if !borrows_arg(base) => Some("view-of-local"),
+        Own::Join { base } if !borrows_arg(base) => Some("join-of-local"),
+        _ => None,
+    }
+}
+
 /// Public, test-facing entry: the owned-slot reassignment sites of function `d_nr`.
 #[must_use]
 pub fn reassign_sites(data: &Data, d_nr: u32) -> Vec<ReassignSite> {

@@ -8,6 +8,164 @@ use crate::keys::{DbRef, Str};
 use crate::ops;
 use std::cmp::Ordering;
 
+// @PLN104 — `LOFT_TEXT_TIMELINE`: the stack-frame-`String` analogue of `LOFT_STORES=timeline`.
+// A loft text value is a Rust `String` living in the stack-frame store as raw bytes, so its
+// OWN heap allocation is invisible to the store timeline / `check_store_leaks` (they track
+// loft STORES, not the String's buffer).  This tracks each text buffer's heap capacity by
+// pointer so an owned-text return orphaned at frame exit (loft#568) is caught RELIABLY — where
+// the ASan `ir_read` suppression is not (its stack-substring match false-pos/negs by depth).
+//
+// Env `LOFT_TEXT_TIMELINE`: any value → exit SUMMARY; `=timeline` → per-op lifeline too.
+// Realloc-safe: a grow snapshots the buffer's `(ptr, capacity)` BEFORE and AFTER the mutation,
+// so a moved buffer drops its old ptr (freed by the realloc) and records the new; the capacity
+// delta is exact.  `free_text` drops the buffer; any ptr still live at program exit LEAKED.
+#[derive(Default)]
+struct TextTimeline {
+    seq: u64,
+    live: std::collections::HashMap<usize, TtBuf>,
+    live_bytes: usize,
+    peak_bytes: usize,
+    allocs: u64,
+    frees: u64,
+}
+struct TtBuf {
+    seq: u64,
+    fn_nr: Option<u32>,
+    content: String,
+    cap: usize,
+}
+
+thread_local! {
+    static TEXT_TL: std::cell::RefCell<TextTimeline> = std::cell::RefCell::new(TextTimeline::default());
+    static TEXT_TL_ON: bool = std::env::var_os("LOFT_TEXT_TIMELINE").is_some();
+    static TEXT_TL_VERBOSE: bool = std::env::var("LOFT_TEXT_TIMELINE").as_deref() == Ok("timeline");
+}
+
+#[inline]
+fn text_tl_on() -> bool {
+    TEXT_TL_ON.with(|b| *b)
+}
+
+/// Record a text-buffer GROWTH (an append / format that may have (re)allocated).
+/// `before`/`after` are `(ptr, capacity)` snapshots around the mutation.
+fn text_tl_grow(fn_nr: Option<u32>, before: (usize, usize), after: (usize, usize), content: &str) {
+    if !text_tl_on() {
+        return;
+    }
+    let (bp, bc) = before;
+    let (ap, ac) = after;
+    TEXT_TL.with(|t| {
+        let mut t = t.borrow_mut();
+        // A realloc MOVED the buffer → its old allocation is gone.
+        if bc > 0 && bp != ap {
+            if let Some(b) = t.live.remove(&bp) {
+                t.live_bytes -= b.cap;
+            }
+        }
+        if ac > 0 {
+            match t.live.get(&ap).map(|b| b.cap) {
+                Some(old) => {
+                    t.live_bytes = t.live_bytes + ac - old;
+                    if let Some(b) = t.live.get_mut(&ap) {
+                        b.cap = ac;
+                        b.content = content.to_string();
+                    }
+                }
+                None => {
+                    let s = t.seq;
+                    t.seq += 1;
+                    t.allocs += 1;
+                    t.live_bytes += ac;
+                    t.live.insert(
+                        ap,
+                        TtBuf {
+                            seq: s,
+                            fn_nr,
+                            content: content.to_string(),
+                            cap: ac,
+                        },
+                    );
+                }
+            }
+            t.peak_bytes = t.peak_bytes.max(t.live_bytes);
+        }
+    });
+    if ac > 0 && TEXT_TL_VERBOSE.with(|b| *b) {
+        eprintln!("[text-tl] grow fn={fn_nr:?} cap={ac} ptr={ap:#x} {content:?}");
+    }
+}
+
+/// Record a text-buffer FREE (`free_text`). `ptr`/`cap` snapshot the buffer before its clear.
+fn text_tl_free(fn_nr: Option<u32>, ptr: usize, cap: usize, content: &str) {
+    if !text_tl_on() || cap == 0 {
+        return;
+    }
+    TEXT_TL.with(|t| {
+        let mut t = t.borrow_mut();
+        if let Some(b) = t.live.remove(&ptr) {
+            t.frees += 1;
+            t.live_bytes -= b.cap;
+        }
+    });
+    if TEXT_TL_VERBOSE.with(|b| *b) {
+        eprintln!("[text-tl] free fn={fn_nr:?} cap={cap} ptr={ptr:#x} {content:?}");
+    }
+}
+
+/// Run a formatting op `f` on buffer `s`, recording its growth (a format may (re)allocate,
+/// e.g. a wide number into an empty buffer).  `tl_fn` is `Some(fn_nr)` when the timeline is on
+/// (captured before the caller's `&mut String` borrow), `None` off — off is a straight call, no
+/// overhead.  Lets every `format_*` op hook the timeline with one line.
+fn text_tl_fmt(tl_fn: Option<Option<u32>>, s: &mut String, f: impl FnOnce(&mut String)) {
+    match tl_fn {
+        Some(fn_nr) => {
+            let before = (s.as_ptr() as usize, s.capacity());
+            f(s);
+            text_tl_grow(
+                fn_nr,
+                before,
+                (s.as_ptr() as usize, s.capacity()),
+                s.as_str(),
+            );
+        }
+        None => f(s),
+    }
+}
+
+/// @PLN104 — the exit summary (no-op unless `LOFT_TEXT_TIMELINE`).  Mirrors the store
+/// `timeline_summary`: allocs / frees / peak live bytes, then — the load-bearing line — every
+/// text buffer still live at exit (an orphaned `String`, the loft#568 leak class).  Called from
+/// `State`'s exit path next to the store timeline summary.
+pub fn text_timeline_summary() {
+    if !text_tl_on() {
+        return;
+    }
+    TEXT_TL.with(|t| {
+        let t = t.borrow();
+        let leaked = t.live.len();
+        let verdict = if leaked == 0 {
+            "NO text leak (every buffer freed)".to_string()
+        } else {
+            format!(
+                "{leaked} text buffer(s) LEAKED ({} bytes) — orphaned Strings (loft#568 class)",
+                t.live_bytes
+            )
+        };
+        eprintln!(
+            "[text-timeline] SUMMARY: {} allocs, {} frees, peak {} bytes live — {verdict}",
+            t.allocs, t.frees, t.peak_bytes
+        );
+        let mut leaks: Vec<&TtBuf> = t.live.values().collect();
+        leaks.sort_by_key(|b| b.seq);
+        for b in leaks {
+            eprintln!(
+                "[text-timeline]   LEAKED #{} fn={:?} {} bytes {:?}",
+                b.seq, b.fn_nr, b.cap, b.content
+            );
+        }
+    });
+}
+
 impl State {
     pub fn conv_text_from_null(&mut self) {
         self.put_stack(Str::new(super::STRING_NULL));
@@ -87,6 +245,7 @@ impl State {
             self.text_positions
                 .insert(self.stack_cur.pos + self.stack_pos + size_ptr() - u32::from(pos));
         }
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let v1 = self.string_mut(pos - size_ptr() as u16);
         // @PLN25 slice (c): a null `text?` accumulator (the STRING_NULL sentinel) IGNORES the
         // append, so `s += x` on a null `s` stays null (propagate — nulls stay visible, never
@@ -96,7 +255,11 @@ impl State {
         if crate::keys::pln25_dn1_enabled() && v1.as_str() == super::STRING_NULL {
             return;
         }
+        let before = (v1.as_ptr() as usize, v1.capacity());
         *v1 += text.str();
+        if let Some(fn_nr) = tl_fn {
+            text_tl_grow(fn_nr, before, (v1.as_ptr() as usize, v1.capacity()), v1.as_str());
+        }
     }
 
     /// `OpCreateStack`: push a `DbRef` pointing into the current stack frame.
@@ -142,8 +305,13 @@ impl State {
     pub fn append_stack_text(&mut self) {
         let text = self.string();
         let pos = self.code::<u16>();
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let v1 = self.string_ref_mut(pos - size_ptr() as u16);
+        let before = (v1.as_ptr() as usize, v1.capacity());
         *v1 += text.str();
+        if let Some(fn_nr) = tl_fn {
+            text_tl_grow(fn_nr, before, (v1.as_ptr() as usize, v1.capacity()), v1.as_str());
+        }
     }
 
     pub fn append_stack_character(&mut self) {
@@ -325,7 +493,11 @@ impl State {
         // sole deallocation point).  Miri's leak checker caught it (cluster 5).
         // (The old debug-only `for _ in 0..s.len()` poison loop was dead code — it
         // ran after `clear()`, so `s.len()` was already 0 and it never executed.)
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos);
+        if let Some(fn_nr) = tl_fn {
+            text_tl_free(fn_nr, s.as_ptr() as usize, s.capacity(), s.as_str());
+        }
         s.clear();
         s.shrink_to(0);
         if cfg!(debug_assertions) {
@@ -415,16 +587,19 @@ impl State {
         // tag unconditionally so it can never leak to a downstream
         // interpolation in the same format string.
         let tag = self.database.take_format_fault();
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         if val == i64::MIN
             && let Some(label_str) = tag
         {
             let label = format!("null({label_str})");
             let s = self.string_mut(pos - 16);
-            ops::format_text(s, &label, width, 1, token);
+            text_tl_fmt(tl_fn, s, |s| ops::format_text(s, &label, width, 1, token));
             return;
         }
         let s = self.string_mut(pos - 16);
-        ops::format_long(s, val, radix, width, token, plus, note, dir);
+        text_tl_fmt(tl_fn, s, |s| {
+            ops::format_long(s, val, radix, width, token, plus, note, dir)
+        });
     }
 
     pub fn format_stack_int(&mut self) {
@@ -437,16 +612,19 @@ impl State {
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<i64>();
         let tag = self.database.take_format_fault();
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         if val == i64::MIN
             && let Some(label_str) = tag
         {
             let label = format!("null({label_str})");
             let s = self.string_ref_mut(pos - 16);
-            ops::format_text(s, &label, width, 1, token);
+            text_tl_fmt(tl_fn, s, |s| ops::format_text(s, &label, width, 1, token));
             return;
         }
         let s = self.string_ref_mut(pos - 16);
-        ops::format_long(s, val, radix, width, token, plus, note, dir);
+        text_tl_fmt(tl_fn, s, |s| {
+            ops::format_long(s, val, radix, width, token, plus, note, dir)
+        });
     }
 
     pub fn format_float(&mut self) {
@@ -455,8 +633,9 @@ impl State {
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f64>();
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos - 24);
-        ops::format_float(s, val, width, precision, dir);
+        text_tl_fmt(tl_fn, s, |s| ops::format_float(s, val, width, precision, dir));
     }
 
     pub fn format_stack_float(&mut self) {
@@ -465,8 +644,9 @@ impl State {
         let precision = *self.get_stack::<i64>();
         let width = *self.get_stack::<i64>();
         let val = *self.get_stack::<f64>();
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_ref_mut(pos - 24); // f64(8)+i64(8)+i64(8) = 24 bytes popped
-        ops::format_float(s, val, width, precision, dir);
+        text_tl_fmt(tl_fn, s, |s| ops::format_float(s, val, width, precision, dir));
     }
 
     pub fn format_single(&mut self) {
@@ -478,8 +658,9 @@ impl State {
         // @PLAN53 cluster 2 / S4: N = stepped span of the popped i64+i64+f32
         // (20 off; 24 aligned — the f32 rounds 4->8).
         let n = (self.stack_step(8) + self.stack_step(8) + self.stack_step(4)) as u16;
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos - n);
-        ops::format_single(s, val, width, precision, dir);
+        text_tl_fmt(tl_fn, s, |s| ops::format_single(s, val, width, precision, dir));
     }
 
     pub fn format_stack_single(&mut self) {
@@ -490,8 +671,9 @@ impl State {
         let val = *self.get_stack::<f32>();
         // @PLAN53 cluster 2 / S4: stepped span of popped i64+i64+f32 (20/24).
         let n = (self.stack_step(8) + self.stack_step(8) + self.stack_step(4)) as u16;
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_ref_mut(pos - n);
-        ops::format_single(s, val, width, precision, dir);
+        text_tl_fmt(tl_fn, s, |s| ops::format_single(s, val, width, precision, dir));
     }
 
     pub fn format_text(&mut self) {
@@ -500,8 +682,9 @@ impl State {
         let token = self.code::<u8>();
         let width = *self.get_stack::<i64>();
         let val = self.string();
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_mut(pos - 8 - size_ptr() as u16);
-        ops::format_text(s, val.str(), width, dir, token);
+        text_tl_fmt(tl_fn, s, |s| ops::format_text(s, val.str(), width, dir, token));
     }
 
     pub fn format_stack_text(&mut self) {
@@ -510,7 +693,8 @@ impl State {
         let token = self.code::<u8>();
         let width = *self.get_stack::<i64>();
         let val = self.string();
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
         let s = self.string_ref_mut(pos - 8 - size_ptr() as u16);
-        ops::format_text(s, val.str(), width, dir, token);
+        text_tl_fmt(tl_fn, s, |s| ops::format_text(s, val.str(), width, dir, token));
     }
 }

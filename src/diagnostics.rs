@@ -138,6 +138,25 @@ impl Diagnostics {
     pub fn level(&self) -> Level {
         self.level
     }
+
+    /// @PLN104 — drop every diagnostic accumulated after index `n`, recomputing the
+    /// max level from what remains.  The retbuf-promotion THIRD parse pass
+    /// (`force_tret`) is a re-lowering, not a fresh analysis, so it re-emits the same
+    /// diagnostics pass 2 already recorded (duplicates + promotion artefacts like a
+    /// spurious "parameter never read").  The parser snapshots
+    /// `diagnostics().entries().len()` before that pass and truncates back to it after,
+    /// keeping pass 2's authoritative set.
+    pub fn truncate_to(&mut self, n: usize) {
+        if n < self.entries.len() {
+            self.entries.truncate(n);
+            self.level = self
+                .entries
+                .iter()
+                .map(|e| e.level)
+                .max()
+                .unwrap_or(Level::Debug);
+        }
+    }
 }
 
 #[must_use]

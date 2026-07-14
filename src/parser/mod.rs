@@ -1152,6 +1152,20 @@ impl Parser {
             // — re-lowers with the buffer (no ABI-growth crash).  Post-H5, so the extra
             // attrs never trip the pass1==pass2 contract.
             if !self.force_tret.is_empty() {
+                // @PLN104 — the third pass is a re-lowering, not a fresh analysis: it
+                // re-emits pass 2's diagnostics (and promotion artefacts like a spurious
+                // "parameter never read").  Snapshot pass 2's diagnostic set and truncate
+                // back to it after, so the user sees pass 2's authoritative diagnostics
+                // only — never third-pass duplicates.
+                let diag_mark = self.lexer.diagnostics().entries().len();
+                // @PLN104 — the third pass re-parses the WHOLE file, but its refinement is
+                // NOT idempotent on already-refined defs: re-lowering a pass-2 vector
+                // literal mis-orders the pre-alloc vs the work-ref decl (native
+                // `var__vec_1` E0425).  Only `force_tret` defs (they gain the retbuf) and
+                // their DIRECT callers (they push it) actually need the third-pass form;
+                // every other def must keep its pass-2 state.  Snapshot the pass-2 defs and
+                // restore the untouched ones after.
+                let pass2_defs: Vec<crate::data::Definition> = self.data.definitions.clone();
                 self.applied_imports.clear();
                 self.deferred_unknown.clear();
                 self.data.reset();
@@ -1163,6 +1177,26 @@ impl Parser {
                 self.lexer.switch(filename);
                 self.parse_file();
                 self.resolve_deferred_unknowns();
+                self.lexer.truncate_diagnostics(diag_mark);
+                for d in 0..pass2_defs.len() {
+                    if self.force_tret.contains(&(d as u32)) {
+                        continue;
+                    }
+                    // A DIRECT caller of a force_tret def (`Call`) — or any fn-ref call
+                    // (`CallRef`, whose promoted callee type is only known post-third-pass)
+                    // — needs the third-pass lowering; keep it. Everything else reverts.
+                    let mut needs_third_pass = false;
+                    pass2_defs[d].code.walk(&mut |v| match v {
+                        crate::data::Value::Call(fd, _) if self.force_tret.contains(fd) => {
+                            needs_third_pass = true;
+                        }
+                        crate::data::Value::CallRef(_, _) => needs_third_pass = true,
+                        _ => {}
+                    });
+                    if !needs_third_pass {
+                        self.data.definitions[d] = pass2_defs[d].clone();
+                    }
+                }
             }
         }
         self.backfill_native_symbol_crates();
