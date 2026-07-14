@@ -62,9 +62,8 @@ pub fn get_pixel(self: const Canvas, gx: integer, gy: integer) -> integer {
 pub fn set_pixel(self: Canvas, sx: integer, sy: integer, color: integer) {
   if sx >= 0 and sx < self.width and sy >= 0 and sy < self.height {
     sp_idx = sy * self.width + sx;
-    sp_d = self.data;
-    if sp_idx < len(sp_d) {
-      sp_d[sp_idx] = color;
+    if sp_idx < len(self.data) {
+      self.data[sp_idx] = color;
     }
   }
 }
@@ -95,9 +94,8 @@ pub fn blend(dst: integer, src: integer) -> integer {
 pub fn blend_pixel(self: Canvas, bx: integer, by: integer, color: integer) {
   if bx >= 0 and bx < self.width and by >= 0 and by < self.height {
     bp_idx = by * self.width + bx;
-    bp_d = self.data;
-    if bp_idx < len(bp_d) {
-      bp_d[bp_idx] = blend(bp_d[bp_idx] ?? 0, color);
+    if bp_idx < len(self.data) {
+      self.data[bp_idx] = blend(self.data[bp_idx] ?? 0, color);
     }
   }
 }
@@ -108,13 +106,12 @@ pub fn fill_rect(self: Canvas, rx: integer, ry: integer, rw: integer, rh: intege
   y0 = if ry < 0 { 0 } else { ry };
   x1 = if rx + rw > self.width { self.width } else { rx + rw };
   y1 = if ry + rh > self.height { self.height } else { ry + rh };
-  fr_d = self.data;
-  fr_n = len(fr_d);
+  fr_n = len(self.data);
   for fr_y in y0..y1 {
     for fr_x in x0..x1 {
       fr_idx = fr_y * self.width + fr_x;
       if fr_idx < fr_n {
-        fr_d[fr_idx] = color;
+        self.data[fr_idx] = color;
       }
     }
   }
@@ -125,12 +122,11 @@ pub fn hline(self: Canvas, hx0: integer, hx1: integer, hy: integer, color: integ
   if hy < 0 or hy >= self.height { return; }
   left = if hx0 < 0 { 0 } else { hx0 };
   right = if hx1 > self.width { self.width } else { hx1 };
-  hl_d = self.data;
-  hl_n = len(hl_d);
+  hl_n = len(self.data);
   for hl_x in left..right {
     hl_idx = hy * self.width + hl_x;
     if hl_idx < hl_n {
-      hl_d[hl_idx] = color;
+      self.data[hl_idx] = color;
     }
   }
 }
@@ -140,12 +136,11 @@ pub fn vline(self: Canvas, vx: integer, vy0: integer, vy1: integer, color: integ
   if vx < 0 or vx >= self.width { return; }
   top = if vy0 < 0 { 0 } else { vy0 };
   bottom = if vy1 > self.height { self.height } else { vy1 };
-  vl_d = self.data;
-  vl_n = len(vl_d);
+  vl_n = len(self.data);
   for vl_y in top..bottom {
     vl_idx = vl_y * self.width + vx;
     if vl_idx < vl_n {
-      vl_d[vl_idx] = color;
+      self.data[vl_idx] = color;
     }
   }
 }

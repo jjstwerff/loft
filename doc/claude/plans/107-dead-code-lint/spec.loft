@@ -1,0 +1,100 @@
+// @PLN107 dead-code lint — the canonical shape corpus (executable spec).
+//
+// Each fn is one row of the matrix in README.md. The `// verdict:` comment states what
+// the lint MUST do; where a shape has a runtime observable, main() prints it so the
+// dead-vs-live semantics are demonstrated (not just asserted). Runs clean on both
+// backends today — the lint is not yet implemented, so nothing warns yet; this file is
+// the spec the implementation is checked against.
+
+struct Box { data: vector<integer> }
+
+fn use_int(v: integer) -> integer { v }
+fn use_vec(v: vector<integer>) -> integer { v[0] ?? -1 }
+
+// ---- WARN rows -------------------------------------------------------------
+
+// verdict: WARN (W-scalar) — a created + mutated, never read. Both statements dead.
+fn w_scalar() {
+  a = 3;
+  a += 1;
+  // a is never observed
+}
+
+// verdict: WARN (W-copy) — d is a C86 field-read COPY; d[0]=9 paints a throwaway.
+// Observable: the source Box is unchanged, proving the write was lost.
+fn w_copy(showln: fn(text)) {
+  b = Box { data: [1, 2, 3] };
+  d = b.data;      // copy
+  d[0] = 9;        // dead: mutates the copy
+  showln("W-copy   b.data[0] = {b.data[0] ?? -1}  (0-index still 1 → write was dead)");
+}
+
+// verdict: WARN (W-accumulator) — leftover accumulator, never read after the loop.
+fn w_accumulator() {
+  total = 0;
+  xs = [10, 20, 30];
+  for i in xs {
+    total += i;   // dead: total is never read after the loop
+  }
+}
+
+// verdict: WARN (W-reassign, Phase 2) — the second store is dead (a read between, none after).
+fn w_reassign(showln: fn(text)) {
+  a = 3;
+  showln("W-reassign first a = {a}");
+  a = 5;   // dead: a is never read after this
+}
+
+// ---- SILENT rows -----------------------------------------------------------
+
+// verdict: silent (N-read) — the copy is mutated AND read → real work.
+fn n_read(showln: fn(text)) {
+  b = Box { data: [1, 2, 3] };
+  d = b.data;
+  d[0] = 9;
+  showln("N-read   d[0] = {d[0] ?? -1}  (9 → observed, not dead)");
+}
+
+// verdict: silent (N-write-through) — direct field mutation, no copy. Observable: persists.
+fn n_write_through(showln: fn(text)) {
+  b = Box { data: [1, 2, 3] };
+  b.data[0] = 9;
+  showln("N-wthru  b.data[0] = {b.data[0] ?? -1}  (9 → persisted)");
+}
+
+// verdict: silent (N-fresh-used) — e escapes into a call.
+fn n_fresh_used(showln: fn(text)) {
+  e = [1, 2, 3];
+  e[0] = 9;
+  showln("N-fresh  use_vec(e) = {use_vec(e)}  (9 → e observed)");
+}
+
+// verdict: silent (N-copy-read) — a copy that is read is not dead (may be a wasteful
+// copy — that is @PLN90's lint, not this one).
+fn n_copy_read(showln: fn(text)) {
+  b = Box { data: [1, 2, 3] };
+  d = b.data;            // copy, no mutation
+  showln("N-cpread use_vec(d) = {use_vec(d)}  (1 → copy observed)");
+}
+
+// verdict: WARN on the binding, not the call (N-effectful) — RHS has effects; the
+// binding is dead but the computation must stay.
+fn n_effectful(showln: fn(text)) -> integer {
+  x = use_int(42);   // pretend use_int had side effects: x is the dead part, not the call
+  // x is unread — the lint flags the *binding*, never suggests deleting the RHS
+  showln("N-effect (binding x unread; RHS effect would stay)");
+  0
+}
+
+fn main() {
+  showln = fn (t: text) { print("{t}\n"); };
+  w_scalar();
+  w_copy(showln);
+  w_accumulator();
+  w_reassign(showln);
+  n_read(showln);
+  n_write_through(showln);
+  n_fresh_used(showln);
+  n_copy_read(showln);
+  n_effectful(showln);
+}
