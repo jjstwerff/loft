@@ -17,8 +17,11 @@ description: >-
   and delete the whole class, not just this instance. Then build the instrument
   that makes the CLASS visible (boundary matrix, falsification probe, usage
   sentinel), find the ONE invariant, enforce it at the chokepoint (no narrower, no
-  wider), verify against what you wrote down. Routes to the matrix-first protocol
-  and Design Protocol 1.
+  wider), verify against what you wrote down. And when a diagnostic reports a
+  symptom but not its cause, or repeated probes won't converge (non-monotonic,
+  "sometimes it happens"), treat that as a blind instrument, not a hard bug —
+  upgrade the tool to ATTRIBUTE the effect to its cause before guessing at a fix.
+  Routes to the matrix-first protocol and Design Protocol 1.
 user-invocable: true
 ---
 
@@ -99,7 +102,10 @@ one level apart** — learn the column you're in, but know it's one method.
    **cross-pass consistency** — the composition axes). Design: the cheapest test that could
    *falsify* each load-bearing claim — a probe, a targeted read, one boundary
    case. Control-flow (*which code actually runs*): a **usage sentinel** — route
-   the uses through one chokepoint and make it loud (its own § below).
+   the uses through one chokepoint and make it loud (its own § below). Provenance
+   (*where did this effect come from?* — a leak, a wrong field, a bad value with no
+   named producer): an **attribution** instrument — stamp the cause into the
+   system's own diagnostics (§ The blind-instrument tell).
    *"I can't see the root / can't name the invariant yet"* means **the
    instrument isn't finished** — never a license to act on the one case in hand.
    When you cannot form a candidate invariant *at all* and the domain is
@@ -263,6 +269,35 @@ cleverness). The tell triggers the search for a missing invariant; finding one �
 shorter + robust; honestly finding none → the length is essential, accept it. The
 alarm did its job by making you check.
 
+## The blind-instrument tell — upgrade the eyes, don't guess
+
+*The tell* above fires on your **code**; this one fires on your **instrument**. You
+have probed the same question two or three times and it will not resolve: the boundary
+is **non-monotonic** ("sometimes it leaks, sometimes not"), or the tool reports the
+*effect* but not its *cause* ("leaked — from where? the site reads `0`"), or the label
+it hands you is misleading (a symptom tagged with a stale name that sends you hunting
+the wrong object). That is not a hard bug — it is a **blind instrument**, and staring
+harder or spraying more probes only spends time at the same blind altitude.
+
+The reflex it triggers is a question, not a probe: *"why can't what I already have
+attribute this?"* — then build the missing eyes. The instrument here is **attribution**
+(the sentinel's sibling, aimed at *data* instead of control): make each effect record
+its own provenance — where a store was allocated, which pass wrote a field, what
+produced a value — so a symptom points back at its cause with **no inference**. Prefer
+upgrading the **system's own diagnostic** over a throwaway probe: that upgrade
+**compounds** — it attributes this instance *and every future one* — so it earns its
+keep even when this one bug wouldn't justify a bespoke matrix (the exception to *keep it
+light* below).
+
+Two guards. Building it is a small **design** act (§ Which mode am I in — you have
+crossed into DESIGN), so hold it to the **calibration** bar (§ the third instrument): a
+provenance field that reads `0`/empty is vacuous, not truth — stamp it at the real
+allocation/write chokepoint and prove it fires for a known case before you trust a
+blank. And distinguish this from *change altitude* below: stalled because the **frame**
+is wrong → go deep on one case; stalled because you **cannot see** → fix the eyes. Ask
+whether a clearer reading would decide it — if yes, you are blind, so build the reading
+first.
+
 ## When iterating stalls: change altitude — the pivot always exists
 
 The tell says *look*; this says **where** once looking-broad has stalled. A few
@@ -302,7 +337,11 @@ checklist is friction that burns the very attention the essential-vs-accidental
 judgment needs. Writing the prediction / matrix down is a load *reducer*: it moves
 the prior onto the page so working memory is free for the building and the
 judgment. So: **the cheap probe is never skipped; the full matrix is never
-reflexive.**
+reflexive.** The one exception to "expensive": an instrument that **compounds** —
+upgrading a production diagnostic to attribute effects to their cause (§ The
+blind-instrument tell) — is usually cheap to add and pays off on *every* future
+instance, so it is worth building even when this single bug wouldn't justify a
+bespoke matrix.
 
 ## Which mode am I in? (and they compose)
 
