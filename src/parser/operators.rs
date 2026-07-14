@@ -1583,6 +1583,24 @@ impl Parser {
                 self.vars
                     .set_type(w, Type::Vector(elm, crate::data::Deps::none()));
             }
+            // @PLN102 default-taken leak (OWNED subject only): `_vec_N` is ALWAYS
+            // field 0 of the default record `__vdb_N` (`_vec_N = OpGetField(__vdb_N,
+            // 0)`), never a store it owns.  Without this, the owned-init preamble above
+            // `OpDatabase`-allocates a `main_vector` store at `_vec_N`'s slot that the
+            // `OpGetField` then OVERWRITES — orphaning it (the kt=21 leak when the
+            // default arm runs, e.g. `nun() ?? [d]` in an assign).  `skip_free` lowers
+            // the preamble to a NULL SENTINEL (no alloc, no orphan — the slot is still
+            // reserved by the frame bump) and suppresses its scope-exit `OpFreeRef`, so
+            // the record `__vdb_N` is the SOLE owner and its free cascades to the whole
+            // vector.  Mirrors the `if`/`match` view-model (the arm's `_vec` is a
+            // never-freed view of its `__vdb`).  Gated on an OWNED subject: a BORROWED
+            // subject's `??` in return-tail position hands `_vec_N` to the return-
+            // delivery materializer, which OWNS its free (free-after-append + the
+            // cross-arm sweep — see 85-ncc-literal-return-delivery.loft); suppressing
+            // it there double-drops / panics.
+            if matches!(lhs_type, Type::Vector(_, dep) if dep.is_empty()) {
+                self.vars.set_skip_free(w);
+            }
         }
 
         if matches!(lhs_type, Type::Null) {

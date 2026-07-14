@@ -8,30 +8,29 @@
 // the consumer), and only a direct assign adopted it — return / append /
 // method-chain / discard had no owner, so the present-path store leaked.
 //
-// Fix: an OWNED Vector subject migrates to the `if`/`match` view-model —
-// `__ncc_N` is an `inline_ref` function-scope OWNER (null-sentinel preamble, no
-// orphaned empty-vector alloc) that `get_free_vars` frees, and the block result
-// is a dep-backed VIEW naming it, so consumers borrow (the adopting assign does
-// not double-free).  A BORROWED subject (`vv[i]`) keeps the original skip_free
-// hand-off — freeing it would be a use-after-free (see 85-ncc-literal-return-
-// delivery.loft for the borrowed twin).
+// Fix — two coordinated leaks, one `if`/`match` view-model, gated on an OWNED
+// subject (empty deps); a BORROWED subject (`vv[i]`) keeps the original skip_free
+// hand-off (freeing it is a use-after-free — see 85-ncc-literal-return-delivery):
+//   1. SUBJECT PRESENT: `__ncc_N` becomes an `inline_ref` function-scope OWNER
+//      (null-sentinel preamble, no orphaned empty-vector alloc) that
+//      `get_free_vars` frees, and the block result is a dep-backed VIEW naming it,
+//      so consumers borrow (the adopting assign does not double-free).
+//   2. SUBJECT ABSENT (default taken, e.g. `read_bytes("missing") ?? d`): the
+//      default record's field-0 view `_vec_N` was owned-init'd, so its preamble
+//      `OpDatabase`-allocated a store the `OpGetField` overwrote — an orphaned
+//      kt=21 leak.  `skip_free` on `_vec_N` makes that preamble a null sentinel
+//      (no alloc) and leaves the record `__vdb_N` the sole freed owner.
 //
-// Cells: PRESENT subject (mkv → [10,20,30]) × {assign, return, append, method,
-// discard, != null, == null, nested, reused-twice}.  Leak-checked in the suite
-// via the wrap gate.
-//
-// NOT covered here — the ABSENT (default-taken) owned-subject path
-// (`owned_call() ?? d` when the call is null, e.g. `read_bytes("missing") ?? d`)
-// leaks the DEFAULT record on BOTH backends.  That is a SEPARATE, pre-existing
-// bug in the `??` default-literal delivery (2 vector stores allocated, 1 freed —
-// unrelated to the subject-consumed-inline leak fixed here); it reproduces
-// identically before this fix.  Tracked in nullable-heap-inline-leak.md § the
-// default-taken residual.
+// Cells: PRESENT subject (mkv → [10,20,30]) AND ABSENT subject (nun → null,
+// default taken) × {assign, return, append, method, discard, empty-default,
+// nested, reused-twice}, plus != null / == null.  Leak-checked via the wrap gate.
 
 fn mkv() -> vector<integer>? { [10, 20, 30] }
+fn nun() -> vector<integer>? { null }
 fn int_vecs() -> vector<vector<integer>> { [] }
 
 fn c_return() -> vector<integer> { return mkv() ?? [1]; }
+fn c_return_absent() -> vector<integer> { return nun() ?? [7, 8]; }
 
 fn main() {
   // assign — the always-clean adopt cell (must stay clean under the view dep).
@@ -63,6 +62,27 @@ fn main() {
   a = mkv() ?? [1];
   b = mkv() ?? [2];
   assert(a.len() + b.len() == 6, "twice");
+
+  // --- ABSENT subject (call is null → default taken); guards the default-record
+  //     orphan leak.  The default delivers by value in every consumer. ---
+  da = nun() ?? [7, 8];
+  assert(da.len() == 2 && da[0] == 7 && da[1] == 8, "absent-assign: {da.len()}");
+
+  ra = c_return_absent();
+  assert(ra.len() == 2 && ra[0] == 7, "absent-return: {ra.len()}");
+
+  assert((nun() ?? [7, 8]).len() == 2, "absent-method");
+  assert((nun() ?? [7, 8])[1] == 8, "absent-method-val");
+
+  nun() ?? [7, 8];
+
+  aout = int_vecs();
+  aout += [nun() ?? [7, 8]];
+  assert(aout.len() == 1 && aout[0].len() == 2 && aout[0][0] == 7, "absent-append");
+
+  de = nun() ?? [];
+  assert(de.len() == 0, "absent-empty-default");
+  assert((nun() ?? []).len() == 0, "absent-empty-method");
 
   println("ncc-owned-subject-consumers ok");
 }

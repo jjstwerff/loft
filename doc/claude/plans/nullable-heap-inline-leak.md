@@ -1,17 +1,19 @@
 <!-- SPDX-License-Identifier: LGPL-3.0-or-later -->
 # Nullable heap value consumed inline — the `??` / null-comparison ownership leak
 
-**Status (2026-07-14):** `== null` / `!= null` half FIXED (`4d35f0d3`); the `??`
-subject-consumed-inline half **FIXED** (this pass) for an OWNED `vector<T>` subject via the
-`if`/`match` view-model — 562 is leak-clean on both backends and `loft_suite` is green.
-Leak-diagnostics tooling that found it shipped (`5d1b8a70`). Branch `tuxedo-compat-gate-design`.
+**Status (2026-07-14):** ALL THREE `??` heap-ownership leaks FIXED for an OWNED `vector<T>`
+subject, plus the earlier `== null` / `!= null` half (`4d35f0d3`):
+1. `== null` / `!= null` on a heap temp (`4d35f0d3`).
+2. **Subject consumed inline** (return/append/method-chain/discard) — the view-model migration.
+3. **Default taken** (`owned_call() ?? d` with the call null at runtime, e.g.
+   `read_bytes("missing") ?? d`) — the default record's field-0 view no longer orphans a
+   preamble alloc.
 
-**One residual remains, newly characterized and SEPARATE** (see § the default-taken residual):
-`owned_call() ?? d` when the call returns **null at runtime** (the default is taken, e.g.
-`read_bytes("missing") ?? d`) leaks the DEFAULT record on both backends. It reproduces
-IDENTICALLY before this pass, is NOT the subject-consumed-inline leak, and is NOT exercised by
-562 (562's `??` cells all have present-but-empty subjects). Routed, not forced — it lives in the
-shared `??` default-literal delivery (high blast radius near the freeze).
+562 is leak-clean on both backends, `loft_suite` is green, and the full owned × {present,absent}
+consumer matrix (value + length + leak + `LOFT_POISON`) is clean on `--interpret` AND `--native`.
+Leak-diagnostics tooling that found them shipped (`5d1b8a70`). Branch `tuxedo-compat-gate-design`.
+A BORROWED subject (`vv[i]`) keeps the original skip_free hand-off throughout (freeing it is a
+UAF; the return-delivery materializer owns its default's free — 85-ncc-literal-return-delivery).
 
 ## The bug (reproduces on `main` — no fs/H4 needed)
 
@@ -117,25 +119,38 @@ original surfacer) now leak-clean. `85-ncc-literal-return-delivery.loft` (the bo
 green. `loft_suite` green; full suite has only the known env flakes (`engine_host_kernel` s5/s7
 parallelism, `wasm_debug_relay`, `viewer_markdown` golden).
 
-## The default-taken residual — SEPARATE, pre-existing, ROUTED
+## The default-taken leak — FIXED (same view-model insight, OWNED subject)
 
 `owned_call() ?? d` when the call returns **null at runtime** (default taken — e.g.
 `read_bytes("missing") ?? d`, or the probe `fn nun() -> vector<integer>? { null }; nun() ?? [7,8]`)
-leaks the DEFAULT record on both backends. Characterized precisely:
+leaked the DEFAULT record on both backends.
 
-- **Not a double-free** (`LOFT_POISON` clean) — a genuine unfreed store.
-- `LOFT_STORES=timeline` shows the default `[7,8]` allocates **2 vector stores, frees 1** — the
-  record (`__vdb_1`, `kt=21`) leaks while the second is freed.
-- **Identical before this pass** (checked against the pristine `operators.rs`) — so it is NOT the
-  subject-consumed-inline leak and NOT caused by the view-model migration.
-- **Not exercised by 562** — 562's `??` cells all use present-but-empty subjects (a missing file
-  is tested with `== null`, not `?? d`).
+### The mechanism (same orphan as the subject leak, one level over)
 
-Suspected root: the `??` default-literal handling CLEARS `_vec_1`'s view dep
-(`operators.rs:~1583`) to make it an owned local for slot reservation, diverging from the
-`if`-sibling (which keeps `_vec_1["__vdb_1"]` a view and frees only `__vdb_1`). Freeing the
-field-0 view `_vec_1` before the record `__vdb_1` appears to corrupt the record's reclamation.
-**Routed, not forced:** the default-literal delivery is shared by every `?? [literal]` shape
-(borrowed subject, all element types, the 150+ coalesce scripts), so a fix there has high blast
-radius and belongs in a dedicated pass — not near the freeze. The `if`-sibling view-preserving
-mechanism (a view-typed `_vec` null-init, freeing only `__vdb`) is the target.
+`LOFT_STORES=timeline` on `nun() ?? [7,8]` (assign) showed **2 vector stores allocated, 1 freed**
+(vs the plain literal's 1-alloc-1-free) — the record (`kt=21`) leaks. Root: the `??` default-literal
+handling (`operators.rs:~1575`) CLEARS `_vec_N`'s view dep so `gen_set_first_vector_null` takes the
+**owned-init** path — which `OpDatabase`-allocates a `main_vector` store at `_vec_N`'s slot. But
+`_vec_N` is ALWAYS field 0 of the record (`_vec_N = OpGetField(__vdb_N, 0)`), so that preamble store
+is immediately OVERWRITTEN and ORPHANED — the **exact same orphan mechanism** as the subject temp,
+one level over (the default arm instead of the present arm). It surfaces only when the default arm
+actually runs AND no return-delivery materializer sweeps `_vec_N` (i.e. an assign / method / append
+of an OWNED-subject `??`); the present-subject cases never run the else-arm, so the orphan is never
+created there.
+
+### The fix (`skip_free` on `_vec_N`, gated on an OWNED subject)
+
+Keep the dep-clear (it reserves the slot — dropping it re-introduces the `_vec_N[65535]` slot panic
+and a fresh leak), but ALSO `set_skip_free(_vec_N)`: that lowers the preamble to a null sentinel
+(no alloc → no orphan; the slot is still reserved by the frame bump) and suppresses its scope-exit
+`OpFreeRef`, leaving the record `__vdb_N` the SOLE owner (its free cascades to the whole vector).
+This mirrors the `if`/`match` view-model, where the arm's `_vec` is a never-freed view of its `__vdb`.
+
+**Gated on an OWNED subject** (`matches!(lhs_type, Type::Vector(_, dep) if dep.is_empty())`) — the
+same condition as the subject-leak fix, and for the same reason: a BORROWED subject's `??` in
+return-tail position hands `_vec_N` to the return-delivery materializer, which OWNS its free
+(free-after-append + the cross-arm sweep). Suppressing it there double-drops and panics
+(`keys.rs`); the borrowed-subject default-taken path was already leak-clean, so the gate touches
+only the leaking class. Verified: owned × {assign, return, method, append, discard, empty-default,
+nested, twice} clean both backends + `LOFT_POISON`; 85-ncc-literal-return-delivery (borrowed twin)
+untouched. Regression cells added to `tests/scripts/562-ncc-owned-subject-consumers.loft`.
