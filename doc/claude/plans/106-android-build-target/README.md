@@ -161,17 +161,24 @@ A phase is DONE only when its gate passes on-device, not in prose.
   emulator; logcat shows `loft --native-android: android_main reached` +
   `sum of squares 0..8 = 140`. The [`b2-spike/`](b2-spike/README.md) `run_emulator_test.sh`
   (now package-auto-detecting) remains the install/launch/logcat harness.
-- **B3 — `lib/graphics` EGL/ANativeWindow backend. 🔬 SPIKE PROVEN (2026-07-14); port
-  scoped.** The core mechanism is proven in [`b3-spike/`](b3-spike/README.md): an EGL/GLES-3.0
-  context on `app.native_window()` renders a solid clear-colour on the KVM emulator —
-  `screencap` golden is **99.5 % `#ff8000`, center pixel (255,128,0)**. The full port
-  (`tests/fixtures/libs/graphics/native/`) is scoped in that README: (1) GLES-3.0 context not
-  desktop GL 3.3 (`window.rs:105`), (2) defer surface creation to `Resumed`/`InitWindow`
-  (`create_gl_state` pumps until resumed; `loft_gl_poll_events` already uses
-  `pump_app_events`), (3) suspend/resume recreates the surface. The load-bearing unknown is the
-  **AndroidApp seam** (how loft's emitted entry hands the app to `lib/graphics`) — options
-  A/B/C written up, recommend (A) a graphics-aware entry. **Verify:** ssh_home's step-0.1
-  clear-colour golden renders on-device (same golden as the Linux build).
+- **B3 — `lib/graphics` EGL/ANativeWindow backend. ✅ DONE (2026-07-14).** A real, unchanged
+  loft GL program (`use graphics; gl_create_window; while gl_poll_events { gl_clear(rgb(255,
+  128,0)); gl_swap_buffers }`) renders on the KVM emulator via `loft --native-android app.apk`
+  — `screencap` golden = center pixel (255,128,0), **99.6 % `#ff8000`**. The port
+  (`tests/fixtures/libs/graphics/native/`) is a small cfg-gated `android_gl.rs`: EGL/GLES-3.0
+  on `app.native_window()`, `gl::load_with(eglGetProcAddress)` so all 45 `gl::` draw fns work
+  unchanged, android-activity poll for `loft_gl_poll_events`; only ~5 glutin-specific sites
+  changed, the desktop path untouched. The AndroidApp seam is a unified-rlib global
+  (`loft_gl_android_set_app`, option B — the OS entry must live in loft's `.so`, so the entry
+  hands the app over). Three integration fixes landed with it: native package as a unified
+  rlib dep + `loft-ffi` patch (`src/android.rs`); `libc++_shared.so` bundled + linked (rodio's
+  oboe is C++); and the generated `main` runs inline on android (not the big-stack thread) so
+  the graphics pump is on the `android_main` ALooper thread (`src/generation/mod.rs`,
+  target-gated). Since the loft website is WebGL2 = GLES 3.0, any website GL program is already
+  GLES-safe → runs on Android unchanged. **Remaining polish:** text/shaders/textures goldens
+  on-device (the `gl::` code is shared, so expected to work — golden them incrementally);
+  audio-on-android (oboe links now; not yet exercised); a big android_main stack for
+  deep-recursion programs.
 - **B4 — touch + IME input.** winit `Touch`/gesture + char/IME → `lib/graphics`. **Verify:**
   tap-to-select, drag-scroll, pinch-zoom, and soft-keyboard password entry drive ssh_home.
 

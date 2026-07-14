@@ -1,0 +1,12 @@
+use graphics;
+
+fn main() {
+  graphics::gl_create_window(320, 480, "loft b3");
+  i = 0;
+  while graphics::gl_poll_events() {
+    graphics::gl_clear(graphics::rgb(255, 128, 0));
+    graphics::gl_swap_buffers();
+    i = i + 1;
+    if i > 600 { return; }
+  }
+}
