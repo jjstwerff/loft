@@ -19,3 +19,12 @@ fontdue = "0.9"
 png = "0.17"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 rodio = { version = "0.20", default-features = false, features = ["wav", "vorbis"] }
+
+# @PLN106 B3 — Android backend. winit's android glue needs android-activity's
+# NativeActivity feature turned on (winit pulls android-activity but not its glue
+# feature); the backend also uses android-activity directly (poll + native_window)
+# and raw EGL/GLES on the ANativeWindow. `khronos-egl` (dynamic) loads libEGL at
+# runtime — no cross-compile build-script to fight.
+[target.'cfg(target_os = "android")'.dependencies]
+winit = { version = "0.30", features = ["android-native-activity"] }
+android-activity = { version = "0.6", features = ["native-activity"] }
