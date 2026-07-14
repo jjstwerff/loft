@@ -1741,17 +1741,40 @@ impl Parser {
             // `is_skip_free`) is suppressed for `__ncc_N` temps so the
             // present-path value's backing storage outlives the block.
             // Closes Set E interpret (probes 21, 22, 23, 36, 41, 50).
+            // @PLN102 `??` heap-ownership: distinguish an OWNED Vector subject (a
+            // call result / comprehension — EMPTY deps, the value the `??` block
+            // must free) from a BORROWED one (`vv[i]`, `s.field` — deps name the
+            // source; freeing it is a use-after-free).  loft's core convention:
+            // `dep.is_empty()` == owned.  Only the OWNED case migrates to the
+            // view-model below; a BORROWED Vector keeps the original skip_free
+            // hand-off (its store is owned elsewhere and must NOT be freed here).
+            let owned_vector = matches!(lhs_type, Type::Vector(_, dep) if dep.is_empty());
             if matches!(
                 lhs_type,
                 Type::Text(_)
                     | Type::Reference(_, _)
-                    | Type::Vector(_, _)
                     | Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Enum(_, true, _),
-            ) {
+            ) || (matches!(lhs_type, Type::Vector(_, _)) && !owned_vector)
+            {
                 self.vars.set_skip_free(tmp);
+            }
+            // An OWNED Vector subject OWNS the value `code` produced (typically
+            // `mkv()`'s returned store) and MUST be freed at scope exit —
+            // `skip_free` would suppress that and every transient consumer
+            // (return/append/method/discard) would leak the present-path store.
+            // Mark `inline_ref` instead: the de-conflated "borrow the slot, don't
+            // ALLOCATE in the preamble" bit (`gen_set_first_vector_null` emits a
+            // null sentinel, NOT an empty-vector `OpDatabase` that `code` would
+            // immediately orphan), while `get_free_vars` still emits
+            // `OpFreeRef(__ncc_N)` (inline_ref is not skip_free).  Exactly the
+            // `__lift_N` owns-an-inline-call pattern (`scopes.rs::new_lift_var`).
+            // Consumers borrow via the block's view dep (added below), so the
+            // adopting assign does not double-free.
+            if owned_vector {
+                self.vars.mark_inline_ref(tmp);
             }
             // #319 — heap-DbRef ncc temps need a function-entry `Set(tmp,
             // Null)` (the work-ref preamble) to reserve their stack slot:
@@ -1759,11 +1782,13 @@ impl Parser {
             // slot scan does not walk.  Shapes whose assigned-var deps reach
             // the temp got a slot via scan_set's dep-prefix; a subject whose
             // dep chain is broken (e.g. a comprehension-built vector) did
-            // not — "Incorrect var __ncc_N[65535]" at codegen.
-            if matches!(
-                lhs_type,
-                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-            ) {
+            // not — "Incorrect var __ncc_N[65535]" at codegen.  (An OWNED Vector
+            // uses the `inline_ref` relocation path in `expressions.rs` for the
+            // same slot reservation, so it is intentionally excluded here; a
+            // BORROWED Vector keeps the original work-ref registration.)
+            if matches!(lhs_type, Type::Reference(_, _) | Type::Enum(_, true, _))
+                || (matches!(lhs_type, Type::Vector(_, _)) && !owned_vector)
+            {
                 self.vars.register_work_ref(tmp);
             }
             let set_tmp = v_set(tmp, code.clone());
@@ -1771,6 +1796,24 @@ impl Parser {
             let mut true_branch = Value::Var(tmp);
             self.convert(&mut true_branch, lhs_type, &result_type);
             let if_expr = v_if(null_check, true_branch, rhs);
+            // @PLN102 `??` Vector view-model (OWNED subject only): the subject
+            // `__ncc_N` is a function-scope OWNER freed by `get_free_vars` (see
+            // `inline_ref` above), exactly like the `if`/`match` view-model's
+            // `__vdb_N`.  So the block RESULT is a dep-backed VIEW naming
+            // `__ncc_N` (`vector<T>["__ncc_N"]`), NOT the bare owner: a consuming
+            // assign `x = e ?? d` then makes `x` a BORROW (no second `OpFreeRef`
+            // → no double-free), while every transient consumer borrows and never
+            // frees.  The default arm keeps its own `__vdb_N` owner (freed
+            // independently); the result names the present arm's owner, mirroring
+            // `if`'s `["__vdb_1"]`.  A BORROWED Vector subject and every non-Vector
+            // heap subject keep the skip_free hand-off, so their result stays the
+            // bare owner.
+            if owned_vector && let Type::Vector(elm, _) = &result_type {
+                let view = Type::Vector(elm.clone(), crate::data::Deps::frame(vec![tmp]));
+                *code = v_block(vec![set_tmp, if_expr], view.clone(), "ncc");
+                *ctp = view;
+                return;
+            }
             *code = v_block(vec![set_tmp, if_expr], result_type.clone(), "ncc");
         }
         *ctp = result_type;
