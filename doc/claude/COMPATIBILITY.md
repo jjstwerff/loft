@@ -59,6 +59,19 @@ dependencies keep working":
 6. **Package format** — `loft.toml`, the package layout, the registry: existing packages
    keep resolving.
 
+**Warnings are NOT a covered surface — a new warning is never a breaking change.** Unlike the
+error *boundary* (item 2, frozen), the warning stream is entirely non-contractual: neither
+*which* code warns nor the warning text is frozen, so adding a warning to a program that used to
+compile clean is **additive, not a regression**. The program still compiles and runs identically
+— a warning changes only what is *printed alongside*. Warnings exist to flag *potential* problems,
+and as loft learns of more of them (a new nullability nudge, a new lint, a domain-fault hint) it
+must stay free to warn about them, forever — the [GOALS.md](GOALS.md) Goal F channel, the one path
+allowed to bill the programmer, stays open past 1.0 precisely because a warning breaks nothing. A
+build that treats warnings as errors, or pins warning output, is opting into churn the contract
+does not owe it. *(Owner decision 2026-07-14: "warnings are never a contract breakage — they are
+there to warn programmers about potential problems; we can learn more of them and have to warn
+about those.")*
+
 ## The promise is a ratchet — everything we add is forever
 
 The promise does not stop at the 1.0 baseline. **Every addition from contract 1 onward joins
@@ -118,6 +131,19 @@ safe" rule is sharpest for **compile-time** errors; runtime faults still follow 
 This is why the silent-wrong findings from the lib and formal audits (`text as integer` → null,
 integer overflow → null, a classifier true on `""`) are really **missing-error** findings: the
 fix is usually *to add a diagnostic or a fault*, and adding it is the one-way door.
+
+**But the *first* resolution of a would-be-error is a rewrite to correct function, not an
+error.** Because contract 1 lets loft only ever *drop* errors, a situation that would "normally"
+(in another language) fault is handled — wherever it sensibly can be — by **defining a
+correct-functioning semantic**: the C80 spreadsheet model, where a divide-by-zero or an
+out-of-range read yields the reserved null and the program keeps running instead of halting.
+Erroring is the *narrower* choice, reserved for what cannot be given a sane defined behavior (and,
+being a compile-time add, is the safe one-way door above). **This is why the pre-freeze checking
+is so intensive right now:** every would-be-error situation must be decided *now* — rewritten to
+function correctly, or (last chance) turned into an error — so that once frozen the contract holds
+and nothing a program does falls into an undefined-or-newly-erroring gap. *(Owner decision
+2026-07-14: "if we encounter more situations that would normally be errors we do rewrites so it
+functions correctly as a contract — that is why we do so much checking right now.")*
 
 ## Deprecation is soft steering, never warn-then-remove
 
