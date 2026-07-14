@@ -57,35 +57,33 @@ fn text_tl_grow(fn_nr: Option<u32>, before: (usize, usize), after: (usize, usize
     TEXT_TL.with(|t| {
         let mut t = t.borrow_mut();
         // A realloc MOVED the buffer → its old allocation is gone.
-        if bc > 0 && bp != ap {
-            if let Some(b) = t.live.remove(&bp) {
-                t.live_bytes -= b.cap;
-            }
+        if bc > 0
+            && bp != ap
+            && let Some(b) = t.live.remove(&bp)
+        {
+            t.live_bytes -= b.cap;
         }
         if ac > 0 {
-            match t.live.get(&ap).map(|b| b.cap) {
-                Some(old) => {
-                    t.live_bytes = t.live_bytes + ac - old;
-                    if let Some(b) = t.live.get_mut(&ap) {
-                        b.cap = ac;
-                        b.content = content.to_string();
-                    }
+            if let Some(old) = t.live.get(&ap).map(|b| b.cap) {
+                t.live_bytes = t.live_bytes + ac - old;
+                if let Some(b) = t.live.get_mut(&ap) {
+                    b.cap = ac;
+                    b.content = content.to_string();
                 }
-                None => {
-                    let s = t.seq;
-                    t.seq += 1;
-                    t.allocs += 1;
-                    t.live_bytes += ac;
-                    t.live.insert(
-                        ap,
-                        TtBuf {
-                            seq: s,
-                            fn_nr,
-                            content: content.to_string(),
-                            cap: ac,
-                        },
-                    );
-                }
+            } else {
+                let s = t.seq;
+                t.seq += 1;
+                t.allocs += 1;
+                t.live_bytes += ac;
+                t.live.insert(
+                    ap,
+                    TtBuf {
+                        seq: s,
+                        fn_nr,
+                        content: content.to_string(),
+                        cap: ac,
+                    },
+                );
             }
             t.peak_bytes = t.peak_bytes.max(t.live_bytes);
         }
@@ -116,6 +114,9 @@ fn text_tl_free(fn_nr: Option<u32>, ptr: usize, cap: usize, content: &str) {
 /// e.g. a wide number into an empty buffer).  `tl_fn` is `Some(fn_nr)` when the timeline is on
 /// (captured before the caller's `&mut String` borrow), `None` off — off is a straight call, no
 /// overhead.  Lets every `format_*` op hook the timeline with one line.
+// The nested Option encodes three real states: `None` = timeline off (no work), `Some(None)`
+// = on but no owning fn, `Some(Some(fn))` = on with the fn number — so it is not collapsible.
+#[allow(clippy::option_option)]
 fn text_tl_fmt(tl_fn: Option<Option<u32>>, s: &mut String, f: impl FnOnce(&mut String)) {
     match tl_fn {
         Some(fn_nr) => {

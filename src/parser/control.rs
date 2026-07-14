@@ -8358,7 +8358,7 @@ impl Parser {
                 }
                 if force.contains(d) {
                     let d = *d;
-                    let n_attrs = self.data.attributes(d) as usize;
+                    let n_attrs = self.data.attributes(d);
                     if args.len() < n_attrs {
                         let mut actual = std::mem::take(args);
                         let mut types = vec![Type::Unknown(0); actual.len()];
