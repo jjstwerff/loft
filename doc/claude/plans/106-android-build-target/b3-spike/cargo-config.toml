@@ -1,0 +1,8 @@
+# Copy to .cargo/config.toml and replace <NDK> with your NDK root
+# (cargo config values are not env-expanded). The clang wrapper is both the C
+# compiler and the linker; the trailing number is the min API level.
+[target.x86_64-linux-android]
+linker = "<NDK>/toolchains/llvm/prebuilt/linux-x86_64/bin/x86_64-linux-android24-clang"
+
+[target.aarch64-linux-android]
+linker = "<NDK>/toolchains/llvm/prebuilt/linux-x86_64/bin/aarch64-linux-android24-clang"

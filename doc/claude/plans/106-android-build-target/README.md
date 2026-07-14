@@ -161,10 +161,17 @@ A phase is DONE only when its gate passes on-device, not in prose.
   emulator; logcat shows `loft --native-android: android_main reached` +
   `sum of squares 0..8 = 140`. The [`b2-spike/`](b2-spike/README.md) `run_emulator_test.sh`
   (now package-auto-detecting) remains the install/launch/logcat harness.
-- **B3 — `lib/graphics` EGL/ANativeWindow backend.** GLES-3.0 context on the
-  `android-activity` window; port the `gl_*` surface. **Verify:** ssh_home's step-0.1 solid
-  clear-color golden renders on-device (same golden as the Linux build — the surface is the
-  only difference).
+- **B3 — `lib/graphics` EGL/ANativeWindow backend. 🔬 SPIKE PROVEN (2026-07-14); port
+  scoped.** The core mechanism is proven in [`b3-spike/`](b3-spike/README.md): an EGL/GLES-3.0
+  context on `app.native_window()` renders a solid clear-colour on the KVM emulator —
+  `screencap` golden is **99.5 % `#ff8000`, center pixel (255,128,0)**. The full port
+  (`tests/fixtures/libs/graphics/native/`) is scoped in that README: (1) GLES-3.0 context not
+  desktop GL 3.3 (`window.rs:105`), (2) defer surface creation to `Resumed`/`InitWindow`
+  (`create_gl_state` pumps until resumed; `loft_gl_poll_events` already uses
+  `pump_app_events`), (3) suspend/resume recreates the surface. The load-bearing unknown is the
+  **AndroidApp seam** (how loft's emitted entry hands the app to `lib/graphics`) — options
+  A/B/C written up, recommend (A) a graphics-aware entry. **Verify:** ssh_home's step-0.1
+  clear-colour golden renders on-device (same golden as the Linux build).
 - **B4 — touch + IME input.** winit `Touch`/gesture + char/IME → `lib/graphics`. **Verify:**
   tap-to-select, drag-scroll, pinch-zoom, and soft-keyboard password entry drive ssh_home.
 
