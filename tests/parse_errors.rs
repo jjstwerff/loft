@@ -21,6 +21,15 @@ fn wrong_boolean() {
         .warning("Parameter t is never read at wrong_boolean:2:19");
 }
 
+#[test]
+fn default_arg_type_mismatch() {
+    // @PLN102 arc-E E2 Tier-0: a wrong-typed default (`text = 42`) used to reach
+    // runtime and SIGSEGV the interpreter (the int used as a text pointer). It
+    // must be rejected at DEFINITION, exactly like a call-site argument mismatch.
+    code!("fn f(x: text = 42) { print(\"{x}\"); }\nfn test() { f(); }")
+        .error("expected text, got integer on default value at default_arg_type_mismatch:1:18");
+}
+
 // @PLN101 — a `value struct` is stored inline (no `store_nr` null sentinel), so `<value struct>?`
 // has no representation and is rejected.
 #[test]
@@ -177,6 +186,63 @@ fn wrong_compare() {
 fn wrong_plus() {
     code!("fn test() {(1 + \"a\")}")
         .error("No matching operator '+' on 'integer' and 'text' at wrong_plus:1:20");
+}
+
+// @PLN102 pre-freeze (E2 Tier-1) — `==`/`!=` between incompatible types used to
+// resolve through the boolean TRUTHINESS fallback (both operands coerced to "is
+// truthy"), so `5 == "banana"` was `true == true` = **true**.  Reject them at
+// compile time — the same "No matching operator" the ordering operators (`<` …)
+// already give.  Same-type and numeric (int↔float, int↔char) comparisons and
+// `x == null` null-checks stay valid (covered by the script suite).
+#[test]
+fn cross_type_eq_int_text() {
+    code!("fn test() { b = 5 == \"x\"; }")
+        .error("No matching operator '==' on 'integer' and 'text' at cross_type_eq_int_text:1:25");
+}
+
+#[test]
+fn cross_type_eq_bool_text() {
+    code!("fn test() { b = true == \"x\"; }")
+        .error("No matching operator '==' on 'boolean' and 'text' at cross_type_eq_bool_text:1:28");
+}
+
+#[test]
+fn cross_type_ne_int_text() {
+    code!("fn test() { b = 5 != \"x\"; }")
+        .error("No matching operator '!=' on 'integer' and 'text' at cross_type_ne_int_text:1:25");
+}
+
+#[test]
+fn cross_type_eq_bool_float() {
+    code!("fn test() { b = true == 5.0; }").error(
+        "No matching operator '==' on 'boolean' and 'float' at cross_type_eq_bool_float:1:28",
+    );
+}
+
+// @PLN102 pre-freeze (E2 Tier-1) — an enum vs a raw integer coerced the enum to
+// its INTERNAL +1-biased discriminant, so `Color.Green == 1` leaked the encoding
+// and read a confusing `false` (Green's disc is 2).  Reject it like every other
+// cross-type compare; `enum == enum` and `enum == null` are unaffected.
+#[test]
+fn cross_type_eq_enum_int() {
+    code!("enum Color { Red, Green, Blue }\nfn test() { c = Color.Green; b = c == 1; }")
+        .error("No matching operator '==' on 'Color' and 'integer' at cross_type_eq_enum_int:2:40");
+}
+
+#[test]
+fn cross_type_ne_int_enum() {
+    code!("enum Color { Red, Green, Blue }\nfn test() { c = Color.Green; b = 0 != c; }")
+        .error("No matching operator '!=' on 'integer' and 'Color' at cross_type_ne_int_enum:2:40");
+}
+
+// @PLN102 — a value-enum vector has no wired per-element null slot, so a `null`
+// element in a `vector<Color?>` literal stays rejected even though a nullable-enum
+// VARIABLE's `= null` now converts to the typed null (parse_errors is the guard so
+// the scalar fix doesn't silently enable the unwired vector form).
+#[test]
+fn null_element_in_value_enum_vector_rejected() {
+    code!("enum Color { Red, Green, Blue }\nfn test() { v: vector<Color?> = [Color.Red, null]; }")
+        .error("cannot store null elements in a vector<Color> (would lose precision); cast each element explicitly with 'as Color' at null_element_in_value_enum_vector_rejected:2:50");
 }
 
 #[test]

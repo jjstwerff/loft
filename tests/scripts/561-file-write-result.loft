@@ -1,0 +1,32 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 lib-audit H3 — `File.write()` used to return void, so a failed text
+// write (disk full, permission denied, a bad path) was silently swallowed.  It
+// now returns a `FileResult`, like the other filesystem-mutating ops
+// (delete/move/mkdir), so a failure is OBSERVABLE.  Discarding callers
+// (`f.write(s)` as a statement) are unaffected.
+
+fn test() {
+  // success → FileResult.Ok, and the content round-trips (one write per handle)
+  { f = file("h3_write_ok.txt");
+    r = f.write("hello");
+    assert(r.ok(), "successful write returns Ok");
+    assert(r == FileResult.Ok, "successful write == FileResult.Ok");
+  }
+  assert(content(file("h3_write_ok.txt")) == "hello", "written text reads back");
+  delete("h3_write_ok.txt");
+
+  // discarding the result still compiles and writes
+  { g = file("h3_write_discard.txt");
+    g.write("x");
+  }
+  delete("h3_write_discard.txt");
+
+  // failure (nonexistent parent directory) → NOT Ok, and observable
+  { b = file("h3_no_such_dir/out.txt");
+    rf = b.write("data");
+    assert(!rf.ok(), "failed write is observable (not Ok)");
+    assert(rf == FileResult.Other, "failed write == FileResult.Other");
+  }
+}

@@ -79,6 +79,15 @@ fn OpMoveFile(from: text, to: text) -> boolean fs#update;
 #rust"codegen_runtime::fs_move(&s.database.resolve_path(@from), &s.database.resolve_path(@to))"
 fn OpTruncateFile(self: File, size: integer) -> boolean fs#update;
 fn OpSyncFile(self: File) -> boolean fs#update;
+// @PLN105 Phase 1 — deliver a live value's descriptor handle to the host.
+// LOOPBACK host (both backends): reconstruct the value via its layout descriptor
+// (@PLN105 Phase 0) + print a deterministic line, so interpret == native. The value
+// is passed BY VALUE (its code, not an OpCreateStack ref) so `@val` is the record
+// DbRef on both backends — one `#rust` body serves both. `deliver(tag, value)` is
+// lowered in the parser's `dispatch_call`, which fills `db_tp` from the value's
+// static type.
+fn OpDeliver(tag: integer, val: reference, db_tp: const u16) fs#update;
+#rust"stores.deliver_reconstruct(@tag, @val, @db_tp);"
 // Dynamic dispatch through a runtime function reference (fn-ref variable).
 // Placed here — after all file-I/O operators — so that it receives op_code 252 without
 // renumbering the operators defined earlier in this file.  Logically it beintegers near
@@ -94,7 +103,10 @@ fn OpMkdirAll(path: text) -> boolean fs#update;
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
 
-pub fn content(self: File) -> text fs#read {
+pub fn content(self: File) -> text? fs#read {
+  // @PLN102 H4 — a MISSING file reads as null, distinct from an EMPTY file (""),
+  // so a missing config is not silently indistinguishable from an empty one.
+  if self.format == Format.NotExists { return null }
   result = "";
   txt = "";
   OpGetFileText(self, txt);
@@ -110,7 +122,8 @@ pub fn content(self: File) -> text fs#read {
 
 pub fn lines(self: File) -> vector < text > fs#read {
   result =[];
-  c = self.content();
+  // @PLN102 H4 — content() is now `text?`; a missing file has no lines.
+  c = self.content() ?? "";
   p = 0;
   prev_cr = false;
   for ch in c {
@@ -303,15 +316,17 @@ pub fn is_file(path: text) -> boolean fs#read;
 #rust"codegen_runtime::fs_is_file(&s.database.resolve_path(@path))"
 #impure(io)
 // Lists the entry NAMES of directory `path` (base names, not full paths),
-// sorted.  Returns an empty vector when `path` is not a readable directory.
+// sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct
+// from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape.
 // Use to enumerate a directory; join with `path` to build full child paths.
-pub fn list_dir(path: text) -> vector < text > fs#read;
+pub fn list_dir(path: text) -> vector < text > ? fs#read;
 #rust"stores.fs_list_dir(@path)"
 #impure(io)
-// Reads the whole file `path` as raw bytes.  Returns an empty vector on a
-// missing file or IO error.  Binary-exact (round-trips with write_bytes);
-// use for non-UTF-8 data — for text prefer `file(path).content()`.
-pub fn read_bytes(path: text) -> vector < u8 > fs#read;
+// Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable
+// file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []`
+// to keep the old shape.  Binary-exact (round-trips with write_bytes); use for
+// non-UTF-8 data — for text prefer `file(path).content()`.
+pub fn read_bytes(path: text) -> vector < u8 > ? fs#read;
 #rust"stores.fs_read_bytes(@path)"
 #impure(io)
 // Writes `bytes` to file `path`, truncating any existing content.  Returns
@@ -540,10 +555,19 @@ pub fn files(self: File) -> vector < File > fs#read {
   result
 }
 #impure(io)
-// Writes v as UTF-8 text to the file. Overwrites existing content.
-
-pub fn write(self: File, v: text) fs#update;
-#rust"{{ let __wf_v = @v; stores.write_file(&@self, __wf_v); }}"
+// Raw text write returning whether the OS write succeeded — internal; `write`
+// wraps it in a FileResult.
+fn write_text_raw(file: File, v: text) -> boolean fs#update;
+#rust"{{ let __wf_v = @v; stores.write_file(&@file, __wf_v) }}"
+#impure(io)
+// Writes v as UTF-8 text to the file, overwriting existing content.  Returns
+// FileResult.Ok on success and FileResult.Other on an OS write failure (disk
+// full, permission denied, a bad path) — a failed write is OBSERVABLE, not
+// silently swallowed.  Discarding callers (`f.write(s)` as a statement) are
+// unaffected; check with `f.write(s).ok()` or match the result.
+pub fn write(self: File, v: text) -> FileResult fs#update {
+  if write_text_raw(self, v) { FileResult.Ok } else { FileResult.Other }
+}
 #impure(io)
 // --- Environment ---
 // Returns all environment variables as a vector of EnvVariable records (fields: name, value).

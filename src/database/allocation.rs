@@ -444,6 +444,10 @@ impl Stores {
         self.clear_free_bit(slot);
         // @PLN101 Slice 0 — the true heap metric: a store slot just went live.
         self.stores_allocated += 1;
+        // @PLN105 leak provenance — stamp the currently-executing op position so a
+        // leaked store's allocation site is attributable for EVERY path (reuse/copy
+        // included), not only `OpDatabase`. Read before the mutable slot borrow.
+        let alloc_pc = self.alloc_pc;
         let store = &mut self.allocations[slot as usize];
         // @P317 — enrich the tripwire: this fires when the free-bitmap and the
         // per-store `free` flag disagree (a double-free, an rc under-count, or a
@@ -458,7 +462,7 @@ impl Stores {
         );
         store.free = false;
         store.pinned = false;
-        store.created_at = 0;
+        store.created_at = alloc_pc;
         store.last_op_at = 0;
         let rec = if size == u32::MAX {
             0
@@ -1269,6 +1273,7 @@ impl Stores {
             allocations,
             records_created: self.records_created,
             stores_allocated: self.stores_allocated,
+            alloc_pc: self.alloc_pc,
             stack_store_at_zero: self.stack_store_at_zero,
             files: Vec::new(),
             max: self.max,
@@ -1359,6 +1364,7 @@ impl Stores {
             allocations,
             records_created: self.records_created,
             stores_allocated: self.stores_allocated,
+            alloc_pc: self.alloc_pc,
             stack_store_at_zero: self.stack_store_at_zero,
             files: Vec::new(),
             max: self.allocations.len() as u16 + pool_slice.len() as u16,

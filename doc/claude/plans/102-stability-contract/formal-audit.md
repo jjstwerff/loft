@@ -54,6 +54,40 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 
 ## The must-fix set (High) — pre-freeze-only, in decision order
 
+> **RECONCILED against `main` 2026-07-13 (verified live on both backends).** Most of this set has
+> since landed — the table below is kept for the analysis, but the true open set is much smaller:
+>
+> | Item | Status now | Evidence |
+> |---|---|---|
+> | F1 float `==` | ✅ **exact** | `1.0 == 1.0000000001` → false; `!=` exact complement |
+> | F2 compound-assign | ✅ **single-eval** | `v[idx()] += 5` calls `idx()` once |
+> | F3 `&&`/`\|\|` short-circuit | ✅ **specified** | `operational.md` E-And/E-Or; E-Left scoped to non-short-circuit |
+> | F5 match non-enum + guards | ✅ **works** (spec = confirm `matching.md` states it) | `match x { 2..=5 => … }` + `n if n>2` run |
+> | F6 `&v` alias | ✅ **aliases** + sandbox hole closed | `w=&v; w[0]=99` → `v[0]==99` (reconcile `heap.md` "copies" prose) |
+> | F8 comparison chaining | ✅ **rejected** (non-assoc) | `1 == 2 == 3` → "comparison operators do not chain" |
+> | runtime errors | ✅ **stable kinds** | `RuntimeErrorKind::{CastOutOfRange,DivideByZero,ShiftOutOfRange}` |
+> | layout guard wired | ✅ | `allocation.rs:2726` refuses a mismatched-layout load |
+>
+> **E1 — DISSOLVED (owner decision 2026-07-13).** *"The error texts are not frozen; we freeze WHEN we
+> throw an error, and can only LIMIT the space we error for."* → Diagnostic **prose is not a frozen
+> surface** — it stays freely improvable forever (the goldens are our own tests, they update with the
+> prose). No stable codes are needed. What freezes is the **error BOUNDARY** (which programs error),
+> and it is **one-directional: the error space can only shrink post-freeze** (stop erroring on X →
+> additive; never start erroring on a program that used to compile). So E1 becomes a **one-line
+> contract statement** in COMPATIBILITY.md, not 457 codes.
+>
+> **This makes E2 the pre-freeze headline:** be **maximally strict NOW** — every error we will ever
+> want must land before the flip, because we can never add one after. See § The error surface.
+>
+> **Genuinely OPEN:** **E2** (the error-boundary maximal-strictness audit — *the* priority) · **F9**
+> (guard is wired, but `layout_algo_hash` at `types.rs:1674` omits **endianness** + the
+> **not-null↔nullable** distinction) · **F4** (assign place/RHS eval order — re-verify) ·
+> spec-honesty for the ✅-behavior rows.
+> **F7 — DECIDED (C91, 2026-07-13):** `==` = value-by-value / reference-by-identity (one uniform rule,
+> bounded by the value's own storage, NEVER chasing a reference — so `==` is never a deep crawl);
+> `===` reserved for opt-in deep structural equality. A shallow/hybrid `==` was rejected as internally
+> inconsistent. Off the open list.
+
 Several of these are **semantic changes, not just added errors** — they can *only* land while
 contract 0 allows, because after the freeze changing an observed value is a regression:
 
@@ -66,7 +100,7 @@ contract 0 allows, because after the freeze changing an observed value is a regr
 | F4 | **assignment place-vs-RHS eval order unspecified** (`a[f()] = g()`); E-Asgn prose "RHS first" contradicts observed LHS-first | evaluation-order gap = the canonical silent-freeze trap | verified `[L][R]` |
 | F5 | **`match` guards have no formal semantics**; **`match` on non-enum** (int/range/literal) unspecified | a shipped feature freezes as impl-defined | `matching.md` |
 | F6 | **`&v` on a vector: `heap.md`+`capabilities.md` say COPIES; `binding.md`+reality say ALIASES** — and the sandbox soundness proof rests on the false "copies" premise | a memory-model spec contradiction + a possible sandbox-admission hole; must reconcile AND verify the `&`-alias-into-host write is gated | verified `v[0]==99` |
-| F7 | **reference `==` defaults to identity, not structural** — unspecified, observable (a view equals its source, two field-equal structs don't) | frozen identity-vs-structural split with no rule | `01_code.loft:862`; `mod.rs:5429` |
+| F7 | **reference `==` defaults to identity, not structural** — ~~unspecified~~ **DECIDED (C91)**: `==` = value-by-value / reference-by-identity (uniform, bounded, no reference-chase); `===` reserved for opt-in deep equality; shallow hybrid rejected as inconsistent | ~~a decision~~ | `DESIGN_DECISIONS.md` C91 |
 | F8 | **comparison operators are one left-assoc level** — `a == b == c` type-checks and misbehaves on booleans | non-associative comparison is a grouping change (pre-freeze-only) | `grammar.md` level 3 |
 | F9 | **layout persistence guard not wired into the load path** (D-layout-1); layout hash ignores **endianness** and can't see a **not-null↔nullable** schema flip | the frozen persistence promise's own detector doesn't run; a stale/foreign store reads raw | `@PLN97`; `types.rs:1674` |
 | E1 | **diagnostics have no stable identity code** (`DiagEntry` = level+message) + 41 golden baselines → loft freezes **error prose as identity** | add a stable code/kind now → prose stays improvable forever behind a frozen code | `diagnostics.rs:16` |
@@ -79,15 +113,81 @@ contract 0 allows, because after the freeze changing an observed value is a regr
 Post-freeze loft can only DROP errors, so **add every error we might want now.** The too-permissive
 findings, with conversion cost (the trade-off you weigh):
 
-### Add now — silent-wrong, NOT yet a decided design (near-zero conversion cost)
-| Sev | Missing error | Now | Fix | Conv. cost |
-|---|---|---|---|---|
-| High | `"-9223372036854775808" as integer` → **null** (parses to the sentinel) | silent loss of a valid value | fault, or reserve the sentinel | ~0 |
-| High | `1e30 as integer` → **i64::MAX**, `-1e30 as integer` → **null** (saturate + sentinel) | plausible-wrong one way, null the other | fault (extend `NarrowCastOverflow` to float→int) or type `integer?` | low |
-| High | `1 << 100` → masked (`1<<36`); `1 << -1` → **null** (`1<<63`) | out-of-range shift silently masked/nulled | compile error for constant OOR shift + runtime fault for variable | ~0 |
-| High | **`NarrowCastOverflow` is defined but never raised** | narrowing overflow silently wrong | wire the fault | low |
-| Med | `999999999 as character` → **NUL** (renders as null) | invalid codepoint silently `'\0'` | fault or `character?` | low |
-| — | `sqrt(-1)`/`log(-1)`/`asin(2)` → **null** (NaN = the float null, C90) | already the honest "undefined" value; composes via `?? d` / null-propagation | **ACCEPT: null, NO error** — the [C80](../../DESIGN_DECISIONS.md) spreadsheet model already governs (undefined → null, never a runtime error). A fault would fork the total rule and add a corner case, not solve one. No new decision needed. | — |
+### Tier 0 — soundness CRASHES (both FIXED 2026-07-13, `tuxedo-compat-gate-design`)
+The E2 sweep found two SIGSEGVs (both backends) where C80 requires null/drop, not a crash. Neither
+is a "missing error" — they are the interpreter using a bad value as a pointer. Both fixed:
+- **default-arg type mismatch** (`fn f(x: text = 42)`) — an unchecked wrong-typed default reached
+  runtime as a pointer. Fix (72bc5302): type-check + coerce the default against the param type at
+  parse time, like a call-site arg; only a KNOWN-vs-KNOWN by-VALUE mismatch is rejected (27329716
+  narrows: skip `null` / untyped-literal / by-reference-param defaults, which `convert` would
+  mis-coerce). `text = 42` → clean error; `float = 5` → `5.0`.
+- **null-struct field access** (`o: T? = null; o.field`) — read/write of a field of a null struct hit
+  `store()`/`store_mut()` with the null `store_nr` (65535) → OOB `allocations` panic. Fix (91246f2d):
+  every scalar field op guards `rec == 0` at the `#rust`-template chokepoint (feeds both backends) —
+  read → the field type's null, write → drop (C80). Regression: `tests/scripts/558-*`.
+
+**`field == null` on a non-nullable field — codegen FIXED (7bc01e1e).** The MIS-CODEGEN was
+enum-specific: `s.c == null` for a value-enum field lowered to `OpRefIsNull(OpGetEnum(s,off))` — a
+store_nr sentinel test on the enum DISC BYTE — so native emitted `.store_nr` on a `u8` (E0610) and
+the interpreter returned the wrong value.  Root: the enum_null branch used OpRefIsNull for every
+non-`__nullable` enum, and a value-enum field access is typed `Enum(_, true, _)` (the access-context
+is-reference flag is polluted).  Now decides value-vs-reference from the enum DEFINITION's `returned`
+type: a value enum tests the disc (`OpConvIntFromEnum == 0`), only a struct-enum keeps OpRefIsNull.
+Correct on both backends (present → false, read through a null receiver → true, C80).  Text fields
+were never mis-codegened (they use `OpEqText` + the text null) — the E0308 note conflated them.
+**RESIDUAL — FIXED (c9fc8153).** The spurious "Redundant null check" / "Redundant null coalescing"
+warning on `field == null` / `field ?? d` for a NULLABLE receiver: `field()` now clears
+`expr_not_null` when the receiver's TYPE is `Optional` (a field of a nullable receiver reads null when
+the receiver is absent, C80).  The signal is the receiver TYPE, not `expr_not_null` — a non-null
+CONSTRUCTED struct (`g = P285G{…}`) leaves `expr_not_null` false too, so the earlier type-agnostic
+attempt wrongly killed the genuine p285 warning.  Only the lint is cleared (the type is unchanged;
+widening to `Optional` would force `?? d` on every nullable-receiver field read).  Nested
+`w.inner.tag` propagates.  So `field == null` on a non-nullable field is now fully resolved.
+
+### Tier 1 — RE-MEASURED 2026-07-13 (`tuxedo-compat-gate-design`)
+Running the current tree flipped most of the table below: the runtime already reads NULL for
+out-of-range operations (C80), so the "silently MASKED to a wrong value" concern is largely gone.
+The only genuine silent-*wrong values* were two, both FIXED; the rest are already-resolved or
+sentinel-collision edges the owner's C80 rule says accept.
+
+| Item (re-measured) | Status |
+|---|---|
+| **cross-type `==`/`!=` → truthiness** (`5 == "banana"` → **true**) | **FIXED** (449c4f64) — reject at compile, like the ordering ops. See § below the K-table note. |
+| **`single as integer` overflow → i64::MAX** (saturates; `float as integer` already nulled) | **FIXED** (b230b957) — mirrors float→int: overflow reads null (C80). |
+| **`enum == int` → discriminant leak** (`Color.Green == 1` → **false**, comparing the +1-biased internal disc) | **FIXED** (b5d33b5d) — reject at compile, "No matching operator"; enum==enum / enum==null untouched. |
+| `1e30 as integer` (float) → **null** | already C80-correct (bounds check → i64::MIN). No add. |
+| `"…" as integer` (text parse) → **null** | already a COMPILE ERROR (`as integer` "may fail — use `integer?`"). No add. |
+| `1 << 100` / `1 << -1` (out-of-range shift) → **null** | already C80-correct (`ShiftOutOfRange` → i64::MIN). No add. |
+| `999999999 as character` → NUL | renders null; C80-adjacent. No genuine wrong value. |
+| `sqrt(-1)` / `log(-1)` / `asin(2)` → **null** | **ACCEPT** ([C80](../../DESIGN_DECISIONS.md): undefined → null, never a fault). No decision needed. |
+
+**Sentinel collisions — DECIDED: ACCEPTED (owner ruling 2026-07-13, [C85](../../DESIGN_DECISIONS.md#c85--overflow-arithmetic-types-non-null-the-game-keeps-running-dont-force-integer-on-every--)).**
+A value equal to the null sentinel (`i64::MAX+1`, `abs(i64::MIN)`, `1<<63`, a literal
+`-9223372036854775808`) reads as null. This is semantically **just an overflow** ("don't rely on it;
+the program may malfunction") and strictly BETTER than a two's-complement wrap because null is
+*detectable/handleable* (`??`, `== null`) where a wrapped value corrupts silently. Not an error to
+add, not a flip blocker — the consistent consequence of the total-null model. Off the debatable list.
+
+**Debatable — need the owner's call (do NOT unilaterally add; conflicts with "null is a valid result
+/ no runtime errors"):**
+- **Constant out-of-range as a COMPILE error** (`1 << 100`, `1e30 as integer` where the operand is a
+  literal) — the runtime already nulls these (C80-correct), so a compile error would reject a program
+  with well-defined (null) behaviour. Stricter, but arguably against the spreadsheet model.
+**Nullable value-enum null-check — FIXED (9582a70a).** `n: Color? = null` rendered `null` but
+`n == null` was false, `n ?? d` didn't coalesce, `if !n` read present.  Root at the PRODUCER:
+`convert(Null, Enum)` skipped `OpConvEnumFromNull` (the `FromNull` loop matches by RETURN type, and
+that op returns the generic `enumerate`, never `is_equal` to a specific `Enum(Color)`), so the slot
+held a bare-null byte 0 while every consumer tests the 255 sentinel.  Fixed by converting a null
+value-enum target to its typed null (255) — variables, reassignment, returns, inline struct fields,
+both backends.  A `vector<Color?>` null literal stays rejected (`parse_vector` guard; the per-element
+null slot is unwired).  Tests: scripts/560, parse_errors.
+
+**Regression found + fixed while doing the above (b8a80870).** The cross-type-`==` guard (449c4f64)
+refused `OpEqBool` for ALL non-boolean operands, but `DT? == DT?` (a nullable STRUCT-REF, two present
+refs) legitimately uses `OpEqBool` as its null-ness test (no `OpEqRef` coercion exists for
+`Optional(Reference)`) — the guard stranded it with "No matching operator".  Earlier suite runs missed
+it on a STALE test binary.  Restricted the reject to VALUE operands (scalars + enums); references keep
+their behaviour.  Lesson: a `touch src/*.rs` / clean rebuild before trusting a green `wrap loft_suite`.
 
 ### Semantics changes — must be pre-freeze (changing an observed value is a later regression)
 | Sev | Item | Fix | Conv. cost |

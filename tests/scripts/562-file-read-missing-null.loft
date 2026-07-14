@@ -1,0 +1,36 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 lib-audit H4 — `content()` / `read_bytes()` / `list_dir()` returned
+// `""` / `[]` for a MISSING file/dir, indistinguishable from an EMPTY-but-present
+// one (a missing config silently read as empty).  They now return `text?` /
+// `vector<u8>?` / `vector<text>?`: MISSING → null, EMPTY-present → the empty value.
+// (Also exercises `vector<T>? == null`, the vec_null lowering that H4 needed.)
+
+fn test() {
+  // --- an EMPTY but present file: content is "", read_bytes is [], NOT null ---
+  { f = file("h4_empty.txt"); f.write(""); }
+  assert(content(file("h4_empty.txt")) != null, "empty file content is not null");
+  assert((content(file("h4_empty.txt")) ?? "x") == "", "empty file content is the empty string");
+  assert(read_bytes("h4_empty.txt") != null, "empty file bytes are not null");
+  assert((read_bytes("h4_empty.txt") ?? [1]).len() == 0, "empty file bytes are length 0");
+  delete("h4_empty.txt");
+
+  // --- a MISSING file: content and bytes are null ---
+  assert(content(file("h4_missing.txt")) == null, "missing file content is null");
+  assert(read_bytes("h4_missing.txt") == null, "missing file bytes are null");
+
+  // --- an EMPTY but present directory: list_dir is [], NOT null ---
+  mkdir("h4_dir");
+  assert(list_dir("h4_dir") != null, "present empty dir lists non-null");
+  assert((list_dir("h4_dir") ?? ["x"]).len() == 0, "present empty dir lists length 0");
+  delete("h4_dir");
+
+  // --- a MISSING / non-directory path: list_dir is null ---
+  assert(list_dir("h4_no_such_dir") == null, "missing dir lists null");
+
+  // --- a present file still round-trips ---
+  { g = file("h4_hi.txt"); g.write("hi"); }
+  assert((content(file("h4_hi.txt")) ?? "") == "hi", "present file content round-trips");
+  delete("h4_hi.txt");
+}

@@ -1,0 +1,505 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN105 Phase 0 — the layout DESCRIPTOR: a self-describing, structured twin of
+// the store's `Parts` schema, emitted once per type-closure so a *foreign* reader
+// (the browser JS bridge, later phases) can walk any loft value in linear memory
+// with no serialization and no copy — the exact type-driven walk `Stores::read_data`
+// (`io.rs`) already does internally, but as data instead of Rust control flow.
+//
+// Phase 0 is pure loft-side (NO FFI): it proves the descriptor is a *faithful* and
+// *sufficient* transcription of the layout, on two independent oracles —
+//   * faithfulness — `LayoutDesc::render_dump` reproduces `Stores::layout_dump`
+//     byte-for-byte (so its FNV-1a hash IS `layout_algo_hash`, the @PLN97 F9 layout
+//     identity): the descriptor loses none of the layout facts the contract pins.
+//   * sufficiency  — `Stores::read_via_descriptor`, driven ONLY by the descriptor,
+//     reproduces `read_data`'s bytes for a live value: the descriptor carries
+//     everything a reader needs to walk the bytes.
+//
+// The boundary `read_data` enforces by PANIC — keyed collections (hash/index/
+// spatial/sorted) and stored `DbRef`/`ChildRec` pointers are store-internal and
+// never structurally serialized — is preserved here as data: those become
+// `Iterated` / `Ref` / `ChildRec` nodes (walked by cursor in a later phase, never
+// as a byte layout), so a foreign reader only ever interprets
+// {scalar, text, record, vector, enum}.
+
+use crate::database::{Parts, Stores};
+use crate::keys::DbRef;
+use std::collections::BTreeMap;
+
+/// The seven seed base types, keyed by their fixed type-id (`Stores::new` order):
+/// 0 integer, 1 long, 2 single, 3 float, 4 boolean, 5 text, 6 character. These are
+/// the ids `read_data` fast-paths before ever consulting `Parts`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BaseKind {
+    Integer,
+    Long,
+    Single,
+    Float,
+    Boolean,
+    Text,
+    Character,
+}
+
+impl BaseKind {
+    fn from_type_id(tp: u16) -> Option<BaseKind> {
+        Some(match tp {
+            0 => BaseKind::Integer,
+            1 => BaseKind::Long,
+            2 => BaseKind::Single,
+            3 => BaseKind::Float,
+            4 => BaseKind::Boolean,
+            5 => BaseKind::Text,
+            6 => BaseKind::Character,
+            _ => return None,
+        })
+    }
+}
+
+/// One field of a `Record` / `EnumValue` node — name, byte position within the
+/// record, and the type-id of the field's value (a key into [`LayoutDesc::nodes`]).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutField {
+    pub name: String,
+    pub position: u16,
+    pub content: u16,
+}
+
+/// The five keyed-collection kinds `read_data` refuses to serialize (store-internal
+/// references). Delivered as `Iterated` so a foreign reader knows to walk them by
+/// cursor, never as a byte layout. Key lists are kept verbatim so the descriptor
+/// re-renders the exact layout-dump line.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Iterated {
+    Sorted {
+        elem: u16,
+        keys: Vec<(u16, bool)>,
+    },
+    Ordered {
+        elem: u16,
+        keys: Vec<(u16, bool)>,
+    },
+    Hash {
+        elem: u16,
+        keys: Vec<u16>,
+    },
+    Index {
+        elem: u16,
+        keys: Vec<(u16, bool)>,
+        left: u16,
+    },
+    Radix {
+        elem: u16,
+        keys: Vec<u16>,
+    },
+}
+
+impl Iterated {
+    /// The element type-id — the type of a record yielded by a cursor over this
+    /// collection (Phase 3). Shared by every kind.
+    #[must_use]
+    pub fn elem(&self) -> u16 {
+        match self {
+            Iterated::Sorted { elem, .. }
+            | Iterated::Ordered { elem, .. }
+            | Iterated::Hash { elem, .. }
+            | Iterated::Index { elem, .. }
+            | Iterated::Radix { elem, .. } => *elem,
+        }
+    }
+}
+
+/// One descriptor node — a structured mirror of one `Parts` variant, with the
+/// element type carried by id (into [`LayoutDesc::nodes`]) rather than inlined, so
+/// the descriptor is a flat table exactly like the store's type table.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LayoutNode {
+    /// A seed base scalar or text (`Parts::Base`); the reader dispatches on `kind`.
+    Base(BaseKind),
+    /// A record — `Parts::Struct`. All fields kept (incl. the struct-enum `enum`
+    /// discriminant field) for a faithful render; the reader skips the non-data
+    /// fields exactly as `read_data` does.
+    Record(Vec<LayoutField>),
+    /// A struct-enum variant record — `Parts::EnumValue(tag, fields)`.
+    EnumValue(u8, Vec<LayoutField>),
+    /// A value enum — `Parts::Enum(variants)`; one byte discriminant. Variants kept
+    /// (id + name) for the render and for later name-mapping on the JS side.
+    Choices(Vec<(u16, String)>),
+    /// Narrow scalars — `Parts::Byte/Short/Int/ShortRaw(start, nullable)`.
+    Byte {
+        start: i32,
+        nullable: bool,
+    },
+    Short {
+        start: i32,
+        nullable: bool,
+    },
+    Int {
+        start: i32,
+        nullable: bool,
+    },
+    ShortRaw {
+        start: i32,
+        nullable: bool,
+    },
+    /// Inline element vector — `Parts::Vector(elem)`.
+    Vector(u16),
+    /// By-reference element vector — `Parts::Array(elem)`.
+    Array(u16),
+    /// A keyed collection — walked by cursor, never structurally (see [`Iterated`]).
+    Iterated(Iterated),
+    /// A 12-byte stored `DbRef` pointer — `Parts::DbRef` (store-internal).
+    Ref,
+    /// A co-located child record pointer — `Parts::ChildRec(elem)` (store-internal).
+    ChildRec(u16),
+}
+
+/// A self-describing layout descriptor for a type-closure: one [`LayoutNode`] per
+/// reachable type-id, plus the names and record sizes needed to reproduce the
+/// @PLN97 layout dump / hash and to render referenced type names.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct LayoutDesc {
+    pub nodes: BTreeMap<u16, LayoutNode>,
+    pub names: BTreeMap<u16, String>,
+    pub sizes: BTreeMap<u16, u16>,
+}
+
+impl LayoutDesc {
+    /// The type-name of `k`, matching `Stores::layout_type_name` (`#<id>` when the
+    /// id is out of range — only for a `u16::MAX` field content).
+    fn name(&self, k: u16) -> String {
+        self.names
+            .get(&k)
+            .cloned()
+            .unwrap_or_else(|| format!("#{k}"))
+    }
+
+    fn size(&self, k: u16) -> u16 {
+        if k == u16::MAX {
+            0
+        } else {
+            self.sizes.get(&k).copied().unwrap_or(0)
+        }
+    }
+
+    fn render_fields(&self, fields: &[LayoutField]) -> String {
+        fields
+            .iter()
+            .map(|f| format!("{}@{}:{}", f.name, f.position, self.name(f.content)))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+
+    /// Render one node exactly as `Stores::render_layout_parts` does.
+    fn render_parts(&self, node: &LayoutNode) -> String {
+        match node {
+            LayoutNode::Base(_) => "base".to_string(),
+            LayoutNode::Record(fields) => format!("struct{{{}}}", self.render_fields(fields)),
+            LayoutNode::Choices(vs) => {
+                let inner: Vec<String> = vs.iter().map(|(_, n)| n.clone()).collect();
+                format!("enum{{{}}}", inner.join(", "))
+            }
+            LayoutNode::EnumValue(tag, fields) => {
+                format!("enumvalue[{tag}]{{{}}}", self.render_fields(fields))
+            }
+            LayoutNode::Byte { start, nullable } => format!("byte(start={start},null={nullable})"),
+            LayoutNode::Short { start, nullable } => {
+                format!("short(start={start},null={nullable})")
+            }
+            LayoutNode::Int { start, nullable } => format!("int4(start={start},null={nullable})"),
+            LayoutNode::ShortRaw { start, nullable } => {
+                format!("shortraw(start={start},null={nullable})")
+            }
+            LayoutNode::Vector(e) => {
+                format!("vector<{}>(elem_size={})", self.name(*e), self.size(*e))
+            }
+            LayoutNode::Array(e) => {
+                format!("array<{}>(elem_size={})", self.name(*e), self.size(*e))
+            }
+            LayoutNode::Iterated(it) => match it {
+                Iterated::Sorted { elem, keys } => {
+                    format!(
+                        "sorted<{}>(keys={keys:?},elem_size={})",
+                        self.name(*elem),
+                        self.size(*elem)
+                    )
+                }
+                Iterated::Ordered { elem, keys } => {
+                    format!(
+                        "ordered<{}>(keys={keys:?},elem_size={})",
+                        self.name(*elem),
+                        self.size(*elem)
+                    )
+                }
+                Iterated::Hash { elem, keys } => {
+                    format!(
+                        "hash<{}>(keys={keys:?},elem_size={})",
+                        self.name(*elem),
+                        self.size(*elem)
+                    )
+                }
+                Iterated::Index { elem, keys, left } => {
+                    format!(
+                        "index<{}>(keys={keys:?},left={left},elem_size={})",
+                        self.name(*elem),
+                        self.size(*elem)
+                    )
+                }
+                Iterated::Radix { elem, keys } => {
+                    format!(
+                        "spatial<{}>(keys={keys:?},elem_size={})",
+                        self.name(*elem),
+                        self.size(*elem)
+                    )
+                }
+            },
+            LayoutNode::Ref => "dbref12".to_string(),
+            LayoutNode::ChildRec(c) => format!("childrec<{}>", self.name(*c)),
+        }
+    }
+
+    /// Reproduce `Stores::layout_dump` from the descriptor alone — one line per type,
+    /// sorted by (name, id). Equal to `layout_dump` iff the transcription is
+    /// faithful; its FNV-1a hash is then exactly `layout_algo_hash` (@PLN97 F9).
+    #[must_use]
+    pub fn render_dump(&self) -> String {
+        use std::fmt::Write as _;
+        let mut ids: Vec<u16> = self.nodes.keys().copied().collect();
+        ids.sort_by(|a, b| self.name(*a).cmp(&self.name(*b)).then(a.cmp(b)));
+        let mut out = String::new();
+        for id in ids {
+            let _ = writeln!(
+                out,
+                "{}\tsize={}\t{}",
+                self.name(id),
+                self.size(id),
+                self.render_parts(&self.nodes[&id])
+            );
+        }
+        out
+    }
+
+    /// FNV-1a over `render_dump` — the same algorithm as `Stores::layout_algo_hash`,
+    /// so an equal dump yields an equal hash (the Phase-0 integrity check).
+    #[must_use]
+    pub fn layout_hash(&self) -> u64 {
+        let mut h: u64 = 0xcbf2_9ce4_8422_2325;
+        for b in self.render_dump().bytes() {
+            h = (h ^ u64::from(b)).wrapping_mul(0x0000_0100_0000_01b3);
+        }
+        h
+    }
+}
+
+impl Stores {
+    /// @PLN105 Phase 0 — emit the [`LayoutDesc`] for the type-closure of `roots`.
+    /// Read-only: it transcribes the existing type table, changing nothing. Walks
+    /// the exact same closure the @PLN97 layout hash commits to (`layout_closure`).
+    ///
+    /// The transcription is EXHAUSTIVE over `Parts` (a new storage kind fails to
+    /// compile here), so the descriptor can never silently drop a layout kind.
+    #[must_use]
+    pub fn layout_descriptor(&self, roots: &[u16]) -> LayoutDesc {
+        let mut nodes = BTreeMap::new();
+        let mut names = BTreeMap::new();
+        let mut sizes = BTreeMap::new();
+        for kt in self.layout_closure(roots) {
+            let t = &self.types[kt as usize];
+            names.insert(kt, t.name.clone());
+            sizes.insert(kt, self.size(kt));
+            nodes.insert(kt, self.transcribe(kt));
+        }
+        LayoutDesc {
+            nodes,
+            names,
+            sizes,
+        }
+    }
+
+    /// Transcribe one type's `Parts` into a [`LayoutNode`]. Exhaustive by design.
+    fn transcribe(&self, kt: u16) -> LayoutNode {
+        let field = |f: &crate::database::Field| LayoutField {
+            name: f.name.clone(),
+            position: f.position,
+            content: f.content,
+        };
+        match &self.types[kt as usize].parts {
+            Parts::Base => {
+                LayoutNode::Base(BaseKind::from_type_id(kt).unwrap_or(BaseKind::Integer))
+            }
+            Parts::Struct(fields) => LayoutNode::Record(fields.iter().map(field).collect()),
+            Parts::EnumValue(tag, fields) => {
+                LayoutNode::EnumValue(*tag, fields.iter().map(field).collect())
+            }
+            Parts::Enum(vs) => LayoutNode::Choices(vs.clone()),
+            Parts::Byte(start, nullable) => LayoutNode::Byte {
+                start: *start,
+                nullable: *nullable,
+            },
+            Parts::Short(start, nullable) => LayoutNode::Short {
+                start: *start,
+                nullable: *nullable,
+            },
+            Parts::Int(start, nullable) => LayoutNode::Int {
+                start: *start,
+                nullable: *nullable,
+            },
+            Parts::ShortRaw(start, nullable) => LayoutNode::ShortRaw {
+                start: *start,
+                nullable: *nullable,
+            },
+            Parts::Vector(e) => LayoutNode::Vector(*e),
+            Parts::Array(e) => LayoutNode::Array(*e),
+            Parts::Sorted(e, keys) => LayoutNode::Iterated(Iterated::Sorted {
+                elem: *e,
+                keys: keys.clone(),
+            }),
+            Parts::Ordered(e, keys) => LayoutNode::Iterated(Iterated::Ordered {
+                elem: *e,
+                keys: keys.clone(),
+            }),
+            Parts::Hash(e, keys) => LayoutNode::Iterated(Iterated::Hash {
+                elem: *e,
+                keys: keys.clone(),
+            }),
+            Parts::Index(e, keys, left) => LayoutNode::Iterated(Iterated::Index {
+                elem: *e,
+                keys: keys.clone(),
+                left: *left,
+            }),
+            Parts::Radix(e, keys) => LayoutNode::Iterated(Iterated::Radix {
+                elem: *e,
+                keys: keys.clone(),
+            }),
+            Parts::DbRef => LayoutNode::Ref,
+            Parts::ChildRec(c) => LayoutNode::ChildRec(*c),
+        }
+    }
+
+    /// @PLN105 Phase 0 — the sufficiency proof: walk a live value using ONLY the
+    /// descriptor for structure (the store is read for bytes exactly as JS reads
+    /// wasm memory), appending the same bytes `read_data` would. Returns `Err` for
+    /// the store-internal kinds `read_data` refuses (keyed collections, stored
+    /// `DbRef`/`ChildRec`) — the walkable-subset boundary; those are cursor-walked
+    /// in a later phase, not serialized.
+    ///
+    /// # Errors
+    /// If a node type is not in the serializable subset, or the type-id is absent
+    /// from the descriptor.
+    pub fn read_via_descriptor(
+        &self,
+        desc: &LayoutDesc,
+        r: &DbRef,
+        tp: u16,
+        little_endian: bool,
+        out: &mut Vec<u8>,
+    ) -> Result<(), String> {
+        let store = &self.allocations[r.store_nr as usize];
+        let push = |out: &mut Vec<u8>, bytes: &[u8]| out.extend_from_slice(bytes);
+        let le = little_endian;
+        let node = desc
+            .nodes
+            .get(&tp)
+            .ok_or_else(|| format!("type {tp} not in descriptor"))?;
+        match node {
+            LayoutNode::Base(kind) => match kind {
+                BaseKind::Integer => {
+                    let v = store.get_int(r.rec, r.pos);
+                    push(out, &if le { v.to_le_bytes() } else { v.to_be_bytes() });
+                }
+                BaseKind::Long => {
+                    let v = store.get_long(r.rec, r.pos);
+                    push(out, &if le { v.to_le_bytes() } else { v.to_be_bytes() });
+                }
+                BaseKind::Single => {
+                    let v = store.get_single(r.rec, r.pos);
+                    push(out, &if le { v.to_le_bytes() } else { v.to_be_bytes() });
+                }
+                BaseKind::Float => {
+                    let v = store.get_float(r.rec, r.pos);
+                    push(out, &if le { v.to_le_bytes() } else { v.to_be_bytes() });
+                }
+                BaseKind::Boolean => out.push(store.get_byte(r.rec, r.pos, 0) as u8),
+                BaseKind::Character => {
+                    let v = store.get_u32_raw(r.rec, r.pos);
+                    push(out, &if le { v.to_le_bytes() } else { v.to_be_bytes() });
+                }
+                BaseKind::Text => {
+                    let s = store.get_str(store.get_u32_raw(r.rec, r.pos));
+                    push(out, s.as_bytes());
+                }
+            },
+            LayoutNode::Byte { .. } => out.push(store.get_byte(r.rec, r.pos, 0) as u8),
+            LayoutNode::Short { .. } => {
+                let v = store.get_short(r.rec, r.pos, 0) as i16;
+                push(out, &if le { v.to_le_bytes() } else { v.to_be_bytes() });
+            }
+            LayoutNode::ShortRaw { start, .. } => {
+                let v = store.get_i16_raw(r.rec, r.pos, *start) as i16;
+                push(out, &if le { v.to_le_bytes() } else { v.to_be_bytes() });
+            }
+            LayoutNode::Int { .. } => {
+                let v = store.get_i32_raw(r.rec, r.pos);
+                push(out, &if le { v.to_le_bytes() } else { v.to_be_bytes() });
+            }
+            LayoutNode::Choices(_) => out.push(store.get_byte(r.rec, r.pos, 0) as u8),
+            LayoutNode::Record(fields) | LayoutNode::EnumValue(_, fields) => {
+                for f in fields {
+                    if f.name == "enum" || f.position == u16::MAX {
+                        continue;
+                    }
+                    let field_r = DbRef {
+                        store_nr: r.store_nr,
+                        rec: r.rec,
+                        pos: r.pos + u32::from(f.position),
+                    };
+                    self.read_via_descriptor(desc, &field_r, f.content, le, out)?;
+                }
+            }
+            LayoutNode::Vector(elem_tp) => {
+                let v_rec = store.get_u32_raw(r.rec, r.pos);
+                let length = if v_rec == 0 {
+                    0
+                } else {
+                    store.get_u32_raw(v_rec, 4)
+                };
+                let elem_size = u32::from(desc.size(*elem_tp));
+                for i in 0..length {
+                    let elem = DbRef {
+                        store_nr: r.store_nr,
+                        rec: v_rec,
+                        pos: 8 + elem_size * i,
+                    };
+                    self.read_via_descriptor(desc, &elem, *elem_tp, le, out)?;
+                }
+            }
+            LayoutNode::Array(elem_tp) => {
+                let v_rec = store.get_u32_raw(r.rec, r.pos);
+                let length = if v_rec == 0 {
+                    0
+                } else {
+                    store.get_u32_raw(v_rec, 4)
+                };
+                let elm_recs: Vec<u32> = (0..length)
+                    .map(|i| store.get_u32_raw(v_rec, 8 + 4 * i))
+                    .collect();
+                for elm_rec in elm_recs {
+                    let elem = DbRef {
+                        store_nr: r.store_nr,
+                        rec: elm_rec,
+                        pos: 8,
+                    };
+                    self.read_via_descriptor(desc, &elem, *elem_tp, le, out)?;
+                }
+            }
+            LayoutNode::Iterated(_) | LayoutNode::Ref | LayoutNode::ChildRec(_) => {
+                return Err(format!(
+                    "type {tp} ({}) is a store-internal kind — not in the serializable subset \
+                     (cursor-walked in a later phase)",
+                    desc.name(tp)
+                ));
+            }
+        }
+        Ok(())
+    }
+}

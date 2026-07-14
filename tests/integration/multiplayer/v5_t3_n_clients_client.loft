@@ -26,9 +26,9 @@ fn main() {
   label = if args.len() > 0 { args[0] } else { "?" };
 
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 18093 } else { port_raw as integer };
+  port = if port_raw == "" { 18093 } else { port_raw as integer? ?? 18093 };
   count_raw = env_variable("LOFT_T3_CLIENTS");
-  expected = if count_raw == "" { 5 } else { count_raw as integer };
+  expected = if count_raw == "" { 5 } else { count_raw as integer? ?? 5 };
   url = "ws://127.0.0.1:{port}";
 
   println("v5-t3c[{label}]: connecting");
@@ -61,7 +61,7 @@ fn main() {
     sep = raw.find(":");
     if sep == null { continue; }
     id_text = raw[..sep];
-    msg_id = id_text as integer;
+    msg_id = id_text as integer? ?? -1;
     payload = raw[sep + 1..];
 
     if msg_id == H_WELCOME && !welcomed {

@@ -3919,6 +3919,10 @@ impl State {
                 }
             }
             let op_pos_rt = self.code_pos;
+            // @PLN105 leak provenance — republish the current op position so any store
+            // allocated while executing this op records it as its `created_at` (one u32
+            // write per op, alongside the existing crash-report context publish below).
+            self.database.alloc_pc = op_pos_rt;
             // @PLN16 debugger — at a registered breakpoint, capture the frame (and
             // in stepping mode, suspend: return to the driver with the frame in
             // `debug.paused`, to be resumed via `resume`).  Inert (one branch) when

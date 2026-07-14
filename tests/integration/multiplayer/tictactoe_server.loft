@@ -163,8 +163,8 @@ fn main() {
       // body is "row,col"
       comma = body.find(",");
       if comma == null { continue; }
-      r = body[..comma] as integer;
-      c = body[comma + 1..] as integer;
+      r = body[..comma] as integer? ?? -1;
+      c = body[comma + 1..] as integer? ?? -1;
       if r < 0 || r > 2 || c < 0 || c > 2 { continue; }
 
       idx = r * 3 + c;

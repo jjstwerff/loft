@@ -12,6 +12,17 @@ fn main() {
   assert(1.5 + 0.5 == 2.0, "Float addition");
   assert(3.0 / 2.0 == 1.5, "Float division");
   assert(2.0 * 1.5 == 3.0, "Float multiplication");
+  // ## Undefined results are null ('float?')
+  // Some float operations have no real answer for some inputs: dividing or
+  // taking '%' by zero, 'sqrt' of a negative, 'ln'/'log' of zero or a negative,
+  // 'asin'/'acos' outside -1..1, or an out-of-domain 'pow'. Rather than crash,
+  // Loft yields null for these — so '/', '%', 'sqrt', 'ln', 'log', 'pow',
+  // 'asin' and 'acos' each produce a NULLABLE float ('float?'). The null then
+  // propagates: any further arithmetic on a null stays null. Discharge it with
+  // '?? fallback' when you need a plain float (just as '"1.5" as float?' below
+  // is a float? you can default).
+  assert((sqrt(-1.0) ?? 0.0) == 0.0, "sqrt of a negative is null");
+  assert(((sqrt(-1.0) + 5.0) ?? 0.0) == 0.0, "null propagates through arithmetic");
   // The 'f' suffix selects single-precision floats, which take half the memory
   // of a regular float but have fewer decimal digits of accuracy. This trade-off
   // is common in graphics and audio code where exact decimal values matter less

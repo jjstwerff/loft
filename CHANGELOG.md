@@ -51,6 +51,42 @@ This is the one change most existing code will need to look at.
 > makes you say what should happen. `null as integer?` is how you write an explicit
 > typed null.
 
+### Float math that can't answer now hands back a nullable
+
+The same honesty reaches floating-point arithmetic. A handful of operations have no
+real answer for some inputs — `/` and `%` when the divisor is `0`, and `sqrt`, `ln`,
+`log2`, `log10`, `asin`, `acos`, and `pow` outside their domain. Those now produce a
+**nullable** (`float?` / `single?`) instead of a silent `NaN`, and the nullability
+**propagates**: a value computed from a `float?` stays `float?` until you settle it.
+
+- `sqrt(x)` and `a / b` are `float?`. Storing one into a spot that must hold a real
+  number — a `-> float` return, a `not null` field — is where you discharge it:
+  `sqrt(dx*dx + dy*dy) ?? 0.0`, or keep the `float?` and test it.
+- A **literal operand known to be in range keeps the result non-null** — `x / 2.0`,
+  `pow(x, 2.0)`, and `sqrt(2.0)` stay plain `float`, so most everyday arithmetic is
+  untouched. `+`, `-`, and `*` on non-null floats are always `float`.
+- This is a **warning, not an error**. Existing programs keep compiling and keep
+  their old runtime behaviour; the compiler just marks each place a possibly-null
+  float lands somewhere that expects a definite number.
+
+> **Upgrading:** if a `-> float` function ends in a variable division or a
+> `sqrt`/`pow`/`ln`/… of a variable, add a default at the boundary — `… ?? 0.0` — or
+> widen the type to `float?`.
+
+### A written compatibility contract — and a command to check it
+
+loft now states its **compatibility contract** in writing
+([COMPATIBILITY.md](doc/claude/COMPATIBILITY.md)): at contract level 1, a program
+that runs today keeps running — the language, its error behaviour, and its libraries
+all included. Both changes above fit inside it, which is exactly why the
+nullable-parse and float-null shifts surface as **warnings** rather than breakage.
+
+A new `loft api-surface` command makes the contract checkable. `loft api-surface
+<file>` prints the public surface of a program or library — its `pub` functions,
+types, sizes, and signatures — and `loft api-surface --diff <base> <new>` compares
+two versions and reports a plain verdict (drop-in, or a break), exiting non-zero on a
+break so a CI check can guard it.
+
 ### Error messages now point at the problem
 
 Every error — parser, type, or runtime — now shows the file, line, and column,

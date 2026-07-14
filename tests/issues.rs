@@ -11226,6 +11226,23 @@ fn test() {
     .result(Value::Null);
 }
 
+/// @PLN102 — the redundant-null-check warning must NOT fire on a field of a
+/// NULLABLE receiver: `s.name` where `s: S?` reads null when `s` is absent (C80),
+/// so `s.name == null` is a genuine check, not "always false".  No `.warning()` —
+/// an unexpected diagnostic fails the harness, so this guards the suppression (the
+/// p285 test above guards the complement: a non-null receiver still warns).
+#[test]
+fn nullable_receiver_field_null_check_no_warning() {
+    code!(
+        "struct NRF { name: text not null }
+fn test() {
+    s: NRF? = null;
+    if s.name == null { assert(true, \"reachable\"); }
+}"
+    )
+    .result(Value::Null);
+}
+
 /// P185 — slot-aliasing bug: a local (`key`) declared AFTER an inner
 /// `body += <format-string>` accumulator loop, inside an outer
 /// `for _ in file(...).files()` that uses an inline temporary as the

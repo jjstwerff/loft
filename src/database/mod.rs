@@ -5,6 +5,7 @@
 #![allow(dead_code)]
 
 mod allocation;
+mod descriptor;
 mod format;
 mod io;
 pub mod journal;
@@ -14,6 +15,7 @@ mod structures;
 mod types;
 
 pub use allocation::timeline_summary;
+pub use descriptor::{BaseKind, Iterated, LayoutDesc, LayoutField, LayoutNode};
 pub use journal::Journal;
 pub use types::Type;
 
@@ -248,6 +250,13 @@ pub struct Stores {
     /// elements → ~4 (near the scalar baseline). A `value struct` built in place allocates
     /// none. `LOFT_ALLOC_REPORT=1` prints it; the pub field is read in-process for assertions.
     pub stores_allocated: u64,
+    /// @PLN105 leak provenance — the bytecode position of the currently-executing op,
+    /// republished per-op by the interpreter's dispatch loop. `database_named` stamps it
+    /// into each freshly-allocated store's `created_at` so a leaked store's allocation
+    /// site (`LOFT_LEAK_SITES` → source line) is populated for EVERY allocation path, not
+    /// just `OpDatabase` (which stamps `code_pos` directly in `alloc_record_at`). Zero
+    /// outside interpretation (native/tooling), which resolves to "line 0" harmlessly.
+    pub alloc_pc: u32,
     /// S29: bitmap of free store slots — bit `i` is set when `allocations[i]`
     /// is free and eligible for reuse.  `database_named` finds the lowest set bit below `max`
     /// and reuses that slot instead of always growing `max`.  This eliminates the LIFO-order
@@ -511,6 +520,7 @@ impl Clone for Stores {
             peak: 0,
             records_created: 0,
             stores_allocated: 0,
+            alloc_pc: 0,
             free_bits: Vec::new(),
             bridge_text_dest: None,
             const_refs: Vec::new(),
@@ -1090,6 +1100,7 @@ impl Stores {
             peak: 0,
             records_created: 0,
             stores_allocated: 0,
+            alloc_pc: 0,
             free_bits: Vec::new(),
             bridge_text_dest: None,
             const_refs: Vec::new(),

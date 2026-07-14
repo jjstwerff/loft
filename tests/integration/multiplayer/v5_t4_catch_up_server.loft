@@ -77,7 +77,7 @@ fn ws_send_binary_to_native(handle: integer, msg: text) -> boolean;
 #native "n_ws_send_binary"
 
 fn handle_subscribe(srv: server::Server, cache: Cache, cid: integer, payload: text) {
-  upto = payload as integer;
+  upto = payload as integer? ?? -1;
   if upto < 1 { upto = 1; }
   if upto > cache.total { upto = cache.total; }
   println("v5-t4: subscribe cid={cid} upto={upto}");
@@ -93,7 +93,7 @@ fn handle_subscribe(srv: server::Server, cache: Cache, cid: integer, payload: te
 }
 
 fn handle_catch_up(srv: server::Server, cache: Cache, cid: integer, payload: text) {
-  from = payload as integer;
+  from = payload as integer? ?? -1;
   if from < 0 { from = 0; }
   println("v5-t4: catch_up cid={cid} from={from}");
   for cj in (from + 1)..=cache.total {
@@ -109,9 +109,9 @@ fn handle_catch_up(srv: server::Server, cache: Cache, cid: integer, payload: tex
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 18094 } else { port_raw as integer };
+  port = if port_raw == "" { 18094 } else { port_raw as integer? ?? 18094 };
   total_raw = env_variable("LOFT_T4_SESSIONS");
-  total = if total_raw == "" { 5 } else { total_raw as integer };
+  total = if total_raw == "" { 5 } else { total_raw as integer? ?? 5 };
 
   srv = server::listen(port);
   if srv.handle < 0 {

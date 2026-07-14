@@ -140,9 +140,9 @@ fn main() {
   };
   assert(kind == "low", "scalar or-pattern");
 
-  // A `null` pattern matches when the value is absent (e.g. defended
-  // division by zero — `?? null` opts into the silent-null behaviour
-  // instead of the typed-error halt path).
+  // A `null` pattern matches when the value is absent (e.g. a defended
+  // division by zero — `?? null` marks the division as handled, so no
+  // undefended-site warning is logged; the result is null either way).
   zero = 0;
   check = match 1 / zero ?? null {
     null => "absent",

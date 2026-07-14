@@ -59,8 +59,10 @@ fn main() {
   }
   assert(t == 54321, "Result was {t} instead of 54321");
   // ## Nested loops and break
-  // Loft has no 'while' or 'loop' keyword — all repetition uses 'for' with a
-  // range, so there is always a clear upper bound on how many iterations can occur.
+  // Loft has no unbounded loop construct — 'while' is a reserved keyword but
+  // there is no 'while' or 'loop' statement to write. All repetition uses 'for'
+  // with a range, so there is always a clear upper bound on how many iterations
+  // can occur.
   // 'break' exits the nearest enclosing loop immediately.
   // To exit an outer loop from inside an inner one, write 'outerVar#break'.
   // Here x#break leaves both loops when the product x*y reaches 16.
@@ -81,6 +83,18 @@ fn main() {
     }
   }
   assert(b == "1:1; 2:1; 2:2; 3:1; 3:2; 3:3; 4:1; 4:2; 4:3", "Incorrect sequence '{b}'");
+  // ## Skipping an iteration: continue
+  // 'continue' is the sibling of 'break': instead of leaving the loop it skips
+  // the rest of the current iteration and moves on to the next value. Here we
+  // sum 1..=5 but skip 3, so the total is 1 + 2 + 4 + 5 = 12.
+  t = 0;
+  for i in 1..=5 {
+    if i == 3 {
+      continue;
+    }
+    t += i;
+  }
+  assert(t == 12, "continue skipped 3: total was {t} instead of 12");
   // ## Loop helpers: #first and #count
   // Inside a loop body you have access to some useful metadata about the
   // current iteration. 'x#first' is true only for the very first element

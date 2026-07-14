@@ -8,13 +8,18 @@
 <style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="cur">Match</span> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <a href="23-safety.html">Safety</a> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <span class="cur">Match</span> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Match</h1>
 <article>
 <p>The <code>match</code> expression lets you compare a value against a series of patterns and run different code for each case.  It is similar to <code>switch</code> in other languages but more powerful: patterns can destructure structs, bind fields to local variables, and include <code>if</code> guards. Match is an expression — it returns a value, so you can assign the result or use it directly inside a larger expression.</p>
 <h2 id="simple-enum-matching">Simple enum matching</h2>
 <p>The most common use: branch on an enum variant.  Every variant must be covered or a <code>_</code> wildcard must appear — the compiler checks exhaustiveness.</p>
 <pre><code><span class="kw">enum</span> <span class="en">Direction</span> { <span class="en">North</span>, <span class="en">South</span>, <span class="en">East</span>, <span class="en">West</span> }</code></pre>
+<p>A struct-enum: its variants carry named fields, which a match arm can destructure.</p>
+<pre><code><span class="kw">enum</span> <span class="en">Shape</span> {
+  <span class="en">Circle</span> { radius: <span class="ty"><a href="stdlib-types.html">integer</a></span> },
+  <span class="en">Rect</span> { w: <span class="ty"><a href="stdlib-types.html">integer</a></span>, h: <span class="ty"><a href="stdlib-types.html">integer</a></span> },
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">direction_name</span>(d: <span class="en">Direction</span>) -&gt; <span class="ty"><a href="stdlib-types.html">text</a></span> {
   match d {
     <span class="en">North</span> =&gt; <span class="st">"north"</span>,
@@ -35,6 +40,12 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(score == <span class="nm">20</span>, <span class="st">"match expression: {score}"</span>);</code></pre>
 <h2 id="struct-enum-destructuring">Struct-enum destructuring</h2>
 <p>When an enum has variants with fields (a struct-enum) you can bind the fields to variables in the match arm. Circle { radius } — binds the <code>radius</code> field to a local variable Rect { w, h }     — binds both <code>w</code> and <code>h</code> The variable names must match the field names exactly.</p>
+<pre><code>  shape = <span class="en">Rect</span> { w: <span class="nm">3</span>, h: <span class="nm">4</span> };
+  shape_area = match shape {
+    <span class="en">Circle</span> { radius } =&gt; radius * radius * <span class="nm">3</span>,
+    <span class="en">Rect</span> { w, h }     =&gt; w * h,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(shape_area == <span class="nm">12</span>, <span class="st">"struct-enum destructure: {shape_area}"</span>);</code></pre>
 <h2 id="guards">Guards</h2>
 <p>Add <code>if condition</code> after a pattern to restrict when the arm matches. The guard can reference variables bound by the pattern.</p>
 <pre><code>  v = <span class="nm">42</span>;
@@ -63,6 +74,23 @@
     _ =&gt; <span class="st">"many"</span>,
   };
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(name == <span class="st">"three"</span>, <span class="st">"integer match: {name}"</span>);</code></pre>
+<h2 id="range-patterns">Range patterns</h2>
+<p>A numeric arm can match a whole inclusive range with <code>low..=high</code> — handy for grading, bucketing, or any "is it in this band" test.</p>
+<pre><code>  grade = match <span class="nm">95</span> {
+    <span class="nm">90..</span>=<span class="nm">100</span> =&gt; <span class="st">"A"</span>,
+    <span class="nm">80..</span>=<span class="nm">89</span>  =&gt; <span class="st">"B"</span>,
+    _        =&gt; <span class="st">"lower"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(grade == <span class="st">"A"</span>, <span class="st">"range pattern: {grade}"</span>);</code></pre>
+<h2 id="null-patterns">Null patterns</h2>
+<p>When the subject is nullable, a <code>null</code> arm handles the absent case explicitly. With null-flow this is the idiomatic way to branch on a <code>T?</code> inside a match.</p>
+<pre><code>  maybe: <span class="ty"><a href="stdlib-types.html">integer</a></span>? = <span class="kw">null</span>;
+  presence = match maybe {
+    <span class="kw">null</span> =&gt; <span class="st">"absent"</span>,
+    <span class="nm">0</span>    =&gt; <span class="st">"zero"</span>,
+    _    =&gt; <span class="st">"present"</span>,
+  };
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(presence == <span class="st">"absent"</span>, <span class="st">"null pattern: {presence}"</span>);</code></pre>
 <h2 id="text-matching">Text matching</h2>
 <p>Match also works on text values.</p>
 <pre><code>  greeting = <span class="st">"hi"</span>;

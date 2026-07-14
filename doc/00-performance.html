@@ -139,7 +139,7 @@
 
 </tbody>
 </table>
-<p class="bench-note">Measured on a single core, Linux x86-64. Times are wall clock, best of one warm run. Run <code>bench/run_bench.sh</code> from the project root to reproduce.</p>
+<p class="bench-note">Measured on a single core, Linux x86-64. Times are wall clock, best of one warm run. <strong>These figures are indicative only:</strong> they were captured before 2026-07 and predate the null-flow default (<code>float</code> division, <code>sqrt</code>, and the other partial float operations now flow through the null-tracking model), so the float-heavy rows may have shifted. Run <code>bench/run_bench.sh</code> from the project root to reproduce on your own hardware.</p>
 
 <h2 id="takeaways">Key takeaways</h2>
 

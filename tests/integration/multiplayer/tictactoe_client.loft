@@ -47,7 +47,7 @@ fn install_map(reg: Registry, payload: text) {
     eq = entry.find("=");
     if eq != null {
       n = entry[..eq];
-      v = entry[eq + 1..] as integer;
+      v = entry[eq + 1..] as integer? ?? -1;
       install(reg, n, v);
       println("learned: {n}={v}");
     }

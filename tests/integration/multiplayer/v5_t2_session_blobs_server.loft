@@ -39,7 +39,7 @@ fn send_blob(ws: server::WebSocket, kind: integer, session: integer,
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 18092 } else { port_raw as integer };
+  port = if port_raw == "" { 18092 } else { port_raw as integer? ?? 18092 };
 
   srv = server::listen(port);
   if srv.handle < 0 {

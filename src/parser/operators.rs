@@ -1583,6 +1583,24 @@ impl Parser {
                 self.vars
                     .set_type(w, Type::Vector(elm, crate::data::Deps::none()));
             }
+            // @PLN102 default-taken leak (OWNED subject only): `_vec_N` is ALWAYS
+            // field 0 of the default record `__vdb_N` (`_vec_N = OpGetField(__vdb_N,
+            // 0)`), never a store it owns.  Without this, the owned-init preamble above
+            // `OpDatabase`-allocates a `main_vector` store at `_vec_N`'s slot that the
+            // `OpGetField` then OVERWRITES — orphaning it (the kt=21 leak when the
+            // default arm runs, e.g. `nun() ?? [d]` in an assign).  `skip_free` lowers
+            // the preamble to a NULL SENTINEL (no alloc, no orphan — the slot is still
+            // reserved by the frame bump) and suppresses its scope-exit `OpFreeRef`, so
+            // the record `__vdb_N` is the SOLE owner and its free cascades to the whole
+            // vector.  Mirrors the `if`/`match` view-model (the arm's `_vec` is a
+            // never-freed view of its `__vdb`).  Gated on an OWNED subject: a BORROWED
+            // subject's `??` in return-tail position hands `_vec_N` to the return-
+            // delivery materializer, which OWNS its free (free-after-append + the
+            // cross-arm sweep — see 85-ncc-literal-return-delivery.loft); suppressing
+            // it there double-drops / panics.
+            if matches!(lhs_type, Type::Vector(_, dep) if dep.is_empty()) {
+                self.vars.set_skip_free(w);
+            }
         }
 
         if matches!(lhs_type, Type::Null) {
@@ -1741,17 +1759,40 @@ impl Parser {
             // `is_skip_free`) is suppressed for `__ncc_N` temps so the
             // present-path value's backing storage outlives the block.
             // Closes Set E interpret (probes 21, 22, 23, 36, 41, 50).
+            // @PLN102 `??` heap-ownership: distinguish an OWNED Vector subject (a
+            // call result / comprehension — EMPTY deps, the value the `??` block
+            // must free) from a BORROWED one (`vv[i]`, `s.field` — deps name the
+            // source; freeing it is a use-after-free).  loft's core convention:
+            // `dep.is_empty()` == owned.  Only the OWNED case migrates to the
+            // view-model below; a BORROWED Vector keeps the original skip_free
+            // hand-off (its store is owned elsewhere and must NOT be freed here).
+            let owned_vector = matches!(lhs_type, Type::Vector(_, dep) if dep.is_empty());
             if matches!(
                 lhs_type,
                 Type::Text(_)
                     | Type::Reference(_, _)
-                    | Type::Vector(_, _)
                     | Type::Sorted(_, _, _)
                     | Type::Hash(_, _, _)
                     | Type::Index(_, _, _)
                     | Type::Enum(_, true, _),
-            ) {
+            ) || (matches!(lhs_type, Type::Vector(_, _)) && !owned_vector)
+            {
                 self.vars.set_skip_free(tmp);
+            }
+            // An OWNED Vector subject OWNS the value `code` produced (typically
+            // `mkv()`'s returned store) and MUST be freed at scope exit —
+            // `skip_free` would suppress that and every transient consumer
+            // (return/append/method/discard) would leak the present-path store.
+            // Mark `inline_ref` instead: the de-conflated "borrow the slot, don't
+            // ALLOCATE in the preamble" bit (`gen_set_first_vector_null` emits a
+            // null sentinel, NOT an empty-vector `OpDatabase` that `code` would
+            // immediately orphan), while `get_free_vars` still emits
+            // `OpFreeRef(__ncc_N)` (inline_ref is not skip_free).  Exactly the
+            // `__lift_N` owns-an-inline-call pattern (`scopes.rs::new_lift_var`).
+            // Consumers borrow via the block's view dep (added below), so the
+            // adopting assign does not double-free.
+            if owned_vector {
+                self.vars.mark_inline_ref(tmp);
             }
             // #319 — heap-DbRef ncc temps need a function-entry `Set(tmp,
             // Null)` (the work-ref preamble) to reserve their stack slot:
@@ -1759,11 +1800,13 @@ impl Parser {
             // slot scan does not walk.  Shapes whose assigned-var deps reach
             // the temp got a slot via scan_set's dep-prefix; a subject whose
             // dep chain is broken (e.g. a comprehension-built vector) did
-            // not — "Incorrect var __ncc_N[65535]" at codegen.
-            if matches!(
-                lhs_type,
-                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
-            ) {
+            // not — "Incorrect var __ncc_N[65535]" at codegen.  (An OWNED Vector
+            // uses the `inline_ref` relocation path in `expressions.rs` for the
+            // same slot reservation, so it is intentionally excluded here; a
+            // BORROWED Vector keeps the original work-ref registration.)
+            if matches!(lhs_type, Type::Reference(_, _) | Type::Enum(_, true, _))
+                || (matches!(lhs_type, Type::Vector(_, _)) && !owned_vector)
+            {
                 self.vars.register_work_ref(tmp);
             }
             let set_tmp = v_set(tmp, code.clone());
@@ -1771,6 +1814,24 @@ impl Parser {
             let mut true_branch = Value::Var(tmp);
             self.convert(&mut true_branch, lhs_type, &result_type);
             let if_expr = v_if(null_check, true_branch, rhs);
+            // @PLN102 `??` Vector view-model (OWNED subject only): the subject
+            // `__ncc_N` is a function-scope OWNER freed by `get_free_vars` (see
+            // `inline_ref` above), exactly like the `if`/`match` view-model's
+            // `__vdb_N`.  So the block RESULT is a dep-backed VIEW naming
+            // `__ncc_N` (`vector<T>["__ncc_N"]`), NOT the bare owner: a consuming
+            // assign `x = e ?? d` then makes `x` a BORROW (no second `OpFreeRef`
+            // → no double-free), while every transient consumer borrows and never
+            // frees.  The default arm keeps its own `__vdb_N` owner (freed
+            // independently); the result names the present arm's owner, mirroring
+            // `if`'s `["__vdb_1"]`.  A BORROWED Vector subject and every non-Vector
+            // heap subject keep the skip_free hand-off, so their result stays the
+            // bare owner.
+            if owned_vector && let Type::Vector(elm, _) = &result_type {
+                let view = Type::Vector(elm.clone(), crate::data::Deps::frame(vec![tmp]));
+                *code = v_block(vec![set_tmp, if_expr], view.clone(), "ncc");
+                *ctp = view;
+                return;
+            }
             *code = v_block(vec![set_tmp, if_expr], result_type.clone(), "ncc");
         }
         *ctp = result_type;
@@ -2109,9 +2170,12 @@ impl Parser {
                 }
             }
             self.expr_not_null = false;
+            // Match on the BASE type so a nullable vector (`vector<u8>? == null`, e.g.
+            // a `read_bytes`/`list_dir` result — @PLN102 H4) is caught, not only a bare
+            // `Type::Vector` — the same @PLN99 A5 gap the ref/enum null cases fixed.
             let vec_null = (operator == "==" || operator == "!=")
-                && ((matches!(*ctp, Type::Vector(_, _)) && second_type == Type::Null)
-                    || (*ctp == Type::Null && matches!(second_type, Type::Vector(_, _))));
+                && ((matches!(ctp.base(), Type::Vector(_, _)) && second_type == Type::Null)
+                    || (*ctp == Type::Null && matches!(second_type.base(), Type::Vector(_, _))));
             // A float/single null is the NaN sentinel, and NaN compares unequal to
             // everything (including itself), so `f == null` can't go through OpEq —
             // it would always be false.  Test validity instead: convert(float, bool)
@@ -2176,12 +2240,35 @@ impl Parser {
                 // sentinel (store_nr == u16::MAX) via OpVectorIsNull — NOT eq_ref,
                 // whose rec==0 null test would also match an empty `[]`.
                 if !self.first_pass {
-                    let vec_code = if matches!(*ctp, Type::Vector(_, _)) {
-                        code.clone()
+                    let (vec_code, vec_tp) = if matches!(ctp.base(), Type::Vector(_, _)) {
+                        (code.clone(), ctp.clone())
                     } else {
-                        second_code
+                        (second_code, second_type.clone())
                     };
-                    let is_null = self.cl("OpVectorIsNull", &[vec_code]);
+                    // A heap-owning vector TEMP (a call result / non-var) consumed by the
+                    // null test would be orphaned: OpVectorIsNull reads only the sentinel and
+                    // discards the vector store. Capture it in a work-ref so scopes.rs emits
+                    // its OpFreeRef (the nullable-vector-return-consumed-inline leak — a plain
+                    // `f() != null` where `f() -> vector<T>?`). A Var operand already owns its
+                    // store, so it needs no work-ref.
+                    let w = if matches!(vec_code.unspan(), Value::Var(_)) {
+                        u16::MAX
+                    } else {
+                        self.vars.work_refs(&vec_tp, &mut self.lexer)
+                    };
+                    let is_null = if w == u16::MAX {
+                        self.cl("OpVectorIsNull", &[vec_code])
+                    } else {
+                        self.vars.mark_inline_ref(w);
+                        crate::data::v_block(
+                            vec![
+                                crate::data::v_set(w, vec_code),
+                                self.cl("OpVectorIsNull", &[Value::Var(w)]),
+                            ],
+                            Type::Boolean,
+                            "vec-null-workref",
+                        )
+                    };
                     *code = if operator == "==" {
                         is_null
                     } else {
@@ -2229,14 +2316,30 @@ impl Parser {
                     // IS the store_nr sentinel (E1) — keep OpRefIsNull for it.
                     let inline =
                         e_def != u32::MAX && self.data.def(e_def).name.starts_with("__nullable<");
+                    // A VALUE enum (`Color`, no payload variants) is a disc byte whose
+                    // null is discriminant 0 — test `OpConvIntFromEnum(v) == 0`, NOT
+                    // OpRefIsNull (its store_nr sentinel test on a u8 field-read →
+                    // native E0610 `.store_nr` on a primitive).  Read the value/reference
+                    // shape from the enum DEFINITION's `returned` type: the ACCESS type
+                    // is polluted — a field read of a simple enum comes back
+                    // `Enum(_, true, _)` even though the enum itself is a value enum.
+                    // Only a genuine struct-enum (`returned` = `Enum(_, true, _)`) is a
+                    // DbRef and keeps OpRefIsNull.
+                    let value_enum = e_def != u32::MAX
+                        && matches!(self.data.def(e_def).returned, Type::Enum(_, false, _));
                     let is_null = if inline {
                         let get_enum = self.cl("OpGetEnum", &[e_code, Value::Int(0)]);
                         let disc = self.cl("OpConvIntFromEnum", &[get_enum]);
                         self.cl("OpEqInt", &[disc, Value::Int(0)])
+                    } else if value_enum {
+                        // `e_code` is the disc byte already (a field read / a value var);
+                        // disc 0 is the absent variant.
+                        let disc = self.cl("OpConvIntFromEnum", &[e_code]);
+                        self.cl("OpEqInt", &[disc, Value::Int(0)])
                     } else {
-                        // Test the null sentinel via store_nr (OpRefIsNull), NOT OpEqRef's
-                        // rec==0: a present enum is inline-represented on native and carries
-                        // rec==0, which rec==0 would misread as null.
+                        // A struct-enum reference: null IS the store_nr sentinel
+                        // (OpRefIsNull), NOT OpEqRef's rec==0 (a present enum is
+                        // inline-represented on native and carries rec==0).
                         self.cl("OpRefIsNull", &[e_code])
                     };
                     *code = if operator == "==" {

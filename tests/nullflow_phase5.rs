@@ -117,3 +117,28 @@ fn non_null_args_unaffected() {
     assert_eq!(warns, 0);
     assert!(out.contains("r=7"));
 }
+
+// #534 / @PLN102 H4 regression — format-interpolating a `text?`-returning call must
+// emit the `&*` deref on native (an owned `Str`/`String` carrying the null sentinel →
+// `&str`), or native codegen fails E0308 `expected &str, found Str`. `format_text`
+// renders the sentinel as `null`, so the deref is null-safe: the value renders its
+// text, or `null` when null, IDENTICALLY on both backends. Surfaced by `content() ->
+// text?`; the fix (peel `Optional` in `generation/text.rs::format_text`) is general.
+const TEXT_OPT_FMT: &str = "fn maybe(x: boolean) -> text? { if x { return \"hello\" } null }\n\
+     fn main(){ print(\"a={maybe(true)}\\nb={maybe(false)}\\n\"); }\n";
+
+#[test]
+fn text_opt_format_parity_interpret_and_native() {
+    let (oi, i, _) = run(TEXT_OPT_FMT, "--interpret", true, "txtopt_i");
+    let (on, n, _) = run(TEXT_OPT_FMT, "--native", true, "txtopt_n");
+    assert!(oi, "interp run failed: {i}");
+    assert!(
+        on,
+        "native run failed (text? format must emit the &* deref): {n}"
+    );
+    assert!(
+        i.contains("a=hello") && i.contains("b=null"),
+        "text? interpolation must render text then null: {i}"
+    );
+    assert_eq!(i, n, "text? format must be byte-identical interp vs native");
+}

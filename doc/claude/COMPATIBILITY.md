@@ -37,11 +37,15 @@ so the scope is not quietly narrowed:
 1. **The language** — both *syntax* (how code is written) and *semantics* (what it means and
    how it runs: evaluation order, coercion/narrowing, null/`??`, ownership/free timing a
    program can observe).
-2. **Errors** — the diagnostic/error surface a program can observe: *which* error fires and
-   *when*, its identity/type, and the content a program can read or catch. A program that
-   handles or branches on an error keeps observing it identically. *(Purely human-facing
-   error **prose** that no program observes may still be improved — cosmetic polish, like
-   any UI text; the moment a program can observe it, it is frozen.)*
+2. **Errors** — the frozen surface is the error **boundary**: *which* programs error versus
+   compile (and, for a runtime fault a program branches on, *which* fault fires — its kind via
+   `??`, not its wording). Error **text is NOT a frozen surface** — the prose stays freely
+   improvable forever; no program contract depends on the exact words (our goldens are internal
+   tests that update with the prose). The boundary is **one-directional** (§ below): the set of
+   inputs we error on can only *shrink* post-freeze — we may stop erroring on something (a program
+   that used to fail now compiles), never start erroring on a program that used to compile. *(Owner
+   decision 2026-07-13: "the error texts are not frozen; we freeze when we throw an error, and can
+   only limit the space we error for.")*
 3. **The libs** — the standard library (`default/*.loft`) **and** published libraries: a
    program calling a stdlib function or a `use`d library keeps working.
 

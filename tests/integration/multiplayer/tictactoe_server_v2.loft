@@ -192,8 +192,8 @@ fn handle_click(
 
   comma = body.find(",");
   if comma == null { return; }
-  r = body[..comma] as integer;
-  c = body[comma + 1..] as integer;
+  r = body[..comma] as integer? ?? -1;
+  c = body[comma + 1..] as integer? ?? -1;
   if r < 0 || r > 2 || c < 0 || c > 2 { return; }
 
   idx = r * 3 + c;
@@ -315,7 +315,7 @@ fn main() {
   // don't collide on a single hardcoded port.  Default 7878
   // preserves the standalone-launch behaviour.
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 7878 } else { port_raw as integer };
+  port = if port_raw == "" { 7878 } else { port_raw as integer? ?? 7878 };
   srv   = server::listen(port);
   println("v2 server listening on :{port}");
   log_info("v2 server listening on :{port}");

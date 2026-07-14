@@ -3,7 +3,7 @@
 
 [![CI](https://github.com/loft-lang/loft/actions/workflows/ci.yml/badge.svg)](https://github.com/loft-lang/loft/actions/workflows/ci.yml)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2026.6.0-blue.svg)](https://github.com/loft-lang/loft/releases)
+[![Version](https://img.shields.io/badge/version-2026.7.1-blue.svg)](https://github.com/loft-lang/loft/releases)
 [![Gallery](https://img.shields.io/badge/gallery-live-brightgreen)](https://loft-lang.org/loft/gallery.html)
 
 [**▶ Try it in the browser**](https://loft-lang.org/loft/playground.html) · [**🎮 Play Brick Buster**](https://loft-lang.org/loft/brick-buster.html) · [**🖼 Graphics gallery**](https://loft-lang.org/loft/gallery.html) · [**📘 Docs**](https://loft-lang.org/loft/)
@@ -48,7 +48,7 @@ struct Point { x: float, y: float }
 fn distance(a: Point, b: Point) -> float {
     dx = a.x - b.x;
     dy = a.y - b.y;
-    sqrt(dx * dx + dy * dy)
+    sqrt(dx * dx + dy * dy) ?? 0.0
 }
 
 fn main() {
@@ -142,7 +142,7 @@ Highest-impact areas today:
 - **Example programs** — small playable games and demos that show the language off
 - **Libraries** — publish a package (sprites, tilemaps, collision, audio, data formats); each is plain loft, so the bar to contribute is low
 - **WebGL backend** — closing the last gaps between native and browser rendering
-- **Documentation polish** — every page runs as a test, so contributions stay correct by construction
+- **Documentation polish** — most reference pages have their code snippets extracted and run as tests; the hand-written comparison and performance pages are checked by hand, so a careful read still catches drift
 
 See [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) for the workflow and [PLANNING.md](doc/claude/PLANNING.md) for the roadmap.
 

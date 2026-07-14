@@ -78,7 +78,7 @@ p.z;          <span class="cm">// compile error: no field z on Point</span>
 p.x = <span class="st">"hi"</span>; <span class="cm">// compile error: cannot assign text to float</span>
 
 <span class="kw">fn</span> <span class="fn-call">distance</span>(self: <span class="kw">const</span> <span class="en">Point</span>) -> <span class="ty"><a href="stdlib-types.html">float</a></span> {
-    <span class="fn-call">sqrt</span>(self.x * self.x + self.y * self.y)
+    <span class="fn-call">sqrt</span>(self.x * self.x + self.y * self.y) ?? <span class="nm">0.0</span>
 }</code></pre>
 </div>
 <div>
@@ -181,22 +181,24 @@ s.<span class="fn-call">area</span>()   <span class="cm">// dispatches on the ru
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code>msg  = <span class="st">"Hi {name}, score: {score:+8.2}"</span>
+  <pre><code>msg  = <span class="st">"Hi {name}, score: {score:8.2}"</span>
+sign = <span class="st">"seed {n:+}"</span>              <span class="cm">// sign shows on integers: "seed +42"</span>
 hex  = <span class="st">"{n:#x}"</span>
-list = <span class="st">"{for x in 1..4 {x*2}}"</span>   <span class="cm">// "2,4,6"</span>
-pad  = <span class="st">"{value:08}"</span>               <span class="cm">// zero-padded</span></code></pre>
+list = <span class="st">"{for x in 1..4 {x*2}}"</span>   <span class="cm">// [2,4,6]</span>
+pad  = <span class="st">"{count:08}"</span>               <span class="cm">// zero-padded (integers)</span></code></pre>
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
-  <pre class="python-pre"><code>msg  = <span class="st">f"Hi {name}, score: {score:+8.2f}"</span>
+  <pre class="python-pre"><code>msg  = <span class="st">f"Hi {name}, score: {score:8.2f}"</span>
+sign = <span class="st">f"seed {n:+}"</span>
 hex  = <span class="st">f"{n:#x}"</span>
 <span class="cm"># no loop in f-string; use a join:</span>
 lst  = <span class="st">","</span>.<span class="fn-call">join</span>(<span class="bi">str</span>(x*<span class="nm">2</span>) <span class="kw">for</span> x <span class="kw">in</span> <span class="bi">range</span>(<span class="nm">1</span>, <span class="nm">4</span>))  <span class="cm"># "2,4,6"</span>
-pad  = <span class="st">f"{value:08}"</span></code></pre>
+pad  = <span class="st">f"{count:08}"</span></code></pre>
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> All loft strings are implicitly format strings — no <code>f</code> prefix needed. Inline <code>for</code> loops inside <code>{}</code> produce comma-separated output without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (<code>#x</code>, <code>#o</code>, <code>b</code>) all work.</p>
+<p class="up"><strong>Upside</strong> All loft strings are implicitly format strings — no <code>f</code> prefix needed. Inline <code>for</code> loops inside <code>{}</code> produce a bracketed list (<code>[2,4,6]</code>) without a separate join. Format specifiers mirror Python's f-string mini-language: width, precision, sign, alignment, zero-padding, and radix (<code>#x</code>, <code>#o</code>, <code>b</code>) all work — though the sign (<code>+</code>) and zero-pad (<code>0N</code>) flags apply to integer output only, and are dropped for floats.</p>
 <p class="down"><strong>Downside</strong> Python f-strings accept arbitrary expressions: method calls (<code>{obj.method():.2f}</code>), ternary expressions (<code>{"yes" if ok else "no"}</code>), and <code>join</code> operations inline. Loft restricts what can appear inside <code>{}</code>. Python also supports conversion flags (<code>!r</code> for repr, <code>!s</code> for str, <code>!a</code> for ASCII) and the <code>=</code> debug specifier (<code>{x=}</code> prints <code>x=42</code>); loft has none of these.</p>
 </div>
 
@@ -275,7 +277,7 @@ shifted = [x + offset <span class="kw">for</span> x <span class="kw">in</span> n
   <pre><code><span class="cm">// Logic errors: assert aborts the program</span>
 <span class="kw">fn</span> <span class="fn-call">divide</span>(a: <span class="ty"><a href="stdlib-types.html">float</a></span>, b: <span class="ty"><a href="stdlib-types.html">float</a></span>) -> <span class="ty"><a href="stdlib-types.html">float</a></span> {
     <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(b != <span class="nm">0.0</span>, <span class="st">"division by zero"</span>);
-    a / b
+    a / b ?? <span class="nm">0.0</span>
 }
 
 <span class="cm">// Reading: check f#exists before using content</span>
@@ -286,14 +288,14 @@ f = <span class="fn-call">file</span>(<span class="st">"data.txt"</span>);
     <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"file not found"</span>);
 }
 
-<span class="cm">// Mutating ops return a FileResult enum</span>
+<span class="cm">// Mutating ops return a FileResult enum; match on the bare variant</span>
 result = <span class="fn-call">delete</span>(<span class="st">"old.txt"</span>);
 <span class="kw">match</span> result {
-    FileResult.Ok             -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"deleted"</span>);
-    FileResult.NotFound       -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"not found"</span>);
-    FileResult.PermissionDenied -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"permission denied"</span>);
-    FileResult.IsDirectory    -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"is a directory"</span>);
-    _                         -> <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"other error"</span>);
+    <span class="en">Ok</span>               => <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"deleted"</span>),
+    <span class="en">NotFound</span>         => <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"not found"</span>),
+    <span class="en">PermissionDenied</span> => <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"permission denied"</span>),
+    <span class="en">IsDirectory</span>      => <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"is a directory"</span>),
+    _                => <span class="bi"><a href="stdlib-output-and-diagnostics.html">print</a></span>(<span class="st">"other error"</span>),
 }
 
 <span class="cm">// Or just check success:</span>
@@ -450,14 +452,14 @@ T = <span class="fn-call">TypeVar</span>(<span class="st">"T"</span>)
 <p class="down"><strong>Downside</strong> Python's ecosystem is its defining advantage. NumPy, pandas, scikit-learn, TensorFlow, requests, Flask, SQLAlchemy, pytest, and hundreds of thousands of other packages are not available to loft programs. Any data science, web development, database integration, or protocol implementation task will require reimplementing from scratch what Python solves with a single <code>pip install</code>. For these domains, loft is the wrong tool today.</p>
 </div>
 
-<h2 id="exponentiation">14. Exponentiation uses <code>pow()</code>; <code>^</code> is XOR</h2>
+<h2 id="exponentiation">14. Exponentiation with <code>**</code> or <code>pow()</code>; <code>^</code> is XOR</h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code>area  = <span class="en"><a href="stdlib-math.html">PI</a></span> * <span class="fn-call">pow</span>(r, <span class="nm">2.0</span>)  <span class="cm">// exponentiation via pow()</span>
+  <pre><code>area  = <span class="en"><a href="stdlib-math.html">PI</a></span> * r ** <span class="nm">2.0</span>      <span class="cm">// ** exponentiation (like Python)</span>
 bits  = a | b              <span class="cm">// bitwise OR</span>
 xor   = a ^ b              <span class="cm">// bitwise XOR — not exponentiation</span>
-cube  = <span class="fn-call">pow</span>(x, <span class="nm">3.0</span>)       <span class="cm">// cube root: pow(x, 1.0/3.0)</span></code></pre>
+cube  = x ** <span class="nm">3</span>             <span class="cm">// integer cube — exact: 2 ** 10 == 1024</span></code></pre>
 </div>
 <div>
   <p class="lang-label python-label">Python</p>
@@ -470,8 +472,8 @@ cube  = x ** (<span class="nm">1</span>/<span class="nm">3</span>)         <span
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> <code>^</code> behaves as bitwise XOR in both loft and Python — no mismatch. Bitwise operator precedence matches: <code>|</code> (loose) → <code>^</code> → <code>&amp;</code> → shifts → arithmetic (tight). The <code>pow()</code> function is explicit, avoiding any ambiguity about whether <code>^</code> means XOR or exponentiation.</p>
-<p class="down"><strong>Downside</strong> Python's <code>**</code> operator works on integers, floats, and complex numbers and produces the exact type the operands imply. Loft's <code>pow()</code> operates on <code>float</code> and <code>single</code> only — integer exponentiation has no built-in; compute it with a loop or cast to float first. Python's <code>pow(base, exp, mod)</code> three-argument form computes modular exponentiation efficiently; loft offers no equivalent.</p>
+<p class="up"><strong>Upside</strong> Loft's <code>**</code> exponentiation operator matches Python's — <code>2 ** 10 == 1024</code> on integers, <code>2.0 ** 3.0 == 8.0</code> on floats (<code>pow(base, exp)</code> is available too). <code>^</code> behaves as bitwise XOR in both loft and Python — no mismatch. Bitwise operator precedence matches: <code>|</code> (loose) → <code>^</code> → <code>&amp;</code> → shifts → arithmetic (tight).</p>
+<p class="down"><strong>Downside</strong> Python's <code>**</code> additionally handles complex numbers, and its three-argument <code>pow(base, exp, mod)</code> form computes modular exponentiation efficiently; loft has neither. Loft's <code>pow()</code> function itself operates on <code>float</code>/<code>single</code> only — use the <code>**</code> operator for integer exponentiation.</p>
 </div>
 
 </article>

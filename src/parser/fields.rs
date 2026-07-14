@@ -9,6 +9,16 @@ use super::{DefType, I32, Level, Parser, Parts, Type, Value, diagnostic_format, 
 impl Parser {
     #[allow(clippy::too_many_lines)]
     pub(crate) fn field(&mut self, code: &mut Value, tp: Type) -> Type {
+        // @PLN102 — a field access can't be MORE non-null than its receiver: if the
+        // receiver is nullable (`s: S? = null`, `w.inner` where `inner: Inner?`),
+        // reading `s.field` yields the field type's null when the receiver is absent
+        // (C80), so `s.field == null` is NOT "always false" and `s.field ?? d` is NOT
+        // redundant.  `get_field` sets `expr_not_null` from the FIELD's own nullness;
+        // clear it below when the receiver's TYPE is `Optional`.  (The receiver TYPE is
+        // the right signal — `expr_not_null` alone is false even for a non-null
+        // constructed struct, which would wrongly suppress genuine warnings, e.g.
+        // p285.)
+        let receiver_nullable = matches!(tp, Type::Optional(_));
         if let Type::Unknown(_) | Type::Never = tp {
             // @P376 — `Type::Never` is the poison an errored struct construction
             // (`p = Plyer { … }` with an unknown `Plyer`) assigns to its
@@ -507,6 +517,15 @@ impl Parser {
                 // (`p.field ?? default`).
                 self.last_field_read_site = Some(key);
             }
+        }
+        // A field of a NULLABLE receiver can itself be null (C80), regardless of the
+        // field's declared non-nullness — so it is not "not null" for the redundant-
+        // check / redundant-coalesce lints.  (Only the lint signal is cleared; the
+        // returned type `t` is unchanged — widening it to `Optional` would force
+        // `?? d` on every nullable-receiver field read, a far broader change.)
+        if receiver_nullable && self.expr_not_null {
+            self.expr_not_null = false;
+            self.expr_not_null_name.clear();
         }
         self.data.attr_used(dnr, fnr);
         t

@@ -31,8 +31,10 @@ fn main() {
   // '!' is true.  This lets you write guard clauses without a separate
   // null-check syntax:
   //   if !result { ... handle missing value ... }
-  // Without `?? null`, a bare `1 / 0` halts in development and logs
-  // a warning + continues with the sentinel in production.
+  // Even without `?? null`, a bare `1 / 0` never halts: it yields null and
+  // logs a warning, behaving the same everywhere — development, test, and
+  // production. The `?? null` above just marks the case as handled, which
+  // suppresses that warning.
   zero = 0;
   assert(!(12 / zero ?? null), "null from division-by-zero is false-like when defended");
   assert(12 > 0, "positive integer is true");

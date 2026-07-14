@@ -20,7 +20,7 @@ use web;
 
 fn main() {
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  port = if port_raw == "" { 18091 } else { port_raw as integer };
+  port = if port_raw == "" { 18091 } else { port_raw as integer? ?? 18091 };
   url = "ws://127.0.0.1:{port}";
 
   println("v5-t1c: connecting port={port}");

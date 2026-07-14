@@ -94,26 +94,28 @@ fn add_to(n: &amp;mut i32, delta: i32) {
 <p class="down"><strong>Downside</strong> The compile-time guarantees are much weaker. Rust's borrow checker statically proves no aliased mutations, no dangling references, and no data races — before the program ever runs. Loft's <code>const</code> is a debug-only runtime check. Aliasing is unchecked at compile time, and the engine's Rust runtime is what truly enforces memory safety.</p>
 </div>
 
-<h2 id="xor">4. <code>^</code> is XOR; exponentiation uses <code>pow()</code></h2>
+<h2 id="xor">4. <code>^</code> is XOR; <code>**</code> or <code>pow()</code> for exponentiation</h2>
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code>area = <span class="en"><a href="stdlib.html#math">PI</a></span> * <span class="fn-call">pow</span>(r, <span class="nm">2.0</span>)  <span class="cm">// exponentiation via pow()</span>
+  <pre><code>sq   = <span class="nm">2</span> ** <span class="nm">10</span>          <span class="cm">// ** exponentiation — integers: 1024</span>
+area = <span class="en"><a href="stdlib.html#math">PI</a></span> * r ** <span class="nm">2.0</span>   <span class="cm">// floats too; pow(r, 2.0) also works</span>
 bits = a | b              <span class="cm">// bitwise OR</span>
 mask = a &amp; b              <span class="cm">// bitwise AND</span>
 xor  = a ^ b              <span class="cm">// bitwise XOR</span></code></pre>
 </div>
 <div>
   <p class="lang-label rust-label">Rust</p>
-  <pre class="rust-pre"><code>let area = PI * r.powi(2); // or r.powf(2.0)
+  <pre class="rust-pre"><code>let sq   = 2i32.pow(10);   // 1024 — no ** operator in Rust
+let area = PI * r.powi(2); // or r.powf(2.0)
 let bits = a | b;          // bitwise OR
 let mask = a &amp; b;          // bitwise AND
 let xor  = a ^ b;          // bitwise XOR</code></pre>
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> <code>^</code> behaves exactly as Rust developers expect — it is bitwise XOR. Bitwise operator precedence matches Rust and C: <code>|</code> (loose) → <code>^</code> → <code>&amp;</code> → shifts → arithmetic (tight).</p>
-<p class="down"><strong>Downside</strong> Exponentiation requires a function call: <code>pow(base, exp)</code> for <code>float</code>/<code>single</code> — there is no <code>**</code> or <code>^</code> exponentiation operator. Integer exponentiation is not in the standard library; compute it with a loop or cast to float first.</p>
+<p class="up"><strong>Upside</strong> Loft has a <code>**</code> exponentiation operator that works on both integers (<code>2 ** 10 == 1024</code>) and floats (<code>2.0 ** 3.0 == 8.0</code>); <code>pow(base, exp)</code> is also available for <code>float</code>/<code>single</code>. <code>^</code> behaves exactly as Rust developers expect — it is bitwise XOR. Bitwise operator precedence matches Rust and C: <code>|</code> (loose) → <code>^</code> → <code>&amp;</code> → shifts → arithmetic (tight).</p>
+<p class="down"><strong>Downside</strong> The <code>**</code> operator is loft-specific — Rust has no exponentiation operator and reaches for methods instead (<code>.pow()</code>, <code>.powi()</code>, <code>.powf()</code>), so the muscle memory does not transfer. And <code>^</code> is XOR in both languages, never exponentiation — a trap for anyone reaching for it as a power operator out of habit.</p>
 </div>
 
 <h2 id="loops">5. No <code>loop</code> keyword — use <code>while</code> or <code>for + break</code></h2>
@@ -348,15 +350,17 @@ fn max&lt;T: PartialOrd&gt;(a: T, b: T) -&gt; T {
 <div class="compare">
 <div>
   <p class="lang-label loft-label">Loft</p>
-  <pre><code>msg  = <span class="st">"Hi {name}, score: {score:+6.2}"</span>  <span class="cm">// width.prec</span>
+  <pre><code>msg  = <span class="st">"Hi {name}, score: {score:6.2}"</span>   <span class="cm">// width.precision</span>
+rank = <span class="st">"seed {n:+}"</span>                      <span class="cm">// sign shows on integers: "seed +42"</span>
 prec = <span class="st">"{value:.2}"</span>                      <span class="cm">// precision only</span>
 hex  = <span class="st">"{n:#x}"</span>
-list = <span class="st">"{for x in 1..4 {x*2}}"</span>          <span class="cm">// "2,4,6"</span>
+list = <span class="st">"{for x in 1..4 {x*2}}"</span>          <span class="cm">// [2,4,6]</span>
      = <span class="st">"{\"hello\":3}"</span>                    <span class="cm">// nested string literal — works</span></code></pre>
 </div>
 <div>
   <p class="lang-label rust-label">Rust</p>
-  <pre class="rust-pre"><code>let msg  = format!("Hi {name}, score: {:+6.2}", score);
+  <pre class="rust-pre"><code>let msg  = format!("Hi {name}, score: {:6.2}", score);
+let rank = format!("seed {:+}", n);
 let prec = format!("{:.2}", value);
 let hex  = format!("{:#x}", n);
 // no in-string iteration; needs a separate collect step
@@ -364,7 +368,7 @@ let hex  = format!("{:#x}", n);
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> Concise — no <code>format!()</code> call, no separate variable. Full format expressions (arithmetic, slices, <code>for</code> comprehensions) can appear directly inside <code>{}</code>. Specifiers mirror Rust: <code>:width</code>, <code>:.precision</code>, <code>:width.precision</code>, sign (<code>+</code>), radix (<code>#x</code>, <code>#o</code>, <code>b</code>), alignment (<code>&lt;</code>, <code>&gt;</code>, <code>^</code>), and zero-padding (<code>0N</code>) all work.</p>
+<p class="up"><strong>Upside</strong> Concise — no <code>format!()</code> call, no separate variable. Full format expressions (arithmetic, slices, <code>for</code> comprehensions) can appear directly inside <code>{}</code>. Specifiers mirror Rust: <code>:width</code>, <code>:.precision</code>, <code>:width.precision</code>, sign (<code>+</code>), radix (<code>#x</code>, <code>#o</code>, <code>b</code>), alignment (<code>&lt;</code>, <code>&gt;</code>, <code>^</code>), and zero-padding (<code>0N</code>) all work. Note that the sign (<code>+</code>) and zero-pad (<code>0N</code>) flags apply to integer output only — they are dropped for floats.</p>
 <p class="down"><strong>Downside</strong> Unknown radix letters in specifiers are compile-time errors (e.g. <code>:5z</code> or <code>:5B</code> are both rejected). Radix letters are case-sensitive: valid ones are <code>b</code>, <code>o</code>, <code>x</code>/<code>X</code>, <code>e</code>, and <code>j</code>/<code>json</code> — uppercase <code>B</code> or <code>O</code> produce an error. Applying a numeric specifier to an incompatible type (such as <code>:x</code> on a <code>text</code> value, or zero-padding on a <code>boolean</code>) is a compile-time error.</p>
 </div>
 

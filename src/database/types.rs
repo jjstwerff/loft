@@ -1718,7 +1718,9 @@ impl Stores {
 
     /// Transitive closure of the types reachable from `roots` via their layout
     /// references (fields, collection elements, childrecs, data-enum variants).
-    fn layout_closure(&self, roots: &[u16]) -> std::collections::BTreeSet<u16> {
+    /// `pub(crate)` so the @PLN105 layout-descriptor emitter walks the exact same
+    /// closure the layout hash commits to (no duplicate, drift-prone walk).
+    pub(crate) fn layout_closure(&self, roots: &[u16]) -> std::collections::BTreeSet<u16> {
         let mut seen: std::collections::BTreeSet<u16> = std::collections::BTreeSet::new();
         let mut stack: Vec<u16> = roots
             .iter()

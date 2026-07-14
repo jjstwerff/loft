@@ -68,6 +68,19 @@ struct Area {
   water: u8,
   direction: u8
 }
+// ## Value structs
+// Prefix a struct with 'value' to give it value (copy) semantics and zero heap
+// overhead: it is stored inline inside a record or vector element, exactly like
+// a plain integer. Reading one out of a field or element yields an independent
+// COPY — writing to that copy never changes the original. Use a 'value struct'
+// for small wrapper types (a point, a colour, a timestamp) that should be as
+// cheap as the number they wrap. A plain (reference) struct, by contrast, is
+// shared: a binding is a live view onto the same record.
+
+value struct Point {
+  x: integer,
+  y: integer
+}
 
 fn main() {
   // Constructing a struct: name the fields you want to set.
@@ -111,6 +124,13 @@ fn main() {
   assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "tile record");
   map[3].height = 200;
   assert(map[3].height == 200, "individual tile update");
+  // A value struct binding is a snapshot (copy), not a shared view.
+  pts =[Point {x: 1, y: 2 }, Point {x: 3, y: 4 }];
+  q = pts[0];
+  // q is an independent COPY of element 0
+  q.x = 99;
+  assert(pts[0].x == 1, "value struct copy does not write back");
+  assert(q.x == 99, "the copy itself did change");
   // ## sizeof
   // 'sizeof(Type)' returns the packed byte size used when the type is stored
   // as a struct field or vector element. Range-constrained integer types like

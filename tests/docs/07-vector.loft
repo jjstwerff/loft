@@ -12,7 +12,7 @@
 // Pass the function using 'fn <name>' to refer to a named function by name.
 //   map(v, f)          — apply f to every element; returns a new vector
 //   filter(v, pred)    — keep only elements for which pred returns true
-//   reduce(v, f, init) — combine all elements into a single value
+//   reduce(v, init, f) — combine all elements into a single value, starting from init
 fn triple(x: integer) -> integer {
   x * 3
 }

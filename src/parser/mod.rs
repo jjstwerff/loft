@@ -2531,6 +2531,27 @@ impl Parser {
             *code = Value::Call(sentinel_nr, vec![]);
             return true;
         }
+        // @PLN102 — `null` assigned to a value-enum target (`n: Color? = null`, a
+        // return, an arg, a field) must become the enum's typed null
+        // (`OpConvEnumFromNull` → the 255 sentinel), NOT stay a bare `Value::Null`
+        // (byte 0).  The `FromNull` loop below matches by RETURN type, but
+        // `OpConvEnumFromNull` returns the generic `enumerate`, never `is_equal` to a
+        // specific `Enum(Color)` — so the conversion was skipped and the slot held 0
+        // while every consumer (`== null`, `??`, `!`, `{n}`) tests the 255 sentinel,
+        // leaving the value un-null-checkable.  Mirrors `Parser::null`'s Enum arm.
+        // Inline `__nullable<S>` fields keep their own disc-0 representation (excluded);
+        // a value-enum VECTOR element has no wired per-element null and is rejected in
+        // `parse_vector` (which no longer relies on this convert failing).
+        if *is_type == Type::Null
+            && let Type::Enum(tp, _, _) = should.base()
+            && !self.data.def(*tp).name.starts_with("__nullable<")
+        {
+            *code = self.cl(
+                "OpConvEnumFromNull",
+                &[Value::Int(i32::from(self.data.def(*tp).known_type()))],
+            );
+            return true;
+        }
         // @PLN99 Arc C — a struct/reference-returning user conversion carries a hidden
         // destination parameter (attributes() > 1), so it must go through `call_nr` (whose
         // `add_defaults` appends the dest).  But `call_nr` needs `&mut self`, and this scan
@@ -5656,16 +5677,8 @@ impl Parser {
                 possible.push(*pos);
             }
             for pos in possible {
-                // skip OpEqBool when comparing character with text —
-                // prevents 'a' == "b" from resolving as true == true.
-                if self.data.def(pos).name() == "OpEqBool"
-                    && types.len() >= 2
-                    && ((matches!(types[0], Type::Character) && matches!(types[1], Type::Text(_)))
-                        || (matches!(types[0], Type::Text(_))
-                            && matches!(types[1], Type::Character)))
-                {
-                    continue;
-                }
+                // `OpEqBool` truthiness-fallback guard lives in `call_nr` (the single
+                // chokepoint all three resolution sub-paths share) — see there.
                 let tp = self.call_nr(code, pos, list, types, false, &[]);
                 if tp != Type::Null {
                     // We cannot compare two different types of enums, both will be integers in the same range
@@ -5751,6 +5764,66 @@ impl Parser {
         report: bool,
         arg_pos: &[Position],
     ) -> Type {
+        // @PLN102 pre-freeze — `OpEqBool`/`OpNeBool` are BOOLEAN (in)equality; they must
+        // not be the implicit truthiness fallback for mismatched types.  Without this,
+        // `5 == "banana"` resolves as `OpEqBool(OpConvBoolFromInt(5),
+        // OpConvBoolFromText("banana"))` = `true == true` = **true** (likewise
+        // `float == text`, `char == float`, `bool == text`, and their `!=` twins).  These
+        // reach here via THREE call_op sub-paths (find_op_method, the `possible` loop, and
+        // find_fn — the last resolves the boolean's own operator), so the guard lives at
+        // this single chokepoint they all share: refuse the boolean (in)equality op unless
+        // both operands are genuinely boolean, returning "no match" so the caller falls
+        // through to a numeric/same-type op or the "No matching operator" reject (as the
+        // ordering operators `<`/`<=`/… already do).  A `null` operand is EXEMPT: a bare
+        // `boolean?`/`integer?`/… `== null` null-check legitimately lowers through the
+        // boolean op (no separate bool-null branch upstream), so only reject when BOTH
+        // operands are concrete non-null and not both boolean.
+        if matches!(self.data.def(d_nr).name(), "OpEqBool" | "OpNeBool") && types.len() >= 2 {
+            let (a, b) = (types[0].base(), types[1].base());
+            // Only a VALUE-vs-value mismatch is the truthiness bug: in-band scalars
+            // plus enums (`Color.Green == 1` truthiness-coerces both).  A reference /
+            // heap operand (`DT? == DT?`, a nullable struct-ref) legitimately reaches
+            // OpEqBool as its null-ness comparison — blocking it there would strand it
+            // with "No matching operator" (there is no OpEqRef coercion for it).  So
+            // require BOTH operands to be value types before rejecting.
+            let value = |t: &Type| {
+                matches!(
+                    t,
+                    Type::Integer(_)
+                        | Type::Float
+                        | Type::Single
+                        | Type::Text(_)
+                        | Type::Character
+                        | Type::Boolean
+                        | Type::Enum(..)
+                )
+            };
+            let both_bool = matches!(a, Type::Boolean) && matches!(b, Type::Boolean);
+            // A boolean-vs-integer comparison is rejected UPSTREAM (parser/operators.rs)
+            // with a bespoke "a boolean is true/false/null, not 0/1" message; leave that
+            // pair to it (this guard would otherwise pre-empt it with the generic reject).
+            let bool_int = (matches!(a, Type::Boolean) && matches!(b, Type::Integer(_)))
+                || (matches!(a, Type::Integer(_)) && matches!(b, Type::Boolean));
+            if value(a) && value(b) && !both_bool && !bool_int {
+                return Type::Null;
+            }
+        }
+        // @PLN102 pre-freeze — an enum compared to a RAW integer coerces the enum to
+        // its INTERNAL discriminant (`OpConvIntFromEnum`, +1-biased so variant 0 is
+        // disc 1), so `Color.Green == 1` leaks that encoding and reads a confusing
+        // false (Green's disc is 2).  Reject the enum-vs-integer pair like the other
+        // cross-type comparisons — `enum == enum` is untouched (BOTH sides convert, so
+        // both operands are `Enum` here, not one enum + one integer; a bare `enum ==
+        // null` is `Enum` + `Null`).  The internal is-absent lowering builds `OpEqInt`
+        // via `self.cl` with an already-integer discriminant, bypassing this path.
+        if matches!(self.data.def(d_nr).name(), "OpEqInt" | "OpNeInt") && types.len() >= 2 {
+            let (a, b) = (types[0].base(), types[1].base());
+            let enum_int = (matches!(a, Type::Enum(..)) && matches!(b, Type::Integer(_)))
+                || (matches!(a, Type::Integer(_)) && matches!(b, Type::Enum(..)));
+            if enum_int {
+                return Type::Null;
+            }
+        }
         let mut all_types = Vec::from(types);
         if self.data.def_type(d_nr) == DefType::Dynamic {
             for a_nr in 0..self.data.attributes(d_nr) {
