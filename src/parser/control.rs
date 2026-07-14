@@ -8038,19 +8038,16 @@ impl Parser {
     /// @PLN104 — after pass 2, flag every user text-returning fn that returns `Owned`
     /// text (`use_analysis::return_ownership`) WITHOUT a hidden `&text` retbuf — the
     /// owned-by-value shape the interpreter orphans (loft-lang/loft#568). Flagged defs
-    /// go into `force_tret`, which drives the third pass to re-lower them with a `&text`
-    /// retbuf (`do_tret_bind` + the `a==v` renumber in `block_result`). OPT-IN via
-    /// `LOFT_TRET_FIX` (default-off): the promotion is correct for the fn-ref-call tail
-    /// (the min.loft/#568 primary) but a default-on trial regressed 7 suite tests —
-    /// spurious third-pass diagnostics, runtime shape changes (s5/s7), 4 native
-    /// compile failures, and tooling — so it stays gated until those are closed (see
-    /// `doc/claude/plans/104-tret-promotion/option-b-scope.md` § "Default-on trial").
-    /// Test env-gated via `LOFT_NO_CACHE=1` (the whole-program cache ignores this flag).
-    /// `LOFT_TRET_REPORT` additionally prints each flagged def.
+    /// go into `force_tret`, which drives `targeted_tret_promotion` to re-lower them with
+    /// a `&text` retbuf (`do_tret_bind` + the `a==v` renumber in `block_result`) IN PLACE
+    /// and patch their callers. DEFAULT-ON — opt OUT with `LOFT_NO_TRET_FIX` (a debug escape
+    /// hatch that restores the leak). `LOFT_TRET_REPORT` additionally prints each flagged
+    /// def. When testing the flag directly, set `LOFT_NO_CACHE=1` (the whole-program cache
+    /// is content-keyed and ignores env flags). See
+    /// `doc/claude/plans/104-tret-promotion/targeted-promotion-design.md`.
     pub(crate) fn report_tret_promotions(&mut self) {
         let report = std::env::var_os("LOFT_TRET_REPORT").is_some();
-        // @PLN104 default-on trial: the targeted promotion (V2) is now the default fix for
-        // the #568 owned-text-return leak; opt OUT with LOFT_NO_TRET_FIX.
+        // The #568 leak fix is on by default; LOFT_NO_TRET_FIX is a debug escape hatch.
         let fix = std::env::var_os("LOFT_NO_TRET_FIX").is_none();
         if !report && !fix {
             return;
