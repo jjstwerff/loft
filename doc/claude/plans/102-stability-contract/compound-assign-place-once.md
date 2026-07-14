@@ -102,3 +102,64 @@ unless the owner rules F4 too.
 - [formal-audit.md](formal-audit.md) F2 / F4 — the audit rows.
 - [COMPATIBILITY.md](../../COMPATIBILITY.md) § the error surface — "a would-be-error is first a
   rewrite-to-correct-function," the principle this fix instances.
+
+## Implementation steps (each with its verification)
+
+Grounded in the actual emitted IR (`loft introspect`, 2026-07-14). Current `w[idx()] += 5`:
+
+```
+OpSetInt( OpGetVector(w, 8, n_idx()), 0,                              // write target
+          OpAddInt( OpGetInt(OpGetVector(w, 8, n_idx()), 0), 5 ) )    // read — n_idx() AGAIN
+```
+
+`n_idx()` is embedded in BOTH `OpGetVector` calls. Target after the fix:
+
+```
+__place_1 = n_idx();                                                  // once
+OpSetInt( OpGetVector(w, 8, __place_1), 0,
+          OpAddInt( OpGetInt(OpGetVector(w, 8, __place_1), 0), 5 ) )
+```
+
+**Step 0 — baseline instruments (before touching the compiler).**
+- 0a. Byte-identical corpus `f2-untouched.loft`: one fn per path that must NOT change — `w[1] += 5`
+  (const index), `w[i] += 5` (var index), `s.v += 5` (field), each op `+= -= *= /= %= &= |= ^= <<=
+  >>=`, keyed `h[k] += v`; a `main` runs all. *Verify:* clean on both backends; capture
+  `loft introspect f2-untouched.loft > before.txt`.
+- 0b. Boundary matrix `f2-matrix.loft`: `w[idx()] += 5` (idx prints), nested `m[i()][j()] += 5`, and
+  the divergence probe `w[next()] += 5` where `next()` returns 1 then 2. *Verify (CURRENT/broken):*
+  idx 2×, nested 4×, divergence reads `w[1]` / writes `w[2]` — the recorded before-state.
+
+**Step 1 — prove the target IR standalone (the spec).** The once-eval form is exactly what the
+hand-written `p = idx(); w[p] += 5` already emits. *Verify:* `loft introspect` that source →
+`n_idx()` bound once, both `OpGetVector` read `p`; runs correct on both backends. That is the
+working bytecode proven beside the broken one.
+
+**Step 2 — locate the duplication point.** In `parse_assign_op` (`src/parser/expressions.rs`, the
+`op != "="` compound path), the place `to` (which embeds the `n_idx()` `Call`) is used for the write
+target AND cloned into the read `OpGetInt(to.clone(), …)`. *Verify:* one env-gated `eprintln` at the
+construction fires for `w[idx()] += 5` and shows `to` containing `n_idx()`.
+
+**Step 3 — hoist non-idempotent addressing sub-expressions once.** Before the place is duplicated,
+walk `to`; for each addressing arg (the index arg of `OpGetVector`, a container-producing
+`OpGetField`/call) that is NOT a bare `Var`/`Int`/const, create `__place_N`, prepend
+`Set(__place_N, expr)`, and `substitute_value` (`expressions.rs:224`) the arg → `Var(__place_N)` in
+BOTH the write and read copies. Idempotent args (bare `Var`/`Int`) are left inline. *Verify:*
+`introspect` on `w[idx()] += 5` matches the Step-1 target IR (one `__place_1 = n_idx()`, both
+`OpGetVector` use it).
+
+**Step 4 — byte-identical gate (untouched paths).** `loft introspect f2-untouched.loft > after.txt;
+diff before.txt after.txt`. *Verify:* EMPTY diff — interp IR AND native Rust — for const/var index,
+field, keyed. (Re-run after `cargo fmt`.)
+
+**Step 5 — boundary matrix, value + count, both backends.** Re-run `f2-matrix.loft`. *Verify on
+`--interpret` AND `--native`:* `w[idx()] += 5` → idx ONCE, `w[1]==25`; nested → each level once;
+divergence `w[next()] += 5` → read and write hit the SAME slot (`w[1]`), value correct.
+`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK` clean — a container-producing-call place binds a heap
+VIEW to `__place_N`; confirm it is a borrow (not owned), so not freed / not double-freed.
+
+**Step 6 — conversion set + full suite + graduate.** *Verify:* full `cargo nextest` green on both
+backends; `log()` any in-tree program whose place-fn call count changed (expected ≈ 0 — a
+side-effecting place is rare/unintentional). Graduate the matrix to `tests/scripts/pln102-f2-place-once.loft`.
+
+**Done when:** Steps 4 (empty diff) AND 5 (matrix correct, both backends, leak-clean) both hold, and
+the full suite is green. Effort **S** — one hoist at one chokepoint, no new op, no runtime change.
