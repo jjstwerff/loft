@@ -11,11 +11,15 @@ promotes only the `force_tret` defs' IR and patches only their call sites. This 
 *"that half awaits the forward-ref pre-pass"*). Read `option-b-scope.md` first for the
 history and the reliable-measurement notes (`LOFT_NO_CACHE`, the runtime text trace).
 
-## Implementation status (built + verified, opt-in behind `LOFT_TRET_V2`)
+## Implementation status — DONE (default-on; third pass deleted, commit `b5a1e65e`)
 
-Both phases land in `parser/control.rs`; wired in `parser/mod.rs` as
-`if force_tret && LOFT_TRET_V2 → targeted_tret_promotion() else third pass`. Gated OFF by
-default (`force_tret` is empty without `LOFT_TRET_FIX`).
+Both phases land in `parser/control.rs`; wired in `parser/mod.rs` as simply
+`if !force_tret.is_empty() { self.targeted_tret_promotion(); }`. The #568 leak fix is **on
+by default**; `LOFT_NO_TRET_FIX` is a debug escape hatch that restores the leak. The
+whole-file re-parse "third pass" (and its snapshot/restore + diagnostic-truncation
+scaffolding) has been **removed** — the targeted pass is the sole promotion path. History
+below (the env-gated `LOFT_TRET_FIX`/`LOFT_TRET_V2`/`LOFT_TRET_THIRD_PASS` flags) is how it
+was staged; only `LOFT_NO_TRET_FIX` and `LOFT_TRET_REPORT` remain.
 
 - **Phase A — `promote_text_return_def(d_nr)`**: swaps `self.vars`↔the def, mints `__tret`,
   rewrites early returns, rebinds the tail, `text_return(&[tv])`, then the a==v renumber via
@@ -81,9 +85,12 @@ the known environmental flake. Note the diagnostic path: the stale-cache hypothe
 (clean-cache suite still failed); the decisive read was the **V2-off full-suite baseline**, not the
 isolated-test passes.
 
-**Remaining close-out (mechanical):** delete the third-pass block in `parser/mod.rs` (and its
-`LOFT_TRET_THIRD_PASS` opt-in) once default-on has soaked; the s5/s7 full-suite flakiness is a
-SEPARATE pre-existing test-infra issue (fails with promotion off), not part of this plan.
+**Close-out DONE (commit `b5a1e65e`):** the third-pass block in `parser/mod.rs` (and its
+`LOFT_TRET_THIRD_PASS` opt-in, plus the now-dead `truncate_diagnostics`/`truncate_to`
+helpers) is deleted; `targeted_tret_promotion` is the sole path. Verified: unit 738/0,
+native_scripts 439/439, clippy clean. The s5/s7 full-suite flakiness remains a SEPARATE
+pre-existing test-infra issue (fails with promotion off), not part of this plan — worth
+filing against the `LOFT_LIVE_FLIP`/debugger harness. **PLN104 is complete.**
 
 ## Why the third pass must go — one root, many symptoms
 
