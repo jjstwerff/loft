@@ -15,9 +15,14 @@ Working notes for the `tuxedo-work` branch. Two independent tracks the user grou
   `tests/engine_host_kernel.rs`. Root cause pinned (leaked swap-child orphan the stem pgrep
   misses); "flake gone" UNPROVEN (intermittent, could not force). RESUME: soak-watch s5/s7 in
   CI; file a `loft-lang/loft` bug (pre-existing, both-mode).
-- **Track B — DESIGN only** (`android-build-target.md`): loft Android target for `../ssh_home`.
-  RESUME: run the concrete **B0 spike** (needs an NDK) to falsify the invariant, then open a
-  `loft-lang/plans` issue.
+- **Track B — B0 CONFIRMED + B1 LANDED** (`android-build-target.md`): loft Android target
+  for `../ssh_home`. Invariant held (generated core cross-compiles to
+  `aarch64-linux-android` unchanged); `loft --native-android prog.loft` produces a bionic
+  AArch64 `.so`. Code: `src/android.rs` + `--native-android` in `main.rs` +
+  `tests/android_target.rs`. NDK r27c installed at `~/android-ndk-r27c` (set
+  `ANDROID_NDK_HOME`). RESUME: B2 (APK packaging), B3 (EGL/ANativeWindow), B4 (touch/IME) —
+  all need a device/emulator; open a `loft-lang/plans` issue for B2+. Networking/TLS (`ring`)
+  is a later feature-flag on the runtime rlib (design §5).
 - No PR on this branch yet. Nothing is blocking.
 
 ## Track A — the s5/s7 full-suite flake (test-infra hardening)

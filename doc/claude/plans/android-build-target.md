@@ -5,10 +5,47 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Design — loft Android build target (`aarch64-linux-android`)
 
-**Status:** design (pre-B0 spike). **Consumer / dogfood:** `../ssh_home` (a pure-loft
-SSH phone terminal) is blocked on this — it runs today as Linux `--native` and re-targets
-to Android with *the same source* once this lands. **Branch:** `tuxedo-work` (stacked on
-@PLN104 PR #569; graduates to its own `loft-lang/plans` issue once B0 confirms the invariant).
+**Status:** **B0 CONFIRMED + B1 LANDED** (2026-07-14, on `tuxedo-work`). The invariant
+held: loft's target-agnostic generated core cross-compiles to `aarch64-linux-android`
+unchanged, and `loft --native-android <prog>` now produces a genuine bionic AArch64
+`.so`. B2–B4 (APK packaging, EGL/ANativeWindow, touch/IME) remain — they need a device
+or emulator, so they are the next phases. **Consumer / dogfood:** `../ssh_home` (a
+pure-loft SSH phone terminal) is unblocked for its headless slice; its GL surface waits on
+B3. **Branch:** `tuxedo-work` (graduates to its own `loft-lang/plans` issue for B2+).
+
+## 0. What B0 found (the falsification pass — run, not guessed)
+
+Verified on this box with NDK r27c (`aarch64-linux-android`, API 24):
+- **Lean core rlib cross-compiles clean** — `cargo rustc --lib --no-default-features
+  --crate-type rlib --target aarch64-linux-android` → `libloft.rlib`, exit 0. An rlib
+  build runs NO linker, so this isolates the codegen question: **the generated core is
+  target-agnostic** (all the `cfg` gates are `wasm32`-vs-not, which Android takes the
+  host side of; `cfg(unix)` covers Android too). Invariant holds.
+- **The ONLY blockers are toolchain wiring**, exactly as §1 predicted: (a) the final
+  `cdylib` `.so` link needs the NDK `clang` linker (the host `ld` rejects EM 183 /
+  AArch64 objects — "file in wrong format"); (b) the FULL default-feature graph fails at
+  ONE crate, `ring`'s build script (`cc-rs: failed to find tool
+  "aarch64-linux-android-clang"`) — every other dep (`rustls`, `ed25519`,
+  `curve25519-dalek`, `zip`, `tar`, `flate2`, `webpki`) cross-compiles. Both resolve once
+  the NDK is installed; neither is a codegen fork.
+- **End-to-end gate PASSED:** with the NDK, a trivial program's generated `.rs` links to
+  `libb0.so` = `ELF 64-bit LSB shared object, ARM aarch64`, `NEEDED libc.so`/`libdl.so`
+  (bionic, not glibc's `libc.so.6`). The full `libloft.so` (default features, incl.
+  `ring`/TLS) also links — so ssh_home's networking chain is viable when B wires it.
+
+## 1b. What B1 landed
+
+`src/android.rs` (`AndroidTarget` descriptor — the §1 chokepoint, all Android knowledge
+in one file) + a `--native-android [out.so]` flag in `main.rs` modeled on `--native-wasm`.
+It reuses the identical `output_native_reachable` emit (no codegen path), cross-builds
+loft's Android runtime rlib on demand (fingerprint-keyed, into an isolated
+`target/loft/android/` so a full-feature build can't stomp it — the `--html` shape's
+rlib-stomp guard), then links the program `cdylib` with the NDK linker. The first slice's
+runtime is lean (`--no-default-features --features "random threading"`) — networking/TLS
+(`ring`, needs the NDK C compiler through `cc-rs`) is a later phase per §5. Tests:
+`tests/android_target.rs` (NDK-gated build test + always-on no-NDK error-path test).
+**To run:** `ANDROID_NDK_HOME=<ndk> loft --native-android prog.loft` (override triple/API
+with `LOFT_ANDROID_TARGET` / `LOFT_ANDROID_API`).
 
 ## 1. The one invariant (the design is a hypothesis about this)
 
@@ -67,8 +104,8 @@ emulator/device (a specific `logcat`/stdout line); **(G)** golden PNG (`gl_scree
 committed golden under tolerance); **(I)** an input event produces a named on-screen effect.
 A phase is DONE only when its gate passes on-device, not in prose.
 
-- **B0 — spike / falsify the invariant (CONCRETE, runnable when an NDK is present).**
-  The exact steps that either compile or name the blocker:
+- **B0 — spike / falsify the invariant. ✅ DONE (2026-07-14).** Confirmed: see §0. The
+  exact steps that either compile or name the blocker (kept for reproducibility):
   ```sh
   # 0. one-time: rustup target + NDK (r26+); NDK provides the clang linker + sysroot
   rustup target add aarch64-linux-android
@@ -91,10 +128,11 @@ A phase is DONE only when its gate passes on-device, not in prose.
   assumption, panic strategy). Do NOT build B1+ before B0 answers this. **If no NDK is available
   in the working env, B0 is a spec to run on a machine that has one — it is not skippable, it is
   the gate.**
-- **B1 — the target descriptor + cross `rustc`.** Introduce the descriptor struct (§1) and an
-  `android` target that sets triple + NDK linker + `cdylib`; reuse the `main.rs:3454` dep-rlib
-  cross-build for the NDK triple. **Verify:** the `.so` links for a headless (no-GL) loft
-  program; symbols resolve. Host-testable with an NDK; no device/emulator yet.
+- **B1 — the target descriptor + cross `rustc`. ✅ DONE (2026-07-14).** `src/android.rs`
+  (`AndroidTarget`) + `--native-android` in `main.rs`; auto cross-builds the runtime rlib
+  into `target/loft/android/`. **Verified:** a headless struct/fn/for-loop program links to a
+  bionic AArch64 `.so` (`tests/android_target.rs`); interpreter/`--native`/`--native-android`
+  agree on the same source. Host-tested with an NDK; no device/emulator yet.
 - **B2 — APK packaging.** `android-activity` entry, manifest, `.so` → aligned/signed APK.
   **Verify:** the APK installs + launches a black-screen loft program on an emulator (or a
   device); `android_main` reached.

@@ -40,6 +40,7 @@ use loft::generation;
 use loft::log_config;
 use loft::logger;
 use loft::manifest;
+mod android;
 mod native_utils;
 use loft::parser;
 use loft::platform;
@@ -122,6 +123,9 @@ fn print_help() {
     println!("  --native-emit [out.rs]        write generated Rust source and exit");
     println!("                                (default: .loft/<script>.rs beside the script)");
     println!("  --native-wasm [out.wasm]      compile to WebAssembly (wasm32-wasip2)");
+    println!(
+        "  --native-android [out.so]     cross-compile to an Android cdylib .so (needs ANDROID_NDK_HOME)"
+    );
     println!("                                (default: .loft/<script>.wasm beside the script)");
     println!("                                for headless/WASI (wasmtime); NOT the browser build");
     println!(
@@ -3971,6 +3975,7 @@ fn main() {
     // Some(path) = explicit output path
     let mut native_emit: Option<String> = None;
     let mut native_wasm: Option<String> = None;
+    let mut native_android: Option<String> = None;
     // Plan-07 phase 2: --errors=compact|pretty CLI flag (overrides
     // LOFT_ERRORS env var).  None = use env-or-default (Pretty).
     let mut error_mode_arg: Option<String> = None;
@@ -4200,6 +4205,17 @@ fn main() {
         } else if a == "--native-wasm" {
             // Optional path: consume next arg only if it looks like an output path
             native_wasm = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
+                let p = argv[i].clone();
+                i += 1;
+                p
+            } else {
+                String::new() // sentinel: compute default from file_name later
+            });
+        } else if a == "--native-android" {
+            // @PLN-android B1 — cross-compile to an Android cdylib `.so` via the
+            // NDK (aarch64-linux-android by default; ANDROID_NDK_HOME required).
+            // Optional path: consume next arg only if it looks like an output path.
+            native_android = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
                 let p = argv[i].clone();
                 i += 1;
                 p
@@ -5776,6 +5792,82 @@ fn main() {
     if check_only && !native_mode && native_emit.is_none() {
         println!("ok {abs_file}");
         return;
+    }
+
+    // Android cross-compile pipeline: --native-android (@PLN-android B1).
+    // Emits the SAME target-agnostic Rust as --native / --native-wasm and hands
+    // it to the Android descriptor (src/android.rs), which cross-builds loft's
+    // Android runtime rlib and links a bionic-AArch64 cdylib `.so`.
+    if let Some(ref android_out) = native_android {
+        let android_out = if android_out.is_empty() {
+            default_artifact_path(&abs_file, "so")
+                .to_str()
+                .unwrap_or("out.so")
+                .to_string()
+        } else {
+            android_out.clone()
+        };
+        let target = match android::AndroidTarget::detect() {
+            Ok(t) => t,
+            Err(msg) => {
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
+        };
+        let end_def = p.data.definitions();
+        // Per-process scratch so parallel --native-android runs never share the
+        // generated source (one rustc reading another's program).
+        let build_dir = platform::build_scratch_dir("android");
+        let rs_path = build_dir.join("prog.rs");
+        {
+            let mut f = match std::fs::File::create(&rs_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!(
+                        "loft: cannot write Android source to '{}': {e}",
+                        rs_path.display()
+                    );
+                    std::process::exit(1);
+                }
+            };
+            // @P379 — qualify native symbols for functions whose name collides
+            // across libraries (no-op without a collision).
+            p.data.namespace_colliding_native_fns();
+            let mut out = generation::Output::new(&p.data, &state.database);
+            // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
+            if lean {
+                out.emit_live = false;
+            }
+            let main_nr = p.data.def_nr("n_main");
+            let entry_defs: Vec<u32> = if main_nr < end_def {
+                vec![main_nr]
+            } else {
+                (start_def..end_def).collect()
+            };
+            if let Err(e) = out.output_native_reachable(&mut f, start_def, end_def, &entry_defs) {
+                eprintln!("loft: Android code generation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        let result = target.build(&rs_path, std::path::Path::new(&android_out));
+        if std::env::var("LOFT_KEEP_NATIVE_RS").is_err() {
+            let _ = std::fs::remove_file(&rs_path);
+        } else {
+            eprintln!(
+                "loft: Android source preserved at {} (LOFT_KEEP_NATIVE_RS)",
+                rs_path.display()
+            );
+        }
+        match result {
+            Ok(()) => {
+                eprintln!("loft: wrote Android cdylib {android_out}");
+                return;
+            }
+            Err(msg) => {
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
+        }
     }
 
     // WASM codegen pipeline: --native-wasm
