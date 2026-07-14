@@ -11,6 +11,38 @@ promotes only the `force_tret` defs' IR and patches only their call sites. This 
 *"that half awaits the forward-ref pre-pass"*). Read `option-b-scope.md` first for the
 history and the reliable-measurement notes (`LOFT_NO_CACHE`, the runtime text trace).
 
+## Implementation status (built + verified, opt-in behind `LOFT_TRET_V2`)
+
+Both phases land in `parser/control.rs`; wired in `parser/mod.rs` as
+`if force_tret && LOFT_TRET_V2 → targeted_tret_promotion() else third pass`. Gated OFF by
+default (`force_tret` is empty without `LOFT_TRET_FIX`).
+
+- **Phase A — `promote_text_return_def(d_nr)`**: swaps `self.vars`↔the def, mints `__tret`,
+  rewrites early returns, rebinds the tail, `text_return(&[tv])`, then the a==v renumber via
+  the extracted `av_renumber_retbuf`. Works: `run_t` promoted, `AppendStackText`, correct
+  output.
+- **Phase B — `patch_tret_callers` / `patch_tret_call`**: for each caller of a promoted def,
+  re-run `add_defaults` on the `Call` to push the retbuf arg.
+- **Phase B liveness fix (the one real bug):** `add_defaults` mints the caller-side retbuf
+  work-text but does NOT declare it at the caller's top level, so `scopes::check` scoped it
+  to the arg block and freed it THERE — before the callee fills it — orphaning the delivered
+  text (the loft#568 leak this pass exists to fix). Diagnosed by capture-and-diff: the
+  proven third-pass `main` hoists `__work_1:text=""` to the top and frees at scope exit; V2
+  froze it inside the arg block. The re-parse gets this hoist from `expression_value`
+  (`parser/expressions.rs:480` — `for wt in work_texts { ls.insert(0, Set(wt,"")) }`); V2
+  replays it post-parse for ONLY the newly-minted work-texts (before/after `work_texts` diff)
+  → `OpFreeText` lands at the caller's scope exit.
+
+**Verified** (`LOFT_NO_CACHE=1 LOFT_TRET_FIX=1 LOFT_TRET_V2=1`, commit `48163304`):
+min.loft V2 introspect BYTE-IDENTICAL to the proven third-pass sibling (IR + bytecode +
+native Rust → both backends), NO text leak; combined (promoted fn + vector defs + an
+already-buffered fn) and card (two #568-class calls, results simultaneously live) correct +
+leak-free on interp AND native; V2 touches only the promoted def + its caller (unrelated
+defs untouched → the collateral class is gone by construction). Unit tests 738/0.
+
+**Next:** run the former default-on failures under V2 (§Verification 4), then make V2 the
+default and drop the gate (§Verification 5) — see the checklist below.
+
 ## Why the third pass must go — one root, many symptoms
 
 `data.reset()` clears only `use_names`, so the third pass re-parses the ENTIRE file and
