@@ -132,6 +132,19 @@ This is why the silent-wrong findings from the lib and formal audits (`text as i
 integer overflow → null, a classifier true on `""`) are really **missing-error** findings: the
 fix is usually *to add a diagnostic or a fault*, and adding it is the one-way door.
 
+**But the *first* resolution of a would-be-error is a rewrite to correct function, not an
+error.** Because contract 1 lets loft only ever *drop* errors, a situation that would "normally"
+(in another language) fault is handled — wherever it sensibly can be — by **defining a
+correct-functioning semantic**: the C80 spreadsheet model, where a divide-by-zero or an
+out-of-range read yields the reserved null and the program keeps running instead of halting.
+Erroring is the *narrower* choice, reserved for what cannot be given a sane defined behavior (and,
+being a compile-time add, is the safe one-way door above). **This is why the pre-freeze checking
+is so intensive right now:** every would-be-error situation must be decided *now* — rewritten to
+function correctly, or (last chance) turned into an error — so that once frozen the contract holds
+and nothing a program does falls into an undefined-or-newly-erroring gap. *(Owner decision
+2026-07-14: "if we encounter more situations that would normally be errors we do rewrites so it
+functions correctly as a contract — that is why we do so much checking right now.")*
+
 ## Deprecation is soft steering, never warn-then-remove
 
 A deprecation under this promise **steers** toward a better idiom; it never announces a
