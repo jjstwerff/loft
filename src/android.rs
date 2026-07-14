@@ -104,16 +104,18 @@ impl AndroidTarget {
     }
 
     /// Wrap the emitted program `rs_path` in a `NativeActivity` cdylib and build
-    /// it into `out_so` — the whole `--native-android` pipeline. `main.rs` only
-    /// emits the program `.rs` and calls this.
+    /// it into `out_path` — the whole `--native-android` pipeline. `main.rs` only
+    /// emits the program `.rs` and calls this. The output type is the extension:
+    /// `.apk` → a signed, installable APK (needs the Android SDK + a JDK); anything
+    /// else → the bare `.so` (needs only the NDK).
     ///
     /// Generates a tiny cargo crate under `<tree>/target/loft/android-app/` whose
     /// crate root IS the emitted program (its `fn main` intact) plus the fixed
     /// [`ANDROID_MAIN_TAIL`] entry, with `android-activity` + a lean `loft` path
-    /// dep, then `cargo build --release --target <triple>` and copies the cdylib
-    /// out. Cargo (not hand-rolled rustc) owns the `android-activity` dep tree and
-    /// the cross-build of loft, so there is no transitive-rlib bookkeeping here.
-    pub(crate) fn build(&self, rs_path: &Path, out_so: &Path) -> Result<(), String> {
+    /// dep, then `cargo build --release --target <triple>`. Cargo (not hand-rolled
+    /// rustc) owns the `android-activity` dep tree and the cross-build of loft, so
+    /// there is no transitive-rlib bookkeeping here.
+    pub(crate) fn build(&self, rs_path: &Path, out_path: &Path) -> Result<(), String> {
         let tree = crate::native_utils::loft_source_tree().ok_or_else(|| {
             "loft: --native-android needs loft's source tree to cross-build its Android \
              runtime; run it from a loft checkout (a downloaded release ships no Android \
@@ -182,14 +184,363 @@ impl AndroidTarget {
             .join(&self.triple)
             .join("release")
             .join("libloft_android_app.so");
-        std::fs::copy(&built, out_so).map(|_| ()).map_err(|e| {
+
+        if out_path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("apk"))
+        {
+            let sdk = AndroidSdk::detect()?;
+            self.package_apk(&sdk, &built, &crate_dir, out_path)
+        } else {
+            std::fs::copy(&built, out_path).map(|_| ()).map_err(|e| {
+                format!(
+                    "loft: copy {} -> {}: {e}",
+                    built.display(),
+                    out_path.display()
+                )
+            })
+        }
+    }
+
+    /// The Android ABI directory name for this triple (`lib/<abi>/` in the APK).
+    fn abi(&self) -> &'static str {
+        if self.triple.starts_with("aarch64") {
+            "arm64-v8a"
+        } else if self.triple.starts_with("armv7") || self.triple.starts_with("thumbv7") {
+            "armeabi-v7a"
+        } else if self.triple.starts_with("x86_64") {
+            "x86_64"
+        } else if self.triple.starts_with("i686") || self.triple.starts_with("x86") {
+            "x86"
+        } else {
+            "arm64-v8a"
+        }
+    }
+
+    /// Package the built `so_path` into a signed, installable APK at `out_apk`,
+    /// using the discovered `sdk`. Mirrors the proven `b2-spike/build_apk.sh`
+    /// recipe: `aapt2 link` the generated manifest against `android.jar`, add the
+    /// `.so` under `lib/<abi>/`, `zipalign`, then `apksigner` with a per-tree debug
+    /// keystore (generated once). The `.so` is compressed with
+    /// `android:extractNativeLibs="true"`, so it is unpacked at install and needs
+    /// no page alignment.
+    fn package_apk(
+        &self,
+        sdk: &AndroidSdk,
+        so_path: &Path,
+        crate_dir: &Path,
+        out_apk: &Path,
+    ) -> Result<(), String> {
+        const LIB_NAME: &str = "loft_android_app";
+        let app = app_ident(out_apk);
+        let work = crate_dir.join("apk-build");
+        let lib_dir = work.join("staging").join("lib").join(self.abi());
+        let _ = std::fs::remove_dir_all(&work);
+        std::fs::create_dir_all(&lib_dir)
+            .map_err(|e| format!("loft: create {}: {e}", lib_dir.display()))?;
+        std::fs::copy(so_path, lib_dir.join(format!("lib{LIB_NAME}.so")))
+            .map_err(|e| format!("loft: stage .so: {e}"))?;
+        let manifest = work.join("AndroidManifest.xml");
+        std::fs::write(&manifest, android_manifest(&app, LIB_NAME))
+            .map_err(|e| format!("loft: write manifest: {e}"))?;
+
+        let base = work.join("base.apk");
+        run_tool(
+            std::process::Command::new(sdk.aapt2())
+                .arg("link")
+                .arg("-o")
+                .arg(&base)
+                .arg("-I")
+                .arg(&sdk.android_jar)
+                .arg("--manifest")
+                .arg(&manifest)
+                .arg("--min-sdk-version")
+                .arg(self.api.to_string())
+                .arg("--target-sdk-version")
+                .arg(sdk.platform_api.to_string())
+                .arg("--version-code")
+                .arg("1")
+                .arg("--version-name")
+                .arg("1.0"),
+            "aapt2 link",
+        )?;
+
+        // Add lib/<abi>/lib*.so to the APK zip via the JDK `jar` (no separate `zip`
+        // dependency; `-M` keeps jar from injecting a MANIFEST.MF that would collide
+        // with apksigner's signing block).
+        run_tool(
+            std::process::Command::new(sdk.jar())
+                .current_dir(work.join("staging"))
+                .arg("--update")
+                .arg("--no-manifest")
+                .arg("--file")
+                .arg(&base)
+                .arg(format!("lib/{}/lib{LIB_NAME}.so", self.abi())),
+            "jar (add native lib)",
+        )?;
+
+        let aligned = work.join("aligned.apk");
+        run_tool(
+            std::process::Command::new(sdk.zipalign())
+                .arg("-f")
+                .arg("-p")
+                .arg("4")
+                .arg(&base)
+                .arg(&aligned),
+            "zipalign",
+        )?;
+
+        let keystore = ensure_debug_keystore(sdk, crate_dir)?;
+        run_tool(
+            std::process::Command::new(sdk.apksigner())
+                .arg("sign")
+                .arg("--ks")
+                .arg(&keystore)
+                .arg("--ks-pass")
+                .arg("pass:android")
+                .arg("--key-pass")
+                .arg("pass:android")
+                .arg("--min-sdk-version")
+                .arg(self.api.to_string())
+                .arg("--out")
+                .arg(out_apk)
+                .arg(&aligned),
+            "apksigner sign",
+        )
+    }
+}
+
+/// A reusable debug keystore under the generated crate dir, created once with the
+/// JDK `keytool` (password `android`, the Android debug-key convention).
+fn ensure_debug_keystore(sdk: &AndroidSdk, crate_dir: &Path) -> Result<PathBuf, String> {
+    let keystore = crate_dir.join("loft-debug.keystore");
+    if keystore.exists() {
+        return Ok(keystore);
+    }
+    run_tool(
+        std::process::Command::new(sdk.keytool())
+            .arg("-genkeypair")
+            .arg("-keystore")
+            .arg(&keystore)
+            .arg("-alias")
+            .arg("androiddebugkey")
+            .arg("-storepass")
+            .arg("android")
+            .arg("-keypass")
+            .arg("android")
+            .arg("-keyalg")
+            .arg("RSA")
+            .arg("-keysize")
+            .arg("2048")
+            .arg("-validity")
+            .arg("10000")
+            .arg("-dname")
+            .arg("CN=Loft Debug,O=Loft,C=US"),
+        "keytool (debug keystore)",
+    )?;
+    Ok(keystore)
+}
+
+/// Discovered Android SDK + JDK tools needed to package a `.so` into a signed APK.
+/// Found from `ANDROID_HOME` / `ANDROID_SDK_ROOT` (SDK) and `JAVA_HOME` / `PATH` (JDK).
+struct AndroidSdk {
+    /// `<sdk>/build-tools/<highest-version>/` — holds `aapt2`, `zipalign`, `apksigner`.
+    build_tools: PathBuf,
+    /// `<sdk>/platforms/android-<N>/android.jar` — the compile target for `aapt2 link`.
+    android_jar: PathBuf,
+    /// The `<N>` of the chosen platform — the `--target-sdk-version`.
+    platform_api: u32,
+    /// JDK root (`bin/jar`, `bin/keytool`); `apksigner` also needs it on `PATH`.
+    java_home: PathBuf,
+}
+
+impl AndroidSdk {
+    /// Resolve the SDK + JDK, or return a message naming exactly what to install/set.
+    fn detect() -> Result<Self, String> {
+        let root = std::env::var_os("ANDROID_HOME")
+            .or_else(|| std::env::var_os("ANDROID_SDK_ROOT"))
+            .map(PathBuf::from)
+            .ok_or_else(|| {
+                "loft: building an .apk needs the Android SDK — set ANDROID_HOME (or \
+                 ANDROID_SDK_ROOT), or emit a `.so` output for just the library."
+                    .to_string()
+            })?;
+        let build_tools = highest_versioned_subdir(&root.join("build-tools")).ok_or_else(|| {
             format!(
-                "loft: copy {} -> {}: {e}",
-                built.display(),
-                out_so.display()
+                "loft: no usable build-tools under {} (install e.g. `build-tools;34.0.0`).",
+                root.display()
             )
+        })?;
+        let (android_jar, platform_api) =
+            highest_platform(&root.join("platforms")).ok_or_else(|| {
+                format!(
+                    "loft: no platform android.jar under {} (install e.g. `platforms;android-34`).",
+                    root.display()
+                )
+            })?;
+        let java_home = detect_java_home().ok_or_else(|| {
+            "loft: building an .apk needs a JDK (apksigner + keytool) — set JAVA_HOME or \
+             put `keytool` on PATH."
+                .to_string()
+        })?;
+        Ok(Self {
+            build_tools,
+            android_jar,
+            platform_api,
+            java_home,
         })
     }
+
+    fn aapt2(&self) -> PathBuf {
+        self.build_tools.join(exe("aapt2"))
+    }
+    fn zipalign(&self) -> PathBuf {
+        self.build_tools.join(exe("zipalign"))
+    }
+    fn apksigner(&self) -> PathBuf {
+        // apksigner is a launcher script: `.bat` on Windows, extension-less elsewhere.
+        self.build_tools.join(if cfg!(windows) {
+            "apksigner.bat"
+        } else {
+            "apksigner"
+        })
+    }
+    fn jar(&self) -> PathBuf {
+        self.java_home.join("bin").join(exe("jar"))
+    }
+    fn keytool(&self) -> PathBuf {
+        self.java_home.join("bin").join(exe("keytool"))
+    }
+}
+
+/// Run an SDK/JDK tool, mapping a non-zero exit to a message with the stderr tail.
+fn run_tool(cmd: &mut std::process::Command, name: &str) -> Result<(), String> {
+    let out = cmd
+        .output()
+        .map_err(|e| format!("loft: cannot run {name}: {e}"))?;
+    if out.status.success() {
+        return Ok(());
+    }
+    let err = String::from_utf8_lossy(&out.stderr);
+    let tail: Vec<&str> = err.lines().rev().take(15).collect();
+    let tail: String = tail.into_iter().rev().collect::<Vec<_>>().join("\n");
+    Err(format!("loft: {name} failed:\n{tail}"))
+}
+
+/// `<name>.exe` on Windows, `<name>` elsewhere.
+fn exe(name: &str) -> String {
+    if cfg!(windows) {
+        format!("{name}.exe")
+    } else {
+        name.to_string()
+    }
+}
+
+/// A valid Android package/label segment derived from the APK's file stem
+/// (`com.loft.<ident>`): lowercase ASCII alnum, must start with a letter.
+fn app_ident(out_apk: &Path) -> String {
+    let stem = out_apk
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("app");
+    let s: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() {
+                c.to_ascii_lowercase()
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    let s = s.trim_matches('_').to_string();
+    let s = if s.is_empty() { "app".to_string() } else { s };
+    if s.chars().next().is_some_and(|c| c.is_ascii_alphabetic()) {
+        s
+    } else {
+        format!("a{s}")
+    }
+}
+
+/// The generated `AndroidManifest.xml` for a code-less `NativeActivity` APK
+/// (`hasCode="false"`, no dex). `min`/`target` sdk come from `aapt2` flags, so no
+/// `<uses-sdk>` here (aapt2 rejects the duplicate).
+fn android_manifest(app: &str, lib_name: &str) -> String {
+    format!(
+        r#"<?xml version="1.0" encoding="utf-8"?>
+<manifest xmlns:android="http://schemas.android.com/apk/res/android" package="com.loft.{app}">
+    <application android:label="{app}" android:hasCode="false" android:extractNativeLibs="true">
+        <activity android:name="android.app.NativeActivity" android:exported="true" android:label="{app}">
+            <meta-data android:name="android.app.lib_name" android:value="{lib_name}"/>
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+    </application>
+</manifest>
+"#
+    )
+}
+
+/// The JDK root: `JAVA_HOME` if it holds `bin/keytool`, else derived from a `keytool`
+/// on `PATH` (its grandparent).
+fn detect_java_home() -> Option<PathBuf> {
+    if let Some(jh) = std::env::var_os("JAVA_HOME").map(PathBuf::from) {
+        if jh.join("bin").join(exe("keytool")).is_file() {
+            return Some(jh);
+        }
+    }
+    let kt = find_on_path(&exe("keytool"))?;
+    kt.parent()?.parent().map(Path::to_path_buf)
+}
+
+/// The first `PATH` directory containing an executable `name`.
+fn find_on_path(name: &str) -> Option<PathBuf> {
+    let path = std::env::var_os("PATH")?;
+    std::env::split_paths(&path)
+        .map(|d| d.join(name))
+        .find(|p| p.is_file())
+}
+
+/// The numeric sort key of a dotted version like `34.0.0` → `[34, 0, 0]`.
+fn version_key(name: &str) -> Vec<u32> {
+    name.split('.').filter_map(|p| p.parse().ok()).collect()
+}
+
+/// The highest-versioned `build-tools/<v>/` subdir that actually contains `aapt2`.
+fn highest_versioned_subdir(dir: &Path) -> Option<PathBuf> {
+    let mut best: Option<(Vec<u32>, PathBuf)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let p = entry.path();
+        let key = version_key(&entry.file_name().to_string_lossy());
+        if key.is_empty() || !p.join(exe("aapt2")).exists() {
+            continue;
+        }
+        if best.as_ref().is_none_or(|(bk, _)| &key > bk) {
+            best = Some((key, p));
+        }
+    }
+    best.map(|(_, p)| p)
+}
+
+/// The highest `platforms/android-<N>/android.jar` and its `<N>`.
+fn highest_platform(dir: &Path) -> Option<(PathBuf, u32)> {
+    let mut best: Option<(u32, PathBuf)> = None;
+    for entry in std::fs::read_dir(dir).ok()?.flatten() {
+        let name = entry.file_name().to_string_lossy().to_string();
+        let Some(n) = name
+            .strip_prefix("android-")
+            .and_then(|s| s.parse::<u32>().ok())
+        else {
+            continue;
+        };
+        let jar = entry.path().join("android.jar");
+        if jar.exists() && best.as_ref().is_none_or(|(bn, _)| n > *bn) {
+            best = Some((n, jar));
+        }
+    }
+    best.map(|(n, jar)| (jar, n))
 }
 
 /// The generated crate's `Cargo.toml`: a `cdylib` NativeActivity app depending on
@@ -270,6 +621,9 @@ fn __loft_android_redirect_stdio_to_logcat() {
     });
 }
 
+// `AndroidApp` is not `#[repr(C)]`, but `android-activity`'s glue is what calls this
+// `android_main` (across a Rust ABI it controls), so the C-FFI-safety lint is moot.
+#[allow(improper_ctypes_definitions)]
 #[unsafe(no_mangle)]
 extern "C" fn android_main(app: android_activity::AndroidApp) {
     use android_activity::{MainEvent, PollEvent};

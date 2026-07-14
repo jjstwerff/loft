@@ -26,8 +26,13 @@ done
 [ "$BOOT" = "1" ] || { echo "BOOT FAILED"; tail -20 /tmp/loft_emu.log; adb emu kill; exit 1; }
 
 adb install -r "$APK" | tail -1
+# Derive the launchable component from the APK (loft names the package after the
+# .apk stem, e.g. com.loft.<name>), so this works with any loft-built APK.
+BT="$SDK/build-tools/$(ls "$SDK/build-tools" | sort -V | tail -1)"
+PKG=$("$BT/aapt2" dump badging "$APK" 2>/dev/null | sed -n "s/^package: name='\([^']*\)'.*/\1/p")
+ACT=$("$BT/aapt2" dump badging "$APK" 2>/dev/null | sed -n "s/^launchable-activity: name='\([^']*\)'.*/\1/p")
 adb logcat -c
-adb shell am start -n com.example.loftspike/android.app.NativeActivity | tail -1
+adb shell am start -n "$PKG/$ACT" | tail -1
 sleep 8
 echo "=== LOGCAT (loft markers) ==="
 adb logcat -d 2>/dev/null | grep -iE "loft|android_main|sum of squares|FATAL|AndroidRuntime" | tail -40

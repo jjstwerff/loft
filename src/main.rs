@@ -124,8 +124,8 @@ fn print_help() {
     println!("                                (default: .loft/<script>.rs beside the script)");
     println!("  --native-wasm [out.wasm]      compile to WebAssembly (wasm32-wasip2)");
     println!(
-        "  --native-android [out.so]     cross-compile to an Android NativeActivity .so \
-         (android_main entry; needs ANDROID_NDK_HOME)"
+        "  --native-android [out.apk]    cross-compile to a signed Android APK (needs \
+         ANDROID_NDK_HOME + ANDROID_HOME); a *.so output builds just the library"
     );
     println!("                                (default: .loft/<script>.wasm beside the script)");
     println!("                                for headless/WASI (wasmtime); NOT the browser build");
@@ -5801,10 +5801,12 @@ fn main() {
     // NativeActivity crate (an `android_main` entry) and cross-builds a bionic
     // cdylib `.so` with cargo + the NDK toolchain.
     if let Some(ref android_out) = native_android {
+        // Default artifact is a runnable, signed `.apk`; pass an explicit `*.so`
+        // output to get just the NativeActivity library (needs only the NDK).
         let android_out = if android_out.is_empty() {
-            default_artifact_path(&abs_file, "so")
+            default_artifact_path(&abs_file, "apk")
                 .to_str()
-                .unwrap_or("out.so")
+                .unwrap_or("out.apk")
                 .to_string()
         } else {
             android_out.clone()
@@ -5871,7 +5873,15 @@ fn main() {
         }
         match result {
             Ok(()) => {
-                eprintln!("loft: wrote Android cdylib {android_out}");
+                let kind = if std::path::Path::new(&android_out)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("apk"))
+                {
+                    "APK"
+                } else {
+                    "NativeActivity .so"
+                };
+                eprintln!("loft: wrote Android {kind} {android_out}");
                 return;
             }
             Err(msg) => {

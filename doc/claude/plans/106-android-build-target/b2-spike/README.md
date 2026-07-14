@@ -9,12 +9,12 @@ This throwaway spike proved the @PLN106 **B2 (R) gate end to end**: a loft progr
 wrapped in an Android `NativeActivity`, installs + launches on a headless emulator and
 runs — `android_main` reached, and the loft program computed the right answer on-device.
 
-> **UPDATE (2026-07-14): the wrapper is now emitted by loft itself.** `loft
-> --native-android` generates the `android_main` `NativeActivity` entry (see
-> `src/android.rs` `ANDROID_MAIN_TAIL`), so `Cargo.toml` / `src/lib.rs` / `cargo-config.toml`
-> here are **historical** — you no longer hand-write them. What is still live: **`build_apk.sh`
-> + `run_emulator_test.sh`** are the packaging + emulator recipe (loft emits the `.so`;
-> wrapping it into a signed APK and launching it is still manual). Point `SO=` at loft's
+> **UPDATE (2026-07-14): loft now does the wrapper AND the packaging.** `loft
+> --native-android app.apk` emits the `android_main` `NativeActivity` (see `src/android.rs`
+> `ANDROID_MAIN_TAIL`) AND builds a signed APK itself (`aapt2`/`jar`/`zipalign`/`apksigner`).
+> So `Cargo.toml` / `src/lib.rs` / `cargo-config.toml` / `build_apk.sh` here are **historical**
+> — loft generates/does all of it. What is still live: **`run_emulator_test.sh`** (now
+> package-auto-detecting) is the install/launch/logcat harness — point `APK=` at loft's
 > `--native-android` output.
 
 **It was a spike, not the feature.** It hand-wrapped the loft-emitted `.rs` to de-risk the
