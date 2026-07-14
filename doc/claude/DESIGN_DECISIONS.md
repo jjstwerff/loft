@@ -2182,3 +2182,34 @@ Evaluation count of the place is observable semantics, so it freezes at contract
 - Owner ruling 2026-07-14 ("evaluate the place once").
 - **Rejected:** freezing double-evaluation — the divergent-index corruption makes it a silent-wrong, not a defensible edge.
 - Fix scope + plan: [compound-assign-place-once.md](plans/102-stability-contract/compound-assign-place-once.md).
+
+## C93 — A `par` worker's captured parent state is read-only; a write to it is a compile error
+
+**Catalogue:** @F2 (operators) / threading. Instances the platform rule *no runtime errors, ever* (DESIGN_DECISIONS [C80](#c80--)): we do not fault at runtime — we either DISALLOW what cannot work (a compile error) or make it work in a lesser state (null). A `par` data race cannot be made to "work" as null, so it is DISALLOWED. Sibling of the sandbox host-data read-only model.
+
+### Question
+
+A `par` worker whose body writes state captured from the enclosing scope is a data race — N threads mutating one store with no synchronisation:
+
+```loft
+struct Shared { n: integer }
+fn bump(s: Shared, x: integer) -> integer { s.n = s.n + x; x * 2 }   // writes shared s.n
+s = Shared { n: 0 };
+for x in [1,2,3,4,5,6,7,8] par(r = bump(s, x), 8) { total += r; }     // 8 threads write s.n
+```
+
+Today this does not race cleanly and it is not cleanly rejected: it falls through to a **codegen slot-panic** (`Incorrect var x[65535]`, `codegen.rs:3235`) — a runtime crash, the one thing the platform never does. The purity machinery exists (`Purity`, `ImpureCategory::ParentWrite`, `is_par_safe`, the phase-5b deep check) and even treats an un-annotated fn conservatively as `ParentWrite`, yet a user worker writing an *aliased reference/vector parameter* slips past it into the crash. How should an impure `par` worker be handled at contract 1?
+
+### Evaluation
+
+A data race is the single fault loft cannot resolve to a defined value: unlike an out-of-range read (→ null, C80) or an overflow (→ sentinel, C85), a race yields nondeterministic corruption that no null can stand in for. So the *"make it work in a lesser state"* half of the platform rule does not apply — the only faithful option is *"do not allow it,"* a compile error. And the signal is already present: the compiler knows which workers write captured state (`ParentWrite`). The cleanest expression is **data-centric, not analysis-centric**: the state a `par` worker captures from its parent is **read-only inside the worker, from the start** — the same principle by which host data and parameters are read-only unless explicitly update-linked (the sandbox model), applied to a second place. Then a write to it is a plain compile error *at the write* — `s.n = …` reports "cannot write `s` inside a `par` worker; it is read-only here" — and the race becomes **unexpressible**, not merely detected. The worker stays free to *read* captured state, read the element, compute, and *return* a value (folded sequentially); only writes to captured parent state are forbidden. This must land pre-freeze: it is an error-ADD, and the error surface can only shrink after contract 1 ([COMPATIBILITY.md](COMPATIBILITY.md) § the error surface).
+
+### Decision
+
+- **The parent state a `par` worker captures is read-only inside the worker.** A write to it — directly (`s.n = v`, `cap[i] = v`) or through a call that writes it (an aliased reference/vector argument bound to a writing parameter) — is a **compile error reported at the write site**, from the start. Part of the contract-1 freeze.
+- **No runtime error, no runtime crash.** The current `codegen.rs:3235` slot-panic on an impure worker is a bug this closes: the rejection lands at parse/type time, before codegen.
+- **The worker may READ captured state, the element, and locals, and RETURN a value.** Its own locals and the loop element stay mutable; only captured *parent* state is frozen read-only. Host I/O / PRNG (`HostIo`/`Prng`/`Io`) stay allowed — the host serialises them — matching the existing `ImpureCategory` split.
+- **`par` is deliberately STRICT — the false-positive friction is accepted (owner, 2026-07-14).** `par` is a complex construct in itself, so strictness is the right default: a worker the purity analysis flags as capturing-and-writing is rejected even when the write might have been benign (disjoint slots), rather than widening `par` to admit "sometimes-safe" mutation. The programmer restructures to a pure fold (return the value; accumulate sequentially) — which is what `par` is for.
+- **More capability, if ever needed, is a NEW inherently-safe construct — never a looser `par` (owner).** Broader shared-mutation parallelism would arrive as a *separate, inherently-safe* construct added additively (the compatibility ratchet — the reliable surface only grows), not by relaxing `par`'s read-only rule (which post-freeze is impossible anyway: loosening an error is fine, but re-tightening later is not, so `par` must be strict *now*). **Not currently envisioned** — the existing `par` already covers the need; this records the direction, not a planned construct.
+- **Rejected:** leaving the race as undefined behavior (the one hole in a memory-safe, no-runtime-error platform), and "defining" it by silently serialising or copying (surprising, and it hides the programmer's mistake rather than surfacing it).
+- Owner ruling 2026-07-14. Fix scope: [par-capture-readonly.md](plans/102-stability-contract/par-capture-readonly.md).
