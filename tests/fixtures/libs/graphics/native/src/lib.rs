@@ -549,8 +549,11 @@ pub extern "C" fn loft_gl_draw(vao: i64, n_vertices: i64) {
 /// Upload a vector<single> as a vertex buffer. Returns VAO handle.
 /// stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).
 /// Interpreter path: receives LoftStore + LoftRef for the data vector.
+/// @PLN106 B3 — on Android this store-aware version owns the `loft_gl_upload_vertices`
+/// C-ABI symbol (see `n_gl_set_mat4`).
 #[loft_native]
-#[unsafe(no_mangle)]
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
+#[cfg_attr(target_os = "android", unsafe(export_name = "loft_gl_upload_vertices"))]
 pub unsafe extern "C" fn n_gl_upload_vertices(
     store: loft_ffi::LoftStore,
     data: loft_ffi::LoftRef,
@@ -568,8 +571,17 @@ pub unsafe extern "C" fn n_gl_upload_vertices(
 
 /// Set a mat4 uniform from a vector<float> (16 elements, column-major).
 /// Interpreter path: receives LoftStore + LoftRef for the mat vector.
+// @PLN106 B3 — on Android the graphics package is linked as a unified rlib and the
+// generated C-ABI native calls (`native_cabi=true`) pass `LoftStore` + `LoftRef` and
+// link the symbol `loft_gl_set_mat4`. That symbol must therefore be this store-aware
+// version, not the raw `loft_gl_set_mat4(*const f64, u32)` (which the registry-based
+// interpreter path never links). So on Android export THIS under the C-ABI name and
+// cfg the raw one out. (The host currently links the raw symbol — a pre-existing
+// mismatch that only surfaces when graphics runs via `--native`, not the interpreter
+// or browser.)
 #[loft_native]
-#[unsafe(no_mangle)]
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
+#[cfg_attr(target_os = "android", unsafe(export_name = "loft_gl_set_mat4"))]
 pub unsafe extern "C" fn n_gl_set_mat4(
     store: loft_ffi::LoftStore,
     program: i64,
@@ -607,6 +619,8 @@ pub unsafe extern "C" fn n_gl_set_mat4(
 
 /// Upload a vertex buffer from a raw f32 pointer.  Returns VAO handle.
 /// data_ptr/count: elements in the vector<single>; stride: floats per vertex.
+/// (Not on Android — `n_gl_upload_vertices` owns the C-ABI symbol there.)
+#[cfg(not(target_os = "android"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn loft_gl_upload_vertices(
     data_ptr: *const f32,
@@ -627,6 +641,8 @@ pub unsafe extern "C" fn loft_gl_upload_vertices(
 
 /// Set a mat4 uniform from a raw f64 pointer (vector<float> element type).
 /// Converts the 16 f64 values to f32 before passing to OpenGL.
+/// (Not on Android — `n_gl_set_mat4` owns the `loft_gl_set_mat4` C-ABI symbol there.)
+#[cfg(not(target_os = "android"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn loft_gl_set_mat4(
     program: i64,
@@ -1350,7 +1366,10 @@ pub extern "C" fn loft_gl_load_texture(path_ptr: *const u8, path_len: usize) -> 
 /// mapping user-supplied top-left screen coords to GL clip-space, so
 /// sprite and texture shaders can sample with identity V (no per-shader
 /// flip).
-#[unsafe(no_mangle)]
+/// @PLN106 B3 — on Android the store-aware `n_gl_upload_canvas` owns the
+/// `loft_gl_upload_canvas` C-ABI symbol and calls this by Rust name, so drop the
+/// `#[no_mangle]` here (keep the fn — it does the actual texture upload).
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
 pub extern "C" fn loft_gl_upload_canvas(
     data_ptr: *const i64,
     data_count: u32,
@@ -1378,8 +1397,12 @@ pub extern "C" fn loft_gl_upload_canvas(
 // Interpreter wrapper — extracts vector data via LoftStore + LoftRef.
 // Cannot use vec_wrapper! because the auto-marshaller's store snapshot
 // may be stale for canvas data (issue #120 store lifecycle).
+// @PLN106 B3 — on Android this owns the `loft_gl_upload_canvas` C-ABI symbol (see
+// `n_gl_set_mat4`); it reads the canvas vector from the store, so the C-ABI call's
+// `data_count` no longer arrives as 0.
 #[loft_native]
-#[unsafe(no_mangle)]
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
+#[cfg_attr(target_os = "android", unsafe(export_name = "loft_gl_upload_canvas"))]
 pub unsafe extern "C" fn n_gl_upload_canvas(
     store: loft_ffi::LoftStore,
     data: loft_ffi::LoftRef,
@@ -1393,6 +1416,24 @@ pub unsafe extern "C" fn n_gl_upload_canvas(
 }
 loft_ffi::vec_wrapper!(n_save_png, loft_save_png(path_ptr: *const u8, path_len: usize, width: i64, height: i64, data: vec<i64>) -> bool);
 loft_ffi::vec_wrapper!(n_rasterize_text_into, loft_rasterize_text_into(font_idx: i64, text_ptr: *const u8, text_len: usize, size: f64, buf: vec<i64>) -> i64);
+
+// @PLN106 B3 — export the store-aware `vec_wrapper!` output under the `loft_*` C-ABI
+// symbol on Android (the macro can't set `export_name` itself), so the generated
+// `native_cabi` decls (LoftStore + LoftRef) resolve to the store-aware version
+// rather than the raw ptr+count one. Same fix as `n_gl_set_mat4` for the two
+// `vec_wrapper!` functions a graphics program can reach.
+#[cfg(target_os = "android")]
+#[unsafe(export_name = "loft_rasterize_text_into")]
+pub unsafe extern "C" fn __loft_android_rasterize_text_into(
+    store: loft_ffi::LoftStore,
+    font: i64,
+    content_ptr: *const u8,
+    content_len: usize,
+    size: f64,
+    buf: loft_ffi::LoftRef,
+) -> i64 {
+    unsafe { n_rasterize_text_into(store, font, content_ptr, content_len, size, buf) }
+}
 
 /// Return the line height in pixels for a font at the given size — fontdue's
 /// real `new_line_size` (@P340/#252), falling back to `size * 1.2` for a font
@@ -1423,7 +1464,10 @@ pub extern "C" fn loft_gl_font_ascent(font_idx: i64, size: f64) -> f64 {
 /// pixel `k+1` from row index `k+1` showed `alpha[2k+2]` — text
 /// rasterised with every-other-pixel zero, the checker overlay
 /// visible on Brick Buster's title.
-#[unsafe(no_mangle)]
+/// @PLN106 B3 — on Android the store-aware `n_rasterize_text_into` (vec_wrapper!)
+/// owns the `loft_rasterize_text_into` C-ABI symbol (via the export wrapper below)
+/// and calls this by Rust name, so drop the `#[no_mangle]` here.
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
 pub extern "C" fn loft_rasterize_text_into(
     font_idx: i64,
     text_ptr: *const u8,
