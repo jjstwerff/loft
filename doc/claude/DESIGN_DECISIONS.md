@@ -2327,3 +2327,30 @@ Only (b) is compatible with an absolute-compat stdlib that still grows. The stdl
 - **Migration (pre-freeze, to be specified):** library public symbols stop registering as global `n_<name>`; a bare unqualified name resolves to the stdlib (or requires an explicit `use`); a program's own top-level definitions are unaffected. The WHAT is decided here; the HOW (exact resolution + `use` surface) is a scoped follow-up, because it changes name resolution for existing programs.
 - **Rejected:** global-namespace library symbols (makes stdlib growth a permanent compat hazard — proven by `shapes`/`time`; incompatible with the freeze); per-collision coordinated republish (does not scale, and absolute-compat forbids it post-freeze).
 - Owner-directed 2026-07-15 (the direction reached across the shapes/time ship work). Trigger: C94 `floor_mod` broke shipped `shapes`/`time` via C95. Companion: [library-ship-validation.md](plans/102-stability-contract/library-ship-validation.md).
+
+## C98 — `use lib;` binds only the `lib` namespace; unqualified access is an EXPLICIT `use lib::*` / `use lib::(…)`, where the imported name wins
+
+**Catalogue:** @F2 (operators) / modules + naming. The name-resolution HOW that [C97](#c97--) deferred — the rule that makes "the stdlib can grow without breaking a program" actually hold.
+
+### Question
+
+C97 makes a library's public symbols module-scoped. But loft also has wildcard import. If a bare `use lib;` (or a wildcard) brought a library's names into the **unqualified** namespace, a later stdlib addition of the same name re-creates the C95 collision one level up — and *any* resolution of it (imported wins / stdlib wins / ambiguity error) either re-opens the silent-shadow class or **breaks an existing program when the stdlib grows** (violating absolute compat). How does unqualified access to a library's symbols work?
+
+### Evaluation
+
+Split the surface by **explicitness**:
+
+- **`use lib;` binds exactly one name — `lib`**, the namespace handle; every function/type is reached as `lib::name`. It brings *nothing* unqualified, so a program that only `use lib;`s is **immune to stdlib growth** (it always qualifies) — the common case can never collide.
+- **`use lib::*;` (wildcard) and `use lib::(a, b, c);` (selective)** are *explicit constructions* that pull names into the unqualified namespace. There the **imported name wins** over a colliding stdlib name — and that is *safe*, because the programmer explicitly asked for those names unqualified: it is their stated intent, not a silent shadow. A program that did this keeps its binding forever, so a later stdlib name of the same spelling **does not change its behavior**.
+
+So absolute compat holds both ways — bare-`use` programs qualify (no collision), explicit-import programs keep their binding (no behavior change) — and the stdlib can grow forever with **no** program breaking and **no** ambiguity-error (which would itself be a break). The wildcard/selective import is the "you asked for it" opt-in; the bare `use` is the collision-proof default.
+
+### Decision
+
+- **`use lib;`** introduces exactly one name, `lib` (the namespace); members are `lib::fn` / `lib::Type`. **No** unqualified leakage.
+- **`use lib::*;`** (wildcard) and **`use lib::(a, b, c);`** (selective) explicitly bind those names into the unqualified namespace; an explicitly-imported name **wins** over a stdlib name of the same spelling — the author's owned choice, so the C95 silent-shadow concern does not apply.
+- Because bare `use lib;` never imports unqualified and an explicit import keeps its binding across stdlib growth, **no program breaks when the stdlib grows**, and no ambiguity-error is needed — the C97 guarantee holds.
+- **Intended asymmetry with [C95](#c95--):** *defining* your own top-level free fn that a stdlib method would silently shadow is a C95 error (the def was silently dead); *explicitly importing* a library name unqualified is allowed and wins — the line is exactly **silent vs explicit**.
+- **Collision resolver — aliased import (ALREADY in loft, @PLN22 P3/P4):** `use lib::(a as x, b);` imports `a` locally as `x` (plus namespace/type/fn aliases: `use lib as el;`, `use lib::Status as St;`, `use lib::make as mk;`). So any clash — two libraries exporting the same name, or an import you want to keep distinct — is resolved by binding it under a chosen local name. This also resolves the two-explicit-imports edge below: `use a::(x); use b::(x as bx);`. **Syntax — keep `as` (owner 2026-07-15):** the resolver already exists and `original as alias` is uniform across all four alias forms, so no new syntax is added (a proposed `alias = original` was declined — it would fragment the shipped alias grammar and break existing `use` statements for a cosmetic disambiguation; the `as` overload with the type-cast `as` is unambiguous inside a `use` group).
+- **Open edges (not ruled here):** an explicitly-imported name vs the program's own top-level def — resolve when specced.
+- Owner ruling 2026-07-15. Companion: [C97](#c97--). Implementation: name resolution (`use` handling) — bare `use` = namespace bind; `::*` / `::(…)` = explicit unqualified bind with import-wins precedence. Pre-freeze (resolution freezes with the contract).
