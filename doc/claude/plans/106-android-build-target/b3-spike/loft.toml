@@ -1,0 +1,8 @@
+# @PLN106 B3 — point `graphics` at the local fixture (which carries the Android GLES
+# backend + the `loft_gl_android_set_app` seam), NOT the published registry copy.
+[package]
+name = "loft_b3"
+version = "0.0.1"
+
+[dependencies]
+graphics = { path = "../../../../../tests/fixtures/libs/graphics" }
