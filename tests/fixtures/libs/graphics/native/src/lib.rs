@@ -128,6 +128,21 @@ thread_local! {
     static PENDING_RESIZE: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
 }
 
+// @PLN106 B4 — Android touch feeds the SAME shared pointer state the desktop path fills from
+// winit events, so `loft_gl_mouse_x/y/button` read touch identically (no new loft API). Called
+// from `android_gl::poll` on the `android_main` thread — the same thread the loft program runs
+// on, so these thread-local cells are shared with the `gl_mouse_*` reads.
+#[cfg(target_os = "android")]
+pub(crate) fn set_pointer_pos(x: f64, y: f64) {
+    MOUSE_X.with(|c| c.set(x));
+    MOUSE_Y.with(|c| c.set(y));
+}
+#[cfg(target_os = "android")]
+pub(crate) fn set_pointer_down(down: bool) {
+    // Touch maps to the left mouse button (bit 0), matching the desktop `MouseButton::Left`.
+    MOUSE_BTN.with(|c| c.set(u8::from(down)));
+}
+
 // Map winit key codes to a simple 0-255 index. Desktop-only; Android input is B4.
 #[cfg(not(target_os = "android"))]
 fn key_index(key: &winit::keyboard::Key) -> Option<u8> {

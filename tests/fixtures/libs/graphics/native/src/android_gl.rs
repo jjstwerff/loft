@@ -23,7 +23,8 @@
 //! `android-activity` is one instance (see `src/android.rs`).
 
 use super::GlState;
-use android_activity::{AndroidApp, MainEvent, PollEvent};
+use android_activity::input::{InputEvent, MotionAction};
+use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use std::ffi::{CString, c_char, c_void};
 use std::sync::Mutex;
 use std::time::Duration;
@@ -234,10 +235,41 @@ pub(crate) fn swap(state: &GlState) {
     }
 }
 
+/// @PLN106 B4 — drain pending touch events into the shared pointer state (`MOUSE_X/Y/BTN` in
+/// `lib.rs`, which `loft_gl_mouse_*` read). Touch → mouse: a press/release maps to the left
+/// button, moves update the position. Only the action's pointer is tracked, matching the
+/// single-cursor desktop model. Must run on the `android_main` thread (an `input_events_iter`
+/// invariant) — which `poll` already is.
+fn drain_input(app: &AndroidApp) {
+    let Ok(mut iter) = app.input_events_iter() else {
+        return;
+    };
+    loop {
+        let read = iter.next(|event| {
+            if let InputEvent::MotionEvent(motion) = event {
+                let p = motion.pointer_at_index(motion.pointer_index());
+                crate::set_pointer_pos(f64::from(p.x()), f64::from(p.y()));
+                match motion.action() {
+                    MotionAction::Down | MotionAction::PointerDown => crate::set_pointer_down(true),
+                    MotionAction::Up | MotionAction::PointerUp | MotionAction::Cancel => {
+                        crate::set_pointer_down(false);
+                    }
+                    _ => {}
+                }
+                return InputStatus::Handled;
+            }
+            InputStatus::Unhandled
+        });
+        if !read {
+            break;
+        }
+    }
+}
+
 /// Pump one round of activity events — the `loft_gl_poll_events` android path.
 /// Returns `false` when the app should close. Handles the surface lifecycle
-/// (Terminate/Init) so a backgrounded+foregrounded app keeps rendering; touch/IME
-/// input is B4.
+/// (Terminate/Init) so a backgrounded+foregrounded app keeps rendering, and (B4) drains
+/// touch input into the shared pointer state.
 pub(crate) fn poll(state: &mut GlState) -> bool {
     // Clone the app handle out first so the poll closure can mutate `state`.
     let app = state.android.app.clone();
@@ -245,6 +277,7 @@ pub(crate) fn poll(state: &mut GlState) -> bool {
     let mut resized: Option<(u32, u32)> = None;
     let mut window_lost = false;
     let mut window_gained = false;
+    let mut input_available = false;
     app.poll_events(Some(Duration::ZERO), |event| match event {
         PollEvent::Main(MainEvent::Destroy) => close = true,
         PollEvent::Main(MainEvent::TerminateWindow { .. }) => window_lost = true,
@@ -254,8 +287,15 @@ pub(crate) fn poll(state: &mut GlState) -> bool {
                 resized = Some((w.width().max(1) as u32, w.height().max(1) as u32));
             }
         }
+        PollEvent::Main(MainEvent::InputAvailable) => input_available = true,
         _ => {}
     });
+
+    // @PLN106 B4 — drain pending touch into the shared pointer state (AFTER poll_events, so
+    // `input_events_iter` isn't a re-borrow of `app` inside its own poll closure).
+    if input_available {
+        drain_input(&app);
+    }
 
     if window_lost {
         unsafe {
