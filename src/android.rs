@@ -681,6 +681,22 @@ fn android_main_tail(needs_gl_app: bool) -> String {
 
 const ANDROID_TAIL_PREFIX: &str = r#"
 // ---- @PLN106 B2/B3: Android NativeActivity entry (emitted by --native-android) ----
+
+// @PLN106 — the android-activity glue spawns `android_main` with `std::thread::spawn` (Rust's
+// default ~2MB stack), and loft runs `__run` INLINE on that thread (it owns the ALooper — a
+// spawned big-stack thread would panic in the graphics poll). So deep recursion overflows.
+// Enlarge that thread's stack to the desktop `NATIVE_MAIN_STACK` (512 MiB) by setting
+// `RUST_MIN_STACK` from a `.init_array` constructor that runs at `.so` load — BEFORE the glue's
+// spawn reads (and std caches) the default stack size.
+#[used]
+#[unsafe(link_section = ".init_array")]
+static __LOFT_ANDROID_STACK_CTOR: extern "C" fn() = {
+    extern "C" fn ctor() {
+        unsafe { libc::setenv(c"RUST_MIN_STACK".as_ptr(), c"536870912".as_ptr(), 1); }
+    }
+    ctor
+};
+
 fn __loft_android_redirect_stdio_to_logcat() {
     #[link(name = "log")]
     unsafe extern "C" {
