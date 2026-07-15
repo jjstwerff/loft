@@ -222,11 +222,25 @@ positives before flipping default-on.
   `reads≥1` and W-copy `d`=`(0,1)`, which together with the count==1 assertion pins that the one
   warning is W-copy's `d`. **Finding:** `n_escape_return`'s `d` is move-elided (returned
   directly) → no user-var, so the return path is guarded by the count, not a classifier cell.
-- **S4 — Suite-wide false-positive sweep (the cry-wolf gate).** Run `LOFT_DEAD_STORES=1 make
-  test` + `default/*.loft` + fixtures + consumers. Triage each new warning: real bug → fix;
-  false positive → add a guard + a corpus row; iterate to **zero FPs**. **Verify:** the suite
-  emits only intended warnings; record the real bugs found (expect lib/graphics-class hits).
-  *This is the gate that earns default-on.*
+- **S4 — Suite-wide false-positive sweep (the cry-wolf gate). ◐ IN PROGRESS 2026-07-15.**
+  Swept the stdlib + all 454 `tests/scripts/*.loft` with `LOFT_NO_CACHE=1 LOFT_DEAD_STORES=1`.
+  **Methodology finding:** loft's **program cache** (`~/.cache/loft/program-*.store`) skips the
+  re-parse on a warm run, so ALL parse-time diagnostics (this lint AND the shipped `test_used`)
+  vanish on cache hits — the sweep MUST use `LOFT_NO_CACHE=1` (the cache is auto-off under Cargo,
+  which is why the tests are stable). **Result:** stdlib **clean** (0); **13 warnings in 10
+  copy/borrow-semantics test scripts**, triaged into two classes:
+  - **5 genuine FALSE POSITIVES — aliases** (the write propagates, so it is NOT dead): `178`/`434`
+    `&`-refs (`RefVar`), `516` reference-struct field alias, `25`/`85-borrow` element views
+    (`Optional(Reference)`). Each test asserts the *original changed*.
+  - **8 TRUE dead stores in intentional copy tests** (`516` `m`/`c`, `517`, `519` value structs;
+    `503` `copy`/`cc`, `85-tier1` vectors; `294` var-to-var): the write to the copy genuinely is
+    never read; the test proves independence by asserting the *original unchanged*.
+
+  **The FP fix:** only warn when the mutated var's defining `Set(v, expr)` is `Owned` per
+  `use_analysis::ownership_of` — a real copy — not `Borrowed`/`Join` (alias/view/`&`). Verified
+  by hand that `ownership_of` separates all 13. **The true-positive tests** are a decision:
+  strengthen each to also assert the copy WAS mutated (reads the copy → silent + stronger test),
+  or accept/annotate. Both must resolve before S5 default-on.
 - **S5 — Flip default-on + graduate.** Default `LOFT_DEAD_STORES` on with `LOFT_NO_DEAD_STORES`
   opt-out (mirror the @PLN28 diagnostic toggles); fix real hits; graduate `spec.loft` to
   `tests/scripts/`; document in STDLIB/diagnostics + the `LOFT_LOG` quick-ref. **Verify:**
