@@ -5,10 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN107 — Dead-code lint: never-read local (unused variable + dead store)
 
-**Status — IN PROGRESS (2026-07-15). S0 + S1 + S2 + S3 landed** on `tuxedo-work` (oracle +
-decoupled read/write classifier + the gated `LOFT_DEAD_STORES` warning + escape/branch/loop
-hardening, all verified both backends; see [the step plan](#implementation--small-verifiable-steps)).
-Next: **S4** (suite-wide false-positive sweep) → **S5** (default-on). **Key finding:** loft
+**Status — IN PROGRESS (2026-07-15). S0–S4 landed** on `tuxedo-work` (oracle + decoupled
+read/write classifier + gated `LOFT_DEAD_STORES` warning + escape/loop hardening + the S4
+alias false-positive fix and suite-wide sweep — **zero warnings across stdlib + all 454
+scripts**, both backends; see [the step plan](#implementation--small-verifiable-steps)). Only
+**S5** (flip default-on) remains. **Key finding:** loft
 **already ships** `unused_variables` (`Function::test_used`, `src/variables/mod.rs:1666`)
 — it correctly flags W-scalar/W-accumulator/N-effectful *today*; the real gap is that its
 `uses` counter treats a write-**target** as a read, so it misses **W-copy** (the graphics
@@ -222,7 +223,7 @@ positives before flipping default-on.
   `reads≥1` and W-copy `d`=`(0,1)`, which together with the count==1 assertion pins that the one
   warning is W-copy's `d`. **Finding:** `n_escape_return`'s `d` is move-elided (returned
   directly) → no user-var, so the return path is guarded by the count, not a classifier cell.
-- **S4 — Suite-wide false-positive sweep (the cry-wolf gate). ◐ IN PROGRESS 2026-07-15.**
+- **S4 — Suite-wide false-positive sweep (the cry-wolf gate). ✅ DONE 2026-07-15.**
   Swept the stdlib + all 454 `tests/scripts/*.loft` with `LOFT_NO_CACHE=1 LOFT_DEAD_STORES=1`.
   **Methodology finding:** loft's **program cache** (`~/.cache/loft/program-*.store`) skips the
   re-parse on a warm run, so ALL parse-time diagnostics (this lint AND the shipped `test_used`)
@@ -236,11 +237,24 @@ positives before flipping default-on.
     `503` `copy`/`cc`, `85-tier1` vectors; `294` var-to-var): the write to the copy genuinely is
     never read; the test proves independence by asserting the *original unchanged*.
 
-  **The FP fix:** only warn when the mutated var's defining `Set(v, expr)` is `Owned` per
-  `use_analysis::ownership_of` — a real copy — not `Borrowed`/`Join` (alias/view/`&`). Verified
-  by hand that `ownership_of` separates all 13. **The true-positive tests** are a decision:
-  strengthen each to also assert the copy WAS mutated (reads the copy → silent + stronger test),
-  or accept/annotate. Both must resolve before S5 default-on.
+  **✅ RESOLVED 2026-07-15 (S4a + S4b) — the tree is now clean under `LOFT_DEAD_STORES`.**
+  - **S4a (`080bbef3`) — the alias false-positive fix.** `ownership_of` is only reliable AFTER
+    `scopes::check` materialises the copies, so the lint MOVED from a parse-time `Function` method
+    to a post-scopes whole-program pass **`use_analysis::warn_dead_stores`** (`main.rs`, after
+    `warn_copies`, emitting via `diags.add_at`). It warns only when the mutated var OWNS its
+    store: `Own::Owned`, OR `Borrowed/Join{base}` where `base` is the var itself or a **synth
+    buffer** (`is_synth_buffer` — the copy idiom builds a vector copy as `OpGetField(__vdb,…)`, so
+    a genuinely-owned copy reads as `Borrowed{__vdb}`). `RefVar` (`&`) is excluded outright. Two
+    findings: `uses` is not maintained post-scopes (the S2 `uses>0` guard was dropped as redundant),
+    and the sweep "non-determinism" was the program cache (tests hardened with `LOFT_NO_CACHE=1`).
+    All 5 alias FPs silent; spec.loft still warns; no new FPs. Value-struct FIELD copies now read
+    `Borrowed{real}` → a **safe false negative** (sound, incomplete — a completeness gap to revisit).
+  - **S4b (`01172384`) — the 8→4 true positives.** The remaining copy-mutate dead stores lived in
+    intentional copy-semantics tests (503/294/519/85-tier1). Each was strengthened to also assert
+    the COPY was mutated (reads the copy → silences the lint AND proves both "copy changed" and
+    "original didn't"). All pass both backends.
+  - **Gate MET:** zero dead-store warnings across the stdlib + all 454 `tests/scripts`. S5
+    (default-on) is unblocked.
 - **S5 — Flip default-on + graduate.** Default `LOFT_DEAD_STORES` on with `LOFT_NO_DEAD_STORES`
   opt-out (mirror the @PLN28 diagnostic toggles); fix real hits; graduate `spec.loft` to
   `tests/scripts/`; document in STDLIB/diagnostics + the `LOFT_LOG` quick-ref. **Verify:**
