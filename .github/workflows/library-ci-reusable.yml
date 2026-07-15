@@ -1,0 +1,92 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# library-ci-reusable — the ONE library CI gate, called by every loft-lang/loft-libs-*
+# repo.  Replaces the per-repo copies of library-ci.yml, which had drifted (stale
+# `jjstwerff/loft` checkout URL in 5 of 6 repos, an incomplete package matrix in
+# some, and no CI at all in loft-libs-docs).  A lib repo's own workflow becomes a
+# ~10-line caller passing its package list; the build logic + the loft URL live
+# here, so they stay in lockstep across all libraries.
+#
+# Called as:
+#   jobs:
+#     ci:
+#       uses: loft-lang/loft/.github/workflows/library-ci-reusable.yml@main
+#       with:
+#         packages: '["shapes","gridmesh"]'
+name: library-ci-reusable
+
+on:
+  workflow_call:
+    inputs:
+      packages:
+        description: 'JSON array of package dirs in the repo, e.g. ["shapes","gridmesh"]'
+        required: true
+        type: string
+      loft-ref:
+        description: 'loft ref to build + validate against (default: main)'
+        required: false
+        default: main
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false                       # one broken package must not hide the others
+      matrix:
+        package: ${{ fromJson(inputs.packages) }}
+    name: ${{ matrix.package }}
+    steps:
+      - name: Checkout the library
+        uses: actions/checkout@v4
+
+      - name: Install mold (loft's pinned linker)
+        run: sudo apt-get update -y && sudo apt-get install -y mold
+
+      - name: Checkout loft (loft-lang/loft — the current org URL)
+        uses: actions/checkout@v4
+        with:
+          repository: loft-lang/loft          # was `jjstwerff/loft` in the drifted copies
+          ref: ${{ inputs.loft-ref }}
+          path: loft-src
+
+      - name: Cache cargo + loft build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            loft-src/target
+          key: library-ci-loft-${{ inputs.loft-ref }}-${{ hashFiles('loft-src/Cargo.lock') }}
+          restore-keys: library-ci-loft-
+
+      - name: Build loft
+        working-directory: loft-src
+        run: |
+          cargo build --release --lib --bin loft
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+
+      # A library's OWN CI denies warnings on its own code by default (a package may
+      # opt out with a `.allow_warnings` file in its dir) — distinct from the loft-side
+      # revalidate-libs gate, which tolerates warnings (a new loft warning must not fail
+      # an already-shipped lib).
+      - name: Interpret — ${{ matrix.package }}
+        working-directory: ${{ matrix.package }}
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+        run: loft --interpret --tests tests
+
+      - name: Native — ${{ matrix.package }}
+        working-directory: ${{ matrix.package }}
+        env:
+          LOFT_DENY_WARNINGS: ${{ hashFiles(format('{0}/.allow_warnings', matrix.package)) != '' && '0' || '1' }}
+        run: LOFT_TIMEOUT=240 loft --native --tests tests
+
+      - name: Rust integration tests (if present)
+        if: hashFiles(format('{0}/native/tests/*.rs', matrix.package)) != ''
+        working-directory: ${{ matrix.package }}/native
+        run: cargo test --release
