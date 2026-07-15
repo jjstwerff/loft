@@ -3975,7 +3975,11 @@ impl Data {
         // check (a MAIN top-level def that a stdlib method would silently shadow is a C95 error).
         let scoped = self.source != STD_SOURCE && self.source != MAIN_SOURCE;
         let own = |data: &Self, nm: &str| -> u32 {
-            if scoped { data.source_nr(data.source, nm) } else { data.def_nr(nm) }
+            if scoped {
+                data.source_nr(data.source, nm)
+            } else {
+                data.def_nr(nm)
+            }
         };
         let o_nr = own(self, fn_name);
         // A `Dynamic` def under the bare name is the DISPATCHER a `both:`/`self` function registers
@@ -4062,7 +4066,11 @@ impl Data {
                         self.def(existing_rt).position
                     );
                 } else {
-                    diagnostic!(lexer, Level::Error, "cannot redefine field `{fn_name}` on `{tname}`");
+                    diagnostic!(
+                        lexer,
+                        Level::Error,
+                        "cannot redefine field `{fn_name}` on `{tname}`"
+                    );
                 }
                 return u32::MAX;
             } else {
