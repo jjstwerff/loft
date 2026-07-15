@@ -151,9 +151,13 @@ until then the above is the whole surface.
    concurrent change didn't touch `index.json`, so the signature stays valid), and
    aborts loudly on a real `index.json` conflict (two signers → the single-writer
    invariant is violated) rather than pushing a bad index.
-3. **TODO — `submissions/` drain** in `registry_maintain.sh` (the key-absent fold-in)
-   and the **V1–V6 gate** call before each append (today `scripts/vet-lib.sh` runs the
-   gate standalone; wire it into the ship loop).
+3. **DONE — `submissions/` drain + inline gate** (`registry_maintain.sh`): the ship run
+   peeks `submissions/` (a key-absent contributor stages `submissions/<name>-<ver>.json`
+   via a PR that never touches `index.json`), then for each runs the **`vet-lib` gate** —
+   a PASS is folded into the index + the staging file `git rm`ed (committed atomically
+   with the index + `.sig` by the sign step); native-code NEEDS-REVIEW / FAIL is reported
+   and left. Own libs also get the **V2/V3 parity gate** (`loft --interpret --tests`) in
+   the pre-flight, so a lib a language change broke is excluded before it can be signed.
 4. **DONE (adjacent) — reusable library CI** (`.github/workflows/library-ci-reusable.yml`
    + `scripts/deploy-library-ci.sh`) and the freeze-gate **`revalidate-libs.yml`**.
 5. **TODO — docs**: a `REGISTRY_SUBMIT.md` update for the `submissions/` path.
