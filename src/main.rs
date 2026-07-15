@@ -3607,6 +3607,81 @@ fn api_surface_of(
     Ok((surface, identity))
 }
 
+/// @PLN102 C96 — `loft ship [args…]`: the maintainer ship verb.  Locates
+/// `scripts/registry_maintain.sh` (env override, exe-relative, or CWD) and runs it.
+/// On a KEY-PRESENT machine (`~/.loft/trust-root/registry-signing-key.bin` exists) it
+/// defaults the local file signer + non-interactive `--yes` — autonomous package →
+/// sign → push of every own lib newer than the index (registry-sign.sh does the
+/// CAS-retry push).  On a KEY-ABSENT machine it can't sign; it says so and runs the
+/// routine in review mode (which reports what a key holder must fold in).  Explicit
+/// `LOFT_REGISTRY_SIGNER` / passing `--dry-run` / `--yes` are respected as given.
+/// Exit code is the script's.
+fn run_ship_command(args: &[String]) -> i32 {
+    use std::path::PathBuf;
+    let script = std::env::var("LOFT_SHIP_SCRIPT")
+        .ok()
+        .map(PathBuf::from)
+        .filter(|p| p.is_file())
+        .or_else(|| {
+            let mut cands: Vec<PathBuf> = Vec::new();
+            if let Ok(exe) = std::env::current_exe() {
+                for up in [2usize, 3, 4] {
+                    let mut d = exe.clone();
+                    for _ in 0..up {
+                        d.pop();
+                    }
+                    cands.push(d.join("scripts/registry_maintain.sh"));
+                }
+            }
+            if let Ok(cwd) = std::env::current_dir() {
+                cands.push(cwd.join("scripts/registry_maintain.sh"));
+            }
+            cands.into_iter().find(|p| p.is_file())
+        });
+    let Some(script) = script else {
+        eprintln!(
+            "loft ship: cannot find scripts/registry_maintain.sh — run from the loft repo, or set LOFT_SHIP_SCRIPT."
+        );
+        return 1;
+    };
+
+    let key_present = std::env::var_os("HOME")
+        .map(|h| PathBuf::from(h).join(".loft/trust-root/registry-signing-key.bin"))
+        .is_some_and(|p| p.is_file());
+
+    let mut cmd = std::process::Command::new("bash");
+    cmd.arg(&script);
+    let passthrough_yes = args.iter().any(|a| a == "--yes" || a == "--dry-run");
+    if key_present {
+        if std::env::var_os("LOFT_REGISTRY_SIGNER").is_none() {
+            cmd.env("LOFT_REGISTRY_SIGNER", "file"); // C96: local file key is the default signer
+        }
+        if !passthrough_yes {
+            cmd.arg("--yes"); // autonomous — no prompt on a key-present machine
+        }
+    } else {
+        eprintln!(
+            "loft ship: no trust-root key here (~/.loft/trust-root/registry-signing-key.bin) — this machine cannot sign."
+        );
+        eprintln!(
+            "           Prepare a submission for a key holder to fold in (see REGISTRY_SUBMIT.md); running in review mode below."
+        );
+        if !passthrough_yes {
+            cmd.arg("--dry-run"); // key-absent → don't attempt to sign/push, just report
+        }
+    }
+    for a in args {
+        cmd.arg(a);
+    }
+    match cmd.status() {
+        Ok(s) => s.code().unwrap_or(1),
+        Err(e) => {
+            eprintln!("loft ship: failed to run {}: {e}", script.display());
+            1
+        }
+    }
+}
+
 /// @PLN102 C1 — `loft api-surface <file>` prints the surface descriptor; `loft api-surface
 /// --diff <base> <new> [--json]` prints the compatibility verdict (human text, or machine JSON
 /// for a CI check). Exit: 0 = drop-in / printed · 1 = a BREAK (so a non-required CI check goes
@@ -4910,6 +4985,13 @@ fn main() {
                 eprintln!("loft pin: this binary was built without the `registry` feature.");
                 std::process::exit(1);
             }
+        } else if a == "ship" {
+            // C96 — the maintainer ship verb.  On a key-present machine (the local
+            // trust-root file key exists) it packages + signs + pushes every own lib
+            // newer than the index, autonomously; a key-absent machine can only defer
+            // to a submission.  Wraps scripts/registry_maintain.sh (which chains the
+            // CAS-retry sign+push in registry-sign.sh).
+            std::process::exit(run_ship_command(&argv[i..]));
         } else if a == "registry" {
             handle_registry(&argv, &mut i);
             return;

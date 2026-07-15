@@ -142,15 +142,21 @@ until then the above is the whole surface.
 
 ## Implementation delta (small, on existing scripts)
 
-1. `registry-sign.sh` — when the trust-root `.bin` is present and no YubiKey is
-   configured, default to the file signer (make the `tuxedo` default explicit); keep
-   `--yubikey` / `LOFT_REGISTRY_SIGNER` overrides.
-2. `registry_maintain.sh` — add the **CAS-retry** push loop (Part 2 step 7), drain a
-   `submissions/` dir, and call the **V1–V6** gate on every pending version before it
-   is appended; expose it as `loft ship`.
-3. A reusable `validate.yml` CI workflow that runs V1–V5 on every submission PR (V6 =
-   a required human review label for `#native`/broad-capability first admissions).
-4. Docs: this file + a `REGISTRY_SUBMIT.md` update (the `submissions/` path) + C96/C97.
+1. **DONE — `loft ship` verb** (`src/main.rs::run_ship_command`): locates
+   `scripts/registry_maintain.sh`; on a key-present machine defaults the local file
+   signer + `--yes` (autonomous), on a key-absent one runs review-only and points at
+   the submission path. `LOFT_REGISTRY_SIGNER` / `--dry-run` / `--yes` respected as given.
+2. **DONE — CAS-retry push** (`scripts/registry-sign.sh`): the sign+push now retries a
+   lost race by rebasing the signed commit onto the fetched tip (clean when the
+   concurrent change didn't touch `index.json`, so the signature stays valid), and
+   aborts loudly on a real `index.json` conflict (two signers → the single-writer
+   invariant is violated) rather than pushing a bad index.
+3. **TODO — `submissions/` drain** in `registry_maintain.sh` (the key-absent fold-in)
+   and the **V1–V6 gate** call before each append (today `scripts/vet-lib.sh` runs the
+   gate standalone; wire it into the ship loop).
+4. **DONE (adjacent) — reusable library CI** (`.github/workflows/library-ci-reusable.yml`
+   + `scripts/deploy-library-ci.sh`) and the freeze-gate **`revalidate-libs.yml`**.
+5. **TODO — docs**: a `REGISTRY_SUBMIT.md` update for the `submissions/` path.
 
 ## See also
 

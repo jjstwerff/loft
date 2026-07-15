@@ -443,16 +443,37 @@ elif [ "$PUSH" = 1 ]; then
     # system, which without a helper falls back to prompting — and GitHub no
     # longer accepts a password there.  GIT_TERMINAL_PROMPT=0 makes a genuinely
     # missing credential fail fast instead of hanging on an interactive prompt.
-    if GIT_TERMINAL_PROMPT=0 git -C "$REG_DIR" \
-        -c credential.helper='!gh auth git-credential' push -q 2>/tmp/_rs_push.$$; then
-        echo "committed + pushed: $(git -C "$REG_DIR" rev-parse --short HEAD) → $(git -C "$REG_DIR" remote get-url origin 2>/dev/null)"
-        PUSHED=1
-    else
+    # CAS push (C96 single-writer): a concurrent push to the registry makes ours
+    # non-fast-forward.  Retry by rebasing our signed commit onto the fetched tip —
+    # a concurrent change that did NOT touch index.json rebases cleanly (our signed
+    # index is unchanged, its signature still valid) and we re-push.  A genuine
+    # index.json conflict means TWO signers raced (the single-writer invariant is
+    # violated): abort and report rather than ever push a bad/unsigned index.  Only
+    # a lost race is retried; a real failure (auth) breaks out immediately.
+    push_ok=0
+    for attempt in 1 2 3 4 5; do
+        if GIT_TERMINAL_PROMPT=0 git -C "$REG_DIR" \
+            -c credential.helper='!gh auth git-credential' push -q 2>/tmp/_rs_push.$$; then
+            echo "committed + pushed: $(git -C "$REG_DIR" rev-parse --short HEAD) → $(git -C "$REG_DIR" remote get-url origin 2>/dev/null)"
+            PUSHED=1; push_ok=1; break
+        fi
+        grep -qiE 'fetch first|non-fast-forward|rejected|behind' /tmp/_rs_push.$$ || break
+        git -C "$REG_DIR" fetch -q origin || break
+        if git -C "$REG_DIR" rebase -q '@{u}' 2>/tmp/_rs_reb.$$; then
+            echo "   (concurrent push; rebased our signed commit onto the new tip — retry $attempt)" >&2
+            continue
+        fi
+        git -C "$REG_DIR" rebase --abort 2>/dev/null || true
+        echo "!! index.json changed underneath us — two signers raced (single-writer invariant violated)." >&2
+        echo "   signed commit kept at $REG_DIR; reconcile the index by hand and re-run." >&2
+        push_ok=2; break
+    done
+    if [ "$push_ok" = 0 ]; then
         echo "!! push FAILED: $(cat /tmp/_rs_push.$$ 2>/dev/null)" >&2
         echo "   signed commit kept at $REG_DIR — push it manually." >&2
         echo "   (auth? run 'gh auth setup-git' once, or use an SSH remote, then re-run.)" >&2
     fi
-    rm -f "/tmp/_rs_push.$$"
+    rm -f "/tmp/_rs_push.$$" "/tmp/_rs_reb.$$"
 else
     git -C "$REG_DIR" commit -q -m "${MSG:-sign: commit index.json + regenerate index.json.sig}"
     echo "committed (--no-push): $(git -C "$REG_DIR" rev-parse --short HEAD) at $REG_DIR — push when ready."
