@@ -43,10 +43,6 @@ fn floor_div(fa: integer, fb: integer) -> integer {
     if (r != 0) && ((fa < 0) != (fb < 0)) { q - 1 } else { q }
 }
 
-fn floor_mod(ma: integer, mb: integer) -> integer {
-    r = ma % mb ?? 0;
-    if (r != 0) && ((r < 0) != (mb < 0)) { r + mb } else { r }
-}
 
 // Days since the Unix epoch for this instant (floored to the UTC day).
 fn epoch_day(ed_t: integer) -> integer { floor_div(ed_t, MS_PER_DAY) }
@@ -158,14 +154,14 @@ pub fn day(dt: integer) -> integer {
     dc.2
 }
 
-fn ms_of_day(mt2: integer) -> integer { floor_mod(mt2, MS_PER_DAY) }
+fn ms_of_day(mt2: integer) -> integer { floor_mod(mt2, MS_PER_DAY) ?? 0 }
 
 pub fn hour(ht: integer)   -> integer { ms_of_day(ht) / MS_PER_HOUR }
 pub fn minute(mit: integer) -> integer { (ms_of_day(mit) / MS_PER_MINUTE) % 60 }
 pub fn second(st: integer)  -> integer { (ms_of_day(st) / MS_PER_SECOND) % 60 }
 
 // 0 = Monday .. 6 = Sunday.  1970-01-01 was a Thursday (weekday 3).
-pub fn weekday(wt: integer) -> integer { floor_mod(epoch_day(wt) + 3, 7) }
+pub fn weekday(wt: integer) -> integer { floor_mod(epoch_day(wt) + 3, 7) ?? 0 }
 
 // ── stepping ──────────────────────────────────────────────────
 

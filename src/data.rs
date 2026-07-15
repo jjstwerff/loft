@@ -3966,7 +3966,25 @@ impl Data {
             name = format!("n_{fn_name}");
         }
         let o_nr = self.def_nr(fn_name);
-        if o_nr != u32::MAX && self.def(o_nr).def_type != DefType::Dynamic {
+        // A `Dynamic` def under the bare name is the DISPATCHER a `both:`/`self` function registers
+        // its type-overloads against — so a same-named def is not always a redefinition. It is when
+        // the bare name is a concrete def (struct/enum/plain fn), or when a plain FREE fn whose
+        // first-arg type already HAS a method would be silently shadowed by it: a call `name(x, …)`
+        // resolves to the method `t_<sig>_<name>` (the fn's canonical internal name), never the free
+        // `n_<name>`. Turn that silent shadow into a clear error (owner 2026-07-15). It is NOT a
+        // redefinition when a new `both:`/`self` overload registers on the dispatcher
+        // (`abs(integer)`/`abs(single)`/`abs(float)`; a same-type duplicate is caught by the mangled
+        // check below), nor when a free fn merely shares a name with a method on another receiver
+        // type (`scale(integer,…)` beside `scale(self: Vec,…)`) — arg-type dispatch keeps it live.
+        let shadows_a_method = !(is_both || is_self)
+            && arguments.first().is_some_and(|a| {
+                let tn = self.type_def_nr(&a.typedef);
+                tn != u32::MAX && {
+                    let sig = Self::sig_type_name(&self.def(tn).name, &a.typedef);
+                    self.def_nr(&format!("t_{}{}_{fn_name}", sig.len(), sig)) != u32::MAX
+                }
+            });
+        if o_nr != u32::MAX && (self.def(o_nr).def_type != DefType::Dynamic || shadows_a_method) {
             diagnostic!(
                 lexer,
                 Level::Error,

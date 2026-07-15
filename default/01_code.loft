@@ -209,6 +209,16 @@ fn OpLeInt(v1: integer, v2: integer) -> boolean;
 // from Long to Int.
 fn OpFormatInt(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
 fn OpFormatStackInt(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
+// Floor modulo — the remainder that takes the sign of the DIVISOR, so
+// `x.floor_mod(n)` lands in `[0, n)` for a positive `n`.  The `%` operator
+// truncates toward zero and keeps the DIVIDEND's sign (`-1 % 3 == -1`);
+// `floor_mod` wraps (`(-1).floor_mod(3) == 2`), which is what circular indexing
+// / wrap-around wants (`grid[(i - 1).floor_mod(w)]`).  `x.floor_mod(0)` is null,
+// like `%` (C80 — an undefined value is a null, never a fault).
+pub fn floor_mod(both: integer, divisor: integer) -> integer? {
+  ((both % divisor) + divisor) % divisor
+}
+#pure
 // Single-precision (32-bit) floating-point math.
 // Choose single for performance-sensitive work such as graphics.
 fn OpConstSingle(val: const single) -> single;

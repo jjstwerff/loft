@@ -1639,11 +1639,9 @@ fn parent_of(rel: text) -> text {
     rel[0..last_slash]
 }
 
-fn basename(path: text) -> text {
-    last_slash = path.rfind("/");
-    if last_slash < 0 { return path; }
-    path[last_slash + 1..len(path)]
-}
+// `basename` is a stdlib builtin (`text.basename()` / `basename(text)`); the local
+// copy would now be a compile error (it duplicates the stdlib method), and the
+// stdlib one is identical — the part after the last `/`, or the whole string.
 
 fn rel_join(base: text, name: text) -> text {
     if base == "" { return name; }

@@ -2213,3 +2213,64 @@ A data race is the single fault loft cannot resolve to a defined value: unlike a
 - **More capability, if ever needed, is a NEW inherently-safe construct — never a looser `par` (owner).** Broader shared-mutation parallelism would arrive as a *separate, inherently-safe* construct added additively (the compatibility ratchet — the reliable surface only grows), not by relaxing `par`'s read-only rule (which post-freeze is impossible anyway: loosening an error is fine, but re-tightening later is not, so `par` must be strict *now*). **Not currently envisioned** — the existing `par` already covers the need; this records the direction, not a planned construct.
 - **Rejected:** leaving the race as undefined behavior (the one hole in a memory-safe, no-runtime-error platform), and "defining" it by silently serialising or copying (surprising, and it hides the programmer's mistake rather than surfacing it).
 - Owner ruling 2026-07-14. Fix scope: [par-capture-readonly.md](plans/102-stability-contract/par-capture-readonly.md).
+
+## C94 — Integer `/` truncates toward zero and `%` takes the dividend's sign; `floor_mod` is the wrap-around helper
+
+**Catalogue:** @F2 (operators) / math. Fixes the sign convention for negative integer division at contract 1 — the one place a language must *pick* (C, Rust, Go, Java, JS truncate; Python, Ruby floor). Both are legitimate; the freeze needs one named default.
+
+### Question
+
+For integer `/` and `%` with a negative operand, two self-consistent conventions exist, differing only in how they round a negative quotient:
+
+```loft
+// truncate toward zero (C/Rust)      vs   floor toward -∞ (Python)
+-7 / 2   ==  -3                             -7 / 2   ==  -4
+-7 % 2   ==  -1  (sign of dividend)         -7 % 2   ==   1  (sign of divisor)
+```
+
+Truncation is the faster hardware default and makes `(a / b) * b + a % b == a` hold; floor gives a remainder that always lands in `[0, n)`, which is what circular indexing (`grid[(i - 1) % w]`) wants — but only under the floor convention, so under truncation that idiom silently reads a negative index. Which convention is loft's, and how does the *other* need get met?
+
+### Evaluation
+
+The two conventions are **two different operations for two different use cases**, and the split is decided by *which* the terse operator should serve — not by what other languages do.
+
+- **Truncating `/` + dividend-sign `%` serve signed-magnitude decomposition:** splitting one signed quantity into (quotient, remainder) parts that both carry the sign and reconstruct — signed time (`-90s → -1min, -30s`), coordinates relative to an origin, round-toward-zero quantization (`a - a%b`), digit extraction after `abs`.
+- **`floor_mod` serves cyclic domains:** a value on a ring of size `n` where you want the canonical representative in `[0, n)` and the input's sign is meaningless — array-index wrap, clock, angle, day-of-week, hashing a possibly-negative value into a bucket.
+
+The load-bearing fact is that **`/` and `%` are a matched pair**: the identity `a == (a / b) * b + a % b` holds for the truncating pair *and* the floor pair **equally**, so the identity does **not** discriminate between them, and the two cannot be mixed (a truncating `/` with a floor `%` would make `%` imply a *different* quotient than `/` returns — an incoherence worse than either clean convention). So the choice collapses to *which `/` do you want*, and `%` follows. Integer `/` should **truncate toward zero** because that is "drop the fractional part" — `-7 / 2 = -3.5 → -3`; floor `/` gives `-4`, surprising for both signs, and division is used far more than negative-operand `%`, so the operator optimizes for un-surprising division. The cyclic case genuinely wants floor, but it is a **distinct operation**, and giving it the name `floor_mod` is a *feature*: at `(i - 1).floor_mod(w)` the reader sees the wrap, whereas a bare `(i - 1) % w` silently yields `-1` — an out-of-range index, exactly the kind of silent footgun loft's total/no-surprise model removes. Adding the helper is additive (a new stdlib name), so it lands cleanly pre- or post-freeze; the *operator* convention is what the freeze pins.
+
+### Decision
+
+- **Integer `/` truncates toward zero** (`-7 / 2 == -3`), and **`%` returns the remainder with the sign of the dividend** (`-7 % 2 == -1`, `7 % -2 == 1`) — the C/Rust convention. `a == (a / b) * b + a % b` holds for all non-zero `b`. Part of the contract-1 freeze.
+- **`/` or `%` by zero is a null** (C80 — an undefined value is a null, never a fault), dischargeable with `?? default`. Unchanged; recorded here for completeness.
+- **`floor_mod(both: integer, divisor: integer) -> integer?`** is the wrap-around helper: the remainder with the sign of the **divisor**, landing in `[0, divisor)` for a positive divisor (`(-1).floor_mod(3) == 2`). Pure stdlib (`default/01_code.loft`), integer-only, `floor_mod(x, 0)` is null like `%`. Use it for circular indexing (`grid[(i - 1).floor_mod(w)]`).
+- **Rejected:** switching the operators themselves to floor semantics — makes `/` surprising (`-7 / 2 == -4`) to serve the cyclic case a helper serves cleanly, and a truncating-`/`-with-floor-`%` hybrid is incoherent (the two operators would disagree on the quotient). Also rejected: leaving wrap-around indexing to open-coded `((i % w) + w) % w` (the footgun stays un-named at every call site).
+- Owner ruling 2026-07-15 — the split is decided by the use cases (signed-magnitude decomposition vs cyclic-domain representative), not by matching C/Rust; "keep truncate but add a floor-mod helper".
+
+## C95 — A definition a same-named method would silently shadow is a compile error (no silent redefinition)
+
+**Catalogue:** @F2 (operators) / naming. Instances the platform rule *no runtime errors, ever* ([C80](#c80--)) at its **compile-time valve**: what cannot work is *disallowed*, not run into a silent-wrong result. Surfaced by C94 (adding stdlib `floor_mod` collided with an existing library helper).
+
+### Question
+
+loft dispatches a method-or-free function (`fn foo(both:/self: T, …)`) on its **first-argument type**. A plain FREE function `foo(x: T, …)` whose name collides with such a method on the **same** first-arg type was **silently shadowed**: a call `foo(x, …)` resolved through the method dispatcher to `t_<T>_foo`, and the free `n_foo` was **unreachable, with no diagnostic**. Exact-signature redefinitions already errored (`Cannot redefine`), but a *different-parameter-name* redefinition slipped through the `Dynamic`-dispatcher exemption in `add_fn`. Repro — the definition compiles yet never runs:
+
+```loft
+fn floor_mod(ma: integer, mb: integer) -> integer { … }   // stdlib floor_mod(integer) wins; this is dead
+pub fn clamp(val: float, lo: float, hi: float) -> float { … }  // stdlib clamp(float) wins; this is dead
+```
+
+Should such a definition be allowed (silently shadowed), or rejected?
+
+### Evaluation
+
+A definition the programmer wrote that can **never be called** is a latent bug — the author believes their `clamp` runs; the stdlib's does. Per *no runtime errors, ever*, the honest answer is the **compile-time valve**: disallow it, at the definition, naming the collision — rather than let a call silently reach a different function. The predicate must be **dispatch-exact**: reject a free function *only* when a method for its **first-argument type** already exists (`t_<len><sig>_<name>` — the function's canonical internal name under loft's first-parameter mangling), because only then does the call actually resolve to the method. A free function that merely **shares a name** with a method on a *different* receiver type stays legal — arg-type dispatch keeps it reachable (`scale(integer, …)` beside the trait method `scale(self: Self, …)`; `byte_at(integer, …)` beside `byte_at(self: text, …)`). This is an error-ADD, so it lands **pre-freeze** (the error surface can only shrink after contract 1). It immediately surfaced four in-repo latent shadows: two libraries redundantly re-defined a stdlib function byte-for-byte (`shapes` `clamp`, the doc viewer's `basename`), a test helper was vacuously shadowed (`83-return-in-if-expr`'s `clamp` was testing the *stdlib* clamp, not its own return-in-`if` body), and the `time` library's private `floor_mod` (resolved by adopting the new stdlib `floor_mod`).
+
+### Decision
+
+- **A free function `foo(x: T, …)` is a compile error when a method `foo` for first-arg type `T` already exists** — it would be silently shadowed (the call dispatches to the method, never the free `n_foo`). Reported at the definition: `Cannot redefine 'foo' (already defined at …)`. Part of the contract-1 freeze.
+- **The predicate is first-argument-type exact** (loft's current mangling keys on the first parameter): a free function sharing a name with a method on a *different* receiver type stays legal. When mangling extends beyond the first parameter, this predicate follows it automatically — no separate rule to maintain.
+- **This closes the different-parameter-name gap** left by the `Dynamic`-dispatcher exemption; exact `both:`/`self` same-type redefinitions already errored via the mangled-name check.
+- **No silent shadow, no runtime error.** The previously-silent case becomes a clear compile error (valve a). A library must not redefine a stdlib function — it uses the stdlib one (or picks a distinct name).
+- **Rejected:** silently shadowing (hides a definition that never runs); and making the user's definition *win* over the stdlib (an invisible footgun in the other direction — a program could silently re-point a stdlib call).
+- Owner ruling 2026-07-15 — "that silent shadow is the problem, make it an error too"; "we are not yet under contract". Implementation: `src/data.rs::add_fn` (`shadows_a_method`).
