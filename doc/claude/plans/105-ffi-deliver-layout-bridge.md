@@ -282,16 +282,45 @@ harness at the end):
   memory.grow-safety cell: force a `memory.grow()` mid-read and assert the reader
   re-derives its view (no detached-buffer throw).
 
-### Phase 3 — iterator cursors for keyed collections
+### Phase 3 — keyed collections (design DECIDED 2026-07-15: pre-flatten, NOT JS cursors)
 
-`loft_iter_open/next/close` + `readIterated`. Proves JS reconstructs a keyed collection
-*without any layout knowledge*.
+Proves JS reconstructs a keyed collection *without any layout knowledge*.
 
-- **Code points:** `src/database/mod.rs` (existing iteration over `Hash`/`Index`/`Radix` —
-  cursors wrap it); the `loft_io` extern block + `buildLoftImports`.
-- **Falsifier / test:** deliver a value containing `hash<T>` + `index<T>` + spatial; JS
-  walks via cursors; assert the reconstructed multiset (count + values) == the
-  interpreter's iteration. JS code path touches **no** hash/tree/spatial constant.
+**Architecture decision — PRE-FLATTEN over JS cursors.** The plan sketched JS calling
+`loft_iter_open/next/close` back into wasm. But `loft_start` creates the `Stores` as a LOCAL
+`UnsafeCell` on its stack (`let cell = UnsafeCell::new(Stores::new()); … n_main(&cell)`;
+`generation/mod.rs:1887`) — there is **no global `Stores`**, so a JS-called `loft_iter_*` EXPORT
+cannot reach the running store without making the store global (a large, aliasing-risky change to
+loft's explicit `&cell` threading). The plan's own stated fallback — "pre-flatten-to-`Vector` if
+cursor state proves awkward under the borrow window" — is therefore the right path, and it
+**reuses the P2.c reader unchanged** (a flattened keyed collection is just an array of records).
+
+**Reuse found.** loft ALREADY materialises a keyed collection to an iterable rec-nr vector — the
+exact path `for x in hash` uses: `Stores::build_hash_sorted_vec` / `build_hash_unsorted_vec` /
+`build_radix_sorted_vec` / `build_radix_range_vec` (`database/allocation.rs:1004+`, all `&mut
+self`, returning a `DbRef`). `deliver` runs as `fn deliver(s: &mut State)` (`fill.rs:2319`), so
+`&mut Stores` is reachable — `deliver_reconstruct` can take `&mut self`.
+
+**Build plan / subtleties to handle:**
+1. **Scratch layout indirection.** `build_rec_scratch` returns a HEADER record (offset-4 → data
+   rec; data rec offset-4 → count `n`; offset-8 → `n` u32 rec-nrs). That is `Array`-shaped (by-ref
+   records) but with ONE extra header hop the P2.c `array` node does not model — either add a
+   descriptor node (`FlatIterated`) that encodes the hop, or normalise the scratch to a plain
+   `Array` before delivery.
+2. **Per-kind coverage.** hash + radix have `build_*_vec`; **`index`/`sorted` still need a
+   materialiser** (or a shared "records in key order" over `Ordered`).
+3. **Nested keyed fields.** A struct with a keyed FIELD needs a flattened TWIN of the whole value
+   (recursively replace `Iterated` fields with materialised arrays), not just a top-level swap.
+
+**First step (verifiable slice):** top-level `deliver(tag, my_hash)` → `deliver_reconstruct`
+detects the root is `Iterated::Hash`, calls `build_hash_sorted_vec`, delivers the scratch as an
+array-of-elem; extend `tests/deliver_wasm.rs` to assert the reconstructed multiset == the
+interpreter's `for x in h` order. Then index/sorted/radix, then nested twins.
+
+- **Falsifier / test:** deliver a value containing `hash<T>` + `index<T>` + spatial; JS reads the
+  materialised arrays via the existing reader; assert the reconstructed multiset (count + values)
+  == the interpreter's iteration. JS touches **no** hash/tree/spatial constant — it only ever sees
+  an array of element records.
 
 ### Phase 4 — routing migration (consumer acceptance; owned by routing's agent)
 
