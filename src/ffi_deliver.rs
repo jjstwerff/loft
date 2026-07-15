@@ -65,20 +65,23 @@ impl Stores {
     /// ends when this returns, so `desc` stays owned across the `loft_host_deliver` call.
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
     fn deliver_browser(&mut self, tag: i64, val: DbRef, db_tp: u16) {
-        use crate::database::{Iterated, LayoutNode};
+        use crate::database::LayoutNode;
         if val.rec == 0 {
             return;
         }
         let mut desc = self.layout_descriptor(&[db_tp]);
         match desc.nodes.get(&db_tp).cloned() {
-            // A top-level keyed `hash<T>`: materialise to an array + deliver a FlatArray root.
-            Some(LayoutNode::Iterated(Iterated::Hash { elem, .. })) => {
-                let data = self.materialize_hash(val, db_tp);
-                let mut adesc = self.layout_descriptor(&[elem]);
-                adesc
-                    .nodes
-                    .insert(FLAT_ARRAY_ROOT, LayoutNode::FlatArray { elem, data });
-                self.emit_deliver(tag, val, FLAT_ARRAY_ROOT, &adesc.to_json());
+            // A top-level keyed collection: materialise to an array + deliver a FlatArray root.
+            Some(LayoutNode::Iterated(it)) => {
+                if let Some(data) = self.materialize_keyed(val, db_tp, &it) {
+                    let elem = it.elem();
+                    let mut adesc = self.layout_descriptor(&[elem]);
+                    adesc
+                        .nodes
+                        .insert(FLAT_ARRAY_ROOT, LayoutNode::FlatArray { elem, data });
+                    self.emit_deliver(tag, val, FLAT_ARRAY_ROOT, &adesc.to_json());
+                }
+                // A kind without a materialiser yet (sorted / ordered / index) — deliver nothing.
             }
             // A struct: flatten any DIRECT keyed fields in place (each becomes a FlatArray node).
             Some(LayoutNode::Record(_)) => {
@@ -90,13 +93,28 @@ impl Stores {
         }
     }
 
-    /// Materialise a keyed hash at `hash_ref` (of type `tp`) to a scratch element array and return
-    /// its DATA record in the value's store — the fixed `data` of a `FlatArray` node.
-    /// `build_rec_scratch` returns `(header, pos)` where `header[pos]` holds the data record.
+    /// Materialise a keyed collection at `coll_ref` (type `tp`) to a scratch element array in the
+    /// value's store, returning its DATA record — the fixed `data` of a `FlatArray` node
+    /// (`build_rec_scratch` returns `(header, pos)` where `header[pos]` holds the data record).
+    /// `hash` and `radix`/`spatial` reuse loft's own `for x in coll` materialisers, so JS gets the
+    /// same key-ordered sequence. `sorted`/`ordered`/`index` have no `build_*_vec` (a later slice)
+    /// → `None`.
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
-    fn materialize_hash(&mut self, hash_ref: DbRef, tp: u16) -> u32 {
-        let scratch = self.build_hash_sorted_vec(&hash_ref, tp);
-        self.allocations[scratch.store_nr as usize].get_u32_raw(scratch.rec, scratch.pos)
+    fn materialize_keyed(
+        &mut self,
+        coll_ref: DbRef,
+        tp: u16,
+        it: &crate::database::Iterated,
+    ) -> Option<u32> {
+        use crate::database::Iterated;
+        let scratch = match it {
+            Iterated::Hash { .. } => self.build_hash_sorted_vec(&coll_ref, tp),
+            Iterated::Radix { .. } => self.build_radix_sorted_vec(&coll_ref, tp),
+            Iterated::Sorted { .. } | Iterated::Ordered { .. } | Iterated::Index { .. } => {
+                return None;
+            }
+        };
+        Some(self.allocations[scratch.store_nr as usize].get_u32_raw(scratch.rec, scratch.pos))
     }
 
     /// Replace each DIRECT keyed FIELD of record `db_tp` with a `FlatArray` node carrying the
@@ -112,7 +130,7 @@ impl Stores {
         val: DbRef,
         db_tp: u16,
     ) {
-        use crate::database::{Iterated, LayoutNode};
+        use crate::database::LayoutNode;
         let fields = match desc.nodes.get(&db_tp) {
             Some(LayoutNode::Record(f)) => f.clone(),
             _ => return,
@@ -121,18 +139,21 @@ impl Stores {
         let mut synth = FLAT_ARRAY_ROOT;
         let mut changed = false;
         for (i, f) in fields.iter().enumerate() {
-            let elem = match desc.nodes.get(&f.content) {
-                Some(LayoutNode::Iterated(Iterated::Hash { elem, .. })) => *elem,
+            let it = match desc.nodes.get(&f.content) {
+                Some(LayoutNode::Iterated(it)) => it.clone(),
                 _ => continue,
             };
-            // The hash field SLOT `(val.rec, val.pos + f.position)` holds the bucket claim
-            // (`hash::records` reads it there), so it IS the hash's DbRef for materialisation.
-            let hash_ref = DbRef {
+            // The keyed field SLOT `(val.rec, val.pos + f.position)` holds the collection root
+            // (`hash::records` / the iterators read it there), so it IS the collection's DbRef.
+            let coll_ref = DbRef {
                 store_nr: val.store_nr,
                 rec: val.rec,
                 pos: val.pos + u32::from(f.position),
             };
-            let data = self.materialize_hash(hash_ref, f.content);
+            let Some(data) = self.materialize_keyed(coll_ref, f.content, &it) else {
+                continue; // sorted / ordered / index field — not yet materialised (later slice)
+            };
+            let elem = it.elem();
             desc.nodes
                 .insert(synth, LayoutNode::FlatArray { elem, data });
             new_fields[i].content = synth;

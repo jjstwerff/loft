@@ -336,10 +336,26 @@ error/placeholder arm), only injected at deliver time. Verified end-to-end
 (`deliver_flattens_nested_hash_field_in_js`): `Bag{ label, items: hash<Item>, count }` →
 `{label:"mybag", items:[{ik:10,…},{ik:20,…}], count:3}` (scalars in place, hash key-sorted).
 
-**REMAINING:** index/sorted/radix materialisers (radix has `build_radix_sorted_vec`; index/sorted
-need a "records in key order" helper); keyed collections nested DEEPER (a keyed field inside a
-SUB-struct, or a keyed ELEMENT type — `flatten_record_keyed_fields` only walks the root record's
-DIRECT fields today); and `expose` (long-lived pinning).
+**All keyed kinds with a `build_*_vec` materialiser — DONE.** `materialize_keyed` dispatches on the
+`Iterated` kind: **`hash`** → `build_hash_sorted_vec` (key-sorted), **`radix`/`spatial`** →
+`build_radix_sorted_vec` (Morton/natural order — verified `deliver_flattens_top_level_spatial_in_js`
+reconstructs `(0,0),(1,2),(3,3)` == the interpreter's `for m in xs`). Both top-level and struct-field
+paths use it. `sorted`/`ordered`/`index` return `None` (delivered nothing / stay Iterated) — no
+regression, just not yet supported.
+
+**REMAINING keyed kinds — `sorted` + `index`** (no `build_*_vec`, and the descriptor emitter marks
+them `Iterated` = "not a plain vector layout"):
+- **`sorted<T>`** is STORED as a vector: the field holds `sorted_rec` (`get_i32_raw`), `len` at
+  `sorted_rec[4]`. Likely deliverable by RECLASSIFYING the `Iterated::Sorted` node to `Array`/`Vector`
+  (no materialisation) — but the element layout (rec-nrs vs inline, key-column interleave) must be
+  VERIFIED first (that is *why* the emitter left it `Iterated`, not `Vector`).
+- **`index<T>`** is a B-tree walked with start/finish (`state/io.rs`, `on=index`) — NO records
+  collector exists; needs a NEW in-order tree-walk helper (`build_index_sorted_vec`) before it can
+  feed the same `FlatArray` path.
+
+**Other remaining:** keyed collections nested DEEPER (a keyed field inside a SUB-struct, or a keyed
+ELEMENT type — `flatten_record_keyed_fields` only walks the root record's DIRECT fields today); and
+`expose` (long-lived pinning).
 
 - **Falsifier / test:** deliver a value containing `hash<T>` + `index<T>` + spatial; JS reads the
   materialised arrays via the existing reader; assert the reconstructed multiset (count + values)

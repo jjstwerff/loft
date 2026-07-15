@@ -173,3 +173,29 @@ fn main() {
         "nested-hash-field mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn deliver_flattens_top_level_spatial_in_js() {
+    // @PLN105 Phase 3 — a `spatial`/radix collection: pre-flattened via build_radix_sorted_vec (the
+    // same tree-walk `for x in xs` uses), so JS reconstructs the elements in NATURAL (Morton)
+    // order, identical to the interpreter's iteration.
+    let src = r#"
+struct Pt { x: integer, y: integer }
+fn main() {
+  xs: spatial<Pt[x, y]> = [];
+  xs += [Pt{x: 3, y: 3}];
+  xs += [Pt{x: 1, y: 2}];
+  xs += [Pt{x: 0, y: 0}];
+  deliver(1, xs);
+}
+"#;
+    let Some(stdout) = run_deliver("spatial", src) else {
+        return; // toolchain self-skip
+    };
+    // Morton/Z-order (== the interpreter's `for m in xs`): (0,0), (1,2), (3,3).
+    let want_value = "\"value\":[{\"x\":0,\"y\":0},{\"x\":1,\"y\":2},{\"x\":3,\"y\":3}]";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "flattened spatial mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}
