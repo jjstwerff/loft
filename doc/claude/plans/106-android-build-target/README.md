@@ -8,14 +8,30 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Tracker:** [`loft-lang/plans#106`](https://github.com/loft-lang/plans/issues/106) — the
 B2–B4 arc (APK packaging · EGL/GL surface · touch/IME). B0/B1 are this doc's §0–§1b.
 
-**Status:** **B0 CONFIRMED + B1 LANDED** (2026-07-14, on `tuxedo-work`). The invariant
-held: loft's target-agnostic generated core cross-compiles to `aarch64-linux-android`
-unchanged, and `loft --native-android <prog>` now produces a genuine bionic AArch64
-`.so`. B2–B4 remain and are tracked in @PLN106; they are validatable **locally on the
-KVM-accelerated Android emulator** (build the x86_64 twin via
-`LOFT_ANDROID_TARGET=x86_64-linux-android`), so they are not device-blocked. **Consumer /
-dogfood:** `../ssh_home` (a pure-loft SSH phone terminal) is unblocked for its headless
-slice; its GL surface waits on B3. **Branch:** `tuxedo-work`.
+## Status — ✅ SHIPPED / DONE (2026-07-15, on `tuxedo-work`)
+
+The invariant held all the way through: a **build target is a descriptor over ONE
+target-agnostic generated core** (`src/android.rs` is the chokepoint), so every capability
+below runs an **UNCHANGED** loft program. All proven on the KVM-accelerated Android emulator
+(x86_64 twin via `LOFT_ANDROID_TARGET=x86_64-linux-android`; ship target `aarch64-linux-android`).
+
+| Phase | What shipped | Proof |
+|---|---|---|
+| **B0/B1** | invariant falsified-and-held; `--native-android` → bionic AArch64 `.so` | §0/§1b below |
+| **B2** | NativeActivity `android_main` + signed APK packaging inside loft | `b2-spike/` |
+| **B3** | GLES-3.0 backend for `lib/graphics` — clear → shapes/shaders → **text** | `b3-spike/*_golden.png` |
+| **B4 touch** | `gl_mouse_*` ← android-activity `MotionEvent`s | `b4_touch_golden.png` |
+| **B4 IME** | `gl_show_keyboard()` + `gl_key_pressed` ← `KeyEvent`s | `b4_ime_golden.png` |
+| **audio** | oboe/AAudio via `audio_play_raw` (vector ABI fix) | `b4_audio_golden.png` |
+| **deep recursion** | 512MB `android_main` stack (matches `NATIVE_MAIN_STACK`) | `b4_stack_golden.png` |
+
+Commits `b270145b`→`17938565` (this session) on top of the B0–B2 arc. Reference for
+**using** the target lives in [NATIVE.md § Android target](../../NATIVE.md#android-target);
+the implementation is `src/android.rs` + the cfg-gated `android_gl.rs` in the graphics fixture.
+**Known follow-up (not blocking):** B4 IME covers `KeyEvent`s only — NativeActivity has no
+`TextEvent`, so IME *composing* text would need a new `gl_text_input()` text-stream API.
+
+Everything below §0 is the **HISTORICAL design record** (the hypothesis that was executed).
 
 ## 0. What B0 found (the falsification pass — run, not guessed)
 

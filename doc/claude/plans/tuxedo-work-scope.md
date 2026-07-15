@@ -15,11 +15,12 @@ Working notes for the `tuxedo-work` branch. Two independent tracks the user grou
   `tests/engine_host_kernel.rs`. Root cause pinned (leaked swap-child orphan the stem pgrep
   misses); "flake gone" UNPROVEN (intermittent, could not force). RESUME: soak-watch s5/s7 in
   CI; file a `loft-lang/loft` bug (pre-existing, both-mode).
-- **Track B — B0 CONFIRMED + B1 LANDED + B2 SPIKE PROVEN** (`106-android-build-target/`,
-  tracked as **@PLN106**): loft Android target for `../ssh_home`. Invariant held (generated
-  core cross-compiles to `aarch64-linux-android` unchanged); `loft --native-android prog.loft`
-  produces a bionic AArch64 `.so`. Code: `src/android.rs` + `--native-android` in `main.rs` +
-  `tests/android_target.rs`. **B2 spike** (`106-android-build-target/b2-spike/`) proved the
+- **Track B — ✅ DONE / @PLN106 CLOSED (2026-07-15)** (`106-android-build-target/`): loft
+  Android build target, complete end-to-end. B0–B4 + audio + big-stack all shipped and proven
+  on the KVM emulator with unchanged loft programs — cross-compile → `--native-android` →
+  signed APK → GLES render (clear/shapes/text) → touch → keyboard/IME → oboe audio → 512MB
+  android_main stack. Reference: [NATIVE.md § Android target](../NATIVE.md#android-target).
+  Original design/history below (kept as the scope record). **B2 spike** (`106-android-build-target/b2-spike/`) proved the
   APK pipeline end to end: a NativeActivity APK launched on a headless KVM emulator, logcat
   showed `android_main reached` + the loft program's output (`sum of squares 0..8 = 140`).
   Toolchain installed locally: NDK r27c (`~/android-ndk-r27c`), Android SDK
