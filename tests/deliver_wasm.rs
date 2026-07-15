@@ -199,3 +199,53 @@ fn main() {
         "flattened spatial mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn deliver_reads_top_level_sorted_in_js() {
+    // @PLN105 Phase 3 — a `sorted<T>` is stored as an INLINE vector kept in key order
+    // (`sorted_finish` inserts each `+=` in sorted position), so it needs NO materialisation: it is
+    // reclassified to an in-place `Vector` node and read where it lives. Inserted {30,10,20} →
+    // key-sorted [10,20,30] == the interpreter's `for it in s`.
+    let src = r#"
+struct Item { k: integer, name: text }
+fn main() {
+  s: sorted<Item[k]> = [];
+  s += [Item{k: 30, name: "thirty"}];
+  s += [Item{k: 10, name: "ten"}];
+  s += [Item{k: 20, name: "twenty"}];
+  deliver(1, s);
+}
+"#;
+    let Some(stdout) = run_deliver("sorted", src) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":[{\"k\":10,\"name\":\"ten\"},{\"k\":20,\"name\":\"twenty\"},{\"k\":30,\"name\":\"thirty\"}]";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "sorted mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn deliver_reads_nested_sorted_field_in_js() {
+    // @PLN105 Phase 3 — a struct with a `sorted` field: scalars in place, the sorted field
+    // reclassified to a `Vector` node (in-place, key-ordered).
+    let src = r#"
+struct Item { k: integer, name: text }
+struct Cat { title: text, items: sorted<Item[k]>, n: integer }
+fn main() {
+  c: Cat = Cat { title: "cat", items: [], n: 5 };
+  c.items += [Item{k: 30, name: "thirty"}];
+  c.items += [Item{k: 10, name: "ten"}];
+  deliver(1, c);
+}
+"#;
+    let Some(stdout) = run_deliver("nestsorted", src) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":{\"title\":\"cat\",\"items\":[{\"k\":10,\"name\":\"ten\"},{\"k\":30,\"name\":\"thirty\"}],\"n\":5}";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "nested-sorted-field mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}

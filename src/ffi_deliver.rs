@@ -71,17 +71,15 @@ impl Stores {
         }
         let mut desc = self.layout_descriptor(&[db_tp]);
         match desc.nodes.get(&db_tp).cloned() {
-            // A top-level keyed collection: materialise to an array + deliver a FlatArray root.
+            // A top-level keyed collection: replace it with an array-shaped root (a materialised
+            // FlatArray for hash/radix, or an in-place Vector for sorted) and deliver at `val`.
             Some(LayoutNode::Iterated(it)) => {
-                if let Some(data) = self.materialize_keyed(val, db_tp, &it) {
-                    let elem = it.elem();
-                    let mut adesc = self.layout_descriptor(&[elem]);
-                    adesc
-                        .nodes
-                        .insert(FLAT_ARRAY_ROOT, LayoutNode::FlatArray { elem, data });
+                if let Some(node) = self.keyed_replacement(val, db_tp, &it) {
+                    let mut adesc = self.layout_descriptor(&[it.elem()]);
+                    adesc.nodes.insert(FLAT_ARRAY_ROOT, node);
                     self.emit_deliver(tag, val, FLAT_ARRAY_ROOT, &adesc.to_json());
                 }
-                // A kind without a materialiser yet (sorted / ordered / index) — deliver nothing.
+                // A kind not yet supported (ordered / index) — deliver nothing.
             }
             // A struct: flatten any DIRECT keyed fields in place (each becomes a FlatArray node).
             Some(LayoutNode::Record(_)) => {
@@ -93,36 +91,40 @@ impl Stores {
         }
     }
 
-    /// Materialise a keyed collection at `coll_ref` (type `tp`) to a scratch element array in the
-    /// value's store, returning its DATA record — the fixed `data` of a `FlatArray` node
-    /// (`build_rec_scratch` returns `(header, pos)` where `header[pos]` holds the data record).
-    /// `hash` and `radix`/`spatial` reuse loft's own `for x in coll` materialisers, so JS gets the
-    /// same key-ordered sequence. `sorted`/`ordered`/`index` have no `build_*_vec` (a later slice)
-    /// → `None`.
+    /// The descriptor node that replaces an `Iterated` keyed collection at `coll_ref` (type `tp`)
+    /// so JS can read its elements as an array (no keyed-layout knowledge). Two shapes:
+    ///   * `hash` / `radix`/`spatial` have no walkable byte layout → MATERIALISE to a scratch array
+    ///     (loft's own `for x in coll` path, so JS gets the same key/Morton order) and return a
+    ///     `FlatArray` node carrying the scratch's fixed data record.
+    ///   * `sorted` is ALREADY an INLINE vector kept IN KEY ORDER (`sorted_finish` inserts each
+    ///     element in sorted position on every `+=`), and its field holds that vector directly →
+    ///     just RECLASSIFY to an in-place `Vector` node (no materialisation).
+    /// `ordered` / `index` have no array form yet (a later slice) → `None`.
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
-    fn materialize_keyed(
+    fn keyed_replacement(
         &mut self,
         coll_ref: DbRef,
         tp: u16,
         it: &crate::database::Iterated,
-    ) -> Option<u32> {
-        use crate::database::Iterated;
+    ) -> Option<crate::database::LayoutNode> {
+        use crate::database::{Iterated, LayoutNode};
+        let elem = it.elem();
         let scratch = match it {
             Iterated::Hash { .. } => self.build_hash_sorted_vec(&coll_ref, tp),
             Iterated::Radix { .. } => self.build_radix_sorted_vec(&coll_ref, tp),
-            Iterated::Sorted { .. } | Iterated::Ordered { .. } | Iterated::Index { .. } => {
-                return None;
-            }
+            Iterated::Sorted { .. } => return Some(LayoutNode::Vector(elem)),
+            Iterated::Ordered { .. } | Iterated::Index { .. } => return None,
         };
-        Some(self.allocations[scratch.store_nr as usize].get_u32_raw(scratch.rec, scratch.pos))
+        let data =
+            self.allocations[scratch.store_nr as usize].get_u32_raw(scratch.rec, scratch.pos);
+        Some(LayoutNode::FlatArray { elem, data })
     }
 
-    /// Replace each DIRECT keyed FIELD of record `db_tp` with a `FlatArray` node carrying the
-    /// materialised element array — so a struct with a `hash` field delivers as
-    /// `{…scalars…, field: [elements]}`. The struct's own bytes stay in place; the keyed field's
-    /// in-place bytes (a store-internal hash) are ignored in favour of the FlatArray's fixed data
-    /// record. Keyed collections nested DEEPER (inside a sub-struct, or as an element type) are a
-    /// later slice.
+    /// Replace each DIRECT keyed FIELD of record `db_tp` with its array-shaped node
+    /// (`keyed_replacement`: a materialised `FlatArray` for hash/radix, an in-place `Vector` for
+    /// sorted) — so a struct with a keyed field delivers as `{…scalars…, field: [elements]}`. The
+    /// struct's own bytes stay in place. Keyed collections nested DEEPER (inside a sub-struct, or
+    /// as an element type) are a later slice.
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
     fn flatten_record_keyed_fields(
         &mut self,
@@ -144,18 +146,17 @@ impl Stores {
                 _ => continue,
             };
             // The keyed field SLOT `(val.rec, val.pos + f.position)` holds the collection root
-            // (`hash::records` / the iterators read it there), so it IS the collection's DbRef.
+            // (`hash::records` / the sorted vector pointer live there), so it IS the collection's
+            // DbRef — for materialisation (hash/radix) or in-place reclassification (sorted).
             let coll_ref = DbRef {
                 store_nr: val.store_nr,
                 rec: val.rec,
                 pos: val.pos + u32::from(f.position),
             };
-            let Some(data) = self.materialize_keyed(coll_ref, f.content, &it) else {
-                continue; // sorted / ordered / index field — not yet materialised (later slice)
+            let Some(node) = self.keyed_replacement(coll_ref, f.content, &it) else {
+                continue; // ordered / index field — not yet supported (later slice)
             };
-            let elem = it.elem();
-            desc.nodes
-                .insert(synth, LayoutNode::FlatArray { elem, data });
+            desc.nodes.insert(synth, node);
             new_fields[i].content = synth;
             synth -= 1;
             changed = true;

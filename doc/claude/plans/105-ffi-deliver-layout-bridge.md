@@ -343,15 +343,19 @@ reconstructs `(0,0),(1,2),(3,3)` == the interpreter's `for m in xs`). Both top-l
 paths use it. `sorted`/`ordered`/`index` return `None` (delivered nothing / stay Iterated) — no
 regression, just not yet supported.
 
-**REMAINING keyed kinds — `sorted` + `index`** (no `build_*_vec`, and the descriptor emitter marks
-them `Iterated` = "not a plain vector layout"):
-- **`sorted<T>`** is STORED as a vector: the field holds `sorted_rec` (`get_i32_raw`), `len` at
-  `sorted_rec[4]`. Likely deliverable by RECLASSIFYING the `Iterated::Sorted` node to `Array`/`Vector`
-  (no materialisation) — but the element layout (rec-nrs vs inline, key-column interleave) must be
-  VERIFIED first (that is *why* the emitter left it `Iterated`, not `Vector`).
-- **`index<T>`** is a B-tree walked with start/finish (`state/io.rs`, `on=index`) — NO records
-  collector exists; needs a NEW in-order tree-walk helper (`build_index_sorted_vec`) before it can
-  feed the same `FlatArray` path.
+**`sorted<T>` — DONE (reclassify to `Vector`, no materialisation).** VERIFIED empirically: a sorted
+collection is stored as an INLINE vector (elements at `sorted_rec[8 + size*i]`, `len` at
+`sorted_rec[4]`) kept in KEY ORDER — `sorted_finish` binary-search-inserts each element on every
+`+=`, so it is sorted at deliver time. So `keyed_replacement` reclassifies `Iterated::Sorted` →
+`Vector(elem)` (the field holds the vector directly, read in place — no scratch, no FlatArray).
+[First-guess `Array` (by-ref rec-nrs) gave garbage-but-right-count → proved INLINE, so `Vector`.]
+Verified `deliver_reads_top_level_sorted_in_js` + `deliver_reads_nested_sorted_field_in_js`
+(inserted `{30,10,20}` → key-sorted `[10,20,30]` == the interpreter's `for it in s`).
+
+**REMAINING keyed kind — `index`** (no `build_*_vec`; emitter marks it `Iterated`): a B-tree walked
+with start/finish (`state/io.rs`, `on=index`) — NO records collector exists; needs a NEW in-order
+tree-walk helper (`build_index_sorted_vec`) before it can feed the `FlatArray` path. (`ordered` is
+an internal kind not user-constructible as a top-level collection.)
 
 **Other remaining:** keyed collections nested DEEPER (a keyed field inside a SUB-struct, or a keyed
 ELEMENT type — `flatten_record_keyed_fields` only walks the root record's DIRECT fields today); and
