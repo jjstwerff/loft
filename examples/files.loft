@@ -13,7 +13,7 @@ fn main() {
   out = file(path);
   out.write("first line\nsecond line\nthird line\n");
   // Re-open to read the contents.
-  contents = file(path).content();
+  contents = file(path).content() ?? "";
   // Count newlines for the line count.
   line_count = 0;
   for ch in contents {
