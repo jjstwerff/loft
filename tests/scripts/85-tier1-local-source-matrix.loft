@@ -31,7 +31,7 @@ fn ro_local_elem() -> integer {
 }
 
 // ── UNSAFE: divergence events — must stay COPY ─────────────────────────────────
-fn d1_write_v() -> integer { x = G { c: [10, 20, 30] }; v = x.c; v[0] = 99; x.c[0] ?? -1 }
+fn d1_write_v() -> integer { x = G { c: [10, 20, 30] }; v = x.c; v[0] = 99; assert((v[0] ?? -1) == 99, "the copy itself WAS mutated"); x.c[0] ?? -1 }
 fn d2_mut_src() -> integer { x = G { c: [10, 20, 30] }; v = x.c; x.c[0] = 99; v[0] ?? -1 }
 fn d3_escape() -> vector<integer> { x = G { c: [10, 20, 30] }; v = x.c; v }
 

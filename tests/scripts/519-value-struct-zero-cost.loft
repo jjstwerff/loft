@@ -35,6 +35,7 @@ fn main() {
   w = b3;
   w.items[0].x = 88;
   assert(r.x == 5, "snapshot survives co-alias mutation (got {r.x}, want 5)");
+  assert(w.items[0].x == 88, "the copy itself WAS mutated (got {w.items[0].x})");
 
   // escape via return is an independent copy
   b4 = Bag { items: [Pt { x: 7, y: 8 }] };
