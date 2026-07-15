@@ -6673,10 +6673,10 @@ const imports={{loft_io:{{
   // (JSON) to a JS hook. SYNCHRONOUS: read within this call (the borrow ends on return). The
   // generic descriptor-driven reader is added in Phase 2c; here a minimal hook so the bundle
   // instantiates and a harness can observe deliveries via `globalThis.loftDeliver`.
-  loft_host_deliver:(tag,base,type_id,dptr,dlen)=>{{
+  loft_host_deliver:(tag,store_base,rec,pos,type_id,dptr,dlen)=>{{
     const desc=dec.decode(new Uint8Array(mem.buffer,dptr,dlen));
-    if(globalThis.loftDeliver)globalThis.loftDeliver(tag,base,type_id,desc,mem);
-    else console.log("[loft:deliver] tag="+tag+" type="+type_id+" base="+base+" desc="+desc);
+    if(globalThis.loftDeliver)globalThis.loftDeliver(tag,store_base,rec,pos,type_id,desc,mem);
+    else console.log("[loft:deliver] tag="+tag+" type="+type_id);
   }}
 }}}};
 WebAssembly.instantiate(wasmBytes,imports).then(r=>{{

@@ -253,10 +253,26 @@ harness at the end):
   wired in). **Runtime-correctness deferred to P2.d** (the node harness validates the `base`
   address + field-offset reads); TEXT is store-INTERNED (`get_str(get_u32_raw(rec,pos))`), so the
   JS reader (P2.c) needs a string-resolution host-fn, not an inline byte read.
-- **P2.c — the generic JS `read()`** in `doc/loft-gl-wasm.js:47` `buildLoftImports` (currently 5
-  `loft_io` imports — follow the `loft_host_http_get` precedent). Scalar → text → record →
-  vector (+ the scalar-vector typed-array fast lane) → ref → enum.
-- **P2.d — the node harness (the whole-slice falsifier)** + memory.grow cell.
+- **P2.c — the generic descriptor-driven JS reader. ✅ DONE.** `readLoftValue(mem, storeBase,
+  desc, typeId, rec, pos)` in `doc/loft-deliver.js` — the twin of `read_via_descriptor`, kept in
+  lockstep. Addressing `storeBase + rec*8 + pos` (`Store::checked_offset`); handles the whole
+  serializable subset: scalar (i64/f32/f64/bool/char) + narrow int (byte/short/int) + INTERNED
+  text (resolved inline at `id*8+8` — NO host-fn needed, the P2.b worry was unfounded) + nested
+  record/enumvalue + value enum + vector (with the scalar-vector typed-array FAST LANE —
+  `Int32Array`/`Float32Array`/`BigInt64Array` zero-copy views) + by-ref array; refuses
+  store-internal ref/childrec/iterated exactly as `read_via_descriptor` (cursor-walked in Phase
+  3). The P2.b handle was corrected to pass `(store_base, rec, pos)` — a pre-computed root
+  address alone can't FOLLOW child records. Both shims updated to the 7-arg handle + expose it
+  via `globalThis.loftDeliver`.
+- **P2.d — the whole-slice falsifier. ✅ DONE (core).** `tools/deliver_repro.mjs` (node:
+  instantiate the `--html` wasm, wire `loft_host_deliver`→`readLoftValue`, capture) +
+  `tests/deliver_wasm.rs` (build `--html` → extract wasm → run node → assert). Green:
+  `Outer{ name:"hi", inner:{a:7,b:1.5}, nums:[10,20,30], ok:true }` reconstructs BYTE-IDENTICALLY
+  to the interpreter loopback (`6869`="hi", `07..`=7, `f83f`=1.5, `0a/14/1e`=10/20/30, `01`=true)
+  — **the parity gate interpret == native == --html now holds end-to-end.** REMAINING (small): a
+  memory.grow-mid-read safety cell; more corpus shapes (value-enum `disc`, by-ref array, narrow
+  ints); inlining the reader into the shims so a real page auto-reconstructs (today they expose
+  the handle to `globalThis.loftDeliver`).
 
 - **Code points:** `doc/loft-gl-wasm.js:47` (`buildLoftImports` — add the deliver/desc/iter
   host fns); `src/main.rs` `--html` assembly (embeds this glue).

@@ -43,8 +43,18 @@ impl Stores {
             if val.rec != 0 {
                 let desc = self.layout_descriptor(&[db_tp]).to_json();
                 let store = &self.allocations[val.store_nr as usize];
-                let base = std::ptr::from_ref(store.addr::<u8>(val.rec, val.pos)) as usize;
-                crate::loft_host_deliver(tag, base, u32::from(db_tp), desc.as_ptr(), desc.len());
+                // `Store.ptr` IS the store buffer's base address in wasm linear memory; the reader
+                // addresses everything as `store_base + rec*8 + pos`, so it can follow child records.
+                let store_base = store.ptr as usize;
+                crate::loft_host_deliver(
+                    tag,
+                    store_base,
+                    val.rec,
+                    val.pos,
+                    u32::from(db_tp),
+                    desc.as_ptr(),
+                    desc.len(),
+                );
             }
             return;
         }

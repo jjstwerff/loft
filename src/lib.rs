@@ -63,15 +63,19 @@ unsafe extern "C" {
     pub(crate) safe fn loft_host_http_get(url_ptr: *const u8, url_len: usize) -> usize;
     pub(crate) safe fn loft_host_http_get_copy(ptr: *mut u8);
     // @PLN105 Phase 2 — `deliver(tag, value)`: hand the JS host a self-describing handle to a
-    // live loft value with no serialization.  `base` is the value record's RAW byte address in
-    // wasm linear memory (`store.ptr + offset`); `desc_ptr/desc_len` is the layout descriptor as
-    // JSON (`LayoutDesc::to_json`, memoized host-side by `type_id`).  SYNCHRONOUS — unlike
-    // `loft_host_http_get` it is NOT in the asyncify allowlist; the borrow ends when this returns,
-    // so JS must finish reading (or copy out) before then (§5 borrow contract).  The generic JS
-    // reader walks the value from `base` driven by the descriptor (Phase 2 §2).
+    // live loft value with no serialization.  `store_base` is the value's Store buffer base in
+    // wasm linear memory (`Store.ptr`); `(rec, pos)` is its `DbRef` within that store.  The reader
+    // addresses ANY node as `store_base + rec*8 + pos` (`Store::checked_offset`), so it can FOLLOW
+    // child records (a vector field holds a child record-index; strings are interned records at
+    // `id*8+8`) — which a pre-computed root address alone could not do.  `desc_ptr/desc_len` is
+    // the layout descriptor as JSON (`LayoutDesc::to_json`, memoized host-side by `type_id`).
+    // SYNCHRONOUS — unlike `loft_host_http_get` it is NOT in the asyncify allowlist; the borrow
+    // ends when this returns, so JS must finish reading (or copy out) before then (§5 borrow).
     pub(crate) safe fn loft_host_deliver(
         tag: i64,
-        base: usize,
+        store_base: usize,
+        rec: u32,
+        pos: u32,
         type_id: u32,
         desc_ptr: *const u8,
         desc_len: usize,
