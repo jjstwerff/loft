@@ -160,7 +160,9 @@ until then the above is the whole surface.
    the pre-flight, so a lib a language change broke is excluded before it can be signed.
 4. **DONE (adjacent) — reusable library CI** (`.github/workflows/library-ci-reusable.yml`
    + `scripts/deploy-library-ci.sh`) and the freeze-gate **`revalidate-libs.yml`**.
-5. **TODO — docs**: a `REGISTRY_SUBMIT.md` update for the `submissions/` path.
+5. **DONE — docs**: [REGISTRY_SUBMIT.md](../../REGISTRY_SUBMIT.md) § "4 (recommended) — stage
+   a `submissions/` file" documents the `submissions/<name>-<version>.json` format + the
+   vet-and-fold flow.
 
 ## See also
 

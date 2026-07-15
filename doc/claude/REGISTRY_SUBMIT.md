@@ -206,6 +206,69 @@ full reference.
 Open the PR.  Title format: `add my-lib 0.1.0` (or for
 subsequent versions, `add my-lib 0.2.0`).
 
+### 4 (recommended) — stage a `submissions/` file instead of editing `index.json`
+
+Editing `index.json` directly (above) has two drawbacks: your PR can **race** the
+signed index (two PRs touching the same file, or a maintainer publish landing
+between your CI run and the merge), and nothing **validates** your library before it
+is trusted.  The **`submissions/` path** fixes both (@PLN102 C96): you add a small
+staging file that *never touches `index.json`*, and the maintainer's `loft ship` run
+puts it through the full validation gate before folding it in.
+
+Add **one file**, `submissions/<name>-<version>.json`, in your registry PR — nothing
+else:
+
+```json
+{
+  "name": "my-lib",
+  "version": "0.1.0",
+  "repo": "<owner>/<repo>",
+  "tag": "v0.1.0",
+  "subpath": "my-lib",
+  "description": "One sentence on what the library does.",
+  "homepage": "https://github.com/<owner>/<repo>",
+  "entry": {
+    "url": "https://github.com/<owner>/<repo>/releases/download/v0.1.0/my-lib-0.1.0.tar.gz",
+    "sha256": "<hex from step 2>",
+    "size": <N from step 2>,
+    "loft": ">=0.8",
+    "subpath": "my-lib",
+    "deps": {}
+  }
+}
+```
+
+Fields:
+
+| Field | Required | Meaning |
+|---|---|---|
+| `name` | ✓ | the package name (matches its `loft.toml`) |
+| `version` | ✓ | the version being submitted (matches `loft.toml`) |
+| `repo` | ✓ | `<owner>/<repo>` GitHub source — the vetter clones it |
+| `tag` | ✓ | the **release tag** from step 1 (`v0.1.0`, or `<name>-v<version>` in a multi-package repo) |
+| `subpath` | ✓ for a multi-package repo | the package **dir** inside the repo (e.g. `crypto`); defaults to `name` |
+| `entry` | ✓ | the index entry — exactly what `loft package` prints (step 2), so `url` / `sha256` / `size` / `loft`; `deps` etc. as needed. **Omit `published`** — the fold stamps it. |
+| `description`, `homepage` | optional | seed a brand-new package's index metadata (ignored if the package already exists) |
+
+Generating it is copy-paste from step 2: `loft package` already prints the `entry`
+body; wrap it and add `name`/`version`/`repo`/`tag`/`subpath`.
+
+What the maintainer's `loft ship` does with it (no human step unless flagged):
+
+1. **Vets** `repo@tag` through `scripts/vet-lib.sh` — the same V1–V6 gate own libs
+   pass: it compiles + runs your tests against the current loft, checks metadata, and
+   flags any `#rust`/`#native` code.
+2. On **PASS** (pure loft), folds `entry` into `index.json`, deletes the staging file,
+   and **re-signs** — all in one atomic commit.  The sign step re-verifies your
+   `sha256` against the actual release tarball, so a wrong hash is caught there.
+3. **`#native`/`#rust`** code → a one-time human **review** before admission (arbitrary
+   native code is never auto-trusted); a **gate failure** → reported, not admitted.
+
+Because the submission never edits `index.json`, it can't race the signed index, and
+because it is vetted before it is folded, a broken or incompatible library never
+reaches consumers.  Title the PR `submit my-lib 0.1.0`.  (The direct-`index.json` edit
+above still works and is merged the same way, but it is being superseded by this path.)
+
 ### 5. Wait for CI + maintainer review
 
 The registry's CI runs `tools/validate.py` automatically.
