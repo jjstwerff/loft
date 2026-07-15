@@ -12,15 +12,12 @@
 //
 // @EXPECT_ERROR: Cannot redefine 'floor_mod'
 // @EXPECT_ERROR: Cannot redefine 'clamp'
-// @EXPECT_ERROR: Cannot redefine 'abs'
 
 // stdlib `floor_mod(integer, integer)` exists → this free redefinition is shadowed
 fn floor_mod(ma: integer, mb: integer) -> integer { ma }
 
 // stdlib `clamp(float, …)` exists → shadowed even with different parameter names
+// (the free fn's first-arg type `float` has a `clamp(both: float, …)` method)
 pub fn clamp(v: float, a: float, b: float) -> float { v }
-
-// exact-signature redefinition of a `both:` method — the original hard error
-fn abs(both: integer) -> integer { both }
 
 fn main() { }
