@@ -1973,6 +1973,90 @@ pub fn dump_all(data: &Data) {
     );
 }
 
+/// @PLN107 S4a — the ENFORCED dead-store lint (`LOFT_DEAD_STORES`). Warns when a non-escaping
+/// local is mutated via an `OpSet*` (`d[i]=x`, `d.f=x`) yet its value is never read AND it OWNS
+/// its store — the copy-mutate footgun (`d = self.data; d[i]=x` COPIES, so the write is lost).
+///
+/// Runs POST-`scopes::check` (called from `main` after the program loads) so the copy-idiom /
+/// value-struct-copy rewrites are in place and [`ownership_of`] is reliable: a `Borrowed`/`Join`
+/// var aliases a source it borrows (a `&`-reference, a reference-struct field alias, a
+/// vector-element view), so its write PROPAGATES and is NOT a dead store — only `Owned` copies
+/// warn. The read/write split is [`dead_store_accesses`]; exclusions mirror `test_used`
+/// (`_`/`#` temporaries, arguments, closure-captured, global shadows). The `reads==0 &&
+/// write_targets>0` signal implies `uses>0`, so this lint and `test_used` (`uses==0`) are
+/// disjoint. Populates `diags`; the caller renders them. Sibling of [`warn_copies`].
+pub fn warn_dead_stores(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    if !crate::keys::dead_stores_enabled() {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) {
+            continue;
+        }
+        let func = &def.variables;
+        let n = func.var_count();
+        let acc = dead_store_accesses(&def.code, n, data);
+        for i in 0..n {
+            let v = i as u16;
+            let name = func.name(v);
+            if name.starts_with('_')
+                || name.contains('#')
+                || func.is_argument(v)
+                || func.is_captured(v)
+                || data.def_nr(name) != u32::MAX
+            {
+                continue;
+            }
+            // A `&`-reference (`RefVar`) explicitly aliases its target; a write through it always
+            // propagates, so never a dead store — exclude regardless of the ownership verdict.
+            if matches!(func.tp(v), crate::data::Type::RefVar(_)) {
+                continue;
+            }
+            let (reads, write_targets) = acc.get(i).copied().unwrap_or((0, 0));
+            // The dead-store signal: mutated via an `OpSet*` (write_targets>0) but never read
+            // (reads==0). A var mutated this way was read as the write BASE at parse, so `uses`
+            // was >0 there and `test_used` (uses==0) stayed silent — the two lints are disjoint
+            // structurally. (`uses` is not maintained in the post-scopes `def.variables`.)
+            if !(reads == 0 && write_targets > 0) {
+                continue;
+            }
+            // A dead store requires the var to OWN its store (a copy). A Borrowed/Join var
+            // aliases a source it borrows, so the write PROPAGATES — not dead. Exception: the
+            // copy idiom builds a vector copy as `OpGetField(__vdb, …)`, so `ownership_of` reports
+            // `Borrowed{base=__vdb}` for a genuinely-owned copy — a base that is a SYNTH buffer
+            // (or the var itself) means owned-via-buffer, not an alias of a live sibling
+            // (`is_synth_buffer`, the P0.2 finding shared with `report_copies`).
+            let owns = match ownership_of(data, d_nr, &Value::Var(v)) {
+                Own::Owned => true,
+                Own::Borrowed { base } | Own::Join { base } => {
+                    base == v || (base != u16::MAX && is_synth_buffer(func.name(base)))
+                }
+            };
+            if !owns {
+                continue;
+            }
+            let (line, col) = func.var_source(v);
+            let msg = format!(
+                "'{name}' is mutated but its value is never read — the write is lost. A \
+                 whole-value bind (`{name} = …`) COPIES the heap value; write through the \
+                 original in place, or take a `&` reference."
+            );
+            diags.add_at(
+                crate::diagnostics::Level::Warning,
+                &msg,
+                fallback_file,
+                line,
+                col,
+            );
+        }
+    }
+}
+
 /// @PLN90 W5 — the ENFORCED copy lint (`LOFT_WARN_COPIES`). Routes every **Avoidable** unbound
 /// structure copy (a still-live value duplicated where a borrow/move would remove it — the
 /// worklist) through the normal `Level::Warning` diagnostics channel, so it surfaces during a

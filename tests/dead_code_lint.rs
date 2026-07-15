@@ -42,6 +42,7 @@ fn run(backend: &str) -> (String, String, Option<i32>) {
         .arg(spec_path())
         .env_remove("LOFT_NO_WARN_RUNTIME")
         .env("LOFT_TIMEOUT", "180")
+        .env("LOFT_NO_CACHE", "1") // parse-time diagnostics are skipped on a warm program cache
         .output()
         .expect("failed to invoke loft binary");
     (
@@ -135,6 +136,7 @@ fn classifier_dump() -> HashMap<(String, String), (u32, u32)> {
         .arg(spec_path())
         .env("LOFT_DUMP_READS", "1")
         .env("LOFT_TIMEOUT", "180")
+        .env("LOFT_NO_CACHE", "1") // parse-time diagnostics are skipped on a warm program cache
         .output()
         .expect("failed to invoke loft binary");
     let stderr = String::from_utf8_lossy(&out.stderr);
@@ -250,6 +252,7 @@ fn run_dead_stores(backend: &str) -> String {
         .arg(spec_path())
         .env("LOFT_DEAD_STORES", "1")
         .env("LOFT_TIMEOUT", "180")
+        .env("LOFT_NO_CACHE", "1") // parse-time diagnostics are skipped on a warm program cache
         .output()
         .expect("failed to invoke loft binary");
     String::from_utf8_lossy(&out.stderr).into_owned()

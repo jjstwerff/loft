@@ -1308,11 +1308,6 @@ impl Parser {
             }
             if !is_stub {
                 self.vars.test_used(&mut self.lexer, &self.data);
-                // @PLN107 S2 — dead-store lint (gated LOFT_DEAD_STORES, default off until the
-                // S4 suite-wide false-positive sweep). The body IR is final here.
-                let body = self.data.definitions[self.context as usize].code();
-                self.vars
-                    .test_dead_stores(body, &mut self.lexer, &self.data);
             }
             // P246 follow-up — UPPER_CASE locals without `const`
             // violate the "UPPER_CASE means immutable constant"

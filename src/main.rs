@@ -5457,6 +5457,9 @@ fn main() {
     // through the Warning channel so it surfaces with the other diagnostics.
     // Gated (no-op unless LOFT_WARN_COPIES); disjoint borrows of `p`'s fields.
     loft::use_analysis::warn_copies(&p.data, &mut p.diagnostics, &abs_file);
+    // @PLN107 S4a — the enforced dead-store lint (gated LOFT_DEAD_STORES). Runs here, after the
+    // program is loaded and scope-checked, so `ownership_of` sees the materialised copies.
+    loft::use_analysis::warn_dead_stores(&p.data, &mut p.diagnostics, &abs_file);
     if !p.diagnostics.is_empty() {
         // @P282 fix: when `--no-warnings` is set, suppress
         // Warning-level diagnostics entirely so the program's

@@ -346,6 +346,17 @@ pub fn warn_copies_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_WARN_COPIES").is_some())
 }
 
+/// `LOFT_DEAD_STORES=1` — @PLN107: the dead-store lint. Warns when a non-escaping local OWNS a
+/// copy that is mutated via an `OpSet*` but whose value is never read (the copy-mutate footgun,
+/// e.g. `d = self.data; d[i] = x` where the bind COPIES so the write is lost). Opt-IN + default
+/// OFF until the S4 suite-wide false-positive sweep lands (S5 flips it). One cached env read. See
+/// `use_analysis::warn_dead_stores`, `doc/claude/plans/107-dead-code-lint/`.
+#[must_use]
+pub fn dead_stores_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_DEAD_STORES").is_some())
+}
+
 /// @PLN90 W1: the temporary-subject borrow-return materialise (the coordinated promotion-verdict
 /// fix) — **DEFAULT ON**. When a `-> vector` fn's tail is a buffer-ABI call returning a borrow of a
 /// TEMPORARY subject the fn constructs (`fn h() -> vector<E> { g(Filled{..}) }`), the borrowed view
