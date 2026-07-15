@@ -1324,6 +1324,32 @@ a correctness gap.
   foreground `rustc` rebuild; move it to the background so even the settling run
   never blocks.
 
+## Android target
+
+**@PLN106 — SHIPPED 2026-07-15.** `loft --native-android [out.apk|out.so] prog.loft` cross-compiles the **same** target-agnostic
+generated core to Android — a build target is a **descriptor over one core**, not a codegen
+fork. All Android knowledge lives in `src/android.rs` (the `AndroidTarget` descriptor +
+`AndroidSdk`): it wraps the unchanged `output_native_reachable` emit in a generated cargo crate
+(program as crate root + a fixed `android_main` via the `android-activity` NativeActivity
+feature), cross-builds a lean `loft` rlib (fingerprint-keyed, isolated `target/loft/android/`),
+then packages a signed APK (aapt2 → `jar` → zipalign → apksigner, per-tree debug keystore) or
+emits the bare `.so`. Env: `ANDROID_NDK_HOME`, `ANDROID_HOME`, `JAVA_HOME`;
+`LOFT_ANDROID_TARGET` (default `aarch64-linux-android`; use `x86_64-linux-android` for the KVM
+emulator), `LOFT_ANDROID_API` (default 24). Needs a `fn main`.
+
+Graphics/input/audio run through the **cfg-gated** Android backend in the `lib/graphics` fixture
+(`native/src/android_gl.rs`): raw EGL/GLES-3.0 on `app.native_window()` (GLES 3.0 = WebGL2, so
+website GL programs run unchanged) + android-activity's event pump. An UNCHANGED loft program
+gets: rendering (clear/shapes/shaders/text), **touch** (feeds `gl_mouse_*` from `MotionEvent`s),
+**keyboard/IME** (`gl_show_keyboard()` + `gl_key_pressed` from `KeyEvent`s), and **audio**
+(oboe/AAudio via `audio_play_raw`). Two Android-specific runtime seams: `__run` runs INLINE on
+the `android_main` ALooper thread (the graphics poll must own it — see `generation/mod.rs`), and
+a `.init_array` constructor sets `RUST_MIN_STACK` to `NATIVE_MAIN_STACK` (512 MiB) so the
+call-depth guard's stack assumption holds (that thread is a default-stack `std::thread::spawn`).
+Vector-arg native fns (`gl_set_mat4`, `audio_play_raw`, …) export their store-aware `n_*` under
+the raw C-ABI symbol on Android (the `--native` C-ABI marshals `(LoftStore, LoftRef)`, not
+`(ptr, count)`). Full history + on-device goldens: [plans/106-android-build-target/](plans/106-android-build-target/README.md).
+
 ## See also
 - [PERFORMANCE.md](PERFORMANCE.md) — Benchmark results and detailed designs for O4 (direct collection emit), O5 (pure function `stores` omission), O6 (`long` sentinel removal) — the native-codegen performance items
 - [COMPILER.md](COMPILER.md) — Compiler pipeline: lexer, parser, IR, bytecode

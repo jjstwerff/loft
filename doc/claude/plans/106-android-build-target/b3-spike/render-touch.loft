@@ -1,0 +1,30 @@
+// @PLN106 B4 — touch input on Android. Unchanged loft graphics program: it reads the same
+// gl_mouse_* API the desktop uses. Idle = dark red; once touched it latches to green tinted
+// by the touch position (x→red, y→blue), so a headless `adb shell input tap X Y` produces a
+// deterministic, position-dependent colour we can screencap and check.
+use graphics;
+
+fn main() {
+  graphics::gl_create_window(320, 480, "loft touch");
+  touched = false;
+  lastx = 0.0;
+  lasty = 0.0;
+  i = 0;
+  while graphics::gl_poll_events() {
+    if graphics::gl_mouse_button() > 0 {
+      touched = true;
+      lastx = graphics::gl_mouse_x();
+      lasty = graphics::gl_mouse_y();
+    }
+    if touched {
+      r = (lastx / 320.0 * 255.0) as integer;
+      b = (lasty / 640.0 * 255.0) as integer;
+      graphics::gl_clear(graphics::rgb(r, 180, b));
+    } else {
+      graphics::gl_clear(graphics::rgb(60, 20, 20));
+    }
+    graphics::gl_swap_buffers();
+    i = i + 1;
+    if i > 3000 { return; }
+  }
+}

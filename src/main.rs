@@ -40,6 +40,7 @@ use loft::generation;
 use loft::log_config;
 use loft::logger;
 use loft::manifest;
+mod android;
 mod native_utils;
 use loft::parser;
 use loft::platform;
@@ -122,6 +123,10 @@ fn print_help() {
     println!("  --native-emit [out.rs]        write generated Rust source and exit");
     println!("                                (default: .loft/<script>.rs beside the script)");
     println!("  --native-wasm [out.wasm]      compile to WebAssembly (wasm32-wasip2)");
+    println!(
+        "  --native-android [out.apk]    cross-compile to a signed Android APK (needs \
+         ANDROID_NDK_HOME + ANDROID_HOME); a *.so output builds just the library"
+    );
     println!("                                (default: .loft/<script>.wasm beside the script)");
     println!("                                for headless/WASI (wasmtime); NOT the browser build");
     println!(
@@ -3971,6 +3976,7 @@ fn main() {
     // Some(path) = explicit output path
     let mut native_emit: Option<String> = None;
     let mut native_wasm: Option<String> = None;
+    let mut native_android: Option<String> = None;
     // Plan-07 phase 2: --errors=compact|pretty CLI flag (overrides
     // LOFT_ERRORS env var).  None = use env-or-default (Pretty).
     let mut error_mode_arg: Option<String> = None;
@@ -4200,6 +4206,17 @@ fn main() {
         } else if a == "--native-wasm" {
             // Optional path: consume next arg only if it looks like an output path
             native_wasm = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
+                let p = argv[i].clone();
+                i += 1;
+                p
+            } else {
+                String::new() // sentinel: compute default from file_name later
+            });
+        } else if a == "--native-android" {
+            // @PLN-android B1 — cross-compile to an Android cdylib `.so` via the
+            // NDK (aarch64-linux-android by default; ANDROID_NDK_HOME required).
+            // Optional path: consume next arg only if it looks like an output path.
+            native_android = Some(if argv.get(i).is_some_and(|s| is_output_path(s)) {
                 let p = argv[i].clone();
                 i += 1;
                 p
@@ -5440,6 +5457,9 @@ fn main() {
     // through the Warning channel so it surfaces with the other diagnostics.
     // Gated (no-op unless LOFT_WARN_COPIES); disjoint borrows of `p`'s fields.
     loft::use_analysis::warn_copies(&p.data, &mut p.diagnostics, &abs_file);
+    // @PLN107 S4a — the enforced dead-store lint (gated LOFT_DEAD_STORES). Runs here, after the
+    // program is loaded and scope-checked, so `ownership_of` sees the materialised copies.
+    loft::use_analysis::warn_dead_stores(&p.data, &mut p.diagnostics, &abs_file);
     if !p.diagnostics.is_empty() {
         // @P282 fix: when `--no-warnings` is set, suppress
         // Warning-level diagnostics entirely so the program's
@@ -5776,6 +5796,113 @@ fn main() {
     if check_only && !native_mode && native_emit.is_none() {
         println!("ok {abs_file}");
         return;
+    }
+
+    // Android cross-compile pipeline: --native-android (@PLN106 B1+B2).
+    // Emits the SAME target-agnostic Rust as --native / --native-wasm and hands
+    // it to the Android descriptor (src/android.rs), which wraps it in a generated
+    // NativeActivity crate (an `android_main` entry) and cross-builds a bionic
+    // cdylib `.so` with cargo + the NDK toolchain.
+    if let Some(ref android_out) = native_android {
+        // Default artifact is a runnable, signed `.apk`; pass an explicit `*.so`
+        // output to get just the NativeActivity library (needs only the NDK).
+        let android_out = if android_out.is_empty() {
+            default_artifact_path(&abs_file, "apk")
+                .to_str()
+                .unwrap_or("out.apk")
+                .to_string()
+        } else {
+            android_out.clone()
+        };
+        let target = match android::AndroidTarget::detect() {
+            Ok(t) => t,
+            Err(msg) => {
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
+        };
+        let end_def = p.data.definitions();
+        // The generated `android_main` runs the program's `fn main`, so an Android
+        // app needs one (unlike a `--native` test file, which can be entry-less).
+        if p.data.def_nr("n_main") >= end_def {
+            eprintln!(
+                "loft: --native-android needs a `fn main` (it becomes the app's \
+                 android_main entry); '{abs_file}' defines none."
+            );
+            std::process::exit(1);
+        }
+        // Per-process scratch so parallel --native-android runs never share the
+        // generated source (one rustc reading another's program).
+        let build_dir = platform::build_scratch_dir("android");
+        let rs_path = build_dir.join("prog.rs");
+        {
+            let mut f = match std::fs::File::create(&rs_path) {
+                Ok(f) => f,
+                Err(e) => {
+                    eprintln!(
+                        "loft: cannot write Android source to '{}': {e}",
+                        rs_path.display()
+                    );
+                    std::process::exit(1);
+                }
+            };
+            // @P379 — qualify native symbols for functions whose name collides
+            // across libraries (no-op without a collision).
+            p.data.namespace_colliding_native_fns();
+            let mut out = generation::Output::new(&p.data, &state.database);
+            // @PLN106 B3 — call native-package functions through the C-ABI marshalling
+            // (loft_ffi types + `#[link_name]` decls) exactly as the host binary does;
+            // the non-C-ABI extern-crate call path can't express their `loft_ffi`
+            // signatures. Android still links the package as a unified rlib (an
+            // `extern crate` prefix in src/android.rs force-links it), so the
+            // `#[link_name]` decls resolve to the rlib's `#[no_mangle]` symbols.
+            out.native_cabi = native_utils::native_cabi_enabled();
+            // @PLN98 P2 — `--lean` strips the live/debug tier from the emitted Rust.
+            if lean {
+                out.emit_live = false;
+            }
+            let main_nr = p.data.def_nr("n_main");
+            let entry_defs: Vec<u32> = if main_nr < end_def {
+                vec![main_nr]
+            } else {
+                (start_def..end_def).collect()
+            };
+            if let Err(e) = out.output_native_reachable(&mut f, start_def, end_def, &entry_defs) {
+                eprintln!("loft: Android code generation failed: {e}");
+                std::process::exit(1);
+            }
+        }
+        let result = target.build(
+            &rs_path,
+            std::path::Path::new(&android_out),
+            &p.data.native_packages,
+        );
+        if std::env::var("LOFT_KEEP_NATIVE_RS").is_err() {
+            let _ = std::fs::remove_file(&rs_path);
+        } else {
+            eprintln!(
+                "loft: Android source preserved at {} (LOFT_KEEP_NATIVE_RS)",
+                rs_path.display()
+            );
+        }
+        match result {
+            Ok(()) => {
+                let kind = if std::path::Path::new(&android_out)
+                    .extension()
+                    .is_some_and(|e| e.eq_ignore_ascii_case("apk"))
+                {
+                    "APK"
+                } else {
+                    "NativeActivity .so"
+                };
+                eprintln!("loft: wrote Android {kind} {android_out}");
+                return;
+            }
+            Err(msg) => {
+                eprintln!("{msg}");
+                std::process::exit(1);
+            }
+        }
     }
 
     // WASM codegen pipeline: --native-wasm

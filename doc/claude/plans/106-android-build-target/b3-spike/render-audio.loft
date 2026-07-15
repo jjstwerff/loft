@@ -1,0 +1,24 @@
+// @PLN106 audio — play synthesized PCM on Android via audio_play_raw (a vector<single> arg,
+// so this exercises the store-aware C-ABI fix). Green = audio_play_raw returned a valid sink
+// (device opened + playing); red = it failed. The sink index is also printed → logcat.
+use graphics;
+
+fn main() {
+  graphics::gl_create_window(320, 480, "loft audio");
+  // 0.5s ~441 Hz square wave at 22050 Hz (no trig needed).
+  n = 11025;
+  samples: vector<single> = [for i in 0..n { if (i % 50) < 25 { 0.4f } else { -0.4f } }];
+  sink = graphics::audio_play_raw(samples, 22050, 0.8);
+  print("audio_play_raw sink={sink}\n");
+  i = 0;
+  while graphics::gl_poll_events() {
+    if sink >= 0 {
+      graphics::gl_clear(graphics::rgb(0, 180, 0));
+    } else {
+      graphics::gl_clear(graphics::rgb(180, 0, 0));
+    }
+    graphics::gl_swap_buffers();
+    i = i + 1;
+    if i > 250 { return; }
+  }
+}

@@ -1,6 +1,8 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
+// @I70 — Database subsystem: the store-schema layout descriptor.
+//
 // @PLN105 Phase 0 — the layout DESCRIPTOR: a self-describing, structured twin of
 // the store's `Parts` schema, emitted once per type-closure so a *foreign* reader
 // (the browser JS bridge, later phases) can walk any loft value in linear memory

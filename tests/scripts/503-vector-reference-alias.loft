@@ -38,11 +38,13 @@ fn main() {
   copy = base;
   copy[0] = 1;
   assert(base[0] == 5, "plain bind copies: base[0]={base[0]}");
+  assert((copy[0] ?? -1) == 1, "the copy itself WAS mutated: copy[0]={copy[0]}");
 
   h = Grid { cells: [8, 9] };
   cc = h.cells;
   cc[0] = 0;
   assert(h.cells[0] == 8, "plain field bind copies: cells[0]={h.cells[0]}");
+  assert((cc[0] ?? -1) == 0, "the copy itself WAS mutated: cc[0]={cc[0]}");
 
   print("503-vector-reference-alias ok\n");
 }

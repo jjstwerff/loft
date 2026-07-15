@@ -16,13 +16,22 @@
 
 use loft_ffi_macros::loft_native;
 
-use glutin::prelude::*;
 use std::cell::{Cell, RefCell};
+// The desktop backend (glutin+winit) — cfg'd off on Android, which uses `android_gl`
+// (raw EGL/GLES on the ANativeWindow) instead. See `android_gl.rs`.
+#[cfg(not(target_os = "android"))]
+use glutin::prelude::*;
+#[cfg(not(target_os = "android"))]
 use std::time::Duration;
+#[cfg(not(target_os = "android"))]
 use winit::application::ApplicationHandler;
+#[cfg(not(target_os = "android"))]
 use winit::event::WindowEvent;
+#[cfg(not(target_os = "android"))]
 use winit::event_loop::ActiveEventLoop;
+#[cfg(not(target_os = "android"))]
 use winit::platform::pump_events::{EventLoopExtPumpEvents, PumpStatus};
+#[cfg(not(target_os = "android"))]
 use winit::window::WindowId;
 
 // Re-export audio functions at the crate root so external crates
@@ -37,10 +46,11 @@ use audio::n_audio_play_raw;
 // Plan-25 F4: the audio bridges live in the `audio` module; bring them into
 // scope so `loft_register_bridges!` (which takes bare idents) can see them.
 use audio::{
-    loft_audio_load__loft_bridge, loft_audio_play__loft_bridge,
-    loft_audio_set_volume__loft_bridge, loft_audio_stop__loft_bridge,
-    n_audio_play_raw__loft_bridge,
+    loft_audio_load__loft_bridge, loft_audio_play__loft_bridge, loft_audio_set_volume__loft_bridge,
+    loft_audio_stop__loft_bridge, n_audio_play_raw__loft_bridge,
 };
+#[cfg(target_os = "android")]
+pub mod android_gl;
 mod shader;
 mod text;
 mod window;
@@ -48,11 +58,18 @@ mod window;
 // ── Thread-local GL state ───────────────────────────────────────────────
 
 struct GlState {
+    #[cfg(not(target_os = "android"))]
     #[allow(dead_code)] // kept alive to prevent window destruction
     window: winit::window::Window,
+    #[cfg(not(target_os = "android"))]
     surface: glutin::surface::Surface<glutin::surface::WindowSurface>,
+    #[cfg(not(target_os = "android"))]
     context: glutin::context::PossiblyCurrentContext,
+    #[cfg(not(target_os = "android"))]
     event_loop: winit::event_loop::EventLoop<()>,
+    // Android: raw EGL/GLES surface on the ANativeWindow (see `android_gl`).
+    #[cfg(target_os = "android")]
+    android: android_gl::AndroidGl,
     should_close: bool,
     // GL viewport size chosen at creation (selected-monitor size for
     // fullscreen) — returned by the window-size getters so callers don't
@@ -111,7 +128,29 @@ thread_local! {
     static PENDING_RESIZE: std::cell::Cell<Option<(u32, u32)>> = const { std::cell::Cell::new(None) };
 }
 
-// Map winit key codes to a simple 0-255 index.
+// @PLN106 B4 — Android touch feeds the SAME shared pointer state the desktop path fills from
+// winit events, so `loft_gl_mouse_x/y/button` read touch identically (no new loft API). Called
+// from `android_gl::poll` on the `android_main` thread — the same thread the loft program runs
+// on, so these thread-local cells are shared with the `gl_mouse_*` reads.
+#[cfg(target_os = "android")]
+pub(crate) fn set_pointer_pos(x: f64, y: f64) {
+    MOUSE_X.with(|c| c.set(x));
+    MOUSE_Y.with(|c| c.set(y));
+}
+#[cfg(target_os = "android")]
+pub(crate) fn set_pointer_down(down: bool) {
+    // Touch maps to the left mouse button (bit 0), matching the desktop `MouseButton::Left`.
+    MOUSE_BTN.with(|c| c.set(u8::from(down)));
+}
+/// @PLN106 B4 IME — set a key's pressed state (`idx` is the 0-255 index `gl_key_pressed`
+/// reads, matching the desktop `key_index` scheme). Called from `android_gl::drain_input`.
+#[cfg(target_os = "android")]
+pub(crate) fn set_key(idx: u8, pressed: bool) {
+    KEYS.with(|k| k.borrow_mut()[idx as usize] = pressed);
+}
+
+// Map winit key codes to a simple 0-255 index. Desktop-only; Android input is B4.
+#[cfg(not(target_os = "android"))]
 fn key_index(key: &winit::keyboard::Key) -> Option<u8> {
     use winit::keyboard::NamedKey;
     match key {
@@ -156,10 +195,12 @@ fn key_index(key: &winit::keyboard::Key) -> Option<u8> {
     }
 }
 
+#[cfg(not(target_os = "android"))]
 struct JsonApp {
     should_close: bool,
 }
 
+#[cfg(not(target_os = "android"))]
 impl ApplicationHandler for JsonApp {
     fn resumed(&mut self, _event_loop: &ActiveEventLoop) {}
     fn window_event(&mut self, _el: &ActiveEventLoop, _id: WindowId, event: WindowEvent) {
@@ -267,14 +308,20 @@ pub extern "C" fn loft_gl_create_fullscreen_window(title_ptr: *const u8, title_l
 #[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_set_fullscreen(on: bool) {
-    use winit::window::Fullscreen;
-    with_gl(|s| {
-        if on {
-            s.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
-        } else {
-            s.window.set_fullscreen(None);
-        }
-    });
+    #[cfg(not(target_os = "android"))]
+    {
+        use winit::window::Fullscreen;
+        with_gl(|s| {
+            if on {
+                s.window.set_fullscreen(Some(Fullscreen::Borderless(None)));
+            } else {
+                s.window.set_fullscreen(None);
+            }
+        });
+    }
+    // An Android NativeActivity is always fullscreen — nothing to toggle.
+    #[cfg(target_os = "android")]
+    let _ = on;
 }
 
 /// Current window inner size in physical pixels.  Needed because a
@@ -299,6 +346,11 @@ pub extern "C" fn loft_gl_window_height() -> i64 {
 #[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_poll_events() -> bool {
+    #[cfg(target_os = "android")]
+    {
+        return with_gl_mut(android_gl::poll).unwrap_or(false);
+    }
+    #[cfg(not(target_os = "android"))]
     with_gl_mut(|s| {
         let mut handler = JsonApp {
             should_close: false,
@@ -346,7 +398,10 @@ pub extern "C" fn loft_gl_swap_buffers() {
         gl::ColorMask(gl::TRUE, gl::TRUE, gl::TRUE, gl::TRUE);
     }
     with_gl(|s| {
+        #[cfg(not(target_os = "android"))]
         let _ = s.surface.swap_buffers(&s.context);
+        #[cfg(target_os = "android")]
+        android_gl::swap(s);
     });
 }
 
@@ -515,8 +570,11 @@ pub extern "C" fn loft_gl_draw(vao: i64, n_vertices: i64) {
 /// Upload a vector<single> as a vertex buffer. Returns VAO handle.
 /// stride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).
 /// Interpreter path: receives LoftStore + LoftRef for the data vector.
+/// @PLN106 B3 — on Android this store-aware version owns the `loft_gl_upload_vertices`
+/// C-ABI symbol (see `n_gl_set_mat4`).
 #[loft_native]
-#[unsafe(no_mangle)]
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
+#[cfg_attr(target_os = "android", unsafe(export_name = "loft_gl_upload_vertices"))]
 pub unsafe extern "C" fn n_gl_upload_vertices(
     store: loft_ffi::LoftStore,
     data: loft_ffi::LoftRef,
@@ -534,8 +592,17 @@ pub unsafe extern "C" fn n_gl_upload_vertices(
 
 /// Set a mat4 uniform from a vector<float> (16 elements, column-major).
 /// Interpreter path: receives LoftStore + LoftRef for the mat vector.
+// @PLN106 B3 — on Android the graphics package is linked as a unified rlib and the
+// generated C-ABI native calls (`native_cabi=true`) pass `LoftStore` + `LoftRef` and
+// link the symbol `loft_gl_set_mat4`. That symbol must therefore be this store-aware
+// version, not the raw `loft_gl_set_mat4(*const f64, u32)` (which the registry-based
+// interpreter path never links). So on Android export THIS under the C-ABI name and
+// cfg the raw one out. (The host currently links the raw symbol — a pre-existing
+// mismatch that only surfaces when graphics runs via `--native`, not the interpreter
+// or browser.)
 #[loft_native]
-#[unsafe(no_mangle)]
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
+#[cfg_attr(target_os = "android", unsafe(export_name = "loft_gl_set_mat4"))]
 pub unsafe extern "C" fn n_gl_set_mat4(
     store: loft_ffi::LoftStore,
     program: i64,
@@ -573,6 +640,8 @@ pub unsafe extern "C" fn n_gl_set_mat4(
 
 /// Upload a vertex buffer from a raw f32 pointer.  Returns VAO handle.
 /// data_ptr/count: elements in the vector<single>; stride: floats per vertex.
+/// (Not on Android — `n_gl_upload_vertices` owns the C-ABI symbol there.)
+#[cfg(not(target_os = "android"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn loft_gl_upload_vertices(
     data_ptr: *const f32,
@@ -593,6 +662,8 @@ pub unsafe extern "C" fn loft_gl_upload_vertices(
 
 /// Set a mat4 uniform from a raw f64 pointer (vector<float> element type).
 /// Converts the 16 f64 values to f32 before passing to OpenGL.
+/// (Not on Android — `n_gl_set_mat4` owns the `loft_gl_set_mat4` C-ABI symbol there.)
+#[cfg(not(target_os = "android"))]
 #[unsafe(no_mangle)]
 pub unsafe extern "C" fn loft_gl_set_mat4(
     program: i64,
@@ -919,6 +990,24 @@ pub extern "C" fn loft_gl_key_pressed(key_code: i64) -> bool {
     KEYS.with(|k| k.borrow()[key_code as usize])
 }
 
+/// @PLN106 B4 IME — show the on-screen keyboard. No-op on desktop (physical keyboard); on
+/// Android raises the soft keyboard so its keys arrive as `KeyEvent`s, fed into `KEYS` by
+/// `android_gl::drain_input` (so `gl_key_pressed` reads typed keys).
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_show_keyboard() {
+    #[cfg(target_os = "android")]
+    crate::android_gl::show_keyboard();
+}
+
+/// @PLN106 B4 IME — hide the on-screen keyboard. No-op on desktop.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_hide_keyboard() {
+    #[cfg(target_os = "android")]
+    crate::android_gl::hide_keyboard();
+}
+
 #[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_mouse_x() -> f64 {
@@ -1048,7 +1137,12 @@ pub extern "C" fn loft_gl_draw_elements(vao: i64, n_indices: i64, mode: i64) {
     };
     unsafe {
         gl::BindVertexArray(vao as u32);
-        gl::DrawElements(gl_mode, n_indices as i32, gl::UNSIGNED_INT, std::ptr::null());
+        gl::DrawElements(
+            gl_mode,
+            n_indices as i32,
+            gl::UNSIGNED_INT,
+            std::ptr::null(),
+        );
         gl::BindVertexArray(0);
     }
 }
@@ -1311,7 +1405,10 @@ pub extern "C" fn loft_gl_load_texture(path_ptr: *const u8, path_len: usize) -> 
 /// mapping user-supplied top-left screen coords to GL clip-space, so
 /// sprite and texture shaders can sample with identity V (no per-shader
 /// flip).
-#[unsafe(no_mangle)]
+/// @PLN106 B3 — on Android the store-aware `n_gl_upload_canvas` owns the
+/// `loft_gl_upload_canvas` C-ABI symbol and calls this by Rust name, so drop the
+/// `#[no_mangle]` here (keep the fn — it does the actual texture upload).
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
 pub extern "C" fn loft_gl_upload_canvas(
     data_ptr: *const i64,
     data_count: u32,
@@ -1339,8 +1436,12 @@ pub extern "C" fn loft_gl_upload_canvas(
 // Interpreter wrapper — extracts vector data via LoftStore + LoftRef.
 // Cannot use vec_wrapper! because the auto-marshaller's store snapshot
 // may be stale for canvas data (issue #120 store lifecycle).
+// @PLN106 B3 — on Android this owns the `loft_gl_upload_canvas` C-ABI symbol (see
+// `n_gl_set_mat4`); it reads the canvas vector from the store, so the C-ABI call's
+// `data_count` no longer arrives as 0.
 #[loft_native]
-#[unsafe(no_mangle)]
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
+#[cfg_attr(target_os = "android", unsafe(export_name = "loft_gl_upload_canvas"))]
 pub unsafe extern "C" fn n_gl_upload_canvas(
     store: loft_ffi::LoftStore,
     data: loft_ffi::LoftRef,
@@ -1354,6 +1455,24 @@ pub unsafe extern "C" fn n_gl_upload_canvas(
 }
 loft_ffi::vec_wrapper!(n_save_png, loft_save_png(path_ptr: *const u8, path_len: usize, width: i64, height: i64, data: vec<i64>) -> bool);
 loft_ffi::vec_wrapper!(n_rasterize_text_into, loft_rasterize_text_into(font_idx: i64, text_ptr: *const u8, text_len: usize, size: f64, buf: vec<i64>) -> i64);
+
+// @PLN106 B3 — export the store-aware `vec_wrapper!` output under the `loft_*` C-ABI
+// symbol on Android (the macro can't set `export_name` itself), so the generated
+// `native_cabi` decls (LoftStore + LoftRef) resolve to the store-aware version
+// rather than the raw ptr+count one. Same fix as `n_gl_set_mat4` for the two
+// `vec_wrapper!` functions a graphics program can reach.
+#[cfg(target_os = "android")]
+#[unsafe(export_name = "loft_rasterize_text_into")]
+pub unsafe extern "C" fn __loft_android_rasterize_text_into(
+    store: loft_ffi::LoftStore,
+    font: i64,
+    content_ptr: *const u8,
+    content_len: usize,
+    size: f64,
+    buf: loft_ffi::LoftRef,
+) -> i64 {
+    unsafe { n_rasterize_text_into(store, font, content_ptr, content_len, size, buf) }
+}
 
 /// Return the line height in pixels for a font at the given size — fontdue's
 /// real `new_line_size` (@P340/#252), falling back to `size * 1.2` for a font
@@ -1384,7 +1503,10 @@ pub extern "C" fn loft_gl_font_ascent(font_idx: i64, size: f64) -> f64 {
 /// pixel `k+1` from row index `k+1` showed `alpha[2k+2]` — text
 /// rasterised with every-other-pixel zero, the checker overlay
 /// visible on Brick Buster's title.
-#[unsafe(no_mangle)]
+/// @PLN106 B3 — on Android the store-aware `n_rasterize_text_into` (vec_wrapper!)
+/// owns the `loft_rasterize_text_into` C-ABI symbol (via the export wrapper below)
+/// and calls this by Rust name, so drop the `#[no_mangle]` here.
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
 pub extern "C" fn loft_rasterize_text_into(
     font_idx: i64,
     text_ptr: *const u8,
@@ -1475,6 +1597,8 @@ loft_ffi::loft_register! {
     loft_gl_draw_fullscreen_quad,
     // Input
     loft_gl_key_pressed,
+    loft_gl_show_keyboard,
+    loft_gl_hide_keyboard,
     loft_gl_mouse_x,
     loft_gl_mouse_y,
     loft_gl_mouse_button,
@@ -1549,6 +1673,8 @@ loft_ffi::loft_register_bridges! {
     "loft_gl_create_color_texture" => loft_gl_create_color_texture__loft_bridge,
     "loft_gl_draw_fullscreen_quad" => loft_gl_draw_fullscreen_quad__loft_bridge,
     "loft_gl_key_pressed" => loft_gl_key_pressed__loft_bridge,
+    "loft_gl_show_keyboard" => loft_gl_show_keyboard__loft_bridge,
+    "loft_gl_hide_keyboard" => loft_gl_hide_keyboard__loft_bridge,
     "loft_gl_mouse_x" => loft_gl_mouse_x__loft_bridge,
     "loft_gl_mouse_y" => loft_gl_mouse_y__loft_bridge,
     "loft_gl_mouse_button" => loft_gl_mouse_button__loft_bridge,

@@ -26,6 +26,7 @@ fn test_var_assignment_copies() {
   s2 = s1;
   s2.val = 77;
   assert(s1.val == 1, "var-to-var must deep-copy, got {s1.val}");
+  assert(s2.val == 77, "the copy itself WAS mutated independently, got {s2.val}");
 }
 
 fn test_slot_write_copies() {

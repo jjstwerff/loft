@@ -1,0 +1,27 @@
+// @PLN106 — deep-recursion stress for the android_main stack. `deep` is NOT tail-recursive
+// (the `+ 1` runs after the call), so it holds 100000 native stack frames at once — far more
+// than the android_main thread's default ~2MB stack, but well within the 512MB desktop stack.
+// Green = the recursion completed (big stack); a crash/red = stack overflow.
+use graphics;
+
+fn deep(n: integer) -> integer {
+  if n <= 0 { return 0; }
+  return 1 + deep(n - 1);
+}
+
+fn main() {
+  graphics::gl_create_window(320, 480, "loft stack");
+  r = deep(9000);
+  print("deep(9000)={r}\n");
+  i = 0;
+  while graphics::gl_poll_events() {
+    if r == 9000 {
+      graphics::gl_clear(graphics::rgb(0, 180, 0));
+    } else {
+      graphics::gl_clear(graphics::rgb(180, 0, 0));
+    }
+    graphics::gl_swap_buffers();
+    i = i + 1;
+    if i > 100 { return; }
+  }
+}

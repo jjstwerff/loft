@@ -1,0 +1,15 @@
+use graphics;
+fn main() {
+  graphics::gl_create_window(320, 480, "loft rects");
+  painter = graphics::create_painter_2d(320.0, 480.0);
+  i = 0;
+  while graphics::gl_poll_events() {
+    graphics::gl_clear(graphics::rgb(20, 24, 48));
+    graphics::draw_rect_at(painter, 30.0, 60.0, 120.0, 90.0, 1.0, 0.5, 0.0, 1.0);
+    graphics::draw_rect_at(painter, 170.0, 60.0, 120.0, 90.0, 0.2, 0.8, 0.3, 1.0);
+    graphics::draw_rect_at(painter, 100.0, 250.0, 120.0, 120.0, 0.3, 0.5, 1.0, 1.0);
+    graphics::gl_swap_buffers();
+    i = i + 1;
+    if i > 300 { return; }
+  }
+}

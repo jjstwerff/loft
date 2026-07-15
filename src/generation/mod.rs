@@ -1931,10 +1931,12 @@ extern crate loft;"
                 w,
                 "    }};\n    \
                  // @PLN98 — the large-stack thread (@PLN28) is a NATIVE affordance;\n    \
-                 // wasm32 (wasip2 / browser) has no thread support, so run inline there.\n    \
-                 #[cfg(not(target_arch = \"wasm32\"))]\n    \
+                 // wasm32 (wasip2 / browser) has no thread support, and Android must run\n    \
+                 // on its `android_main` thread (the ALooper owner — a spawned thread\n    \
+                 // would panic in the graphics event pump), so both run `__run` inline.\n    \
+                 #[cfg(all(not(target_arch = \"wasm32\"), not(target_os = \"android\")))]\n    \
                  std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");\n    \
-                 #[cfg(target_arch = \"wasm32\")]\n    \
+                 #[cfg(any(target_arch = \"wasm32\", target_os = \"android\"))]\n    \
                  __run();"
             )?;
             writeln!(w, "}}")
@@ -1957,10 +1959,12 @@ extern crate loft;"
                 w,
                 "    }};\n    \
                  // @PLN98 — the large-stack thread (@PLN28) is a NATIVE affordance;\n    \
-                 // wasm32 (wasip2 / browser) has no thread support, so run inline there.\n    \
-                 #[cfg(not(target_arch = \"wasm32\"))]\n    \
+                 // wasm32 (wasip2 / browser) has no thread support, and Android must run\n    \
+                 // on its `android_main` thread (the ALooper owner — a spawned thread\n    \
+                 // would panic in the graphics event pump), so both run `__run` inline.\n    \
+                 #[cfg(all(not(target_arch = \"wasm32\"), not(target_os = \"android\")))]\n    \
                  std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect(\"failed to spawn main-stack thread\").join().expect(\"main thread panicked\");\n    \
-                 #[cfg(target_arch = \"wasm32\")]\n    \
+                 #[cfg(any(target_arch = \"wasm32\", target_os = \"android\"))]\n    \
                  __run();"
             )?;
             writeln!(w, "}}")

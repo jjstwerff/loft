@@ -949,6 +949,12 @@ impl Function {
         self.variables[var_nr as usize].uses
     }
 
+    /// Number of variables in this function's table (@PLN107 — for the dead-store walk).
+    #[must_use]
+    pub fn var_count(&self) -> usize {
+        self.variables.len()
+    }
+
     pub fn is_defined(&self, var_nr: u16) -> bool {
         self.variables[var_nr as usize].defined
     }
@@ -1682,6 +1688,30 @@ impl Function {
                     var.name,
                 );
             }
+        }
+    }
+
+    /// @PLN107 S1 — observable dump of the dead-store access classification (value-observing
+    /// READS vs `OpSet*` WRITE-TARGET bases), gated on `LOFT_DUMP_READS`. Purely diagnostic:
+    /// no warning is emitted, so the classifier can be verified against the shape corpus
+    /// before S2 wires it into a lint. `uses` is printed alongside to make the read /
+    /// write-target split visible against the codegen counter it deliberately does NOT change
+    /// (`reads == 0 && write_targets > 0` is the future S2 dead-store signal — see
+    /// `doc/claude/plans/107-dead-code-lint/`).
+    pub fn debug_dead_store_dump(&self, fn_name: &str, body: &Value, data: &Data) {
+        if std::env::var_os("LOFT_DUMP_READS").is_none() {
+            return;
+        }
+        let acc = crate::use_analysis::dead_store_accesses(body, self.variables.len(), data);
+        for (i, var) in self.variables.iter().enumerate() {
+            if var.name.starts_with('_') || var.name.contains('#') || var.argument {
+                continue;
+            }
+            let (reads, write_targets) = acc.get(i).copied().unwrap_or((0, 0));
+            eprintln!(
+                "dead-store-dbg: fn={fn_name} var={} uses={} reads={reads} write_targets={write_targets}",
+                var.name, var.uses,
+            );
         }
     }
 

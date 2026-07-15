@@ -5,7 +5,37 @@
 
 use std::ffi::CString;
 
+/// @PLN106 B3 — down-convert desktop GLSL (`#version 330 core`) to GLSL ES 3.00 for
+/// Android's GLES-3.0 context, the same transform the loft website applies for WebGL2
+/// (`src/wasm_gl.rs::patch_shader`): swap the version, add the ES-required precision
+/// qualifiers, and default `gl_PointSize` if a vertex shader sets only `gl_Position`.
+/// Keeping it identical to the website's is what lets a website GL program run on
+/// Android unchanged.
+#[cfg(target_os = "android")]
+fn patch_shader_gles(src: &str) -> String {
+    let mut result = src.to_string();
+    for from in ["#version 330 core", "#version 330"] {
+        if result.contains(from) {
+            result = result.replace(from, "#version 300 es");
+            if let Some(pos) = result.find("#version 300 es") {
+                let end = pos + "#version 300 es".len();
+                let nl = result[end..].find('\n').map_or(end, |p| end + p + 1);
+                result.insert_str(nl, "precision highp float;\nprecision highp int;\n");
+            }
+            break;
+        }
+    }
+    if result.contains("gl_Position") && !result.contains("gl_PointSize") {
+        result = result.replace("gl_Position =", "gl_PointSize = 4.0; gl_Position =");
+    }
+    result
+}
+
 fn compile_shader(src: &str, shader_type: u32) -> Result<u32, String> {
+    #[cfg(target_os = "android")]
+    let patched = patch_shader_gles(src);
+    #[cfg(target_os = "android")]
+    let src = patched.as_str();
     let shader = unsafe { gl::CreateShader(shader_type) };
     let c_src = CString::new(src).map_err(|e| format!("CString: {e}"))?;
     unsafe {

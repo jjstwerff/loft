@@ -1,0 +1,24 @@
+// @PLN106 B3 text golden — an UNCHANGED loft graphics program that renders text on Android.
+// The glyph path: create_text_texture rasterizes "LOFT" into a Canvas (via draw_text →
+// blend_pixel) then uploads it as a GL texture; draw_texture_at samples it with the p2_tex
+// shader (which alpha-discards transparent pixels). This was invisible until the Canvas
+// copy-mutate dead-store fix (blend_pixel/set_pixel direct write-through) let the glyphs
+// actually reach the canvas.
+use graphics;
+
+fn main() {
+  graphics::gl_create_window(320, 480, "loft text");
+  font = graphics::gl_load_font("/data/local/tmp/font.ttf");
+  painter = graphics::create_painter_2d(320.0, 480.0);
+  tex = graphics::create_text_texture(font, "LOFT", 72.0, graphics::rgb(255, 255, 255));
+  tw = graphics::gl_measure_text(font, "LOFT", 72.0) as integer + 5;
+  th = graphics::gl_text_height(font, 72.0) + 4;
+  i = 0;
+  while graphics::gl_poll_events() {
+    graphics::gl_clear(graphics::rgb(20, 20, 60));
+    graphics::draw_texture_at(painter, tex, 30.0, 200.0, tw as float, th as float);
+    graphics::gl_swap_buffers();
+    i = i + 1;
+    if i > 300 { return; }
+  }
+}

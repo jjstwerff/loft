@@ -232,4 +232,6 @@ user renderer — `pretty` (default: `file:line:col` + source line + caret) vs `
 (single line; the test harness pins this). Diagnostic toggles (all default-on except
 soft-halt): `LOFT_NO_WARN_RUNTIME` (undefended-fault-site warning) · `LOFT_NO_HINT_NOT_NULL`
 (`not null` field hint) · `LOFT_FORMAT_BARE_NULL` (drop the `(reason)` suffix on `null`) ·
+`LOFT_NO_DEAD_STORES` (@PLN107 dead-store lint: a copy mutated but never read, e.g.
+`d = self.data; d[i]=x` where the bind COPIES so the write is lost) ·
 `LOFT_DEV_SOFT_HALT` (demote dev raises to log-and-continue so one run surfaces every fault).
