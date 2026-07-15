@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
+// @F54 — Browser / WASM target: the `deliver` FFI boundary that hands the host
+// (the browser JS bridge) a self-describing handle to a live loft value.
+//
 // @PLN105 Phase 1 — the `deliver` boundary + its LOOPBACK host.
 //
 // `deliver(tag, value)` hands the host a self-describing handle to a live loft

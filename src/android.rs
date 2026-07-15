@@ -1,5 +1,7 @@
 //! Android build target (`--native-android`) — @PLN106 (B1 + B2).
 //!
+//! @I68 — Native Rust generator (a build target over the shared native core).
+//!
 //! loft's native backend emits ONE target-agnostic Rust core and compiles it per
 //! target; a build target is just a *descriptor* — `(rust triple, linker, runtime
 //! entry, packaging)` — over that shared core (B0 confirmed the core cross-compiles
@@ -173,10 +175,11 @@ impl AndroidTarget {
         // but never `use`s the crate, so force-link its rlib) + the android_main tail.
         let program = std::fs::read_to_string(rs_path)
             .map_err(|e| format!("loft: read emitted program {}: {e}", rs_path.display()))?;
-        let externs: String = native_packages
-            .iter()
-            .map(|(c, _)| format!("extern crate {};\n", c.replace('-', "_")))
-            .collect();
+        let mut externs = String::new();
+        for (c, _) in native_packages {
+            use std::fmt::Write as _;
+            let _ = writeln!(externs, "extern crate {};", c.replace('-', "_"));
+        }
         let lib_rs = format!("{program}\n{externs}{}", android_main_tail(needs_gl_app));
         std::fs::write(src_dir.join("lib.rs"), lib_rs)
             .map_err(|e| format!("loft: write lib.rs: {e}"))?;
