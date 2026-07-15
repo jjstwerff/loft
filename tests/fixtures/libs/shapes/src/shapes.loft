@@ -86,10 +86,3 @@ pub fn aabb_depth_y(ax: float, ay: float, aw: float, ah: float,
   if !(ax < bx + bw && ax + aw > bx && ay < by + bh && ay + ah > by) { return 0.0; }
   min(ay + ah - by, by + bh - ay)
 }
-
-/// Clamp a value to the range [lo, hi].
-pub fn clamp(val: float, lo: float, hi: float) -> float {
-  if val < lo { return lo; }
-  if val > hi { return hi; }
-  val
-}

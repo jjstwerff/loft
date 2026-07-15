@@ -2779,9 +2779,10 @@ use #count instead"
             diagnostic!(
                 self.lexer,
                 Level::Error,
-                "par() worker reaches a parent-write callee: {}.  \
-                     Worker writes to non-local state silently vanish at thread join \
-                     (plan-06 D2.0).  Return the value instead.",
+                "par() worker {} — a par worker's captured state is READ-ONLY (@PLN102 C93): a \
+                     write to shared parent state is a data race, which loft disallows rather \
+                     than run.  Return the value from the worker and accumulate it in the fold \
+                     body instead.",
                 chain
             );
         }

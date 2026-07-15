@@ -2182,3 +2182,95 @@ Evaluation count of the place is observable semantics, so it freezes at contract
 - Owner ruling 2026-07-14 ("evaluate the place once").
 - **Rejected:** freezing double-evaluation — the divergent-index corruption makes it a silent-wrong, not a defensible edge.
 - Fix scope + plan: [compound-assign-place-once.md](plans/102-stability-contract/compound-assign-place-once.md).
+
+## C93 — A `par` worker's captured parent state is read-only; a write to it is a compile error
+
+**Catalogue:** @F2 (operators) / threading. Instances the platform rule *no runtime errors, ever* (DESIGN_DECISIONS [C80](#c80--)): we do not fault at runtime — we either DISALLOW what cannot work (a compile error) or make it work in a lesser state (null). A `par` data race cannot be made to "work" as null, so it is DISALLOWED. Sibling of the sandbox host-data read-only model.
+
+### Question
+
+A `par` worker whose body writes state captured from the enclosing scope is a data race — N threads mutating one store with no synchronisation:
+
+```loft
+struct Shared { n: integer }
+fn bump(s: Shared, x: integer) -> integer { s.n = s.n + x; x * 2 }   // writes shared s.n
+s = Shared { n: 0 };
+for x in [1,2,3,4,5,6,7,8] par(r = bump(s, x), 8) { total += r; }     // 8 threads write s.n
+```
+
+Today this does not race cleanly and it is not cleanly rejected: it falls through to a **codegen slot-panic** (`Incorrect var x[65535]`, `codegen.rs:3235`) — a runtime crash, the one thing the platform never does. The purity machinery exists (`Purity`, `ImpureCategory::ParentWrite`, `is_par_safe`, the phase-5b deep check) and even treats an un-annotated fn conservatively as `ParentWrite`, yet a user worker writing an *aliased reference/vector parameter* slips past it into the crash. How should an impure `par` worker be handled at contract 1?
+
+### Evaluation
+
+A data race is the single fault loft cannot resolve to a defined value: unlike an out-of-range read (→ null, C80) or an overflow (→ sentinel, C85), a race yields nondeterministic corruption that no null can stand in for. So the *"make it work in a lesser state"* half of the platform rule does not apply — the only faithful option is *"do not allow it,"* a compile error. And the signal is already present: the compiler knows which workers write captured state (`ParentWrite`). The cleanest expression is **data-centric, not analysis-centric**: the state a `par` worker captures from its parent is **read-only inside the worker, from the start** — the same principle by which host data and parameters are read-only unless explicitly update-linked (the sandbox model), applied to a second place. Then a write to it is a plain compile error *at the write* — `s.n = …` reports "cannot write `s` inside a `par` worker; it is read-only here" — and the race becomes **unexpressible**, not merely detected. The worker stays free to *read* captured state, read the element, compute, and *return* a value (folded sequentially); only writes to captured parent state are forbidden. This must land pre-freeze: it is an error-ADD, and the error surface can only shrink after contract 1 ([COMPATIBILITY.md](COMPATIBILITY.md) § the error surface).
+
+### Decision
+
+- **The parent state a `par` worker captures is read-only inside the worker.** A write to it — directly (`s.n = v`, `cap[i] = v`) or through a call that writes it (an aliased reference/vector argument bound to a writing parameter) — is a **compile error reported at the write site**, from the start. Part of the contract-1 freeze.
+- **No runtime error, no runtime crash.** The current `codegen.rs:3235` slot-panic on an impure worker is a bug this closes: the rejection lands at parse/type time, before codegen.
+- **The worker may READ captured state, the element, and locals, and RETURN a value.** Its own locals and the loop element stay mutable; only captured *parent* state is frozen read-only. Host I/O / PRNG (`HostIo`/`Prng`/`Io`) stay allowed — the host serialises them — matching the existing `ImpureCategory` split.
+- **`par` is deliberately STRICT — the false-positive friction is accepted (owner, 2026-07-14).** `par` is a complex construct in itself, so strictness is the right default: a worker the purity analysis flags as capturing-and-writing is rejected even when the write might have been benign (disjoint slots), rather than widening `par` to admit "sometimes-safe" mutation. The programmer restructures to a pure fold (return the value; accumulate sequentially) — which is what `par` is for.
+- **More capability, if ever needed, is a NEW inherently-safe construct — never a looser `par` (owner).** Broader shared-mutation parallelism would arrive as a *separate, inherently-safe* construct added additively (the compatibility ratchet — the reliable surface only grows), not by relaxing `par`'s read-only rule (which post-freeze is impossible anyway: loosening an error is fine, but re-tightening later is not, so `par` must be strict *now*). **Not currently envisioned** — the existing `par` already covers the need; this records the direction, not a planned construct.
+- **Rejected:** leaving the race as undefined behavior (the one hole in a memory-safe, no-runtime-error platform), and "defining" it by silently serialising or copying (surprising, and it hides the programmer's mistake rather than surfacing it).
+- Owner ruling 2026-07-14. Fix scope: [par-capture-readonly.md](plans/102-stability-contract/par-capture-readonly.md).
+
+## C94 — Integer `/` truncates toward zero and `%` takes the dividend's sign; `floor_mod` is the wrap-around helper
+
+**Catalogue:** @F2 (operators) / math. Fixes the sign convention for negative integer division at contract 1 — the one place a language must *pick* (C, Rust, Go, Java, JS truncate; Python, Ruby floor). Both are legitimate; the freeze needs one named default.
+
+### Question
+
+For integer `/` and `%` with a negative operand, two self-consistent conventions exist, differing only in how they round a negative quotient:
+
+```loft
+// truncate toward zero (C/Rust)      vs   floor toward -∞ (Python)
+-7 / 2   ==  -3                             -7 / 2   ==  -4
+-7 % 2   ==  -1  (sign of dividend)         -7 % 2   ==   1  (sign of divisor)
+```
+
+Truncation is the faster hardware default and makes `(a / b) * b + a % b == a` hold; floor gives a remainder that always lands in `[0, n)`, which is what circular indexing (`grid[(i - 1) % w]`) wants — but only under the floor convention, so under truncation that idiom silently reads a negative index. Which convention is loft's, and how does the *other* need get met?
+
+### Evaluation
+
+The two conventions are **two different operations for two different use cases**, and the split is decided by *which* the terse operator should serve — not by what other languages do.
+
+- **Truncating `/` + dividend-sign `%` serve signed-magnitude decomposition:** splitting one signed quantity into (quotient, remainder) parts that both carry the sign and reconstruct — signed time (`-90s → -1min, -30s`), coordinates relative to an origin, round-toward-zero quantization (`a - a%b`), digit extraction after `abs`.
+- **`floor_mod` serves cyclic domains:** a value on a ring of size `n` where you want the canonical representative in `[0, n)` and the input's sign is meaningless — array-index wrap, clock, angle, day-of-week, hashing a possibly-negative value into a bucket.
+
+The load-bearing fact is that **`/` and `%` are a matched pair**: the identity `a == (a / b) * b + a % b` holds for the truncating pair *and* the floor pair **equally**, so the identity does **not** discriminate between them, and the two cannot be mixed (a truncating `/` with a floor `%` would make `%` imply a *different* quotient than `/` returns — an incoherence worse than either clean convention). So the choice collapses to *which `/` do you want*, and `%` follows. Integer `/` should **truncate toward zero** because that is "drop the fractional part" — `-7 / 2 = -3.5 → -3`; floor `/` gives `-4`, surprising for both signs, and division is used far more than negative-operand `%`, so the operator optimizes for un-surprising division. The cyclic case genuinely wants floor, but it is a **distinct operation**, and giving it the name `floor_mod` is a *feature*: at `(i - 1).floor_mod(w)` the reader sees the wrap, whereas a bare `(i - 1) % w` silently yields `-1` — an out-of-range index, exactly the kind of silent footgun loft's total/no-surprise model removes. Adding the helper is additive (a new stdlib name), so it lands cleanly pre- or post-freeze; the *operator* convention is what the freeze pins.
+
+### Decision
+
+- **Integer `/` truncates toward zero** (`-7 / 2 == -3`), and **`%` returns the remainder with the sign of the dividend** (`-7 % 2 == -1`, `7 % -2 == 1`) — the C/Rust convention. `a == (a / b) * b + a % b` holds for all non-zero `b`. Part of the contract-1 freeze.
+- **`/` or `%` by zero is a null** (C80 — an undefined value is a null, never a fault), dischargeable with `?? default`. Unchanged; recorded here for completeness.
+- **`floor_mod(both: integer, divisor: integer) -> integer?`** is the wrap-around helper: the remainder with the sign of the **divisor**, landing in `[0, divisor)` for a positive divisor (`(-1).floor_mod(3) == 2`). Pure stdlib (`default/01_code.loft`), integer-only, `floor_mod(x, 0)` is null like `%`. Use it for circular indexing (`grid[(i - 1).floor_mod(w)]`).
+- **Rejected:** switching the operators themselves to floor semantics — makes `/` surprising (`-7 / 2 == -4`) to serve the cyclic case a helper serves cleanly, and a truncating-`/`-with-floor-`%` hybrid is incoherent (the two operators would disagree on the quotient). Also rejected: leaving wrap-around indexing to open-coded `((i % w) + w) % w` (the footgun stays un-named at every call site).
+- Owner ruling 2026-07-15 — the split is decided by the use cases (signed-magnitude decomposition vs cyclic-domain representative), not by matching C/Rust; "keep truncate but add a floor-mod helper".
+
+## C95 — A definition a same-named method would silently shadow is a compile error (no silent redefinition)
+
+**Catalogue:** @F2 (operators) / naming. Instances the platform rule *no runtime errors, ever* ([C80](#c80--)) at its **compile-time valve**: what cannot work is *disallowed*, not run into a silent-wrong result. Surfaced by C94 (adding stdlib `floor_mod` collided with an existing library helper).
+
+### Question
+
+loft dispatches a method-or-free function (`fn foo(both:/self: T, …)`) on its **first-argument type**. A plain FREE function `foo(x: T, …)` whose name collides with such a method on the **same** first-arg type was **silently shadowed**: a call `foo(x, …)` resolved through the method dispatcher to `t_<T>_foo`, and the free `n_foo` was **unreachable, with no diagnostic**. Exact-signature redefinitions already errored (`Cannot redefine`), but a *different-parameter-name* redefinition slipped through the `Dynamic`-dispatcher exemption in `add_fn`. Repro — the definition compiles yet never runs:
+
+```loft
+fn floor_mod(ma: integer, mb: integer) -> integer { … }   // stdlib floor_mod(integer) wins; this is dead
+pub fn clamp(val: float, lo: float, hi: float) -> float { … }  // stdlib clamp(float) wins; this is dead
+```
+
+Should such a definition be allowed (silently shadowed), or rejected?
+
+### Evaluation
+
+A definition the programmer wrote that can **never be called** is a latent bug — the author believes their `clamp` runs; the stdlib's does. Per *no runtime errors, ever*, the honest answer is the **compile-time valve**: disallow it, at the definition, naming the collision — rather than let a call silently reach a different function. The predicate must be **dispatch-exact**: reject a free function *only* when a method for its **first-argument type** already exists (`t_<len><sig>_<name>` — the function's canonical internal name under loft's first-parameter mangling), because only then does the call actually resolve to the method. A free function that merely **shares a name** with a method on a *different* receiver type stays legal — arg-type dispatch keeps it reachable (`scale(integer, …)` beside the trait method `scale(self: Self, …)`; `byte_at(integer, …)` beside `byte_at(self: text, …)`). This is an error-ADD, so it lands **pre-freeze** (the error surface can only shrink after contract 1). It immediately surfaced four in-repo latent shadows: two libraries redundantly re-defined a stdlib function byte-for-byte (`shapes` `clamp`, the doc viewer's `basename`), a test helper was vacuously shadowed (`83-return-in-if-expr`'s `clamp` was testing the *stdlib* clamp, not its own return-in-`if` body), and the `time` library's private `floor_mod` (resolved by adopting the new stdlib `floor_mod`).
+
+### Decision
+
+- **A free function `foo(x: T, …)` is a compile error when a method `foo` for first-arg type `T` already exists** — it would be silently shadowed (the call dispatches to the method, never the free `n_foo`). Reported at the definition: `Cannot redefine 'foo' (already defined at …)`. Part of the contract-1 freeze.
+- **The predicate is first-argument-type exact** (loft's current mangling keys on the first parameter): a free function sharing a name with a method on a *different* receiver type stays legal. When mangling extends beyond the first parameter, this predicate follows it automatically — no separate rule to maintain.
+- **This closes the different-parameter-name gap** left by the `Dynamic`-dispatcher exemption; exact `both:`/`self` same-type redefinitions already errored via the mangled-name check.
+- **No silent shadow, no runtime error.** The previously-silent case becomes a clear compile error (valve a). A library must not redefine a stdlib function — it uses the stdlib one (or picks a distinct name).
+- **Rejected:** silently shadowing (hides a definition that never runs); and making the user's definition *win* over the stdlib (an invisible footgun in the other direction — a program could silently re-point a stdlib call).
+- Owner ruling 2026-07-15 — "that silent shadow is the problem, make it an error too"; "we are not yet under contract". Implementation: `src/data.rs::add_fn` (`shadows_a_method`).

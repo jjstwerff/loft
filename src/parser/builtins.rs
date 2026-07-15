@@ -259,6 +259,91 @@ impl Parser {
                 );
             }
         }
+        // @PLN102 C93 / read-residual — a par worker runs on an ISOLATED store clone,
+        // so a captured REFERENCE argument (a heap DbRef) is invalid in the worker's
+        // store: it used to read empty (silent-wrong) or, mis-ordered, slot-panic at
+        // codegen.  Disallow it cleanly (no runtime errors, ever — we do not allow what
+        // cannot work rather than run it).  A captured SCALAR crosses by value; the loop
+        // ELEMENT (param 0) may be a reference — the dispatcher copies each element into
+        // the worker.  Checks: (A) param 0's reference-vs-scalar kind must match the
+        // element type (catches the element passed as a non-first arg, which mis-mapped
+        // and crashed); (B) every captured (context) param must be a scalar.
+        if !self.first_pass {
+            let is_heap_ref = |tp: &Type| {
+                matches!(
+                    tp,
+                    Type::Vector(..)
+                        | Type::Reference(..)
+                        | Type::Hash(..)
+                        | Type::Sorted(..)
+                        | Type::Index(..)
+                        | Type::Radix(..)
+                        | Type::Enum(_, true, _)
+                        | Type::Text(_)
+                )
+            };
+            let real_params: Vec<usize> = (0..self.data.attributes(d_nr))
+                .filter(|&a| {
+                    !self.data.attr_name(d_nr, a).starts_with("__")
+                        && !self.data.def(d_nr).attributes()[a].hidden
+                })
+                .collect();
+            // (A) mis-order — fire ONLY on the clear case: a PLAIN-SCALAR loop element paired
+            // with a first param that is a heap COLLECTION (a captured container passed where
+            // the element belongs, `vr(sh, x)`).  Deliberately narrow: a tuple / text / struct
+            // / nullable-wrapper element (or a `const` param that reads as a reference) is NOT a
+            // mismatch — those match by value/kind and used to false-positive.
+            let is_plain_scalar = |tp: &Type| {
+                matches!(
+                    tp,
+                    Type::Integer(..)
+                        | Type::Float
+                        | Type::Single
+                        | Type::Boolean
+                        | Type::Character
+                )
+            };
+            let is_collection = |tp: &Type| {
+                matches!(
+                    tp,
+                    Type::Vector(..)
+                        | Type::Reference(..)
+                        | Type::Hash(..)
+                        | Type::Sorted(..)
+                        | Type::Index(..)
+                        | Type::Radix(..)
+                )
+            };
+            if is_plain_scalar(elem_tp)
+                && let Some(&p0) = real_params.first()
+                && is_collection(&self.data.attr_type(d_nr, p0))
+            {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "par worker '{first_id}': its first parameter '{}' is the loop element, but \
+                     its type does not match the element — the element must be the FIRST \
+                     argument; pass captured value(s) after it",
+                    self.data.attr_name(d_nr, p0)
+                );
+            }
+            // (B) captured (context) params must be scalars, not references.
+            for &a in real_params.iter().skip(1) {
+                let tp = self.data.attr_type(d_nr, a);
+                if is_heap_ref(&tp) {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "par worker '{first_id}': captured argument '{}' is a reference ({}); a \
+                         par worker runs on an isolated store clone and cannot read a captured \
+                         reference.  Pass a scalar, or read the value into a scalar before the \
+                         loop (only the loop element may be a reference).",
+                        self.data.attr_name(d_nr, a),
+                        tp.name(&self.data)
+                    );
+                }
+            }
+        }
         self.data.def_used(d_nr);
         let ret_type = self.data.def(d_nr).returned().clone();
         // @PLN25 E2 gap 3 — par over `vector<__nullable<S>>` whose worker takes a

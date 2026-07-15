@@ -506,6 +506,13 @@ Only defined for `integer`; use `as integer` to convert other types first.
 
 Assignment operators: `=`, `+=`, `-=`, `*=`, `/=`, `%=`.
 
+**Integer `/` and `%` with negatives.** Integer division **truncates toward zero**
+(`-7 / 2 == -3`, not `-4`), and `%` returns the remainder that takes the sign of the
+**dividend** (`-7 % 2 == -1`, `7 % -2 == 1`) — the C/Rust convention, so `a == (a / b) * b + a % b`
+holds. When you want a remainder that wraps into `[0, n)` (the sign of the *divisor*, for
+circular indexing), use `floor_mod`: `(-1).floor_mod(3) == 2`. Division or `%` by zero is a
+**null**, never a fault (C80) — discharge it with `?? default`.
+
 ### The `??` operator (null-coalescing)
 
 `lhs ?? rhs` evaluates to `lhs` if it is not null, otherwise evaluates to `rhs`:

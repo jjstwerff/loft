@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 C93 (read residual) — a par worker runs on an ISOLATED store clone, so a
+// captured REFERENCE argument (vector/struct/…) is invalid in the worker's store.
+// It used to read empty (silent-wrong) or, mis-ordered, slot-panic in codegen. Now a
+// clean COMPILE error (no runtime errors, ever — disallow what cannot work). Captured
+// SCALARS cross by value; the loop ELEMENT may be a reference (see 22-threading, whose
+// `const Score` element still works). Pass tests: 22-threading + scalar-context cases.
+//
+// @EXPECT_ERROR: captured argument 'cap' is a reference
+// @EXPECT_ERROR: captured argument 's' is a reference
+// @EXPECT_ERROR: first parameter 'first' is the loop element
+
+struct S { n: integer }
+fn vcap(x: integer, cap: vector<integer>) -> integer { (cap[0] ?? 0) + x }  // captured vector
+fn scap(x: integer, s: S) -> integer { s.n + x }                           // captured struct
+fn misordered(first: vector<integer>, x: integer) -> integer { (first[0] ?? 0) + x }  // element not first
+
+fn use_vcap() { c = [7]; for x in [1, 2] par(r = vcap(x, c), 2) { } }
+fn use_scap() { sv = S { n: 7 }; for x in [1, 2] par(r = scap(x, sv), 2) { } }
+fn use_mis() { c = [7]; for x in [1, 2] par(r = misordered(c, x), 2) { } }
+
+fn main() { }
