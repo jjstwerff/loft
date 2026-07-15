@@ -21,12 +21,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > `tests/scripts/170-parallel-capture-soundness.loft`); this change covers the `for … par(worker,
 > n)` FOLD form, whose worker-fn param-writes used to crash.
 >
-> **Residual (SEPARATE pre-existing soundness bug, NOT the C93 write-decision):** a worker that
-> only READS a captured *reference* argument (`vector`/`struct`) still crashes codegen
-> (`Incorrect var x[65535]`, `codegen.rs:3235`) — the same bug test 170 documents for
-> `parallel {}` ("param capture (read) — SIGSEGVs; copy to a local first"). C93 says reads are
-> fine; making them so is a codegen fix (the par reference-arg slot assignment), independent of
-> the read-only *write* rule decided here. Scalar-arg workers read fine. Route as its own issue.
+> **Read residual — RESOLVED (2026-07-15) by disallowing captured references.** A par worker runs
+> on an ISOLATED store clone, so a captured *reference* arg (a heap DbRef) never crossed: it read
+> empty (silent-wrong) when element-first, or slot-panicked (`codegen.rs:3235`) when mis-ordered.
+> Per *no runtime errors, ever* — and the strict-`par` philosophy — this is DISALLOWED, not made
+> to work (cross-clone deep-copy would be a capability add; the owner's line is "current par
+> covers my needs, new capability via new constructs"). `parse_parallel_worker_fn`
+> (`builtins.rs`) now emits a clean compile error: (A) the element param (param 0) must match the
+> loop element's reference-vs-scalar kind — catches the element passed as a non-first arg; (B) a
+> captured (context) param that is a reference (`vector`/`struct`/`hash`/…/`text`) is rejected —
+> "pass a scalar, or read the value into a scalar before the loop (only the loop element may be a
+> reference)". Captured SCALARS still cross by value; the loop ELEMENT may be a reference (the
+> dispatcher copies each element — 22-threading's `const Score` element still works). Test
+> `tests/scripts/pln102-c93-par-captured-ref.loft`.
 
 ## The current behaviour (verified 2026-07-14, interpret)
 
