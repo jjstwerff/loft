@@ -321,52 +321,27 @@ fn canvas_demo_matches_gold() {
 
 #[test]
 fn pixel_roundtrip_matches_gold() {
-    gold_compare(
-        "examples/gold-pixels.loft",
-        "gold-pixels.png",
-        0,
-        0.0,
-    );
+    gold_compare("examples/gold-pixels.loft", "gold-pixels.png", 0, 0.0);
 }
 
 #[test]
 fn fill_rect_matches_gold() {
-    gold_compare(
-        "examples/gold-rect.loft",
-        "gold-rect.png",
-        0,
-        0.0,
-    );
+    gold_compare("examples/gold-rect.loft", "gold-rect.png", 0, 0.0);
 }
 
 #[test]
 fn draw_line_matches_gold() {
-    gold_compare(
-        "examples/gold-line.loft",
-        "gold-line.png",
-        0,
-        0.0,
-    );
+    gold_compare("examples/gold-line.loft", "gold-line.png", 0, 0.0);
 }
 
 #[test]
 fn fill_triangle_matches_gold() {
-    gold_compare(
-        "examples/gold-triangle.loft",
-        "gold-triangle.png",
-        0,
-        0.0,
-    );
+    gold_compare("examples/gold-triangle.loft", "gold-triangle.png", 0, 0.0);
 }
 
 #[test]
 fn blend_matches_gold() {
-    gold_compare(
-        "examples/gold-blend.loft",
-        "gold-blend.png",
-        0,
-        0.0,
-    );
+    gold_compare("examples/gold-blend.loft", "gold-blend.png", 0, 0.0);
 }
 
 #[test]
