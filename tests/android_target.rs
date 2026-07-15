@@ -11,10 +11,14 @@
 // NativeActivity crate → cross-build a cdylib that exports `android_main` +
 // `ANativeActivity_onCreate` (the B2 runtime entry).
 //
-// The build test needs the Android NDK, which the normal CI images lack, so it is
-// a SEPARATE, opt-in leg gated on `ANDROID_NDK_HOME` (like the daily Windows leg,
-// never a required check).  The error-path test always runs — it is cheap and
-// guards that the flag exists and fails with an actionable message.
+// The build test needs the Android NDK AND a working cross toolchain, so it is a
+// SEPARATE, opt-in leg gated on `LOFT_ANDROID_BUILD_TEST` (like the daily Windows
+// leg, never a required check).  NOTE: it can NOT gate on `ANDROID_NDK_HOME`
+// presence — the GitHub-hosted ubuntu/macos images ship an NDK and set that var,
+// so a presence-gate would wrongly run the heavy build in required CI (where the
+// cross-build fails).  A dedicated opt-in flag keeps it a manual, local leg.  The
+// error-path test always runs — it is cheap and guards that the flag exists and
+// fails with an actionable message.
 
 use std::io::Write;
 use std::process::Command;
@@ -54,14 +58,22 @@ fn so_names_symbol(path: &std::path::Path, sym: &str) -> bool {
 /// `--native-android` on a non-trivial program (struct + fn + for-loop + string
 /// interpolation) produces a real AArch64 `NativeActivity` shared object — a valid
 /// AArch64 ELF that exports the `android_main` + `ANativeActivity_onCreate` entry
-/// (B2). Skipped unless `ANDROID_NDK_HOME` is set, so a normal `cargo test` run
-/// never needs an NDK.
+/// (B2). Skipped unless `LOFT_ANDROID_BUILD_TEST` is set, so a normal `cargo test`
+/// run (including CI images that happen to ship an NDK) never triggers the build.
 #[test]
 fn android_native_so_is_aarch64_elf() {
+    // Opt-in ONLY on a dedicated flag — NOT on ambient NDK vars, which the
+    // GitHub-hosted runners set (see the module header).
+    if std::env::var_os("LOFT_ANDROID_BUILD_TEST").is_none() {
+        eprintln!(
+            "skipping android build leg: set LOFT_ANDROID_BUILD_TEST=1 (needs an NDK + cross toolchain)"
+        );
+        return;
+    }
     if std::env::var_os("ANDROID_NDK_HOME").is_none()
         && std::env::var_os("ANDROID_NDK_ROOT").is_none()
     {
-        eprintln!("skipping: ANDROID_NDK_HOME not set (opt-in Android build leg)");
+        eprintln!("skipping: LOFT_ANDROID_BUILD_TEST set but no ANDROID_NDK_HOME/ANDROID_NDK_ROOT");
         return;
     }
     let src = r#"
