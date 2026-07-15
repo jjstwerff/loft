@@ -119,3 +119,31 @@ fn main() {
         "reconstructed value mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn deliver_flattens_top_level_hash_in_js() {
+    // @PLN105 Phase 3 slice — a top-level keyed `hash<T>` has no byte layout a reader can walk, so
+    // deliver PRE-FLATTENS it (materialise to a scratch array of element records, the `for x in h`
+    // path) and hands JS a synthetic `Array(elem)` descriptor. JS reconstructs the elements via the
+    // existing array reader, KEY-SORTED, touching no hash-layout knowledge.
+    let src = r#"
+struct Item { ik: integer, name: text }
+fn main() {
+  h: hash<Item[ik]> = [];
+  h[30] = Item { ik: 30, name: "thirty" };
+  h[10] = Item { ik: 10, name: "ten" };
+  h[20] = Item { ik: 20, name: "twenty" };
+  deliver(1, h);
+}
+"#;
+    let Some(stdout) = run_deliver("hash", src) else {
+        return; // toolchain self-skip
+    };
+    // Inserted out of order (30,10,20); reconstructed KEY-SORTED (10,20,30) == the interpreter's
+    // `for x in h` order (both use build_hash_sorted_vec).
+    let want_value = "\"value\":[{\"ik\":10,\"name\":\"ten\"},{\"ik\":20,\"name\":\"twenty\"},{\"ik\":30,\"name\":\"thirty\"}]";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "flattened hash mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}

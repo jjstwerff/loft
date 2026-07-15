@@ -312,10 +312,19 @@ self`, returning a `DbRef`). `deliver` runs as `fn deliver(s: &mut State)` (`fil
 3. **Nested keyed fields.** A struct with a keyed FIELD needs a flattened TWIN of the whole value
    (recursively replace `Iterated` fields with materialised arrays), not just a top-level swap.
 
-**First step (verifiable slice):** top-level `deliver(tag, my_hash)` → `deliver_reconstruct`
-detects the root is `Iterated::Hash`, calls `build_hash_sorted_vec`, delivers the scratch as an
-array-of-elem; extend `tests/deliver_wasm.rs` to assert the reconstructed multiset == the
-interpreter's `for x in h` order. Then index/sorted/radix, then nested twins.
+**First slice — top-level `hash<T>`. ✅ DONE.** `deliver_reconstruct` is now `&mut self` and, on
+the browser target, `deliver_browser` detects the root is `Iterated::Hash`, calls
+`build_hash_sorted_vec` (the `for x in h` path, key-sorted), and delivers the scratch `DbRef`
+(`{rec: header, pos: 4}`, which points straight at the data record — no extra hop) with a
+SYNTHETIC `Array(elem)` descriptor (root id `u16::MAX`, the "no type" sentinel, over the element
+closure). The scratch layout lines up EXACTLY with the P2.c `array` node, so the JS reader needed
+NO change. Verified end-to-end (`tests/deliver_wasm.rs::deliver_flattens_top_level_hash_in_js`):
+inserting `{30,10,20}` reconstructs KEY-SORTED `[{ik:10,name:"ten"},{ik:20,…},{ik:30,…}]` — the
+same order as the interpreter's `for x in h` (both use `build_hash_sorted_vec`); JS touches no
+hash-layout constant. Loopback (interp/native) still refuses a keyed root with `error=store-
+internal` (Phase-1, unchanged) — flattening is browser-only. **REMAINING:** index/sorted/radix
+materialisers (radix has `build_radix_sorted_vec`; index/sorted need a "records in key order"
+helper), then NESTED keyed fields (a struct with a `hash` field → build a flattened twin).
 
 - **Falsifier / test:** deliver a value containing `hash<T>` + `index<T>` + spatial; JS reads the
   materialised arrays via the existing reader; assert the reconstructed multiset (count + values)

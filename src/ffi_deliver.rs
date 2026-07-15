@@ -24,6 +24,12 @@
 use crate::database::Stores;
 use crate::keys::DbRef;
 
+/// @PLN105 Phase 3 — the synthetic descriptor type-id for a pre-flattened keyed collection's
+/// `Array(elem)` root node. `u16::MAX` never collides with a real type-id (it is the type table's
+/// "no type" sentinel), so it is safe to insert alongside the element type's closure.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+const FLAT_ARRAY_ROOT: u16 = u16::MAX;
+
 impl Stores {
     /// @PLN105 Phase 1 loopback host — reconstruct the delivered value from its
     /// layout descriptor and print a deterministic line. Called from the `OpDeliver`
@@ -32,37 +38,66 @@ impl Stores {
     /// `val` is the value's record `DbRef` (a by-value struct/collection argument
     /// arrives already deref'd to its record on both backends). Scalars delivered by
     /// value are not record-shaped and are out of the Phase-1 subset.
-    pub fn deliver_reconstruct(&self, tag: i64, val: DbRef, db_tp: u16) {
-        // @PLN105 Phase 2 — browser target: hand the value to the JS host instead of the loopback.
-        // Serialize the layout descriptor to JSON, compute the value record's RAW byte address in
-        // wasm linear memory (`store.ptr + offset`), and call the `loft_host_deliver` import; the
-        // generic JS reader walks the value from `base` driven by the descriptor (§2), SYNCHRONOUSLY
-        // within this call so the borrow is still live (§5). `desc` stays owned until after the call.
+    ///
+    /// `&mut self` because the browser path may MATERIALISE a keyed collection into a scratch
+    /// vector before delivery (Phase 3 pre-flatten); the loopback path only reads.
+    pub fn deliver_reconstruct(&mut self, tag: i64, val: DbRef, db_tp: u16) {
         #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
         {
-            if val.rec != 0 {
-                let desc = self.layout_descriptor(&[db_tp]).to_json();
-                let store = &self.allocations[val.store_nr as usize];
-                // `Store.ptr` IS the store buffer's base address in wasm linear memory; the reader
-                // addresses everything as `store_base + rec*8 + pos`, so it can follow child records.
-                let store_base = store.ptr as usize;
-                crate::loft_host_deliver(
-                    tag,
-                    store_base,
-                    val.rec,
-                    val.pos,
-                    u32::from(db_tp),
-                    desc.as_ptr(),
-                    desc.len(),
-                );
-            }
-            return;
+            self.deliver_browser(tag, val, db_tp);
         }
         // native / interpreter / wasi — the Phase-1 LOOPBACK host (the both-backend parity oracle).
         #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))))]
         {
             self.deliver_loopback(tag, val, db_tp);
         }
+    }
+
+    /// @PLN105 Phase 2/3 — the browser host path: hand the value to JS driven by its layout
+    /// descriptor, with no serialization (the value bytes stay in wasm linear memory). A struct /
+    /// scalar / vector is delivered in place: JS walks it from `(store_base, rec, pos)` via the
+    /// descriptor (§2). A top-level KEYED collection has no byte layout a reader can walk, so
+    /// (Phase 3) it is PRE-FLATTENED — materialised to a scratch array of its element records (the
+    /// same `for x in hash` path) and delivered with a synthetic `Array(elem)` descriptor, which
+    /// the generic reader already handles; JS never sees the hash/tree layout. SYNCHRONOUS — the
+    /// borrow ends when this returns, so `desc` stays owned across the `loft_host_deliver` call.
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+    fn deliver_browser(&mut self, tag: i64, val: DbRef, db_tp: u16) {
+        use crate::database::{Iterated, LayoutNode};
+        if val.rec == 0 {
+            return;
+        }
+        let root = self.layout_descriptor(&[db_tp]);
+        // Phase 3 slice — a top-level `hash<T>`: flatten to an array of its element records. Other
+        // keyed kinds (index / sorted / radix) + keyed FIELDS nested in a struct are later slices.
+        if let Some(LayoutNode::Iterated(Iterated::Hash { elem, .. })) = root.nodes.get(&db_tp) {
+            let elem_tp = *elem;
+            let scratch = self.build_hash_sorted_vec(&val, db_tp);
+            let mut adesc = self.layout_descriptor(&[elem_tp]);
+            adesc
+                .nodes
+                .insert(FLAT_ARRAY_ROOT, LayoutNode::Array(elem_tp));
+            self.emit_deliver(tag, scratch, FLAT_ARRAY_ROOT, &adesc.to_json());
+            return;
+        }
+        // The generic (struct / scalar / vector) path — P2.c.
+        self.emit_deliver(tag, val, db_tp, &root.to_json());
+    }
+
+    /// Call the `loft_host_deliver` import: `Store.ptr` is the store buffer's base in wasm linear
+    /// memory, so the reader addresses everything as `store_base + rec*8 + pos`.
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+    fn emit_deliver(&self, tag: i64, r: DbRef, type_id: u16, desc: &str) {
+        let store_base = self.allocations[r.store_nr as usize].ptr as usize;
+        crate::loft_host_deliver(
+            tag,
+            store_base,
+            r.rec,
+            r.pos,
+            u32::from(type_id),
+            desc.as_ptr(),
+            desc.len(),
+        );
     }
 
     /// The Phase-1 loopback host — reconstruct the delivered value from its descriptor and print a
