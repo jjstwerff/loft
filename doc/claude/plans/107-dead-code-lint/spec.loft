@@ -8,6 +8,14 @@
 
 struct Box { data: vector<integer> }
 
+// Value-struct completeness rows (@PLN101 value semantics). A `value struct` read out of a
+// field/element COPIES (the `value_struct_copy` pass); a plain reference `struct` ALIASES.
+value struct Cents { n: integer }
+struct Purse { lo: Cents, hi: Cents }
+struct Coins { cs: vector<Cents> }
+struct RefCell { rn: integer }
+struct RefVec { cells: vector<RefCell> }
+
 fn use_int(v: integer) -> integer { v }
 fn use_vec(v: vector<integer>) -> integer { v[0] ?? -1 }
 
@@ -45,6 +53,24 @@ fn w_reassign(showln: fn(text)) {
   a = 5;   // dead: a is never read after this
 }
 
+// verdict: WARN (W-vstruct-field) — a value struct read out of a FIELD COPIES (value_struct_copy),
+// so mutating the copy when it is never read is a lost write — the W-copy footgun on a value
+// struct. Observable: the source field is unchanged (the copy was independent, its mutation dead).
+fn w_vstruct_field(showln: fn(text)) {
+  p = Purse { lo: Cents { n: 1 }, hi: Cents { n: 2 } };
+  vf = p.lo;      // value-struct field COPY
+  vf.n = 99;      // dead: mutates the copy, never read
+  showln("W-vsfld  p.lo.n = {p.lo.n}  (1 → write was dead)");
+}
+
+// verdict: WARN (W-vstruct-elem) — a value struct read out of a vector ELEMENT COPIES; same footgun.
+fn w_vstruct_elem(showln: fn(text)) {
+  cc = Coins { cs: [Cents { n: 10 }, Cents { n: 20 }] };
+  ve = cc.cs[1];  // value-struct element COPY
+  ve.n = -1;      // dead: mutates the copy, never read
+  showln("W-vselm  cc.cs[1].n = {cc.cs[1].n}  (20 → write was dead)");
+}
+
 // ---- SILENT rows -----------------------------------------------------------
 
 // verdict: silent (N-read) — the copy is mutated AND read → real work.
@@ -75,6 +101,26 @@ fn n_copy_read(showln: fn(text)) {
   b = Box { data: [1, 2, 3] };
   d = b.data;            // copy, no mutation
   showln("N-cpread use_vec(d) = {use_vec(d)}  (1 → copy observed)");
+}
+
+// verdict: silent (N-vstruct-read) — a value-struct copy that IS read is not dead.
+fn n_vstruct_read(showln: fn(text)) {
+  p = Purse { lo: Cents { n: 1 }, hi: Cents { n: 2 } };
+  vr = p.lo;
+  vr.n = 99;
+  showln("N-vsread vr.n = {vr.n}  (99 → copy observed)");
+}
+
+// verdict: silent (N-ref-alias) — the LOAD-BEARING guard the value-struct fix must NOT break: a
+// plain reference struct ALIASES, so the write propagates to the source and is real work even
+// though the alias local `al` is never read. `al` has the SAME (reads=0, write_targets=1) signal
+// as a value-struct copy — distinguished ONLY by ownership (value struct = owned copy → warn;
+// reference struct = alias → silent).
+fn n_ref_alias(showln: fn(text)) {
+  rv = RefVec { cells: [RefCell { rn: 7 }] };
+  al = rv.cells[0]; // reference-struct element ALIAS (not a copy)
+  al.rn = 42;       // writes THROUGH the alias → reaches rv
+  showln("N-refals rv.cells[0].rn = {rv.cells[0].rn}  (42 → alias write persisted)");
 }
 
 // verdict: WARN on the binding, not the call (N-effectful) — RHS has effects; the
@@ -143,10 +189,14 @@ fn main() {
   w_copy(showln);
   w_accumulator();
   w_reassign(showln);
+  w_vstruct_field(showln);
+  w_vstruct_elem(showln);
   n_read(showln);
   n_write_through(showln);
   n_fresh_used(showln);
   n_copy_read(showln);
+  n_vstruct_read(showln);
+  n_ref_alias(showln);
   n_effectful(showln);
   n_construct_unread();
   n_escape_call(showln);

@@ -26,6 +26,7 @@ fn main() {
   a = s.rows[0];
   bb = s.rows[0];
   a.name = "AA";
+  assert("{a.name}" == "AA", "first copy took the mutation");
   assert("{bb.name}" == "row0", "second copy is independent of the first");
   assert("{s.rows[0].name}" == "row0", "source is independent of both copies");
 

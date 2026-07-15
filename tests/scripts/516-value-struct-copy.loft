@@ -28,12 +28,14 @@ fn main() {
   w = Wallet { main: Money { cents: 100 }, backup: Money { cents: 5 } };
   m = w.main;
   m.cents = 999;
+  assert(m.cents == 999, "the copy took the mutation");
   assert(w.main.cents == 100, "value-struct field read copies, not aliases");
 
   // --- value struct VECTOR-ELEMENT read copies ---
   b = Bag { coins: [for i in 0..4 { Money { cents: i * 10 } }] };
   c = b.coins[2];
   c.cents = -1;
+  assert(c.cents == -1, "the element copy took the mutation");
   assert(b.coins[2].cents == 20, "value-struct vector element read copies");
 
   // --- operators (@PLN99) still dispatch on value structs ---

@@ -11,10 +11,12 @@ Working notes for the `tuxedo-work` branch. Two independent tracks the user grou
 
 - **PLN104 / loft#568 — DONE, MERGED to main** (PR #569, squash). This branch was stacked on
   it and has now been **rebased onto `origin/main`** (7 commits ahead, 0 behind, builds green).
-- **Track A — fix LANDED, soaking** (§ below): `reap_port` hardening + stderr flake-probe in
-  `tests/engine_host_kernel.rs`. Root cause pinned (leaked swap-child orphan the stem pgrep
-  misses); "flake gone" UNPROVEN (intermittent, could not force). RESUME: soak-watch s5/s7 in
-  CI; file a `loft-lang/loft` bug (pre-existing, both-mode).
+- **Track A — fix LANDED + MERGED to main (via #576)**, soaking (§ below): `reap_port`
+  hardening + stderr flake-probe in `tests/engine_host_kernel.rs`. Root cause pinned (leaked
+  swap-child orphan the stem pgrep misses); "flake gone" UNPROVEN (intermittent, could not
+  force). RESUME: soak-watch s5/s7 in CI. **Do NOT file a `loft-lang/loft` bug — the fix is
+  already merged.** Only file if the soak shows the flake still recurs on `main` (i.e. proof it
+  is NOT actually fixed), with the captured stderr as evidence.
 - **Track B — ✅ DONE / @PLN106 CLOSED (2026-07-15)** (`106-android-build-target/`): loft
   Android build target, complete end-to-end. B0–B4 + audio + big-stack all shipped and proven
   on the KVM emulator with unchanged loft programs — cross-compile → `--native-android` →
@@ -60,8 +62,9 @@ off)**, so it is NOT the @PLN104 promotion — it rode along on an already-fragi
 
 Option 2 is the least-invasive and most robust; option 1 is the "correct" fix if the hook
 exists. Verify by running the full nextest suite 3× (they must pass every time), not the
-isolated test (which already passes). This is a **separate GitHub issue** against the
-engine-host/live-flip harness — file it (pre-existing, both-mode).
+isolated test (which already passes). NOTE: the `reap_port` hardening already landed and
+merged (#576), so **do not file an issue for this** — it is fixed. Reopen the question (and
+only then consider filing, with evidence) if the CI soak proves the flake still recurs.
 
 **Investigation update (do not fix on a guess — the mechanism is not yet pinned):**
 - **RULED OUT — s5/s7 mutual port collision.** `test_port(base) = base + LOFT_TEST_PORT_OFFSET`

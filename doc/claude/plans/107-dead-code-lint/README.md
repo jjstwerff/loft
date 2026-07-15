@@ -8,8 +8,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Status — ✅ DONE (2026-07-15). Phase 1 (S0–S5) shipped** on `tuxedo-work`: the dead-store
 lint is **default ON** (`LOFT_NO_DEAD_STORES` opts out), verified both backends against a
 corpus swept clean (stdlib + all 454 scripts + fixture libs + `tests/lib` + examples). See
-[the step plan](#implementation--small-verifiable-steps). Phase 2 (dead-final-store,
-method-on-dead-receiver) and the value-struct-field-copy completeness gap remain FUTURE.
+[the step plan](#implementation--small-verifiable-steps). Phase 2: **P2a (dead-final-store)
+SHELVED — the sketched counter-flush is UNSOUND** (see Phase 2 below); P2b
+(method-on-dead-receiver) remains FUTURE; the **value-struct-field-copy completeness gap is
+now CLOSED** (see § S4a) — value-struct copies warn like the vector copy.
 **Key finding:** loft
 **already ships** `unused_variables` (`Function::test_used`, `src/variables/mod.rs:1666`)
 — it correctly flags W-scalar/W-accumulator/N-effectful *today*; the real gap is that its
@@ -248,8 +250,20 @@ positives before flipping default-on.
     a genuinely-owned copy reads as `Borrowed{__vdb}`). `RefVar` (`&`) is excluded outright. Two
     findings: `uses` is not maintained post-scopes (the S2 `uses>0` guard was dropped as redundant),
     and the sweep "non-determinism" was the program cache (tests hardened with `LOFT_NO_CACHE=1`).
-    All 5 alias FPs silent; spec.loft still warns; no new FPs. Value-struct FIELD copies now read
-    `Borrowed{real}` → a **safe false negative** (sound, incomplete — a completeness gap to revisit).
+    All 5 alias FPs silent; spec.loft still warns; no new FPs.
+  - **Value-struct completeness — ✅ CLOSED 2026-07-15.** S4a left value-struct field/element
+    copies as a safe false NEGATIVE: `ownership_of` reports `Borrowed{source-view}` for them, so
+    the `owns` gate stayed shut. But a `value struct` read out of a field/element COPIES (the
+    `value_struct_copy` pass materialises a fresh `OpCopyRecord`; @PLN101), so `m = w.field;
+    m.x = 9` (m unread) is a lost write — the SAME footgun. Fix: `is_value_struct_local` — a
+    local whose type is a `Type::Reference` marked in `Data.value_structs` ALWAYS owns its store,
+    OR'd into the `owns` gate. The load-bearing subtlety: a reference-struct alias (`al =
+    rv.cells[0]; al.n = 42`) has the IDENTICAL `(reads=0, write_targets=1)` classifier signal as a
+    value-struct copy — the two are separated ONLY by ownership (value struct = owned copy → warn;
+    reference struct = aliases, the write propagates → silent). Corpus rows `w_vstruct_field`/
+    `w_vstruct_elem` (WARN) + `n_vstruct_read`/`n_ref_alias` (silent) lock it; scripts 516/517
+    strengthened (S4b pattern: read the copy → prove copy changed AND source didn't). Full suite
+    green both backends (2913 passed; the 3 fails are the known s7/wasm-relay/viewer env flakes).
   - **S4b (`01172384`) — the 8→4 true positives.** The remaining copy-mutate dead stores lived in
     intentional copy-semantics tests (503/294/519/85-tier1). Each was strengthened to also assert
     the COPY was mutated (reads the copy → silences the lint AND proves both "copy changed" and
@@ -268,11 +282,60 @@ positives before flipping default-on.
   would only add its intentional warning to the script runner). **Verified both backends**;
   6 oracle tests green.
 
-**Phase 2 (later, separate steps).** *P2a — dead FINAL store* (W-reassign-final): extend
-`track_write` with a scope-end flush that re-checks the last write's `uses == uses_at_write`.
-*P2b — method-on-dead-receiver* (W-method-mut): build the **self-mutation-only** effect summary
-(§ interprocedural frontier) and extend the lint to `d.push(9)` without tripping
-N-method-effect/return/escape.
+**Phase 2 (later, separate steps).**
+
+*P2a — dead FINAL store* (W-reassign-final) — **SHELVED 2026-07-15. The sketched approach
+is UNSOUND; do not re-attempt it.** The sketch was "extend `track_write` with a scope-end
+flush that re-checks the last write's `uses == uses_at_write`." Instrumentation (gated
+`LOFT_DBG_P2A` probe, since reverted) proved the `uses`/`uses_at_write` counters are
+**perturbed across the two parser passes** and cannot express scope-end liveness: `uses`
+accumulates across BOTH passes while `in_use(v,false)` (`variables/mod.rs:985`) decrements
+it, so at the flush point `uses_at_write` can even EXCEED `uses`. Measured at scope-end:
+  - motivating `a = 3; print(a); a = 5` (a dead) → `uses=1, uses_at_write=2` ⇒ flush MISSES it;
+  - live `c = 3; print(c); c = 5; return c` → `2 == 2` ⇒ **false positive** (c is returned);
+  - loop-carried `prev_cr = false; for … { if prev_cr {…}; prev_cr = … }` → `1 == 1` ⇒ **false
+    positive** (the init IS read in the loop).
+
+  `uses == uses_at_write` is coherent ONLY inside `track_write`'s own mid-pass moment (which is
+  why the existing "overwritten before read" warning is correct); it does not survive to
+  scope-end. Two guardrails caught this instantly: the stdlib loader requires a warning-clean
+  parse (the two stdlib false positives hard-failed the load). A *sound* P2a needs
+  **position-aware IR backward-liveness** ("does a read of `v` follow `v`'s last write on any
+  path, incl. loop back-edges?" — the fixpoint sketched in [The rule](#the-rule--fixpoint-backward-liveness),
+  deliberately deferred), living in `use_analysis.rs` beside `dead_store_accesses` — a real
+  dataflow pass, NOT a cheap flush. Shelved because the cost/payoff inverted: a dataflow pass
+  for a shape that catches no known loft bug (it is `unused_assignments`-completeness, not the
+  W-copy footgun). (The value-struct-field-copy completeness gap that was its sibling is now
+  CLOSED — § S4a.)
+
+*P2b — method-on-dead-receiver* (W-method-mut) — **INVESTIGATED + SHELVED 2026-07-15. Needs
+substantial new infrastructure; not a lint extension.** Findings (probes since reverted):
+  - The shape is real: `self: T` (non-`const`) methods write through `self` and the mutation
+    PROPAGATES to the caller (measured: `d.add(9); d.total()` → 9), so a mutated-then-unread
+    receiver genuinely IS dead work.
+  - **It cannot reuse the shipped Phase-1 signal.** Phase-1 fires on `reads == 0`, but a
+    CONSTRUCTED receiver always has `reads ≥ 1` — a construction `d = Bag{…}` fills its fields
+    by reading the target (the deliberate S2 behaviour that keeps `z = Box{}` silent; measured:
+    `g = Bag{…}` unused → `reads=1, write_targets=2`). Reclassifying the method receiver as a
+    write-target does NOT help — `d` still carries the construction reads. P2b needs a NEW,
+    refined-observability liveness (construction-fills and self-mutation receivers are NOT
+    observable reads), i.e. the same deferred backward-liveness fixpoint P2a needs.
+  - **The "self-mutation-only" effect summary does not exist in loft.** `Purity::Impure(ParentWrite)`
+    ("writes a parent store via its first arg") is conceptually the right predicate, BUT purity
+    is annotation-driven for the stdlib only — USER functions default to `Purity::Unknown`. The
+    lone effect analyser, `scopes::is_par_safe` (phase-5b), is `#[allow(dead_code)]` with "no
+    production caller", uses an optimistic cycle short-circuit (not a real fixpoint), and
+    EXPLICITLY lacks the "is first arg local?" check — the exact arg-write-vs-global-write
+    distinction P2b's summary hinges on. So the effect summary must be built (interprocedural
+    fixpoint), not read.
+
+  Net: P2b = (a) build a per-fn self-mutation-only effect summary + (b) a refined-observability
+  backward-liveness pass + (c) call-site return-observed checks + (d) a high-risk FP sweep (the
+  graphics libs are full of construct → method-mutate → render). A multi-session analysis, not
+  the "extend the lint" the plan implied. Both Phase-2 items are gated on the same missing
+  backward-liveness foundation (P2b additionally on a nonexistent effect summary). The other
+  candidate — the value-struct-field-copy completeness gap — was the cheaper win (extends the
+  SHIPPED lint via the ownership analysis, no new dataflow) and is now **CLOSED** (§ S4a).
 
 ## False-positive guards (the entire risk)
 
