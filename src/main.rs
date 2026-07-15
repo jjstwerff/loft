@@ -479,10 +479,43 @@ fn install_package(pkg_path: &std::path::Path) {
             }
         }
     }
+    // Copy native/ (the `#native` FFI crate) if present, so `--native` /
+    // `--native-android` can build it — mirroring `loft package`, which includes
+    // native/. Without this, a LOCAL `loft install <dir>` of a native lib silently
+    // dropped its FFI (undefined `n_*` symbols at link time), while the registry
+    // path (from the tarball) carried it — an asymmetry this closes. Build
+    // artifacts (`native/target/`) and dot-dirs are excluded, matching the tarball.
+    let native_dir = pkg_path.join("native");
+    if native_dir.is_dir() {
+        if let Err(e) = copy_native_crate(&native_dir, &target.join("native")) {
+            println!("loft install: cannot copy native/: {e}");
+        }
+    }
     println!(
         "installed {pkg_name} ({copied} source files) → {}",
         target.display()
     );
+}
+
+/// Recursively copy a package's `native/` crate, excluding build artifacts
+/// (`target/`) and dot-directories — the same exclusions `loft package` applies,
+/// so a local install matches a registry install.
+fn copy_native_crate(src: &std::path::Path, dst: &std::path::Path) -> std::io::Result<()> {
+    std::fs::create_dir_all(dst)?;
+    for entry in std::fs::read_dir(src)?.flatten() {
+        let name = entry.file_name();
+        let n = name.to_string_lossy();
+        if n == "target" || n.starts_with('.') {
+            continue;
+        }
+        let (s, d) = (entry.path(), dst.join(&name));
+        if entry.file_type().map(|t| t.is_dir()).unwrap_or(false) {
+            copy_native_crate(&s, &d)?;
+        } else {
+            std::fs::copy(&s, &d)?;
+        }
+    }
+    Ok(())
 }
 
 /// REG.2: Install a package from the registry by name (optionally with `@version`).
