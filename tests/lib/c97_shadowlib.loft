@@ -1,0 +1,4 @@
+// @PLN102 C97 — a library may define a name that also exists in the stdlib; it is
+// module-scoped (reached as `c97_shadowlib::clamp`), NOT a global redefinition.
+pub fn clamp(x: float, lo: float, hi: float) -> float { x * 100.0 }
+pub fn widget() -> integer { 7 }

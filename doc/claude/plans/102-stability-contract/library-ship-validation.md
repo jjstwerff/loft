@@ -166,5 +166,5 @@ until then the above is the whole surface.
 
 ## See also
 
-- [publish runbook](../../../.claude/skills/loft-ship/references/publish.md) · [PKG_REGISTRY.md](../../PKG_REGISTRY.md) · [REGISTRY_SUBMIT.md](../../REGISTRY_SUBMIT.md) · [COMPATIBILITY.md](../../COMPATIBILITY.md)
+- [PKG_REGISTRY.md](../../PKG_REGISTRY.md) · [REGISTRY_SUBMIT.md](../../REGISTRY_SUBMIT.md) · [COMPATIBILITY.md](../../COMPATIBILITY.md) · the publish runbook (loft-ship skill, `references/publish.md`)
 - The trigger: adding stdlib `floor_mod` (C94) broke shipped `shapes`/`time` (C95) — the case for V3 + V4 + C97.

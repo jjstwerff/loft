@@ -3965,7 +3965,19 @@ impl Data {
         } else {
             name = format!("n_{fn_name}");
         }
-        let o_nr = self.def_nr(fn_name);
+        // @PLN102 C97 — a LIBRARY (source ≥ 2, i.e. not the stdlib prelude and not the user's
+        // MAIN program) defines its public symbols MODULE-SCOPED: they live under the library's
+        // own source and are reached as `lib::name`, never injected into the global namespace.
+        // So a library name that exists only in the STDLIB is NOT a redefinition — the two
+        // coexist (`shapes::clamp` beside the stdlib `clamp`), which is what lets the stdlib grow
+        // without breaking a shipped lib.  Only a clash within the library's OWN source is a real
+        // redefinition.  The stdlib (STD_SOURCE) and the user's MAIN program keep the global-scope
+        // check (a MAIN top-level def that a stdlib method would silently shadow is a C95 error).
+        let scoped = self.source != STD_SOURCE && self.source != MAIN_SOURCE;
+        let own = |data: &Self, nm: &str| -> u32 {
+            if scoped { data.source_nr(data.source, nm) } else { data.def_nr(nm) }
+        };
+        let o_nr = own(self, fn_name);
         // A `Dynamic` def under the bare name is the DISPATCHER a `both:`/`self` function registers
         // its type-overloads against — so a same-named def is not always a redefinition. It is when
         // the bare name is a concrete def (struct/enum/plain fn), or when a plain FREE fn whose
@@ -3981,7 +3993,7 @@ impl Data {
                 let tn = self.type_def_nr(&a.typedef);
                 tn != u32::MAX && {
                     let sig = Self::sig_type_name(&self.def(tn).name, &a.typedef);
-                    self.def_nr(&format!("t_{}{}_{fn_name}", sig.len(), sig)) != u32::MAX
+                    own(self, &format!("t_{}{}_{fn_name}", sig.len(), sig)) != u32::MAX
                 }
             });
         if o_nr != u32::MAX && (self.def(o_nr).def_type != DefType::Dynamic || shadows_a_method) {
@@ -3993,7 +4005,7 @@ impl Data {
                 self.def(o_nr).position
             );
         }
-        let mut d_nr = self.def_nr(&name);
+        let mut d_nr = own(self, &name); // C97: a library's mangled name is scoped to its own source
         if d_nr != u32::MAX {
             diagnostic!(
                 lexer,
