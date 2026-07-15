@@ -218,10 +218,31 @@ record + vector without knowing the layout" capability, end-to-end.
   The descriptor-in-loopback IS descriptor-driven here (uses `read_via_descriptor`), so it is
   already a faithful JS stand-in.
 
-### Phase 2 — the generic JS reader
+### Phase 2 — the generic JS reader (IN PROGRESS on `tuxedo-pln105-phase2`)
 
 Implement `read(view, desc, typeId, rec, pos)` (§2) in `doc/loft-gl-wasm.js`; export a real
 program with `--html`; run it headless under node with a JS deliver host.
+
+**Falsifier-first step sequence** (each verifiable; the whole-slice falsifier is the node
+harness at the end):
+- **P2.a — descriptor → JSON (the JS contract). ✅ DONE.** `LayoutDesc::to_json()`
+  (`src/database/descriptor.rs`) serializes the descriptor to `{nodes:{<id>:node},names,sizes}`
+  — the read-only twin the JS `read()` switch dispatches on. JSON (not a binary format) because
+  the descriptor is metadata emitted once per type-closure + memoized host-side, NOT the hot
+  path (the value bytes are the zero-copy fast lane); hand-rendered (no serde) so it compiles
+  into the lean wasm build. Node `kind` tags mirror the `read_via_descriptor` arms. Guard:
+  `tests/layout_descriptor.rs::descriptor_to_json_is_well_formed_and_faithful` (balanced +
+  every §2 node kind present on the corpus). NEXT contract detail to validate against the JS
+  reader: value-enum `disc` ordering (currently the `Choices` vec order).
+- **P2.b — wasm host-imports + a `loft_layout_desc` export.** Add `loft_host_deliver` to the
+  `#[link(wasm_import_module="loft_io")]` block (`src/generation/mod.rs:1322`) + the `--html`
+  import allow-list (`src/main.rs:~6190`); deliver is SYNCHRONOUS so it does NOT join the
+  asyncify set (`main.rs:6340`). Export `loft_layout_desc(typeId) -> ptr` (loft serializes the
+  descriptor JSON into linear memory, returns the ptr; JS parses + memoizes).
+- **P2.c — the generic JS `read()`** in `doc/loft-gl-wasm.js:47` `buildLoftImports` (currently 5
+  `loft_io` imports — follow the `loft_host_http_get` precedent). Scalar → text → record →
+  vector (+ the scalar-vector typed-array fast lane) → ref → enum.
+- **P2.d — the node harness (the whole-slice falsifier)** + memory.grow cell.
 
 - **Code points:** `doc/loft-gl-wasm.js:47` (`buildLoftImports` — add the deliver/desc/iter
   host fns); `src/main.rs` `--html` assembly (embeds this glue).

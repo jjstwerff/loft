@@ -260,3 +260,76 @@ fn keyed_collection_read_is_refused_not_panicked() {
         "the refusal names the store-internal boundary"
     );
 }
+
+// ── @PLN105 Phase 2: descriptor → JSON (the JS reader's contract) ────────────────
+
+/// Balanced-brace / string-aware JSON well-formedness check — no parser dependency.
+fn json_balanced(s: &str) -> bool {
+    let (mut braces, mut brackets, mut in_str, mut esc) = (0i32, 0i32, false, false);
+    for c in s.chars() {
+        if in_str {
+            if esc {
+                esc = false;
+            } else if c == '\\' {
+                esc = true;
+            } else if c == '"' {
+                in_str = false;
+            }
+            continue;
+        }
+        match c {
+            '"' => in_str = true,
+            '{' => braces += 1,
+            '}' => braces -= 1,
+            '[' => brackets += 1,
+            ']' => brackets -= 1,
+            _ => {}
+        }
+        if braces < 0 || brackets < 0 {
+            return false;
+        }
+    }
+    braces == 0 && brackets == 0 && !in_str
+}
+
+#[test]
+fn descriptor_to_json_is_well_formed_and_faithful() {
+    let p = parse(CORPUS);
+    let roots: Vec<u16> = CORPUS_TYPES.iter().map(|n| known(&p, n)).collect();
+    let js = p.database.layout_descriptor(&roots).to_json();
+
+    // Well-formed (the JS side does `JSON.parse`), with the three top-level tables.
+    assert!(json_balanced(&js), "descriptor JSON is not balanced:\n{js}");
+    assert!(js.starts_with("{\"nodes\":{"), "top-level shape:\n{js}");
+    for key in ["\"nodes\":{", "\"names\":{", "\"sizes\":{"] {
+        assert!(js.contains(key), "missing top-level {key}\n{js}");
+    }
+
+    // Every node kind the JS reader (§2) dispatches on is present in the corpus.
+    for kind in [
+        "\"kind\":\"base\"",     // scalar leaves (text/char/…)
+        "\"kind\":\"record\"",   // Scalars / Narrow / RefHost
+        "\"kind\":\"vector\"",   // Vec1
+        "\"kind\":\"enum\"",     // Color
+        "\"kind\":\"iterated\"", // hash / index / sorted
+    ] {
+        assert!(js.contains(kind), "corpus JSON missing node {kind}\n{js}");
+    }
+
+    // Faithful details: a base carries its wire scalar name; the value enum keeps its variants
+    // in discriminant order; a keyed collection is iterated with its sub-kind (never structural).
+    assert!(
+        js.contains("\"kind\":\"base\",\"base\":\"text\""),
+        "text base wire name\n{js}"
+    );
+    for v in ["Red", "Green", "Blue"] {
+        assert!(
+            js.contains(&format!("\"name\":\"{v}\"")),
+            "Color.{v} variant\n{js}"
+        );
+    }
+    assert!(
+        js.contains("\"kind\":\"iterated\",\"sub\":\"hash\""),
+        "hash<> → iterated/hash\n{js}"
+    );
+}
