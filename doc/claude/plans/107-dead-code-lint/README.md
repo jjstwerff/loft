@@ -10,7 +10,8 @@ lint is **default ON** (`LOFT_NO_DEAD_STORES` opts out), verified both backends 
 corpus swept clean (stdlib + all 454 scripts + fixture libs + `tests/lib` + examples). See
 [the step plan](#implementation--small-verifiable-steps). Phase 2: **P2a (dead-final-store)
 SHELVED — the sketched counter-flush is UNSOUND** (see Phase 2 below); P2b
-(method-on-dead-receiver) and the value-struct-field-copy completeness gap remain FUTURE.
+(method-on-dead-receiver) remains FUTURE; the **value-struct-field-copy completeness gap is
+now CLOSED** (see § S4a) — value-struct copies warn like the vector copy.
 **Key finding:** loft
 **already ships** `unused_variables` (`Function::test_used`, `src/variables/mod.rs:1666`)
 — it correctly flags W-scalar/W-accumulator/N-effectful *today*; the real gap is that its
@@ -249,8 +250,20 @@ positives before flipping default-on.
     a genuinely-owned copy reads as `Borrowed{__vdb}`). `RefVar` (`&`) is excluded outright. Two
     findings: `uses` is not maintained post-scopes (the S2 `uses>0` guard was dropped as redundant),
     and the sweep "non-determinism" was the program cache (tests hardened with `LOFT_NO_CACHE=1`).
-    All 5 alias FPs silent; spec.loft still warns; no new FPs. Value-struct FIELD copies now read
-    `Borrowed{real}` → a **safe false negative** (sound, incomplete — a completeness gap to revisit).
+    All 5 alias FPs silent; spec.loft still warns; no new FPs.
+  - **Value-struct completeness — ✅ CLOSED 2026-07-15.** S4a left value-struct field/element
+    copies as a safe false NEGATIVE: `ownership_of` reports `Borrowed{source-view}` for them, so
+    the `owns` gate stayed shut. But a `value struct` read out of a field/element COPIES (the
+    `value_struct_copy` pass materialises a fresh `OpCopyRecord`; @PLN101), so `m = w.field;
+    m.x = 9` (m unread) is a lost write — the SAME footgun. Fix: `is_value_struct_local` — a
+    local whose type is a `Type::Reference` marked in `Data.value_structs` ALWAYS owns its store,
+    OR'd into the `owns` gate. The load-bearing subtlety: a reference-struct alias (`al =
+    rv.cells[0]; al.n = 42`) has the IDENTICAL `(reads=0, write_targets=1)` classifier signal as a
+    value-struct copy — the two are separated ONLY by ownership (value struct = owned copy → warn;
+    reference struct = aliases, the write propagates → silent). Corpus rows `w_vstruct_field`/
+    `w_vstruct_elem` (WARN) + `n_vstruct_read`/`n_ref_alias` (silent) lock it; scripts 516/517
+    strengthened (S4b pattern: read the copy → prove copy changed AND source didn't). Full suite
+    green both backends (2913 passed; the 3 fails are the known s7/wasm-relay/viewer env flakes).
   - **S4b (`01172384`) — the 8→4 true positives.** The remaining copy-mutate dead stores lived in
     intentional copy-semantics tests (503/294/519/85-tier1). Each was strengthened to also assert
     the COPY was mutated (reads the copy → silences the lint AND proves both "copy changed" and
@@ -292,7 +305,8 @@ it, so at the flush point `uses_at_write` can even EXCEED `uses`. Measured at sc
   deliberately deferred), living in `use_analysis.rs` beside `dead_store_accesses` — a real
   dataflow pass, NOT a cheap flush. Shelved because the cost/payoff inverted: a dataflow pass
   for a shape that catches no known loft bug (it is `unused_assignments`-completeness, not the
-  W-copy footgun). Revisit together with the value-struct-field-copy completeness gap (§ S4a).
+  W-copy footgun). (The value-struct-field-copy completeness gap that was its sibling is now
+  CLOSED — § S4a.)
 
 *P2b — method-on-dead-receiver* (W-method-mut) — **INVESTIGATED + SHELVED 2026-07-15. Needs
 substantial new infrastructure; not a lint extension.** Findings (probes since reverted):
@@ -319,9 +333,9 @@ substantial new infrastructure; not a lint extension.** Findings (probes since r
   backward-liveness pass + (c) call-site return-observed checks + (d) a high-risk FP sweep (the
   graphics libs are full of construct → method-mutate → render). A multi-session analysis, not
   the "extend the lint" the plan implied. Both Phase-2 items are gated on the same missing
-  backward-liveness foundation (P2b additionally on a nonexistent effect summary); the
-  value-struct-field-copy completeness gap (§ S4a) — which extends the SHIPPED lint via the
-  ownership analysis, no new dataflow — is the better next investment.
+  backward-liveness foundation (P2b additionally on a nonexistent effect summary). The other
+  candidate — the value-struct-field-copy completeness gap — was the cheaper win (extends the
+  SHIPPED lint via the ownership analysis, no new dataflow) and is now **CLOSED** (§ S4a).
 
 ## False-positive guards (the entire risk)
 

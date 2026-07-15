@@ -93,16 +93,26 @@ fn assert_default(backend: &str) {
         "[{backend}] corpus did not run to completion\n{stdout}"
     );
 
-    // Exactly one dead store — the W-copy `d` (an owned vector copy). More = a false positive
-    // returned; zero = the lint regressed / got silently disabled.
+    // Exactly three dead stores — the W-copy `d` (an owned vector copy) plus the two value-struct
+    // copies `vf` (field) and `ve` (element), which OWN their copy (`value_struct_copy`). More = a
+    // false positive returned; fewer = the lint regressed / got silently disabled.
     let ds = dead_stores(&diag);
     assert_eq!(
-        ds, 1,
-        "[{backend}] want exactly 1 dead-store warning (W-copy d), got {ds}\n{diag}"
+        ds, 3,
+        "[{backend}] want exactly 3 dead-store warnings (W-copy d, W-vstruct vf/ve), got {ds}\n{diag}"
     );
+    for v in ["d", "vf", "ve"] {
+        assert!(
+            diag.contains(&format!("'{v}' {DEAD_STORE_MSG}")),
+            "[{backend}] the dead store on `{v}` must fire\n{diag}"
+        );
+    }
+    // Load-bearing guard: a reference-struct alias (`al`) has the SAME (reads=0, write_targets=1)
+    // signal as a value-struct copy, but the write PROPAGATES to the source, so it must stay
+    // SILENT — the value-struct fix must be distinguished by ownership, not over-fire on aliases.
     assert!(
-        diag.contains(&format!("'d' {DEAD_STORE_MSG}")),
-        "[{backend}] the dead store must be reported on `d`\n{diag}"
+        !diag.contains(&format!("'al' {DEAD_STORE_MSG}")),
+        "[{backend}] reference-struct alias `al` must NOT warn (the write propagates)\n{diag}"
     );
 
     // `test_used` untouched — its three never-read warnings still fire, and `d` gets ONLY the
@@ -280,5 +290,31 @@ fn s1_classifier_isolates_w_copy_dead_store() {
     assert!(
         zr >= 1 && zw >= 1,
         "construct-unread z: reads>=1 (fills) + wt>=1: got ({zr},{zw})"
+    );
+
+    // Value-struct completeness — a `value struct` copy read out of a field/element is OWNED (the
+    // `value_struct_copy` pass), so its never-read mutation is the dead-store signal, exactly like
+    // W-copy.
+    assert_eq!(
+        cell("n_w_vstruct_field", "vf"),
+        (0, 1),
+        "W-vstruct-field vf: reads=0 write_targets=1"
+    );
+    assert_eq!(
+        cell("n_w_vstruct_elem", "ve"),
+        (0, 1),
+        "W-vstruct-elem ve: reads=0 write_targets=1"
+    );
+    assert!(
+        cell("n_n_vstruct_read", "vr").0 >= 1,
+        "N-vstruct-read vr: the copy is read → reads>=1"
+    );
+    // The reference-struct alias `al` has the IDENTICAL (0,1) signal as a value-struct copy — proof
+    // the classifier alone cannot separate them; `warn_dead_stores`' ownership check does (al is a
+    // reference struct → Borrowed → silent, verified in `assert_default`).
+    assert_eq!(
+        cell("n_n_ref_alias", "al"),
+        (0, 1),
+        "N-ref-alias al: same (0,1) signal as a value-struct copy, filtered by ownership"
     );
 }

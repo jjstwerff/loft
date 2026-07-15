@@ -1849,6 +1849,16 @@ pub fn is_synth_buffer(name: &str) -> bool {
         || name == "__retbuf"
 }
 
+/// @PLN107 value-struct completeness — is `ty` a `value struct` local (a `Type::Reference`
+/// whose record is marked in `Data.value_structs`)? Such a local always OWNS its store: a
+/// value struct read out of a field/element is COPIED (§ `scopes::value_struct_copy`), never
+/// aliased, so a never-read mutation of it is a lost write. A plain reference struct is also a
+/// `Type::Reference` but NOT value-marked → aliases → not owned here. `&value struct` is a
+/// `RefVar` (excluded upstream), so only the bare value-struct binding reaches this.
+fn is_value_struct_local(ty: &crate::data::Type, data: &Data) -> bool {
+    matches!(ty, crate::data::Type::Reference(d, _) if data.is_value_struct(*d))
+}
+
 /// @PLN103 P1.4 — render `own` for the ownership overlay (the P0.2 rendering rule,
 /// corrected in P1): `ownership_of` reports a bare argument as `Borrowed{base=self}`
 /// (self-base) and an owned delivery buffer as `Borrowed{base=<buffer>}`, neither of
@@ -2031,12 +2041,22 @@ pub fn warn_dead_stores(
             // `Borrowed{base=__vdb}` for a genuinely-owned copy — a base that is a SYNTH buffer
             // (or the var itself) means owned-via-buffer, not an alias of a live sibling
             // (`is_synth_buffer`, the P0.2 finding shared with `report_copies`).
-            let owns = match ownership_of(data, d_nr, &Value::Var(v)) {
-                Own::Owned => true,
-                Own::Borrowed { base } | Own::Join { base } => {
-                    base == v || (base != u16::MAX && is_synth_buffer(func.name(base)))
-                }
-            };
+            //
+            // @PLN107 value-struct completeness: a `value struct` local ALWAYS owns its store —
+            // reading a value struct out of a field/element COPIES it (the `value_struct_copy`
+            // pass materialises a fresh `OpCopyRecord`; DESIGN @PLN101), so `m = w.field; m.x = 9`
+            // (m unread) is a lost write, the same footgun as the vector copy. `ownership_of`
+            // conservatively reports `Borrowed{source-view}` there, so without this explicit
+            // value-struct test it is a false NEGATIVE. A plain reference `struct` ALIASES (the
+            // write propagates) and correctly stays `Borrowed` → silent; `&value struct` is a
+            // `RefVar`, already excluded above.
+            let owns = is_value_struct_local(func.tp(v), data)
+                || match ownership_of(data, d_nr, &Value::Var(v)) {
+                    Own::Owned => true,
+                    Own::Borrowed { base } | Own::Join { base } => {
+                        base == v || (base != u16::MAX && is_synth_buffer(func.name(base)))
+                    }
+                };
             if !owns {
                 continue;
             }
