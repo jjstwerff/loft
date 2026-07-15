@@ -4037,7 +4037,33 @@ impl Data {
             if existing && matches!(&arguments[0].typedef, Type::Optional(_)) {
                 // nullability overload — the base owns the type attribute; nothing to add.
             } else if existing {
-                diagnostic!(lexer, Level::Error, "Cannot redefine field {fn_name}",);
+                // The receiver type already carries a member of this name.  Unlike a free
+                // function (which C97 module-scopes to its library), a method lives in the
+                // type's SHARED, global attribute table, and `x.name(…)` can resolve to only
+                // one thing — so a colliding method can't be module-scoped (the C97 residual).
+                // Name the type and point at the fix; when the clash is with the stdlib, say so.
+                let tname = self.def(type_nr).name.clone();
+                let attr_idx = self.attr(type_nr, fn_name);
+                let existing_rt = match &self.def(type_nr).attributes[attr_idx].typedef {
+                    Type::Routine(nr) => *nr,
+                    _ => u32::MAX,
+                };
+                if existing_rt != u32::MAX && self.def(existing_rt).source == STD_SOURCE {
+                    diagnostic!(
+                        lexer,
+                        Level::Error,
+                        "`{fn_name}` is a stdlib method on `{tname}` — a type's methods are global, so `x.{fn_name}(…)` can't be two things; rename yours, or drop it (the stdlib already provides it)",
+                    );
+                } else if existing_rt != u32::MAX {
+                    diagnostic!(
+                        lexer,
+                        Level::Error,
+                        "cannot redefine method `{fn_name}` on `{tname}` (already defined at {})",
+                        self.def(existing_rt).position
+                    );
+                } else {
+                    diagnostic!(lexer, Level::Error, "cannot redefine field `{fn_name}` on `{tname}`");
+                }
                 return u32::MAX;
             } else {
                 let a_nr = self.add_attribute(lexer, type_nr, fn_name, Type::Routine(d_nr));
