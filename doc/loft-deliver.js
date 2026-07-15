@@ -74,6 +74,20 @@ export function readLoftValue(mem, storeBase, desc, typeId, rec, pos) {
         }
         return a;
       }
+      case "flatarray": {
+        // @PLN105 Phase 3 — a keyed collection pre-flattened at deliver time: the data record is
+        // FIXED in the descriptor (`node.data`), not read from the value's bytes (a top-level hash
+        // or a keyed struct field). Otherwise identical to `array`.
+        const dRec = node.data;
+        if (dRec === 0) return [];
+        const len = view.getUint32(storeBase + dRec * 8 + 4, true);
+        const a = new Array(len);
+        for (let i = 0; i < len; i++) {
+          const elmRec = view.getUint32(storeBase + dRec * 8 + 8 + 4 * i, true);
+          a[i] = read(node.elem, elmRec, 8);
+        }
+        return a;
+      }
       case "ref":
       case "childrec":
       case "iterated":

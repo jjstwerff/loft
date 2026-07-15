@@ -147,3 +147,29 @@ fn main() {
         "flattened hash mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn deliver_flattens_nested_hash_field_in_js() {
+    // @PLN105 Phase 3 — a struct with a keyed FIELD: the scalar/text fields are read in place, and
+    // the `hash` field is flattened to a key-sorted array (a FlatArray descriptor node carrying the
+    // materialised data record) — so JS reconstructs `{…scalars…, field: [elements]}` with no
+    // hash-layout knowledge.
+    let src = r#"
+struct Item { ik: integer, name: text }
+struct Bag { label: text, items: hash<Item[ik]>, count: integer }
+fn main() {
+  b: Bag = Bag { label: "mybag", items: [], count: 3 };
+  b.items[20] = Item { ik: 20, name: "twenty" };
+  b.items[10] = Item { ik: 10, name: "ten" };
+  deliver(1, b);
+}
+"#;
+    let Some(stdout) = run_deliver("nesthash", src) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":{\"label\":\"mybag\",\"items\":[{\"ik\":10,\"name\":\"ten\"},{\"ik\":20,\"name\":\"twenty\"}],\"count\":3}";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "nested-hash-field mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}

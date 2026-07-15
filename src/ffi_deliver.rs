@@ -24,9 +24,10 @@
 use crate::database::Stores;
 use crate::keys::DbRef;
 
-/// @PLN105 Phase 3 — the synthetic descriptor type-id for a pre-flattened keyed collection's
-/// `Array(elem)` root node. `u16::MAX` never collides with a real type-id (it is the type table's
-/// "no type" sentinel), so it is safe to insert alongside the element type's closure.
+/// @PLN105 Phase 3 — the base synthetic descriptor type-id for a pre-flattened keyed collection's
+/// `FlatArray` node (a top-level keyed root, or one per keyed field, decrementing). `u16::MAX`
+/// never collides with a real type-id (it is the type table's "no type" sentinel), so it is safe
+/// to insert alongside the element type's closure.
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 const FLAT_ARRAY_ROOT: u16 = u16::MAX;
 
@@ -56,32 +57,91 @@ impl Stores {
     /// @PLN105 Phase 2/3 — the browser host path: hand the value to JS driven by its layout
     /// descriptor, with no serialization (the value bytes stay in wasm linear memory). A struct /
     /// scalar / vector is delivered in place: JS walks it from `(store_base, rec, pos)` via the
-    /// descriptor (§2). A top-level KEYED collection has no byte layout a reader can walk, so
-    /// (Phase 3) it is PRE-FLATTENED — materialised to a scratch array of its element records (the
-    /// same `for x in hash` path) and delivered with a synthetic `Array(elem)` descriptor, which
-    /// the generic reader already handles; JS never sees the hash/tree layout. SYNCHRONOUS — the
-    /// borrow ends when this returns, so `desc` stays owned across the `loft_host_deliver` call.
+    /// descriptor (§2). A KEYED collection (a top-level hash, or a hash FIELD of a struct) has no
+    /// byte layout a reader can walk, so (Phase 3) it is PRE-FLATTENED — materialised to a scratch
+    /// array of its element records (the same `for x in hash` path) and exposed via a synthetic
+    /// `FlatArray` descriptor node carrying that array's fixed data record; the generic reader
+    /// reads it like any array, and JS never sees the hash/tree layout. SYNCHRONOUS — the borrow
+    /// ends when this returns, so `desc` stays owned across the `loft_host_deliver` call.
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
     fn deliver_browser(&mut self, tag: i64, val: DbRef, db_tp: u16) {
         use crate::database::{Iterated, LayoutNode};
         if val.rec == 0 {
             return;
         }
-        let root = self.layout_descriptor(&[db_tp]);
-        // Phase 3 slice — a top-level `hash<T>`: flatten to an array of its element records. Other
-        // keyed kinds (index / sorted / radix) + keyed FIELDS nested in a struct are later slices.
-        if let Some(LayoutNode::Iterated(Iterated::Hash { elem, .. })) = root.nodes.get(&db_tp) {
-            let elem_tp = *elem;
-            let scratch = self.build_hash_sorted_vec(&val, db_tp);
-            let mut adesc = self.layout_descriptor(&[elem_tp]);
-            adesc
-                .nodes
-                .insert(FLAT_ARRAY_ROOT, LayoutNode::Array(elem_tp));
-            self.emit_deliver(tag, scratch, FLAT_ARRAY_ROOT, &adesc.to_json());
-            return;
+        let mut desc = self.layout_descriptor(&[db_tp]);
+        match desc.nodes.get(&db_tp).cloned() {
+            // A top-level keyed `hash<T>`: materialise to an array + deliver a FlatArray root.
+            Some(LayoutNode::Iterated(Iterated::Hash { elem, .. })) => {
+                let data = self.materialize_hash(val, db_tp);
+                let mut adesc = self.layout_descriptor(&[elem]);
+                adesc
+                    .nodes
+                    .insert(FLAT_ARRAY_ROOT, LayoutNode::FlatArray { elem, data });
+                self.emit_deliver(tag, val, FLAT_ARRAY_ROOT, &adesc.to_json());
+            }
+            // A struct: flatten any DIRECT keyed fields in place (each becomes a FlatArray node).
+            Some(LayoutNode::Record(_)) => {
+                self.flatten_record_keyed_fields(&mut desc, val, db_tp);
+                self.emit_deliver(tag, val, db_tp, &desc.to_json());
+            }
+            // Scalar / vector / nested record without keyed fields — the P2.c in-place path.
+            _ => self.emit_deliver(tag, val, db_tp, &desc.to_json()),
         }
-        // The generic (struct / scalar / vector) path — P2.c.
-        self.emit_deliver(tag, val, db_tp, &root.to_json());
+    }
+
+    /// Materialise a keyed hash at `hash_ref` (of type `tp`) to a scratch element array and return
+    /// its DATA record in the value's store — the fixed `data` of a `FlatArray` node.
+    /// `build_rec_scratch` returns `(header, pos)` where `header[pos]` holds the data record.
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+    fn materialize_hash(&mut self, hash_ref: DbRef, tp: u16) -> u32 {
+        let scratch = self.build_hash_sorted_vec(&hash_ref, tp);
+        self.allocations[scratch.store_nr as usize].get_u32_raw(scratch.rec, scratch.pos)
+    }
+
+    /// Replace each DIRECT keyed FIELD of record `db_tp` with a `FlatArray` node carrying the
+    /// materialised element array — so a struct with a `hash` field delivers as
+    /// `{…scalars…, field: [elements]}`. The struct's own bytes stay in place; the keyed field's
+    /// in-place bytes (a store-internal hash) are ignored in favour of the FlatArray's fixed data
+    /// record. Keyed collections nested DEEPER (inside a sub-struct, or as an element type) are a
+    /// later slice.
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+    fn flatten_record_keyed_fields(
+        &mut self,
+        desc: &mut crate::database::LayoutDesc,
+        val: DbRef,
+        db_tp: u16,
+    ) {
+        use crate::database::{Iterated, LayoutNode};
+        let fields = match desc.nodes.get(&db_tp) {
+            Some(LayoutNode::Record(f)) => f.clone(),
+            _ => return,
+        };
+        let mut new_fields = fields.clone();
+        let mut synth = FLAT_ARRAY_ROOT;
+        let mut changed = false;
+        for (i, f) in fields.iter().enumerate() {
+            let elem = match desc.nodes.get(&f.content) {
+                Some(LayoutNode::Iterated(Iterated::Hash { elem, .. })) => *elem,
+                _ => continue,
+            };
+            // The hash field SLOT `(val.rec, val.pos + f.position)` holds the bucket claim
+            // (`hash::records` reads it there), so it IS the hash's DbRef for materialisation.
+            let hash_ref = DbRef {
+                store_nr: val.store_nr,
+                rec: val.rec,
+                pos: val.pos + u32::from(f.position),
+            };
+            let data = self.materialize_hash(hash_ref, f.content);
+            desc.nodes
+                .insert(synth, LayoutNode::FlatArray { elem, data });
+            new_fields[i].content = synth;
+            synth -= 1;
+            changed = true;
+        }
+        if changed {
+            desc.nodes.insert(db_tp, LayoutNode::Record(new_fields));
+        }
     }
 
     /// Call the `loft_host_deliver` import: `Store.ptr` is the store buffer's base in wasm linear

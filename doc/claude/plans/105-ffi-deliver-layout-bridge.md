@@ -322,9 +322,24 @@ NO change. Verified end-to-end (`tests/deliver_wasm.rs::deliver_flattens_top_lev
 inserting `{30,10,20}` reconstructs KEY-SORTED `[{ik:10,name:"ten"},{ik:20,…},{ik:30,…}]` — the
 same order as the interpreter's `for x in h` (both use `build_hash_sorted_vec`); JS touches no
 hash-layout constant. Loopback (interp/native) still refuses a keyed root with `error=store-
-internal` (Phase-1, unchanged) — flattening is browser-only. **REMAINING:** index/sorted/radix
-materialisers (radix has `build_radix_sorted_vec`; index/sorted need a "records in key order"
-helper), then NESTED keyed fields (a struct with a `hash` field → build a flattened twin).
+internal` (Phase-1, unchanged) — flattening is browser-only.
+
+**Nested keyed FIELD (a struct with a `hash` field). ✅ DONE.** No flattened-twin copy needed: the
+struct is delivered IN PLACE, and each direct keyed field's descriptor node is replaced by a
+BROWSER-SYNTHETIC `LayoutNode::FlatArray { elem, data }` carrying the materialised array's fixed
+data record (`flatten_record_keyed_fields`; the hash field slot `(val.rec, val.pos + field.pos)`
+IS the hash's `DbRef`, since `hash::records` reads the bucket claim there). The struct's own
+bytes are untouched — scalar/text fields read in place, the keyed field's in-place hash bytes are
+ignored in favour of the FlatArray's fixed record. Top-level and nested now share the `FlatArray`
+mechanism. `FlatArray` never appears in a real type descriptor (loopback/@PLN97-hash paths add an
+error/placeholder arm), only injected at deliver time. Verified end-to-end
+(`deliver_flattens_nested_hash_field_in_js`): `Bag{ label, items: hash<Item>, count }` →
+`{label:"mybag", items:[{ik:10,…},{ik:20,…}], count:3}` (scalars in place, hash key-sorted).
+
+**REMAINING:** index/sorted/radix materialisers (radix has `build_radix_sorted_vec`; index/sorted
+need a "records in key order" helper); keyed collections nested DEEPER (a keyed field inside a
+SUB-struct, or a keyed ELEMENT type — `flatten_record_keyed_fields` only walks the root record's
+DIRECT fields today); and `expose` (long-lived pinning).
 
 - **Falsifier / test:** deliver a value containing `hash<T>` + `index<T>` + spatial; JS reads the
   materialised arrays via the existing reader; assert the reconstructed multiset (count + values)
