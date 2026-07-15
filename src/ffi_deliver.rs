@@ -33,6 +33,34 @@ impl Stores {
     /// arrives already deref'd to its record on both backends). Scalars delivered by
     /// value are not record-shaped and are out of the Phase-1 subset.
     pub fn deliver_reconstruct(&self, tag: i64, val: DbRef, db_tp: u16) {
+        // @PLN105 Phase 2 — browser target: hand the value to the JS host instead of the loopback.
+        // Serialize the layout descriptor to JSON, compute the value record's RAW byte address in
+        // wasm linear memory (`store.ptr + offset`), and call the `loft_host_deliver` import; the
+        // generic JS reader walks the value from `base` driven by the descriptor (§2), SYNCHRONOUSLY
+        // within this call so the borrow is still live (§5). `desc` stays owned until after the call.
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+        {
+            if val.rec != 0 {
+                let desc = self.layout_descriptor(&[db_tp]).to_json();
+                let store = &self.allocations[val.store_nr as usize];
+                let base = std::ptr::from_ref(store.addr::<u8>(val.rec, val.pos)) as usize;
+                crate::loft_host_deliver(tag, base, u32::from(db_tp), desc.as_ptr(), desc.len());
+            }
+            return;
+        }
+        // native / interpreter / wasi — the Phase-1 LOOPBACK host (the both-backend parity oracle).
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))))]
+        {
+            self.deliver_loopback(tag, val, db_tp);
+        }
+    }
+
+    /// The Phase-1 loopback host — reconstruct the delivered value from its descriptor and print a
+    /// deterministic line. The parity oracle for `--interpret` == `--native`. Split out of
+    /// `deliver_reconstruct` so the browser (Phase 2) and loopback paths are each cfg-clean. Only
+    /// the non-browser targets keep it (the browser calls the `loft_host_deliver` import instead).
+    #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))))]
+    fn deliver_loopback(&self, tag: i64, val: DbRef, db_tp: u16) {
         let name = self
             .types
             .get(db_tp as usize)

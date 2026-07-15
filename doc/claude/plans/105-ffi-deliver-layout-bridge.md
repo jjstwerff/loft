@@ -234,11 +234,25 @@ harness at the end):
   `tests/layout_descriptor.rs::descriptor_to_json_is_well_formed_and_faithful` (balanced +
   every §2 node kind present on the corpus). NEXT contract detail to validate against the JS
   reader: value-enum `disc` ordering (currently the `Choices` vec order).
-- **P2.b — wasm host-imports + a `loft_layout_desc` export.** Add `loft_host_deliver` to the
-  `#[link(wasm_import_module="loft_io")]` block (`src/generation/mod.rs:1322`) + the `--html`
-  import allow-list (`src/main.rs:~6190`); deliver is SYNCHRONOUS so it does NOT join the
-  asyncify set (`main.rs:6340`). Export `loft_layout_desc(typeId) -> ptr` (loft serializes the
-  descriptor JSON into linear memory, returns the ptr; JS parses + memoizes).
+- **P2.b — wasm host-import + the deliver handle. ✅ DONE.** `loft_host_deliver(tag, base,
+  type_id, desc_ptr, desc_len)` declared in the RUNTIME `loft_io` import block (`src/lib.rs`,
+  cfg `all(wasm32, not(wasi), not(feature="wasm"))`, next to `loft_host_http_get`) — deliver's
+  `#rust` body is runtime code (`ffi_deliver.rs`), so the import lives in the runtime, not the
+  generated-program block. `deliver_reconstruct` now cfg-splits: the browser target serializes
+  the descriptor (`to_json`), computes the value record's RAW linear-memory address (`base =
+  &store.addr::<u8>(rec, pos)` — `Store.ptr` IS a wasm memory address), and calls the import;
+  native/interp keep the Phase-1 loopback (`deliver_loopback`, the parity oracle — untouched,
+  `deliver_parity` still 2/2). SYNCHRONOUS → NOT added to the asyncify set. JS stubs in both host
+  shims (inline `main.rs` + `doc/loft-gl-wasm.js`) route to a `globalThis.loftDeliver` hook so
+  the bundle instantiates + a harness observes deliveries. **DESIGN CHANGE from the sketch: the
+  descriptor JSON is passed INLINE with the deliver call (`desc_ptr/desc_len`), NOT via a
+  separate `loft_layout_desc(typeId)->ptr` export** — the deliver `#rust` body already holds the
+  `Stores`, so it serializes the descriptor right there; JS memoizes by `type_id`. This avoids a
+  wasm export needing to reach global runtime state. **Verified:** wasm32 lib build clean; `loft
+  --html deliver_prog.loft` produces a bundle (module-import check passes; `loft_host_deliver`
+  wired in). **Runtime-correctness deferred to P2.d** (the node harness validates the `base`
+  address + field-offset reads); TEXT is store-INTERNED (`get_str(get_u32_raw(rec,pos))`), so the
+  JS reader (P2.c) needs a string-resolution host-fn, not an inline byte read.
 - **P2.c — the generic JS `read()`** in `doc/loft-gl-wasm.js:47` `buildLoftImports` (currently 5
   `loft_io` imports — follow the `loft_host_http_get` precedent). Scalar → text → record →
   vector (+ the scalar-vector typed-array fast lane) → ref → enum.

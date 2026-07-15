@@ -6668,7 +6668,16 @@ const imports={{loft_io:{{
     if(ctrl.ac)ctrl.ac.suspend();
     return 0;
   }},
-  loft_host_http_get_copy:(ptr)=>{{if(ctrl.httpBytes)new Uint8Array(mem.buffer,ptr,ctrl.httpBytes.length).set(ctrl.httpBytes);}}
+  loft_host_http_get_copy:(ptr)=>{{if(ctrl.httpBytes)new Uint8Array(mem.buffer,ptr,ctrl.httpBytes.length).set(ctrl.httpBytes);}},
+  // @PLN105 Phase 2 — deliver: hand a live value's raw linear-memory address + layout descriptor
+  // (JSON) to a JS hook. SYNCHRONOUS: read within this call (the borrow ends on return). The
+  // generic descriptor-driven reader is added in Phase 2c; here a minimal hook so the bundle
+  // instantiates and a harness can observe deliveries via `globalThis.loftDeliver`.
+  loft_host_deliver:(tag,base,type_id,dptr,dlen)=>{{
+    const desc=dec.decode(new Uint8Array(mem.buffer,dptr,dlen));
+    if(globalThis.loftDeliver)globalThis.loftDeliver(tag,base,type_id,desc,mem);
+    else console.log("[loft:deliver] tag="+tag+" type="+type_id+" base="+base+" desc="+desc);
+  }}
 }}}};
 WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
   mem=r.instance.exports.memory;

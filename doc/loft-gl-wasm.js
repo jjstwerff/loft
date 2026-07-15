@@ -170,6 +170,16 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       loft_host_http_get_copy(ptr) {
         if (asyncCtrl && asyncCtrl.httpBytes)
           new Uint8Array(getMem().buffer, ptr, asyncCtrl.httpBytes.length).set(asyncCtrl.httpBytes);
+      },
+      // @PLN105 Phase 2 — deliver(tag, value): the JS host receives the value record's RAW
+      // linear-memory address `base` + its layout descriptor (JSON, memoized by type_id) and
+      // walks the value with no serialization (Phase 2c adds the generic reader). SYNCHRONOUS —
+      // read within this call, the borrow ends on return (§5). Here a minimal hook so the bundle
+      // instantiates; a page/harness observes deliveries via globalThis.loftDeliver.
+      loft_host_deliver(tag, base, type_id, dptr, dlen) {
+        const desc = readStr(dptr, dlen);
+        if (globalThis.loftDeliver) globalThis.loftDeliver(tag, base, type_id, desc, getMem());
+        else console.log("[loft:deliver]", "tag=" + tag, "type=" + type_id, "base=" + base, desc);
       }
     }),
     loft_gl: coerceArgs({
