@@ -142,6 +142,12 @@ pub(crate) fn set_pointer_down(down: bool) {
     // Touch maps to the left mouse button (bit 0), matching the desktop `MouseButton::Left`.
     MOUSE_BTN.with(|c| c.set(u8::from(down)));
 }
+/// @PLN106 B4 IME — set a key's pressed state (`idx` is the 0-255 index `gl_key_pressed`
+/// reads, matching the desktop `key_index` scheme). Called from `android_gl::drain_input`.
+#[cfg(target_os = "android")]
+pub(crate) fn set_key(idx: u8, pressed: bool) {
+    KEYS.with(|k| k.borrow_mut()[idx as usize] = pressed);
+}
 
 // Map winit key codes to a simple 0-255 index. Desktop-only; Android input is B4.
 #[cfg(not(target_os = "android"))]
@@ -984,6 +990,24 @@ pub extern "C" fn loft_gl_key_pressed(key_code: i64) -> bool {
     KEYS.with(|k| k.borrow()[key_code as usize])
 }
 
+/// @PLN106 B4 IME — show the on-screen keyboard. No-op on desktop (physical keyboard); on
+/// Android raises the soft keyboard so its keys arrive as `KeyEvent`s, fed into `KEYS` by
+/// `android_gl::drain_input` (so `gl_key_pressed` reads typed keys).
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_show_keyboard() {
+    #[cfg(target_os = "android")]
+    crate::android_gl::show_keyboard();
+}
+
+/// @PLN106 B4 IME — hide the on-screen keyboard. No-op on desktop.
+#[loft_native]
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_gl_hide_keyboard() {
+    #[cfg(target_os = "android")]
+    crate::android_gl::hide_keyboard();
+}
+
 #[loft_native]
 #[unsafe(no_mangle)]
 pub extern "C" fn loft_gl_mouse_x() -> f64 {
@@ -1573,6 +1597,8 @@ loft_ffi::loft_register! {
     loft_gl_draw_fullscreen_quad,
     // Input
     loft_gl_key_pressed,
+    loft_gl_show_keyboard,
+    loft_gl_hide_keyboard,
     loft_gl_mouse_x,
     loft_gl_mouse_y,
     loft_gl_mouse_button,
@@ -1647,6 +1673,8 @@ loft_ffi::loft_register_bridges! {
     "loft_gl_create_color_texture" => loft_gl_create_color_texture__loft_bridge,
     "loft_gl_draw_fullscreen_quad" => loft_gl_draw_fullscreen_quad__loft_bridge,
     "loft_gl_key_pressed" => loft_gl_key_pressed__loft_bridge,
+    "loft_gl_show_keyboard" => loft_gl_show_keyboard__loft_bridge,
+    "loft_gl_hide_keyboard" => loft_gl_hide_keyboard__loft_bridge,
     "loft_gl_mouse_x" => loft_gl_mouse_x__loft_bridge,
     "loft_gl_mouse_y" => loft_gl_mouse_y__loft_bridge,
     "loft_gl_mouse_button" => loft_gl_mouse_button__loft_bridge,

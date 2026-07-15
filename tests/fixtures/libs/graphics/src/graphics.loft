@@ -785,6 +785,14 @@ KEY_F12 = 146;
 pub fn gl_key_pressed(key_code: integer) -> boolean;
 #native "loft_gl_key_pressed"
 
+// Show / hide the on-screen (soft) keyboard. On desktop these are no-ops (a physical
+// keyboard is always available); on Android they raise/dismiss the IME so `gl_key_pressed`
+// receives typed keys. Call `gl_show_keyboard()` when a text field gains focus.
+pub fn gl_show_keyboard();
+#native "loft_gl_show_keyboard"
+pub fn gl_hide_keyboard();
+#native "loft_gl_hide_keyboard"
+
 // Mouse position X (pixels from left edge of window).
 pub fn gl_mouse_x() -> float;
 #native "loft_gl_mouse_x"

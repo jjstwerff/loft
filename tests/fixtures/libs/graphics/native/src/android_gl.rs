@@ -23,7 +23,7 @@
 //! `android-activity` is one instance (see `src/android.rs`).
 
 use super::GlState;
-use android_activity::input::{InputEvent, MotionAction};
+use android_activity::input::{InputEvent, KeyAction, Keycode, MotionAction};
 use android_activity::{AndroidApp, InputStatus, MainEvent, PollEvent};
 use std::ffi::{CString, c_char, c_void};
 use std::sync::Mutex;
@@ -245,8 +245,8 @@ fn drain_input(app: &AndroidApp) {
         return;
     };
     loop {
-        let read = iter.next(|event| {
-            if let InputEvent::MotionEvent(motion) = event {
+        let read = iter.next(|event| match event {
+            InputEvent::MotionEvent(motion) => {
                 let p = motion.pointer_at_index(motion.pointer_index());
                 crate::set_pointer_pos(f64::from(p.x()), f64::from(p.y()));
                 match motion.action() {
@@ -256,13 +256,94 @@ fn drain_input(app: &AndroidApp) {
                     }
                     _ => {}
                 }
-                return InputStatus::Handled;
+                InputStatus::Handled
             }
-            InputStatus::Unhandled
+            // @PLN106 B4 IME — map a KeyEvent to the shared `KEYS` state so `gl_key_pressed`
+            // reads typed keys (hardware keyboard + soft-keyboard keys that emit KeyEvents).
+            // Unmapped keys stay Unhandled so the system still handles Back / Volume / etc.
+            InputEvent::KeyEvent(key) => match keycode_to_index(key.key_code()) {
+                Some(idx) => {
+                    crate::set_key(idx, matches!(key.action(), KeyAction::Down));
+                    InputStatus::Handled
+                }
+                None => InputStatus::Unhandled,
+            },
+            _ => InputStatus::Unhandled,
         });
         if !read {
             break;
         }
+    }
+}
+
+/// Map an Android [`Keycode`] to the 0-255 index `gl_key_pressed` reads, matching the desktop
+/// `key_index` scheme (letters → lowercase ASCII, digits → ASCII, arrows → 128-131, plus the
+/// common editing keys). Returns `None` for keys the shared model doesn't cover.
+#[allow(clippy::match_same_arms)]
+fn keycode_to_index(kc: Keycode) -> Option<u8> {
+    let idx: u8 = match kc {
+        Keycode::A => b'a',
+        Keycode::B => b'b',
+        Keycode::C => b'c',
+        Keycode::D => b'd',
+        Keycode::E => b'e',
+        Keycode::F => b'f',
+        Keycode::G => b'g',
+        Keycode::H => b'h',
+        Keycode::I => b'i',
+        Keycode::J => b'j',
+        Keycode::K => b'k',
+        Keycode::L => b'l',
+        Keycode::M => b'm',
+        Keycode::N => b'n',
+        Keycode::O => b'o',
+        Keycode::P => b'p',
+        Keycode::Q => b'q',
+        Keycode::R => b'r',
+        Keycode::S => b's',
+        Keycode::T => b't',
+        Keycode::U => b'u',
+        Keycode::V => b'v',
+        Keycode::W => b'w',
+        Keycode::X => b'x',
+        Keycode::Y => b'y',
+        Keycode::Z => b'z',
+        Keycode::Keycode0 => b'0',
+        Keycode::Keycode1 => b'1',
+        Keycode::Keycode2 => b'2',
+        Keycode::Keycode3 => b'3',
+        Keycode::Keycode4 => b'4',
+        Keycode::Keycode5 => b'5',
+        Keycode::Keycode6 => b'6',
+        Keycode::Keycode7 => b'7',
+        Keycode::Keycode8 => b'8',
+        Keycode::Keycode9 => b'9',
+        Keycode::Space => b' ',
+        Keycode::Enter | Keycode::NumpadEnter => b'\r',
+        Keycode::Tab => 9,
+        Keycode::Escape => 27,
+        Keycode::Del => 8,      // backspace
+        Keycode::DpadUp => 128, // matches desktop key_index arrow codes
+        Keycode::DpadDown => 129,
+        Keycode::DpadLeft => 130,
+        Keycode::DpadRight => 131,
+        _ => return None,
+    };
+    Some(idx)
+}
+
+/// @PLN106 B4 IME — raise the soft keyboard so its keys arrive as `KeyEvent`s. Uses the
+/// `AndroidApp` handed to the crate via `loft_gl_android_set_app`.
+pub(crate) fn show_keyboard() {
+    if let Some(app) = ANDROID_APP.lock().unwrap().as_ref() {
+        app.show_soft_input(true);
+    }
+}
+
+/// @PLN106 B4 IME — dismiss the soft keyboard.
+pub(crate) fn hide_keyboard() {
+    if let Some(app) = ANDROID_APP.lock().unwrap().as_ref() {
+        app.hide_soft_input(false);
     }
 }
 

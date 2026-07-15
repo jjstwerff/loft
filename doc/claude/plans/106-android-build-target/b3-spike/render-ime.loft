@@ -1,0 +1,25 @@
+// @PLN106 B4 IME — keyboard input on Android. Raises the soft keyboard, then reads typed keys
+// via the same gl_key_pressed API the desktop uses. Latches the last key pressed to a colour
+// (green='a', blue='b') so a headless `adb shell input keyevent` can be screencapped and checked.
+use graphics;
+
+fn main() {
+  graphics::gl_create_window(320, 480, "loft ime");
+  graphics::gl_show_keyboard();
+  latched = 0;
+  i = 0;
+  while graphics::gl_poll_events() {
+    if graphics::gl_key_pressed(97) { latched = 1; } // 'a'
+    if graphics::gl_key_pressed(98) { latched = 2; } // 'b'
+    if latched == 1 {
+      graphics::gl_clear(graphics::rgb(0, 200, 0));
+    } else if latched == 2 {
+      graphics::gl_clear(graphics::rgb(30, 60, 220));
+    } else {
+      graphics::gl_clear(graphics::rgb(40, 40, 40));
+    }
+    graphics::gl_swap_buffers();
+    i = i + 1;
+    if i > 6000 { return; }
+  }
+}
