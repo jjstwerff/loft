@@ -186,7 +186,14 @@ impl rodio::Source for RawPcmSource {
 /// Play raw PCM samples (mono f32, values -1.0 to 1.0) at the given sample rate.
 /// Returns sink index (for stopping/volume) or -1 on failure.
 /// Native compilation path: receives raw pointer + count.
-#[unsafe(no_mangle)]
+///
+/// @PLN106 audio — on Android the C symbol `loft_audio_play_raw` is exported by the
+/// store-aware `n_audio_play_raw` (below), because `audio_play_raw` is remapped
+/// (`loft_audio_play_raw => n_audio_play_raw`) so the `--native` C-ABI codegen calls it with
+/// a `(LoftStore, LoftRef)` vector arg, not `(ptr, count)`. This raw fn stays compiled (it's
+/// still the shared body `n_audio_play_raw` calls), just not exported under that symbol there —
+/// the same fix the GL vector fns (`n_gl_set_mat4` &c) use.
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
 pub extern "C" fn loft_audio_play_raw(
     data_ptr: *const f32,
     data_count: u32,
@@ -226,9 +233,12 @@ pub extern "C" fn loft_audio_play_raw(
     })
 }
 
-/// Interpreter wrapper: extracts vector<single> via LoftStore + LoftRef.
+/// Interpreter wrapper: extracts vector<single> via LoftStore + LoftRef. On Android this owns
+/// the `loft_audio_play_raw` C-ABI symbol (see the raw fn above) so the `--native` store-aware
+/// vector arg marshals correctly instead of arriving as a garbage `(ptr, count)`.
 #[loft_native]
-#[unsafe(no_mangle)]
+#[cfg_attr(not(target_os = "android"), unsafe(no_mangle))]
+#[cfg_attr(target_os = "android", unsafe(export_name = "loft_audio_play_raw"))]
 pub unsafe extern "C" fn n_audio_play_raw(
     store: loft_ffi::LoftStore,
     data: loft_ffi::LoftRef,
