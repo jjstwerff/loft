@@ -5,11 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN107 — Dead-code lint: never-read local (unused variable + dead store)
 
-**Status — IN PROGRESS (2026-07-15). S0–S4 landed** on `tuxedo-work` (oracle + decoupled
-read/write classifier + gated `LOFT_DEAD_STORES` warning + escape/loop hardening + the S4
-alias false-positive fix and suite-wide sweep — **zero warnings across stdlib + all 454
-scripts**, both backends; see [the step plan](#implementation--small-verifiable-steps)). Only
-**S5** (flip default-on) remains. **Key finding:** loft
+**Status — ✅ DONE (2026-07-15). Phase 1 (S0–S5) shipped** on `tuxedo-work`: the dead-store
+lint is **default ON** (`LOFT_NO_DEAD_STORES` opts out), verified both backends against a
+corpus swept clean (stdlib + all 454 scripts + fixture libs + `tests/lib` + examples). See
+[the step plan](#implementation--small-verifiable-steps). Phase 2 (dead-final-store,
+method-on-dead-receiver) and the value-struct-field-copy completeness gap remain FUTURE.
+**Key finding:** loft
 **already ships** `unused_variables` (`Function::test_used`, `src/variables/mod.rs:1666`)
 — it correctly flags W-scalar/W-accumulator/N-effectful *today*; the real gap is that its
 `uses` counter treats a write-**target** as a read, so it misses **W-copy** (the graphics
@@ -255,10 +256,17 @@ positives before flipping default-on.
     "original didn't"). All pass both backends.
   - **Gate MET:** zero dead-store warnings across the stdlib + all 454 `tests/scripts`. S5
     (default-on) is unblocked.
-- **S5 — Flip default-on + graduate.** Default `LOFT_DEAD_STORES` on with `LOFT_NO_DEAD_STORES`
-  opt-out (mirror the @PLN28 diagnostic toggles); fix real hits; graduate `spec.loft` to
-  `tests/scripts/`; document in STDLIB/diagnostics + the `LOFT_LOG` quick-ref. **Verify:**
-  `make ci` green, default-on, oracle locks behaviour on both backends.
+- **S5 — Flip default-on + graduate. ✅ DONE 2026-07-15.** `dead_stores_enabled()` is now
+  **default ON**; `LOFT_NO_DEAD_STORES` opts out (mirrors the @PLN28 toggles; documented in
+  `CLAUDE.md`). Pre-flip the corpus was swept comprehensively cold — stdlib + all 454
+  `tests/scripts` + all fixture libs + `tests/lib` + examples — **zero warnings**, so no real
+  hits remained. The oracle (`tests/dead_code_lint.rs`) was rewritten for default-on: the corpus
+  warns exactly on the W-copy `d` by default, `LOFT_NO_DEAD_STORES` silences it (but not
+  `test_used`), and a dedicated `s4a_aliases_stay_silent` test locks that real alias scripts
+  (`178`/`434`/`25`/`85-borrow`) emit no dead-store warning. `spec.loft` stays the oracle corpus
+  in this plan dir (the Rust oracle test IS its regression — moving it into `tests/scripts/`
+  would only add its intentional warning to the script runner). **Verified both backends**;
+  6 oracle tests green.
 
 **Phase 2 (later, separate steps).** *P2a — dead FINAL store* (W-reassign-final): extend
 `track_write` with a scope-end flush that re-checks the last write's `uses == uses_at_write`.
@@ -300,5 +308,5 @@ would have flagged all four at authoring time; it is the general guard against t
   the copy/borrow lint and the `use_analysis.rs` classification this reuses.
 - [OWNERSHIP_MODEL.md](../../OWNERSHIP_MODEL.md) (C86: whole-value heap binds COPY; #415) —
   *why* `d = self.data` copies, which is what makes the dead-store shape possible.
-- @PLN106 [106-android-build-target.md](../106-android-build-target.md) — the consumer
+- @PLN106 [106-android-build-target/](../106-android-build-target/README.md) — the consumer
   that surfaced the copy-mutate footgun in `lib/graphics`.
