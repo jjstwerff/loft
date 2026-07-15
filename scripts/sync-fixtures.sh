@@ -46,14 +46,14 @@ fi
 # "zero network during cargo test" goal.
 PINNED_REFS=$(cat <<'EOF'
 loft-libs-core      arguments-v0.1.1         arguments
-loft-libs-graphics  shapes-v0.2.0            shapes
+loft-libs-graphics  shapes-v0.3.0            shapes
 loft-libs-graphics  gridmesh-v0.1.1          gridmesh
 loft-libs-graphics  graphics-v0.1.1            graphics
 loft-libs-graphics  imaging-v0.1.0           imaging
 loft-libs-net       game_protocol-v0.1.2     game_protocol
 loft-libs-net       web-v0.1.1               web
 loft-libs-world     hex_world-v0.1.0         hex_world
-loft-libs-game      time-v0.1.0              time
+loft-libs-game      time-v0.2.1              time
 EOF
 )
 
@@ -124,10 +124,6 @@ EOF
 #   rejects).  Drop this line when loft-libs-net ships the `text?` migration
 #   (the web/server republish) and bump PINNED_REFS instead.
 #
-# - time/src/time.loft — @PLN25 DN1: `parse`/`combine` return null on a bad
-#   time string, so their return types must be `integer?`; the pinned
-#   time-v0.1.0 tag predates the flip.  Drop when loft-libs-game ships the
-#   migration and PINNED_REFS bumps.
 LOCAL_PATCHES=$(cat <<'EOF'
 imaging/native/Cargo.toml
 imaging/src/imaging.loft
@@ -142,7 +138,6 @@ shapes/README.md
 imaging/README.md
 web/README.md
 web/src/web.loft
-time/src/time.loft
 EOF
 )
 

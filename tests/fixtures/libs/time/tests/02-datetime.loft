@@ -1,0 +1,145 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// DateTime / Duration value-type tests (0.2.0).  Goldens hand-computed
+// against the proleptic Gregorian calendar; every case must agree on the
+// interpreter and --native (and wasm).
+use time;
+
+fn test_construct_and_epoch() {
+    // absolute anchors — catch a systematic offset the round-trips would hide
+    e0 = time::datetime(1970, 1, 1, 0, 0, 0);
+    assert((e0 as integer) == 0, "unix epoch is ms 0");
+    y2k = time::datetime(2000, 1, 1, 0, 0, 0);
+    assert((y2k as integer) == 946684800000, "2000-01-01 known epoch ms");
+    assert((time::date(2000, 1, 1) as integer) == 946684800000, "date() midnight matches");
+}
+
+fn test_fields() {
+    d = time::datetime(2026, 7, 8, 13, 30, 7);
+    assert(d.year() == 2026,  "year {d.year()}");
+    assert(d.month() == 7,    "month {d.month()}");
+    assert(d.day() == 8,      "day {d.day()}");
+    assert(d.hour() == 13,    "hour {d.hour()}");
+    assert(d.minute() == 30,  "minute {d.minute()}");
+    assert(d.second() == 7,   "second {d.second()}");
+    // 2026-05-25 is a Monday (weekday 0)
+    mon = time::date(2026, 5, 25);
+    assert(mon.weekday() == 0, "weekday {mon.weekday()}");
+    assert(mon.weekday_name() == "Mon", "wname {mon.weekday_name()}");
+    assert(mon.month_name() == "May", "mname {mon.month_name()}");
+}
+
+fn test_format() {
+    d = time::datetime(2026, 7, 8, 13, 30, 7);
+    assert("{d:date}" == "2026-07-08", "date {d:date}");
+    assert("{d:time}" == "13:30", "time {d:time}");
+    assert("{d:seconds}" == "13:30:07", "secs {d:seconds}");
+    assert("{d:iso}" == "2026-07-08T13:30:07Z", "iso {d:iso}");
+    assert("{d}" == "2026-07-08 13:30", "bare {d}");
+    assert("{d:month}" == "Jul", "month spec {d:month}");
+}
+
+fn test_compare() {
+    d1 = time::datetime(2026, 7, 8, 12, 0, 0);
+    d2 = time::datetime(2026, 7, 8, 13, 30, 0);
+    assert(d1 < d2, "op <");
+    assert(d2 > d1, "op >");
+    assert(d1 <= d1, "op <=");
+    assert(d1 >= d1, "op >=");
+    assert(d1 == d1, "op ==");
+    assert(d1 != d2, "op !=");
+}
+
+fn test_arithmetic() {
+    d1 = time::datetime(2026, 7, 8, 12, 0, 0);
+    d2 = time::datetime(2026, 7, 8, 13, 30, 0);
+    diff = d2 - d1;                     // DateTime - DateTime -> Duration
+    assert(diff == time::minutes(90), "diff is 90 minutes");
+    assert(diff.total_minutes() == 90, "total_minutes {diff.total_minutes()}");
+    assert(diff.total_seconds() == 5400, "total_seconds {diff.total_seconds()}");
+    d3 = d1 + time::minutes(90);         // DateTime + Duration -> DateTime
+    assert(d3 == d2, "add duration reaches the later time");
+    back = d1.minus(time::minutes(90));  // subtract a Duration (method)
+    assert(back == time::datetime(2026, 7, 8, 10, 30, 0), "minus a duration");
+}
+
+fn test_duration() {
+    assert(time::hours(1) < time::hours(2), "duration compare");
+    assert((time::hours(1) + time::minutes(30)).total_minutes() == 90, "add durations");
+    assert(time::days(1).total_hours() == 24, "day is 24h");
+    assert(time::weeks(1).total_days() == 7, "week is 7d");
+    assert((time::hours(2) * 3) == time::hours(6), "scale duration");
+    assert(time::minutes(90).negate().total_minutes() == -90, "negate");
+    assert("{time::minutes(90)}" == "1:30:00", "dur fmt {time::minutes(90)}");
+    assert("{time::hours(25)}" == "25:00:00", "dur >24h");
+    assert("{time::minutes(-90)}" == "-1:30:00", "negative dur fmt");
+}
+
+fn test_conversions() {
+    d1 = time::datetime(2026, 7, 8, 12, 0, 0);
+    epoch = d1 as integer;              // DateTime -> integer
+    back = epoch as DateTime;           // integer  -> DateTime
+    assert(back == d1, "int round-trip");
+    parsed = "2026-07-08" as DateTime;  // text -> DateTime (total)
+    assert(parsed == time::date(2026, 7, 8), "parse-on-cast date");
+    parsed2 = "2026-07-08T13:30:00" as DateTime;
+    assert(parsed2 == time::datetime(2026, 7, 8, 13, 30, 0), "parse-on-cast datetime");
+}
+
+fn test_now_and_vector() {
+    // now() is a real wall-clock DateTime (via the total int->DateTime cast)
+    cur = now() as DateTime;
+    assert(cur > time::datetime(2020, 1, 1, 0, 0, 0), "now is after 2020");
+    // value structs are zero-cost as vector elements — read one back out
+    events = [time::datetime(2026, 1, 1, 0, 0, 0),
+              time::datetime(2026, 6, 15, 9, 0, 0),
+              time::datetime(2026, 12, 31, 23, 59, 59)];
+    assert(events[1].month() == 6, "vector element field read");
+    assert("{events[2]:date}" == "2026-12-31", "vector element format");
+    // copy semantics: mutating a local copy leaves the source untouched
+    first = events[0];
+    first = first + time::days(10);
+    assert(events[0].day() == 1, "value-struct copy: source element unchanged");
+}
+
+fn test_iso_and_millis() {
+    d = time::datetime(2026, 5, 25, 8, 0, 0);   // Monday
+    // the value-struct methods delegate to the integer API — cross-check on the
+    // same instant (01-basics pins the integer fns to hand-goldens)
+    assert(d.iso_year() == time::iso_year(d as integer), "iso_year delegates");
+    assert(d.iso_week() == time::iso_week(d as integer), "iso_week delegates");
+    assert(d.iso_week() >= 1 && d.iso_week() <= 53, "iso_week range {d.iso_week()}");
+    assert(d.to_millis() == (d as integer), "to_millis == as integer");
+}
+
+fn test_duration_full() {
+    assert((time::hours(2) - time::minutes(30)) == time::minutes(90), "duration subtract");
+    assert(time::hours(1) <= time::hours(1), "dur <=");
+    assert(time::hours(2) >= time::hours(1), "dur >=");
+    assert(time::hours(2) > time::hours(1), "dur >");
+    assert(time::hours(1) != time::hours(2), "dur !=");
+    assert(time::minutes(90).total_millis() == 5400000, "total_millis");
+}
+
+fn test_format_aliases() {
+    mon = time::date(2026, 5, 25);   // Monday
+    assert("{mon:wday}" == "Mon", "wday spec {mon:wday}");
+    assert("{mon:weekday}" == "Mon", "weekday alias {mon:weekday}");
+    d = time::datetime(2026, 7, 8, 13, 30, 7);
+    assert("{d:secs}" == "13:30:07", "secs alias {d:secs}");
+}
+
+fn test_edge_cases() {
+    // pre-1970 (negative epoch ms) still fields + formats correctly
+    old = time::datetime(1960, 6, 15, 12, 0, 0);
+    assert(old.year() == 1960, "pre-1970 year {old.year()}");
+    assert(old.month() == 6, "pre-1970 month");
+    assert(old.day() == 15, "pre-1970 day");
+    assert((old as integer) < 0, "pre-1970 is negative ms");
+    assert("{old:date}" == "1960-06-15", "pre-1970 date fmt {old:date}");
+    // garbage text -> DateTime is a TOTAL best-effort cast (epoch 0); the fallible
+    // integer parse is the checked path
+    assert(("garbage" as DateTime).to_millis() == 0, "total cast of garbage -> epoch");
+    assert(!time::parse("garbage"), "checked parse returns null on garbage");
+}

@@ -11,7 +11,7 @@ source = "registry"
 
 [[package]]
 name = "shapes"
-version = "0.2.0"
-url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.2.0/shapes-0.2.0.tar.gz"
-sha256 = "284e8a5c86036911d047d66218751d06ac026b9c07debe7be32c1e51da0bd051"
+version = "0.3.0"
+url = "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.3.0/shapes-0.3.0.tar.gz"
+sha256 = "7ad0ec172316fc8a75df9a8ea8d4994b3d75080e59cc2947e35d21759914539b"
 source = "registry"

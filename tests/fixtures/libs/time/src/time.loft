@@ -43,7 +43,6 @@ fn floor_div(fa: integer, fb: integer) -> integer {
     if (r != 0) && ((fa < 0) != (fb < 0)) { q - 1 } else { q }
 }
 
-
 // Days since the Unix epoch for this instant (floored to the UTC day).
 fn epoch_day(ed_t: integer) -> integer { floor_div(ed_t, MS_PER_DAY) }
 
@@ -314,4 +313,137 @@ pub fn month_name(mnt: integer) -> text {
         11 => "Nov",
         _  => "Dec",
     }
+}
+
+// ══════════════════════════════════════════════════════════════
+//  DateTime / Duration — first-grade value types (0.2.0)
+// ══════════════════════════════════════════════════════════════
+//
+// `DateTime` and `Duration` are zero-cost `value struct`s wrapping the same
+// epoch-millisecond `integer` the functions above use — so they add NO heap
+// allocation as a record field or vector element (a `vector<DateTime>` costs
+// the same as `vector<integer>`), yet they are a DISTINCT type: `dt + 5` is a
+// compile error, only `dt + hours(2)` steps a time.  They layer on top of the
+// integer API above (which stays exactly as it was — the 0.1.0 surface still
+// works); pick whichever fits the call site.
+//
+//   Construct:  date(y,mo,d) · datetime(y,mo,d,h,mi,s) · ms as DateTime ·
+//               "2026-07-08T12:00:00Z" as DateTime · now() as DateTime
+//   Read:       dt.year() … dt.second(), dt.weekday(), dt.weekday_name(), …
+//   Compare:    dt1 < dt2 · dt1 == dt2  (all six)
+//   Span:       dt2 - dt1 -> Duration ;  dt + hours(2) -> DateTime
+//   Format:     "{dt}" (YYYY-MM-DD HH:MM) · "{dt:date}" · "{dt:iso}" · "{dt:time}"
+//
+// FALLIBILITY: a `value struct` has no null, so a fallible parse cannot return
+// a `DateTime` AND signal failure.  Keep failure at the integer level — `parse`
+// above returns null on bad input — then wrap the checked value:
+//     ms = parse(s); if !ms { …handle… } else { dt = ms as DateTime }
+// The `"…" as DateTime` conversion is a TOTAL best-effort parse (bad input →
+// epoch) for the ergonomic path where an invalid date need not be caught.
+
+pub value struct DateTime { ms: integer }
+pub value struct Duration { ms: integer }
+
+// ── DateTime construction ──
+pub fn date(dcy: integer, dcmo: integer, dcd: integer) -> DateTime {
+    DateTime { ms: from_ymd(dcy, dcmo, dcd) }
+}
+pub fn datetime(tcy: integer, tcmo: integer, tcd: integer,
+                tch: integer, tcmi: integer, tcs: integer) -> DateTime {
+    DateTime { ms: at_time(from_ymd(tcy, tcmo, tcd), tch, tcmi, tcs) }
+}
+
+// ── Duration construction ──
+pub fn milliseconds(nms: integer) -> Duration { Duration { ms: nms } }
+pub fn seconds(nsec: integer)     -> Duration { Duration { ms: nsec * MS_PER_SECOND } }
+pub fn minutes(nmin: integer)     -> Duration { Duration { ms: nmin * MS_PER_MINUTE } }
+pub fn hours(nhr: integer)        -> Duration { Duration { ms: nhr * MS_PER_HOUR } }
+pub fn days(nday: integer)        -> Duration { Duration { ms: nday * MS_PER_DAY } }
+pub fn weeks(nwk: integer)        -> Duration { Duration { ms: nwk * 7 * MS_PER_DAY } }
+
+// ── DateTime field accessors (methods; delegate to the integer API above) ──
+pub fn year(self: DateTime)         -> integer { year(self.ms) }
+pub fn month(self: DateTime)        -> integer { month(self.ms) }
+pub fn day(self: DateTime)          -> integer { day(self.ms) }
+pub fn hour(self: DateTime)         -> integer { hour(self.ms) }
+pub fn minute(self: DateTime)       -> integer { minute(self.ms) }
+pub fn second(self: DateTime)       -> integer { second(self.ms) }
+pub fn weekday(self: DateTime)      -> integer { weekday(self.ms) }
+pub fn iso_year(self: DateTime)     -> integer { iso_year(self.ms) }
+pub fn iso_week(self: DateTime)     -> integer { iso_week(self.ms) }
+pub fn weekday_name(self: DateTime) -> text    { weekday_name(self.ms) }
+pub fn month_name(self: DateTime)   -> text    { month_name(self.ms) }
+pub fn to_millis(self: DateTime)    -> integer { self.ms }
+
+// ── Duration accessors ──
+pub fn total_millis(self: Duration)  -> integer { self.ms }
+pub fn total_seconds(self: Duration) -> integer { self.ms / MS_PER_SECOND }
+pub fn total_minutes(self: Duration) -> integer { self.ms / MS_PER_MINUTE }
+pub fn total_hours(self: Duration)   -> integer { self.ms / MS_PER_HOUR }
+pub fn total_days(self: Duration)    -> integer { self.ms / MS_PER_DAY }
+
+// ── DateTime operators (comparison + typed arithmetic) ──
+pub fn OpLt(self: DateTime, other: DateTime) -> boolean { self.ms < other.ms }
+pub fn OpLe(self: DateTime, other: DateTime) -> boolean { self.ms <= other.ms }
+pub fn OpGt(self: DateTime, other: DateTime) -> boolean { self.ms > other.ms }
+pub fn OpGe(self: DateTime, other: DateTime) -> boolean { self.ms >= other.ms }
+pub fn OpEq(self: DateTime, other: DateTime) -> boolean { self.ms == other.ms }
+pub fn OpNe(self: DateTime, other: DateTime) -> boolean { self.ms != other.ms }
+pub fn OpMin(self: DateTime, other: DateTime) -> Duration { Duration { ms: self.ms - other.ms } }
+pub fn OpAdd(self: DateTime, span: Duration)  -> DateTime { DateTime { ms: self.ms + span.ms } }
+// `-` on a DateTime is the difference `dt - dt` (above); operators key on the
+// receiver type, so subtracting a Duration is the `minus` method (or `dt + (-span)`).
+pub fn minus(self: DateTime, span: Duration) -> DateTime { DateTime { ms: self.ms - span.ms } }
+pub fn negate(self: Duration) -> Duration { Duration { ms: 0 - self.ms } }
+
+// ── Duration operators ──
+pub fn OpAdd(self: Duration, other: Duration) -> Duration { Duration { ms: self.ms + other.ms } }
+pub fn OpMin(self: Duration, other: Duration) -> Duration { Duration { ms: self.ms - other.ms } }
+pub fn OpMul(self: Duration, factor: integer) -> Duration { Duration { ms: self.ms * factor } }
+pub fn OpLt(self: Duration, other: Duration) -> boolean { self.ms < other.ms }
+pub fn OpLe(self: Duration, other: Duration) -> boolean { self.ms <= other.ms }
+pub fn OpGt(self: Duration, other: Duration) -> boolean { self.ms > other.ms }
+pub fn OpGe(self: Duration, other: Duration) -> boolean { self.ms >= other.ms }
+pub fn OpEq(self: Duration, other: Duration) -> boolean { self.ms == other.ms }
+pub fn OpNe(self: Duration, other: Duration) -> boolean { self.ms != other.ms }
+
+// ── custom formatting (the per-type to_text hook) ──
+// "" / "datetime" -> YYYY-MM-DD HH:MM · "date" -> YYYY-MM-DD · "time" -> HH:MM
+// "seconds" -> HH:MM:SS · "iso" -> …THH:MM:SSZ · "wday" -> Mon · "month" -> May
+pub fn to_text(self: DateTime, spec: text) -> text {
+    // The if-chain is bound to `r` and returned, NOT left as the tail expression:
+    // a tail `if` inside a format-hook `to_text(self, spec)` mis-selects its branch
+    // on both backends (a loft format-hook bug — repro filed upstream). Binding the
+    // result to a local sidesteps it.
+    // Each branch is wrapped in "{…}" so every arm is an owned text: on native a
+    // bare `text`-returning call whose body is a match of string literals (weekday_name /
+    // month_name → &str) does NOT unify with a String-returning arm (format_* interpolate),
+    // giving rustc E0308. Interpolating each arm normalises them (a second loft bug, filed).
+    r = if spec == "date" { "{format_date(self.ms)}" }
+        else if spec == "time" { "{format_time(self.ms)}" }
+        else if spec == "seconds" || spec == "secs" { "{format_seconds(self.ms)}" }
+        else if spec == "iso" { "{format_iso(self.ms)}" }
+        else if spec == "wday" || spec == "weekday" { "{weekday_name(self.ms)}" }
+        else if spec == "month" { "{month_name(self.ms)}" }
+        else { "{format_datetime(self.ms)}" };
+    r
+}
+// A Duration renders as [-]H:MM:SS (hours may exceed 24).
+pub fn to_text(self: Duration, spec: text) -> text {
+    neg = self.ms < 0;
+    tot = if neg { 0 - self.ms } else { self.ms };
+    ss = (tot / MS_PER_SECOND) % 60;
+    mm = (tot / MS_PER_MINUTE) % 60;
+    hh = tot / MS_PER_HOUR;
+    sign = if neg { "-" } else { "" };
+    "{sign}{hh}:{mm:02}:{ss:02}"
+}
+
+// ── conversions (`as`) ──
+fn OpConvIntFromDateTime(civ: DateTime) -> integer { civ.ms }
+fn OpConvDateTimeFromInt(civ: integer)  -> DateTime { DateTime { ms: civ } }
+// text -> DateTime: a TOTAL best-effort parse (bad input -> epoch); see the
+// FALLIBILITY note above for the checked path via `parse`.
+fn OpConvDateTimeFromText(civ: text) -> DateTime {
+    DateTime { ms: parse(civ) ?? 0 }
 }

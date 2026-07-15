@@ -60,8 +60,7 @@ fn test_aabb_overlap() {
 }
 
 fn test_clamp() {
-  // `clamp` is a stdlib builtin (a library must not redefine it — that is now a
-  // compile error); call the stdlib one directly.
+  // clamp is a stdlib builtin now (a lib must not redefine it); call it directly.
   assert(clamp(5.0, 0.0, 10.0) == 5.0, "in-range clamp");
   assert(clamp(-1.0, 0.0, 10.0) == 0.0, "below-range clamp");
   assert(clamp(15.0, 0.0, 10.0) == 10.0, "above-range clamp");
