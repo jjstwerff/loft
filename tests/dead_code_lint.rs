@@ -215,6 +215,25 @@ fn s1_classifier_isolates_w_copy_dead_store() {
         zr >= 1 && zw >= 1,
         "construct-unread z must have reads>=1 (fills) and write_targets>=1 (OpSetField): got ({zr},{zw})"
     );
+
+    // S3 escape/branch/loop guards — each mutated copy is also genuinely READ, so it keeps
+    // reads>=1 and the lint stays silent. Together with the `w_copy` = (0,1) assertion above and
+    // the s2 exactly-one-warning count, this PINS that the single warning is W-copy's `d`: if any
+    // other `d` dropped to reads=0 it would both fail here and inflate the s2 count.
+    assert!(
+        cell("n_n_escape_call", "d").0 >= 1,
+        "N-escape-call d: passed WHOLE to a call → reads>=1"
+    );
+    assert!(
+        cell("n_n_cond_read", "d").0 >= 1,
+        "N-cond-read d: read on a branch → reads>=1"
+    );
+    assert!(
+        cell("n_n_loop_read", "buf").0 >= 1,
+        "N-loop-read buf: cross-iteration read (buf[i-1]) → reads>=1"
+    );
+    // NOTE: `n_escape_return`'s `d` is move-elided (returned directly) so it has no user-var
+    // dump line; the lint correctly stays silent there — covered by the s2 count==1 assertion.
 }
 
 // ── S2: the gated dead-store warning (`LOFT_DEAD_STORES`) ────────────────────────────────

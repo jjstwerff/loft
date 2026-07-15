@@ -96,6 +96,47 @@ fn n_construct_unread() {
   // z is never read
 }
 
+// ── S3: escape / branch / loop hardening — all SILENT (a real read keeps them off the lint) ──
+
+// N-escape-return: d (a copy) is mutated then RETURNED → the mutation escapes to the caller,
+// so it is legitimate. `d` as the tail expression is a read → reads>0 → silent.
+fn n_escape_return(b: Box) -> vector<integer> {
+  d = b.data;
+  d[0] = 9;
+  d
+}
+
+// N-escape-call: d is mutated then passed WHOLE to a callee → escapes → silent.
+fn n_escape_call(showln: fn(text)) {
+  b = Box { data: [1, 2, 3] };
+  d = b.data;
+  d[0] = 9;
+  r = use_vec(d); // d passed to a call → reads>0
+  showln("N-escape-call r = {r}");
+}
+
+// N-cond-read: d mutated, read on only ONE branch → conservatively a read (any reachable
+// read counts) → silent.
+fn n_cond_read(showln: fn(text), c: boolean) {
+  b = Box { data: [1, 2, 3] };
+  d = b.data;
+  d[0] = 9;
+  if c {
+    showln("N-cond-read d[0] = {d[0] ?? -1}"); // read on the true branch → reads>0
+  }
+}
+
+// N-loop-read: buf mutated across a loop WITH a cross-iteration read (`buf[i-1]`) → silent.
+fn n_loop_read(showln: fn(text)) {
+  b = Box { data: [0, 0, 0, 0] };
+  buf = b.data;
+  buf[0] = 1;
+  for i in 1..4 {
+    buf[i] = (buf[i - 1] ?? 0) + 1; // reads buf[i-1] → reads>0
+  }
+  showln("N-loop-read buf[3] = {buf[3] ?? -1}");
+}
+
 fn main() {
   showln = fn (t: text) { print("{t}\n"); };
   w_scalar();
@@ -108,4 +149,10 @@ fn main() {
   n_copy_read(showln);
   n_effectful(showln);
   n_construct_unread();
+  n_escape_call(showln);
+  n_cond_read(showln, true);
+  n_loop_read(showln);
+  eb = Box { data: [5, 6, 7] };
+  er = n_escape_return(eb);
+  showln("N-escape-return er[0] = {er[0] ?? -1}");
 }

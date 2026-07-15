@@ -5,11 +5,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN107 — Dead-code lint: never-read local (unused variable + dead store)
 
-**Status — IN PROGRESS (2026-07-15). S0 + S1 + S2 landed** on `tuxedo-work` (oracle +
-decoupled read/write classifier + the gated `LOFT_DEAD_STORES` warning, all verified both
-backends; see [the step plan](#implementation--small-verifiable-steps)). Next: **S3**
-(escape/branch hardening) → **S4** (suite-wide false-positive sweep) → **S5** (default-on).
-**Key finding:** loft
+**Status — IN PROGRESS (2026-07-15). S0 + S1 + S2 + S3 landed** on `tuxedo-work` (oracle +
+decoupled read/write classifier + the gated `LOFT_DEAD_STORES` warning + escape/branch/loop
+hardening, all verified both backends; see [the step plan](#implementation--small-verifiable-steps)).
+Next: **S4** (suite-wide false-positive sweep) → **S5** (default-on). **Key finding:** loft
 **already ships** `unused_variables` (`Function::test_used`, `src/variables/mod.rs:1666`)
 — it correctly flags W-scalar/W-accumulator/N-effectful *today*; the real gap is that its
 `uses` counter treats a write-**target** as a read, so it misses **W-copy** (the graphics
@@ -214,11 +213,15 @@ positives before flipping default-on.
   warning (W-copy `d`), the three never-read warnings are untouched, and `d` is not also
   never-read-flagged (no double warning); flag-off is byte-identical to S1 (the S0 oracle, which
   never sets the env, stays green).
-- **S3 — Escape + branch hardening.** Add corpus rows: escape-after-mutate (`d[0]=9; sink(d)`,
-  `return d`), conditional read (`if c { use(d) }`), loop cross-iteration read. Each must keep
-  `reads() > 0` (pass-to-call / return / any-path read bumps `uses` but **not**
-  `write_target_uses`). **Verify:** oracle — every N-escape row silent, W-copy still warns, both
-  backends.
+- **S3 — Escape + branch hardening. ✅ DONE 2026-07-15 (no code change needed).** Added corpus
+  rows: escape-to-call (pass whole `d` to a callee), escape-via-return, conditional read
+  (`if c { use(d) }`), loop cross-iteration read (`buf[i] = buf[i-1]+1`). The lint was already
+  robust — escaping *is* a read in the IR (a call arg / return / any-path read → `reads>0`), so
+  every row stays silent with **zero** false positives. **Verified** (both backends): flag-on
+  stays at exactly ONE warning (W-copy `d`); the S1 test asserts every *other* `d` keeps
+  `reads≥1` and W-copy `d`=`(0,1)`, which together with the count==1 assertion pins that the one
+  warning is W-copy's `d`. **Finding:** `n_escape_return`'s `d` is move-elided (returned
+  directly) → no user-var, so the return path is guarded by the count, not a classifier cell.
 - **S4 — Suite-wide false-positive sweep (the cry-wolf gate).** Run `LOFT_DEAD_STORES=1 make
   test` + `default/*.loft` + fixtures + consumers. Triage each new warning: real bug → fix;
   false positive → add a guard + a corpus row; iterate to **zero FPs**. **Verify:** the suite
