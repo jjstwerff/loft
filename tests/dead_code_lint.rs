@@ -8,13 +8,14 @@
 //! subsequent step (S1 read-count → S2 warning → …) has something to move against and the
 //! W-copy gap is a single, visible flip.
 //!
-//! Baseline TODAY: loft's shipped `unused_variables` (`Function::test_used`,
+//! Baseline: loft's shipped `unused_variables` (`Function::test_used`,
 //! `src/variables/mod.rs:1666`) flags exactly three locals — `a` (W-scalar), `total`
 //! (W-accumulator), `x` (N-effectful binding). The motivating **W-copy** dead store
-//! (`d = b.data; d[0] = 9`, `d` never read) is **SILENT** — its only "use" is a
-//! write-target base, which bumps `uses`, so `test_used` thinks `d` is used. Closing that
-//! is S2; when it lands, update `EXPECT_NEVER_READ` / the W-copy assertion here (the count
-//! becomes 4). See `doc/claude/plans/107-dead-code-lint/README.md`.
+//! (`d = b.data; d[0] = 9`, `d` never read) is **SILENT by default** — its only "use" is a
+//! write-target base, which bumps `uses`, so `test_used` thinks `d` is used. S2 (landed)
+//! adds a SEPARATE, gated (`LOFT_DEAD_STORES`) warning for it — the never-read count stays 3
+//! (d gets its own "is mutated but … never read" message, not a never-read one), and the
+//! flag-OFF baseline is unchanged. See `doc/claude/plans/107-dead-code-lint/README.md`.
 //!
 //! Why the binary (not the in-process harness): these are end-to-end compile diagnostics on
 //! stderr — same approach as `tests/runtime_warnings.rs`.
@@ -207,4 +208,71 @@ fn s1_classifier_isolates_w_copy_dead_store() {
         (0, 0),
         "N-effectful x: no write-target"
     );
+    // Construction guard — `z = Box{…}` fills READ z's field (reads>0), so despite
+    // write_targets>0 the S2 `reads==0` signal is absent (no false positive on construction).
+    let (zr, zw) = cell("n_n_construct_unread", "z");
+    assert!(
+        zr >= 1 && zw >= 1,
+        "construct-unread z must have reads>=1 (fills) and write_targets>=1 (OpSetField): got ({zr},{zw})"
+    );
+}
+
+// ── S2: the gated dead-store warning (`LOFT_DEAD_STORES`) ────────────────────────────────
+//
+// Turns the S1 `reads==0 && write_targets>0` signal into a Warning, in a sibling
+// `test_dead_stores`, gated OFF by default. Flag-OFF is byte-identical to S1 (covered by the
+// S0 tests, which never set the env). Flag-ON warns exactly on W-copy `d` — a SEPARATE message
+// from never-read, so `test_used`'s three warnings are untouched (no double-warn on `d`).
+
+/// Run the corpus on `backend` with the dead-store lint enabled; return stderr.
+fn run_dead_stores(backend: &str) -> String {
+    let out = Command::new(loft_bin())
+        .arg(backend)
+        .arg(spec_path())
+        .env("LOFT_DEAD_STORES", "1")
+        .env("LOFT_TIMEOUT", "180")
+        .output()
+        .expect("failed to invoke loft binary");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+fn assert_s2(backend: &str) {
+    let diag = run_dead_stores(backend);
+
+    // Exactly one dead-store warning across the whole corpus — the W-copy `d` store. A count
+    // other than 1 means a false positive (>1) or a regression that lost the signal (0).
+    let n = diag
+        .matches("is mutated but its value is never read")
+        .count();
+    assert_eq!(
+        n, 1,
+        "[{backend}] want exactly 1 dead-store warning (W-copy d), got {n}\n--- stderr ---\n{diag}"
+    );
+    assert!(
+        diag.contains("'d' is mutated but its value is never read"),
+        "[{backend}] the dead store must be reported on `d`\n--- stderr ---\n{diag}"
+    );
+
+    // `test_used` is untouched — the three never-read warnings still fire, and `d` is NOT among
+    // them (its only diagnostic is the dead-store one → no double warning).
+    for w in EXPECT_NEVER_READ {
+        assert!(
+            diag.contains(w),
+            "[{backend}] never-read {w:?} must still fire under the flag\n--- stderr ---\n{diag}"
+        );
+    }
+    assert!(
+        !diag.contains("Variable d is never read"),
+        "[{backend}] `d` must get ONLY the dead-store warning, not also never-read\n{diag}"
+    );
+}
+
+#[test]
+fn s2_flag_on_warns_w_copy_interpret() {
+    assert_s2("--interpret");
+}
+
+#[test]
+fn s2_flag_on_warns_w_copy_native() {
+    assert_s2("--native");
 }

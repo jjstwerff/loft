@@ -86,6 +86,16 @@ fn n_effectful(showln: fn(text)) -> integer {
   0
 }
 
+// verdict: silent for BOTH lints — a false-positive guard for construction. `z = Box{…}`
+// emits `OpSetField(z,…)` (write_targets>0) but the element fills READ z's field (reads>0),
+// and construction also bumps `uses>0` — so `test_used` (uses==0) stays quiet AND S2
+// (reads==0) stays quiet. That an unused constructed value escapes both is a separate
+// pre-existing `test_used` gap, not a dead-store; S2 must not false-positive on it.
+fn n_construct_unread() {
+  z = Box { data: [1, 2, 3] };
+  // z is never read
+}
+
 fn main() {
   showln = fn (t: text) { print("{t}\n"); };
   w_scalar();
@@ -97,4 +107,5 @@ fn main() {
   n_fresh_used(showln);
   n_copy_read(showln);
   n_effectful(showln);
+  n_construct_unread();
 }

@@ -1685,6 +1685,45 @@ impl Function {
         }
     }
 
+    /// @PLN107 S2 — the dead-store lint. Warns when a non-escaping local is **mutated via an
+    /// `OpSet*`** (`d[i]=x`, `d.f=x`) yet its value is **never read** — the classic copy-mutate
+    /// footgun where `d = s.f` COPIES (C86) so the write lands in a throwaway. The signal is
+    /// `reads == 0 && write_targets > 0` from [`crate::use_analysis::dead_store_accesses`]
+    /// (which does NOT use `uses`; see S1). That signal implies `uses > 0`, so this lint and
+    /// `test_used` (`uses == 0`) are DISJOINT — the explicit `uses > 0` below is a belt-and-
+    /// braces guarantee they never both fire. Gated on `LOFT_DEAD_STORES` (default off until
+    /// the S4 suite-wide false-positive sweep earns default-on). Exclusions mirror `test_used`:
+    /// compiler temporaries (`_`/`#`), arguments, closure-captured vars, and global shadows.
+    pub fn test_dead_stores(&self, body: &Value, lexer: &mut Lexer, data: &Data) {
+        if std::env::var_os("LOFT_DEAD_STORES").is_none() {
+            return;
+        }
+        let acc = crate::use_analysis::dead_store_accesses(body, self.variables.len(), data);
+        for (i, var) in self.variables.iter().enumerate() {
+            if var.name.starts_with('_')
+                || var.name.contains('#')
+                || var.argument
+                || var.captured
+                || data.def_nr(&var.name) != u32::MAX
+            {
+                continue;
+            }
+            let (reads, write_targets) = acc.get(i).copied().unwrap_or((0, 0));
+            if var.uses > 0 && reads == 0 && write_targets > 0 {
+                lexer.to(var.source);
+                diagnostic!(
+                    lexer,
+                    Level::Warning,
+                    "'{}' is mutated but its value is never read — the write is lost. A \
+                     whole-value bind (`{} = …`) COPIES the heap value; write through the \
+                     original in place, or take a `&` reference.",
+                    var.name,
+                    var.name,
+                );
+            }
+        }
+    }
+
     /// @PLN107 S1 — observable dump of the dead-store access classification (value-observing
     /// READS vs `OpSet*` WRITE-TARGET bases), gated on `LOFT_DUMP_READS`. Purely diagnostic:
     /// no warning is emitted, so the classifier can be verified against the shape corpus

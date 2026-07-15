@@ -5,9 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN107 — Dead-code lint: never-read local (unused variable + dead store)
 
-**Status — IN PROGRESS (2026-07-14). S0 + S1 landed** on `tuxedo-work` (oracle +
-decoupled read/write classifier, both verified; see [the step plan](#implementation--small-verifiable-steps)).
-Next: **S2** (turn the `reads=0, write_targets>0` signal into a gated warning). **Key finding:** loft
+**Status — IN PROGRESS (2026-07-15). S0 + S1 + S2 landed** on `tuxedo-work` (oracle +
+decoupled read/write classifier + the gated `LOFT_DEAD_STORES` warning, all verified both
+backends; see [the step plan](#implementation--small-verifiable-steps)). Next: **S3**
+(escape/branch hardening) → **S4** (suite-wide false-positive sweep) → **S5** (default-on).
+**Key finding:** loft
 **already ships** `unused_variables` (`Function::test_used`, `src/variables/mod.rs:1666`)
 — it correctly flags W-scalar/W-accumulator/N-effectful *today*; the real gap is that its
 `uses` counter treats a write-**target** as a read, so it misses **W-copy** (the graphics
@@ -197,13 +199,21 @@ positives before flipping default-on.
   N-read/N-fresh `reads ≥ 1`; N-copy-read `wt=0`; W-scalar `a` / N-effectful `x` present no
   signal (so S2 won't double-warn what `test_used` owns). **S0 oracle byte-identical** on both
   backends ⇒ `uses`/codegen untouched; the walk is inert unless `LOFT_DUMP_READS` is set.
-- **S2 — Emit the warning behind an off-by-default flag.** In a sibling `test_dead_stores`
-  (next to `test_used`): `reads() == 0 && write_target_uses > 0 && !argument && !captured &&
-  name∉{_*, *#*, global}` → Warning *"'d' is mutated but its value is never read — the mutation
-  is lost. A whole-value bind (`d = s.f`) COPIES; write through the field (`s.f[i] = …`) or take
-  `&`."* Gate on `LOFT_DEAD_STORES` (default OFF), mirroring `report_copies_enabled()`.
-  **Verify:** flag on → S0 oracle expects exactly **+W-copy**, all N-* silent; flag off →
-  byte-identical to S1.
+- **S2 — Emit the warning behind an off-by-default flag. ✅ DONE 2026-07-15.**
+  `Function::test_dead_stores` (sibling of `test_used`, `variables/mod.rs`) warns on `uses > 0
+  && reads == 0 && write_targets > 0` (plus the `test_used` exclusions: `_`/`#`, argument,
+  captured, global-shadow), gated on `LOFT_DEAD_STORES` (default OFF). Message: *"'d' is mutated
+  but its value is never read — the write is lost. A whole-value bind (`d = …`) COPIES the heap
+  value; write through the original in place, or take a `&` reference."* **Findings:** (a) the
+  `uses > 0` clause is provably REDUNDANT (`reads==0 && write_targets>0` ⇒ `uses>0`) but kept as
+  an explicit belt-and-braces guarantee that S2 and `test_used` (`uses==0`) never both fire — it
+  costs nothing and hardens the S4 sweep against unseen IR shapes; (b) the feared construction
+  double-flag is a NON-issue — `z = Box{…}`'s element fills READ `z` (`reads>0`), so `reads==0`
+  excludes constructed values automatically (locked by the `n_construct_unread` corpus row).
+  **Verified** (`s2_flag_on_warns_w_copy_*`, both backends): flag-on emits exactly ONE dead-store
+  warning (W-copy `d`), the three never-read warnings are untouched, and `d` is not also
+  never-read-flagged (no double warning); flag-off is byte-identical to S1 (the S0 oracle, which
+  never sets the env, stays green).
 - **S3 — Escape + branch hardening.** Add corpus rows: escape-after-mutate (`d[0]=9; sink(d)`,
   `return d`), conditional read (`if c { use(d) }`), loop cross-iteration read. Each must keep
   `reads() > 0` (pass-to-call / return / any-path read bumps `uses` but **not**
