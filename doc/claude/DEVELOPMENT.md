@@ -50,6 +50,20 @@ Rules:
 - Never create a feature branch from another feature branch — always branch from `main`.
 - Merging to `main` is done via a GitHub pull request, not a local `git merge`.
 
+**The working branch is ONE accumulating PR unit.**  A long-lived work branch
+(`<host>-work`) carries fixes for *everything* worked on in the cycle — the feature,
+plus any bugs found along the way.  Two consequences:
+- **Fix bugs on sight, don't leave them on the floor.**  A bug discovered while doing
+  other work (paths warm, repro cheap) is fixed in the same branch, not filed and
+  deferred — a left-behind bug only hampers later work.  (Reinforces "default is FIX,
+  not file".)
+- **PR the whole branch, not a surgical slice.**  When asked to "PR the <feature>", the
+  PR is the entire work branch as one review unit — do not cherry-pick a subset onto a
+  fresh branch.  If the branch is BEHIND `origin/main`, bring it current by **merging
+  `origin/main` in** (rebase conflicts against squash-merged duplicates), reconciling
+  conflicts to keep both sides' features; where both branches converged on the same fix,
+  take the mainline's canonical form and keep any local improvement on top.
+
 ---
 
 ## Sprint Branches
