@@ -2343,9 +2343,13 @@ pub fn superseded_fold_diagnostics(
             continue;
         }
         // (b) the shim check — X's body must CALL Y (fold the old form onto the new).
-        let folds = def
-            .code
-            .any_node(&mut |n| matches!(n, Value::Call(d, _) if *d == y_nr));
+        // For a GENERIC successor the body's call targets the monomorphised
+        // instantiation (`t_<Type>_sum`), not the `n_sum` template `y_nr` resolved to,
+        // so match by the user-facing name (both render as `sum`); a plain fn/method
+        // is the direct call to `y_nr`.
+        let folds = def.code.any_node(&mut |n| {
+            matches!(n, Value::Call(d, _) if *d == y_nr || data.def(*d).display_name() == succ)
+        });
         if !folds {
             diags.add_at(
                 crate::diagnostics::Level::Warning,

@@ -1524,16 +1524,6 @@ fn OpParallelJoin();
 fn OpPreAllocVector(r: vector, capacity: const u16, elem_size: const u16);
 #rust"vector::pre_alloc_vector(&@r, u32::from(@capacity), u32::from(@elem_size), &mut s.database.allocations);"
 // --- Vector aggregates ---
-// Internal helpers for reduce-based aggregates.
-fn __add_int(a: integer, b: integer) -> integer {
-  a + b
-}
-
-// Sum of all integer elements. Returns 0 for an empty vector.
-pub fn sum_of(v: vector<integer>) -> integer {
-  reduce(v, 0, __add_int)
-}
-#pure
 // Smallest element in a vector, or null when the vector is empty (@PLN102 keystone
 // step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
 pub fn min_of < T: Ordered > (v: vector<T>) -> T? {
@@ -1561,6 +1551,13 @@ pub fn sum < T: Addable > (v: vector<T>, init: T) -> T {
   for i in 0..v.len() { result = result + v[i] };
   result
 }
+#pure
+// Sum of all integer elements. Returns 0 for an empty vector.
+// @PLN102 arc C — superseded by the general `sum(v, init)`; kept as a shim over it
+// (the old form keeps working). `sum_of(v)` == `sum(v, 0)`. Defined AFTER `sum` so the
+// shim's call resolves — a forward reference to a generic is not yet supported.
+pub fn sum_of(v: vector<integer>) -> integer { sum(v, 0) }
+#superseded "sum"
 #pure
 
 pub interface Walkable {

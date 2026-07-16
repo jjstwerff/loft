@@ -2,6 +2,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Regression tests for documented caveats (CAVEATS.md).
 // Each test verifies the current behaviour so releases can be retested quickly.
+// @PLN102 arc C — `sum_of` is superseded by `sum` (a shim); this test exercises the
+// shim, so it EXPECTS the steer.
+// @EXPECT_WARNING: `sum_of` is superseded
 
 // C1 — Lambda closure capture: verify lambdas work without capture.
 fn test_c1_lambda_no_capture() {

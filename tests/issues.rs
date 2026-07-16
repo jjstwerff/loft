@@ -9135,7 +9135,7 @@ fn p140_vector_range_slice_auto_materialises_to_vector() {
     // to a local now auto-materialises into a `vector<T>` instead of
     // leaving the local typed as `iterator<T>`.  The slice's elements
     // get copied into a fresh vector at the assignment site, and
-    // downstream uses (`sum_of(s)` here) see a normal `vector<integer>`.
+    // downstream uses (`sum(s, 0)` here) see a normal `vector<integer>`.
     // The old shape of this test asserted the reverse — that the
     // slice-to-vector mismatch was rejected with a diagnostic — but a
     // working materialisation is a strictly better user experience and
@@ -9145,7 +9145,7 @@ fn p140_vector_range_slice_auto_materialises_to_vector() {
         "fn run() -> integer {
     v = [10, 20, 30, 40, 50];
     s = v[1..4];
-    sum_of(s)
+    sum(s, 0)
 }"
     )
     .expr("run()")
@@ -9201,7 +9201,7 @@ fn inc02_vector_comprehension_works() {
     code!(
         "fn run() -> integer {
     v = [1, 2, 3, 4, 5, 6];
-    sum_of([for x in v if x > 3 { x }])
+    sum([for x in v if x > 3 { x }], 0)
 }"
     )
     .expr("run()")
