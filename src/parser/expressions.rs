@@ -3560,6 +3560,87 @@ use a separate collection or add after the loop"
         }
     }
 
+    /// @PLN40 Phase 2 — walk a COMPONENT write's LHS access chain from the base
+    /// variable toward the leaf, tracking each node's type, and return the name of the
+    /// first value-const FIELD the chain DEREFERENCES THROUGH (an inner step — the
+    /// field has a further field-get or an index applied to it: `s.v[i]=`, `s.v.x=`,
+    /// `s.v[i].x=`).  Such a write mutates a read-only value and must be rejected.
+    ///
+    /// The OUTERMOST node is the write TARGET itself, not a dereference, so it is
+    /// deliberately skipped: a rebind `s.v = other` re-points the slot (allowed) and a
+    /// leaf append `s.v += …` is an op-distinguished contents mutation handled at the
+    /// leaf-field block below.  Base-variable value-const (`p.x=` where `p` is a
+    /// value-const binding) is handled by the base-resolution block in `validate_write`.
+    ///
+    /// Read-only.  INERT until wired into `validate_write` (Step 3).  The type-tracking
+    /// mirrors the leaf block's `parent_tp`→`known_type`→`Parts::Struct` field lookup,
+    /// but applied at every node so an inner field's `value_const` is reachable.
+    #[allow(dead_code)] // Step 2: inert until wired into validate_write (Step 3)
+    fn lhs_frozen_through(&self, to: &Value) -> Option<String> {
+        if self.first_pass {
+            return None;
+        }
+        // Collect the chain outermost→base by following `args[0]` (as `lhs_base_var`).
+        let mut nodes: Vec<&Value> = Vec::new();
+        let mut cur = to.unspan();
+        while let Value::Call(_, args) = cur {
+            if args.is_empty() {
+                break;
+            }
+            nodes.push(cur);
+            cur = args[0].unspan();
+        }
+        let Value::Var(base) = cur else {
+            return None;
+        };
+        if !self.vars.exists(*base) {
+            return None;
+        }
+        // Walk base→leaf, interpreting each node by the CURRENT type: a struct expects a
+        // field-get (its `Int(pos)` names the field), a collection expects an index.
+        let mut cur_type = self.vars.var_type(*base).clone();
+        nodes.reverse();
+        let n = nodes.len();
+        for (i, node) in nodes.iter().enumerate() {
+            let is_leaf = i + 1 == n;
+            let Value::Call(_, args) = node.unspan() else {
+                return None;
+            };
+            match cur_type.base() {
+                Type::Reference(d_nr, _) => {
+                    let d_nr = *d_nr;
+                    let Some(Value::Int(pos)) = args.get(1).map(Value::unspan) else {
+                        return None;
+                    };
+                    let known = self.data.def(d_nr).known_type();
+                    if known == u16::MAX {
+                        return None;
+                    }
+                    let Parts::Struct(fields) = &self.database.types[known as usize].parts else {
+                        return None;
+                    };
+                    let Some(f_nr) = fields.iter().position(|f| f.position == *pos as u16) else {
+                        return None;
+                    };
+                    let attr = &self.data.def(d_nr).attributes()[f_nr];
+                    if !is_leaf && attr.value_const {
+                        return Some(format!("{}.{}", self.data.def(d_nr).name(), attr.name));
+                    }
+                    cur_type = attr.typedef.clone();
+                }
+                Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Hash(_, _, _) => {
+                    cur_type = cur_type.content();
+                }
+                _ => return None,
+            }
+        }
+        None
+    }
+
     /// Materialise an iterator (e.g. `v[a..b]` slice) into a vector variable.
     /// Promotes the LHS variable to `Vector<elm_tp>` and builds a loop that appends
     /// each element in-place.
