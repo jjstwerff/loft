@@ -281,6 +281,81 @@ cheapest rung that fits the payload; default to the top:
 
 ---
 
+## The binary bridge — `deliver` / `expose` (zero-copy, layout-driven)
+
+Rung 2 above, made general (@PLN105, shipped). `deliver`/`expose` hand JS a whole loft value —
+record, vector, enum, nested to any depth — **in wasm linear memory, with no serialization and no
+copy**, driven only by a self-describing layout descriptor loft emits alongside the value. This is
+the primitive routing's base-map `view` wanted (its ~230k-feature text serialize + JS `parseFloat`
+of millions of coord strings was the front-end bottleneck) and the games per-frame vertex/index
+path. Additive to the `loft_io` shim; nothing existing changes.
+
+**The two calls** (`default/02_files.loft`; lowered in `parser/control.rs` like a builtin):
+
+```loft
+deliver(tag: integer, value: T)   // SYNCHRONOUS one-shot: the borrow ends when deliver returns
+expose(tag: integer, value: T)    // LONG-LIVED: pins the value's store; read it each frame
+release(tag: integer, value: T)   // unpins the exposed store
+```
+
+**Mechanism — a descriptor + a reader that is the twin of `read_data`.** loft emits a compact
+descriptor (`LayoutDesc::to_json` → `{nodes, names, sizes}`, memoized per type; keyed collections
+add a `flat` redirect map) INLINE with the handle — `loft_host_deliver(tag, storeBase, rec, pos,
+typeId, descPtr, descLen)`. JS reconstructs via `readLoftValue` (`doc/loft-deliver.js`), the exact
+twin of Rust's `read_via_descriptor` (`src/database/descriptor.rs`) — **keep the two in lockstep**;
+`tests/deliver_wasm.rs` is the byte-parity gate (interpret == native == `--html`). `storeBase` (the
+store's `ptr`) IS a wasm linear-memory address; `addr(rec,pos) = storeBase + rec*8 + pos`.
+
+**Encodings a modifier must respect** (the reader mirrors `read_data`'s exact byte facts, but
+reconstructs the true *value* where the Rust twin emits packed parity bytes):
+- **Scalar-vector fast lane — the zero-copy win.** `vector<scalar>` → a `Float32Array`/`Int32Array`/
+  `BigInt64Array` **view straight over `mem.buffer`** (aliases wasm memory; hand to `gl.bufferData`
+  with no repack). This is what makes `deliver` **O(1)** in element count for the inline path (proven
+  structurally: the delivered node is a plain `vector`, the JS value's `.buffer === mem.buffer`).
+- **Text** is interned inline: the field holds a string id; bytes at `id*8+8`, len at `id*8+4`;
+  `STRING_NULL` (`id==0 || id>0x7fffffff`) → `null`.
+- **Narrow ints** are PACKED: `Byte`/`ShortRaw` store `value - start` (add `start` back; read shorts
+  UNSIGNED); nullable `Short` stores `value - start + 1` with `0` = null; `Int` is a direct i32
+  (`start` is the null sentinel, not an offset). `start` (the range min) rides in the descriptor.
+- **Value enum** discriminant is stored **1-based** (`variants[disc - 1]`; `0`/`255` → null).
+- **DbRef** null is `rec==0 || store_nr==u16::MAX`.
+
+**Keyed collections are PRE-FLATTENED, not cursor-walked** (the design flipped from the original
+sketch). A hash/index/sorted/radix field has no byte layout a reader can walk, so at deliver time
+loft materialises it to a scratch array (key-ordered, == the interpreter's `for x in coll`) and the
+descriptor node becomes `FlatArray` (or in-place `Vector` for `sorted`, already inline-ordered). A
+per-value `flat` map keyed by `(rec,pos)` lets one type-shared node serve every instance (a
+`vector<Bag>` where each element owns a hash). JS reads them via the ordinary array path, blind to
+the tree/hash/spatial structure. **Cost note:** pre-flatten is **O(n)** by intent — only the inline
+fast lane is O(1); a keyed collection copies once at delivery.
+
+**The borrow contract (the load-bearing safety invariant).**
+- `deliver` is synchronous: read (or copy out) **within** the `loft_host_deliver` call; the borrow
+  ends on return. loft must not grow/realloc/free the value during it.
+- JS **re-derives `mem.buffer` on every read** — `memory.grow()` DETACHES the old `ArrayBuffer`, so
+  a retained `DataView`/typed-array view is a use-after-detach. `readLoftValue` re-derives per call;
+  a page must not cache a view past the borrow. (`tests/deliver_wasm.rs` forces a grow mid-read.)
+- `expose` additionally PINS the value's store (`lock_store` — read-only, no free/resize/move) so its
+  addresses stay valid across frames; the page holds a re-reader closure (`globalThis.loftExposed.
+  get(tag)()`) for a fresh value each frame; `release` unpins. Cross-frame reads survive an asyncify
+  yield (`tests/deliver_wasm.rs` reads an exposed value after a `store_load_url_trusted` unwind).
+
+This is loft's own borrow model (`OWNERSHIP_MODEL.md`): the handle is a **View**, not an owned
+transfer; the descriptor + linear memory are the backing store.
+
+**Backends.** `--html` is the true zero-copy path (both page shells embed `readLoftValue` from
+`doc/loft-deliver.js`); interpret/native run a `deliver_loopback` that prints the reconstructed bytes
+as hex — a cross-backend parity **oracle** (interpret == native), not a value consumer, so it stays
+lossy-but-stable for packed narrow ints. Consumer migration (routing's `view`/`match`, the games GPU
+path) is @PLN105 Phase 4, owned by those consumers.
+
+Code map: `src/ffi_deliver.rs` (deliver/expose/reconstruct) · `src/database/descriptor.rs`
+(`LayoutDesc`/`read_via_descriptor`) · `doc/loft-deliver.js` (`readLoftValue`) · `default/02_files.loft`
+(`deliver`/`expose`/`release`) · `tests/deliver_wasm.rs` + `tools/deliver_*.mjs` (the parity, grow,
+cross-frame, and zero-copy-perf harnesses).
+
+---
+
 ## Failure paths (what breaks, and what holds the line)
 
 Enumerated because this is where the invariant earns its keep — each row is a
@@ -407,3 +482,6 @@ a future need forces a blocking primitive, that one-line list addition is the
 - [WASM.md](WASM.md) — the broader WASM runtime (VFS, host bridges, threading).
 - [LAVITION.md](LAVITION.md) — why an agnostic engine-as-service-provider is the
   product thesis, not just a convenience.
+- [plans/105-ffi-deliver-layout-bridge.md](plans/105-ffi-deliver-layout-bridge.md) —
+  the closure record for the binary bridge (`deliver`/`expose`): phase log,
+  decisions, and the falsifier suite behind § *The binary bridge* above.
