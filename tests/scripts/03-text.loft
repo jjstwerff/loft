@@ -124,7 +124,7 @@ fn main() {
   assert(sum_fmt == 60, "\"0{{t}}0\" as integer sum 010+020+030=60: {sum_fmt}");
   // join is the canonical method form `vec.join(sep)` — tested below under "join".
   // --- Text-level predicates (whole-string classify) ---
-  // Note: empty string has no characters so all predicates return true (vacuous).
+  // @PLN102 H6 — empty string is NOT "all X": every text classifier returns FALSE on "".
   assert("hello".is_alphabetic(), "text is_alphabetic: all letters");
   assert(!"hello123".is_alphabetic(), "text is_alphabetic: mixed letter+digit is false");
   assert("12345".is_numeric(), "text is_numeric: all digits");
@@ -138,6 +138,14 @@ fn main() {
   assert("   \t".is_whitespace(), "text is_whitespace: spaces and tab");
   assert(!" hello ".is_whitespace(), "text is_whitespace: letters make it false");
   assert(!"hello".is_control(), "text is_control: normal text returns false");
+  // @PLN102 H6 — empty string -> false for every text classifier (vacuous-true footgun closed).
+  assert(!"".is_numeric(), "empty is_numeric is false");
+  assert(!"".is_alphabetic(), "empty is_alphabetic is false");
+  assert(!"".is_alphanumeric(), "empty is_alphanumeric is false");
+  assert(!"".is_lowercase(), "empty is_lowercase is false");
+  assert(!"".is_uppercase(), "empty is_uppercase is false");
+  assert(!"".is_whitespace(), "empty is_whitespace is false");
+  assert(!"".is_control(), "empty is_control is false");
   // --- Character predicates (individual char classify) ---
   assert('a'.is_lowercase(), "char is_lowercase: 'a' is lower");
   assert(!'A'.is_lowercase(), "char is_lowercase: 'A' is false");

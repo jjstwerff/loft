@@ -121,7 +121,7 @@ Beyond the null-sentinel cluster above:
 | H3 | ~~**`File.write()` returns void**~~ **DONE** — now returns `FileResult` (`Ok`/`Other`), like delete/move/mkdir; a failed write is observable (`f.write(s).ok()`); discarding callers unaffected. Runtime `Stores::write_file` returns bool; loft `write` wraps it. Both backends; test scripts/561. | ~~unobservable~~ | `02_files.loft` `write` |
 | H4 | ~~`content()`/`read_bytes()`/`list_dir()` return `""`/`[]` for a missing file~~ **DONE** — now `text?`/`vector<u8>?`/`vector<text>?`; a MISSING file/dir reads NULL, an EMPTY-present one reads `""`/`[]` (the honest-`τ?` C90 pattern). Discharge with `?? ""`/`?? []`. Fixed `vector<T>? == null` (vec_null peels Optional). Both backends; tests scripts/430,562. | ~~silent~~ | `02_files.loft` |
 | H5 | **JSON numbers are f64-backed** — a JSON integer > 2⁵³ silently rounds; `as_long()` truncates it | silent precision loss on IDs / ns-timestamps, frozen | integer-preserving JSON number variant, or documented-lossy | `06_json.loft:21,93` |
-| H6 | **All-quantified classifiers return `true` on `""`** (`is_numeric`/`is_alphabetic`/…) | `if input.is_numeric()` accepts empty input | decide the empty case (most want `false`) + regression test | `03_text.loft:70–139` |
+| H6 | ✅ **FIXED (2026-07-16)** — the 7 all-quantified text classifiers now return `false` on `""` (was vacuously `true`) | closed the `if input.is_numeric()` accepts-empty footgun; empty→false matches Python's `"".isdigit()`/`.isalpha()`/`.isspace()` | DONE — an `if self.len()==0 { return false }` guard on each of the 7; regression in `tests/scripts/03-text.loft`; verified both backends; ZERO in-tree callers relied on the vacuous-true | `03_text.loft:74–146` |
 | H7 | **`text as integer/single/float` silently yields null / NaN** on unparseable input | `"abc" as integer` → null, `"1.2.3" as float` → NaN propagates silently | a checked parse (`try_parse` → null, never NaN) as the blessed path | `fill.rs:466,472,478` |
 | H8 | **`sorted[a..b]` is a KEY-range query sharing vector's positional-slice syntax** (INC#2) | a vector→sorted port silently reads the wrong elements | reject positional-shaped slices on sorted, or make key-range slicing syntactically distinct | INC#2; `LOFT.md` |
 | H9 | **`FileResult` advertises error variants that never fire** (`PermissionDenied`, `IsDirectory`, …) | the *frozen error identity* mismatches reality; a perm-denied delete returns `Other` | map OS errors to the variants, or remove the aspirational ones | `02_files.loft:38–40` |
@@ -140,7 +140,7 @@ Beyond the null-sentinel cluster above:
    `i64::MIN`, a global `json_errors()` string, or a `raise`. **Fix: pick one convention per
    surface** (fault vs nullable-return) before it calcifies.
 3. **Empty-collection / empty-input edge behavior is undecided per-op.** `min_of([])`=null vs
-   `sum_of([])`=0; `v[0]` raises vs `h[key]` returns null; `split("")`=`[]`; `is_numeric("")`=true.
+   `sum_of([])`=0; `v[0]` raises vs `h[key]` returns null; `split("")`=`[]`; `is_numeric("")`=false (H6 FIXED).
    **Fix: a single stated rule for "operation over empty."**
 4. **Naming conventions drift.** The `_of` suffix is on `min_of`/`max_of`/`sum_of` but not
    `sum`; `dir` vs `directory` split within one module; `float`/`single` inverted from C-family;
@@ -179,7 +179,7 @@ Beyond the null-sentinel cluster above:
 | Sev | Item | Fix | Ref |
 |---|---|---|---|
 | High | `len`=bytes/`size`=chars + byte-indexing vs char-iteration (H2) | see H2 | `:736,744,765` |
-| High | classifiers vacuously `true` on `""` (H6) | see H6 | `03_text.loft:70` |
+| High | ~~classifiers vacuously `true` on `""`~~ ✅ FIXED (H6) — empty → false | see H6 | `03_text.loft:74` |
 | High | `text as int/float` silent null/NaN (H7) | see H7 | `fill.rs:466` |
 | Med | `split(character)` vs `split_text(text)` — permanent two-name split | unify on `text` needle before freeze | `02_files.loft:139,167` |
 | Med | `join` = both string-join and path-join (receiver-dispatched) | rename path form `path_join` | `03_text.loft:148` / `02_files.loft:706` |

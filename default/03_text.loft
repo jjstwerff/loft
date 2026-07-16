@@ -70,11 +70,10 @@ pub fn to_lowercase(self: text) -> text;
 pub fn to_uppercase(self: text) -> text;
 #rust"@self.to_uppercase()"
 #pure
-// True if all characters are lowercase letters.
+// True if the text is non-empty and all characters are lowercase letters.
 pub fn is_lowercase(self: text) -> boolean {
-  for c in self {
-    if!c.is_lowercase() { return false }
-  }
+  if self.len() == 0 { return false }
+  for c in self { if !c.is_lowercase() { return false } }
   true
 }
 #pure
@@ -83,11 +82,10 @@ pub fn is_lowercase(self: character) -> boolean;
 #rust"@self.is_lowercase()"
 #pure
 #null_safe
-// True if all characters are uppercase letters.
+// True if the text is non-empty and all characters are uppercase letters.
 pub fn is_uppercase(self: text) -> boolean {
-  for c in self {
-    if!c.is_uppercase() { return false }
-  }
+  if self.len() == 0 { return false }
+  for c in self { if !c.is_uppercase() { return false } }
   true
 }
 #pure
@@ -96,11 +94,10 @@ pub fn is_uppercase(self: character) -> boolean;
 #rust"@self.is_uppercase()"
 #pure
 #null_safe
-// True if all characters are numeric digits (Unicode numeric, not just ASCII 0–9).
+// True if the text is non-empty and all characters are numeric digits (Unicode numeric, not just ASCII 0–9).
 pub fn is_numeric(self: text) -> boolean {
-  for c in self {
-    if!c.is_numeric() { return false }
-  }
+  if self.len() == 0 { return false }
+  for c in self { if !c.is_numeric() { return false } }
   true
 }
 #pure
@@ -109,11 +106,10 @@ pub fn is_numeric(self: character) -> boolean;
 #rust"@self.is_numeric()"
 #pure
 #null_safe
-// True if all characters are letters or digits. Use to validate identifiers or tokens.
+// True if the text is non-empty and all characters are letters or digits. Use to validate identifiers or tokens.
 pub fn is_alphanumeric(self: text) -> boolean {
-  for c in self {
-    if!c.is_alphanumeric() { return false }
-  }
+  if self.len() == 0 { return false }
+  for c in self { if !c.is_alphanumeric() { return false } }
   true
 }
 #pure
@@ -122,11 +118,10 @@ pub fn is_alphanumeric(self: character) -> boolean;
 #rust"@self.is_alphanumeric()"
 #pure
 #null_safe
-// True if all characters are alphabetic.
+// True if the text is non-empty and all characters are alphabetic.
 pub fn is_alphabetic(self: text) -> boolean {
-  for c in self {
-    if!c.is_alphabetic() { return false }
-  }
+  if self.len() == 0 { return false }
+  for c in self { if !c.is_alphabetic() { return false } }
   true
 }
 #pure
@@ -135,11 +130,10 @@ pub fn is_alphabetic(self: character) -> boolean;
 #rust"@self.is_alphabetic()"
 #pure
 #null_safe
-// True if all characters are whitespace. Use to detect blank lines.
+// True if the text is non-empty and all characters are whitespace. Use to detect blank lines.
 pub fn is_whitespace(self: text) -> boolean {
-  for c in self {
-    if!c.is_whitespace() { return false }
-  }
+  if self.len() == 0 { return false }
+  for c in self { if !c.is_whitespace() { return false } }
   true
 }
 #pure
@@ -148,11 +142,10 @@ pub fn is_whitespace(self: character) -> boolean;
 #rust"@self.is_whitespace()"
 #pure
 #null_safe
-// True if all characters are control characters.
+// True if the text is non-empty and all characters are control characters.
 pub fn is_control(self: text) -> boolean {
-  for c in self {
-    if!c.is_control() { return false }
-  }
+  if self.len() == 0 { return false }
+  for c in self { if !c.is_control() { return false } }
   true
 }
 #pure
