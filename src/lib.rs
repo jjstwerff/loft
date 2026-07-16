@@ -62,6 +62,37 @@ unsafe extern "C" {
     // the `len`-then-`copy` shape `loft_host_input_len`/`copy` already proves.
     pub(crate) safe fn loft_host_http_get(url_ptr: *const u8, url_len: usize) -> usize;
     pub(crate) safe fn loft_host_http_get_copy(ptr: *mut u8);
+    // @PLN105 Phase 2 — `deliver(tag, value)`: hand the JS host a self-describing handle to a
+    // live loft value with no serialization.  `store_base` is the value's Store buffer base in
+    // wasm linear memory (`Store.ptr`); `(rec, pos)` is its `DbRef` within that store.  The reader
+    // addresses ANY node as `store_base + rec*8 + pos` (`Store::checked_offset`), so it can FOLLOW
+    // child records (a vector field holds a child record-index; strings are interned records at
+    // `id*8+8`) — which a pre-computed root address alone could not do.  `desc_ptr/desc_len` is
+    // the layout descriptor as JSON (`LayoutDesc::to_json`, memoized host-side by `type_id`).
+    // SYNCHRONOUS — unlike `loft_host_http_get` it is NOT in the asyncify allowlist; the borrow
+    // ends when this returns, so JS must finish reading (or copy out) before then (§5 borrow).
+    pub(crate) safe fn loft_host_deliver(
+        tag: i64,
+        store_base: usize,
+        rec: u32,
+        pos: u32,
+        type_id: u32,
+        desc_ptr: *const u8,
+        desc_len: usize,
+    );
+    // @PLN105 Phase 3 — `expose`: a LONG-LIVED `deliver` (same handle), stashed by `tag` and
+    // re-read across frames; the value's store is pinned loft-side so the addresses stay stable.
+    // `loft_host_release(tag)` tells the host to drop the stash when loft unpins.
+    pub(crate) safe fn loft_host_expose(
+        tag: i64,
+        store_base: usize,
+        rec: u32,
+        pos: u32,
+        type_id: u32,
+        desc_ptr: *const u8,
+        desc_len: usize,
+    );
+    pub(crate) safe fn loft_host_release(tag: i64);
 }
 
 #[macro_use]

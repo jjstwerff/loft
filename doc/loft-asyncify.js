@@ -82,3 +82,5 @@ function AsyncifyCtrl(instance) {
     E.asyncify_start_unwind(DATA_ADDR);
   };
 }
+
+export { AsyncifyCtrl };

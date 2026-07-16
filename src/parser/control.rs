@@ -11371,6 +11371,28 @@ impl Parser {
                 );
                 return Type::Void;
             }
+            // @PLN105 Phase 3 — expose(tag, value) / release(tag, value): the long-lived deliver
+            // + its unpin. Lowered like `deliver`, filling `db_tp` from the value's static type.
+            "expose" | "release" if types.len() == 2 => {
+                if self.first_pass {
+                    return Type::Void;
+                }
+                let db_tp = self.get_type(&types[1].clone());
+                let op = self.data.def_nr(if name == "expose" {
+                    "OpExpose"
+                } else {
+                    "OpRelease"
+                });
+                *val = Value::Call(
+                    op,
+                    vec![
+                        list[0].clone(),
+                        list[1].clone(),
+                        Value::Int(i32::from(db_tp)),
+                    ],
+                );
+                return Type::Void;
+            }
             "parallel_for" => return self.parse_parallel_for(val, list, types),
             "par_fold" => return self.parse_par_fold(val, list, types),
             "map" => return self.parse_map(val, list, types),

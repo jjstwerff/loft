@@ -56,6 +56,19 @@ impl BaseKind {
             _ => return None,
         })
     }
+
+    /// The wire name the JS reader dispatches its scalar read on (@PLN105 Phase 2 `to_json`).
+    fn wire(self) -> &'static str {
+        match self {
+            BaseKind::Integer => "integer",
+            BaseKind::Long => "long",
+            BaseKind::Single => "single",
+            BaseKind::Float => "float",
+            BaseKind::Boolean => "boolean",
+            BaseKind::Text => "text",
+            BaseKind::Character => "character",
+        }
+    }
 }
 
 /// One field of a `Record` / `EnumValue` node — name, byte position within the
@@ -148,6 +161,17 @@ pub enum LayoutNode {
     Vector(u16),
     /// By-reference element vector — `Parts::Array(elem)`.
     Array(u16),
+    /// @PLN105 Phase 3 — a BROWSER-SYNTHETIC node: a keyed collection PRE-FLATTENED at deliver
+    /// time to an element array. The array's DATA record is NOT in the node (a type node is shared
+    /// by every instance of that type — e.g. every element of a `vector<Bag>`); instead the reader
+    /// looks it up in the delivery's `flat` redirect map by the current `(rec, pos)`, which
+    /// `deliver_browser` materialised there. `data`'s offset-4 word is the element count, offset-8
+    /// onwards the element rec-nrs (`build_rec_scratch` layout), each element read at `(rec_nr, 8)`
+    /// as `elem`. Never appears in a REAL type descriptor — only injected at deliver time, so the
+    /// loopback/@PLN97-hash paths never see it.
+    FlatArray {
+        elem: u16,
+    },
     /// A keyed collection — walked by cursor, never structurally (see [`Iterated`]).
     Iterated(Iterated),
     /// A 12-byte stored `DbRef` pointer — `Parts::DbRef` (store-internal).
@@ -217,6 +241,10 @@ impl LayoutDesc {
             }
             LayoutNode::Array(e) => {
                 format!("array<{}>(elem_size={})", self.name(*e), self.size(*e))
+            }
+            // Browser-synthetic; never rendered in a real layout dump.
+            LayoutNode::FlatArray { elem } => {
+                format!("flatarray<{}>", self.name(*elem))
             }
             LayoutNode::Iterated(it) => match it {
                 Iterated::Sorted { elem, keys } => {
@@ -291,6 +319,195 @@ impl LayoutDesc {
         }
         h
     }
+
+    /// @PLN105 Phase 2 — serialize the descriptor to JSON for the foreign (JS) reader.
+    ///
+    /// The descriptor is METADATA emitted once per type-closure and memoized host-side, NOT the
+    /// hot path — the value bytes are the zero-copy fast lane — so a self-describing JSON blob
+    /// (trivially `JSON.parse`d, robust to schema evolution) is the right contract over a bespoke
+    /// binary format. Shape: `{nodes:{<id>:node}, names:{<id>:str}, sizes:{<id>:u16}}`, one node
+    /// per reachable type-id — the read-only twin the JS `read(view, desc, typeId, rec, pos)`
+    /// switch (§2) dispatches on. Hand-rendered (no serde dep) so it compiles into the lean wasm
+    /// build unchanged; the node `kind` tags mirror the `read_via_descriptor` match arms.
+    #[must_use]
+    pub fn to_json(&self) -> String {
+        use std::fmt::Write as _;
+        let mut s = String::from("{\"nodes\":{");
+        for (i, (id, node)) in self.nodes.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(s, "\"{id}\":");
+            node_json(node, &mut s);
+        }
+        s.push_str("},\"names\":{");
+        for (i, (id, name)) in self.names.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(s, "\"{id}\":\"{}\"", json_escape(name));
+        }
+        s.push_str("},\"sizes\":{");
+        for (i, (id, size)) in self.sizes.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(s, "\"{id}\":{size}");
+        }
+        s.push_str("}}");
+        s
+    }
+
+    /// @PLN105 Phase 3 — the delivery descriptor: [`to_json`] plus a `flat` REDIRECT map that gives
+    /// each pre-flattened keyed collection INSTANCE its materialised data record, keyed by the
+    /// `(rec, pos)` where the collection lives (`"<rec>_<pos>"`). A `FlatArray` type node is shared
+    /// by every instance of its type (e.g. every element of a `vector<Bag>`), so the per-instance
+    /// data cannot live in the node — the reader looks it up here by the current `(rec, pos)`.
+    #[must_use]
+    pub fn to_delivery_json(&self, flat: &BTreeMap<u64, u32>) -> String {
+        use std::fmt::Write as _;
+        let mut s = self.to_json();
+        s.pop(); // drop the base object's closing '}'
+        s.push_str(",\"flat\":{");
+        for (i, (k, data)) in flat.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let (rec, pos) = ((k >> 32) as u32, *k as u32);
+            let _ = write!(s, "\"{rec}_{pos}\":{data}");
+        }
+        s.push_str("}}");
+        s
+    }
+
+    fn fields_json(fields: &[LayoutField], s: &mut String) {
+        use std::fmt::Write as _;
+        s.push('[');
+        for (i, f) in fields.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let _ = write!(
+                s,
+                "{{\"name\":\"{}\",\"pos\":{},\"content\":{}}}",
+                json_escape(&f.name),
+                f.position,
+                f.content
+            );
+        }
+        s.push(']');
+    }
+}
+
+/// Render one descriptor node as a JSON object. `kind` is the reader's dispatch tag; every
+/// type-id reference (`content`/`elem`) is a key into `nodes`, mirroring the flat store type
+/// table so the reader never inlines. A free function — a node renders from its own data only
+/// (no `LayoutDesc` lookups, unlike `render_parts`).
+fn node_json(node: &LayoutNode, s: &mut String) {
+    use std::fmt::Write as _;
+    match node {
+        LayoutNode::Base(k) => {
+            let _ = write!(s, "{{\"kind\":\"base\",\"base\":\"{}\"}}", k.wire());
+        }
+        LayoutNode::Record(fields) => {
+            s.push_str("{\"kind\":\"record\",\"fields\":");
+            LayoutDesc::fields_json(fields, s);
+            s.push('}');
+        }
+        LayoutNode::EnumValue(tag, fields) => {
+            let _ = write!(s, "{{\"kind\":\"enumvalue\",\"tag\":{tag},\"fields\":");
+            LayoutDesc::fields_json(fields, s);
+            s.push('}');
+        }
+        LayoutNode::Choices(vs) => {
+            s.push_str("{\"kind\":\"enum\",\"variants\":[");
+            for (disc, (id, name)) in vs.iter().enumerate() {
+                if disc > 0 {
+                    s.push(',');
+                }
+                let _ = write!(
+                    s,
+                    "{{\"disc\":{disc},\"id\":{id},\"name\":\"{}\"}}",
+                    json_escape(name)
+                );
+            }
+            s.push_str("]}");
+        }
+        LayoutNode::Byte { start, nullable } => {
+            let _ = write!(
+                s,
+                "{{\"kind\":\"byte\",\"start\":{start},\"nullable\":{nullable}}}"
+            );
+        }
+        LayoutNode::Short { start, nullable } => {
+            let _ = write!(
+                s,
+                "{{\"kind\":\"short\",\"start\":{start},\"nullable\":{nullable}}}"
+            );
+        }
+        LayoutNode::Int { start, nullable } => {
+            let _ = write!(
+                s,
+                "{{\"kind\":\"int\",\"start\":{start},\"nullable\":{nullable}}}"
+            );
+        }
+        LayoutNode::ShortRaw { start, nullable } => {
+            let _ = write!(
+                s,
+                "{{\"kind\":\"shortraw\",\"start\":{start},\"nullable\":{nullable}}}"
+            );
+        }
+        LayoutNode::Vector(e) => {
+            let _ = write!(s, "{{\"kind\":\"vector\",\"elem\":{e}}}");
+        }
+        LayoutNode::Array(e) => {
+            let _ = write!(s, "{{\"kind\":\"array\",\"elem\":{e}}}");
+        }
+        LayoutNode::FlatArray { elem } => {
+            let _ = write!(s, "{{\"kind\":\"flatarray\",\"elem\":{elem}}}");
+        }
+        LayoutNode::Ref => s.push_str("{\"kind\":\"ref\"}"),
+        LayoutNode::ChildRec(e) => {
+            let _ = write!(s, "{{\"kind\":\"childrec\",\"elem\":{e}}}");
+        }
+        LayoutNode::Iterated(it) => {
+            // Keyed collections are `iterated` — the reader walks them by cursor (Phase 3),
+            // never as a byte layout; only the element type-id is needed to read a yielded rec.
+            let (sub, elem) = match it {
+                Iterated::Sorted { elem, .. } => ("sorted", elem),
+                Iterated::Ordered { elem, .. } => ("ordered", elem),
+                Iterated::Hash { elem, .. } => ("hash", elem),
+                Iterated::Index { elem, .. } => ("index", elem),
+                Iterated::Radix { elem, .. } => ("radix", elem),
+            };
+            let _ = write!(
+                s,
+                "{{\"kind\":\"iterated\",\"sub\":\"{sub}\",\"elem\":{elem}}}"
+            );
+        }
+    }
+}
+
+/// Minimal JSON string escaper for descriptor names (type + field identifiers). They are almost
+/// always bare identifiers, but escape the JSON-significant bytes so an unusual name can never
+/// produce malformed JSON on the JS side.
+fn json_escape(s: &str) -> String {
+    use std::fmt::Write as _;
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match c {
+            '"' => out.push_str("\\\""),
+            '\\' => out.push_str("\\\\"),
+            '\n' => out.push_str("\\n"),
+            '\r' => out.push_str("\\r"),
+            '\t' => out.push_str("\\t"),
+            c if (c as u32) < 0x20 => {
+                let _ = write!(out, "\\u{:04x}", c as u32);
+            }
+            c => out.push(c),
+        }
+    }
+    out
 }
 
 impl Stores {
@@ -447,7 +664,9 @@ impl Stores {
             LayoutNode::Choices(_) => out.push(store.get_byte(r.rec, r.pos, 0) as u8),
             LayoutNode::Record(fields) | LayoutNode::EnumValue(_, fields) => {
                 for f in fields {
-                    if f.name == "enum" || f.position == u16::MAX {
+                    // Skip non-data fields: the enum discriminant, absent fields, and `#`-prefixed
+                    // synthetic fields (e.g. an index node's #left/#right/#color tree bookkeeping).
+                    if f.name == "enum" || f.position == u16::MAX || f.name.starts_with('#') {
                         continue;
                     }
                     let field_r = DbRef {
@@ -494,7 +713,10 @@ impl Stores {
                     self.read_via_descriptor(desc, &elem, *elem_tp, le, out)?;
                 }
             }
-            LayoutNode::Iterated(_) | LayoutNode::Ref | LayoutNode::ChildRec(_) => {
+            LayoutNode::Iterated(_)
+            | LayoutNode::Ref
+            | LayoutNode::ChildRec(_)
+            | LayoutNode::FlatArray { .. } => {
                 return Err(format!(
                     "type {tp} ({}) is a store-internal kind — not in the serializable subset \
                      (cursor-walked in a later phase)",
