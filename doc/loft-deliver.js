@@ -18,7 +18,10 @@
 // `mem` is the WebAssembly.Memory; its `.buffer` MUST be re-read on each deliver (memory.grow
 // detaches the old ArrayBuffer — §5 borrow contract). Read (or copy out) within the deliver call.
 
-export function readLoftValue(mem, storeBase, desc, typeId, rec, pos) {
+// NOTE: a plain function (no inline `export`) so it can be `include_str!`-embedded into the
+// non-module `--html` shim; the trailing `export { readLoftValue }` (stripped at embed time) keeps
+// the node harness's `import { readLoftValue }` working.
+function readLoftValue(mem, storeBase, desc, typeId, rec, pos) {
   const view = new DataView(mem.buffer);
   const nodes = desc.nodes;
   const sizeOf = (id) => (desc.sizes && desc.sizes[id] != null ? +desc.sizes[id] : 0);
@@ -148,3 +151,5 @@ export function readLoftValue(mem, storeBase, desc, typeId, rec, pos) {
 
   return read(typeId, rec, pos);
 }
+
+export { readLoftValue };

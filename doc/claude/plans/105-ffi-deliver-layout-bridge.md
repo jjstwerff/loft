@@ -269,10 +269,18 @@ harness at the end):
   `tests/deliver_wasm.rs` (build `--html` → extract wasm → run node → assert). Green:
   `Outer{ name:"hi", inner:{a:7,b:1.5}, nums:[10,20,30], ok:true }` reconstructs BYTE-IDENTICALLY
   to the interpreter loopback (`6869`="hi", `07..`=7, `f83f`=1.5, `0a/14/1e`=10/20/30, `01`=true)
-  — **the parity gate interpret == native == --html now holds end-to-end.** REMAINING (small): a
+  — **the parity gate interpret == native == --html now holds end-to-end.**
+- **P2.d — inline the reader into the shims so a real page auto-reconstructs. ✅ DONE.** `main.rs`
+  `include_str!`s `doc/loft-deliver.js` (stripping the trailing `export`) as `reader_js` and emits
+  it ahead of both page shells (minimal engine-less + full GL). `loft_host_deliver` now `JSON.parse`s
+  the descriptor, calls `readLoftValue(mem, store_base, desc, type_id, rec, pos)`, and hands the
+  finished VALUE to `globalThis.loftDeliver(tag, value, type_id)` — no handle plumbing on the page.
+  `loft_host_expose` stashes a RE-READER closure (`globalThis.loftExposed.get(tag)()` → fresh value
+  each frame, memory.grow-safe). Both the inline `main.rs` shim and `doc/loft-gl-wasm.js` wired
+  identically; the node harness keeps its own host fns (the trailing `export` still serves its
+  `import`), so the 11 `deliver_wasm` parity tests are unchanged and green. REMAINING (small): a
   memory.grow-mid-read safety cell; more corpus shapes (value-enum `disc`, by-ref array, narrow
-  ints); inlining the reader into the shims so a real page auto-reconstructs (today they expose
-  the handle to `globalThis.loftDeliver`).
+  ints).
 
 - **Code points:** `doc/loft-gl-wasm.js:47` (`buildLoftImports` — add the deliver/desc/iter
   host fns); `src/main.rs` `--html` assembly (embeds this glue).

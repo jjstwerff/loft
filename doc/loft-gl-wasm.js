@@ -173,26 +173,25 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
       },
       // @PLN105 Phase 2 — deliver(tag, value): the JS host receives the value's store base +
       // DbRef (store_base, rec, pos) + its layout descriptor (JSON), and reconstructs the value
-      // with no serialization via readLoftValue (doc/loft-deliver.js). SYNCHRONOUS — read within
-      // this call, the borrow ends on return (§5). A page/harness observes deliveries by setting
-      // globalThis.loftDeliver(tag, store_base, rec, pos, type_id, desc, mem).
+      // with no serialization via readLoftValue (embedded reader — main.rs inlines
+      // doc/loft-deliver.js AHEAD of this file). SYNCHRONOUS — read within this call, the borrow
+      // ends on return (§5). A page observes deliveries by setting globalThis.loftDeliver(tag,
+      // value, type_id).
       loft_host_deliver(tag, store_base, rec, pos, type_id, dptr, dlen) {
-        const desc = readStr(dptr, dlen);
-        if (globalThis.loftDeliver)
-          globalThis.loftDeliver(tag, store_base, rec, pos, type_id, desc, getMem());
-        else console.log("[loft:deliver]", "tag=" + tag, "type=" + type_id);
+        const desc = JSON.parse(readStr(dptr, dlen));
+        const value = readLoftValue(getMem(), store_base, desc, type_id, rec, pos);
+        if (globalThis.loftDeliver) globalThis.loftDeliver(tag, value, type_id);
+        else console.log("[loft:deliver]", tag, value);
       },
-      // @PLN105 Phase 3 — expose/release: a long-lived deliver. Stash the handle by tag (loft pins
-      // the value's store so its addresses stay valid across frames); a page reads
-      // globalThis.loftExposed each frame and re-derives its view from getMem().buffer. release
-      // drops the stash.
+      // @PLN105 Phase 3 — expose/release: a long-lived deliver. Stash a RE-READER closure by tag
+      // (loft pins the value's store so its addresses stay valid across frames); a page calls
+      // globalThis.loftExposed.get(String(tag))() each frame for a fresh value (re-derives the view
+      // from getMem().buffer — memory.grow-safe). release drops the stash.
       loft_host_expose(tag, store_base, rec, pos, type_id, dptr, dlen) {
-        const desc = readStr(dptr, dlen);
-        (globalThis.loftExposed || (globalThis.loftExposed = new Map())).set(String(tag), {
-          store_base, rec, pos, type_id, desc, mem: getMem(),
-        });
-        if (globalThis.loftExpose)
-          globalThis.loftExpose(tag, store_base, rec, pos, type_id, desc, getMem());
+        const desc = JSON.parse(readStr(dptr, dlen));
+        const reread = () => readLoftValue(getMem(), store_base, desc, type_id, rec, pos);
+        (globalThis.loftExposed || (globalThis.loftExposed = new Map())).set(String(tag), reread);
+        if (globalThis.loftExpose) globalThis.loftExpose(tag, reread, type_id);
       },
       loft_host_release(tag) {
         if (globalThis.loftExposed) globalThis.loftExposed.delete(String(tag));

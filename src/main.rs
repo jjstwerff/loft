@@ -6571,6 +6571,11 @@ fn main() {
         // headless templates.  gl_js references it, so it is emitted FIRST.
         let asyncify_js = include_str!("../doc/loft-asyncify.js");
         let gl_js = include_str!("../doc/loft-gl-wasm.js");
+        // @PLN105 Phase 2/3 — the generic deliver reader, embedded so both page shells reconstruct a
+        // JS value from a `deliver`/`expose` handle. Strip the trailing `export` (the file is a
+        // module for the node harness; here it is inlined into a non-module `<script>`).
+        let reader_js =
+            include_str!("../doc/loft-deliver.js").replace("export { readLoftValue };", "");
         // @lib_plan-29 W2: concatenate every used library's
         // `[wasm.bridge].host_js` file into the HTML preamble.  Each
         // file pushes a registration callback onto
@@ -6615,6 +6620,7 @@ fn main() {
 </head><body><pre id="out"></pre>
 <script>
 {asyncify_js}
+{reader_js}
 // Minimal engine-less loft page: a small wasm + this tiny shim.  No WebGL2, no
 // canvas — only `loft_io` (text out + the async `store_load_url_trusted` fetch).
 // Asyncify IS driven here (via AsyncifyCtrl above) so a synchronous loft call can
@@ -6669,22 +6675,25 @@ const imports={{loft_io:{{
     return 0;
   }},
   loft_host_http_get_copy:(ptr)=>{{if(ctrl.httpBytes)new Uint8Array(mem.buffer,ptr,ctrl.httpBytes.length).set(ctrl.httpBytes);}},
-  // @PLN105 Phase 2 — deliver: hand a live value's raw linear-memory address + layout descriptor
-  // (JSON) to a JS hook. SYNCHRONOUS: read within this call (the borrow ends on return). The
-  // generic descriptor-driven reader is added in Phase 2c; here a minimal hook so the bundle
-  // instantiates and a harness can observe deliveries via `globalThis.loftDeliver`.
+  // @PLN105 Phase 2 — deliver: reconstruct a live value from its raw linear-memory address + layout
+  // descriptor (JSON) via the embedded readLoftValue (reader_js, inlined above), then hand the
+  // finished value to globalThis.loftDeliver(tag, value, type_id). SYNCHRONOUS: read within this
+  // call — the borrow ends on return.
   loft_host_deliver:(tag,store_base,rec,pos,type_id,dptr,dlen)=>{{
-    const desc=dec.decode(new Uint8Array(mem.buffer,dptr,dlen));
-    if(globalThis.loftDeliver)globalThis.loftDeliver(tag,store_base,rec,pos,type_id,desc,mem);
-    else console.log("[loft:deliver] tag="+tag+" type="+type_id);
+    const desc=JSON.parse(dec.decode(new Uint8Array(mem.buffer,dptr,dlen)));
+    const value=readLoftValue(mem,store_base,desc,type_id,rec,pos);
+    if(globalThis.loftDeliver)globalThis.loftDeliver(tag,value,type_id);
+    else console.log("[loft:deliver]",tag,value);
   }},
-  // @PLN105 Phase 3 — expose/release: a long-lived deliver. Stash the handle by tag (loft pins the
-  // store so its addresses stay valid across frames); a page reads globalThis.loftExposed each
-  // frame and re-derives its view. release drops the stash.
+  // @PLN105 Phase 3 — expose/release: a long-lived deliver. Stash a RE-READER closure by tag (loft
+  // pins the store so its addresses stay valid across frames); a page calls
+  // globalThis.loftExposed.get(String(tag))() each frame for a fresh value (re-derives the view —
+  // memory.grow-safe). release drops the stash.
   loft_host_expose:(tag,store_base,rec,pos,type_id,dptr,dlen)=>{{
-    const desc=dec.decode(new Uint8Array(mem.buffer,dptr,dlen));
-    (globalThis.loftExposed||(globalThis.loftExposed=new Map())).set(String(tag),{{store_base,rec,pos,type_id,desc,mem}});
-    if(globalThis.loftExpose)globalThis.loftExpose(tag,store_base,rec,pos,type_id,desc,mem);
+    const desc=JSON.parse(dec.decode(new Uint8Array(mem.buffer,dptr,dlen)));
+    const reread=()=>readLoftValue(mem,store_base,desc,type_id,rec,pos);
+    (globalThis.loftExposed||(globalThis.loftExposed=new Map())).set(String(tag),reread);
+    if(globalThis.loftExpose)globalThis.loftExpose(tag,reread,type_id);
   }},
   loft_host_release:(tag)=>{{ if(globalThis.loftExposed)globalThis.loftExposed.delete(String(tag)); if(globalThis.loftRelease)globalThis.loftRelease(tag); }}
 }}}};
@@ -6714,6 +6723,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
 <pre id="out"></pre>
 <script>
 {asyncify_js}
+{reader_js}
 {gl_js}
 {host_js_extensions}
 const wasmB64="{wasm_b64}";
