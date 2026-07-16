@@ -3459,15 +3459,27 @@ use a separate collection or add after the loop"
                     && let Parts::Struct(fields) = &self.database.types[known as usize].parts
                 {
                     for (f_nr, f) in fields.iter().enumerate() {
-                        if f.position == pos as u16
-                            && !self.data.def(d_nr).attributes()[f_nr].mutable
-                        {
+                        if f.position != pos as u16 {
+                            continue;
+                        }
+                        if !self.data.def(d_nr).attributes()[f_nr].mutable {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,
                                 "Cannot write to key field {}.{} create a record instead",
                                 self.data.def(d_nr).name(),
                                 f.name
+                            );
+                        } else if self.data.def(d_nr).attributes()[f_nr].const_field {
+                            // @PLN40 — a `const` field is write-once at construction.  The
+                            // constructor lowers via Value::Insert (a separate path that does
+                            // not reach here), so only a later reassignment lands in this guard.
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                "cannot reassign const field '{}' of struct '{}' — const fields are write-once-at-construction",
+                                f.name,
+                                self.data.def(d_nr).name()
                             );
                         }
                     }

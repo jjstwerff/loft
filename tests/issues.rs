@@ -1554,6 +1554,49 @@ fn pln40_const_virtual_field_rejected() {
     );
 }
 
+/// @PLN40 step 4: reassigning a `const` field after construction is rejected.
+#[test]
+fn pln40_const_reassign_rejected() {
+    code!(
+        "struct Rec { const x: integer }
+fn test() { t = Rec { x: 1 }; t.x = 5; }"
+    )
+    .error(
+        "cannot reassign const field 'x' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_reassign_rejected:2:39",
+    );
+}
+
+/// @PLN40 step 4: the const-field guard fires regardless of the write route —
+/// here through a `&Rec` parameter, not the construction site.
+#[test]
+fn pln40_const_reassign_via_ref_rejected() {
+    code!(
+        "struct Rec { const x: integer }
+fn touch(t: &Rec) { t.x = 9; }
+fn test() { t = Rec { x: 1 }; touch(t); }"
+    )
+    .error(
+        "cannot reassign const field 'x' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_reassign_via_ref_rejected:2:29",
+    );
+}
+
+/// @PLN40 step 4: `const` freezes the field BINDING, not its contents — mutating
+/// a non-const field reached THROUGH a const struct field stays legal (Rust's
+/// `let v = …; v.field = …` rule).  Guards against over-broad enforcement.
+#[test]
+fn pln40_const_contents_still_mutable() {
+    code!(
+        "struct Inner { f: integer }
+struct Rec { const r: Inner }
+fn test() {
+    t = Rec { r: Inner { f: 1 } };
+    t.r.f = 5;
+    assert(t.r.f == 5, \"contents of a const struct field remain mutable\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
 // ── P139 regression guards ──────────────────────────────────────────────────
 // The slot allocator placed zone-1 byte-sized vars (plain enum, boolean) at
 // fixed slots inside the zone-2 frontier, leaving codegen's TOS one byte
