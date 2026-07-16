@@ -142,6 +142,11 @@ ships, widened. The lint is a second, independent single pass (`warn_dead_stores
 
 ## The safe small steps
 
+> **Detailed build + validation plan: [alias-where-correct-build.md](alias-where-correct-build.md)** —
+> the instrument-first ladder (prove each oracle report-only against a hand-computed matrix *before*
+> codegen), the two boundary matrices (safety + observability, incl. the sibling-alias trap), the
+> byte-value-identity gate, and the stop conditions. The table below is the summary.
+
 Inert-first, each verifiable before the next. The whole design is a pure optimization + a lint-message
 change — no observable behaviour changes, so there is no gated-measure-then-flip risk beyond proving
 byte-value-identity.

@@ -1,0 +1,153 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# Building + validating the transparent-link widening — safe small steps
+
+> **Status: build plan (2026-07-16).** The *how* for [alias-where-correct.md](alias-where-correct.md)
+> (the *why*): widen the copy-elision so the compiler realizes a bind as a shared-store **link**
+> wherever a link is **safe** (no UAF) **and unobservable** (identical result), keeping copy as the
+> semantics. Read the design doc first. This plan is instrument-first: **every oracle is proven
+> report-only against a hand-computed matrix before it touches codegen**, and the codegen change is
+> held to **byte-value-identity** on both backends. Nothing here changes what a program observes.
+
+## The correctness bar (the whole build serves this)
+
+Two invariants, both hard, both testable:
+
+1. **Byte-VALUE-identity.** With the widening ON, every program produces the **identical observable
+   result** (values + exit + output) it produced with copy-everywhere, on **both** backends. The
+   emitted IR *changes* (a copy becomes a borrow); the runtime value must not. This is *not* Mode-B
+   byte-identical IR — it is value-identity across a deliberate IR change. Gate-OFF stays
+   byte-identical (the change is inert when disabled).
+2. **#415-safety.** The widening never realizes an **unsafe** link (a borrow whose source store is
+   freed / reassigned / escapes while the borrow is live) — the exact UAF that made field-read binds
+   copy in the first place. A single unsafe link is a UAF regression, caught by the leak gates.
+
+The design is **sound by conservatism** (`use_analysis`'s standing rule: *"can only lose an elision,
+never produce a wrong borrow"*): if safety-and-unobservability is not *proven*, it materializes the
+copy. So the failure surface is one-sided — a **missed** link (a real copy that was safe to share) is
+acceptable; a **wrong** link is the only bug, and it shows up as a value divergence or a leak.
+
+## What already exists — do NOT rebuild
+
+The widening extends a shipped, validated analysis; most of the machinery is present:
+
+- **The current elision** already links on **last-use** (source provably dead after the bind) —
+  `use_analysis`'s verdict → `scopes::elide_borrows` (the `ElidePlan`) / `move_elide` (`MovePlan`).
+- **The position-aware mutation fact** the widening needs is already computed: `mut_max_pos` — *"the
+  source is mutated after the copy"* (`use_analysis.rs:119`, built from `mark_write` /
+  `find_written_vars`). The widening reuses it and adds the symmetric *"the local is mutated after the
+  bind"* query from the same access data.
+- **The safety fact:** `Ownership::Borrowed { base }` (the source var backing a bound value) +
+  `warn_dead_stores`' non-escape check + `reclaim_safe`.
+- **The oracle test harness:** `tests/ownership_oracle.rs`, `tests/use_analysis.rs` — where the
+  report-only oracle verdicts are pinned against hand-computed expectations.
+- **The instruments:** `--report-copies` / `LOFT_MATERIALIZE_DUMP` (copy-count + which binds link),
+  `LOFT_POISON` (arena poison-on-free), `LOFT_NATIVE_LEAK_CHECK`, `LOFT_STORES=warn` (the leak gates),
+  and the `#415` baseline `tests/scripts/85-store-lifetime-field-read-copy.loft`.
+
+So the build is **"extend `mut_max_pos`'s consumer + the elision verdict, behind a gate,"** not a new
+subsystem.
+
+## The validation methodology (the load-bearing half)
+
+- **Instrument-first: validate each oracle BEFORE wiring it to codegen.** Build the safety and
+  observability queries **report-only** (a dump / a test-only accessor), and pin them against a
+  **hand-computed** boundary matrix in `tests/ownership_oracle.rs`. An oracle that is only checked
+  *through* the codegen change cannot be debugged when a value diverges — you would not know if the
+  bug is the oracle or the wiring. Prove the oracle in isolation first (engineering-rigor §
+  calibration: the instrument is validated before it is trusted).
+- **Capture-and-diff the answer.** The current copy-behavior **is** the answer to reproduce. Capture
+  the full-suite result + leak-state GATE-OFF as the baseline; the GATE-ON run must reproduce it
+  **exactly**. A value diff is the spec of a bug, read off the diff — not theorized.
+- **The full suite GATE-ON is the soundness check.** A false *"unobservable"* verdict produces a
+  different value → the suite reds on that program. A false *"safe"* verdict produces a UAF/leak →
+  the leak gates red. So running the suite + leak gates gate-on, on both backends, **is** the
+  validation that the oracles are sound — every divergence is an oracle bug. The targeted matrices
+  (below) make the specific hazards non-vacuous.
+- **Positive controls (no vacuous green).** Each matrix carries an **injected** cell the oracle MUST
+  flag `unsafe` / `observable`; a green run that never exercised a fail cell proves nothing.
+- **Both backends, always.** Interp and native are separate generators reading one plan; a link
+  correct on one can UAF on the other. Every gate runs `--interpret` AND `--native`.
+- **The gate is the safety valve.** `LOFT_LINK_WIDEN` (opt-in) lets the widening be **measured**
+  gate-on across the whole corpus before it is ever default — and instantly disabled if a divergence
+  appears. Default-on is earned only after a clean gate-on suite.
+
+## The two boundary matrices (hand-computed; the falsification targets)
+
+Build these as `/tmp` probes first (engineering-rigor), then graduate the surviving cells to
+`tests/scripts/` + `tests/ownership_oracle.rs`. Every cell: **value AND length AND leak**, both
+backends.
+
+**Matrix S — safety (`link_is_safe`).** Each row is a `local = <source>` bind; the verdict must be
+`unsafe` (⇒ copy) unless the source provably outlives the local:
+
+| Shape | Must be | Why |
+|---|---|---|
+| `a = s.v; read a` (source lives) | **safe** | the field's store outlives `a` |
+| `a = s.v; free/last-use s; read a` | **unsafe** | `#415` — a link dangles when `s` is freed |
+| `a = s.v; s = other; read a` | **unsafe** | `base` reassigned — the old store may be reclaimed |
+| `a = s.v; return a` (a escapes) | **unsafe** | `a` outlives the callee frame that owns `s` |
+| `a = mkv()` (owned source) | n/a (no `base`) | an owned value has no source to link to — copy/own path unchanged |
+
+**Matrix O — observability (`link_is_unobservable`).** Each row is a `local = <source>` bind that is
+already `safe`; the verdict must be `observable` (⇒ copy) unless copy and link compute the same
+result:
+
+| Shape | Must be | Why |
+|---|---|---|
+| `a = s.v; read a; read s.v` (both read-only) | **unobservable** | no write to diverge them |
+| `a = s.v; a[i] = x; read s.v` | **observable** | link writes through to `s.v`; copy does not |
+| `a = s.v; s.v[i] = x; read a` | **observable** | link reflects the source write; copy does not |
+| **`a = s.v; b = &s.v; b[i] = x; read a`** | **observable** | ⚠️ the source is mutated through **another alias** — the oracle must be alias-aware and treat any write that can reach `s.v`'s store as a mutation, else it links and silently reflects `b`'s write |
+| `a = s.v; a[i] = x` (`a` discarded, dead store) | **observable** | this is the lint-to-`&` case — a copy (write lost); NOT linked (that link is observable) |
+
+The starred row is the design-protocol **over-unification guard**: the tempting `link_is_unobservable`
+= "the source var is not written after the bind" is *wrong* — it misses a write through a sibling
+alias. The oracle must be conservative (over-report `observable`) whenever it cannot prove no write
+reaches the source store. This cell is the falsification target that proves it.
+
+## The build ladder (commit-by-commit; oracle-first, gated, each validated)
+
+| # | Commit | What lands | Validation (the gate for THIS step) | E |
+|---|---|---|---|---|
+| 1 | **Baseline capture + the two probe matrices.** Author Matrix S + Matrix O as `/tmp`→`tests/scripts/` probes (value+length+leak, both backends), each hand-computed. Capture the full-suite + leak baseline GATE-OFF. No product change. | the probes run today and each cell's hand-computed value matches copy-behavior; the baseline is recorded | S |
+| 2 | **`link_is_safe` — report-only, matrixed.** A test-only accessor = `Ownership::Borrowed { base }` present AND local non-escaping AND `base` outlives the local (reuse `warn_dead_stores` non-escape + `reclaim_safe`). Wired to a dump, NOT to codegen. | pin it in `tests/ownership_oracle.rs` against **Matrix S** — every unsafe cell reads `unsafe`, the safe cell `safe`; positive control (injected freed-base) reads `unsafe`; both backends | M |
+| 3 | **`link_is_unobservable` — report-only, matrixed.** A test-only accessor = source-dead (shipped last-use) OR (neither source nor local mutated after the bind, **alias-aware** — any write reaching the source store counts). Reuses `mut_max_pos` + the symmetric local query. NOT wired to codegen. | pin against **Matrix O** — the read-only-both cell `unobservable`, every mutating cell (incl. the ⚠️ sibling-alias row) `observable`; positive control (injected sibling-alias write) reads `observable`; both backends | M |
+| 4 | **Wire the widening into `ElidePlan` — GATED (`LOFT_LINK_WIDEN`, default off).** The elision verdict additionally links a bind when `link_is_safe && link_is_unobservable` (adds the read-only-both set on top of the shipped last-use). | **gate-OFF:** loft-codegen Mode-B byte-identical corpus (empty diff, both backends). **gate-ON:** the read-only binds emit a borrow not a copy (`--report-copies` / introspect diff) AND the full suite is **byte-value-identical** to the step-1 baseline AND leak-clean (`LOFT_POISON`, `LOFT_NATIVE_LEAK_CHECK`, `LOFT_STORES=warn`), both backends. **Any gate-on value diff or leak = an oracle bug → STOP, fix the oracle (step 2/3), do not touch codegen.** | M |
+| 5 | **Default-on — the deliverable.** Flip `LOFT_LINK_WIDEN` default-on (opt-out `LOFT_NO_LINK_WIDEN`) once step 4's gate-on suite is byte-value-identical + leak-clean. | full suite + `native_scripts` byte-value-identical to the step-1 baseline, both backends; the copy-count reduction recorded (`--report-copies`); the `#415` + poison + DA gates green | S |
+| 6 | **Point the dead-store lint at `&`.** Upgrade `warn_dead_stores`' message on an `Owned` non-escaping `reads==0 & write_targets>0` local to name the fix: *"the write to `x` lands in a copy and is lost — write `x = &<src>` for write-through, or read `x` back if a copy was intended."* No behaviour change (still a copy). | the hex_terrain-shaped fixture: the lint names `&<src>`; the VALUE is unchanged (still copy); the escaping-local + read-back controls do not fire; message-golden updated | S |
+
+**Shape:** the risk is concentrated in the two oracles (steps 2–3), proven **in isolation** against
+hand-computed matrices *before* any codegen change, so a step-4 value divergence points at a known
+place. Steps 4–5 are the wiring + the byte-value-identity proof (the "everything the same" guarantee).
+Step 6 is the ergonomic close. The safety oracle (step 2) is the keystone that guarantees `#415`
+never returns; the alias-aware observability oracle (step 3, the ⚠️ cell) is the subtle one — over-
+report `observable` whenever a write might reach the source.
+
+## Stop conditions (revert, don't push through)
+
+- A **gate-on value divergence** on any program → an oracle over-claimed `unobservable`. STOP; fix
+  step 3; never "adjust the codegen to match". The value is the spec.
+- A **gate-on leak / poison / UAF** → an oracle over-claimed `safe`. STOP; fix step 2; the `#415`
+  class is back.
+- **The widening keeps needing another special case** in the elision verdict → the fact belongs in
+  the oracle (step 2/3), not in codegen (design-protocol / loft-codegen: facts in the analysis,
+  translation in codegen).
+- **One backend passes, the other diverges/leaks** → not landable; the plan is not a subset until
+  both agree.
+
+## See also
+
+- [alias-where-correct.md](alias-where-correct.md) — the design + the crystallized principle (copy is
+  the semantics; links are transparent-or-explicit).
+- [DESIGN_DECISIONS.md § C86](../../DESIGN_DECISIONS.md) — the contract this optimizes under (its
+  "revisit when: widen `ElidePlan`").
+- The loft-codegen skill (Mode B byte-identity + the both-backends rule) and the engineering-rigor
+  skill (the boundary matrix, calibrate-the-instrument, the ratchet + positive controls).
+- Code-points: `src/use_analysis.rs` (`Ownership::Borrowed`, `mut_max_pos`, `mark_write`,
+  `find_written_vars`, `warn_dead_stores`, the elision verdict) · `src/scopes.rs`
+  (`elide_borrows` / `move_elide`) · `tests/ownership_oracle.rs` / `tests/use_analysis.rs` (the oracle
+  harness) · `tests/scripts/85-store-lifetime-field-read-copy.loft` (the `#415` baseline).
