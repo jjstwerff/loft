@@ -178,6 +178,29 @@ So the collectible win of a steer is the **fold** — fewer independent implemen
 surface shrinkage. Every recommended-idiom steer should ship *with* its fold, or it buys nothing but
 more surface to maintain.
 
+**The mechanism — `#superseded` (@PLN102 arc C).** loft ships this as a callable attribute.
+`#superseded "Y"` on a symbol X (a fn / method / operator) declares X superseded by the successor
+symbol `Y` (a **bare name**, e.g. `#superseded "write_through"`). Three things follow, all built:
+
+- **The steer.** A call to X *from owned source* — the entry project being compiled, never a
+  re-parsed dependency or the stdlib — emits `warning: `X` is superseded — use `Y` (the old form
+  keeps working)`. This caller-provenance gate means the steer reaches only whoever can act on it:
+  the author of the *calling* code, never a consumer nagged about a dependency's internal idiom.
+  Default-on; **`LOFT_NO_STEER`** opts out. The old form keeps working, identically, forever — a
+  signpost, never a removal.
+- **The fold, enforced.** A lint (`superseded_fold_diagnostics`, run on every compile and in
+  `make ci`) checks each `#superseded "Y"` symbol in owned source: `Y` must resolve — an
+  unresolvable successor is a **hard compile error**, so a *dangling* steer never ships — and X's
+  body must *call* `Y` (X is a thin shim over the successor, not independent code; an un-folded steer
+  is an advisory warning). A steer therefore cannot ship without its fold.
+- **Inert until used.** The channel does nothing until a symbol is actually marked, so adding it
+  changed no existing program (the whole suite is byte-identical).
+
+A *semantic* replacement (the old behaviour is **not** expressible over the new — see *Folding's
+limit* below) is **not** a `#superseded` steer; it is **contract-keyed** (the escape valve below),
+which reuses this same owned-source gate but keys the author-alert to a `contract` bump instead of a
+bare `#superseded`.
+
 **Folding's limit.** It works only when the new primitive is a genuine **superset** — same
 observable semantics, nicer form. A semantically-*different* replacement cannot be folded (the old
 behavior is not expressible over the new), so there you carry both — which is exactly why a semantic
