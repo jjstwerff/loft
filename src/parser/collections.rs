@@ -791,7 +791,7 @@ impl Parser {
                 | Type::Radix(_, _, _)
         ) {
             if let Value::Var(nr) = to.unspan() {
-                if !self.first_pass && self.vars.is_const_param(*nr) {
+                if self.const_write_blocked(*nr, op) {
                     diagnostic!(
                         self.lexer,
                         Level::Error,
@@ -862,7 +862,7 @@ impl Parser {
             let args = args.clone();
             self.call_to_set_op(&name, &args, code, op)
         } else if let Value::Var(nr) = to.unspan() {
-            if !self.first_pass && self.vars.is_const_param(*nr) {
+            if self.const_write_blocked(*nr, op) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,

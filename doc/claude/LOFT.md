@@ -267,12 +267,37 @@ Fields are declared as `name: type` with optional modifiers **after** the type:
 - `assert(expr)` / `assert(expr, message)` — runtime constraint checked on every write
 - `computed(expr)` — calculated on every access, **not stored** in the record
 
-One modifier goes **before** the field name:
-- `const` — write-once at construction. The field is set in the struct literal (or
-  takes its default), and any later `t.field = …` reassignment is a compile error.
-  Const freezes the field *binding*, not its contents: `const v: vector<T>` rejects
-  `t.v = […]` but still allows `t.v[0] = x`. Combining `const` with `computed(...)`
-  is rejected (a computed field is already read-only). Example: `const id: integer`.
+A field has **two independent const axes** (@PLN40 const model) — `const` before the
+NAME freezes the *binding* (the slot), `const` before the TYPE freezes the *value*
+(the contents). They are opposites and compose into four quadrants:
+
+| declaration | rebind `t.v = …` | append `t.v += …` | element `t.v[i] = …` | use |
+|---|---|---|---|---|
+| `v: T` | ✓ | ✓ | ✓ | plain mutable |
+| `const v: T` (binding-const) | ✗ | ✓ | ✓ | **builder** — slot is write-once, contents grow in place |
+| `v: const T` (value-const) | ✓ | ✗ | ✗ | **frozen value** — read-only contents, slot re-pointable |
+| `const v: const T` | ✗ | ✗ | ✗ | fully immutable record |
+
+- **`const` before the NAME — binding-const** (write-once at construction). The field is
+  set in the struct literal (or takes its default), and any later `t.field = …` rebind is
+  a compile error, but the *contents* stay mutable: `const v: vector<T>` allows `t.v[0]=x`
+  and `t.v += […]`. This is the **builder** shape (grow a field in place after construction).
+  Combining `const` with `computed(...)` is rejected (a computed field is already read-only).
+- **`const` before the TYPE — value-const** (`v: const T`). The field's *value* is read-only,
+  so every mutation THROUGH it is rejected — append `t.v += …`, element `t.v[i] = …`, and a
+  nested write `t.r.x = …` reached via a value-const struct field. A whole-value **rebind**
+  `t.v = other` is still allowed: it re-points the slot rather than mutating the frozen value.
+  This is the **frozen record / immutable-value** shape (shared config, a compound key, a value
+  handed to `par()` threads).
+- **Scalar collapse.** A by-value scalar (`integer/float/single/boolean/character`) has no
+  contents distinct from its binding, so BOTH axes make it fully immutable — `const n: integer`
+  *and* `n: const integer` reject `t.n = …` and `t.n += …`. Example: `const id: integer`.
+
+Value-const enforcement covers DIRECT writes (the write's LHS resolved at compile time). A
+value-const value that escapes via a local (`x = t.v; x[i]=…`), a function return, or a
+`vector<const T>` generic is not yet frozen through that laundering — that transitivity is
+type-carried const, deferred to Phase 3.
+(@PLN40; doc/claude/plans/40-const-fields/const-model-phase2.md.)
 
 In default/computed expressions, `$` refers to the record:
 ```
@@ -316,10 +341,25 @@ fn function_name(param: type, other: type = default_value) -> return_type {
   not `inc(&x)`. (See § References (`&`) for the full model; `&` is a binding marker, not a general
   operator.)
   - **Enforced**: a `&` parameter that is never mutated (directly or transitively through a called function) is a **compile error**. Drop the `&` if the parameter is read-only.
-- Parameters with `const` prevent mutation of that parameter inside the function body.
-  - `const` is a compile-time check: any assignment to a `const` parameter is an **error**.
-  - `& const T` is syntactically valid but unusual — it means "pass by reference, but don't write to it" (which is redundant; prefer plain `const T` passed by value for primitives).
-  - `Attribute.constant/mutable` on function definitions are NOT set for `const` user-defined-function parameters (that would break bytecode generation). The check lives purely in `Variable.const_param`.
+- A `const` before a parameter's type — `p: const T` — is **value-const**: a read-only
+  borrow of the value (the immutable sibling of the `&T` mutable borrow). It is a
+  compile-time check.
+  - Every mutation THROUGH the parameter is an **error** — `p += …` (append), `p[i] = …`
+    (element), `p.f = …` (field), and nested writes `p.a.b = …`. Reads are always allowed.
+  - Re-pointing the local slot — `p = other` — **is** allowed for a compound type (it
+    rebinds the function's own copy of the borrow, not the caller's value). The same is
+    true of a value-const **local**: `x: const vector<T> = …`.
+  - A by-value **scalar** (`integer/float/single/boolean/character`) and a `& const T`
+    reference collapse to fully immutable — no `=` and no `+=` — because a scalar has no
+    contents distinct from its binding and a `&` write goes straight to the referent.
+  - The mirror axis, **binding-const** (`const` before the NAME — freezes the slot but
+    leaves contents mutable), exists for **locals** (`const x = …`) and struct **fields**
+    (`const v: T`). A binding-const *parameter* (`const p: T`) is not yet wired (Phase 1
+    ships value-const params + binding-const locals/fields).
+  - The check lives purely on the per-binding flags (`Variable.const_binding` /
+    `Variable.value_const`); `Attribute.constant/mutable` on the function definition are
+    NOT set for `const` user-defined-function parameters (that would break codegen).
+    (@PLN40 const-model phase 1; doc/claude/plans/40-const-fields/const-model.md.)
 - Default parameter values are supported.
 - Functions without a `->` clause return `void`.
 - A function body ending in an expression (without `;`) returns that value.
@@ -1238,7 +1278,7 @@ buf: vector<single> = []    // empty vector of f32
 v += [4]                    // append one element
 v += [5, 6]                 // append multiple elements
 for x in v { }             // iterate
-v[i]                        // index (null if out of bounds)
+v[i]                        // index; i>=len -> null, negative i counts from the end (see below)
 v[start..end]               // slice range (end exclusive)
 v[start..=end]              // slice range (end inclusive)
 v[start..]                  // open-ended slice to end
@@ -1261,6 +1301,15 @@ via a local, or a comprehension: `f([for x in v[lo..hi] { x }])`.
 it yields `30, 40`.  `v[-2..]` yields the last two elements.  A
 negative bound is shorthand for `len(v) + bound`, so `v[0..len(v) - 1]`
 and `v[0..-1]` are the same slice.
+
+**Scalar `v[i]` follows the same negative rule — mind the null-guard footgun.**
+The full picture: `i ∈ [0, len)` → the element; `i ≥ len` → `null`; a **negative**
+`i ∈ [-len, -1]` counts **from the end** (`v[-1]` is the last element, `v[-len]` the
+first — the same rule as negative slice bounds above); `i < -len` → `null`.  Because a
+negative index in range yields a real element, a *computed* index that can go negative
+does **not** null-guard: `if v[i] { … }` and `v[i] ?? d` only catch `i ≥ len`, not a
+`-1` "not-found" sentinel or a subtraction underflow.  Test `if i >= 0` first (or `?? d`
+only after a `>= 0` check) when `i` may be negative.
 
 **Struct elements: reads are views, writes are copies — never swap
 in-place via a temp (#338).**  For a `vector<STRUCT>`, `tmp = v[j]` yields

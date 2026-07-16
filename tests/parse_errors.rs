@@ -1906,3 +1906,18 @@ fn unknown_type_typed_decl_diagnoses_not_panics() {
         )
         .error("Expect token ; at unknown_type_typed_decl_diagnoses_not_panics:1:10");
 }
+
+// @PLN — routing-feedback finding 2: a struct-valued file-scope constant is rejected
+// (its record can't be materialised at each use → null on interp, E0308 on native);
+// the diagnostic points at the zero-arg-fn idiom that works on both backends.
+#[test]
+fn struct_valued_constant_rejected() {
+    code!("struct Point { x: integer } POINT_NONE = Point { x: 1 }; fn test() { a = POINT_NONE; }")
+        .error(
+            "a struct-valued constant ('POINT_NONE') is not supported — a record cannot be \
+             materialised at each use site (it reads `null` on --interpret and fails to \
+             compile on --native).  Wrap it in a zero-argument function instead: \
+             `fn point_none() -> Point { … }`, then call `point_none()` at \
+             struct_valued_constant_rejected:1:57",
+        );
+}

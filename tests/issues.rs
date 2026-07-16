@@ -1566,6 +1566,20 @@ fn test() { t = Rec { x: 1 }; t.x = 5; }"
     );
 }
 
+/// @PLN40: `+=` on a const SCALAR field is still rejected — it changes the whole
+/// value (a scalar has no "contents").  Only append on a const collection/text
+/// field is allowed (that is contents mutation; covered in the both-backend script).
+#[test]
+fn pln40_const_scalar_compound_rejected() {
+    code!(
+        "struct Rec { const n: integer }
+fn test() { r = Rec { n: 1 }; r.n += 1; }"
+    )
+    .error(
+        "cannot reassign const field 'n' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_scalar_compound_rejected:2:40",
+    );
+}
+
 /// @PLN40 step 4: the const-field guard fires regardless of the write route —
 /// here through a `&Rec` parameter, not the construction site.
 #[test]
@@ -1609,6 +1623,95 @@ fn test() {
     a = Cfg {};
     b = Cfg { port: 9000 };
     assert(a.port == 8080 && b.port == 9000, \"const default when omitted, override at construction\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+// ── @PLN40 Phase 2 — VALUE-const fields (`v: const T`, deep-frozen records) ──
+// The inverse axis of binding-const: a value-const field's VALUE is read-only, so
+// contents mutation (append `+=`, element `[i]=`, nested `.x=`) is rejected while a
+// REBIND `s.v = other` re-points the slot and is allowed.  Composes with binding-
+// const: `const v: const T` is fully frozen.  The positive cells (rebind, read) and
+// the builder-untouched guarantee run on both backends in tests/scripts/40-const-fields.loft.
+
+/// Append `+=` to a value-const COLLECTION field is a contents mutation → rejected
+/// (unlike a binding-const collection field, where append is the allowed builder op).
+#[test]
+fn pln40_vc_append_rejected() {
+    code!(
+        "struct Rec { v: const vector<integer> }
+fn test() { r = Rec { v: [1] }; r.v += [2]; }"
+    )
+    .error(
+        "cannot mutate value-const field 'v' of struct 'Rec' — its value is read-only (rebind with '=' to re-point, or drop 'const') at pln40_vc_append_rejected:2:44",
+    );
+}
+
+/// Element write `s.v[i]=` DEREFERENCES THROUGH the value-const field → rejected by
+/// the LHS chain-walk (the field is an inner step, not the write target).
+#[test]
+fn pln40_vc_element_rejected() {
+    code!(
+        "struct Rec { v: const vector<integer> }
+fn test() { r = Rec { v: [1] }; r.v[0] = 9; }"
+    )
+    .error(
+        "Cannot modify value-const field 'Rec.v'; its value is read-only at pln40_vc_element_rejected:2:44",
+    );
+}
+
+/// Nested write `s.r.x=` through a value-const STRUCT field → rejected: the chain
+/// dereferences through the frozen `r`, even though the leaf field `x` is plain.
+#[test]
+fn pln40_vc_nested_rejected() {
+    code!(
+        "struct Inner { x: integer }
+struct Rec { r: const Inner }
+fn test() { t = Rec { r: Inner { x: 1 } }; t.r.x = 9; }"
+    )
+    .error(
+        "Cannot modify value-const field 'Rec.r'; its value is read-only at pln40_vc_nested_rejected:3:54",
+    );
+}
+
+/// A value-const SCALAR field collapses (no interior distinct from its binding), so
+/// value-const freezes it fully — even a rebind `=` is rejected.
+#[test]
+fn pln40_vc_scalar_rejected() {
+    code!(
+        "struct Rec { c: const integer }
+fn test() { r = Rec { c: 1 }; r.c = 9; }"
+    )
+    .error(
+        "cannot mutate value-const field 'c' of struct 'Rec' — its value is read-only (rebind with '=' to re-point, or drop 'const') at pln40_vc_scalar_rejected:2:39",
+    );
+}
+
+/// `const v: const T` is FULLY frozen: binding-const blocks the rebind, value-const
+/// blocks the append.  Here the append is caught by the value-const leaf block.
+#[test]
+fn pln40_vc_fully_frozen_append_rejected() {
+    code!(
+        "struct Fz { const v: const vector<integer> }
+fn test() { f = Fz { v: [1] }; f.v += [2]; }"
+    )
+    .error(
+        "cannot mutate value-const field 'v' of struct 'Fz' — its value is read-only (rebind with '=' to re-point, or drop 'const') at pln40_vc_fully_frozen_append_rejected:2:43",
+    );
+}
+
+/// The over-unification guard as a test: a REBIND of a value-const field (the
+/// outermost node) re-points the slot and is ALLOWED — only mutation THROUGH the
+/// frozen value is rejected.  Same base `r` as the rejected element write above.
+#[test]
+fn pln40_vc_rebind_allowed() {
+    code!(
+        "struct Rec { v: const vector<integer> }
+fn test() {
+    r = Rec { v: [1] };
+    r.v = [2, 3];
+    assert(len(r.v) == 2, \"a value-const field may be rebound, re-pointing the slot\");
 }"
     )
     .result(loft::data::Value::Null);

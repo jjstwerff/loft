@@ -23,10 +23,10 @@
 // status = the HTTP status — negative on transport error / timeout —
 // payload = the response body; status is 0 for every other kind).
 pub struct Event {
-  cid:     integer,
-  kind:    integer,
-  payload: text,
-  status:  integer,
+  const cid:     integer,
+  const kind:    integer,
+  const payload: text,
+  const status:  integer,
 }
 
 fn kernel_listen(port: integer, tick_interval_us: integer) -> boolean;

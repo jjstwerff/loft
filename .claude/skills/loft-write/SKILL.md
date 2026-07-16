@@ -83,9 +83,10 @@ is a RETIRED accepted no-op** — it now means what the default already is, so d
 
 ```loft
 struct Point {
-    const id: integer,           // `const` PREFIX: write-once at construction
+    const id: integer,           // binding-const PREFIX: write-once at construction
+    const cells: vector<Cell>,   // BUILDER: slot write-once, `cells += […]` still grows it
+    coord: const Coord,          // value-const on the TYPE: frozen value (contents read-only)
     x: float,                    // non-null by default (DN1) — no `not null` needed
-    y: float,
     r: integer limit(0, 255),
     label: text = "default",
     area: float virtual($.x * $.y),
@@ -96,10 +97,28 @@ struct Point {
 Modifiers: `limit(min, max)`, `default(expr)` / `= expr`, `virtual(expr)`.  (`not null` still parses
 but is a retired no-op — see the DN1 defaults note above; use `?` for the nullable case.)
 
-**`const` field** (prefix, before the name) — write-once at construction: set it in the struct
-literal (or let it take its default), then any later `t.id = …` is a compile error.  Freezes the
-*binding*, not contents (`const v: vector<T>` rejects `t.v = […]` but allows `t.v[0] = x`).  Works on
-enum-variant fields too.  `const virtual(...)` is rejected (a virtual field is already read-only).
+**Two const axes** (@PLN40) — `const` before the NAME freezes the *binding*; `const` before the
+TYPE freezes the *value*.  They are opposites and compose:
+
+| declaration | rebind `t.v=` | append `t.v+=` | element `t.v[i]=` | use |
+|---|---|---|---|---|
+| `v: T` | ✓ | ✓ | ✓ | plain |
+| `const v: T` | ✗ | ✓ | ✓ | **builder** (grow in place) |
+| `v: const T` | ✓ | ✗ | ✗ | **frozen value** (rebindable slot) |
+| `const v: const T` | ✗ | ✗ | ✗ | fully immutable |
+
+- **binding-const** (`const v: T`, prefix): write-once slot, contents stay mutable — the builder
+  shape.  Reach for it when a field is assembled once then grown/edited in place (`const cells:
+  vector<Cell>` with `cells += […]`).  `const virtual(...)` is rejected; works on enum-variant fields.
+- **value-const** (`v: const T`, on the type): the value is read-only — append / element / nested
+  writes (`t.v+=`, `t.v[i]=`, `t.r.x=` through it) are rejected; a whole-value rebind `t.v = other`
+  is allowed.  Reach for it on a genuine value/record (shared config, a compound key, a `par()`-shared
+  value).  Enforced for DIRECT writes; laundering via a local/return/generic is Phase 3 (not yet).
+- **scalar collapse**: a by-value scalar (`integer/float/…`) freezes fully under EITHER axis —
+  `const n: integer` and `n: const integer` both reject `t.n=` and `t.n+=`.
+
+**Owner policy** (libraries): const every never-reassigned field.  Use `const v: T` for builder fields
+you still append to; `v: const T` for true value/record fields; whole-value keys/config → both.
 
 ---
 
@@ -379,6 +398,8 @@ v[i];                // index read
 **Empty vectors** need a type annotation so the compiler knows the element type.
 
 **Slices are iterators, materialised on assignment.** `sub = arr[lo..hi]` (annotated or not) builds a fresh vector, and negative bounds count from the end (`arr[2..-1]`, @P384).  A slice still cannot be passed directly where a `vector<T>` **argument** is expected — assign to a local first, or pass the array with index bounds.
+
+**`v[i]` with a possibly-negative index does NOT null-guard.** Scalar indexing counts from the end for negative `i`, exactly like slices: `v[-1]` is the LAST element, `v[-len]` the first — NOT `null`.  Only `i >= len` (and `i < -len`) yield `null`.  So `if v[i] { … }` and `v[i] ?? d` catch an over-range index but NOT a negative one — a `-1` "not-found" sentinel or a `a - b` underflow silently reads a real element from the end.  When `i` can go negative, test `if i >= 0` FIRST (that `>= 0` check is not redundant with a later null-guard).
 
 **Never swap `vector<STRUCT>` elements in-place via a temp (#338).** `tmp = v[j]` is a VIEW of slot j (not a copy), but `v[j] = v[k]` COPIES into the slot — so `tmp = v[j]; v[j] = v[k]; v[k] = tmp;` silently loses j's record and duplicates k's. Swap scalar fields one by one, or build a fresh vector (selection instead of in-place insertion sort).
 

@@ -86,9 +86,13 @@ fn abs_nullable_off_launders_no_warning() {
 fn abs_nullable_on_propagates_and_guards_interpret() {
     let (ok, out, warns) = run(ABS_NULL, "--interpret", true, "abs_on_i");
     assert!(ok, "{out}");
+    // ONE (N-Store) warning: abs(n)'s `integer?` result into the non-null field `s.f`.
+    // The nullable ARG `n` into abs is NOT flagged — `abs` is NULL-TRANSPARENT (@PLN102
+    // #583 gate-2: abs/min/max/clamp/floor/… propagate null by design, so passing a
+    // nullable to them is legitimate). The store of the propagated null is the violation.
     assert_eq!(
         warns, 1,
-        "ON: abs(nullable) is integer? → store warns: {out}"
+        "ON: abs(nullable) warns at the STORE only (abs is null-transparent): {out}"
     );
     assert!(
         out.contains("r=null"),
@@ -99,7 +103,10 @@ fn abs_nullable_on_propagates_and_guards_interpret() {
 fn abs_nullable_on_propagates_and_guards_native() {
     let (ok, out, warns) = run(ABS_NULL, "--native", true, "abs_on_n");
     assert!(ok, "{out}");
-    assert_eq!(warns, 1, "ON native: {out}");
+    assert_eq!(
+        warns, 1,
+        "ON native: store only (abs is null-transparent): {out}"
+    );
     assert!(
         out.contains("r=null"),
         "ON native: abs(null) must be null: {out}"

@@ -602,6 +602,28 @@ impl Parser {
             }
             let mut val = Value::Null;
             let tp = self.expression(&mut val);
+            // A struct-valued file-scope constant (`P = Point { … }`) is NOT supported: its
+            // value is the constructor's field-writes with no allocated record, so every use
+            // inlines writes into a null record — silently reading `null` on `--interpret`,
+            // panicking codegen on a plain bind, and failing to compile (`E0308`) on
+            // `--native`.  Scalars inline fine and scalar-element vector constants ride the
+            // `OpConstRef` const-store path; a heap record has neither.  Reject with the
+            // working idiom (a zero-arg fn re-materialises the record per call).  Full
+            // support = a const-store record builder (see the routing-feedback triage doc).
+            if !self.first_pass
+                && let Type::Reference(a_nr, _) = tp.base()
+            {
+                let type_name = self.data.def(*a_nr).name().to_string();
+                let fn_name = id.to_lowercase();
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a struct-valued constant ('{id}') is not supported — a record cannot be \
+                     materialised at each use site (it reads `null` on --interpret and fails \
+                     to compile on --native).  Wrap it in a zero-argument function instead: \
+                     `fn {fn_name}() -> {type_name} {{ … }}`, then call `{fn_name}()`"
+                );
+            }
             if self.first_pass {
                 // detect a name collision before calling `add_def`,
                 // which would otherwise panic with `Dual definition of <name>`.
@@ -1162,11 +1184,21 @@ impl Parser {
                     if v_nr != u16::MAX {
                         self.vars.become_argument(v_nr);
                         self.var_usages(v_nr, false);
+                        // @PLN40 const-model — `p: const T` (const before the type) is
+                        // VALUE-const: a read-only borrow.  Mutation through `p` is
+                        // rejected (step 3 base-resolution), but a rebind `p = other`
+                        // re-points the local slot and is allowed.  Set on BOTH passes:
+                        // a text arg's read-only-borrow auto-promotion (parse_assign_op)
+                        // is decided on the FIRST pass, so the flag must exist by then to
+                        // suppress promotion and let the write reach the const guard.
+                        if a.constant {
+                            self.vars.set_value_const(v_nr);
+                        }
                     }
                 } else {
                     self.change_var_type(a_nr as u16, &a.typedef);
                     if a.constant {
-                        self.vars.set_const_param(a_nr as u16);
+                        self.vars.set_value_const(a_nr as u16);
                     }
                 }
             }
@@ -2763,11 +2795,23 @@ impl Parser {
         let mut nullable = true;
         let mut is_computed = false;
         let mut is_init = false;
+        // @PLN40 Phase 2 — VALUE-const on the field (`v: const T`): a `const`
+        // keyword before the field TYPE marks the field's contents read-only
+        // (deep-frozen), distinct from the binding-const PREFIX (`const v: T`)
+        // the caller consumes.  Combined as `const v: const T` = fully frozen.
+        let mut value_const = false;
         // Post-2c: remember the integer alias name the user typed (e.g. `i32`)
         // so `fill_database` / codegen can consult `forced_size(alias)` even
         // though the resolved Type::Integer collapses the alias info.
         let mut alias_d_nr: u32 = u32::MAX;
         loop {
+            // @PLN40 Phase 2 — consume a `const` before the field type (`v: const T`).
+            // Runs on BOTH passes so the lexer position stays aligned; the flag is
+            // recorded onto the attribute below.  Was previously a parse error
+            // ("Undefined type const"), so this is purely additive.
+            if self.lexer.has_keyword("const") {
+                value_const = true;
+            }
             // @PLN25 F2 — `not null` is RETIRED but still ACCEPTED as a no-op (a scalar field
             // is non-null by DEFAULT now; `is_optional` below sets the attribute non-null and
             // the `not_null` flag is stamped for the range). `has_deprecated_not_null` consumes
@@ -2891,6 +2935,9 @@ impl Parser {
             let a = self
                 .data
                 .add_attribute(&mut self.lexer, d_nr, a_name, a_type);
+            if value_const {
+                self.data.definitions[d_nr as usize].attributes[a].value_const = true;
+            }
             self.data.set_attr_nullable(d_nr, a, nullable);
             self.data.set_attr_value(d_nr, a, value);
             if alias_d_nr != u32::MAX {
@@ -2908,6 +2955,9 @@ impl Parser {
             }
         } else {
             let a = self.data.attr(d_nr, a_name);
+            if value_const {
+                self.data.definitions[d_nr as usize].attributes[a].value_const = true;
+            }
             if is_computed {
                 self.data.definitions[d_nr as usize].attributes[a].constant = true;
             }

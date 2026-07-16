@@ -1175,7 +1175,16 @@ impl Parser {
             // A scalar `τ?` tail hits none of the vector/tuple special cases above,
             // and `convert` below peels `Optional`, so no double-diagnose.
             if context == "return from block" {
-                self.n_store_violation(t, result, "the return value");
+                // @PLN102 (N-Store) — this check runs at BLOCK FINALIZATION, so `self.lexer`
+                // has advanced to the block's `}` (reporting the NEXT function).  Anchor to
+                // the tail expression's own span; fall back to the enclosing function's
+                // position (a bare-var/rewritten tail may have lost its span) — always the
+                // RIGHT function, never the next.  See nstore-position-fix.md.
+                let at = l[last]
+                    .span_pos()
+                    .cloned()
+                    .or_else(|| Some(self.data.def(self.context).position().clone()));
+                self.n_store_violation(t, result, "the return value", at.as_ref());
             }
             if !tuple_rewritten
                 && !if_unified
@@ -10701,7 +10710,7 @@ impl Parser {
             // discharged (`?? d` / `match`) first.  Emitted here; `convert` below
             // still peels `Optional`, so no double-diagnose.  Gate-OFF / first-pass:
             // a no-op (`n_store_violation` returns `false`).
-            self.n_store_violation(&t, &r_type, "the return value");
+            self.n_store_violation(&t, &r_type, "the return value", None);
             if t == Type::Null {
                 v = self.null(&r_type);
             } else if !tuple_rewritten && !self.convert(&mut v, &t, &r_type) {

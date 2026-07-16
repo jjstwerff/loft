@@ -133,7 +133,7 @@ verify on `--native`:
 | `const x: integer` | `T{ x: 1 }` | `t.x` | `t.x = 2` | — |
 | `const s: text` | `T{ s: "a" }` | `t.s` | `t.s = "b"` | — |
 | `const r: OtherStruct` | `T{ r: O{…} }` | `t.r.f` | `t.r = O{…}` | `t.r.f = 5` (f not const) |
-| `const v: vector<integer>` | `T{ v: [1] }` | `t.v[0]` | `t.v = [2]` | `t.v[0] = 9` (Rust `let v` rule) |
+| `const v: vector<integer>` | `T{ v: [1] }` | `t.v[0]` | `t.v = [2]` (reassign only) | `t.v[0] = 9` AND `t.v += [9]` (append — both contents) |
 | `const x: integer?` (nullable) | `T{}` (takes its default) | `t.x` | `t.x = 1` | — |
 
 Write routes that must all hit the ERROR cells (the plan's "fires regardless of
@@ -146,8 +146,10 @@ sibling cell proves the probe can error.
 ## What `const` does NOT cover
 
 - **Contents through a const collection/struct field.**  `const v: vector<integer>`
-  freezes the *binding* (`t.v = […]` rejected) but not the elements
-  (`t.v[0] = 5` allowed) — same as Rust's `let v = vec![…]; v[0] = 5;`.  Do **not**
+  freezes the *binding* (`t.v = […]` reassign rejected) but not the contents:
+  `t.v[0] = 5` (element write) AND `t.v += […]` (append) are both allowed — a `+=`-grown
+  accumulator field IS const-able (implemented via const-append-contents.md; a const
+  *scalar* still rejects `+=` since it has no contents).  Do **not**
   put the check in `set_field_check` (`mod.rs:5227`): that chokepoint is shared by
   construction, element deep-copies, and ~20 compiler-synthesised loop/vector
   writes, so `emit_check` is not a clean "user re-assignment" signal.

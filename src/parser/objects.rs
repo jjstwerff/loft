@@ -2829,7 +2829,7 @@ impl Parser {
                 let dst_name = self.int_type_name(&td);
                 if let Some(hint) = self.nullable_sentinel_hint(value, &td, &dst_name) {
                     diagnostic!(self.lexer, Level::Error, "{hint}");
-                } else if self.n_store_violation(exp_tp, &td, "the field") {
+                } else if self.n_store_violation(exp_tp, &td, "the field", None) {
                     // @PLN25 (N-Store): a nullable into a non-null field — diagnostic emitted.
                 } else if !self.convert(value, exp_tp, &td) {
                     // Plan-07 phase 6 (partial) — name the value side first

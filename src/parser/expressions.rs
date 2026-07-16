@@ -51,6 +51,21 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
     }
 }
 
+/// The base variable at the root of an lvalue access chain, or `u16::MAX` if the
+/// chain does not bottom out in a plain variable.  A field/element access lowers to
+/// `Call(op, [inner, …])` whose FIRST argument is the object being accessed
+/// (`s.a.b[i]` → `Call(idx, [Call(f_b, [Call(f_a, [Var(s), …]), …]), i])`), so the
+/// base is found by walking `args[0]` to the leaf `Var`.  @PLN40 step 3 uses this to
+/// find which binding a component write (`p.x = …`, `p[i] = …`) mutates THROUGH, so a
+/// write through a value-const binding can be rejected at its root.
+fn lhs_base_var(v: &Value) -> u16 {
+    match v.unspan() {
+        Value::Var(nr) => *nr,
+        Value::Call(_, args) if !args.is_empty() => lhs_base_var(&args[0]),
+        _ => u16::MAX,
+    }
+}
+
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
 /// Descent comes from `Value::for_each_child`, so a new compound variant
@@ -841,7 +856,7 @@ impl Parser {
                     _ => None,
                 };
                 if let Some(v_nr) = v_nr {
-                    self.vars.set_const_param(v_nr);
+                    self.vars.set_const_binding(v_nr);
                 } else if !self.first_pass {
                     diagnostic!(
                         self.lexer,
@@ -1034,7 +1049,7 @@ use a separate collection or add after the loop"
         }
         if matches!(code, Value::Boolean(false))
             && let Some(Value::Var(v_nr)) = lock_args.first()
-            && self.vars.is_const_param(*v_nr)
+            && self.vars.is_const_any(*v_nr)
         {
             diagnostic!(
                 self.lexer,
@@ -1399,7 +1414,11 @@ use a separate collection or add after the loop"
             self.convert(code, &Type::Null, f_type);
         }
         if var_nr == u16::MAX {
-            self.validate_write(to, &parent_tp);
+            // Use the LHS target's parent type saved BEFORE the RHS parse — the RHS
+            // parse above overwrites `parent_tp` (to the RHS's last field-access type),
+            // which made a write like `arr[i] = … + e.const_field` falsely resolve to
+            // the RHS struct and flag its const/key field (@PLN40 false positive).
+            self.validate_write(to, &lhs_parent_tp, op);
         }
         // materialise a collection iterator (e.g. v[a..b] slice) into a vector
         // variable.  CO1.3c: the original "second type Null = coroutine, skip"
@@ -1776,7 +1795,6 @@ use a separate collection or add after the loop"
             let effective_var = if self.first_pass
                 && var_nr != u16::MAX
                 && self.vars.is_argument(var_nr)
-                && !self.vars.is_const_param(var_nr)
                 && (op == "=" || op == "+=")
             {
                 let name = self.vars.name(var_nr).to_string();
@@ -1786,6 +1804,16 @@ use a separate collection or add after the loop"
                     &mut self.lexer,
                 );
                 self.vars.set_promoted_from(shadow, var_nr);
+                // @PLN40 — a const text arg still promotes to a local String so a rebind
+                // (`p = …`) has a slot to write, but the promoted local INHERITS the
+                // const axis so the const guard still fires: value-const blocks `+=`
+                // (mutation) while allowing `=` (rebind); binding-const the reverse.
+                if self.vars.is_value_const(var_nr) {
+                    self.vars.set_value_const(shadow);
+                }
+                if self.vars.is_const_binding(var_nr) {
+                    self.vars.set_const_binding(shadow);
+                }
                 self.vars.remap_name(&name, shadow);
                 shadow
             } else {
@@ -2382,7 +2410,7 @@ use a separate collection or add after the loop"
             && !f_type.is_unknown()
             && !s_type.is_unknown();
         if typed_scalar_store {
-            self.n_store_violation(&s_type, f_type, "the assignment target");
+            self.n_store_violation(&s_type, f_type, "the assignment target", None);
         }
         if typed_scalar_store
             && !matches!(s_type, Type::Null)
@@ -2424,7 +2452,7 @@ use a separate collection or add after the loop"
         if matches!(code, Value::Insert(_))
             && !self.first_pass
             && var_nr != u16::MAX
-            && self.vars.is_const_param(var_nr)
+            && self.vars.is_const_binding(var_nr)
         {
             diagnostic!(
                 self.lexer,
@@ -2696,6 +2724,11 @@ use a separate collection or add after the loop"
             // the `&` on the type instead of the value.  Mirror the param parser.
             // @F21 — references &T (parameters + write-back bindings)
             let is_ref = self.lexer.has_token("&");
+            // @PLN40 const-model — `x: const T` before the type = value-const: a
+            // read-only borrow of the value (mutation through `x` is rejected; a
+            // rebind is allowed).  Set the flag AFTER the type parse confirms this
+            // is a real annotation (`= …` follows), mirroring the param parser.
+            let is_value_const = self.lexer.has_keyword("const");
             let mut got_annotation = false;
             if let Some(tp) = self.parse_type_full(u32::MAX, false)
                 && self.lexer.peek_token("=")
@@ -2714,6 +2747,9 @@ use a separate collection or add after the loop"
                 // it stays constrained (a wider write is a narrowing error).  An inferred
                 // local (no annotation) widens to the join instead (see parse_assign_op).
                 self.vars.set_annotated(*v_nr);
+                if is_value_const {
+                    self.vars.set_value_const(*v_nr);
+                }
                 f_type = tp;
                 got_annotation = true;
                 // @PLN87 #2 — `b: &T = src` IS `b = &src`: flag the reference bind so
@@ -3077,8 +3113,10 @@ use a separate collection or add after the loop"
         var_nr: u16,
         s_type: &Type,
     ) {
-        if !self.first_pass && self.vars.is_const_param(var_nr) && !matches!(code, Value::Insert(_))
-        {
+        // A direct text write `s = …` / `s += …`: reject a binding-const rebind and a
+        // value-const append via the shared guard.  The `Insert` re-init form is a
+        // rebind handled by the `towards_set` check, so skip it here.
+        if !matches!(code, Value::Insert(_)) && self.const_write_blocked(var_nr, op) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -3446,7 +3484,36 @@ use a separate collection or add after the loop"
         true
     }
 
-    pub(crate) fn validate_write(&mut self, to: &Value, parent_tp: &Type) {
+    pub(crate) fn validate_write(&mut self, to: &Value, parent_tp: &Type, op: &str) {
+        // @PLN40 step 3 — value-const base-resolution.  `validate_write` fires only for
+        // a COMPONENT write (`p.x = …`, `p[i] = …`, `p.a.b = …`; the whole-var case has
+        // a `Value::Var` target and never reaches here), so any write whose base binding
+        // is value-const is a mutation THROUGH a read-only value — reject it at the root.
+        // A rebind of the binding itself (`p = other`) re-points the slot and is allowed;
+        // it is a bare-`Var` write handled by `const_write_blocked`, not this path.
+        if !self.first_pass {
+            let base = lhs_base_var(to);
+            if base != u16::MAX && self.vars.is_value_const(base) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot modify {} '{}'; remove 'const' or use a local copy",
+                    self.vars.const_kind(base),
+                    self.vars.name(base)
+                );
+            } else if let Some(frozen) = self.lhs_frozen_through(to) {
+                // @PLN40 Phase 2 — the write DEREFERENCES THROUGH a value-const field
+                // (`s.v[i]=`, `s.v.x=`, deeper): its value is read-only at every depth.
+                // A rebind/append of the field ITSELF (`s.v=` / `s.v+=`) is the outermost
+                // node — not flagged here — and is decided by the leaf-field block below.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot modify value-const field '{}'; its value is read-only",
+                    frozen
+                );
+            }
+        }
         if let Value::Call(_, vars) = to.unspan()
             && vars.len() > 1
             && let Value::Int(pos) = vars[1].unspan()
@@ -3473,19 +3540,141 @@ use a separate collection or add after the loop"
                         } else if self.data.def(d_nr).attributes()[f_nr].const_field {
                             // @PLN40 — a `const` field is write-once at construction.  The
                             // constructor lowers via Value::Insert (a separate path that does
-                            // not reach here), so only a later reassignment lands in this guard.
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "cannot reassign const field '{}' of struct '{}' — const fields are write-once-at-construction",
-                                f.name,
-                                self.data.def(d_nr).name()
+                            // not reach here), so only a later write lands in this guard.
+                            // Reject a rebind of the whole value: `=` (any type) or a compound
+                            // op (`+=`) on a SCALAR.  ALLOW a compound op on a collection/text
+                            // field — that is an in-place append (contents mutation), consistent
+                            // with the already-allowed element write `t.v[0] = x`.
+                            let contents_append = op != "="
+                                && matches!(
+                                    self.data.def(d_nr).attributes()[f_nr].typedef,
+                                    Type::Text(_)
+                                        | Type::Vector(_, _)
+                                        | Type::Sorted(_, _, _)
+                                        | Type::Index(_, _, _)
+                                        | Type::Radix(_, _, _)
+                                        | Type::Hash(_, _, _)
+                                );
+                            if !contents_append {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "cannot reassign const field '{}' of struct '{}' — const fields are write-once-at-construction",
+                                    f.name,
+                                    self.data.def(d_nr).name()
+                                );
+                            }
+                        }
+                        // @PLN40 Phase 2 — value-const field (`v: const T`).  This is the
+                        // LEAF write to `s.v` itself.  Reject a contents mutation (a compound
+                        // op `+=` append) while ALLOWING a rebind (`=`) that re-points the
+                        // slot.  A by-value SCALAR collapses (no interior distinct from its
+                        // binding), so value-const freezes it fully — reject `=` too.  Writes
+                        // THROUGH the field (`s.v[i]=`, `s.v.x=`) are inner derefs already
+                        // rejected by `lhs_frozen_through` above.  Independent `if` (not
+                        // `else`): it COMPOSES with `const_field` so `const v: const T` is
+                        // fully frozen — const_field blocks the rebind, value_const the append.
+                        if self.data.def(d_nr).attributes()[f_nr].value_const {
+                            let collapses = matches!(
+                                self.data.def(d_nr).attributes()[f_nr].typedef.base(),
+                                Type::Integer(_)
+                                    | Type::Float
+                                    | Type::Single
+                                    | Type::Boolean
+                                    | Type::Character
                             );
+                            if op != "=" || collapses {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "cannot mutate value-const field '{}' of struct '{}' — its value is read-only (rebind with '=' to re-point, or drop 'const')",
+                                    f.name,
+                                    self.data.def(d_nr).name()
+                                );
+                            }
                         }
                     }
                 }
             }
         }
+    }
+
+    /// @PLN40 Phase 2 — walk a COMPONENT write's LHS access chain from the base
+    /// variable toward the leaf, tracking each node's type, and return the name of the
+    /// first value-const FIELD the chain DEREFERENCES THROUGH (an inner step — the
+    /// field has a further field-get or an index applied to it: `s.v[i]=`, `s.v.x=`,
+    /// `s.v[i].x=`).  Such a write mutates a read-only value and must be rejected.
+    ///
+    /// The OUTERMOST node is the write TARGET itself, not a dereference, so it is
+    /// deliberately skipped: a rebind `s.v = other` re-points the slot (allowed) and a
+    /// leaf append `s.v += …` is an op-distinguished contents mutation handled at the
+    /// leaf-field block below.  Base-variable value-const (`p.x=` where `p` is a
+    /// value-const binding) is handled by the base-resolution block in `validate_write`.
+    ///
+    /// Read-only.  INERT until wired into `validate_write` (Step 3).  The type-tracking
+    /// mirrors the leaf block's `parent_tp`→`known_type`→`Parts::Struct` field lookup,
+    /// but applied at every node so an inner field's `value_const` is reachable.
+    fn lhs_frozen_through(&self, to: &Value) -> Option<String> {
+        if self.first_pass {
+            return None;
+        }
+        // Collect the chain outermost→base by following `args[0]` (as `lhs_base_var`).
+        let mut nodes: Vec<&Value> = Vec::new();
+        let mut cur = to.unspan();
+        while let Value::Call(_, args) = cur {
+            if args.is_empty() {
+                break;
+            }
+            nodes.push(cur);
+            cur = args[0].unspan();
+        }
+        let Value::Var(base) = cur else {
+            return None;
+        };
+        if !self.vars.exists(*base) {
+            return None;
+        }
+        // Walk base→leaf, interpreting each node by the CURRENT type: a struct expects a
+        // field-get (its `Int(pos)` names the field), a collection expects an index.
+        let mut cur_type = self.vars.var_type(*base).clone();
+        nodes.reverse();
+        let n = nodes.len();
+        for (i, node) in nodes.iter().enumerate() {
+            let is_leaf = i + 1 == n;
+            let Value::Call(_, args) = node.unspan() else {
+                return None;
+            };
+            match cur_type.base() {
+                Type::Reference(d_nr, _) => {
+                    let d_nr = *d_nr;
+                    let Some(Value::Int(pos)) = args.get(1).map(Value::unspan) else {
+                        return None;
+                    };
+                    let known = self.data.def(d_nr).known_type();
+                    if known == u16::MAX {
+                        return None;
+                    }
+                    let Parts::Struct(fields) = &self.database.types[known as usize].parts else {
+                        return None;
+                    };
+                    let f_nr = fields.iter().position(|f| f.position == *pos as u16)?;
+                    let attr = &self.data.def(d_nr).attributes()[f_nr];
+                    if !is_leaf && attr.value_const {
+                        return Some(format!("{}.{}", self.data.def(d_nr).name(), attr.name));
+                    }
+                    cur_type = attr.typedef.clone();
+                }
+                Type::Vector(_, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+                | Type::Hash(_, _, _) => {
+                    cur_type = cur_type.content();
+                }
+                _ => return None,
+            }
+        }
+        None
     }
 
     /// Materialise an iterator (e.g. `v[a..b]` slice) into a vector variable.

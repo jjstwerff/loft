@@ -531,7 +531,15 @@ impl Test {
                 // advisory during the retirement window.  Many `code!` fixtures still
                 // declare fields with it incidentally; filter it so it only fails a
                 // test that explicitly expects it via `.warning(..)`.
-                || l.starts_with("Warning: `not null` is deprecated");
+                || l.starts_with("Warning: `not null` is deprecated")
+                // @PLN25 (N-Store) — the "nullable/null stored into a non-null return /
+                // field / argument" nudge is advisory (the store proceeds); like the
+                // sibling "may produce null" warnings above, filter it so it only fails a
+                // test that explicitly asserts it via `.warning(..)`.  The argument-class
+                // (routing-feedback f4) surfaces on the common `f(v[i])` shape, so many
+                // incidental `code!` fixtures trip it.
+                || (l.starts_with("Warning: a nullable `") && l.contains("` is stored into"))
+                || l.starts_with("Warning: `null` is stored into");
             if expected.contains(&l) {
                 expected.remove(&l);
             } else if is_runtime_warning {
