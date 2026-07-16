@@ -1465,7 +1465,7 @@ impl Parser {
     /// native packages — e.g. `graphics` + `random` — leaving BOTH unmapped:
     /// the interpreter still dispatched them via `def.native` + dlopen, but
     /// `--native` rejected the first reachable call with a P269 compile error.)
-    fn backfill_native_symbol_crates(&mut self) {
+    pub(crate) fn backfill_native_symbol_crates(&mut self) {
         if self.data.native_packages.is_empty() {
             return;
         }
