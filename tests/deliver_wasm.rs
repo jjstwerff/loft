@@ -425,3 +425,80 @@ fn main() {
         "memory.grow-safety cell failed\n  want GROW-SAFE with grew+stale_detached+reread_matches all true and {want_value}\n  got stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn deliver_reconstructs_narrow_ints_in_js() {
+    // @PLN105 corpus — narrow-int fields (Parts::Byte/Short/ShortRaw/Int). These do NOT store the
+    // value directly: a narrow int is packed as `(value - start)` (byte/shortraw), or `(value -
+    // start + 1)` with 0=null (nullable short), and the descriptor carries `start` (the range
+    // minimum). The reader must re-add `start` and read shorts UNSIGNED — a raw `getInt16`/`getUint8`
+    // gives the packed representation, not the value. Distinctive per-field values pin every arm:
+    //   u8=200 (start 0) · i8=-5 (start -128) · u16=40000 (start 0) · i16=-1000 (start -32768) ·
+    //   i32=100000.
+    let src = r#"
+struct Narrow { u: u8, sb: i8, us: u16, ss: i16, i: i32 }
+fn main() {
+  n = Narrow { u: 200, sb: -5, us: 40000, ss: -1000, i: 100000 };
+  deliver(1, n);
+}
+"#;
+    let Some(stdout) = run_deliver("narrow", src) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":{\"u\":200,\"sb\":-5,\"us\":40000,\"ss\":-1000,\"i\":100000}";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "narrow-int reconstruction mismatch (start offset / short signedness not applied?)\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn deliver_reconstructs_value_enum_in_js() {
+    // @PLN105 corpus — a plain (value) enum field (Parts::Enum/Choices). The discriminant is stored
+    // 1-BASED (Text=1, Number=2, FileName=3; 0 unused, 255=null), and the reader resolves the byte
+    // to the variant NAME via `variants[disc - 1]` — an off-by-one (indexing `variants[disc]`)
+    // silently returns the WRONG variant. Setting `Format.Number` (disc 2) must read back "Number".
+    let src = r#"
+enum Format { Text, Number, FileName }
+struct Rec { name: text, fmt: Format, n: integer }
+fn main() {
+  r = Rec { name: "hi", fmt: Format.Number, n: 42 };
+  deliver(1, r);
+}
+"#;
+    let Some(stdout) = run_deliver("venum", src) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":{\"name\":\"hi\",\"fmt\":\"Number\",\"n\":42}";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "value-enum reconstruction mismatch (1-based disc / off-by-one variant?)\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn deliver_reads_by_ref_array_synthetic_in_js() {
+    // @PLN105 corpus — the by-ref `array` arm (Parts::Array) of readLoftValue. No loft SOURCE
+    // construct emits a by-ref Array today (every IR vector is inline Parts::Vector — see
+    // src/data_store.rs:128), so this arm can't be reached through a `deliver` program. Guard it
+    // directly with a SYNTHETIC descriptor + hand-laid memory (tools/reader_array_unit.mjs): a
+    // 3-element `array<integer>` must reconstruct to [100, 200, 300]. (Its per-element loop matches
+    // the `flatarray` arm the keyed-collection tests already exercise; this pins the field→vRec→
+    // element-index path unique to `array`.)
+    if !which("node") {
+        eprintln!("SKIP: node not installed");
+        return;
+    }
+    let unit = repo_root().join("tools/reader_array_unit.mjs");
+    assert!(unit.exists(), "tools/reader_array_unit.mjs missing");
+    let out = Command::new("node")
+        .arg(&unit)
+        .output()
+        .expect("invoke node array-unit");
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    assert!(
+        out.status.success() && stdout.contains("ARRAY-UNIT OK 100,200,300"),
+        "by-ref array arm mismatch\n  stdout:{stdout}\n  stderr:{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+}

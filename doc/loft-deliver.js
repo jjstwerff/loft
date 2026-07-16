@@ -34,12 +34,31 @@ function readLoftValue(mem, storeBase, desc, typeId, rec, pos) {
     switch (node.kind) {
       case "base":
         return readBase(node.base, at);
-      case "byte":
-        return view.getUint8(at);
-      case "short":
-      case "shortraw":
-        return view.getInt16(at, true);
+      case "byte": {
+        // Narrow 1-byte int (Parts::Byte): stored as `(value - start)` so the packed byte spans
+        // 0..255; a nullable byte reserves 255 for null. Re-add `start` to recover the signed value
+        // (u8 start=0 → 0..255; i8 start=-128 → -128..127). NOTE: the Rust twin read_via_descriptor
+        // emits the PACKED byte (a byte-parity artefact) — this reader reconstructs the true VALUE.
+        const raw = view.getUint8(at);
+        if (node.nullable && raw === 255) return null;
+        return raw + node.start;
+      }
+      case "shortraw": {
+        // Non-null narrow 2-byte int (Parts::ShortRaw): `(value - start)` as a u16, full range, no
+        // reserved sentinel. Read UNSIGNED then re-add start (u16 start=0; i16 start=-32768).
+        return view.getUint16(at, true) + node.start;
+      }
+      case "short": {
+        // Nullable narrow 2-byte int (Parts::Short): `(value - start + 1)` as a u16 with 0 reserved
+        // for null (so a nullable field holds 65535 distinct values). Undo the +1 shift.
+        const raw = view.getUint16(at, true);
+        if (node.nullable && raw === 0) return null;
+        return raw + node.start - 1;
+      }
       case "int":
+        // 4-byte int (Parts::Int): stored directly as i32 — `start` is the null-sentinel boundary
+        // (i32::MIN+1), NOT a packing offset, so no adjustment. (u32 > 2^31 is a known edge: it
+        // reads back negative here, matching the Rust twin's get_i32_raw.)
         return view.getInt32(at, true);
       case "record":
       case "enumvalue": {
@@ -53,8 +72,12 @@ function readLoftValue(mem, storeBase, desc, typeId, rec, pos) {
         return o;
       }
       case "enum": {
+        // Plain (value) enum — Parts::Enum/Choices, stored 1-BASED (first variant = 1; 0 unused,
+        // 255 = null sentinel), so the variant is `variants[disc - 1]`. The Rust twin emits the raw
+        // 1-based byte; this reader resolves it to the variant NAME.
         const disc = view.getUint8(at);
-        const v = node.variants[disc];
+        if (disc === 0 || disc === 255) return null;
+        const v = node.variants[disc - 1];
         return v ? v.name : disc;
       }
       case "vector": {

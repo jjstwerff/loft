@@ -286,8 +286,26 @@ harness at the end):
   per call, so the re-read reproduces the value byte-for-byte (`reread_matches:true`) with no
   detached-buffer throw. Anti-vacuity: a `DataView` captured before the grow throws afterwards
   (`stale_detached:true`), proving the buffer really changed underneath the reader; `RELEASE 1`
-  still fires, so the mid-run grow doesn't trap loft's continuation. REMAINING (small): more corpus
-  shapes (value-enum `disc`, by-ref array, narrow ints).
+  still fires, so the mid-run grow doesn't trap loft's continuation.
+- **P2.f — corpus shapes: narrow ints, value enum, by-ref array. ✅ DONE.** Extending coverage past
+  the wide scalars surfaced two REAL reader bugs, both now fixed in `doc/loft-deliver.js`:
+  - **Narrow ints (Byte/Short/ShortRaw/Int):** a narrow int is packed as `(value - start)` (or `+1`
+    with 0=null for a nullable Short), with the range minimum in the descriptor's `start`. The reader
+    ignored `start` and read shorts *signed*, so `i8 -5 → 123`, `u16 40000 → -25536`, `i16 -1000 →
+    31768`. Fixed: re-add `start`, read shorts UNSIGNED, split the `short`(+1/null) vs `shortraw`
+    (direct) encodings. `deliver_reconstructs_narrow_ints_in_js` pins u8/i8/u16/i16/i32.
+  - **Value enum (Choices):** the discriminant is stored 1-BASED (first variant = 1), but the reader
+    indexed `variants[disc]` — off by one, so `Format.Number` read back as `"FileName"`. Fixed to
+    `variants[disc - 1]` with 0/255 → null. `deliver_reconstructs_value_enum_in_js`.
+  - **By-ref array (Parts::Array):** unreachable from loft source (every IR vector is inline
+    `Parts::Vector` — `src/data_store.rs:128`), so it ships but no `deliver` program hits it. Guarded
+    directly with a synthetic descriptor + hand-laid memory (`tools/reader_array_unit.mjs`,
+    `deliver_reads_by_ref_array_synthetic_in_js`) → `array<integer>` reconstructs `[100,200,300]`.
+
+  The Rust twin `read_via_descriptor` intentionally emits the PACKED bytes for narrow ints / the raw
+  1-based enum byte (a stable cross-backend fingerprint — interpret==native still holds, verified);
+  the JS reader reconstructs the true VALUE, which is the browser-facing contract. No remaining
+  corpus gaps (u32 > 2^31 reads back negative, matching the twin's `get_i32_raw` — a documented edge).
 
 - **Code points:** `doc/loft-gl-wasm.js:47` (`buildLoftImports` — add the deliver/desc/iter
   host fns); `src/main.rs` `--html` assembly (embeds this glue).
