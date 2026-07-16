@@ -107,7 +107,7 @@ syntax.  The risk is back-loaded and opt-in.
 | 2 ✅ | **Round-trip the flag.**  The store schema is **generated** — edit the source `tools/ir_schema/ir.loft` AND hand-apply the matching `db.field(t139, "const_field", t4)` to the generated `src/ir_schema_gen.rs` (a wholesale regen drifts the `tN` ids — follow the `links` precedent already in that file).  Register it **LAST among the bools** so it packs at the next free offset (`ATTR_CONST_FIELD = 46`) and every prior offset stays put; bump `ATTRIBUTE_STRIDE` 46→47 (byte-offset constants + the `baked_layout_mirrors_loft_schema` assert live in `src/data_store.rs`).  Write in `write_attribute`; **read in `read_attribute`** (`src/ir_read.rs` — NOT `materialize_attributes`, which is the write side); JSON writer + tolerant parser + golden string in `src/ir_schema.rs`.  Make the round-trip test **non-vacuous** (build `const_field: true`, assert it survives). | `tools/ir_schema/ir.loft`, `src/ir_schema_gen.rs`, `src/data_store.rs`, `src/ir_store.rs`, `src/ir_read.rs`, `src/ir_schema.rs` | `baked_layout_mirrors_loft_schema` + stdlib store round-trips green; a save→reload keeps the bit | Round-trip of an always-`false` value is identity, so inert.  **No cache-format bump needed:** `BUILD_ID` (git HEAD) is in the cache key (`src/cache.rs`), so any rebuild invalidates stale caches — a stride change can't collide with old data.  Required so a **cached library struct** keeps its const-ness |
 | 3 | **Accept + store the keyword.**  At `definitions.rs:2467` replace the `@P386` rejection with `let is_const = self.lexer.has_keyword("const");`, then after `parse_field` (`:2490`) set `attributes[idx].const_field = is_const`.  Reject `const virtual(...)` here (virtual already implies no-write).  Apply the same to enum-variant fields (`parse_enum_values` loop, `definitions.rs:286`). | `src/parser/definitions.rs` | `const x: integer` now parses and runs; the flag is set (unit assert on the `Attribute`); `const virtual(...)` errors | Only behaviour change is `const` no longer erroring — the intended direction.  Nothing reads the flag yet, so no write is rejected → zero false positives |
 | 4 | **Enforce reassignment.**  Extend `validate_write` (`expressions.rs:3449`) with an `else if …const_field` arm emitting `"cannot reassign const field '{f}' of struct '{T}' — const fields are write-once-at-construction"`.  Use the **boundary matrix** (below) to find every write route that must be covered; add the field-keyed guard on any route `validate_write` doesn't reach (e.g. collection-field reassignment via the `towards_set` collection branch, `collections.rs:794`). | `src/parser/expressions.rs`, possibly `src/parser/collections.rs` | Full matrix: every negative cell errors, every positive cell (construction + read) still works, **both backends** | Fires only when `const_field==true`, which only step-3 code can set → no existing program affected.  This is the load-bearing step; gate it on the written matrix, not the suite alone |
-| 5 | **Construction completeness.**  Confirm a non-null const field with no default is already required at construction (the existing non-null construction check covers it) and that a `const x: integer?` with no default is legal (stays null).  Add a message only if a gap shows. | `src/parser/objects.rs` (`object_init`) | Positive/negative construction probes pass | Reuses existing non-null enforcement; likely a test-only step |
+| 5 ✅ | **Construction — keep loft's default-fill (decided: no init requirement).**  A `const` field follows the SAME construction rules as any field: an omitted field takes its default (an explicit `= expr`, else the type's zero value), a value in the literal overrides it, and the field is write-once from that point.  Probed (both backends): omitted `const x: integer` → `0`, `const x: integer = 8080` omitted → `8080` / overridden → `9000`.  **No `object_init` change** — the earlier plan assumed a "non-null field must be provided" check exists; it does not (loft zero-fills), and the owner's decision is to keep default-fill, NOT add a const-specific "must initialise" rule. | none (test + doc only) | `pln40_const_field_default_and_override` | Reuses loft's existing default-fill unchanged; const only adds the reassignment ban |
 | 6 | **Document.**  `const` in the field-modifier list. | `doc/claude/LOFT.md § Field modifiers`, `.claude/skills/loft-write/SKILL.md` | `gendoc`; doc drift check | Docs only |
 | 7 | **Dogfood.**  Pick a current real consumer with the **rebuild-via-construction** shape — a struct whose instances are replaced wholesale (`grid[idx] = Cell{…}`) rather than mutated in place — and mark those write-once fields `const`.  Construction keeps working; an accidental in-place field write is now caught.  (Candidates drift; check `loft install` / `lib/*` for a grid/cell world at build time — do not hard-code a path.) | a `lib/*` consumer chosen at build time | Consumer runs unchanged; a deliberate in-place write errors | Real consumer that proves the rule earns its keep; revert if it fights the code |
 | 8 | **Close the gap.**  Flip INCONSISTENCIES § 33 to resolved; graduate the probes to `tests/issues.rs::p386_const_field_*` (the id already exists as the parser guard) + `tests/scripts/40-const-fields.loft`. | `doc/claude/INCONSISTENCIES.md`, `tests/` | `make ci` | Closes the loop; regression guard lands with the feature |
@@ -129,7 +129,7 @@ verify on `--native`:
 | `const s: text` | `T{ s: "a" }` | `t.s` | `t.s = "b"` | — |
 | `const r: OtherStruct` | `T{ r: O{…} }` | `t.r.f` | `t.r = O{…}` | `t.r.f = 5` (f not const) |
 | `const v: vector<integer>` | `T{ v: [1] }` | `t.v[0]` | `t.v = [2]` | `t.v[0] = 9` (Rust `let v` rule) |
-| `const x: integer?` (nullable) | `T{}` (stays null) | `t.x` | `t.x = 1` | — |
+| `const x: integer?` (nullable) | `T{}` (takes its default) | `t.x` | `t.x = 1` | — |
 
 Write routes that must all hit the ERROR cells (the plan's "fires regardless of
 access route"): direct (`t.x = …`), nested (`box.t.x = …`), through a `&`
@@ -152,12 +152,21 @@ sibling cell proves the probe can error.
 - **Enum-variant match bindings** (`if shape is Circle { radius }`) are already
   read-only locals — const-by-construction, no annotation needed.
 
+## Decisions
+
+- **Must a const field be initialised at construction?**  **No (owner decision,
+  step 5).**  A `const` field follows loft's standard default-fill: omitted → its
+  default (explicit `= expr`, else the type's zero value); a value in the literal
+  overrides it; the field is write-once from that point.  loft keeps its default-fill
+  semantics unchanged — `const` adds only the reassignment ban, no construction-time
+  "must initialise" rule.  (The earlier design proposed requiring init; probing showed
+  loft zero-fills *all* omitted fields, and the owner chose to keep that.)
+- **Should a const field auto-imply non-null?**  No — orthogonal.  Fields are
+  already non-null by default; `const x: integer` is non-null + write-once,
+  `const x: integer?` is nullable + write-once.  No coupling.
+
 ## Open questions (not blocking)
 
-- **Should a const field auto-imply non-null?**  Moot under the 2026-07 syntax:
-  fields are **already non-null by default**.  `const x: integer` is non-null +
-  write-once; `const x: integer?` is nullable + write-once (may stay null forever).
-  Keep them orthogonal — no coupling.
 - **`pub const field`?**  Struct fields have no visibility modifiers today (`pub`
   on a field is consumed and ignored, `definitions.rs:2462`).  Out of scope.
 - **Const on enum-variant fields?**  In scope — step 3 covers the variant loop

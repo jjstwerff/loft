@@ -1597,6 +1597,23 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
+/// @PLN40 step 5: a `const` field follows loft's standard field defaults — an
+/// omitted field takes its default and a construction-time value overrides it
+/// (construction is not a reassignment).  loft keeps its default-fill semantics;
+/// there is no "a const field must be initialised" rule.
+#[test]
+fn pln40_const_field_default_and_override() {
+    code!(
+        "struct Cfg { const port: integer = 8080 }
+fn test() {
+    a = Cfg {};
+    b = Cfg { port: 9000 };
+    assert(a.port == 8080 && b.port == 9000, \"const default when omitted, override at construction\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
 // ── P139 regression guards ──────────────────────────────────────────────────
 // The slot allocator placed zone-1 byte-sized vars (plain enum, boolean) at
 // fixed slots inside the zone-2 frontier, leaving codegen's TOS one byte
