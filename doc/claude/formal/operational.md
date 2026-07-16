@@ -124,6 +124,14 @@ cell that can't compute shows null and never stops the other cells. A fault is *
 degrades one value, never the whole run. The same holds for every uncomputable step (an
 out-of-bounds index, a deref of an absent value): null, continue.
 
+**Float `==` is exact, never epsilon.** For two *non-null* floats, `==`/`!=` compare the IEEE
+values exactly — `1.0 == 1.0000000001` is **false**, `0.1 + 0.2 == 0.3` is **false** (the sum is
+`0.30000000000000004`), and `!=` is the exact complement of `==`. There is no tolerance band. The
+ordering operators (`<` `<=` `>` `>=`) agree with it: among non-null floats they form a **total
+order** — NaN cannot occur (it is represented as null, D-op-null-1), so exactly one of `a < b`,
+`a == b`, `a > b` holds for every pair, and no value is ever both `<` and `==` its neighbour.
+`single` (32-bit) behaves the same. Verified both backends.
+
 ### `??` — a non-null fallback (no trap mode)
 
 ```
