@@ -98,7 +98,10 @@ fn nullable_var_into_nonnull_rejects() {
 fn nonnull_fallback_still_discharges() {
     for backend in ["--interpret", "--native"] {
         let (ok, out) = run(NONNULL_FALLBACK, backend, true, &format!("nn_{backend}"));
-        assert!(ok, "[{backend}] a non-null `??` fallback must stay non-null");
+        assert!(
+            ok,
+            "[{backend}] a non-null `??` fallback must stay non-null"
+        );
         assert!(out.contains("y=0"), "[{backend}] expected y=0, got {out:?}");
     }
 }
@@ -108,7 +111,10 @@ fn nullable_slot_accepts() {
     for backend in ["--interpret", "--native"] {
         let (ok, out) = run(NULLABLE_SLOT, backend, true, &format!("slot_{backend}"));
         assert!(ok, "[{backend}] `?? null` into a `τ?` slot must compile");
-        assert!(out.contains("y=null"), "[{backend}] expected y=null, got {out:?}");
+        assert!(
+            out.contains("y=null"),
+            "[{backend}] expected y=null, got {out:?}"
+        );
     }
 }
 
@@ -118,7 +124,10 @@ fn chain_discharges_on_last_fallback() {
     // chain discharges to non-null — the fix must not over-reject a chain that ends non-null.
     for backend in ["--interpret", "--native"] {
         let (ok, out) = run(CHAIN_TO_NONNULL, backend, true, &format!("chain_{backend}"));
-        assert!(ok, "[{backend}] a `??` chain ending non-null must discharge");
+        assert!(
+            ok,
+            "[{backend}] a `??` chain ending non-null must discharge"
+        );
         assert!(out.contains("y=7"), "[{backend}] expected y=7, got {out:?}");
     }
 }

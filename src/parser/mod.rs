@@ -6115,6 +6115,14 @@ impl Parser {
             }
             return actual;
         }
+        // @PLN102 gate-2 (N-Store) at the CALL-ARG site — constant across the args: the callee
+        // name (for the diagnostic) and whether the call-arg check applies. Null-transparent fns
+        // (`min`/`max`/`clamp`/`abs`/… — `is_null_transparent`) PROPAGATE null via a runtime guard
+        // (`wrap_null_transparent`), so a nullable arg into their non-null param is intentional, not
+        // an unsound store — exempt them (operators already dodge this path via the nullable-op swap).
+        let callee_name = self.data.def(d_nr).original_name();
+        let callarg_nstore =
+            crate::keys::callarg_nstore_enabled() && !Self::is_null_transparent(&callee_name);
         for (nr, a_code) in list.iter().enumerate() {
             let tp = self.data.attr_type(d_nr, nr);
             let Some(actual_type) = types.get(nr) else {
@@ -6183,6 +6191,24 @@ impl Parser {
                     self.cl("OpGetEnum", &[actual_code, Value::Int(0)])
                 };
                 actual.push(self.cl("OpConvIntFromEnum", &[cd]));
+                continue;
+            }
+            // @PLN102 gate-2 (N-Store) at the CALL-ARG site — the last store site the teeth did
+            // not cover. `convert` below leniently peels an `Optional`, so a nullable `τ?` (or a
+            // bare `null` under DN1) bound silently into a non-null PARAMETER. Run the same
+            // `n_store_violation` check here (identical Phase-1 warn/error split) so the param
+            // binding is held to the same rule as an assignment / field / return. On a hard error
+            // (a narrow-width param) skip `convert`'s generic diagnostic; otherwise (a warn, or no
+            // violation) fall through and let `convert` peel the `Optional` as before.
+            if report
+                && callarg_nstore
+                && self.n_store_violation(
+                    actual_type,
+                    &tp,
+                    &format!("parameter {} of `{callee_name}`", nr + 1),
+                )
+            {
+                actual.push(actual_code);
                 continue;
             }
             if !self.convert(&mut actual_code, actual_type, &tp) {

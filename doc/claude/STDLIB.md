@@ -703,7 +703,7 @@ pub struct JsonField { name: text, value: JsonValue }
 | `to_json_pretty(v) -> text` | 2-space indent, one element per line for non-empty containers |
 | `json_null() -> JsonValue` | Constructor — `JNull` |
 | `json_bool(v: boolean) -> JsonValue` | Constructor — `JBool` |
-| `json_number(v: float) -> JsonValue` | Constructor — `JNumber`; non-finite (NaN / Inf) → `JNull` |
+| `json_number(v: float?) -> JsonValue` | Constructor — `JNumber`; non-finite (NaN / Inf) or null → `JNull` (param is `float?` since handling null/NaN is its contract) |
 | `json_string(v: text) -> JsonValue` | Constructor — `JString` |
 | `json_array(items: vector<JsonValue>) -> JsonValue` | Constructor — `JArray`; deep-copies items |
 | `json_object(fields: vector<JsonField>) -> JsonValue` | Constructor — `JObject`; deep-copies fields |

@@ -435,6 +435,21 @@ pub fn nullflow_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLFLOW").is_none())
 }
 
+/// `LOFT_NO_CALLARG_NSTORE=1` (@PLN102 gate-2 residual — the call-arg N-Store hole) — DEFAULT ON,
+/// opt OUT. The `(N-Store)` teeth previously sat only on the LOCAL-slot / field / return / index
+/// store sites, so a nullable `τ?` (or bare `null`) passed into a non-null PARAMETER slipped
+/// through `convert` (which leniently peels the `Optional`) — `takes(x)` with `x: integer?`
+/// silently bound `null` into `n: integer`. This applies the same `n_store_violation` check at the
+/// param-binding chokepoint (`process_call_args`), with the identical Phase-1 warn/error split (a
+/// non-narrow scalar/heap param WARNS and the null binds; a narrow width hard-errors). The escape
+/// hatch exists because it is a compile-time tightening of a previously-accepted (unsound) program;
+/// it must land before the 1.0 freeze (rejecting later would break compat).
+#[must_use]
+pub fn callarg_nstore_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_CALLARG_NSTORE").is_none())
+}
+
 /// `LOFT_NO_QQ_NULL=1` (@PLN102 gate-2 residual — the `?? null` typing soundness fix) — DEFAULT
 /// ON, opt OUT. `a ?? b` discharges null only as far as the FALLBACK `b` can: when `b` is itself
 /// nullable (a bare `null` literal, or a `τ?`-typed expression) the coalesce can still yield null,

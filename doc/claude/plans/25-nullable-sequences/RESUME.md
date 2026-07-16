@@ -30,9 +30,16 @@ current tree, so this supersedes the older FINISH-LINE notes where they disagree
 - **`not null` HARD parser-reject — open by design.** Still accepted as a silent no-op
   (`src/parser/definitions.rs`); a hard "retired" error is blocked on the registry republish
   (task #4 — graphics/web/gridmesh/crypto/cbor still carry `not null`, and green tests load them).
-- **Call-arg (N-Store) hole — open.** A nullable passed into a non-null PARAMETER is silently
-  accepted on both backends (`takes(v[j])`, `takes(a / b)`), though the same value into a non-null
-  LOCAL is correctly rejected. The teeth sit on the local-slot site, not the call-arg site.
+- **Call-arg (N-Store) hole — ✅ FIXED (2026-07-16, `callarg_nstore_enabled` / `LOFT_NO_CALLARG_NSTORE`).**
+  The `n_store_violation` check now runs at the param-binding chokepoint (`process_call_args`), with
+  the identical Phase-1 warn/error split — a nullable into a non-narrow param WARNS (the null binds),
+  into a NARROW width hard-errors. Null-transparent fns (`min`/`max`/`clamp`/`abs`/… — they PROPAGATE
+  null via `wrap_null_transparent`) are exempt; operators already dodge the path via the nullable-op
+  swap. Blast radius (measured, both backends): 4 warning-assertion tests, fixed at the source — the
+  stdlib `json_number(v: float)` → `float?` (its doc already says it handles NaN/null → `JNull`, so
+  the `float` was the lie) + `call_with_null` migrated to a nullable param. Regression
+  `tests/callarg_nstore.rs`. **With this + `?? null` closed, all three gate-2 SOUNDNESS edges are
+  fixed; only the non-soundness close-out (`not null` registry hard-reject + F6) remains for gate 2.**
 - **`?? null` unsoundness — ✅ FIXED (2026-07-16, `qq_null_typing_enabled` / `LOFT_NO_QQ_NULL`).**
   `a ?? b` now stays `τ?` when the FALLBACK `b` is itself nullable (a bare `null` literal, or a
   `τ?`-typed expression), so `y: integer = x ?? null` (and `?? <nullableVar>`) is REJECTED — the

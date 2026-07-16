@@ -164,8 +164,10 @@ pub fn json_bool(v: boolean) -> JsonValue;
 /// carrying the supplied float payload.  Non-finite inputs
 /// (float null = NaN, or ±Inf) produce `JNull` with a diagnostic
 /// in `json_errors()` — mirrors the RFC 8259 constraint that JSON
-/// numbers must be finite.
-pub fn json_number(v: float) -> JsonValue;
+/// numbers must be finite.  The parameter is `float?` because handling
+/// a null/NaN input IS its contract (→ `JNull`); a finite `float`
+/// passes as a non-null value into the nullable slot as usual.
+pub fn json_number(v: float?) -> JsonValue;
 // Non-finite inputs touch
 // json_errors state.  Otherwise pure construction into worker
 // stores.
