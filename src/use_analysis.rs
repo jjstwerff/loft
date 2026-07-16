@@ -843,7 +843,11 @@ fn link_observability_of(
         if !fresh_buffer || appends.len() != 1 {
             continue;
         }
-        out.push((a, appends[0], bind_link_unobservable(&u, function, a, appends[0])));
+        out.push((
+            a,
+            appends[0],
+            bind_link_unobservable(&u, function, a, appends[0]),
+        ));
     }
     out
 }
