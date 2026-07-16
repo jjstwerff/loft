@@ -188,6 +188,7 @@ that changes the working tree.** Compare without switching: `git diff main -- <f
 
 **Quality / stability / formal:** [CODE.md](doc/claude/CODE.md) · [DOC_QUALITY.md](doc/claude/DOC_QUALITY.md) ·
 [QUALITY.md](doc/claude/QUALITY.md) open work · [GOALS.md](doc/claude/GOALS.md) (purpose + goals A–F) ·
+[BUS_FACTOR.md](doc/claude/BUS_FACTOR.md) (the development model — repo + agent, no single point of failure) ·
 [STRONG_POINTS.md](doc/claude/STRONG_POINTS.md) · [DESIGN.md](doc/claude/DESIGN.md) algorithms ·
 [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) declined-features register ·
 [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md) / [DESIGN_VERIFICATION.md](doc/claude/DESIGN_VERIFICATION.md) ·
