@@ -773,6 +773,84 @@ pub fn dump_link_safety(data: &Data) {
     }
 }
 
+/// @PLN102 transparent-link widening — build step 3: the REPORT-ONLY observability oracle. For each
+/// single-source copy-fill bind `a = s.v` it returns `(a, base, unobservable)`, where a shared-store
+/// LINK is UNOBSERVABLE (copy ≡ link) iff **nothing mutates either side's store after the bind**:
+///
+///   * the local `a` is not mutated after the bind (`a ∉ ineligible` — the copy-idiom-aware
+///     read-only fact), AND
+///   * the SOURCE store is not mutated after the bind — `other_max_pos[base] < fill` (no non-reader
+///     use of the base after the copy-fill), ALIAS-AWARE: every var whose store aliases the base (its
+///     `deps` reference `base` — a sibling `&`-reference, an element view) is ALSO stable after the
+///     fill. Without the alias clause, `a = s.v; b = &s.v; b[i]=x; read a` would falsely read
+///     unobservable (the write via `b` reaches `s.v`'s store, so a link would reflect it).
+///
+/// SOUND BY CONSERVATISM: `other_max_pos` counts a pre-bind def too, but the bind's own fill is later,
+/// so a stable source reads `< fill`; a set-based over-count only MISSES a link, never invents an
+/// observable one. Drives no codegen. Pinned by `tests/link_obs_oracle.rs` against Matrix O.
+fn link_observability_of(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+) -> Vec<(u16, Option<u16>, bool)> {
+    let u = collect_uses(code, data, false);
+    let n = function.next_var();
+    let mut vars: Vec<u16> = u.append_src.keys().copied().collect();
+    vars.sort_unstable();
+    let mut out = Vec::new();
+    for a in vars {
+        let fresh_buffer = u
+            .def_vdb
+            .get(&a)
+            .is_some_and(|vdb| u.database_vars.contains(vdb));
+        let appends = &u.append_src[&a];
+        if !fresh_buffer || appends.len() != 1 {
+            continue;
+        }
+        let Some(fill) = u.copyfill_pos.get(&a).copied() else {
+            continue;
+        };
+        let local_readonly = !u.ineligible.contains(&a);
+        let source_stable = appends[0].is_some_and(|base| {
+            // The base's own store is stable after the fill, AND so is every var that aliases it.
+            let base_stable = u.other_max_pos.get(&base).copied().unwrap_or(0) < fill;
+            let aliases_stable = (0..n).filter(|&b| b != a && b != base).all(|b| {
+                if function.tp(b).base().depend().contains(&base) {
+                    u.other_max_pos.get(&b).copied().unwrap_or(0) < fill
+                } else {
+                    true
+                }
+            });
+            base_stable && aliases_stable
+        });
+        out.push((a, appends[0], local_readonly && source_stable));
+    }
+    out
+}
+
+/// `LOFT_DUMP_LINK_OBS` — emit one `link-obs-dbg:` line per copy-fill bind of every USER function.
+pub fn dump_link_observability(data: &Data) {
+    if !crate::keys::dump_link_obs() {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) || def.source == crate::data::STD_SOURCE {
+            continue;
+        }
+        for (v, base, unobs) in link_observability_of(&def.code, &def.variables, data) {
+            let base_name = base.map_or("-".to_string(), |b| def.variables.name(b).to_string());
+            eprintln!(
+                "link-obs-dbg: fn={} var={} base={} unobs={}",
+                def.name,
+                def.variables.name(v),
+                base_name,
+                u8::from(unobs)
+            );
+        }
+    }
+}
+
 fn analyze_fn(
     code: &Value,
     function: &Function,

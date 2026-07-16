@@ -358,6 +358,16 @@ pub fn dead_stores_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEAD_STORES").is_none())
 }
 
+/// `LOFT_DUMP_LINK_OBS=1` — @PLN102 transparent-link widening, build step 3 (the observability
+/// oracle). REPORT-ONLY: emits one `link-obs-dbg: fn=… var=… base=… unobs=0|1` line per copy-fill
+/// bind — the "would a shared-store link be UNOBSERVABLE (copy ≡ link)?" verdict: neither the local
+/// nor the source's store is mutated after the bind, ALIAS-AWARE (a write through a sibling `&`-alias
+/// of the source counts). Drives NO codegen — byte-identical. Pinned by `tests/link_obs_oracle.rs`.
+#[must_use]
+pub fn dump_link_obs() -> bool {
+    std::env::var_os("LOFT_DUMP_LINK_OBS").is_some()
+}
+
 /// `LOFT_DUMP_LINK_SAFE=1` — @PLN102 transparent-link widening, build step 2 (the safety oracle).
 /// REPORT-ONLY: when set, the parser emits one `link-safe-dbg: fn=… var=… base=… safe=0|1` line per
 /// copy-fill bind, the conservative "would a shared-store link be UAF-safe here?" verdict (source

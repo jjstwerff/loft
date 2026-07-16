@@ -5575,8 +5575,9 @@ fn main() {
     // @PLN107 S4a — the enforced dead-store lint (gated LOFT_DEAD_STORES). Runs here, after the
     // program is loaded and scope-checked, so `ownership_of` sees the materialised copies.
     loft::use_analysis::warn_dead_stores(&p.data, &mut p.diagnostics, &abs_file);
-    // @PLN102 build step 2 — report-only link-safety oracle (no-op unless LOFT_DUMP_LINK_SAFE).
+    // @PLN102 build step 2/3 — report-only link oracles (no-op unless LOFT_DUMP_LINK_SAFE/OBS).
     loft::use_analysis::dump_link_safety(&p.data);
+    loft::use_analysis::dump_link_observability(&p.data);
     if !p.diagnostics.is_empty() {
         // @P282 fix: when `--no-warnings` is set, suppress
         // Warning-level diagnostics entirely so the program's
