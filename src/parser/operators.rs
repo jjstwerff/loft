@@ -1440,8 +1440,14 @@ impl Parser {
         precedence: usize,
         ctp: &mut Type,
     ) {
-        // Redundant-coalesce warning for `not null` operands.
-        if self.expr_not_null && !self.first_pass {
+        // Redundant-coalesce warning — fire ONLY when the LHS type is genuinely
+        // non-null.  `expr_not_null` tracks the last-read name's not-null-ness but
+        // does NOT account for a fault op (`sqrt`, `/`, `ln`, …) nulling a non-null
+        // input — `sqrt(non_null_negative)` IS null — so it can be stale-true over an
+        // `Optional`-typed result.  The type is the authority: an `Optional` LHS means
+        // the `??` is genuinely needed, so gate on it (else the lint contradicts the
+        // type system, which correctly REQUIRES the discharge — @PLN102 case E).
+        if self.expr_not_null && !self.first_pass && !matches!(ctp, Type::Optional(_)) {
             diagnostic!(
                 self.lexer,
                 Level::Warning,
@@ -2143,6 +2149,10 @@ impl Parser {
         {
             let lhs_not_null = self.expr_not_null;
             let lhs_not_null_name = self.expr_not_null_name.clone();
+            // Same @PLN102 case-E soundness gate as the `??` lint: the operand type is
+            // the authority.  An `Optional` LHS can be null (a fault op nulled a
+            // not-null input), so the `== null` check is NOT always-constant.
+            let lhs_nullable = matches!(ctp, Type::Optional(_));
             self.expr_not_null = false;
             let mut second_code = Value::Null;
             let tp = parent_tp.clone();
@@ -2152,14 +2162,17 @@ impl Parser {
                 self.parse_operators(var_tp, &mut second_code, parent_tp, precedence + 1);
             self.known_var_or_type(&second_code, &second_pos);
             if !self.first_pass && (operator == "==" || operator == "!=") {
-                if second_type == Type::Null && lhs_not_null {
+                if second_type == Type::Null && lhs_not_null && !lhs_nullable {
                     let always = if operator == "==" { "false" } else { "true" };
                     diagnostic!(
                         self.lexer,
                         Level::Warning,
                         "Redundant null check — '{lhs_not_null_name}' is 'not null', comparison is always {always}",
                     );
-                } else if *ctp == Type::Null && self.expr_not_null {
+                } else if *ctp == Type::Null
+                    && self.expr_not_null
+                    && !matches!(second_type, Type::Optional(_))
+                {
                     let always = if operator == "==" { "false" } else { "true" };
                     diagnostic!(
                         self.lexer,

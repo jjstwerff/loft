@@ -103,7 +103,7 @@ non-null value satisfies every `float?` consumer, and every existing `??` still 
 
 | Case | Value | Cost | Risk | Verdict |
 |---|---|---|---|---|
-| **E** — retire the unsound `expr_not_null` lint on fault-op results | removes a live bug (un-satisfiable sites) | trivial | none — removes unsoundness | **Do first** |
+| **E** — retire the unsound `expr_not_null` lint on fault-op results | removes a live bug (un-satisfiable sites) | trivial | none — removes unsoundness | **DONE** — both the `??` (`operators.rs:1444`) and `== null` (`:2160`) lints now gate on the operand's `Optional` type, not the stale flag; regression guards in `runtime_warnings.rs` |
 | **B** — `sqrt`/domain non-negativity lattice (above) | high — *all* geometric `sqrt`/`pow`; the whole real gap | moderate — a bounded recursive analysis | soundness-critical, but the square/sum/max/abs rules are provably safe with `Unknown` default | **Do — the core** |
 | **C** — nonzero divisor | — | — | — | **Already shipped** for literal/file-const; only gap = imported-const folding → tiny optional extension |
 | **A** — fold through pure arithmetic before typing | low | low | none | **Falls out of B** (constants get exact facts) |
@@ -132,6 +132,39 @@ Ship **E then B**, `sqrt` first (the dominant case), then `ln`/`log`/`pow`. Leav
 collapses to exactly the genuinely-reachable faults — variable divisors, unbounded
 `v[i]`, parses, nullable fields — and hex_terrain's four arithmetic `??` disappear with
 nothing that could truly be null losing its guard.
+
+## Implementation plan — small steps
+
+Case E is shipped. The remaining mitigation is **case B** (the domain lattice), built one
+transfer rule at a time — each step is independently shippable, adds *positive controls*
+that must **stay `float?`**, and is measured by a whole-corpus run before the next. Every
+step lands **behind an env flag** (e.g. `LOFT_NO_SQRT_DOMAIN`), default-off until Step 6
+flips it, so the type-flip's blast radius is measured, never assumed (measure-a-flip-by-
+running-the-suite).
+
+- **B0 — scaffold.** Add `fn nonneg_domain(&Value) -> Domain` (`{ Pos, NonNeg, Unknown }`,
+  default `Unknown`) over *pure float* sub-expressions; wire nothing yet. Unit-test the
+  lattice in isolation (a fault injected → `Unknown`).
+- **B1 — the square rule.** `a * a` (structurally-equal operands) → `NonNeg`; `sqrt(NonNeg)`
+  → non-null. Controls that stay `?`: `sqrt(x)`, `sqrt(x*y)` (distinct operands). This alone
+  covers `sqrt(ddx*ddx)`.
+- **B2 — sums + literals.** literal `c` → `Pos`/`NonNeg`/`Unknown` by sign; `a + b` → `NonNeg`
+  if both `NonNeg` (`Pos` if either `Pos`). Covers `sqrt(dx*dx + dy*dy)`, `sqrt(x*x + 1.0)`.
+  Control: `sqrt(x - 1.0)` stays `?`.
+- **B3 — clamps.** `max(e, k)` (k literal ≥ 0) → `NonNeg`/`Pos`; `abs(e)` → `NonNeg`;
+  `min(a,b)` → `NonNeg` if both. Covers `sqrt(max(tt_steep, 0.01))`. Control:
+  `sqrt(max(x, -5.0))` stays `?`.
+- **B4 — nesting + `pow`.** `sqrt(e)` → `NonNeg`; `pow(NonNeg, _)` → non-null. Covers
+  `pow(rad, 2.4)`.
+- **B5 — strict ops + flip.** `ln`/`log` need `Pos` (not `NonNeg`); control `ln(max(x,0.0))`
+  stays `?`. Then run the whole corpus + `native_scripts` on both backends confirming **no
+  runtime-null value reaches a non-null slot**, graduate the controls to `tests/scripts/`,
+  and flip the flag default-on.
+
+Out of this plan: **case C residual** (imported/qualified-const divisor folding across
+modules) — a tiny separate change; **case D** (`v[i]` bound-carry) — deferred, its own
+gated effort with the same soundness bar. Each B-step is XS/S; the risk is concentrated in
+the transfer functions' soundness, which the per-step controls pin.
 
 ## See also
 
