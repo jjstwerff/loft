@@ -109,7 +109,7 @@ syntax.  The risk is back-loaded and opt-in.
 | 4 | **Enforce reassignment.**  Extend `validate_write` (`expressions.rs:3449`) with an `else if …const_field` arm emitting `"cannot reassign const field '{f}' of struct '{T}' — const fields are write-once-at-construction"`.  Use the **boundary matrix** (below) to find every write route that must be covered; add the field-keyed guard on any route `validate_write` doesn't reach (e.g. collection-field reassignment via the `towards_set` collection branch, `collections.rs:794`). | `src/parser/expressions.rs`, possibly `src/parser/collections.rs` | Full matrix: every negative cell errors, every positive cell (construction + read) still works, **both backends** | Fires only when `const_field==true`, which only step-3 code can set → no existing program affected.  This is the load-bearing step; gate it on the written matrix, not the suite alone |
 | 5 ✅ | **Construction — keep loft's default-fill (decided: no init requirement).**  A `const` field follows the SAME construction rules as any field: an omitted field takes its default (an explicit `= expr`, else the type's zero value), a value in the literal overrides it, and the field is write-once from that point.  Probed (both backends): omitted `const x: integer` → `0`, `const x: integer = 8080` omitted → `8080` / overridden → `9000`.  **No `object_init` change** — the earlier plan assumed a "non-null field must be provided" check exists; it does not (loft zero-fills), and the owner's decision is to keep default-fill, NOT add a const-specific "must initialise" rule. | none (test + doc only) | `pln40_const_field_default_and_override` | Reuses loft's existing default-fill unchanged; const only adds the reassignment ban |
 | 6 | **Document.**  `const` in the field-modifier list. | `doc/claude/LOFT.md § Field modifiers`, `.claude/skills/loft-write/SKILL.md` | `gendoc`; doc drift check | Docs only |
-| 7 | **Dogfood.**  Pick a current real consumer with the **rebuild-via-construction** shape — a struct whose instances are replaced wholesale (`grid[idx] = Cell{…}`) rather than mutated in place — and mark those write-once fields `const`.  Construction keeps working; an accidental in-place field write is now caught.  (Candidates drift; check `loft install` / `lib/*` for a grid/cell world at build time — do not hard-code a path.) | a `lib/*` consumer chosen at build time | Consumer runs unchanged; a deliberate in-place write errors | Real consumer that proves the rule earns its keep; revert if it fights the code |
+| 7 ✅ | **Dogfood — `hex_world.Cell`** (`loft-libs-world`, the rebuild-via-construction grid).  Marked `c_color`/`c_height`/`c_age` `const`.  const immediately flagged `world_load`'s construct-then-fill (`.c_color = f#read` ×3) — the exact in-place-mutation footgun; collapsed it into one `Cell{…}` literal.  The tick loop's `icells[i] = Cell{…}` rebuild is unaffected.  All 16 lib tests (incl. save/load round-trip) green on **both backends**.  See the consumer survey below. | `loft-libs-world/hex_world/src/hex_world.loft` | 16/16 tests green, interp + native | Proves const catches real in-place mutation on a live tick loop; harvested a language lesson (below) |
 | 8 | **Close the gap.**  Flip INCONSISTENCIES § 33 to resolved; graduate the probes to `tests/issues.rs::p386_const_field_*` (the id already exists as the parser guard) + `tests/scripts/40-const-fields.loft`. | `doc/claude/INCONSISTENCIES.md`, `tests/` | `make ci` | Closes the loop; regression guard lands with the feature |
 
 **Total effort:** M.  No new opcodes and no runtime/codegen change; the only
@@ -202,6 +202,45 @@ fn touch(t: &Token) { t.id = 99; }
 // p386_const_virtual_rejected           @EXPECT_ERROR
 struct Bad { const v: integer virtual($.x * 2), x: integer }
 ```
+
+## Consumer survey — where const fields apply
+
+Surveyed every known library + consumer (`loft-libs-core`/`game`/`graphics`/`world`/`net`,
+`crawler`, `routing`, and the in-repo `audience_crystal`/`engine_host`) for fields that are
+set at construction and never reassigned via `.field =`.  Strong prior signal: `const` is
+**already a parameter qualifier** in shipping libs (`imaging`'s `save_png(self: const Image)`,
+crawler's `const Region`/`const Hydro`) — const fields complete the immutable-value story.
+
+Five recurring situations that call for const fields:
+
+1. **Pure value / record types → const the whole struct.**  Geometry (`Vec2/3/4`, `Mat4`,
+   `Rect`, `Circle`, `Pixel`, `GeoPoint`, `BBox`), content/DB rows (`MonsterDef`, `ItemDef`,
+   `TerrainType`, `Way`, `GEdge`), result records (`HttpResponse`, `MatchResult`, `Decoded`,
+   `HpkeSealed`, `Event`).  Built once, only read.
+2. **Identity fields on otherwise-mutable "god objects" → where const catches the most bugs.**
+   `Sim.wseed`, `Enemy.key`/`maxhp`, `Server.handle`, `WebSocket.ws_id`,
+   `GameEnvelope.sequence`, `Chunk.ck_cx`/`ck_cz`, `TerrainParams.tp_seed`.  (The entire
+   `loft-libs-net` src has zero field mutations — risk-free.)
+3. **Rebuild-via-construction records → const enforces "rebuild, never mutate in place."**
+   `hex_world.Cell` (the step-7 dogfood), `audience_crystal.ChunkMeshEntry`.
+4. **Fixed configuration set once.**  `CrystalIncr.group_dim`, `TerrainParams` (16 config
+   fields), `Renderer` dims/shaders, `Args.name`/`version`.
+5. **Container-binding const** (vector/map grown via `+=`/`[i]=` but never rebound — const the
+   binding, contents still mutate).  `Scene.meshes`, `Graph.nodes`/`edges`, `ck_cells`.  Lower urgency.
+
+**Friction cases** (const forces a small refactor — the "earns its keep" test): construct-then-fill
+idioms that must collapse into a literal — `hex_world.world_load` (done, step 7), `Canvas.data`,
+`routing_kernel.Graph.build_adj` (rebinds `adj_*`).  Genuine mutation to leave non-const: `World.tick`,
+`Material.set_color`, `Heap.size`, RNG state (`RandStream`, `Rng`).
+
+### Harvested lesson (step-7 dogfood)
+
+Collapsing `hex_world.world_load`'s per-field fills into a `Cell{…}` literal exposed an
+**expected-type asymmetry**: an assignment LHS pushes the field's declared type into its RHS
+(`cell.c_color = f#read` reads a `u8`), but a **struct-literal field position does not** — a bare
+`Cell{ c_color: f#read }` infers `text` and errors.  Worked around with explicit `f#read as u8`/`as u16`.
+The underlying gap — propagate a literal field's declared type as the value expression's expected type —
+is a language-enhancement candidate that const adoption surfaces (const removes the LHS-driven escape hatch).
 
 ## See also
 
