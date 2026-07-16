@@ -230,16 +230,16 @@ construction modifier.  Purely static check, zero runtime cost,
 no schema change.  Design + sequencing in
 [plans/40-const-fields/README.md](plans/40-const-fields/README.md).
 
-**Plan (2026-05-11):** Documented as @PLN40 (future).  Not
-yet implemented; the gap is currently silent (the parser
-accepts mutable fields with names that look like they should be
-const).  No regression guard yet — none possible until the
-feature is implemented.  (Other INC entries use a `Status`
-marker that means "resolved as design point" — INC#33 is
-genuinely open, so a `Plan` marker is used here instead.  The
-`doc_hygiene::inconsistencies_status_blocks_listed_as_resolved`
-test scans for the resolved marker; the open-status `Plan`
-form intentionally falls outside its match.)
+**Status (2026-07-16):** Resolved — `const` struct fields are
+implemented (@PLN40).  A field may be marked `const` (write-once
+at construction); it is set in the struct literal or takes its
+default, and any later `t.field = …` reassignment is a compile
+error, enforced at the same parse-time write guard as key fields.
+`const` freezes the field binding, not its contents.  The
+asymmetry is gone: `const` now applies to locals, parameters, and
+fields.  Documented in LOFT.md § Fields; regression-guarded by the
+`pln40_const_*` tests in `tests/issues.rs` and
+`tests/scripts/40-const-fields.loft`.
 
 ---
 
@@ -252,8 +252,7 @@ _All fixed — see CHANGELOG.md._
 _All documented + regression-guarded — see the Resolved-as-design-point table below._
 
 ### Low (cosmetic or minor)
-- [33. `const` Applies to Locals and Parameters but Not Fields](#33-const-applies-to-locals-and-parameters-but-not-fields) — open; resolution path in [plans/40-const-fields/](plans/40-const-fields/README.md)
-_Other Low items: documented + regression-guarded — see the Resolved-as-design-point table below._
+_All documented + regression-guarded — see the Resolved-as-design-point table below._
 
 ### Resolved as design point (documented + regression-guarded)
 
@@ -264,6 +263,7 @@ ones, not silent surprises.  Removed from the severity tables above.
 
 | # | Issue | Doc + Tests |
 |---|---|---|
+| 33 | `const` applied to locals + parameters but not struct fields.  **Resolved by @PLN40** (2026-07-16): a field may be marked `const` (write-once at construction); a later reassignment is a compile error at the parse-time write guard, and `const` now applies uniformly to locals, parameters, and fields.  Freezes the binding, not contents. | LOFT.md § Fields (`const` prefix modifier); `pln40_const_*` in `tests/issues.rs`, `tests/scripts/40-const-fields.loft` |
 | 34 | Definitions shared one flat namespace — two enums couldn't share a variant, user types collided with stdlib names.  **Resolved by @PLN22** (2026-06-14): variants are enum-scoped (`variant_of` chokepoint), user defs shadow the prelude (`std::Name` escapes), built-in type-keywords stay reserved.  Design point: a bare variant as a *value* needs a type context; defining a new untyped variable from one (`x = Red`) is a hard error.  See CHANGELOG_TECHNICAL.md + LOFT.md § Enum-scoped variants | LOFT.md § Shadowing / § Enum-scoped variants; `tests/scripts/369-pln22-shared-enum-variants.loft`, `370-pln22-prelude-shadowing.loft`, `tests/imports.rs` |
 | 2 | Vector has comprehensions; sorted / index / hash do not, and `#index` is invalid on index collections | LOFT.md § Key-based collections (Gotcha block); `inc02_vector_comprehension_works`, `inc02_sorted_is_iterable` |
 | 3 | `#index` byte-offset on text vs. element-position on vector | LOFT.md § Loop attributes (Gotcha block); `inc3_*` regression tests |

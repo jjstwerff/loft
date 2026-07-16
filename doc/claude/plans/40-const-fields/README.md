@@ -12,16 +12,21 @@ modifier.  Closes the locals-vs-fields asymmetry surfaced in
 
 ## Status
 
-**Not started — design ready, landing site already exists.**  Single feature,
-no cross-arc dependencies.  Effort: M (parser + one type-check hook + an IR-store
-round-trip bit; no new opcodes, no runtime change, no store-schema change).
+**DONE — all 8 steps shipped (2026-07-16).**  `const` struct (and enum-variant)
+fields are implemented, enforced, persisted, documented, and dogfooded.  A field
+marked `const` is write-once at construction; a later `t.field = …` reassignment is
+a compile error at the parse-time write guard, and construction is exempt for free
+(it lowers via `Value::Insert`, a separate path).  const freezes the binding, not
+contents.  No new opcodes, no runtime change; the only store change is one
+round-trip bool.  Landed on `tuxedo-work` (steps 1–8), pending a PR.
 
-The parser **already recognises `const` in struct-field position and rejects it**
-with a pointer to this plan (`@P386` guard, `src/parser/definitions.rs:2467`).  So
-step 1 of the build is not "teach the parser a new keyword" — it is "replace that
-rejection with a flag set".  That makes the whole feature an additive, opt-in
-change: no existing program contains a `const` field today (they can't — it errors),
-so enforcement can only ever fire on newly-written code.
+One follow-up spun off (independent of const): the literal-field expected-type
+enhancement — see [literal-expected-type.md](literal-expected-type.md).
+
+The parser had **already recognised `const` in struct-field position and rejected
+it** (`@P386` guard, `src/parser/definitions.rs`), so the feature was an additive,
+opt-in change: no existing program could contain a `const` field, so enforcement
+only ever fires on newly-written code.
 
 ## Goal
 
@@ -108,9 +113,9 @@ syntax.  The risk is back-loaded and opt-in.
 | 3 | **Accept + store the keyword.**  At `definitions.rs:2467` replace the `@P386` rejection with `let is_const = self.lexer.has_keyword("const");`, then after `parse_field` (`:2490`) set `attributes[idx].const_field = is_const`.  Reject `const virtual(...)` here (virtual already implies no-write).  Apply the same to enum-variant fields (`parse_enum_values` loop, `definitions.rs:286`). | `src/parser/definitions.rs` | `const x: integer` now parses and runs; the flag is set (unit assert on the `Attribute`); `const virtual(...)` errors | Only behaviour change is `const` no longer erroring — the intended direction.  Nothing reads the flag yet, so no write is rejected → zero false positives |
 | 4 | **Enforce reassignment.**  Extend `validate_write` (`expressions.rs:3449`) with an `else if …const_field` arm emitting `"cannot reassign const field '{f}' of struct '{T}' — const fields are write-once-at-construction"`.  Use the **boundary matrix** (below) to find every write route that must be covered; add the field-keyed guard on any route `validate_write` doesn't reach (e.g. collection-field reassignment via the `towards_set` collection branch, `collections.rs:794`). | `src/parser/expressions.rs`, possibly `src/parser/collections.rs` | Full matrix: every negative cell errors, every positive cell (construction + read) still works, **both backends** | Fires only when `const_field==true`, which only step-3 code can set → no existing program affected.  This is the load-bearing step; gate it on the written matrix, not the suite alone |
 | 5 ✅ | **Construction — keep loft's default-fill (decided: no init requirement).**  A `const` field follows the SAME construction rules as any field: an omitted field takes its default (an explicit `= expr`, else the type's zero value), a value in the literal overrides it, and the field is write-once from that point.  Probed (both backends): omitted `const x: integer` → `0`, `const x: integer = 8080` omitted → `8080` / overridden → `9000`.  **No `object_init` change** — the earlier plan assumed a "non-null field must be provided" check exists; it does not (loft zero-fills), and the owner's decision is to keep default-fill, NOT add a const-specific "must initialise" rule. | none (test + doc only) | `pln40_const_field_default_and_override` | Reuses loft's existing default-fill unchanged; const only adds the reassignment ban |
-| 6 | **Document.**  `const` in the field-modifier list. | `doc/claude/LOFT.md § Field modifiers`, `.claude/skills/loft-write/SKILL.md` | `gendoc`; doc drift check | Docs only |
+| 6 ✅ | **Document.**  `const` in the field-modifier list (a prefix modifier — freezes the binding, not contents; `const virtual` rejected). | `doc/claude/LOFT.md § Fields`, `.claude/skills/loft-write/SKILL.md` | drift check clean | Docs only |
 | 7 ✅ | **Dogfood — `hex_world.Cell`** (`loft-libs-world`, the rebuild-via-construction grid).  Marked `c_color`/`c_height`/`c_age` `const`.  const immediately flagged `world_load`'s construct-then-fill (`.c_color = f#read` ×3) — the exact in-place-mutation footgun; collapsed it into one `Cell{…}` literal.  The tick loop's `icells[i] = Cell{…}` rebuild is unaffected.  All 16 lib tests (incl. save/load round-trip) green on **both backends**.  See the consumer survey below. | `loft-libs-world/hex_world/src/hex_world.loft` | 16/16 tests green, interp + native | Proves const catches real in-place mutation on a live tick loop; harvested a language lesson (below) |
-| 8 | **Close the gap.**  Flip INCONSISTENCIES § 33 to resolved; graduate the probes to `tests/issues.rs::p386_const_field_*` (the id already exists as the parser guard) + `tests/scripts/40-const-fields.loft`. | `doc/claude/INCONSISTENCIES.md`, `tests/` | `make ci` | Closes the loop; regression guard lands with the feature |
+| 8 ✅ | **Close the gap.**  INCONSISTENCIES § 33 flipped to resolved (Status marker + resolved-table row; `doc_hygiene` green).  Positive matrix graduated to `tests/scripts/40-const-fields.loft` (interp/native/wasm); negative cells are the `pln40_const_*` parse-error tests in `tests/issues.rs`. | `doc/claude/INCONSISTENCIES.md`, `tests/scripts/40-const-fields.loft`, `tests/issues.rs` | `doc_hygiene` + both-backend script run green | Closes the loop; regression guard lands with the feature |
 
 **Total effort:** M.  No new opcodes and no runtime/codegen change; the only
 store change is the one round-trip bool in step 2 (a stride bump on the
