@@ -5,11 +5,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN102 F2 — Compound assignment evaluates its place once (fix scope)
 
-> **Status: DECIDED, NOT YET IMPLEMENTED (2026-07-14).** Owner ruling: evaluate the place
-> exactly once. Decision record: [DESIGN_DECISIONS.md C92](../../DESIGN_DECISIONS.md). This doc
-> scopes the fix. (The `formal-audit.md` reconciliation table once marked F2 "✅ single-eval" —
-> that was **wrong**: it double-evaluates, re-verified 2026-07-14 on both backends. Corrected
-> there.)
+> **Status: IMPLEMENTED + VALIDATED + LANDED (2026-07-16).** Owner ruling: evaluate the place
+> exactly once. Decision record: [DESIGN_DECISIONS.md C92](../../DESIGN_DECISIONS.md). Fix in
+> `src/parser/expressions.rs` (`ir_has_user_call` + the `_place` RefVar hoist in `parse_assign`);
+> regression `tests/scripts/pln102-f2-place-once.loft`. Validated per the loft-codegen method:
+> the double-eval reproduces pre-fix on both backends (instrument-can-fail); post-fix the boundary
+> matrix (count + value + divergence + nested + all five ops + Op-wrapped calls) passes on both
+> backends; the no-user-call corpus is byte-identical (IR + bytecode + native Rust); no leak
+> (`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`); full suite green (only the 3 known heavy-serial
+> flakes + the pre-existing viewer `content()`→`text?` consumer break, both outside F2's `op != "="`
+> path). On `tuxedo-f2-impl-steps`, stacked on arc-D → PR #583; no PR. (The `formal-audit.md`
+> reconciliation table once marked F2 "✅ single-eval" — that was **wrong**: it double-evaluated,
+> re-verified 2026-07-14 on both backends, now genuinely fixed.)
 
 ## The behaviour (verified 2026-07-14, both backends)
 

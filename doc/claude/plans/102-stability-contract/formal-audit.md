@@ -60,7 +60,7 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 > | Item | Status now | Evidence |
 > |---|---|---|
 > | F1 float `==` | ✅ **exact** | `1.0 == 1.0000000001` → false; `!=` exact complement |
-> | F2 compound-assign | ⚠️ **DECIDED single-eval (C92), NOT yet implemented** — still **double-evals** | `v[idx()] += 5` calls `idx()` **twice** (re-verified 2026-07-14, both backends); the earlier "single-eval ✅" here was wrong. Owner ruling 2026-07-14: eval once. Scope: [compound-assign-place-once.md](compound-assign-place-once.md) |
+> | F2 compound-assign | ✅ **single-eval (C92) — IMPLEMENTED + VALIDATED + LANDED (2026-07-16)** | `v[idx()] += 5` now calls `idx()` **once**; a divergent index reads + writes the SAME slot. Validated both backends (boundary matrix + byte-identical corpus + no leak; suite green modulo known flakes). On `tuxedo-f2-impl-steps`. Scope + method: [compound-assign-place-once.md](compound-assign-place-once.md) |
 > | F3 `&&`/`\|\|` short-circuit | ✅ **specified** | `operational.md` E-And/E-Or; E-Left scoped to non-short-circuit |
 > | F5 match non-enum + guards | ✅ **works** (spec = confirm `matching.md` states it) | `match x { 2..=5 => … }` + `n if n>2` run |
 > | F6 `&v` alias | ✅ **aliases** + sandbox hole closed | `w=&v; w[0]=99` → `v[0]==99` (reconcile `heap.md` "copies" prose) |
@@ -95,7 +95,7 @@ contract 0 allows, because after the freeze changing an observed value is a regr
 |---|---|---|---|
 | K | the null-sentinel model (above) | changes signatures + values | — |
 | F1 | **float `==`/`!=` are epsilon-approximate but `<`/`<=` exact** — `1.0 == 1.0000000001` → true; `a<b` **and** `a==b` both true near the boundary; `!=` not the exact complement of `==` | a trichotomy/transitivity violation frozen forever; no formal rule pins it at all | `fill.rs:1018,1025` |
-| F2 | **compound assignment double-evaluates its place** — `w[f()] += g()` calls `f()` **twice** (nested `m[i()][j()]` → 4×); a divergent index reads one slot and writes another — ~~unspecified~~ **DECIDED (C92, 2026-07-14): eval the place once**; NOT yet implemented → [scope](compound-assign-place-once.md) | a silent duplicate side-effect + a divergent-index corruption; lowering the place to eval-once is a semantics change | verified both backends |
+| F2 | ~~compound assignment double-evaluates its place~~ — **FIXED (C92, 2026-07-16)**: `w[f()] += g()` now calls `f()` once (nested `m[i()][j()]` → 2×), and a divergent index reads + writes the SAME slot. `ir_has_user_call` + a `_place` RefVar hoist in `parse_assign` → [scope + validation](compound-assign-place-once.md) | the duplicate side-effect + divergent-index corruption are gone; byte-identical for no-user-call places | LANDED, validated both backends |
 | F3 | **`&&` / `||` short-circuit is unspecified** — and the one general rule (E-Left) says both operands evaluate (false) | the most-depended-on eval rule is unwritten; freezes as impl-defined | verified; `operational.md` E-Left |
 | F4 | **assignment place-vs-RHS eval order unspecified** (`a[f()] = g()`); E-Asgn prose "RHS first" contradicts observed LHS-first | evaluation-order gap = the canonical silent-freeze trap | verified `[L][R]` |
 | F5 | **`match` guards have no formal semantics**; **`match` on non-enum** (int/range/literal) unspecified | a shipped feature freezes as impl-defined | `matching.md` |
