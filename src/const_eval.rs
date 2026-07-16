@@ -108,6 +108,11 @@ fn fold_op(name: &str, args: &[Value]) -> Option<Value> {
         ("OpMulFloat", [Value::Float(a), Value::Float(b)]) => Some(Value::Float(a * b)),
         ("OpDivFloat", [Value::Float(a), Value::Float(b)]) => Some(Value::Float(a / b)),
         ("OpMinSingleFloat", [Value::Float(a)]) => Some(Value::Float(-a)),
+        // --- nullary math constants (@PLN102 case-C residual) — same values as the runtime
+        //     ops in `fill.rs`, so a `PI`/`E` divisor const-folds and is proven non-zero
+        //     (`x / PI` non-null), and the domain lattice reads their sign. ---
+        ("OpMathPiFloat", []) => Some(Value::Float(std::f64::consts::PI)),
+        ("OpMathEFloat", []) => Some(Value::Float(std::f64::consts::E)),
         // --- single arithmetic ---
         ("OpAddSingle", [Value::Single(a), Value::Single(b)]) => Some(Value::Single(a + b)),
         ("OpMinSingle", [Value::Single(a), Value::Single(b)]) => Some(Value::Single(a - b)),
@@ -208,5 +213,19 @@ mod tests {
     #[test]
     fn fold_unknown_op() {
         assert_eq!(fold_op("OpSqrt", &[Value::Float(4.0)]), None);
+    }
+
+    #[test]
+    fn fold_nullary_math_consts() {
+        // @PLN102 case-C residual — PI/E fold to their runtime values (fill.rs), so a `PI`
+        // divisor / fault-op arg is proven non-zero / in-domain.
+        assert_eq!(
+            fold_op("OpMathPiFloat", &[]),
+            Some(Value::Float(std::f64::consts::PI))
+        );
+        assert_eq!(
+            fold_op("OpMathEFloat", &[]),
+            Some(Value::Float(std::f64::consts::E))
+        );
     }
 }

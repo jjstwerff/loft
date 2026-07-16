@@ -140,3 +140,31 @@ fn math_domain_two_sided_asin_acos() {
         );
     }
 }
+
+// @PLN102 case-C residual: the call-valued consts PI/E (OpMathPiFloat/OpMathEFloat) const-fold,
+// so a divisor or fault-op arg written with them is proven non-zero / in-domain. Always on (the
+// constant + divisor paths, not gated by the flag).
+const PI_CONST: &str = "\
+fn f(x: float) {
+  a: float = x / PI;
+  b: float = x / (2.0 * E);
+  c: float = sqrt(PI);
+}
+fn main() { }
+";
+
+#[test]
+fn math_domain_folds_call_valued_pi_e_consts() {
+    let (ok, diag) = compile("pi", PI_CONST, true);
+    assert!(
+        ok,
+        "PI/E as a divisor or fault-op arg must const-fold to non-null; diag={diag}"
+    );
+    // control: a genuine variable divisor stays float?
+    let (ok2, _) = compile(
+        "pivar",
+        "fn f(x: float, d: float) { z: float = x / d; }\nfn main() { }\n",
+        true,
+    );
+    assert!(!ok2, "a variable divisor must stay float?");
+}

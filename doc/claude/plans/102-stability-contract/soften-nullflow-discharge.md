@@ -30,10 +30,12 @@ loft's *only* current non-null proof is **shallow literal constant-folding**:
 
 Two conclusions fall straight out:
 
-1. **Nonzero-divisor softening already exists** (literal / file-const divisor). The only
-   forced division is `x / <variable>`, which is correct. The single small residual gap
-   is a *qualified/imported* const divisor (`/ lib::SQRT3`), which the cross-module
-   folder doesn't evaluate — narrow, low value.
+1. **Nonzero-divisor softening already exists** (literal / file-const divisor, and — verified —
+   *qualified* literal/expression consts like `lib::CONST` already inline+fold). The only
+   forced division is `x / <variable>`, which is correct. The one residual gap was a
+   **call-valued const** (`PI = OpMathPiFloat()`): `x / PI` forced `?` because `const_eval`
+   couldn't fold the nullary op — **fixed** by teaching `fold_op` `OpMathPiFloat`/`OpMathEFloat`
+   (their exact `fill.rs` values), so a `PI`/`E` divisor or fault-op arg folds like a literal.
 2. **The entire remaining ceremony is the domain ops** — `sqrt`/`ln`/`asin`/`pow` get
    *no* argument-domain analysis, so any variable-bearing argument forces `?`. In real
    numeric code (variables everywhere) that is effectively unconditional, and the
@@ -105,7 +107,7 @@ non-null value satisfies every `float?` consumer, and every existing `??` still 
 |---|---|---|---|---|
 | **E** — retire the unsound `expr_not_null` lint on fault-op results | removes a live bug (un-satisfiable sites) | trivial | none — removes unsoundness | **DONE** — both the `??` (`operators.rs:1444`) and `== null` (`:2160`) lints now gate on the operand's `Optional` type, not the stale flag; regression guards in `runtime_warnings.rs` |
 | **B** — `sqrt`/domain non-negativity lattice (above) | high — *all* geometric `sqrt`/`pow`; the whole real gap | moderate — a bounded recursive analysis | soundness-critical, but the square/sum/max/abs rules are provably safe with `Unknown` default | **DONE, default-on** (opt-out `LOFT_NO_MATH_DOMAIN`) — `Sign` lattice + `domain_sign` in `parser/mod.rs` wired into `math_arg_in_domain`; the flip's redundant-lint churn closed by the `call_declares_nullable` grandfather; tests in `tests/math_domain.rs` |
-| **C** — nonzero divisor | — | — | — | **Already shipped** for literal/file-const; only gap = imported-const folding → tiny optional extension |
+| **C** — nonzero divisor | — | — | — | **DONE** — literal/file-const/qualified-const already folded; the residual call-valued const (`PI`/`E`) now folds via `const_eval` (`fold_op` + `const_f64`), so `x / PI` is non-null |
 | **A** — fold through pure arithmetic before typing | low | low | none | **Falls out of B** (constants get exact facts) |
 | **D** — `v[i]` bound-carry in `for i in 0..len(v)` | highest raw frequency (the 100+ `v[i] ??`) | high — index-range dataflow | **high** — a mid-loop resize/alias makes a "proved" index OOB → null typed non-null → **silent corruption** | **Defer** — separate effort; if ever, only the not-resized-local sub-case, gated + heavily tested |
 
@@ -130,8 +132,8 @@ Shipped **E then B**, `sqrt`/`ln`/`log`/`pow` first (the sign lattice), then **`
 DONE** via a small two-sided interval-bounds pass (`pm_bounds` in `parser/mod.rs`): the
 `[-1, 1]` domain is proved for `sin`/`cos` outputs, `clamp(e, -1, 1)`, and the manual
 `min(max(e, -1), 1)` clamp (unary-negation nodes handled so a literal `-1.0` reaches the
-bound as a constant); an unbounded or one-sided arg stays `float?`. Remaining follow-ups: the
-imported-const divisor (case C residual) and **case D** (`v[i]` bound-carry, deferred). Net
+bound as a constant); an unbounded or one-sided arg stays `float?`. **Case C** also closed (the
+`PI`/`E` call-valued-const fold). Remaining follow-up: **case D** (`v[i]` bound-carry, deferred). Net
 effect: the `??` ceremony collapses to exactly the genuinely-reachable faults — variable
 divisors, unbounded `v[i]`, parses, nullable fields — and hex_terrain's four arithmetic `??`
 disappear with nothing that could truly be null losing its guard.
@@ -166,8 +168,7 @@ sound transfer function with a *positive control* that must **stay `float?`**, a
   runtime-null reached a non-null slot; hex_terrain 0.1.1 + the math fixtures stay warning-clean
   under `LOFT_DENY_WARNINGS`.
 
-Out of this plan: **case C residual** (imported/qualified-const divisor folding across
-modules) — a tiny separate change; **case D** (`v[i]` bound-carry) — deferred, its own
+Out of this plan: **case D** (`v[i]` bound-carry) — deferred, its own
 gated effort with the same soundness bar. `pow(rad, 2.4)` where `rad` is a *variable* stays
 `?` (inline-only analysis; variable-def tracking is deferred with D).
 

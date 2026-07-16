@@ -3054,6 +3054,27 @@ impl Parser {
         }
     }
 
+    /// The constant `f64` value of `v` if it is one — a literal, or (case-C residual) any
+    /// expression that `const_eval` reduces to a number, e.g. the call-valued consts `PI` /
+    /// `E` (`OpMathPiFloat()` → π). So a math arg / divisor written in terms of `PI` folds
+    /// like a literal would.
+    #[allow(clippy::cast_precision_loss)]
+    fn const_f64(&self, v: Option<&Value>) -> Option<f64> {
+        match v?.unspan() {
+            Value::Float(f) => Some(*f),
+            Value::Single(f) => Some(f64::from(*f)),
+            Value::Int(n) => Some(f64::from(*n)),
+            Value::Long(n) => Some(*n as f64),
+            other => match crate::const_eval::const_eval(other, &self.data) {
+                Some(Value::Float(f)) => Some(f),
+                Some(Value::Single(f)) => Some(f64::from(f)),
+                Some(Value::Int(n)) => Some(f64::from(n)),
+                Some(Value::Long(n)) => Some(n as f64),
+                _ => None,
+            },
+        }
+    }
+
     /// @PLN102 Phase 3.5 — is a call to a domain-partial math fn provably IN its real domain,
     /// from CONSTANT arguments alone? Then its result is non-null and the `τ?` elides. The
     /// constant subset of the "provably-fits" elision (variable-arg range-tracking is deferred).
@@ -3062,17 +3083,8 @@ impl Parser {
     // genuine boundary (a `log` base of exactly 1 is undefined), so the two lints do not apply.
     #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
     fn math_arg_in_domain(&self, name: &str, args: &[Value]) -> bool {
-        fn cval(v: Option<&Value>) -> Option<f64> {
-            match v.map(Value::unspan) {
-                Some(Value::Float(f)) => Some(*f),
-                Some(Value::Single(f)) => Some(f64::from(*f)),
-                Some(Value::Int(n)) => Some(f64::from(*n)),
-                Some(Value::Long(n)) => Some(*n as f64),
-                _ => None,
-            }
-        }
-        let a0 = cval(args.first());
-        let a1 = cval(args.get(1));
+        let a0 = self.const_f64(args.first());
+        let a1 = self.const_f64(args.get(1));
         let const_ok = match name {
             "sqrt" => matches!(a0, Some(x) if x >= 0.0),
             "asin" | "acos" => matches!(a0, Some(x) if (-1.0..=1.0).contains(&x)),
