@@ -72,7 +72,8 @@ const TYPES: &[&str] = &[
 ];
 
 /// A layout change flips this. Re-bless (with the golden) on an intentional change.
-const LAYOUT_ALGO_HASH: u64 = 6_612_474_016_846_722_780;
+/// (@PLN97 F9 2026-07-17 — re-blessed after adding the `@endian` line to the layout dump.)
+const LAYOUT_ALGO_HASH: u64 = 14_478_928_954_060_894_342;
 
 /// The corpus roots resolved to known_types (loudly — a parse / syntax drift fails).
 fn corpus_roots(data: &Data) -> Vec<u16> {

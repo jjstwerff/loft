@@ -458,6 +458,27 @@ mod tests {
         }
     }
 
+    /// @PLN97 F9 — the layout identity pins host endianness: two stores with an
+    /// identical byte layout but written on opposite-endian hosts must NEVER hand
+    /// over raw. Proven without a big-endian machine — the `@endian` line is the
+    /// only difference, and even under a (hypothetical) hash COLLISION the dump
+    /// compare still refuses the raw handoff and names `@endian` as the change.
+    #[test]
+    fn endian_flip_is_never_a_raw_handoff() {
+        let types = "A\tsize=4\tstruct{x@0:integer}\n";
+        let little = id(7, &format!("@endian\tlittle\n{types}"));
+        let big = id(7, &format!("@endian\tbig\n{types}")); // same hash ON PURPOSE
+        let Handoff::Changed(d) = classify(&little, &big) else {
+            panic!("a cross-endian store must never classify Identical");
+        };
+        assert_eq!(
+            d.changed,
+            vec!["@endian".to_string()],
+            "the endian flip must be visible in the diff"
+        );
+        assert!(d.added.is_empty() && d.dropped.is_empty());
+    }
+
     #[test]
     fn sidecar_round_trips() {
         let a = id(0xdead_beef, "A\tsize=4\tstruct{x@0:integer}\n");

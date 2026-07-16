@@ -80,8 +80,14 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 > want must land before the flip, because we can never add one after. See § The error surface.
 >
 > **Genuinely OPEN:** **E2** (the error-boundary maximal-strictness audit — *the* priority) · **F9**
-> (guard is wired, but `layout_algo_hash` at `types.rs:1674` omits **endianness** + the
-> **not-null↔nullable** distinction).
+> — **endianness half DONE (2026-07-17):** the layout identity now pins the host endianness (an
+> `@endian\t<little|big>` line in `layout_dump` + the `descriptor.rs` twin; hash re-blessed;
+> positive control `endian_flip_is_never_a_raw_handoff`). **Still open:** the **not-null↔nullable**
+> distinction for FULL-WIDTH fields — `layout_dump` renders `i@0:integer` for BOTH `integer` and
+> `integer not null` (verified: corpus `NotNull.i` vs `Scalars.i`), so a full-width nullability
+> flip produces the same dump+hash and misclassifies `Identical`. (Narrow ints already differ via
+> the `null=<sentinel>`.) This is a real raw-handoff soundness gap, NOT covered by the sidecar
+> `dump` compare (that dump IS `layout_dump`, not the `ir_schema` `not_null` schema).
 > **Spec-honesty for the ✅-behavior rows — DONE (2026-07-16):** F1 (float `==` exact, pinned in
 > `operational.md`), F3 (short-circuit E-And/E-Or), F4 (assign eval order), F5 (P-Range/P-Guard +
 > two-regime M-Total in `matching.md`), F6 (`&v` aliases), F8 (chaining rejected) all reconciled +
@@ -110,7 +116,7 @@ contract 0 allows, because after the freeze changing an observed value is a regr
 | F6 | ~~**`&v` on a vector: `heap.md`+`capabilities.md` say COPIES; `binding.md`+reality say ALIASES**~~ — **RECONCILED** (2026-07-11 fix + docs, re-verified 2026-07-16): all three specs now state `&`-bind ALIASES / plain bind COPIES (`heap.md` H-Ref/H-Copy, `binding.md` B-Ref/B-Copy, `capabilities.md` D-cap-3); the sandbox gate `raw_write_is_host_owned` follows the dep chain (`root_aliases_argument`), so an `&`-alias-into-host write is host-gated, not laundered | memory-model spec contradiction + sandbox-admission hole — both CLOSED | verified both backends: `w=&v; w[0]=99`→`v[0]==99`; plain bind independent (`c=v; c[1]=77` leaves `v[1]==2`) |
 | F7 | **reference `==` defaults to identity, not structural** — ~~unspecified~~ **DECIDED (C91)**: `==` = value-by-value / reference-by-identity (uniform, bounded, no reference-chase); `===` reserved for opt-in deep equality; shallow hybrid rejected as inconsistent | ~~a decision~~ | `DESIGN_DECISIONS.md` C91 |
 | F8 | ~~**comparison operators are one left-assoc level** — `a == b == c` type-checks and misbehaves~~ — **RECONCILED + verified (2026-07-16)**: comparison is NON-associative (`grammar.md` level 3); `1 == 2 == 3` is a STATIC ERROR ("comparison operators do not chain — parenthesise or combine with `&&`") on both backends, not a silent misbehave | grouping change landed (chaining rejected pre-freeze) | verified both backends; `grammar.md` level 3 |
-| F9 | **layout persistence guard not wired into the load path** (D-layout-1); layout hash ignores **endianness** and can't see a **not-null↔nullable** schema flip | the frozen persistence promise's own detector doesn't run; a stale/foreign store reads raw | `@PLN97`; `types.rs:1674` |
+| F9 | **layout persistence guard not wired into the load path** (D-layout-1); ~~layout hash ignores **endianness**~~ **FIXED 2026-07-17** (`@endian` line in `layout_dump` + descriptor twin) — and still can't see a **not-null↔nullable** schema flip on a FULL-WIDTH field (`layout_dump` renders `i@0:integer` for both `integer` and `integer not null`; narrow ints already differ via `null=<sentinel>`) | the frozen persistence promise's own detector: endianness now caught; a full-width nullability flip still reads raw | `@PLN97`; `types.rs` `layout_dump`; positive control `endian_flip_is_never_a_raw_handoff` |
 | E1 | **diagnostics have no stable identity code** (`DiagEntry` = level+message) + 41 golden baselines → loft freezes **error prose as identity** | add a stable code/kind now → prose stays improvable forever behind a frozen code | `diagnostics.rs:16` |
 | E2 | **missing errors (the too-permissive class)** — see the error section; the sentinel-collision adds are ~zero conversion cost | adding an error is the one-way door | verified |
 

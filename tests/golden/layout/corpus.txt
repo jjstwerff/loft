@@ -1,3 +1,4 @@
+@endian	little
 Bag	size=4	struct{items@0:hash<Item[ik]>}
 Circle	size=16	enumvalue[1]{enum@0:byte, radius@8:integer}
 Color	size=1	enum{Red, Green, Blue}
