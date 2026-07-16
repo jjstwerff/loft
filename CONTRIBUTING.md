@@ -16,6 +16,14 @@ Please say:
 - a **workaround** if you found one — *and whether you actually ran it*. A
   workaround that doesn't work is worse than none; if you're not sure, say so.
 
+**Our promise: your working program keeps working.** If an upgrade broke
+something that used to work, that is a **top-priority regression**, not a
+"managed change" or a "known limitation" — say so plainly and we treat it as a
+bug (see [COMPATIBILITY.md](doc/claude/COMPATIBILITY.md)). And **which repo:**
+the language or compiler → here (`loft/loft`); a *library's* behaviour → that
+library's `loft-libs-*` repo; a game → its own repo. When in doubt, file here
+and we'll route it.
+
 ## Known issues + the labels
 
 Browse **[open Issues](https://github.com/loft-lang/loft/issues)**.  Triage uses a
