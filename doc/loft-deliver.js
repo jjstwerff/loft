@@ -42,7 +42,9 @@ export function readLoftValue(mem, storeBase, desc, typeId, rec, pos) {
       case "enumvalue": {
         const o = {};
         for (const f of node.fields) {
-          if (f.name === "enum" || f.pos === 65535) continue; // read_data skips the disc/absent fields
+          // Skip the non-data fields read_data skips: the enum discriminant, absent fields, and any
+          // `#`-prefixed SYNTHETIC field (e.g. an index node's #left/#right/#color tree bookkeeping).
+          if (f.name === "enum" || f.pos === 65535 || f.name[0] === "#") continue;
           o[f.name] = read(f.content, rec, pos + f.pos);
         }
         return o;

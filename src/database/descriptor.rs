@@ -645,7 +645,9 @@ impl Stores {
             LayoutNode::Choices(_) => out.push(store.get_byte(r.rec, r.pos, 0) as u8),
             LayoutNode::Record(fields) | LayoutNode::EnumValue(_, fields) => {
                 for f in fields {
-                    if f.name == "enum" || f.position == u16::MAX {
+                    // Skip non-data fields: the enum discriminant, absent fields, and `#`-prefixed
+                    // synthetic fields (e.g. an index node's #left/#right/#color tree bookkeeping).
+                    if f.name == "enum" || f.position == u16::MAX || f.name.starts_with('#') {
                         continue;
                     }
                     let field_r = DbRef {

@@ -112,8 +112,9 @@ impl Stores {
         let scratch = match it {
             Iterated::Hash { .. } => self.build_hash_sorted_vec(&coll_ref, tp),
             Iterated::Radix { .. } => self.build_radix_sorted_vec(&coll_ref, tp),
+            Iterated::Index { .. } => self.build_index_sorted_vec(&coll_ref, tp),
             Iterated::Sorted { .. } => return Some(LayoutNode::Vector(elem)),
-            Iterated::Ordered { .. } | Iterated::Index { .. } => return None,
+            Iterated::Ordered { .. } => return None,
         };
         let data =
             self.allocations[scratch.store_nr as usize].get_u32_raw(scratch.rec, scratch.pos);

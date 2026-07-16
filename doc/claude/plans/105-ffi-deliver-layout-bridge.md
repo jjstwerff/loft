@@ -352,10 +352,19 @@ collection is stored as an INLINE vector (elements at `sorted_rec[8 + size*i]`, 
 Verified `deliver_reads_top_level_sorted_in_js` + `deliver_reads_nested_sorted_field_in_js`
 (inserted `{30,10,20}` → key-sorted `[10,20,30]` == the interpreter's `for it in s`).
 
-**REMAINING keyed kind — `index`** (no `build_*_vec`; emitter marks it `Iterated`): a B-tree walked
-with start/finish (`state/io.rs`, `on=index`) — NO records collector exists; needs a NEW in-order
-tree-walk helper (`build_index_sorted_vec`) before it can feed the `FlatArray` path. (`ordered` is
-an internal kind not user-constructible as a top-level collection.)
+**`index<T>` — DONE (new `build_index_sorted_vec` + `#`-field skip).** Added
+`Stores::build_index_sorted_vec` (`allocation.rs`): an in-order red-black-tree walk (`tree::first`
+→ `tree::next`, mirroring `tree::count`) keyed off the node type's left-child BYTE position
+(`8 + fields[left_field].position`), collecting rec-nrs → `build_rec_scratch` → the same `FlatArray`
+path. `keyed_replacement` routes `Iterated::Index` to it. One layout subtlety, caught empirically:
+an index node is the user record AUGMENTED with `#left_1`/`#right_1`/`#color_1` tree fields, and the
+descriptor's `elem` IS that augmented node — so a first pass LEAKED them. Fix: the record reader
+(both `read_via_descriptor` AND the JS twin) now SKIPS `#`-prefixed synthetic fields (general — they
+are never user data), matching what `for x in ix` sees. Verified
+`deliver_flattens_top_level_index_in_js` + `deliver_flattens_nested_index_field_in_js` (insert
+`{30,10,20}` → key-sorted `[10,20,30]`, no tree fields). **ALL FOUR keyed kinds
+(hash/radix/sorted/index) now deliver.** (`ordered` is an internal kind, not a user top-level
+collection.)
 
 **Other remaining:** keyed collections nested DEEPER (a keyed field inside a SUB-struct, or a keyed
 ELEMENT type — `flatten_record_keyed_fields` only walks the root record's DIRECT fields today); and

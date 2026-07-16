@@ -249,3 +249,53 @@ fn main() {
         "nested-sorted-field mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn deliver_flattens_top_level_index_in_js() {
+    // @PLN105 Phase 3 — an `index<T>` (red-black tree): pre-flattened via build_index_sorted_vec (an
+    // in-order first→next walk), so JS reconstructs the elements in ASCENDING KEY order == the
+    // interpreter's `for it in ix`. The node's #left/#right/#color tree bookkeeping is SKIPPED (a
+    // `#`-prefixed synthetic field), so only the user fields appear.
+    let src = r#"
+struct IRec { ik: integer, name: text }
+fn main() {
+  ix: index<IRec[ik]> = [];
+  ix += [IRec{ik: 30, name: "thirty"}];
+  ix += [IRec{ik: 10, name: "ten"}];
+  ix += [IRec{ik: 20, name: "twenty"}];
+  deliver(1, ix);
+}
+"#;
+    let Some(stdout) = run_deliver("index", src) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":[{\"ik\":10,\"name\":\"ten\"},{\"ik\":20,\"name\":\"twenty\"},{\"ik\":30,\"name\":\"thirty\"}]";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "flattened index mismatch (leaked tree fields? wrong order?)\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn deliver_flattens_nested_index_field_in_js() {
+    // @PLN105 Phase 3 — a struct with an `index` field: scalars in place, the index field
+    // materialised to a key-ordered array (FlatArray), tree bookkeeping skipped.
+    let src = r#"
+struct IRec { ik: integer, name: text }
+struct Db { label: text, idx: index<IRec[ik]>, n: integer }
+fn main() {
+  d: Db = Db { label: "db", idx: [], n: 7 };
+  d.idx += [IRec{ik: 20, name: "twenty"}];
+  d.idx += [IRec{ik: 10, name: "ten"}];
+  deliver(1, d);
+}
+"#;
+    let Some(stdout) = run_deliver("nestindex", src) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":{\"label\":\"db\",\"idx\":[{\"ik\":10,\"name\":\"ten\"},{\"ik\":20,\"name\":\"twenty\"}],\"n\":7}";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "nested-index-field mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}
