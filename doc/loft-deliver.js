@@ -77,10 +77,11 @@ export function readLoftValue(mem, storeBase, desc, typeId, rec, pos) {
         return a;
       }
       case "flatarray": {
-        // @PLN105 Phase 3 — a keyed collection pre-flattened at deliver time: the data record is
-        // FIXED in the descriptor (`node.data`), not read from the value's bytes (a top-level hash
-        // or a keyed struct field). Otherwise identical to `array`.
-        const dRec = node.data;
+        // @PLN105 Phase 3 — a keyed collection pre-flattened at deliver time. The materialised data
+        // record is NOT in the (type-shared) node; it is looked up in the `flat` redirect map by
+        // this collection's `(rec, pos)` — so ONE `flatarray` node serves every instance (e.g. each
+        // element of a `vector<Bag>`). Otherwise identical to `array`.
+        const dRec = (desc.flat && desc.flat[rec + "_" + pos]) || 0;
         if (dRec === 0) return [];
         const len = view.getUint32(storeBase + dRec * 8 + 4, true);
         const a = new Array(len);

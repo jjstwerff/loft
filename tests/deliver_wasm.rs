@@ -326,3 +326,35 @@ fn main() {
         "deep-nested keyed field mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn deliver_flattens_keyed_in_vector_elements_in_js() {
+    // @PLN105 Phase 3 — MULTI-INSTANCE: a `vector<Bag>` where EACH element has its OWN keyed
+    // collection at a different record. `collect_keyed` descends into vector elements and
+    // materialises every hash instance into the `flat` redirect map keyed by its `(rec, pos)`; the
+    // single (type-shared) FlatArray node reads each element's own data record via that map.
+    let src = r#"
+struct Item { ik: integer, name: text }
+struct Bag { tag: integer, items: hash<Item[ik]> }
+fn main() {
+  bags: vector<Bag> = [];
+  b0: Bag = Bag { tag: 0, items: [] };
+  b0.items[10] = Item { ik: 10, name: "ten" };
+  bags += [b0];
+  b1: Bag = Bag { tag: 1, items: [] };
+  b1.items[21] = Item { ik: 21, name: "twentyone" };
+  b1.items[20] = Item { ik: 20, name: "twenty" };
+  bags += [b1];
+  deliver(1, bags);
+}
+"#;
+    let Some(stdout) = run_deliver("multi", src) else {
+        return; // toolchain self-skip
+    };
+    // Element 0 has one item; element 1 has two (key-sorted) — each from its own materialised hash.
+    let want_value = "\"value\":[{\"tag\":0,\"items\":[{\"ik\":10,\"name\":\"ten\"}]},{\"tag\":1,\"items\":[{\"ik\":20,\"name\":\"twenty\"},{\"ik\":21,\"name\":\"twentyone\"}]}]";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "multi-instance (keyed in vector elements) mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}

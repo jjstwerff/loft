@@ -24,13 +24,6 @@
 use crate::database::Stores;
 use crate::keys::DbRef;
 
-/// @PLN105 Phase 3 — the base synthetic descriptor type-id for a pre-flattened keyed collection's
-/// `FlatArray` node (a top-level keyed root, or one per keyed field, decrementing). `u16::MAX`
-/// never collides with a real type-id (it is the type table's "no type" sentinel), so it is safe
-/// to insert alongside the element type's closure.
-#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
-const FLAT_ARRAY_ROOT: u16 = u16::MAX;
-
 impl Stores {
     /// @PLN105 Phase 1 loopback host — reconstruct the delivered value from its
     /// layout descriptor and print a deterministic line. Called from the `OpDeliver`
@@ -56,144 +49,135 @@ impl Stores {
 
     /// @PLN105 Phase 2/3 — the browser host path: hand the value to JS driven by its layout
     /// descriptor, with no serialization (the value bytes stay in wasm linear memory). A struct /
-    /// scalar / vector is delivered in place: JS walks it from `(store_base, rec, pos)` via the
-    /// descriptor (§2). A KEYED collection (a top-level hash, or a hash FIELD of a struct) has no
-    /// byte layout a reader can walk, so (Phase 3) it is PRE-FLATTENED — materialised to a scratch
-    /// array of its element records (the same `for x in hash` path) and exposed via a synthetic
-    /// `FlatArray` descriptor node carrying that array's fixed data record; the generic reader
-    /// reads it like any array, and JS never sees the hash/tree layout. SYNCHRONOUS — the borrow
-    /// ends when this returns, so `desc` stays owned across the `loft_host_deliver` call.
+    /// scalar / vector is read IN PLACE (§2). A KEYED collection has no byte layout a reader can
+    /// walk, so it is PRE-FLATTENED: `collect_keyed` walks the WHOLE value (into records AND vector
+    /// elements) and materialises every hash/radix/index INSTANCE — the same `for x in coll` path —
+    /// into the `flat` redirect map keyed by its `(rec, pos)`; `rewrite_iterated` then turns the
+    /// (type-shared) `Iterated` nodes into `FlatArray` (redirect-read) or, for `sorted`, an in-place
+    /// `Vector`. The reader looks each `FlatArray`'s data record up in `flat` by the current
+    /// `(rec, pos)`, so ONE type node serves every element of a `vector<Bag>`. SYNCHRONOUS — the
+    /// borrow ends when this returns, so `desc`/`flat` stay owned across the `loft_host_deliver` call.
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
     fn deliver_browser(&mut self, tag: i64, val: DbRef, db_tp: u16) {
+        use std::collections::BTreeMap;
         if val.rec == 0 {
             return;
         }
         let mut desc = self.layout_descriptor(&[db_tp]);
-        // Recursively replace every keyed collection reachable through inline record fields with its
-        // array-shaped node; `root` is the (possibly rewritten) node to describe the value.
-        let mut synth = FLAT_ARRAY_ROOT;
-        let root = self.flatten_at(&mut desc, db_tp, val, &mut synth);
-        self.emit_deliver(tag, val, root, &desc.to_json());
+        let mut flat: BTreeMap<u64, u32> = BTreeMap::new();
+        self.collect_keyed(&desc, db_tp, val, &mut flat);
+        Self::rewrite_iterated(&mut desc);
+        self.emit_deliver(tag, val, db_tp, &desc.to_delivery_json(&flat));
     }
 
-    /// The descriptor node that replaces an `Iterated` keyed collection at `coll_ref` (type `tp`)
-    /// so JS can read its elements as an array (no keyed-layout knowledge). Two shapes:
-    ///   * `hash` / `radix`/`spatial` have no walkable byte layout → MATERIALISE to a scratch array
-    ///     (loft's own `for x in coll` path, so JS gets the same key/Morton order) and return a
-    ///     `FlatArray` node carrying the scratch's fixed data record.
-    ///   * `sorted` is ALREADY an INLINE vector kept IN KEY ORDER (`sorted_finish` inserts each
-    ///     element in sorted position on every `+=`), and its field holds that vector directly →
-    ///     just RECLASSIFY to an in-place `Vector` node (no materialisation).
-    /// `ordered` / `index` have no array form yet (a later slice) → `None`.
+    /// The `flat` redirect key for a keyed collection at `(rec, pos)` — matches the reader's
+    /// `"<rec>_<pos>"` lookup (`to_delivery_json`).
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
-    fn keyed_replacement(
-        &mut self,
-        coll_ref: DbRef,
-        tp: u16,
-        it: &crate::database::Iterated,
-    ) -> Option<crate::database::LayoutNode> {
-        use crate::database::{Iterated, LayoutNode};
-        let elem = it.elem();
-        let scratch = match it {
-            Iterated::Hash { .. } => self.build_hash_sorted_vec(&coll_ref, tp),
-            Iterated::Radix { .. } => self.build_radix_sorted_vec(&coll_ref, tp),
-            Iterated::Index { .. } => self.build_index_sorted_vec(&coll_ref, tp),
-            Iterated::Sorted { .. } => return Some(LayoutNode::Vector(elem)),
-            Iterated::Ordered { .. } => return None,
-        };
-        let data =
-            self.allocations[scratch.store_nr as usize].get_u32_raw(scratch.rec, scratch.pos);
-        Some(LayoutNode::FlatArray { elem, data })
+    fn flat_key(rec: u32, pos: u32) -> u64 {
+        (u64::from(rec) << 32) | u64::from(pos)
     }
 
-    /// Recursively replace every keyed collection reachable through INLINE record fields — the root
-    /// itself, a direct field, or a field of a nested sub-struct — with its array-shaped node,
-    /// returning the (possibly new) node id that describes `at`. A changed record/keyed node is
-    /// re-inserted under a fresh synthetic id (decrementing from `u16::MAX`) so the shared TYPE
-    /// descriptor is not mutated and each location gets its own materialised data record.
-    ///
-    /// Nested INLINE records stay in the same store record (just offset by the field position), so
-    /// a keyed field of a sub-struct is at `(at.rec, at.pos + field.pos …)` — single-instance and
-    /// addressable. NOT descended: `Vector`/`Array` ELEMENTS — those are multi-instance (each
-    /// element's keyed collection lives at a different record), which a single fixed-data
-    /// `FlatArray` cannot express; a keyed collection behind a vector element is a later slice
-    /// (needs a different, per-element protocol).
+    /// Walk the WHOLE value (records + their fields, vector/array elements — mirroring
+    /// `read_via_descriptor`'s traversal so the `(rec, pos)` of each keyed collection matches what
+    /// the reader computes) and, for every hash/radix/index INSTANCE, materialise its element array
+    /// (`build_*_sorted_vec`, key/Morton order) into `flat[(rec,pos)] = data_record`. `sorted` is an
+    /// in-place vector (handled by `rewrite_iterated`, no entry); `ordered` is unsupported.
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
-    fn flatten_at(
+    fn collect_keyed(
         &mut self,
-        desc: &mut crate::database::LayoutDesc,
+        desc: &crate::database::LayoutDesc,
         node_id: u16,
         at: DbRef,
-        synth: &mut u16,
-    ) -> u16 {
-        use crate::database::LayoutNode;
-        match desc.nodes.get(&node_id).cloned() {
-            Some(LayoutNode::Iterated(it)) => match self.keyed_replacement(at, node_id, &it) {
-                Some(node) => {
-                    let id = *synth;
-                    *synth -= 1;
-                    desc.nodes.insert(id, node);
-                    id
-                }
-                None => node_id, // ordered — unsupported, left as Iterated (reader errors)
-            },
-            Some(LayoutNode::Record(fields)) => {
-                match self.flatten_fields(desc, &fields, at, synth) {
-                    Some(nf) => {
-                        let id = *synth;
-                        *synth -= 1;
-                        desc.nodes.insert(id, LayoutNode::Record(nf));
-                        id
+        flat: &mut std::collections::BTreeMap<u64, u32>,
+    ) {
+        use crate::database::{Iterated, LayoutNode};
+        match desc.nodes.get(&node_id) {
+            Some(LayoutNode::Iterated(it)) => {
+                let scratch = match it {
+                    Iterated::Hash { .. } => self.build_hash_sorted_vec(&at, node_id),
+                    Iterated::Radix { .. } => self.build_radix_sorted_vec(&at, node_id),
+                    Iterated::Index { .. } => self.build_index_sorted_vec(&at, node_id),
+                    Iterated::Sorted { .. } | Iterated::Ordered { .. } => return,
+                };
+                let data = self.allocations[scratch.store_nr as usize]
+                    .get_u32_raw(scratch.rec, scratch.pos);
+                flat.insert(Self::flat_key(at.rec, at.pos), data);
+            }
+            Some(LayoutNode::Record(fields)) | Some(LayoutNode::EnumValue(_, fields)) => {
+                for f in fields.clone() {
+                    if f.name == "enum" || f.position == u16::MAX || f.name.starts_with('#') {
+                        continue;
                     }
-                    None => node_id,
+                    let field_at = DbRef {
+                        store_nr: at.store_nr,
+                        rec: at.rec,
+                        pos: at.pos + u32::from(f.position),
+                    };
+                    self.collect_keyed(desc, f.content, field_at, flat);
                 }
             }
-            Some(LayoutNode::EnumValue(tag, fields)) => {
-                match self.flatten_fields(desc, &fields, at, synth) {
-                    Some(nf) => {
-                        let id = *synth;
-                        *synth -= 1;
-                        desc.nodes.insert(id, LayoutNode::EnumValue(tag, nf));
-                        id
-                    }
-                    None => node_id,
+            // A VECTOR of inline records: elements at `(v_rec, 8 + elem_size*i)` — descend into each.
+            Some(LayoutNode::Vector(elem)) => {
+                let elem = *elem;
+                let size = u32::from(desc.sizes.get(&elem).copied().unwrap_or(0));
+                let v_rec = self.allocations[at.store_nr as usize].get_u32_raw(at.rec, at.pos);
+                if v_rec == 0 {
+                    return;
+                }
+                let len = self.allocations[at.store_nr as usize].get_u32_raw(v_rec, 4);
+                for i in 0..len {
+                    let elem_at = DbRef {
+                        store_nr: at.store_nr,
+                        rec: v_rec,
+                        pos: 8 + size * i,
+                    };
+                    self.collect_keyed(desc, elem, elem_at, flat);
                 }
             }
-            // Scalar / text / vector / array / ref — no single-instance keyed collection to descend.
-            _ => node_id,
+            // A BY-REF ARRAY: each element is a record at `(elm_rec, 8)`.
+            Some(LayoutNode::Array(elem)) => {
+                let elem = *elem;
+                let v_rec = self.allocations[at.store_nr as usize].get_u32_raw(at.rec, at.pos);
+                if v_rec == 0 {
+                    return;
+                }
+                let len = self.allocations[at.store_nr as usize].get_u32_raw(v_rec, 4);
+                let elm_recs: Vec<u32> = (0..len)
+                    .map(|i| self.allocations[at.store_nr as usize].get_u32_raw(v_rec, 8 + 4 * i))
+                    .collect();
+                for elm_rec in elm_recs {
+                    let elem_at = DbRef {
+                        store_nr: at.store_nr,
+                        rec: elm_rec,
+                        pos: 8,
+                    };
+                    self.collect_keyed(desc, elem, elem_at, flat);
+                }
+            }
+            // Scalars / text / ref / childrec — nothing keyed below.
+            _ => {}
         }
     }
 
-    /// Recurse `flatten_at` into each DATA field of a record (skipping the enum discriminant, absent,
-    /// and `#`-synthetic fields, exactly as the reader does); returns a new field list iff any field
-    /// changed. A nested field is at `(at.rec, at.pos + field.position)` (inline records share the
-    /// record; a keyed field slot holds the collection root there).
+    /// Rewrite the (type-shared) descriptor nodes for a keyed collection into an array-shaped node
+    /// the reader can walk: hash/radix/index → `FlatArray` (its data record is looked up per
+    /// instance in `flat`); `sorted` → an in-place `Vector` (already an inline, key-ordered vector,
+    /// `sorted_finish` maintains it on every `+=`). `ordered` is left unsupported.
     #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
-    fn flatten_fields(
-        &mut self,
-        desc: &mut crate::database::LayoutDesc,
-        fields: &[crate::database::LayoutField],
-        at: DbRef,
-        synth: &mut u16,
-    ) -> Option<Vec<crate::database::LayoutField>> {
-        let mut new_fields = fields.to_vec();
-        let mut changed = false;
-        for (i, f) in fields.iter().enumerate() {
-            if f.name == "enum" || f.position == u16::MAX || f.name.starts_with('#') {
-                continue;
-            }
-            let field_at = DbRef {
-                store_nr: at.store_nr,
-                rec: at.rec,
-                pos: at.pos + u32::from(f.position),
+    fn rewrite_iterated(desc: &mut crate::database::LayoutDesc) {
+        use crate::database::{Iterated, LayoutNode};
+        for node in desc.nodes.values_mut() {
+            let replacement = match node {
+                LayoutNode::Iterated(
+                    Iterated::Hash { elem, .. }
+                    | Iterated::Radix { elem, .. }
+                    | Iterated::Index { elem, .. },
+                ) => LayoutNode::FlatArray { elem: *elem },
+                LayoutNode::Iterated(Iterated::Sorted { elem, .. }) => LayoutNode::Vector(*elem),
+                _ => continue,
             };
-            let new_content = self.flatten_at(desc, f.content, field_at, synth);
-            if new_content != f.content {
-                new_fields[i].content = new_content;
-                changed = true;
-            }
+            *node = replacement;
         }
-        if changed { Some(new_fields) } else { None }
     }
 
     /// Call the `loft_host_deliver` import: `Store.ptr` is the store buffer's base in wasm linear

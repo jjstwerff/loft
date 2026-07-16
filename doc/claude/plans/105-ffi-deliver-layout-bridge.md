@@ -375,12 +375,22 @@ mutated and each location gets its own data record). Verified
 `deliver_flattens_keyed_in_substruct_in_js` (`Outer.inner.items: hash` → the hash flattens two
 levels down; scalars at both levels stay in place). Arbitrary depth (inline records only).
 
-**Remaining — keyed collection behind a VECTOR/ARRAY element (multi-instance).** `flatten_at` does
-NOT descend into vector/array elements: each element's keyed collection lives at a DIFFERENT record,
-and a `FlatArray` carries ONE fixed data record, so a type-level node cannot express per-element
-materialisation. A `vector<Bag>` where `Bag` has a keyed field would need a different, per-element
-protocol (materialise every element's collection + a redirect, or a cursor). Deferred. Plus
-`expose` (long-lived pinning).
+**Multi-instance (keyed collection behind a VECTOR/ARRAY element) — DONE (the REDIRECT rewrite).**
+The fixed-data `FlatArray` couldn't express per-element data (a type node is shared by every element
+of a `vector<Bag>`). Reworked to a REDIRECT: `FlatArray { elem }` carries NO data; instead a per-
+value `flat` map keyed by the collection's `(rec, pos)` gives each INSTANCE its materialised data
+record, serialised alongside the descriptor (`to_delivery_json`, `"<rec>_<pos>": data`). Deliver now:
+`collect_keyed` walks the WHOLE value — records AND vector/array ELEMENTS (mirroring
+`read_via_descriptor`'s traversal so the `(rec,pos)` match the reader) — materialising every
+hash/radix/index instance into `flat`; `rewrite_iterated` turns the type-shared `Iterated` nodes into
+`FlatArray` (redirect-read) / `Vector` (sorted, in-place); the JS reader looks each `FlatArray`'s
+data up in `flat` by the current `(rec,pos)`. One shared node serves every element. This also
+SIMPLIFIED the code (no per-location descriptor clones / synth ids). Verified
+`deliver_flattens_keyed_in_vector_elements_in_js` (`vector<Bag>`, each `Bag` its own hash → each
+element gets its own materialised array) + all 9 prior tests still green.
+
+**Remaining:** `expose` (long-lived pinning across frames); the Phase-2 tails (a memory.grow-mid-read
+safety cell; inlining the reader into the production shims).
 
 - **Falsifier / test:** deliver a value containing `hash<T>` + `index<T>` + spatial; JS reads the
   materialised arrays via the existing reader; assert the reconstructed multiset (count + values)

@@ -162,15 +162,15 @@ pub enum LayoutNode {
     /// By-reference element vector — `Parts::Array(elem)`.
     Array(u16),
     /// @PLN105 Phase 3 — a BROWSER-SYNTHETIC node: a keyed collection PRE-FLATTENED at deliver
-    /// time to an array whose DATA record is FIXED (`data`), not read from the value's bytes (the
-    /// keyed field's in-place bytes are the store-internal hash/tree, unwalkable). `data`'s
-    /// offset-4 word is the element count, offset-8 onwards the element rec-nrs (`build_rec_scratch`
-    /// layout), each element read at `(rec_nr, 8)` as `elem`. Never appears in a REAL type
-    /// descriptor — only injected by `deliver_browser`, so the loopback/@PLN97-hash paths never
-    /// see it.
+    /// time to an element array. The array's DATA record is NOT in the node (a type node is shared
+    /// by every instance of that type — e.g. every element of a `vector<Bag>`); instead the reader
+    /// looks it up in the delivery's `flat` redirect map by the current `(rec, pos)`, which
+    /// `deliver_browser` materialised there. `data`'s offset-4 word is the element count, offset-8
+    /// onwards the element rec-nrs (`build_rec_scratch` layout), each element read at `(rec_nr, 8)`
+    /// as `elem`. Never appears in a REAL type descriptor — only injected at deliver time, so the
+    /// loopback/@PLN97-hash paths never see it.
     FlatArray {
         elem: u16,
-        data: u32,
     },
     /// A keyed collection — walked by cursor, never structurally (see [`Iterated`]).
     Iterated(Iterated),
@@ -243,8 +243,8 @@ impl LayoutDesc {
                 format!("array<{}>(elem_size={})", self.name(*e), self.size(*e))
             }
             // Browser-synthetic; never rendered in a real layout dump.
-            LayoutNode::FlatArray { elem, data } => {
-                format!("flatarray<{}>(data={data})", self.name(*elem))
+            LayoutNode::FlatArray { elem } => {
+                format!("flatarray<{}>", self.name(*elem))
             }
             LayoutNode::Iterated(it) => match it {
                 Iterated::Sorted { elem, keys } => {
@@ -358,6 +358,28 @@ impl LayoutDesc {
         s
     }
 
+    /// @PLN105 Phase 3 — the delivery descriptor: [`to_json`] plus a `flat` REDIRECT map that gives
+    /// each pre-flattened keyed collection INSTANCE its materialised data record, keyed by the
+    /// `(rec, pos)` where the collection lives (`"<rec>_<pos>"`). A `FlatArray` type node is shared
+    /// by every instance of its type (e.g. every element of a `vector<Bag>`), so the per-instance
+    /// data cannot live in the node — the reader looks it up here by the current `(rec, pos)`.
+    #[must_use]
+    pub fn to_delivery_json(&self, flat: &BTreeMap<u64, u32>) -> String {
+        use std::fmt::Write as _;
+        let mut s = self.to_json();
+        s.pop(); // drop the base object's closing '}'
+        s.push_str(",\"flat\":{");
+        for (i, (k, data)) in flat.iter().enumerate() {
+            if i > 0 {
+                s.push(',');
+            }
+            let (rec, pos) = ((k >> 32) as u32, *k as u32);
+            let _ = write!(s, "\"{rec}_{pos}\":{data}");
+        }
+        s.push_str("}}");
+        s
+    }
+
     fn fields_json(fields: &[LayoutField], s: &mut String) {
         use std::fmt::Write as _;
         s.push('[');
@@ -441,11 +463,8 @@ fn node_json(node: &LayoutNode, s: &mut String) {
         LayoutNode::Array(e) => {
             let _ = write!(s, "{{\"kind\":\"array\",\"elem\":{e}}}");
         }
-        LayoutNode::FlatArray { elem, data } => {
-            let _ = write!(
-                s,
-                "{{\"kind\":\"flatarray\",\"elem\":{elem},\"data\":{data}}}"
-            );
+        LayoutNode::FlatArray { elem } => {
+            let _ = write!(s, "{{\"kind\":\"flatarray\",\"elem\":{elem}}}");
         }
         LayoutNode::Ref => s.push_str("{\"kind\":\"ref\"}"),
         LayoutNode::ChildRec(e) => {
