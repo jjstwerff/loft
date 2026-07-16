@@ -111,6 +111,10 @@ index `i` into a source `src`, with `elem(src,i)` / `len(src)` **null past the e
   (P-Point)  a unit variant V, struct variant V{f…}, literal, `_`, or bare binding is a POINT
              pattern over one value (today's M-Unit/M-Variant/M-Wild lifted into ⇓).  A struct /
              variant FIELD may itself be a pattern (nested) — the recursion this extension adds.
+  (P-Range)  a RANGE pattern over a SCALAR value v (a non-enum subject — integer / character):
+             `a..=b` (inclusive) matches iff a ≤ v ≤ b; `a..b` (half-open) matches iff a ≤ v < b —
+             the upper bound is EXCLUSIVE.  A POINT pattern (one value, no extra cursor advance);
+             Fail otherwise.  Verified both backends: `2..=5` matches 2 and 5; `2..5` excludes 5.
   (P-Seq)    ⟨[p₁ … pₙ], κ⟩: run p₁ from κ→κ₁, …, pₙ from κ_{n-1}→κₙ; ANY pᵢ ⇓ Fail ⟹ the whole
              sequence ⇓ Fail (κ unchanged).  binds = ⋃ᵢ binds_i.
   (P-Whole)  an ARM's sequence pattern must consume the WHOLE input (κ' = ⟨len(src),src⟩); a proper
@@ -128,6 +132,11 @@ index `i` into a source `src`, with `elem(src,i)` / `len(src)` **null past the e
              t = fixed patterns after the rest (H-Alloc — a new store, independent of src).
   (P-Multi)  a MULTI-PATTERN arm `pat_a, pat_b => body`: try pat_a from ⟨0,v⟩ (whole-match); else
              pat_b; the FIRST whole-match commits.  (P-Alt at arm granularity — no new cursor work.)
+  (P-Guard)  a GUARDED arm `pat if cond => body`: run `pat` from κ; on Match(binds,κ') evaluate
+             `cond` under σ extended with `binds`.  cond true ⟹ the arm commits (Match(binds,κ'));
+             cond false ⟹ the arm ⇓ Fail — exactly as if `pat` had not matched (P-Atomic keeps the
+             provisional binds invisible) — and selection moves to the NEXT arm.  The guard is the
+             only way an already-matched pattern can still reject its arm.
   (P-Atomic) ⟨pat,κ,σ⟩ ⇓ Fail ⟹ σ UNCHANGED, κ not advanced (INV-Pure).  Provisional captures from a
              failed attempt are NEVER observable — the arm body runs ONLY after a committed whole-match.
 ```
@@ -148,19 +157,31 @@ backtracking safe.
                total(_) = total(bare name) = true
                total(V) / total(V{f…}) = true  iff every field sub-pattern is total
                total(sequence | alternation-not-covering | optional-in-required-pos | repetition |
-                     length-constrained slice | literal) = false
-             A match SATISFIES INV-Total (never fails to select an arm at runtime) iff EITHER
-               (enum subject) its total arms cover every variant,  OR
-               its FINAL arm's pattern is total (a `_`, a bare binding, or a full variant cover).
-             A match with a non-total pattern and no total final arm is a STATIC ERROR
-               ("match is not exhaustive — a structural pattern can fail; add a `_` arm").
+                     length-constrained slice | literal | range) = false
+               total(pat if cond) = false — a GUARD can reject, so a guarded arm NEVER secures
+                     totality, whatever its pattern.
+             ENFORCEMENT splits on whether coverage is DECIDABLE:
+               • ENUM subject — the variant set is finite + known, so coverage IS checked.  A variant
+                 counts as covered only by a TOTAL arm (bare `Variant` / `_` / bare binding), NEVER by
+                 a guarded or otherwise non-total arm.  A variant left uncovered with no `_` is a
+                 STATIC ERROR ("match on T is not exhaustive — missing: X; add the missing variants or
+                 a `_ =>` wildcard").
+               • SCALAR subject (integer / character — an unbounded domain) — coverage is NOT decidable
+                 and NOT required.  With no total final arm the match MAY select no arm at runtime; by
+                 the C80 spreadsheet model ([DESIGN_DECISIONS.md C80](../DESIGN_DECISIONS.md)) it then
+                 yields **null**, so the match's result type is **nullable** (`τ?`) — no error, the null
+                 surfaces at the use site (the null-flow discipline).  This is the one place a `match`
+                 "falls through", and it falls through to null, never to a fault.
 ```
 
-**In words.** This is the one rule that keeps loft's promise that a `match` never falls through to
-nothing. A PEG pattern *can* fail, so on its own it is not enough — the compiler requires a final
-arm that always matches (`_`, a bare name, or a set of enum arms that jointly cover every variant).
-With that final arm present, some arm always fires; without it, the program does not compile. It is
-the exact generalisation of `M-Exhaust`: for a pure-enum match, nothing changes.
+**In words.** For an ENUM subject this keeps loft's promise that a `match` never falls through to
+nothing: the compiler requires the arms to cover every variant (a variant counts only when a TOTAL
+arm names it — a guard does not), or a final `_`; otherwise the program does not compile. For a
+SCALAR subject (integer / character) coverage cannot be decided, so it is not required — a match with
+no total final arm may select nothing at runtime and then yields **null** (the C80 model), which makes
+its result type nullable. So a `match` still never faults on a fall-through: on an enum it cannot fall
+through at all, and on a scalar it falls through to null. For a pure-enum match, nothing changes from
+`M-Exhaust`.
 
 ### Iterator inputs add the only new operational primitive
 
