@@ -358,6 +358,16 @@ pub fn dead_stores_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEAD_STORES").is_none())
 }
 
+/// `LOFT_DUMP_LINK_SAFE=1` — @PLN102 transparent-link widening, build step 2 (the safety oracle).
+/// REPORT-ONLY: when set, the parser emits one `link-safe-dbg: fn=… var=… base=… safe=0|1` line per
+/// copy-fill bind, the conservative "would a shared-store link be UAF-safe here?" verdict (source
+/// outlives the local + the local does not escape). Drives NO codegen — it only prints, so it is
+/// byte-identical to today. Pinned against the safety matrix by `tests/link_safe_oracle.rs`.
+#[must_use]
+pub fn dump_link_safe() -> bool {
+    std::env::var_os("LOFT_DUMP_LINK_SAFE").is_some()
+}
+
 /// @PLN90 W1: the temporary-subject borrow-return materialise (the coordinated promotion-verdict
 /// fix) — **DEFAULT ON**. When a `-> vector` fn's tail is a buffer-ABI call returning a borrow of a
 /// TEMPORARY subject the fn constructs (`fn h() -> vector<E> { g(Filled{..}) }`), the borrowed view

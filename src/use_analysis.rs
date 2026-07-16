@@ -669,18 +669,10 @@ impl Uses {
 /// `code`, up to `max_tier` (0 = the shipped param-source rule; 1 = also
 /// read-only-local sources, ordering-proven). Higher tiers are additive: a tier-1
 /// run still emits every tier-0 Borrow.
-fn analyze_fn(
-    code: &Value,
-    function: &Function,
-    data: &Data,
-    max_tier: u8,
-) -> (Vec<VerdictRow>, Vec<ElidePlan>, Vec<MovePlan>) {
-    // @PLN90 — the survival split + its report locations are produced under LOFT_COPY_SURVIVAL
-    // (the raw dev dump) OR the user-facing report (`report_copies`); read once so both the walk
-    // (`track_pos`) and the classification below agree.
-    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some()
-        || crate::keys::report_copies_enabled()
-        || crate::keys::warn_copies_enabled();
+/// Build + walk the copy/borrow use-facts for one function body. Extracted from `analyze_fn` so the
+/// report-only link-safety oracle (`link_safety_of`) reads the SAME facts the shipped elision does,
+/// with no second, drifting analysis.
+fn collect_uses(code: &Value, data: &Data, survival_on: bool) -> Uses {
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
@@ -711,6 +703,89 @@ fn analyze_fn(
         record_copy: Vec::new(),
     };
     u.visit(code, Ctx::Other);
+    u
+}
+
+/// @PLN102 transparent-link widening — build step 2: the REPORT-ONLY safety oracle. For each
+/// single-source copy-fill bind `v = <src>.f` it returns `(v, base, safe)`, where `safe` is the
+/// conservative "a shared-store LINK would be UAF-safe here" verdict:
+///
+///   * the source `base`'s store OUTLIVES `v` — a parameter (caller-owned, alive across the frame),
+///     or a non-reassigned local whose last use is at/after `v`'s (its store is not reclaimed while
+///     `v` is live), AND
+///   * `v` does NOT escape (`v ∉ ineligible` — no return / store / pass-to-callee that could outlive
+///     `base`).
+///
+/// SOUND BY CONSERVATISM: last-use ordering under-approximates store lifetime (a store lives to scope
+/// exit), and `ineligible` also excludes a mutated local, so this can only MISS a safe link, never
+/// invent an unsafe one — it cannot green-light a #415 dangle. Drives no codegen. Pinned by
+/// `tests/link_safe_oracle.rs` against the safety matrix.
+fn link_safety_of(code: &Value, function: &Function, data: &Data) -> Vec<(u16, Option<u16>, bool)> {
+    let u = collect_uses(code, data, false);
+    let mut vars: Vec<u16> = u.append_src.keys().copied().collect();
+    vars.sort_unstable();
+    let mut out = Vec::new();
+    for v in vars {
+        // Only the single-source copy-fill idiom (a fresh `OpDatabase` buffer filled by one append).
+        let fresh_buffer = u
+            .def_vdb
+            .get(&v)
+            .is_some_and(|vdb| u.database_vars.contains(vdb));
+        let appends = &u.append_src[&v];
+        if !fresh_buffer || appends.len() != 1 {
+            continue;
+        }
+        let src = appends[0];
+        let single_def = u.def_count.get(&v).copied().unwrap_or(0) == 1;
+        let v_non_escaping = !u.ineligible.contains(&v);
+        let source_outlives = src.is_some_and(|s| {
+            function.is_argument(s)
+                || (u.def_count.get(&s).copied().unwrap_or(0) <= 1
+                    && u.last_use_pos.get(&s).copied().unwrap_or(0)
+                        >= u.last_use_pos.get(&v).copied().unwrap_or(0))
+        });
+        out.push((v, src, single_def && src.is_some() && v_non_escaping && source_outlives));
+    }
+    out
+}
+
+/// `LOFT_DUMP_LINK_SAFE` — emit one `link-safe-dbg:` line per copy-fill bind of every USER function
+/// (`STD_SOURCE` skipped — its facts are stable and would flood the dump). Report-only.
+pub fn dump_link_safety(data: &Data) {
+    if !crate::keys::dump_link_safe() {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) || def.source == crate::data::STD_SOURCE {
+            continue;
+        }
+        for (v, base, safe) in link_safety_of(&def.code, &def.variables, data) {
+            let base_name = base.map_or("-".to_string(), |b| def.variables.name(b).to_string());
+            eprintln!(
+                "link-safe-dbg: fn={} var={} base={} safe={}",
+                def.name,
+                def.variables.name(v),
+                base_name,
+                u8::from(safe)
+            );
+        }
+    }
+}
+
+fn analyze_fn(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+    max_tier: u8,
+) -> (Vec<VerdictRow>, Vec<ElidePlan>, Vec<MovePlan>) {
+    // @PLN90 — the survival split + its report locations are produced under LOFT_COPY_SURVIVAL
+    // (the raw dev dump) OR the user-facing report (`report_copies`); read once so both the walk
+    // (`track_pos`) and the classification below agree.
+    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some()
+        || crate::keys::report_copies_enabled()
+        || crate::keys::warn_copies_enabled();
+    let u = collect_uses(code, data, survival_on);
 
     // The SOURCE-mutation fact (¬D2) is the parser's mature, interprocedural
     // mutation analysis — `find_written_vars` also catches a source handed to a
