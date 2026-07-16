@@ -470,6 +470,18 @@ pub fn nullflow_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLFLOW").is_none())
 }
 
+/// `LOFT_NO_STEER=1` (@PLN102 arc C — the recommended-idiom steer channel) — DEFAULT ON, opt OUT.
+/// When on, a call FROM OWNED source (the entry project) to a `#superseded "Y"` symbol emits a
+/// `Level::Warning` steering the author toward `Y` (the old form keeps working — a never-break
+/// signpost, never a removal). Inert regardless until a symbol is actually marked `#superseded`,
+/// so default-on is safe from day one. One cached env read; mirrors `nullflow_enabled`. See
+/// `doc/claude/plans/102-stability-contract/recommended-idiom-channel.md`.
+#[must_use]
+pub fn steer_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_STEER").is_none())
+}
+
 /// `LOFT_NO_CALLARG_NSTORE=1` (@PLN102 gate-2 residual — the call-arg N-Store hole) — DEFAULT ON,
 /// opt OUT. The `(N-Store)` teeth previously sat only on the LOCAL-slot / field / return / index
 /// store sites, so a nullable `τ?` (or bare `null`) passed into a non-null PARAMETER slipped

@@ -1677,6 +1677,49 @@ mod tests {
         );
     }
 
+    #[test]
+    /// @PLN102 arc C step 3 — the recommended-idiom STEER fires for a call to a
+    /// `#superseded` symbol FROM OWNED source and is SILENT from a dependency
+    /// source (the caller-provenance Q3 gate).  Same shape both times — a marked
+    /// fn plus a caller — differing ONLY in the source number, so the owned case
+    /// proves the mechanism can steer and the dependency case proves the gate
+    /// blocks it.  The steer lives in the shared parser (`call_nr`), so this is
+    /// backend-agnostic; `LOFT_NO_STEER` opt-out + the both-backends surface are
+    /// covered by the CLI probe.
+    fn steer_fires_from_owned_source_silent_from_dependency() {
+        use crate::data::MAIN_SOURCE;
+        use crate::diagnostics::Level;
+
+        let marked = |names: (&str, &str, &str)| {
+            format!(
+                "fn {0}() -> integer {{ 1 }}\n#superseded \"{1}\"\nfn {1}() -> integer {{ 2 }}\nfn {2}() -> integer {{ {0}() }}\n",
+                names.0, names.1, names.2
+            )
+        };
+        let is_steer = |e: &crate::diagnostics::DiagEntry| {
+            e.level == Level::Warning && e.message.contains("is superseded")
+        };
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+
+        // OWNED (MAIN_SOURCE): a call to a #superseded fn steers.
+        let pre = p.diagnostics.entries().len();
+        p.parse_snippet(&marked(("old_fn", "new_fn", "caller")), "<main>", MAIN_SOURCE);
+        assert!(
+            p.diagnostics.entries()[pre..].iter().any(is_steer),
+            "a #superseded call from OWNED source must steer"
+        );
+
+        // DEPENDENCY (source 2): the SAME shape is silent — the caller is not owned.
+        let pre = p.diagnostics.entries().len();
+        p.parse_snippet(&marked(("dep_old", "dep_new", "dep_caller")), "<dep>", 2);
+        assert!(
+            !p.diagnostics.entries()[pre..].iter().any(is_steer),
+            "a #superseded call from a DEPENDENCY source must NOT steer"
+        );
+    }
+
     /// @PLN11 arc D micro-bench — wall-clock of producing the native stdlib
     /// `Data` two ways: a fresh `parse_dir` (today's cold-start path) vs
     /// `Store::open` + `read_data` (mmap the precompiled store, rebuild native).

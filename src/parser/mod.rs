@@ -6083,6 +6083,30 @@ impl Parser {
         self.add_defaults(d_nr, &mut actual, &mut all_types);
         let tp = self.call_dependencies(d_nr, &all_types);
         *code = Value::Call(d_nr, actual);
+        // @PLN102 arc C step 3 — the recommended-idiom STEER.  A resolved call FROM
+        // OWNED source (the entry project) to a `#superseded "Y"` symbol warns the
+        // author toward `Y`; the old form keeps working (a never-break signpost, not
+        // a removal).  The caller-provenance gate (`caller_source_is_owned`) means a
+        // consumer re-parsing a dependency's source is NEVER nagged about the
+        // dependency's internal old-idiom use — only whoever can act sees it.
+        // Second-pass + `report` only, so it fires exactly once per call site;
+        // `LOFT_NO_STEER` opts out; inert until a symbol is actually marked.
+        if report
+            && !self.first_pass
+            && crate::keys::steer_enabled()
+            && self.data.caller_source_is_owned()
+        {
+            let succ = self.data.def(d_nr).superseded().to_string();
+            if !succ.is_empty() {
+                let name = self.data.def(d_nr).name();
+                let shown = name.strip_prefix("n_").unwrap_or(name).to_string();
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
+                );
+            }
+        }
         tp
     }
 
