@@ -422,7 +422,7 @@ SIMPLIFIED the code (no per-location descriptor clones / synth ids). Verified
 `deliver_flattens_keyed_in_vector_elements_in_js` (`vector<Bag>`, each `Bag` its own hash → each
 element gets its own materialised array) + all 9 prior tests still green.
 
-**`expose` / `release` — DONE (wiring + pinning; full cross-frame needs the yield harness).**
+**`expose` / `release` — DONE (wiring + pinning + full cross-frame test).**
 `expose(tag, value)` is a LONG-LIVED `deliver`: new `OpExpose`/`OpRelease` ops (`02_files.loft`,
 lowered in `dispatch_call` like `deliver`), `Stores::expose_value`/`release_value` — expose
 materialises the keyed collections + serialises the handle exactly like `deliver`, then PINS the
@@ -432,12 +432,19 @@ wasm addresses stay stable across frames; `release(tag, value)` `unlock_store`s 
 shims + the harness stash the handle by `tag` (`globalThis.loftExposed`) and drop it on release.
 Verified `deliver_expose_and_release_a_value_in_js` (a hash exposed → materialised value read in the
 expose call, then `RELEASE`) + the interpreter run proves lock→…→unlock does not crash.
-CAVEAT: the single-shot harness reads DURING the expose call (`Stores` is a `loft_start` LOCAL, gone
-once it returns) — the true cross-frame read (a game loop yielding to JS between frames, re-reading
-`globalThis.loftExposed`) needs the asyncify yield harness, deferred.
+CROSS-FRAME — DONE (`deliver_expose_survives_cross_frame_yield_in_js`, `tools/deliver_crossframe.mjs`).
+The single-shot test reads DURING the expose call; the cross-frame test reads on a LATER frame: the
+program exposes a hash, then `store_load_url_trusted` (the only headless suspend, `loft_host_http_get`)
+asyncify-UNWINDS the whole wasm stack back to JS; the asyncify-driven harness reconstructs the exposed
+value at that yield — after expose + real execution + the unwind — then resumes loft (which releases).
+A correct key-sorted read proves `lock_store` pins the store across the yield and the reader re-derives
+its view (the fetch may have grown memory). `AsyncifyCtrl` is now `export`ed from `doc/loft-asyncify.js`
+(one definition; `main.rs` strips the export when embedding it), so the harness shares it with the
+shims. (`yield_frame()` is interpreter-only — a no-op in `--html`; the GL swap-buffers yield needs the
+full shell, so the fetch path is the headless yield.)
 
-**Remaining:** the Phase-2 tails (a memory.grow-mid-read safety cell; inlining the reader into the
-production shims); the full cross-frame `expose` test (yield harness).
+**Remaining:** none — Phases 2 & 3 (keyed collections, expose + cross-frame, inline reader, grow cell,
+corpus shapes) are COMPLETE. Phase 4 = routing consumer (that agent).
 
 - **Falsifier / test:** deliver a value containing `hash<T>` + `index<T>` + spatial; JS reads the
   materialised arrays via the existing reader; assert the reconstructed multiset (count + values)
