@@ -138,9 +138,9 @@ pub fn palette_b(idx: integer) -> float {
 // taking a struct parameter (sidesteps @P290).
 
 pub struct CellSnap {
-  xs:     vector<integer>,
-  ys:     vector<integer>,
-  colors: vector<integer>,
+  const xs:     vector<integer>,
+  const ys:     vector<integer>,
+  const colors: vector<integer>,
 }
 
 // ── Crystal mesh — output of the segment-list generator ─────────────
@@ -151,20 +151,20 @@ pub struct CellSnap {
 // can give the two classes different widths / styling.
 
 pub struct CrystalMesh {
-  kinds:  vector<integer>,
-  x0s:    vector<float>,
-  y0s:    vector<float>,
-  z0s:    vector<float>,
-  x1s:    vector<float>,
-  y1s:    vector<float>,
-  z1s:    vector<float>,
-  colors: vector<integer>,
+  const kinds:  vector<integer>,
+  const x0s:    vector<float>,
+  const y0s:    vector<float>,
+  const z0s:    vector<float>,
+  const x1s:    vector<float>,
+  const y1s:    vector<float>,
+  const z1s:    vector<float>,
+  const colors: vector<integer>,
   // Owning cell index (into the source CellSnap) for each segment.  Lets
   // a consumer attribute a segment back to the cell whose paint produced
   // it — e.g. the projector keys per-cell GPU growth (bloom-from-centre
   // by cell age) off this, so the mesh stays static/cached while the
   // animation runs in the vertex shader.
-  cell_ix: vector<integer>,
+  const cell_ix: vector<integer>,
 }
 
 // ── CrystalState — persistent age tracking across rebuilds ───────────
@@ -181,10 +181,10 @@ pub struct CrystalMesh {
 // new fork-points separately when a main grows), or per-supporter
 // timing — placeholders are deliberately omitted until needed.
 pub struct CrystalState {
-  main_x:     vector<integer>,
-  main_y:     vector<integer>,
-  main_d:     vector<integer>,
-  birth_tick: vector<integer>,
+  const main_x:     vector<integer>,
+  const main_y:     vector<integer>,
+  const main_d:     vector<integer>,
+  const birth_tick: vector<integer>,
 }
 
 // Look up the recorded birth tick of (cx, cy, d) main.  Returns -1
@@ -814,7 +814,7 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
 // copy_claims_hash_body re-inserts via hash::add).  This in-place build stays
 // because it is also faster (no deep-copy of a populated field).
 
-struct ChunkMeshEntry { ck: integer, mesh: SegMesh }
+struct ChunkMeshEntry { const ck: integer, const mesh: SegMesh }
 
 // Per-CHUNK cached meshes are the source of truth + the CPU-reuse unit:
 // crystal_incr_rebuild re-runs the rule for ONLY the dirty chunks and reuses
@@ -822,11 +822,14 @@ struct ChunkMeshEntry { ck: integer, mesh: SegMesh }
 // meshes (a cheap concat) rather than cached in a second keyed collection —
 // the consumer caches the GPU VBO per group and re-uploads only the groups
 // that contain a dirty chunk (which it learns from collect_dirty_groups).
+// All four fields are const bindings: `snap`/`field` are mutated only through their CONTENTS
+// (`c.snap.xs += […]`, field_add_cell(c.field,…)), `chunks` only via keyed element-set
+// (`c.chunks[k] = …`), and `group_dim` is a read-only dial — none rebinds the field itself.
 pub struct CrystalIncr {
-  snap:      CellSnap,                  // source of truth (xs, ys, colors)
-  field:     ChunkField,                // spatial index + buckets + dirty set
-  group_dim: integer,                   // tunable: G=1 per-chunk … G large ~one VBO
-  chunks:    hash<ChunkMeshEntry[ck]>,  // per-chunk cached mesh (reused if not dirty)
+  const snap:      CellSnap,                  // source of truth (xs, ys, colors)
+  const field:     ChunkField,                // spatial index + buckets + dirty set
+  const group_dim: integer,                   // tunable: G=1 per-chunk … G large ~one VBO
+  const chunks:    hash<ChunkMeshEntry[ck]>,  // per-chunk cached mesh (reused if not dirty)
 }
 
 // Re-run the rule for the given chunk inputs, upserting each into the cache
