@@ -38,10 +38,19 @@ fn s4_escape() -> vector<integer> {
     a // escapes
 }
 
+// S5 — UNSAFE (degenerate): the source IS the local (`a += a`, a self-append). A "link" would be
+// `a` borrowing itself → its buffer is dropped and it becomes slotless. Never a link candidate.
+fn s5_self_append() -> integer {
+    a: vector<integer> = [1, 2, 3];
+    a += a;
+    len(a)
+}
+
 fn main() {
     x = s1_safe();
     y = s2_source_dead();
     z = s3_source_reassigned(S { v: [1, 2, 3] });
     w = len(s4_escape());
-    println("{x} {y} {z} {w}");
+    q = s5_self_append();
+    println("{x} {y} {z} {w} {q}");
 }

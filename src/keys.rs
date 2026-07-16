@@ -358,6 +358,19 @@ pub fn dead_stores_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEAD_STORES").is_none())
 }
 
+/// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening, build step 4. Opt-in, DEFAULT OFF. When
+/// set, the copy-elision (`analyze_fn` → `ElidePlan`) ADDITIONALLY realizes a copy-fill bind `a=s.v`
+/// as a shared-store link when it is provably SAFE (`link_is_safe`, step 2 — the source outlives the
+/// local, no escape) AND UNOBSERVABLE (`link_is_unobservable`, step 3 — neither side's store is
+/// mutated after the bind, alias-aware). The observable result is unchanged (it links only where a
+/// link ≡ a copy); this just realizes more links. Gated so the change is measured byte-value-identical
+/// before any default. Dead branch when off ⇒ byte-identical. Cached once. Flipped default-on in step 5.
+#[must_use]
+pub fn link_widen_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_LINK_WIDEN").is_some())
+}
+
 /// `LOFT_DUMP_LINK_OBS=1` — @PLN102 transparent-link widening, build step 3 (the observability
 /// oracle). REPORT-ONLY: emits one `link-obs-dbg: fn=… var=… base=… unobs=0|1` line per copy-fill
 /// bind — the "would a shared-store link be UNOBSERVABLE (copy ≡ link)?" verdict: neither the local

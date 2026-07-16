@@ -706,6 +706,52 @@ fn collect_uses(code: &Value, data: &Data, survival_on: bool) -> Uses {
     u
 }
 
+/// @PLN102 transparent-link widening — the per-bind SAFETY predicate (step 2). The single source of
+/// truth read by BOTH the report-only oracle (`link_safety_of`) and the codegen widening
+/// (`analyze_fn` under `LOFT_LINK_WIDEN`), so the gate-on suite validates exactly what codegen uses.
+/// See `link_safety_of` for the invariant + the soundness argument.
+fn bind_link_safe(u: &Uses, function: &Function, v: u16, src: Option<u16>) -> bool {
+    // A SELF-source (`v += v`, so `append_src[v] = [Some(v)]`) is a self-append, not a copy of a
+    // distinct store — a "link" would be `v` borrowing itself, which drops its buffer and leaves it
+    // slotless. It is never a link candidate. (The shipped tiers dodge it via `src_is_param` /
+    // `src_local_stable` never firing here by default; the widening must exclude it explicitly.)
+    if src == Some(v) {
+        return false;
+    }
+    let single_def = u.def_count.get(&v).copied().unwrap_or(0) == 1;
+    let v_non_escaping = !u.ineligible.contains(&v);
+    let source_outlives = src.is_some_and(|s| {
+        function.is_argument(s)
+            || (u.def_count.get(&s).copied().unwrap_or(0) <= 1
+                && u.last_use_pos.get(&s).copied().unwrap_or(0)
+                    >= u.last_use_pos.get(&v).copied().unwrap_or(0))
+    });
+    single_def && src.is_some() && v_non_escaping && source_outlives
+}
+
+/// @PLN102 transparent-link widening — the per-bind OBSERVABILITY predicate (step 3), ALIAS-AWARE.
+/// The single source of truth for both `link_observability_of` and the codegen widening. See
+/// `link_observability_of` for the invariant. `false` if the bind has no recorded copy-fill.
+fn bind_link_unobservable(u: &Uses, function: &Function, v: u16, src: Option<u16>) -> bool {
+    let Some(fill) = u.copyfill_pos.get(&v).copied() else {
+        return false;
+    };
+    let local_readonly = !u.ineligible.contains(&v);
+    let n = function.next_var();
+    let source_stable = src.is_some_and(|base| {
+        let base_stable = u.other_max_pos.get(&base).copied().unwrap_or(0) < fill;
+        let aliases_stable = (0..n).filter(|&b| b != v && b != base).all(|b| {
+            if function.tp(b).base().depend().contains(&base) {
+                u.other_max_pos.get(&b).copied().unwrap_or(0) < fill
+            } else {
+                true
+            }
+        });
+        base_stable && aliases_stable
+    });
+    local_readonly && source_stable
+}
+
 /// @PLN102 transparent-link widening — build step 2: the REPORT-ONLY safety oracle. For each
 /// single-source copy-fill bind `v = <src>.f` it returns `(v, base, safe)`, where `safe` is the
 /// conservative "a shared-store LINK would be UAF-safe here" verdict:
@@ -735,16 +781,7 @@ fn link_safety_of(code: &Value, function: &Function, data: &Data) -> Vec<(u16, O
         if !fresh_buffer || appends.len() != 1 {
             continue;
         }
-        let src = appends[0];
-        let single_def = u.def_count.get(&v).copied().unwrap_or(0) == 1;
-        let v_non_escaping = !u.ineligible.contains(&v);
-        let source_outlives = src.is_some_and(|s| {
-            function.is_argument(s)
-                || (u.def_count.get(&s).copied().unwrap_or(0) <= 1
-                    && u.last_use_pos.get(&s).copied().unwrap_or(0)
-                        >= u.last_use_pos.get(&v).copied().unwrap_or(0))
-        });
-        out.push((v, src, single_def && src.is_some() && v_non_escaping && source_outlives));
+        out.push((v, appends[0], bind_link_safe(&u, function, v, appends[0])));
     }
     out
 }
@@ -794,7 +831,6 @@ fn link_observability_of(
     data: &Data,
 ) -> Vec<(u16, Option<u16>, bool)> {
     let u = collect_uses(code, data, false);
-    let n = function.next_var();
     let mut vars: Vec<u16> = u.append_src.keys().copied().collect();
     vars.sort_unstable();
     let mut out = Vec::new();
@@ -807,23 +843,7 @@ fn link_observability_of(
         if !fresh_buffer || appends.len() != 1 {
             continue;
         }
-        let Some(fill) = u.copyfill_pos.get(&a).copied() else {
-            continue;
-        };
-        let local_readonly = !u.ineligible.contains(&a);
-        let source_stable = appends[0].is_some_and(|base| {
-            // The base's own store is stable after the fill, AND so is every var that aliases it.
-            let base_stable = u.other_max_pos.get(&base).copied().unwrap_or(0) < fill;
-            let aliases_stable = (0..n).filter(|&b| b != a && b != base).all(|b| {
-                if function.tp(b).base().depend().contains(&base) {
-                    u.other_max_pos.get(&b).copied().unwrap_or(0) < fill
-                } else {
-                    true
-                }
-            });
-            base_stable && aliases_stable
-        });
-        out.push((a, appends[0], local_readonly && source_stable));
+        out.push((a, appends[0], bind_link_unobservable(&u, function, a, appends[0])));
     }
     out
 }
@@ -951,6 +971,22 @@ fn analyze_fn(
             (
                 Verdict::Borrow,
                 "tier1: read-only local, ordering-proven read-only local source",
+                CopyClass::Eliminated,
+            )
+        } else if crate::keys::link_widen_enabled()
+            && bind_link_safe(&u, function, v, src)
+            && bind_link_unobservable(&u, function, v, src)
+        {
+            // @PLN102 build step 4 — the transparent-link WIDENING (gated `LOFT_LINK_WIDEN`). A bind
+            // the tiers above leave as a copy is realized as a shared-store link when it is provably
+            // SAFE (source outlives the local, no escape) AND UNOBSERVABLE (neither side's store is
+            // mutated after the bind, ALIAS-AWARE) — the two oracles proven report-only in steps 2/3.
+            // The observable result is unchanged (copy ≡ link here); it just realizes more links. The
+            // `ElidePlan` production below runs unchanged, incl. its own borrower-safety gate. Dead
+            // when the flag is off ⇒ byte-identical.
+            (
+                Verdict::Borrow,
+                "widen: safe + unobservable link (LOFT_LINK_WIDEN)",
                 CopyClass::Eliminated,
             )
         } else if src.is_none() {

@@ -86,6 +86,13 @@ fn assert_matrix_s(backend: &str) {
         Some(&true),
         "[{backend}] S4 (local escapes via return) must NOT be SAFE\n{v:?}"
     );
+    // S5 (self-append `a += a`, source == local) must be UNSAFE — a link would borrow itself and go
+    // slotless (the codegen panic the widening's first gate-on run surfaced).
+    assert_eq!(
+        v.get("n_s5_self_append"),
+        Some(&false),
+        "[{backend}] S5 (self-append, source is the local) must be UNSAFE\n{v:?}"
+    );
 
     // Non-vacuous: the oracle demonstrably emits BOTH verdicts on this corpus.
     assert!(
