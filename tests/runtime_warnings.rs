@@ -854,18 +854,42 @@ fn coalesce_after_fault_op_not_redundant() {
     let source = "\
 struct M { m: vector<float> not null }
 struct S { stride: integer not null }
+struct T { steep: float not null }
 fn pick(x: const M, i: integer) -> float { x.m[i] ?? 0.0 }
 fn cnt(s: const S, n: integer) -> integer { (n / s.stride) ?? 0 }
+fn relief(t: const T) -> float { sqrt(max(t.steep, 0.01)) ?? 0.0 }
 fn main() {
   a = pick(M { m: [1.0, 2.0] }, 0);
   b = cnt(S { stride: 2 }, 10);
-  print(\"a={a} b={b}\\n\");
+  c = relief(T { steep: 4.0 });
+  print(\"a={a} b={b} c={c}\\n\");
 }
 ";
     let (_stdout, diag, _code) = run_with_warnings("coalesce_fault_op", source);
+    // @PLN102 case E — a domain-fault CALL (`sqrt`, …) nulls a non-null input, so
+    // `sqrt(not_null_field) ?? d` is a real defense, exactly like the index/division
+    // cases.  The lint gates on the (Optional) result type, not the stale not-null flag.
     assert!(
         !diag.contains("Redundant null coalescing"),
-        "`??` after an index / division must NOT be flagged redundant; got stderr={diag:?}"
+        "`??` after an index / division / sqrt must NOT be flagged redundant; got stderr={diag:?}"
+    );
+}
+
+// ── @PLN102 case E sibling: `== null` after a fault op is not always-constant ──
+// The redundant-null-CHECK lint shares the `expr_not_null` root: `sqrt(field) == null`
+// is a genuine check (sqrt of a non-null CAN be null), so it must not warn "always
+// false".  A genuine non-null field check still warns (asserted elsewhere: p285).
+#[test]
+fn null_check_after_fault_op_not_redundant() {
+    let source = "\
+struct T { steep: float not null }
+fn is_bad(t: const T) -> boolean { sqrt(t.steep) == null }
+fn main() { print(\"{is_bad(T { steep: 4.0 })}\\n\"); }
+";
+    let (_stdout, diag, _code) = run_with_warnings("nullcheck_fault_op", source);
+    assert!(
+        !diag.contains("Redundant null check"),
+        "`== null` after a sqrt must NOT be flagged always-constant; got stderr={diag:?}"
     );
 }
 

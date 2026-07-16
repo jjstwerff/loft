@@ -435,6 +435,18 @@ pub fn nullflow_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLFLOW").is_none())
 }
 
+/// `LOFT_NO_MATH_DOMAIN=1` (@PLN102 case B — soften-nullflow-discharge.md) — DEFAULT ON, opt
+/// OUT. Extends the Phase-3.5 constant-in-domain elision from constant args to provably
+/// in-domain EXPRESSIONS via a sign lattice (`sqrt(a*a + b*b)`, `sqrt(max(x, 0.01))`,
+/// `pow(abs(x), y)` type non-null instead of `τ?`), so no `??` is forced on a provably-safe
+/// fault op. Flipped default-on (B5) after the whole-corpus measure confirmed zero runtime-null
+/// leaks and the redundant-lint grandfather (`call_declares_nullable`) prevents a now-non-null
+/// `sqrt(sum) ?? d` from newly warning under `LOFT_DENY_WARNINGS`.
+pub fn math_domain_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_MATH_DOMAIN").is_none())
+}
+
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
 /// (`integer`, `text`, `bool`, …) is NON-NULL by default; `τ?` is the only nullable form. Turns
 /// `IntegerSpec.not_null` default `false → true` (and the analog for other scalars rides

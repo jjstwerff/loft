@@ -22,6 +22,16 @@ use std::io::Write;
 use std::string::ToString;
 use typedef::complete_definition;
 
+/// @PLN102 case B (soften-nullflow-discharge.md) — the sign / lower-bound lattice used to
+/// prove a domain-fault op's argument is in its safe domain (`sqrt` needs `≥ 0`, `ln` needs
+/// `> 0`). `Pos ⊑ NonNeg ⊑ Unknown` (stronger → weaker); `Unknown` is the conservative default.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Sign {
+    Pos,
+    NonNeg,
+    Unknown,
+}
+
 /**
 The number of defined reserved text worker variables. A worker variable is needed when
 two texts are added or a formatting text is used, and the result is used as a parameter to a call.
@@ -1455,7 +1465,7 @@ impl Parser {
     /// native packages — e.g. `graphics` + `random` — leaving BOTH unmapped:
     /// the interpreter still dispatched them via `def.native` + dlopen, but
     /// `--native` rejected the first reachable call with a P269 compile error.)
-    fn backfill_native_symbol_crates(&mut self) {
+    pub(crate) fn backfill_native_symbol_crates(&mut self) {
         if self.data.native_packages.is_empty() {
             return;
         }
@@ -2940,7 +2950,7 @@ impl Parser {
             // LOFT_NULLFLOW, and only the constant subset (variable-arg range-tracking is deferred).
             if crate::keys::nullflow_enabled()
                 && matches!(ret, Type::Optional(_))
-                && Self::math_arg_in_domain(name, list)
+                && self.math_arg_in_domain(name, list)
             {
                 // Phase 3.5 elision: a provably-in-domain constant arg peels the `τ?`.
                 ret.base().clone()
@@ -3044,6 +3054,27 @@ impl Parser {
         }
     }
 
+    /// The constant `f64` value of `v` if it is one — a literal, or (case-C residual) any
+    /// expression that `const_eval` reduces to a number, e.g. the call-valued consts `PI` /
+    /// `E` (`OpMathPiFloat()` → π). So a math arg / divisor written in terms of `PI` folds
+    /// like a literal would.
+    #[allow(clippy::cast_precision_loss)]
+    fn const_f64(&self, v: Option<&Value>) -> Option<f64> {
+        match v?.unspan() {
+            Value::Float(f) => Some(*f),
+            Value::Single(f) => Some(f64::from(*f)),
+            Value::Int(n) => Some(f64::from(*n)),
+            Value::Long(n) => Some(*n as f64),
+            other => match crate::const_eval::const_eval(other, &self.data) {
+                Some(Value::Float(f)) => Some(f),
+                Some(Value::Single(f)) => Some(f64::from(f)),
+                Some(Value::Int(n)) => Some(f64::from(n)),
+                Some(Value::Long(n)) => Some(n as f64),
+                _ => None,
+            },
+        }
+    }
+
     /// @PLN102 Phase 3.5 — is a call to a domain-partial math fn provably IN its real domain,
     /// from CONSTANT arguments alone? Then its result is non-null and the `τ?` elides. The
     /// constant subset of the "provably-fits" elision (variable-arg range-tracking is deferred).
@@ -3051,19 +3082,10 @@ impl Parser {
     // represent exactly in `f64` is trivially outside any bounded domain, and `base != 1.0` is the
     // genuine boundary (a `log` base of exactly 1 is undefined), so the two lints do not apply.
     #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
-    fn math_arg_in_domain(name: &str, args: &[Value]) -> bool {
-        fn cval(v: Option<&Value>) -> Option<f64> {
-            match v.map(Value::unspan) {
-                Some(Value::Float(f)) => Some(*f),
-                Some(Value::Single(f)) => Some(f64::from(*f)),
-                Some(Value::Int(n)) => Some(f64::from(*n)),
-                Some(Value::Long(n)) => Some(*n as f64),
-                _ => None,
-            }
-        }
-        let a0 = cval(args.first());
-        let a1 = cval(args.get(1));
-        match name {
+    fn math_arg_in_domain(&self, name: &str, args: &[Value]) -> bool {
+        let a0 = self.const_f64(args.first());
+        let a1 = self.const_f64(args.get(1));
+        let const_ok = match name {
             "sqrt" => matches!(a0, Some(x) if x >= 0.0),
             "asin" | "acos" => matches!(a0, Some(x) if (-1.0..=1.0).contains(&x)),
             "ln" | "log2" | "log10" => matches!(a0, Some(x) if x > 0.0),
@@ -3075,6 +3097,170 @@ impl Parser {
             // the exponent is a whole number (`pow(-2, 3)` = -8, but `pow(-2, 0.5)` = null).
             "pow" => matches!(a0, Some(b) if b >= 0.0) || matches!(a1, Some(e) if e.fract() == 0.0),
             _ => false,
+        };
+        if const_ok {
+            return true;
+        }
+        // @PLN102 case B (soften-nullflow-discharge.md) — beyond the constant subset, prove the
+        // argument is in-domain from an EXPRESSION via the sign lattice (`sqrt(a*a + b*b)`,
+        // `sqrt(max(x, 0.01))`). Opt-in until the default-on flip (B5); default-off keeps the
+        // surface byte-identical (a narrowed `τ?` would else re-flag `… ?? d` as redundant).
+        if !crate::keys::math_domain_enabled() {
+            return false;
+        }
+        let base_sign = args.first().map_or(Sign::Unknown, |v| self.domain_sign(v));
+        match name {
+            // sqrt / pow-base need arg ≥ 0; ln / log need arg > 0 (strict).
+            "sqrt" => matches!(base_sign, Sign::NonNeg | Sign::Pos),
+            "ln" | "log2" | "log10" => base_sign == Sign::Pos,
+            "pow" => matches!(base_sign, Sign::NonNeg | Sign::Pos),
+            // `log(x, base)`: x > 0 (lattice) and a valid CONSTANT base (upper-bound-free lattice
+            // can't prove base ≠ 1, so keep base constant).
+            "log" => base_sign == Sign::Pos && matches!(a1, Some(b) if b > 0.0 && b != 1.0),
+            // asin / acos need a TWO-sided bound [-1, 1] — the interval pass proves it for the
+            // real cases (`sin`/`cos` outputs, `clamp(_, -1, 1)`, the `min(max(e,-1),1)` clamp).
+            "asin" | "acos" => {
+                let (lo, hi) = args
+                    .first()
+                    .map_or((f64::NEG_INFINITY, f64::INFINITY), |v| self.pm_bounds(v));
+                lo >= -1.0 && hi <= 1.0
+            }
+            _ => false,
+        }
+    }
+
+    /// @PLN102 case B — a small interval-bounds pass for the TWO-sided `asin`/`acos` domain
+    /// `[-1, 1]` (the sign lattice gives only a lower bound). Returns a provable `[lo, hi]`;
+    /// `±∞` means unbounded. Only the constructs that actually keep a value in range: constants,
+    /// `sin`/`cos` outputs, `clamp(e, lo, hi)` with constant bounds, and `min`/`max` (so the
+    /// manual `min(max(e, -1.0), 1.0)` clamp is proved). Everything else → unbounded (matched by
+    /// exact stdlib def name; `OpMinFloat` is subtraction, not `min`, and is deliberately unmatched).
+    #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
+    fn pm_bounds(&self, v: &Value) -> (f64, f64) {
+        let open = (f64::NEG_INFINITY, f64::INFINITY);
+        match v.unspan() {
+            Value::Float(f) => (*f, *f),
+            Value::Single(f) => (f64::from(*f), f64::from(*f)),
+            Value::Int(n) => (f64::from(*n), f64::from(*n)),
+            Value::Long(n) => (*n as f64, *n as f64),
+            Value::Call(d, args) => {
+                let nm = self.data.def(*d).name.as_str();
+                // Unary negation (`-1.0` parses to `OpMinSingleFloat(1.0)`): flip + swap bounds,
+                // so a negated literal reaches `clamp`/`min`/`max` as a real constant bound.
+                if args.len() == 1 && matches!(nm, "OpMinSingleFloat" | "OpMinSingleSingle") {
+                    let (lo, hi) = self.pm_bounds(&args[0]);
+                    return (-hi, -lo);
+                }
+                if matches!(
+                    nm,
+                    "t_5float_sin" | "t_6single_sin" | "t_5float_cos" | "t_6single_cos"
+                ) {
+                    return (-1.0, 1.0);
+                }
+                if args.len() == 3 && matches!(nm, "t_5float_clamp" | "t_6single_clamp") {
+                    // clamp(e, lo, hi) ∈ [lo, hi] when lo/hi are constants and lo ≤ hi.
+                    let (llo, lhi) = self.pm_bounds(&args[1]);
+                    let (hlo, hhi) = self.pm_bounds(&args[2]);
+                    if llo == lhi && hlo == hhi && llo <= hhi {
+                        return (llo, hhi);
+                    }
+                    return open;
+                }
+                if args.len() == 2 && matches!(nm, "t_5float_min" | "t_6single_min") {
+                    let (al, ah) = self.pm_bounds(&args[0]);
+                    let (bl, bh) = self.pm_bounds(&args[1]);
+                    return (al.min(bl), ah.min(bh));
+                }
+                if args.len() == 2 && matches!(nm, "t_5float_max" | "t_6single_max") {
+                    let (al, ah) = self.pm_bounds(&args[0]);
+                    let (bl, bh) = self.pm_bounds(&args[1]);
+                    return (al.max(bl), ah.max(bh));
+                }
+                open
+            }
+            _ => open,
+        }
+    }
+
+    /// @PLN102 case B — the sign / lower-bound lattice over a PURE float/single expression:
+    /// is its value provably `> 0` (`Pos`), `≥ 0` (`NonNeg`), or unknown? Conservative — the
+    /// default is `Unknown`, and only exact, sound transfer functions promote (a square is ≥ 0,
+    /// a sum of non-negatives is ≥ 0, `abs`/`sqrt` are ≥ 0, `max` takes the stronger bound).
+    /// Node kinds are matched by their EXACT stdlib def name (`OpMulFloat`, `t_5float_max`, …),
+    /// never a suffix, so a user method can't be mistaken for one. Anything unrecognised → Unknown.
+    fn domain_sign(&self, v: &Value) -> Sign {
+        fn of_const(x: f64) -> Sign {
+            if x > 0.0 {
+                Sign::Pos
+            } else if x == 0.0 {
+                Sign::NonNeg
+            } else {
+                Sign::Unknown
+            }
+        }
+        match v.unspan() {
+            Value::Float(f) => of_const(*f),
+            #[allow(clippy::cast_precision_loss)]
+            Value::Single(f) => of_const(f64::from(*f)),
+            Value::Int(n) => of_const(f64::from(*n)),
+            #[allow(clippy::cast_precision_loss)]
+            Value::Long(n) => of_const(*n as f64),
+            Value::Call(d_nr, args) => {
+                let nm = self.data.def(*d_nr).name.as_str();
+                if args.len() == 2 && matches!(nm, "OpMulFloat" | "OpMulSingle") {
+                    // A square (`a * a`, structurally identical operands) is ≥ 0 regardless of
+                    // sign; otherwise combine signs (a non-null float is never the null sentinel,
+                    // so no null leaks through a product).
+                    if args[0].unspan() == args[1].unspan() {
+                        return Sign::NonNeg;
+                    }
+                    return match (self.domain_sign(&args[0]), self.domain_sign(&args[1])) {
+                        (Sign::Pos, Sign::Pos) => Sign::Pos,
+                        (Sign::Pos | Sign::NonNeg, Sign::Pos | Sign::NonNeg) => Sign::NonNeg,
+                        _ => Sign::Unknown,
+                    };
+                }
+                if args.len() == 2 && matches!(nm, "OpAddFloat" | "OpAddSingle") {
+                    return match (self.domain_sign(&args[0]), self.domain_sign(&args[1])) {
+                        (Sign::Pos, Sign::Pos | Sign::NonNeg) | (Sign::NonNeg, Sign::Pos) => {
+                            Sign::Pos
+                        }
+                        (Sign::NonNeg, Sign::NonNeg) => Sign::NonNeg,
+                        _ => Sign::Unknown,
+                    };
+                }
+                // `abs(x)` and `sqrt(x)` are ≥ 0 by definition (exact stdlib names only).
+                if matches!(
+                    nm,
+                    "t_5float_abs" | "t_6single_abs" | "t_5float_sqrt" | "t_6single_sqrt"
+                ) {
+                    return Sign::NonNeg;
+                }
+                // `max(a, b)` ≥ each operand, so its lower bound is the STRONGER of the two.
+                if args.len() == 2 && matches!(nm, "t_5float_max" | "t_6single_max") {
+                    let (a, b) = (self.domain_sign(&args[0]), self.domain_sign(&args[1]));
+                    return if a == Sign::Pos || b == Sign::Pos {
+                        Sign::Pos
+                    } else if a == Sign::NonNeg || b == Sign::NonNeg {
+                        Sign::NonNeg
+                    } else {
+                        Sign::Unknown
+                    };
+                }
+                // `min(a, b)` ≤ each, so its lower bound is the WEAKER of the two.
+                if args.len() == 2 && matches!(nm, "t_5float_min" | "t_6single_min") {
+                    let (a, b) = (self.domain_sign(&args[0]), self.domain_sign(&args[1]));
+                    return if a == Sign::Unknown || b == Sign::Unknown {
+                        Sign::Unknown
+                    } else if a == Sign::NonNeg || b == Sign::NonNeg {
+                        Sign::NonNeg
+                    } else {
+                        Sign::Pos
+                    };
+                }
+                Sign::Unknown
+            }
+            _ => Sign::Unknown,
         }
     }
 

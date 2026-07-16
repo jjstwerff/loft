@@ -106,6 +106,13 @@ struct ManifestState {
     /// the parse registered (#310 — re-resolved at warm load so a cached run
     /// dlopens the same libraries, with cold-equal freshness checks).
     native_lib_regs: Vec<(String, String)>,
+    /// `[native] crate` registrations: `(crate, pkg_dir)` per native package —
+    /// what `Data::native_packages` holds (the rlib the `--native` path links).
+    /// The IR bundle does not serialize it, and `--native` codegen maps every
+    /// `#native` symbol to its owning crate through it — so without replaying it a
+    /// warm `--native` build P269s a reachable `#native` fn as "no implementation
+    /// in any registered native crate" (the ssh-lib regression).
+    native_crate_regs: Vec<(String, String)>,
     /// Def-table index where USER definitions start (the stdlib def count when
     /// the user-file parse began).  A warm load restores stdlib + user defs in
     /// one table, so without this boundary the no-`main` test-fn fallback sees
@@ -166,6 +173,16 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
         native_lib_regs.push((stem.to_string(), pkg_dir.to_string()));
         next = lines.next();
     }
+    // Optional `ncrate <crate> <pkg_dir>` headers: one per `[native] crate`
+    // registration (`Data::native_packages`) — replayed so a warm `--native`
+    // build repopulates the native-symbol→crate map instead of P269-ing. A crate
+    // name has no spaces, so the remainder after the first space is the dir.
+    let mut native_crate_regs = Vec::new();
+    while let Some(rest) = next.and_then(|l| l.strip_prefix("ncrate ")) {
+        let (krate, pkg_dir) = rest.split_once(' ')?;
+        native_crate_regs.push((krate.to_string(), pkg_dir.to_string()));
+        next = lines.next();
+    }
     // #444 — optional `wbroute <loft_sym> <crate> <bridge_fn>` headers: the
     // `[wasm.bridge].routes` map.  The three tokens are a `#native` symbol, a
     // crate name, and a bridge fn — none contains a space — so `splitn(3)` is
@@ -206,6 +223,7 @@ fn manifest_state(manifest: &std::path::Path) -> Option<ManifestState> {
     any.then_some(ManifestState {
         program_relative,
         native_lib_regs,
+        native_crate_regs,
         user_def_start,
         wasm_bridge_routes,
         wasm_bridge_packages,
@@ -270,6 +288,20 @@ pub fn warm_load_program(
     if !loaded {
         return None;
     }
+    // Repopulate `native_packages` (the `[native] crate` regs) — the IR bundle
+    // stores only the def table, so a warm load loses them and `--native` codegen
+    // P269s a reachable `#native` fn. Re-push them, then re-derive
+    // `native_symbol_crates` via the SAME backfill the cold path runs after its
+    // manifest registration (map each `#native` def to the package dir that is the
+    // longest prefix of its source file).
+    for (krate, pkg_dir) in &state.native_crate_regs {
+        if !p.data.native_packages.iter().any(|(c, _)| c == krate) {
+            p.data
+                .native_packages
+                .push((krate.clone(), pkg_dir.clone()));
+        }
+    }
+    p.backfill_native_symbol_crates();
     // @PLN11 — restore the parse-time `#cwd` path-resolution mode the warm
     // load skipped.  Without it a cached `#cwd` program resolves relative
     // paths program-relative instead of cwd-relative, silently reading the
@@ -321,6 +353,13 @@ pub fn save_program(p: &Parser, script_abspath: &str, user_def_start: u32) {
     // re-resolve (and freshness-check) the cdylibs the parse registered.
     for (stem, pkg_dir) in &p.native_lib_regs {
         let _ = writeln!(lines, "nlib {stem} {pkg_dir}");
+    }
+    // Persist each `[native] crate` registration (`Data::native_packages`) so a
+    // warm `--native` build repopulates the native-symbol→crate map — without it
+    // the IR bundle (def table only) leaves it empty and codegen P269s a reachable
+    // `#native` fn as "no implementation in any registered native crate".
+    for (krate, pkg_dir) in &p.data.native_packages {
+        let _ = writeln!(lines, "ncrate {krate} {pkg_dir}");
     }
     // #444 — persist the `[wasm.bridge]` state so a warm load reconstructs the
     // route table `--html` codegen reads (the IR bundle stores only the def
@@ -376,3 +415,42 @@ pub fn warm_load_program(
 }
 #[cfg(not(feature = "mmap"))]
 pub fn save_program(_p: &Parser, _script_abspath: &str, _user_def_start: u32) {}
+
+#[cfg(all(test, feature = "mmap"))]
+mod ncrate_manifest_tests {
+    use super::*;
+
+    /// The cache manifest must replay an `ncrate <crate> <pkg_dir>` header so a warm `--native`
+    /// build repopulates `native_packages` (the ssh-lib P269 regression). Exercises the read
+    /// side of that round-trip beside the existing `nlib` header.
+    #[test]
+    fn manifest_state_parses_ncrate_native_packages() {
+        let dir = std::env::temp_dir().join(format!("loft_ncrate_{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let src = dir.join("s.loft");
+        std::fs::write(&src, "fn main() {}\n").unwrap();
+        let src_str = src.to_string_lossy().to_string();
+        let hash = crate::cache::file_hash(&src_str).expect("hash source");
+        let manifest = dir.join("m.manifest");
+        let content = format!(
+            "sig {}\nnlib loft_foo /pkgs/foo\nncrate loft-foo /pkgs/foo\n{} {}\n",
+            crate::cache::build_signature(),
+            hex32(&hash),
+            src_str,
+        );
+        std::fs::write(&manifest, &content).unwrap();
+
+        let state = manifest_state(&manifest).expect("valid manifest hit");
+        assert_eq!(
+            state.native_crate_regs,
+            vec![("loft-foo".to_string(), "/pkgs/foo".to_string())],
+            "the ncrate header must round-trip into native_crate_regs"
+        );
+        assert_eq!(
+            state.native_lib_regs,
+            vec![("loft_foo".to_string(), "/pkgs/foo".to_string())],
+            "the sibling nlib header still parses beside ncrate"
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+}
