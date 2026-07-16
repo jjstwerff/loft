@@ -5471,7 +5471,7 @@ fn inc29_bang_integer_null_is_caught() {
     // an explicit nullable shape (`a / b ?? null`) so the divide
     // still produces the null sentinel that `!n` is here to catch.
     code!(
-        "fn divide(a: integer, b: integer) -> integer { a / b ?? null }
+        "fn divide(a: integer, b: integer) -> integer? { a / b ?? null }
 fn run() -> boolean {
     n = divide(1, 0);
     !n

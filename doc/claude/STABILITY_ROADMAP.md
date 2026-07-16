@@ -91,13 +91,17 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    registry republish (#546). **Load-bearing half realised:** the value shapes and `deps` ownership
    facts the memory-model fix reads are settled, which is what makes **gate 1's invariant
    *knowable*** — so gate 1 is unblocked, and that was gate 2's job for it.
-   **What keeps the gate open** is close-out plus a set of **verified-open edge cases** — among them
-   a **`?? null` unsoundness** (`y: integer = x ?? null` is accepted and a non-null slot ends up
-   holding `null`, both backends), the **call-arg N-Store hole** (a nullable passed into a non-null
-   *parameter* is silently accepted, though into a non-null *local* it is correctly rejected), a
-   **`u8?`-return native codegen failure**, the registry-gated `not null` hard-reject, and the F6
-   bookkeeping close-out. A null reaching a non-null slot is a soundness edge, not cosmetics: it is
-   the user-facing incoherence this gate exists to remove, so the gate reads **open**.
+   **What keeps the gate open** is close-out plus a shrinking set of **verified-open edge cases**.
+   Two of the three soundness edges are now **CLOSED (2026-07-16)**: the **`?? null` unsoundness**
+   (`y: integer = x ?? null`) is fixed — `??` keeps the result `τ?` when the fallback can be null,
+   so the store is rejected (`qq_null_typing_enabled`, `tests/qq_null_typing.rs`); and the
+   **`u8?`-return native codegen failure** no longer reproduces (re-probed, `--native` agrees with
+   interp). The **remaining** soundness edge is the **call-arg N-Store hole** — a nullable passed
+   into a non-null *parameter* is silently accepted, though into a non-null *local* it is correctly
+   rejected (the teeth sit on the local-slot site, not the call-arg site). That plus the
+   registry-gated `not null` hard-reject and the F6 bookkeeping close-out are what remain. A null
+   reaching a non-null slot is a soundness edge, not cosmetics — the user-facing incoherence this
+   gate exists to remove — so while the call-arg hole stands the gate reads **open**.
    *Provenance:* re-probed on both backends 2026-07-10 by the @PLN25 stream — the authoritative list
    is [RESUME.md § VERIFIED-OPEN RESIDUALS](plans/25-nullable-sequences/RESUME.md#verified-open-residuals-re-probed-both-backends-2026-07-10).
    These are **not** independently re-verified here.

@@ -1282,11 +1282,18 @@ impl Output<'_> {
         // dangle.  Defer to `text_string_unify` below (owned `String` for
         // both) instead.
         let text_mismatch = self.text_if_mismatched_reps(true_v, false_v);
+        // @PLN102 `?? null`: a coalesce arm now reports `text?` (`Optional(Text)`) when its
+        // fallback can be null (`v[i] ?? null`), so peel `Optional` before the text-rep check — a
+        // `text?` if-arm has the SAME `String`/`&str` unify hazard as a plain `text` one (its
+        // present-path still materialises an owned `String` while a `null` sibling arm is `&str`).
+        let true_arm_is_text = self
+            .infer_type(IrNode::Native(true_v))
+            .is_some_and(|t| matches!(t.base(), Type::Text(_)));
         let text_unify = !b_true
             && !b_false
             && !text_mismatch
             && !matches!(false_v, Value::Null)
-            && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
+            && true_arm_is_text;
         // @P386: a text-result if-expression where any branch is a Block
         // containing the `__ncc_*` skip_free pattern produces an OWNED
         // `String` for that branch (via the `_ret.to_string()` block-tail
@@ -1306,7 +1313,7 @@ impl Output<'_> {
             && (text_mismatch
                 || matches!(true_v, Value::Block(b) if self.block_contains_ncc_skip_free(b))
                 || matches!(false_v, Value::Block(b) if self.block_contains_ncc_skip_free(b)))
-            && matches!(self.infer_type(IrNode::Native(true_v)), Some(Type::Text(_)));
+            && true_arm_is_text;
         // @PLN17: a boolean if-expression (e.g. the `&&` / `||` lowering
         // `if a {b} else {false}`) has arms that may be `u8` (a var/call — storage
         // form) or `bool` (a literal/comparison — expression form), which don't

@@ -435,6 +435,20 @@ pub fn nullflow_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLFLOW").is_none())
 }
 
+/// `LOFT_NO_QQ_NULL=1` (@PLN102 gate-2 residual — the `?? null` typing soundness fix) — DEFAULT
+/// ON, opt OUT. `a ?? b` discharges null only as far as the FALLBACK `b` can: when `b` is itself
+/// nullable (a bare `null` literal, or a `τ?`-typed expression) the coalesce can still yield null,
+/// so its RESULT type stays `τ?` instead of peeling to the non-null base. Without this,
+/// `y: integer = x ?? null` (and `?? <nullableVar>`) was accepted and a non-null slot held the null
+/// sentinel — the exact "null in a non-null slot" incoherence the null-model gate exists to remove.
+/// The escape hatch exists because the tightening is a compile-time reject of a previously-accepted
+/// (unsound) program; it must land before the 1.0 freeze (rejecting later would break compat).
+#[must_use]
+pub fn qq_null_typing_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_QQ_NULL").is_none())
+}
+
 /// `LOFT_NO_MATH_DOMAIN=1` (@PLN102 case B — soften-nullflow-discharge.md) — DEFAULT ON, opt
 /// OUT. Extends the Phase-3.5 constant-in-domain elision from constant args to provably
 /// in-domain EXPRESSIONS via a sign lattice (`sqrt(a*a + b*b)`, `sqrt(max(x, 0.01))`,
