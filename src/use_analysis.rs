@@ -2250,10 +2250,16 @@ pub fn warn_dead_stores(
                 continue;
             }
             let (line, col) = func.var_source(v);
+            // @PLN102 arc-C steer (alias-where-correct.md step 6): the write-through-intent case.
+            // A copy mutated then discarded has no correct copy meaning, so point straight at the
+            // explicit fix — `&` for write-through — and offer the read-back alternative if a copy
+            // really was intended. (The write-through is ALWAYS the programmer's explicit `&`, never
+            // inferred — see alias-where-correct.md: copy is the semantics, links are explicit.)
             let msg = format!(
-                "'{name}' is mutated but its value is never read — the write is lost. A \
-                 whole-value bind (`{name} = …`) COPIES the heap value; write through the \
-                 original in place, or take a `&` reference."
+                "'{name}' is mutated but its value is never read — the write is LOST. A whole-value \
+                 bind (`{name} = …`) COPIES the heap value (C86), so the mutation lands in the copy, \
+                 not the source. For write-through, bind a live reference with `&` (`{name} = &…`). \
+                 If a copy was intended, read `{name}` after the mutation."
             );
             diags.add_at(
                 crate::diagnostics::Level::Warning,

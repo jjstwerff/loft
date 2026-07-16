@@ -107,6 +107,13 @@ fn assert_default(backend: &str) {
             "[{backend}] the dead store on `{v}` must fire\n{diag}"
         );
     }
+    // @PLN102 alias-where-correct step 6 — the message is the arc-C write-through steer: it points at
+    // the explicit `&` fix AND offers the read-back alternative. The write-through is never inferred
+    // (copy stays the semantics), so the lint teaching `&` is how the intent is recovered.
+    assert!(
+        diag.contains("`d = &…`") && diag.contains("read `d` after"),
+        "[{backend}] the dead-store message must steer to `&` (write-through) + offer read-back\n{diag}"
+    );
     // Load-bearing guard: a reference-struct alias (`al`) has the SAME (reads=0, write_targets=1)
     // signal as a value-struct copy, but the write PROPAGATES to the source, so it must stay
     // SILENT — the value-struct fix must be distinguished by ownership, not over-fire on aliases.
