@@ -1630,6 +1630,53 @@ mod tests {
             .expect("round-trip equal incl. superseded");
     }
 
+    #[test]
+    /// @PLN102 arc C step 2 — `source_is_owned` / `caller_source_is_owned`
+    /// distinguish the OWNED entry project (`MAIN_SOURCE`) from a re-parsed
+    /// dependency (source `2..`, what a `use`d library gets) and the stdlib
+    /// (`STD_SOURCE`).  This is the caller-provenance fact the arc-C steer gate
+    /// (step 3) reads so a `#superseded` warning reaches only whoever can act.
+    fn source_ownership_distinguishes_entry_dependency_stdlib() {
+        use crate::data::{MAIN_SOURCE, STD_SOURCE};
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+
+        // The bare fact on each source class.
+        assert!(p.data.source_is_owned(MAIN_SOURCE), "entry (MAIN_SOURCE) is owned");
+        assert!(!p.data.source_is_owned(STD_SOURCE), "stdlib is NOT owned");
+        assert!(!p.data.source_is_owned(2), "a dependency source (2..) is NOT owned");
+
+        // The stdlib parse produced defs, and none of them reads as owned.
+        assert!(
+            (0..p.data.definitions.len())
+                .any(|d| p.data.def(d as u32).source() == STD_SOURCE),
+            "stdlib parse produced STD_SOURCE defs"
+        );
+
+        // An entry-file def, parsed at MAIN_SOURCE, IS owned; and the current
+        // compile source is owned right after.
+        p.parse_snippet("fn my_entry_fn() -> integer { 42 }\n", "<main>", MAIN_SOURCE);
+        assert!(p.data.caller_source_is_owned(), "MAIN_SOURCE current -> owned");
+        let entry = p.data.source_nr(MAIN_SOURCE, "n_my_entry_fn");
+        assert_ne!(entry, u32::MAX, "entry fn resolves at MAIN_SOURCE");
+        assert!(
+            p.data.source_is_owned(p.data.def(entry).source()),
+            "an entry-file def IS owned"
+        );
+
+        // A dependency def, parsed at source 2 (what a `use`d library gets), is
+        // NOT owned; and the current compile source is NOT owned right after.
+        p.parse_snippet("fn my_dep_fn() -> integer { 7 }\n", "<dep>", 2);
+        assert!(!p.data.caller_source_is_owned(), "source 2 current -> NOT owned");
+        let dep = p.data.source_nr(2, "n_my_dep_fn");
+        assert_ne!(dep, u32::MAX, "dependency fn resolves at source 2");
+        assert!(
+            !p.data.source_is_owned(p.data.def(dep).source()),
+            "a dependency def is NOT owned"
+        );
+    }
+
     /// @PLN11 arc D micro-bench — wall-clock of producing the native stdlib
     /// `Data` two ways: a fresh `parse_dir` (today's cold-start path) vs
     /// `Store::open` + `read_data` (mmap the precompiled store, rebuild native).

@@ -4613,6 +4613,34 @@ impl Data {
         }
     }
 
+    /// @PLN102 arc C — is `source` the compilation's OWNED entry project (vs a
+    /// resolved dependency or the stdlib)?  loft numbers sources `STD_SOURCE` (0)
+    /// = stdlib, `MAIN_SOURCE` (1) = the entry being compiled, `2..` = imported
+    /// dependencies — so a source is owned exactly when it is the entry.  This is
+    /// RELATIVE to what is being built: a library's own source is owned when its
+    /// author compiles it, and a dependency when a consumer imports it (the
+    /// consumer re-parses the library at a `2..` source, never `MAIN_SOURCE`).
+    /// The arc-C steer gate (a later step) reads this so a `#superseded` warning
+    /// reaches only whoever can act on it.
+    ///
+    /// Boundary: loft's entry is a single `MAIN_SOURCE` file plus `use`d
+    /// libraries; were an entry package ever spread across several sources this
+    /// would need the package-path-prefix map, but until then owned == the entry.
+    #[must_use]
+    pub fn source_is_owned(&self, source: u16) -> bool {
+        source == MAIN_SOURCE
+    }
+
+    /// @PLN102 arc C — is the source CURRENTLY being compiled owned (see
+    /// [`Data::source_is_owned`])?  This is the caller-provenance fact the steer
+    /// gate reads at a call site: `self.source` is the source of the code doing
+    /// the call, so a steer fires only when the caller is the entry project,
+    /// never when the call sits in a re-parsed dependency's or the stdlib's source.
+    #[must_use]
+    pub fn caller_source_is_owned(&self) -> bool {
+        self.source_is_owned(self.source)
+    }
+
     #[must_use]
     pub fn source_nr(&self, source: u16, name: &str) -> u32 {
         if source == u16::MAX {
