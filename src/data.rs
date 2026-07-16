@@ -2713,6 +2713,16 @@ pub struct Definition {
     /// stdlib helper loaded from the `LOFT_STDLIB_CACHE` bundle still suppresses;
     /// mirrored in `tools/ir_schema/ir.loft` (`Definition.null_safe`).
     pub null_safe: bool,
+    /// @PLN102 arc C — `#superseded "Y"`: the bare name of the successor symbol
+    /// this callable is superseded by (e.g. `"write_through"`).  Empty = not
+    /// superseded.  Set by the `#superseded` attribute; step 1 only parses +
+    /// stores it (nothing reads it yet, so it is inert).  A later step reads it
+    /// at the call chokepoint to steer an OWNED-source caller toward `Y`, and a
+    /// `make ci` lint checks `Y` resolves and this body is a shim over it.
+    /// Persisted through the IR store (`DEF_SUPERSEDED`) so a `#superseded`
+    /// stdlib symbol loaded from the `LOFT_STDLIB_CACHE` bundle keeps its mark;
+    /// mirrored in `tools/ir_schema/ir.loft` (`Definition.superseded`).
+    pub superseded: String,
     /// Definition number of the closure record struct for capturing lambdas.
     /// `u32::MAX` if this function does not capture.
     pub closure_record: u32,
@@ -2816,6 +2826,14 @@ impl Definition {
     #[must_use]
     pub fn null_safe(&self) -> bool {
         self.null_safe
+    }
+
+    /// `#superseded "Y"` (@PLN102 arc C): the bare successor-symbol name this
+    /// callable is superseded by, or empty if not superseded.  Inert in step 1
+    /// (parsed + stored only); a later step reads it to steer owned-source callers.
+    #[must_use]
+    pub fn superseded(&self) -> &str {
+        &self.superseded
     }
 
     /// Source-file id this definition was parsed from.
@@ -3708,6 +3726,7 @@ impl Data {
             variables: Function::new(name, &position.file),
             pub_visible: false,
             null_safe: false,
+            superseded: String::new(),
             closure_record: u32::MAX,
             mutated_captures: Vec::new(),
             scalars_to_box: Vec::new(),

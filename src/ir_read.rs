@@ -631,6 +631,7 @@ pub fn read_definition(stores: &Stores, r: Record, bodies: bool) -> Definition {
         rust: r.field_str(stores, ds::DEF_RUST).to_string(),
         native: r.field_str(stores, ds::DEF_NATIVE).to_string(),
         cap: r.field_str(stores, ds::DEF_CAP).to_string(), // @PLN86
+        superseded: r.field_str(stores, ds::DEF_SUPERSEDED).to_string(), // @PLN102 arc C
         op_code: r.field_int(stores, ds::DEF_OP_CODE) as u16,
         known_type: r.field_int(stores, ds::DEF_KNOWN_TYPE) as u16,
         pub_visible: r.field_bool(stores, ds::DEF_PUB_VISIBLE),
@@ -1592,6 +1593,41 @@ mod tests {
             "null_safe must survive the store round-trip"
         );
         crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. null_safe");
+    }
+
+    #[test]
+    /// @PLN102 arc C step 1 — `#superseded "Y"` parses to the bare successor name
+    /// and survives both the binary-store and JSON round-trips (so a marked stdlib
+    /// symbol keeps its mark when loaded from the `LOFT_STDLIB_CACHE` bundle).
+    fn superseded_survives_store_round_trip() {
+        use crate::data::Data;
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+        let src = "fn old_add(a: integer, b: integer) -> integer { a + b }\n#superseded \"new_add\"\nfn new_add(a: integer, b: integer) -> integer { a + b }\n";
+        let lpath = std::env::temp_dir().join(format!("loft_sup_rt_{}.loft", std::process::id()));
+        std::fs::write(&lpath, src).unwrap();
+        p.parse(lpath.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&lpath);
+        assert_eq!(
+            p.data.def(p.data.def_nr("n_old_add")).superseded(),
+            "new_add",
+            "parsed `#superseded \"new_add\"` must store the bare successor name"
+        );
+
+        let fresh = p.data;
+        let spath = std::env::temp_dir().join(format!("loft_sup_rt_{}.store", std::process::id()));
+        let spath_str = spath.to_str().unwrap();
+        fresh.save(spath_str).expect("Data::save");
+        let loaded = Data::open(spath_str).expect("Data::open");
+        let _ = std::fs::remove_file(&spath);
+        assert_eq!(
+            loaded.def(loaded.def_nr("n_old_add")).superseded(),
+            "new_add",
+            "the #superseded mark must survive the store round-trip"
+        );
+        crate::ir_schema::compare_data(&fresh, &loaded)
+            .expect("round-trip equal incl. superseded");
     }
 
     /// @PLN11 arc D micro-bench — wall-clock of producing the native stdlib

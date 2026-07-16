@@ -1448,6 +1448,22 @@ impl Parser {
                 // expression (`s[i]`) passed DIRECTLY as an argument is not flagged
                 // at the call site (the possible-null is the callee's contract).
                 self.data.definitions[self.context as usize].null_safe = true;
+            } else if id == Some("superseded".to_string()) {
+                // @PLN102 arc C — `#superseded "Y"` marks this callable as
+                // superseded by the successor symbol Y (a bare name, e.g.
+                // `write_through`).  Step 1 only PARSES + STORES the name;
+                // nothing reads it yet, so it is inert (byte-identical bytecode).
+                // A later step steers an OWNED-source caller toward Y, and a
+                // `make ci` lint checks Y resolves and this body is a shim over it.
+                if let Some(succ) = self.lexer.has_cstring() {
+                    self.data.definitions[self.context as usize].superseded = succ;
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Expect #superseded successor name string, e.g. #superseded \"write_through\""
+                    );
+                }
             } else if id == Some("pure".to_string()) {
                 // Plan-06 phase 5a (DESIGN.md D8.1): `#pure`
                 // declares "no observable side effects, no
