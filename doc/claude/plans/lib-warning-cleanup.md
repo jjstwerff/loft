@@ -99,21 +99,35 @@ from its `gridmesh-0.1.2` REGISTRY dependency (a stale copy predating the siblin
 fix).  Those clear only when the fixed graphics libs are re-published (loft-ship skill,
 touch-gated) — a release step, not a source edit.
 
-### C3 — `&`-parameter advisory (7 sites, gridmesh only) — JUDGMENT, not mechanical
-"`&` only slows it down — drop unless you REASSIGN the whole binding."  NOT a blind
-delete: a `&` that write-backs (`p = …`, or field/element mutation the caller must see)
-must stay; only a read-only `&` param is droppable.  Review each of gridmesh's 7 against
-"is the param reassigned?" — drop the read-only ones, keep the write-back ones (and if a
-kept one still warns, that's a lint false-positive to file, not a lib fix).
+### C3 — `&`-parameter advisory (gridmesh, 7 sites) — **DONE (2026-07-16)**
+"`&` only slows it down — drop unless you REASSIGN the whole binding."  A `&`-reference is
+double-indirect and only needed to rebind the whole slot; field/element/keyed mutation of
+a struct param already propagates to the caller (structs are store-links, @PLN85).
 
-### C0 — test-failure triage (blocks C1c/C2c) — do before touching random/regex
-`random` and `regex` FAIL their suites on current loft.  Confirm env (cdylib
-`libloft.rlib`/no-network registry — the known-environmental class) vs a real break with
-`--no-fail-fast`; only then discharge/retire their warnings.
+Reviewed each of gridmesh's 7 flagged params — **all field-mutate-only or read-only, NONE
+reassign the whole binding** (the sole `f = ChunkField{…}` is a local in the `field_new`
+constructor, not a param).  Dropped `&` on all 7: `emit_segment(m)`, `seg_mesh_append(dst)`,
+`mark_borders(f)`, `field_add_cell(f)`, `field_mark_dirty(f)`, `field_remove_cell(f)`,
+`clear_dirty(f)`.  **Write-through verified preserved on BOTH backends** (chunkfield
+exercises add/remove/clear, chunkinput reads the mutated field, segmesh the SegMesh
+appends — 20 tests green interp + native).  loft-libs-graphics `c4297c6`.
 
-## When this is done
+### C0 — test-failure triage (was blocking C1c/C2c) — **DONE**
+Confirmed `random`/`regex` failures are the KNOWN-ENVIRONMENTAL stale-cdylib bridge
+(`n_<fn> has no marshal bridge — rebuild against bridge-capable loft-ffi`), not a logic
+break — their pure-loft tests pass.  A clean CI rebuilds the cdylib; no source fix needed.
 
-Every non-consumer lib compiles warning-free → the N-Store / `not null` / `&` entries can
-leave the `tests/testing.rs` tolerated list (the @PLN102 1.0 gate), because no fixture
-trips them anymore.  Re-sweep after any language change that shifts the null-flow surface
-(a new f-finding), since that can re-open C1.
+## When this is done — **DONE (C1 + C2 + C3, 2026-07-16)**
+
+**Final sweep: 0 own-source N-Store + `not null` + `&` across every sibling package.**
+Every non-consumer lib now compiles warning-free at the source → the N-Store / `not null` /
+`&` entries can leave the `tests/testing.rs` tolerated list (the @PLN102 1.0 gate) once no
+loft2 fixture trips them either.  Re-sweep after any language change that shifts the
+null-flow surface (a new f-finding), since that can re-open C1.
+
+**Two residuals (not source edits):**
+- **Registry republish** — in-repo `lib/audience_crystal` still warns via its stale
+  `gridmesh-0.1.2` REGISTRY dependency; clears when the fixed graphics libs are
+  re-published (loft-ship skill, touch-gated).
+- **Loft diagnostic bug** — the null-flow return-value N-Store misreports the following
+  function's position (see C1 note); a minimal repro + root cause are ready to file.
