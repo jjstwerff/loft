@@ -3657,9 +3657,7 @@ use a separate collection or add after the loop"
                     let Parts::Struct(fields) = &self.database.types[known as usize].parts else {
                         return None;
                     };
-                    let Some(f_nr) = fields.iter().position(|f| f.position == *pos as u16) else {
-                        return None;
-                    };
+                    let f_nr = fields.iter().position(|f| f.position == *pos as u16)?;
                     let attr = &self.data.def(d_nr).attributes()[f_nr];
                     if !is_leaf && attr.value_const {
                         return Some(format!("{}.{}", self.data.def(d_nr).name(), attr.name));

@@ -5,7 +5,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Design — const model Phase 2: value-const on fields (deep-frozen records)
 
-**Status: DESIGN. Target: before 1.0 (this weekend).**  Continues
+**Status: DONE (Phase 2 CORE, steps 0–5).**  Landed on `tuxedo-work`: value-const
+field flag + parse (INERT) → LHS chain-walk (INERT) → `validate_write` enforcement →
+builders proven untouched (audience_crystal / gridmesh / routing_kernel) → graduated
+tests (`tests/scripts/40-const-fields.loft` positives + `tests/issues.rs pln40_vc_*`
+negatives, both backends) + docs (LOFT.md § Fields four-quadrant table + loft-write).
+Store serialization deferred to Phase 2b (INERT, documented in `ir_read.rs`);
+type-carried transitivity is Phase 3 (post-1.0).  Continues
 [const-model.md](const-model.md) (Phase 1 shipped: value-const params/locals + scalar
 collapse + binding-const fields).  Phase 2 adds the **value-const FIELD** — the missing
 half of the `const v: const T` fully-frozen record — enforced for direct writes by one

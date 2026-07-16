@@ -267,15 +267,37 @@ Fields are declared as `name: type` with optional modifiers **after** the type:
 - `assert(expr)` / `assert(expr, message)` — runtime constraint checked on every write
 - `computed(expr)` — calculated on every access, **not stored** in the record
 
-One modifier goes **before** the field name:
-- `const` — write-once at construction. The field is set in the struct literal (or
-  takes its default), and any later `t.field = …` reassignment is a compile error.
-  Const freezes the field *binding*, not its contents: `const v: vector<T>` rejects
-  only `t.v = […]` (rebinding the field to a new collection); it allows the in-place
-  contents mutations `t.v[0] = x` (element write) and `t.v += […]` (append). On a
-  const *scalar* field, both `t.n = …` and `t.n += …` are rejected (a scalar has no
-  contents). Combining `const` with `computed(...)`
-  is rejected (a computed field is already read-only). Example: `const id: integer`.
+A field has **two independent const axes** (@PLN40 const model) — `const` before the
+NAME freezes the *binding* (the slot), `const` before the TYPE freezes the *value*
+(the contents). They are opposites and compose into four quadrants:
+
+| declaration | rebind `t.v = …` | append `t.v += …` | element `t.v[i] = …` | use |
+|---|---|---|---|---|
+| `v: T` | ✓ | ✓ | ✓ | plain mutable |
+| `const v: T` (binding-const) | ✗ | ✓ | ✓ | **builder** — slot is write-once, contents grow in place |
+| `v: const T` (value-const) | ✓ | ✗ | ✗ | **frozen value** — read-only contents, slot re-pointable |
+| `const v: const T` | ✗ | ✗ | ✗ | fully immutable record |
+
+- **`const` before the NAME — binding-const** (write-once at construction). The field is
+  set in the struct literal (or takes its default), and any later `t.field = …` rebind is
+  a compile error, but the *contents* stay mutable: `const v: vector<T>` allows `t.v[0]=x`
+  and `t.v += […]`. This is the **builder** shape (grow a field in place after construction).
+  Combining `const` with `computed(...)` is rejected (a computed field is already read-only).
+- **`const` before the TYPE — value-const** (`v: const T`). The field's *value* is read-only,
+  so every mutation THROUGH it is rejected — append `t.v += …`, element `t.v[i] = …`, and a
+  nested write `t.r.x = …` reached via a value-const struct field. A whole-value **rebind**
+  `t.v = other` is still allowed: it re-points the slot rather than mutating the frozen value.
+  This is the **frozen record / immutable-value** shape (shared config, a compound key, a value
+  handed to `par()` threads).
+- **Scalar collapse.** A by-value scalar (`integer/float/single/boolean/character`) has no
+  contents distinct from its binding, so BOTH axes make it fully immutable — `const n: integer`
+  *and* `n: const integer` reject `t.n = …` and `t.n += …`. Example: `const id: integer`.
+
+Value-const enforcement covers DIRECT writes (the write's LHS resolved at compile time). A
+value-const value that escapes via a local (`x = t.v; x[i]=…`), a function return, or a
+`vector<const T>` generic is not yet frozen through that laundering — that transitivity is
+type-carried const, deferred to Phase 3.
+(@PLN40; doc/claude/plans/40-const-fields/const-model-phase2.md.)
 
 In default/computed expressions, `$` refers to the record:
 ```

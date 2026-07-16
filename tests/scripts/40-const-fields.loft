@@ -13,6 +13,8 @@ struct Inner { f: integer }
 struct Holder { const r: Inner }
 struct Vecs { const v: vector<integer> }
 struct Note { const body: text }
+struct VFrz { v: const vector<integer>, r: const Inner }  // @PLN40 Phase 2 — value-const fields
+struct FullFrz { const fv: const vector<integer> }        // fully frozen (both const axes)
 struct Cfg { const port: integer = 8080 }
 struct Nested { c: Cell }
 enum Shape { Circle { const radius: integer }, Square { side: integer } }
@@ -73,4 +75,20 @@ fn main() {
   i0 = 0;
   acc[i0] = (acc[i0] ?? 0) + cell.c_color;
   assert(acc[0] == 4, "reading a const field on the RHS of an element-store is fine");
+
+  // ── @PLN40 Phase 2 — VALUE-const field: rebind re-points the slot (allowed) ──
+  // A `v: const T` field's VALUE is read-only, so append / element / nested writes
+  // are rejected (the NEGATIVE cells are parse-time; see tests/issues.rs pln40_vc_*).
+  // A whole-value REBIND is allowed — it re-points the slot, not mutating the value.
+  vf = VFrz { v: [1, 2], r: Inner { f: 7 } };
+  assert(vf.v[0] == 1 && vf.r.f == 7, "value-const fields construct and read");
+  vf.v = [9, 8, 7];                  // rebind the value-const collection field
+  assert(len(vf.v) == 3 && vf.v[0] == 9, "value-const collection field may be rebound");
+  vf.r = Inner { f: 42 };            // rebind the value-const struct field
+  assert(vf.r.f == 42, "value-const struct field may be rebound");
+
+  // ── fully frozen (`const v: const T`) constructs + reads; both writes are rejected
+  //    at parse time (append by value-const, rebind by binding-const). ─
+  ff = FullFrz { fv: [5, 6] };
+  assert(ff.fv[1] == 6 && len(ff.fv) == 2, "fully-frozen field constructs and reads");
 }
