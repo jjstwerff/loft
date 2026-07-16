@@ -1333,7 +1333,7 @@ fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
         returned_not_null: as_bool(field(p, "returned_not_null")?)?,
         rust: as_str(field(p, "rust")?)?,
         native: as_str(field(p, "native")?)?,
-        cap: as_str(field(p, "cap")?)?, // @PLN86
+        cap: as_str(field(p, "cap")?)?,               // @PLN86
         superseded: as_str(field(p, "superseded")?)?, // @PLN102 arc C
         op_code: as_u16(field(p, "op_code")?)?,
         known_type: as_u16(field(p, "known_type")?)?,

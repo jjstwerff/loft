@@ -1626,8 +1626,7 @@ mod tests {
             "new_add",
             "the #superseded mark must survive the store round-trip"
         );
-        crate::ir_schema::compare_data(&fresh, &loaded)
-            .expect("round-trip equal incl. superseded");
+        crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. superseded");
     }
 
     #[test]
@@ -1643,21 +1642,33 @@ mod tests {
         p.parse_dir("default", true, false).expect("parse stdlib");
 
         // The bare fact on each source class.
-        assert!(p.data.source_is_owned(MAIN_SOURCE), "entry (MAIN_SOURCE) is owned");
+        assert!(
+            p.data.source_is_owned(MAIN_SOURCE),
+            "entry (MAIN_SOURCE) is owned"
+        );
         assert!(!p.data.source_is_owned(STD_SOURCE), "stdlib is NOT owned");
-        assert!(!p.data.source_is_owned(2), "a dependency source (2..) is NOT owned");
+        assert!(
+            !p.data.source_is_owned(2),
+            "a dependency source (2..) is NOT owned"
+        );
 
         // The stdlib parse produced defs, and none of them reads as owned.
         assert!(
-            (0..p.data.definitions.len())
-                .any(|d| p.data.def(d as u32).source() == STD_SOURCE),
+            (0..p.data.definitions.len()).any(|d| p.data.def(d as u32).source() == STD_SOURCE),
             "stdlib parse produced STD_SOURCE defs"
         );
 
         // An entry-file def, parsed at MAIN_SOURCE, IS owned; and the current
         // compile source is owned right after.
-        p.parse_snippet("fn my_entry_fn() -> integer { 42 }\n", "<main>", MAIN_SOURCE);
-        assert!(p.data.caller_source_is_owned(), "MAIN_SOURCE current -> owned");
+        p.parse_snippet(
+            "fn my_entry_fn() -> integer { 42 }\n",
+            "<main>",
+            MAIN_SOURCE,
+        );
+        assert!(
+            p.data.caller_source_is_owned(),
+            "MAIN_SOURCE current -> owned"
+        );
         let entry = p.data.source_nr(MAIN_SOURCE, "n_my_entry_fn");
         assert_ne!(entry, u32::MAX, "entry fn resolves at MAIN_SOURCE");
         assert!(
@@ -1668,7 +1679,10 @@ mod tests {
         // A dependency def, parsed at source 2 (what a `use`d library gets), is
         // NOT owned; and the current compile source is NOT owned right after.
         p.parse_snippet("fn my_dep_fn() -> integer { 7 }\n", "<dep>", 2);
-        assert!(!p.data.caller_source_is_owned(), "source 2 current -> NOT owned");
+        assert!(
+            !p.data.caller_source_is_owned(),
+            "source 2 current -> NOT owned"
+        );
         let dep = p.data.source_nr(2, "n_my_dep_fn");
         assert_ne!(dep, u32::MAX, "dependency fn resolves at source 2");
         assert!(
@@ -1707,7 +1721,11 @@ mod tests {
 
         // OWNED (MAIN_SOURCE): a call to a #superseded fn steers.
         let pre = p.diagnostics.entries().len();
-        p.parse_snippet(&marked(("old_fn", "new_fn", "caller")), "<main>", MAIN_SOURCE);
+        p.parse_snippet(
+            &marked(("old_fn", "new_fn", "caller")),
+            "<main>",
+            MAIN_SOURCE,
+        );
         assert!(
             p.diagnostics.entries()[pre..].iter().any(is_steer),
             "a #superseded call from OWNED source must steer"
@@ -1747,21 +1765,28 @@ mod tests {
         let clean = check(
             "fn old_f() -> integer { new_f() }\n#superseded \"new_f\"\nfn new_f() -> integer { 2 }\n",
         );
-        assert!(clean.is_empty(), "a folded #superseded symbol must be clean; got {clean:?}");
+        assert!(
+            clean.is_empty(),
+            "a folded #superseded symbol must be clean; got {clean:?}"
+        );
 
         // (2) un-folded → advisory Warning: old_g does not call new_g.
         let unfolded = check(
             "fn old_g() -> integer { 1 }\n#superseded \"new_g\"\nfn new_g() -> integer { 2 }\n",
         );
         assert!(
-            unfolded.iter().any(|(l, m)| *l == Level::Warning && m.contains("never calls")),
+            unfolded
+                .iter()
+                .any(|(l, m)| *l == Level::Warning && m.contains("never calls")),
             "an un-folded #superseded symbol must warn; got {unfolded:?}"
         );
 
         // (3) dangling successor → hard Error.
         let dangling = check("fn old_h() -> integer { 1 }\n#superseded \"nonesuch\"\n");
         assert!(
-            dangling.iter().any(|(l, m)| *l == Level::Error && m.contains("no such successor")),
+            dangling
+                .iter()
+                .any(|(l, m)| *l == Level::Error && m.contains("no such successor")),
             "a dangling #superseded successor must error; got {dangling:?}"
         );
 
