@@ -1511,6 +1511,7 @@ mod tests {
             }),
             mutable: true,
             constant: false,
+            const_field: false,
             init: false,
             nullable: true,
             primary: false,

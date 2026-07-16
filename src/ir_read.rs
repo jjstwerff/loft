@@ -677,6 +677,8 @@ fn read_attribute(stores: &Stores, r: Record) -> Attribute {
         typedef: read_type_child(stores, r.field_recvec(ds::ATTR_TYPEDEF, ds::TYPET_STRIDE)),
         mutable: r.field_bool(stores, ds::ATTR_MUTABLE),
         constant: r.field_bool(stores, ds::ATTR_CONSTANT),
+        // Step 2 of the const-fields plan wires this to a stored bit; inert (false) for now.
+        const_field: false,
         init: r.field_bool(stores, ds::ATTR_INIT),
         nullable: r.field_bool(stores, ds::ATTR_NULLABLE),
         primary: r.field_bool(stores, ds::ATTR_PRIMARY),

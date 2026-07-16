@@ -2380,7 +2380,7 @@ pub struct Argument {
 }
 
 #[derive(Clone)]
-#[allow(clippy::struct_excessive_bools)] // four independent property flags (mutable/constant/nullable/primary); an enum would add indirection without clarity
+#[allow(clippy::struct_excessive_bools)] // independent property flags (mutable/constant/const_field/nullable/primary); an enum would add indirection without clarity
 pub struct Attribute {
     /// Name of the attribute for this definition
     pub name: String,
@@ -2389,6 +2389,9 @@ pub struct Attribute {
     pub mutable: bool,
     /// Only return the default on this field.
     pub constant: bool,
+    /// This field is `const` — write-once at construction; a later reassignment
+    /// is rejected. See doc/claude/plans/40-const-fields/.
+    pub const_field: bool,
     /// L7: init(expr) field — stored at creation, writable after. `$` allowed.
     pub init: bool,
     /// This attribute is allowed to be null in the substructure.
@@ -3626,6 +3629,7 @@ impl Data {
             typedef,
             mutable: true,
             constant: false,
+            const_field: false,
             init: false,
             nullable: true,
             primary: false,
