@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 transparent-link widening — the SAFETY oracle probe (build step 2).
+// One function per Matrix-S cell, each with a distinct source/local so `LOFT_DUMP_LINK_SAFE`
+// emits ONE unambiguous `link-safe-dbg: fn=… var=a base=… safe=0|1` per cell.
+// tests/link_safe_oracle.rs pins the verdicts. See alias-where-correct-build.md § Matrix S.
+
+struct S { v: vector<integer> }
+
+// S1 — SAFE: the source `s` outlives `a` (read after), `a` is read-only + non-escaping.
+fn s1_safe() -> integer {
+    s = S { v: [10, 20, 30] };
+    a = s.v; // link candidate
+    r = a[1]; // read a
+    r + s.v[0] // read s AFTER a → s outlives a
+}
+
+// S2 — UNSAFE: the source `s` is dead right after the bind (a link would dangle when s is reclaimed).
+fn s2_source_dead() -> integer {
+    s = S { v: [10, 20, 30] };
+    a = s.v; // `s` is never used again
+    a[0]
+}
+
+// S3 — UNSAFE: the source `s` is reassigned (its old store may be reclaimed while `a` is live).
+fn s3_source_reassigned(o: S) -> integer {
+    s = S { v: [10, 20, 30] };
+    a = s.v;
+    s = o; // reassign the base
+    a[0] + s.v[0]
+}
+
+// S4 — UNSAFE: the local `a` ESCAPES via return (it would outlive the callee's store).
+fn s4_escape() -> vector<integer> {
+    s = S { v: [10, 20, 30] };
+    a = s.v;
+    a // escapes
+}
+
+// S5 — UNSAFE (degenerate): the source IS the local (`a += a`, a self-append). A "link" would be
+// `a` borrowing itself → its buffer is dropped and it becomes slotless. Never a link candidate.
+fn s5_self_append() -> integer {
+    a: vector<integer> = [1, 2, 3];
+    a += a;
+    len(a)
+}
+
+fn main() {
+    x = s1_safe();
+    y = s2_source_dead();
+    z = s3_source_reassigned(S { v: [1, 2, 3] });
+    w = len(s4_escape());
+    q = s5_self_append();
+    println("{x} {y} {z} {w} {q}");
+}

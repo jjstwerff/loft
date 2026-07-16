@@ -30,9 +30,13 @@ fn expr_zero_divide() {
 
 #[test]
 fn call_with_null() {
-    code!("fn add(a: integer, b: integer) -> integer { a + b }")
+    // @PLN102 gate-2 (call-arg N-Store) — passing `null` into a param requires the param to be
+    // nullable (`integer?`); into a non-null `integer` it is now the same violation as a nullable
+    // into a non-null local. With `b: integer?`, `a + b` propagates (N-Prop) and `add(1, null)`
+    // still yields null at runtime, typed `integer?`.
+    code!("fn add(a: integer, b: integer?) -> integer? { a + b }")
         .expr("add(1, null)")
-        .tp(INTEGER)
+        .tp(Type::optional(INTEGER))
         .result(Value::Null);
 }
 

@@ -1086,8 +1086,8 @@ fn main() {
 ";
     let (_stdout, diag, _code) = run_with_warnings("nstore_tail_arg_pos", source);
     assert!(
-        diag.contains("stored into argument"),
-        "the nullable tail argument produces an argument N-Store; got stderr={diag:?}"
+        diag.contains("stored into parameter"),
+        "the nullable tail argument produces a call-arg (parameter) N-Store; got stderr={diag:?}"
     );
     assert!(
         diag.contains(".loft:3:") && !diag.contains(".loft:5:"),

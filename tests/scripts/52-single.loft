@@ -55,6 +55,6 @@ fn main() {
   assert(!bad_text, "invalid text as single is null");
   // --- Null cast results ---
   nan_s = (zero / zero) ?? null;
-  assert(!(nan_s as integer), "single NaN as integer is null");
-  assert(!(nan_s as integer), "single NaN as integer is null");
+  assert(!(nan_s as integer?), "single NaN as integer is null");
+  assert(!(nan_s as integer?), "single NaN as integer is null");
 }

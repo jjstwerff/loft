@@ -358,6 +358,41 @@ pub fn dead_stores_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEAD_STORES").is_none())
 }
 
+/// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
+/// validated (steps 1–4) but NOT defaulted on: step 5's copy-count measurement found the win is ~0
+/// in practice (the read-only-both field-bind pattern it targets is essentially absent in real loft
+/// code — even the ~2000-line viewer eliminates 0 copies), while defaulting on adds per-bind analysis
+/// cost (an O(n) alias scan). C86's revisit trigger ("a profiler shows bind-copies dominating a real
+/// consumer") is NOT met, so the mechanism stays opt-in, ready for when a consumer demonstrates the
+/// win. When set, `analyze_fn` → `ElidePlan` links a copy-fill bind `a = s.v` where it is provably
+/// SAFE (`link_is_safe`) AND UNOBSERVABLE (`link_is_unobservable`, alias-aware) — the observable
+/// result is unchanged (link ≡ copy there). Cached once. See alias-where-correct{,-build}.md.
+#[must_use]
+pub fn link_widen_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_LINK_WIDEN").is_some())
+}
+
+/// `LOFT_DUMP_LINK_OBS=1` — @PLN102 transparent-link widening, build step 3 (the observability
+/// oracle). REPORT-ONLY: emits one `link-obs-dbg: fn=… var=… base=… unobs=0|1` line per copy-fill
+/// bind — the "would a shared-store link be UNOBSERVABLE (copy ≡ link)?" verdict: neither the local
+/// nor the source's store is mutated after the bind, ALIAS-AWARE (a write through a sibling `&`-alias
+/// of the source counts). Drives NO codegen — byte-identical. Pinned by `tests/link_obs_oracle.rs`.
+#[must_use]
+pub fn dump_link_obs() -> bool {
+    std::env::var_os("LOFT_DUMP_LINK_OBS").is_some()
+}
+
+/// `LOFT_DUMP_LINK_SAFE=1` — @PLN102 transparent-link widening, build step 2 (the safety oracle).
+/// REPORT-ONLY: when set, the parser emits one `link-safe-dbg: fn=… var=… base=… safe=0|1` line per
+/// copy-fill bind, the conservative "would a shared-store link be UAF-safe here?" verdict (source
+/// outlives the local + the local does not escape). Drives NO codegen — it only prints, so it is
+/// byte-identical to today. Pinned against the safety matrix by `tests/link_safe_oracle.rs`.
+#[must_use]
+pub fn dump_link_safe() -> bool {
+    std::env::var_os("LOFT_DUMP_LINK_SAFE").is_some()
+}
+
 /// @PLN90 W1: the temporary-subject borrow-return materialise (the coordinated promotion-verdict
 /// fix) — **DEFAULT ON**. When a `-> vector` fn's tail is a buffer-ABI call returning a borrow of a
 /// TEMPORARY subject the fn constructs (`fn h() -> vector<E> { g(Filled{..}) }`), the borrowed view
@@ -435,6 +470,35 @@ pub fn nullflow_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLFLOW").is_none())
 }
 
+/// `LOFT_NO_CALLARG_NSTORE=1` (@PLN102 gate-2 residual — the call-arg N-Store hole) — DEFAULT ON,
+/// opt OUT. The `(N-Store)` teeth previously sat only on the LOCAL-slot / field / return / index
+/// store sites, so a nullable `τ?` (or bare `null`) passed into a non-null PARAMETER slipped
+/// through `convert` (which leniently peels the `Optional`) — `takes(x)` with `x: integer?`
+/// silently bound `null` into `n: integer`. This applies the same `n_store_violation` check at the
+/// param-binding chokepoint (`process_call_args`), with the identical Phase-1 warn/error split (a
+/// non-narrow scalar/heap param WARNS and the null binds; a narrow width hard-errors). The escape
+/// hatch exists because it is a compile-time tightening of a previously-accepted (unsound) program;
+/// it must land before the 1.0 freeze (rejecting later would break compat).
+#[must_use]
+pub fn callarg_nstore_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_CALLARG_NSTORE").is_none())
+}
+
+/// `LOFT_NO_QQ_NULL=1` (@PLN102 gate-2 residual — the `?? null` typing soundness fix) — DEFAULT
+/// ON, opt OUT. `a ?? b` discharges null only as far as the FALLBACK `b` can: when `b` is itself
+/// nullable (a bare `null` literal, or a `τ?`-typed expression) the coalesce can still yield null,
+/// so its RESULT type stays `τ?` instead of peeling to the non-null base. Without this,
+/// `y: integer = x ?? null` (and `?? <nullableVar>`) was accepted and a non-null slot held the null
+/// sentinel — the exact "null in a non-null slot" incoherence the null-model gate exists to remove.
+/// The escape hatch exists because the tightening is a compile-time reject of a previously-accepted
+/// (unsound) program; it must land before the 1.0 freeze (rejecting later would break compat).
+#[must_use]
+pub fn qq_null_typing_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_QQ_NULL").is_none())
+}
+
 /// `LOFT_NO_MATH_DOMAIN=1` (@PLN102 case B — soften-nullflow-discharge.md) — DEFAULT ON, opt
 /// OUT. Extends the Phase-3.5 constant-in-domain elision from constant args to provably
 /// in-domain EXPRESSIONS via a sign lattice (`sqrt(a*a + b*b)`, `sqrt(max(x, 0.01))`,
@@ -445,6 +509,18 @@ pub fn nullflow_enabled() -> bool {
 pub fn math_domain_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_MATH_DOMAIN").is_none())
+}
+
+/// `LOFT_LINT_STRICT_INDEX=1` (@PLN102 case D audit) — opt-in, DEFAULT OFF. The index-trust
+/// model types `v[i]` non-null for a for-loop iter var (like a constant index), trusting the
+/// loop bounds the vector. That trust is unchecked, so `for i in 0..len(v) { w[i] }` (or a
+/// mid-loop resize) types non-null yet reads C80-null on overrun. When set, this warns where a
+/// loop-var index is bounded by `len(<one vector>)` but indexes a DIFFERENT vector — the
+/// mismatched-vector index that is the silent-null hazard. Advisory only: the type is unchanged
+/// (tightening the trust to a proof would break the ubiquitous `for i in 0..n { v[i] }` idiom).
+pub fn strict_index_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_LINT_STRICT_INDEX").is_some())
 }
 
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar

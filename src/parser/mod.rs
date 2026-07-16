@@ -6155,6 +6155,14 @@ impl Parser {
             }
             return actual;
         }
+        // @PLN102 gate-2 (N-Store) at the CALL-ARG site — constant across the args: the callee
+        // name (for the diagnostic) and whether the call-arg check applies. Null-transparent fns
+        // (`min`/`max`/`clamp`/`abs`/… — `is_null_transparent`) PROPAGATE null via a runtime guard
+        // (`wrap_null_transparent`), so a nullable arg into their non-null param is intentional, not
+        // an unsound store — exempt them (operators already dodge this path via the nullable-op swap).
+        let callee_name = self.data.def(d_nr).original_name();
+        let callarg_nstore =
+            crate::keys::callarg_nstore_enabled() && !Self::is_null_transparent(&callee_name);
         for (nr, a_code) in list.iter().enumerate() {
             let tp = self.data.attr_type(d_nr, nr);
             let Some(actual_type) = types.get(nr) else {
@@ -6225,27 +6233,26 @@ impl Parser {
                 actual.push(self.cl("OpConvIntFromEnum", &[cd]));
                 continue;
             }
-            // @PLN25 (N-Store) routing-feedback f4 — a nullable argument into a NON-null
-            // PARAMETER is the same violation as into a return value / field / assignment
-            // target, but the call-argument path never ran the check (only return/field/
-            // assign did), so `convert` below silently peeled the Optional and the null
-            // slipped into the callee.  Gate on the null-flow model being ON (the default):
-            // this is the WARNING half of (N-Store), so it must not add a NEW hard error to
-            // the legacy strict OFF mode (`LOFT_NO_NULLFLOW`), where n_store_violation errors
-            // — a nullable arg there was previously unchecked and legal.  Store still proceeds.
-            if report && crate::keys::nullflow_enabled() {
-                let ctx = format!(
-                    "argument {} of {}",
-                    nr + 1,
-                    self.data.def(d_nr).original_name()
-                );
-                // @PLN102 (N-Store) — anchor to the ARGUMENT expression's own span so a
-                // TAIL call (checked at block finalization, cursor at `}`) points at the
-                // call, not the next line.  No function-position fallback here: an
-                // unspanned arg keeps `None` → the lexer cursor, which is already correct
-                // for the common (non-tail) argument.  See nstore-position-fix.md.
-                let at = actual_code.span_pos().cloned();
-                self.n_store_violation(actual_type, &tp, &ctx, at.as_ref());
+            // @PLN102 gate-2 (N-Store) at the CALL-ARG site — the last store site the teeth did
+            // not cover (converges with the earlier routing-feedback f4 fix). `convert` below
+            // leniently peels an `Optional`, so a nullable `τ?` (or a bare `null` under DN1) bound
+            // silently into a non-null PARAMETER. Run the same `n_store_violation` check here
+            // (identical Phase-1 warn/error split) so the param binding is held to the same rule as
+            // an assignment / field / return. On a hard error (a narrow-width param) skip
+            // `convert`'s generic diagnostic; otherwise fall through and let `convert` peel it.
+            // The position anchors to the argument's own span (nstore-position-fix.md) so a TAIL
+            // call reports at the call, not the next line.
+            if report
+                && callarg_nstore
+                && self.n_store_violation(
+                    actual_type,
+                    &tp,
+                    &format!("parameter {} of `{callee_name}`", nr + 1),
+                    actual_code.span_pos(),
+                )
+            {
+                actual.push(actual_code);
+                continue;
             }
             if !self.convert(&mut actual_code, actual_type, &tp) {
                 if report {
