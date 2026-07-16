@@ -2144,8 +2144,7 @@ impl Parser {
         {
             let mut hit = false;
             for (i, (ve, te)) in v_elems.iter().zip(t_elems.iter()).enumerate() {
-                hit |=
-                    self.n_store_violation(ve, te, &format!("element {i} of {what}"), at);
+                hit |= self.n_store_violation(ve, te, &format!("element {i} of {what}"), at);
             }
             return hit;
         }
