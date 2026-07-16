@@ -98,3 +98,45 @@ fn math_domain_keeps_unprovable_args_nullable() {
         );
     }
 }
+
+// Two-sided domain [-1, 1] for asin/acos: sin/cos outputs, clamp, and the min/max clamp idiom.
+const TWO_SIDED: &str = "\
+fn f(x: float) {
+  q1: float = asin(sin(x));
+  q2: float = acos(cos(x));
+  q3: float = asin(clamp(x, -1.0, 1.0));
+  q4: float = asin(min(max(x, -1.0), 1.0));
+}
+fn main() { }
+";
+
+// asin/acos controls — only a LOWER bound (m2), an unbounded arg (m1), or arithmetic past the
+// interval (m3) — each must stay float? (the sign lattice's one-sided bound is not enough).
+const TWO_SIDED_CTRL: &str = "\
+fn f(x: float) {
+  m1: float = asin(x);
+  m2: float = asin(max(x, -1.0));
+  m3: float = acos(sin(x) + 0.5);
+}
+fn main() { }
+";
+
+#[test]
+fn math_domain_two_sided_asin_acos() {
+    let (ok, diag) = compile("asin_pos", TWO_SIDED, true);
+    assert!(
+        ok,
+        "provably-in-[-1,1] asin/acos args must soften; diag={diag}"
+    );
+    let (ok2, diag2) = compile("asin_ctrl", TWO_SIDED_CTRL, true);
+    assert!(
+        !ok2,
+        "an unbounded / one-sided asin/acos arg must stay float?; got success"
+    );
+    for v in ["m1", "m2", "m3"] {
+        assert!(
+            diag2.contains(&format!("Variable '{v}'")),
+            "asin/acos control {v} must stay forced; diag={diag2}"
+        );
+    }
+}

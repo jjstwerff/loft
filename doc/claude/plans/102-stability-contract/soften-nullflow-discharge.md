@@ -126,12 +126,15 @@ to a reject scan):
 
 ## Recommendation + scope
 
-Ship **E then B**, `sqrt` first (the dominant case), then `ln`/`log`/`pow`. Leave
-`asin`/`acos` (bounded-both-sides domain `[-1,1]`, rare) and the imported-const divisor
-(case C residual) as follow-ups; **defer D** entirely. Net effect: the `??` ceremony
-collapses to exactly the genuinely-reachable faults — variable divisors, unbounded
-`v[i]`, parses, nullable fields — and hex_terrain's four arithmetic `??` disappear with
-nothing that could truly be null losing its guard.
+Shipped **E then B**, `sqrt`/`ln`/`log`/`pow` first (the sign lattice), then **`asin`/`acos`
+DONE** via a small two-sided interval-bounds pass (`pm_bounds` in `parser/mod.rs`): the
+`[-1, 1]` domain is proved for `sin`/`cos` outputs, `clamp(e, -1, 1)`, and the manual
+`min(max(e, -1), 1)` clamp (unary-negation nodes handled so a literal `-1.0` reaches the
+bound as a constant); an unbounded or one-sided arg stays `float?`. Remaining follow-ups: the
+imported-const divisor (case C residual) and **case D** (`v[i]` bound-carry, deferred). Net
+effect: the `??` ceremony collapses to exactly the genuinely-reachable faults — variable
+divisors, unbounded `v[i]`, parses, nullable fields — and hex_terrain's four arithmetic `??`
+disappear with nothing that could truly be null losing its guard.
 
 ## Implementation plan — small steps
 

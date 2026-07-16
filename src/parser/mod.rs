@@ -3105,9 +3105,68 @@ impl Parser {
             // `log(x, base)`: x > 0 (lattice) and a valid CONSTANT base (upper-bound-free lattice
             // can't prove base ≠ 1, so keep base constant).
             "log" => base_sign == Sign::Pos && matches!(a1, Some(b) if b > 0.0 && b != 1.0),
-            // asin / acos need a two-sided bound [-1, 1]; the sign lattice gives only a lower
-            // bound, so they stay constant-only.
+            // asin / acos need a TWO-sided bound [-1, 1] — the interval pass proves it for the
+            // real cases (`sin`/`cos` outputs, `clamp(_, -1, 1)`, the `min(max(e,-1),1)` clamp).
+            "asin" | "acos" => {
+                let (lo, hi) = args
+                    .first()
+                    .map_or((f64::NEG_INFINITY, f64::INFINITY), |v| self.pm_bounds(v));
+                lo >= -1.0 && hi <= 1.0
+            }
             _ => false,
+        }
+    }
+
+    /// @PLN102 case B — a small interval-bounds pass for the TWO-sided `asin`/`acos` domain
+    /// `[-1, 1]` (the sign lattice gives only a lower bound). Returns a provable `[lo, hi]`;
+    /// `±∞` means unbounded. Only the constructs that actually keep a value in range: constants,
+    /// `sin`/`cos` outputs, `clamp(e, lo, hi)` with constant bounds, and `min`/`max` (so the
+    /// manual `min(max(e, -1.0), 1.0)` clamp is proved). Everything else → unbounded (matched by
+    /// exact stdlib def name; `OpMinFloat` is subtraction, not `min`, and is deliberately unmatched).
+    #[allow(clippy::cast_precision_loss, clippy::float_cmp)]
+    fn pm_bounds(&self, v: &Value) -> (f64, f64) {
+        let open = (f64::NEG_INFINITY, f64::INFINITY);
+        match v.unspan() {
+            Value::Float(f) => (*f, *f),
+            Value::Single(f) => (f64::from(*f), f64::from(*f)),
+            Value::Int(n) => (f64::from(*n), f64::from(*n)),
+            Value::Long(n) => (*n as f64, *n as f64),
+            Value::Call(d, args) => {
+                let nm = self.data.def(*d).name.as_str();
+                // Unary negation (`-1.0` parses to `OpMinSingleFloat(1.0)`): flip + swap bounds,
+                // so a negated literal reaches `clamp`/`min`/`max` as a real constant bound.
+                if args.len() == 1 && matches!(nm, "OpMinSingleFloat" | "OpMinSingleSingle") {
+                    let (lo, hi) = self.pm_bounds(&args[0]);
+                    return (-hi, -lo);
+                }
+                if matches!(
+                    nm,
+                    "t_5float_sin" | "t_6single_sin" | "t_5float_cos" | "t_6single_cos"
+                ) {
+                    return (-1.0, 1.0);
+                }
+                if args.len() == 3 && matches!(nm, "t_5float_clamp" | "t_6single_clamp") {
+                    // clamp(e, lo, hi) ∈ [lo, hi] when lo/hi are constants and lo ≤ hi.
+                    let (llo, lhi) = self.pm_bounds(&args[1]);
+                    let (hlo, hhi) = self.pm_bounds(&args[2]);
+                    if llo == lhi && hlo == hhi && llo <= hhi {
+                        return (llo, hhi);
+                    }
+                    return open;
+                }
+                if args.len() == 2 && matches!(nm, "t_5float_min" | "t_6single_min") {
+                    let (al, ah) = self.pm_bounds(&args[0]);
+                    let (bl, bh) = self.pm_bounds(&args[1]);
+                    return (al.min(bl), ah.min(bh));
+                }
+                if args.len() == 2 && matches!(nm, "t_5float_max" | "t_6single_max") {
+                    let (al, ah) = self.pm_bounds(&args[0]);
+                    let (bl, bh) = self.pm_bounds(&args[1]);
+                    return (al.max(bl), ah.max(bh));
+                }
+                open
+            }
+            _ => open,
         }
     }
 
