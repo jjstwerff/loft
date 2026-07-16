@@ -299,3 +299,30 @@ fn main() {
         "nested-index-field mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn deliver_flattens_keyed_in_substruct_in_js() {
+    // @PLN105 Phase 3 — DEEP nesting: a keyed collection inside a SUB-struct (not a direct field of
+    // the root). `flatten_at` recurses through inline record fields — `Outer.inner.items` is at
+    // `(rec, pos + inner.pos + items.pos)`, single-instance and addressable — materialising it and
+    // rewiring both the Inner and Outer descriptor nodes.
+    let src = r#"
+struct Item { ik: integer, name: text }
+struct Inner { count: integer, items: hash<Item[ik]> }
+struct Outer { label: text, inner: Inner, n: integer }
+fn main() {
+  o: Outer = Outer { label: "top", inner: Inner { count: 2, items: [] }, n: 9 };
+  o.inner.items[20] = Item { ik: 20, name: "twenty" };
+  o.inner.items[10] = Item { ik: 10, name: "ten" };
+  deliver(1, o);
+}
+"#;
+    let Some(stdout) = run_deliver("deep", src) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":{\"label\":\"top\",\"inner\":{\"count\":2,\"items\":[{\"ik\":10,\"name\":\"ten\"},{\"ik\":20,\"name\":\"twenty\"}]},\"n\":9}";
+    assert!(
+        stdout.contains("DELIVER ") && stdout.contains(want_value),
+        "deep-nested keyed field mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
+    );
+}

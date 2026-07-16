@@ -366,8 +366,20 @@ are never user data), matching what `for x in ix` sees. Verified
 (hash/radix/sorted/index) now deliver.** (`ordered` is an internal kind, not a user top-level
 collection.)
 
-**Other remaining:** keyed collections nested DEEPER (a keyed field inside a SUB-struct, or a keyed
-ELEMENT type — `flatten_record_keyed_fields` only walks the root record's DIRECT fields today); and
+**Deep nesting through inline record fields — DONE.** `flatten_record_keyed_fields` was generalised
+to a RECURSIVE `flatten_at(desc, node_id, at, synth)`: it descends every INLINE record field (the
+root, a direct field, or a field of a nested sub-struct) and replaces each keyed collection at its
+single-instance location `(at.rec, at.pos + Σ field.pos)` with its array-shaped node, re-inserting
+each changed record/keyed node under a fresh synthetic id (so the shared TYPE descriptor is not
+mutated and each location gets its own data record). Verified
+`deliver_flattens_keyed_in_substruct_in_js` (`Outer.inner.items: hash` → the hash flattens two
+levels down; scalars at both levels stay in place). Arbitrary depth (inline records only).
+
+**Remaining — keyed collection behind a VECTOR/ARRAY element (multi-instance).** `flatten_at` does
+NOT descend into vector/array elements: each element's keyed collection lives at a DIFFERENT record,
+and a `FlatArray` carries ONE fixed data record, so a type-level node cannot express per-element
+materialisation. A `vector<Bag>` where `Bag` has a keyed field would need a different, per-element
+protocol (materialise every element's collection + a redirect, or a cursor). Deferred. Plus
 `expose` (long-lived pinning).
 
 - **Falsifier / test:** deliver a value containing `hash<T>` + `index<T>` + spatial; JS reads the
