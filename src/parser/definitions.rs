@@ -305,6 +305,8 @@ impl Parser {
                     } else {
                         false
                     };
+                    // @PLN40 — a variant field may also be `const` (write-once).
+                    let is_const = self.lexer.has_keyword("const");
                     let Some(a_name) = self.lexer.has_identifier() else {
                         diagnostic!(self.lexer, Level::Error, "Expect attribute");
                         return true;
@@ -324,6 +326,9 @@ impl Parser {
                         if idx != usize::MAX {
                             self.data.definitions[v_nr as usize].attributes[idx].lexeme = true;
                         }
+                    }
+                    if is_const {
+                        self.mark_const_field(v_nr, &a_name);
                     }
                     // accept trailing comma after the last field,
                     // matching struct parsing (line 1380).
@@ -2460,18 +2465,10 @@ impl Parser {
         let mut init_deps: Vec<(String, Vec<String>)> = Vec::new();
         loop {
             self.lexer.has_token("pub");
-            // @P386: `const` struct fields are a planned feature (@PLAN33), not yet
-            // supported.  Reject with ONE clear diagnostic and consume the keyword
-            // so the field still parses as `name: type` — without this, `const` is
-            // read as the field NAME and the real field cascades into 4 errors.
-            if self.lexer.has_keyword("const") {
-                diagnostic!(
-                    self.lexer,
-                    Level::Error,
-                    "const struct fields are not yet supported (planned — @PLAN33); \
-                     remove `const` for now"
-                );
-            }
+            // @PLN40 — a `const` field is write-once at construction.  Consume the
+            // keyword (if present) and mark the field once it has parsed; see
+            // doc/claude/plans/40-const-fields/.
+            let is_const = self.lexer.has_keyword("const");
             let Some(a_name) = self.lexer.has_identifier() else {
                 diagnostic!(self.lexer, Level::Error, "Expect attribute");
                 self.context = context;
@@ -2488,6 +2485,9 @@ impl Parser {
             self.lexer.token(":");
             self.init_field_deps.clear();
             self.parse_field(d_nr, &a_name);
+            if is_const {
+                self.mark_const_field(d_nr, &a_name);
+            }
             if !self.init_field_deps.is_empty() {
                 init_deps.push((a_name.clone(), self.init_field_deps.clone()));
             }
@@ -2729,6 +2729,26 @@ impl Parser {
                     }
                 }
             }
+        }
+    }
+
+    /// Mark a just-parsed field as `const` (write-once at construction).  Call
+    /// after [`Self::parse_field`], once the field's attribute exists.  Rejects
+    /// `const virtual(…)`: a virtual field is already computed and read-only, so
+    /// `const` on it is redundant.  See doc/claude/plans/40-const-fields/.
+    fn mark_const_field(&mut self, on_d: u32, a_name: &str) {
+        let idx = self.data.attr(on_d, a_name);
+        if idx == usize::MAX {
+            return;
+        }
+        if self.data.def(on_d).attributes()[idx].constant {
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "`const virtual(…)` is redundant — a virtual field is already computed and read-only; drop `const`"
+            );
+        } else {
+            self.data.definitions[on_d as usize].attributes[idx].const_field = true;
         }
     }
 

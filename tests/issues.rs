@@ -1530,14 +1530,27 @@ fn test() {
     );
 }
 
-/// @P386 regression: a `const` struct field must produce ONE clear
-/// "not yet supported" diagnostic, not the prior 4-error cascade
-/// (`const` was read as the field name, then the real field choked).
+/// @PLN40 (was @P386): a `const` struct field is accepted — it constructs and
+/// reads like any field.  Reassignment enforcement is a separate step; see
+/// doc/claude/plans/40-const-fields/.
 #[test]
-fn p386_const_struct_field_one_clear_error() {
-    code!("struct Cell { const c_color: integer, height: integer }").error(
-        "const struct fields are not yet supported (planned — @PLAN33); \
-             remove `const` for now at p386_const_struct_field_one_clear_error:1:28",
+fn pln40_const_struct_field_accepted() {
+    code!(
+        "struct Cell { const c_color: integer, height: integer }
+fn test() {
+    c = Cell { c_color: 7, height: 3 };
+    assert(c.c_color == 7 && c.height == 3, \"const field constructs and reads\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// @PLN40: `const virtual(…)` is rejected — a virtual field is already computed
+/// and read-only, so `const` on it is redundant.
+#[test]
+fn pln40_const_virtual_field_rejected() {
+    code!("struct Bad { x: integer, const v: integer virtual($.x * 2) }").error(
+        "`const virtual(…)` is redundant — a virtual field is already computed and read-only; drop `const` at pln40_const_virtual_field_rejected:1:61",
     );
 }
 
