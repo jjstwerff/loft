@@ -56,3 +56,13 @@ fn test_const_local_ref_read_only() {
   const c = CLCounter { value: 7 };
   assert(c.value == 7, "ok");
 }
+
+// --- binding-const (const local) allows contents mutation, blocks only rebind ---
+// @PLN40 const-model phase 1 step 1: `const x` is binding-const — the slot is
+// write-once, but the container it holds can still grow (`+=`) and be element-written.
+fn test_const_local_binding_allows_append() {
+  const v = [1, 2];
+  v += [3];            // append = contents mutation → allowed
+  v[0] = 9;            // element write = contents mutation → allowed
+  assert(len(v) == 3 && v[0] == 9 && v[2] == 3, "binding-const allows contents mutation: {v}");
+}

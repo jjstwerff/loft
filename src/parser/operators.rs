@@ -9,6 +9,20 @@ use super::{
 // Operator parsing and type dispatch.
 
 impl Parser {
+    /// Whether a write with operator `op` to a const binding `nr` must be rejected.
+    /// A const LOCAL is binding-const (`const x`, prefix): it rejects only a rebind
+    /// (`=`) and allows contents mutation (`+=`, element write).  A const PARAMETER
+    /// is value-const (`p: const T`, type-qualifier): it rejects any write here.
+    /// (Phase 1 of the const model, doc/claude/plans/40-const-fields/const-model.md;
+    /// value-const mutation that does not target the var directly — `p.x=`, `p[i]=` —
+    /// is caught by the base-resolution step, not here.)
+    pub(crate) fn const_write_blocked(&self, nr: u16, op: &str) -> bool {
+        !self.first_pass
+            && nr != u16::MAX
+            && self.vars.is_const_param(nr)
+            && (self.vars.is_argument(nr) || op == "=")
+    }
+
     pub(crate) fn assign_text(
         &mut self,
         code: &mut Value,
@@ -17,7 +31,7 @@ impl Parser {
         op: &str,
         var_nr: u16,
     ) {
-        if !self.first_pass && var_nr != u16::MAX && self.vars.is_const_param(var_nr) {
+        if self.const_write_blocked(var_nr, op) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -113,7 +127,7 @@ impl Parser {
         var_nr: u16,
     ) -> bool {
         if let (Value::Insert(ls), Type::Vector(tp, _)) = (code, f_type) {
-            if !self.first_pass && self.vars.is_const_param(var_nr) {
+            if self.const_write_blocked(var_nr, op) {
                 diagnostic!(
                     self.lexer,
                     Level::Error,
@@ -299,7 +313,7 @@ impl Parser {
         if !is_empty_insert {
             return false;
         }
-        if !self.first_pass && self.vars.is_const_param(var_nr) {
+        if self.const_write_blocked(var_nr, op) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
