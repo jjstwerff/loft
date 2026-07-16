@@ -44,6 +44,25 @@ fn run_deliver(name: &str, source: &str) -> Option<String> {
 /// [`run_deliver`], but sets extra environment variables on the node harness process (e.g.
 /// `LOFT_DELIVER_GROW=1` to arm the memory.grow-safety cell).
 fn run_deliver_env(name: &str, source: &str, env: &[(&str, &str)]) -> Option<String> {
+    run_harness(name, source, "tools/deliver_repro.mjs", env)
+}
+
+/// [`run_deliver`], but through the asyncify-driven CROSS-FRAME harness
+/// (`tools/deliver_crossframe.mjs`) — exposes a value, yields via a stubbed fetch, and reads the
+/// exposed value back on the JS side AFTER the yield.
+fn run_crossframe(name: &str, source: &str) -> Option<String> {
+    run_harness(name, source, "tools/deliver_crossframe.mjs", &[])
+}
+
+/// Build `source` via `loft --html`, extract the embedded wasm, run it through the given node
+/// harness (`harness_rel`, repo-relative) with extra `env`, and return its stdout — or `None` if
+/// the toolchain self-skips.
+fn run_harness(
+    name: &str,
+    source: &str,
+    harness_rel: &str,
+    env: &[(&str, &str)],
+) -> Option<String> {
     if !which("node") {
         eprintln!("SKIP: node not installed");
         return None;
@@ -85,8 +104,8 @@ fn run_deliver_env(name: &str, source: &str, env: &[(&str, &str)]) -> Option<Str
     let end = start + page[start..].find('"').expect("wasmB64 closing quote");
     std::fs::write(&wasm, loft::base64::decode(&page[start..end])).expect("write wasm");
 
-    let harness = repo_root().join("tools/deliver_repro.mjs");
-    assert!(harness.exists(), "tools/deliver_repro.mjs missing");
+    let harness = repo_root().join(harness_rel);
+    assert!(harness.exists(), "{harness_rel} missing");
     let out = Command::new("node")
         .arg(&harness)
         .arg(&wasm)
@@ -500,5 +519,42 @@ fn deliver_reads_by_ref_array_synthetic_in_js() {
         out.status.success() && stdout.contains("ARRAY-UNIT OK 100,200,300"),
         "by-ref array arm mismatch\n  stdout:{stdout}\n  stderr:{}",
         String::from_utf8_lossy(&out.stderr)
+    );
+}
+
+#[test]
+fn deliver_expose_survives_cross_frame_yield_in_js() {
+    // @PLN105 §5 — the FULL cross-frame expose test. `deliver_expose_and_release_a_value_in_js`
+    // reads the exposed value DURING the expose host call (Stores unambiguously live); this proves
+    // the real use case — a page reads the value on a LATER frame. The program exposes a hash, then
+    // runs on to `store_load_url_trusted` (a fetch), which asyncify-UNWINDS the whole wasm stack
+    // back to JS. The cross-frame harness (asyncify-driven) reconstructs the exposed value at that
+    // yield — after `expose` + real execution + the unwind — and only then resumes loft (which
+    // releases). A correct key-sorted read there proves `lock_store` keeps the store pinned across
+    // the yield and that the reader re-derives its view (the fetch may have grown memory).
+    let src = r#"
+struct Item { ik: integer, name: text }
+fn main() {
+  h: hash<Item[ik]> = [];
+  h[20] = Item { ik: 20, name: "twenty" };
+  h[10] = Item { ik: 10, name: "ten" };
+  expose(1, h);
+  world: hash<Item[ik]> = [];
+  ok = store_load_url_trusted(world, "http://x/y");
+  release(1, h);
+}
+"#;
+    let Some(stdout) = run_crossframe("xframe", src) else {
+        return; // toolchain self-skip
+    };
+    // CROSSFRAME (read AFTER the yield) must carry the key-sorted value, and it must be bracketed by
+    // EXPOSE (before the yield) and RELEASE 1 (after the resume) — i.e. the read really is between.
+    let want_value = "\"value\":[{\"ik\":10,\"name\":\"ten\"},{\"ik\":20,\"name\":\"twenty\"}]";
+    assert!(
+        stdout.contains("EXPOSE ")
+            && stdout.contains("CROSSFRAME ")
+            && stdout.contains(want_value)
+            && stdout.contains("RELEASE 1"),
+        "cross-frame expose read mismatch\n  want EXPOSE + CROSSFRAME with {want_value} + RELEASE 1\n  got stdout:\n{stdout}"
     );
 }

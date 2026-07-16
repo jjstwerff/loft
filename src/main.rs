@@ -6569,7 +6569,8 @@ fn main() {
         };
         // The asyncify async→sync bridge (AsyncifyCtrl), shared by the GL and the
         // headless templates.  gl_js references it, so it is emitted FIRST.
-        let asyncify_js = include_str!("../doc/loft-asyncify.js");
+        let asyncify_js =
+            include_str!("../doc/loft-asyncify.js").replace("export { AsyncifyCtrl };", "");
         let gl_js = include_str!("../doc/loft-gl-wasm.js");
         // @PLN105 Phase 2/3 — the generic deliver reader, embedded so both page shells reconstruct a
         // JS value from a `deliver`/`expose` handle. Strip the trailing `export` (the file is a
