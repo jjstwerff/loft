@@ -63,7 +63,7 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 > | F2 compound-assign | ✅ **single-eval (C92) — IMPLEMENTED + VALIDATED + LANDED (2026-07-16)** | `v[idx()] += 5` now calls `idx()` **once**; a divergent index reads + writes the SAME slot. Validated both backends (boundary matrix + byte-identical corpus + no leak; suite green modulo known flakes). On `tuxedo-f2-impl-steps`. Scope + method: [compound-assign-place-once.md](compound-assign-place-once.md) |
 > | F3 `&&`/`\|\|` short-circuit | ✅ **specified** | `operational.md` E-And/E-Or; E-Left scoped to non-short-circuit |
 > | F5 match non-enum + guards | ✅ **works** (spec = confirm `matching.md` states it) | `match x { 2..=5 => … }` + `n if n>2` run |
-> | F6 `&v` alias | ✅ **aliases** + sandbox hole closed | `w=&v; w[0]=99` → `v[0]==99` (reconcile `heap.md` "copies" prose) |
+> | F6 `&v` alias | ✅ **aliases** + sandbox hole closed + **docs reconciled** | `w=&v; w[0]=99` → `v[0]==99`; `heap.md` (H-Ref/H-Copy), `binding.md` (B-Ref/B-Copy), `capabilities.md` (D-cap-3) all state `&`-bind ALIASES / plain bind COPIES — no doc still says `&v` copies |
 > | F8 comparison chaining | ✅ **rejected** (non-assoc) | `1 == 2 == 3` → "comparison operators do not chain" |
 > | runtime errors | ✅ **stable kinds** | `RuntimeErrorKind::{CastOutOfRange,DivideByZero,ShiftOutOfRange}` |
 > | layout guard wired | ✅ | `allocation.rs:2726` refuses a mismatched-layout load |
@@ -99,7 +99,7 @@ contract 0 allows, because after the freeze changing an observed value is a regr
 | F3 | **`&&` / `||` short-circuit is unspecified** — and the one general rule (E-Left) says both operands evaluate (false) | the most-depended-on eval rule is unwritten; freezes as impl-defined | verified; `operational.md` E-Left |
 | F4 | **assignment place-vs-RHS eval order unspecified** (`a[f()] = g()`); E-Asgn prose "RHS first" contradicts observed LHS-first | evaluation-order gap = the canonical silent-freeze trap | verified `[L][R]` |
 | F5 | **`match` guards have no formal semantics**; **`match` on non-enum** (int/range/literal) unspecified | a shipped feature freezes as impl-defined | `matching.md` |
-| F6 | **`&v` on a vector: `heap.md`+`capabilities.md` say COPIES; `binding.md`+reality say ALIASES** — and the sandbox soundness proof rests on the false "copies" premise | a memory-model spec contradiction + a possible sandbox-admission hole; must reconcile AND verify the `&`-alias-into-host write is gated | verified `v[0]==99` |
+| F6 | ~~**`&v` on a vector: `heap.md`+`capabilities.md` say COPIES; `binding.md`+reality say ALIASES**~~ — **RECONCILED** (2026-07-11 fix + docs, re-verified 2026-07-16): all three specs now state `&`-bind ALIASES / plain bind COPIES (`heap.md` H-Ref/H-Copy, `binding.md` B-Ref/B-Copy, `capabilities.md` D-cap-3); the sandbox gate `raw_write_is_host_owned` follows the dep chain (`root_aliases_argument`), so an `&`-alias-into-host write is host-gated, not laundered | memory-model spec contradiction + sandbox-admission hole — both CLOSED | verified both backends: `w=&v; w[0]=99`→`v[0]==99`; plain bind independent (`c=v; c[1]=77` leaves `v[1]==2`) |
 | F7 | **reference `==` defaults to identity, not structural** — ~~unspecified~~ **DECIDED (C91)**: `==` = value-by-value / reference-by-identity (uniform, bounded, no reference-chase); `===` reserved for opt-in deep equality; shallow hybrid rejected as inconsistent | ~~a decision~~ | `DESIGN_DECISIONS.md` C91 |
 | F8 | **comparison operators are one left-assoc level** — `a == b == c` type-checks and misbehaves on booleans | non-associative comparison is a grouping change (pre-freeze-only) | `grammar.md` level 3 |
 | F9 | **layout persistence guard not wired into the load path** (D-layout-1); layout hash ignores **endianness** and can't see a **not-null↔nullable** schema flip | the frozen persistence promise's own detector doesn't run; a stale/foreign store reads raw | `@PLN97`; `types.rs:1674` |
@@ -235,7 +235,7 @@ their behaviour.  Lesson: a `touch src/*.rs` / clean rebuild before trusting a g
   unspecified; no unit/1-tuple type; `char`-null (`'\0'`) collides with a real NUL, both invisible.
 
 ### Ownership / heap / layout (the memory model — highest stakes)
-- **F6 (`&v` copies-vs-aliases contradiction)** and **F7 (reference `==` identity)** above.
+- ~~**F6 (`&v` copies-vs-aliases contradiction)**~~ **RECONCILED** (see the must-fix table above) and **F7 (reference `==` identity)** above.
 - **C80 write-side drop:** `obj.field = x` when `obj` is null **silently discards the write** and
   continues (`H-WriteNull`/`H-WriteOOB`) — the write side is more dangerous than the read side and
   isn't separately justified. State it deliberately.
