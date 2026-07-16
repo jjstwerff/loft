@@ -72,6 +72,36 @@ const loft_io = {
     const value = readLoftValue(mem, store_base, desc, type_id, rec, pos);
     const line = { tag: typeof tag === "bigint" ? Number(tag) : tag, type: type_id, value: jsonSafe(value) };
     process.stdout.write("EXPOSE " + JSON.stringify(line) + "\n");
+
+    // @PLN105 §5 memory.grow-safety cell (opt-in via LOFT_DELIVER_GROW). A page reads an exposed
+    // value every FRAME; between frames wasm can `memory.grow`, which DETACHES the old ArrayBuffer.
+    // readLoftValue re-derives `mem.buffer` on every call, so a re-read after a grow must still
+    // succeed and reproduce the SAME value (grow preserves existing bytes; the store is pinned).
+    // Anti-vacuity: a DataView captured BEFORE the grow must throw afterwards — proving the harness
+    // can actually observe the detach (a passing re-read is only meaningful if the buffer really
+    // changed underneath it).
+    if (process.env.LOFT_DELIVER_GROW) {
+      const staleView = new DataView(mem.buffer); // bound to the pre-grow ArrayBuffer
+      const prevPages = mem.grow(1); // +1 page (64 KiB) — detaches staleView's buffer
+      let staleDetached = false;
+      try {
+        staleView.getUint8(0);
+      } catch {
+        staleDetached = true;
+      }
+      const after = readLoftValue(mem, store_base, desc, type_id, rec, pos); // re-derives mem.buffer
+      const rereadMatches = JSON.stringify(jsonSafe(after)) === JSON.stringify(jsonSafe(value));
+      process.stdout.write(
+        "GROW-SAFE " +
+          JSON.stringify({
+            grew: prevPages >= 0,
+            stale_detached: staleDetached,
+            reread_matches: rereadMatches,
+            value: jsonSafe(after),
+          }) +
+          "\n",
+      );
+    }
   },
   loft_host_release(tag) {
     exposed.delete(String(tag));

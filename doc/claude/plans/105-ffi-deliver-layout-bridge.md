@@ -278,17 +278,24 @@ harness at the end):
   `loft_host_expose` stashes a RE-READER closure (`globalThis.loftExposed.get(tag)()` → fresh value
   each frame, memory.grow-safe). Both the inline `main.rs` shim and `doc/loft-gl-wasm.js` wired
   identically; the node harness keeps its own host fns (the trailing `export` still serves its
-  `import`), so the 11 `deliver_wasm` parity tests are unchanged and green. REMAINING (small): a
-  memory.grow-mid-read safety cell; more corpus shapes (value-enum `disc`, by-ref array, narrow
-  ints).
+  `import`), so the 11 `deliver_wasm` parity tests are unchanged and green.
+- **P2.e — the memory.grow-safety cell. ✅ DONE.** `deliver_survives_memory_grow_after_expose`
+  (`tests/deliver_wasm.rs`, armed by `LOFT_DELIVER_GROW=1`): after the initial expose read the
+  harness calls `mem.grow(1)` — which DETACHES the old `ArrayBuffer` (the §5 hazard a page hits
+  between frames) — then re-reads the SAME exposed value. `readLoftValue` re-derives `mem.buffer`
+  per call, so the re-read reproduces the value byte-for-byte (`reread_matches:true`) with no
+  detached-buffer throw. Anti-vacuity: a `DataView` captured before the grow throws afterwards
+  (`stale_detached:true`), proving the buffer really changed underneath the reader; `RELEASE 1`
+  still fires, so the mid-run grow doesn't trap loft's continuation. REMAINING (small): more corpus
+  shapes (value-enum `disc`, by-ref array, narrow ints).
 
 - **Code points:** `doc/loft-gl-wasm.js:47` (`buildLoftImports` — add the deliver/desc/iter
   host fns); `src/main.rs` `--html` assembly (embeds this glue).
 - **Falsifier / test:** headless node harness loads the exported wasm, supplies the deliver
   host, runs `read(...)`, asserts reconstructed JSON == the interpreter's serialization of
   the same value. **Parity gate: interpret == native == --html, byte-identical.**
-  memory.grow-safety cell: force a `memory.grow()` mid-read and assert the reader
-  re-derives its view (no detached-buffer throw).
+  memory.grow-safety cell (✅ P2.e): force a `memory.grow()` after expose (detaching the
+  ArrayBuffer) and assert the re-reader re-derives its view (no detached-buffer throw, same value).
 
 ### Phase 3 — keyed collections (design DECIDED 2026-07-15: pre-flatten, NOT JS cursors)
 

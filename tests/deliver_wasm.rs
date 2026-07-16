@@ -38,6 +38,12 @@ fn repo_root() -> PathBuf {
 /// Build `source` via `loft --html`, extract the embedded wasm, run it through the deliver node
 /// harness, and return its stdout — or `None` if the toolchain self-skips.
 fn run_deliver(name: &str, source: &str) -> Option<String> {
+    run_deliver_env(name, source, &[])
+}
+
+/// [`run_deliver`], but sets extra environment variables on the node harness process (e.g.
+/// `LOFT_DELIVER_GROW=1` to arm the memory.grow-safety cell).
+fn run_deliver_env(name: &str, source: &str, env: &[(&str, &str)]) -> Option<String> {
     if !which("node") {
         eprintln!("SKIP: node not installed");
         return None;
@@ -84,6 +90,7 @@ fn run_deliver(name: &str, source: &str) -> Option<String> {
     let out = Command::new("node")
         .arg(&harness)
         .arg(&wasm)
+        .envs(env.iter().copied())
         .output()
         .expect("invoke node deliver harness");
     let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
@@ -383,5 +390,38 @@ fn main() {
     assert!(
         stdout.contains("EXPOSE ") && stdout.contains(want_value) && stdout.contains("RELEASE 1"),
         "expose/release mismatch\n  want EXPOSE with {want_value} + a RELEASE 1\n  got stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn deliver_survives_memory_grow_after_expose() {
+    // @PLN105 §5 memory.grow-safety cell — the exposed re-reader must survive a `memory.grow` that
+    // DETACHES the wasm ArrayBuffer. Armed by LOFT_DELIVER_GROW=1: after the initial expose read,
+    // the harness grows linear memory by a page (detaching the old buffer) and re-reads the SAME
+    // exposed value. readLoftValue re-derives `mem.buffer` per call, so the re-read must NOT throw
+    // and must reproduce the value byte-for-byte (`reread_matches`). Anti-vacuity: a DataView
+    // captured before the grow MUST throw afterwards (`stale_detached`) — otherwise a passing
+    // re-read would be vacuous (the buffer never actually changed).
+    let src = r#"
+struct Item { ik: integer, name: text }
+fn main() {
+  h: hash<Item[ik]> = [];
+  h[20] = Item { ik: 20, name: "twenty" };
+  h[10] = Item { ik: 10, name: "ten" };
+  expose(1, h);
+  release(1, h);
+}
+"#;
+    let Some(stdout) = run_deliver_env("grow", src, &[("LOFT_DELIVER_GROW", "1")]) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":[{\"ik\":10,\"name\":\"ten\"},{\"ik\":20,\"name\":\"twenty\"}]";
+    assert!(
+        stdout.contains("GROW-SAFE ")
+            && stdout.contains("\"grew\":true")
+            && stdout.contains("\"stale_detached\":true") // the detach really happened (anti-vacuity)
+            && stdout.contains("\"reread_matches\":true") // reader re-derived its view over the new buffer
+            && stdout.contains(want_value),
+        "memory.grow-safety cell failed\n  want GROW-SAFE with grew+stale_detached+reread_matches all true and {want_value}\n  got stdout:\n{stdout}"
     );
 }
