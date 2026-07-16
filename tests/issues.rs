@@ -1530,15 +1530,88 @@ fn test() {
     );
 }
 
-/// @P386 regression: a `const` struct field must produce ONE clear
-/// "not yet supported" diagnostic, not the prior 4-error cascade
-/// (`const` was read as the field name, then the real field choked).
+/// @PLN40 (was @P386): a `const` struct field is accepted — it constructs and
+/// reads like any field.  Reassignment enforcement is a separate step; see
+/// doc/claude/plans/40-const-fields/.
 #[test]
-fn p386_const_struct_field_one_clear_error() {
-    code!("struct Cell { const c_color: integer, height: integer }").error(
-        "const struct fields are not yet supported (planned — @PLAN33); \
-             remove `const` for now at p386_const_struct_field_one_clear_error:1:28",
+fn pln40_const_struct_field_accepted() {
+    code!(
+        "struct Cell { const c_color: integer, height: integer }
+fn test() {
+    c = Cell { c_color: 7, height: 3 };
+    assert(c.c_color == 7 && c.height == 3, \"const field constructs and reads\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// @PLN40: `const virtual(…)` is rejected — a virtual field is already computed
+/// and read-only, so `const` on it is redundant.
+#[test]
+fn pln40_const_virtual_field_rejected() {
+    code!("struct Bad { x: integer, const v: integer virtual($.x * 2) }").error(
+        "`const virtual(…)` is redundant — a virtual field is already computed and read-only; drop `const` at pln40_const_virtual_field_rejected:1:61",
     );
+}
+
+/// @PLN40 step 4: reassigning a `const` field after construction is rejected.
+#[test]
+fn pln40_const_reassign_rejected() {
+    code!(
+        "struct Rec { const x: integer }
+fn test() { t = Rec { x: 1 }; t.x = 5; }"
+    )
+    .error(
+        "cannot reassign const field 'x' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_reassign_rejected:2:39",
+    );
+}
+
+/// @PLN40 step 4: the const-field guard fires regardless of the write route —
+/// here through a `&Rec` parameter, not the construction site.
+#[test]
+fn pln40_const_reassign_via_ref_rejected() {
+    code!(
+        "struct Rec { const x: integer }
+fn touch(t: &Rec) { t.x = 9; }
+fn test() { t = Rec { x: 1 }; touch(t); }"
+    )
+    .error(
+        "cannot reassign const field 'x' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_reassign_via_ref_rejected:2:29",
+    );
+}
+
+/// @PLN40 step 4: `const` freezes the field BINDING, not its contents — mutating
+/// a non-const field reached THROUGH a const struct field stays legal (Rust's
+/// `let v = …; v.field = …` rule).  Guards against over-broad enforcement.
+#[test]
+fn pln40_const_contents_still_mutable() {
+    code!(
+        "struct Inner { f: integer }
+struct Rec { const r: Inner }
+fn test() {
+    t = Rec { r: Inner { f: 1 } };
+    t.r.f = 5;
+    assert(t.r.f == 5, \"contents of a const struct field remain mutable\");
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
+/// @PLN40 step 5: a `const` field follows loft's standard field defaults — an
+/// omitted field takes its default and a construction-time value overrides it
+/// (construction is not a reassignment).  loft keeps its default-fill semantics;
+/// there is no "a const field must be initialised" rule.
+#[test]
+fn pln40_const_field_default_and_override() {
+    code!(
+        "struct Cfg { const port: integer = 8080 }
+fn test() {
+    a = Cfg {};
+    b = Cfg { port: 9000 };
+    assert(a.port == 8080 && b.port == 9000, \"const default when omitted, override at construction\");
+}"
+    )
+    .result(loft::data::Value::Null);
 }
 
 // ── P139 regression guards ──────────────────────────────────────────────────

@@ -154,6 +154,7 @@ struct Attribute {     // src/data.rs::Attribute
   nullable: boolean,
   primary: boolean,
   hidden: boolean,
+  const_field: boolean,      // @PLN40 — write-once struct field; last bool keeps prior offsets stable
   value: vector<Node>,
   check: vector<Node>,
   check_message: vector<Node>,

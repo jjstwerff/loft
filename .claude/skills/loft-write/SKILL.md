@@ -83,6 +83,7 @@ is a RETIRED accepted no-op** — it now means what the default already is, so d
 
 ```loft
 struct Point {
+    const id: integer,           // `const` PREFIX: write-once at construction
     x: float,                    // non-null by default (DN1) — no `not null` needed
     y: float,
     r: integer limit(0, 255),
@@ -94,6 +95,11 @@ struct Point {
 
 Modifiers: `limit(min, max)`, `default(expr)` / `= expr`, `virtual(expr)`.  (`not null` still parses
 but is a retired no-op — see the DN1 defaults note above; use `?` for the nullable case.)
+
+**`const` field** (prefix, before the name) — write-once at construction: set it in the struct
+literal (or let it take its default), then any later `t.id = …` is a compile error.  Freezes the
+*binding*, not contents (`const v: vector<T>` rejects `t.v = […]` but allows `t.v[0] = x`).  Works on
+enum-variant fields too.  `const virtual(...)` is rejected (a virtual field is already read-only).
 
 ---
 

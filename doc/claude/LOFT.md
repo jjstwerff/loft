@@ -267,6 +267,13 @@ Fields are declared as `name: type` with optional modifiers **after** the type:
 - `assert(expr)` / `assert(expr, message)` — runtime constraint checked on every write
 - `computed(expr)` — calculated on every access, **not stored** in the record
 
+One modifier goes **before** the field name:
+- `const` — write-once at construction. The field is set in the struct literal (or
+  takes its default), and any later `t.field = …` reassignment is a compile error.
+  Const freezes the field *binding*, not its contents: `const v: vector<T>` rejects
+  `t.v = […]` but still allows `t.v[0] = x`. Combining `const` with `computed(...)`
+  is rejected (a computed field is already read-only). Example: `const id: integer`.
+
 In default/computed expressions, `$` refers to the record:
 ```
 struct Object {

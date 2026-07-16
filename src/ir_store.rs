@@ -241,6 +241,7 @@ fn write_attribute(stores: &mut Stores, r: &Record, a: &Attribute) {
     r.set_field_bool(stores, ds::ATTR_NULLABLE, a.nullable);
     r.set_field_bool(stores, ds::ATTR_PRIMARY, a.primary);
     r.set_field_bool(stores, ds::ATTR_HIDDEN, a.hidden);
+    r.set_field_bool(stores, ds::ATTR_CONST_FIELD, a.const_field);
     node_child(stores, r, ds::ATTR_VALUE, &a.value);
     node_child(stores, r, ds::ATTR_CHECK, &a.check);
     node_child(stores, r, ds::ATTR_CHECK_MESSAGE, &a.check_message);
@@ -1511,6 +1512,7 @@ mod tests {
             }),
             mutable: true,
             constant: false,
+            const_field: true,
             init: false,
             nullable: true,
             primary: false,
@@ -1534,6 +1536,9 @@ mod tests {
         assert_eq!(a.field_str(&stores, ds::ATTR_NAME), "count");
         assert!(a.field_bool(&stores, ds::ATTR_MUTABLE));
         assert!(!a.field_bool(&stores, ds::ATTR_CONSTANT));
+        // @PLN40 — non-vacuous: the attr was built with const_field: true, so a broken
+        // write/offset would read back false here.
+        assert!(a.field_bool(&stores, ds::ATTR_CONST_FIELD));
         assert!(a.field_bool(&stores, ds::ATTR_NULLABLE));
         assert_eq!(a.field_int(&stores, ds::ATTR_ALIAS_D_NR), 3);
         assert_eq!(a.field_int(&stores, ds::ATTR_ASSIGNED_LAMBDA_D_NR), 99);

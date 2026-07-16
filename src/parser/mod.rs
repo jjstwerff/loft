@@ -9429,6 +9429,39 @@ mod p269_native_backfill_tests {
         }
     }
 
+    /// @PLN40 step 3 — `const` on a struct field sets `const_field` on that
+    /// attribute and leaves plain fields untouched.  Non-vacuous: a no-op mark
+    /// fails the first assert, an over-eager mark the second.
+    #[test]
+    fn pln40_const_field_flag_is_set() {
+        let mut p = Parser::new();
+        p.parse_dir("default", true, false).unwrap();
+        p.parse_str(
+            "struct Cell { const c_color: integer, height: integer }",
+            "pln40_const_field_flag_is_set",
+            false,
+        );
+        assert!(
+            p.diagnostics.level() < crate::diagnostics::Level::Error,
+            "unexpected parse errors: {:?}",
+            p.diagnostics.lines()
+        );
+        let cell = p.data.def_nr("Cell");
+        assert_ne!(cell, u32::MAX, "Cell def not found");
+        let color = p.data.attr(cell, "c_color");
+        let height = p.data.attr(cell, "height");
+        assert_ne!(color, usize::MAX, "c_color attr missing");
+        assert_ne!(height, usize::MAX, "height attr missing");
+        assert!(
+            p.data.def(cell).attributes()[color].const_field,
+            "const field c_color must set const_field"
+        );
+        assert!(
+            !p.data.def(cell).attributes()[height].const_field,
+            "plain field height must NOT be const"
+        );
+    }
+
     /// @PLN26 phase 1 — two native packages exporting the SAME `#native` symbol
     /// must be detected: the C-ABI flat namespace (and the interpreter's
     /// symbol-keyed `BRIDGE_REGISTRY`) can't disambiguate them, so native

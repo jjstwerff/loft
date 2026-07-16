@@ -868,8 +868,8 @@ fn write_attribute(out: &mut String, a: &Attribute) {
     write_type(out, &a.typedef);
     let _ = write!(
         out,
-        ",\"mutable\":{},\"constant\":{},\"init\":{},\"nullable\":{},\"primary\":{},\"hidden\":{}",
-        a.mutable, a.constant, a.init, a.nullable, a.primary, a.hidden
+        ",\"mutable\":{},\"constant\":{},\"init\":{},\"nullable\":{},\"primary\":{},\"hidden\":{},\"const_field\":{}",
+        a.mutable, a.constant, a.init, a.nullable, a.primary, a.hidden, a.const_field
     );
     out.push_str(",\"value\":");
     write_value(out, &a.value);
@@ -904,6 +904,12 @@ fn attribute_from_parsed(p: &Parsed) -> Result<Attribute, TypeDecodeError> {
         typedef: type_from_parsed(field(p, "typedef")?)?,
         mutable: as_bool(field(p, "mutable")?)?,
         constant: as_bool(field(p, "constant")?)?,
+        // Tolerant of older JSON written before this field existed (defaults false),
+        // mirroring the `links` handling below.
+        const_field: match field(p, "const_field") {
+            Ok(f) => as_bool(f)?,
+            Err(_) => false,
+        },
         init: as_bool(field(p, "init")?)?,
         nullable: as_bool(field(p, "nullable")?)?,
         primary: as_bool(field(p, "primary")?)?,
@@ -2061,6 +2067,7 @@ mod tests {
             typedef: Type::Integer(IntegerSpec::u8()),
             mutable: true,
             constant: false,
+            const_field: false,
             init: true,
             nullable: false,
             primary: true,
@@ -2095,6 +2102,7 @@ mod tests {
             typedef: Type::Unknown(0),
             mutable: true,
             constant: false,
+            const_field: false,
             init: false,
             nullable: true,
             primary: false,
@@ -2120,6 +2128,7 @@ mod tests {
             typedef: Type::Boolean,
             mutable: false,
             constant: true,
+            const_field: false,
             init: false,
             nullable: false,
             primary: false,
@@ -2134,7 +2143,7 @@ mod tests {
         };
         assert_eq!(
             attribute_to_json(&a),
-            r#"{"name":"x","typedef":{"k":"Boolean"},"mutable":false,"constant":true,"init":false,"nullable":false,"primary":false,"hidden":false,"value":{"k":"Null"},"check":{"k":"Null"},"check_message":{"k":"Null"},"alias_d_nr":0,"assigned_lambda_d_nr":0,"links":""}"#
+            r#"{"name":"x","typedef":{"k":"Boolean"},"mutable":false,"constant":true,"init":false,"nullable":false,"primary":false,"hidden":false,"const_field":false,"value":{"k":"Null"},"check":{"k":"Null"},"check_message":{"k":"Null"},"alias_d_nr":0,"assigned_lambda_d_nr":0,"links":""}"#
         );
     }
 
@@ -2169,6 +2178,7 @@ mod tests {
                     typedef: Type::Integer(IntegerSpec::u8()),
                     mutable: true,
                     constant: false,
+                    const_field: false,
                     init: false,
                     nullable: true,
                     primary: false,
@@ -2186,6 +2196,7 @@ mod tests {
                     typedef: Type::Integer(IntegerSpec::u8()),
                     mutable: true,
                     constant: false,
+                    const_field: false,
                     init: false,
                     nullable: true,
                     primary: false,

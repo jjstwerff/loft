@@ -225,7 +225,7 @@ pub(crate) const BLOCK_SCOPE: u32 = 0;
 pub(crate) const BLOCK_VAR_SIZE: u32 = 8;
 
 /// `Attribute` record (element of `vector<Attribute>`).
-pub(crate) const ATTRIBUTE_STRIDE: u32 = 46; // @PLN86 F8b — +4 for the `links` text field
+pub(crate) const ATTRIBUTE_STRIDE: u32 = 47; // @PLN86 F8b +4 links; @PLN40 +1 const_field bool
 pub(crate) const ATTR_NAME: u32 = 16;
 pub(crate) const ATTR_TYPEDEF: u32 = 20; // vector<TypeT> (box-of-one)
 pub(crate) const ATTR_VALUE: u32 = 24; // vector<Node> (box-of-one)
@@ -238,6 +238,7 @@ pub(crate) const ATTR_INIT: u32 = 42;
 pub(crate) const ATTR_NULLABLE: u32 = 43;
 pub(crate) const ATTR_PRIMARY: u32 = 44;
 pub(crate) const ATTR_HIDDEN: u32 = 45;
+pub(crate) const ATTR_CONST_FIELD: u32 = 46; // @PLN40 — write-once struct field
 pub(crate) const ATTR_ALIAS_D_NR: u32 = 0;
 pub(crate) const ATTR_ASSIGNED_LAMBDA_D_NR: u32 = 8;
 
@@ -1356,6 +1357,7 @@ mod tests {
         assert_eq!(pos(ids.attribute, "nullable"), ATTR_NULLABLE);
         assert_eq!(pos(ids.attribute, "primary"), ATTR_PRIMARY);
         assert_eq!(pos(ids.attribute, "hidden"), ATTR_HIDDEN);
+        assert_eq!(pos(ids.attribute, "const_field"), ATTR_CONST_FIELD);
         assert_eq!(pos(ids.attribute, "alias_d_nr"), ATTR_ALIAS_D_NR);
         assert_eq!(
             pos(ids.attribute, "assigned_lambda_d_nr"),

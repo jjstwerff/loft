@@ -1,0 +1,56 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN40 — const struct fields (write-once at construction).  This graduates the
+// POSITIVE cells of the step-4 boundary matrix: construction, read, and
+// contents-mutation-through-a-const-field all stay legal on every backend.  The
+// NEGATIVE cells (a later `t.field = …` reassignment is a compile error) are
+// parse-time diagnostics, guarded by the `pln40_const_*` tests in tests/issues.rs.
+// Runs through interp + native + wasm.
+
+struct Cell { const c_color: integer, const c_height: integer, c_age: integer }
+struct Inner { f: integer }
+struct Holder { const r: Inner }
+struct Vecs { const v: vector<integer> }
+struct Cfg { const port: integer = 8080 }
+struct Nested { c: Cell }
+enum Shape { Circle { const radius: integer }, Square { side: integer } }
+
+fn main() {
+  // ── construct + read a const field ─────────────────────────────
+  cell = Cell { c_color: 7, c_height: 3, c_age: 0 };
+  assert(cell.c_color == 7 && cell.c_height == 3, "const scalar fields construct and read");
+
+  // c_age is NOT const — a normal field write still works
+  cell2 = Cell { c_color: 1, c_height: 2, c_age: 0 };
+  cell2.c_age = 9;
+  assert(cell2.c_age == 9, "a non-const sibling field is still writable");
+
+  // ── rebuild-via-construction (the tick-loop pattern) ───────────
+  cells: vector<Cell> = [cell];
+  cells[0] = Cell { c_color: cell.c_color, c_height: cell.c_height, c_age: cell.c_age + 1 };
+  assert(cells[0].c_age == 1, "rebuild a const-field record via a fresh literal into a vector slot");
+
+  // ── contents mutation THROUGH a const struct field stays legal ─
+  h = Holder { r: Inner { f: 1 } };
+  h.r.f = 5;                       // r is const-bound; f (of Inner) is not
+  assert(h.r.f == 5, "contents of a const struct field remain mutable");
+
+  // ── contents mutation THROUGH a const vector field stays legal ─
+  vs = Vecs { v: [1, 2, 3] };
+  vs.v[0] = 9;                     // element write, not a binding reassignment
+  assert(vs.v[0] == 9 && len(vs.v) == 3, "elements of a const vector field remain mutable");
+
+  // ── default when omitted, override at construction ─────────────
+  a = Cfg {};
+  b = Cfg { port: 9000 };
+  assert(a.port == 8080 && b.port == 9000, "const default when omitted, override at construction");
+
+  // ── nested read through a const field ──────────────────────────
+  n = Nested { c: Cell { c_color: 4, c_height: 5, c_age: 6 } };
+  assert(n.c.c_color == 4 && n.c.c_age == 6, "read a const field nested one level down");
+
+  // ── const field on an enum variant ─────────────────────────────
+  s = Circle { radius: 5 };
+  if s is Circle { radius } { assert(radius == 5, "const enum-variant field constructs and reads"); }
+}
