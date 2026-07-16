@@ -203,6 +203,13 @@ const stubs = {
     // module still links (an absent import would LinkError at instantiate).
     loft_host_http_get: () => 0xffffffff,
     loft_host_http_get_copy: () => {},
+    // @PLN105: deliver/expose/release imports are linked by the FULL-interpreter
+    // `--debug` client (its op dispatch includes OpDeliver/OpExpose/OpRelease),
+    // so they must exist or the module LinkErrors — this repro never delivers, so
+    // no-ops suffice.
+    loft_host_deliver: () => {},
+    loft_host_expose: () => {},
+    loft_host_release: () => {},
     loft_host_print: (ptr, len) => {
       if (enableTrace) trace.push(`loft_host_print(${ptr}, ${len})`);
       if (instance) {
