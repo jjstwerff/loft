@@ -93,6 +93,14 @@ const loft_io = {
 try {
   const { instance } = await WebAssembly.instantiate(fs.readFileSync(wasmPath), { loft_io });
   mem = instance.exports.memory;
+  // The cross-frame yield needs the asyncify runtime, which `wasm-opt --asyncify` adds at build
+  // time. If wasm-opt/binaryen was absent when `loft --html` ran (some CI jobs), the bundle has NO
+  // asyncify instrumentation and there is no yield to exercise — self-skip rather than trap (mirrors
+  // the node/wasm32/release skips in tests/deliver_wasm.rs).
+  if (typeof instance.exports.asyncify_get_state !== "function") {
+    console.log("SKIP: wasm lacks asyncify instrumentation (wasm-opt/binaryen not installed at build)");
+    process.exit(0);
+  }
   ac = new AsyncifyCtrl(instance);
   ac.start("loft_start"); // runs to the fetch yield (expose has already fired + been stashed)
   if (ac.sleeping) ac.resume("loft_start"); // rewind past the yield → release → return

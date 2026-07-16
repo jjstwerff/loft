@@ -553,6 +553,11 @@ fn main() {
     let Some(stdout) = run_crossframe("xframe", src) else {
         return; // toolchain self-skip
     };
+    if stdout.contains("SKIP: wasm lacks asyncify") {
+        // wasm-opt/binaryen absent at build time → no --asyncify pass → no yield to exercise.
+        eprintln!("SKIP: --html bundle has no asyncify instrumentation (wasm-opt not installed)");
+        return;
+    }
     // CROSSFRAME (read AFTER the yield) must carry the key-sorted value, and it must be bracketed by
     // EXPOSE (before the yield) and RELEASE 1 (after the resume) — i.e. the read really is between.
     let want_value = "\"value\":[{\"ik\":10,\"name\":\"ten\"},{\"ik\":20,\"name\":\"twenty\"}]";
