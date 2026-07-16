@@ -124,7 +124,7 @@ fn page_landing() -> text {
     if bf.format == Format.NotExists {
         body += "<p class=\"warn\">No git state.  Run <code>make view-refresh</code> to build the dashboard.</p>";
     } else {
-        braw = bf.content();
+        braw = bf.content() ?? "";
         b = json_parse(braw);
         branch = b.field("branch").as_text();
         head_sha = b.field("head_sha").as_text();
@@ -155,7 +155,7 @@ fn page_landing() -> text {
     // toggle.
     kf = file("tools/viewer/state/commits.json");
     if kf.format != Format.NotExists {
-        kv = json_parse(kf.content());
+        kv = json_parse(kf.content() ?? "");
         n = kv.len();
         body += "<section><h2>Recent activity <span class=\"ct\">{n}</span></h2>";
         body += "<div class=\"activity\">";
@@ -188,7 +188,7 @@ fn page_landing() -> text {
     // appear in the viewer.
     // Section is suppressed when there are zero open issues.
     if file("index/tags.json").format != Format.NotExists {
-        idx_root = json_parse(file("index/tags.json").content());
+        idx_root = json_parse(file("index/tags.json").content() ?? "");
         po = idx_root.field("problems_open");
         if po.kind() == "JArray" {
             n = po.len();
@@ -212,7 +212,7 @@ fn page_landing() -> text {
     // suppressed entirely).
     uf = file("tools/viewer/state/uncommitted.json");
     if uf.format != Format.NotExists {
-        uv = json_parse(uf.content());
+        uv = json_parse(uf.content() ?? "");
         n = uv.len();
         if n > 0 {
             body += "<section><h2>Uncommitted <span class=\"ct\">{n}</span></h2>";
@@ -240,7 +240,7 @@ fn page_landing() -> text {
     // <section> so it stays one click away.
     cf = file("tools/viewer/state/changed.json");
     if cf.format != Format.NotExists {
-        cv = json_parse(cf.content());
+        cv = json_parse(cf.content() ?? "");
         n = cv.len();
         body += "<details class=\"changes-section\"><summary class=\"h2-summary\">All changes <small>vs main</small> <span class=\"ct\">{n}</span></summary>";
         if n == 0 {
@@ -341,7 +341,7 @@ fn page_welcome() -> text {
         body += "<p class=\"warn\">No <code>index/tags.json</code>.  Run <code>make index</code> to populate the welcome buckets.</p>";
         return page("loft", body);
     }
-    idx = json_parse(file("index/tags.json").content());
+    idx = json_parse(file("index/tags.json").content() ?? "");
 
     // Two-column grid for the four primary buckets.
     body += "<div class=\"welcome-grid\">";
@@ -558,7 +558,7 @@ fn respond_raw(req: server::Request, rel: text) {
         req.respond_html(body);
         return;
     }
-    body = f.content();
+    body = f.content() ?? "";
     req.respond_typed(200, body, "text/plain; charset=utf-8");
 }
 
@@ -624,7 +624,7 @@ fn page_file(rel: text, f: File) -> text {
     }
 
     article += "<p><a href=\"/raw/{esc_rel}\">View raw</a></p>";
-    src = f.content();
+    src = f.content() ?? "";
     if is_markdown(rel) {
         article += markdown::render(src, parent_of(rel), "/tag/", "/raw/");
     } else {
@@ -728,7 +728,7 @@ fn page_tag(tag: text) -> text {
         return page(title, body);
     }
 
-    raw = f.content();
+    raw = f.content() ?? "";
     root = json_parse(raw);
 
     // Two buckets: @-prefixed (canonical) + legacy (bare-name).  Both
@@ -837,7 +837,7 @@ fn problem_row_summary(body: text, id: text) -> text {
 fn render_md_table_row(file_path: text, line_n: integer) -> text {
     f = file(file_path);
     if f.format == Format.NotExists { return ""; }
-    src = f.content();
+    src = f.content() ?? "";
     lines = src.split('\n');
     if line_n < 1 || line_n > lines.len() { return ""; }
     raw = lines[line_n - 1];
@@ -951,7 +951,7 @@ fn n_to_text(n: integer) -> text { "{n}" }
 fn render_problems_row(line_n: integer) -> text {
     f = file("doc/claude/PROBLEMS.md");
     if f.format == Format.NotExists { return ""; }
-    src = f.content();
+    src = f.content() ?? "";
     lines = src.split('\n');
     if line_n < 1 || line_n > len(lines) { return ""; }
     raw = lines[line_n - 1];
@@ -1144,7 +1144,7 @@ fn render_definition(tag: text, arr: JsonValue) -> text {
 fn sidebar_referenced_by(rel: text) -> text {
     f = file("index/tags.json");
     if f.format == Format.NotExists { return ""; }
-    raw = f.content();
+    raw = f.content() ?? "";
     root = json_parse(raw);
     links_obj = root.field("links");
     if links_obj.kind() != "JObject" { return ""; }
@@ -1173,7 +1173,7 @@ fn sidebar_referenced_by(rel: text) -> text {
 fn sidebar_tags_on_page(rel: text) -> text {
     f = file("index/tags.json");
     if f.format == Format.NotExists { return ""; }
-    raw = f.content();
+    raw = f.content() ?? "";
     root = json_parse(raw);
 
     // Walk every tag key, emit those whose ref list contains
@@ -1273,7 +1273,7 @@ fn page_commit(sha: text) -> text {
         body += "<p><a href=\"/\">back to dashboard</a></p>";
         return page("commit {sha}", body);
     }
-    src = f.content();
+    src = f.content() ?? "";
     body += render_diff(src);
     body += "<p><a href=\"/\">back to dashboard</a></p>";
     page("commit {sha}", body)
@@ -1311,7 +1311,7 @@ fn page_diff(rel: text) -> text {
         body += "Run <code>make view-refresh</code>; if the file isn't changed vs <code>main</code>, no diff is generated.</p>";
         return page(rel, body);
     }
-    src = f.content();
+    src = f.content() ?? "";
     if len(src) == 0 {
         body += "<p class=\"empty\">Empty diff (file matches main).</p>";
         return page(rel, body);
@@ -1535,7 +1535,7 @@ fn render_activity_card(sha: text, esc_sha: text, esc_date: text, esc_msg: text)
         out += "</header></article>";
         return out;
     }
-    fjson = json_parse(ff.content());
+    fjson = json_parse(ff.content() ?? "");
     if fjson.kind() != "JArray" {
         out += "</header></article>";
         return out;

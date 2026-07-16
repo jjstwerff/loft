@@ -116,7 +116,7 @@ fn handle_ws(ws: server::WebSocket) {
     // Parse <msg_id>:<payload>
     i = raw.find(":");
     if i == null { continue; }
-    msg_id = raw[..i] as integer;
+    msg_id = raw[..i] as integer? ?? 0;
     payload = raw[i + 1..];
     println("dev-server: msg_id={msg_id} payload={payload}");
     if msg_id == 1 {

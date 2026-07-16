@@ -2274,3 +2274,83 @@ A definition the programmer wrote that can **never be called** is a latent bug �
 - **No silent shadow, no runtime error.** The previously-silent case becomes a clear compile error (valve a). A library must not redefine a stdlib function — it uses the stdlib one (or picks a distinct name).
 - **Rejected:** silently shadowing (hides a definition that never runs); and making the user's definition *win* over the stdlib (an invisible footgun in the other direction — a program could silently re-point a stdlib call).
 - Owner ruling 2026-07-15 — "that silent shadow is the problem, make it an error too"; "we are not yet under contract". Implementation: `src/data.rs::add_fn` (`shadows_a_method`).
+
+## C96 — Library shipping is keyed on trust-root presence: a key-present machine ships autonomously, a key-absent one defers
+
+**Catalogue:** @F/registry (publishing). Fixes the trust model of the file-based registry ([PKG_REGISTRY.md](PKG_REGISTRY.md), [REGISTRY_SUBMIT.md](REGISTRY_SUBMIT.md)) at contract 1: the reliable surface (a signed, immutable, append-only index) may only grow, and shipping into it must not bottleneck on one human.
+
+### Question
+
+The registry index is signed by the maintainer trust-root key, and `loft install` refuses an index whose signature doesn't verify — so a wrong/stale signature breaks **every** install. That key must therefore never enter CI, which makes signing inherently local and human-gated. But if the maintainer must sign every release, they are a per-release bottleneck on *all* library shipping. How does a library reach trusted-in-the-registry without a human-only step in every release?
+
+### Evaluation
+
+**Sign policy (rarely), not every release.** The bottleneck is that one key re-signs the *whole index* on every publish. Two structural changes remove the human from the per-release path without weakening trust:
+
+1. **Key-presence is the tier boundary.** On a machine that HOLDS the trust-root (on `tuxedo` it is a file, `~/.loft/trust-root/registry-signing-key.bin`) the machine *is* the signer — ship is fully autonomous, no touch, the file key the default (no YubiKey attempt, no prompt). On a machine WITHOUT the key, it cannot sign and must not fake it: it validates locally and **defers** via a submission PR a key-holder folds in and signs. The maintainer is never a required step on a key-present machine; on a key-absent one the only human is a key-holder folding in — batchable, not per-release-per-author.
+2. **Per-artifact signatures + an append-only, immutable index** make autonomous signing low-risk and retire the re-sign foot-gun structurally: each tarball is individually signed and independently verifiable against the trust-root; the index is untrusted metadata; a ship transaction can only APPEND (never alter a published version), and index + `.sig` are only ever written together. Concurrent lib landings are safe because appends of immutable versions commute — a single-writer ship transaction with a compare-and-swap push + a `submissions/` staging dir means a lost race just re-folds, never corrupts.
+
+The maintainer's only irreducibly-human steps become **policy**: admit a namespace (first-time, especially `#native` — the V6 review) or revoke a key. Not per-release.
+
+### Decision
+
+- **Shipping is keyed on trust-root presence.** Key-present (the `tuxedo` default) → autonomous: validate → package → sign artifact + index with the local file key → append → push, no human step. Key-absent → **defer**: validate locally, open a submission PR to a `submissions/` staging area (NOT `index.json`), which a key-present machine's ship pass folds in and signs.
+- On a key-present machine the **local file key is the default signer** (no YubiKey attempt, no prompt); `LOFT_REGISTRY_SIGNER` / `--yubikey` override.
+- **Per-artifact signatures + append-only immutable index**; the index is untrusted, verified per-entry against the trust-root. The re-sign foot-gun is gone by construction (index + `.sig` written together, by the one transaction).
+- The ship transaction is **single-writer with a compare-and-swap push loop** draining own-lib tags + `submissions/`, so concurrent landings can't race the signed index.
+- The **V1–V6 validation gate** ([library-ship-validation.md](plans/102-stability-contract/library-ship-validation.md)) runs before signing; the signature attests validation.
+- **Rejected:** the trust-root in CI (a leak breaks every install); a fully-automatic push→signed-release (can't be kept safe); a mutable single-signed index blob (the re-sign foot-gun — it broke installs once already). A scoped delegated CI key is a fancier key-absent tier, deferred until unattended CI publishing is a real need; the submission-PR defer is the MVP.
+- Owner ruling 2026-07-15 (`tuxedo` default = local key). Proven in part: `scripts/registry_maintain.sh` + the local file key shipped shapes 0.3.0 + time 0.2.1. Freeze-gate companion: `.github/workflows/revalidate-libs.yml`.
+
+## C97 — A library's public symbols live under its module, not the global namespace (so the stdlib can grow without breaking a shipped lib)
+
+**Catalogue:** @F2 (operators) / modules + naming. A contract-1 compat decision — the precondition for a stdlib that is *both* absolute-compat *and* still growable.
+
+### Question
+
+A library's `pub fn clamp` registers as the **global** `n_clamp` — the same namespace as the stdlib (that is why [C95](#c95--)'s redefinition error fired on it). So library public symbols **leak into the global namespace**. The consequence surfaced at once: adding a stdlib `floor_mod` ([C94](#c94--)) **broke already-shipped libraries** that defined the same name — `shapes` (`clamp`) and `time` (`floor_mod`) both stopped compiling. Post-freeze, with an absolute-compat stdlib we still want to grow, this is a contradiction: any stdlib addition might collide with a name some published, immutable library already ships. Should library public symbols share the global namespace, or live strictly under their module?
+
+### Evaluation
+
+The `shapes`/`time` break is proof this is real, not hypothetical — and unshippable at contract 1. Two directions:
+
+- **(a) Keep global-namespace library symbols.** Then the stdlib effectively **cannot grow** post-freeze: every addition is a potential compat break, so either it is forbidden (a frozen-forever stdlib) or it forces a coordinated republish of every colliding library — which we just did by hand for two libs, and which absolute-compat forbids post-freeze (a shipped program importing the old lib must keep working).
+- **(b) Namespace library public symbols.** `shapes::clamp` never enters the global unqualified namespace, so stdlib `clamp` and `shapes::clamp` coexist and a stdlib addition can **never** collide with a library symbol. The stdlib grows additively forever, absolute-compat holds, and C95's error narrows to its correct scope — guarding a *program's own* top-level redefinitions, not library-vs-stdlib.
+
+Only (b) is compatible with an absolute-compat stdlib that still grows. The stdlib stays the one shared namespace every program imports (it is the library every program uses); everything else is qualified. The cost: unqualified access to a library symbol now needs an explicit import (`use lib::name`) rather than leaking globally — a migration that must land **pre-freeze**, since the resolution rule freezes with the contract.
+
+### Decision
+
+- **A library's public symbols are addressed under its module** (`lib::name`, or brought into scope with an explicit `use lib::{name}`), and are NOT injected into the global unqualified namespace. The **stdlib is the sole global namespace** — the library every program imports.
+- Therefore **the stdlib may grow additively without ever colliding with a shipped library**, and C95's no-silent-redefinition error applies to a program's own top-level definitions (its intended scope), not to a library duplicating a stdlib name.
+- This retires the class of break C94→C95 exercised (a language addition retro-breaking shipped libs); `revalidate-libs.yml` is the pre-freeze guard that proves it while the change lands.
+- **IMPLEMENTED (free-fn case) 2026-07-15** in `src/data.rs::add_fn`: a definition in a LIBRARY source (source ≥ 2 — not the STD prelude, not the user's MAIN program) is registered **scoped to its own source** (`source_nr(self.source, …)` instead of the STD-fallback `def_nr`), so a library name that exists only in the stdlib is not a redefinition — it coexists (`lib::clamp` beside the stdlib `clamp`). STD and MAIN keep the global-scope C95 check (a MAIN top-level def a stdlib method would silently shadow still errors). Verified both backends: a library `clamp` resolves as `lib::clamp` while the bare `clamp` stays the stdlib's; a library's OWN duplicate still errors; test `pln102_c97_library_may_define_a_stdlib_name` (`tests/imports.rs`). **Residual:** a library `both:`/`self:` METHOD colliding with a stdlib method still errors — methods register as attributes on a shared (global) type, which module-scoping can't cleanly cover; the real cases (`shapes` `clamp`, `time` `floor_mod`) are free fns, so this is a rare, accepted limitation.
+- **Rejected:** global-namespace library symbols (makes stdlib growth a permanent compat hazard — proven by `shapes`/`time`; incompatible with the freeze); per-collision coordinated republish (does not scale, and absolute-compat forbids it post-freeze).
+- Owner-directed 2026-07-15 (the direction reached across the shapes/time ship work). Trigger: C94 `floor_mod` broke shipped `shapes`/`time` via C95. Companion: [library-ship-validation.md](plans/102-stability-contract/library-ship-validation.md).
+
+## C98 — `use lib;` binds only the `lib` namespace; unqualified access is an EXPLICIT `use lib::*` / `use lib::(…)`, where the imported name wins
+
+**Catalogue:** @F2 (operators) / modules + naming. The name-resolution HOW that [C97](#c97--) deferred — the rule that makes "the stdlib can grow without breaking a program" actually hold.
+
+### Question
+
+C97 makes a library's public symbols module-scoped. But loft also has wildcard import. If a bare `use lib;` (or a wildcard) brought a library's names into the **unqualified** namespace, a later stdlib addition of the same name re-creates the C95 collision one level up — and *any* resolution of it (imported wins / stdlib wins / ambiguity error) either re-opens the silent-shadow class or **breaks an existing program when the stdlib grows** (violating absolute compat). How does unqualified access to a library's symbols work?
+
+### Evaluation
+
+Split the surface by **explicitness**:
+
+- **`use lib;` binds exactly one name — `lib`**, the namespace handle; every function/type is reached as `lib::name`. It brings *nothing* unqualified, so a program that only `use lib;`s is **immune to stdlib growth** (it always qualifies) — the common case can never collide.
+- **`use lib::*;` (wildcard) and `use lib::(a, b, c);` (selective)** are *explicit constructions* that pull names into the unqualified namespace. There the **imported name wins** over a colliding stdlib name — and that is *safe*, because the programmer explicitly asked for those names unqualified: it is their stated intent, not a silent shadow. A program that did this keeps its binding forever, so a later stdlib name of the same spelling **does not change its behavior**.
+
+So absolute compat holds both ways — bare-`use` programs qualify (no collision), explicit-import programs keep their binding (no behavior change) — and the stdlib can grow forever with **no** program breaking and **no** ambiguity-error (which would itself be a break). The wildcard/selective import is the "you asked for it" opt-in; the bare `use` is the collision-proof default.
+
+### Decision
+
+- **`use lib;`** introduces exactly one name, `lib` (the namespace); members are `lib::fn` / `lib::Type`. **No** unqualified leakage.
+- **`use lib::*;`** (wildcard) and **`use lib::(a, b, c);`** (selective) explicitly bind those names into the unqualified namespace; an explicitly-imported name **wins** over a stdlib name of the same spelling — the author's owned choice, so the C95 silent-shadow concern does not apply.
+- Because bare `use lib;` never imports unqualified and an explicit import keeps its binding across stdlib growth, **no program breaks when the stdlib grows**, and no ambiguity-error is needed — the C97 guarantee holds.
+- **Intended asymmetry with [C95](#c95--):** *defining* your own top-level free fn that a stdlib method would silently shadow is a C95 error (the def was silently dead); *explicitly importing* a library name unqualified is allowed and wins — the line is exactly **silent vs explicit**.
+- **Collision resolver — aliased import (ALREADY in loft, @PLN22 P3/P4):** `use lib::(a as x, b);` imports `a` locally as `x` (plus namespace/type/fn aliases: `use lib as el;`, `use lib::Status as St;`, `use lib::make as mk;`). So any clash — two libraries exporting the same name, or an import you want to keep distinct — is resolved by binding it under a chosen local name. This also resolves the two-explicit-imports edge below: `use a::(x); use b::(x as bx);`. **Syntax — keep `as` (owner 2026-07-15):** the resolver already exists and `original as alias` is uniform across all four alias forms, so no new syntax is added (a proposed `alias = original` was declined — it would fragment the shipped alias grammar and break existing `use` statements for a cosmetic disambiguation; the `as` overload with the type-cast `as` is unambiguous inside a `use` group).
+- **Open edges (not ruled here):** an explicitly-imported name vs the program's own top-level def — resolve when specced.
+- Owner ruling 2026-07-15. Companion: [C97](#c97--). **Already shipped (@PLN22 P1–P4):** the whole `use` surface — bare `use lib;` = prefix-required namespace bind, `use lib::*;` = wildcard, `use lib::(a, b, c)` = selective, `use lib::(a as x, b)` / `use lib as el` / `use lib::T as St` = aliasing. So C98 needs **no new syntax**; the only residual is the C97 internal change (a library's `pub` symbol must stop registering as global `n_<name>` — the dual registration that still collides with the stdlib during the library's own compile, per C95 — and be module-scoped only, which the shipped `use` machinery already brings into scope). Import-wins precedence for an explicit `::*` / `::(…)` binding is the one resolution rule to confirm against that change.

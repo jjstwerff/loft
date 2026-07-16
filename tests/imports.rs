@@ -151,3 +151,22 @@ fn pln22_phase4_flat_list_rejected() {
         "Expected the flat `use lib::a, b` list to be rejected"
     );
 }
+
+/// @PLN102 C97 — a library may define a name that also exists in the stdlib (`clamp`);
+/// it is module-scoped (reached as `c97_shadowlib::clamp`) and does NOT trigger the C95
+/// "Cannot redefine" error, while the bare name stays the stdlib's.  This is the fix that
+/// lets the stdlib grow without breaking a shipped library (the shapes/time break).
+#[test]
+fn pln102_c97_library_may_define_a_stdlib_name() {
+    let s = sep_str();
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.lib_dirs = vec![format!("tests{s}lib")];
+    p.parse(&format!("tests{s}lib{s}c97_shadow_main.loft"), false);
+    scopes::check(&mut p.data);
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "a library defining the stdlib name `clamp` must be module-scoped, not a C95 redefinition; got: {:?}",
+        p.diagnostics.lines()
+    );
+}

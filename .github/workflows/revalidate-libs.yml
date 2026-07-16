@@ -1,0 +1,151 @@
+# Copyright (c) 2026 Jurjen Stellingwerff
+# SPDX-License-Identifier: LGPL-3.0-or-later
+#
+# revalidate-libs — compile + test every PUBLISHED registry library against THIS
+# loft.  A language change (a new stdlib function, a new error/warning, a cast
+# rule) can silently break a shipped library — exactly how adding `floor_mod`
+# (C94) + the no-silent-redefinition rule (C95) broke shapes/time, caught only by
+# a manual "compile every lib" sweep.  This makes that sweep a gate.
+#
+# @PLN102 freeze-critical: the stdlib may only grow if growth can't retro-break a
+# shipped lib.  This job proves it, per change and nightly.
+name: revalidate-libs
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: '17 6 * * *'          # nightly, off the hour
+  push:
+    branches: [main]
+    paths:                        # only the loft surface a library compiles against
+      - 'default/**'              # the stdlib
+      - 'src/**'                  # the compiler / type system
+      - '.github/workflows/revalidate-libs.yml'
+  pull_request:                   # catch a lib-breaking language change BEFORE it merges
+    paths:
+      - 'default/**'
+      - 'src/**'
+      - '.github/workflows/revalidate-libs.yml'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: revalidate-libs-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # Read the registry index (source of truth for what is installable) and emit one
+  # matrix leg per published package at its latest version → (repo, tag, subpath).
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      matrix: ${{ steps.m.outputs.matrix }}
+      count: ${{ steps.m.outputs.count }}
+    steps:
+      - id: m
+        run: |
+          set -euo pipefail
+          curl -fsSL https://raw.githubusercontent.com/loft-lang/registry/main/index.json -o index.json
+          python3 - <<'PY' >> "$GITHUB_OUTPUT"
+          import json, re
+          idx = json.load(open("index.json"))["packages"]
+          key = lambda v: [int(x) for x in re.findall(r'\d+', v)][:3]
+          legs = []
+          for name, pkg in idx.items():
+              vers = pkg.get("versions", {})
+              if not vers:
+                  continue
+              latest = max(vers, key=key)
+              url = vers[latest].get("url", "")
+              m = re.match(r"https://github\.com/([^/]+/[^/]+)/releases/download/([^/]+)/", url)
+              if not m:                       # non-GitHub / malformed URL — can't check out; skip
+                  continue
+              repo, tag = m.group(1), m.group(2)
+              legs.append({
+                  "name": name,
+                  "version": latest,
+                  "repo": repo,
+                  "tag": tag,
+                  "sub": vers[latest].get("subpath", name),
+              })
+          print("matrix=" + json.dumps({"include": legs}))
+          print("count=" + str(len(legs)))
+          PY
+          echo "discovered $(grep -oP 'count=\K\d+' "$GITHUB_OUTPUT" | tail -1) published libraries"
+
+  revalidate:
+    needs: discover
+    if: needs.discover.outputs.count != '0'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false            # one broken lib must not hide the others
+      matrix: ${{ fromJson(needs.discover.outputs.matrix) }}
+    name: ${{ matrix.name }} ${{ matrix.version }}
+    steps:
+      - name: Checkout loft (the version under validation)
+        uses: actions/checkout@v4
+        with:
+          path: loft-src
+
+      - name: Install mold (loft's pinned linker)
+        run: sudo apt-get update -y && sudo apt-get install -y mold
+
+      - name: Cache cargo + loft build
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            loft-src/target
+          key: revalidate-loft-${{ hashFiles('loft-src/Cargo.lock') }}
+          restore-keys: revalidate-loft-
+
+      - name: Build loft
+        working-directory: loft-src
+        run: |
+          cargo build --release --lib --bin loft
+          echo "$PWD/target/release" >> "$GITHUB_PATH"
+
+      - name: Checkout ${{ matrix.name }} @ ${{ matrix.tag }}
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          ref: ${{ matrix.tag }}
+          path: lib
+
+      # Warnings are NON-contractual (a new deprecation must NOT fail a shipped lib),
+      # so LOFT_DENY_WARNINGS is left off — only a compile error or a failed test,
+      # i.e. a genuine break, fails the leg.  Interpret is the HARD gate: it catches
+      # the whole language-break-at-compile class (C95 redefinition, DN cast rules,
+      # type changes) with no per-lib system deps.
+      - name: Interpret — ${{ matrix.name }}  (hard gate)
+        working-directory: lib/${{ matrix.sub }}
+        run: loft --interpret --tests tests
+
+      # Native adds codegen/divergence coverage but needs each lib's own system deps
+      # (e.g. graphics → ALSA), which a generic runner lacks — so it is BEST-EFFORT
+      # here and hard-gated in each lib's own library-ci.yml (where its deps are set
+      # up).  A red here is a signal to look, not an automatic freeze-gate failure.
+      - name: Native — ${{ matrix.name }}  (best-effort)
+        continue-on-error: true
+        working-directory: lib/${{ matrix.sub }}
+        run: LOFT_TIMEOUT=240 loft --native --tests tests
+
+  # Fail the workflow if any published library broke — that is a language change
+  # retro-breaking a shipped lib, which the freeze forbids.
+  gate:
+    needs: revalidate
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verdict
+        run: |
+          r='${{ needs.revalidate.result }}'
+          echo "revalidation: $r" >> "$GITHUB_STEP_SUMMARY"
+          if [ "$r" = "success" ] || [ "$r" = "skipped" ]; then
+            echo "✅ every published library still compiles + tests green against this loft"
+          else
+            echo "::error::a PUBLISHED library FAILS against this loft — a language change is retro-breaking a shipped lib. See the failed matrix legs; fix the lib (bump + republish) or reconsider the change (pre-freeze) — the stdlib may only grow additively."
+            exit 1
+          fi

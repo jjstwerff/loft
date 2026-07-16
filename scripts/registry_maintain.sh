@@ -179,6 +179,18 @@ done
 while IFS=$'\t' read -r name ver repo libdir _why; do
     [ -n "$name" ] || continue
     tag="$name-v$ver"
+    # V2/V3 gate — the lib must parse/type/test against THIS loft before it can be
+    # published + signed (the same gate library-ci + revalidate-libs run; catches a
+    # lib a language change broke, e.g. C95, before it reaches the signed index).
+    if [ -d "$libdir/tests" ] \
+       && ! ( cd "$libdir" && LOFT_TIMEOUT=180 "$LOFT" --interpret --tests tests ) > "$tmp/gate_$name.log" 2>&1; then
+        {
+          echo "  ✗ $name $ver — GATE FAILED: does not pass its tests against this loft."
+          echo "      $(grep -iE 'error|fail' "$tmp/gate_$name.log" | head -1)"
+          echo "      Fix the library (or reconsider the language change — pre-freeze the stdlib may only grow additively), then re-run."
+        } >> "$tmp/blocked.txt"
+        continue
+    fi
     if ! gh release view "$tag" -R "$ORG/$repo" > /dev/null 2>&1; then
         printf '%s\t%s\t%s\t%s\t%s\n' "$name" "$ver" "$repo" "$libdir" "$_why" >> "$tmp/work_ok.tsv"
         continue
@@ -209,6 +221,13 @@ mv "$tmp/work_ok.tsv" "$tmp/work.tsv"
 n_own=$(wc -l < "$tmp/work.tsv")
 n_prs=$(wc -l < "$tmp/prs.tsv")
 n_blocked=$(grep -c '✗' "$tmp/blocked.txt" 2>/dev/null || true); n_blocked=${n_blocked:-0}
+# C96 key-absent path: versions STAGED under submissions/ (via a PR that does NOT
+# touch index.json).  Peek at the count before cloning so a submissions-only run
+# still proceeds; the drain (post-clone) vets + folds each one.
+n_subs=$(gh api "repos/$ORG/registry/contents/submissions" \
+    --jq '[.[] | select(.name | endswith(".json"))] | length' 2>/dev/null \
+    | grep -E '^[0-9]+$' | head -1 || true)   # submissions/ absent (404) → empty
+n_subs=${n_subs:-0}
 echo
 echo "== own libs to publish ($n_own) =="
 awk -F'\t' '{ printf "  %s %s (%s, %s)\n", $1, $2, $3, $5 }' "$tmp/work.tsv"
@@ -218,6 +237,7 @@ if [ "$n_blocked" != 0 ]; then
 fi
 echo "== foreign submission PRs on $ORG/registry ($n_prs) =="
 awk -F'\t' '{ printf "  #%s by %s [%s] %s\n", $1, $2, $3, $4 }' "$tmp/prs.tsv"
+echo "== staged submissions/ to vet + fold ($n_subs) =="
 echo "== foreign upstream drift (informational) =="
 cat "$tmp/foreign_drift.txt"
 if [ -s "$tmp/orphan_branches.txt" ]; then
@@ -230,7 +250,7 @@ if [ -s "$tmp/prunable_branches.txt" ]; then
 fi
 echo
 
-if [ "$n_own" = 0 ] && [ "$n_prs" = 0 ]; then
+if [ "$n_own" = 0 ] && [ "$n_prs" = 0 ] && [ "$n_subs" = 0 ]; then
     echo "nothing to do to publish — registry is current (see any branch hygiene above)."
     exit 0
 fi
@@ -405,6 +425,64 @@ EOF
     published+=("$name-$ver")
 done < "$tmp/work.tsv"
 
+# ── submissions/ drain (C96 key-absent path) ─────────────────────────────────
+# A key-absent contributor stages a version by adding submissions/<name>-<ver>.json
+# (name, version, repo, tag, subpath, entry) via a PR that does NOT touch index.json,
+# so it can't race the signed index.  Here — on the key-present machine — each staged
+# submission goes through the full vet-lib gate; a PASS is folded into the index and
+# its staging file `git rm`ed (committed together with the index + .sig by the sign
+# step, so it lands atomically); a native-code NEEDS-REVIEW or a FAIL is reported and
+# the submission left in place for a human decision.
+DRAINED=(); REVIEW_SUBS=(); FAILED_SUBS=()
+for sub in "$REG_DIR"/submissions/*.json; do
+    [ -e "$sub" ] || continue
+    read -r s_name s_ver s_repo s_tag s_sub < <(python3 - "$sub" <<'PYEOF'
+import json, sys
+d = json.load(open(sys.argv[1]))
+print(d.get("name", ""), d.get("version", ""), d.get("repo", ""),
+      d.get("tag", ""), d.get("subpath", d.get("name", "")))
+PYEOF
+)
+    if [ -z "$s_name" ] || [ -z "$s_ver" ] || [ -z "$s_repo" ] || [ -z "$s_tag" ]; then
+        echo "  ⚠ malformed submission $(basename "$sub") (need name/version/repo/tag) — left for review"
+        FAILED_SUBS+=("$(basename "$sub")"); continue
+    fi
+    echo "vetting submission $s_name $s_ver ($s_repo @ $s_tag) ..."
+    bash "$here/scripts/vet-lib.sh" "$s_repo" "$s_tag" "$s_sub" > "$tmp/vet_$s_name.log" 2>&1
+    rc=$?
+    if [ "$rc" = 3 ]; then
+        echo "  ⚠ $s_name $s_ver NEEDS REVIEW (carries #native/#rust) — promote by hand after review (log: $tmp/vet_$s_name.log)"
+        REVIEW_SUBS+=("$s_name-$s_ver"); continue
+    fi
+    if [ "$rc" != 0 ]; then
+        echo "  ✗ $s_name $s_ver did NOT pass the gate — not admitted (log: $tmp/vet_$s_name.log)"
+        FAILED_SUBS+=("$s_name-$s_ver"); continue
+    fi
+    if python3 - "$REG_DIR/index.json" "$sub" <<'PYEOF'
+import json, sys
+from datetime import datetime, timezone
+index_path, sub_path = sys.argv[1:3]
+sub = json.load(open(sub_path))
+name, ver, entry = sub["name"], sub["version"], sub["entry"]
+index = json.load(open(index_path))
+pkg = index["packages"].setdefault(name, {
+    "description": sub.get("description", f"loft library {name}"),
+    "homepage": sub.get("homepage", ""), "categories": [], "yanked": [], "versions": {}})
+entry.setdefault("published", datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"))
+pkg["versions"][ver] = entry
+index["updated"] = entry["published"]
+json.dump(index, open(index_path, "w"), indent=2, ensure_ascii=False)
+open(index_path, "a").write("\n")
+PYEOF
+    then
+        git -C "$REG_DIR" rm -q "submissions/$(basename "$sub")" 2>/dev/null || rm -f "$sub"
+        DRAINED+=("$s_name-$s_ver"); echo "  ✓ vetted + folded $s_name $s_ver (staging file removed)"
+    else
+        echo "  ⚠ index fold failed for $s_name $s_ver — submission left in place"
+        FAILED_SUBS+=("$s_name-$s_ver")
+    fi
+done
+
 # Summary — never drop a skip silently.
 if [ "${#SKIPPED_PRS[@]}" -gt 0 ] || [ "${#SKIPPED_LIBS[@]}" -gt 0 ] || [ "$n_blocked" != 0 ]; then
     echo
@@ -413,6 +491,10 @@ if [ "${#SKIPPED_PRS[@]}" -gt 0 ] || [ "${#SKIPPED_LIBS[@]}" -gt 0 ] || [ "$n_bl
         echo "  stale releases excluded in pre-flight ($n_blocked) — bump version + re-release:"
         cat "$tmp/blocked.txt"
     fi
+fi
+if [ "${#DRAINED[@]}" -gt 0 ] || [ "${#REVIEW_SUBS[@]}" -gt 0 ] || [ "${#FAILED_SUBS[@]}" -gt 0 ]; then
+    echo
+    echo "submissions: folded ${DRAINED[*]:-none} | needs-review ${REVIEW_SUBS[*]:-none} | rejected ${FAILED_SUBS[*]:-none}"
 fi
 
 echo

@@ -1,0 +1,9 @@
+// @PLN102 C97 — a library's stdlib-colliding name is module-scoped: `c97_shadowlib::clamp`
+// is the library's; a bare `clamp` is still the stdlib's.  (Before C97 the library's
+// `clamp` definition was a C95 "Cannot redefine" error.)
+use c97_shadowlib;
+fn test() {
+  assert(c97_shadowlib::clamp(2.0, 0.0, 10.0) == 200.0, "lib clamp is module-scoped");
+  assert(clamp(2.0, 0.0, 10.0) == 2.0, "bare clamp is still the stdlib's");
+  assert(c97_shadowlib::widget() == 7, "lib fn reachable");
+}

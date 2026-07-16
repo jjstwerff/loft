@@ -106,14 +106,14 @@ fn parse_xyc(payload: text) -> (integer, integer, integer) {
   if i == null {
     (0, 0, 0)
   } else {
-    x = payload[..i] as integer;
+    x = payload[..i] as integer? ?? 0;
     rest = payload[i + 1..];
     j = rest.find(",");
     if j == null {
       (x, 0, 0)
     } else {
-      y = rest[..j] as integer;
-      c = rest[j + 1..] as integer;
+      y = rest[..j] as integer? ?? 0;
+      c = rest[j + 1..] as integer? ?? 0;
       (x, y, c)
     }
   }
@@ -125,8 +125,8 @@ fn parse_xy(payload: text) -> (integer, integer) {
   if i == null {
     (0, 0)
   } else {
-    x = payload[..i] as integer;
-    y = payload[i + 1..] as integer;
+    x = payload[..i] as integer? ?? 0;
+    y = payload[i + 1..] as integer? ?? 0;
     (x, y)
   }
 }
@@ -209,7 +209,7 @@ REPLAY_BUDGET = 64;
 
 fn env_int(name: text, dflt: integer) -> integer {
   raw = env_variable(name);
-  if raw == "" { dflt } else { raw as integer }
+  if raw == "" { dflt } else { raw as integer? ?? dflt }
 }
 
 // Byte widths come from each field's declared type — `c.x: i32`
@@ -226,10 +226,10 @@ fn world_save(world: World) {
     // the truncation explicit so the sequence keeps working once `+=`
     // is append-only (rather than truncating on first reopen).
     f.set_file_size(0);
-    f += (WORLD_FILE_MAGIC   as u32);
-    f += (WORLD_FILE_VERSION as u32);
-    f += (world.tick as u32);
-    f += (n as u32);
+    f += (WORLD_FILE_MAGIC   as u32? ?? 0);
+    f += (WORLD_FILE_VERSION as u32? ?? 0);
+    f += (world.tick as u32? ?? 0);
+    f += (n as u32? ?? 0);
     for c in world.cells {
       f += c.x;
       f += c.y;
@@ -253,22 +253,22 @@ fn world_load(world: World) {
   // Auto-detect v1 vs v2 by peeking the first 4 bytes against the magic.
   // v1 puts a count there; counts < magic in practice so a magic match
   // unambiguously means v2.
-  head = f#read as u32;
+  head = f#read as u32? ?? 0;
   loaded = 0;
   if head == WORLD_FILE_MAGIC {
-    version = f#read as u32;
+    version = f#read as u32? ?? 0;
     if version != WORLD_FILE_VERSION {
       println("single-port: snapshot version {version} not understood (expected {WORLD_FILE_VERSION}) — starting empty");
       return;
     }
-    world.tick = f#read as u32;
-    n = f#read as u32;
+    world.tick = f#read as u32? ?? 0;
+    n = f#read as u32? ?? 0;
     i = 0;
     while i < n {
-      x          = f#read as i32;
-      y          = f#read as i32;
-      c          = f#read as u8;
-      birth_tick = f#read as u32;
+      x          = f#read as i32? ?? 0;
+      y          = f#read as i32? ?? 0;
+      c          = f#read as u8? ?? 0;
+      birth_tick = f#read as u32? ?? 0;
       if c >= 1 && c <= 9 {
         k = cell_key(x, y);
         if world.cells[k] == null {
@@ -285,9 +285,9 @@ fn world_load(world: World) {
     n = head;
     i = 0;
     while i < n {
-      x = f#read as i32;
-      y = f#read as i32;
-      c = f#read as u8;
+      x = f#read as i32? ?? 0;
+      y = f#read as i32? ?? 0;
+      c = f#read as u8? ?? 0;
       if c >= 1 && c <= 9 {
         k = cell_key(x, y);
         if world.cells[k] == null {
@@ -359,8 +359,8 @@ fn handle_message(world: World, cid: integer, msg_id: integer, payload: text) {
       // other-colour tap → ignore
       return;
     }
-    world.cells += [Cell{ck: k, x: x as i32, y: y as i32, color: c as u8,
-                         birth_tick: world.tick as u32}];
+    world.cells += [Cell{ck: k, x: x as i32? ?? 0, y: y as i32? ?? 0, color: c as u8? ?? 0,
+                         birth_tick: world.tick as u32? ?? 0}];
     p = world.players[cid];
     if p != null {
       p.lx = x;

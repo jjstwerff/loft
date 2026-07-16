@@ -16,4 +16,4 @@ loft    = ">=0.8"
 
 [dependencies]
 graphics = ">=0.1"
-shapes   = ">=0.1"
+shapes   = ">=0.3"
