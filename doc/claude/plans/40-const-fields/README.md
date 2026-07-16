@@ -241,6 +241,9 @@ Collapsing `hex_world.world_load`'s per-field fills into a `Cell{…}` literal e
 `Cell{ c_color: f#read }` infers `text` and errors.  Worked around with explicit `f#read as u8`/`as u16`.
 The underlying gap — propagate a literal field's declared type as the value expression's expected type —
 is a language-enhancement candidate that const adoption surfaces (const removes the LHS-driven escape hatch).
+Designed (root cause + safe small steps) in
+[literal-expected-type.md](literal-expected-type.md); it is independent of `const`
+and should become its own plan / `loft-lang/features` issue before build.
 
 ## See also
 
