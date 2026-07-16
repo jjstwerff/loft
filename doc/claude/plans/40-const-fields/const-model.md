@@ -5,10 +5,29 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Design — the coherent immutability model
 
-**Status: design (greenfield).**  A clean-slate spec for loft's immutability,
-designed for coherence first — *ignoring* what is currently built (the shipped
-@PLN40 field-const, and the ad-hoc const-param/local behaviour, all become one
-quadrant of this model; the libs get re-annotated to match).  No new keyword.
+**Status: Phase 1 IN PROGRESS on `tuxedo-work` (no PR).**  Clean-slate spec for
+loft's immutability, coherence first — the shipped @PLN40 field-const and the ad-hoc
+const-param/local behaviour all become one quadrant of this model; the libs get
+re-annotated to match.  No new keyword.
+
+## Implementation progress (Phase 1)
+
+- **Step 0 (matrix probe) — DONE.**  Target = the 4×2 table below × {local,field,param}.
+  Reusable probe recreatable from the "Implementation" section.
+- **Step 1 (const-local = binding-const, allows append) — DONE** (commit `13d625df`).
+  Unified the 5 scattered `is_const_param` write-guards into one parser helper
+  `const_write_blocked(nr, op) = is_const_param && (is_argument || op == "=")`
+  (`src/parser/operators.rs`).  const-local now rejects only rebind; const-param
+  unchanged.  Verified both backends; guard `test_const_local_binding_allows_append`
+  in `tests/scripts/90-immutability.loft`.
+- **Step 2 (parse `const` before a type → new `value_const` flag on Attribute+Variable) — NEXT.**  Inert.
+- **Step 3 (value-const enforcement via base-resolution) — the load-bearing step.**
+  Resolve any write's base binding; if `value_const`, reject ALL mutation
+  (append/element/nested), allow rebind.  Flips const-param elem/nested→BLOCK,
+  rebind→ok.  Extends `validate_write` + the `const_write_blocked` sites with
+  base-chain resolution.  NO `Type::Const` wrapper (ripples through every Type match).
+- **Steps 4–5** — scalars collapse + `&`-borrow interaction; docs + graduate the
+  matrix to `tests/scripts/40-const-fields.loft` + `tests/issues.rs`.
 
 ## First principle — two orthogonal facts, and loft already has one of them
 
