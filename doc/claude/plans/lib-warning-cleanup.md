@@ -48,7 +48,7 @@ loft (`tuxedo-work`), deduped by site (files × passes inflate raw counts).
 Ordered: null-flow first (correctness-adjacent, tiny), then the mechanical `not null`
 sweep, then the judgment-call `&` review.
 
-### C1 — null-flow N-Store discharge (≈7 sites) — do first, small
+### C1 — null-flow N-Store discharge — **DONE (2026-07-16)**
 Discharge each un-discharged nullable at its SOURCE with the lib's own `?? d` idiom
 (`?? 0` int, `?? 0.0` float), NOT at every call site.  Watch two traps proven this
 session: (a) never `??` a WRITE target (`x[i] = v` stays bare — an LHS `x[i] ?? 0 = v`
@@ -57,12 +57,26 @@ is a parse error); (b) don't `??` a value the f1 fix already proved fit (same-ve
 each package's `loft test` shows 0 "is stored into" AND golden/round-trip tests still
 green (the discharges must be behaviour-preserving — the null never fires).
 
-| unit | package(s) | sites |
-|---|---|---|
-| C1a | loft-libs-graphics: graphics (1), gridmesh (1 — arg already fixed, uncommitted) | 2 |
-| C1b | loft-libs-world: hex_terrain (3) | 3 |
-| C1c | loft-libs-core: random (1 — after its test triage) | 1 |
-| C1d | loft-libs-net: web (1) | 1 |
+**Final sweep: 0 own-source+test N-Store across every package.**  Landed one commit per
+repo, on each repo's current branch (all pushed):
+
+| unit | package(s) | fix | commit |
+|---|---|---|---|
+| C1a | graphics (1), gridmesh (2) | computed-index `?? 0`; parallel-vector `ys[i] ?? 0`; **modulo `v % cs` `?? 0` in chunk_loc** (was misreported at chunk_of) | loft-libs-graphics `16633a7` |
+| C1b | hex_terrain (3 src + 1 test) | `sqrt(kv)` bound ONCE as `skv = sqrt(kv) ?? 0.0` (reused ×3); test RHS `?? 0.0` (can't `??` the `th[i]` write target) | loft-libs-world `fe917c0` |
+| C1c | random (1) | `get()` was `-> integer` but documents+executes `return null` → typed `-> integer?` (honesty fix, not `?? d`; internal `indices()` already `?? 0`) | loft-libs-core `7887a3b` |
+| C1d | web (1) | `parts[len-1]` computed-index → `(… ?? "").trim()` | loft-libs-net `3c3fc90` |
+
+**C0 triage (random/regex):** confirmed KNOWN-ENVIRONMENTAL — the failures are the
+stale-cdylib bridge (`n_rand_seed has no marshal bridge — rebuild against bridge-capable
+loft-ffi`), not a logic break; the pure-loft tests pass.  No fix needed here (a clean CI
+rebuilds the cdylib).
+
+**Loft finding (diagnostic bug):** the null-flow **return-value** N-Store reports the
+position of the FOLLOWING function definition, not the offending return expression —
+`chunk_loc`'s nullable tail was reported at `chunk_of:172`.  Cost ~15 probes to locate.
+Worth a diagnostic-position fix in loft's null-flow check (bisect-by-tail-discharge is
+the reliable workaround until then).
 
 ### C2 — `not null` retirement (≈85 sites) — mechanical, per repo
 `not null` is a deprecated no-op (fields are non-null by default; @PLN25 F2).  Pure
