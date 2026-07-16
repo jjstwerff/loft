@@ -1248,7 +1248,7 @@ buf: vector<single> = []    // empty vector of f32
 v += [4]                    // append one element
 v += [5, 6]                 // append multiple elements
 for x in v { }             // iterate
-v[i]                        // index (null if out of bounds)
+v[i]                        // index; i>=len -> null, negative i counts from the end (see below)
 v[start..end]               // slice range (end exclusive)
 v[start..=end]              // slice range (end inclusive)
 v[start..]                  // open-ended slice to end
@@ -1271,6 +1271,15 @@ via a local, or a comprehension: `f([for x in v[lo..hi] { x }])`.
 it yields `30, 40`.  `v[-2..]` yields the last two elements.  A
 negative bound is shorthand for `len(v) + bound`, so `v[0..len(v) - 1]`
 and `v[0..-1]` are the same slice.
+
+**Scalar `v[i]` follows the same negative rule — mind the null-guard footgun.**
+The full picture: `i ∈ [0, len)` → the element; `i ≥ len` → `null`; a **negative**
+`i ∈ [-len, -1]` counts **from the end** (`v[-1]` is the last element, `v[-len]` the
+first — the same rule as negative slice bounds above); `i < -len` → `null`.  Because a
+negative index in range yields a real element, a *computed* index that can go negative
+does **not** null-guard: `if v[i] { … }` and `v[i] ?? d` only catch `i ≥ len`, not a
+`-1` "not-found" sentinel or a subtraction underflow.  Test `if i >= 0` first (or `?? d`
+only after a `>= 0` check) when `i` may be negative.
 
 **Struct elements: reads are views, writes are copies — never swap
 in-place via a temp (#338).**  For a `vector<STRUCT>`, `tmp = v[j]` yields

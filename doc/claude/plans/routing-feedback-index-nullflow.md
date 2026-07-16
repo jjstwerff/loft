@@ -201,6 +201,13 @@ NOTHING in the compiler changes; we are writing down what already happens):**
 
 Do steps 1–3 together (they're the same edit in three docs); step 4 is a follow-up.
 
+**SHIPPED (steps 1–3, docs only — no behaviour change).**  LOFT.md § indexing carries
+the full `i≥len`→null / `i∈[-len,-1]`→from-end / `i<-len`→null table + the null-guard
+footgun, cross-linked to the slice rule (@P384); the loft-write skill has the
+"`v[i]` with a possibly-negative index does NOT null-guard — test `if i >= 0` first"
+gotcha; CAVEATS.md § Accepted trade-offs records the asymmetry.  Step 4 (a lint on a
+subtraction/`-1`-able index behind an `if v[i]` guard) remains an optional follow-up.
+
 ---
 
 ## Routing / sequencing

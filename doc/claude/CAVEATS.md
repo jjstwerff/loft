@@ -21,6 +21,12 @@ Closed-by-decision entries live in
 here for cross-reference; don't re-argue these in active caveat
 tables.
 
+- **Scalar `v[i]` negative-index asymmetry (intentional; documented 2026-07).**  `i ≥ len`
+  → `null`, but a negative `i ∈ [-len, -1]` counts **from the end** (`v[-1]` = last element,
+  like slices @P384); only `i < -len` → `null`.  So a null-guard (`if v[i]`, `v[i] ?? d`)
+  catches an over-range index but NOT a `-1` sentinel / underflow — that reads a real
+  element from the end.  Was documented only for slices; now in LOFT.md § indexing +
+  loft-write.  Guard a possibly-negative index with `if i >= 0` first.
 - **C3** — WASM `par()` runs sequentially.
   See [DESIGN_DECISIONS.md § C3](DESIGN_DECISIONS.md#c3--wasm-par-runs-sequentially).
 - **C38** — Closure capture was copy-at-definition.
