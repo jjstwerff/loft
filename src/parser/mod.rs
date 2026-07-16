@@ -6098,8 +6098,7 @@ impl Parser {
         {
             let succ = self.data.def(d_nr).superseded().to_string();
             if !succ.is_empty() {
-                let name = self.data.def(d_nr).name();
-                let shown = name.strip_prefix("n_").unwrap_or(name).to_string();
+                let shown = self.data.def(d_nr).display_name().to_string();
                 diagnostic!(
                     self.lexer,
                     Level::Warning,

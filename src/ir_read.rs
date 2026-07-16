@@ -1764,6 +1764,25 @@ mod tests {
             dangling.iter().any(|(l, m)| *l == Level::Error && m.contains("no such successor")),
             "a dangling #superseded successor must error; got {dangling:?}"
         );
+
+        // (4) a METHOD successor resolves (`t_<LEN><Type>_<succ>`, not just `n_<succ>`):
+        // a folded method is clean; an un-folded one warns by its bare method name.
+        let clean_method = check(
+            "struct Box { n: integer }\nfn old_m(self: Box) -> integer { self.new_m() }\n#superseded \"new_m\"\nfn new_m(self: Box) -> integer { self.n }\n",
+        );
+        assert!(
+            clean_method.is_empty(),
+            "a folded #superseded METHOD must resolve its successor and be clean; got {clean_method:?}"
+        );
+        let unfolded_method = check(
+            "struct Box { n: integer }\nfn keep_m(self: Box) -> integer { self.n }\n#superseded \"other_m\"\nfn other_m(self: Box) -> integer { self.n + 1 }\n",
+        );
+        assert!(
+            unfolded_method.iter().any(|(l, m)| *l == Level::Warning
+                && m.contains("`keep_m`")
+                && m.contains("never calls")),
+            "an un-folded #superseded METHOD must warn by its bare name; got {unfolded_method:?}"
+        );
     }
 
     /// @PLN11 arc D micro-bench — wall-clock of producing the native stdlib

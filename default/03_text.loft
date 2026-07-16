@@ -52,9 +52,11 @@ pub fn rfind(self: text, value: text) -> integer?;
 #rust"if let Some(v) = @self.rfind(@value) {{ v as i64 }} else {{ i64::MIN }}"
 #pure
 // Returns true if value appears anywhere in self.
-// Simpler than find when you only need a yes/no answer.
-pub fn contains(self: text, value: text) -> boolean;
-#rust"@self.contains(@value)"
+// @PLN102 arc C — superseded by `find`; kept as a shim over it (the old form keeps
+// working). `s.contains(v)` == `s.find(v) != null` — `find` returns the position,
+// `contains` is its found?/not-found? projection.
+pub fn contains(self: text, value: text) -> boolean { self.find(value) != null }
+#superseded "find"
 #pure
 // Returns a copy of self with every occurrence of value replaced by with.
 pub fn replace(self: text, value: text, with: text) -> text;

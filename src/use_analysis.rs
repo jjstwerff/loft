@@ -2276,9 +2276,11 @@ pub fn warn_dead_stores(
     }
 }
 
-/// @PLN102 arc C step 4 — the FOLD lint (C5.2).  For every `#superseded "Y"` symbol X in OWNED
-/// source (the author's own — a consumer never sees a dependency's fold issues, same provenance
-/// gate as the steer): (a) the successor `Y` must RESOLVE — an unresolvable successor is a hard
+/// @PLN102 arc C step 4 — the FOLD lint (C5.2).  For every `#superseded "Y"` symbol X in loft's
+/// OWN code — the stdlib (`STD_SOURCE`, so loft's `make ci` enforces its stdlib folds) or the entry
+/// project (`MAIN_SOURCE`, a library author's own lib / a user's program); a third-party dependency
+/// (source `2..`) is excluded, since a consumer cannot fix its fold: (a) the successor `Y` must
+/// RESOLVE — an unresolvable successor is a hard
 /// `Level::Error`, so a *dangling* steer never ships; (b) X's body must CALL `Y` — X is a shim over
 /// the successor, not independent code — else an advisory `Level::Warning` (promote to a hard
 /// `make ci` check once the surface is clean).  Every steer thus ships with its fold, or the lint
@@ -2292,8 +2294,13 @@ pub fn superseded_fold_diagnostics(
     for d_nr in 0..data.definitions() {
         let def = data.def(d_nr);
         let succ = def.superseded();
-        // Scope to the author's own marked symbols; a consumer cannot fix a dependency's fold.
-        if succ.is_empty() || !data.source_is_owned(def.source) {
+        // Scope to loft's OWN code — the stdlib (`STD_SOURCE`, checked by loft's `make ci`) or the
+        // entry project being built (`MAIN_SOURCE`, a library author's own lib / a user's program).
+        // A THIRD-PARTY dependency (source `2..`) is excluded: a consumer cannot fix a dependency's
+        // fold, so it must not error their compile (the dependency's author catches it in their own
+        // build, where their lib is the entry).
+        let own = def.source == crate::data::STD_SOURCE || data.source_is_owned(def.source);
+        if succ.is_empty() || !own {
             continue;
         }
         let pos = def.position();
@@ -2302,14 +2309,26 @@ pub fn superseded_fold_diagnostics(
         } else {
             pos.file.as_str()
         };
-        let shown = def.name().strip_prefix("n_").unwrap_or(def.name());
-        // (a) the successor must resolve — the marked symbol's own source first, then the stdlib
-        // (`STD_SOURCE`, visible everywhere) for a fold onto a standard-library primitive.
-        let y_name = format!("n_{succ}");
-        let mut y_nr = data.source_nr(def.source, &y_name);
-        if y_nr == u32::MAX {
-            y_nr = data.source_nr(crate::data::STD_SOURCE, &y_name);
+        let shown = def.display_name();
+        // (a) the successor must resolve — as a free fn `n_<succ>`, or (if X is a
+        // method) the same-receiver method `t_<LEN><Type>_<succ>`.  Each tried in
+        // X's own source, then the stdlib (`STD_SOURCE`, visible everywhere).
+        let mut candidates = vec![format!("n_{succ}")];
+        if let Some(prefix) = def.method_type_prefix() {
+            candidates.push(format!("{prefix}{succ}"));
         }
+        let y_nr = candidates
+            .iter()
+            .map(|name| {
+                let n = data.source_nr(def.source, name);
+                if n == u32::MAX {
+                    data.source_nr(crate::data::STD_SOURCE, name)
+                } else {
+                    n
+                }
+            })
+            .find(|&n| n != u32::MAX)
+            .unwrap_or(u32::MAX);
         if y_nr == u32::MAX {
             diags.add_at(
                 crate::diagnostics::Level::Error,

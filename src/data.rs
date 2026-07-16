@@ -2836,6 +2836,29 @@ impl Definition {
         &self.superseded
     }
 
+    /// If this is a method — stored `t_<LEN><Type>_<method>` (LEN = chars in the
+    /// receiver type name) — the `t_<LEN><Type>_` prefix (e.g. `t_4text_` for a
+    /// `text` method); `None` for a free fn (`n_…`) or operator (`Op…`).
+    #[must_use]
+    pub fn method_type_prefix(&self) -> Option<&str> {
+        let rest = self.name.strip_prefix("t_")?;
+        let nd = rest.chars().take_while(char::is_ascii_digit).count();
+        let len: usize = rest.get(..nd)?.parse().ok()?;
+        // `t_`(2) + digits(nd) + type(len) + `_`(1); require a method name after it.
+        (rest.len() > nd + len).then_some(&self.name[..=2 + nd + len])
+    }
+
+    /// The user-facing name of this definition — the internal `n_` (free fn) or
+    /// `t_<LEN><Type>_` (method) prefix stripped, so `t_4text_contains` reads as
+    /// `contains`.  Used by diagnostics (the @PLN102 arc-C steer + fold lint).
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        match self.method_type_prefix() {
+            Some(p) => &self.name[p.len()..],
+            None => self.name.strip_prefix("n_").unwrap_or(&self.name),
+        }
+    }
+
     /// Source-file id this definition was parsed from.
     #[must_use]
     pub fn source(&self) -> u16 {
