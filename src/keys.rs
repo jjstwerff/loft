@@ -447,6 +447,18 @@ pub fn math_domain_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_MATH_DOMAIN").is_none())
 }
 
+/// `LOFT_LINT_STRICT_INDEX=1` (@PLN102 case D audit) — opt-in, DEFAULT OFF. The index-trust
+/// model types `v[i]` non-null for a for-loop iter var (like a constant index), trusting the
+/// loop bounds the vector. That trust is unchecked, so `for i in 0..len(v) { w[i] }` (or a
+/// mid-loop resize) types non-null yet reads C80-null on overrun. When set, this warns where a
+/// loop-var index is bounded by `len(<one vector>)` but indexes a DIFFERENT vector — the
+/// mismatched-vector index that is the silent-null hazard. Advisory only: the type is unchanged
+/// (tightening the trust to a proof would break the ubiquitous `for i in 0..n { v[i] }` idiom).
+pub fn strict_index_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_LINT_STRICT_INDEX").is_some())
+}
+
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
 /// (`integer`, `text`, `bool`, …) is NON-NULL by default; `τ?` is the only nullable form. Turns
 /// `IntegerSpec.not_null` default `false → true` (and the analog for other scalars rides

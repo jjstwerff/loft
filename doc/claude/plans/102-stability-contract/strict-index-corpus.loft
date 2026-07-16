@@ -1,0 +1,76 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 case-D strict-index lint corpus — the regression net for the gated
+// `LOFT_LINT_STRICT_INDEX` warning (`fields.rs` emit + `objects.rs` capture).
+//
+// The lint is DEFAULT OFF (opt-in audit). When set, it warns where a for-loop iter var bounded
+// by `len(<one vector>)` indexes a DIFFERENT vector — `for i in 0..len(v) { w[i] }` types w[i]
+// non-null yet reads C80-null on overrun. Each function is labelled FIRE (must warn under the
+// flag) or OK (must stay silent on both backends, flag or not). The whole file runs clean with
+// the flag off. Locked by tests/strict_index_lint.rs.
+
+struct S { a: vector<integer>, b: vector<integer> }
+
+// FIRE 1 — bounded by len(v), READS w (w != v).
+fn mismatch_read(v: vector<integer>, w: vector<integer>) -> integer {
+    total = 0;
+    for i in 0..len(v) { total += w[i]; }
+    total
+}
+
+// FIRE 2 — write side: bounded by len(v), WRITES w[i] (the index path is shared with the read).
+fn mismatch_write(v: vector<integer>, w: vector<integer>) -> integer {
+    for i in 0..len(v) { w[i] = 0; }
+    len(w)
+}
+
+// FIRE 3 — field vectors: bounded by len(s.a), reads s.b (VecKey::Field discrimination).
+fn mismatch_field(s: S) -> integer {
+    total = 0;
+    for i in 0..len(s.a) { total += s.b[i]; }
+    total
+}
+
+// OK 1 — same vector: bounded by len(v), reads v.
+fn matched(v: vector<integer>) -> integer {
+    total = 0;
+    for i in 0..len(v) { total += v[i]; }
+    total
+}
+
+// OK 2 — plain `0..n` range: not a `len(...)` bound, so it is the developer's explicit contract.
+fn plain_range(w: vector<integer>, n: integer) -> integer {
+    total = 0;
+    for i in 0..n { total += w[i]; }
+    total
+}
+
+// OK 3 — matched field vector: bounded by len(s.a), reads s.a.
+fn matched_field(s: S) -> integer {
+    total = 0;
+    for i in 0..len(s.a) { total += s.a[i]; }
+    total
+}
+
+// OK 4 — nested, each loop indexes its own bound vector.
+fn nested_matched(v: vector<integer>, w: vector<integer>) -> integer {
+    total = 0;
+    for i in 0..len(v) {
+        for j in 0..len(w) { total += v[i] + w[j]; }
+    }
+    total
+}
+
+fn main() {
+    v = [1, 2, 3];
+    w = [10, 20, 30, 40];
+    s = S { a: [1, 2], b: [3, 4, 5] };
+    println("{mismatch_read(v, w)}");
+    println("{mismatch_write(v, w)}");
+    println("{mismatch_field(s)}");
+    println("{matched(v)}");
+    println("{plain_range(w, 3)}");
+    println("{matched_field(s)}");
+    println("{nested_matched(v, w)}");
+}

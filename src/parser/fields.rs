@@ -1010,6 +1010,28 @@ impl Parser {
         // (the developer typed a literal), or a for-loop iteration variable (the loop's bound is the
         // contract). `parse_index` reads this flag to wrap the element type `Optional` when unfit.
         self.last_index_fit = self.index_provably_fit(&p, code);
+        // @PLN102 strict-index lint (gated by `LOFT_LINT_STRICT_INDEX`, advisory). The index is
+        // trusted in-bounds because it is a for-loop iter var — but if that loop is bounded by
+        // `len(<other vector>)`, `for i in 0..len(v) { w[i] }` types `w[i]` non-null yet reads
+        // C80-null on overrun. Warn on the mismatch; the type stays non-null (a real proof would
+        // break the ubiquitous `for i in 0..n { v[i] }` idiom — see `strict_index_lint_enabled`).
+        if self.last_index_fit
+            && !self.first_pass
+            && crate::keys::strict_index_lint_enabled()
+            && let Value::Var(iv) = p.unspan()
+            && let Some(bound) = self.vars.loop_len_bound(*iv)
+            && let Some(indexed) = crate::parser::operators::vec_key(code, &self.data)
+            && bound != indexed
+        {
+            let iname = self.vars.name(*iv).to_string();
+            diagnostic!(
+                self.lexer,
+                Level::Warning,
+                "index `{iname}` is bounded by `len(...)` of a different vector than the one \
+                 indexed here — a mismatched-vector index is typed non-null but reads null on \
+                 overrun (@PLN102 strict-index)"
+            );
+        }
         if !self.first_pass && !self.convert(&mut p, &index_t, &I32) {
             diagnostic!(
                 self.lexer,

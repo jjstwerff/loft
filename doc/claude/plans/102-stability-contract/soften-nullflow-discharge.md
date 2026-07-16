@@ -109,7 +109,7 @@ non-null value satisfies every `float?` consumer, and every existing `??` still 
 | **B** — `sqrt`/domain non-negativity lattice (above) | high — *all* geometric `sqrt`/`pow`; the whole real gap | moderate — a bounded recursive analysis | soundness-critical, but the square/sum/max/abs rules are provably safe with `Unknown` default | **DONE, default-on** (opt-out `LOFT_NO_MATH_DOMAIN`) — `Sign` lattice + `domain_sign` in `parser/mod.rs` wired into `math_arg_in_domain`; the flip's redundant-lint churn closed by the `call_declares_nullable` grandfather; tests in `tests/math_domain.rs` |
 | **C** — nonzero divisor | — | — | — | **DONE** — literal/file-const/qualified-const already folded; the residual call-valued const (`PI`/`E`) now folds via `const_eval` (`fold_op` + `const_f64`), so `x / PI` is non-null |
 | **A** — fold through pure arithmetic before typing | low | low | none | **Falls out of B** (constants get exact facts) |
-| **D** — `v[i]` bound-carry in `for i in 0..len(v)` | highest raw frequency (the `v[i] ??` sites) | — | — | **ALREADY SHIPPED** as `@PLN102 D1` (the null-flow flip, #559) — `fields.rs::index_provably_fit` types `v[i]` non-null for a for-loop iter var (and integer-arith indices over trusted leaves, `m[k*4+row]`), plus the `if i<len(v)` guard (pattern 5). It is a **trust model**, not a proof: a for-loop iter var is trusted for ANY vector (like a constant index — `v[100]` also types non-null), so a mismatched loop (`for i in 0..len(v) { w[i] }`, or a mid-loop resize) types non-null yet reads C80-null at runtime. Tightening to a proof (range = `len(THIS vector)` + not-resized) would fix that but **break the ubiquitous `for i in 0..n { v[i] }` idiom** (`n` not a `len`) — a deliberate index-trust decision for the owner, not a softening this plan needs to add |
+| **D** — `v[i]` bound-carry in `for i in 0..len(v)` | highest raw frequency (the `v[i] ??` sites) | — | — | **ALREADY SHIPPED** as `@PLN102 D1` (the null-flow flip, #559) — `fields.rs::index_provably_fit` types `v[i]` non-null for a for-loop iter var (and integer-arith indices over trusted leaves, `m[k*4+row]`), plus the `if i<len(v)` guard (pattern 5). It is a **trust model**, not a proof: a for-loop iter var is trusted for ANY vector (like a constant index — `v[100]` also types non-null), so a mismatched loop (`for i in 0..len(v) { w[i] }`, or a mid-loop resize) types non-null yet reads C80-null at runtime. Tightening to a proof (range = `len(THIS vector)` + not-resized) would fix that but **break the ubiquitous `for i in 0..n { v[i] }` idiom** (`n` not a `len`) — a deliberate index-trust decision for the owner, not a softening this plan needs to add. **The audit half is now built**: a gated `LOFT_LINT_STRICT_INDEX` (default OFF, advisory — the type stays non-null) flags exactly the mismatched-vector case (`for i in 0..len(v) { w[i] }`, `w != v`), the highest-signal slice of the unchecked trust, leaving the trust intact (see below) |
 
 ## Soundness bar (non-negotiable for B, and D if ever attempted)
 
@@ -169,10 +169,28 @@ sound transfer function with a *positive control* that must **stay `float?`**, a
   runtime-null reached a non-null slot; hex_terrain 0.1.1 + the math fixtures stay warning-clean
   under `LOFT_DENY_WARNINGS`.
 
-Out of this plan: **case D** (`v[i]` bound-carry) is already shipped as `@PLN102 D1` (trust-based,
-not proof-based — see the table); the only open question there is whether to tighten the index
-trust to a proof, which is a separate compat decision. `pow(rad, 2.4)` where `rad` is a *variable*
-stays `?` (inline-only analysis; variable-def tracking is a separate follow-up).
+**Case D — the audit lint (DONE).** The softening (`v[i]` non-null under the for-loop trust) was
+already shipped as `@PLN102 D1`; what this plan adds is the *audit* half — a gated
+`LOFT_LINT_STRICT_INDEX` warning (default OFF) that surfaces the one unsound slice of the trust
+without changing a type. It fires when a for-loop iter var is bounded by `len(<one vector>)` but a
+DIFFERENT vector is indexed (`for i in 0..len(v) { w[i] }`, or `s.b[i]` under `len(s.a)`) — the
+mismatched-vector silent-null hazard, highest signal / lowest noise. It is deliberately *not* a
+default flip: tightening the trust to a proof would break `for i in 0..n { v[i] }`, so the trust
+stays and the lint is opt-in.
+
+- **Capture** (`objects.rs::parse_in_range_body`): a pure exclusive `for i in 0..len(X)` range
+  records `X`'s `VecKey` on the loop (`Iterator.len_bound`); `0..n`, `0..=len(X)`, and slices do
+  not qualify.
+- **Emit** (`fields.rs`, at the `index_provably_fit` site): when a trusted loop-var index has a
+  `len_bound` and the indexed vector's `VecKey` differs, warn — advisory, the element type is
+  unchanged. Both `VecKey::Var` and `VecKey::Field` (field vectors) discriminate.
+- **Gate + tests**: `keys::strict_index_lint_enabled()` (`LOFT_LINT_STRICT_INDEX`, default OFF);
+  corpus `strict-index-corpus.loft` (3 FIRE + 4 OK), locked both backends by
+  `tests/strict_index_lint.rs`. Emits no IR, so byte-identical for every program (full suite green).
+
+Still out of this plan: whether to *tighten* the index trust to a proof (a separate compat
+decision), and `pow(rad, 2.4)` where `rad` is a *variable* (inline-only analysis; variable-def
+tracking is a separate follow-up).
 
 ## See also
 

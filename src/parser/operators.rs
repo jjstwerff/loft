@@ -2645,7 +2645,7 @@ enum FaultKind {
 /// bare-local `if i < len(loc) { loc[i] }` form.  (A struct vector-field
 /// read COPIES post-@PLN85 #415, so the old `loc = self.v` alias trick is
 /// gone and value-correct code indexes the field directly.)
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum VecKey {
     Var(u16),
     Field(u16, i32, i32),
