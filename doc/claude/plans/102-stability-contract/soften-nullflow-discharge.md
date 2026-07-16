@@ -104,7 +104,7 @@ non-null value satisfies every `float?` consumer, and every existing `??` still 
 | Case | Value | Cost | Risk | Verdict |
 |---|---|---|---|---|
 | **E** — retire the unsound `expr_not_null` lint on fault-op results | removes a live bug (un-satisfiable sites) | trivial | none — removes unsoundness | **DONE** — both the `??` (`operators.rs:1444`) and `== null` (`:2160`) lints now gate on the operand's `Optional` type, not the stale flag; regression guards in `runtime_warnings.rs` |
-| **B** — `sqrt`/domain non-negativity lattice (above) | high — *all* geometric `sqrt`/`pow`; the whole real gap | moderate — a bounded recursive analysis | soundness-critical, but the square/sum/max/abs rules are provably safe with `Unknown` default | **IMPLEMENTED** behind `LOFT_MATH_DOMAIN` (default off) — `Sign` lattice + `domain_sign` in `parser/mod.rs` wired into `math_arg_in_domain`; gated tests in `tests/math_domain.rs`. The default-on flip is the one piece left |
+| **B** — `sqrt`/domain non-negativity lattice (above) | high — *all* geometric `sqrt`/`pow`; the whole real gap | moderate — a bounded recursive analysis | soundness-critical, but the square/sum/max/abs rules are provably safe with `Unknown` default | **DONE, default-on** (opt-out `LOFT_NO_MATH_DOMAIN`) — `Sign` lattice + `domain_sign` in `parser/mod.rs` wired into `math_arg_in_domain`; the flip's redundant-lint churn closed by the `call_declares_nullable` grandfather; tests in `tests/math_domain.rs` |
 | **C** — nonzero divisor | — | — | — | **Already shipped** for literal/file-const; only gap = imported-const folding → tiny optional extension |
 | **A** — fold through pure arithmetic before typing | low | low | none | **Falls out of B** (constants get exact facts) |
 | **D** — `v[i]` bound-carry in `for i in 0..len(v)` | highest raw frequency (the 100+ `v[i] ??`) | high — index-range dataflow | **high** — a mid-loop resize/alias makes a "proved" index OOB → null typed non-null → **silent corruption** | **Defer** — separate effort; if ever, only the not-resized-local sub-case, gated + heavily tested |
@@ -154,12 +154,14 @@ sound transfer function with a *positive control* that must **stay `float?`**, a
 - **B4 — nesting + `pow`. DONE.** nested `sqrt(e)` → `NonNeg`; `pow(NonNeg, _)` → non-null.
 - **B5-strict — DONE.** `ln`/`log2`/`log10` require `Pos` (not `NonNeg`); controls
   `ln(max(x,0.0))`, `ln(abs(x))` stay `?`.
-- **B5-flip — REMAINING.** Run the whole corpus + `native_scripts` on both backends under the
-  flag, confirm **no runtime-null value reaches a non-null slot**, then flip the flag
-  default-on **together with** grandfathering the two case-E lints so a now-non-null
-  `sqrt(sum) ?? d` / `sqrt(sum) == null` in shipped libs (e.g. hex_terrain 0.1.1) does not
-  newly warn under `LOFT_DENY_WARNINGS`. This is the one step with real blast radius; it stays
-  behind the flag until measured.
+- **B5-flip — DONE.** Flipped default-on (opt-out via `LOFT_NO_MATH_DOMAIN`). The whole-corpus
+  measure under the flag surfaced exactly ONE churn class — an inline `sqrt(max(field, k)) ?? d`
+  newly warning "redundant" — closed by the **grandfather** `call_declares_nullable`
+  (`operators.rs`): the two case-E lints never fire on a call to a fn DECLARED `-> τ?`, even
+  when the domain lattice narrowed this site to non-null, since a `??` / `== null` guarding a
+  declared-nullable op is a real defense (a bare `s.nn ?? d` still warns — distinct node). No
+  runtime-null reached a non-null slot; hex_terrain 0.1.1 + the math fixtures stay warning-clean
+  under `LOFT_DENY_WARNINGS`.
 
 Out of this plan: **case C residual** (imported/qualified-const divisor folding across
 modules) — a tiny separate change; **case D** (`v[i]` bound-carry) — deferred, its own

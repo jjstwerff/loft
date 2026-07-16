@@ -14,18 +14,19 @@ fn loft_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft"))
 }
 
-/// Compile `src` on the interpreter, with `LOFT_MATH_DOMAIN` set iff `flag`.
-/// Returns `(compiled_ok, stdout+stderr)`.
-fn compile(tag: &str, src: &str, flag: bool) -> (bool, String) {
+/// Compile `src` on the interpreter with the domain lattice on (`domain_on`, the DEFAULT) or
+/// opted out via `LOFT_NO_MATH_DOMAIN`. Returns `(compiled_ok, stdout+stderr)`.
+fn compile(tag: &str, src: &str, domain_on: bool) -> (bool, String) {
     let path = std::env::temp_dir().join(format!("loft_mathdom_{}_{tag}.loft", std::process::id()));
     std::fs::write(&path, src).expect("write temp");
     let mut cmd = Command::new(loft_bin());
     cmd.arg("--interpret")
         .arg(&path)
-        .current_dir(env!("CARGO_MANIFEST_DIR"))
-        .env_remove("LOFT_MATH_DOMAIN");
-    if flag {
-        cmd.env("LOFT_MATH_DOMAIN", "1");
+        .current_dir(env!("CARGO_MANIFEST_DIR"));
+    if domain_on {
+        cmd.env_remove("LOFT_NO_MATH_DOMAIN");
+    } else {
+        cmd.env("LOFT_NO_MATH_DOMAIN", "1");
     }
     let out = cmd.output().expect("invoke loft binary");
     let _ = std::fs::remove_file(&path);
@@ -63,20 +64,23 @@ fn main() { }
 ";
 
 #[test]
-fn math_domain_off_by_default_keeps_expression_args_forced() {
-    let (ok, diag) = compile("default", PROVABLE, false);
+fn math_domain_opt_out_keeps_expression_args_forced() {
+    // `LOFT_NO_MATH_DOMAIN` reverts to the constant-only elision — the expression args are
+    // forced back to `float?` (the escape hatch behaves).
+    let (ok, diag) = compile("optout", PROVABLE, false);
     assert!(
         !ok,
-        "without LOFT_MATH_DOMAIN a non-constant fault-op arg must stay float? (forced); diag={diag}"
+        "under LOFT_NO_MATH_DOMAIN a non-constant fault-op arg must stay float? (forced); diag={diag}"
     );
 }
 
 #[test]
-fn math_domain_softens_provable_args() {
+fn math_domain_softens_provable_args_by_default() {
+    // Default (B5 flipped default-on): a provably in-domain arg types non-null, no ?? forced.
     let (ok, diag) = compile("provable", PROVABLE, true);
     assert!(
         ok,
-        "with LOFT_MATH_DOMAIN a provably in-domain arg must type non-null (no ?? forced); diag={diag}"
+        "a provably in-domain arg must type non-null by default (no ?? forced); diag={diag}"
     );
 }
 
