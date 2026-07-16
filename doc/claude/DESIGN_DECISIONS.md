@@ -1971,11 +1971,14 @@ proves a recurring source of user surprise, that is a #426 revisit, not a C86 on
 A profiler shows bind-copies dominating a real consumer AND the elision's coverage
 cannot be extended — that argues for widening `ElidePlan`, never for flipping the
 semantic. **The widening is designed** →
-[plans/102-stability-contract/alias-where-correct.md](plans/102-stability-contract/alias-where-correct.md):
-a safety-gated two-tier `ElidePlan` extension (Tier 1 = unobservable aliasing, contract-clean +
-always-on; Tier 2 = alias the provable dead store, the `th = t.tr_h; th[i]=v` write-through case,
-owner-decided) — the semantic (copy-by-default) is untouched; the compiler just realizes the alias
-in more of the *safe* set, so `#415`'s UAF cannot return.
+[plans/102-stability-contract/alias-where-correct.md](plans/102-stability-contract/alias-where-correct.md).
+The crystallized principle (owner 2026-07-16): **every variable is its own value — copy is the
+semantics, always; a "link" (shared store) is either the compiler's TRANSPARENT optimization
+(realized only where a link is safe AND unobservable) or the programmer's EXPLICIT `&`.** So the
+design widens `ElidePlan` to link in more of the safe + unobservable set (byte-value-identical, no
+contract-key), and the `th = t.tr_h; th[i]=v` lost-write case is NOT silently linked (that link would
+be observable — the spooky action C86 forbids); it is surfaced by the dead-store lint pointing at `&`.
+`#415`'s UAF cannot return (the safety gate) and nothing a program observes changes.
 
 ## C87 — `#rust"..."` template path is KEPT; do NOT migrate it away to per-Op emitters (@PLN81 closed)
 
