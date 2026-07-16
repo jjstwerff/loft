@@ -1894,6 +1894,20 @@ impl Parser {
         } else {
             self.last_range_till = Some(till.clone());
         }
+        // @PLN25 finding-1 — when the range upper bound is `len(V)`, remember which
+        // vector V it counts, so `index_provably_fit` can trust `V[i]` (i < len(V) is
+        // proven) but NOT `W[i]` for a DIFFERENT W (nothing proves i < len(W)).  Any
+        // other bound (`0..N`, `0..f(x)`) records nothing → the loop var keeps its old
+        // by-contract trust for any vector (no new false positives on constant ranges).
+        self.last_range_len_src = if let Value::Call(d, args) = till.unspan() {
+            if args.len() == 1 && self.data.def(*d).original_name() == "len" {
+                crate::parser::operators::vec_key(&args[0], &self.data)
+            } else {
+                None
+            }
+        } else {
+            None
+        };
         // loft#384: a vector slice (`data` present, not a pure `0..n` range) must
         // resolve negative bounds from the end and clamp into `[0, len]`, else the
         // iteration endpoints run off an edge: a negative end breaks immediately

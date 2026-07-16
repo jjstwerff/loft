@@ -1921,3 +1921,17 @@ fn struct_valued_constant_rejected() {
              struct_valued_constant_rejected:1:57",
         );
 }
+
+// @PLN25 routing-feedback finding 1: `for i in 0..len(v) { w[i] }` indexes a SEPARATE
+// vector `w` by `v`'s length — nothing bounds `i` by `len(w)`, so `w[i]` is nullable
+// (parity with the while-loop form), and the un-discharged flow into non-null `s` is
+// rejected.  A same-struct parallel field (SoA) stays fit — see the scripts guard.
+#[test]
+fn for_range_index_separate_vector_is_nullable() {
+    code!("fn f(v: vector<integer>, w: vector<integer>) -> integer { s = 0; for i in 0..len(v) { s = s + w[i]; } s }")
+        .error(
+            "Variable 's' cannot change type from integer to integer?; use a new \
+             variable name or cast with 'as' at \
+             for_range_index_separate_vector_is_nullable:1:100",
+        );
+}

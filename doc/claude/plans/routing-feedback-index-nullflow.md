@@ -125,6 +125,21 @@ Contained: step 1 only adds an unread map (inert); step 2 only *narrows* an
 over-broad `true` (can add `τ?`, i.e. more warnings — never removes a real one); the
 true-positive `for i in 0..len(v) { v[i] }` idiom must stay wart-free (guard it in step 0).
 
+**SHIPPED — with a struct-of-arrays carve-out (the compatibility decision).**  The
+FULLY-SOUND version (flag every vector that isn't the range's own source) broke the
+ecosystem's **SoA idiom** on first contact — `audience_crystal`'s
+`for i in 0..len(snap.xs) { snap.ys[i] }` (parallel fields of ONE struct, same-length by
+construction) is idiomatic and pervasive (games, meshes, `CellSnap`/`CrystalMesh`).  So
+`index_provably_fit` trusts a same-**base**-struct parallel FIELD (`s.xs` range →
+`s.ys[i]` fit) while flagging a genuinely SEPARATE vector (`v` range → `w[i]`) — which is
+exactly the finding's bug and the consumer's "every flagged site was correct."  It is a
+heuristic, not fully sound (two fields of one struct *could* differ in length, and local
+two-vector parallel arrays still flag), but it matches how loft SoA is written and keeps
+the whole library corpus green (audience_crystal 10, world, graphics 68, cbor/crypto,
+routing_kernel 42).  Guards: `tests/parse_errors.rs::for_range_index_separate_vector_is_nullable`
+(negative) + `tests/scripts/563-index-fit-loop-source.loft` (same-vector + SoA positives).
+Full suite green bar the known-flaky s5 / environmental wasm_debug_relay.
+
 ---
 
 ## Finding 3 — scalar negative indexing counts from the end, documented only for slices (DOC gap + footgun)

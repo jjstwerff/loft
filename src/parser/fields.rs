@@ -782,10 +782,34 @@ impl Parser {
         }
         match index.unspan() {
             Value::Var(v) => {
-                // A for-loop iteration variable (`for i in <range> { v[i] }`) — the vars system
-                // already tracks the active loop stack, so no separate parse-time stack is needed.
+                // A for-loop iteration variable (`for i in <range> { v[i] }`).
                 if self.vars.is_active_loop_var(*v) {
-                    return true;
+                    // @PLN25 finding-1 — a `for i in 0..len(V)` loop proves `i < len(V)`, so
+                    // `V[i]` is fit.  A genuinely SEPARATE vector `W[i]` is NOT (nothing bounds
+                    // `i` by `len(W)`) — that is the finding's bug (`for i in 0..len(v){w[i]}`,
+                    // `w` shorter).  BUT a parallel FIELD of the SAME base struct IS trusted —
+                    // struct-of-arrays (`for i in 0..len(s.xs){ s.ys[i] }`, s.xs/s.ys declared
+                    // together, parallel by construction) is idiomatic and same-length.  A
+                    // non-matching vector falls through to the `if`-guard check below (an inner
+                    // `if i < len(W)` re-proves it); a non-`len`-bound loop var (no record)
+                    // keeps the by-contract trust for any vector.
+                    use crate::parser::operators::VecKey;
+                    if let Some((_, src)) = self.loop_range_src.iter().find(|(lv, _)| lv == v) {
+                        let fit =
+                            crate::parser::operators::vec_key(vec, &self.data).is_some_and(|vk| {
+                                vk == *src
+                                    || matches!(
+                                        (vk, *src),
+                                        (VecKey::Field(bv, _, _), VecKey::Field(bs, _, _))
+                                            if bv == bs
+                                    )
+                            });
+                        if fit {
+                            return true;
+                        }
+                    } else {
+                        return true;
+                    }
                 }
                 // An `if idx < len(vec) { vec[idx] }` guard proved the (idx, vec) pair in-bounds
                 // for this branch — match `v` AND the indexed vector's `VecKey`.

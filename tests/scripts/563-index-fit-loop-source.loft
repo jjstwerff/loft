@@ -1,0 +1,24 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN25 routing-feedback finding 1 — POSITIVES for the `for i in 0..len(V)` index-fit
+// carry.  `V[i]` (the range's own vector) is proven in-bounds; a same-struct parallel
+// FIELD (struct-of-arrays) is fit too; both need no `?? d` discharge.  The NEGATIVE — a
+// genuinely SEPARATE vector `W[i]` becomes nullable — is guarded in
+// tests/parse_errors.rs::for_range_index_separate_vector_is_nullable.
+
+fn test_same_vector_index_fit() {
+  v = [10, 20, 30];
+  s = 0;
+  for i in 0..len(v) { s = s + v[i]; }   // v[i] fit — non-null, no discharge
+  assert(s == 60, "same-vector index fit: {s}");
+}
+
+struct Snap { xs: vector<integer>, ys: vector<integer>, colors: vector<integer> }
+
+fn test_soa_parallel_field_fit() {
+  snap = Snap { xs: [1, 2], ys: [10, 20], colors: [100, 200] };
+  s = 0;
+  for i in 0..len(snap.xs) { s = s + snap.ys[i] + snap.colors[i]; }  // SoA parallel fields
+  assert(s == 330, "SoA parallel field fit: {s}");
+}
