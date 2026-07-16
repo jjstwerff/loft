@@ -2795,11 +2795,23 @@ impl Parser {
         let mut nullable = true;
         let mut is_computed = false;
         let mut is_init = false;
+        // @PLN40 Phase 2 — VALUE-const on the field (`v: const T`): a `const`
+        // keyword before the field TYPE marks the field's contents read-only
+        // (deep-frozen), distinct from the binding-const PREFIX (`const v: T`)
+        // the caller consumes.  Combined as `const v: const T` = fully frozen.
+        let mut value_const = false;
         // Post-2c: remember the integer alias name the user typed (e.g. `i32`)
         // so `fill_database` / codegen can consult `forced_size(alias)` even
         // though the resolved Type::Integer collapses the alias info.
         let mut alias_d_nr: u32 = u32::MAX;
         loop {
+            // @PLN40 Phase 2 — consume a `const` before the field type (`v: const T`).
+            // Runs on BOTH passes so the lexer position stays aligned; the flag is
+            // recorded onto the attribute below.  Was previously a parse error
+            // ("Undefined type const"), so this is purely additive.
+            if self.lexer.has_keyword("const") {
+                value_const = true;
+            }
             // @PLN25 F2 — `not null` is RETIRED but still ACCEPTED as a no-op (a scalar field
             // is non-null by DEFAULT now; `is_optional` below sets the attribute non-null and
             // the `not_null` flag is stamped for the range). `has_deprecated_not_null` consumes
@@ -2923,6 +2935,9 @@ impl Parser {
             let a = self
                 .data
                 .add_attribute(&mut self.lexer, d_nr, a_name, a_type);
+            if value_const {
+                self.data.definitions[d_nr as usize].attributes[a].value_const = true;
+            }
             self.data.set_attr_nullable(d_nr, a, nullable);
             self.data.set_attr_value(d_nr, a, value);
             if alias_d_nr != u32::MAX {
@@ -2940,6 +2955,9 @@ impl Parser {
             }
         } else {
             let a = self.data.attr(d_nr, a_name);
+            if value_const {
+                self.data.definitions[d_nr as usize].attributes[a].value_const = true;
+            }
             if is_computed {
                 self.data.definitions[d_nr as usize].attributes[a].constant = true;
             }

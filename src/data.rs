@@ -2392,6 +2392,12 @@ pub struct Attribute {
     /// This field is `const` — write-once at construction; a later reassignment
     /// is rejected. See doc/claude/plans/40-const-fields/.
     pub const_field: bool,
+    /// This field is VALUE-const (`v: const T` — `const` before the TYPE): the value it
+    /// holds is a read-only borrow, so every mutation THROUGH it (`s.v.x=`, `s.v[i]=`,
+    /// `s.v+=`) is rejected, while a rebind `s.v = other` is allowed.  Composes with
+    /// `const_field`: `const v: const T` is fully frozen.  @PLN40 Phase 2 (deep-frozen
+    /// records); enforced by `validate_write`'s LHS chain-walk.
+    pub value_const: bool,
     /// L7: init(expr) field — stored at creation, writable after. `$` allowed.
     pub init: bool,
     /// This attribute is allowed to be null in the substructure.
@@ -3630,6 +3636,7 @@ impl Data {
             mutable: true,
             constant: false,
             const_field: false,
+            value_const: false,
             init: false,
             nullable: true,
             primary: false,

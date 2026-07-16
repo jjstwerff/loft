@@ -1513,6 +1513,7 @@ mod tests {
             mutable: true,
             constant: false,
             const_field: true,
+            value_const: false,
             init: false,
             nullable: true,
             primary: false,
