@@ -6197,6 +6197,20 @@ impl Parser {
                 actual.push(self.cl("OpConvIntFromEnum", &[cd]));
                 continue;
             }
+            // @PLN25 (N-Store) routing-feedback f4 — a nullable argument into a NON-null
+            // PARAMETER is the same violation as into a return value / field / assignment
+            // target, but the call-argument path never ran the check (only return/field/
+            // assign did), so `convert` below silently peeled the Optional and the null
+            // slipped into the callee.  Run it here too (warn — or hard-error for a narrow
+            // width — exactly like the other sites); the store still proceeds via `convert`.
+            if report {
+                let ctx = format!(
+                    "argument {} of {}",
+                    nr + 1,
+                    self.data.def(d_nr).original_name()
+                );
+                self.n_store_violation(actual_type, &tp, &ctx);
+            }
             if !self.convert(&mut actual_code, actual_type, &tp) {
                 if report {
                     let context = format!(
