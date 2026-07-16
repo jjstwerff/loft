@@ -1,0 +1,140 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# @PLN102 — Softening the `??` discharge: a domain lattice for fault ops
+
+> **Status: DESIGN (2026-07-16).** DN3-Float types every float fault op (`/`, `%`,
+> `sqrt`, `ln`, `log`, `asin`, `acos`, `pow`) as `float?`, forcing a `?? default`
+> discharge. That discharge is the *concrete cost* of the uniform-null model. This doc
+> measures where the discharge is **genuinely needed** vs **ceremony** (forced on a
+> provably-non-null value), then designs a narrow, sound way to remove the ceremony —
+> a **sign/lower-bound lattice** consulted when typing a fault op — and evaluates the
+> specific cases. Trigger: the hex_terrain 0.1.1 migration, where **all four**
+> arithmetic `??` I added were ceremony (`sqrt` of sums-of-squares / `max(_,positive)`,
+> `pow` of a non-negative base — none can ever be null). Builds on
+> [dn3-float-null-flow-design](../../DESIGN_DECISIONS.md) (DN3-Float, shipped default-on).
+
+## The measurement (probed, not assumed)
+
+loft's *only* current non-null proof is **shallow literal constant-folding**:
+
+| Expression | Types as | Why |
+|---|---|---|
+| `sqrt(4.0)`, `10.0 / 2.0`, `pow(2.0, 3.0)` | **non-null** | the whole expression folds to a literal |
+| `x / 2.0`, `x / SQRT3`, `x % 2.0`, `i / 2` | **non-null** | **divisor** proven nonzero (literal / file-const) — *division is already softened* |
+| `x / d` (variable divisor) | `float?` | `d` could be 0 — **genuinely needed** |
+| `sqrt(x * x)`, `sqrt(x*x + 1.0)`, `sqrt(abs(x))` | `float?` | **no domain proof** — forced despite a provably-≥0 argument |
+| `sqrt(x)` (unknown sign) | `float?` | could be negative — **genuinely needed** |
+
+Two conclusions fall straight out:
+
+1. **Nonzero-divisor softening already exists** (literal / file-const divisor). The only
+   forced division is `x / <variable>`, which is correct. The single small residual gap
+   is a *qualified/imported* const divisor (`/ lib::SQRT3`), which the cross-module
+   folder doesn't evaluate — narrow, low value.
+2. **The entire remaining ceremony is the domain ops** — `sqrt`/`ln`/`asin`/`pow` get
+   *no* argument-domain analysis, so any variable-bearing argument forces `?`. In real
+   numeric code (variables everywhere) that is effectively unconditional, and the
+   discharged value is almost never actually null (distances, magnitudes, clamped
+   inputs). This is the whole gap worth closing.
+
+### Where `??` is *actually* needed
+
+After this design, `??` remains **required** exactly where null is genuinely reachable:
+`v[i]` / `hash[k]` on an unbounded index/key, `text as integer` (parse), a nullable
+field/param, `x / <maybe-zero>`, `sqrt(<maybe-negative>)`. Everything else is ceremony
+the type system simply can't yet see through.
+
+## The unsound lint (why an inline fix wasn't possible)
+
+The "Redundant null coalescing" lint (`src/parser/operators.rs:1444`, off the
+`expr_not_null` flag) tracks whether the `??` operand *derives from a not-null name* —
+but ignores that a fault op can **null a non-null input**. Verified: `sqrt(-4.0)` on a
+**non-null** negative *is* null. So the lint fired on `sqrt(max(tt_steep,0.01)) ?? 0.0`
+calling it redundant, **while the (correct) type system required the discharge** — a
+contradiction with *no inline form that satisfies both*. In hex_terrain I had to hoist
+to a `steep_root` local to dodge it. The lint is unsound independent of anything below,
+and this design retires it on fault-op results.
+
+## Design — one mechanism: a domain lattice
+
+A bottom-up abstract interpretation over *pure* float sub-expressions, lattice
+`{ Pos, NonNeg, Unknown }`, **default `Unknown`** (conservative). The nullability pass
+consults `domain(arg)` when typing a fault op: if the argument is in the op's safe
+domain the result types **non-null**; otherwise it stays `float?`, unchanged. One
+recursive function with per-node transfer functions — not a bag of pattern matches (the
+"fold the fact into the structure" move; every fault op then *reads* the fact).
+
+Transfer functions — the specific softening cases, each with its soundness argument:
+
+| Node | Fact | Sound because |
+|---|---|---|
+| literal `c` | `Pos` if c>0, `NonNeg` if c==0, else `Unknown` | exact value |
+| `a * a` (operands structurally equal) | `NonNeg` | a square is ≥ 0; a **non-null** float is never the NaN sentinel, so no null leaks in |
+| `a + b` | `NonNeg` if both `NonNeg`; `Pos` if either `Pos` and other `NonNeg` | monotone; overflow → +inf, still ≥ 0 and non-null |
+| `abs(e)` | `NonNeg` | by definition |
+| `max(e, k)`, k literal ≥ 0 | `NonNeg` (`Pos` if k>0) | lower bound is k |
+| `min(a, b)` | `NonNeg` if both `NonNeg` | lower bound is min of bounds |
+| `sqrt(e)` (nested) | `NonNeg` | sqrt result ≥ 0 |
+| variable / unknown call / anything else | `Unknown` | can't see it → the op stays `float?` (correct) |
+
+Each fault op then reads it: `sqrt(NonNeg)` → non-null; `ln`/`log`(`Pos`) → non-null
+(strict, needs `Pos` not `NonNeg`); `pow(NonNeg, _)` → non-null; `sqrt(Unknown)` → `float?`.
+Every hex_terrain site — `sqrt(ddx*ddx + ddy*ddy)`, `sqrt(max(tt_steep,0.01))`,
+`pow(rad, 2.4)` — resolves to non-null.
+
+### Compatibility rule (load-bearing)
+
+Softening **only removes the error** (makes `??` optional); it must **never add a
+warning**. A `??` on a now-provably-non-null value stays *silently accepted*, so:
+
+- existing libraries stay warning-clean under `LOFT_DENY_WARNINGS=1` (no forced churn),
+- new code may simply omit the `??`,
+- and the unsound redundant-coalescing lint (case E) **stops firing on fault-op results
+  entirely** — it can't soundly judge them, and the type now covers the safe cases.
+
+This is additive under [absolute compat](../../COMPATIBILITY.md): a `?` becoming non-null
+is a narrowing of the *result* type that no existing program can observe as a break (a
+non-null value satisfies every `float?` consumer, and every existing `??` still runs).
+
+## Evaluation of the cases
+
+| Case | Value | Cost | Risk | Verdict |
+|---|---|---|---|---|
+| **E** — retire the unsound `expr_not_null` lint on fault-op results | removes a live bug (un-satisfiable sites) | trivial | none — removes unsoundness | **Do first** |
+| **B** — `sqrt`/domain non-negativity lattice (above) | high — *all* geometric `sqrt`/`pow`; the whole real gap | moderate — a bounded recursive analysis | soundness-critical, but the square/sum/max/abs rules are provably safe with `Unknown` default | **Do — the core** |
+| **C** — nonzero divisor | — | — | — | **Already shipped** for literal/file-const; only gap = imported-const folding → tiny optional extension |
+| **A** — fold through pure arithmetic before typing | low | low | none | **Falls out of B** (constants get exact facts) |
+| **D** — `v[i]` bound-carry in `for i in 0..len(v)` | highest raw frequency (the 100+ `v[i] ??`) | high — index-range dataflow | **high** — a mid-loop resize/alias makes a "proved" index OOB → null typed non-null → **silent corruption** | **Defer** — separate effort; if ever, only the not-resized-local sub-case, gated + heavily tested |
+
+## Soundness bar (non-negotiable for B, and D if ever attempted)
+
+A wrong non-null proof is exactly the corruption DN3-Float exists to prevent, so per
+[measure-a-flip-by-running-the-suite](../../STABILITY_METHOD.md) this ships **gated +
+measured by running the full corpus on both backends**, never by counting compile-rejects
+(a silent wrong-answer — a genuinely-null value landing in a non-null slot — is invisible
+to a reject scan):
+
+- **Positive controls that must STAY `float?`** (fail the build if any types non-null):
+  `sqrt(x)`, `sqrt(x * y)` (distinct operands), `sqrt(x - 1.0)`, `sqrt(max(x, -5.0))`,
+  `ln(x)` / `ln(max(x, 0.0))` (needs `Pos`, `NonNeg` is not enough), `x / d`.
+- **Whole-corpus differential**: run the full suite + `native_scripts` under the analysis
+  and confirm no value that is null at runtime now reaches a non-null slot.
+- Graduate the controls to `tests/scripts/` as a permanent guard.
+
+## Recommendation + scope
+
+Ship **E then B**, `sqrt` first (the dominant case), then `ln`/`log`/`pow`. Leave
+`asin`/`acos` (bounded-both-sides domain `[-1,1]`, rare) and the imported-const divisor
+(case C residual) as follow-ups; **defer D** entirely. Net effect: the `??` ceremony
+collapses to exactly the genuinely-reachable faults — variable divisors, unbounded
+`v[i]`, parses, nullable fields — and hex_terrain's four arithmetic `??` disappear with
+nothing that could truly be null losing its guard.
+
+## See also
+
+- [DESIGN_DECISIONS.md](../../DESIGN_DECISIONS.md) — DN3-Float (the null model this softens) · C80 no-runtime-errors (the uniform-null contract) · [COMPATIBILITY.md](../../COMPATIBILITY.md) (why softening is additive)
+- `src/parser/operators.rs:1444` — the `expr_not_null` redundant-coalescing lint (case E)
+- Corpus / trigger: the hex_terrain 0.1.1 migration (loft-lang/loft#579) — every arithmetic `??` it needed is a bucket-3 ceremony site this design removes.
