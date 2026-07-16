@@ -109,7 +109,7 @@ non-null value satisfies every `float?` consumer, and every existing `??` still 
 | **B** — `sqrt`/domain non-negativity lattice (above) | high — *all* geometric `sqrt`/`pow`; the whole real gap | moderate — a bounded recursive analysis | soundness-critical, but the square/sum/max/abs rules are provably safe with `Unknown` default | **DONE, default-on** (opt-out `LOFT_NO_MATH_DOMAIN`) — `Sign` lattice + `domain_sign` in `parser/mod.rs` wired into `math_arg_in_domain`; the flip's redundant-lint churn closed by the `call_declares_nullable` grandfather; tests in `tests/math_domain.rs` |
 | **C** — nonzero divisor | — | — | — | **DONE** — literal/file-const/qualified-const already folded; the residual call-valued const (`PI`/`E`) now folds via `const_eval` (`fold_op` + `const_f64`), so `x / PI` is non-null |
 | **A** — fold through pure arithmetic before typing | low | low | none | **Falls out of B** (constants get exact facts) |
-| **D** — `v[i]` bound-carry in `for i in 0..len(v)` | highest raw frequency (the 100+ `v[i] ??`) | high — index-range dataflow | **high** — a mid-loop resize/alias makes a "proved" index OOB → null typed non-null → **silent corruption** | **Defer** — separate effort; if ever, only the not-resized-local sub-case, gated + heavily tested |
+| **D** — `v[i]` bound-carry in `for i in 0..len(v)` | highest raw frequency (the `v[i] ??` sites) | — | — | **ALREADY SHIPPED** as `@PLN102 D1` (the null-flow flip, #559) — `fields.rs::index_provably_fit` types `v[i]` non-null for a for-loop iter var (and integer-arith indices over trusted leaves, `m[k*4+row]`), plus the `if i<len(v)` guard (pattern 5). It is a **trust model**, not a proof: a for-loop iter var is trusted for ANY vector (like a constant index — `v[100]` also types non-null), so a mismatched loop (`for i in 0..len(v) { w[i] }`, or a mid-loop resize) types non-null yet reads C80-null at runtime. Tightening to a proof (range = `len(THIS vector)` + not-resized) would fix that but **break the ubiquitous `for i in 0..n { v[i] }` idiom** (`n` not a `len`) — a deliberate index-trust decision for the owner, not a softening this plan needs to add |
 
 ## Soundness bar (non-negotiable for B, and D if ever attempted)
 
@@ -133,9 +133,10 @@ DONE** via a small two-sided interval-bounds pass (`pm_bounds` in `parser/mod.rs
 `[-1, 1]` domain is proved for `sin`/`cos` outputs, `clamp(e, -1, 1)`, and the manual
 `min(max(e, -1), 1)` clamp (unary-negation nodes handled so a literal `-1.0` reaches the
 bound as a constant); an unbounded or one-sided arg stays `float?`. **Case C** also closed (the
-`PI`/`E` call-valued-const fold). Remaining follow-up: **case D** (`v[i]` bound-carry, deferred). Net
-effect: the `??` ceremony collapses to exactly the genuinely-reachable faults — variable
-divisors, unbounded `v[i]`, parses, nullable fields — and hex_terrain's four arithmetic `??`
+`PI`/`E` call-valued-const fold). **Case D** turns out to be already shipped (`@PLN102 D1`, the
+for-loop-iter-var index trust — see the table). Net effect: the `??` ceremony collapses to exactly
+the genuinely-reachable faults — variable divisors, unbounded `v[i]`, parses, nullable fields —
+and hex_terrain's four arithmetic `??`
 disappear with nothing that could truly be null losing its guard.
 
 ## Implementation plan — small steps
@@ -168,9 +169,10 @@ sound transfer function with a *positive control* that must **stay `float?`**, a
   runtime-null reached a non-null slot; hex_terrain 0.1.1 + the math fixtures stay warning-clean
   under `LOFT_DENY_WARNINGS`.
 
-Out of this plan: **case D** (`v[i]` bound-carry) — deferred, its own
-gated effort with the same soundness bar. `pow(rad, 2.4)` where `rad` is a *variable* stays
-`?` (inline-only analysis; variable-def tracking is deferred with D).
+Out of this plan: **case D** (`v[i]` bound-carry) is already shipped as `@PLN102 D1` (trust-based,
+not proof-based — see the table); the only open question there is whether to tighten the index
+trust to a proof, which is a separate compat decision. `pow(rad, 2.4)` where `rad` is a *variable*
+stays `?` (inline-only analysis; variable-def tracking is a separate follow-up).
 
 ## See also
 
