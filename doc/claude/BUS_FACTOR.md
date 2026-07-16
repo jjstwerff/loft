@@ -84,6 +84,7 @@ argument stands on evidence you can reproduce, not on assertion.
 | The hardest parts were rewritten agent-led | The closure records under `doc/claude/plans/`; the commit history + its co-author trailers |
 | A public library catalogue exists | `doc/claude/LIBRARIES.md`; the `loft-libs-*` repos at <https://github.com/loft-lang>; `loft search <keyword>` |
 | Programs run live in the browser | Playground <https://loft-lang.org/loft/playground.html> · Gallery <https://loft-lang.org/loft/gallery.html> |
+| **Many public example programs, varied domains** | <https://github.com/jjstwerff> — `crawler` (a hex roguelike in loft), `dryopea` + `moros` (games), `routing` (a phone-first route planner), `ssh_home` (a pure-loft phone SSH terminal), `zero-trust-shared-files` (a federated file system) |
 | The language + stdlib are documented | <https://loft-lang.org/loft/> |
 | The issue tracker is public | <https://github.com/loft-lang/loft/issues> |
 
@@ -125,9 +126,11 @@ load the skills in `.claude/skills/`). None of these needs a maintainer's help.
 
 ### Start a program
 
-1. Point at the nearest public example. The games (moros, dryopea) and the browser
-   Gallery (<https://loft-lang.org/loft/gallery.html>) are all public, worked programs.
-   The fastest first look is the Playground
+1. Point at the nearest public example — there are many, across very different domains,
+   at <https://github.com/jjstwerff>: `crawler` (a hex roguelike), `dryopea` and `moros`
+   (games), `routing` (a route planner), `ssh_home` (a phone SSH terminal),
+   `zero-trust-shared-files` (a federated file system), plus the browser Gallery
+   (<https://loft-lang.org/loft/gallery.html>). The fastest first look is the Playground
    (<https://loft-lang.org/loft/playground.html>): type a few lines, press run, see output.
 2. Locally: copy the closest example into a `.loft` file and change it.
 3. Pull in the libraries you need: `loft install <name>`, then `use` them in the file.
@@ -136,7 +139,9 @@ load the skills in `.claude/skills/`). None of these needs a maintainer's help.
 
 ### Edit a program that already exists
 
-1. Clone or open it — the games and demos are public repos under <https://github.com/loft-lang>.
+1. Clone or open it — the example programs are public repos under
+   <https://github.com/jjstwerff> (`crawler`, `dryopea`, `moros`, `routing`, `ssh_home`,
+   `zero-trust-shared-files`, …), and the libraries under <https://github.com/loft-lang>.
 2. Run it first to see the current behaviour: `loft prog.loft`.
 3. Make the change. `loft-write` + `doc/claude/LOFT.md` keep the syntax right;
    `loft introspect prog.loft` shows what the compiler makes of it if something is off.
