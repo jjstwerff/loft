@@ -1,0 +1,218 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Formatter groundwork — Step 2: a LOSSLESS surface tree (CST) for loft source, in loft.
+// The flat token stream from Step 1 is nested into bracket groups (`[]`/`{}`/`()`); every
+// other token is a Leaf.  Error-tolerant: an unmatched close is a Leaf, an unterminated
+// group carries an empty close — so the tree ALWAYS reproduces the source.
+//   emit(parse(lex(src))) == src   (the Step-0 lossless invariant, through the tree)
+// Run over the corpus:
+//   for f in tests/scripts/*.loft; do LOFT_FMT_FILE=$(realpath $f) loft --interpret cst.loft; done
+
+// ── lexer (Step 1) ───────────────────────────────────────────────────────────
+
+fn is_ws(c: character) -> boolean { c == ' ' || c == '\t' || c == '\r' }
+fn is_word(c: character) -> boolean { c.is_alphanumeric() || c == '_' }
+
+fn slice(chars: vector<character>, a: integer, b: integer) -> text {
+  s = "";
+  k = a;
+  while k < b {
+    s += (chars[k] ?? ' ');
+    k += 1;
+  }
+  s
+}
+
+fn scan_string(chars: vector<character>, i: integer, n: integer) -> integer {
+  j = i + 1;
+  while j < n {
+    c = chars[j] ?? '"';
+    if c == '\\' {
+      j += 2;
+    } else if c == '{' {
+      if j + 1 < n && (chars[j + 1] ?? ' ') == '{' {
+        j += 2;
+      } else {
+        j = scan_slot(chars, j + 1, n);
+      }
+    } else if c == '"' {
+      return j + 1;
+    } else if c == '\n' {
+      return j;
+    } else {
+      j += 1;
+    }
+  }
+  j
+}
+
+fn scan_slot(chars: vector<character>, i: integer, n: integer) -> integer {
+  j = i;
+  depth = 1;
+  while j < n {
+    c = chars[j] ?? '}';
+    if c == '{' {
+      depth += 1;
+      j += 1;
+    } else if c == '}' {
+      depth -= 1;
+      j += 1;
+      if depth == 0 {
+        return j;
+      }
+    } else if c == '"' {
+      j = scan_string(chars, j, n);
+    } else if c == '\\' {
+      j += 2;
+    } else {
+      j += 1;
+    }
+  }
+  j
+}
+
+fn scan_char(chars: vector<character>, i: integer, n: integer) -> integer {
+  j = i + 1;
+  while j < n {
+    c = chars[j] ?? '\'';
+    if c == '\\' {
+      j += 2;
+    } else if c == '\'' {
+      return j + 1;
+    } else {
+      j += 1;
+    }
+  }
+  j
+}
+
+fn lex(src: text) -> vector<text> {
+  chars: vector<character> = [];
+  for c in src { chars += [c]; }
+  n = len(chars);
+  toks: vector<text> = [];
+  i = 0;
+  while i < n {
+    c = chars[i] ?? ' ';
+    start = i;
+    if c == '\n' {
+      i += 1;
+    } else if is_ws(c) {
+      while i < n && is_ws(chars[i] ?? '\n') { i += 1; }
+    } else if c == '/' && i + 1 < n && (chars[i + 1] ?? ' ') == '/' {
+      while i < n && (chars[i] ?? '\n') != '\n' { i += 1; }
+    } else if c == '"' {
+      i = scan_string(chars, i, n);
+    } else if c == '\'' {
+      i = scan_char(chars, i, n);
+    } else if is_word(c) {
+      while i < n && is_word(chars[i] ?? ' ') { i += 1; }
+    } else {
+      i += 1;
+    }
+    toks += [slice(chars, start, i)];
+  }
+  toks
+}
+
+// ── surface tree (Step 2) ────────────────────────────────────────────────────
+
+// A CST node: a single token, or a bracketed group.  `close` is "" for an
+// unterminated group (error-tolerant).  Trivia (whitespace/comment) tokens are
+// Leaf nodes too — attachment to real tokens is a later refinement.
+enum Node {
+  Leaf { tok: text },
+  Group { open: text, kids: vector<Node>, close: text },
+}
+
+struct Seq { nodes: vector<Node>, next: integer, closed: text }
+
+// `"{{"` / `"}}"` are literal-brace string escapes — a bare `"{"` opens a format slot.
+fn is_open(t: text) -> boolean { t == "[" || t == "{{" || t == "(" }
+fn is_close(t: text) -> boolean { t == "]" || t == "}}" || t == ")" }
+fn close_for(open: text) -> text {
+  if open == "[" { "]" } else if open == "{{" { "}}" } else { ")" }
+}
+
+// Parse a sequence of nodes from toks[start], stopping AFTER the close token that
+// equals `expect` (consuming it), or at EOF.  `expect` = "" at the top level (no
+// close matches → runs to EOF).  Unmatched closes become Leaves.
+fn parse_seq(toks: vector<text>, start: integer, expect: text) -> Seq {
+  kids: vector<Node> = [];
+  j = start;
+  n = len(toks);
+  while j < n {
+    t = toks[j] ?? "";
+    if is_close(t) {
+      if t == expect {
+        return Seq { nodes: kids, next: j + 1, closed: t };
+      } else {
+        kids += [Leaf { tok: t }];
+        j += 1;
+      }
+    } else if is_open(t) {
+      sub = parse_seq(toks, j + 1, close_for(t));
+      kids += [Group { open: t, kids: sub.nodes, close: sub.closed }];
+      j = sub.next;
+    } else {
+      kids += [Leaf { tok: t }];
+      j += 1;
+    }
+  }
+  Seq { nodes: kids, next: j, closed: "" }
+}
+
+fn parse(toks: vector<text>) -> vector<Node> {
+  r = parse_seq(toks, 0, "");
+  r.nodes
+}
+
+fn emit(nodes: vector<Node>) -> text {
+  s = "";
+  for nd in nodes {
+    match nd {
+      Leaf { tok } => { s += tok; },
+      Group { open, kids, close } => { s += open; s += emit(kids); s += close; },
+    }
+  }
+  s
+}
+
+fn count_groups(nodes: vector<Node>) -> integer {
+  c = 0;
+  for nd in nodes {
+    match nd {
+      Leaf { tok } => {},
+      Group { open, kids, close } => { c += 1 + count_groups(kids); },
+    }
+  }
+  c
+}
+
+fn max_depth(nodes: vector<Node>) -> integer {
+  d = 0;
+  for nd in nodes {
+    match nd {
+      Leaf { tok } => {},
+      Group { open, kids, close } => {
+        dd = 1 + max_depth(kids);
+        if dd > d { d = dd; }
+      },
+    }
+  }
+  d
+}
+
+fn main() {
+  path = env_variable("LOFT_FMT_FILE") ?? "";
+  src = file(path).content() ?? "";
+  toks = lex(src);
+  tree = parse(toks);
+  rebuilt = emit(tree);
+  if rebuilt == src {
+    print("OK   {size(src)}b {len(toks)}tok groups={count_groups(tree)} depth={max_depth(tree)}  {path}\n");
+  } else {
+    print("DIFF {size(src)}b -> {size(rebuilt)}b  {path}\n");
+  }
+}
