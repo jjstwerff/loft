@@ -57,7 +57,8 @@ jobs:
           # be removed the moment the lib republishes migrated.  (Logged to stderr so
           # it is visible in the job log without corrupting the matrix on stdout.)
           KNOWN_BROKEN = {
-              "hex_terrain": "DN3-Float (float ops -> float?) — loft-lang/loft#579; remove on 0.1.1",
+              # (empty) — hex_terrain 0.1.1 republished migrated (loft-lang/loft#579).
+              # Add an entry ONLY with a tracking issue + a remove-on-republish note.
           }
           legs = []
           for name, pkg in idx.items():
