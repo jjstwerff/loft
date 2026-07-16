@@ -453,6 +453,11 @@ corpus shapes) are COMPLETE. Phase 4 = routing consumer (that agent).
 
 ### Phase 4 — routing migration (consumer acceptance; owned by routing's agent)
 
+> **Language-side prerequisites all DONE.** The zero-copy O(1) claim this whole feature rests on is
+> now proven on the language side (def-of-done #7); what remains in Phase 4 is genuinely consumer
+> work in `../routing` (owned by that agent): the `view`/`match` migration + the coordinate
+> round-trip acceptance, plus the games GPU-upload path and the optional `--native-wasm` framed sink.
+
 Swap routing's `view`/`match` text-serialize for `deliver(...)`; swap the canvas
 `parseFloat`-per-coord renderer for the generic reader + typed-array lanes.
 
@@ -473,7 +478,14 @@ Swap routing's `view`/`match` text-serialize for `deliver(...)`; swap the canvas
 4. **Headless browser parity** (Phase 2) — **interpret == native == --html**, byte-identical JSON.
 5. **memory.grow safety** (Phase 2) — grow mid-read, reader re-derives view, no detach throw.
 6. **Cursor reconstruction** (Phase 3) — keyed multiset == interpreter iteration; JS layout-blind.
-7. **Routing acceptance** (Phase 4) — deliver `view`/`match` == native text path, exact fixed-point.
+7. **Zero-copy O(1)** (probe #3, language-side ✅) — `deliver_scalar_vector_is_zero_copy_o1_in_js`:
+   an inline `vector<scalar>` delivers O(1) in `n`, proven STRUCTURALLY — loft-side node is a plain
+   `vector` (no materialisation), JS-side value is a typed-array VIEW aliasing `mem.buffer` (a copy
+   can't alias) — with a same-machine O(1)-view-vs-O(n)-scan ratio (~1000×, min-based) as
+   corroboration. Falsified live: a copying reader flips `shared`/`o1` false and `viewMs` jumps
+   ~1000×. **NUANCE:** the O(1) guarantee is the inline fast-lane path; keyed collections are
+   pre-flattened (materialised → O(n)) by the Phase 3 design, by intent.
+8. **Routing acceptance** (Phase 4) — deliver `view`/`match` == native text path, exact fixed-point.
 
 The master invariant is the loft-ship parity bar (`loft-ship` skill): a target is done only
 when its result *equals the interpreter's* — not merely exits 0.

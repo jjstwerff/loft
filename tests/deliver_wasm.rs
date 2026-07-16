@@ -54,6 +54,12 @@ fn run_crossframe(name: &str, source: &str) -> Option<String> {
     run_harness(name, source, "tools/deliver_crossframe.mjs", &[])
 }
 
+/// [`run_deliver`], but through the ZERO-COPY perf harness (`tools/deliver_perf.mjs`) — measures
+/// that an inline scalar vector delivers O(1) in n (a view aliasing wasm memory, not a copy).
+fn run_perf(name: &str, source: &str) -> Option<String> {
+    run_harness(name, source, "tools/deliver_perf.mjs", &[])
+}
+
 /// Build `source` via `loft --html`, extract the embedded wasm, run it through the given node
 /// harness (`harness_rel`, repo-relative) with extra `env`, and return its stdout — or `None` if
 /// the toolchain self-skips.
@@ -556,5 +562,47 @@ fn main() {
             && stdout.contains(want_value)
             && stdout.contains("RELEASE 1"),
         "cross-frame expose read mismatch\n  want EXPOSE + CROSSFRAME with {want_value} + RELEASE 1\n  got stdout:\n{stdout}"
+    );
+}
+
+#[test]
+fn deliver_scalar_vector_is_zero_copy_o1_in_js() {
+    // @PLN105 probe #3 — the ZERO-COPY perf falsifier (the reason the feature exists: routing's
+    // ~230k-feature `view` serialises to text and JS `parseFloat`s millions of coord strings; this
+    // must instead be O(1)). An inline `vector<scalar>` must reach JS O(1) in the element count `n`,
+    // not O(n)/copying, on BOTH sides — proven structurally (airtight), not by absolute wall-clock:
+    //  * LOFT-SIDE O(1): the delivered top node is a plain `vector` (NOT a materialised `flatarray`).
+    //    An inline vector is handed over by reference; only keyed collections are pre-flattened.
+    //  * JS-SIDE O(1): the value reconstructs to a typed-array VIEW aliasing wasm memory
+    //    (`shared=true` — buffer identity). A copy cannot alias; a view over an existing buffer
+    //    touches no element, so it is O(1) by construction.
+    // Delivering 64k AND 1M shows view cost is FLAT (independent of n); the harness's `o1` flag is a
+    // same-machine ratio of view-construction vs an O(n) scan of the SAME data (~1000x margin,
+    // min-based — robust, never a bare time threshold). Keyed collections are O(n) by the Phase 3
+    // pre-flatten design; this covers the inline fast-lane path the perf claim is about.
+    let src = r#"
+fn fill(n: integer) -> vector<single> {
+  v: vector<single> = [];
+  i = 0;
+  while i < n { v += [i as single]; i += 1; }
+  v
+}
+fn main() {
+  deliver(9, fill(2048));      // JIT warmup — tag 9 ignored below
+  deliver(1, fill(65536));     // small
+  deliver(2, fill(1048576));   // large
+}
+"#;
+    let Some(stdout) = run_perf("perf", src) else {
+        return; // toolchain self-skip
+    };
+    // Both sizes: a plain `vector` node (loft-side O(1)) reconstructs to a zero-copy VIEW
+    // (`shared=true`) with exact endpoint values and `o1=true` (view O(1) vs O(n) scan). The prefix
+    // is deterministic; the trailing `(viewMs=… )` timing is reported but not asserted.
+    let small = "PERF tag=1 n=65536 kind=vector shared=true first=0 last=65535 o1=true";
+    let large = "PERF tag=2 n=1048576 kind=vector shared=true first=0 last=1048575 o1=true";
+    assert!(
+        stdout.contains(small) && stdout.contains(large),
+        "zero-copy O(1) falsifier failed (delivered a copy? materialised the vector? o1 regressed?)\n  want both:\n    {small}\n    {large}\n  got stdout:\n{stdout}"
     );
 }
