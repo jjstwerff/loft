@@ -85,16 +85,46 @@ borrow) and adds an immutable binding.  One keyword, positioned to say *which fa
 
 ## Implementation — safe small steps
 
-The two axes are enforced at two chokepoints loft already has.
+**The load-bearing constraint (from the code):** value-const must **not** be a
+`Type::Const(Box<Type>)` wrapper.  `Type` (`src/data.rs`) is pattern-matched in
+hundreds of sites across the compiler; a wrapper variant would ripple through every
+one (unwrap-or-break) — the exact codegen change that regresses the suite (the
+loft-codegen skill's probe-04 anti-example).  So the plan is **phased**:
+
+- **Phase 1 — flags on the binding + base-resolution** (this plan).  Both axes ride
+  on the existing per-binding flag mechanism (`Attribute.const_field` for fields,
+  `Variable.const_param` for vars), enforced at the write chokepoints by resolving a
+  write's *base binding* and checking its flags.  No `Type` change → no ripple.
+  Delivers the model for **direct writes through a binding** — the common case, and
+  everything the libs need.
+- **Phase 2 — type-carried const** (a separate, larger plan).  Thread a `const` bit
+  through `Type` so immutability survives store round-trips, function returns
+  (no-laundering), and composes into generics (`vector<const T>`).  Phase 1's
+  base-resolution covers direct writes without it.
+
+**Representation (phase 1):**
+- **binding-const** = `const` PREFIX → the shipped `const_field` (fields) + a
+  `const_binding` flag on `Variable` (vars; the existing `const_param` renamed/reused).
+- **value-const** = `const` before the TYPE → a NEW `value_const` bool on `Attribute`
+  and `Variable`.  Both may be set (`const v: const T`).
+
+Both axes enforce at the two chokepoints loft already has: `validate_write`
+(`expressions.rs:3453`, fields) and the `is_const_param` sites
+(`operators.rs:20`/`116`/`302`, `collections.rs:794`/`865`, vars).
 
 | # | Step | Verify (both backends) |
 |---|---|---|
-| 0 | **Matrix probe** (throwaway): the 4×2 table above × {local, field, param} × {scalar, struct, vector, hash, text, nested} — hand-computed target verdicts.  This is the spec. | records the target |
-| 1 | **Binding-const, unified.**  One flag on the slot (field `const_field`, var `const_binding`); reject only a *rebind* of that slot at the write chokepoints (`validate_write` for fields; the `is_const_param`/local guards for vars).  Allow all contents mutation (element, append, nested). | binding row identical for local/field/param |
-| 2 | **Value-const carried by the type.**  A `Type::Const(Box<Type>)` wrapper (or a `const` bit on `Type`) set when `const` precedes a type; parse it in field/param/local/generic type positions. | `x: const T` parses; type round-trips |
-| 3 | **Enforce value-const at read/write lowering.**  A write whose target has a `const` value-type is rejected (element, append, field, nested).  A field/element READ of a `const` value yields a `const` view (transitivity + no-laundering). | value row + transitivity, both backends |
-| 4 | **Borrow interaction.**  `const T` accepted where `&T` is not for mutation; a `const` value can't bind to a `&` param.  Scalars collapse (rule 1). | param matrix; the `&`-vs-const cases |
-| 5 | **Docs + graduate** the full matrix into `tests/scripts/` + `tests/issues.rs` negatives; LOFT.md/loft-write carry the 4-quadrant table + the borrow analogy. | `make ci` |
+| 0 | **Matrix probe** (throwaway): the 4×2 table × {local, field, param} × {scalar, struct, vector, hash, text, nested} — hand-computed target verdicts.  This is the spec; snapshot CURRENT behaviour beside it. | spec recorded |
+| 1 | **Binding-const, unified append.**  const-local (`const x`, prefix) allows `+=` (contents), matching const-field; const-*param* (`p: const T`, type-qual) does NOT — it is heading to value-const.  Distinguish via `const_kind` (argument flag).  A contained relax of the `is_const_param` append guards. | binding-const row identical for local + field; param unchanged |
+| 2 | **Parse the two positions into two flags.**  `const` prefix → binding flag; `const` before the type → `value_const` on the `Attribute`/`Variable`.  Inert until step 3 (nothing reads `value_const` yet). | parses; flags set (white-box); suite green (inert) |
+| 3 | **Value-const enforcement — the base-resolution (load-bearing).**  For any write, resolve the *base binding* of the target chain (`a.b.c[i] = x`, `a += …`, `a = …` → base `a`); if its `value_const` flag is set, reject ALL of rebind / append / element / field / nested.  Extends `validate_write` (already resolves a field's parent) and the `is_const_param` sites with base-chain resolution.  Transitivity for direct writes falls out (any write under a value-const base is caught). | value-const row + `p.inner.x=` transitivity, both backends; gate on the written matrix, not just the suite |
+| 4 | **Scalars collapse + borrow interaction.**  For a scalar binding, binding-const == value-const (rule 1).  A `value_const` binding cannot be passed to a `&` (mutable-borrow) param; `p: const T` is the read-only borrow (rule 4). | param matrix + the `&`-vs-const cases |
+| 5 | **Docs + graduate.**  The full matrix into `tests/scripts/40-const-fields.loft` + `tests/issues.rs` negatives; LOFT.md / loft-write carry the 4-quadrant table + the `&`/`const` borrow analogy. | `make ci` |
+
+Each step is contained: step 1 only turns a const-local `+=` error into a success;
+step 2 is inert; step 3 only fires on the new `value_const` flag (nothing sets it
+before step 2).  No env-gate needed.  Phase 2 (type-carried) is deferred to its own
+plan and is the only part that touches `Type`.
 
 ## The library-scoped const-suggest lint
 
