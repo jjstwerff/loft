@@ -2958,7 +2958,16 @@ impl Parser {
         // creates the monomorphised def.  First-pass IR for the call
         // is `Value::Null` placeholder; second-pass re-parse builds
         // the real `Value::Call`.
-        if d_nr == u32::MAX && !self.default {
+        // @PLN102 arc C — generic instantiation is CALLER-SOURCE-AGNOSTIC: a
+        // stdlib fn calling a generic (`sum_of`→`sum`) instantiates it exactly like
+        // a user program does.  The old `&& !self.default` guard skipped the stdlib
+        // parse, so a stdlib-internal generic call resolved to "Unknown function"
+        // (surfaced by the step-6 dogfood).  Inert for the current stdlib — no
+        // stdlib call was a generic — and inert for a non-generic unresolved name
+        // (`predict_generic_return_type` / `try_generic_instantiation` return
+        // Unknown/MAX with no side effect, so it falls through to "Unknown function"
+        // exactly as before).
+        if d_nr == u32::MAX {
             if self.first_pass {
                 let predicted = self.predict_generic_return_type(name, types);
                 if !predicted.is_unknown() {

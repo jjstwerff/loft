@@ -1785,6 +1785,39 @@ mod tests {
         );
     }
 
+    #[test]
+    /// @PLN102 arc C — a stdlib fn (parsed under `self.default`, i.e. `STD_SOURCE`)
+    /// can call a GENERIC stdlib fn.  Before the fix the generic-instantiation block
+    /// in `parse_call` was gated on `!self.default`, so a stdlib-internal generic
+    /// call resolved to "Unknown function" (surfaced by the step-6 dogfood: folding
+    /// `sum_of` onto the generic `sum` failed at stdlib load, though `sum(v, 0)`
+    /// worked from a user program).  Generic instantiation is now caller-source-agnostic.
+    fn stdlib_fn_can_call_a_generic() {
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+        let pre = p.diagnostics.entries().len();
+        // Parse a helper WITH default=true (the stdlib parse context) that calls the
+        // generic `min_of` — the exact shape that used to fail.
+        p.parse_source(
+            "fn my_std_helper(v: vector<integer>) -> integer { min_of(v) ?? 0 }\n",
+            "<std-generic-test>",
+            true,
+        );
+        let new_diags: Vec<String> = p.diagnostics.entries()[pre..]
+            .iter()
+            .map(|e| e.message.clone())
+            .collect();
+        assert!(
+            !new_diags.iter().any(|m| m.contains("Unknown function")),
+            "a stdlib fn calling a generic must resolve, not 'Unknown function'; got {new_diags:?}"
+        );
+        assert_ne!(
+            p.data.source_nr(crate::data::STD_SOURCE, "n_my_std_helper"),
+            u32::MAX,
+            "the stdlib-context helper that calls a generic must parse"
+        );
+    }
+
     /// @PLN11 arc D micro-bench — wall-clock of producing the native stdlib
     /// `Data` two ways: a fresh `parse_dir` (today's cold-start path) vs
     /// `Store::open` + `read_data` (mmap the precompiled store, rebuild native).
