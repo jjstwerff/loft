@@ -1399,7 +1399,11 @@ use a separate collection or add after the loop"
             self.convert(code, &Type::Null, f_type);
         }
         if var_nr == u16::MAX {
-            self.validate_write(to, &parent_tp);
+            // Use the LHS target's parent type saved BEFORE the RHS parse — the RHS
+            // parse above overwrites `parent_tp` (to the RHS's last field-access type),
+            // which made a write like `arr[i] = … + e.const_field` falsely resolve to
+            // the RHS struct and flag its const/key field (@PLN40 false positive).
+            self.validate_write(to, &lhs_parent_tp, op);
         }
         // materialise a collection iterator (e.g. v[a..b] slice) into a vector
         // variable.  CO1.3c: the original "second type Null = coroutine, skip"
@@ -3446,7 +3450,7 @@ use a separate collection or add after the loop"
         true
     }
 
-    pub(crate) fn validate_write(&mut self, to: &Value, parent_tp: &Type) {
+    pub(crate) fn validate_write(&mut self, to: &Value, parent_tp: &Type, op: &str) {
         if let Value::Call(_, vars) = to.unspan()
             && vars.len() > 1
             && let Value::Int(pos) = vars[1].unspan()
@@ -3473,14 +3477,30 @@ use a separate collection or add after the loop"
                         } else if self.data.def(d_nr).attributes()[f_nr].const_field {
                             // @PLN40 — a `const` field is write-once at construction.  The
                             // constructor lowers via Value::Insert (a separate path that does
-                            // not reach here), so only a later reassignment lands in this guard.
-                            diagnostic!(
-                                self.lexer,
-                                Level::Error,
-                                "cannot reassign const field '{}' of struct '{}' — const fields are write-once-at-construction",
-                                f.name,
-                                self.data.def(d_nr).name()
-                            );
+                            // not reach here), so only a later write lands in this guard.
+                            // Reject a rebind of the whole value: `=` (any type) or a compound
+                            // op (`+=`) on a SCALAR.  ALLOW a compound op on a collection/text
+                            // field — that is an in-place append (contents mutation), consistent
+                            // with the already-allowed element write `t.v[0] = x`.
+                            let contents_append = op != "="
+                                && matches!(
+                                    self.data.def(d_nr).attributes()[f_nr].typedef,
+                                    Type::Text(_)
+                                        | Type::Vector(_, _)
+                                        | Type::Sorted(_, _, _)
+                                        | Type::Index(_, _, _)
+                                        | Type::Radix(_, _, _)
+                                        | Type::Hash(_, _, _)
+                                );
+                            if !contents_append {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "cannot reassign const field '{}' of struct '{}' — const fields are write-once-at-construction",
+                                    f.name,
+                                    self.data.def(d_nr).name()
+                                );
+                            }
                         }
                     }
                 }

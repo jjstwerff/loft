@@ -1566,6 +1566,20 @@ fn test() { t = Rec { x: 1 }; t.x = 5; }"
     );
 }
 
+/// @PLN40: `+=` on a const SCALAR field is still rejected — it changes the whole
+/// value (a scalar has no "contents").  Only append on a const collection/text
+/// field is allowed (that is contents mutation; covered in the both-backend script).
+#[test]
+fn pln40_const_scalar_compound_rejected() {
+    code!(
+        "struct Rec { const n: integer }
+fn test() { r = Rec { n: 1 }; r.n += 1; }"
+    )
+    .error(
+        "cannot reassign const field 'n' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_scalar_compound_rejected:2:40",
+    );
+}
+
 /// @PLN40 step 4: the const-field guard fires regardless of the write route —
 /// here through a `&Rec` parameter, not the construction site.
 #[test]

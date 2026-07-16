@@ -12,6 +12,7 @@ struct Cell { const c_color: integer, const c_height: integer, c_age: integer }
 struct Inner { f: integer }
 struct Holder { const r: Inner }
 struct Vecs { const v: vector<integer> }
+struct Note { const body: text }
 struct Cfg { const port: integer = 8080 }
 struct Nested { c: Cell }
 enum Shape { Circle { const radius: integer }, Square { side: integer } }
@@ -53,4 +54,23 @@ fn main() {
   // ── const field on an enum variant ─────────────────────────────
   s = Circle { radius: 5 };
   if s is Circle { radius } { assert(radius == 5, "const enum-variant field constructs and reads"); }
+
+  // ── append IS contents mutation on a const collection/text field ─
+  // `t.v += […]` grows the field's container in place (like `t.v[0]=x`), so it is
+  // allowed on a const field; only a whole-value rebind `t.v = […]` is rejected.
+  ap = Vecs { v: [1, 2] };
+  ap.v += [3];
+  assert(len(ap.v) == 3 && ap.v[2] == 3, "const vector field: += append is allowed");
+
+  txt = Note { body: "a" };
+  txt.body += "b";
+  assert(txt.body == "ab", "const text field: += append is allowed");
+
+  // ── regression: an element-store whose RHS READS a const field ──
+  // (arr[i] = … + e.const_field) must NOT be misread as reassigning the const field.
+  acc: vector<integer> = [0];
+  cell = Cell { c_color: 4, c_height: 0, c_age: 0 };
+  i0 = 0;
+  acc[i0] = (acc[i0] ?? 0) + cell.c_color;
+  assert(acc[0] == 4, "reading a const field on the RHS of an element-store is fine");
 }

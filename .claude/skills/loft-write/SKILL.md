@@ -98,7 +98,7 @@ but is a retired no-op — see the DN1 defaults note above; use `?` for the null
 
 **`const` field** (prefix, before the name) — write-once at construction: set it in the struct
 literal (or let it take its default), then any later `t.id = …` is a compile error.  Freezes the
-*binding*, not contents (`const v: vector<T>` rejects `t.v = […]` but allows `t.v[0] = x`).  Works on
+*binding*, not contents (`const v: vector<T>` rejects only `t.v = […]` reassign; it ALLOWS `t.v[0] = x` and `t.v += […]` append — both are contents mutation).  A const *scalar* rejects `t.n = …` and `t.n += …` both.  Works on
 enum-variant fields too.  `const virtual(...)` is rejected (a virtual field is already read-only).
 
 ---
