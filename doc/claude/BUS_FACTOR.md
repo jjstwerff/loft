@@ -169,6 +169,8 @@ read. It is a project anyone with a coding agent can continue.**
 
 ## See also
 
+- [AGENT_ACCOUNT.md](AGENT_ACCOUNT.md) — a first-person account from the Claude agent that
+  did most of loft's building, after it checked the record of the past sessions.
 - [GOALS.md](GOALS.md) — Goal B (legible on contact) and Goal F (serve the reader): the
   goals this development model serves.
 - [../../CLAUDE.md](../../CLAUDE.md) — the agent on-ramp: conventions, the documentation
