@@ -358,13 +358,15 @@ pub fn dead_stores_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_DEAD_STORES").is_none())
 }
 
-/// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening, build step 4. Opt-in, DEFAULT OFF. When
-/// set, the copy-elision (`analyze_fn` → `ElidePlan`) ADDITIONALLY realizes a copy-fill bind `a=s.v`
-/// as a shared-store link when it is provably SAFE (`link_is_safe`, step 2 — the source outlives the
-/// local, no escape) AND UNOBSERVABLE (`link_is_unobservable`, step 3 — neither side's store is
-/// mutated after the bind, alias-aware). The observable result is unchanged (it links only where a
-/// link ≡ a copy); this just realizes more links. Gated so the change is measured byte-value-identical
-/// before any default. Dead branch when off ⇒ byte-identical. Cached once. Flipped default-on in step 5.
+/// `LOFT_LINK_WIDEN=1` — @PLN102 transparent-link widening. **OPT-IN, DEFAULT OFF** — built +
+/// validated (steps 1–4) but NOT defaulted on: step 5's copy-count measurement found the win is ~0
+/// in practice (the read-only-both field-bind pattern it targets is essentially absent in real loft
+/// code — even the ~2000-line viewer eliminates 0 copies), while defaulting on adds per-bind analysis
+/// cost (an O(n) alias scan). C86's revisit trigger ("a profiler shows bind-copies dominating a real
+/// consumer") is NOT met, so the mechanism stays opt-in, ready for when a consumer demonstrates the
+/// win. When set, `analyze_fn` → `ElidePlan` links a copy-fill bind `a = s.v` where it is provably
+/// SAFE (`link_is_safe`) AND UNOBSERVABLE (`link_is_unobservable`, alias-aware) — the observable
+/// result is unchanged (link ≡ copy there). Cached once. See alias-where-correct{,-build}.md.
 #[must_use]
 pub fn link_widen_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
