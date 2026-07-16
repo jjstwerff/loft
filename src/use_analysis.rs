@@ -2276,6 +2276,73 @@ pub fn warn_dead_stores(
     }
 }
 
+/// @PLN102 arc C step 4 — the FOLD lint (C5.2).  For every `#superseded "Y"` symbol X in OWNED
+/// source (the author's own — a consumer never sees a dependency's fold issues, same provenance
+/// gate as the steer): (a) the successor `Y` must RESOLVE — an unresolvable successor is a hard
+/// `Level::Error`, so a *dangling* steer never ships; (b) X's body must CALL `Y` — X is a shim over
+/// the successor, not independent code — else an advisory `Level::Warning` (promote to a hard
+/// `make ci` check once the surface is clean).  Every steer thus ships with its fold, or the lint
+/// fires.  INERT until a symbol is actually marked `#superseded`, so the suite is byte-identical.
+/// Populates `diags`; the caller renders them with the other diagnostics.
+pub fn superseded_fold_diagnostics(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        let succ = def.superseded();
+        // Scope to the author's own marked symbols; a consumer cannot fix a dependency's fold.
+        if succ.is_empty() || !data.source_is_owned(def.source) {
+            continue;
+        }
+        let pos = def.position();
+        let file = if pos.file.is_empty() {
+            fallback_file
+        } else {
+            pos.file.as_str()
+        };
+        let shown = def.name().strip_prefix("n_").unwrap_or(def.name());
+        // (a) the successor must resolve — the marked symbol's own source first, then the stdlib
+        // (`STD_SOURCE`, visible everywhere) for a fold onto a standard-library primitive.
+        let y_name = format!("n_{succ}");
+        let mut y_nr = data.source_nr(def.source, &y_name);
+        if y_nr == u32::MAX {
+            y_nr = data.source_nr(crate::data::STD_SOURCE, &y_name);
+        }
+        if y_nr == u32::MAX {
+            diags.add_at(
+                crate::diagnostics::Level::Error,
+                &format!(
+                    "`#superseded \"{succ}\"` on `{shown}`: no such successor `{succ}` — a \
+                     superseded symbol must name a real replacement, or a dangling steer would ship"
+                ),
+                file,
+                pos.line,
+                pos.pos,
+            );
+            continue;
+        }
+        // (b) the shim check — X's body must CALL Y (fold the old form onto the new).
+        let folds = def
+            .code
+            .any_node(&mut |n| matches!(n, Value::Call(d, _) if *d == y_nr));
+        if !folds {
+            diags.add_at(
+                crate::diagnostics::Level::Warning,
+                &format!(
+                    "`{shown}` is `#superseded` by `{succ}` but its body never calls `{succ}` — \
+                     fold it onto the successor (reimplement `{shown}` as a shim over `{succ}`) so \
+                     the steer ships with its fold"
+                ),
+                file,
+                pos.line,
+                pos.pos,
+            );
+        }
+    }
+}
+
 /// @PLN90 W5 — the ENFORCED copy lint (`LOFT_WARN_COPIES`). Routes every **Avoidable** unbound
 /// structure copy (a still-live value duplicated where a borrow/move would remove it — the
 /// worklist) through the normal `Level::Warning` diagnostics channel, so it surfaces during a

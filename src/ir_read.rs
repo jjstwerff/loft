@@ -1690,9 +1690,11 @@ mod tests {
         use crate::data::MAIN_SOURCE;
         use crate::diagnostics::Level;
 
+        // {0} is superseded by {1} and FOLDED onto it (a shim); {2} calls {0}
+        // (the owned-source call that steers).
         let marked = |names: (&str, &str, &str)| {
             format!(
-                "fn {0}() -> integer {{ 1 }}\n#superseded \"{1}\"\nfn {1}() -> integer {{ 2 }}\nfn {2}() -> integer {{ {0}() }}\n",
+                "fn {0}() -> integer {{ {1}() }}\n#superseded \"{1}\"\nfn {1}() -> integer {{ 2 }}\nfn {2}() -> integer {{ {0}() }}\n",
                 names.0, names.1, names.2
             )
         };
@@ -1717,6 +1719,50 @@ mod tests {
         assert!(
             !p.diagnostics.entries()[pre..].iter().any(is_steer),
             "a #superseded call from a DEPENDENCY source must NOT steer"
+        );
+    }
+
+    #[test]
+    /// @PLN102 arc C step 4 — the fold lint: a `#superseded "Y"` symbol must
+    /// RESOLVE Y (an unresolvable successor is a hard Error — a dangling steer
+    /// never ships) and its body must CALL Y (a shim over the successor — an
+    /// un-folded steer is an advisory Warning); a properly-folded one is clean.
+    fn fold_lint_flags_dangling_and_unfolded_superseded() {
+        use crate::diagnostics::{Diagnostics, Level};
+
+        let check = |src: &str| -> Vec<(Level, String)> {
+            let mut p = crate::parser::Parser::new();
+            p.parse_dir("default", true, false).expect("parse stdlib");
+            p.parse_snippet(src, "<main>", crate::data::MAIN_SOURCE);
+            let mut diags = Diagnostics::new();
+            crate::use_analysis::superseded_fold_diagnostics(&p.data, &mut diags, "<main>");
+            diags
+                .entries()
+                .iter()
+                .map(|e| (e.level, e.message.clone()))
+                .collect()
+        };
+
+        // (1) folded → clean: old_f is a shim over new_f.
+        let clean = check(
+            "fn old_f() -> integer { new_f() }\n#superseded \"new_f\"\nfn new_f() -> integer { 2 }\n",
+        );
+        assert!(clean.is_empty(), "a folded #superseded symbol must be clean; got {clean:?}");
+
+        // (2) un-folded → advisory Warning: old_g does not call new_g.
+        let unfolded = check(
+            "fn old_g() -> integer { 1 }\n#superseded \"new_g\"\nfn new_g() -> integer { 2 }\n",
+        );
+        assert!(
+            unfolded.iter().any(|(l, m)| *l == Level::Warning && m.contains("never calls")),
+            "an un-folded #superseded symbol must warn; got {unfolded:?}"
+        );
+
+        // (3) dangling successor → hard Error.
+        let dangling = check("fn old_h() -> integer { 1 }\n#superseded \"nonesuch\"\n");
+        assert!(
+            dangling.iter().any(|(l, m)| *l == Level::Error && m.contains("no such successor")),
+            "a dangling #superseded successor must error; got {dangling:?}"
         );
     }
 

@@ -24,8 +24,10 @@ fn workspace_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+// `old_add` is FOLDED onto `new_add` (a shim over the successor) so the arc-C
+// step-4 fold lint stays clean; the steer still fires on a *call* to `old_add`.
 const PROG: &str = "\
-fn old_add(a: integer, b: integer) -> integer { a + b }
+fn old_add(a: integer, b: integer) -> integer { new_add(a, b) }
 #superseded \"new_add\"
 fn new_add(a: integer, b: integer) -> integer { a + b }
 fn main() { println(\"{old_add(2, 3)} {new_add(4, 5)}\") }
