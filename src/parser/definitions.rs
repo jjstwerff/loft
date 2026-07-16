@@ -602,6 +602,28 @@ impl Parser {
             }
             let mut val = Value::Null;
             let tp = self.expression(&mut val);
+            // A struct-valued file-scope constant (`P = Point { … }`) is NOT supported: its
+            // value is the constructor's field-writes with no allocated record, so every use
+            // inlines writes into a null record — silently reading `null` on `--interpret`,
+            // panicking codegen on a plain bind, and failing to compile (`E0308`) on
+            // `--native`.  Scalars inline fine and scalar-element vector constants ride the
+            // `OpConstRef` const-store path; a heap record has neither.  Reject with the
+            // working idiom (a zero-arg fn re-materialises the record per call).  Full
+            // support = a const-store record builder (see the routing-feedback triage doc).
+            if !self.first_pass
+                && let Type::Reference(a_nr, _) = tp.base()
+            {
+                let type_name = self.data.def(*a_nr).name().to_string();
+                let fn_name = id.to_lowercase();
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "a struct-valued constant ('{id}') is not supported — a record cannot be \
+                     materialised at each use site (it reads `null` on --interpret and fails \
+                     to compile on --native).  Wrap it in a zero-argument function instead: \
+                     `fn {fn_name}() -> {type_name} {{ … }}`, then call `{fn_name}()`"
+                );
+            }
             if self.first_pass {
                 // detect a name collision before calling `add_def`,
                 // which would otherwise panic with `Dual definition of <name>`.

@@ -33,17 +33,29 @@ fn main() { println("{g(null).x}"); }         // want -1
   works on both backends.  So the fault is specific to a struct *constant* in the `??`
   fallback position.
 
-**Root cause (to confirm):** the `??` (null-coalesce) lowering when the fallback operand is
-a struct-typed file-scope constant.  The interpreter path yields the null sentinel instead
-of the constant's record; native codegen emits a value of the wrong Rust type (E0308).  A
-zero-arg fn works because it routes through the ordinary call path, not the constant path.
+**Root cause (CONFIRMED, broader than `??`):** a struct file-scope constant
+(`P = Point { … }`) is not just broken in `??` — it is broken in *every* position.  Its
+stored value is the constructor's field-writes with **no allocated record** (the IR shows
+`else { INSERT OpSetInt(null, …) OpSetInt(null, …) }` — dest = `null`).  A plain
+`a = POINT_NONE` panics codegen (`Incorrect var a[65535]`); `?? POINT_NONE` reads null
+(interp) / E0308 (native).  Scalars inline fine; scalar-element **vector** constants ride
+the `OpConstRef` const-store path (`objects.rs:1232`, built by `build_const_vectors` in
+`compile.rs:111`) — a heap record has neither.  A zero-arg fn works because it materialises
+the record through the ordinary return-buffer call path.
 
-**Intended change:** make a struct-typed constant in the `??` fallback materialise the
-constant's record on BOTH backends (value-parity with the zero-arg-fn form).  Gate with a
-both-backends regression: `x ?? STRUCT_CONST` returns the constant's fields; a
-zero-arg-fn twin; and a native-compile-clean check (this is the loft-codegen "prove the
-working bytecode on both backends" gate — the E0308 is the tell that a type fact is missing
-at the emit site).
+**Change — two phases:**
+- **SHIPPED (safe immediate fix):** *reject* a struct-valued constant at
+  `parse_constant` (`definitions.rs`) with a diagnostic that points at the working
+  zero-arg-fn idiom — turning a silent `null` / `E0308` / codegen-panic into a clear
+  compile error on both backends.  No stdlib/lib uses struct constants, so nothing breaks.
+  Guard: `tests/parse_errors.rs::struct_valued_constant_rejected`.
+- **FOLLOW-UP (full support, own plan):** route struct (`Reference`) constants through the
+  const-store like vectors — a `build_const_records` sibling that materialises the record
+  from the constructor's field literals into `CONST_STORE`, plus emit `OpConstRef` for a
+  `Reference` constant at `objects.rs:1232` (`OpConstRef` + `OpCopyRecord` already
+  deep-copy a record).  This is the loft-codegen "prove the working bytecode on both
+  backends" gate — the vector-constant path is the working reference to mirror.  Likely
+  extends to enum-payload constants (the same materialisation gap).
 
 **Why it matters:** a sentinel constant is the obvious idiom; it passes the interpreter and
 then breaks the native build — the worst failure shape (green locally, red on `make test`).
