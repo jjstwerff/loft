@@ -86,9 +86,12 @@ fn abs_nullable_off_launders_no_warning() {
 fn abs_nullable_on_propagates_and_guards_interpret() {
     let (ok, out, warns) = run(ABS_NULL, "--interpret", true, "abs_on_i");
     assert!(ok, "{out}");
+    // TWO (N-Store) warnings now: the nullable arg `n` into abs's non-null param
+    // (routing-feedback f4), and abs(n)'s `integer?` result into the non-null field
+    // `s.f`.  One source discharge (`abs(n ?? 0)`) clears both.
     assert_eq!(
-        warns, 1,
-        "ON: abs(nullable) is integer? → store warns: {out}"
+        warns, 2,
+        "ON: abs(nullable) warns at the arg AND the store: {out}"
     );
     assert!(
         out.contains("r=null"),
@@ -99,7 +102,7 @@ fn abs_nullable_on_propagates_and_guards_interpret() {
 fn abs_nullable_on_propagates_and_guards_native() {
     let (ok, out, warns) = run(ABS_NULL, "--native", true, "abs_on_n");
     assert!(ok, "{out}");
-    assert_eq!(warns, 1, "ON native: {out}");
+    assert_eq!(warns, 2, "ON native: arg + store (N-Store): {out}");
     assert!(
         out.contains("r=null"),
         "ON native: abs(null) must be null: {out}"

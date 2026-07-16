@@ -6201,9 +6201,11 @@ impl Parser {
             // PARAMETER is the same violation as into a return value / field / assignment
             // target, but the call-argument path never ran the check (only return/field/
             // assign did), so `convert` below silently peeled the Optional and the null
-            // slipped into the callee.  Run it here too (warn — or hard-error for a narrow
-            // width — exactly like the other sites); the store still proceeds via `convert`.
-            if report {
+            // slipped into the callee.  Gate on the null-flow model being ON (the default):
+            // this is the WARNING half of (N-Store), so it must not add a NEW hard error to
+            // the legacy strict OFF mode (`LOFT_NO_NULLFLOW`), where n_store_violation errors
+            // — a nullable arg there was previously unchecked and legal.  Store still proceeds.
+            if report && crate::keys::nullflow_enabled() {
                 let ctx = format!(
                     "argument {} of {}",
                     nr + 1,
