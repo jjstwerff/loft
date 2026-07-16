@@ -43,6 +43,9 @@ loft source. The most useful filters:
   auto-closes it.
 - Deeper architecture + conventions live under [`doc/claude/`](doc/claude); how
   bugs/issues are tracked is [`doc/claude/ISSUE_TRACKING.md`](doc/claude/ISSUE_TRACKING.md).
+- **You can contribute with a coding agent.** loft is developed this way — steered,
+  with documentation and tooling put above code — so everything needed to make a
+  change is in the repo. See [how loft is built](doc/claude/BUS_FACTOR.md).
 
 loft is developed by building real consumers (the games **moros** / **dryopea** on
 the **lavition** engine) and harvesting the language lessons — so bug reports

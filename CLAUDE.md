@@ -11,6 +11,8 @@ expression-oriented, struct/enum, store-based heap, stdlib from `default/*.loft`
 the interpreter and `--native` (compiles via `rustc`). It's the **language** layer of a stack:
 **lavition** (the engine/brand) → **loft** (this repo) → games **moros**/**dryopea** + consumer
 libs (crawler, `lib/markdown`) that dogfood the language. History: [LAVITION.md](doc/claude/LAVITION.md).
+Developed almost entirely by AI agents (steered; docs + tooling prioritized above code), so
+everything needed to work on loft is in this repo — [BUS_FACTOR.md](doc/claude/BUS_FACTOR.md).
 
 ## Dogfood loop
 
