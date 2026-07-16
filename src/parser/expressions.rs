@@ -3501,6 +3501,17 @@ use a separate collection or add after the loop"
                     self.vars.const_kind(base),
                     self.vars.name(base)
                 );
+            } else if let Some(frozen) = self.lhs_frozen_through(to) {
+                // @PLN40 Phase 2 — the write DEREFERENCES THROUGH a value-const field
+                // (`s.v[i]=`, `s.v.x=`, deeper): its value is read-only at every depth.
+                // A rebind/append of the field ITSELF (`s.v=` / `s.v+=`) is the outermost
+                // node — not flagged here — and is decided by the leaf-field block below.
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot modify value-const field '{}'; its value is read-only",
+                    frozen
+                );
             }
         }
         if let Value::Call(_, vars) = to.unspan()
@@ -3554,6 +3565,34 @@ use a separate collection or add after the loop"
                                 );
                             }
                         }
+                        // @PLN40 Phase 2 — value-const field (`v: const T`).  This is the
+                        // LEAF write to `s.v` itself.  Reject a contents mutation (a compound
+                        // op `+=` append) while ALLOWING a rebind (`=`) that re-points the
+                        // slot.  A by-value SCALAR collapses (no interior distinct from its
+                        // binding), so value-const freezes it fully — reject `=` too.  Writes
+                        // THROUGH the field (`s.v[i]=`, `s.v.x=`) are inner derefs already
+                        // rejected by `lhs_frozen_through` above.  Independent `if` (not
+                        // `else`): it COMPOSES with `const_field` so `const v: const T` is
+                        // fully frozen — const_field blocks the rebind, value_const the append.
+                        if self.data.def(d_nr).attributes()[f_nr].value_const {
+                            let collapses = matches!(
+                                self.data.def(d_nr).attributes()[f_nr].typedef.base(),
+                                Type::Integer(_)
+                                    | Type::Float
+                                    | Type::Single
+                                    | Type::Boolean
+                                    | Type::Character
+                            );
+                            if op != "=" || collapses {
+                                diagnostic!(
+                                    self.lexer,
+                                    Level::Error,
+                                    "cannot mutate value-const field '{}' of struct '{}' — its value is read-only (rebind with '=' to re-point, or drop 'const')",
+                                    f.name,
+                                    self.data.def(d_nr).name()
+                                );
+                            }
+                        }
                     }
                 }
             }
@@ -3575,7 +3614,6 @@ use a separate collection or add after the loop"
     /// Read-only.  INERT until wired into `validate_write` (Step 3).  The type-tracking
     /// mirrors the leaf block's `parent_tp`→`known_type`→`Parts::Struct` field lookup,
     /// but applied at every node so an inner field's `value_const` is reachable.
-    #[allow(dead_code)] // Step 2: inert until wired into validate_write (Step 3)
     fn lhs_frozen_through(&self, to: &Value) -> Option<String> {
         if self.first_pass {
             return None;
