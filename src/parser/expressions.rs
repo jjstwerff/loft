@@ -841,7 +841,7 @@ impl Parser {
                     _ => None,
                 };
                 if let Some(v_nr) = v_nr {
-                    self.vars.set_const_param(v_nr);
+                    self.vars.set_const_binding(v_nr);
                 } else if !self.first_pass {
                     diagnostic!(
                         self.lexer,
@@ -1034,7 +1034,7 @@ use a separate collection or add after the loop"
         }
         if matches!(code, Value::Boolean(false))
             && let Some(Value::Var(v_nr)) = lock_args.first()
-            && self.vars.is_const_param(*v_nr)
+            && self.vars.is_const_any(*v_nr)
         {
             diagnostic!(
                 self.lexer,
@@ -1780,7 +1780,7 @@ use a separate collection or add after the loop"
             let effective_var = if self.first_pass
                 && var_nr != u16::MAX
                 && self.vars.is_argument(var_nr)
-                && !self.vars.is_const_param(var_nr)
+                && !self.vars.is_const_any(var_nr)
                 && (op == "=" || op == "+=")
             {
                 let name = self.vars.name(var_nr).to_string();
@@ -2428,7 +2428,7 @@ use a separate collection or add after the loop"
         if matches!(code, Value::Insert(_))
             && !self.first_pass
             && var_nr != u16::MAX
-            && self.vars.is_const_param(var_nr)
+            && self.vars.is_const_binding(var_nr)
         {
             diagnostic!(
                 self.lexer,
@@ -2700,6 +2700,11 @@ use a separate collection or add after the loop"
             // the `&` on the type instead of the value.  Mirror the param parser.
             // @F21 — references &T (parameters + write-back bindings)
             let is_ref = self.lexer.has_token("&");
+            // @PLN40 const-model — `x: const T` before the type = value-const: a
+            // read-only borrow of the value (mutation through `x` is rejected; a
+            // rebind is allowed).  Set the flag AFTER the type parse confirms this
+            // is a real annotation (`= …` follows), mirroring the param parser.
+            let is_value_const = self.lexer.has_keyword("const");
             let mut got_annotation = false;
             if let Some(tp) = self.parse_type_full(u32::MAX, false)
                 && self.lexer.peek_token("=")
@@ -2718,6 +2723,9 @@ use a separate collection or add after the loop"
                 // it stays constrained (a wider write is a narrowing error).  An inferred
                 // local (no annotation) widens to the join instead (see parse_assign_op).
                 self.vars.set_annotated(*v_nr);
+                if is_value_const {
+                    self.vars.set_value_const(*v_nr);
+                }
                 f_type = tp;
                 got_annotation = true;
                 // @PLN87 #2 — `b: &T = src` IS `b = &src`: flag the reference bind so
@@ -3081,7 +3089,9 @@ use a separate collection or add after the loop"
         var_nr: u16,
         s_type: &Type,
     ) {
-        if !self.first_pass && self.vars.is_const_param(var_nr) && !matches!(code, Value::Insert(_))
+        if !self.first_pass
+            && self.vars.is_const_binding(var_nr)
+            && !matches!(code, Value::Insert(_))
         {
             diagnostic!(
                 self.lexer,

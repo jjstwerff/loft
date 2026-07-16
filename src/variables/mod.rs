@@ -148,7 +148,16 @@ pub struct Variable {
     write_source: (u32, u32),
     argument: bool,
     defined: bool,
-    const_param: bool,
+    /// Binding-const (`const` PREFIX): `const x` local, `const p: T` param, and the
+    /// field twin `Attribute.const_field`.  The slot is write-once — a rebind (`=`)
+    /// is rejected — but the value it holds stays mutable (`+=` / element write are
+    /// allowed).  @PLN40 const-model phase 1; see doc/claude/plans/40-const-fields/.
+    const_binding: bool,
+    /// Value-const (`const` before the TYPE): `p: const T` param, `x: const T` local.
+    /// A read-only borrow of the value — every mutation THROUGH this name (`+=`,
+    /// element, field, nested) is rejected, but a rebind (`=`) that re-points the
+    /// slot is allowed.  The sibling of the `&T` mutable borrow.  @PLN40 phase 1.
+    value_const: bool,
     /// Whether this variable's stack storage has been initialised by codegen.
     /// Set to `true` when the first-allocation init opcodes are emitted (A6.3).
     /// Arguments are pre-allocated by the caller, so they start as `true`.
@@ -438,7 +447,8 @@ impl Function {
                 uses_at_write: 0,
                 write_source: (0, 0),
                 defined: false,
-                const_param: false,
+                const_binding: false,
+                value_const: false,
                 first_def: u32::MAX,
                 last_use: 0,
                 pre_assigned_pos: u16::MAX,
@@ -994,7 +1004,11 @@ impl Function {
     /// Call this on every `=` assignment to a user variable during the second pass.
     pub fn track_write(&mut self, var_nr: u16, lexer: &mut Lexer) {
         let var = &self.variables[var_nr as usize];
-        if var.name.starts_with('_') || var.name.contains('#') || var.const_param {
+        if var.name.starts_with('_')
+            || var.name.contains('#')
+            || var.const_binding
+            || var.value_const
+        {
             return;
         }
         if var.write_source != (0, 0) && var.uses == var.uses_at_write {
@@ -1174,7 +1188,8 @@ impl Function {
             write_source: (0, 0),
             argument: false,
             defined: false,
-            const_param: false,
+            const_binding: false,
+            value_const: false,
             stack_allocated: false,
             skip_free: false,
             captured: false,
@@ -1202,7 +1217,8 @@ impl Function {
             write_source: (0, 0),
             argument: false,
             defined: self.variables[var as usize].defined,
-            const_param: self.variables[var as usize].const_param,
+            const_binding: self.variables[var as usize].const_binding,
+            value_const: self.variables[var as usize].value_const,
             stack_allocated: false,
             skip_free: false,
             captured: false,
@@ -1232,7 +1248,8 @@ impl Function {
             write_source: (0, 0),
             argument: false,
             defined: false,
-            const_param: false,
+            const_binding: false,
+            value_const: false,
             stack_allocated: false,
             skip_free: false,
             captured: false,
@@ -1260,7 +1277,8 @@ impl Function {
             write_source: (0, 0),
             argument: false,
             defined: true,
-            const_param: false,
+            const_binding: false,
+            value_const: false,
             stack_allocated: false,
             skip_free: false,
             captured: false,
@@ -1530,12 +1548,34 @@ impl Function {
         (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].argument
     }
 
-    pub fn set_const_param(&mut self, var_nr: u16) {
-        self.variables[var_nr as usize].const_param = true;
+    /// Mark `var_nr` binding-const (`const` PREFIX): its slot is write-once.
+    pub fn set_const_binding(&mut self, var_nr: u16) {
+        self.variables[var_nr as usize].const_binding = true;
     }
 
-    pub fn is_const_param(&self, var_nr: u16) -> bool {
-        (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].const_param
+    /// Whether `var_nr` is binding-const — a rebind (`=`) is rejected, but the
+    /// value it holds stays mutable.
+    pub fn is_const_binding(&self, var_nr: u16) -> bool {
+        (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].const_binding
+    }
+
+    /// Mark `var_nr` value-const (`const` before the TYPE): the value is a
+    /// read-only borrow — mutation through this name is rejected.
+    pub fn set_value_const(&mut self, var_nr: u16) {
+        self.variables[var_nr as usize].value_const = true;
+    }
+
+    /// Whether `var_nr` is value-const — every mutation THROUGH it (`+=`, element,
+    /// field, nested) is rejected; a rebind (`=`) that re-points the slot is allowed.
+    pub fn is_value_const(&self, var_nr: u16) -> bool {
+        (var_nr as usize) < self.variables.len() && self.variables[var_nr as usize].value_const
+    }
+
+    /// Whether `var_nr` carries EITHER const axis — used by the guards that apply to
+    /// any const binding (`d#lock` unlock, text-arg auto-promotion, dead-store and
+    /// UPPER_CASE lints) regardless of which immutability it is.
+    pub fn is_const_any(&self, var_nr: u16) -> bool {
+        self.is_const_binding(var_nr) || self.is_value_const(var_nr)
     }
 
     pub fn is_captured(&self, var_nr: u16) -> bool {
@@ -1729,7 +1769,8 @@ impl Function {
     pub fn warn_upper_case_locals(&self, lexer: &mut Lexer) {
         for var in &self.variables {
             if var.argument
-                || var.const_param
+                || var.const_binding
+                || var.value_const
                 || var.name.starts_with('_')
                 || var.name.contains('#')
             {

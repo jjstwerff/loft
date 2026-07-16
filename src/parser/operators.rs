@@ -19,7 +19,7 @@ impl Parser {
     pub(crate) fn const_write_blocked(&self, nr: u16, op: &str) -> bool {
         !self.first_pass
             && nr != u16::MAX
-            && self.vars.is_const_param(nr)
+            && self.vars.is_const_binding(nr)
             && (self.vars.is_argument(nr) || op == "=")
     }
 

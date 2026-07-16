@@ -1166,7 +1166,7 @@ impl Parser {
                 } else {
                     self.change_var_type(a_nr as u16, &a.typedef);
                     if a.constant {
-                        self.vars.set_const_param(a_nr as u16);
+                        self.vars.set_const_binding(a_nr as u16);
                     }
                 }
             }
