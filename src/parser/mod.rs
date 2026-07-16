@@ -2104,7 +2104,26 @@ impl Parser {
     /// yield the non-null base). UNLIKE `convert`, this runs ONLY at store sites, so null-CHECK
     /// comparisons (`x == null`) stay legal. Gated on `LOFT_PLN25_DN3`; returns `true` (and
     /// emits the diagnostic) on a violation. A no-op (returns `false`) off / first pass.
-    fn n_store_violation(&mut self, value_tp: &Type, target_tp: &Type, what: &str) -> bool {
+    /// @PLN102 (N-Store) — emit an N-Store diagnostic at the STORED VALUE's own span
+    /// (`at`) when the caller supplies one, else at the lexer cursor (the historical
+    /// position).  `None` is byte-identical to the old `diagnostic!(self.lexer, …)` path
+    /// (`lexer.diagnostic` == `pos_diagnostic` at the current position); a `Some` anchor
+    /// is used by the block-finalization callers whose cursor has advanced to the block's
+    /// `}`.  See doc/claude/plans/102-stability-contract/nstore-position-fix.md.
+    fn nstore_diag(&mut self, at: Option<&Position>, level: Level, message: &str) {
+        match at {
+            Some(p) => self.lexer.pos_diagnostic(level, p, message),
+            None => self.lexer.diagnostic(level, message),
+        }
+    }
+
+    fn n_store_violation(
+        &mut self,
+        value_tp: &Type,
+        target_tp: &Type,
+        what: &str,
+        at: Option<&Position>,
+    ) -> bool {
         if self.first_pass {
             return false;
         }
@@ -2137,7 +2156,8 @@ impl Parser {
         {
             let mut hit = false;
             for (i, (ve, te)) in v_elems.iter().zip(t_elems.iter()).enumerate() {
-                hit |= self.n_store_violation(ve, te, &format!("element {i} of {what}"));
+                hit |=
+                    self.n_store_violation(ve, te, &format!("element {i} of {what}"), at);
             }
             return hit;
         }
@@ -2159,20 +2179,24 @@ impl Parser {
             // Gate OFF → the current uniform hard error (this branch stays byte-identical).
             let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
             if crate::keys::nullflow_enabled() && !narrow {
-                diagnostic!(
-                    self.lexer,
+                let msg = diagnostic_format(
                     Level::Warning,
-                    "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?? <default>` or `match` if that is not intended",
-                    target_tp.name(&self.data)
+                    format_args!(
+                        "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?? <default>` or `match` if that is not intended",
+                        target_tp.name(&self.data)
+                    ),
                 );
+                self.nstore_diag(at, Level::Warning, &msg);
                 return false; // store proceeds — `convert` peels the Optional and stores the sentinel
             }
-            diagnostic!(
-                self.lexer,
+            let msg = diagnostic_format(
                 Level::Error,
-                "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?? <default>` or `match`",
-                target_tp.name(&self.data)
+                format_args!(
+                    "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?? <default>` or `match`",
+                    target_tp.name(&self.data)
+                ),
             );
+            self.nstore_diag(at, Level::Error, &msg);
             return true;
         }
         // DN1 (the default flip): under DN1 a plain scalar is NON-null, so a bare `null` cannot be
@@ -2191,18 +2215,22 @@ impl Parser {
             // holds null and reads back null); a NARROW width keeps the hard error (no room).
             let narrow = matches!(target_tp, Type::Integer(s) if s.byte_width(false) < 8);
             if crate::keys::nullflow_enabled() && !narrow {
-                diagnostic!(
-                    self.lexer,
+                let msg = diagnostic_format(
                     Level::Warning,
-                    "`null` is stored into {what} of the non-null scalar type `{nm}` — the slot holds null; declare it `{nm}?` to make that explicit"
+                    format_args!(
+                        "`null` is stored into {what} of the non-null scalar type `{nm}` — the slot holds null; declare it `{nm}?` to make that explicit"
+                    ),
                 );
+                self.nstore_diag(at, Level::Warning, &msg);
                 return false;
             }
-            diagnostic!(
-                self.lexer,
+            let msg = diagnostic_format(
                 Level::Error,
-                "`null` cannot be stored into {what} of the non-null scalar type `{nm}` — declare it `{nm}?` to allow null"
+                format_args!(
+                    "`null` cannot be stored into {what} of the non-null scalar type `{nm}` — declare it `{nm}?` to allow null"
+                ),
             );
+            self.nstore_diag(at, Level::Error, &msg);
             return true;
         }
         false
@@ -6211,7 +6239,13 @@ impl Parser {
                     nr + 1,
                     self.data.def(d_nr).original_name()
                 );
-                self.n_store_violation(actual_type, &tp, &ctx);
+                // @PLN102 (N-Store) — anchor to the ARGUMENT expression's own span so a
+                // TAIL call (checked at block finalization, cursor at `}`) points at the
+                // call, not the next line.  No function-position fallback here: an
+                // unspanned arg keeps `None` → the lexer cursor, which is already correct
+                // for the common (non-tail) argument.  See nstore-position-fix.md.
+                let at = actual_code.span_pos().cloned();
+                self.n_store_violation(actual_type, &tp, &ctx, at.as_ref());
             }
             if !self.convert(&mut actual_code, actual_type, &tp) {
                 if report {

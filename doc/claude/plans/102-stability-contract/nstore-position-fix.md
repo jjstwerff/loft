@@ -5,11 +5,31 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Design — N-Store diagnostic position: anchor to the stored value, not the cursor
 
-**Status: DESIGN.**  Fixes the null-flow (@PLN25/@PLN102) N-Store warning reporting the
-WRONG source position — it points at the *next function definition* instead of the
-offending expression.  Surfaced during the library warning-cleanup
+**Status: DONE (Steps 0–5).**  Landed on `tuxedo-work`: `Attribute`-free, `Type`-free —
+one optional `at: Option<Position>` on `n_store_violation` (INERT with `None`), the
+implicit-tail-return caller anchors to `l[last].span_pos()` with a function-position
+fallback, the tail-argument caller to the arg value's span (no fallback — keeps the
+correct non-tail case on the cursor).  The three correct callers pass `None` and stay
+byte-identical.  Final matrix: all three block-finalization shapes now report inside the
+offending function; regression tests `nstore_return_position_names_offending_fn` +
+`nstore_tail_arg_position_names_offending_fn` in `tests/runtime_warnings.rs`.
+
+Fixed the null-flow (@PLN25/@PLN102) N-Store warning reporting the WRONG source position —
+it pointed at the *next function definition* instead of the offending expression.
+Surfaced during the library warning-cleanup
 ([lib-warning-cleanup.md](../lib-warning-cleanup.md) C1): gridmesh `chunk_loc`'s nullable
 `v % cs` tail was reported at `chunk_of:172`, costing ~15 probes to locate.
+
+## Outcome vs prediction (the build was the last probe)
+
+The design predicted failure-path 1 (*"the tail value may not be span-wrapped"*) — and it
+fired for BOTH the bare-var tail AND the if-expr tail: `l[last].span_pos()` returned
+`None`, so the **function-position fallback** carries them (reported at the `fn …` line,
+not the exact tail line).  That is the accepted granularity — inside the right function,
+never the next one.  Only the tail-ARGUMENT value kept a usable span (reported at the
+call).  No other divergence: the five `None` callers stayed byte-identical, and the
+non-tail argument's column merely refined (end-of-statement cursor → the arg expression),
+breaking no test (the tolerated list + `@EXPECT_WARNING` match messages, not positions).
 
 ## The defect (grounded in the code)
 

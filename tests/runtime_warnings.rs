@@ -1032,6 +1032,70 @@ fn main() {
     );
 }
 
+/// @PLN102 (N-Store) — the return-value N-Store diagnostic must name the OFFENDING
+/// function, not the FOLLOWING one.  Regression for the position misreport fixed by
+/// doc/claude/plans/102-stability-contract/nstore-position-fix.md: `n_store_violation`
+/// used the lexer cursor, which at BLOCK FINALIZATION sits on the next `fn` (the implicit
+/// tail is checked after the block is fully parsed).  The nullable tail (`self.w[i]`, a
+/// guard on a DIFFERENT field) lives in `read_off` at line 2; the warning must point at
+/// line 2, never line 5 (`other_fn`).
+#[test]
+fn nstore_return_position_names_offending_fn() {
+    let source = "\
+struct S { v: vector<text>, w: vector<text> }
+fn read_off(self: S, i: integer) -> text {
+  if i < len(self.v) { self.w[i] } else { \"\" }
+}
+fn other_fn(x: integer) -> integer {
+  x + 1
+}
+fn main() {
+  s = S { v: [\"a\"], w: [\"b\"] };
+  print(\"{read_off(s, 0)} {other_fn(2)}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("nstore_return_pos", source);
+    assert!(
+        diag.contains("stored into the return value"),
+        "the nullable tail produces a return-value N-Store; got stderr={diag:?}"
+    );
+    assert!(
+        diag.contains(".loft:2:") && !diag.contains(".loft:5:"),
+        "the diagnostic must anchor to the OFFENDING fn `read_off` (line 2), not the \
+         FOLLOWING `other_fn` (line 5); got stderr={diag:?}"
+    );
+}
+
+/// @PLN102 (N-Store) — the SAME position fix for a TAIL call's argument (also checked at
+/// block finalization).  The nullable arg `v[i]` is in `pass_off` at line 3; the argument
+/// N-Store must point at line 3, not line 5 (`other_fn`).
+#[test]
+fn nstore_tail_arg_position_names_offending_fn() {
+    let source = "\
+fn sink(n: integer) -> integer { n }
+fn pass_off(v: vector<integer>, i: integer) -> integer {
+  sink(v[i])
+}
+fn other_fn(x: integer) -> integer {
+  x + 1
+}
+fn main() {
+  a: vector<integer> = [7];
+  print(\"{pass_off(a, 0)} {other_fn(2)}\\n\");
+}
+";
+    let (_stdout, diag, _code) = run_with_warnings("nstore_tail_arg_pos", source);
+    assert!(
+        diag.contains("stored into argument"),
+        "the nullable tail argument produces an argument N-Store; got stderr={diag:?}"
+    );
+    assert!(
+        diag.contains(".loft:3:") && !diag.contains(".loft:5:"),
+        "the diagnostic must anchor to the call in `pass_off` (line 3), not the FOLLOWING \
+         `other_fn` (line 5); got stderr={diag:?}"
+    );
+}
+
 // ── @PLN46 W2 — `#null_safe` param annotation (skip pattern 6) ───────────────
 
 /// A fault-prone expression passed DIRECTLY to a `#null_safe` function is not

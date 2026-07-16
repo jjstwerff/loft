@@ -2410,7 +2410,7 @@ use a separate collection or add after the loop"
             && !f_type.is_unknown()
             && !s_type.is_unknown();
         if typed_scalar_store {
-            self.n_store_violation(&s_type, f_type, "the assignment target");
+            self.n_store_violation(&s_type, f_type, "the assignment target", None);
         }
         if typed_scalar_store
             && !matches!(s_type, Type::Null)
