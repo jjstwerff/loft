@@ -484,7 +484,7 @@ For per-phase status (what's shipped, what's in flight, what's blocked) **read t
 |---|---|---|---|
 | [`plans/35-match-peg/`](plans/35-match-peg) | MH | — | L3 PEG-style match patterns (cooperates with regex lib) |
 | [`plans/38-sorted-slice/`](plans/38-sorted-slice) | M | **✅ CLOSED 2026-07-09 (delivered)** | A8 — slicing / open-ended ranges / partial-key match on sorted/index; shipped + per-sub-feature tests |
-| [`plans/40-const-fields/`](plans/40-const-fields) | M | — | `const` struct fields — closes INCONSISTENCIES.md § 33 (locals/params already support it) |
+| [`plans/40-const-fields/`](plans/40-const-fields) | M | **✅ CLOSED 2026-07-16 (delivered)** | `const` struct fields (write-once-at-construction) — closes INCONSISTENCIES.md § 33; shipped all 8 steps + boundary matrix + hex_world dogfood |
 
 ### Q — Internal quality
 
