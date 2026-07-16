@@ -51,6 +51,21 @@ fn leaf_tuple_lhs(v: &Value) -> Option<(Value, i32)> {
     }
 }
 
+/// The base variable at the root of an lvalue access chain, or `u16::MAX` if the
+/// chain does not bottom out in a plain variable.  A field/element access lowers to
+/// `Call(op, [inner, …])` whose FIRST argument is the object being accessed
+/// (`s.a.b[i]` → `Call(idx, [Call(f_b, [Call(f_a, [Var(s), …]), …]), i])`), so the
+/// base is found by walking `args[0]` to the leaf `Var`.  @PLN40 step 3 uses this to
+/// find which binding a component write (`p.x = …`, `p[i] = …`) mutates THROUGH, so a
+/// write through a value-const binding can be rejected at its root.
+fn lhs_base_var(v: &Value) -> u16 {
+    match v.unspan() {
+        Value::Var(nr) => *nr,
+        Value::Call(_, args) if !args.is_empty() => lhs_base_var(&args[0]),
+        _ => u16::MAX,
+    }
+}
+
 /// Returns true if `val` contains a `Set(r, _)` node at any depth.
 /// Used to find which block statement first assigns an inline-ref temporary.
 /// Descent comes from `Value::for_each_child`, so a new compound variant
@@ -1780,7 +1795,6 @@ use a separate collection or add after the loop"
             let effective_var = if self.first_pass
                 && var_nr != u16::MAX
                 && self.vars.is_argument(var_nr)
-                && !self.vars.is_const_any(var_nr)
                 && (op == "=" || op == "+=")
             {
                 let name = self.vars.name(var_nr).to_string();
@@ -1790,6 +1804,16 @@ use a separate collection or add after the loop"
                     &mut self.lexer,
                 );
                 self.vars.set_promoted_from(shadow, var_nr);
+                // @PLN40 — a const text arg still promotes to a local String so a rebind
+                // (`p = …`) has a slot to write, but the promoted local INHERITS the
+                // const axis so the const guard still fires: value-const blocks `+=`
+                // (mutation) while allowing `=` (rebind); binding-const the reverse.
+                if self.vars.is_value_const(var_nr) {
+                    self.vars.set_value_const(shadow);
+                }
+                if self.vars.is_const_binding(var_nr) {
+                    self.vars.set_const_binding(shadow);
+                }
                 self.vars.remap_name(&name, shadow);
                 shadow
             } else {
@@ -3089,10 +3113,10 @@ use a separate collection or add after the loop"
         var_nr: u16,
         s_type: &Type,
     ) {
-        if !self.first_pass
-            && self.vars.is_const_binding(var_nr)
-            && !matches!(code, Value::Insert(_))
-        {
+        // A direct text write `s = …` / `s += …`: reject a binding-const rebind and a
+        // value-const append via the shared guard.  The `Insert` re-init form is a
+        // rebind handled by the `towards_set` check, so skip it here.
+        if !matches!(code, Value::Insert(_)) && self.const_write_blocked(var_nr, op) {
             diagnostic!(
                 self.lexer,
                 Level::Error,
@@ -3461,6 +3485,24 @@ use a separate collection or add after the loop"
     }
 
     pub(crate) fn validate_write(&mut self, to: &Value, parent_tp: &Type, op: &str) {
+        // @PLN40 step 3 — value-const base-resolution.  `validate_write` fires only for
+        // a COMPONENT write (`p.x = …`, `p[i] = …`, `p.a.b = …`; the whole-var case has
+        // a `Value::Var` target and never reaches here), so any write whose base binding
+        // is value-const is a mutation THROUGH a read-only value — reject it at the root.
+        // A rebind of the binding itself (`p = other`) re-points the slot and is allowed;
+        // it is a bare-`Var` write handled by `const_write_blocked`, not this path.
+        if !self.first_pass {
+            let base = lhs_base_var(to);
+            if base != u16::MAX && self.vars.is_value_const(base) {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "Cannot modify {} '{}'; remove 'const' or use a local copy",
+                    self.vars.const_kind(base),
+                    self.vars.name(base)
+                );
+            }
+        }
         if let Value::Call(_, vars) = to.unspan()
             && vars.len() > 1
             && let Value::Int(pos) = vars[1].unspan()

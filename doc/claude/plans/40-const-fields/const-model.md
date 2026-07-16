@@ -20,14 +20,37 @@ re-annotated to match.  No new keyword.
   (`src/parser/operators.rs`).  const-local now rejects only rebind; const-param
   unchanged.  Verified both backends; guard `test_const_local_binding_allows_append`
   in `tests/scripts/90-immutability.loft`.
-- **Step 2 (parse `const` before a type → new `value_const` flag on Attribute+Variable) — NEXT.**  Inert.
-- **Step 3 (value-const enforcement via base-resolution) — the load-bearing step.**
-  Resolve any write's base binding; if `value_const`, reject ALL mutation
-  (append/element/nested), allow rebind.  Flips const-param elem/nested→BLOCK,
-  rebind→ok.  Extends `validate_write` + the `const_write_blocked` sites with
-  base-chain resolution.  NO `Type::Const` wrapper (ripples through every Type match).
-- **Steps 4–5** — scalars collapse + `&`-borrow interaction; docs + graduate the
-  matrix to `tests/scripts/40-const-fields.loft` + `tests/issues.rs`.
+- **Step 2 (two flags: binding-const vs value-const) — DONE.**  Renamed
+  `Variable.const_param → const_binding` (binding-const, `const` PREFIX) and added a
+  NEW `value_const` (value-const, `const` before the TYPE); axis-neutral guards (d#lock
+  unlock, text-arg auto-promotion, dead-store + UPPER_CASE lints) route through the new
+  `is_const_any`.  Parses `x: const T` local (was a parse error).  Inert on its own.
+  `value_const` rides on `Variable` **only** — see the FIELD scope note below.
+- **Step 3 (value-const enforcement via base-resolution) — DONE (load-bearing).**
+  Param `p: const T` now sets `value_const` (was binding); `const_write_blocked` is
+  two-flag + op-based (binding rejects `=`, value rejects `+=`); `validate_write`
+  resolves a component write's BASE variable (`lhs_base_var`, walks `args[0]` to the
+  leaf `Var`) and rejects any mutation through a value-const binding.  NO `Type::Const`
+  wrapper (ripples through every Type match).  Full 23-cell matrix green on BOTH
+  backends; positives in `tests/scripts/90-immutability.loft`, negatives in
+  `tests/scripts/102-expected-errors.loft`.
+  - **Rule 1 (scalar collapse) folded in here** — required for step-3 coherence: once a
+    scalar `const` param is value-const, a bare "rebind allowed" would make
+    `const integer` params reassignable, so a by-value scalar (`integer / float /
+    single / boolean / character`) and a `& const T` reference are FULLY immutable under
+    either axis (reject `=` AND `+=`).  Text stays COMPOUND (append-allowed for
+    binding-const), matching the shipped const-text-field behaviour — the design's
+    "text is a by-value scalar" reading is left as an open question.
+  - **FIELD value-const deferred to Phase 2:** `v: const T` on a struct (the record-type
+    deep freeze) needs `Attribute.value_const` + IR-serialisation + type-carried
+    transitivity through stores/returns/generics — all Phase 2.  Phase 1 ships the
+    lib-relevant case: value-const **params + locals** (the honest read-only borrow).
+    A field's binding-const half (`const v: T`) already works.
+- **Steps 4–5** — the `&`-borrow interaction (a value-const value may not be passed to a
+  `&` param; rule 4) + docs graduate to `tests/scripts/40-const-fields.loft` +
+  `tests/issues.rs` and the LOFT.md / loft-write 4-quadrant table.  The const-suggest
+  lint (const-suggest-lint.md) is now well-defined as a DUAL lint (binding-const on a
+  never-rebound field, value-const on a never-mutated field/param) — its own follow-up.
 
 ## First principle — two orthogonal facts, and loft already has one of them
 

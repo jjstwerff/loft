@@ -1661,6 +1661,16 @@ impl Function {
             && self.variables[var_nr as usize].caller_hidden_buf
     }
 
+    /// The variable a const-modification diagnostic should name.  A mutated text
+    /// argument is promoted to a `__tp_` local (so a rebind has a slot to write); that
+    /// synthetic local carries the const axis but not a user-facing name, so report
+    /// against the ORIGINAL parameter it was promoted from.  Non-promoted vars map to
+    /// themselves.
+    pub fn const_report_var(&self, var_nr: u16) -> u16 {
+        let origin = self.variables[var_nr as usize].promoted_from;
+        if origin == u16::MAX { var_nr } else { origin }
+    }
+
     /// Returns the appropriate error noun for a const-modification diagnostic.
     /// Parameters say "const parameter"; local variables say "const variable".
     pub fn const_kind(&self, var_nr: u16) -> &'static str {

@@ -1162,11 +1162,21 @@ impl Parser {
                     if v_nr != u16::MAX {
                         self.vars.become_argument(v_nr);
                         self.var_usages(v_nr, false);
+                        // @PLN40 const-model — `p: const T` (const before the type) is
+                        // VALUE-const: a read-only borrow.  Mutation through `p` is
+                        // rejected (step 3 base-resolution), but a rebind `p = other`
+                        // re-points the local slot and is allowed.  Set on BOTH passes:
+                        // a text arg's read-only-borrow auto-promotion (parse_assign_op)
+                        // is decided on the FIRST pass, so the flag must exist by then to
+                        // suppress promotion and let the write reach the const guard.
+                        if a.constant {
+                            self.vars.set_value_const(v_nr);
+                        }
                     }
                 } else {
                     self.change_var_type(a_nr as u16, &a.typedef);
                     if a.constant {
-                        self.vars.set_const_binding(a_nr as u16);
+                        self.vars.set_value_const(a_nr as u16);
                     }
                 }
             }

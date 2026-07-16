@@ -164,22 +164,42 @@ fn test_const_local_text_reassigned() {
   t = "world";
 }
 
-// @EXPECT_ERROR: Cannot modify const variable 't'
-fn test_const_local_text_appended() {
-  const t = "hello";
-  t += "!";
-}
-
-// @EXPECT_ERROR: Cannot modify const variable 'v'
-fn test_const_local_vector_appended() {
-  const v = [1, 2, 3];
-  v += [4];
-}
-
 // @EXPECT_ERROR: Cannot modify const variable 'c'
 fn test_const_local_ref_reassigned() {
   const c = Direction.North;
   c = South;
+}
+
+// ── @PLN40 const-model phase 1 step 3 — value-const (`: const T`) NEGATIVES ──
+// A value-const binding is a read-only borrow: every mutation THROUGH it is rejected
+// (append / element / field / nested), while a rebind that re-points the slot is
+// allowed (see the positives in 90-immutability.loft).  Binding-const compound
+// append (`const v: vector`, `const t: text` + `+=`) is legal and lives there too.
+
+struct VcRec { x: integer }
+
+// @EXPECT_ERROR: Cannot modify const parameter 'p'
+fn vc_param_append(p: const vector<integer>) { p += [3] }
+
+// @EXPECT_ERROR: Cannot modify const parameter 'p'
+fn vc_param_element(p: const vector<integer>) { p[0] = 9 }
+
+// @EXPECT_ERROR: Cannot modify const parameter 'p'
+fn vc_param_field(p: const VcRec) { p.x = 9 }
+
+// @EXPECT_ERROR: Cannot modify const parameter 'p'
+fn vc_param_text_append(p: const text) { p += "z" }
+
+// @EXPECT_ERROR: Cannot modify const variable 'x'
+fn vc_local_append() {
+  x: const vector<integer> = [1];
+  x += [2];
+}
+
+// @EXPECT_ERROR: Cannot modify const variable 'x'
+fn vc_local_element() {
+  x: const vector<integer> = [1, 2];
+  x[0] = 9;
 }
 
 // ── @PLAN48 P2 / @P370 — implicit integer→i32 narrowing is an error ──

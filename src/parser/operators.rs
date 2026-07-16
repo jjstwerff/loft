@@ -9,18 +9,43 @@ use super::{
 // Operator parsing and type dispatch.
 
 impl Parser {
-    /// Whether a write with operator `op` to a const binding `nr` must be rejected.
-    /// A const LOCAL is binding-const (`const x`, prefix): it rejects only a rebind
-    /// (`=`) and allows contents mutation (`+=`, element write).  A const PARAMETER
-    /// is value-const (`p: const T`, type-qualifier): it rejects any write here.
-    /// (Phase 1 of the const model, doc/claude/plans/40-const-fields/const-model.md;
-    /// value-const mutation that does not target the var directly — `p.x=`, `p[i]=` —
-    /// is caught by the base-resolution step, not here.)
+    /// Whether a DIRECT write (`nr = …` / `nr += …`) with operator `op` to binding
+    /// `nr` must be rejected.  The two const axes reject opposite operations:
+    /// - **binding-const** (`const x`, prefix): the slot is write-once — reject a
+    ///   rebind (`=`); allow contents mutation (`+=`).
+    /// - **value-const** (`p: const T`, type-qualifier): the value is read-only —
+    ///   reject contents mutation (`+=`); allow a rebind (`=`) that re-points the slot.
+    ///
+    /// This guards only writes whose target IS the bare variable.  A mutation through
+    /// a value-const binding — `p.x = …`, `p[i] = …` — has no `Value::Var` target and
+    /// is caught by `validate_write`'s base-resolution instead.
+    /// (Phase 1 of the const model, doc/claude/plans/40-const-fields/const-model.md.)
     pub(crate) fn const_write_blocked(&self, nr: u16, op: &str) -> bool {
-        !self.first_pass
-            && nr != u16::MAX
-            && self.vars.is_const_binding(nr)
-            && (self.vars.is_argument(nr) || op == "=")
+        if self.first_pass || nr == u16::MAX {
+            return false;
+        }
+        let binding = self.vars.is_const_binding(nr);
+        let value = self.vars.is_value_const(nr);
+        if !binding && !value {
+            return false;
+        }
+        // Rule 1 — scalar collapse: a by-value scalar (integer/float/…/character) has no
+        // contents distinct from its binding, so `+=` rewrites the whole value exactly
+        // as `=` does.  Both axes therefore make it FULLY immutable (reject `=` AND `+=`).
+        // A `&`-reference binding writes THROUGH to its referent, so a value-const `&`
+        // param (`& const T`) has no local rebind either — every write mutates the
+        // referent — and is likewise fully blocked.
+        let tp = self.vars.var_type(nr).base();
+        let collapses = matches!(
+            tp,
+            Type::Integer(_) | Type::Float | Type::Single | Type::Boolean | Type::Character
+        ) || matches!(self.vars.var_type(nr), Type::RefVar(_));
+        // binding-const rejects a rebind (`=`); value-const rejects contents mutation
+        // (`+=`) while allowing a `=` rebind that re-points the slot.  Under collapse both
+        // reject everything.
+        let binding_blocks = binding && (op == "=" || collapses);
+        let value_blocks = value && (op != "=" || collapses);
+        binding_blocks || value_blocks
     }
 
     pub(crate) fn assign_text(
@@ -32,12 +57,16 @@ impl Parser {
         var_nr: u16,
     ) {
         if self.const_write_blocked(var_nr, op) {
+            // Report against the ORIGINAL parameter, not the `__tp_` local a text arg is
+            // promoted into (@PLN40 — a const text arg still promotes so a rebind has a
+            // slot; the shadow inherits the const axis, so the guard fires on the shadow).
+            let report = self.vars.const_report_var(var_nr);
             diagnostic!(
                 self.lexer,
                 Level::Error,
                 "Cannot modify {} '{}'; remove 'const' or use a local copy",
-                self.vars.const_kind(var_nr),
-                self.vars.name(var_nr)
+                self.vars.const_kind(report),
+                self.vars.name(report)
             );
         }
         if let Value::Call(_, parms) = to.unspan().clone() {

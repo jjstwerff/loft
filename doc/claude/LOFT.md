@@ -319,10 +319,25 @@ fn function_name(param: type, other: type = default_value) -> return_type {
   not `inc(&x)`. (See § References (`&`) for the full model; `&` is a binding marker, not a general
   operator.)
   - **Enforced**: a `&` parameter that is never mutated (directly or transitively through a called function) is a **compile error**. Drop the `&` if the parameter is read-only.
-- Parameters with `const` prevent mutation of that parameter inside the function body.
-  - `const` is a compile-time check: any assignment to a `const` parameter is an **error**.
-  - `& const T` is syntactically valid but unusual — it means "pass by reference, but don't write to it" (which is redundant; prefer plain `const T` passed by value for primitives).
-  - `Attribute.constant/mutable` on function definitions are NOT set for `const` user-defined-function parameters (that would break bytecode generation). The check lives purely in `Variable.const_param`.
+- A `const` before a parameter's type — `p: const T` — is **value-const**: a read-only
+  borrow of the value (the immutable sibling of the `&T` mutable borrow). It is a
+  compile-time check.
+  - Every mutation THROUGH the parameter is an **error** — `p += …` (append), `p[i] = …`
+    (element), `p.f = …` (field), and nested writes `p.a.b = …`. Reads are always allowed.
+  - Re-pointing the local slot — `p = other` — **is** allowed for a compound type (it
+    rebinds the function's own copy of the borrow, not the caller's value). The same is
+    true of a value-const **local**: `x: const vector<T> = …`.
+  - A by-value **scalar** (`integer/float/single/boolean/character`) and a `& const T`
+    reference collapse to fully immutable — no `=` and no `+=` — because a scalar has no
+    contents distinct from its binding and a `&` write goes straight to the referent.
+  - The mirror axis, **binding-const** (`const` before the NAME — freezes the slot but
+    leaves contents mutable), exists for **locals** (`const x = …`) and struct **fields**
+    (`const v: T`). A binding-const *parameter* (`const p: T`) is not yet wired (Phase 1
+    ships value-const params + binding-const locals/fields).
+  - The check lives purely on the per-binding flags (`Variable.const_binding` /
+    `Variable.value_const`); `Attribute.constant/mutable` on the function definition are
+    NOT set for `const` user-defined-function parameters (that would break codegen).
+    (@PLN40 const-model phase 1; doc/claude/plans/40-const-fields/const-model.md.)
 - Default parameter values are supported.
 - Functions without a `->` clause return `void`.
 - A function body ending in an expression (without `;`) returns that value.
