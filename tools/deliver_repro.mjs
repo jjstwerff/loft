@@ -24,6 +24,7 @@ if (!wasmPath) {
 
 let mem = null;
 const dec = new TextDecoder();
+const exposed = new Map();
 
 // JSON-safe: BigInt → Number when exact, else a "…n" string; typed arrays → plain arrays.
 function jsonSafe(v) {
@@ -60,6 +61,21 @@ const loft_io = {
     const value = readLoftValue(mem, store_base, desc, type_id, rec, pos);
     const line = { tag: typeof tag === "bigint" ? Number(tag) : tag, type: type_id, value: jsonSafe(value) };
     process.stdout.write("DELIVER " + JSON.stringify(line) + "\n");
+  },
+  // @PLN105 Phase 3 — expose(tag,value): a long-lived deliver. The value's store is pinned loft-side
+  // so its addresses stay valid across frames — a real page reads globalThis.loftExposed each frame.
+  // This single-shot harness reads it once here (in the expose call, while `Stores` is alive); the
+  // full cross-frame path (reading between yields) needs the asyncify game-loop harness.
+  loft_host_expose(tag, store_base, rec, pos, type_id, dptr, dlen) {
+    const desc = JSON.parse(dec.decode(new Uint8Array(mem.buffer, dptr, dlen)));
+    exposed.set(String(tag), { store_base, rec, pos, type_id, desc });
+    const value = readLoftValue(mem, store_base, desc, type_id, rec, pos);
+    const line = { tag: typeof tag === "bigint" ? Number(tag) : tag, type: type_id, value: jsonSafe(value) };
+    process.stdout.write("EXPOSE " + JSON.stringify(line) + "\n");
+  },
+  loft_host_release(tag) {
+    exposed.delete(String(tag));
+    process.stdout.write("RELEASE " + (typeof tag === "bigint" ? Number(tag) : tag) + "\n");
   },
 };
 

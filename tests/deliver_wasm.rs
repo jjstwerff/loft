@@ -358,3 +358,30 @@ fn main() {
         "multi-instance (keyed in vector elements) mismatch\n  want the value: {want_value}\n  got stdout:\n{stdout}"
     );
 }
+
+#[test]
+fn deliver_expose_and_release_a_value_in_js() {
+    // @PLN105 Phase 3 — expose(tag,value): a LONG-LIVED deliver. Same handle as deliver (here a
+    // materialised hash), but the store is PINNED (read-only lock) so its addresses stay valid
+    // across frames until release(tag,value) unpins it. This single-shot harness reads the exposed
+    // value once (in the expose call) + confirms release fires; the full cross-frame path needs the
+    // asyncify game-loop harness. The interpreter run also proves lock→…→unlock does not crash.
+    let src = r#"
+struct Item { ik: integer, name: text }
+fn main() {
+  h: hash<Item[ik]> = [];
+  h[20] = Item { ik: 20, name: "twenty" };
+  h[10] = Item { ik: 10, name: "ten" };
+  expose(1, h);
+  release(1, h);
+}
+"#;
+    let Some(stdout) = run_deliver("expose", src) else {
+        return; // toolchain self-skip
+    };
+    let want_value = "\"value\":[{\"ik\":10,\"name\":\"ten\"},{\"ik\":20,\"name\":\"twenty\"}]";
+    assert!(
+        stdout.contains("EXPOSE ") && stdout.contains(want_value) && stdout.contains("RELEASE 1"),
+        "expose/release mismatch\n  want EXPOSE with {want_value} + a RELEASE 1\n  got stdout:\n{stdout}"
+    );
+}

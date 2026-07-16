@@ -286,6 +286,8 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     truncate_file,
     sync_file,
     deliver,
+    expose,
+    release,
     call_ref,
     mkdir,
     mkdir_all,
@@ -2321,6 +2323,20 @@ fn deliver(s: &mut State) {
     let v_val = *s.get_stack::<DbRef>();
     let v_tag = *s.get_stack::<i64>();
     s.database.deliver_reconstruct(v_tag, v_val, v_db_tp);
+}
+
+fn expose(s: &mut State) {
+    let v_db_tp = s.code::<u16>();
+    let v_val = *s.get_stack::<DbRef>();
+    let v_tag = *s.get_stack::<i64>();
+    s.database.expose_value(v_tag, v_val, v_db_tp);
+}
+
+fn release(s: &mut State) {
+    let v_db_tp = s.code::<u16>();
+    let v_val = *s.get_stack::<DbRef>();
+    let v_tag = *s.get_stack::<i64>();
+    s.database.release_value(v_tag, v_val, v_db_tp);
 }
 
 fn call_ref(s: &mut State) {

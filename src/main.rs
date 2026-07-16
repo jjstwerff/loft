@@ -6677,7 +6677,16 @@ const imports={{loft_io:{{
     const desc=dec.decode(new Uint8Array(mem.buffer,dptr,dlen));
     if(globalThis.loftDeliver)globalThis.loftDeliver(tag,store_base,rec,pos,type_id,desc,mem);
     else console.log("[loft:deliver] tag="+tag+" type="+type_id);
-  }}
+  }},
+  // @PLN105 Phase 3 — expose/release: a long-lived deliver. Stash the handle by tag (loft pins the
+  // store so its addresses stay valid across frames); a page reads globalThis.loftExposed each
+  // frame and re-derives its view. release drops the stash.
+  loft_host_expose:(tag,store_base,rec,pos,type_id,dptr,dlen)=>{{
+    const desc=dec.decode(new Uint8Array(mem.buffer,dptr,dlen));
+    (globalThis.loftExposed||(globalThis.loftExposed=new Map())).set(String(tag),{{store_base,rec,pos,type_id,desc,mem}});
+    if(globalThis.loftExpose)globalThis.loftExpose(tag,store_base,rec,pos,type_id,desc,mem);
+  }},
+  loft_host_release:(tag)=>{{ if(globalThis.loftExposed)globalThis.loftExposed.delete(String(tag)); if(globalThis.loftRelease)globalThis.loftRelease(tag); }}
 }}}};
 WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
   mem=r.instance.exports.memory;

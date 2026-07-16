@@ -80,6 +80,19 @@ unsafe extern "C" {
         desc_ptr: *const u8,
         desc_len: usize,
     );
+    // @PLN105 Phase 3 — `expose`: a LONG-LIVED `deliver` (same handle), stashed by `tag` and
+    // re-read across frames; the value's store is pinned loft-side so the addresses stay stable.
+    // `loft_host_release(tag)` tells the host to drop the stash when loft unpins.
+    pub(crate) safe fn loft_host_expose(
+        tag: i64,
+        store_base: usize,
+        rec: u32,
+        pos: u32,
+        type_id: u32,
+        desc_ptr: *const u8,
+        desc_len: usize,
+    );
+    pub(crate) safe fn loft_host_release(tag: i64);
 }
 
 #[macro_use]

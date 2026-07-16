@@ -47,6 +47,57 @@ impl Stores {
         }
     }
 
+    /// @PLN105 Phase 3 — `expose(tag, value)`: a LONG-LIVED `deliver` whose borrow spans FRAMES.
+    /// Hands the host the same descriptor handle as `deliver`, but then PINS the value's store with
+    /// a read-only lock (AFTER materialising the keyed collections — a claim on a locked store
+    /// panics) so its wasm-memory addresses stay stable across frames until `release` unpins it.
+    /// The host stashes the handle by `tag` and re-reads it each frame (re-deriving its view — a
+    /// `memory.grow` detaches the old buffer). Non-browser targets just lock (no host to hand to).
+    pub fn expose_value(&mut self, tag: i64, val: DbRef, db_tp: u16) {
+        if val.rec == 0 {
+            return;
+        }
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+        {
+            use std::collections::BTreeMap;
+            let mut desc = self.layout_descriptor(&[db_tp]);
+            let mut flat: BTreeMap<u64, u32> = BTreeMap::new();
+            self.collect_keyed(&desc, db_tp, val, &mut flat);
+            Self::rewrite_iterated(&mut desc);
+            let json = desc.to_delivery_json(&flat);
+            self.lock_store(&val);
+            let store_base = self.allocations[val.store_nr as usize].ptr as usize;
+            crate::loft_host_expose(
+                tag,
+                store_base,
+                val.rec,
+                val.pos,
+                u32::from(db_tp),
+                json.as_ptr(),
+                json.len(),
+            );
+        }
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))))]
+        {
+            let _ = (tag, db_tp);
+            self.lock_store(&val);
+        }
+    }
+
+    /// @PLN105 Phase 3 — `release(tag, value)`: unpin the store `expose` pinned (via the value's
+    /// `DbRef`, so no tag→store table is needed) and tell the host to drop its stashed handle.
+    pub fn release_value(&mut self, tag: i64, val: DbRef, db_tp: u16) {
+        let _ = db_tp;
+        if val.rec == 0 {
+            return;
+        }
+        self.unlock_store(&val);
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+        crate::loft_host_release(tag);
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))))]
+        let _ = tag;
+    }
+
     /// @PLN105 Phase 2/3 — the browser host path: hand the value to JS driven by its layout
     /// descriptor, with no serialization (the value bytes stay in wasm linear memory). A struct /
     /// scalar / vector is read IN PLACE (§2). A KEYED collection has no byte layout a reader can

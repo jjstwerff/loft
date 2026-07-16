@@ -389,8 +389,22 @@ SIMPLIFIED the code (no per-location descriptor clones / synth ids). Verified
 `deliver_flattens_keyed_in_vector_elements_in_js` (`vector<Bag>`, each `Bag` its own hash → each
 element gets its own materialised array) + all 9 prior tests still green.
 
-**Remaining:** `expose` (long-lived pinning across frames); the Phase-2 tails (a memory.grow-mid-read
-safety cell; inlining the reader into the production shims).
+**`expose` / `release` — DONE (wiring + pinning; full cross-frame needs the yield harness).**
+`expose(tag, value)` is a LONG-LIVED `deliver`: new `OpExpose`/`OpRelease` ops (`02_files.loft`,
+lowered in `dispatch_call` like `deliver`), `Stores::expose_value`/`release_value` — expose
+materialises the keyed collections + serialises the handle exactly like `deliver`, then PINS the
+value's store with a read-only lock (AFTER materialising — a claim on a locked store panics) so its
+wasm addresses stay stable across frames; `release(tag, value)` `unlock_store`s it (via the value's
+`DbRef`, so no tag→store table). New host imports `loft_host_expose` / `loft_host_release`; both
+shims + the harness stash the handle by `tag` (`globalThis.loftExposed`) and drop it on release.
+Verified `deliver_expose_and_release_a_value_in_js` (a hash exposed → materialised value read in the
+expose call, then `RELEASE`) + the interpreter run proves lock→…→unlock does not crash.
+CAVEAT: the single-shot harness reads DURING the expose call (`Stores` is a `loft_start` LOCAL, gone
+once it returns) — the true cross-frame read (a game loop yielding to JS between frames, re-reading
+`globalThis.loftExposed`) needs the asyncify yield harness, deferred.
+
+**Remaining:** the Phase-2 tails (a memory.grow-mid-read safety cell; inlining the reader into the
+production shims); the full cross-frame `expose` test (yield harness).
 
 - **Falsifier / test:** deliver a value containing `hash<T>` + `index<T>` + spatial; JS reads the
   materialised arrays via the existing reader; assert the reconstructed multiset (count + values)
