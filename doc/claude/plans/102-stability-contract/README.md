@@ -144,6 +144,20 @@ accept/reject divergence here is a Goal-D violation).
 API-surface diff = keystone · C2 the registry gate · C3 the new per-version compat status · C4
 contract-keying [mostly done] · C5 the folding discipline), a build order, and the falsification list.
 
+**Pre-freeze test-hygiene (arc E) — remove the tolerated-warnings list.**  `tests/testing.rs` carries
+a **`is_runtime_warning` filter** that silently ABSORBS a fixed set of warnings so the
+diagnostic-comparison harness never flags them as unexpected output — currently *"division/modulus may
+produce null"*, *"`v[i]`/`s[i]` may produce null"*, *"field …"*, *"`&` on parameter …"*, and *"`not
+null` is deprecated"*.  A test therefore PASSES **without asserting** these, so a semantic change (the
+null-flow default-on cutover, the `&`-lint, the `not null` retirement, now the arc-C steer) can quietly
+change *what warns* and no test notices.  **Task:** delete the tolerated list and make each affected
+`code!` fixture CORRECT to the current semantics — either explicitly `.warning("…")`-assert the warning
+it should now produce, or fix the `.loft` so it no longer emits one.  This is the warning-surface half
+of arc E's *"be strict now"* one-way-door audit: the test suite should describe the diagnostics loft
+*actually* emits today, not tolerate a frozen legacy set.  (End-to-end warning coverage already lives
+in `tests/runtime_warnings.rs` / `tests/steer_warning.rs`; this is about the `code!` harness's silent
+filter.)
+
 ## Phase ordering
 
 Refined 2026-07-10 to separate the two halves of arc B and to surface the pivot the
