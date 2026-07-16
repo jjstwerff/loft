@@ -129,6 +129,68 @@ on both backends, printed `10`/`7`.)
 urgent than raw `sev:`, because severity is "how bad when hit" and `wa:` is "can
 you avoid being hit."
 
+## The public intake bridge (arc D)
+
+*A stranger's report enters the fix-not-file flow — without reintroducing a backlog.*
+
+loft's internal rule is **fix, don't file**: whoever finds a bug fixes it (repro
+warm, paths loaded), so the tracker never grows a backlog.  That rule is right —
+but it is a rule for people who **can** fix.  A stranger cannot; for them, filing
+is the *only* move.  The public bug template
+([`.github/ISSUE_TEMPLATE/bug_report.yml`](../../.github/ISSUE_TEMPLATE/bug_report.yml))
+is their door in; this bridge is how what they file becomes a warm, reproducible
+fix-input the internal discipline consumes.
+
+**Reconciliation (the load-bearing claim).**  fix-not-file forbids *the finder who
+can fix* from filing instead of fixing — its rationale is *repro warm, no
+re-derivation to re-pay later*.  A stranger has no fix ability, so their file is
+not that forbidden move; it is the **input** fix-not-file consumes.  The bridge is
+the seam: the stranger files (warm to *them*), the maintainer reproduces +
+minimises (re-warming it *internally*), then fix-not-file runs unchanged.  So the
+public intake **extends** fix-not-file's reach to bugs no insider found; it does
+not weaken it, and it is a queue with a standing consumer, not a backlog.
+
+**The bridge — a public report → the fix flow:**
+
+1. **Acknowledge — it never vanishes.**  Every public report gets a triage
+   response (a label + a reply).  This is the *acknowledgement promise*: a report
+   left sitting with no maintainer response is itself a lapse, because the
+   never-break promise (step 5) rings hollow if reports vanish.  It is the standing
+   consumer, **not an SLA number** — `gh issue list --label needs-triage` is the
+   un-drained intake, and nothing there should sit unacknowledged.
+2. **Label — the maintainer triages; the reporter can't.**  A public report arrives
+   carrying only `bug` (the [access model](#access-model--transparent-by-default-mutation-gated-by-role)
+   gives the public no label write).  Triage adds **`needs-triage`** on arrival,
+   then — once reproduced — the `sev:` / `area:` / `wa:` that make it a *ripe* bug
+   (§ Item lifecycle), and removes `needs-triage`.  If it doesn't reproduce or the
+   repro is incomplete, it goes to **`status:unclear`** with a *specific* ask back
+   to the reporter — not silence.
+3. **Reproduce + minimise to a both-backend repro.**  The template requires a
+   minimal repro; triage's job is to shrink it to the *actionable core* — the
+   smallest program that fails, checked on **both backends** (the smaller the
+   program, the faster the fix).  This minimisation *is* the internal re-warming
+   fix-not-file needs; the arc-B version axis answers "does it still reproduce on
+   `main`?" so an already-fixed report closes with a pointer, not silence.
+4. **Fix-not-file — a maintainer who CAN fix picks it up warm.**  From here the
+   normal flow runs unchanged: matrix-first investigate → fix → regression test →
+   verify both backends → `Fixes #NNN` (§ Resolving an issue).  The stranger's file
+   and the insider's fix are the two halves of one `file → fix` pipeline.
+5. **Close with the fix — never `wontfix` for a regression.**  A report that an
+   upgrade broke a working program is a **top-priority regression** (the never-break
+   promise, arc A — [COMPATIBILITY.md](COMPATIBILITY.md)); the promise *forbids*
+   closing it `wontfix` / "managed change".  Other outcomes close as usual
+   (`by-design` citing a `DESIGN_DECISIONS.md` `C##`, `duplicate` citing the
+   canonical issue) — always a pointer, never silence.
+
+**Stated at the intake.**  The promise and the routing are one click from "New
+issue", so a reporter of a regression files it as the bug it is (not a timid "is
+this expected?") and a library bug reaches the right repo: the public form's intro
++ [`CONTRIBUTING.md § Reporting a bug`](../../CONTRIBUTING.md) + the
+[`config.yml`](../../.github/ISSUE_TEMPLATE/config.yml) chooser + the
+GitHub-surfaced [`SUPPORT.md`](../../SUPPORT.md) all carry them.  Design + the full
+failure-path enumeration this bridge closes:
+[plans/102-stability-contract/public-bug-intake.md](plans/102-stability-contract/public-bug-intake.md).
+
 ## Issue lifecycle — what each state means (read this before picking work)
 
 **`open` means there is work to be done.**  The tracker's open set is the agent's

@@ -10,6 +10,13 @@ body:
         worth far more than a description — the smaller the program
         that reproduces the problem, the faster the fix.
 
+        **Our promise: your working program keeps working.**  If an
+        upgrade broke something that used to work, that is a top-priority
+        **regression**, not a "managed change" or a "known limitation" —
+        say so plainly and we treat it as a bug.  And **every report gets
+        a response** — it is acknowledged and labelled, never left to
+        vanish.
+
   - type: textarea
     id: repro
     attributes:
