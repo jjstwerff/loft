@@ -81,8 +81,12 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 >
 > **Genuinely OPEN:** **E2** (the error-boundary maximal-strictness audit — *the* priority) · **F9**
 > (guard is wired, but `layout_algo_hash` at `types.rs:1674` omits **endianness** + the
-> **not-null↔nullable** distinction) · **F4** (assign place/RHS eval order — re-verify) ·
-> spec-honesty for the ✅-behavior rows.
+> **not-null↔nullable** distinction) · spec-honesty for the ✅-behavior rows.
+> **F4 — DONE (re-verified 2026-07-16):** `operational.md` E-Asgn already specifies the place
+> reduces **first** (left-to-right), **then** the RHS, then the store update (by E-Left) — no
+> "RHS first" contradiction remains. Re-verified both backends: `a[idx()]=rhs()` prints the
+> place index before the RHS; nested `m[outer()][inner()]=rhs()` is strictly left-to-right
+> (outer, inner, rhs). Off the open list.
 > **F7 — DECIDED (C91, 2026-07-13):** `==` = value-by-value / reference-by-identity (one uniform rule,
 > bounded by the value's own storage, NEVER chasing a reference — so `==` is never a deep crawl);
 > `===` reserved for opt-in deep structural equality. A shallow/hybrid `==` was rejected as internally
@@ -97,7 +101,7 @@ contract 0 allows, because after the freeze changing an observed value is a regr
 | F1 | **float `==`/`!=` are epsilon-approximate but `<`/`<=` exact** — `1.0 == 1.0000000001` → true; `a<b` **and** `a==b` both true near the boundary; `!=` not the exact complement of `==` | a trichotomy/transitivity violation frozen forever; no formal rule pins it at all | `fill.rs:1018,1025` |
 | F2 | ~~compound assignment double-evaluates its place~~ — **FIXED (C92, 2026-07-16)**: `w[f()] += g()` now calls `f()` once (nested `m[i()][j()]` → 2×), and a divergent index reads + writes the SAME slot. `ir_has_user_call` + a `_place` RefVar hoist in `parse_assign` → [scope + validation](compound-assign-place-once.md) | the duplicate side-effect + divergent-index corruption are gone; byte-identical for no-user-call places | LANDED, validated both backends |
 | F3 | **`&&` / `||` short-circuit is unspecified** — and the one general rule (E-Left) says both operands evaluate (false) | the most-depended-on eval rule is unwritten; freezes as impl-defined | verified; `operational.md` E-Left |
-| F4 | **assignment place-vs-RHS eval order unspecified** (`a[f()] = g()`); E-Asgn prose "RHS first" contradicts observed LHS-first | evaluation-order gap = the canonical silent-freeze trap | verified `[L][R]` |
+| F4 | ~~**assignment place-vs-RHS eval order unspecified** (`a[f()] = g()`); E-Asgn prose "RHS first" contradicts observed LHS-first~~ — **RECONCILED (re-verified 2026-07-16)**: `operational.md` E-Asgn specifies the place reduces first (left-to-right), then the RHS, then the store (by E-Left); no contradiction remains | evaluation-order gap — CLOSED (spec matches both backends) | verified `[L][R]` both backends: `a[idx()]=rhs()` prints place before RHS; nested `m[o()][i()]=rhs()` strictly left-to-right |
 | F5 | **`match` guards have no formal semantics**; **`match` on non-enum** (int/range/literal) unspecified | a shipped feature freezes as impl-defined | `matching.md` |
 | F6 | ~~**`&v` on a vector: `heap.md`+`capabilities.md` say COPIES; `binding.md`+reality say ALIASES**~~ — **RECONCILED** (2026-07-11 fix + docs, re-verified 2026-07-16): all three specs now state `&`-bind ALIASES / plain bind COPIES (`heap.md` H-Ref/H-Copy, `binding.md` B-Ref/B-Copy, `capabilities.md` D-cap-3); the sandbox gate `raw_write_is_host_owned` follows the dep chain (`root_aliases_argument`), so an `&`-alias-into-host write is host-gated, not laundered | memory-model spec contradiction + sandbox-admission hole — both CLOSED | verified both backends: `w=&v; w[0]=99`→`v[0]==99`; plain bind independent (`c=v; c[1]=77` leaves `v[1]==2`) |
 | F7 | **reference `==` defaults to identity, not structural** — ~~unspecified~~ **DECIDED (C91)**: `==` = value-by-value / reference-by-identity (uniform, bounded, no reference-chase); `===` reserved for opt-in deep equality; shallow hybrid rejected as inconsistent | ~~a decision~~ | `DESIGN_DECISIONS.md` C91 |
