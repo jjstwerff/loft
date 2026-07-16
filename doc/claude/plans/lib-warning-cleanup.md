@@ -78,19 +78,26 @@ position of the FOLLOWING function definition, not the offending return expressi
 Worth a diagnostic-position fix in loft's null-flow check (bisect-by-tail-discharge is
 the reliable workaround until then).
 
-### C2 — `not null` retirement (≈85 sites) — mechanical, per repo
+### C2 — `not null` retirement — **DONE (2026-07-16)**
 `not null` is a deprecated no-op (fields are non-null by default; @PLN25 F2).  Pure
-DELETE — strip ` not null` from each field decl.  A field that SHOULD allow null is a
-separate judgment (write `T?`), but the sweep shows these are all on already-non-null
-fields, so a scoped per-file `s/ not null//` + a `loft test` re-run per package is
-enough.  One PR per repo keeps the diff reviewable.
+DELETE — `perl -i -pe 's/ not null//g'` per source after verifying every occurrence is a
+field decl (all were — incl. enum-variant fields and `limit(0,255) not null` colour
+fields; none in comments/strings).  Semantics unchanged; `loft test` green per package.
 
-| unit | repo | pkgs (sites) |
-|---|---|---|
-| C2a | loft-libs-world | hex_terrain (50), hex_world (4) |
-| C2b | loft-libs-graphics | gridmesh (12), shapes (9), imaging (3) |
-| C2c | loft-libs-core | crypto (2), cbor (1), random (2) |
-| C2d | loft-libs-net | web (2) |
+**Final sweep: 0 own-source `not null` (and 0 N-Store) across every sibling package.**
+The source counts came in below the work-list numbers (those were files×passes inflated):
+
+| unit | repo | pkgs (source sites) | commit |
+|---|---|---|---|
+| C2a | loft-libs-world | hex_terrain (50), hex_world (4) | loft-libs-world `d2101ad` |
+| C2b | loft-libs-graphics | gridmesh (7), shapes (9), imaging (3) | loft-libs-graphics `5d09bb7` |
+| C2c | loft-libs-core | crypto (2), cbor (1), random (2) | loft-libs-core `c8ae4d5` |
+| C2d | loft-libs-net | web (2) | loft-libs-net `bc9558e` |
+
+**Registry note:** in-repo `lib/audience_crystal` still shows `not null` (+ `&`) warnings
+from its `gridmesh-0.1.2` REGISTRY dependency (a stale copy predating the sibling-repo
+fix).  Those clear only when the fixed graphics libs are re-published (loft-ship skill,
+touch-gated) — a release step, not a source edit.
 
 ### C3 — `&`-parameter advisory (7 sites, gridmesh only) — JUDGMENT, not mechanical
 "`&` only slows it down — drop unless you REASSIGN the whole binding."  NOT a blind
