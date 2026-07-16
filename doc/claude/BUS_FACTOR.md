@@ -66,70 +66,87 @@ That is loft's development model, stated plainly: **a human with taste, a coding
 with capability, and a repository that carries the method between them.** None of the
 three is a specific, irreplaceable person.
 
-## The evidence — and how to check it yourself
+## Everything on this page is independently verifiable
 
-You do not have to take this on trust. Inspect it:
+Take none of this on trust. Every claim here is checkable **without a word from anyone**
+— clone the repo and run the command, or open the public link. That is the point: the
+argument stands on evidence you can reproduce, not on assertion.
 
-- **About 80% of commits are agent-driven.** Of roughly 772 commits, over 620 carry a
-  `Co-Authored-By: Claude` trailer — the code work was done in agent sessions, with the
-  human steering. The owner lands the commits, but the trailer records who did the
-  building. Check for yourself:
-  `git log --grep="Co-Authored-By: Claude" -i --oneline | wc -l` against
-  `git rev-list --count HEAD`.
-- **The documentation is larger than many projects' whole codebase.** `doc/claude/`
-  alone is about 73,000 lines. Check: `find doc/claude -name '*.md' | xargs wc -l | tail -1`.
-- **The hardest parts were rewritten agent-led** — the store-lifetime / ownership
-  model, the null and value model, the compatibility contract — each carried out across
-  long sessions, with the human giving direction, not code. The closure records live
-  under `doc/claude/plans/`.
+| Claim | Check it yourself |
+|---|---|
+| The full source is public — nothing withheld | Clone <https://github.com/loft-lang/loft> |
+| ≈80% of commits are agent-driven, human-steered | In the clone: `git log -i --grep="Co-Authored-By: Claude" --oneline \| wc -l` (≈620) against `git rev-list --count HEAD` (≈772) |
+| ≈73,000 lines of documentation | `find doc/claude -name '*.md' \| xargs wc -l \| tail -1` |
+| Ten executable skills carry the *method* | `ls .claude/skills/` — then read any `SKILL.md` |
+| One command runs the whole gate | `make ci` (format, lint, full test suite) |
+| The compiler is fully inspectable | `loft introspect any.loft` — dumps the IR, bytecode, and generated Rust |
+| The tests are real and pass in **public CI** | <https://github.com/loft-lang/loft/actions/workflows/ci.yml> |
+| The hardest parts were rewritten agent-led | The closure records under `doc/claude/plans/`; the commit history + its co-author trailers |
+| A public library catalogue exists | `doc/claude/LIBRARIES.md`; the `loft-libs-*` repos at <https://github.com/loft-lang>; `loft search <keyword>` |
+| Programs run live in the browser | Playground <https://loft-lang.org/loft/playground.html> · Gallery <https://loft-lang.org/loft/gallery.html> |
+| The language + stdlib are documented | <https://loft-lang.org/loft/> |
+| The issue tracker is public | <https://github.com/loft-lang/loft/issues> |
 
-## The claim, made concrete — the recipe
+## The recipes — exactly how anyone does each thing
 
-Here is the operational test. Anyone can run it:
+The operational test, made specific. Each recipe assumes what the model assumes: a
+person, plus a coding agent pointed at the repo (it reads `CLAUDE.md` on start and can
+load the skills in `.claude/skills/`). None of these needs a maintainer's help.
 
-1. Fire up any capable coding agent (Claude Code, or an equal).
-2. Point it at the public repository and let it download the sources.
-3. Let it read `CLAUDE.md` and load the skills in `.claude/skills/`.
-4. Give it a real task — a bug, a feature, a refactor.
+### Fix a bug in loft (the compiler or runtime)
 
-It will be able to do the work, because the *how* is in the repo. The matrix-first
-method finds the real cause instead of the first plausible one. The codegen discipline
-keeps the interpreter and the native backend honest with each other. `make ci` is the
-gate. The docs explain every load-bearing invariant it must respect.
+1. `git clone https://github.com/loft-lang/loft && cd loft && cargo build`.
+2. Start a coding agent in the folder. Have it load the `engineering-rigor` skill (the
+   matrix-first method); add `loft-codegen` for compiler/codegen work, or `loft-debug`
+   for a crash.
+3. Reproduce with the smallest `.loft` you can, on **both** backends:
+   `cargo run --bin loft -- bug.loft` and `cargo run --bin loft -- --native bug.loft`.
+4. See what the compiler actually does:
+   `cargo run --bin loft -- introspect bug.loft` (IR + bytecode + generated Rust); read
+   the matching `tests/dumps/*.txt`; narrow with `LOFT_LOG=crash_tail:50`.
+5. Build the boundary matrix (the skill), find the one chokepoint, and fix it there —
+   no wider.
+6. Add a regression test (`tests/scripts/NNN.loft` or `tests/*.rs`); verify on both backends.
+7. Run the gate: `make ci`, or `./scripts/find_problems.sh --bg` then `--wait` for the
+   full suite in the background.
+8. Commit on a feature branch and push.
 
-**So the continuation of loft does not depend on any one person.** It depends on the
-public repository and on the existence of a coding agent — and both are available to
-everyone.
+### Write a library
 
-## The same is true of everything around loft
+1. Find the closest one that already exists: browse `doc/claude/LIBRARIES.md` and the
+   `loft-libs-*` repos at <https://github.com/loft-lang>, or run `loft search <keyword>`.
+2. Scaffold a fresh one: `loft new <name>` (writes `loft.toml` + `src/`).
+3. Write the `.loft`, adapting the nearest example. Have the agent load the `loft-write`
+   skill for syntax; the reference is `doc/claude/LOFT.md` + `STDLIB.md`.
+4. Make it work on every target: load the `loft-ship` skill and confirm identical
+   behaviour on the interpreter, `--native`, `--native-wasm`, and `--html`.
+5. Test it, then publish: `loft publish` (a touch-gated signature) — or keep it local
+   with `loft install <dir>`.
 
-The argument above is about developing the compiler. But the same foundation — a public
-body of worked examples plus a written-down method — makes the *whole loop* around loft
-low-friction, for the same reason: the hard cases have already been done in the open, so
-the next one is rarely from scratch.
+### Start a program
 
-- **Debugging is fast, not deep.** You do not have to understand the whole compiler to
-  fix a bug in it. You ask a capable agent, and it sees the tools the repo already
-  gives it: `loft introspect` to read the IR, the bytecode, and the generated Rust; the
-  `tests/dumps/*.txt` traces; the `LOFT_LOG` presets; the `loft-debug` skill's
-  operational recipes; the matrix-first method that finds the real cause instead of the
-  first guess. The agent picks the right instrument and fixes it quickly, because the
-  instrument and the method are both right there.
-- **Writing a library is mostly finding one that already fits.** The catalogue
-  ([LIBRARIES.md](LIBRARIES.md)) and the `loft-libs-*` repositories already hold a wide
-  public set — graphics, audio, net, game, assets, and more. A new library usually
-  starts by finding the closest existing one and adapting it; the `loft-ship` skill and
-  [LIBRARY_AUTHORING.md](LIBRARY_AUTHORING.md) carry it the rest of the way, to a build
-  that behaves the same on all four targets. Little of it is invented from nothing.
-- **Writing a program is mostly pointing at an example.** The games (moros, dryopea) and
-  the browser gallery are all public — and all were written by an agent and steered by
-  the owner, which makes every one of them a worked example. A new program starts by
-  pointing at the one that looks closest and changing it. The playground turns that into
-  a single step: type a few lines, press run, see output.
+1. Point at the nearest public example. The games (moros, dryopea) and the browser
+   Gallery (<https://loft-lang.org/loft/gallery.html>) are all public, worked programs.
+   The fastest first look is the Playground
+   (<https://loft-lang.org/loft/playground.html>): type a few lines, press run, see output.
+2. Locally: copy the closest example into a `.loft` file and change it.
+3. Pull in the libraries you need: `loft install <name>`, then `use` them in the file.
+4. Run it: `loft myprog.loft` (or `cargo run --bin loft -- myprog.loft` inside the repo).
+5. Have the agent load `loft-write` for syntax as you go; the reference is `doc/claude/LOFT.md`.
 
-So it is not only the compiler that no single person has to hold in their head. Using
-loft and fixing loft rest on the same thing: a public set of worked examples and a
-documented method that any coding agent can pick up.
+### Edit a program that already exists
+
+1. Clone or open it — the games and demos are public repos under <https://github.com/loft-lang>.
+2. Run it first to see the current behaviour: `loft prog.loft`.
+3. Make the change. `loft-write` + `doc/claude/LOFT.md` keep the syntax right;
+   `loft introspect prog.loft` shows what the compiler makes of it if something is off.
+4. Re-run it and run its tests — every loft repo carries the same conventions
+   (`loft --tests tests/`, `make ci`).
+5. Commit and push.
+
+**So the continuation of loft — building it, using it, or fixing it — does not depend on
+any one person.** It depends on the public repository and on the existence of a coding
+agent, and both are available to everyone.
 
 ## What "no bus factor" does and does not mean
 
