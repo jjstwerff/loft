@@ -642,6 +642,10 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t139, "nullable", t4);
     db.field(t139, "primary", t4);
     db.field(t139, "hidden", t4);
+    // @PLN40 — hand-applied alongside ir.loft (a wholesale regen still drifts the `tN`
+    // ids, see the `links` note below).  Registered LAST among the bools so it packs at
+    // the next free bool offset (ATTR_CONST_FIELD) and every prior offset stays put.
+    db.field(t139, "const_field", t4);
     let vec_value = db.vector(t65);
     db.field(t139, "value", vec_value);
     let vec_check = db.vector(t65);
