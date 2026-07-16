@@ -471,16 +471,6 @@ pub struct Parser {
     /// NON-null. Pushed for the THEN branch in `parse_if`, truncated on exit — same discipline as
     /// `divisor_nonzero`, but keyed on the (index, vector) pair via `VecKey`.
     pub(crate) index_bounded: Vec<(u16, crate::parser::operators::VecKey)>,
-    /// @PLN25 finding-1 — the vector a just-parsed `0..len(V)` range counts, captured by
-    /// `parse_in_range_body` and consumed by `parse_for` when it registers the loop var
-    /// (`None` for any non-`len` bound).  See [`Parser::loop_range_src`].
-    pub(crate) last_range_len_src: Option<crate::parser::operators::VecKey>,
-    /// @PLN25 finding-1 — the `(loop_var, VecKey)` pairs for active `for i in 0..len(V)`
-    /// loops: within such a loop, `V[i]` is proven in-bounds but a DIFFERENT `W[i]` is not.
-    /// Pushed before the loop body in `parse_for`, truncated on exit — the loop-var twin of
-    /// `index_bounded`.  A loop var absent here (a `0..N` / non-`len` bound) keeps its
-    /// unconditional by-contract trust.
-    pub(crate) loop_range_src: Vec<(u16, crate::parser::operators::VecKey)>,
     /// Plan-07 phase 4h — site of the most recently parsed field
     /// read.  Set by `Parser::field()` after each read, taken by
     /// `handle_null_coalesce` to mark the read as defended when
@@ -726,8 +716,6 @@ impl Parser {
             divisor_nonzero: Vec::new(),
             last_index_fit: false,
             index_bounded: Vec::new(),
-            last_range_len_src: None,
-            loop_range_src: Vec::new(),
             last_field_read_site: None,
             #[cfg(feature = "registry")]
             advisory_checked: std::collections::HashSet::new(),

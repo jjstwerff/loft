@@ -1894,20 +1894,6 @@ impl Parser {
         } else {
             self.last_range_till = Some(till.clone());
         }
-        // @PLN25 finding-1 — when the range upper bound is `len(V)`, remember which
-        // vector V it counts, so `index_provably_fit` can trust `V[i]` (i < len(V) is
-        // proven) but NOT `W[i]` for a DIFFERENT W (nothing proves i < len(W)).  Any
-        // other bound (`0..N`, `0..f(x)`) records nothing → the loop var keeps its old
-        // by-contract trust for any vector (no new false positives on constant ranges).
-        self.last_range_len_src = if let Value::Call(d, args) = till.unspan() {
-            if args.len() == 1 && self.data.def(*d).original_name() == "len" {
-                crate::parser::operators::vec_key(&args[0], &self.data)
-            } else {
-                None
-            }
-        } else {
-            None
-        };
         // @PLN102 strict-index lint — for a pure exclusive `for i in 0..len(X)` range, record
         // X's `VecKey` on the current loop so a mismatched-vector index (`w[i]` with `w != X`)
         // can be flagged under `LOFT_LINT_STRICT_INDEX`. Only a bare `len(<addressable vector>)`

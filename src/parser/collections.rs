@@ -1645,9 +1645,6 @@ use #count instead"
             let loop_nr = self.vars.start_loop();
             let mut expr = Value::Null;
             let mut in_type = self.parse_in_range(&mut expr, &Value::Null, &id);
-            // @PLN25 finding-1 — grab the `0..len(V)` source vector now (before the body
-            // parse can overwrite it), to pair with the loop var below.
-            let range_len_src = self.last_range_len_src.take();
             // if #fields was detected, take the compile-time unrolling path.
             if self.fields_of != u32::MAX {
                 let struct_def_nr = self.fields_of;
@@ -2058,20 +2055,12 @@ use #count instead"
             };
             let for_next = v_set(for_var, iter_next);
             self.vars.loop_var(for_var);
-            // @PLN25 finding-1 — for `for i in 0..len(V)`, record `(i, VecKey(V))` for the
-            // body so `V[i]` is proven fit but a DIFFERENT `W[i]` stays nullable.  Truncated
-            // after the body (nested loops stack).  A non-`len` bound records nothing.
-            let loop_range_base = self.loop_range_src.len();
-            if let Some(src) = range_len_src {
-                self.loop_range_src.push((for_var, src));
-            }
             let in_loop = self.in_loop;
             self.in_loop = true;
             let mut block = Value::Null;
             let loop_write_state = self.vars.save_and_clear_write_state();
             self.vars.clear_write_state();
             self.parse_block("for", &mut block, &Type::Void);
-            self.loop_range_src.truncate(loop_range_base);
             // P235 step 3: prepend the destructure Set ops so each
             // iteration unpacks the loop var into the user-named binders
             // before the user's body runs.
