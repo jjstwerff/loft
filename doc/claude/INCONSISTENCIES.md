@@ -218,13 +218,12 @@ fields:
 | **Struct field** | **(no equivalent — every field is implicitly mutable)** |
 
 The asymmetry is the only place where "I want this thing
-immutable" can't be expressed.  The first concrete consumer is
-[lib/hex_world's `Cell`](../../lib/hex_world/src/hex_world.loft):
-`c_color`, `c_height`, `c_age` should ALL be const after
-construction (the tick loop rebuilds the entire cell via
-`chunk.ck_cells[idx] = Cell{…}`, never via in-place field
-writes), but loft can't express the constraint, so a future
-contributor writing `cell.c_color = 0;` gets no compiler help.
+immutable" can't be expressed.  The motivating consumer shape is a
+grid/cell world whose tick loop rebuilds each cell wholesale
+(`grid[idx] = Cell{…}`, never an in-place field write): its
+identity fields should be const after construction, but loft can't
+express the constraint, so a contributor writing `cell.color = 0;`
+gets no compiler help.
 
 **Advice:** Extend `const` to struct fields as a write-once-at-
 construction modifier.  Purely static check, zero runtime cost,
