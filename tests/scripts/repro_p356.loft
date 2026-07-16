@@ -42,7 +42,7 @@ fn text_oob_continues() -> integer {
 }
 
 // The (A) crash repro: `?? null` over an emptied text vector.
-fn text_vec_coalesce_null() -> text {
+fn text_vec_coalesce_null() -> text? {
     tv: vector<text> = ["a", "b"];
     for s in tv { s#remove; }
     return tv[0] ?? null;  // OOB → ncc → null (was SIGSEGV before fix A)

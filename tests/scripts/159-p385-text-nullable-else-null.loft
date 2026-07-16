@@ -32,7 +32,7 @@
 // (literal text branch carries empty deps); this test pins the
 // vector-element-source case that used to fail.
 
-fn probe(v: vector<text>, idx: integer) -> text {
+fn probe(v: vector<text>, idx: integer) -> text? {
   if idx < len(v) {
     v[idx] ?? null
   } else {

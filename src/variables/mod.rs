@@ -102,6 +102,11 @@ struct Iterator {
     /// (e.g. a struct-field access like `db.map`).
     coll_var: u16,
     counter: u16, // variable number or MAX when it is not used
+    /// @PLN102 strict-index lint — for a `for i in 0..len(X)` range, the `VecKey` of `X`
+    /// (the vector whose length bounds this loop). `Some` only when the range's upper bound
+    /// is a bare `len(<addressable vector>)`; `None` for `0..n`, slices, or collection loops.
+    /// Read by the gated `LOFT_LINT_STRICT_INDEX` warning to flag `w[i]` where `w != X`.
+    len_bound: Option<crate::parser::operators::VecKey>,
 }
 
 /// @PLAN28 C4 — borrowed view of the codegen-read fields of one `Variable`,
@@ -533,6 +538,7 @@ impl Function {
             value: Box::new(Value::Null),
             coll_var: u16::MAX,
             counter: u16::MAX,
+            len_bound: None,
         });
         self.current_loop = self.loops.len() as u16 - 1;
         self.current_loop
@@ -598,6 +604,32 @@ impl Function {
     /// temp-copy variable that `set_loop` records.
     pub fn set_coll_value(&mut self, orig_value: Value) {
         *self.loops[self.current_loop as usize].value = orig_value;
+    }
+
+    /// @PLN102 strict-index lint — record the vector whose `len(...)` bounds the current
+    /// loop's range (`for i in 0..len(X)` → `X`'s `VecKey`). No-op when there is no active
+    /// loop. Set from `parse_in_range_body` right after the range's upper bound is parsed.
+    pub(crate) fn set_loop_len_bound(&mut self, vk: crate::parser::operators::VecKey) {
+        if self.current_loop != u16::MAX && (self.current_loop as usize) < self.loops.len() {
+            self.loops[self.current_loop as usize].len_bound = Some(vk);
+        }
+    }
+
+    /// @PLN102 strict-index lint — the `len(...)` bound recorded for the active for-loop
+    /// whose variable is `var_nr` (walks the active-loop chain like `is_active_loop_var`).
+    /// `None` when `var_nr` is not an active loop var or the loop wasn't a `0..len(X)` range.
+    pub(crate) fn loop_len_bound(&self, var_nr: u16) -> Option<crate::parser::operators::VecKey> {
+        if var_nr == u16::MAX {
+            return None;
+        }
+        let mut c = self.current_loop;
+        while c != u16::MAX {
+            if self.loops[c as usize].variable == var_nr {
+                return self.loops[c as usize].len_bound;
+            }
+            c = self.loops[c as usize].inside;
+        }
+        None
     }
 
     /// C61: returns true when `var_nr` is the loop *variable* (the `<id>`

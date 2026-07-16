@@ -229,9 +229,12 @@ Full API: [TESTING.md § LogConfig](doc/claude/TESTING.md), [DEBUG.md](doc/claud
 
 **Error rendering (@PLN28):** `LOFT_ERRORS=pretty|compact` (or `--errors=…`) picks the
 user renderer — `pretty` (default: `file:line:col` + source line + caret) vs `compact`
-(single line; the test harness pins this). Diagnostic toggles (all default-on except
-soft-halt): `LOFT_NO_WARN_RUNTIME` (undefended-fault-site warning) · `LOFT_NO_HINT_NOT_NULL`
-(`not null` field hint) · `LOFT_FORMAT_BARE_NULL` (drop the `(reason)` suffix on `null`) ·
-`LOFT_NO_DEAD_STORES` (@PLN107 dead-store lint: a copy mutated but never read, e.g.
-`d = self.data; d[i]=x` where the bind COPIES so the write is lost) ·
-`LOFT_DEV_SOFT_HALT` (demote dev raises to log-and-continue so one run surfaces every fault).
+(single line; the test harness pins this). Diagnostic toggles (default-on opt-outs, except
+the last two which are opt-in): `LOFT_NO_WARN_RUNTIME` (undefended-fault-site warning) ·
+`LOFT_NO_HINT_NOT_NULL` (`not null` field hint) · `LOFT_FORMAT_BARE_NULL` (drop the `(reason)`
+suffix on `null`) · `LOFT_NO_DEAD_STORES` (@PLN107 dead-store lint: a copy mutated but never
+read, e.g. `d = self.data; d[i]=x` where the bind COPIES so the write is lost) ·
+`LOFT_LINT_STRICT_INDEX` (**opt-in**, @PLN102 case-D audit: warns where a for-loop iter var
+bounded by `len(<one vector>)` indexes a DIFFERENT vector — `for i in 0..len(v) { w[i] }` types
+non-null yet reads C80-null on overrun; advisory, the type is unchanged) ·
+`LOFT_DEV_SOFT_HALT` (**opt-in**: demote dev raises to log-and-continue so one run surfaces every fault).

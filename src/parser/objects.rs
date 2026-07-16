@@ -1894,6 +1894,25 @@ impl Parser {
         } else {
             self.last_range_till = Some(till.clone());
         }
+        // @PLN102 strict-index lint — for a pure exclusive `for i in 0..len(X)` range, record
+        // X's `VecKey` on the current loop so a mismatched-vector index (`w[i]` with `w != X`)
+        // can be flagged under `LOFT_LINT_STRICT_INDEX`. Only a bare `len(<addressable vector>)`
+        // upper bound qualifies; `0..n`, `0..=len(X)` (inclusive), and slices do not.
+        // `len(v)` stays as the `len` builtin call at parse time; `LengthVector` is the internal
+        // slice-bound form. Match both, mirroring the bounds-proof recogniser in `operators.rs`
+        // (`matches!(name, "len" | "LengthVector")`).
+        if *data == Value::Null
+            && !incl
+            && let Value::Call(d, largs) = till.unspan()
+            && matches!(
+                self.data.def(*d).original_name().as_str(),
+                "len" | "LengthVector"
+            )
+            && largs.len() == 1
+            && let Some(vk) = crate::parser::operators::vec_key(&largs[0], &self.data)
+        {
+            self.vars.set_loop_len_bound(vk);
+        }
         // loft#384: a vector slice (`data` present, not a pure `0..n` range) must
         // resolve negative bounds from the end and clamp into `[0, len]`, else the
         // iteration endpoints run off an edge: a negative end breaks immediately

@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 transparent-link widening — the BASELINE matrices (build step 1).
+// See doc/claude/plans/102-stability-contract/alias-where-correct-build.md.
+//
+// Every value here is the CURRENT copy-semantics answer (C86), hand-computed, and is the reference
+// the widening (link-where-safe-AND-unobservable) must reproduce EXACTLY. The observability cells
+// are the falsification targets: a wrong link changes an OBSERVED value, caught by these asserts.
+// The safety cells are the UAF targets: a wrong link dangles, caught by the leak gates
+// (LOFT_POISON / LOFT_NATIVE_LEAK_CHECK) that tests/alias_link_baseline.rs runs. Both backends.
+
+struct S { v: vector<integer> }
+
+// --- Matrix S (safety): the source must outlive the local; a wrong link would UAF ---
+
+// S2 — source dead right after the bind. Under copy `a` is independent (→ 10); a wrong link would
+// alias `s`'s store and dangle once `s` is reclaimed.
+fn s2_source_dead() -> integer {
+    s = S { v: [10, 20, 30] };
+    a = s.v; // `s` is not used again
+    a[0]
+}
+
+// S4 — the local ESCAPES via return. Under copy the returned vector is intact ([10,20,30]); a wrong
+// link would dangle the callee's store after the frame is gone.
+fn s4_escape() -> vector<integer> {
+    s = S { v: [10, 20, 30] };
+    a = s.v; // `a` escapes
+    a
+}
+
+fn main() {
+    // ---- Matrix O (observability) — copy contract; a wrong link changes an observed value ----
+
+    // O1 — both read-only after the bind: a correct link is value-identical (both read 20).
+    s = S { v: [10, 20, 30] };
+    a = s.v;
+    assert(a[1] == 20, "O1: copy reads 20");
+    assert(s.v[1] == 20, "O1: source reads 20 (read-only both → unobservable)");
+
+    // O2 — write the COPY: the source must stay UNCHANGED (a wrong link would read 99).
+    a[1] = 99;
+    assert(a[1] == 99, "O2: the copy reflects its own write");
+    assert(s.v[1] == 20, "O2: SOURCE UNCHANGED — a wrong link reads 99");
+
+    // O3 — write the SOURCE: the copy must stay UNCHANGED (a wrong link would read 88).
+    t = S { v: [10, 20, 30] };
+    b = t.v;
+    t.v[1] = 88;
+    assert(t.v[1] == 88, "O3: the source reflects its own write");
+    assert(b[1] == 20, "O3: COPY UNCHANGED — a wrong link reads 88");
+
+    // O4 — the ALIAS-AWARE trap: a sibling `&` writes THROUGH the source; the copy must stay
+    // UNCHANGED. A link oracle that only checks "the source var was not written" misses `e`'s
+    // write and would read 77 here.
+    u = S { v: [10, 20, 30] };
+    c = u.v; // copy
+    e = &u.v; // explicit write-through alias
+    e[1] = 77;
+    assert(u.v[1] == 77, "O4: the &-alias wrote through the source");
+    assert(c[1] == 20, "O4: COPY UNCHANGED — a wrong non-alias-aware link reads 77");
+
+    // ---- Matrix S (safety) — value intact + (leak-checked by the Rust driver) ----
+    assert(s2_source_dead() == 10, "S2: a source-dead copy is independent");
+    r = s4_escape();
+    assert(len(r) == 3, "S4: escaping copy keeps its length");
+    assert(r[2] == 30, "S4: escaping copy returns intact");
+
+    println("link-widen baseline OK");
+}

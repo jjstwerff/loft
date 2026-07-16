@@ -669,18 +669,10 @@ impl Uses {
 /// `code`, up to `max_tier` (0 = the shipped param-source rule; 1 = also
 /// read-only-local sources, ordering-proven). Higher tiers are additive: a tier-1
 /// run still emits every tier-0 Borrow.
-fn analyze_fn(
-    code: &Value,
-    function: &Function,
-    data: &Data,
-    max_tier: u8,
-) -> (Vec<VerdictRow>, Vec<ElidePlan>, Vec<MovePlan>) {
-    // @PLN90 — the survival split + its report locations are produced under LOFT_COPY_SURVIVAL
-    // (the raw dev dump) OR the user-facing report (`report_copies`); read once so both the walk
-    // (`track_pos`) and the classification below agree.
-    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some()
-        || crate::keys::report_copies_enabled()
-        || crate::keys::warn_copies_enabled();
+/// Build + walk the copy/borrow use-facts for one function body. Extracted from `analyze_fn` so the
+/// report-only link-safety oracle (`link_safety_of`) reads the SAME facts the shipped elision does,
+/// with no second, drifting analysis.
+fn collect_uses(code: &Value, data: &Data, survival_on: bool) -> Uses {
     let mut u = Uses {
         get_field: data.def_nr("OpGetField"),
         op_append: data.def_nr("OpAppendVector"),
@@ -711,6 +703,191 @@ fn analyze_fn(
         record_copy: Vec::new(),
     };
     u.visit(code, Ctx::Other);
+    u
+}
+
+/// @PLN102 transparent-link widening — the per-bind SAFETY predicate (step 2). The single source of
+/// truth read by BOTH the report-only oracle (`link_safety_of`) and the codegen widening
+/// (`analyze_fn` under `LOFT_LINK_WIDEN`), so the gate-on suite validates exactly what codegen uses.
+/// See `link_safety_of` for the invariant + the soundness argument.
+fn bind_link_safe(u: &Uses, function: &Function, v: u16, src: Option<u16>) -> bool {
+    // A SELF-source (`v += v`, so `append_src[v] = [Some(v)]`) is a self-append, not a copy of a
+    // distinct store — a "link" would be `v` borrowing itself, which drops its buffer and leaves it
+    // slotless. It is never a link candidate. (The shipped tiers dodge it via `src_is_param` /
+    // `src_local_stable` never firing here by default; the widening must exclude it explicitly.)
+    if src == Some(v) {
+        return false;
+    }
+    let single_def = u.def_count.get(&v).copied().unwrap_or(0) == 1;
+    let v_non_escaping = !u.ineligible.contains(&v);
+    let source_outlives = src.is_some_and(|s| {
+        function.is_argument(s)
+            || (u.def_count.get(&s).copied().unwrap_or(0) <= 1
+                && u.last_use_pos.get(&s).copied().unwrap_or(0)
+                    >= u.last_use_pos.get(&v).copied().unwrap_or(0))
+    });
+    single_def && src.is_some() && v_non_escaping && source_outlives
+}
+
+/// @PLN102 transparent-link widening — the per-bind OBSERVABILITY predicate (step 3), ALIAS-AWARE.
+/// The single source of truth for both `link_observability_of` and the codegen widening. See
+/// `link_observability_of` for the invariant. `false` if the bind has no recorded copy-fill.
+fn bind_link_unobservable(u: &Uses, function: &Function, v: u16, src: Option<u16>) -> bool {
+    let Some(fill) = u.copyfill_pos.get(&v).copied() else {
+        return false;
+    };
+    let local_readonly = !u.ineligible.contains(&v);
+    let n = function.next_var();
+    let source_stable = src.is_some_and(|base| {
+        let base_stable = u.other_max_pos.get(&base).copied().unwrap_or(0) < fill;
+        let aliases_stable = (0..n).filter(|&b| b != v && b != base).all(|b| {
+            if function.tp(b).base().depend().contains(&base) {
+                u.other_max_pos.get(&b).copied().unwrap_or(0) < fill
+            } else {
+                true
+            }
+        });
+        base_stable && aliases_stable
+    });
+    local_readonly && source_stable
+}
+
+/// @PLN102 transparent-link widening — build step 2: the REPORT-ONLY safety oracle. For each
+/// single-source copy-fill bind `v = <src>.f` it returns `(v, base, safe)`, where `safe` is the
+/// conservative "a shared-store LINK would be UAF-safe here" verdict:
+///
+///   * the source `base`'s store OUTLIVES `v` — a parameter (caller-owned, alive across the frame),
+///     or a non-reassigned local whose last use is at/after `v`'s (its store is not reclaimed while
+///     `v` is live), AND
+///   * `v` does NOT escape (`v ∉ ineligible` — no return / store / pass-to-callee that could outlive
+///     `base`).
+///
+/// SOUND BY CONSERVATISM: last-use ordering under-approximates store lifetime (a store lives to scope
+/// exit), and `ineligible` also excludes a mutated local, so this can only MISS a safe link, never
+/// invent an unsafe one — it cannot green-light a #415 dangle. Drives no codegen. Pinned by
+/// `tests/link_safe_oracle.rs` against the safety matrix.
+fn link_safety_of(code: &Value, function: &Function, data: &Data) -> Vec<(u16, Option<u16>, bool)> {
+    let u = collect_uses(code, data, false);
+    let mut vars: Vec<u16> = u.append_src.keys().copied().collect();
+    vars.sort_unstable();
+    let mut out = Vec::new();
+    for v in vars {
+        // Only the single-source copy-fill idiom (a fresh `OpDatabase` buffer filled by one append).
+        let fresh_buffer = u
+            .def_vdb
+            .get(&v)
+            .is_some_and(|vdb| u.database_vars.contains(vdb));
+        let appends = &u.append_src[&v];
+        if !fresh_buffer || appends.len() != 1 {
+            continue;
+        }
+        out.push((v, appends[0], bind_link_safe(&u, function, v, appends[0])));
+    }
+    out
+}
+
+/// `LOFT_DUMP_LINK_SAFE` — emit one `link-safe-dbg:` line per copy-fill bind of every USER function
+/// (`STD_SOURCE` skipped — its facts are stable and would flood the dump). Report-only.
+pub fn dump_link_safety(data: &Data) {
+    if !crate::keys::dump_link_safe() {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) || def.source == crate::data::STD_SOURCE {
+            continue;
+        }
+        for (v, base, safe) in link_safety_of(&def.code, &def.variables, data) {
+            let base_name = base.map_or("-".to_string(), |b| def.variables.name(b).to_string());
+            eprintln!(
+                "link-safe-dbg: fn={} var={} base={} safe={}",
+                def.name,
+                def.variables.name(v),
+                base_name,
+                u8::from(safe)
+            );
+        }
+    }
+}
+
+/// @PLN102 transparent-link widening — build step 3: the REPORT-ONLY observability oracle. For each
+/// single-source copy-fill bind `a = s.v` it returns `(a, base, unobservable)`, where a shared-store
+/// LINK is UNOBSERVABLE (copy ≡ link) iff **nothing mutates either side's store after the bind**:
+///
+///   * the local `a` is not mutated after the bind (`a ∉ ineligible` — the copy-idiom-aware
+///     read-only fact), AND
+///   * the SOURCE store is not mutated after the bind — `other_max_pos[base] < fill` (no non-reader
+///     use of the base after the copy-fill), ALIAS-AWARE: every var whose store aliases the base (its
+///     `deps` reference `base` — a sibling `&`-reference, an element view) is ALSO stable after the
+///     fill. Without the alias clause, `a = s.v; b = &s.v; b[i]=x; read a` would falsely read
+///     unobservable (the write via `b` reaches `s.v`'s store, so a link would reflect it).
+///
+/// SOUND BY CONSERVATISM: `other_max_pos` counts a pre-bind def too, but the bind's own fill is later,
+/// so a stable source reads `< fill`; a set-based over-count only MISSES a link, never invents an
+/// observable one. Drives no codegen. Pinned by `tests/link_obs_oracle.rs` against Matrix O.
+fn link_observability_of(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+) -> Vec<(u16, Option<u16>, bool)> {
+    let u = collect_uses(code, data, false);
+    let mut vars: Vec<u16> = u.append_src.keys().copied().collect();
+    vars.sort_unstable();
+    let mut out = Vec::new();
+    for a in vars {
+        let fresh_buffer = u
+            .def_vdb
+            .get(&a)
+            .is_some_and(|vdb| u.database_vars.contains(vdb));
+        let appends = &u.append_src[&a];
+        if !fresh_buffer || appends.len() != 1 {
+            continue;
+        }
+        out.push((
+            a,
+            appends[0],
+            bind_link_unobservable(&u, function, a, appends[0]),
+        ));
+    }
+    out
+}
+
+/// `LOFT_DUMP_LINK_OBS` — emit one `link-obs-dbg:` line per copy-fill bind of every USER function.
+pub fn dump_link_observability(data: &Data) {
+    if !crate::keys::dump_link_obs() {
+        return;
+    }
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        if !matches!(def.def_type, DefType::Function) || def.source == crate::data::STD_SOURCE {
+            continue;
+        }
+        for (v, base, unobs) in link_observability_of(&def.code, &def.variables, data) {
+            let base_name = base.map_or("-".to_string(), |b| def.variables.name(b).to_string());
+            eprintln!(
+                "link-obs-dbg: fn={} var={} base={} unobs={}",
+                def.name,
+                def.variables.name(v),
+                base_name,
+                u8::from(unobs)
+            );
+        }
+    }
+}
+
+fn analyze_fn(
+    code: &Value,
+    function: &Function,
+    data: &Data,
+    max_tier: u8,
+) -> (Vec<VerdictRow>, Vec<ElidePlan>, Vec<MovePlan>) {
+    // @PLN90 — the survival split + its report locations are produced under LOFT_COPY_SURVIVAL
+    // (the raw dev dump) OR the user-facing report (`report_copies`); read once so both the walk
+    // (`track_pos`) and the classification below agree.
+    let survival_on = std::env::var_os("LOFT_COPY_SURVIVAL").is_some()
+        || crate::keys::report_copies_enabled()
+        || crate::keys::warn_copies_enabled();
+    let u = collect_uses(code, data, survival_on);
 
     // The SOURCE-mutation fact (¬D2) is the parser's mature, interprocedural
     // mutation analysis — `find_written_vars` also catches a source handed to a
@@ -798,6 +975,22 @@ fn analyze_fn(
             (
                 Verdict::Borrow,
                 "tier1: read-only local, ordering-proven read-only local source",
+                CopyClass::Eliminated,
+            )
+        } else if crate::keys::link_widen_enabled()
+            && bind_link_safe(&u, function, v, src)
+            && bind_link_unobservable(&u, function, v, src)
+        {
+            // @PLN102 build step 4 — the transparent-link WIDENING (gated `LOFT_LINK_WIDEN`). A bind
+            // the tiers above leave as a copy is realized as a shared-store link when it is provably
+            // SAFE (source outlives the local, no escape) AND UNOBSERVABLE (neither side's store is
+            // mutated after the bind, ALIAS-AWARE) — the two oracles proven report-only in steps 2/3.
+            // The observable result is unchanged (copy ≡ link here); it just realizes more links. The
+            // `ElidePlan` production below runs unchanged, incl. its own borrower-safety gate. Dead
+            // when the flag is off ⇒ byte-identical.
+            (
+                Verdict::Borrow,
+                "widen: safe + unobservable link (LOFT_LINK_WIDEN)",
                 CopyClass::Eliminated,
             )
         } else if src.is_none() {
@@ -2061,10 +2254,16 @@ pub fn warn_dead_stores(
                 continue;
             }
             let (line, col) = func.var_source(v);
+            // @PLN102 arc-C steer (alias-where-correct.md step 6): the write-through-intent case.
+            // A copy mutated then discarded has no correct copy meaning, so point straight at the
+            // explicit fix — `&` for write-through — and offer the read-back alternative if a copy
+            // really was intended. (The write-through is ALWAYS the programmer's explicit `&`, never
+            // inferred — see alias-where-correct.md: copy is the semantics, links are explicit.)
             let msg = format!(
-                "'{name}' is mutated but its value is never read — the write is lost. A \
-                 whole-value bind (`{name} = …`) COPIES the heap value; write through the \
-                 original in place, or take a `&` reference."
+                "'{name}' is mutated but its value is never read — the write is LOST. A whole-value \
+                 bind (`{name} = …`) COPIES the heap value (C86), so the mutation lands in the copy, \
+                 not the source. For write-through, bind a live reference with `&` (`{name} = &…`). \
+                 If a copy was intended, read `{name}` after the mutation."
             );
             diags.add_at(
                 crate::diagnostics::Level::Warning,

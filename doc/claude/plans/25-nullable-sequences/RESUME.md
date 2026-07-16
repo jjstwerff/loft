@@ -30,17 +30,30 @@ current tree, so this supersedes the older FINISH-LINE notes where they disagree
 - **`not null` HARD parser-reject — open by design.** Still accepted as a silent no-op
   (`src/parser/definitions.rs`); a hard "retired" error is blocked on the registry republish
   (task #4 — graphics/web/gridmesh/crypto/cbor still carry `not null`, and green tests load them).
-- **Call-arg (N-Store) hole — open.** A nullable passed into a non-null PARAMETER is silently
-  accepted on both backends (`takes(v[j])`, `takes(a / b)`), though the same value into a non-null
-  LOCAL is correctly rejected. The teeth sit on the local-slot site, not the call-arg site.
-- **`?? null` unsoundness — open.** `y: integer = x ?? null` (and `?? <nullableVar>`) is accepted
-  and a non-null slot ends up holding `null` on both backends; `??` discharges regardless of the
-  fallback's own nullability. (`?? null` is itself a pathological no-op idiom.)
-- **`u8?`-return native codegen bug — open (native-only build failure).** `fn f(i) -> u8? {
-  r = i as u8?; r }` runs correctly on interp but emits invalid Rust on native (declared `-> u8`,
-  body returns `i64` → `rustc` E0308). Also: the tail-expr form `-> u8? { i as u8? }` is spuriously
-  rejected at compile time while the local-bound form is accepted (a return-coercion checker
-  inconsistency). Merits its own GH issue when the edge-case phase starts.
+- **Call-arg (N-Store) hole — ✅ FIXED (2026-07-16, `callarg_nstore_enabled` / `LOFT_NO_CALLARG_NSTORE`).**
+  The `n_store_violation` check now runs at the param-binding chokepoint (`process_call_args`), with
+  the identical Phase-1 warn/error split — a nullable into a non-narrow param WARNS (the null binds),
+  into a NARROW width hard-errors. Null-transparent fns (`min`/`max`/`clamp`/`abs`/… — they PROPAGATE
+  null via `wrap_null_transparent`) are exempt; operators already dodge the path via the nullable-op
+  swap. Blast radius (measured, both backends): 4 warning-assertion tests, fixed at the source — the
+  stdlib `json_number(v: float)` → `float?` (its doc already says it handles NaN/null → `JNull`, so
+  the `float` was the lie) + `call_with_null` migrated to a nullable param. Regression
+  `tests/callarg_nstore.rs`. **With this + `?? null` closed, all three gate-2 SOUNDNESS edges are
+  fixed; only the non-soundness close-out (`not null` registry hard-reject + F6) remains for gate 2.**
+- **`?? null` unsoundness — ✅ FIXED (2026-07-16, `qq_null_typing_enabled` / `LOFT_NO_QQ_NULL`).**
+  `a ?? b` now stays `τ?` when the FALLBACK `b` is itself nullable (a bare `null` literal, or a
+  `τ?`-typed expression), so `y: integer = x ?? null` (and `?? <nullableVar>`) is REJECTED — the
+  N-Store check at the consuming slot fires. Non-null fallbacks still discharge to the non-null
+  base (`x ?? 0` → `integer`), and a chain discharges iff its LAST fallback is non-null
+  (`x ?? (a/b) ?? 7` → `integer`). Fix in `operators.rs::build_null_coalesce_default` (report `*ctp`
+  Optional; the code still builds with the base since the null sentinel is representable there) +
+  the native `text_string_unify` predicate peels `Optional` (`emit.rs` — a `text?` if-arm has the
+  same `String`/`&str` hazard). Blast radius (measured, both backends): five corpus sites relying on
+  the `?? null` no-op, all corrected to the honest form (`as τ?` / `-> τ?`). Regression
+  `tests/qq_null_typing.rs`.
+- **`u8?`-return native codegen bug — ✅ FIXED (verified 2026-07-16).** `fn f(i) -> u8? { r = i as
+  u8?; r }` no longer reproduces — `--native` runs and agrees with interp (`f(300)` → `null` on
+  both). Re-probed on the current tree; closed off the residual list.
 - **F6 — close-out**: the `Closes @PLN25` PR + `CHANGELOG` + the deviation-register confirmation.
 
 **Removed as FIXED (2026-07-10):** the old "interp full-width vs native narrow-packed" `u8?`

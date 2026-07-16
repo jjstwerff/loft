@@ -1,0 +1,192 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# @PLN102 arc C — the recommended-idiom channel (steer + fold), safe small steps
+
+> **Status: design (2026-07-16), buildable.** The full design for arc C — the "recommended-idiom
+> signposting" channel and the folding discipline — with a safe, inert-first step ladder. Read
+> [COMPATIBILITY.md § Deprecation is soft steering](../../COMPATIBILITY.md) and [§ Folding](../../COMPATIBILITY.md)
+> for the *why*; the [README arc table](README.md) maps **C = C5**. This resolves the plan's
+> thorniest open question (Q3: *whose* obligation is the warning). No code yet — the doc is the
+> generative act (design-protocol § "write the doc before the code").
+
+## What arc C is (and is not)
+
+loft's promise is **absolute never-break + no usage telemetry**, which makes the callable surface a
+**one-way ratchet**: you can *add* and *steer*, but you can never *prove* zero holdouts, so you can
+never *remove*. So a "deprecation" here can never reach a removal — it is **recommended-idiom
+signposting**, not a path to a break. Arc C is that channel. It has exactly two jobs:
+
+1. **Steer** — a warning that says *"there is now a nicer way to write this"* (Goal F: the only
+   channel allowed to bill the programmer, and even it bills nothing you must act on). The old idiom
+   keeps working, identically, forever.
+2. **Fold** — the collectible win of a steer is not surface shrinkage (impossible) but **fewer
+   independent implementations**: reimplement the old name as a thin shim over the new primitive and
+   delete the old code. *Every steer ships with its fold, or it buys nothing but more surface.*
+
+Arc C is **not** the compat gate (that is C1, done, `loft api-surface`), **not** the registry
+(B-registry / C2-C3), and **not** the contract-keyed behaviour split (C4). It is the smallest of the
+mechanism arcs — one attribute, one gate, one lint — but it carries the plan's hardest *design*
+question, Q3.
+
+## The one invariant (design-protocol step 1)
+
+> **A steer fires exactly when the compilation's OWNED source (the entry project) uses a
+> `#superseded` idiom — never when the idiom-use is in imported-dependency or stdlib source; and
+> every `#superseded("use Y")` symbol is implemented as a shim over Y.**
+
+Two halves, each a single carried fact so it cannot be re-derived per site:
+
+- **The fire-site half (Q3):** the gate reads ONE fact — *is the source currently being compiled the
+  entry project, or a dependency?* — which loft already carries per source (`Definition.source`;
+  `MAIN_SOURCE` = the entry, `STD_SOURCE` = stdlib, a `use`d library = its own resolved source, tagged
+  a dependency by the package-path-prefix map). The steer fires iff the CALLER's source is owned.
+- **The fold half (C5):** `#superseded("use Y")` on symbol X is a machine-checkable promise that X's
+  body is a shim over Y. A `make ci` lint enforces it, so a steer cannot ship un-folded.
+
+## Q3 — whose obligation, resolved (the crux)
+
+**The question** (README open-question 3): C86 changed the meaning of code libraries had *already
+shipped*. A warning at **loft-build** time reaches the loft team (they already know); at
+**library-compile** time reaches the author (who can act); at **consumer-compile** time reaches the
+wrong person (a consumer cannot fix the library). *Where does it fire?*
+
+**The answer is a provenance gate on the CALLER, not the callee.** A steer fires only when the source
+*making the call* is the compilation's entry project (`owned`), never when it is a resolved
+dependency or the stdlib. This reaches the right person **structurally**, in every case:
+
+| Who is compiling | Whose source is `owned` (entry) | Steer on a superseded idiom fires? | Right person? |
+|---|---|---|---|
+| A user writing a program | their program | **yes** — on their own old-idiom use | ✅ they can act |
+| A **library author** building/testing their lib | the library | **yes** — on the lib's old-idiom use | ✅ they can act |
+| A **consumer** importing that library | their program (the lib is a dependency) | **no** on the lib's internal idiom; **yes** on the consumer's own code | ✅ never nagged for a lib they can't fix |
+| loft's own `make ci` on the stdlib | the stdlib is `STD_SOURCE`, exempt | **no** (stdlib already warning-exempt) | ✅ n/a |
+
+The load-bearing observation that makes this non-trivial: **a consumer DOES re-parse a library's
+`.loft` source** (libraries ship as source for the interpreter + cross-target). Without the gate, a
+library's internal use of an old idiom would warn *the consumer* on every build — the exact
+"wrong-person" failure. The gate suppresses it because the library's source is not `MAIN_SOURCE` in
+the consumer's compilation. This is the same shape as the existing `self.default` stdlib exemption,
+generalised from two-way (stdlib / not) to the provenance already carried per source (entry /
+dependency / stdlib).
+
+**Delivery (the README's second half of C's open status).** The steer's primary channel is the
+**dev-time compile warning** — the author sees it on `loft run` / `loft check` / `loft test` of their
+own project or library. That is sufficient and correctly-targeted by the gate above. A **secondary**
+channel — the registry migration-scan (arc B-registry) — statically scans every *published* library
+for superseded-idiom use, giving the OWNER the ecosystem map ("which public libs still use old idiom
+X") to **prioritise which folds are worth doing** and to target an author-facing nudge. Two channels,
+distinct audiences: dev-compile → the code's author (act now); registry scan → the loft owner
+(prioritise). Neither ever reaches a consumer about a dependency's internals.
+
+**The contract-keyed variant (C86's actual class) is C4, not the MVP.** C86 was a *semantic* change
+(plain-bind now copies), which **cannot be folded** (the old behaviour is not expressible over the
+new — folding's limit, below). A semantic change is handled by the **contract-keyed escape valve**
+(C4 / leg 3): the old behaviour is preserved under the declared `contract`, and the author is steered
+to the new idiom *when they bump contract*. That author-alert reuses arc C's SAME provenance gate and
+emission, but its trigger is a contract bump, not a bare `#superseded`. So the MVP builds the
+**superset idiom steer**; the contract-keyed author-alert is a thin C4-triggered reuse of it,
+cross-referenced, built when the first genuine keyed change lands (same "when genuinely needed" rule
+as C4's behaviour split).
+
+## The re-assertion count (design-protocol step 2) — N = 1 everywhere
+
+- **Steer emission:** ONE chokepoint — call resolution (`call_nr` / `call`, `src/parser/mod.rs`),
+  the same single point every fn/method/operator call routes through (the site the call-arg N-Store
+  check already lives at). It reads the resolved def's `superseded` field + the caller's provenance.
+  No per-call-form spray.
+- **Provenance:** ONE carried fact (`self.data.source` vs `MAIN_SOURCE` / dependency), not
+  re-derived. Omitting it cannot silently mis-target — the gate is one predicate.
+- **The fold check:** ONE `make ci` pass over the parsed `Data`.
+
+So `N × silence` = 0: there is one emission site, one gate, one lint. (The one honest widening: a
+superseded *type/field* use — not a call — would need a second emission point at type-resolution.
+The MVP scopes to fn/method/operator steers, the common "use method Y instead" case; type steers are
+a later increment reading the *same* provenance fact — see step 7.)
+
+## Falsification — how it breaks (design-protocol steps 3–4)
+
+- **Claim: "the gate reaches the right person in every case."** Probed in the Q3 table above; the
+  load-bearing sub-claim ("a consumer re-parses library source, so the gate is required") is
+  VERIFIED against the tree (libraries distribute `.loft` source, parsed at load). Falsification
+  target for the build: a fixture where a *dependency's* source uses a `#superseded` idiom must emit
+  **zero** steers when compiled by a consumer, and the SAME source must emit the steer when compiled
+  as its own entry (the author case). Both are positive controls in step 3.
+- **Claim: "every superseded symbol can be folded."** FALSE in general — a semantically-*different*
+  replacement cannot be folded (folding's limit). So `#superseded` carries a contract: **the
+  successor Y is a behavioural superset of X.** The fold lint enforces that X is *implemented via* Y
+  (a structural check), but it CANNOT prove semantic equivalence — the author asserts the superset.
+  This bounds the attribute's honest use: a semantic change is contract-keyed (C4), never a bare
+  `#superseded`. The lint catches the *mechanical* failure (a steer with no fold); the superset claim
+  is the author's, documented at the marker.
+- **Claim: "a new steer is never a breaking change" (why the channel survives the freeze).** A
+  `#superseded` marking adds a *warning* to code that used to compile clean. Per
+  [COMPATIBILITY.md § Warnings are not a covered surface](../../COMPATIBILITY.md) (owner ruling
+  2026-07-14: warnings are never a contract breakage), a new warning breaks nothing — so the steer
+  channel is the one path that stays open *past* 1.0 (Goal F). This is load-bearing: it is *why* arc
+  C can keep operating after the freeze while every other surface is frozen. Falsification target: a
+  build that treats warnings as errors is opting into churn the contract does not owe — so the steer
+  must be a `Level::Warning`, never an error, and must be silenceable per the standard warning
+  toggles.
+- **Over-unification guard (step 4) — the cleanest claim: "arc C is one attribute + one gate + one
+  lint."** Attacked: (a) type/field steers need a second emission point → scoped OUT of the MVP
+  (step 7), not absorbed falsely. (b) The contract-keyed author-alert (C86's class) *looks* like the
+  same channel but has a different trigger (a contract bump, not a bare marker) and cannot fold →
+  routed to C4, not absorbed. (c) A steer whose successor is in a *different* library (cross-package
+  fold) — the fold lint must resolve Y across the loaded `Data`, and if Y is unresolvable the marker
+  is rejected at parse (a dangling steer is a build error on the AUTHOR's side, never a consumer's).
+  Each near-absorption is named and either scoped out or handled, not waved in.
+
+## The safe small steps (the commit ladder)
+
+Inert-first, each step complete + verifiable before the next (PLANNING.md § goal 5). The channel is
+**inert until the first symbol is marked `#superseded`**, so most steps are byte-identical for every
+existing program — the risk is concentrated in one place (the provenance gate, step 3) and the proof
+in the dogfood (step 6).
+
+| # | Step | What lands | Verify (positive control) | E |
+|---|---|---|---|---|
+| 1 | **The `#superseded` attribute — PARSE + STORE, inert.** Add `Definition.superseded: Option<String>` (the successor hint, e.g. `"use write_through"`), default `None`. Parse `#superseded "…"` in the fn/method/operator attribute position (beside `#pure`/`#impure`/`#native` in `definitions.rs`). Persist through the IR store + JSON (mirror @PLN40's `const_field` round-trip). **Nothing reads the field** → byte-identical. | a fn with `#superseded "use Y"` parses, the field round-trips through store + JSON; a fn without it is `None`; introspect/suite byte-identical | S |
+| 2 | **The provenance predicate.** Expose `fn caller_source_is_owned(&self) -> bool` = the current compile source is the entry project (`self.data.source == MAIN_SOURCE`, not a resolved dependency, not `STD_SOURCE`). This mostly *names* a fact loft already carries; the step's value is a **positive control** proving entry-vs-dependency is distinguished. No behaviour change. | a unit/fixture test: a def in the entry file → owned; a def loaded from a `use`d library fixture → NOT owned; stdlib → NOT owned | S |
+| 3 | **Steer emission — GATED, the one risky step.** At the call chokepoint (`call_nr`), when the resolved def has `superseded: Some(hint)` AND `caller_source_is_owned()`, emit `Level::Warning` *"`X` is superseded — {hint} (the old form keeps working)"*. Gate behind `LOFT_NO_STEER` (default **on**, opt-out) — but it is inert regardless until a symbol is marked, so default-on is safe from day one. Silenceable by the standard warning toggles. | fixtures: a test `#superseded` fn called from **owned** source → warns; the SAME call from a **dependency** fixture's source → silent; `LOFT_NO_STEER=1` → silent; both backends; suite byte-identical (no stdlib symbol is marked yet) | **M** |
+| 4 | **The fold lint (C5.2) — advisory, then CI.** A pass over the parsed `Data` in `make ci`: for every `#superseded("use Y")` symbol X, (a) resolve Y in `Data` — an unresolvable successor is a **hard parse error on the author** (a dangling steer never ships); (b) check X's body *calls* Y (a structural shim check — X is folded onto Y, not independent code). Fires on an un-folded steer. Start advisory (warn), promote to a hard `make ci` check once green. | positive control: a `#superseded` fixture symbol NOT implemented via Y → lint fires; a properly-folded one → clean; a dangling `#superseded "use nonesuch"` → parse error | S–M |
+| 5 | **Default-on confirmation + docs.** Confirm the channel is default-on and inert (no marked symbols ⇒ zero warnings across the suite — the measurement). Document the attribute + the gate in LOFT.md / COMPATIBILITY.md § Folding, and the toggle in the `LOFT_LOG`/diagnostics reference. | full suite: zero new warnings (inert); docs updated | S |
+| 6 | **The first REAL steer (dogfood — the deliverable).** Pick ONE genuine stdlib superset pair where a nicer primitive already exists, mark the old name `#superseded "use Y"`, and **fold** it (reimplement the old name as a shim over Y, delete the old body). This proves the channel end-to-end and instantiates "every steer ships with its fold". Blast radius measured by the suite (owned-source callers of the old idiom now warn — fix or accept per site). | the folded old name still passes every existing test (behavioural superset held); owned callers warn; the fold lint is green on it; the registry libs (dependency source) do NOT warn | **M** |
+| 7 | **(Later) type/field steers + the registry migration-scan.** Extend emission to a superseded *type/field* use at type-resolution (same provenance fact, second read point). Wire the registry scan (arc B-registry) to report which *published* libs use each `#superseded` idiom — the owner's fold-prioritisation map + author-facing nudge. Defer until the MVP proves out and B-registry exists. | a superseded type used in owned source warns; the scan lists public-lib users of a marked idiom | M |
+
+**Shape:** keystone risk in **step 3** (the provenance gate — the Q3 resolution in code) and proof in
+**step 6** (the first real fold, end-to-end, with the dependency-source-silent positive control).
+Steps 1–2 are inert plumbing; 4–5 make the discipline enforceable; 7 is the ecosystem tie-in,
+deferred. The whole MVP is steps 1–6, entirely in this repo.
+
+## Folding's limit (the boundary the design must respect)
+
+Folding works **only when Y is a genuine superset** — same observable semantics, nicer form. So:
+
+- `#superseded` is for **preference steers over supersets** — "use `write_through` instead of the
+  plain-bind idiom", "use `floor_mod` instead of the manual wrap". The old and new produce identical
+  observable results; the fold is a pure refactor.
+- A **semantic** replacement (the old behaviour is *not* expressible over the new — C86) is NOT an
+  arc-C steer. It is **contract-keyed** (C4 / leg 3): loft carries both behaviours, keyed on the
+  declared `contract`; the author sees the new idiom only when they bump contract. Arc C's channel is
+  *reused* to deliver that author-alert (same owned-source gate), but the trigger and the "fold" (=
+  contract-keying) are C4's, built when the first keyed change is genuinely needed.
+
+Stating this boundary is load-bearing: it stops the elegant over-absorption of C86 into the bare
+`#superseded` channel, where it would be a lie (the fold cannot exist).
+
+## See also
+
+- [COMPATIBILITY.md](../../COMPATIBILITY.md) — § Deprecation is soft steering · § Folding · § Two
+  populations · § Warnings are not a covered surface (why the channel outlives the freeze).
+- [compat-gate-build.md](compat-gate-build.md) — the sibling build plan; arc C is its **C5** (C1 done,
+  C2/C3 = B-registry, C4 = contract-keying). This doc is C5 in full.
+- [README.md](README.md) — the arc table + Q3 (open-question 3), resolved here.
+- [versioning-decision.md](versioning-decision.md) — the `contract` axis C4's keyed-change alert rides.
+- [GOALS.md](../../GOALS.md) Goal F — warnings are the only channel that may bill the programmer.
+- Code-points: `Definition.superseded` (`src/data.rs`) · attribute parse (`src/parser/definitions.rs`,
+  beside `#pure`/`#native`) · emission at `call_nr` (`src/parser/mod.rs`) · provenance
+  (`Definition.source`, `MAIN_SOURCE`/`STD_SOURCE`, `def_library`) · the fold lint (a `make ci` pass
+  over `Data`, cf. `LOFT_NO_DEAD_STORES`).

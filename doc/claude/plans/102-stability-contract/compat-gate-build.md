@@ -275,6 +275,10 @@ branch in the relevant op/typing site), edition-style — not speculatively.
 
 ### C5 — The folding discipline (leg 1 / arc C) — process + one lint
 
+> **Full design: [recommended-idiom-channel.md](recommended-idiom-channel.md)** (2026-07-16) — the
+> steer channel, the Q3 provenance-gate resolution, and a 6-step inert-first ladder. The sketch
+> below is the seed; that doc is arc C in full.
+
 Folding is mostly discipline, not code, but it can be *guarded*:
 
 - **C5.1 — the discipline:** every recommended-idiom steer ships *with* its fold — the old name

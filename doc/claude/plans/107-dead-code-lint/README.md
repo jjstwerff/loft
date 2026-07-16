@@ -205,9 +205,13 @@ positives before flipping default-on.
 - **S2 — Emit the warning behind an off-by-default flag. ✅ DONE 2026-07-15.**
   `Function::test_dead_stores` (sibling of `test_used`, `variables/mod.rs`) warns on `uses > 0
   && reads == 0 && write_targets > 0` (plus the `test_used` exclusions: `_`/`#`, argument,
-  captured, global-shadow), gated on `LOFT_DEAD_STORES` (default OFF). Message: *"'d' is mutated
-  but its value is never read — the write is lost. A whole-value bind (`d = …`) COPIES the heap
-  value; write through the original in place, or take a `&` reference."* **Findings:** (a) the
+  captured, global-shadow), gated on `LOFT_DEAD_STORES` (default OFF). Message (refined to the arc-C
+  steer, @PLN102 alias-where-correct step 6): *"'d' is mutated but its value is never read — the
+  write is LOST. A whole-value bind (`d = …`) COPIES the heap value (C86), so the mutation lands in
+  the copy, not the source. For write-through, bind a live reference with `&` (`d = &…`). If a copy
+  was intended, read `d` after the mutation."* — points straight at the explicit fix (`&`) and offers
+  the read-back alternative; the write-through is always the programmer's `&`, never inferred.
+  **Findings:** (a) the
   `uses > 0` clause is provably REDUNDANT (`reads==0 && write_targets>0` ⇒ `uses>0`) but kept as
   an explicit belt-and-braces guarantee that S2 and `test_used` (`uses==0`) never both fire — it
   costs nothing and hardens the S4 sweep against unseen IR shapes; (b) the feared construction

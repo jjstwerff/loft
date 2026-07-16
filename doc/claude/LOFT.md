@@ -533,6 +533,14 @@ first = a ?? b ?? c    // chains: first non-null of a, b, c
 The operator is left-associative and chains: `a ?? b ?? c` is `(a ?? b) ?? c`.
 If `lhs` has a statically-known `null` type (the bare `null` literal), `??` returns `rhs` directly.
 
+**Result type — the discharge is only as complete as the fallback.** `a ?? b` yields `a` when
+non-null else `b`, so it can still be null exactly when `b` can: the result type is the non-null
+base **only if the fallback `b` is non-null**. A nullable fallback — a bare `null` literal, or a
+`τ?`-typed expression — keeps the result `τ?`, so `y: integer = x ?? null` is a compile error (a
+null would reach the non-null slot). A chain discharges to non-null iff its *last* fallback is
+non-null: `x ?? (a / b) ?? 7` is `integer` (ends in `7`), while `x ?? null` is `integer?`. Discharge
+into a non-null slot with a real default (`x ?? 0`), or keep the slot `τ?`.
+
 **Note:** For complex LHS expressions (function calls, field chains), the compiler automatically
 materialises the result into a temporary variable so the expression is evaluated exactly once.
 Simple variable reads skip the temporary since they have no side effects.

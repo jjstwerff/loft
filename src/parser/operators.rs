@@ -1581,6 +1581,16 @@ impl Parser {
         let rhs_type = self.parse_operators(rhs_hint, &mut rhs, parent_tp, precedence + 1);
         self.known_var_or_type(&rhs, &rhs_pos);
 
+        // @PLN102 gate-2 `?? null` soundness — `a ?? b` yields `a` when non-null else `b`, so it
+        // can STILL be null exactly when the FALLBACK `b` is nullable (a bare `null` literal, or a
+        // `τ?`-typed expression). In that case the result type must stay `τ?`, not peel to the
+        // non-null base — else `y: integer = x ?? null` accepts a null into a non-null slot. The
+        // code below builds with the non-null base (the null sentinel is representable in the
+        // base's storage: `i64::MIN`, a null DbRef, …); only the REPORTED `*ctp` is re-wrapped, so
+        // the N-Store check at the consuming slot rejects. Gated `LOFT_NO_QQ_NULL` (default on).
+        let fallback_nullable = crate::keys::qq_null_typing_enabled()
+            && (matches!(rhs.unspan(), Value::Null) || matches!(rhs_type, Type::Optional(_)));
+
         // The default may be a vector literal (`?? []`, `?? [99]`) that builds into
         // its OWN work-ref `_vec_N` — the last operator of the emitted `"Vector"`
         // block.  That work-ref's only `Set` lives in the else-branch block the
@@ -1852,12 +1862,22 @@ impl Parser {
             if owned_vector && let Type::Vector(elm, _) = &result_type {
                 let view = Type::Vector(elm.clone(), crate::data::Deps::frame(vec![tmp]));
                 *code = v_block(vec![set_tmp, if_expr], view.clone(), "ncc");
-                *ctp = view;
+                *ctp = Self::wrap_if_fallback_nullable(view, fallback_nullable);
                 return;
             }
             *code = v_block(vec![set_tmp, if_expr], result_type.clone(), "ncc");
         }
-        *ctp = result_type;
+        *ctp = Self::wrap_if_fallback_nullable(result_type, fallback_nullable);
+    }
+
+    /// @PLN102 gate-2 `?? null` — re-mark a coalesce RESULT nullable when its fallback can be null
+    /// (see `build_null_coalesce_default`). Idempotent: never double-wraps an already-`Optional`.
+    fn wrap_if_fallback_nullable(t: Type, fallback_nullable: bool) -> Type {
+        if fallback_nullable && !matches!(t, Type::Optional(_)) {
+            Type::optional(t)
+        } else {
+            t
+        }
     }
 
     /// @PLN25 DN4 `(N-Cast?)` — lower `e as τ?` (narrowing, not provably-fit) to a
@@ -2645,7 +2665,7 @@ enum FaultKind {
 /// bare-local `if i < len(loc) { loc[i] }` form.  (A struct vector-field
 /// read COPIES post-@PLN85 #415, so the old `loc = self.v` alias trick is
 /// gone and value-correct code indexes the field directly.)
-#[derive(Clone, Copy, PartialEq, Eq)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum VecKey {
     Var(u16),
     Field(u16, i32, i32),
