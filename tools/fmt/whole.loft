@@ -254,12 +254,14 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
   col = col0;
   pu = false;   // pending unary: suppress the space before the next token
   gdepth = 0;   // generic-nesting depth: inside `<…>`, `<`/`>`/`>>` render TIGHT
+  saw_fn = false;   // this line began a `fn` — its body block always breaks (stdlib style)
   k = a;
   while k < b {
     nd = kids[k] ?? Leaf { tok: "" };
     match nd {
       Leaf { tok } => {
         if !is_ws_tok(tok) {
+          if tok == "fn" { saw_fn = true; }
           // emit real tokens AND comments (whitespace is re-derived)
           gen_open = tok == "<" && is_generic_head(prev);
           gen_close = (tok == ">" || tok == ">>") && gdepth > 0;
@@ -280,13 +282,18 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
         if !pu && sp(prev, open) { s += " "; col += 1; }
         // dispatch: `Name { … }` in expression position is a struct-literal (container
         // rule); but a fn/return-type body `-> Type { … }` and a bare `{ … }` are BLOCKS.
+        // Definitions always break, matching the stdlib: struct/enum bodies as forced
+        // COMMA containers (one field/variant per line); interface bodies (newline-
+        // separated members) and fn bodies as forced BLOCKS.
+        is_struct_def = prev2 == "struct" || prev2 == "enum";
+        is_iface_def = prev2 == "interface";
         g = "";
-        if open == "{{" && is_camel(prev) && prev2 != "->" {
-          g = render_container(open, kids, close, col, indent);
+        if open == "{{" && is_camel(prev) && prev2 != "->" && !is_iface_def {
+          g = render_container(open, kids, close, col, indent, is_struct_def);
         } else if open == "{{" {
-          g = render_block(kids, close, col, indent);
+          g = render_block(kids, close, col, indent, saw_fn || is_iface_def);
         } else {
-          g = render_container(open, kids, close, col, indent);
+          g = render_container(open, kids, close, col, indent, false);
         }
         s += g;
         col = last_line_len(g, col);
@@ -345,13 +352,14 @@ fn render_elem(kids: vector<Node>, a: integer, b: integer, indent: integer) -> t
   s
 }
 
-// Data container: break iff a direct child is a `{…}` object, or too long.
-fn render_container(open: text, kids: vector<Node>, close: text, col: integer, indent: integer) -> text {
+// Data container: break iff `force` (a struct/enum DEFINITION → one field per line), a
+// direct child is a `{…}` object, a `//` comment is present, or it's too long.
+fn render_container(open: text, kids: vector<Node>, close: text, col: integer, indent: integer, force: boolean) -> text {
   n = len(kids);
   if !has_real(kids, 0, n) {
     s = open; s += close; return s;
   }
-  brk = false;
+  brk = force;
   k = 0;
   while k < n {
     nd = kids[k] ?? Leaf { tok: "" };
@@ -412,14 +420,15 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
   s
 }
 
-// Block: inline `{ expr }` when it holds ≤1 statement, no nested block, and fits;
-// otherwise multi-line with statements re-indented and preserved.
-fn render_block(kids: vector<Node>, close: text, col: integer, indent: integer) -> text {
+// Block: inline `{ expr }` when it holds ≤1 statement, no nested block, and fits — UNLESS
+// `force` (a fn body, which always breaks, matching the stdlib).  Otherwise multi-line
+// with statements re-indented and preserved.  An empty body stays `{}` regardless.
+fn render_block(kids: vector<Node>, close: text, col: integer, indent: integer, force: boolean) -> text {
   n = len(kids);
   if !has_real(kids, 0, n) {
     s = "{{"; s += close; return s;
   }
-  if count_semis(kids) <= 1 && !has_child_brace(kids) && !has_line_comment(kids, 0, n) {
+  if !force && count_semis(kids) <= 1 && !has_child_brace(kids) && !has_line_comment(kids, 0, n) {
     inline = "{{ ";
     inline += render_range(kids, 0, n, col + 2, indent);
     inline += " }}";
