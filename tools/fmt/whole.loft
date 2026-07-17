@@ -263,6 +263,15 @@ fn count_semis(kids: vector<Node>) -> integer {
   for nd in kids { match nd { Leaf { tok } => { if tok == ";" { c += 1; } }, Group { open, kids, close } => {}, } }
   c
 }
+// Count a bare top-level token among the DIRECT children (nested groups are skipped) — used to
+// read a group's body shape.  A top-level `:` marks a `field: value` pair (a struct/variant
+// literal); it is a distinct token from the path separator `::`, so `math::vec3` is never
+// miscounted as a field.
+fn count_top(kids: vector<Node>, t: text) -> integer {
+  c = 0;
+  for nd in kids { match nd { Leaf { tok } => { if tok == t { c += 1; } }, Group { open, kids, close } => {}, } }
+  c
+}
 fn has_child_brace(kids: vector<Node>) -> boolean {
   for nd in kids { match nd { Leaf { tok } => {}, Group { open, kids, close } => { if open == "{{" { return true; } }, } }
   false
@@ -350,6 +359,16 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
         is_iface_def = prev2 == "interface";
         is_struct_lit =
           is_camel(prev) && prev2 != "->" && prev2 != "." && !is_struct_def && !is_iface_def;
+        // The preceding-token test alone cannot tell `Construct { … }` from `Name` + a block:
+        // loft resolves that with TYPES (the compiler's `parse_object` does a
+        // `DefType::Struct | EnumValue` lookup), so a QUALIFIED name slips past the `.`/`->`
+        // patches — `-> math::Vec3 { … }` and `if x == scene::Point { … }` both put a CamelCase
+        // token (`Vec3`/`Point`, reached via `::`) right before a BLOCK, and got mis-rendered as
+        // comma containers (the `;,` / `},` mangle).  Confirm against the BODY, which is decisive
+        // and type-free: a struct/variant literal holds `field: value` pairs and NEVER a
+        // statement.  So keep the literal classification only if the body actually shows a
+        // top-level `field:` and no top-level `;` — otherwise it is a block.
+        if count_semis(kids) > 0 || count_top(kids, ":") == 0 { is_struct_lit = false; }
         g = "";
         if open == "{{" && (is_struct_def || is_struct_lit) {
           g = render_container(open, kids, close, col, indent, is_struct_def);

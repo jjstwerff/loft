@@ -152,6 +152,41 @@ fn formatter_enum_variant_if_body_is_a_block() {
 }
 
 #[test]
+fn formatter_qualified_variant_before_block_is_not_a_struct_lit() {
+    // Regression (tests/fixtures/libs/graphics/src/glb.loft): a CamelCase enum variant reached
+    // via `::` (`scene::Point`) — or a `::`-qualified return type (`-> math::Vec3`) — placed right
+    // before a BLOCK must render as a block, never a comma container.  The preceding-token
+    // heuristic mis-classified it as a struct literal, because the `.`/`->` exclusions do not
+    // cover a QUALIFIED name (loft resolves construct-vs-block with types; a formatter can't).  A
+    // wrapping body was then rendered as comma-separated "elements", emitting invalid `;,`.  The
+    // fix confirms against the body: a struct/variant literal holds `field:` pairs and never a
+    // statement, so a `;`-bearing body is a block whatever precedes the brace.
+    let src = std::fs::read_to_string("tools/fmt/whole.loft").expect("formatter source");
+    let mut p = Program::from_source(&src).expect("formatter compiles");
+    // a long body so a mis-rendered container WRAPS and exposes the `;,` (an inline one hides it).
+    let input = "enum Light { Point }\nfn f(lt: Light) -> text {\n  out = \"\";\n  if lt == Light::Point { aaaaaa = 111111; bbbbbb = 222222; cccccc = 333333; out += \"translation data here\"; }\n  out\n}\n";
+    let out = p
+        .call("format", &[Value::Text(input.into())])
+        .unwrap()
+        .into_text()
+        .unwrap();
+    // The exact corruption symptom: a statement turned into a comma-separated container element.
+    assert!(
+        !out.contains(";,"),
+        "qualified variant before a block must not render as a comma container: {out:?}"
+    );
+    // The body is a real block: statements keep their `;`, and none becomes a `stmt,` element.
+    assert!(
+        out.contains("aaaaaa = 111111;"),
+        "block statement preserved with its semicolon: {out:?}"
+    );
+    assert!(
+        !out.contains("aaaaaa = 111111,"),
+        "statement must not become a container element: {out:?}"
+    );
+}
+
+#[test]
 fn formatter_width_counts_characters_not_bytes() {
     // Regression (@PLN110): the formatter measures DISPLAY width, which is a CHARACTER
     // count — not a byte count. This assert line is 89 characters but 103 UTF-8 bytes
