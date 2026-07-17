@@ -252,7 +252,12 @@ impl LexConfig {
     /// escapes enabled.
     #[must_use]
     pub fn json() -> Self {
-        let tokens: HashSet<String> = ["{", "}", "[", "]", ":", ",", "-"]
+        // `.` is a token so a `Dialect::Lenient` qualified enum tag (`Category.Daily`)
+        // tokenises as `Ident "." Ident` rather than choking the lexer; the JSON
+        // parser raw-scans the full dotted identifier and skips past these tokens.
+        // (Fractional numbers like `1.5` are still read as a single number token
+        // before the `.` token rule applies.)
+        let tokens: HashSet<String> = ["{", "}", "[", "]", ":", ",", "-", "."]
             .iter()
             .map(|s| (*s).to_string())
             .collect();

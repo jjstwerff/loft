@@ -1,12 +1,11 @@
-// @PLN109 Phase 0 — THROWAWAY differential/golden scaffold (deleted in Phase 4).
-//
-// Freezes the CURRENT `crate::json::parse` / `parse_with` output over a liberal
-// corpus of real consumer shapes + edge cases, as a `Debug`-string golden
-// (`tests/json_corpus.golden`). It is the executable spec for the NO-HYBRID swap:
-// Phase 2's lexer-driven rewrite must reproduce every snapshot byte-for-byte
-// EXCEPT the one intended change — an integer-shaped `Parsed::Number(f64)` becomes
-// `Parsed::Int(i64)` (the owner's uniform-integer decision, incl. H5 big ints).
-// When Phase 2 lands, re-bless and hand-verify every diff is exactly that.
+// @PLN109 — golden regression guard for `crate::json::parse` / `parse_with` over a
+// liberal corpus of real consumer shapes + edge cases, as a `Debug`-string golden
+// (`tests/json_corpus.golden`). Born as the Phase-0 executable spec for the
+// lexer-driven rewrite (Phase 2 reproduced every snapshot byte-for-byte); it now
+// pins the @PLN109 end state, incl. the integer-shaped `Parsed::Int` values (H5).
+// Kept as a permanent guard rather than deleted — a cheap, exhaustive lock on the
+// number/escape/structure/error surface. Re-bless only for an intended change:
+//   bless: LOFT_BLESS_JSON_CORPUS=1 cargo test --test json_corpus
 //
 //   run:   cargo test --test json_corpus
 //   bless: LOFT_BLESS_JSON_CORPUS=1 cargo test --test json_corpus

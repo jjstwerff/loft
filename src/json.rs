@@ -308,6 +308,33 @@ impl ByteMapper {
     }
 }
 
+/// Scan a bare identifier in value position (`Dialect::Lenient`) from `start`,
+/// returning `(name, end)`.  Consumes `[A-Za-z0-9_]` and `.`-joined segments — a
+/// *qualified* enum tag like `Color.Red` (a `.` is taken only when followed by
+/// another identifier segment, so a trailing dot or `tag.0` is left for the
+/// caller).  Mirrors the retired `parse_bare_identifier_value`.
+fn scan_bare_ident(bytes: &[u8], start: usize) -> (String, usize) {
+    let mut j = start + 1;
+    loop {
+        while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+            j += 1;
+        }
+        if j + 1 < bytes.len()
+            && bytes[j] == b'.'
+            && (bytes[j + 1].is_ascii_alphabetic() || bytes[j + 1] == b'_')
+        {
+            j += 1; // consume the '.', loop to take the next segment
+        } else {
+            break;
+        }
+    }
+    // Safe: every accepted byte is ASCII.
+    let name = std::str::from_utf8(&bytes[start..j])
+        .expect("ASCII identifier slice")
+        .to_string();
+    (name, j)
+}
+
 /// Old-scanner string error detection + terminator scan, WITHOUT decoding (the
 /// decode is the lexer's `CString`).  `start` is the opening-quote offset.
 /// Returns the byte offset just past the closing `"` on success, or the first
@@ -553,13 +580,18 @@ impl<'a> JParser<'a> {
     ) -> Result<Parsed, (String, usize)> {
         let off = self.byte_of(pos);
         if self.dialect == Dialect::Lenient {
-            self.lx.cont();
-            self.value_end = self.peek_pos();
-            let value = match name {
+            // Raw-scan the FULL bare identifier — including `.`-joined segments for a
+            // qualified enum tag (`Category.Daily`) — since the lexer tokenises the
+            // dots separately.  Then re-sync the token stream past the whole thing.
+            let _ = name;
+            let (full, end) = scan_bare_ident(self.bytes, off);
+            self.value_end = end;
+            self.advance_past(end);
+            let value = match full.as_str() {
                 "null" => Parsed::Null,
                 "true" => Parsed::Bool(true),
                 "false" => Parsed::Bool(false),
-                _ => Parsed::Ident(name.to_string()),
+                _ => Parsed::Ident(full),
             };
             // `Tag{…}` — a type-tagged constructor (kept distinct from Object).
             if let Parsed::Ident(tag) = &value
@@ -859,10 +891,10 @@ mod tests {
 
     #[test]
     fn numbers() {
-        assert!(matches!(parse("0").unwrap(), Parsed::Number(v) if (v - 0.0).abs() < f64::EPSILON));
-        assert!(
-            matches!(parse("42").unwrap(), Parsed::Number(v) if (v - 42.0).abs() < f64::EPSILON)
-        );
+        // @PLN109 — integer-shaped numbers are `Parsed::Int`; fractional/exponent
+        // numbers stay `Parsed::Number`.
+        assert!(matches!(parse("0").unwrap(), Parsed::Int(0)));
+        assert!(matches!(parse("42").unwrap(), Parsed::Int(42)));
         assert!(
             matches!(parse("-17.5").unwrap(), Parsed::Number(v) if (v - (-17.5)).abs() < f64::EPSILON)
         );
@@ -989,7 +1021,7 @@ mod tests {
             panic!("expected array");
         };
         assert_eq!(v.len(), 3);
-        assert!(matches!(v[0], Parsed::Number(n) if (n - 1.0).abs() < f64::EPSILON));
+        assert!(matches!(v[0], Parsed::Int(1)));
         let nested = parse("[[1], [2, 3]]").unwrap();
         let Parsed::Array(outer) = nested else {
             panic!("expected array");
@@ -1006,7 +1038,7 @@ mod tests {
         };
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].0, "a");
-        assert!(matches!(fields[0].2, Parsed::Number(n) if (n - 1.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[0].2, Parsed::Int(1)));
         assert_eq!(fields[1].0, "b");
         assert!(matches!(fields[1].2, Parsed::Str(ref s) if s == "hi"));
     }
@@ -1133,7 +1165,7 @@ mod tests {
         };
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].0, "val");
-        assert!(matches!(fields[0].2, Parsed::Number(n) if (n - 7.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[0].2, Parsed::Int(7)));
     }
 
     #[test]
@@ -1237,7 +1269,7 @@ mod tests {
         assert_eq!(fields.len(), 4);
         assert!(matches!(&fields[0].2, Parsed::Str(s) if s == "Hello World!"));
         assert!(matches!(&fields[1].2, Parsed::Ident(s) if s == "Hourly"));
-        assert!(matches!(fields[2].2, Parsed::Number(n) if (n - 12345.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[2].2, Parsed::Int(12345)));
         assert!(matches!(fields[3].2, Parsed::Number(n) if (n - 0.15).abs() < 1e-9));
     }
 }
