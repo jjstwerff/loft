@@ -10,13 +10,14 @@ Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:lo
 ## Status
 
 **Live progress: S0 (bench) ✓, S1 (audit) ✓, S2 (deferred — not needed), S3 (discard borrow) ✓
-& gate-green, S9 (queue borrow) ✓ & gate-green — WIN CONFIRMED. `LOFT_PAR_SHARE=1` turns the
-S0 queue probe's per-worker `clone_for_worker` (8× COPY) into `clone_for_light_worker` (8×
-BORROW), and par_ms goes FLAT vs the unrelated heap: 0/61/122 MB ⇒ OFF 5/107/211 ms → ON
-3/4/4 ms (53× at 122 MB), `total` identical (383995) both ways. Next: S5/S6 (ASan + TSan) to
-harden the shared read as the data-race gate, then extend to the remaining queue variants +
-default-on. (Earlier this doc recorded a "model failure" — that was a stale-binary artifact,
-now retracted; see § Correction.)**
+& gate-green, S9 (queue borrow) ✓ & gate-green — WIN CONFIRMED, and S5 (ASan) + S6 (TSan) ✓ —
+the DATA-RACE GATE IS GREEN. `LOFT_PAR_SHARE=1` turns the S0 queue probe's per-worker
+`clone_for_worker` (8× COPY) into `clone_for_light_worker` (8× BORROW); par_ms goes FLAT vs the
+unrelated heap (0/61/122 MB ⇒ OFF 5/107/211 ms → ON 3/4/4 ms, 53× at 122 MB), `total` identical
+(383995). ASan 47/47 both flags; TSan clean 0 races flag ON + positive control fired. Next: flip
+`LOFT_PAR_SHARE` default-ON for the proven paths, extend to the remaining queue variants, and the
+A-vs-B decision (S10). (An earlier "model failure" note was a stale-binary artifact, retracted;
+§ Correction.)**
 Cherry-picked from the sibling `../loft` checkout into this working tree (the named code is
 in sync:
 `clone_for_worker` `allocation.rs:1277`, `borrow_locked_for_light_worker` `store.rs:1292`,
@@ -167,8 +168,8 @@ building on it).
 | **S2** ⏭️ | **`unsafe impl Sync for Store`** — *turned out NOT needed for S3* and is **deferred**. The `thread::scope` borrow path gives each worker an **owned** `WorkerStores` (moved into the spawn); no `&Store` crosses a thread, so `Store: Send` (already impl'd) suffices — S3 compiles clean without a `Sync` impl. Add it ONLY when a **rayon-based** shared dispatcher (S9 queue, where `&closure`/`&Stores` is shared across pool threads) actually demands it — keep the unsafe surface minimal. | (n/a — no impl added) | — |
 | **S3** ✅ | **Wire Option A behind `LOFT_PAR_SHARE` (default OFF) on `run_parallel_discard`** (no return-stitch → smallest surface). Flag ON → `run_parallel_discard_shared`: `thread::scope` + `clone_for_light_worker` (borrow parents read-only + a `WorkerPool` of worker-owned stores); flag OFF → `clone_for_worker` (today's copy, byte-identical). | **DONE** — flag OFF: threading suite **47/47**, unchanged. Flag ON: **47/47**, incl. `parallel_store_is_read_only_in_workers` + `par_discard_does_not_grow_parent_stores`. | unset the flag (default) |
 | **S4** | **S1 audit follow-through for discard** — if S1 flagged a mid-par parent touch in the discard path, move it before the spawn now; else assert (in a comment) the join-before-touch ordering at the call site. | discard path: no parent-store write/adopt between `scope.spawn` and join (code-read + comment). | — |
-| **S5** | **ASan with the flag ON** (`scripts/asan.sh -E 'binary(threading)'`) — the borrow-lifetime / UAF axis, `LOFT_PAR_SHARE=1`. | **47/47** (must match baseline). | flag off |
-| **S6** | **TSan with the flag ON + positive control** (@PLN54 S2: `-Zbuild-std` + target-scoped `-Zsanitizer=thread`) over the threading suite — the shared-read race axis. Include a **temporarily-patched positive control** (let a worker write a parent) and confirm **TSan FIRES**, then revert it, so the clean run is non-vacuous. | clean TSan with flag ON **AND** the positive control fires when armed. | flag off |
+| **S5** ✅ | **ASan** over `binary(threading)`, flag OFF *and* ON (`scripts/asan.sh`, pinned nightly). | **DONE — 47/47 both** flag OFF and ON; no UAF / leak (§ Gate results). | flag off |
+| **S6** ✅ | **TSan** (`-Zbuild-std` + target-scoped `-Zsanitizer=thread`, isolated `target/tsan/`) over the threading suite, flag ON, + a positive control. | **DONE — clean 47/47, 0 races** flag ON; the armed positive control **FIRED** (`data race in run_parallel_queue_shared::{closure#0}`), then reverted → clean run non-vacuous. | flag off |
 | **S7** | **Bench the win vs S0** — re-run S0 with `LOFT_PAR_SHARE=1`. | `par_ms` no longer grows with unrelated heap; `par` scales *down* with threads (inversion gone). | flag off |
 | **S8** | **Flip `LOFT_PAR_SHARE` default-ON for `discard`** once S5+S6+S7 pass. | full suite **both backends** green with default-on. | flip default back to OFF |
 | **S9** ✅ | **Extend to the Queue family.** `run_parallel_queue_shared` behind the flag (thread::scope + `clone_for_light_worker`, ordered `Vec<u64>`). The S0 probe routes here (range→vector→`n_parallel_queue`→`run_parallel_queue`). | **DONE — WIN CONFIRMED.** Threading **47/47** flag OFF+ON; par_ms flat vs heap ON (53× at 122 MB), `total` identical (§ S9 win). | unset flag (default) |
@@ -231,6 +232,26 @@ Traced (release build): flag OFF = **8× `clone_for_worker` COPY**, flag ON = **
 `par_ms` is **flat vs the heap with the flag ON** (the copy is gone) — up to **53× at 122 MB** —
 and `total` is **identical (383995)** both ways (semantics preserved). This is exactly the
 routing inversion (S0), eliminated.
+
+## Gate results — S5 (ASan) + S6 (TSan), the data-race spec (2026-07-17)
+
+The borrow shares a parent buffer across worker threads, so a data race is the one fault loft
+cannot null-out — the sanitizers ARE the acceptance bar.
+
+- **S5 ASan** (`scripts/asan.sh -E 'binary(threading)'`, pinned nightly, isolated `target/asan/`):
+  **47/47 flag OFF and 47/47 flag ON**, no `AddressSanitizer`/`LeakSanitizer` report. The
+  read-only borrow (`clone_for_light_worker`, `borrowed:true` ⇒ `Drop` skips dealloc) has no
+  UAF and no double-free; the parent outlives every worker (rayon `install` / `thread::scope`).
+- **S6 TSan** (`cargo +nightly test -Zbuild-std --target … --config …rustflags=["-Zsanitizer=thread"]
+  --release --test threading`, isolated `target/tsan/`, `LOFT_PAR_SHARE=1`): **clean, 47/47, 0
+  races.** The shared read across workers is race-free. **Positive control** (env-gated
+  `PLN108_RACE`: every worker does one unsynchronised raw write to a shared byte) **FIRED** —
+  `SUMMARY: ThreadSanitizer: data race … in run_parallel_queue_shared::{closure#0}` — so the clean
+  run is non-vacuous. Control reverted after; source carries no scaffolding.
+
+This resolves the plan's central worry (Option A is "contract-carried, not type-carried"): the
+contract now has *two* enforcers — the compiler (`&Stores`, C93) AND the sanitizers, run green on
+the actual flag-ON path. S10's A-vs-B decision can record **A stands** (no fragility surfaced).
 
 ## Correction — the retracted "model failure"
 
