@@ -9,7 +9,15 @@ Tracker: [@PLN109](https://github.com/loft-lang/plans/issues/109) · `subject:lo
 
 ## Status
 
-Open — design ready, step 1b landed. Triggered by @PLN102 arc-E lib-audit **H5**
+**✅ COMPLETE (2026-07-17).** All phases (0–5) done on `tuxedo_work2`. `crate::json`
+is driven entirely by loft's own JSON-mode lexer (hand-rolled scanner deleted, no
+hybrid); an integer-shaped JSON number preserves its exact i64 as `Parsed::Int` /
+`JsonValue::JInteger`, so **@PLN102 H5 is fixed** on both backends, typed and generic.
+Full suite green (bar known env flakes); golden regression guard pins the end state.
+
+---
+
+Was: Open — design ready, step 1b landed. Triggered by @PLN102 arc-E lib-audit **H5**
 (JSON integers > 2⁵³ silently round through f64, corrupting even a known-type `integer`
 field on deserialize). Rather than patch the duplicate scanner, retire it: drive JSON
 tokenization from loft's own lexer, which already distinguishes int from float. **H5 is
@@ -138,7 +146,7 @@ committing to the phasing:
 | 2e | **Error parity** — reproduce the old scanner's messages + `byte_offset`s + `path` for every error cell in the golden; `json_errors()` unchanged. Then swap `parse`/`parse_with`; golden unchanged. | Open |
 | 3 | ✅ **DONE** — uniform integer semantics. `Parsed::Int(i64)` + `Parsed::as_i64`/`as_f64`; integer-shaped lexemes (no `.`/exp, i64-fitting) → `Int`; `JsonValue::JInteger{value:integer}` (last variant) + `JV_DISCR_INT=7`; `materialise_primitive_into` / `json_parse_into_stores` / `dbref_to_parsed` / `json_to_text_at` / `format.rs::write_jsonvalue` / `n_as_long`/`n_as_number`/`n_kind` + the native `t_9JsonValue_*` mirror + `unwrap_long`/`unwrap_int`/`unwrap_float` / `push_kind_mismatch` all handle `JInteger`; the ~18 Rust `Parsed::Number` consumer sites route through `as_i64`/`as_f64`; loft JNumber consumers (194/198 + issues classify) updated. **H5 fixed on BOTH backends, typed AND generic** (`{"id":9007199254740993}` → exact). Golden re-blessed (int flips only; overflow >i64 stays `Number`). | **Done** |
 | 4 | ✅ **DONE (folded into Phase 2)** — the hand-rolled scanner is deleted; `crate::json` is a thin layer over loft's lexer. **No hybrid remains.** | **Done** |
-| 5 | **Verify + freeze** — full suite both backends; corpus → regression suite; H5 typed-integer golden added; STDLIB.md JSON number semantics (int→i64, float→f64, > i64 ceiling) + lib-audit H5 → DONE. | Open |
+| 5 | ✅ **DONE** — full suite both backends green (only the known `s5`/`s7`-debugger + `wasm_debug_relay` env flakes fail, unrelated); `tests/json_corpus` graduated to a permanent regression guard (pins the JInteger end state incl. H5); STDLIB.md JSON number semantics + `JInteger` documented; lib-audit **H5 → FIXED**. Also fixed en route: Lenient qualified enum tags (`Category.Daily`), lexer lone-high-surrogate + non-low-`\u` decoding, JSON-invalid number rejection (`007`). | **Done** |
 
 ## Execution — safe small steps (loft2 baseline, verified 2026-07-17)
 
