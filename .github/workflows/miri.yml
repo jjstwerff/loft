@@ -308,6 +308,30 @@ jobs:
         run: sudo apt-get install -y libgl1-mesa-dev libasound2-dev pkg-config
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
+      # LeakSanitizer suppressions match by DEMANGLED FRAME NAME, so the leak stacks
+      # MUST be symbolized — otherwise `leak:ir_read` (etc.) cannot match the intentional
+      # bounded Box::leak interner and the gate reds on a benign leak (raw `loft+0x…`
+      # frames).  GitHub runners ship llvm-symbolizer only under a VERSIONED name that the
+      # sanitizer's default PATH lookup (`llvm-symbolizer`) misses, so resolve it and point
+      # the runtime at it explicitly.  Persists via $GITHUB_ENV to every later step.
+      - name: Point the sanitizer at llvm-symbolizer (LSan suppressions need symbols)
+        shell: bash
+        run: |
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            SYM=$(command -v llvm-symbolizer || true)
+            [ -z "$SYM" ] && SYM=$(ls /usr/lib/llvm-*/bin/llvm-symbolizer /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -1)
+          else
+            SYM=$(command -v llvm-symbolizer || true)
+            [ -z "$SYM" ] && SYM=$(ls "$(brew --prefix llvm 2>/dev/null)/bin/llvm-symbolizer" 2>/dev/null | head -1)
+            [ -z "$SYM" ] && SYM=$(xcrun --find llvm-symbolizer 2>/dev/null || true)
+          fi
+          echo "llvm-symbolizer resolved to: ${SYM:-NONE}"
+          if [ -n "$SYM" ]; then
+            "$SYM" --version | head -1 || true
+            echo "ASAN_SYMBOLIZER_PATH=$SYM" >> "$GITHUB_ENV"
+          else
+            echo "::warning::no llvm-symbolizer found — LSan stacks stay unsymbolized and suppressions may not match"
+          fi
       # The leak gate = the ASan sweep's command with detect_leaks=1 instead of 0, so
       # nextest runs each test in its OWN process and LSan fails THAT test at exit if it
       # leaks — per-test attribution (the best "work we might miss" signal), implicit
