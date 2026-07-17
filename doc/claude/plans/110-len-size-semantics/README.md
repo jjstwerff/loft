@@ -171,7 +171,7 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 1a | `size(vector<T>)` = N × in-buffer stride + tests | additive · green | ✅ Done — `OpSizeVector`, both backends; `tests/scripts/pln110-size-vector.loft` |
 | 1b | `size(struct)` = packed record size (inline sub-records fully; `text`/heap fields as 4B) + tests | additive · green | ✅ Done — `OpSizeStruct`, both backends; `tests/scripts/pln110-size-struct.loft`. Enums deferred to their own step |
 | 1c | `size(hash)` = full bucket table (holes included) + tests | additive · green | ✅ Done — `OpSizeHash`/`hash::table_bytes` (stdlib overload), both backends; `tests/scripts/pln110-size-hash.loft` |
-| 1d | `size(sorted / index / spatial)` (table/tree bytes) + tests | additive · green | Open |
+| 1d | `size(sorted)` = buffer (len×stride); `size(index/spatial)` = a **single node record** (no aggregate structure — tree bookkeeping is per-record) + tests | additive · green | ✅ Done — both backends; `tests/scripts/pln110-size-sorted-index-spatial.loft` |
 | 1e | `size(<scalar>)` = storage width (narrow-aware) + tests | additive · green | ✅ Done — `OpSizeScalar`, both backends; `tests/scripts/pln110-size-scalar.loft`. Settles `size(character)`=4 (size-half of 1g) |
 | 1g | **(found in 0f)** `size(character)` = UTF-8 content byte width (1–4, *not* the 4-byte slot); redefine `len(character)` = 1. Mirrors text; ~0 callers, low-risk. + tests | additive · green | Open |
 | 1f | `s[p]` unchanged — the original (pre-Claude) implementation, already has its own tests (verified: mid-char snaps to the char's start; out-of-byte-range → null; negatives from the end). Not a build; just **don't regress**. | no-op | Open |

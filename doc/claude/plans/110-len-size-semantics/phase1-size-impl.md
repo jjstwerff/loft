@@ -79,8 +79,8 @@ descriptor, the #477 stride `element_size(inner).max(4)` — `size` reports it f
 
 ## Remaining sub-arcs — formulas + open questions
 
-Done so far: **1a (vector), 1b (struct), 1e (scalar), 1c (hash)**. Remaining: **1d (sorted/index/
-spatial) → enums → 1g (`len(character)` contract call, deferred).** Rationale: hash/sorted/index/
+Done so far: **1a (vector), 1b (struct), 1e (scalar), 1c (hash), 1d (sorted/index/spatial)**.
+Remaining: **enums → 1g (`len(character)` contract call, deferred).** Rationale: hash/sorted/index/
 spatial each need their collection's table/tree byte accounting; enums split into simple (scalar-
 like) and data (struct-like); 1g's *size* half is already done (via 1e, `size(character)`=4), leaving
 only the deferred `len(character)` decision.
@@ -123,10 +123,24 @@ only the deferred `len(character)` decision.
   table (room 10) → 16 slots × 4 = 64; after rehashes (room 10→19→37, load 0.75) → 136 → 280. The
   step sizes encode the resize policy, so a policy change flips the test (a conscious layout change,
   @PLN97).
-- **1d `size(sorted / index / spatial)`** = the collection's table/tree bytes (sorted: the
-  length-prefixed sorted buffer like vector; index: the red-black tree nodes; spatial: the radix/
-  Morton tree). Each reads its structure's allocated byte span. **Open:** confirm whether "holes/
-  spare nodes" count (recommend: the allocated structure bytes, mirroring hash's "full table").
+- **1d `size(sorted / index / spatial)` ✅ DONE** — these split by whether there IS an aggregate
+  structure (owner guidance 2026-07-17):
+  - **`sorted<T[key]>`** shares vector's length-prefixed BUFFER → `size = len × stride` (reuse
+    `OpSizeVector`, stride = `vector_elem_iter_stride(content())` = the node record inline). A real
+    aggregate: `size(sorted) == len × size(node)`.
+  - **`index<T[key]>`** (red-black tree) and **`spatial<T[keys]>`** (radix/Morton tree) keep their
+    ordering as bookkeeping embedded IN each element record — **there is NO separate structure
+    allocation to sum**, so `size` reports a **SINGLE node record** (a compile-time constant,
+    independent of the element count; reuse `OpSizeStruct` with `database.size(element node type)`).
+    An index node = the element + its RB bookkeeping (left/right/colour), so a plain `{int,int}` node
+    is 25 (16 + 9). `size(index)` stays constant as `len` grows; an empty index still reports the
+    node size.
+  Verified both backends (`tests/scripts/pln110-size-sorted-index-spatial.loft`): sorted 3 → 75 =
+  3 × 25; index (2 then 5 elements) → 25 (unchanged); spatial → 24 (one `{int,int,int}` record).
+  Reusing `OpSizeVector`/`OpSizeStruct` for `Sorted`/`Index`/`Radix` args works on both backends (no
+  dedicated op needed). ⚠ Note: a struct used as a keyed-collection element carries the bookkeeping
+  everywhere, so `size(K{…})` is 25 (not 16) in a program where `K` is an index element — a
+  whole-program layout property, like the vector/array promotion.
 - **1f `s[p]`** — no-op (already correct; just don't regress). Covered by the 0e golden fixture § B.
 
 ## 1g `size(character)` / `len(character)` — DEFERRED, needs a contract call

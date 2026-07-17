@@ -3130,6 +3130,48 @@ impl Parser {
                 return crate::data::I64.clone();
             }
             Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Sorted(_, _, _))
+        {
+            // @PLN110 1d: a `sorted` shares vector's length-prefixed buffer, so its
+            // size is that buffer = element count × the element's in-buffer stride
+            // (identical to `size(vector)` — reuse `OpSizeVector`).
+            let elem = types[0].content();
+            let stride = self.vector_elem_iter_stride(&elem);
+            let op_d_nr = self.data.def_nr("OpSizeVector");
+            if op_d_nr != u32::MAX {
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(stride)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Index(_, _, _) | Type::Radix(_, _, _))
+        {
+            // @PLN110 1d: an `index` (red-black tree) / `spatial` (radix/Morton tree)
+            // keeps its ordering as bookkeeping embedded IN each element record —
+            // there is NO separate structure allocation to sum, so `size` reports a
+            // SINGLE node record's size (a compile-time constant), reusing the
+            // struct-record path.  The arg is evaluated; only its element type feeds
+            // the const record size.
+            let elem_kt = match &types[0] {
+                Type::Index(tp, _, _) | Type::Radix(tp, _, _) => self.data.def(*tp).known_type(),
+                _ => u16::MAX,
+            };
+            let op_d_nr = self.data.def_nr("OpSizeStruct");
+            if elem_kt != u16::MAX && op_d_nr != u32::MAX {
+                let sz = self.database.size(elem_kt);
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(sz)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            Type::Unknown(0)
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {
