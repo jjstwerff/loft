@@ -59,6 +59,21 @@ are different units and **do not compose**. `for i in 0..size(s) { s[i] }` is th
 walk; `for i in 0..len(s) { s[i] }` is a units error, caught by the strict-index lint made
 **default-on for the text case** (today's opt-in `LOFT_LINT_STRICT_INDEX`).
 
+## Whole-surface consistency — no half-features
+
+Text has **full** support, so "secondary priority" does **not** license warts: the redesign
+must leave the **entire** text surface coherent, not just `len`/`size`. There are two consistent
+worlds, and every operation must sit clearly in one:
+
+- **Byte world (O(1), byte offsets):** `size`, `s[p]`, slices `s[a..b]`, `find`/`rfind` (byte
+  offsets), `byte_at`, the `#index` / `#next` loop attributes.
+- **Character world:** `len` (char count), `for c in s` iteration, the character classifiers.
+
+Every method's return **unit** must be consistent and documented (e.g. `find` returns a **byte
+offset** → it pairs with `s[p]` and slicing, never with `len`). The Phase-0 inventory audits the
+**whole** surface for unit consistency — not only `len`/`size` — and Phase 4 validates it, so we
+never fix `len`/`size` and leave a slice or a method's return-unit mismatched.
+
 ## Several new `size` implementations
 
 Today `size` is essentially text-only and returns a *character* count; the byte-footprint
@@ -123,6 +138,7 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 0c | Inventory in `tests/` (scripts, docs, `code!` cases) + examples + STDLIB.md | read-only | Open |
 | 0d | Inventory in the consumer programs (games / crawler / `lib/markdown`) | read-only | Open |
 | 0e | Land the golden-behavior corpus for the text-using consumers (the visibility baseline) | additive · green | Open |
+| 0f | Audit the **whole** text surface (slices, `#index`/`#next`, `find`/`rfind`, `byte_at`, classifiers) for byte-vs-char unit consistency; reconcile any mismatch so the surface is coherent — **no half-features** | read-only + reconcile | Open |
 | 1a | `size(vector<T>)` (buffer bytes; members as inline size / 4-byte ref) + tests | additive · green | Open |
 | 1b | `size(struct)` (flat allocation; inline sub-records; `text`/heap fields as ref width) + tests | additive · green | Open |
 | 1c | `size(hash)` (full table, holes included) + tests | additive · green | Open |
