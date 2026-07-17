@@ -59,13 +59,58 @@ fn closure_shape(ret: &Type) -> ClosureShape {
         ClosureShape::Text
     } else if matches!(ret, Type::Function(_, _, _)) {
         ClosureShape::Fn
-    } else if ret.heap_def_nr().is_some() {
+    } else if is_ref_return(ret) {
         ClosureShape::HeapRef
     } else if matches!(ret, Type::Float | Type::Single) {
         ClosureShape::Float
     } else {
         ClosureShape::Scalar
     }
+}
+
+/// True when the worker's return value is delivered as a `DbRef` that the ref
+/// path deep-copies (`n_parallel_queue_ref_native`).  Covers named heap defs
+/// (struct `Reference` / struct-`Enum`) and `Vector` — the cases `heap_ref_kt`
+/// can size.  A vector-returning worker was previously mis-routed to the scalar
+/// path, which cast `DbRef as i64` (E0605, the native-refreturn bug).
+///
+/// Keyed collections (`Sorted`/`Hash`/`Index`/`Radix`) are also DbRef returns
+/// (the parser groups them with `return_size = -1`) but have no `main_<kind><T>`
+/// storage wrapper for `heap_ref_kt` to size, so they stay off this path for now
+/// — a worker returning one still fails to compile loudly rather than copying at
+/// the wrong stride.  Extending `heap_ref_kt` to them is the follow-up.
+fn is_ref_return(ret: &Type) -> bool {
+    ret.heap_def_nr().is_some() || matches!(ret, Type::Vector(_, _))
+}
+
+/// The `(struct_size, known_type)` a `HeapRef` worker return is copied as by
+/// `n_parallel_queue_ref_native` / `n_parallel_for_ref_native`: the storage type
+/// of the value the worker returns.
+///
+/// - Named heap defs (struct `Reference`, struct-`Enum`): the def's own
+///   `known_type`, sized directly.
+/// - `Vector<T>`: the `main_vector<T>` wrapper struct the worker actually
+///   allocates (its `vector` field at offset 0 holds the data).  The wrapper is
+///   registered during parsing — the worker built one — so this read-only
+///   by-name lookup always resolves at codegen time.
+///
+/// Returns `(0, 0)` only for a type `is_ref_return` never admits (a defensive
+/// default; a `(0, 0)` stride would make the runtime copy nothing).
+fn heap_ref_kt(ctx: &EmitCtx<'_, '_>, ret: &Type) -> (i32, i32) {
+    let data = ctx.output.data;
+    let kt = if let Some(d_nr) = ret.heap_def_nr() {
+        data.def(d_nr).known_type()
+    } else if let Type::Vector(elem, _) = ret {
+        // Mirror `Data::vector_def`'s wrapper naming exactly.
+        let wrapper = data.def_nr(&format!("main_vector<{}>", elem.name(data)));
+        if wrapper == u32::MAX {
+            return (0, 0);
+        }
+        data.def(wrapper).known_type()
+    } else {
+        return (0, 0);
+    };
+    (i32::from(ctx.output.stores.size(kt)), i32::from(kt))
 }
 
 fn helper_name(shape: ClosureShape) -> &'static str {
@@ -296,15 +341,9 @@ impl OpEmitter for ParallelForEmitter {
         write!(ctx.w, ", ")?;
         if shape == ClosureShape::HeapRef {
             // Ref mode: emit struct_size and known_type instead of
-            // return_size.  Both Type::Reference and the heap-allocated
-            // struct-enum (`Type::Enum(_, true, _)`) route here;
-            // `heap_def_nr()` returns the def for both.
-            let (struct_size, known_type) = if let Some(d_nr) = worker_ret.heap_def_nr() {
-                let kt = ctx.output.data.def(d_nr).known_type();
-                (i32::from(ctx.output.stores.size(kt)), i32::from(kt))
-            } else {
-                (0, 0)
-            };
+            // return_size — the storage type the runtime deep-copies each
+            // worker result as (struct/enum def, or a vector's wrapper).
+            let (struct_size, known_type) = heap_ref_kt(ctx, &worker_ret);
             write!(ctx.w, "{struct_size}, {known_type}, ")?;
         } else {
             ctx.emit_i32_slot(&args[2])?;
@@ -474,12 +513,7 @@ impl OpEmitter for ParallelQueueEmitter {
         ctx.emit_i32_slot(&args[1])?;
         write!(ctx.w, ", ")?;
         if shape == ClosureShape::HeapRef {
-            let (struct_size, known_type) = if let Some(d_nr) = worker_ret.heap_def_nr() {
-                let kt = ctx.output.data.def(d_nr).known_type();
-                (i32::from(ctx.output.stores.size(kt)), i32::from(kt))
-            } else {
-                (0, 0)
-            };
+            let (struct_size, known_type) = heap_ref_kt(ctx, &worker_ret);
             write!(ctx.w, "{struct_size}, {known_type}, ")?;
         } else {
             ctx.emit_i32_slot(&args[2])?;

@@ -3434,8 +3434,13 @@ where
         return 0;
     }
 
+    // Reserve one leading element slot so no result lands at `pos == 0`: a vector
+    // (and every keyed collection) reads `pos == 0` as its null/empty sentinel
+    // (`vector::length_vector`), so an element stored there would always read as
+    // empty.  Structs have no such sentinel, but the uniform `+1` offset is
+    // harmless for them — every `refs[i]` carries its true position to the reader.
     let result_db = stores.null();
-    let total_words = ((n as u32) * sz).div_ceil(8).max(1);
+    let total_words = ((n as u32 + 1) * sz).div_ceil(8).max(1);
     let result_cr = stores.claim(&result_db, total_words);
     let result_store_nr = result_db.store_nr;
     let result_rec = result_cr.rec;
@@ -3449,7 +3454,7 @@ where
             let dest = DbRef {
                 store_nr: result_store_nr,
                 rec: result_rec,
-                pos: (i as u32) * sz,
+                pos: (i as u32 + 1) * sz,
             };
             if unowned {
                 stores.copy_from_worker_unowned(&src_ref, &dest, &mut worker_stores, kt);

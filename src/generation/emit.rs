@@ -1144,11 +1144,25 @@ impl Output<'_> {
     /// default.  Use at tp-number, field-index, and flag-enum
     /// argument slots where the runtime signature is still i32.
     pub(super) fn emit_i32_slot(&mut self, w: &mut dyn Write, val: &Value) -> std::io::Result<()> {
-        let saved = self.i32_literal_context;
-        self.i32_literal_context = true;
-        let r = self.output_code_inner(w, val);
-        self.i32_literal_context = saved;
-        r
+        // A bare integer literal renders directly as `N_i32` (the i32-literal
+        // context).  Anything else — a variable or a computed expression, e.g. a
+        // runtime `par(…, threads)` thread count — is an `i64`/typed value in
+        // normal context, so emit it there and cast the whole expression to
+        // `i32`.  Turning on the i32-literal context around a non-literal instead
+        // would leave the value `i64` (the flag only rewrites bare literals) — the
+        // E0308 a variable thread count used to hit — and would also mint `i32`
+        // literals inside any `i64` arithmetic the expression contains.
+        if matches!(val.unspan(), Value::Int(_)) {
+            let saved = self.i32_literal_context;
+            self.i32_literal_context = true;
+            let r = self.output_code_inner(w, val);
+            self.i32_literal_context = saved;
+            r
+        } else {
+            write!(w, "(")?;
+            self.output_code_inner(w, val)?;
+            write!(w, " as i32)")
+        }
     }
 
     /// Emit a typed null sentinel for the given type.
