@@ -171,7 +171,7 @@ fn has_real(kids: vector<Node>, a: integer, b: integer) -> boolean {
 }
 
 // The line-width budget — the "unless too long" fallback (owner dial).
-fn width() -> integer { (env_variable("LOFT_FMT_WIDTH") ?? "60") as integer ?? 60 }
+fn width() -> integer { (env_variable("LOFT_FMT_WIDTH") ?? "100") as integer ?? 100 }
 
 // The column after appending `g` at column `before`: `before + len` on the same line,
 // or the length of `g`'s LAST line if it broke.

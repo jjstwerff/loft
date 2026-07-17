@@ -88,6 +88,9 @@ fn lex(src: text) -> vector<text> {
     } else if c == '"' { i = scan_string(chars, i, n); }
     else if c == '\'' { i = scan_char(chars, i, n); }
     else if is_word(c) { while i < n && is_word(chars[i] ?? ' ') { i += 1; } }
+    // `#directive` (e.g. `#rust`, `#lexeme`, `#impure`) is ONE token — so a following
+    // string can be recognised as the directive's payload (`#rust"…"` stays tight).
+    else if c == '#' { i += 1; while i < n && is_word(chars[i] ?? ' ') { i += 1; } }
     else if i + 2 < n && c == '.' && (chars[i + 1] ?? ' ') == '.' && (chars[i + 2] ?? ' ') == '=' { i += 3; }
     else if i + 1 < n && two_char(c, chars[i + 1] ?? ' ') { i += 2; }
     else { i += 1; }
@@ -151,13 +154,21 @@ fn ends_word(t: text) -> boolean {
   for c in t { r = c.is_alphanumeric() || c == '_'; }
   r
 }
-// NB: `<` / `>` are deliberately EXCLUDED — they are ambiguous with generics
-// (`vector<T>` must stay tight); disambiguating comparison-vs-generic is a later refinement.
+// `<` / `>` ARE binops here (comparison → spaced, e.g. `pos < 0`).  render_range
+// overrides them to TIGHT when they open/close a GENERIC (`vector<T>`), tracked via
+// is_generic_head + a generic-depth counter — so only the comparison sense reaches `sp`.
 fn is_binop(t: text) -> boolean {
-  t == "=" || t == "==" || t == "!=" || t == "<=" || t == ">="
+  t == "=" || t == "==" || t == "!=" || t == "<=" || t == ">=" || t == "<" || t == ">"
     || t == "&&" || t == "||" || t == "??" || t == "->" || t == "=>"
     || t == "+" || t == "-" || t == "*" || t == "/" || t == "%"
     || t == "+=" || t == "-=" || t == "*=" || t == "/=" || t == "%="
+}
+
+// A token before `<` that makes it a GENERIC open (tight), not a comparison: a builtin
+// container keyword or any Camel-case type name (`vector<T>`, `sorted<K>`, `Node<T>`).
+fn is_generic_head(t: text) -> boolean {
+  is_camel(t) || t == "vector" || t == "hash" || t == "sorted"
+    || t == "index" || t == "spatial" || t == "radix"
 }
 
 // A `-`/`+`/`*`/`&` right after an expression-START is UNARY -> no space after it.
@@ -168,6 +179,10 @@ fn unary_ctx(prev: text) -> boolean {
 
 fn sp(prev: text, tok: text) -> boolean {
   if prev == "" { return false; }
+  // `#rust"…"` — the raw-code payload hugs its directive (other `#dir name` still space).
+  if prev == "#rust" && tok.starts_with("\"") { return false; }
+  // a LONE `#` (source had `# word`) must keep a space, else re-lex re-merges `#word`.
+  if prev == "#" { return true; }
   if prev == "(" || prev == "[" { return false; }
   if tok == ")" || tok == "]" || tok == "," || tok == ";" || tok == ":" { return false; }
   if tok == "." || prev == "." || tok == "::" || prev == "::" { return false; }
@@ -216,6 +231,18 @@ fn has_child_brace(kids: vector<Node>) -> boolean {
   for nd in kids { match nd { Leaf { tok } => {}, Group { open, kids, close } => { if open == "{{" { return true; } }, } }
   false
 }
+// A `//` line comment among the DIRECT children — it runs to end-of-line, so inlining
+// this range would let the comment swallow whatever follows (the closing brace!).
+// Nested groups manage their own comments (their inline guard fires there).
+fn has_line_comment(kids: vector<Node>, a: integer, b: integer) -> boolean {
+  k = a;
+  while k < b {
+    nd = kids[k] ?? Leaf { tok: "" };
+    match nd { Leaf { tok } => { if tok.starts_with("//") { return true; } }, Group { open, kids, close } => {}, }
+    k += 1;
+  }
+  false
+}
 
 // ── render (Step 4 whole-file) ───────────────────────────────────────────────
 
@@ -223,8 +250,10 @@ fn has_child_brace(kids: vector<Node>) -> boolean {
 fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, indent: integer) -> text {
   s = "";
   prev = "";
+  prev2 = "";   // token before prev (whitespace skipped) — for `-> Type {` dispatch
   col = col0;
   pu = false;   // pending unary: suppress the space before the next token
+  gdepth = 0;   // generic-nesting depth: inside `<…>`, `<`/`>`/`>>` render TIGHT
   k = a;
   while k < b {
     nd = kids[k] ?? Leaf { tok: "" };
@@ -232,19 +261,29 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
       Leaf { tok } => {
         if !is_ws_tok(tok) {
           // emit real tokens AND comments (whitespace is re-derived)
-          if !pu && sp(prev, tok) { s += " "; col += 1; }
+          gen_open = tok == "<" && is_generic_head(prev);
+          gen_close = (tok == ">" || tok == ">>") && gdepth > 0;
+          if !pu && !gen_open && !gen_close && sp(prev, tok) { s += " "; col += 1; }
           s += tok;
           col += tok.size();
-          pu = (tok == "-" || tok == "+" || tok == "*" || tok == "&") && unary_ctx(prev);
+          if gen_open { gdepth += 1; }
+          else if tok == ">>" && gdepth >= 2 { gdepth -= 2; }
+          else if gen_close { gdepth -= 1; }
+          // pending-tight for the NEXT token: after a generic `<` (so `<T` hugs) or a unary op
+          pu = gen_open
+            || ((tok == "-" || tok == "+" || tok == "*" || tok == "&") && unary_ctx(prev));
+          prev2 = prev;
           prev = tok;
         }
       },
       Group { open, kids, close } => {
         if !pu && sp(prev, open) { s += " "; col += 1; }
-        // dispatch inline: a `{…}` after a Camel type name is a struct-lit/def
-        // (container rule); otherwise a block.
+        // dispatch: `Name { … }` in expression position is a struct-literal (container
+        // rule); but a fn/return-type body `-> Type { … }` and a bare `{ … }` are BLOCKS.
         g = "";
-        if open == "{{" && !is_camel(prev) {
+        if open == "{{" && is_camel(prev) && prev2 != "->" {
+          g = render_container(open, kids, close, col, indent);
+        } else if open == "{{" {
           g = render_block(kids, close, col, indent);
         } else {
           g = render_container(open, kids, close, col, indent);
@@ -252,11 +291,57 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
         s += g;
         col = last_line_len(g, col);
         pu = false;
+        prev2 = prev;
         prev = close;
       },
     }
     k += 1;
   }
+  s
+}
+
+// One broken-container element — kids[a..b] spans a field's LEADING comments, its code, its
+// own comma (if present), and a SAME-LINE trailing comment (if the caller absorbed one).
+// Rendered as full line(s) at `indent`: leading comments each on their own line; then the
+// code on one line with the comma placed BEFORE the trailing comment (`field: val, // note`)
+// — so a `//` never swallows code or the comma, and the layout is a fixpoint (idempotent).
+fn render_elem(kids: vector<Node>, a: integer, b: integer, indent: integer) -> text {
+  first_code = 0 - 1;
+  comma = 0 - 1;
+  tcmt = 0 - 1;
+  k = a;
+  while k < b {
+    nd = kids[k] ?? Leaf { tok: "" };
+    match nd {
+      Leaf { tok } => {
+        if tok == "," { if comma < 0 { comma = k; } }
+        else if tok.starts_with("//") { if first_code >= 0 && tcmt < 0 { tcmt = k; } }
+        else if !is_ws_tok(tok) { if first_code < 0 { first_code = k; } }
+      },
+      Group { open, kids, close } => { if first_code < 0 { first_code = k; } },
+    }
+    k += 1;
+  }
+  // a comment BEFORE the comma isn't a trailing comment — fold it back into the code span
+  if comma >= 0 && tcmt >= 0 && tcmt < comma { tcmt = 0 - 1; }
+  s = "";
+  lead_end = if first_code >= 0 { first_code } else { b };
+  k = a;
+  while k < lead_end {
+    nd = kids[k] ?? Leaf { tok: "" };
+    match nd { Leaf { tok } => { if tok.starts_with("//") { s += spaces(indent); s += tok; s += "\n"; } }, Group { open, kids, close } => {}, }
+    k += 1;
+  }
+  if first_code < 0 { return s; }   // comment-only element: no trailing comma
+  code_end = if comma >= 0 { comma } else if tcmt >= 0 { tcmt } else { b };
+  s += spaces(indent);
+  s += render_range(kids, first_code, code_end, indent, indent);
+  s += ",";
+  if tcmt >= 0 {
+    ct = kids[tcmt] ?? Leaf { tok: "" };
+    match ct { Leaf { tok } => { s += " "; s += tok; }, Group { open, kids, close } => {}, }
+  }
+  s += "\n";
   s
 }
 
@@ -273,6 +358,8 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
     match nd { Leaf { tok } => {}, Group { open, kids, close } => { if open == "{{" { brk = true; } }, }
     k += 1;
   }
+  // a `//` comment can't live inline (it would swallow the close) → force multi-line
+  if has_line_comment(kids, 0, n) { brk = true; }
   if !brk {
     pad = if open == "{{" { " " } else { "" };
     inline = open;
@@ -286,23 +373,39 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
   s = open;
   s += "\n";
   start = 0;
-  k = 0;
-  while k <= n {
-    at_end = k == n;
-    is_comma = false;
-    if !at_end {
+  while start < n {
+    // find this element's comma (top-level)
+    comma = 0 - 1;
+    k = start;
+    while k < n {
       nd = kids[k] ?? Leaf { tok: "" };
-      match nd { Leaf { tok } => { if tok == "," { is_comma = true; } }, Group { open, kids, close } => {}, }
+      match nd { Leaf { tok } => { if tok == "," { comma = k; } }, Group { open, kids, close } => {}, }
+      if comma >= 0 { break; }
+      k += 1;
     }
-    if is_comma || at_end {
-      if has_real(kids, start, k) {
-        s += spaces(indent + 2);
-        s += render_range(kids, start, k, indent + 2, indent + 2);
-        s += ",\n";
+    // element end absorbs a SAME-LINE trailing comment after the comma (no newline between)
+    elem_end = if comma >= 0 { comma + 1 } else { n };
+    if comma >= 0 {
+      j = comma + 1;
+      while j < n {
+        nd = kids[j] ?? Leaf { tok: "" };
+        stop = true;
+        match nd {
+          Leaf { tok } => {
+            if tok == "\n" { stop = true; }             // newline → comment belongs to next elem
+            else if is_ws_tok(tok) { stop = false; }    // same-line spaces → keep scanning
+            else if tok.starts_with("//") { elem_end = j + 1; stop = true; }
+          },
+          Group { open, kids, close } => {},
+        }
+        if stop { break; }
+        j += 1;
       }
-      start = k + 1;
     }
-    k += 1;
+    if has_real(kids, start, elem_end) {
+      s += render_elem(kids, start, elem_end, indent + 2);
+    }
+    start = elem_end;
   }
   s += spaces(indent);
   s += close;
@@ -316,7 +419,7 @@ fn render_block(kids: vector<Node>, close: text, col: integer, indent: integer) 
   if !has_real(kids, 0, n) {
     s = "{{"; s += close; return s;
   }
-  if count_semis(kids) <= 1 && !has_child_brace(kids) {
+  if count_semis(kids) <= 1 && !has_child_brace(kids) && !has_line_comment(kids, 0, n) {
     inline = "{{ ";
     inline += render_range(kids, 0, n, col + 2, indent);
     inline += " }}";
