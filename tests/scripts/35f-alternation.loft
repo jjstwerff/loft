@@ -6,60 +6,83 @@
 // own offset (a conditional-offset read).  Ordered choice reduces to a disjunction
 // because enum tags are disjoint.  Cross-mode, leak-checked.
 
-enum Tok { Ident { n: text }, Str { pad: integer, n: text }, Num { v: integer } }
+enum Tok {
+  Ident { n: text },
+  Str { pad: integer, n: text },
+  Num { v: integer },
+}
 
 // text capture across two variants (Str stores n after a leading pad field)
 fn first_name(toks: vector<Tok>) -> text {
-  match toks {
-    [ (Ident { n } | Str { n }) ] => n,
-    _ => "none",
-  }
+  match toks { [(Ident { n } |Str { n })] => n, _ => "none", }
 }
 
 // SCALAR capture with a GENUINELY different offset: Wide stores `k` after a
 // leading pad, so a mis-computed offset would read `pad` instead of `k`.
-enum Cell { Slim { k: integer }, Wide { pad: integer, k: integer } }
+enum Cell {
+  Slim { k: integer },
+  Wide { pad: integer, k: integer },
+}
 fn value_of(cells: vector<Cell>) -> integer {
-  match cells {
-    [ (Slim { k } | Wide { k }) ] => k,
-    _ => -1,
-  }
+  match cells { [(Slim { k } |Wide { k })] => k, _ => -1, }
 }
 
 // three-way BARE-variant alternation (no captures — pure tag disjunction)
 fn any_tok(toks: vector<Tok>) -> text {
-  match toks {
-    [ (Ident | Str | Num) ] => "one",
-    _ => "many-or-none",
-  }
+  match toks { [(Ident|Str|Num)] => "one", _ => "many-or-none", }
 }
 
 // Phase 4.2 — DIFFERENT-name alternation: `x` is in both branches (stays integer),
 // `y` is only in Add, so it promotes to `option<integer>` (null when Neg matched).
-enum Expr { Add { x: integer, y: integer }, Neg { x: integer } }
+enum Expr {
+  Add { x: integer, y: integer },
+  Neg { x: integer },
+}
 fn eval(es: vector<Expr>) -> integer {
-  match es {
-    [ (Add { x, y } | Neg { x }) ] => x + (y ?? 0),
-    _ => -1,
-  }
+  match es { [(Add { x, y } |Neg { x })] => x + (y ?? 0), _ => -1, }
 }
 
 fn main() {
-  assert(first_name([Ident { n: "foo" }]) == "foo", "Ident n");
-  assert(first_name([Str { pad: 7, n: "bar" }]) == "bar", "Str n (text region)");
-  assert(first_name([Num { v: 9 }]) == "none", "Num falls through");
-  assert(first_name([Ident { n: "x" }, Ident { n: "y" }]) == "none", "len 2 falls through");
+  assert(first_name([
+    Ident { n: "foo" },
+  ]) == "foo", "Ident n");
+  assert(first_name([
+    Str { pad: 7, n: "bar" },
+  ]) == "bar", "Str n (text region)");
+  assert(first_name([
+    Num { v: 9 },
+  ]) == "none", "Num falls through");
+  assert(
+    first_name([
+      Ident { n: "x" },
+      Ident { n: "y" },
+    ]) == "none",
+    "len 2 falls through"
+  );
 
-  assert(value_of([Slim { k: 11 }]) == 11, "Slim k");
-  assert(value_of([Wide { pad: 99, k: 22 }]) == 22, "Wide k (offset past pad)");
-  assert(value_of([Slim { k: 1 }, Slim { k: 2 }]) == -1, "len 2 falls through");
+  assert(value_of([
+    Slim { k: 11 },
+  ]) == 11, "Slim k");
+  assert(value_of([
+    Wide { pad: 99, k: 22 },
+  ]) == 22, "Wide k (offset past pad)");
+  assert(value_of([
+    Slim { k: 1 },
+    Slim { k: 2 },
+  ]) == -1, "len 2 falls through");
 
-  assert(any_tok([Num { v: 1 }]) == "one", "bare 3-way alt matches");
+  assert(any_tok([
+    Num { v: 1 },
+  ]) == "one", "bare 3-way alt matches");
   assert(any_tok([]) == "many-or-none", "empty falls through");
 
   // 4.2 option promotion
-  assert(eval([Add { x: 3, y: 4 }]) == 7, "Add x+y");
-  assert(eval([Neg { x: 5 }]) == 5, "Neg x, y promoted to null");
+  assert(eval([
+    Add { x: 3, y: 4 },
+  ]) == 7, "Add x+y");
+  assert(eval([
+    Neg { x: 5 },
+  ]) == 5, "Neg x, y promoted to null");
 
   print("35f-alternation: PASS");
 }

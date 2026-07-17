@@ -8,11 +8,18 @@
 // local's `text`/`vector` is its own, and freeing the local frees only the copy (no alias, no
 // double-free, no leak). Both backends; leak-checked by tests/ownership_oracle.
 
-value struct Tags { name: text, nums: vector<integer> }
-struct Store { rows: vector<Tags> }
+value struct Tags {
+  name: text,
+  nums: vector<integer>,
+}
+struct Store {
+  rows: vector<Tags>,
+}
 
 fn main() {
-  s = Store { rows: [for i in 0..5 { Tags { name: "row{i}", nums: [i, i * 2] } }] };
+  s = Store { rows: [for i in 0..5 {
+    Tags { name: "row{i}", nums: [i, i * 2] }
+  }] };
 
   // deep copy: mutating a local copy leaves the source's text + vector untouched
   t = s.rows[2];
@@ -32,7 +39,9 @@ fn main() {
 
   // loop of copies: each allocates text + vector; all must free (leak gate)
   total = 0;
-  for r in s.rows { c = r; total = total + len(c.nums); }
+  for r in s.rows {
+    c = r; total = total + len(c.nums);
+  }
   assert(total == 10, "loop-copy over lifetime-bearing value structs, leak-free");
 
   println("lifetime-bearing value struct ok");

@@ -23,29 +23,44 @@
 // fail the `== null` assertions.  Boolean selectors are VARIABLES, not literals,
 // to avoid the unrelated #366 boolean-literal-arg native E0308.
 
-struct S { x: integer }
-struct Box { y: integer }
-enum Figure { Disk { r: integer }, Hollow }
+struct S {
+  x: integer,
+}
+struct Box {
+  y: integer,
+}
+enum Figure {
+  Disk { r: integer },
+  Hollow,
+}
 
 // plain struct param, bare null return
 fn from_struct(s: S, c: boolean) -> Box {
-  if c { Box { y: s.x } } else { null }
+  if c {
+    Box { y: s.x }
+  } else { null }
 }
 
 // struct-enum param, bare null return (no match)
 fn from_enum_direct(e: Figure, c: boolean) -> Box {
-  if c { Box { y: 1 } } else { null }
+  if c {
+    Box { y: 1 }
+  } else { null }
 }
 
 // struct-enum match returning struct-or-null
 fn decode(e: Figure) -> S {
-  match e { Disk { r } => S { x: r }, Hollow => null }
+  match e {
+    Disk { r } => S { x: r }, Hollow => null
+  }
 }
 
 // self-referential reassignment `s = grow(s)` (#360 ordering: the call must read
 // the OLD store before the destination is re-initialised)
 fn grow(s: S, c: boolean) -> S {
-  if c { S { x: s.x + 1 } } else { null }
+  if c {
+    S { x: s.x + 1 }
+  } else { null }
 }
 
 fn test_first_assign_struct_param() {
@@ -62,7 +77,7 @@ fn test_deep_copy_not_aliased() {
   yes = true;
   s = S { x: 7 };
   b = from_struct(s, yes);
-  s.x = 100;                      // mutating the arg must NOT change the returned copy
+  s.x = 100; // mutating the arg must NOT change the returned copy
   assert(b.y == 7, "deep copy independent of arg: y=7, got {b.y}");
 }
 
@@ -89,7 +104,7 @@ fn test_reassign_then_null() {
   yes = true;
   no = false;
   s = S { x: 5 };
-  b = Box { y: 99 };              // b already holds a record
+  b = Box { y: 99 }; // b already holds a record
   b = from_struct(s, yes);
   assert(b.y == 5, "reassigned value y=5, got {b.y}");
   b = from_struct(s, no);
@@ -100,7 +115,7 @@ fn test_self_ref_reassign() {
   yes = true;
   no = false;
   s = S { x: 10 };
-  s = grow(s, yes);              // s = grow(s) — reads old s.x=10
+  s = grow(s, yes); // s = grow(s) — reads old s.x=10
   assert(s != null && s.x == 11, "self-ref grow x=11, got {if s==null {-1} else {s.x}}");
   s = grow(s, no);
   assert(s == null, "self-ref to null must be null");

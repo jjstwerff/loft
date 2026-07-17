@@ -18,15 +18,9 @@ fn main() {
   log_error("failed on {name}");
 
   // --- Logging inside control flow ---
-  for lg_i in 0..3 {
-    log_info("iteration {lg_i}");
-  }
+  for lg_i in 0..3 { log_info("iteration {lg_i}"); }
 
-  if val > 0 {
-    log_info("positive");
-  } else {
-    log_warn("non-positive");
-  }
+  if val > 0 { log_info("positive"); } else { log_warn("non-positive"); }
 
   // --- Logging with computed expressions ---
   items = [10, 20, 30];

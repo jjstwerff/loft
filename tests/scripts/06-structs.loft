@@ -4,26 +4,26 @@
 // Structs: field types, constructors, methods, virtual fields, null defaults.
 struct Pos {
   x: integer,
-  y: integer
+  y: integer,
 }
 
 struct Segment {
   label: text,
   start: Pos,
-  end: Pos
+  end: Pos,
 }
 
 struct Area {
   height: u16,
   terrain: u8,
   water: u8,
-  direction: u8
+  direction: u8,
 }
 
 struct Point {
   r: integer limit(0, 255),
   g: integer limit(0, 255),
-  b: integer limit(0, 255)
+  b: integer limit(0, 255),
 }
 
 fn value(self: Point) -> integer {
@@ -31,22 +31,21 @@ fn value(self: Point) -> integer {
 }
 
 fn dimmed(self: Point) -> Point {
-  Point {r: self.r / 2, g: self.g / 2, b: self.b / 2 }
+  Point { r: self.r / 2, g: self.g / 2, b: self.b / 2 }
 }
 
 struct Object {
   name_length: integer = len($.name),
-  name: text
+  name: text,
 }
 
 struct Circle {
   radius: float,
-  area: float
-    computed(3.14159265 * $.radius * $.radius)
+  area: float computed(3.14159265 * $.radius * $.radius),
 }
 
 struct Counter {
-  count: integer
+  count: integer,
 }
 
 fn inc(self: Counter) {
@@ -55,7 +54,7 @@ fn inc(self: Counter) {
 
 fn main() {
   // --- Basic constructor and field access ---
-  p = Point {r: 128, b: 64 };
+  p = Point { r: 128, b: 64 };
   assert(p.r == 128, "field r");
   assert(p.g == 0, "omitted field g defaults to 0 (not null)");
   assert(p.b == 64, "field b");
@@ -67,9 +66,9 @@ fn main() {
   assert(dark.g == 0, "dimmed g: {dark.g}");
   assert(dark.b == 32, "dimmed b: {dark.b}");
   // --- Stored default field (= expr, computed at construction) ---
-  o = Object {name: "hello" };
+  o = Object { name: "hello" };
   assert(o.name_length == 5, "stored default name_length");
-  o2 = Object {name: "hi" };
+  o2 = Object { name: "hi" };
   assert(o2.name_length == 2, "stored default shorter name");
   // --- Computed field (not stored, recomputed on access) ---
   ci = Circle { radius: 5.0 };
@@ -79,7 +78,7 @@ fn main() {
   assert(ci.area > 314.0, "recomputed area: {ci.area}");
   assert(ci.area < 315.0, "recomputed area upper: {ci.area}");
   // --- not null field with zero ---
-  c = Counter { };
+  c = Counter {};
   assert(c.count == 0, "not null int defaults to 0");
   c.inc();
   assert(c.count == 1, "after inc count == 1");
@@ -92,21 +91,22 @@ fn main() {
   // Use escaped braces on the RHS; \" is a literal quote inside the string.
   assert("{o:j}" == "{{\"name_length\":5,\"name\":\"hello\"}}", "json format");
   // --- Vector of structs with repetition ---
-  map =[Area {height: 0, terrain: 1, water: 1, direction: 1 };
-  4];
+  map = [
+    Area { height: 0, terrain: 1, water: 1, direction: 1 }; 4,
+  ];
   assert("{map[0]}" == "{{height:0,terrain:1,water:1,direction:1}}", "vector of structs [0]");
   assert("{map[3]}" == "{{height:0,terrain:1,water:1,direction:1}}", "vector of structs [3]");
   assert(!map[10], "out-of-bounds is null");
   // --- Field mutation ---
-  pt = Point {r: 10, g: 20, b: 30 };
+  pt = Point { r: 10, g: 20, b: 30 };
   pt.r = 99;
   assert(pt.r == 99, "field mutation");
   // --- Nested struct: field access and mutation ---
   seg = Segment {
-  label: "AB",
-  start: Pos {x: 1, y: 2 },
-  end: Pos {x: 5, y: 6 }
- };
+    label: "AB",
+    start: Pos { x: 1, y: 2 },
+    end: Pos { x: 5, y: 6 },
+  };
   assert(seg.start.x == 1, "nested field start.x");
   assert(seg.end.y == 6, "nested field end.y");
   assert(seg.label == "AB", "outer field label");
@@ -117,7 +117,7 @@ fn main() {
   assert(seg.end.y == 77, "nested field mutation end.y");
   assert(seg.start.y == 2, "unchanged field start.y stays 2");
   // --- Struct with all-default constructor ---
-  p_def = Pos { };
+  p_def = Pos {};
   assert(p_def.x == 0, "default integer field is 0");
   assert(p_def.y == 0, "default integer field y is 0");
   // --- sizeof ---
@@ -137,31 +137,41 @@ fn main() {
   assert(sizeof(Point) == 3, "sizeof Point (3x limited-integer) is 3");
   // --- Pretty-print format (:#) ---
   // Compact {o} vs pretty {o:#} with spaces and newline-indented nested structs.
-  pp = Point {r: 10, g: 20, b: 30 };
+  pp = Point { r: 10, g: 20, b: 30 };
   assert("{pp}" == "{{r:10,g:20,b:30}}", "compact struct format");
   assert("{pp:#}" == "{{ r: 10, g: 20, b: 30 }}", "pretty struct format");
   // --- Method called directly on a constructor expression ---
-  assert(Point {r: 10, g: 20, b: 30 }.value() == 0x0a141e, "method on constructor");
+  assert(Point { r: 10, g: 20, b: 30 }.value() == 0x0a141e, "method on constructor");
   // --- Struct copy semantics: text fields are independent ---
   // Assigning a struct copies it; mutating the copy must not affect the original.
-  sc_orig = Segment {label: "hello", start: Pos {x: 1, y: 2 }, end: Pos {x: 3, y: 4 } };
+  sc_orig = Segment {
+    label: "hello",
+    start: Pos { x: 1, y: 2 },
+    end: Pos { x: 3, y: 4 },
+  };
   sc_copy = sc_orig;
   sc_copy.label += " world";
   assert(sc_orig.label == "hello", "struct copy: original text field unchanged");
   assert(sc_copy.label == "hello world", "struct copy: copy has modified text");
   // --- Direct access on not-null struct fields ---
-  pq = Point {r: 7, g: 0, b: 3 };
+  pq = Point { r: 7, g: 0, b: 3 };
   assert(pq.r == 7, "not-null field returns assigned value");
   // A zero-valued not-null field is still non-null (0 != null sentinel).
   assert(pq.g == 0, "zero not-null field is 0 not null");
   // --- const local variable with struct ---
-  const fixed = Counter { };
+  const fixed = Counter {};
   assert(fixed.count == 0, "const local struct: field readable");
 }
 
-struct PObj { a: integer, bb: text, ccc: boolean }
+struct PObj {
+  a: integer,
+  bb: text,
+  ccc: boolean,
+}
 
-fn obj() -> PObj { PObj { a: 12, bb: "hi", ccc: false } }
+fn obj() -> PObj {
+  PObj { a: 12, bb: "hi", ccc: false }
+}
 
 fn test_print_object() {
   o = obj();
@@ -173,8 +183,15 @@ fn test_print_object() {
   assert(pretty.contains(`"hi!"`), "pretty has quoted bb");
 }
 
-enum SGender { Male, Female, Fluid }
-struct SObj { a: vector<integer>, b: SGender }
+enum SGender {
+  Male,
+  Female,
+  Fluid,
+}
+struct SObj {
+  a: vector<integer>,
+  b: SGender,
+}
 
 fn sum_sobj(o: SObj) -> integer {
   r = 0;
@@ -183,7 +200,7 @@ fn sum_sobj(o: SObj) -> integer {
 }
 
 fn test_special_fields() {
-  o = SObj { a: [1,4,3], b: Fluid };
+  o = SObj { a: [1, 4, 3], b: Fluid };
   o.a += [sum_sobj(o)];
   assert("{o}" == `{{a:[1,4,3,8],b:Fluid}}`, "special fields");
 }
@@ -191,7 +208,7 @@ fn test_special_fields() {
 struct CPoint {
   r: integer limit(0, 255),
   g: integer limit(0, 255),
-  b: integer limit(0, 255)
+  b: integer limit(0, 255),
 }
 
 fn value(self: CPoint) -> integer {
@@ -199,18 +216,24 @@ fn value(self: CPoint) -> integer {
 }
 
 fn test_colours() {
-  points = [ CPoint { r: 128, b: 128 }, CPoint { b: 255 } ];
+  points = [
+    CPoint { r: 128, b: 128 },
+    CPoint { b: 255 },
+  ];
   result = "size:{sizeof(CPoint)} purple:{points[0]} value:{points[0].value():x} blue:{points[1]}";
-  assert(result == `size:3 purple:{{r:128,g:0,b:128}} value:800080 blue:{{r:0,g:0,b:255}}`, "colours");
+  assert(
+    result == `size:3 purple:{{r:128,g:0,b:128}} value:800080 blue:{{r:0,g:0,b:255}}`,
+    "colours"
+  );
 }
 
 struct MData {
   num: integer,
-  values: vector<integer>
+  values: vector<integer>,
 }
 
 fn m_add(r: &MData = null, val: integer) {
-  if !r {
+  if!r {
     r = MData { num: 0 };
   }
   r.num += val;
@@ -237,15 +260,13 @@ fn test_mutable_vector() {
 
 fn vec_sum(r: vector<integer>) -> integer {
   res = 0;
-  for v in r {
-    res += v;
-  }
+  for v in r { res += v; }
   res
 }
 
 struct RTData {
   name: text,
-  number: integer
+  number: integer,
 }
 
 fn rt_data(n: text) -> text {
@@ -257,7 +278,9 @@ fn test_return_text() {
   assert(rt_data("test") == "test", "return text");
 }
 
-struct ATObj { a: text }
+struct ATObj {
+  a: text,
+}
 
 fn test_assign_text() {
   o = ATObj { a: "a" };
@@ -268,7 +291,9 @@ fn test_assign_text() {
   assert("{o}" == `{{a:"bcdef"}}`, "assign text");
 }
 
-struct IST { name: text }
+struct IST {
+  name: text,
+}
 
 fn test_independent_strings() {
   a = IST { name: "hello" };
@@ -277,9 +302,14 @@ fn test_independent_strings() {
   assert(a.name == "hello", "independent strings");
 }
 
-struct MCPt { x: integer, y: integer }
+struct MCPt {
+  x: integer,
+  y: integer,
+}
 
-fn dist2(self: MCPt) -> integer { self.x * self.x + self.y * self.y }
+fn dist2(self: MCPt) -> integer {
+  self.x * self.x + self.y * self.y
+}
 
 fn test_method_on_constructor() {
   assert(MCPt { x: 3, y: 4 }.dist2() == 25, "method on constructor");
@@ -289,14 +319,26 @@ fn test_method_on_constructor() {
 // current TOS caused a subtract overflow in gen_set_first_ref_null.
 // The codegen now emits OpNullRefSentinel instead of OpCreateStack when
 // the dependency slot is above the stack position.
-struct DepItem { name: text, value: integer }
-struct DepContainer { items: vector<DepItem>, extra: vector<integer> }
+struct DepItem {
+  name: text,
+  value: integer,
+}
+struct DepContainer {
+  items: vector<DepItem>,
+  extra: vector<integer>,
+}
 
 fn test_loop_dep_above_tos() {
   c = DepContainer {};
-  c.items += [DepItem { name: "a", value: 10 }];
-  c.items += [DepItem { name: "b", value: 20 }];
-  c.items += [DepItem { name: "c", value: 30 }];
+  c.items += [
+    DepItem { name: "a", value: 10 },
+  ];
+  c.items += [
+    DepItem { name: "b", value: 20 },
+  ];
+  c.items += [
+    DepItem { name: "c", value: 30 },
+  ];
   c.extra += [1, 2, 3];
   total = 0;
   names = "";

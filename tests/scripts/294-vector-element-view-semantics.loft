@@ -8,12 +8,19 @@
 // updated DELIBERATELY together with LOFT.md — the silent-swap corruption
 // (#338) is the cost of the view semantics and is warned about in the doc.
 
-struct P294 { name: text, val: integer }
+struct P294 {
+  name: text,
+  val: integer,
+}
 
 fn test_element_read_is_view() {
   v: vector<P294> = [];
-  v += [P294 { name: "a", val: 1 }];
-  v += [P294 { name: "b", val: 2 }];
+  v += [
+    P294 { name: "a", val: 1 },
+  ];
+  v += [
+    P294 { name: "b", val: 2 },
+  ];
   e = v[0];
   e.val = 99;
   assert(v[0].val == 99, "write through view must mutate the slot, got {v[0].val}");
@@ -31,8 +38,12 @@ fn test_var_assignment_copies() {
 
 fn test_slot_write_copies() {
   v: vector<P294> = [];
-  v += [P294 { name: "a", val: 1 }];
-  v += [P294 { name: "b", val: 2 }];
+  v += [
+    P294 { name: "a", val: 1 },
+  ];
+  v += [
+    P294 { name: "b", val: 2 },
+  ];
   v[0] = v[1];
   v[1].val = 55;
   assert(v[0].val == 2, "slot write must copy, not alias: got {v[0].val}");

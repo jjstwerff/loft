@@ -2,13 +2,17 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // A10: Field iteration — for f in s#fields
 
-struct Point { x: float, y: float, z: float }
+struct Point {
+  x: float,
+  y: float,
+  z: float,
+}
 
 struct Mixed {
   name: text,
   count: integer,
   active: boolean,
-  score: float
+  score: float,
 }
 
 fn main() {
@@ -19,9 +23,7 @@ fn main() {
   for pf in p#fields {
     if pt_names != "" { pt_names += "," }
     pt_names += pf.name;
-    if pf.value is FvFloat { v } {
-      pt_total += v;
-    }
+    if pf.value is FvFloat { v } { pt_total += v; }
   }
   assert(pt_names == "x,y,z", "point names: {pt_names}");
   assert(pt_total == 6.0, "point total: {pt_total}");
@@ -33,18 +35,10 @@ fn main() {
     if mx_result != "" { mx_result += "|" }
     mx_result += mf.name;
     mx_result += "=";
-    if mf.value is FvText { v } {
-      mx_result += "'{v}'";
-    }
-    if mf.value is FvInt { v } {
-      mx_result += "{v}";
-    }
-    if mf.value is FvBool { v } {
-      mx_result += "{v}";
-    }
-    if mf.value is FvFloat { v } {
-      mx_result += "{v}";
-    }
+    if mf.value is FvText { v } { mx_result += "'{v}'"; }
+    if mf.value is FvInt { v } { mx_result += "{v}"; }
+    if mf.value is FvBool { v } { mx_result += "{v}"; }
+    if mf.value is FvFloat { v } { mx_result += "{v}"; }
   }
   assert(mx_result == "name='test'|count=42|active=true|score=9.5", "mixed: {mx_result}");
 }

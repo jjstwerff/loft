@@ -10,11 +10,11 @@ fn main() {
   v += [30];
   n = 4;
   // division in index
-  a = v[n / 2];          // v[2] = 30
+  a = v[n / 2]; // v[2] = 30
   // modulo in index
-  b = v[n % 3];          // v[1] = 20
+  b = v[n % 3]; // v[1] = 20
   // nested: division over a vector-read value
-  c = v[v[0] / 10];      // v[1] = 20
+  c = v[v[0] / 10]; // v[1] = 20
   assert(a == 30, "div index: {a}");
   assert(b == 20, "mod index: {b}");
   assert(c == 20, "nested div index: {c}");

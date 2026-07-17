@@ -12,44 +12,46 @@
 // reinforces the loop clear-on-entry).  `+=` (append) is untouched.
 
 fn join_lit(c: boolean, x: vector<integer>) -> vector<integer> {
-    r = x;
-    if c { r = [9, 9]; }
-    r
+  r = x;
+  if c { r = [9, 9]; }
+  r
 }
 fn join_multi(n: integer, x: vector<integer>) -> vector<integer> {
-    r = x;
-    if n == 1 { r = [1]; } else { if n == 2 { r = [2, 2]; } }
-    r
+  r = x;
+  if n == 1 { r = [1]; } else {
+    if n == 2 { r = [2, 2]; }
+  }
+  r
 }
 fn loop_reassign(x: vector<integer>) -> vector<integer> {
-    r = x;
-    for i in 0..3 { r = [i]; }
-    r
+  r = x;
+  for i in 0..3 { r = [i]; }
+  r
 }
 // `+=` MUST still append (the fix only touches `=`).
 fn append_ctl(x: vector<integer>) -> vector<integer> {
-    r = x;
-    r += [7];
-    r
+  r = x;
+  r += [7];
+  r
 }
 
 fn main() {
-    a = [1, 2, 3];
+  a = [1, 2, 3];
 
-    // the #492 shape: owned arm replaces (len 2), borrow arm keeps (len 3).
-    assert(len(join_lit(true, a)) == 2, "jl true {len(join_lit(true, a))}");
-    assert(len(join_lit(false, a)) == 3, "jl false {len(join_lit(false, a))}");
+  // the #492 shape: owned arm replaces (len 2), borrow arm keeps (len 3).
+  assert(len(join_lit(true, a)) == 2, "jl true {len(join_lit(true, a))}");
+  assert(len(join_lit(false, a)) == 3, "jl false {len(join_lit(false, a))}");
 
-    // nested-if arms.
-    assert(len(join_multi(1, a)) == 1, "jm1");
-    assert(len(join_multi(2, a)) == 2, "jm2");
-    assert(len(join_multi(0, a)) == 3, "jm0 {len(join_multi(0, a))}");
+  // nested-if arms.
+  assert(len(join_multi(1, a)) == 1, "jm1");
+  assert(len(join_multi(2, a)) == 2, "jm2");
+  assert(len(join_multi(0, a)) == 3, "jm0 {len(join_multi(0, a))}");
 
-    // loop reassign — each iteration replaces (final len 1).
-    assert(len(loop_reassign(a)) == 1, "loop {len(loop_reassign(a))}");
+  // loop reassign — each iteration replaces (final len 1).
+  assert(len(loop_reassign(a)) == 1, "loop {len(loop_reassign(a))}");
 
-    // `+=` control — still appends (len 4).
-    assert(len(append_ctl(a)) == 4, "append {len(append_ctl(a))}");
+  // `+=` control — still appends (len 4).
+  assert(len(append_ctl(a)) == 4, "append {len(append_ctl(a))}");
 
-    println("join-vector-return-replace ok");
+  println("join-vector-return-replace ok");
 }

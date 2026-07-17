@@ -3,23 +3,24 @@
 // Root cause: growing one vector field reallocates the struct's store,
 // invalidating the cached reference to the other vector field.
 
-struct Collector { vals: vector<integer> }
-struct Pair { a: vector<integer>, b: vector<integer> }
+struct Collector {
+  vals: vector<integer>,
+}
+struct Pair {
+  a: vector<integer>,
+  b: vector<integer>,
+}
 
 // Single field push works fine.
 fn test_single_field_push() {
   c = Collector { vals: [] };
-  for sp in 0..5 {
-    c.vals += [sp * 10];
-  }
+  for sp in 0..5 { c.vals += [sp * 10]; }
   assert("{c.vals}" == "[0,10,20,30,40]", "single push: {c.vals}");
 }
 
 fn test_local_vector_push() {
   lv: vector<integer> = [];
-  for vl in 0..5 {
-    lv += [vl * 10];
-  }
+  for vl in 0..5 { lv += [vl * 10]; }
   assert("{lv}" == "[0,10,20,30,40]", "local push: {lv}");
 }
 

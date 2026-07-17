@@ -35,9 +35,9 @@
 // don't expose a new sub-cluster.
 
 struct SegMesh {
-  kinds:  vector<integer>,
+  kinds: vector<integer>,
   values: vector<integer>,
-  ids:    vector<integer>,
+  ids: vector<integer>,
 }
 
 fn seg_mesh_new() -> SegMesh {
@@ -45,23 +45,21 @@ fn seg_mesh_new() -> SegMesh {
 }
 
 fn seg_emit(m: SegMesh, kind: integer, value: integer, id: integer) {
-  m.kinds  += [kind];
+  m.kinds += [kind];
   m.values += [value];
-  m.ids    += [id];
+  m.ids += [id];
 }
 
 fn seg_mesh_append(dst: SegMesh, src: SegMesh) {
-  dst.kinds  += src.kinds;
+  dst.kinds += src.kinds;
   dst.values += src.values;
-  dst.ids    += src.ids;
+  dst.ids += src.ids;
 }
 
 // Inner: build one chunk's segments.  `seg_mesh_new` + for-loop emit pattern.
 fn build_chunk(chunk_id: integer, count: integer) -> SegMesh {
   m = seg_mesh_new();
-  for k in 0..count {
-    seg_emit(m, chunk_id * 10 + k, chunk_id * 100 + k, chunk_id);
-  }
+  for k in 0..count { seg_emit(m, chunk_id * 10 + k, chunk_id * 100 + k, chunk_id); }
   m
 }
 

@@ -24,19 +24,48 @@
 // laid out before the content, so the field landed at offset u16::MAX.  `boxed`
 // exercises it; the nested and enum-variant forms are in the Rust tests.
 
-fn build(m: Map) -> integer { s = 0; for it in m.items { s = s + it.n; } s }
-fn pick() -> integer { c = Color::Green; match c { Color::Red => 0, Color::Green => 6 } }
-fn pull() -> integer { v = [Cell { n: 8 }]; v[0].n }
-fn boxed() -> integer { b = Box { inner: Cell { n: 4 } }; b.inner.n }
+fn build(m: Map) -> integer {
+  s = 0; for it in m.items { s = s + it.n; } s
+}
+fn pick() -> integer {
+  c = Color::Green; match c { Color::Red => 0, Color::Green => 6 }
+}
+fn pull() -> integer {
+  v = [
+    Cell { n: 8 },
+  ]; v[0].n
+}
+fn boxed() -> integer {
+  b = Box {
+    inner: Cell { n: 4 },
+  }; b.inner.n
+}
 
-struct Inner { n: integer }
-struct Map { items: vector<Inner> }
-enum Color { Red, Green }
-struct Cell { n: integer }
-struct Box { inner: Cell }
+struct Inner {
+  n: integer,
+}
+struct Map {
+  items: vector<Inner>,
+}
+enum Color {
+  Red,
+  Green,
+}
+struct Cell {
+  n: integer,
+}
+struct Box {
+  inner: Cell,
+}
 
 fn main() {
-  assert(build(Map { items: [Inner { n: 5 }, Inner { n: 7 }] }) == 12, "for-loop over forward vector<struct> field");
+  assert(
+    build(Map { items: [
+      Inner { n: 5 },
+      Inner { n: 7 },
+    ] }) == 12,
+    "for-loop over forward vector<struct> field"
+  );
   assert(pick() == 6, "match on forward enum");
   assert(pull() == 8, "local forward vector<struct> literal");
   assert(boxed() == 4, "inline forward struct field");

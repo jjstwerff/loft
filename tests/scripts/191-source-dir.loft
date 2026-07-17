@@ -12,7 +12,7 @@
 // bug this guards was `source_dir()` returning "" under the test runners and
 // natively.  The printed value makes the per-backend directory visible.
 fn main() {
-    sd = source_dir();
-    assert(sd != "", "source_dir() must be populated on every backend (was empty)");
-    print("source_dir=[{sd}]\n");
+  sd = source_dir();
+  assert(sd != "", "source_dir() must be populated on every backend (was empty)");
+  print("source_dir=[{sd}]\n");
 }

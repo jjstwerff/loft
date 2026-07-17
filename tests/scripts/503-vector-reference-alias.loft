@@ -6,7 +6,9 @@
 // ignored for a vector — `d = &v; d[i]=x` copied, so no write reached the source
 // (this is what broke every Canvas drawing method: `d = self.data; d[i]=color`).
 
-struct Grid { cells: vector<integer> }
+struct Grid {
+  cells: vector<integer>,
+}
 
 // The graphics-library pattern: bind the vector FIELD to a local via `&`, mutate.
 fn bump_all(self: Grid, by: integer) {

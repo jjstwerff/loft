@@ -10,10 +10,18 @@
 // AND a V2 differential seed — run under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive` it
 // exercises the stepped worker frame that the V1 run (here) does not.
 
-fn add2(p: const (integer, integer)) -> integer { p.0 + p.1 }
-fn pick_ic(p: const (integer, character)) -> integer { p.0 }
-fn sel_ib(p: const (integer, boolean)) -> integer { if p.1 { p.0 } else { 0 } }
-fn sum3(p: const (integer, integer, character)) -> integer { p.0 + p.1 }
+fn add2(p: const(integer, integer)) -> integer {
+  p.0 + p.1
+}
+fn pick_ic(p: const(integer, character)) -> integer {
+  p.0
+}
+fn sel_ib(p: const(integer, boolean)) -> integer {
+  if p.1 { p.0 } else { 0 }
+}
+fn sum3(p: const(integer, integer, character)) -> integer {
+  p.0 + p.1
+}
 
 fn main() {
   // (int, int) — 16 bytes, the p189c baseline.

@@ -12,7 +12,9 @@
 // and never re-generated inline.  No counter, no regenerate-and-string-match.
 // This must hold identically on BOTH backends (Goal D).
 
-struct PScore { val: integer }
+struct PScore {
+  val: integer,
+}
 
 fn main() {
   // Side-effecting producer inside an inline format-string comparison.

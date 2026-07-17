@@ -10,7 +10,7 @@
 
 enum Shape {
   Circle { r: integer },
-  Square { pad: integer, r: integer },   // r at a DIFFERENT offset than Circle
+  Square { pad: integer, r: integer }, // r at a DIFFERENT offset than Circle
   Triangle { r: integer },
 }
 
@@ -32,8 +32,8 @@ fn doubled(s: Shape) -> integer {
 }
 
 enum Msg {
-  Info { code: integer, label: text },   // label after a leading int field
-  Warn { label: text },                  // label at the front
+  Info { code: integer, label: text }, // label after a leading int field
+  Warn { label: text }, // label at the front
   Quiet,
 }
 

@@ -10,7 +10,9 @@
 
 fn main() {
   factor = 3;
-  multiply = fn(x: integer) -> integer { x * factor };
+  multiply = fn(x: integer) -> integer {
+    x * factor
+  };
   for i in 0..6 {
     v = multiply(i);
     assert(v == i * 3, "iter {i}: v = {v}");

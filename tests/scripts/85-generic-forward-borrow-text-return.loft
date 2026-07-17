@@ -12,27 +12,38 @@
 // through the hidden `&text` buffer, exactly as the manual rebind already did.
 // Graduated from probes/corpus-optional-text/ (p205_* / gen_guard* / gen_field).
 
-interface Lab { fn to_label(self: Self) -> text }
-interface Val { fn ok(self: Self) -> boolean }
+interface Lab {
+  fn to_label(self: Self) -> text
+}
+interface Val {
+  fn ok(self: Self) -> boolean
+}
 
-struct Item { nm: text, sc: integer }
-fn to_label(self: Item) -> text { return self.nm; }
-fn ok(self: Item) -> boolean { return self.sc > 0; }
+struct Item {
+  nm: text,
+  sc: integer,
+}
+fn to_label(self: Item) -> text {
+  return self.nm;
+}
+fn ok(self: Item) -> boolean {
+  return self.sc > 0;
+}
 
 // TAIL forward-borrow call (the p205 shape).
-fn label<T: Lab>(x: T) -> text {
+fn label < T: Lab > (x: T) -> text {
   return x.to_label();
 }
 
 // NON-TAIL forward-borrow return inside a guard-`if`, plus a literal tail (the
 // 86-interfaces `if_describe` shape).
-fn describe<T: Lab + Val>(x: T) -> text {
+fn describe < T: Lab + Val > (x: T) -> text {
   if x.ok() { return x.to_label(); }
   return "invalid";
 }
 
 // A rebind (proven-clean baseline: the manual `y = call(); y`).
-fn label_rebind<T: Lab>(x: T) -> text {
+fn label_rebind < T: Lab > (x: T) -> text {
   y = x.to_label();
   return y;
 }

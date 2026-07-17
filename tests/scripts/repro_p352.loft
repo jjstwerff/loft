@@ -5,8 +5,12 @@
 // loop-var reuse check mis-fire ("type fn(...) but was previously used as
 // fn(...)") even though the two types are identical.  Fixed by giving
 // Type::is_same a structural Function arm (params + return, ignoring deps).
-fn dbl(x: integer) -> integer { return x * 2; }
-fn apply(f: fn(integer) -> integer) -> integer { return f(10); }
+fn dbl(x: integer) -> integer {
+  return x * 2;
+}
+fn apply(f: fn(integer) -> integer) -> integer {
+  return f(10);
+}
 
 fn main() {
   a: vector<fn(integer) -> integer> = [dbl];

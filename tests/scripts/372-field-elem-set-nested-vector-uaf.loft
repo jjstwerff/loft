@@ -28,28 +28,44 @@
 // release build the reads below produce correct values, and the baselines guard
 // against over-fixing (scalar-field / whole-element / struct-call set paths).
 
-struct V { a: vector<integer> }
-struct Cont { m: V }
-struct Scalar { n: integer }
-struct SCont { m: Scalar }
+struct V {
+  a: vector<integer>,
+}
+struct Cont {
+  m: V,
+}
+struct Scalar {
+  n: integer,
+}
+struct SCont {
+  m: Scalar,
+}
 
 fn mk(n: integer) -> V {
   v: vector<integer> = [];
   for j in 0..n { v += [j]; }
-  V{a: v}
+  V { a: v }
 }
 
 // The bug shape: field-of-element set to a struct literal with a vector field,
 // across several elements, then read every nested element back.
 fn test_field_elem_set_vector() {
   xs: vector<Cont> = [];
-  for i in 0..4 { xs += [Cont{m: V{a: []}}]; }
-  for i in 0..4 { xs[i].m = V{a: [i * 10, i * 10 + 1, i * 10 + 2]}; }
+  for i in 0..4 { xs += [
+    Cont {
+      m: V { a: [] },
+    },
+  ]; }
+  for i in 0..4 {
+    xs[i].m = V { a: [i * 10, i * 10 + 1, i * 10 + 2] };
+  }
   total = 0;
   for i in 0..4 {
     assert(len(xs[i].m.a) == 3, "elem {i} len={len(xs[i].m.a)} (expect 3)");
-    assert(xs[i].m.a[0] == i * 10 && xs[i].m.a[2] == i * 10 + 2,
-      "elem {i} values: a[0]={xs[i].m.a[0]} a[2]={xs[i].m.a[2]}");
+    assert(
+      xs[i].m.a[0] == i * 10 && xs[i].m.a[2] == i * 10 + 2,
+      "elem {i} values: a[0]={xs[i].m.a[0]} a[2]={xs[i].m.a[2]}"
+    );
     total = total + len(xs[i].m.a);
   }
   assert(total == 12, "field-set total={total} (expect 12 = 4x3)");
@@ -59,16 +75,30 @@ fn test_field_elem_set_vector() {
 // vector backing, so the pre-Set free was never reached.
 fn test_field_elem_set_scalar_unaffected() {
   xs: vector<SCont> = [];
-  for i in 0..3 { xs += [SCont{m: Scalar{n: 0}}]; }
-  for i in 0..3 { xs[i].m = Scalar{n: i * 7}; }
+  for i in 0..3 { xs += [
+    SCont {
+      m: Scalar { n: 0 },
+    },
+  ]; }
+  for i in 0..3 {
+    xs[i].m = Scalar { n: i * 7 };
+  }
   for i in 0..3 { assert(xs[i].m.n == i * 7, "scalar elem {i} = {xs[i].m.n}"); }
 }
 
 // Baseline (must stay correct): whole-element set — the @P313-fixed path.
 fn test_whole_elem_set_unaffected() {
   xs: vector<Cont> = [];
-  for i in 0..3 { xs += [Cont{m: V{a: []}}]; }
-  for i in 0..3 { xs[i] = Cont{m: V{a: [i, i, i, i]}}; }
+  for i in 0..3 { xs += [
+    Cont {
+      m: V { a: [] },
+    },
+  ]; }
+  for i in 0..3 {
+    xs[i] = Cont {
+      m: V { a: [i, i, i, i] },
+    };
+  }
   total = 0;
   for x in xs { total = total + len(x.m.a); }
   assert(total == 12, "whole-set total={total} (expect 12 = 3x4)");
@@ -78,7 +108,11 @@ fn test_whole_elem_set_unaffected() {
 // CALL (an unowned temporary) — the path that legitimately keeps its source free.
 fn test_field_set_from_call_unaffected() {
   xs: vector<Cont> = [];
-  for i in 0..3 { xs += [Cont{m: V{a: []}}]; }
+  for i in 0..3 { xs += [
+    Cont {
+      m: V { a: [] },
+    },
+  ]; }
   for i in 0..3 { xs[i].m = mk(i + 2); }
   total = 0;
   for i in 0..3 { total = total + len(xs[i].m.a); }

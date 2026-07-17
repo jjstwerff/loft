@@ -9,8 +9,12 @@
 // `rust.is_empty()`).  Fixed by dropping that clause so the `&*` deref
 // fires for any non-`Op` text-returning call.  Same family as @P262/@P265.
 
-fn count_chars(s: text) -> integer { len(s) }
-fn is_report(s: text) -> boolean { s.starts_with("stores:") }
+fn count_chars(s: text) -> integer {
+  len(s)
+}
+fn is_report(s: text) -> boolean {
+  s.starts_with("stores:")
+}
 
 fn main() {
   // store_memory() (native, returns text) passed DIRECTLY as a text arg

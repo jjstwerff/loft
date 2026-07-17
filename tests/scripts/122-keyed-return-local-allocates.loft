@@ -23,29 +23,47 @@
 // All sections must run clean (correct result + no store leak at exit) on BOTH
 // the interpreter and --native.
 
-struct Item { k: integer }
-struct HRec { ck: integer, v: integer }
+struct Item {
+  k: integer,
+}
+struct HRec {
+  ck: integer,
+  v: integer,
+}
 
 // --- OWNS: keyed return-local. The store is allocated in mk_* and transferred
 //     on return; the receiving local must read a real (allocated) store. ---
 fn mk_hash() -> hash<HRec[ck]> {
   h: hash<HRec[ck]> = [];
-  h += [HRec{ck: 5, v: 9}];
-  h += [HRec{ck: 8, v: 12}];
+  h += [
+    HRec { ck: 5, v: 9 },
+  ];
+  h += [
+    HRec { ck: 8, v: 12 },
+  ];
   h
 }
 fn mk_sorted() -> sorted<Item[k]> {
   s: sorted<Item[k]> = [];
-  s += [Item{k: 3}];
-  s += [Item{k: 1}];
-  s += [Item{k: 2}];
+  s += [
+    Item { k: 3 },
+  ];
+  s += [
+    Item { k: 1 },
+  ];
+  s += [
+    Item { k: 2 },
+  ];
   s
 }
 
 // --- BORROWS (skip_free, dep empty): match-bind of a vector held inside an
 //     enum payload. The bind temp aliases the payload store; it must NOT
 //     allocate a fresh store (which, being skip_free, would never be freed). ---
-enum Box { Empty, Full { v: vector<integer> } }
+enum Box {
+  Empty,
+  Full { v: vector<integer> },
+}
 fn sum_full(n: integer) -> integer {
   t = 0;
   if n > 0 {
@@ -60,12 +78,18 @@ fn sum_full(n: integer) -> integer {
 
 // --- BORROWS (skip_free, dep non-empty): `??` coalesce returning a vector view
 //     into an existing container — a borrowed view, not an owned store. ---
-struct Outer { lists: vector<vector<Item>> }
+struct Outer {
+  lists: vector<vector<Item>>,
+}
 fn coalesce_pick() -> integer {
   o = Outer { lists: [] };
-  inner: vector<Item> = [Item { k: 42 }];
+  inner: vector<Item> = [
+    Item { k: 42 },
+  ];
   o.lists += [inner];
-  fallback: vector<Item> = [Item { k: 0 }];
+  fallback: vector<Item> = [
+    Item { k: 0 },
+  ];
   a = o.lists[0] ?? fallback;
   a[0].k
 }

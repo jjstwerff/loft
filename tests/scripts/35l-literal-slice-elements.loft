@@ -10,26 +10,22 @@
 // integer-literal dispatch on the head element, with following binds / rest.
 fn dispatch(v: vector<integer>) -> integer {
   match v {
-    [ 1, x ]      => x,                    // head literal 1, bind x
-    [ 0, y, z ]   => y * 10 + z,           // head literal 0, two binds
-    [ 2, ..rest ] => 200 + len(rest),      // head literal 2, then rest
-    [ -1, w ]     => -w,                   // negative literal
-    _             => -999,
+    [1, x] => x, // head literal 1, bind x
+    [0, y, z] => y * 10 + z, // head literal 0, two binds
+    [2, ..rest] => 200 + len(rest), // head literal 2, then rest
+    [-1, w] => -w, // negative literal
+    _ => -999,
   }
 }
 
 // two literal head elements then a bind.
 fn two(v: vector<integer>) -> integer {
-  match v { [ 7, 8, a ] => a, _ => -1 }
+  match v { [7, 8, a] => a, _ => -1 }
 }
 
 // text-literal elements on a vector<text> (integer return avoids #557).
 fn kw(v: vector<text>) -> integer {
-  match v {
-    [ "set", name ] => len(name),
-    [ "get" ]       => 0,
-    _               => -1,
-  }
+  match v { ["set", name] => len(name), ["get"] => 0, _ => -1, }
 }
 
 fn main() {

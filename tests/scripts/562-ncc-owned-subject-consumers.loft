@@ -25,12 +25,22 @@
 // default taken) × {assign, return, append, method, discard, empty-default,
 // nested, reused-twice}, plus != null / == null.  Leak-checked via the wrap gate.
 
-fn mkv() -> vector<integer>? { [10, 20, 30] }
-fn nun() -> vector<integer>? { null }
-fn int_vecs() -> vector<vector<integer>> { [] }
+fn mkv() -> vector<integer> ? {
+  [10, 20, 30]
+}
+fn nun() -> vector<integer> ? {
+  null
+}
+fn int_vecs() -> vector<vector<integer>> {
+  []
+}
 
-fn c_return() -> vector<integer> { return mkv() ?? [1]; }
-fn c_return_absent() -> vector<integer> { return nun() ?? [7, 8]; }
+fn c_return() -> vector<integer> {
+  return mkv() ?? [1];
+}
+fn c_return_absent() -> vector<integer> {
+  return nun() ?? [7, 8];
+}
 
 fn main() {
   // assign — the always-clean adopt cell (must stay clean under the view dep).
@@ -55,13 +65,13 @@ fn main() {
 
   // null comparisons on an owned heap temp (the == / != null half).
   assert(mkv() != null, "notnull");
-  assert(!(mkv() == null), "isnull");
+  assert(! (mkv() == null), "isnull");
 
   // nested and reused-twice — each `??` reborns its own owner per site.
   assert(((mkv() ?? [1]) ?? [2]).len() == 3, "nested");
   a = mkv() ?? [1];
   b = mkv() ?? [2];
-  assert(a.len() + b.len() == 6, "twice");
+  assert(a.len()+b.len() == 6, "twice");
 
   // --- ABSENT subject (call is null → default taken); guards the default-record
   //     orphan leak.  The default delivers by value in every consumer. ---

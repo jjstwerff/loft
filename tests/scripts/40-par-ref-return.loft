@@ -4,16 +4,16 @@
 
 struct Item {
   name: text,
-  value: integer
+  value: integer,
 }
 
 struct Items {
-  list: vector<Item>
+  list: vector<Item>,
 }
 
 struct Result {
   label: text,
-  doubled: integer
+  doubled: integer,
 }
 
 fn transform(src: const Item) -> Result {
@@ -22,7 +22,7 @@ fn transform(src: const Item) -> Result {
 
 struct Pair {
   a: integer,
-  b: integer
+  b: integer,
 }
 
 fn make_pair(src: const Item) -> Pair {
@@ -31,17 +31,22 @@ fn make_pair(src: const Item) -> Pair {
 
 fn test_par_struct_simple() {
   data = Items {};
-  data.list += [Item { name: "x", value: 10 }, Item { name: "y", value: 20 }];
+  data.list += [
+    Item { name: "x", value: 10 },
+    Item { name: "y", value: 20 },
+  ];
   total = 0;
-  for par_s in data.list par(par_p = make_pair(par_s), 1) {
-    total += par_p.a + par_p.b;
-  }
+  for par_s in data.list par(par_p = make_pair(par_s), 1) { total += par_p.a + par_p.b; }
   assert(total == 120, "simple struct: {total}");
 }
 
 fn test_par_struct_return_single_thread() {
   data = Items {};
-  data.list += [Item { name: "a", value: 10 }, Item { name: "b", value: 20 }, Item { name: "c", value: 30 }];
+  data.list += [
+    Item { name: "a", value: 10 },
+    Item { name: "b", value: 20 },
+    Item { name: "c", value: 30 },
+  ];
   total = 0;
   labels = "";
   for par_item in data.list par(par_res = transform(par_item), 1) {
@@ -54,11 +59,14 @@ fn test_par_struct_return_single_thread() {
 
 fn test_par_struct_return_multi_thread() {
   data = Items {};
-  data.list += [Item { name: "a", value: 5 }, Item { name: "b", value: 15 }, Item { name: "c", value: 25 }, Item { name: "d", value: 35 }];
+  data.list += [
+    Item { name: "a", value: 5 },
+    Item { name: "b", value: 15 },
+    Item { name: "c", value: 25 },
+    Item { name: "d", value: 35 },
+  ];
   total = 0;
-  for par_mt in data.list par(par_r2 = transform(par_mt), 4) {
-    total += par_r2.doubled;
-  }
+  for par_mt in data.list par(par_r2 = transform(par_mt), 4) { total += par_r2.doubled; }
   assert(total == 160, "multi thread total: {total}");
 }
 

@@ -4,8 +4,12 @@
 // must survive EVERY observable round-trip, identically on interp and --native.
 // This locks the contract so a future representation change can't silently clip it.
 
-struct Box { v: integer }
-fn ident(x: integer) -> integer { return x; }
+struct Box {
+  v: integer,
+}
+fn ident(x: integer) -> integer {
+  return x;
+}
 
 fn test_438_i64_arithmetic() {
   assert(3000000000 * 3 == 9000000000, "mul over i32 range");

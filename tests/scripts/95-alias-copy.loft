@@ -4,14 +4,16 @@
 
 struct AcPoint {
   x: float,
-  y: float
+  y: float,
 }
 
 fn ac_make(ac_x: float, ac_y: float) -> AcPoint {
   AcPoint { x: ac_x, y: ac_y }
 }
 
-fn ac_identity(ac_p: AcPoint) -> AcPoint { ac_p }
+fn ac_identity(ac_p: AcPoint) -> AcPoint {
+  ac_p
+}
 
 fn test_aliased_return_copies() {
   ac_orig = ac_make(1.0, 2.0);

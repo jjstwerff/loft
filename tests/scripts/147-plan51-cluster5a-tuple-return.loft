@@ -10,8 +10,13 @@
 // Tests: do tuple returns introduce TWO hidden buffers (one per element)
 // via ref_return?  How does S1 / S2 handle multi-buffer fns?
 
-struct P { tag: integer }
-struct Canvas { data: vector<integer>, w: integer }
+struct P {
+  tag: integer,
+}
+struct Canvas {
+  data: vector<integer>,
+  w: integer,
+}
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

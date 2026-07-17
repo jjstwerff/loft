@@ -6,7 +6,9 @@
 // 22c-par-sources.loft (which already has many par loops) to avoid the
 // unrelated "many par loops in one fn" corruption.
 
-fn dbl(x: integer) -> integer { return x * 2; }
+fn dbl(x: integer) -> integer {
+  return x * 2;
+}
 
 fn main() {
   // u8 element, integer-param worker (element widens to the param).

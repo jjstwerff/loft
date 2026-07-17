@@ -18,7 +18,7 @@ fn g_first() -> (vector<integer>, integer) {
 
 fn g_second() -> (integer, vector<integer>) {
   a: vector<integer> = [];
-  a += [7, 8];   // mutably built (not a literal const-store)
+  a += [7, 8]; // mutably built (not a literal const-store)
   (9, a)
 }
 
@@ -29,5 +29,8 @@ fn test_tuple_vector_first() {
 
 fn test_tuple_vector_second_mutable() {
   (m, w) = g_second();
-  assert(m == 9 && w.len() == 2 && w[0] == 7 && w[1] == 8, "vector-second + mutably-built tuple return");
+  assert(
+    m == 9 && w.len() == 2 && w[0] == 7 && w[1] == 8,
+    "vector-second + mutably-built tuple return"
+  );
 }

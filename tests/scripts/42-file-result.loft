@@ -18,9 +18,10 @@ fn main() {
   assert(delete("../Cargo.toml") == FileResult.NotFound, "delete outside project");
 
   // Create a file, then delete it successfully
- {f = file("test_loft_fr.txt");
-  f += "test content";
- }
+  {
+    f = file("test_loft_fr.txt");
+    f += "test content";
+  }
   assert(delete("test_loft_fr.txt") == FileResult.Ok, "delete existing file");
   assert(!delete("test_loft_fr.txt").ok(), "delete already deleted");
 
@@ -35,9 +36,10 @@ fn main() {
   assert(!r.ok(), "mkdir on existing dir not ok");
 
   // --- move() returns FileResult ---
- {f2 = file("test_loft_fr.txt");
-  f2 += "move test";
- }
+  {
+    f2 = file("test_loft_fr.txt");
+    f2 += "move test";
+  }
   assert(move("test_loft_fr.txt", "test_loft_fr2.txt").ok(), "move succeeds");
   assert(!move("nonexistent_fr_src.txt", "dst.txt").ok(), "move missing source");
 

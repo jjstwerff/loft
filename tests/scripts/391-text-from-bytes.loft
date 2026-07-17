@@ -34,7 +34,7 @@ fn main() {
 
   // Capacity-slack: a 1-byte vector carries an 11-element capacity buffer.  The
   // decode must read only the 1 LIVE byte (length at offset 4), not the slack.
-  one: vector<u8> = []; one += [65 as u8];   // "A"
+  one: vector<u8> = []; one += [65 as u8]; // "A"
   s_one = text_from_bytes(one);
   assert(s_one == "A", "decode bounded by live length, not capacity slack");
   assert(s_one.len() == 1, "single live byte");

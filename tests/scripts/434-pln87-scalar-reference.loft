@@ -3,108 +3,115 @@
 // Runs on interp + --native + wasm, under the store-leak gate.  `&` here is the allowed
 // binding form (`a = &b`, addressable operand).
 
-struct Pair { a: integer, b: integer }
+struct Pair {
+  a: integer,
+  b: integer,
+}
 
 // L6 — a `&` parameter is a reference to the caller's lvalue, called WITHOUT `&`.
-fn write_back(w: &integer) { w = 4; }
+fn write_back(w: &integer) {
+  w = 4;
+}
 // `&`-struct WRITE-BACK: reassigning the whole binding writes the caller's struct
 // (the one thing `&` is for — a plain param would rebind locally).  Validates the
 // indirection AND keeps the `&` load-bearing (so it is not a redundant `&`).
-fn mutate_field(obj: &Pair) { obj = Pair { a: 9, b: obj.b }; }
+fn mutate_field(obj: &Pair) {
+  obj = Pair { a: 9, b: obj.b };
+}
 
 fn test() {
-    // L1 — live read: the reference reflects the source's current value.
-    a = 3;
-    b = &a;
-    assert(b == 3, "fresh reference reads the source");
-    a = 5;
-    assert(b == 5, "reference is LIVE — sees a's update");
+  // L1 — live read: the reference reflects the source's current value.
+  a = 3;
+  b = &a;
+  assert(b == 3, "fresh reference reads the source");
+  a = 5;
+  assert(b == 5, "reference is LIVE — sees a's update");
 
-    // L2 — write-through (north star): writing the reference writes the source.
-    c = 10;
-    d = &c;
-    d = 4;
-    assert(c == 4, "write through the reference writes the source");
+  // L2 — write-through (north star): writing the reference writes the source.
+  c = 10;
+  d = &c;
+  d = 4;
+  assert(c == 4, "write through the reference writes the source");
 
-    // combined: alternating reads/writes through the reference and the source.
-    x = 1;
-    y = &x;
-    y = 7;
-    assert(x == 7, "write y -> x");
-    x = 9;
-    assert(y == 9, "read y <- x");
-    y = y + 1;
-    assert(x == 10 && y == 10, "read-modify-write through the reference");
+  // combined: alternating reads/writes through the reference and the source.
+  x = 1;
+  y = &x;
+  y = 7;
+  assert(x == 7, "write y -> x");
+  x = 9;
+  assert(y == 9, "read y <- x");
+  y = y + 1;
+  assert(x == 10 && y == 10, "read-modify-write through the reference");
 
-    // #2 — the typed-local form `b: &T = src` (the `&` on the type, not the value).
-    p = 3;
-    q: &integer = p;
-    assert(q == 3, "typed reference reads the source");
-    p = 5;
-    assert(q == 5, "typed reference is LIVE");
-    q = 8;
-    assert(p == 8, "typed reference writes through to the source");
+  // #2 — the typed-local form `b: &T = src` (the `&` on the type, not the value).
+  p = 3;
+  q: &integer = p;
+  assert(q == 3, "typed reference reads the source");
+  p = 5;
+  assert(q == 5, "typed reference is LIVE");
+  q = 8;
+  assert(p == 8, "typed reference writes through to the source");
 
-    // L4 — a scalar vector-ELEMENT reference (`r0 = &v[0]`) is live both ways.
-    v = [10, 20];
-    r0 = &v[0];
-    assert(r0 == 10, "element reference reads the element");
-    v[0] = 5;
-    assert(r0 == 5, "element reference is LIVE — sees v[0]'s update");
-    r0 = 99;
-    assert(v[0] == 99, "write through the element reference writes v[0]");
-    r0 = r0 + 1;
-    assert(v[0] == 100 && r0 == 100, "read-modify-write through the element reference");
-    r1 = &v[1];
-    r1 = 7;
-    assert(v[1] == 7, "a second element reference is independent");
+  // L4 — a scalar vector-ELEMENT reference (`r0 = &v[0]`) is live both ways.
+  v = [10, 20];
+  r0 = &v[0];
+  assert(r0 == 10, "element reference reads the element");
+  v[0] = 5;
+  assert(r0 == 5, "element reference is LIVE — sees v[0]'s update");
+  r0 = 99;
+  assert(v[0] == 99, "write through the element reference writes v[0]");
+  r0 = r0 + 1;
+  assert(v[0] == 100 && r0 == 100, "read-modify-write through the element reference");
+  r1 = &v[1];
+  r1 = 7;
+  assert(v[1] == 7, "a second element reference is independent");
 
-    // L3 — a scalar struct-FIELD reference (`fb = &sf.b`) is live both ways, at any offset.
-    sf = Pair { a: 3, b: 7 };
-    fb = &sf.b;
-    assert(fb == 7, "field reference reads the field");
-    sf.b = 5;
-    assert(fb == 5, "field reference is LIVE — sees sf.b's update");
-    fb = 99;
-    assert(sf.b == 99, "write through the field reference writes sf.b");
-    fa = &sf.a;
-    fa = 4;
-    assert(sf.a == 4 && sf.b == 99, "a field-0 reference is independent of field-8");
+  // L3 — a scalar struct-FIELD reference (`fb = &sf.b`) is live both ways, at any offset.
+  sf = Pair { a: 3, b: 7 };
+  fb = &sf.b;
+  assert(fb == 7, "field reference reads the field");
+  sf.b = 5;
+  assert(fb == 5, "field reference is LIVE — sees sf.b's update");
+  fb = 99;
+  assert(sf.b == 99, "write through the field reference writes sf.b");
+  fa = &sf.a;
+  fa = 4;
+  assert(sf.a == 4 && sf.b == 99, "a field-0 reference is independent of field-8");
 
-    // L6 — a `&` parameter links to the caller's lvalue (called WITHOUT `&`).
-    w = 3;
-    write_back(w);
-    assert(w == 4, "& scalar parameter writes back to the caller's variable");
-    sp = Pair { a: 1, b: 2 };
-    mutate_field(sp);
-    assert(sp.a == 9 && sp.b == 2, "& struct parameter WRITE-BACK reassigns the caller's struct");
+  // L6 — a `&` parameter links to the caller's lvalue (called WITHOUT `&`).
+  w = 3;
+  write_back(w);
+  assert(w == 4, "& scalar parameter writes back to the caller's variable");
+  sp = Pair { a: 1, b: 2 };
+  mutate_field(sp);
+  assert(sp.a == 9 && sp.b == 2, "& struct parameter WRITE-BACK reassigns the caller's struct");
 
-    // L5 — a heap WHOLE-VALUE reference (`pr = &whole`) aliases the struct, non-owning.
-    whole = Pair { a: 1, b: 2 };
-    pr = &whole;
-    assert(pr.a == 1 && pr.b == 2, "whole-value reference reads the source's fields");
-    pr.a = 5;
-    assert(whole.a == 5, "field mutation through the whole-value reference writes the source");
-    whole.b = 9;
-    assert(pr.b == 9, "whole-value reference is LIVE — sees the source's update");
+  // L5 — a heap WHOLE-VALUE reference (`pr = &whole`) aliases the struct, non-owning.
+  whole = Pair { a: 1, b: 2 };
+  pr = &whole;
+  assert(pr.a == 1 && pr.b == 2, "whole-value reference reads the source's fields");
+  pr.a = 5;
+  assert(whole.a == 5, "field mutation through the whole-value reference writes the source");
+  whole.b = 9;
+  assert(pr.b == 9, "whole-value reference is LIVE — sees the source's update");
 
-    // L7 — edges: a reference to a reference, and an inner-scope reference to an outer local.
-    rr_a = 3;
-    rr_b = &rr_a;
-    rr_c = &rr_b;
-    rr_c = 5;
-    assert(rr_a == 5, "ref-to-ref (scalar): writing the outer reference reaches the original");
-    rr_o = Pair { a: 1, b: 2 };
-    rr_p = &rr_o;
-    rr_q = &rr_p;
-    rr_q.a = 7;
-    assert(rr_o.a == 7, "ref-to-ref (struct): a field mutation reaches the original");
-    outer = 1;
-    if true {
-        inner_ref = &outer;
-        inner_ref = 8;
-    }
-    assert(outer == 8, "inner-scope reference to an outer local writes through (source outlives it)");
+  // L7 — edges: a reference to a reference, and an inner-scope reference to an outer local.
+  rr_a = 3;
+  rr_b = &rr_a;
+  rr_c = &rr_b;
+  rr_c = 5;
+  assert(rr_a == 5, "ref-to-ref (scalar): writing the outer reference reaches the original");
+  rr_o = Pair { a: 1, b: 2 };
+  rr_p = &rr_o;
+  rr_q = &rr_p;
+  rr_q.a = 7;
+  assert(rr_o.a == 7, "ref-to-ref (struct): a field mutation reaches the original");
+  outer = 1;
+  if true {
+    inner_ref = &outer;
+    inner_ref = 8;
+  }
+  assert(outer == 8, "inner-scope reference to an outer local writes through (source outlives it)");
 
-    print("pln87 scalar reference ok\n");
+  print("pln87 scalar reference ok\n");
 }

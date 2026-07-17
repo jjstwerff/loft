@@ -20,9 +20,16 @@
 // Status: known broken.  Possibly same fix surface as probe 02 (extended
 // S1 / parse-time substitution for struct-literal RHS into hidden buffer).
 
-struct P { tag: integer }
-struct Q { tag: integer }
-struct Canvas { data: vector<integer>, w: integer }
+struct P {
+  tag: integer,
+}
+struct Q {
+  tag: integer,
+}
+struct Canvas {
+  data: vector<integer>,
+  w: integer,
+}
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };
@@ -36,7 +43,9 @@ fn render_lit_then_call(p: P) -> Canvas {
   cv
 }
 
-fn render_direct(q: Q) -> Canvas { cv = alloc_canvas(7, 9, q.tag * 2); cv }
+fn render_direct(q: Q) -> Canvas {
+  cv = alloc_canvas(7, 9, q.tag * 2); cv
+}
 
 fn main() {
   for i in 0..6 {
@@ -47,7 +56,7 @@ fn main() {
     assert(cv_c.w == 4, "iter {i}: cv_c.w = {cv_c.w}");
     assert(len(cv_c.data) == 5, "iter {i}: len(cv_c) = {len(cv_c.data)}");
     assert(cv_c.data[0] == i, "iter {i}: cv_c[0] = {cv_c.data[0]}");
-    assert(cv_d.data[0] == (i + 100) * 2, "iter {i}: cv_d[0] = {cv_d.data[0]}");
+    assert(cv_d.data[0] == (i + 100)*2, "iter {i}: cv_d[0] = {cv_d.data[0]}");
   }
   println("probe 04 PASSED");
 }

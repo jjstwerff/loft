@@ -15,14 +15,22 @@
 // (no-op when `out` adopted it), and a non-return-source adopter's own store is
 // freed by an explicit `OpFreeRef`.  Asserts the VALUE (length) — a leak-only
 // check would miss the double-append; both backends must read len == 1.
-fn b2b(s: text) -> vector<u8> { r: vector<u8> = []; for c in s { r += [1]; } return r; }
-fn mleaf(x: text) -> text { b: vector<u8> = [0]; b += b2b(x); return "h"; }
+fn b2b(s: text) -> vector<u8> {
+  r: vector<u8> = []; for c in s { r += [1]; } return r;
+}
+fn mleaf(x: text) -> text {
+  b: vector<u8> = [0]; b += b2b(x); return "h";
+}
 fn path(m: integer, lo: integer, hi: integer) -> vector<text> {
   out: vector<text> = []; n = hi - lo;
   if n <= 1 { return out; }
   k = 1;
-  if m < k { out = path(m, lo, lo + k); out += [ mleaf("a") ]; }
-  else     { out = path(m - k, lo + k, hi); out += [ mleaf("b") ]; }
+  if m < k {
+    out = path(m, lo, lo + k); out += [mleaf("a")];
+  }
+  else {
+    out = path(m - k, lo + k, hi); out += [mleaf("b")];
+  }
   return out;
 }
 fn main() {

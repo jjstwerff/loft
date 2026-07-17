@@ -6,9 +6,7 @@
 
 fn to_text() -> text {
   res = "aa ";
-  for _i in 0..2 {
-    res += "b";
-  }
+  for _i in 0..2 { res += "b"; }
   res + " cc"
 }
 
@@ -58,7 +56,7 @@ fn choice(a: text, b: text) -> text {
 }
 
 fn test_call() {
-  assert(choice("{1:03}", "{2}1") + choice("2", "") == "0012", "call");
+  assert(choice("{1:03}", "{2}1")+choice("2", "") == "0012", "call");
 }
 
 fn test_work_loop() {
@@ -69,13 +67,17 @@ fn test_work_loop() {
 
 fn test_loop_variable() {
   a = 0;
-  for _t in 1..5 { b = "123"; a += b as integer ?? 0; if a > 200 { break; } }
+  for _t in 1..5 {
+    b = "123"; a += b as integer ?? 0; if a > 200 { break; }
+  }
   assert(a == 246, "loop variable");
 }
 
 fn res() -> integer {
   a = 0;
-  for _t in 1..5 { b = "123"; a += b as integer ?? 0; if a > 200 { return a; } }
+  for _t in 1..5 {
+    b = "123"; a += b as integer ?? 0; if a > 200 { return a; }
+  }
   0
 }
 
@@ -89,7 +91,7 @@ fn last(filename: text) -> text {
 }
 
 fn test_optional_remove() {
-  assert(last("a/b/c") + last("d") == "cd", "optional remove");
+  assert(last("a/b/c")+last("d") == "cd", "optional remove");
 }
 
 fn build() -> text {
@@ -104,9 +106,7 @@ fn test_strange_if() {
 fn parse_ident(s: text) -> integer {
   for t in 0..300 {
     l = s[t];
-    if !l.is_alphanumeric() and l != '_' {
-      return t;
-    }
+    if!l.is_alphanumeric() and l != '_' { return t; }
   }
   return 0;
 }
@@ -121,9 +121,7 @@ fn test_string_scope() {
   for n in 1..4 {
     t = "1";
     b += "n" + ":{n}" + "=";
-    for _m in 1..n {
-      t += "2";
-    }
+    for _m in 1..n { t += "2"; }
     b += t + " ";
     a += t as integer ?? 0;
   }
@@ -142,9 +140,7 @@ fn tr_find(items: vector<text>) -> text {
 
 fn tr_join(items: vector<text>) -> text {
   r = "";
-  for item in items {
-    r += "[{item}]";
-  }
+  for item in items { r += "[{item}]"; }
   r
 }
 
@@ -166,9 +162,7 @@ fn test_text_self_concat() {
 fn test_text_self_concat_loop() {
   h = "start";
   items = ["a", "b", "c"];
-  for item in items {
-    h = h + "." + item;
-  }
+  for item in items { h = h + "." + item; }
   assert(h == "start.a.b.c", "loop: {h}");
 }
 
@@ -212,4 +206,3 @@ fn test_text_self_slice() {
   ss2 = ss2[..3];
   assert(ss2 == "abc", "self-slice-end: {ss2}");
 }
-

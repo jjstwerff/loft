@@ -30,24 +30,24 @@
 // the actual two-level nesting.
 
 struct Hex {
-  h_height:        integer,
-  h_material:      integer,
-  h_item:          integer,
+  h_height: integer,
+  h_material: integer,
+  h_item: integer,
   h_item_rotation: integer,
-  h_wall_n:        integer,
-  h_wall_ne:       integer,
-  h_wall_se:       integer,
+  h_wall_n: integer,
+  h_wall_ne: integer,
+  h_wall_se: integer,
 }
 
 struct Chunk {
-  ck_cx:    integer,
-  ck_cy:    integer,
-  ck_cz:    integer,
+  ck_cx: integer,
+  ck_cy: integer,
+  ck_cz: integer,
   ck_hexes: vector<Hex>,
 }
 
 struct Map {
-  m_name:   text,
+  m_name: text,
   m_chunks: vector<Chunk>,
 }
 
@@ -65,9 +65,7 @@ fn make_hex(height: integer, material: integer) -> Hex {
 
 fn make_chunk(cx: integer, cy: integer, cz: integer, count: integer) -> Chunk {
   hexes: vector<Hex> = [];
-  for i in 0..count {
-    hexes += [make_hex(i + cx, i + cy)];
-  }
+  for i in 0..count { hexes += [make_hex(i + cx, i + cy)]; }
   Chunk { ck_cx: cx, ck_cy: cy, ck_cz: cz, ck_hexes: hexes }
 }
 
@@ -75,9 +73,7 @@ fn make_chunk(cx: integer, cy: integer, cz: integer, count: integer) -> Chunk {
 fn map_get_hex(m: Map, target_cx: integer, target_cy: integer, target_cz: integer, idx: integer) -> Hex {
   for gh_c in m.m_chunks {
     if gh_c.ck_cx == target_cx && gh_c.ck_cy == target_cy && gh_c.ck_cz == target_cz {
-      if idx >= 0 && idx < len(gh_c.ck_hexes) {
-        return gh_c.ck_hexes[idx];
-      }
+      if idx >= 0 && idx < len(gh_c.ck_hexes) { return gh_c.ck_hexes[idx]; }
     }
   }
   make_hex(0, 0)

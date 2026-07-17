@@ -3,9 +3,9 @@
 // L7: init(expr) stored field initialiser with $ reference.
 
 struct Metrics {
-    c: integer,
-    b: integer computed($.c),
-    a: integer init($.b * 5),
+  c: integer,
+  b: integer computed($.c),
+  a: integer init($.b * 5),
 }
 
 fn main() {

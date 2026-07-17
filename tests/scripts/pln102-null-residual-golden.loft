@@ -12,15 +12,19 @@
 // AND an adjacent real value does NOT), so it pins the *specific* pattern, not just
 // "some null exists". Runs on both backends via the wrap harness.
 
-struct U8N { x: u8? }
-struct BoolN { b: boolean? }
+struct U8N {
+  x: u8?,
+}
+struct BoolN {
+  b: boolean?,
+}
 
 fn main() {
   // --- integer: reserved null = i64::MIN; i64::MIN+1 is the smallest REAL value ---
-  min_non_null = -9223372036854775807;            // i64::MIN + 1
+  min_non_null = -9223372036854775807; // i64::MIN + 1
   assert(min_non_null, "i64::MIN+1 is a real integer, NOT null");
   assert(min_non_null == -9223372036854775807, "i64::MIN+1 holds its exact value");
-  overflow = 9223372036854775807 + 1 ?? null;      // i64::MAX + 1 overflows to i64::MIN
+  overflow = 9223372036854775807 + 1 ?? null; // i64::MAX + 1 overflows to i64::MIN
   assert(!overflow, "the reserved integer null is i64::MIN (reached via overflow)");
 
   // --- float: reserved null = NaN ONLY; +inf / -inf are REAL values ---

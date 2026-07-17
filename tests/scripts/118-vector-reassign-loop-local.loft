@@ -11,7 +11,10 @@
 // AND struct element types, with indexed reads (the shape that
 // surfaced the bug in projector.loft::pick_centers).
 
-struct Pt { x: integer, y: integer }
+struct Pt {
+  x: integer,
+  y: integer,
+}
 
 fn main() {
   // --- integer vector: rebuild-from-loop-local, read by index. ---
@@ -19,23 +22,29 @@ fn main() {
   v += [10];
   for i in 0..3 {
     nv: vector<integer> = [];
-    for j in 0..len(v) { nv += [v[j]]; }   // copy loop reads v
+    for j in 0..len(v) { nv += [v[j]]; } // copy loop reads v
     nv += [i];
-    v = nv;                                 // reassign from loop-local
+    v = nv; // reassign from loop-local
   }
   assert(len(v) == 4, "int: 4 elements after 3 rebuilds");
   assert(v[0] == 10, "int: v[0] initial preserved");
-  assert(v[1] == 0,  "int: v[1] iter 0");
-  assert(v[2] == 1,  "int: v[2] iter 1");
-  assert(v[3] == 2,  "int: v[3] iter 2");
+  assert(v[1] == 0, "int: v[1] iter 0");
+  assert(v[2] == 1, "int: v[2] iter 1");
+  assert(v[3] == 2, "int: v[3] iter 2");
 
   // --- struct vector: same shape; element copy must be a deep copy. ---
   pts: vector<Pt> = [];
-  pts += [Pt{x: 0, y: 0}];
+  pts += [
+    Pt { x: 0, y: 0 },
+  ];
   for i in 1..5 {
     np: vector<Pt> = [];
-    for p in pts { np += [Pt{x: p.x, y: p.y}]; }
-    np += [Pt{x: i, y: i * 10}];
+    for p in pts { np += [
+      Pt { x: p.x, y: p.y },
+    ]; }
+    np += [
+      Pt { x: i, y: i * 10 },
+    ];
     pts = np;
   }
   assert(len(pts) == 5, "struct: 5 elements after 4 rebuilds");

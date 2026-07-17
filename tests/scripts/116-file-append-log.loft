@@ -24,73 +24,87 @@ fn main() {
   // --- Text log: three appends across three opens.  All three lines
   // are preserved across the reopen — `+= "first\n"` followed by
   // reopen + `+= "second\n"` does not truncate the first line. ---
- {f = file("test_loft_text_log.txt"); f += "first\n";  f.sync(); }
- {f = file("test_loft_text_log.txt"); f += "second\n"; f.sync(); }
- {f = file("test_loft_text_log.txt"); f += "third\n";  f.sync(); }
- {f = file("test_loft_text_log.txt");
-  assert(f#size == 19, "text log: 5+1 + 6+1 + 5+1 = 19 bytes");
-  ln_count: integer = 0;
-  for _ in f.lines() { ln_count += 1; }
- }
- {f = file("test_loft_text_log.txt");
-  lines: vector<text> = [];
-  for ln in f.lines() { lines += [ln]; }
-  assert(lines.len() == 3, "text log: three lines preserved");
-  assert(lines[0] == "first",  "text log: line 0 preserved");
-  assert(lines[1] == "second", "text log: line 1 preserved");
-  assert(lines[2] == "third",  "text log: line 2 preserved");
- }
+  {
+    f = file("test_loft_text_log.txt"); f += "first\n"; f.sync();
+  }
+  {
+    f = file("test_loft_text_log.txt"); f += "second\n"; f.sync();
+  }
+  {
+    f = file("test_loft_text_log.txt"); f += "third\n"; f.sync();
+  }
+  {
+    f = file("test_loft_text_log.txt");
+    assert(f#size == 19, "text log: 5+1 + 6+1 + 5+1 = 19 bytes");
+    ln_count: integer = 0;
+    for _ in f.lines() { ln_count += 1; }
+  }
+  {
+    f = file("test_loft_text_log.txt");
+    lines: vector<text> = [];
+    for ln in f.lines() { lines += [ln]; }
+    assert(lines.len() == 3, "text log: three lines preserved");
+    assert(lines[0] == "first", "text log: line 0 preserved");
+    assert(lines[1] == "second", "text log: line 1 preserved");
+    assert(lines[2] == "third", "text log: line 2 preserved");
+  }
 
   // --- Binary log: append-only i32 records.  Successive opens
   // accumulate without truncating earlier records. ---
- {f = file("test_loft_binary_log.bin");
-  f#format = LittleEndian;
-  f += (1001 as i32);
-  f += (1002 as i32);
-  f.sync();
- }
- {f = file("test_loft_binary_log.bin");
-  f#format = LittleEndian;
-  f += (2001 as i32);
-  f.sync();
- }
- {f = file("test_loft_binary_log.bin");
-  f#format = LittleEndian;
-  f += (3001 as i32);
-  f += (3002 as i32);
-  f += (3003 as i32);
-  f.sync();
- }
- {f = file("test_loft_binary_log.bin");
-  assert(f#size == 24, "binary log: 6 i32 records = 24 bytes");
-  f#format = LittleEndian;
-  v0: i32 = f#read as i32;
-  v1: i32 = f#read as i32;
-  v2: i32 = f#read as i32;
-  v3: i32 = f#read as i32;
-  v4: i32 = f#read as i32;
-  v5: i32 = f#read as i32;
-  assert(v0 == 1001 && v1 == 1002, "binary log: first batch preserved");
-  assert(v2 == 2001,                "binary log: second batch preserved");
-  assert(v3 == 3001 && v4 == 3002 && v5 == 3003, "binary log: third batch preserved");
- }
+  {
+    f = file("test_loft_binary_log.bin");
+    f#format = LittleEndian;
+    f += (1001 as i32);
+    f += (1002 as i32);
+    f.sync();
+  }
+  {
+    f = file("test_loft_binary_log.bin");
+    f#format = LittleEndian;
+    f += (2001 as i32);
+    f.sync();
+  }
+  {
+    f = file("test_loft_binary_log.bin");
+    f#format = LittleEndian;
+    f += (3001 as i32);
+    f += (3002 as i32);
+    f += (3003 as i32);
+    f.sync();
+  }
+  {
+    f = file("test_loft_binary_log.bin");
+    assert(f#size == 24, "binary log: 6 i32 records = 24 bytes");
+    f#format = LittleEndian;
+    v0: i32 = f#read as i32;
+    v1: i32 = f#read as i32;
+    v2: i32 = f#read as i32;
+    v3: i32 = f#read as i32;
+    v4: i32 = f#read as i32;
+    v5: i32 = f#read as i32;
+    assert(v0 == 1001 && v1 == 1002, "binary log: first batch preserved");
+    assert(v2 == 2001, "binary log: second batch preserved");
+    assert(v3 == 3001 && v4 == 3002 && v5 == 3003, "binary log: third batch preserved");
+  }
 
   // --- Explicit offset still overwrites in place: `f#next = 0`
   // followed by `f += …` writes at offset 0, not at end-of-file. ---
- {f = file("test_loft_binary_log.bin");
-  f#format = LittleEndian;
-  f#next = 0;
-  f += (9999 as i32);
-  f.sync();
- }
- {f = file("test_loft_binary_log.bin");
-  assert(f#size == 24, "explicit offset preserved file size");
-  f#format = LittleEndian;
-  v0: i32 = f#read as i32;
-  v1: i32 = f#read as i32;
-  assert(v0 == 9999, "first record overwritten in place");
-  assert(v1 == 1002, "second record intact after in-place overwrite");
- }
+  {
+    f = file("test_loft_binary_log.bin");
+    f#format = LittleEndian;
+    f#next = 0;
+    f += (9999 as i32);
+    f.sync();
+  }
+  {
+    f = file("test_loft_binary_log.bin");
+    assert(f#size == 24, "explicit offset preserved file size");
+    f#format = LittleEndian;
+    v0: i32 = f#read as i32;
+    v1: i32 = f#read as i32;
+    assert(v0 == 9999, "first record overwritten in place");
+    assert(v1 == 1002, "second record intact after in-place overwrite");
+  }
 
   cleanup();
   println("116-file-append-log ok");

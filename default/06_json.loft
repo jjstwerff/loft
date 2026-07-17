@@ -16,11 +16,11 @@
 /// Matches the six RFC 8259 kinds.
 pub enum JsonValue {
   JNull,
-  JBool   { value: boolean },
+  JBool { value: boolean },
   JNumber { value: float },
   JString { value: text },
-  JArray  { items: vector<JsonValue> },
-  JObject { fields: vector<JsonField> }
+  JArray { items: vector<JsonValue> },
+  JObject { fields: vector<JsonField> },
 }
 
 /// One field of a `JObject`.  Stored as a `vector<JsonField>` rather
@@ -29,8 +29,8 @@ pub enum JsonValue {
 /// are exercised end-to-end.  Linear scan is fine for the object sizes
 /// typical in configuration / API responses.
 pub struct JsonField {
-  name:  text,
-  value: JsonValue
+  name: text,
+  value: JsonValue,
 }
 
 /// Parse JSON text into a `JsonValue` tree.  Malformed input returns

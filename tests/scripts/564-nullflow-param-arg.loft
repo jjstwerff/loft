@@ -8,20 +8,32 @@
 // class cannot silently regress again (it was 21 of routing's 26 real sites).
 // Source in every case is `1.0 / n` — a div-by-zero DN3 nullable, no indexing.
 
-struct F4Box { v: float }
-fn f4_sink(x: float) -> float { x }
+struct F4Box {
+  v: float,
+}
+fn f4_sink(x: float) -> float {
+  x
+}
 
 // @EXPECT_WARNING: is stored into the return value of the non-null type `float`
-fn f4_to_return(n: float) -> float { 1.0 / n }
+fn f4_to_return(n: float) -> float {
+  1.0 / n
+}
 
 // @EXPECT_WARNING: is stored into the field of the non-null type `float`
-fn f4_to_field(n: float) -> F4Box { F4Box { v: 1.0 / n } }
+fn f4_to_field(n: float) -> F4Box {
+  F4Box { v: 1.0 / n }
+}
 
 // @EXPECT_WARNING: is stored into parameter 1 of `f4_sink` of the non-null type `float`
-fn f4_to_param(n: float) -> float { f4_sink(1.0 / n) }
+fn f4_to_param(n: float) -> float {
+  f4_sink(1.0 / n)
+}
 
 fn main() {
   // exercise with a non-zero divisor (no actual null) so the file also runs clean
-  assert(f4_to_return(2.0) == 0.5 && f4_to_field(2.0).v == 0.5 && f4_to_param(2.0) == 0.5,
-    "the three destinations compute correctly when the divisor is non-zero");
+  assert(
+    f4_to_return(2.0) == 0.5 && f4_to_field(2.0).v == 0.5 && f4_to_param(2.0) == 0.5,
+    "the three destinations compute correctly when the divisor is non-zero"
+  );
 }

@@ -104,9 +104,7 @@ fn test_sort_large() {
   slg_ok = true;
   for slg_e in slg_v {
     if slg_e#index > 0 {
-      if slg_v[slg_e#index] < slg_v[slg_e#index - 1] {
-        slg_ok = false;
-      }
+      if slg_v[slg_e#index] < slg_v[slg_e#index - 1] { slg_ok = false; }
     }
   }
   assert(slg_ok, "large sort is monotonic");

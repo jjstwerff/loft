@@ -19,7 +19,9 @@
 // dispatches a text-returning native call result.  Without the
 // fix, `--native` rejects every callee in the dispatch table.
 
-fn p265_make_text() -> text { "p265 ok" }
+fn p265_make_text() -> text {
+  "p265 ok"
+}
 
 fn p265_consume(s: text) {
   assert(s == "p265 ok", "p265: s={s}");

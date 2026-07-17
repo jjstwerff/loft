@@ -16,8 +16,14 @@
 // out of scope for this crash fix.  The write side asserts only *no crash* — the
 // writes drop silently, and reaching the CONTROL section proves none panicked.
 
-enum Color { Red, Green, Blue }
-struct Inner { tag: text }
+enum Color {
+  Red,
+  Green,
+  Blue,
+}
+struct Inner {
+  tag: text,
+}
 struct Wide {
   t: text,
   i: integer,
@@ -27,7 +33,7 @@ struct Wide {
   col: Color,
   small: integer limit(0, 200),
   med: integer limit(0, 60000),
-  inner: Inner?
+  inner: Inner?,
 }
 
 fn test() {
@@ -57,8 +63,15 @@ fn test() {
 
   // --- CONTROL: a present struct still round-trips normally ---
   v: Wide? = Wide {
-    t: "ok", i: 7, f: 1.0, s: 2.0 as single, b: false,
-    col: Color.Blue, small: 9, med: 300, inner: null
+    t: "ok",
+    i: 7,
+    f: 1.0,
+    s: 2.0 as single,
+    b: false,
+    col: Color.Blue,
+    small: 9,
+    med: 300,
+    inner: null,
   };
   v.i = 99;
   assert(v.t == "ok", "present struct text field round-trips");

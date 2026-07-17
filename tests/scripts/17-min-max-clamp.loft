@@ -5,7 +5,9 @@
 // A runtime (non-constant) division whose divisor is not provably non-zero: the
 // result types `integer?` (DN3), so `nulldiv(0)` yields null at runtime rather than
 // raising, and flows through the `τ?` min/max/clamp overloads.
-fn nulldiv(b: integer) -> integer? { 1 / b }
+fn nulldiv(b: integer) -> integer? {
+  1 / b
+}
 
 fn main() {
   // --- integer min ---

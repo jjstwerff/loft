@@ -2,20 +2,20 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Threading: parallel_for via the par() for-loop clause.
 struct Score {
-  value: integer
+  value: integer,
 }
 
 struct ScoreList {
-  items: vector < Score >
+  items: vector<Score>,
 }
 
 struct Range {
   lo: integer,
-  hi: integer
+  hi: integer,
 }
 
 struct RangeList {
-  items: vector < Range >
+  items: vector<Range>,
 }
 
 fn double_score(r: const Score) -> integer {
@@ -61,47 +61,41 @@ fn score_as_single(r: const Score) -> single {
 enum Grade {
   Low,
   Medium,
-  High
+  High,
 }
 
 fn score_grade(r: const Score) -> Grade {
-  if r.value >= 20 {
-    High
-  } else if r.value >= 10 {
-    Medium
-  } else {
-    Low
-  }
+  if r.value >= 20 { High } else if r.value >= 10 { Medium } else { Low }
 }
 
 fn main() {
   // --- Form 1: global function, integer return, 1 thread ---
-  q = ScoreList { };
-  q.items +=[Score {value: 10 }, Score {value: 20 }, Score {value: 30 }];
+  q = ScoreList {};
+  q.items += [
+    Score { value: 10 },
+    Score { value: 20 },
+    Score { value: 30 },
+  ];
   sum = 0;
-  for a in q.items par(b = double_score(a), 1) {
-    sum += b;
-  }
+  for a in q.items par(b = double_score(a), 1) { sum += b; }
   assert(sum == 120, "form-1 integer 1 thread: {sum}");
   // --- Form 1: 4 threads ---
   sum2 = 0;
-  for a in q.items par(b = double_score(a), 4) {
-    sum2 += b;
-  }
+  for a in q.items par(b = double_score(a), 4) { sum2 += b; }
   assert(sum2 == 120, "form-1 integer 4 threads: {sum2}");
   // --- Form 1: two-field struct ---
-  rl = RangeList { };
-  rl.items +=[Range {lo: 0, hi: 10 }, Range {lo: 5, hi: 12 }, Range {lo: -3, hi: 7 }];
+  rl = RangeList {};
+  rl.items += [
+    Range { lo: 0, hi: 10 },
+    Range { lo: 5, hi: 12 },
+    Range { lo: -3, hi: 7 },
+  ];
   span_sum = 0;
-  for a in rl.items par(b = span(a), 2) {
-    span_sum += b;
-  }
+  for a in rl.items par(b = span(a), 2) { span_sum += b; }
   assert(span_sum == 27, "form-1 span sum: {span_sum}");
   // --- Form 1: float return ---
   fcount = 0;
-  for a in q.items par(b = score_as_float(a), 1) {
-    fcount += 1;
-  }
+  for a in q.items par(b = score_as_float(a), 1) { fcount += 1; }
   assert(fcount == 3, "form-1 float return: {fcount} elements");
   // --- ARC.md A3.6: float return body sums via parallel_buf_get_float ---
   // This exercises the typed wide-buf reader (n_parallel_buf_get_float)
@@ -113,62 +107,44 @@ fn main() {
   // reader.  Multi-thread (4) confirms the per-thread merge preserves
   // order-independent commutative sum.
   ftotal = 0.0;
-  for a in q.items par(b = score_as_float(a), 4) {
-    ftotal += b;
-  }
+  for a in q.items par(b = score_as_float(a), 4) { ftotal += b; }
   assert(ftotal == 60.0, "form-1 float multi-thread sum: {ftotal}");
   // --- Form 1: boolean return ---
   pos = 0;
   for a in q.items par(b = score_positive(a), 1) {
-    if b {
-      pos += 1;
-    }
+    if b { pos += 1; }
   }
   assert(pos == 3, "form-1 boolean: {pos} positive");
   // --- Empty vector: body executes 0 times ---
-  empty = ScoreList { };
+  empty = ScoreList {};
   empty_sum = 0;
-  for a in empty.items par(b = double_score(a), 1) {
-    empty_sum += b;
-  }
+  for a in empty.items par(b = double_score(a), 1) { empty_sum += b; }
   assert(empty_sum == 0, "empty vector: {empty_sum}");
   // --- Form 2: method on element, integer return ---
   sum3 = 0;
-  for a in q.items par(b = a.get_value(), 1) {
-    sum3 += b;
-  }
+  for a in q.items par(b = a.get_value(), 1) { sum3 += b; }
   assert(sum3 == 60, "form-2 integer 1 thread: {sum3}");
   // --- Form 2: 4 threads ---
   sum4 = 0;
-  for a in q.items par(b = a.get_value(), 4) {
-    sum4 += b;
-  }
+  for a in q.items par(b = a.get_value(), 4) { sum4 += b; }
   assert(sum4 == 60, "form-2 integer 4 threads: {sum4}");
   // --- Form 2: boolean return ---
   pos2 = 0;
   for a in q.items par(b = a.is_positive(), 1) {
-    if b {
-      pos2 += 1;
-    }
+    if b { pos2 += 1; }
   }
   assert(pos2 == 3, "form-2 boolean: {pos2} positive");
   // --- Form 1: text return ---
   labels = "";
-  for a in q.items par(lbl = score_label(a), 1) {
-    labels += "{lbl},";
-  }
+  for a in q.items par(lbl = score_label(a), 1) { labels += "{lbl},"; }
   assert(labels == "v10,v20,v30,", "form-1 text: {labels}");
   // --- Form 1: text return, multi-thread ---
   labels2 = "";
-  for a in q.items par(lbl2 = score_label(a), 4) {
-    labels2 += "{lbl2},";
-  }
+  for a in q.items par(lbl2 = score_label(a), 4) { labels2 += "{lbl2},"; }
   assert(labels2 != "", "form-1 text multi-thread: {labels2}");
   // --- Form 1: single (f32) return ---
   stotal = 0.0f;
-  for a in q.items par(s = score_as_single(a), 1) {
-    stotal += s;
-  }
+  for a in q.items par(s = score_as_single(a), 1) { stotal += s; }
   assert(stotal > 59.0f, "form-1 single: {stotal}");
   // --- ARC.md A3.6: single return body sums via parallel_buf_get_single ---
   // This exercises the typed narrow-buf reader (n_parallel_buf_get_single)
@@ -178,30 +154,22 @@ fn main() {
   // representable in f32 (no rounding).  Multi-thread (4) confirms the
   // per-thread Queue partial accumulator preserves the f32 bit pattern.
   stotal_mt = 0.0f;
-  for a in q.items par(s = score_as_single(a), 4) {
-    stotal_mt += s;
-  }
+  for a in q.items par(s = score_as_single(a), 4) { stotal_mt += s; }
   assert(stotal_mt == 60.0f, "form-1 single multi-thread sum: {stotal_mt}");
   // --- Form 1: enum return ---
   highs = 0;
   for a in q.items par(g = score_grade(a), 1) {
-    if g == High {
-      highs += 1;
-    }
+    if g == High { highs += 1; }
   }
   assert(highs == 2, "form-1 enum: {highs} high grades");
   // --- Extra context arguments ---
   scaled = 0;
   mult = 5;
-  for a in q.items par(c = scale(a, mult), 2) {
-    scaled += c;
-  }
+  for a in q.items par(c = scale(a, mult), 2) { scaled += c; }
   assert(scaled == 300, "context arg: {scaled}");
   // --- Two extra context arguments ---
   fused_sum = 0;
-  for a in q.items par(d = fused(a, 10, 3), 2) {
-    fused_sum += d;
-  }
+  for a in q.items par(d = fused(a, 10, 3), 2) { fused_sum += d; }
   // expected: (10*3+10) + (20*3+10) + (30*3+10) = 40 + 70 + 100 = 210
   assert(fused_sum == 210, "two context args: {fused_sum}");
 }

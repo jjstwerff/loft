@@ -9,10 +9,15 @@
 // alias must reach the caller's struct, reads through both the alias and the
 // original must agree, and the alias must be forwardable as a `&ref` argument.
 
-struct Foo { a: integer, b: integer }
+struct Foo {
+  a: integer,
+  b: integer,
+}
 
 // write through the alias reaches the caller's record
-fn set_a(s: &Foo) { snap = s; snap.a = 7; }
+fn set_a(s: &Foo) {
+  snap = s; snap.a = 7;
+}
 
 // read through alias AND original, then write the sum back through the alias
 fn mix(s: &Foo) {
@@ -22,7 +27,9 @@ fn mix(s: &Foo) {
   snap.b = r;
 }
 
-fn bump(s: &Foo) { s.a = s.a + 10; }
+fn bump(s: &Foo) {
+  s.a = s.a + 10;
+}
 
 // forward the alias onward as a `&ref` argument
 fn forward(s: &Foo) {

@@ -27,11 +27,19 @@
 // Keep this a NON-CAPTURING fn-ref — a capturing closure squeezed into a
 // 4-byte field is inherently lossy and out of scope for this guard.
 
-struct Pair { v: (fn(integer) -> integer, integer) }
+struct Pair {
+  v: (fn(integer) -> integer, integer),
+}
 
-fn p_dbl(x: integer) -> integer { x + x }
-fn p_trp(x: integer) -> integer { x * 3 }
-fn build(f: fn(integer) -> integer, n: integer) -> (fn(integer) -> integer, integer) { (f, n) }
+fn p_dbl(x: integer) -> integer {
+  x + x
+}
+fn p_trp(x: integer) -> integer {
+  x * 3
+}
+fn build(f: fn(integer) -> integer, n: integer) -> (fn(integer) -> integer, integer) {
+  (f, n)
+}
 
 fn main() {
   // store: build a (fn-ref, integer) tuple, then store it into a struct field.

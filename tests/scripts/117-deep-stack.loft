@@ -22,7 +22,7 @@ fn sum_to(n: integer) -> integer {
   rest = sum_to(n - 1);
   // pad.len() is constant per n only via the number's width; fold a
   // deterministic, pad-independent value so the assert is exact.
-  a + rest + (b - b) + (c - c)
+  a + rest + (b - b)+(c - c)
 }
 
 fn main() {

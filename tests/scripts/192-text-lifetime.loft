@@ -8,9 +8,13 @@
 // duplicate + permanent Vec capacity), not a correctness dangle.  This locks the
 // correctness in through the scratch-retirement migration: the destination-
 // passing rewrite must keep every cell green on both backends.
-fn lower(x: text) -> text { x.to_lowercase() }
+fn lower(x: text) -> text {
+  x.to_lowercase()
+}
 
-fn gen() -> iterator<text> { yield "X".to_lowercase(); yield "Y".to_lowercase(); }
+fn gen() -> iterator < text > {
+  yield "X".to_lowercase(); yield "Y".to_lowercase();
+}
 
 fn main() {
   // local hold across line boundaries — two producers held + used together
@@ -20,7 +24,7 @@ fn main() {
   assert(s == "hello" && t == "world" && u == "xyzDEF", "cross-statement hold");
 
   // comprehension accumulate — one produced text per element, collected
-  v = [for x in ["A", "B", "C"] { x.to_lowercase() }];
+  v = [for x in["A", "B", "C"] { x.to_lowercase() }];
   assert(v[0] == "a" && v[1] == "b" && v[2] == "c", "vector accumulate");
 
   // coroutine yield — text produced in a generator, concatenated after the yield
@@ -34,7 +38,7 @@ fn main() {
   assert(a == "foo" && b == "bar", "fn-return text");
 
   // in-statement chain — many producers in one statement, no line clear between
-  r = "A".to_lowercase() + "B".to_lowercase() + "C".to_lowercase() + "D".to_lowercase();
+  r = "A".to_lowercase()+"B".to_lowercase()+"C".to_lowercase()+"D".to_lowercase();
   assert(r == "abcd", "in-statement chain");
 
   print("192 text-lifetime PASS\n");

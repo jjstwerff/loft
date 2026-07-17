@@ -12,7 +12,11 @@
 // body, nested block).  Cross-mode: the interpreter treats all locals
 // as fn-scoped, so both backends must agree.
 
-enum Dir { North, South, East }
+enum Dir {
+  North,
+  South,
+  East,
+}
 
 fn town(wwx: integer, wwy: integer) -> integer {
   acc = 0;
@@ -33,7 +37,9 @@ fn town(wwx: integer, wwy: integer) -> integer {
 fn loop_then_read() -> integer {
   acc = 0;
   // scalar first-written inside a loop body, read after the loop
-  for k in 0..5 { if k == 3 { hit = k * 10; } }
+  for k in 0..5 {
+    if k == 3 { hit = k * 10; }
+  }
   if hit > 0 { acc = acc + hit; }
   acc
 }
@@ -41,13 +47,15 @@ fn loop_then_read() -> integer {
 fn enum_across_blocks(n: integer) -> integer {
   acc = 0;
   if n == 0 { d = Dir.South; }
-  if n == 0 { if d == Dir.South { acc = acc + 1; } }
+  if n == 0 {
+    if d == Dir.South { acc = acc + 1; }
+  }
   acc
 }
 
 fn main() {
-  a = town(0, 0);   // intown true: nhouse 3 + scale 0 = 3
-  b = town(1, 1);   // intown false: nhouse skipped, scale 1.5->1
+  a = town(0, 0); // intown true: nhouse 3 + scale 0 = 3
+  b = town(1, 1); // intown false: nhouse skipped, scale 1.5->1
   assert(a == 3, "town in: {a}");
   assert(b == 1, "town out: {b}");
   assert(loop_then_read() == 30, "loop hoist");

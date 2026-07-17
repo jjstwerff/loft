@@ -13,19 +13,40 @@
 // classification must stay `Join`).  Verified on BOTH backends, leak-clean; the then-arm is varied
 // over every materialised shape since each reaches the same delivery.
 
-enum Tok { V { n: integer }, W { m: integer } }
+enum Tok {
+  V { n: integer },
+  W { m: integer },
+}
 
-fn take_rest(v: vector<Tok>) -> vector<Tok> { match v { [ _, ..rest ] => rest, _ => [] } }
-fn take_rep(v: vector<Tok>) -> vector<Tok> { match v { [ (xs: V)* ] => xs, _ => [] } }
-fn take_two(v: vector<Tok>) -> vector<Tok> { match v { [ a, b ] => [a, b], _ => [] } }
+fn take_rest(v: vector<Tok>) -> vector<Tok> {
+  match v { [_, ..rest] => rest, _ => [] }
+}
+fn take_rep(v: vector<Tok>) -> vector<Tok> {
+  match v { [(xs: V)*] => xs, _ => [] }
+}
+fn take_two(v: vector<Tok>) -> vector<Tok> {
+  match v { [a, b] => [a, b], _ => [] }
+}
 // block-form empty arm
-fn take_rest_block(v: vector<Tok>) -> vector<Tok> { match v { [ _, ..rest ] => rest, _ => { [] } } }
+fn take_rest_block(v: vector<Tok>) -> vector<Tok> {
+  match v {
+    [_, ..rest] => rest, _ => { [] }
+  }
+}
 // repetition with a fixed literal head + a `..rest` tail, empty else
-fn take_mid(v: vector<Tok>) -> vector<Tok> { match v { [ (xs: V)+ ] => xs, _ => [] } }
+fn take_mid(v: vector<Tok>) -> vector<Tok> {
+  match v { [(xs: V)+] => xs, _ => [] }
+}
 
 fn main() {
-  full:  vector<Tok> = [V{n:1}, V{n:2}, V{n:3}];
-  one:   vector<Tok> = [V{n:7}];
+  full: vector<Tok> = [
+    V { n: 1 },
+    V { n: 2 },
+    V { n: 3 },
+  ];
+  one: vector<Tok> = [
+    V { n: 7 },
+  ];
   empty: vector<Tok> = [];
 
   // `..rest`: full -> tail of 2; empty -> the `[]` arm (len 0).
@@ -41,32 +62,37 @@ fn main() {
   assert(len(take_mid(empty)) == 0, "mid empty arm (+ with no run)");
 
   // rebuilt literal: exactly two -> [a,b]; else `[]`.
-  two: vector<Tok> = [V{n:4}, V{n:5}];
+  two: vector<Tok> = [
+    V { n: 4 },
+    V { n: 5 },
+  ];
   assert(len(take_two(two)) == 2, "two: rebuilt");
   assert(len(take_two(full)) == 0, "two: len 3 falls to []");
 
   // ASSIGN-TO-LOCAL (bind context, no return buffer): the match value is COPIED into the
   // local (`ownership_of == Owned` → CopyMatch in parse_assign_op), so the local owns its
   // store and the `[]` arm is a fresh empty vector — not a bare null.
-  cap_rest = match full { [ _, ..rest ] => rest, _ => [] };
+  cap_rest = match full { [_, ..rest] => rest, _ => [] };
   assert(len(cap_rest) == 2, "bind ..rest: {len(cap_rest)}");
-  cap_rep = match full { [ (ys: V)* ] => ys, _ => [] };
+  cap_rep = match full { [(ys: V)*] => ys, _ => [] };
   assert(len(cap_rep) == 3, "bind rep: {len(cap_rep)}");
-  cap_empty = match empty { [ (zs: V)* ] => zs, _ => [] };
+  cap_empty = match empty { [(zs: V)*] => zs, _ => [] };
   assert(len(cap_empty) == 0, "bind rep empty-subject: {len(cap_empty)}");
-  cap_two = match two { [ a2, b2 ] => [a2, b2], _ => [] };
+  cap_two = match two { [a2, b2] => [a2, b2], _ => [] };
   assert(len(cap_two) == 2, "bind rebuild: {len(cap_two)}");
   // the bound copy is INDEPENDENT of the source (value semantics)
-  cap_ind = match full { [ (ws: V)* ] => ws, _ => [] };
-  full += [V{n:9}];
+  cap_ind = match full { [(ws: V)*] => ws, _ => [] };
+  full += [
+    V { n: 9 },
+  ];
   assert(len(cap_ind) == 3 && len(full) == 4, "bind copy independent of source");
 
   // Reuse axis: hit the empty-arm path repeatedly (no store leak / stale buffer).
   sum = 0;
   for _i in 0..4 {
     sum += len(take_rep(empty));
-    sum += len(take_rest(one));   // one -> rest len 0
-    r_bind = match empty { [ (qs: V)* ] => qs, _ => [] };
+    sum += len(take_rest(one)); // one -> rest len 0
+    r_bind = match empty { [(qs: V)*] => qs, _ => [] };
     sum += len(r_bind);
   }
   assert(sum == 0, "reuse empty arms stay empty: {sum}");

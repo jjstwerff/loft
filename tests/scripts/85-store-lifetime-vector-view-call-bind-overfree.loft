@@ -15,9 +15,15 @@
 // universal first-bind form.  Dense-element vectors (`vector<M>`) only — the
 // shape the proxy never covered.
 
-struct M { hp: integer, depth: integer, name: text }
+struct M {
+  hp: integer,
+  depth: integer,
+  name: text,
+}
 
-fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn m_none() -> M {
+  M { hp: 0, depth: 0, name: "" }
+}
 
 // returns a borrowed view of a vector-element (no Reference/Enum param)
 fn pick(table: vector<M>, idx: integer) -> M {
@@ -28,17 +34,23 @@ fn pick(table: vector<M>, idx: integer) -> M {
 // allocation pressure: same-shaped allocations that recycle a freed slot.
 fn filler(n: integer) -> integer {
   es: vector<M> = [];
-  for j in 0..n { es += [M { hp: j, depth: j, name: "RECYCLE-{j}" }]; }
+  for j in 0..n { es += [
+    M { hp: j, depth: j, name: "RECYCLE-{j}" },
+  ]; }
   return len(es);
 }
 
 fn main() {
   t: vector<M> = [];
-  t += [M { hp: 5, depth: 3, name: "rat" }];
-  t += [M { hp: 8, depth: 5, name: "bat" }];
+  t += [
+    M { hp: 5, depth: 3, name: "rat" },
+  ];
+  t += [
+    M { hp: 8, depth: 5, name: "bat" },
+  ];
 
   for i in 0..6 {
-    a = pick(t, i % 2 ?? 0);          // a := borrowed view of t[idx]
+    a = pick(t, i % 2 ?? 0); // a := borrowed view of t[idx]
     // recycle the slot the scope-exit free of `a` would wrongly release:
     acc = 0;
     for f in 0..6 { acc += filler(4); }

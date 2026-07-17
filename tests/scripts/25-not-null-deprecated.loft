@@ -6,9 +6,16 @@
 // warning drives the gate attrition toward the eventual hard "retired" error.
 // Verifies the warning fires in every position AND the code still runs.
 // @EXPECT_WARNING: `not null` is deprecated
-struct S { a: integer not null, b: text not null }
-fn ret() -> integer not null { 7 }
-struct Narrow { p: integer limit(0, 255) not null }
+struct S {
+  a: integer not null,
+  b: text not null,
+}
+fn ret() -> integer not null {
+  7
+}
+struct Narrow {
+  p: integer limit(0, 255) not null,
+}
 fn main() {
   s: S = S { a: 1, b: "x" };
   n: Narrow = Narrow { p: 255 };

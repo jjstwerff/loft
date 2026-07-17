@@ -7,7 +7,10 @@
 // relocates the matched entry. The loaded entry reads correctly, un-requested
 // keys are absent, and the result is sound. Driven by `store_persist_loft.rs`.
 
-struct Place { name: text not null, pop: integer not null }
+struct Place {
+  name: text not null,
+  pop: integer not null,
+}
 
 fn pop_of(h: hash<Place[name]>, k: text) -> integer {
   found = h[k];
@@ -21,9 +24,9 @@ fn main() {
   p: hash<Place[name]> = [];
   if mode == "write" {
     p += Place { name: "Amsterdam", pop: 900000 };
-    p += Place { name: "Berlin",    pop: 3700000 };
-    p += Place { name: "Cairo",     pop: 10000000 };
-    if !store_persist_bind(p, path) { println("FAIL write-bind"); return }
+    p += Place { name: "Berlin", pop: 3700000 };
+    p += Place { name: "Cairo", pop: 10000000 };
+    if!store_persist_bind(p, path) { println("FAIL write-bind"); return }
     println("write ok");
   } else if mode == "loadkey" {
     ok = store_load_key_text(p, path, "Berlin");
@@ -32,7 +35,5 @@ fn main() {
     println("tk amsterdam={pop_of(p, \"Amsterdam\")}");
     println("tk len={len(p)}");
     println("tk verify={store_verify(p)}");
-  } else {
-    println("FAIL unknown-mode")
-  }
+  } else { println("FAIL unknown-mode") }
 }

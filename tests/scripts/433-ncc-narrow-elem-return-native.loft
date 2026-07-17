@@ -14,30 +14,47 @@
 // b[1] == 20 (present, non-null) in every case — the `?? 99` default never fires, so
 // every accessor reads the element through the coalesce.
 
-fn ret_u8(b: vector<u8>)   -> integer { return (b[1] ?? 99); }
-fn ret_u16(b: vector<u16>) -> integer { return (b[1] ?? 99); }
-fn assign_decl(b: vector<u8>) -> integer { x: integer = (b[1] ?? 99); return x; }
+fn ret_u8(b: vector<u8>) -> integer {
+  return(b[1] ?? 99);
+}
+fn ret_u16(b: vector<u16>) -> integer {
+  return(b[1] ?? 99);
+}
+fn assign_decl(b: vector<u8>) -> integer {
+  x: integer = (b[1] ?? 99); return x;
+}
 // Reassignment (a Set to an existing i64 var, not a decl).  The conditional keeps
 // the initial `x = 7` live (no dead-store warning) while still exercising the
 // direct narrow-ncc-block → i64-var Set path on the reassignment.
-fn assign_reassign(b: vector<u8>) -> integer { x = 7; if len(b) > 0 { x = (b[1] ?? 99); } return x; }
+fn assign_reassign(b: vector<u8>) -> integer {
+  x = 7; if len(b) > 0 { x = (b[1] ?? 99); } return x;
+}
 // Default does NOT fit u8 → already widens to i64 (the non-exception path); must stay correct.
-fn ret_nofit(b: vector<u8>) -> integer { return (b[1] ?? 999); }
+fn ret_nofit(b: vector<u8>) -> integer {
+  return(b[1] ?? 999);
+}
 // A genuinely NARROW-returning function keeps its `as u8` return cast — must not regress.
-fn ret_narrow(b: vector<u8>) -> u8 { return (b[1] ?? 99); }
+fn ret_narrow(b: vector<u8>) -> u8 {
+  return(b[1] ?? 99);
+}
 // Append context: the block MUST stay u8 here (the case the exception protects).
 fn through_append(b: vector<u8>) -> integer {
   out: vector<u8> = [];
   for i in 0..len(b) { out += [b[i] ?? 0]; }
-  return (out[1] ?? 0);
+  return(out[1] ?? 0);
 }
 
-fn mk() -> vector<u8> { v: vector<u8> = []; v += [10 as u8]; v += [20 as u8]; v += [30 as u8]; v }
+fn mk() -> vector<u8> {
+  v: vector<u8> = []; v += [10 as u8]; v += [20 as u8]; v += [30 as u8]; v
+}
 
 fn test_p433_return_narrow_elem() {
   v = mk();
   assert(ret_u8(v) == 20, "return u8 ?? = {ret_u8(v)} (want 20)");
-  assert(ret_u16([10 as u16, 20 as u16]) == 20, "return u16 ?? = {ret_u16([10 as u16, 20 as u16])} (want 20)");
+  assert(
+    ret_u16([10 as u16, 20 as u16]) == 20,
+    "return u16 ?? = {ret_u16([10 as u16, 20 as u16])} (want 20)"
+  );
 }
 
 fn test_p433_assign_narrow_elem() {

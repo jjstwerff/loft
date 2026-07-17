@@ -9,9 +9,15 @@
 //   3. conditional alias into the returned  (reassignment deep-copy)
 //   4. view of a fn-LOCAL vector returned   (materialise into an owned copy)
 
-struct M { hp: integer, depth: integer, name: text }
+struct M {
+  hp: integer,
+  depth: integer,
+  name: text,
+}
 
-fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn m_none() -> M {
+  M { hp: 0, depth: 0, name: "" }
+}
 
 // 1. view via local
 fn pick_local(table: vector<M>, idx: integer) -> M {
@@ -26,9 +32,7 @@ fn pick_direct(table: vector<M>, idx: integer) -> M {
 
 // 2b. view returned mid-body
 fn pick_mid(table: vector<M>, idx: integer) -> M {
-  if idx >= 0 {
-    return table[idx] ?? m_none();
-  }
+  if idx >= 0 { return table[idx] ?? m_none(); }
   m_none()
 }
 
@@ -44,15 +48,21 @@ fn choose(table: vector<M>, salt: integer) -> M {
 //    materialised (pre-fix: dangled into the local's freed store).
 fn pick_from_local(seed: integer) -> M {
   pool: vector<M> = [];
-  pool += [M { hp: seed, depth: seed + 1, name: "local" }];
+  pool += [
+    M { hp: seed, depth: seed + 1, name: "local" },
+  ];
   found = pool[0] ?? m_none();
   found
 }
 
 fn main() {
   t: vector<M> = [];
-  t += [M { hp: 5, depth: 3, name: "rat" }];
-  t += [M { hp: 8, depth: 5, name: "bat" }];
+  t += [
+    M { hp: 5, depth: 3, name: "rat" },
+  ];
+  t += [
+    M { hp: 8, depth: 5, name: "bat" },
+  ];
 
   for i in 0..6 {
     a = pick_local(t, i % 2 ?? 0);
@@ -65,7 +75,7 @@ fn main() {
     assert(a.depth == 3 || a.depth == 5, "iter {i}: a.depth = {a.depth}");
     assert(b.name == "rat" || b.name == "bat", "iter {i}: b.name = '{b.name}'");
     assert(c.hp == 5 || c.hp == 8, "iter {i}: c.hp = {c.hp}");
-    exp = if (i % 2 ?? 0) == 0 { 3 } else { 5 };
+    exp = if(i % 2 ?? 0) == 0 { 3 } else { 5 };
     assert(d.depth == exp, "iter {i}: d.depth = {d.depth} (expect {exp})");
     assert(e.depth == i * 10 + 1, "iter {i}: e.depth = {e.depth} (expect {i * 10 + 1})");
     assert(e.name == "local", "iter {i}: e.name = '{e.name}'");

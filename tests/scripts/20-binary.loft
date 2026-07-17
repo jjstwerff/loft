@@ -11,188 +11,216 @@ fn cleanup() {
 fn main() {
   cleanup();
   // === Binary: u8 ===
- {f = file("test_loft_a.bin");
-  f#format = BigEndian;
-  f += 0 as u8;
-  f += 255 as u8;
-  assert(f#size == 2, "u8 write size");
- }
- {f = file("test_loft_a.bin");
-  f#format = BigEndian;
-  assert(f#read(1) as u8 == 0, "u8 read 0");
-  assert(f#read(1) as u8 == 255, "u8 read 255");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = BigEndian;
+    f += 0 as u8;
+    f += 255 as u8;
+    assert(f#size == 2, "u8 write size");
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = BigEndian;
+    assert(f#read(1) as u8 == 0, "u8 read 0");
+    assert(f#read(1) as u8 == 255, "u8 read 255");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after u8 test");
   // === Binary: u16 ===
- {f = file("test_loft_a.bin");
-  f#format = BigEndian;
-  f += 0x0203 as u16;
- }
- {f = file("test_loft_a.bin");
-  f#format = BigEndian;
-  assert(f#read(2) as u16 == 0x0203, "u16 read BigEndian");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = BigEndian;
+    f += 0x0203 as u16;
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = BigEndian;
+    assert(f#read(2) as u16 == 0x0203, "u16 read BigEndian");
+  }
   // Little-endian: bytes are [03,02] so LE read gives swapped value
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  assert(f#read(2) as u16 == 0x0302, "u16 bytes swapped in LE");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    assert(f#read(2) as u16 == 0x0302, "u16 bytes swapped in LE");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after u16 test");
   // === Binary: i32 (LittleEndian) ===
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  f += 0x11223344 as i32;
- }
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  assert(f#read(4) as i32 == 0x11223344, "i32 LE roundtrip");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    f += 0x11223344 as i32;
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    assert(f#read(4) as i32 == 0x11223344, "i32 LE roundtrip");
+  }
   // Same bytes read as BigEndian give byte-swapped value
- {f = file("test_loft_a.bin");
-  f#format = BigEndian;
-  assert(f#read(4) as i32 == 0x44332211, "i32 LE bytes read as BE");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = BigEndian;
+    assert(f#read(4) as i32 == 0x44332211, "i32 LE bytes read as BE");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after i32 LE test");
   // === Binary: i32 (BigEndian) ===
- {f = file("test_loft_a.bin");
-  f#format = BigEndian;
-  f += 0x11223344 as i32;
- }
- {f = file("test_loft_a.bin");
-  f#format = BigEndian;
-  assert(f#read(4) as i32 == 0x11223344, "i32 BE roundtrip");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = BigEndian;
+    f += 0x11223344 as i32;
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = BigEndian;
+    assert(f#read(4) as i32 == 0x11223344, "i32 BE roundtrip");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after i32 BE test");
   // === Binary: integer (i64) ===
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  f += 0x0102030405060708;
-  assert(f#size == 8, "long write size");
- }
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  assert(f#read(8) as integer == 0x0102030405060708, "long LE roundtrip");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    f += 0x0102030405060708;
+    assert(f#size == 8, "long write size");
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    assert(f#read(8) as integer == 0x0102030405060708, "long LE roundtrip");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after long test");
   // === Binary: single (f32) ===
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  f += 1.5f;
- }
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  assert(f#read(4) as single == 1.5f, "single LE roundtrip");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    f += 1.5f;
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    assert(f#read(4) as single == 1.5f, "single LE roundtrip");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after single test");
   // === Binary: float (f64) ===
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  f += 3.14;
-  assert(f#size == 8, "float write size");
- }
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  assert(f#read(8) as float == 3.14, "float LE roundtrip");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    f += 3.14;
+    assert(f#size == 8, "float write size");
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    assert(f#read(8) as float == 3.14, "float LE roundtrip");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after float test");
   // === Binary: text (raw UTF-8, no length prefix) ===
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  f += "Hello";
-  assert(f#size == 5, "text binary write size");
- }
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  assert(f#read(5) as text == "Hello", "text binary read");
-  f#next = 0;
-  assert(f#read(100) as text == "Hello", "text read past eof full");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    f += "Hello";
+    assert(f#size == 5, "text binary write size");
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    assert(f#read(5) as text == "Hello", "text binary read");
+    f#next = 0;
+    assert(f#read(100) as text == "Hello", "text read past eof full");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after text binary test");
   // === Binary: vector of integers ===
   // Post-2c integer = 8 bytes at rest; each element serializes as i64.
- {f = file("test_loft_b.bin");
-  f#format = LittleEndian;
-  f +=[1, 2];
- }
- {f = file("test_loft_b.bin");
-  f#format = LittleEndian;
-  f#read(8) as integer;
-  assert(f#read(8) as integer == 2, "integer vector binary write: second element");
- }
+  {
+    f = file("test_loft_b.bin");
+    f#format = LittleEndian;
+    f += [1, 2];
+  }
+  {
+    f = file("test_loft_b.bin");
+    f#format = LittleEndian;
+    f#read(8) as integer;
+    assert(f#read(8) as integer == 2, "integer vector binary write: second element");
+  }
   assert(delete("test_loft_b.bin").ok(), "delete after integer-vector write test");
   // === Mixed write: sequential types ===
- {f = file("test_loft_a.bin");
-  f#format = BigEndian;
-  f += 0 as u8;
-  f += 1 as u8;
-  f += 0x0203 as u16;
-  f += 0x04050607 as i32;
-  f += 0x08090a0b0c0d0e0f;
-  assert(f#size == 16, "mixed write total 16 bytes");
-  f += "Hello world!";
-  assert(f#size == 28, "mixed write with text 28 bytes");
- }
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  // First 4 bytes as LE: [0x00,0x01,0x02,0x03] → 0x03020100
-  assert(f#read(4) as i32 == 0x03020100, "mixed LE read first 4");
-  assert(f#index == 0, "#index at start");
-  assert(f#next == 4, "#next after first read");
-  // Seek to text part
-  f#next = 16;
-  assert(f#read(5) as text == "Hello", "mixed seek+read text");
-  assert(f#index == 16, "#index after seek");
-  assert(f#next == 21, "#next after text read");
-  rest = f#read(100) as text;
-  assert(rest == " world!", "mixed read to eof");
-  assert(f#next == f#size, "#next at end == #size");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = BigEndian;
+    f += 0 as u8;
+    f += 1 as u8;
+    f += 0x0203 as u16;
+    f += 0x04050607 as i32;
+    f += 0x08090a0b0c0d0e0f;
+    assert(f#size == 16, "mixed write total 16 bytes");
+    f += "Hello world!";
+    assert(f#size == 28, "mixed write with text 28 bytes");
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    // First 4 bytes as LE: [0x00,0x01,0x02,0x03] → 0x03020100
+    assert(f#read(4) as i32 == 0x03020100, "mixed LE read first 4");
+    assert(f#index == 0, "#index at start");
+    assert(f#next == 4, "#next after first read");
+    // Seek to text part
+    f#next = 16;
+    assert(f#read(5) as text == "Hello", "mixed seek+read text");
+    assert(f#index == 16, "#index after seek");
+    assert(f#next == 21, "#next after text read");
+    rest = f#read(100) as text;
+    assert(rest == " world!", "mixed read to eof");
+    assert(f#next == f#size, "#next at end == #size");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after mixed test");
   // === vector<float> binary I/O ===
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  fv = [1.5, 2.5, 3.5];
-  f += fv;
-  assert(f#size == 24, "vector<float> write size (3*8 bytes)={f#size}");
- }
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  rv = f#read(24) as vector<float>;
-  assert(len(rv) == 3, "vector<float> read len={len(rv)}");
-  assert(rv[0] == 1.5, "vector<float> [0]={rv[0]}");
-  assert(rv[1] == 2.5, "vector<float> [1]={rv[1]}");
-  assert(rv[2] == 3.5, "vector<float> [2]={rv[2]}");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    fv = [1.5, 2.5, 3.5];
+    f += fv;
+    assert(f#size == 24, "vector<float> write size (3*8 bytes)={f#size}");
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    rv = f#read(24) as vector<float>;
+    assert(len(rv) == 3, "vector<float> read len={len(rv)}");
+    assert(rv[0] == 1.5, "vector<float> [0]={rv[0]}");
+    assert(rv[1] == 2.5, "vector<float> [1]={rv[1]}");
+    assert(rv[2] == 3.5, "vector<float> [2]={rv[2]}");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after vector<float> test");
   // === vector<single> binary I/O ===
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  sv = [10.0f, 20.0f, 30.0f];
-  f += sv;
-  assert(f#size == 12, "vector<single> write size (3*4 bytes)={f#size}");
- }
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  rsv = f#read(12) as vector<single>;
-  assert(len(rsv) == 3, "vector<single> read len={len(rsv)}");
-  assert(rsv[0] == 10.0f, "vector<single> [0]={rsv[0]}");
-  assert(rsv[2] == 30.0f, "vector<single> [2]={rsv[2]}");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    sv = [10.0f, 20.0f, 30.0f];
+    f += sv;
+    assert(f#size == 12, "vector<single> write size (3*4 bytes)={f#size}");
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    rsv = f#read(12) as vector<single>;
+    assert(len(rsv) == 3, "vector<single> read len={len(rsv)}");
+    assert(rsv[0] == 10.0f, "vector<single> [0]={rsv[0]}");
+    assert(rsv[2] == 30.0f, "vector<single> [2]={rsv[2]}");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after vector<single> test");
   // === multiple vectors round-trip in one file ===
   // Post-2c integer = 8 bytes at rest; 3 elements = 24 bytes, 2 elements = 16 bytes.
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  f += [1, 2, 3];
-  f += [100, 200];
- }
- {f = file("test_loft_a.bin");
-  f#format = LittleEndian;
-  ri = f#read(24) as vector<integer>;
-  rl = f#read(16) as vector<integer>;
-  assert(ri[2] == 3, "multi-vector int [2]={ri[2]}");
-  assert(rl[0] == 100, "multi-vector long [0]={rl[0]}");
-  assert(rl[1] == 200, "multi-vector long [1]={rl[1]}");
- }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    f += [1, 2, 3];
+    f += [100, 200];
+  }
+  {
+    f = file("test_loft_a.bin");
+    f#format = LittleEndian;
+    ri = f#read(24) as vector<integer>;
+    rl = f#read(16) as vector<integer>;
+    assert(ri[2] == 3, "multi-vector int [2]={ri[2]}");
+    assert(rl[0] == 100, "multi-vector long [0]={rl[0]}");
+    assert(rl[1] == 200, "multi-vector long [1]={rl[1]}");
+  }
   assert(delete("test_loft_a.bin").ok(), "delete after multi-vector test");
 }

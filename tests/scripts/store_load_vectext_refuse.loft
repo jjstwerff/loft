@@ -9,7 +9,10 @@
 // (3b.2), nested (3b.4) ARE handled. The refused-empty result stays sound.
 // Driven by `store_persist_loft.rs`.
 
-struct VTRec { id: integer not null, tags: vector<text> }
+struct VTRec {
+  id: integer not null,
+  tags: vector<text>,
+}
 
 fn main() {
   path = env_variable("LOFT_PERSIST_TEST_PATH");
@@ -21,14 +24,12 @@ fn main() {
     ts += ["alpha"];
     ts += ["beta"];
     v += VTRec { id: 13, tags: ts };
-    if !store_persist_bind(v, path) { println("FAIL write-bind"); return }
+    if!store_persist_bind(v, path) { println("FAIL write-bind"); return }
     println("write ok");
   } else if mode == "loadkey" {
     ok = store_load_key(v, path, 13);
     println("vt loadkey={ok}");
     println("vt len={len(v)}");
     println("vt verify={store_verify(v)}");
-  } else {
-    println("FAIL unknown-mode")
-  }
+  } else { println("FAIL unknown-mode") }
 }

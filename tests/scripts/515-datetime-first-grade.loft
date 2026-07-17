@@ -14,8 +14,12 @@
 //     (was: `d2 - d1` coerced both to integer → typed integer, not Duration).
 // Both were built-in operator paths beating the type's OWN operator; call_op now tries
 // the exact `t_<len><Type>_Op<Name>` method BEFORE the built-in/coercion loop.
-value struct DateTime { ms: integer }
-value struct Duration { ms: integer }
+value struct DateTime {
+  ms: integer,
+}
+value struct Duration {
+  ms: integer,
+}
 
 // --- proleptic Gregorian calendar math (Howard Hinnant days/civil) ---
 fn days_from_civil(y0: integer, m: integer, d: integer) -> integer {
@@ -49,32 +53,72 @@ fn civil_from_days(z0: integer) -> (integer, integer, integer) {
 }
 
 // --- construction ---
-fn datetime(year: integer, month: integer, day: integer,
-            hour: integer, minute: integer, second: integer) -> DateTime {
+fn datetime(
+  year: integer,
+  month: integer,
+  day: integer,
+  hour: integer,
+  minute: integer,
+  second: integer
+) -> DateTime {
   days = days_from_civil(year, month, day);
   DateTime { ms: days * 86400000 + hour * 3600000 + minute * 60000 + second * 1000 }
 }
-fn dt_now() -> DateTime { DateTime { ms: now() } }
+fn dt_now() -> DateTime {
+  DateTime { ms: now() }
+}
 
 // --- Duration constructors + operators ---
-fn hours(n: integer)   -> Duration { Duration { ms: n * 3600000 } }
-fn minutes(n: integer) -> Duration { Duration { ms: n * 60000 } }
-fn dur_days(n: integer) -> Duration { Duration { ms: n * 86400000 } }
-fn OpAdd(self: Duration, other: Duration) -> Duration { Duration { ms: self.ms + other.ms } }
-fn OpLt(self: Duration, other: Duration)  -> boolean  { self.ms < other.ms }
-fn OpEq(self: Duration, other: Duration)  -> boolean  { self.ms == other.ms }
-fn OpNe(self: Duration, other: Duration)  -> boolean  { self.ms != other.ms }
-fn to_text(self: Duration) -> text { "{self.ms}ms" }
+fn hours(n: integer) -> Duration {
+  Duration { ms: n * 3600000 }
+}
+fn minutes(n: integer) -> Duration {
+  Duration { ms: n * 60000 }
+}
+fn dur_days(n: integer) -> Duration {
+  Duration { ms: n * 86400000 }
+}
+fn OpAdd(self: Duration, other: Duration) -> Duration {
+  Duration { ms: self.ms + other.ms }
+}
+fn OpLt(self: Duration, other: Duration) -> boolean {
+  self.ms < other.ms
+}
+fn OpEq(self: Duration, other: Duration) -> boolean {
+  self.ms == other.ms
+}
+fn OpNe(self: Duration, other: Duration) -> boolean {
+  self.ms != other.ms
+}
+fn to_text(self: Duration) -> text {
+  "{self.ms}ms"
+}
 
 // --- DateTime operators (comparison + mixed-type arithmetic) ---
-fn OpLt(self: DateTime, other: DateTime) -> boolean { self.ms < other.ms }
-fn OpLe(self: DateTime, other: DateTime) -> boolean { self.ms <= other.ms }
-fn OpGt(self: DateTime, other: DateTime) -> boolean { self.ms > other.ms }
-fn OpGe(self: DateTime, other: DateTime) -> boolean { self.ms >= other.ms }
-fn OpEq(self: DateTime, other: DateTime) -> boolean { self.ms == other.ms }
-fn OpNe(self: DateTime, other: DateTime) -> boolean { self.ms != other.ms }
-fn OpMin(self: DateTime, other: DateTime) -> Duration { Duration { ms: self.ms - other.ms } }
-fn OpAdd(self: DateTime, other: Duration) -> DateTime { DateTime { ms: self.ms + other.ms } }
+fn OpLt(self: DateTime, other: DateTime) -> boolean {
+  self.ms < other.ms
+}
+fn OpLe(self: DateTime, other: DateTime) -> boolean {
+  self.ms <= other.ms
+}
+fn OpGt(self: DateTime, other: DateTime) -> boolean {
+  self.ms > other.ms
+}
+fn OpGe(self: DateTime, other: DateTime) -> boolean {
+  self.ms >= other.ms
+}
+fn OpEq(self: DateTime, other: DateTime) -> boolean {
+  self.ms == other.ms
+}
+fn OpNe(self: DateTime, other: DateTime) -> boolean {
+  self.ms != other.ms
+}
+fn OpMin(self: DateTime, other: DateTime) -> Duration {
+  Duration { ms: self.ms - other.ms }
+}
+fn OpAdd(self: DateTime, other: Duration) -> DateTime {
+  DateTime { ms: self.ms + other.ms }
+}
 
 // --- custom format: bare {d} = ISO; {d:date}, {d:time} ---
 fn to_text(self: DateTime, spec: text) -> text {
@@ -106,7 +150,7 @@ fn OpConvDateTimeFromText(v: text) -> DateTime {
     }
   }
   if has { parts += [cur]; }
-  y  = parts[0] ?? 1970;
+  y = parts[0] ?? 1970;
   mo = parts[1] ?? 1;
   dd = parts[2] ?? 1;
   hh = parts[3] ?? 0;
@@ -114,8 +158,12 @@ fn OpConvDateTimeFromText(v: text) -> DateTime {
   ss = parts[5] ?? 0;
   datetime(y, mo, dd, hh, mm, ss)
 }
-fn OpConvIntFromDateTime(v: DateTime) -> integer { v.ms }
-fn OpConvDateTimeFromInt(v: integer) -> DateTime { DateTime { ms: v } }
+fn OpConvIntFromDateTime(v: DateTime) -> integer {
+  v.ms
+}
+fn OpConvDateTimeFromInt(v: integer) -> DateTime {
+  DateTime { ms: v }
+}
 
 fn main() {
   // absolute epoch anchors (catch a systematic offset the round-trips would hide)
@@ -137,11 +185,11 @@ fn main() {
   assert(d1 == d1, "operator ==");
   assert(d1 != d2, "operator !=");
 
-  diff = d2 - d1;                  // DateTime - DateTime -> Duration
+  diff = d2 - d1; // DateTime - DateTime -> Duration
   assert(diff == minutes(90), "elapsed is 90 minutes");
   assert(diff.ms == 5400000, "elapsed ms");
 
-  d3 = d1 + minutes(90);          // DateTime + Duration -> DateTime
+  d3 = d1 + minutes(90); // DateTime + Duration -> DateTime
   assert(d3 == d2, "add duration reaches the later time");
   assert(hours(1) < hours(2), "duration comparison");
 
@@ -151,8 +199,8 @@ fn main() {
   parsed2 = "2026-07-08T13:30:00" as DateTime;
   assert(parsed2 == d2, "parsed datetime equals constructed");
 
-  epoch_ms = d1 as integer;        // DateTime -> integer
-  back = epoch_ms as DateTime;     // integer -> DateTime
+  epoch_ms = d1 as integer; // DateTime -> integer
+  back = epoch_ms as DateTime; // integer -> DateTime
   assert(back == d1, "DateTime <-> integer round-trips");
 
   // now() is a real wall-clock DateTime

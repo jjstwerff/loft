@@ -9,7 +9,9 @@
 
 fn test() {
   // --- an EMPTY but present file: content is "", read_bytes is [], NOT null ---
-  { f = file("h4_empty.txt"); f.write(""); }
+  {
+    f = file("h4_empty.txt"); f.write("");
+  }
   assert(content(file("h4_empty.txt")) != null, "empty file content is not null");
   assert((content(file("h4_empty.txt")) ?? "x") == "", "empty file content is the empty string");
   assert(read_bytes("h4_empty.txt") != null, "empty file bytes are not null");
@@ -30,7 +32,9 @@ fn test() {
   assert(list_dir("h4_no_such_dir") == null, "missing dir lists null");
 
   // --- a present file still round-trips ---
-  { g = file("h4_hi.txt"); g.write("hi"); }
+  {
+    g = file("h4_hi.txt"); g.write("hi");
+  }
   assert((content(file("h4_hi.txt")) ?? "") == "hi", "present file content round-trips");
   delete("h4_hi.txt");
 }

@@ -8,21 +8,37 @@
 // backends. Before this, `a < b` on a concrete struct errored "No matching
 // operator '<' on 'Money' and 'Money'".
 
-struct Money { cents: integer not null }
+struct Money {
+  cents: integer not null,
+}
 
-fn OpLt(self: Money, other: Money) -> boolean { self.cents < other.cents }
-fn OpLe(self: Money, other: Money) -> boolean { self.cents <= other.cents }
-fn OpGt(self: Money, other: Money) -> boolean { self.cents > other.cents }
-fn OpGe(self: Money, other: Money) -> boolean { self.cents >= other.cents }
-fn OpMin(self: Money, other: Money) -> integer { self.cents - other.cents }
-fn OpEq(self: Money, other: Money) -> boolean { self.cents == other.cents }
-fn OpNe(self: Money, other: Money) -> boolean { self.cents != other.cents }
+fn OpLt(self: Money, other: Money) -> boolean {
+  self.cents < other.cents
+}
+fn OpLe(self: Money, other: Money) -> boolean {
+  self.cents <= other.cents
+}
+fn OpGt(self: Money, other: Money) -> boolean {
+  self.cents > other.cents
+}
+fn OpGe(self: Money, other: Money) -> boolean {
+  self.cents >= other.cents
+}
+fn OpMin(self: Money, other: Money) -> integer {
+  self.cents - other.cents
+}
+fn OpEq(self: Money, other: Money) -> boolean {
+  self.cents == other.cents
+}
+fn OpNe(self: Money, other: Money) -> boolean {
+  self.cents != other.cents
+}
 
 fn main() {
   a = Money { cents: 150 };
   b = Money { cents: 500 };
   assert(a < b, "direct <");
-  assert(!(b < a), "direct < false side");
+  assert(! (b < a), "direct < false side");
   assert(a <= a, "direct <=");
   assert(b > a, "direct >");
   assert(b >= b, "direct >=");
@@ -35,6 +51,6 @@ fn main() {
   // precedence guarantees; without it `a == c` is false.
   c = Money { cents: 150 };
   assert(a == c, "user OpEq on distinct equal-valued structs");
-  assert(!(a != c), "user OpNe on distinct equal-valued structs");
+  assert(! (a != c), "user OpNe on distinct equal-valued structs");
   println("first-grade ops ok");
 }

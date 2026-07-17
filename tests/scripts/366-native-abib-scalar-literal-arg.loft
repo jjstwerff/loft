@@ -10,16 +10,31 @@
 // the normal path (`emit_call_arg`), so boolean / character / enum literals all
 // reach an ABI-B callee correctly.  The interpreter was always correct; this
 // guards the native backend (and the interp/native parity).
-enum Color { Red, Green, Blue }
-struct S { x: integer }
-struct Box { y: integer, hit: boolean }
+enum Color {
+  Red,
+  Green,
+  Blue,
+}
+struct S {
+  x: integer,
+}
+struct Box {
+  y: integer,
+  hit: boolean,
+}
 
-fn with_bool(s: S, c: boolean) -> Box { Box{y: s.x, hit: c} }
-fn with_char(s: S, c: character) -> Box { Box{y: s.x, hit: c == 'Z'} }
-fn with_enum(s: S, c: Color) -> Box { Box{y: s.x, hit: c == Color.Green} }
+fn with_bool(s: S, c: boolean) -> Box {
+  Box { y: s.x, hit: c }
+}
+fn with_char(s: S, c: character) -> Box {
+  Box { y: s.x, hit: c == 'Z' }
+}
+fn with_enum(s: S, c: Color) -> Box {
+  Box { y: s.x, hit: c == Color.Green }
+}
 
 pub fn main() {
-  a = S{x: 7};
+  a = S { x: 7 };
 
   // boolean literal — the exact #366 reproducer (both polarities).
   bt = with_bool(a, true);

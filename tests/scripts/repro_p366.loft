@@ -10,8 +10,14 @@
 //
 // NB: `{{` / `}}` are literal braces (a single `{` starts string interpolation).
 
-struct Item { tag: text, amount: integer }
-struct Nested { id: integer, inner: Item }
+struct Item {
+  tag: text,
+  amount: integer,
+}
+struct Nested {
+  id: integer,
+  inner: Item,
+}
 
 fn main() {
   // extra top-level key "extra" must not drop the element

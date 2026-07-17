@@ -9,23 +9,25 @@
 // no-op.  The interpreter was always correct (len=0); this guards the native
 // codegen path.
 
-fn dbl(x: integer) -> integer { return x * 2; }
+fn dbl(x: integer) -> integer {
+  return x * 2;
+}
 
 fn empty_fn_vec_len() -> integer {
-    fs: vector<fn(integer)->integer> = [];
-    return len(fs);
+  fs: vector<fn(integer) -> integer> = [];
+  return len(fs);
 }
 
 fn seeded_fn_vec_len() -> integer {
-    // a non-empty fn-ref vector literal must still work (the common case)
-    fs: vector<fn(integer)->integer> = [dbl];
-    return len(fs);
+  // a non-empty fn-ref vector literal must still work (the common case)
+  fs: vector<fn(integer) -> integer> = [dbl];
+  return len(fs);
 }
 
 fn main() {
-    e = empty_fn_vec_len();
-    s = seeded_fn_vec_len();
-    print("empty={e} seeded={s}\n");
-    assert(e == 0, "empty fn-ref vector literal must have len 0");
-    assert(s == 1, "seeded fn-ref vector literal must have len 1");
+  e = empty_fn_vec_len();
+  s = seeded_fn_vec_len();
+  print("empty={e} seeded={s}\n");
+  assert(e == 0, "empty fn-ref vector literal must have len 0");
+  assert(s == 1, "seeded fn-ref vector literal must have len 1");
 }

@@ -5,7 +5,9 @@
 
 // --- & parameter tests ---
 
-fn increment(a: &integer) { a += 1 }
+fn increment(a: &integer) {
+  a += 1
+}
 
 fn test_ref_param_is_modified() {
   x = 5;
@@ -15,8 +17,12 @@ fn test_ref_param_is_modified() {
 
 // --- & parameter transitive mutation ---
 
-fn add_one(v: &integer) { v += 1 }
-fn wrapper(a: &integer) { add_one(a) }
+fn add_one(v: &integer) {
+  v += 1
+}
+fn wrapper(a: &integer) {
+  add_one(a)
+}
 
 fn test_ref_param_mutated_via_call() {
   x = 10;
@@ -43,14 +49,21 @@ fn test_const_local_read_only() {
   assert(x == 42, "ok");
 }
 
-struct CLP { x: integer }
+struct CLP {
+  x: integer,
+}
 
 fn test_const_local_vector_read_only() {
-  const v = [CLP { x: 1 }, CLP { x: 2 }];
+  const v = [
+    CLP { x: 1 },
+    CLP { x: 2 },
+  ];
   assert(v[0].x == 1, "ok");
 }
 
-struct CLCounter { value: integer }
+struct CLCounter {
+  value: integer,
+}
 
 fn test_const_local_ref_read_only() {
   const c = CLCounter { value: 7 };
@@ -62,8 +75,8 @@ fn test_const_local_ref_read_only() {
 // write-once, but the container it holds can still grow (`+=`) and be element-written.
 fn test_const_local_binding_allows_append() {
   const v = [1, 2];
-  v += [3];            // append = contents mutation → allowed
-  v[0] = 9;            // element write = contents mutation → allowed
+  v += [3]; // append = contents mutation → allowed
+  v[0] = 9; // element write = contents mutation → allowed
   assert(len(v) == 3 && v[0] == 9 && v[2] == 3, "binding-const allows contents mutation: {v}");
 }
 
@@ -78,18 +91,22 @@ fn test_const_local_binding_text_append() {
 // --- value-const (`: const T`) allows a REBIND, blocks mutation (negatives in 102) ---
 // @PLN40 const-model phase 1 step 3: `p: const T` is a read-only borrow — mutation
 // through the name is rejected, but re-pointing the local slot (`p = other`) is fine.
-struct VcPoint { x: integer }
+struct VcPoint {
+  x: integer,
+}
 
 fn vc_take_param(p: const vector<integer>) -> integer {
-  p = [7, 8, 9];       // rebind the local slot → allowed (value-const permits rebind)
-  len(p)               // read through a value-const binding → always allowed
+  p = [7, 8, 9]; // rebind the local slot → allowed (value-const permits rebind)
+  len(p)// read through a value-const binding → always allowed
 }
 
 fn test_value_const_param_rebind_and_read() {
   assert(vc_take_param([1, 2]) == 3, "value-const param: rebind local slot + read allowed");
 }
 
-fn vc_read_field(p: const VcPoint) -> integer { p.x }
+fn vc_read_field(p: const VcPoint) -> integer {
+  p.x
+}
 
 fn test_value_const_param_field_read() {
   assert(vc_read_field(VcPoint { x: 42 }) == 42, "value-const param: field read allowed");
@@ -97,6 +114,6 @@ fn test_value_const_param_field_read() {
 
 fn test_value_const_local_rebind() {
   x: const vector<integer> = [1];
-  x = [2, 3];          // rebind the local slot → allowed
+  x = [2, 3]; // rebind the local slot → allowed
   assert(len(x) == 2, "value-const local: rebind allowed");
 }

@@ -3,9 +3,11 @@
 // P5.2: Generic function call-site instantiation.
 // Generics support pass-through operations: assign and return.
 
-fn identity<T>(x: T) -> T { x }
+fn identity < T > (x: T) -> T {
+  x
+}
 
-fn pick_second<T>(a: T, b: T) -> T {
+fn pick_second < T > (a: T, b: T) -> T {
   _x = a;
   b
 }

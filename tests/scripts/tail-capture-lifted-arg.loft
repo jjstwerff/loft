@@ -18,9 +18,13 @@
 // `opsurface::handle_write_s` hit (`resp_frame(rid, tag, empty_body())`).  Must
 // compile + run identically on interpret and native.
 
-struct SlSf { sl_v: vector<float> }
+struct SlSf {
+  sl_v: vector<float>,
+}
 
-fn sl_make() -> SlSf { return SlSf { sl_v: [2.0] }; }
+fn sl_make() -> SlSf {
+  return SlSf { sl_v: [2.0] };
+}
 
 fn sl_lift_inner(sl_la: const SlSf, sl_lb: SlSf) -> SlSf {
   SlSf { sl_v: [sl_la.sl_v[0] + sl_lb.sl_v[0]] }

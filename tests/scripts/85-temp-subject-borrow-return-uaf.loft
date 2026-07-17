@@ -12,12 +12,24 @@
 // default on, LOFT_NO_A1B opts out) keeps the three stores DISTINCT: the subject
 // work-ref is skipped (kept a local, freed after the copy) and the buffer work-ref
 // materialises an owned copy into a separate `__retbuf`. Pins both backends.
-struct E { hp: integer, name: text }
-enum Cell { Empty, Filled { items: vector<E> } }
-fn g(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+struct E {
+  hp: integer,
+  name: text,
+}
+enum Cell {
+  Empty,
+  Filled { items: vector<E> },
+}
+fn g(e: Cell) -> vector<E> {
+  match e {
+    Filled { items } => { items }, _ => { [] }
+  }
+}
 fn h(seed: integer) -> vector<E> {
   inner: vector<E> = [];
-  for k in 0..3 { inner += [E{hp: seed + k, name: "e"}]; }
+  for k in 0..3 { inner += [
+    E { hp: seed + k, name: "e" },
+  ]; }
   g(Filled { items: inner })
 }
 fn main() {
@@ -25,7 +37,9 @@ fn main() {
   assert(len(a) == 3, "len: {len(a)}");
   assert(a[0].hp == 10 && a[1].hp == 11 && a[2].hp == 12, "values corrupted");
   // allocation churn AFTER the escaped return, to reuse the freed store if it leaked
-  j: vector<E> = []; for q in 0..20 { j += [E{hp: q, name: "x"}]; }
+  j: vector<E> = []; for q in 0..20 { j += [
+    E { hp: q, name: "x" },
+  ]; }
   assert(a[0].hp == 10, "UAF: a corrupted after churn");
   print("pln90-w1 ok\n");
 }

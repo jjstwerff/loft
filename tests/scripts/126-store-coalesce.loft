@@ -12,14 +12,19 @@
 // guarantee (mergeable-pairs → 0, reuse without grow) is the Rust unit
 // test `coalesce_free_merges_adjacent_and_reuses_space` in src/store.rs.
 
-struct Box { tag: integer, data: vector<integer> }
+struct Box {
+  tag: integer,
+  data: vector<integer>,
+}
 
 // build a Box whose vector has `n` elements, return its checksum (forces
 // the vector to be materialised), then let it drop at the call boundary.
 fn churn(n: integer) -> integer {
   b: vector<integer> = [];
   i = 0;
-  while i < n { b += [i * 2 + n]; i += 1; }
+  while i < n {
+    b += [i * 2 + n]; i += 1;
+  }
   s = 0;
   for x in b { s += x; }
   s
@@ -31,7 +36,9 @@ fn free_blocks_digits(report: text) -> integer {
   assert(pos >= 0, "free-blocks marker present");
   rest = report[pos + len(marker)..len(report)];
   d = 0;
-  for c in rest { if c.is_numeric() { d += 1; } else { break; } }
+  for c in rest {
+    if c.is_numeric() { d += 1; } else { break; }
+  }
   d
 }
 
@@ -42,7 +49,7 @@ fn main() {
   total = 0;
   round = 0;
   while round < 400 {
-    total += churn(10 + round % 50);   // sizes cycle 10..59
+    total += churn(10 + round % 50); // sizes cycle 10..59
     round += 1;
   }
   assert(total != 0, "churn produced a checksum");

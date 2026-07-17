@@ -15,8 +15,12 @@
 // `n_println(cell, n_upper(cell, n_greet(cell, "x", ...)))`;
 // after the fix it becomes
 // `n_println(cell, &*(n_upper(cell, &*(n_greet(cell, "x", ...)))))`.
-fn p262_greet(p262_n: text) -> text { "hi {p262_n}" }
-fn p262_upper(p262_s: text) -> text { p262_s.to_uppercase() }
+fn p262_greet(p262_n: text) -> text {
+  "hi {p262_n}"
+}
+fn p262_upper(p262_s: text) -> text {
+  p262_s.to_uppercase()
+}
 
 fn p262_text_call_chain_compiles_under_native() {
   p262_out = p262_upper(p262_greet("x"));

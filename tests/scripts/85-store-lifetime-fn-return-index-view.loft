@@ -15,9 +15,13 @@
 // RED before the fix on BOTH backends: `b` reads back as [] once any later
 // allocation recycles the prematurely-freed source store.  Guards value + no leak.
 
-struct Box { v: vector<integer> }
+struct Box {
+  v: vector<integer>,
+}
 
-fn idx0(w: vector<vector<integer>>) -> vector<integer> { w[0] }
+fn idx0(w: vector<vector<integer>>) -> vector<integer> {
+  w[0]
+}
 
 fn main() {
   // The view-from-fn-return must survive a following allocation (a fresh local
@@ -35,7 +39,7 @@ fn main() {
   ww2: vector<vector<integer>> = [[44, 55, 66]];
   b2 = idx0(ww2);
   by = Box { v: [7, 8, 9] };
-  c = by.v;                 // #415 borrowing-read copy — frees by's store
+  c = by.v; // #415 borrowing-read copy — frees by's store
   assert(len(b2) == 3, "b2 view must survive the by.v copy (len 3)");
   assert(b2[1] == 55, "b2[1] must stay 55");
   assert(len(c) == 3, "c = by.v must be an owned copy (len 3)");

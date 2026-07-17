@@ -9,7 +9,9 @@
 //   - widening `i32` → `integer` (lossless, implicit),
 //   - an explicit `as i32` cast of a non-constant integer.
 
-fn takes_i32(x: i32) -> i32 { x }
+fn takes_i32(x: i32) -> i32 {
+  x
+}
 
 fn main() {
   // literal exemption

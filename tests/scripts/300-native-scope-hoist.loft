@@ -15,7 +15,9 @@
 //    Block arm casts itself to u8 while the `false` else-arm stayed
 //    `bool` (E0308 "if and else have incompatible types").
 
-struct Probe { p_flags: vector<boolean> }
+struct Probe {
+  p_flags: vector<boolean>,
+}
 
 fn classify(depth: integer, w: integer) -> integer {
   total = 0;
@@ -24,9 +26,7 @@ fn classify(depth: integer, w: integer) -> integer {
     nhouse = 3 + w * 2;
     scale = 1.5 * w as float;
     for r in 0..w {
-      for q in 0..w {
-        total = total + r * q;
-      }
+      for q in 0..w { total = total + r * q; }
     }
     if intown { total = total + nhouse; }
     total = total + scale as integer;
@@ -53,9 +53,7 @@ fn float_then_int_loops(vals: vector<float>) -> integer {
 fn ncc_bool_gate(p: Probe, idx: integer, lim: integer) -> integer {
   hits = 0;
   for i in 0..lim {
-    if 0 <= idx && idx < lim && (p.p_flags[idx] ?? false) {
-      hits = hits + 1;
-    }
+    if 0 <= idx && idx < lim && (p.p_flags[idx] ?? false) { hits = hits + 1; }
   }
   hits
 }

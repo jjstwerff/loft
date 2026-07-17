@@ -8,35 +8,71 @@
 // sub-patterns and `..rest`.  Cross-mode + leak-checked.
 
 enum Token {
-  Kw    { #lexeme name: text },     // keyword — matched by its lexeme
-  Punct { #lexeme sym: text },      // punctuation — matched by its lexeme
-  Ident { name: text },             // NOT #lexeme — matched structurally + captured
-  Num   { value: integer },
+  Kw { #lexeme name: text }, // keyword — matched by its lexeme
+  Punct { #lexeme sym: text }, // punctuation — matched by its lexeme
+  Ident { name: text }, // NOT #lexeme — matched structurally + captured
+  Num { value: integer },
 }
 
 // A tiny statement grammar, written the way you'd write the rules:
 //   "fn" IDENT "(" ")"            |   "let" IDENT "=" NUM   |   "return" NUM
 fn parse(v: vector<Token>) -> text {
   match v {
-    [ "fn", Ident { name }, "(", ")" ]            => "fn:{name}",
-    [ "let", Ident { name }, "=", Num { value } ] => "let:{name}={value}",
-    [ "return", Num { value } ]                   => "ret:{value}",
-    _                                              => "?",
+    [
+      "fn",
+      Ident { name },
+      "(",
+      ")",
+    ] => "fn:{name}",
+    [
+      "let",
+      Ident { name },
+      "=",
+      Num { value },
+    ] => "let:{name}={value}",
+    [
+      "return",
+      Num { value },
+    ] => "ret:{value}",
+    _ => "?",
   }
 }
 
 // `#lexeme` composes with `..rest`: match a leading keyword, keep the tail.
 fn tail_after(v: vector<Token>) -> integer {
-  match v { [ "do", ..rest ] => len(rest), _ => -1 }
+  match v { ["do", ..rest] => len(rest), _ => -1 }
 }
 
 fn main() {
-  fnsig: vector<Token> = [Kw { name: "fn" }, Ident { name: "foo" }, Punct { sym: "(" }, Punct { sym: ")" }];
-  letst: vector<Token> = [Kw { name: "let" }, Ident { name: "x" }, Punct { sym: "=" }, Num { value: 42 }];
-  ret:   vector<Token> = [Kw { name: "return" }, Num { value: 7 }];
-  bad:   vector<Token> = [Kw { name: "fn" }, Ident { name: "foo" }, Punct { sym: "[" }, Punct { sym: ")" }];
+  fnsig: vector<Token> = [
+    Kw { name: "fn" },
+    Ident { name: "foo" },
+    Punct { sym: "(" },
+    Punct { sym: ")" },
+  ];
+  letst: vector<Token> = [
+    Kw { name: "let" },
+    Ident { name: "x" },
+    Punct { sym: "=" },
+    Num { value: 42 },
+  ];
+  ret: vector<Token> = [
+    Kw { name: "return" },
+    Num { value: 7 },
+  ];
+  bad: vector<Token> = [
+    Kw { name: "fn" },
+    Ident { name: "foo" },
+    Punct { sym: "[" },
+    Punct { sym: ")" },
+  ];
   // an Ident whose text is "fn" must NOT match the `"fn"` keyword literal (Ident.name isn't #lexeme)
-  idfn:  vector<Token> = [Ident { name: "fn" }, Ident { name: "foo" }, Punct { sym: "(" }, Punct { sym: ")" }];
+  idfn: vector<Token> = [
+    Ident { name: "fn" },
+    Ident { name: "foo" },
+    Punct { sym: "(" },
+    Punct { sym: ")" },
+  ];
 
   assert(parse(fnsig) == "fn:foo", "fn sig: {parse(fnsig)}");
   assert(parse(letst) == "let:x=42", "let stmt: {parse(letst)}");
@@ -44,8 +80,17 @@ fn main() {
   assert(parse(bad) == "?", "wrong punct '[' falls through: {parse(bad)}");
   assert(parse(idfn) == "?", "Ident \"fn\" is not the keyword \"fn\": {parse(idfn)}");
 
-  assert(tail_after([Kw { name: "do" }, Num { value: 1 }, Num { value: 2 }]) == 2, "lexeme + rest");
-  assert(tail_after([Num { value: 9 }]) == -1, "no leading 'do'");
+  assert(
+    tail_after([
+      Kw { name: "do" },
+      Num { value: 1 },
+      Num { value: 2 },
+    ]) == 2,
+    "lexeme + rest"
+  );
+  assert(tail_after([
+    Num { value: 9 },
+  ]) == -1, "no leading 'do'");
 
   print("35k-lexeme: PASS");
 }

@@ -12,7 +12,9 @@ fn test_rem_by_const_zero() {
   r = 5 % 0 ?? null;
 }
 
-fn append_ch(ch: character) -> text { "abc_de" + ch }
+fn append_ch(ch: character) -> text {
+  "abc_de" + ch
+}
 
 fn test_append_fn() {
   // Uses text + character (workaround for #90: text first)
@@ -44,7 +46,9 @@ fn test_continue_loop() {
 }
 
 // @EXPECT_WARNING: Parameter a is never read
-fn void_routine(a: integer) { return; }
+fn void_routine(a: integer) {
+  return;
+}
 
 fn test_inner_loop() {
   s = "";
@@ -55,11 +59,17 @@ fn test_inner_loop() {
       if len(s) > 100 { i#break }
     }
   }
-  assert(s == "00,10,11,20,21,22,30,31,32,33,40,41,42,43,44,50,51,52,53,54,55,60,61,62,63,64,65,66,70,71,72,73,74,75,",
-    "inner loop");
+  assert(
+    s == "00,10,11,20,21,22,30,31,32,33,40,41,42,43,44,50,51,52,53,54,55,60,61,62,63,64,65,66,70,71,72,73,74,75,",
+    "inner loop"
+  );
 }
 
-enum ExState { ExStart, ExOngoing, ExHalt }
+enum ExState {
+  ExStart,
+  ExOngoing,
+  ExHalt,
+}
 
 fn first(s: ExState, c: integer) -> integer {
   if s == ExStart { s = ExOngoing; } else if c > 10 { s = ExHalt; }

@@ -10,29 +10,50 @@
 // keeps it on a first assignment (store init) and elides it on a
 // reassignment (bare `OpReplaceKeyed` reuses the existing store).
 
-struct Item { k: integer }
-struct HRec { ck: integer, v: integer }
-struct IRec { n: integer }
+struct Item {
+  k: integer,
+}
+struct HRec {
+  ck: integer,
+  v: integer,
+}
+struct IRec {
+  n: integer,
+}
 
 fn mk_hash() -> hash<HRec[ck]> {
   h: hash<HRec[ck]> = [];
-  h += [HRec{ck: 5, v: 9}];
-  h += [HRec{ck: 8, v: 12}];
+  h += [
+    HRec { ck: 5, v: 9 },
+  ];
+  h += [
+    HRec { ck: 8, v: 12 },
+  ];
   h
 }
 
 fn mk_sorted() -> sorted<Item[k]> {
   s: sorted<Item[k]> = [];
-  s += [Item{k: 3}];
-  s += [Item{k: 1}];
-  s += [Item{k: 2}];
+  s += [
+    Item { k: 3 },
+  ];
+  s += [
+    Item { k: 1 },
+  ];
+  s += [
+    Item { k: 2 },
+  ];
   s
 }
 
 fn mk_index() -> index<IRec[n]> {
   ix: index<IRec[n]> = [];
-  ix += [IRec{n: 7}];
-  ix += [IRec{n: 3}];
+  ix += [
+    IRec { n: 7 },
+  ];
+  ix += [
+    IRec { n: 3 },
+  ];
   ix
 }
 
@@ -64,7 +85,9 @@ fn main() {
 
   // --- reassign-from-call: existing store reused, no leak ---
   r: sorted<Item[k]> = [];
-  r += [Item{k: 99}];
+  r += [
+    Item { k: 99 },
+  ];
   r = mk_sorted();
   assert(len(r) == 3, "reassign-from-call len");
 

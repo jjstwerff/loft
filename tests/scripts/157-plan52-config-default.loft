@@ -20,8 +20,13 @@
 // Pairing: diff against 02 (vec-index) and 17 (hash-keyed deep chain).
 // Status: cluster V real-library shape; latent exposure documentation.
 
-struct Pair { name: text, value: text }
-struct Config { entries: hash<Pair[name]> }
+struct Pair {
+  name: text,
+  value: text,
+}
+struct Config {
+  entries: hash<Pair[name]>,
+}
 
 fn lookup(c: Config, k: text) -> text {
   // Look up the entry, project its value field, fall back to "FINAL".

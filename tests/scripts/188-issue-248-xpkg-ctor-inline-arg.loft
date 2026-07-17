@@ -40,8 +40,10 @@ fn main() {
   // The trigger: `&self` method with an INLINE heap-returning call argument.
   s.p248_load(99, make_keys());
 
-  assert(p248_pkg::p248_scalar(s) == 99,
-    "after load scalar: expected 99 got {p248_pkg::p248_scalar(s)}");
+  assert(
+    p248_pkg::p248_scalar(s) == 99,
+    "after load scalar: expected 99 got {p248_pkg::p248_scalar(s)}"
+  );
   // every element written from the inline-call argument
   assert(p248_pkg::p248_key(s, 0), "key0 set");
   assert(p248_pkg::p248_key(s, 1), "key1 set");
@@ -52,8 +54,10 @@ fn main() {
   // same hazard — cover it too.
   s2 = p248_pkg::p248_new(1);
   p248_pkg::p248_load(s2, 42, make_keys());
-  assert(p248_pkg::p248_scalar(s2) == 42,
-    "free-fn form scalar: expected 42 got {p248_pkg::p248_scalar(s2)}");
+  assert(
+    p248_pkg::p248_scalar(s2) == 42,
+    "free-fn form scalar: expected 42 got {p248_pkg::p248_scalar(s2)}"
+  );
   assert(p248_pkg::p248_key(s2, 3), "free-fn form key3 set");
 
   print("issue-248 cross-package ctor + inline-arg: ok\n");

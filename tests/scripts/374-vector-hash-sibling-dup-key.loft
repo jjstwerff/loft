@@ -18,16 +18,31 @@
 // Semantics: the vector keeps EVERY appended record (insertion order, duplicates
 // included); the hash keeps ONE record per key — the LATEST appended.
 
-struct Word { text: text, count: integer }
-struct Counter { ordered: vector<Word>, by_text: hash<Word[text]> }
-struct ByCount { ordered: vector<Word>, by_count: hash<Word[count]> }
+struct Word {
+  text: text,
+  count: integer,
+}
+struct Counter {
+  ordered: vector<Word>,
+  by_text: hash<Word[text]>,
+}
+struct ByCount {
+  ordered: vector<Word>,
+  by_count: hash<Word[count]>,
+}
 
 // Duplicate key: vector keeps both, hash keeps the latest, nothing corrupts.
 fn test_dup_key_vector_keeps_all_hash_keeps_latest() {
   c = Counter { ordered: [], by_text: [] };
-  c.ordered += [Word { text: "apple", count: 1 }];
-  c.ordered += [Word { text: "banana", count: 2 }];
-  c.ordered += [Word { text: "apple", count: 9 }];
+  c.ordered += [
+    Word { text: "apple", count: 1 },
+  ];
+  c.ordered += [
+    Word { text: "banana", count: 2 },
+  ];
+  c.ordered += [
+    Word { text: "apple", count: 9 },
+  ];
   // Vector keeps all three in insertion order.
   assert(len(c.ordered) == 3, "vector len={len(c.ordered)} (expect 3)");
   assert(c.ordered[0].text == "apple" && c.ordered[0].count == 1, "ord[0]={c.ordered[0].count}");
@@ -42,12 +57,16 @@ fn test_dup_key_vector_keeps_all_hash_keeps_latest() {
 // "apple" record must remain live in the vector).
 fn test_dup_key_survives_churn() {
   c = Counter { ordered: [], by_text: [] };
-  for label in ["a", "b", "a", "c", "b", "a"] {
-    c.ordered += [Word { text: label, count: 1 }];
+  for label in["a", "b", "a", "c", "b", "a"] {
+    c.ordered += [
+      Word { text: label, count: 1 },
+    ];
   }
   // 6 appended; vector holds all 6 (3×a, 2×b, 1×c).
   junk: vector<Word> = [];
-  for k in 0..50 { junk += [Word { text: "junk", count: k }]; }
+  for k in 0..50 { junk += [
+    Word { text: "junk", count: k },
+  ]; }
   assert(len(c.ordered) == 6, "churn vector len={len(c.ordered)} (expect 6)");
   total = 0;
   for e in c.ordered { total = total + len(e.text); }
@@ -59,7 +78,9 @@ fn test_dup_key_survives_churn() {
 // the fix, `d.ordered[0].text` read the LAST element ("z") instead of "x".
 fn test_dup_integer_key() {
   d = ByCount { ordered: [], by_count: [] };
-  for t in ["x", "y", "z"] { d.ordered += [Word { text: t, count: 5 }]; }
+  for t in["x", "y", "z"] { d.ordered += [
+    Word { text: t, count: 5 },
+  ]; }
   assert(len(d.ordered) == 3, "int-key vector len={len(d.ordered)} (expect 3)");
   assert(d.ordered[0].text == "x", "int-key [0]={d.ordered[0].text} (expect x)");
   assert(d.ordered[2].text == "z", "int-key [2]={d.ordered[2].text} (expect z)");

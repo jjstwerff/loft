@@ -50,7 +50,7 @@ fn main() {
   assert(r8 == 6, "chained mixed: {r8}");
 
   // --- Precision loss: large long as float ---
-  big = 9007199254740993;  // 2^53 + 1, not representable in f64
+  big = 9007199254740993; // 2^53 + 1, not representable in f64
   big_f = big as float;
   // After round-trip, value may differ by 1 due to f64 precision limit.
   assert(abs(big_f - 9007199254740993.0) <= 1.0, "i64 as float precision: {big_f}");

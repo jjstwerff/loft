@@ -5,12 +5,12 @@
 // function bodies with `return null` had their field types reset to unknown(0).
 
 pub struct Alpha {
-  value: integer
+  value: integer,
 }
 
 pub struct Beta {
   name: text,
-  count: integer
+  count: integer,
 }
 
 fn get_num() -> integer;
@@ -31,7 +31,7 @@ pub fn make_beta(n: text, c: integer) -> Beta {
 // Nested: struct construction using result of another function
 pub fn make_pair() -> Beta {
   a = make_alpha(10);
-  if !a { return null; }
+  if!a { return null; }
   Beta { name: "test", count: a.value }
 }
 

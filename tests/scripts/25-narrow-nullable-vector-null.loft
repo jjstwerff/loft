@@ -6,12 +6,12 @@
 // plans/25-nullable-sequences/narrow-nullable-representation.md.
 fn main() {
   // width 1 — u8? / i8? (ByteNullable, 255 sentinel)
-  u: vector<u8?> = [];  u += [null]; u += [42]; u += [254];
+  u: vector<u8?> = []; u += [null]; u += [42]; u += [254];
   assert(u[0] == null, "u8?[0] should be null, got {u[0]}");
   assert(u[1] == 42, "u8?[1] should be 42, got {u[1]}");
   assert(u[2] == 254, "u8?[2] should be 254, got {u[2]}");
   assert(u[9] == null, "u8? OOB should be null, got {u[9]}");
-  i: vector<i8?> = [];  i += [null]; i += [-5]; i += [127];
+  i: vector<i8?> = []; i += [null]; i += [-5]; i += [127];
   assert(i[0] == null, "i8?[0] should be null, got {i[0]}");
   assert(i[1] == -5, "i8?[1] should be -5, got {i[1]}");
   assert(i[2] == 127, "i8?[2] should be 127, got {i[2]}");

@@ -7,12 +7,31 @@
 // to point an error at.  Reporting is then a VALUE, never a trap: read the token at `farthest` and
 // format a message.  Opt-in — a plain `{ src, pos }` cursor has no such field and is unaffected.
 
-enum Tok { KwFn { x: integer }, Id { x: integer }, LParen { x: integer } }
-struct Cur { src: vector<Tok>, pos: integer, farthest: integer }
-struct Plain { src: vector<Tok>, pos: integer }
-struct Node { v: integer }
+enum Tok {
+  KwFn { x: integer },
+  Id { x: integer },
+  LParen { x: integer },
+}
+struct Cur {
+  src: vector<Tok>,
+  pos: integer,
+  farthest: integer,
+}
+struct Plain {
+  src: vector<Tok>,
+  pos: integer,
+}
+struct Node {
+  v: integer,
+}
 
-fn ident(c: Cur) -> Node { match c { [ Id { x } ] => Node { v: x }, _ => null } }
+fn ident(c: Cur) -> Node {
+  match c {
+    [
+      Id { x },
+    ] => Node { v: x }, _ => null
+  }
+}
 
 // Name the failing token kind — a pure helper (PC4-clean), used to build the error message.
 fn describe(t: Tok) -> text {
@@ -21,9 +40,12 @@ fn describe(t: Tok) -> text {
 
 fn main() {
   // Grammar wants two identifiers; the input is `Id (` — so it fails at token index 1.
-  c = Cur { src: [Id { x: 7 }, LParen { x: 0 }], pos: 0, farthest: 0 };
-  a = match c { [ n: ident ] => n.v, _ => -1 };   // pos 0 -> 1, farthest 1
-  b = match c { [ n: ident ] => n.v, _ => -1 };   // pos 1: LParen, miss -> -1, farthest stays 1
+  c = Cur { src: [
+    Id { x: 7 },
+    LParen { x: 0 },
+  ], pos: 0, farthest: 0 };
+  a = match c { [n: ident] => n.v, _ => -1 }; // pos 0 -> 1, farthest 1
+  b = match c { [n: ident] => n.v, _ => -1 }; // pos 1: LParen, miss -> -1, farthest stays 1
   assert(a == 7, "first ident: {a}");
   assert(b == -1, "second ident misses: {b}");
   assert(c.farthest == 1, "farthest names the failing token index: {c.farthest}");
@@ -33,8 +55,12 @@ fn main() {
   assert(msg == "parse error at token 1: expected identifier, found `(`", "report: {msg}");
 
   // Opt-in — a plain cursor WITHOUT a `farthest` field is unaffected.
-  p = Plain { src: [Id { x: 5 }], pos: 0 };
-  r = match p { [ Id { x } ] => x, _ => -1 };
+  p = Plain { src: [
+    Id { x: 5 },
+  ], pos: 0 };
+  r = match p { [
+    Id { x },
+  ] => x, _ => -1 };
   assert(r == 5, "plain cursor still works: {r}");
 
   print("35s-farthest: PASS");

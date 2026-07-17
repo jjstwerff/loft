@@ -6,7 +6,9 @@
 // block-local String), and the consumer's `.to_string()` ran after the local
 // dropped.  Fix: a text value-block now materialises its `_ret` to an OWNED
 // String inside the block.
-struct P323H { items: vector<text> }
+struct P323H {
+  items: vector<text>,
+}
 
 fn test_p323_index_coalesce() {
   h = P323H { items: [] };

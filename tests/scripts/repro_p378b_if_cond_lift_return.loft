@@ -11,10 +11,19 @@
 // freed BEFORE the `return if (bool_tmp) {…} else {…}`.
 // vector (not hash) keeps this distinct from the keyed @P378(a) crash.
 
-struct Ent { q: integer, r: integer }
-struct Bag { items: vector<Ent> }
-fn bag_empty() -> Bag { Bag { items: [] } }
-fn mk_ent(n: integer) -> Ent { Ent { q: n, r: n } }
+struct Ent {
+  q: integer,
+  r: integer,
+}
+struct Bag {
+  items: vector<Ent>,
+}
+fn bag_empty() -> Bag {
+  Bag { items: [] }
+}
+fn mk_ent(n: integer) -> Ent {
+  Ent { q: n, r: n }
+}
 
 // the if-CONDITION calls a struct-returning fn → lifts a ref-temp.
 fn pick(n: integer) -> Bag {

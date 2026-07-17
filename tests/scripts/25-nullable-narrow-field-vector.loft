@@ -11,24 +11,41 @@
 // `nullable` in `emit_field` (generation/mod.rs) so the field takes the narrow
 // `db.short(min, true)` path. Gate-OFF the `?` is a no-op → identical.
 
-struct FullU8  { x: integer limit(0, 255)? }
-struct FullU16 { y: integer limit(0, 65535)? }
-struct AliasU8 { z: u8? }
+struct FullU8 {
+  x: integer limit(0, 255)?,
+}
+struct FullU16 {
+  y: integer limit(0, 65535)?,
+}
+struct AliasU8 {
+  z: u8?,
+}
 
 fn main() {
   // multi-element vector: EVERY element (not just index 0) must round-trip,
   // including the range-edge max value (255 / 65535) and interleaved null.
-  v = [FullU8 { x: 100 }, FullU8 { x: null }, FullU8 { x: 255 }];
+  v = [
+    FullU8 { x: 100 },
+    FullU8 { x: null },
+    FullU8 { x: 255 },
+  ];
   assert(v[0].x == 100, "u8 vec[0] value");
   assert(v[1].x == null, "u8 vec[1] null");
   assert(v[2].x == 255, "u8 vec[2] MAX (was swallowed as null)");
 
-  w = [FullU16 { y: 1 }, FullU16 { y: 65535 }, FullU16 { y: null }];
+  w = [
+    FullU16 { y: 1 },
+    FullU16 { y: 65535 },
+    FullU16 { y: null },
+  ];
   assert(w[0].y == 1, "u16 vec[0] value");
   assert(w[1].y == 65535, "u16 vec[1] MAX");
   assert(w[2].y == null, "u16 vec[2] null");
 
-  a = [AliasU8 { z: 5 }, AliasU8 { z: 254 }];
+  a = [
+    AliasU8 { z: 5 },
+    AliasU8 { z: 254 },
+  ];
   assert(a[0].z == 5, "u8-alias vec[0]");
   assert(a[1].z == 254, "u8-alias vec[1]");
 

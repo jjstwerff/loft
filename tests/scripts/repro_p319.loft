@@ -23,19 +23,36 @@
 // Isolated lib reproducer: lib/moros_render/tests/adversarial.loft
 // (test_adv_lambda_mutates_mesh).
 
-struct P319V3 { x: float, y: float, z: float }
-struct P319V2 { x: float, y: float }
-struct P319Vtx { pos: P319V3, normal: P319V3, uv: P319V2 }
+struct P319V3 {
+  x: float,
+  y: float,
+  z: float,
+}
+struct P319V2 {
+  x: float,
+  y: float,
+}
+struct P319Vtx {
+  pos: P319V3,
+  normal: P319V3,
+  uv: P319V2,
+}
 
-fn p319_v3(a: float, b: float, c: float) -> P319V3 { P319V3 { x: a, y: b, z: c } }
-fn p319_v2(a: float, b: float) -> P319V2 { P319V2 { x: a, y: b } }
+fn p319_v3(a: float, b: float, c: float) -> P319V3 {
+  P319V3 { x: a, y: b, z: c }
+}
+fn p319_v2(a: float, b: float) -> P319V2 {
+  P319V2 { x: a, y: b }
+}
 fn p319_vtx(p: P319V3, n: P319V3, u: P319V2) -> P319Vtx {
   P319Vtx { pos: p, normal: n, uv: u }
 }
 
 // Offset-0 variant: the captured struct's vector field is at byte offset 0.
 // Pre-fix symptom: `len` read back as 0 after the second append (data loss).
-struct P319MeshA { verts: vector<P319Vtx> }
+struct P319MeshA {
+  verts: vector<P319Vtx>,
+}
 
 fn p319_offset0() {
   m_a = P319MeshA { verts: [] };
@@ -56,7 +73,10 @@ fn p319_offset0() {
 
 // Non-zero-offset variant: a scalar field precedes the vector, so the vector
 // header sits at a non-zero offset.  Pre-fix symptom: SIGSEGV in new_record.
-struct P319MeshB { tag: integer, verts: vector<P319Vtx> }
+struct P319MeshB {
+  tag: integer,
+  verts: vector<P319Vtx>,
+}
 
 fn p319_offset_nonzero() {
   m_b = P319MeshB { tag: 7, verts: [] };

@@ -13,8 +13,12 @@
 // interp coverage intact via this file; native skip is in
 // `tests/native.rs::SCRIPTS_NATIVE_SKIP`.
 
-fn add_two(a: integer, b: integer) -> integer { a + b }
-fn max_pair(a: integer, b: integer) -> integer { if b > a { b } else { a } }
+fn add_two(a: integer, b: integer) -> integer {
+  a + b
+}
+fn max_pair(a: integer, b: integer) -> integer {
+  if b > a { b } else { a }
+}
 
 fn main() {
   // Acceptance 1: sum 1..=100 = 5050 (4 threads).

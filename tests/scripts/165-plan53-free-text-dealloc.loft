@@ -35,7 +35,7 @@ fn main() {
   // Repeated reassignment in a loop: exercises free_text on each iteration.
   acc = "";
   for i in 0..5 {
-    old = acc;          // old is freed at end of iteration
+    old = acc; // old is freed at end of iteration
     acc = "{acc}{i}";
   }
   assert(acc == "01234", "loop acc: got {acc}");

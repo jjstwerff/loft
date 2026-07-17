@@ -13,7 +13,9 @@
 // @EXPECT_ERROR: cannot capture function parameter 'p'
 // @EXPECT_ERROR: cannot write or mutate enclosing-scope variable 's'
 
-struct Box { n: integer }
+struct Box {
+  n: integer,
+}
 
 // Scalar write to an enclosing local — silently dropped at runtime (the write
 // goes to the worker's private stack and is discarded on join).
@@ -30,7 +32,7 @@ fn cap_vector_mutate() {
 
 // Struct field mutation through a captured ref.
 fn cap_struct_field() {
-  b = Box{ n: 1 };
+  b = Box { n: 1 };
   parallel { b.n = 5; }
 }
 

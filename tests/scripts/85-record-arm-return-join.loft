@@ -11,53 +11,76 @@
 
 // (1) enum match-return, value flows through a second fn (the p54 shape —
 // multi-line arms on purpose: layout shifted poison visibility, never the bug).
-pub enum V { A { v: integer }, B { v: text } }
+pub enum V {
+  A { v: integer },
+  B { v: text },
+}
 fn dbl(x: const V) -> V {
-    match x {
-        A { v } => A { v: v * 2 },
-        B { v } => B { v: v }
-    }
+  match x {
+    A { v } => A { v: v * 2 },
+    B { v } => B { v: v }
+  }
 }
 fn describe(x: const V) -> text {
-    match x {
-        A { v } => "a-{v}",
-        B { v } => "b-{v}"
-    }
+  match x {
+    A { v } => "a-{v}",
+    B { v } => "b-{v}"
+  }
 }
 fn t1_flow() -> text {
-    a = A { v: 5 };
-    d = dbl(a);
-    describe(d)
+  a = A { v: 5 };
+  d = dbl(a);
+  describe(d)
 }
 
 // (2) nullable Reference if-return — both paths, leak-free (the maybe_row
 // shape: present arm transfers, null arm frees the preamble placeholder).
-struct NRow { id: integer, tag: text }
-fn maybe_row(b: boolean) -> NRow { if b { NRow { id: 9, tag: "z" } } else { null } }
+struct NRow {
+  id: integer,
+  tag: text,
+}
+fn maybe_row(b: boolean) -> NRow {
+  if b {
+    NRow { id: 9, tag: "z" }
+  } else { null }
+}
 
 // (3) two candidate arm stores adopted by ONE named local — the winner must
 // survive the return-site frees (the par t4 root, minus the par).
-enum Verdict { Pass { score: integer }, Fail { reason: text } }
+enum Verdict {
+  Pass { score: integer },
+  Fail { reason: text },
+}
 fn classify(n: integer) -> Verdict {
-    v: Verdict = Pass { score: n };
-    if n < 0 { v = Fail { reason: "negative" }; }
-    v
+  v: Verdict = Pass { score: n };
+  if n < 0 {
+    v = Fail { reason: "negative" };
+  }
+  v
 }
 
 // (4) the par face itself.
-struct Score { value: integer }
+struct Score {
+  value: integer,
+}
 fn classify_s(s: const Score) -> Verdict {
-    v: Verdict = Pass { score: s.value };
-    if s.value < 0 { v = Fail { reason: "negative" }; }
-    v
+  v: Verdict = Pass { score: s.value };
+  if s.value < 0 {
+    v = Fail { reason: "negative" };
+  }
+  v
 }
 fn t4_par() -> integer {
-    sl: vector<Score> = [Score { value: 10 }, Score { value: -5 }, Score { value: 20 }];
-    pass_sum = 0;
-    for s in sl par(v = classify_s(s), 4) {
-        if v is Pass { score } { pass_sum += score; }
-    }
-    pass_sum
+  sl: vector<Score> = [
+    Score { value: 10 },
+    Score { value: -5 },
+    Score { value: 20 },
+  ];
+  pass_sum = 0;
+  for s in sl par(v = classify_s(s), 4) {
+    if v is Pass { score } { pass_sum += score; }
+  }
+  pass_sum
 }
 
 fn main() {
@@ -67,8 +90,12 @@ fn main() {
   assert(r == null && q.id == 9, "t2: {q.id}");
   p = classify(7);
   f = classify(-1);
-  ps = match p { Pass { score } => score, _ => -1 };
-  fr = match f { Fail { reason } => reason, _ => "?" };
+  ps = match p {
+    Pass { score } => score, _ => -1
+  };
+  fr = match f {
+    Fail { reason } => reason, _ => "?"
+  };
   assert(ps == 7 && fr == "negative", "t3: {ps} {fr}");
   assert(t4_par() == 30, "t4: {t4_par()}");
   println("record-arm-return-join ok");

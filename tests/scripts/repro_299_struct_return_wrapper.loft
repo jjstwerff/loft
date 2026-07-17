@@ -9,7 +9,16 @@
 // results below aliased one store and read the last-written value (interpret
 // only; native/WASM were unaffected).  Surfaced by the crawler FOV loop.
 
-struct Big { lw: integer, lh: integer, a: integer, b: integer, c: integer, d: integer, e: integer, g: integer }
+struct Big {
+  lw: integer,
+  lh: integer,
+  a: integer,
+  b: integer,
+  c: integer,
+  d: integer,
+  e: integer,
+  g: integer,
+}
 
 // Wrapper DECLARED BEFORE the builder — the order that defeated the promotion.
 fn make(w: integer) -> Big {

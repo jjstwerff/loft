@@ -23,13 +23,14 @@ fn test_p3_aggregates() {
 }
 
 // S15 regression: struct-enum variants with same-named fields now read the correct offset.
-enum TwoVal { TvInt { v: integer }, TvFloat { v: float } }
+enum TwoVal {
+  TvInt { v: integer },
+  TvFloat { v: float },
+}
 
 fn test_s15_same_named_field_offset() {
   x = TvInt { v: 42 };
-  if x is TvInt { v } {
-    assert(v == 42, "S15: TvInt v should be 42, got {v}");
-  } else {
+  if x is TvInt { v } { assert(v == 42, "S15: TvInt v should be 42, got {v}"); } else {
     assert(false, "S15: wrong match arm");
   }
 }
@@ -38,7 +39,9 @@ fn test_s15_same_named_field_offset() {
 fn test_c11_while() {
   i = 0;
   found = false;
-  while !found { i += 1; found = i * i > 100; }
+  while!found {
+    i += 1; found = i * i > 100;
+  }
   assert(found, "C11: while loop works");
 }
 

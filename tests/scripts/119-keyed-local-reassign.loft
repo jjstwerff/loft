@@ -16,19 +16,32 @@
 // latent hash-copy bugs (remove_claims off-by-one, copy_claims_hash_body
 // under-copy).
 
-struct Item { k: integer }
-struct HRec { name: text, v: integer }
-struct IRec { n: integer }
+struct Item {
+  k: integer,
+}
+struct HRec {
+  name: text,
+  v: integer,
+}
+struct IRec {
+  n: integer,
+}
 
 fn main() {
   // --- sorted local: build + reassign-from-loop-local (insertion-sort
   //     rebuild idiom) + indexed read. ---
   s: sorted<Item[k]> = [];
-  s += [Item{k: 100}];
+  s += [
+    Item { k: 100 },
+  ];
   for i in 1..5 {
     ns: sorted<Item[k]> = [];
-    for it in s { ns += [Item{k: it.k}]; }
-    ns += [Item{k: i}];
+    for it in s { ns += [
+      Item { k: it.k },
+    ]; }
+    ns += [
+      Item { k: i },
+    ];
     s = ns;
   }
   s_out = "";
@@ -38,20 +51,32 @@ fn main() {
   // --- hash local: build + reassign + key lookup (i64 field must
   //     round-trip cleanly — the copy_claims_hash_body fix). ---
   h: hash<HRec[name]> = [];
-  h += [HRec{name: "a", v: 1}];
+  h += [
+    HRec { name: "a", v: 1 },
+  ];
   nh: hash<HRec[name]> = [];
-  nh += [HRec{name: "a", v: 1}];
-  nh += [HRec{name: "b", v: 2}];
+  nh += [
+    HRec { name: "a", v: 1 },
+  ];
+  nh += [
+    HRec { name: "b", v: 2 },
+  ];
   h = nh;
   assert(len(h) == 2, "hash local reassign len");
   assert(h["a"].v == 1 && h["b"].v == 2, "hash local lookup after reassign");
 
   // --- index local: build + reassign. ---
   ix: index<IRec[n]> = [];
-  ix += [IRec{n: 5}];
+  ix += [
+    IRec { n: 5 },
+  ];
   nx: index<IRec[n]> = [];
-  nx += [IRec{n: 3}];
-  nx += [IRec{n: 7}];
+  nx += [
+    IRec { n: 3 },
+  ];
+  nx += [
+    IRec { n: 7 },
+  ];
   ix = nx;
   ix_out = "";
   for r in ix { ix_out += "{r.n} "; }

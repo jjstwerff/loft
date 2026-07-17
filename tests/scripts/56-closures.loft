@@ -3,7 +3,9 @@
 // Closures: lambda variable capture, timing, text deep-copy, factory functions.
 
 fn make_adder(cl_base: integer) -> fn(integer) -> integer {
-  fn(cl_n: integer) -> integer { cl_base + cl_n }
+  fn(cl_n: integer) -> integer {
+    cl_base + cl_n
+  }
 }
 
 fn apply_fn(cl_f: fn(integer) -> integer, cl_val: integer) -> integer {
@@ -12,7 +14,9 @@ fn apply_fn(cl_f: fn(integer) -> integer, cl_val: integer) -> integer {
 
 fn test_integer_capture() {
   offset = 100;
-  shift = fn(cl_x: integer) -> integer { cl_x + offset };
+  shift = fn(cl_x: integer) -> integer {
+    cl_x + offset
+  };
   assert(shift(5) == 105, "integer capture: {shift(5)}");
 }
 
@@ -29,7 +33,9 @@ fn test_multiple_integer_captures() {
 
 fn test_text_capture_deep_copy() {
   greeting = "Hello";
-  make_msg = fn(cl_name: text) -> text { "{greeting}, {cl_name}!" };
+  make_msg = fn(cl_name: text) -> text {
+    "{greeting}, {cl_name}!"
+  };
   assert(make_msg("Alice") == "Hello, Alice!", "text capture");
   // Mutating greeting after capture should NOT affect the closure.
   greeting = "Bye";
@@ -39,7 +45,9 @@ fn test_text_capture_deep_copy() {
 // @EXPECT_WARNING: Dead assignment
 fn test_capture_timing() {
   base = 10;
-  add_base = fn(cl_n: integer) -> integer { base + cl_n };
+  add_base = fn(cl_n: integer) -> integer {
+    base + cl_n
+  };
   // Capture happened at definition time.
   base = 999;
   assert(add_base(5) == 15, "capture timing: {add_base(5)}");
@@ -54,13 +62,17 @@ fn test_factory_function() {
 
 fn test_closure_in_higher_order() {
   factor = 3;
-  scale = fn(cl_x: integer) -> integer { cl_x * factor };
+  scale = fn(cl_x: integer) -> integer {
+    cl_x * factor
+  };
   assert(apply_fn(scale, 7) == 21, "closure in HOF: {apply_fn(scale, 7)}");
 }
 
 fn test_closure_called_multiple_times() {
   counter = 0;
-  inc = fn(cl_n: integer) -> integer { counter + cl_n };
+  inc = fn(cl_n: integer) -> integer {
+    counter + cl_n
+  };
   assert(inc(1) == 1, "first call");
   assert(inc(10) == 10, "second call");
 }

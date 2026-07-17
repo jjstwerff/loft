@@ -25,7 +25,9 @@
 //                the block (the @P321e/@P323 fix; native escape).
 // Status: P383 canonical, cluster I.
 
-struct H { items: vector<text> }
+struct H {
+  items: vector<text>,
+}
 
 fn main() {
   h = H { items: [] };

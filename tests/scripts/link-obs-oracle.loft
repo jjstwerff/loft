@@ -5,53 +5,55 @@
 // One function per Matrix-O cell, distinct `a` per cell → one `link-obs-dbg: fn=… var=a … unobs=0|1`
 // each. tests/link_obs_oracle.rs pins the verdicts. See alias-where-correct-build.md § Matrix O.
 
-struct S { v: vector<integer> }
+struct S {
+  v: vector<integer>,
+}
 
 // O1 — UNOBSERVABLE: both read-only after the bind (no write can diverge copy from link).
 fn o1_readonly_both() -> integer {
-    s = S { v: [10, 20, 30] };
-    a = s.v; // link candidate
-    a[1] + s.v[0] // read a and s, no writes
+  s = S { v: [10, 20, 30] };
+  a = s.v; // link candidate
+  a[1] + s.v[0]// read a and s, no writes
 }
 
 // O2 — OBSERVABLE: the local `a` is mutated (a link would write through to the source).
 fn o2_write_local() -> integer {
-    s = S { v: [10, 20, 30] };
-    a = s.v;
-    a[1] = 99;
-    a[1] + s.v[0]
+  s = S { v: [10, 20, 30] };
+  a = s.v;
+  a[1] = 99;
+  a[1] + s.v[0]
 }
 
 // O3 — OBSERVABLE: the source is mutated (a link would reflect the source write).
 fn o3_write_source() -> integer {
-    s = S { v: [10, 20, 30] };
-    a = s.v;
-    s.v[1] = 88;
-    a[1] + s.v[0]
+  s = S { v: [10, 20, 30] };
+  a = s.v;
+  s.v[1] = 88;
+  a[1] + s.v[0]
 }
 
 // O4 — OBSERVABLE (the ALIAS-AWARE trap): a sibling `&` writes THROUGH the source store.
 fn o4_sibling_alias() -> integer {
-    s = S { v: [10, 20, 30] };
-    a = s.v; // copy candidate
-    b = &s.v; // explicit write-through alias of the same store
-    b[1] = 77;
-    a[1] + s.v[0]
+  s = S { v: [10, 20, 30] };
+  a = s.v; // copy candidate
+  b = &s.v; // explicit write-through alias of the same store
+  b[1] = 77;
+  a[1] + s.v[0]
 }
 
 // O5 — OBSERVABLE, and the LOAD-BEARING alias-aware proof: the `&` is taken BEFORE the bind, so the
 // base's own use is before the fill (the direct base check passes) — ONLY the alias-aware clause
 // (`e` aliases `s`, `e` written after the fill) can flag this. A link would read 55 here, not 20.
 fn o5_alias_before_bind() -> integer {
-    s = S { v: [10, 20, 30] };
-    e = &s.v; // alias created BEFORE the bind
-    a = s.v; // link candidate
-    e[1] = 55; // write through the alias, after the bind
-    a[1] + s.v[0]
+  s = S { v: [10, 20, 30] };
+  e = &s.v; // alias created BEFORE the bind
+  a = s.v; // link candidate
+  e[1] = 55; // write through the alias, after the bind
+  a[1] + s.v[0]
 }
 
 fn main() {
-    println(
-        "{o1_readonly_both()} {o2_write_local()} {o3_write_source()} {o4_sibling_alias()} {o5_alias_before_bind()}",
-    );
+  println(
+    "{o1_readonly_both()} {o2_write_local()} {o3_write_source()} {o4_sibling_alias()} {o5_alias_before_bind()}"
+  );
 }

@@ -9,36 +9,28 @@ fn connect(host: text, port: integer = 8080, tls: boolean = true) -> text {
   "{host}:{port}:{tls}"
 }
 
-fn add(a:  & integer, b: integer, c: integer = 0) {
+fn add(a: &integer, b: integer, c: integer = 0) {
   a += b + c;
 }
 
 fn classify(n: integer) -> text {
-  if n < 0 {
-    return "negative";
-  }
-  if n == 0 {
-    return "zero";
-  }
+  if n < 0 { return "negative"; }
+  if n == 0 { return "zero"; }
   "positive"
 }
 
 fn fib(n: integer) -> integer {
-  if n <= 1 {
-    return n;
-  }
-  fib(n - 1) + fib(n - 2)
+  if n <= 1 { return n; }
+  fib(n - 1)+fib(n - 2)
 }
 
 fn sum_to(n: integer) -> integer {
   t = 0;
-  for i in 1..=n {
-    t += i;
-  }
+  for i in 1..=n { t += i; }
   t
 }
 
-fn append_to(buf:  & text, item: text) {
+fn append_to(buf: &text, item: text) {
   buf += item;
 }
 
@@ -47,44 +39,32 @@ fn double_val(x: integer) -> integer {
 }
 
 fn is_even(n: integer) -> boolean {
-  if n == 0 {
-    return true;
-  }
-  if n < 0 {
-    return is_even(-n);
-  }
+  if n == 0 { return true; }
+  if n < 0 { return is_even(-n); }
   is_odd(n - 1)
 }
 
 fn is_odd(n: integer) -> boolean {
-  if n == 0 {
-    return false;
-  }
-  if n < 0 {
-    return is_odd(-n);
-  }
+  if n == 0 { return false; }
+  if n < 0 { return is_odd(-n); }
   is_even(n - 1)
 }
 // Returns null when a > 2, otherwise a+1.
 
 fn maybe_inc(a: integer) -> integer? {
-  if a > 2 {
-    return null;
-  }
+  if a > 2 { return null; }
   a + 1
 }
 // Returns text or null depending on flag.
 
 fn maybe_str(a: integer) -> text? {
-  if a > 2 {
-    return null;
-  }
+  if a > 2 { return null; }
   "#{a}#"
 }
 // Mutable struct reference with explicit &.
 
 struct Accum {
-  total: integer
+  total: integer,
 }
 
 fn accumulate(r: Accum, val: integer) {
@@ -92,8 +72,8 @@ fn accumulate(r: Accum, val: integer) {
 }
 // Mutable vector reference with empty-vector default.
 
-fn append_int(r:  & vector < integer > =[], val: integer) {
-  r +=[val];
+fn append_int(r: &vector<integer> = [], val: integer) {
+  r += [val];
 }
 
 fn main() {
@@ -149,12 +129,12 @@ fn main() {
   r_if2 = if 3 < 10 { "yes" } else { "no" };
   assert(r_if2 == "yes", "if-else: true branch");
   // --- Mutable struct reference parameter ---
-  acc = Accum {total: 0 };
+  acc = Accum { total: 0 };
   accumulate(acc, 5);
   accumulate(acc, 3);
   assert(acc.total == 8, "mutable struct ref param: {acc.total}");
   // --- Mutable vector reference with default ---
-  vi =[1];
+  vi = [1];
   append_int(vi, 2);
   append_int(vi, 3);
   assert("{vi}" == "[1,2,3]", "mutable vec ref param: {vi}");

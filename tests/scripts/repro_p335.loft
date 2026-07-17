@@ -7,8 +7,12 @@
 // function `day`, and mis-parsed the declaration ("Expect token ;" for the
 // typed form, "Cannot redefine function ..." for the assignment form).
 // Functions are now reached ONLY via the `n_`+ident mangle.
-fn day() -> integer { 7 }
-fn year() -> integer { 2026 }
+fn day() -> integer {
+  7
+}
+fn year() -> integer {
+  2026
+}
 
 fn test_typed_decl_does_not_collide() {
   n_day: vector<text> = [];

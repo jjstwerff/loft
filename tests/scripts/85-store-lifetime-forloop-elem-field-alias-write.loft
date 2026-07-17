@@ -18,29 +18,45 @@
 //
 // Guards value semantics + write-through across the base-kind axis, both backends.
 
-struct Hex { h_height: integer, h_material: integer }
-struct Chunk { ck_cx: integer, ck_hexes: vector<Hex> }
-struct Map { m_chunks: vector<Chunk> }
+struct Hex {
+  h_height: integer,
+  h_material: integer,
+}
+struct Chunk {
+  ck_cx: integer,
+  ck_hexes: vector<Hex>,
+}
+struct Map {
+  m_chunks: vector<Chunk>,
+}
 
 fn mk_chunk(cx: integer) -> Chunk {
   hexes: vector<Hex> = [];
-  for _ in 0..4 { hexes += [Hex { h_height: 0, h_material: 0 }]; }
+  for _ in 0..4 { hexes += [
+    Hex { h_height: 0, h_material: 0 },
+  ]; }
   Chunk { ck_cx: cx, ck_hexes: hexes }
 }
 
 fn ensure(m: &Map, cx: integer) {
-  for ec in m.m_chunks { if ec.ck_cx == cx { return; } }
+  for ec in m.m_chunks {
+    if ec.ck_cx == cx { return; }
+  }
   m.m_chunks += [mk_chunk(cx)];
 }
 
 // base = &Chunk reference param: aliases its field (write-through).
-fn a1_write(c: &Chunk, idx: integer, h: Hex) { cells = c.ck_hexes; cells[idx] = h; }
+fn a1_write(c: &Chunk, idx: integer, h: Hex) {
+  cells = c.ck_hexes; cells[idx] = h;
+}
 
 // base = for-loop element of the outer vector: the regressed case.
 fn a2_write(m: &Map, cx: integer, idx: integer, h: Hex) {
   ensure(m, cx);
   for sc in m.m_chunks {
-    if sc.ck_cx == cx { cells = sc.ck_hexes; cells[idx] = h; return; }
+    if sc.ck_cx == cx {
+      cells = sc.ck_hexes; cells[idx] = h; return;
+    }
   }
 }
 
@@ -54,7 +70,9 @@ fn a3_write(m: &Map, cx: integer, idx: integer, h: Hex) {
 // base = for-loop element, alias-READ.
 fn a5_read(m: Map, cx: integer, idx: integer) -> integer {
   for gc in m.m_chunks {
-    if gc.ck_cx == cx { cells = gc.ck_hexes; return cells[idx].h_height; }
+    if gc.ck_cx == cx {
+      cells = gc.ck_hexes; return cells[idx].h_height;
+    }
   }
   -1
 }
@@ -76,6 +94,8 @@ fn main() {
   // The #415 owned-base case still deep-copies (value-semantics independence).
   ch = mk_chunk(5);
   snap = ch.ck_hexes;
-  ch.ck_hexes += [Hex { h_height: 9, h_material: 9 }];
+  ch.ck_hexes += [
+    Hex { h_height: 9, h_material: 9 },
+  ];
   assert(len(snap) == 4, "owned-base field read stays an independent copy (len 4)");
 }

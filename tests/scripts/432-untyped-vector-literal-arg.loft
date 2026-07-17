@@ -15,15 +15,31 @@
 // Distinctive collision-resistant values [11, 222, 33] across all three lanes —
 // a weak probe (only `v[0]`, or small values) would miss the stride reinterpret.
 
-fn s_u8(v: vector<u8>)   -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
-fn s_u16(v: vector<u16>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
-fn s_u32(v: vector<u32>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
-fn s_i32(v: vector<i32>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
-fn named_sink(label: integer, v: vector<u8>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
-fn nested(vv: vector<vector<u8>>) -> integer { vv[0][1] * 1000 + vv[1][2] }
+fn s_u8(v: vector<u8>) -> integer {
+  v[0] * 1000000 + v[1] * 1000 + v[2]
+}
+fn s_u16(v: vector<u16>) -> integer {
+  v[0] * 1000000 + v[1] * 1000 + v[2]
+}
+fn s_u32(v: vector<u32>) -> integer {
+  v[0] * 1000000 + v[1] * 1000 + v[2]
+}
+fn s_i32(v: vector<i32>) -> integer {
+  v[0] * 1000000 + v[1] * 1000 + v[2]
+}
+fn named_sink(label: integer, v: vector<u8>) -> integer {
+  v[0] * 1000000 + v[1] * 1000 + v[2]
+}
+fn nested(vv: vector<vector<u8>>) -> integer {
+  vv[0][1] * 1000 + vv[1][2]
+}
 
-struct Holder { tag: integer }
-fn take(self: Holder, v: vector<u8>) -> integer { v[0] * 1000000 + v[1] * 1000 + v[2] }
+struct Holder {
+  tag: integer,
+}
+fn take(self: Holder, v: vector<u8>) -> integer {
+  v[0] * 1000000 + v[1] * 1000 + v[2]
+}
 
 // Positional free-function argument — the reported shape, across narrow widths.
 fn test_p432_positional_narrow_widths() {
@@ -41,15 +57,19 @@ fn test_p432_method_arg() {
 
 // Named argument — name maps to the parameter, which seeds the width.
 fn test_p432_named_arg() {
-  assert(named_sink(label: 7, v: [11, 222, 33]) == 11222033,
-    "named arg = {named_sink(label: 7, v: [11, 222, 33])} (want 11222033)");
+  assert(
+    named_sink(label: 7, v: [11, 222, 33]) == 11222033,
+    "named arg = {named_sink(label: 7, v: [11, 222, 33])} (want 11222033)"
+  );
 }
 
 // Nested `vector<vector<u8>>`: the outer hint seeds the outer literal, the inner
 // element type threads through `var_tp.content()` to each inner literal.
 fn test_p432_nested_vector_arg() {
-  assert(nested([[1, 222, 3], [4, 5, 66]]) == 222066,
-    "nested arg = {nested([[1, 222, 3], [4, 5, 66]])} (want 222066)");
+  assert(
+    nested([[1, 222, 3], [4, 5, 66]]) == 222066,
+    "nested arg = {nested([[1, 222, 3], [4, 5, 66]])} (want 222066)"
+  );
 }
 
 // A GENERIC `vector<T>` parameter (`min_of<T: Ordered>`) must NOT be seeded — the

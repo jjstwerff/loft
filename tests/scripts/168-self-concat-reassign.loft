@@ -69,7 +69,10 @@ fn test_trailing_self_ref_middle() {
   v: vector<integer> = [2, 3];
   b: vector<integer> = [4];
   v = a + v + b;
-  assert(v.len() == 4 && v[0] == 1 && v[1] == 2 && v[2] == 3 && v[3] == 4, "v in the middle of a chain");
+  assert(
+    v.len() == 4 && v[0] == 1 && v[1] == 2 && v[2] == 3 && v[3] == 4,
+    "v in the middle of a chain"
+  );
   assert(a.len() == 1 && b.len() == 1, "other operands intact");
 }
 

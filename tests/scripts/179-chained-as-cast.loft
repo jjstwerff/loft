@@ -8,7 +8,7 @@
 
 fn main() {
   v = 2.7;
-  x = (v + 0.5) as integer as float;       // 3.2 -> 3 -> 3.0
+  x = (v + 0.5) as integer as float; // 3.2 -> 3 -> 3.0
   assert(x == 3.0, "x={x} expect 3.0");
 
   w = 300.9;

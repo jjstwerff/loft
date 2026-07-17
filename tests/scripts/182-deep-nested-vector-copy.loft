@@ -13,7 +13,9 @@
 // NOTE: `vector<vector<vector<single>>>` is a SEPARATE compounding bug (the
 // @P380 single-NaN-sentinel-as-rec-id family) and is not exercised here.
 
-struct Holder { box: vector<vector<vector<integer>>> }
+struct Holder {
+  box: vector<vector<vector<integer>>>,
+}
 
 fn main() {
   // 3-deep, element is a variable (the OpCopyRecord path)

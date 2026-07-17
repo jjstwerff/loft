@@ -11,19 +11,23 @@
 // Gate-OFF the `?` is a no-op, so this self-asserts identically gate-OFF (script
 // sweep) and gate-ON (tests/pln25_dn1_consumption.rs, both backends).
 
-fn nc() -> character? { return null; }
-fn pick(c: boolean) -> character? { if c { 'a' } else { null } }
+fn nc() -> character? {
+  return null;
+}
+fn pick(c: boolean) -> character? {
+  if c { 'a' } else { null }
+}
 
 fn main() {
-  assert(nc() == null, "return-null path == null");            // Call shape
-  assert((nc() ?? 'z') == 'z', "?? discharges to default");    // Block/?? shape
-  assert(pick(false) == null, "if-branch null == null");       // Call shape
+  assert(nc() == null, "return-null path == null"); // Call shape
+  assert((nc() ?? 'z') == 'z', "?? discharges to default"); // Block/?? shape
+  assert(pick(false) == null, "if-branch null == null"); // Call shape
   assert(pick(true) == 'a', "if-branch value intact");
-  cif = if false { 'a' } else { null };                        // Var shape
+  cif = if false { 'a' } else { null }; // Var shape
   assert(cif == null, "character? local null == null");
   civ = if true { 'b' } else { null };
   assert(civ == 'b', "character? local value intact");
-  t = ('a', nc());                                             // TupleGet shape
+  t = ('a', nc()); // TupleGet shape
   assert(t.1 == null, "tuple character? element null");
   assert(t.0 == 'a', "tuple character element value");
   print("character? null-sentinel: ok\n");

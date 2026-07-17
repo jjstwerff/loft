@@ -8,7 +8,11 @@
 // only a genuinely-unset text (s_rec 0) is null; an allocated "" emits as ""
 // and a vector (no nullable flag) always emits at least [].
 
-struct S { a: text, b: vector<integer>, c: integer }
+struct S {
+  a: text,
+  b: vector<integer>,
+  c: integer,
+}
 
 fn main() {
   // The @P375 regression is on the EMIT side: every declared field must

@@ -6,11 +6,15 @@
 
 enum RShape {
   RCircle { radius: float },
-  RRect { width: float, height: float }
+  RRect { width: float, height: float },
 }
 
-fn describe(self: RCircle) -> text { "circle r={self.radius}" }
-fn describe(self: RRect) -> text { "rect {self.width}x{self.height}" }
+fn describe(self: RCircle) -> text {
+  "circle r={self.radius}"
+}
+fn describe(self: RRect) -> text {
+  "rect {self.width}x{self.height}"
+}
 
 fn test_polymorphic_text_method() {
   c = RCircle { radius: 3.0 };
@@ -19,7 +23,9 @@ fn test_polymorphic_text_method() {
 
 // ── Vector field append (Issue 5) ───────────────────────────────────────────
 
-struct RBox { items: vector<integer> }
+struct RBox {
+  items: vector<integer>,
+}
 
 fn test_vec_field_append_bracket_scalar() {
   b = RBox {};
@@ -45,9 +51,13 @@ fn test_vec_field_append_scalar() {
 
 // ── Method returns new struct record (Issue 1) ──────────────────────────────
 
-struct RColor { r: integer }
+struct RColor {
+  r: integer,
+}
 
-fn rdouble(self: RColor) -> RColor { RColor { r: self.r * 2 } }
+fn rdouble(self: RColor) -> RColor {
+  RColor { r: self.r * 2 }
+}
 
 fn test_method_returns_new_struct() {
   c = RColor { r: 3 };
@@ -57,10 +67,15 @@ fn test_method_returns_new_struct() {
 
 // ── Borrowed ref inside branch (Issue 2) ────────────────────────────────────
 
-struct RItem { val: integer }
+struct RItem {
+  val: integer,
+}
 
 fn test_ref_inside_branch() {
-  items = [RItem { val: 10 }, RItem { val: 20 }];
+  items = [
+    RItem { val: 10 },
+    RItem { val: 20 },
+  ];
   result = 0;
   if items[0].val > 0 {
     r = items[0];
@@ -71,10 +86,14 @@ fn test_ref_inside_branch() {
 
 // ── Ref param field mutation (Issue 4) ──────────────────────────────────────
 
-fn set_first(v: &vector<RItem>, x: integer) { v[0].val = x; }
+fn set_first(v: &vector<RItem>, x: integer) {
+  v[0].val = x;
+}
 
 fn test_ref_param_field_mutation() {
-  buf = [RItem { val: 1 }];
+  buf = [
+    RItem { val: 1 },
+  ];
   set_first(buf, 42);
   assert(buf[0].val == 42, "buf[0]: {buf[0].val}");
 }
@@ -111,18 +130,29 @@ fn test_empty_vector_second_arg() {
 
 // ── Ref param append (Issue 56/L5) ──────────────────────────────────────────
 
-struct RFillItem { name: text, value: integer }
+struct RFillItem {
+  name: text,
+  value: integer,
+}
 
-fn rfill(v: &vector<RFillItem>, extra: vector<RFillItem>) { v += extra; }
+fn rfill(v: &vector<RFillItem>, extra: vector<RFillItem>) {
+  v += extra;
+}
 
 fn test_ref_param_append() {
-  buf = [RFillItem { name: "a", value: 1 }];
-  rfill(buf, [RFillItem { name: "b", value: 2 }]);
+  buf = [
+    RFillItem { name: "a", value: 1 },
+  ];
+  rfill(buf, [
+    RFillItem { name: "b", value: 2 },
+  ]);
   assert(len(buf) == 2, "len: {len(buf)}");
   assert(buf[1].value == 2, "buf[1]: {buf[1].value}");
 }
 
-fn append_ints(v: &vector<integer>, extra: vector<integer>) { v += extra; }
+fn append_ints(v: &vector<integer>, extra: vector<integer>) {
+  v += extra;
+}
 
 fn test_ref_param_append_int_vec() {
   nums = [1, 2, 3];
@@ -131,7 +161,9 @@ fn test_ref_param_append_int_vec() {
   assert(nums[3] == 4, "nums[3]: {nums[3]}");
 }
 
-fn push_one(v: &vector<integer>, x: integer) { v += [x]; }
+fn push_one(v: &vector<integer>, x: integer) {
+  v += [x];
+}
 
 fn test_ref_param_multiple_appends() {
   nums = [0];
@@ -144,11 +176,12 @@ fn test_ref_param_multiple_appends() {
 }
 
 // L4: passing a named empty vector to `&vector<T>` works correctly.
-fn l4_fill_ref(l4v: &vector<integer>) { l4v += [1]; l4v += [2]; l4v += [3]; }
+fn l4_fill_ref(l4v: &vector<integer>) {
+  l4v += [1]; l4v += [2]; l4v += [3];
+}
 
 fn test_l4_empty_vec_annotated_as_ref_param() {
   l4_buf: vector<integer> = [];
   l4_fill_ref(l4_buf);
   assert(len(l4_buf) == 3, "L4 annotated: len={len(l4_buf)}");
 }
-

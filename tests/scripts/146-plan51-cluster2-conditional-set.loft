@@ -16,8 +16,13 @@
 // shifts to a default-init Canvas being orphaned, AND whether the leak
 // count tracks if-firings.
 
-struct P { tag: integer }
-struct Canvas { data: vector<integer>, w: integer }
+struct P {
+  tag: integer,
+}
+struct Canvas {
+  data: vector<integer>,
+  w: integer,
+}
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };
@@ -27,9 +32,7 @@ fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
 
 fn render(p: P) -> Canvas {
   cv: Canvas = Canvas { data: [], w: 0 };
-  if p.tag > 0 {
-    cv = alloc_canvas(4, 5, p.tag);
-  }
+  if p.tag > 0 { cv = alloc_canvas(4, 5, p.tag); }
   cv
 }
 
@@ -40,9 +43,7 @@ fn main() {
     if i > 0 {
       assert(cv.w == 4, "iter {i}: w = {cv.w}");
       assert(cv.data[0] == i, "iter {i}: data[0] = {cv.data[0]}");
-    } else {
-      assert(cv.w == 0, "iter {i}: default w = {cv.w}");
-    }
+    } else { assert(cv.w == 0, "iter {i}: default w = {cv.w}"); }
   }
   println("probe 28 PASSED");
 }

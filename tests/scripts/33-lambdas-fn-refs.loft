@@ -5,33 +5,47 @@
 // ── Lambda tests ────────────────────────────────────────────────────────────
 
 fn test_lambda_basic_call() {
-  double = fn(x: integer) -> integer { x * 2 };
+  double = fn(x: integer) -> integer {
+    x * 2
+  };
   assert(double(5) == 10, "lambda basic");
 }
 
-fn lm_apply(f: fn(integer) -> integer, v: integer) -> integer { f(v) }
+fn lm_apply(f: fn(integer) -> integer, v: integer) -> integer {
+  f(v)
+}
 
 fn test_lambda_as_argument() {
-  r = lm_apply(fn(x: integer) -> integer { x + 100 }, 5);
+  r = lm_apply(fn(x: integer) -> integer {
+    x + 100
+  }, 5);
   assert(r == 105, "lambda arg");
 }
 
 fn test_short_lambda_explicit_types() {
-  double = fn(x: integer) -> integer { x * 2 };
+  double = fn(x: integer) -> integer {
+    x * 2
+  };
   assert(double(7) == 14, "short lambda explicit");
 }
 
 fn test_short_lambda_zero_params() {
-  greet = fn() -> text { "hello" };
+  greet = fn() -> text {
+    "hello"
+  };
   assert(greet() == "hello", "zero params");
 }
 
 fn test_short_lambda_two_params() {
-  add = fn(a: integer, b: integer) -> integer { a + b };
+  add = fn(a: integer, b: integer) -> integer {
+    a + b
+  };
   assert(add(3, 4) == 7, "two params");
 }
 
-fn sl_apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+fn sl_apply(f: fn(integer) -> integer, x: integer) -> integer {
+  f(x)
+}
 
 fn test_short_lambda_inferred_type() {
   result = sl_apply(|n| { n * 3 }, 7);
@@ -40,22 +54,30 @@ fn test_short_lambda_inferred_type() {
 
 // ── Function references ─────────────────────────────────────────────────────
 
-fn fr_double(n: integer) -> integer { n * 2 }
+fn fr_double(n: integer) -> integer {
+  n * 2
+}
 
 fn test_fn_ref_basic_call() {
   f = fr_double;
   assert(f(21) == 42, "fn ref basic");
 }
 
-fn fr_add(a: integer, b: integer) -> integer { a + b }
+fn fr_add(a: integer, b: integer) -> integer {
+  a + b
+}
 
 fn test_fn_ref_two_args() {
   f = fr_add;
   assert(f(10, 32) == 42, "fn ref two args");
 }
 
-fn fr_inc(n: integer) -> integer { n + 1 }
-fn fr_dec(n: integer) -> integer { n - 1 }
+fn fr_inc(n: integer) -> integer {
+  n + 1
+}
+fn fr_dec(n: integer) -> integer {
+  n - 1
+}
 
 fn test_fn_ref_conditional() {
   flag = true;
@@ -63,8 +85,12 @@ fn test_fn_ref_conditional() {
   assert(f(41) == 42, "fn ref conditional");
 }
 
-fn fr_square(n: integer) -> integer { n * n }
-fn fr_apply(f: fn(integer) -> integer, x: integer) -> integer { f(x) }
+fn fr_square(n: integer) -> integer {
+  n * n
+}
+fn fr_apply(f: fn(integer) -> integer, x: integer) -> integer {
+  f(x)
+}
 
 fn test_fn_ref_as_parameter() {
   assert(fr_apply(fr_square, 7) == 49, "fn ref as param");
@@ -72,7 +98,9 @@ fn test_fn_ref_as_parameter() {
 
 // ── map / filter / reduce ───────────────────────────────────────────────────
 
-fn mfr_double(x: integer) -> integer { x * 2 }
+fn mfr_double(x: integer) -> integer {
+  x * 2
+}
 
 fn test_map_with_fn_ref() {
   v = [1, 2, 3, 4, 5];
@@ -82,7 +110,9 @@ fn test_map_with_fn_ref() {
   assert(s == 30, "expected 30, got {s}");
 }
 
-fn mfr_is_even(x: integer) -> boolean { x % 2 == 0 }
+fn mfr_is_even(x: integer) -> boolean {
+  x % 2 == 0
+}
 
 fn test_filter_with_fn_ref() {
   v = [1, 2, 3, 4, 5, 6];
@@ -92,7 +122,9 @@ fn test_filter_with_fn_ref() {
   assert(s == 12, "expected 12, got {s}");
 }
 
-fn mfr_add(acc: integer, x: integer) -> integer { acc + x }
+fn mfr_add(acc: integer, x: integer) -> integer {
+  acc + x
+}
 
 fn test_reduce_with_fn_ref() {
   v = [1, 2, 3, 4, 5];

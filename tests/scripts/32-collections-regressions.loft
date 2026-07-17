@@ -3,11 +3,18 @@
 // Collection regressions: null fields, key-null removal, deep copy, index claims.
 // ── Field name overlap in collections (Issue 11) ────────────────────────────
 
-struct RSortElm { key: text, value: integer }
-struct RIdxElm { nr: integer, key: text, value: integer }
+struct RSortElm {
+  key: text,
+  value: integer,
+}
+struct RIdxElm {
+  nr: integer,
+  key: text,
+  value: integer,
+}
 struct RDb {
   srt: sorted<RSortElm[-key]>,
-  idx: index<RIdxElm[nr, -key]>
+  idx: index<RIdxElm[nr, -key]>,
 }
 
 fn test_field_name_overlap_range_query() {
@@ -15,13 +22,13 @@ fn test_field_name_overlap_range_query() {
     srt: [
       RSortElm { key: "One", value: 1 },
       RSortElm { key: "Two", value: 2 },
-      RSortElm { key: "Three", value: 3 }
+      RSortElm { key: "Three", value: 3 },
     ],
     idx: [
       RIdxElm { nr: 10, key: "A", value: 100 },
       RIdxElm { nr: 10, key: "B", value: 200 },
-      RIdxElm { nr: 20, key: "C", value: 300 }
-    ]
+      RIdxElm { nr: 20, key: "C", value: 300 },
+    ],
   };
   srt_val = db.srt["Two"].value;
   assert(srt_val == 2, "srt lookup: {srt_val}");
@@ -36,36 +43,58 @@ fn test_field_name_overlap_range_query() {
 
 fn test_sequential_blocks_same_varname() {
   total = 0;
-  { n = 1; total += n; }
-  { n = 2; total += n; }
-  { n = 3; total += n; }
+  {
+    n = 1; total += n;
+  }
+  {
+    n = 2; total += n;
+  }
+  {
+    n = 3; total += n;
+  }
   assert(total == 6, "total: {total}");
 }
 
 fn test_sequential_blocks_different_varnames() {
   total = 0;
-  { a = 10; total += a; }
-  { b = 20; total += b; }
+  {
+    a = 10; total += a;
+  }
+  {
+    b = 20; total += b;
+  }
   assert(total == 30, "total: {total}");
 }
 
 // ── Sequential blocks with refs (Issue 29) ──────────────────────────────────
 
-struct RRec { x: integer }
+struct RRec {
+  x: integer,
+}
 
 fn test_sequential_blocks_different_ref_varnames() {
   total = 0;
-  { a = RRec { x: 10 }; total += a.x; }
-  { b = RRec { x: 20 }; total += b.x; }
+  {
+    a = RRec { x: 10 }; total += a.x;
+  }
+  {
+    b = RRec { x: 20 }; total += b.x;
+  }
   assert(total == 30, "total: {total}");
 }
 
 fn test_reused_refname_with_later_different_var() {
   total = 0;
-  { f = RRec { x: 1 }; total += f.x; }
-  { f = RRec { x: 2 }; total += f.x; }
+  {
+    f = RRec { x: 1 }; total += f.x;
+  }
+  {
+    f = RRec { x: 2 }; total += f.x;
+  }
   c = RRec { x: 99 };
-  { f = RRec { x: 3 }; total += f.x; }
+  {
+    f = RRec { x: 3 }; total += f.x;
+  }
   total += c.x;
   assert(total == 6 + 99, "total: {total}");
 }
@@ -74,11 +103,21 @@ fn test_reused_refname_with_later_different_var() {
 
 // Issue 82 (string type) and 83 (hash key clash) error tests → 38-regression-errors.loft
 
-struct RKVGood { id: integer, value: text }
-struct RKVStore { h: hash<RKVGood[id]> }
+struct RKVGood {
+  id: integer,
+  value: text,
+}
+struct RKVStore {
+  h: hash<RKVGood[id]>,
+}
 
 fn test_hash_renamed_key_field_works() {
-  s = RKVStore { h: [RKVGood { id: 1, value: "one" }, RKVGood { id: 2, value: "two" }] };
+  s = RKVStore {
+    h: [
+      RKVGood { id: 1, value: "one" },
+      RKVGood { id: 2, value: "two" },
+    ],
+  };
   assert(s.h[1].value == "one", "h[1]: {s.h[1].value}");
   assert(s.h[2].value == "two", "h[2]: {s.h[2].value}");
 }
@@ -103,25 +142,41 @@ fn test_for_loop_in_recursive_fn() {
 
 // ── Issue 85: hash null lookup then insert ──────────────────────────────────
 
-struct REntry { id: integer, val: text }
-struct REntryStore { h: hash<REntry[id]> }
+struct REntry {
+  id: integer,
+  val: text,
+}
+struct REntryStore {
+  h: hash<REntry[id]>,
+}
 
 fn test_hash_null_lookup_then_insert_int_key() {
   s = REntryStore {};
   assert(!s.h[42], "initially null");
-  s.h += [REntry { id: 42, val: "answer" }];
+  s.h += [
+    REntry { id: 42, val: "answer" },
+  ];
   assert(s.h[42].val == "answer", "found after insert");
 }
 
-struct RTEntry { name: text, count: integer }
-struct RTEntryStore { h: hash<RTEntry[name]> }
+struct RTEntry {
+  name: text,
+  count: integer,
+}
+struct RTEntryStore {
+  h: hash<RTEntry[name]>,
+}
 
 fn test_hash_null_lookup_then_insert_text_key() {
   s = RTEntryStore {};
   assert(!s.h["x"], "initially null");
-  s.h += [RTEntry { name: "x", count: 1 }];
+  s.h += [
+    RTEntry { name: "x", count: 1 },
+  ];
   assert(s.h["x"].count == 1, "found after insert");
-  s.h += [RTEntry { name: "y", count: 2 }];
+  s.h += [
+    RTEntry { name: "y", count: 2 },
+  ];
   assert(s.h["y"].count == 2, "y found");
   assert(s.h["x"].count == 1, "x still found");
 }
@@ -142,9 +197,13 @@ fn test_to_lowercase_in_format() {
 
 // ── Issue 27: self.field = null codegen ──────────────────────────────────────
 
-struct NullS { cur: integer? }
+struct NullS {
+  cur: integer?,
+}
 
-fn ns_clear(self: NullS) { self.cur = null }
+fn ns_clear(self: NullS) {
+  self.cur = null
+}
 
 fn test_set_int_field_null_via_ref() {
   s = NullS { cur: 42 };
@@ -158,9 +217,13 @@ fn test_set_int_field_null_direct() {
   assert(s.cur == null, "expected null after direct");
 }
 
-struct NullLS { val: integer? }
+struct NullLS {
+  val: integer?,
+}
 
-fn nls_clear(self: NullLS) { self.val = null }
+fn nls_clear(self: NullLS) {
+  self.val = null
+}
 
 fn test_set_long_field_null_via_ref() {
   s = NullLS { val: 1000000 };
@@ -168,9 +231,14 @@ fn test_set_long_field_null_via_ref() {
   assert(s.val == null, "expected null");
 }
 
-struct NullMS { a: integer?, b: integer? }
+struct NullMS {
+  a: integer?,
+  b: integer?,
+}
 
-fn nms_clear(self: NullMS) { self.a = null; self.b = null; }
+fn nms_clear(self: NullMS) {
+  self.a = null; self.b = null;
+}
 
 fn test_set_multiple_scalar_fields_null() {
   s = NullMS { a: 1, b: 2 };
@@ -189,9 +257,13 @@ fn test_null_then_reassign_integer_field() {
 
 // ── Issue 37: LIFO store-free ──────────────────────────────────────────────
 
-struct LifoS { val: integer }
+struct LifoS {
+  val: integer,
+}
 
-fn lifo_double(self: LifoS) -> LifoS { LifoS { val: self.val * 2 } }
+fn lifo_double(self: LifoS) -> LifoS {
+  LifoS { val: self.val * 2 }
+}
 
 fn test_lifo_store_free_two_owned() {
   c = LifoS { val: 3 };
@@ -199,7 +271,10 @@ fn test_lifo_store_free_two_owned() {
   assert(d.val == 6, "d.val: {d.val}");
 }
 
-struct LifoP { x: integer, y: integer }
+struct LifoP {
+  x: integer,
+  y: integer,
+}
 
 fn test_lifo_store_free_three_owned() {
   a = LifoP { x: 1, y: 2 };
@@ -211,18 +286,30 @@ fn test_lifo_store_free_three_owned() {
 
 // ── Issue 38: key-null removal ──────────────────────────────────────────────
 
-struct KNElm { skey: integer, val: integer }
-struct KNDb { s: sorted<KNElm[skey]> }
+struct KNElm {
+  skey: integer,
+  val: integer,
+}
+struct KNDb {
+  s: sorted<KNElm[skey]>,
+}
 
 fn test_sorted_key_null_removes_entry() {
-  db = KNDb { s: [KNElm{skey:1,val:10}, KNElm{skey:2,val:20}] };
+  db = KNDb { s: [
+    KNElm { skey: 1, val: 10 },
+    KNElm { skey: 2, val: 20 },
+  ] };
   db.s[1] = null;
   assert(!db.s[1], "key 1 removed");
   assert(db.s[2].val == 20, "key 2 present");
 }
 
-struct KNKeyword { name: text }
-struct KNData { h: hash<KNKeyword[name]> }
+struct KNKeyword {
+  name: text,
+}
+struct KNData {
+  h: hash<KNKeyword[name]>,
+}
 
 fn test_hash_key_null_removes_entry() {
   c = KNData {};
@@ -232,11 +319,22 @@ fn test_hash_key_null_removes_entry() {
   assert(!!c.h["two"], "two present");
 }
 
-struct KNIElm { nr: integer, ikey: text, val: integer }
-struct KNIDb { map: index<KNIElm[nr, -ikey]> }
+struct KNIElm {
+  nr: integer,
+  ikey: text,
+  val: integer,
+}
+struct KNIDb {
+  map: index<KNIElm[nr, -ikey]>,
+}
 
 fn test_index_key_null_removes_entry() {
-  db = KNIDb { map: [KNIElm{nr:1,ikey:"a",val:10}, KNIElm{nr:2,ikey:"b",val:20}] };
+  db = KNIDb {
+    map: [
+      KNIElm { nr: 1, ikey: "a", val: 10 },
+      KNIElm { nr: 2, ikey: "b", val: 20 },
+    ],
+  };
   // Use both key fields for exact match (partial-key [nr] triggers A8.3 iteration path).
   db.map[1, "a"] = null;
   assert(!db.map[1, "a"], "nr 1 removed");
@@ -245,23 +343,42 @@ fn test_index_key_null_removes_entry() {
 
 // ── Issue 39: vector add deep copy ──────────────────────────────────────────
 
-struct DCItem { name: text, value: integer }
-struct DCBag { items: vector<DCItem> }
+struct DCItem {
+  name: text,
+  value: integer,
+}
+struct DCBag {
+  items: vector<DCItem>,
+}
 
 fn test_vec_add_text_field_deep_copy() {
-  a = DCBag { items: [DCItem{name: "hello", value: 1}, DCItem{name: "world", value: 2}] };
+  a = DCBag {
+    items: [
+      DCItem { name: "hello", value: 1 },
+      DCItem { name: "world", value: 2 },
+    ],
+  };
   b = DCBag {};
   b.items += a.items;
   assert(b.items[0].name == "hello", "name[0]");
   assert(b.items[1].name == "world", "name[1]");
 }
 
-struct DCTag { label: text }
-struct DCCol { tags: vector<DCTag> }
+struct DCTag {
+  label: text,
+}
+struct DCCol {
+  tags: vector<DCTag>,
+}
 
 fn test_vec_add_text_field_non_empty_dest() {
-  src = DCCol { tags: [DCTag{label: "a"}, DCTag{label: "b"}] };
-  dst = DCCol { tags: [DCTag{label: "x"}] };
+  src = DCCol { tags: [
+    DCTag { label: "a" },
+    DCTag { label: "b" },
+  ] };
+  dst = DCCol { tags: [
+    DCTag { label: "x" },
+  ] };
   dst.tags += src.tags;
   assert(dst.tags[0].label == "x", "tag[0]");
   assert(dst.tags[1].label == "a", "tag[1]");
@@ -270,40 +387,73 @@ fn test_vec_add_text_field_non_empty_dest() {
 
 // ── Issue 40: index copy_claims / remove_claims ─────────────────────────────
 
-struct ICItem { ikey: integer, val: integer }
-struct ICContainer { items: index<ICItem[ikey]> }
+struct ICItem {
+  ikey: integer,
+  val: integer,
+}
+struct ICContainer {
+  items: index<ICItem[ikey]>,
+}
 
 fn test_index_field_copy_claims_via_vector() {
-  c = ICContainer { items: [ICItem{ikey:1, val:10}, ICItem{ikey:2, val:20}] };
+  c = ICContainer { items: [
+    ICItem { ikey: 1, val: 10 },
+    ICItem { ikey: 2, val: 20 },
+  ] };
   bag = [c];
   assert(bag[0].items[1].val == 10, "key 1 val");
   assert(bag[0].items[2].val == 20, "key 2 val");
 }
 
-struct ICTag { ikey: integer, label: text }
-struct ICBag { tags: index<ICTag[ikey]> }
+struct ICTag {
+  ikey: integer,
+  label: text,
+}
+struct ICBag {
+  tags: index<ICTag[ikey]>,
+}
 
 fn test_index_field_copy_claims_text_elements() {
-  b = ICBag { tags: [ICTag{ikey:1, label:"alpha"}, ICTag{ikey:2, label:"beta"}] };
+  b = ICBag {
+    tags: [
+      ICTag { ikey: 1, label: "alpha" },
+      ICTag { ikey: 2, label: "beta" },
+    ],
+  };
   copy = [b];
   assert(copy[0].tags[1].label == "alpha", "label 1");
   assert(copy[0].tags[2].label == "beta", "label 2");
 }
 
-struct ICNode { ikey: integer, score: integer }
-struct ICGraph { nodes: index<ICNode[ikey]> }
+struct ICNode {
+  ikey: integer,
+  score: integer,
+}
+struct ICGraph {
+  nodes: index<ICNode[ikey]>,
+}
 
 fn test_index_field_remove_claims_on_reassign() {
-  g = ICGraph { nodes: [ICNode{ikey:1, score:100}, ICNode{ikey:2, score:200}] };
+  g = ICGraph {
+    nodes: [
+      ICNode { ikey: 1, score: 100 },
+      ICNode { ikey: 2, score: 200 },
+    ],
+  };
   assert(g.nodes[1].score == 100, "before");
-  g = ICGraph { nodes: [ICNode{ikey:3, score:300}] };
+  g = ICGraph { nodes: [
+    ICNode { ikey: 3, score: 300 },
+  ] };
   assert(g.nodes[3].score == 300, "after");
   assert(!g.nodes[1], "key 1 gone");
 }
 
 // ── Issue 41: inline ref-returning call field access ────────────────────────
 
-struct IRPoint { x: float, y: float }
+struct IRPoint {
+  x: float,
+  y: float,
+}
 
 fn ir_shifted(self: IRPoint, dx: float, dy: float) -> IRPoint {
   IRPoint { x: self.x + dx, y: self.y + dy }
@@ -343,4 +493,3 @@ fn test_vector_self_append_single() {
 // Struct field vector reassignment: `s.field = [literal]` is a valid operation
 // but cannot be tested here — pre-existing parser panic when running this file
 // with `loft --tests` (set_loop index out of bounds in partial-key match context).
-

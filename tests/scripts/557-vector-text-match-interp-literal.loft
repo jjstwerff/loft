@@ -12,15 +12,15 @@
 
 fn tag(v: vector<text>) -> text {
   match v {
-    [ x ]    => "one:{x}",   // interpolation -> owned String
-    [ x, y ] => "two:{x}{y}",
-    _        => "none",      // bare literal -> &str
+    [x] => "one:{x}", // interpolation -> owned String
+    [x, y] => "two:{x}{y}",
+    _ => "none", // bare literal -> &str
   }
 }
 
 // literal arm first, interpolation second (order-independent).
 fn first_lit(v: vector<text>) -> text {
-  match v { [ x ] => "lit", [ x, y ] => "z{x}{y}", _ => "w" }
+  match v { [x] => "lit", [x, y] => "z{x}{y}", _ => "w" }
 }
 
 fn main() {

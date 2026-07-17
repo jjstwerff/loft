@@ -2,12 +2,16 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // L2: Nested patterns in match field positions
 
-enum Status { Pending, Paid, Refunded }
+enum Status {
+  Pending,
+  Paid,
+  Refunded,
+}
 
 struct Order {
   id: integer,
   status: Status,
-  amount: float
+  amount: float,
 }
 
 fn main() {
@@ -79,15 +83,15 @@ fn main() {
 
   // --- Or-pattern in field sub-pattern ---
   match o1 {
-    Order { status: Paid | Refunded } => assert(true, "or-pattern match paid")
+    Order { status: Paid|Refunded } => assert(true, "or-pattern match paid")
     _ => assert(false, "should match or-pattern")
   }
   match o2 {
-    Order { status: Paid | Refunded } => assert(true, "or-pattern match refunded")
+    Order { status: Paid|Refunded } => assert(true, "or-pattern match refunded")
     _ => assert(false, "should match or-pattern for refunded")
   }
   match o3 {
-    Order { status: Paid | Refunded } => assert(false, "pending should not match")
+    Order { status: Paid|Refunded } => assert(false, "pending should not match")
     _ => assert(true, "pending falls to wildcard")
   }
 }

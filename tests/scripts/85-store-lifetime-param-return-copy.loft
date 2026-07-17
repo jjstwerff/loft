@@ -9,7 +9,9 @@
 // is_argument so locally-owned returns are untouched. The `return v` empty-dep
 // ownership hole from OWNERSHIP_MODEL.md.
 
-fn idv(v: vector<u8>) -> vector<u8> { return v; }
+fn idv(v: vector<u8>) -> vector<u8> {
+  return v;
+}
 
 fn main() {
   x: vector<u8> = [1, 2, 3];

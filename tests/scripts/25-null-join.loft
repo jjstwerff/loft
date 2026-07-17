@@ -28,7 +28,7 @@ fn nj_cond_untaken() -> integer {
 fn nj_use_after_widen() -> integer {
   a = null;
   if 1 < 2 { a = 7; }
-  (a ?? 0) + 10
+  (a ?? 0)+10
 }
 
 // float / character widen too (all INLINE scalars share the Null slot).

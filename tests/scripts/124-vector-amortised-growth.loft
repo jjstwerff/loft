@@ -31,7 +31,9 @@ fn free_blocks_digits(report: text) -> integer {
 fn main() {
   v: vector<integer> = [];
   i = 0;
-  while i < 12000 { v += [i * 3]; i += 1; }
+  while i < 12000 {
+    v += [i * 3]; i += 1;
+  }
 
   // correctness after many single-element appends
   assert(len(v) == 12000, "length after 12000 appends");

@@ -12,14 +12,36 @@
 // @EXPECT_ERROR: worker writevec writes captured `v`
 // @EXPECT_ERROR: worker outer → bump writes captured `s`
 
-struct S { n: integer }
-fn writeit(e: S) -> integer { e.n = 5; e.n }                 // writes the struct element
-fn writevec(v: vector<integer>) -> integer { v[0] = 9; 0 }  // writes the vector element
-fn bump(s: S) { s.n = s.n + 1; }
-fn outer(e: S) -> integer { bump(e); e.n }                  // transitive element write
+struct S {
+  n: integer,
+}
+fn writeit(e: S) -> integer {
+  e.n = 5; e.n
+} // writes the struct element
+fn writevec(v: vector<integer>) -> integer {
+  v[0] = 9; 0
+} // writes the vector element
+fn bump(s: S) {
+  s.n = s.n + 1;
+}
+fn outer(e: S) -> integer {
+  bump(e); e.n
+} // transitive element write
 
-fn use_direct() { rows: vector<S> = [S { n: 1 }, S { n: 2 }]; for e in rows par(r = writeit(e), 2) { } }
-fn use_vec() { vv: vector<vector<integer>> = [[1], [2]]; for v in vv par(r = writevec(v), 2) { } }
-fn use_indirect() { rows: vector<S> = [S { n: 1 }, S { n: 2 }]; for e in rows par(r = outer(e), 2) { } }
+fn use_direct() {
+  rows: vector<S> = [
+    S { n: 1 },
+    S { n: 2 },
+  ]; for e in rows par(r = writeit(e), 2) {}
+}
+fn use_vec() {
+  vv: vector<vector<integer>> = [[1], [2]]; for v in vv par(r = writevec(v), 2) {}
+}
+fn use_indirect() {
+  rows: vector<S> = [
+    S { n: 1 },
+    S { n: 2 },
+  ]; for e in rows par(r = outer(e), 2) {}
+}
 
-fn main() { }
+fn main() {}

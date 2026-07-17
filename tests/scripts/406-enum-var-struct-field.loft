@@ -16,13 +16,29 @@
 // then `OpCopyRecord` into that field sub-ref — mirroring the `Type::Reference`
 // arm directly above it.
 
-enum CV { CInt { value: integer } }
-struct Entry { key: CV, value: CV }
-struct Mix { count: integer, k: CV }
-struct Tri { a: CV, b: CV, c: CV }
+enum CV {
+  CInt { value: integer },
+}
+struct Entry {
+  key: CV,
+  value: CV,
+}
+struct Mix {
+  count: integer,
+  k: CV,
+}
+struct Tri {
+  a: CV,
+  b: CV,
+  c: CV,
+}
 
-fn mk(x: integer) -> CV { return CInt { value: x }; }
-fn rd(c: CV) -> integer { if c is CInt { value } { return value; } return -1; }
+fn mk(x: integer) -> CV {
+  return CInt { value: x };
+}
+fn rd(c: CV) -> integer {
+  if c is CInt { value } { return value; } return -1;
+}
 
 // The original report: build a two-enum-field struct from variables, append to a
 // vector, read it back.  Both fields must survive at their own offsets.
@@ -63,7 +79,10 @@ fn test_three_enum_fields() {
 // variable copy must not overwrite the literal-built first field.
 fn test_literal_first_variable_second() {
   b = mk(2);
-  o = Entry { key: CInt { value: 1 }, value: b };
+  o = Entry {
+    key: CInt { value: 1 },
+    value: b,
+  };
   assert(rd(o.key) == 1, "mixed key={rd(o.key)} (expect 1)");
   assert(rd(o.value) == 2, "mixed value={rd(o.value)} (expect 2)");
 }
@@ -72,7 +91,10 @@ fn test_literal_first_variable_second() {
 fn test_enum_field_reassignment() {
   a = mk(4);
   b = mk(5);
-  o = Entry { key: CInt { value: 0 }, value: CInt { value: 0 } };
+  o = Entry {
+    key: CInt { value: 0 },
+    value: CInt { value: 0 },
+  };
   o.key = a;
   o.value = b;
   assert(rd(o.key) == 4, "reassign key={rd(o.key)} (expect 4)");

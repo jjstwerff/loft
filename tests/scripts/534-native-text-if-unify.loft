@@ -12,17 +12,31 @@
 // previously-working shape.  `--interpret` was already correct; this guards the
 // `--native` compile+run (via `tests/native.rs::native_scripts`).
 
-fn g(k: integer) -> text { match k { 1 => "one", _ => "other" } }
+fn g(k: integer) -> text {
+  match k { 1 => "one", _ => "other" }
+}
 
 // Each arm pairing that native codegen must unify.  `k == 0` selects the THEN
 // arm, `k == 9` the ELSE arm.
-fn f_interp_v_fncall(k: integer) -> text { if k == 0 { "x{k}" } else { g(k) } }
-fn f_fncall_v_interp(k: integer) -> text { if k == 0 { g(k) } else { "x{k}" } }
-fn f_fncall_v_lit(k: integer)    -> text { if k == 0 { g(k) } else { "y" } }
-fn f_lit_v_fncall(k: integer)    -> text { if k == 0 { "y" } else { g(k) } }
+fn f_interp_v_fncall(k: integer) -> text {
+  if k == 0 { "x{k}" } else { g(k) }
+}
+fn f_fncall_v_interp(k: integer) -> text {
+  if k == 0 { g(k) } else { "x{k}" }
+}
+fn f_fncall_v_lit(k: integer) -> text {
+  if k == 0 { g(k) } else { "y" }
+}
+fn f_lit_v_fncall(k: integer) -> text {
+  if k == 0 { "y" } else { g(k) }
+}
 // Controls that already compiled — must stay correct.
-fn f_fncall_v_fncall(k: integer) -> text { if k == 0 { g(k) } else { g(k + 1) } }
-fn f_interp_v_lit(k: integer)    -> text { if k == 0 { "x{k}" } else { "y" } }
+fn f_fncall_v_fncall(k: integer) -> text {
+  if k == 0 { g(k) } else { g(k + 1) }
+}
+fn f_interp_v_lit(k: integer) -> text {
+  if k == 0 { "x{k}" } else { "y" }
+}
 
 fn main() {
   // then (interp) at k==0; else (fncall) at k==1 → g(1) == "one".

@@ -24,29 +24,15 @@ fn main() {
 
   if mode == "initial" {
     // Step 1: fresh main file present, no sidecar → check must return false.
-    if store_durable_check(path) {
-      println("FAIL initial-check-should-be-false");
-      return
-    }
+    if store_durable_check(path) { println("FAIL initial-check-should-be-false"); return }
     // Step 2: seal — should succeed and produce a fresh sidecar.
-    if !store_durable_seal(path) {
-      println("FAIL initial-seal-should-succeed");
-      return
-    }
+    if!store_durable_seal(path) { println("FAIL initial-seal-should-succeed"); return }
     // Step 3: re-check — sidecar now exists + matches → check must return true.
-    if !store_durable_check(path) {
-      println("FAIL initial-recheck-should-be-true");
-      return
-    }
+    if!store_durable_check(path) { println("FAIL initial-recheck-should-be-true"); return }
     println("OK clean")
   } else if mode == "corrupt" {
     // Sidecar exists but the harness has XOR'd a byte → check must return false.
-    if store_durable_check(path) {
-      println("FAIL corrupt-check-should-be-false");
-      return
-    }
+    if store_durable_check(path) { println("FAIL corrupt-check-should-be-false"); return }
     println("OK corrupt-detected")
-  } else {
-    println("FAIL unknown-mode")
-  }
+  } else { println("FAIL unknown-mode") }
 }

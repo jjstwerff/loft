@@ -16,14 +16,22 @@
 // Pairing: diff against 10 (Reference shape).
 // Status: cluster IV completion probe.
 
-struct Inner { tag: integer }
-struct Outer { lists: vector<vector<Inner>> }
+struct Inner {
+  tag: integer,
+}
+struct Outer {
+  lists: vector<vector<Inner>>,
+}
 
 fn main() {
   o = Outer { lists: [] };
-  inner: vector<Inner> = [Inner { tag: 42 }];
+  inner: vector<Inner> = [
+    Inner { tag: 42 },
+  ];
   o.lists += [inner];
-  fallback: vector<Inner> = [Inner { tag: 0 }];
+  fallback: vector<Inner> = [
+    Inner { tag: 0 },
+  ];
   a = o.lists[0] ?? fallback;
   assert(len(a) == 1, "probe 21: len(a) = {len(a)}, want 1");
   assert(a[0].tag == 42, "probe 21: a[0].tag = {a[0].tag}, want 42");

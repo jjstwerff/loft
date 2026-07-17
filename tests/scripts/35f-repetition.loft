@@ -11,36 +11,36 @@
 // The golden: head literal + `*` repetition, and a single `name:Type` capture in a sibling arm.
 fn dispatch(v: vector<integer>) -> text {
   match v {
-    [ 1, args:integer* ] => "call/{args.len()}",
-    [ 0, one:integer ]   => "set {one}",
-    _                    => "unknown",
+    [1, args: integer *] => "call/{args.len()}",
+    [0, one: integer] => "set {one}",
+    _ => "unknown",
   }
 }
 
 // No head, `*` — collect the whole vector (matches even when empty).
 fn whole(v: vector<integer>) -> integer {
-  match v { [ xs:integer* ] => xs.len(), _ => -1 }
+  match v { [xs: integer *] => xs.len(), _ => -1 }
 }
 
 // `+` requires at least one element.
 fn plus(v: vector<integer>) -> integer {
-  match v { [ xs:integer+ ] => xs.len(), _ => -1 }
+  match v { [xs: integer +] => xs.len(), _ => -1 }
 }
 
 // `*` with a fixed literal tail: the run is the middle, the last element must be 99.
 fn midtail(v: vector<integer>) -> integer {
-  match v { [ xs:integer*, 99 ] => xs.len(), _ => -1 }
+  match v { [xs: integer *, 99] => xs.len(), _ => -1 }
 }
 
 // Head literal + `*` + literal tail: `[ 1, xs*, 9 ]`.
 fn wrapped(v: vector<integer>) -> integer {
-  match v { [ 1, xs:integer*, 9 ] => xs.len(), _ => -1 }
+  match v { [1, xs: integer *, 9] => xs.len(), _ => -1 }
 }
 
 // Value + order: the collected run holds the right elements (read via a nested slice match).
 fn firsttwo(v: vector<integer>) -> integer {
   match v {
-    [ 7, xs:integer* ] => match xs { [ a, b, .. ] => a * 10 + b, _ => -1 },
+    [7, xs: integer *] => match xs { [a, b, ..] => a * 10 + b, _ => -1 },
     _ => -9,
   }
 }

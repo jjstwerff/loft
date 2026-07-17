@@ -16,7 +16,7 @@ fn same_typed() -> integer {
   w = b[0..1];
   assert(s[0][0] == 1 && s[1][1] == 4, "first int slice");
   assert(w[0][0] == 9 && w[0][1] == 8, "second int slice not null");
-  s[0][0] + w[0][0]                     // 1 + 9 = 10
+  s[0][0] + w[0][0]// 1 + 9 = 10
 }
 
 // DIFFERENTLY-typed slices in one function (the originally-reported shape).
@@ -27,18 +27,18 @@ fn diff_typed() -> text {
   u = t[0..2];
   assert(s[0][0] == 1, "int slice value");
   assert(u[0][0] == "k" && u[1][0] == "m", "text slice — first elem not null");
-  "{s[0][0]}/{u[0][0]}/{u[1][0]}"       // 1/k/m
+  "{s[0][0]}/{u[0][0]}/{u[1][0]}"// 1/k/m
 }
 
 // three slices, mixed order — every element of every slice must survive.
 fn three_way() -> integer {
-  a = [[1, 2], [3, 4]];       sa = a[0..2];
-  t = [["p"], ["q"], ["r"]];  st = t[0..3];
-  b = [[5, 6, 7]];            sb = b[0..1];
+  a = [[1, 2], [3, 4]]; sa = a[0..2];
+  t = [["p"], ["q"], ["r"]]; st = t[0..3];
+  b = [[5, 6, 7]]; sb = b[0..1];
   assert(sa[1][0] == 3, "sa");
   assert(st[2][0] == "r", "st last");
   assert(sb[0][2] == 7, "sb");
-  sa[0][0] + sb[0][2]                    // 1 + 7 = 8
+  sa[0][0] + sb[0][2]// 1 + 7 = 8
 }
 
 fn main() {

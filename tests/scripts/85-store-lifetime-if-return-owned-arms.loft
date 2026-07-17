@@ -38,9 +38,7 @@ fn pick3(n: integer) -> vector<integer> {
 fn picknest(n: integer) -> vector<integer> {
   if n > 0 {
     if n > 10 { [100, 200] } else { [11, 22, 33] }
-  } else {
-    [44, 55]
-  }
+  } else { [44, 55] }
 }
 
 // One arm borrows a parameter, the other builds an owned literal — the literal arm
@@ -52,14 +50,29 @@ fn pick_mixed(c: boolean, p: vector<integer>) -> vector<integer> {
   if c { [11, 22, 33] } else { p }
 }
 
-struct Box { v: vector<integer> }
+struct Box {
+  v: vector<integer>,
+}
 fn pickbox(c: boolean) -> Box {
-  if c { Box { v: [11, 22, 33] } } else { Box { v: [44, 55] } }
+  if c {
+    Box { v: [11, 22, 33] }
+  } else {
+    Box { v: [44, 55] }
+  }
 }
 
-struct P { x: integer, y: integer }
+struct P {
+  x: integer,
+  y: integer,
+}
 fn pickp3(n: integer) -> P {
-  if n == 0 { P { x: 1, y: 2 } } else if n == 1 { P { x: 3, y: 4 } } else { P { x: 5, y: 6 } }
+  if n == 0 {
+    P { x: 1, y: 2 }
+  } else if n == 1 {
+    P { x: 3, y: 4 }
+  } else {
+    P { x: 5, y: 6 }
+  }
 }
 
 fn picktext(c: boolean) -> text {
@@ -75,11 +88,7 @@ fn pickscalar(c: boolean) -> integer {
 // the fix too (over-unification guard: a divergent arm must not be forced into the
 // shared buffer, and the live arm must still deliver).
 fn pickdiverge(c: boolean) -> vector<integer> {
-  if c {
-    return [99];
-  } else {
-    [44, 55]
-  }
+  if c { return[99]; } else { [44, 55] }
 }
 
 // Nullable return — one arm yields `null`. Must STAY correct: the per-arm

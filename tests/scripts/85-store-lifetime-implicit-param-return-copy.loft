@@ -15,7 +15,9 @@
 // tail funnels to the same copy-into-`__retbuf` the struct-field tail (#415)
 // and the explicit `return v` use — one funnelled return path.
 
-fn idv(v: vector<u8>) -> vector<u8> { v }
+fn idv(v: vector<u8>) -> vector<u8> {
+  v
+}
 
 fn main() {
   x: vector<u8> = [1, 2, 3];

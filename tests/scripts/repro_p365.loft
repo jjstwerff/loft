@@ -21,27 +21,31 @@
 // Empty return + non-empty tail (HAS an `__ref_1` output buffer, inherited from
 // `split`).
 fn from_split(raw: text) -> vector<text> {
-  if raw.len() == 0 { return []; }
+  if raw.len() == 0 { return[]; }
   raw.split('\n')
 }
 
 // Empty return with NO output buffer (a standalone vector-returning fn).
-fn always_empty() -> vector<text> { return []; }
+fn always_empty() -> vector<text> {
+  return[];
+}
 
 // Non-empty literal return (must not regress).
-fn nonempty() -> vector<text> { return ["a", "b"]; }
+fn nonempty() -> vector<text> {
+  return["a", "b"];
+}
 
 // Empty return via a pre-bound empty local (the path that always worked).
 fn via_local(n: integer) -> vector<integer> {
   e: vector<integer> = [];
   if n == 0 { return e; }
-  return [1, 2, 3];
+  return[1, 2, 3];
 }
 
 // Nested vector: empty `return []` for vector<vector<integer>>.
 fn nested(n: integer) -> vector<vector<integer>> {
-  if n == 0 { return []; }
-  return [[1], [2, 3]];
+  if n == 0 { return[]; }
+  return[[1], [2, 3]];
 }
 
 fn main() {

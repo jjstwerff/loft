@@ -11,7 +11,9 @@
 // (`get_free_vars`' fn-ref arm + the declared-return decode).
 
 fn make_adder(base: integer) -> fn(integer) -> integer {
-  add = fn(x: integer) -> integer { x + base };
+  add = fn(x: integer) -> integer {
+    x + base
+  };
   return add;
 }
 

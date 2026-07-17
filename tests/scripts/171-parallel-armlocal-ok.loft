@@ -9,7 +9,9 @@
 // code and the test fails.  (170-parallel-capture-soundness.loft guards the
 // reject half; this guards the allow half.)
 
-fn worker(n: integer) -> integer { n * 2 }
+fn worker(n: integer) -> integer {
+  n * 2
+}
 
 fn main() {
   outer = 5;

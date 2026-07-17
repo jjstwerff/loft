@@ -7,60 +7,60 @@
 // their own.
 
 fn test_dir_basic() {
-    assert("doc/claude/PROBLEMS.md".dir() == "doc/claude", "dir of nested file");
-    assert("doc/CLAUDE.md".dir() == "doc", "dir of single-level file");
-    assert("CLAUDE.md".dir() == "", "no slash → empty dir");
-    assert("".dir() == "", "empty input → empty");
-    assert("/etc/passwd".dir() == "/etc", "absolute path");
-    assert("/foo".dir() == "", "single-segment absolute (everything before / is empty)");
+  assert("doc/claude/PROBLEMS.md".dir() == "doc/claude", "dir of nested file");
+  assert("doc/CLAUDE.md".dir() == "doc", "dir of single-level file");
+  assert("CLAUDE.md".dir() == "", "no slash → empty dir");
+  assert("".dir() == "", "empty input → empty");
+  assert("/etc/passwd".dir() == "/etc", "absolute path");
+  assert("/foo".dir() == "", "single-segment absolute (everything before / is empty)");
 }
 
 fn test_basename_basic() {
-    assert("doc/claude/PROBLEMS.md".basename() == "PROBLEMS.md", "nested file");
-    assert("CLAUDE.md".basename() == "CLAUDE.md", "no slash → self");
-    assert("".basename() == "", "empty");
-    assert("/etc/passwd".basename() == "passwd", "absolute path");
-    assert("/foo/".basename() == "", "trailing slash → empty");
+  assert("doc/claude/PROBLEMS.md".basename() == "PROBLEMS.md", "nested file");
+  assert("CLAUDE.md".basename() == "CLAUDE.md", "no slash → self");
+  assert("".basename() == "", "empty");
+  assert("/etc/passwd".basename() == "passwd", "absolute path");
+  assert("/foo/".basename() == "", "trailing slash → empty");
 }
 
 fn test_join_basic() {
-    assert("a".join("b") == "a/b", "simple join");
-    assert("a/".join("b") == "a/b", "trailing slash absorbed");
-    assert("".join("b") == "b", "empty self → other");
-    assert("a".join("/b") == "/b", "absolute other → other");
-    assert("a/b".join("c/d") == "a/b/c/d", "multi-segment");
+  assert("a".join("b") == "a/b", "simple join");
+  assert("a/".join("b") == "a/b", "trailing slash absorbed");
+  assert("".join("b") == "b", "empty self → other");
+  assert("a".join("/b") == "/b", "absolute other → other");
+  assert("a/b".join("c/d") == "a/b/c/d", "multi-segment");
 }
 
 fn test_resolve_basic() {
-    assert("doc/claude".resolve("./X.md") == "doc/claude/X.md", "leading ./ stripped");
-    assert("doc/claude".resolve("../README.md") == "doc/README.md", "single ../ trims one segment");
-    assert("a/b/c".resolve("../../x") == "a/x", "two ../ trim two segments");
-    assert("".resolve("foo") == "foo", "empty base → target");
+  assert("doc/claude".resolve("./X.md") == "doc/claude/X.md", "leading ./ stripped");
+  assert("doc/claude".resolve("../README.md") == "doc/README.md", "single ../ trims one segment");
+  assert("a/b/c".resolve("../../x") == "a/x", "two ../ trim two segments");
+  assert("".resolve("foo") == "foo", "empty base → target");
 }
 
 fn test_resolve_walks_past_root() {
-    // Walking up MORE than the base depth → base becomes empty.
-    assert("a".resolve("../../x") == "x", "walk past root");
-    assert("a/b".resolve("../../../x") == "x", "walk way past root");
+  // Walking up MORE than the base depth → base becomes empty.
+  assert("a".resolve("../../x") == "x", "walk past root");
+  assert("a/b".resolve("../../../x") == "x", "walk way past root");
 }
 
 fn test_resolve_repeated_dot_slash() {
-    // Multiple leading ./ are all stripped.
-    assert("base".resolve("././x") == "base/x", "double ./");
+  // Multiple leading ./ are all stripped.
+  assert("base".resolve("././x") == "base/x", "double ./");
 }
 
 fn test_resolve_no_navigation() {
-    // No ./ or ../ → just join under base.
-    assert("doc".resolve("foo.md") == "doc/foo.md", "plain target");
+  // No ./ or ../ → just join under base.
+  assert("doc".resolve("foo.md") == "doc/foo.md", "plain target");
 }
 
 fn main() {
-    test_dir_basic();
-    test_basename_basic();
-    test_join_basic();
-    test_resolve_basic();
-    test_resolve_walks_past_root();
-    test_resolve_repeated_dot_slash();
-    test_resolve_no_navigation();
-    println("path-helpers: ok");
+  test_dir_basic();
+  test_basename_basic();
+  test_join_basic();
+  test_resolve_basic();
+  test_resolve_walks_past_root();
+  test_resolve_repeated_dot_slash();
+  test_resolve_no_navigation();
+  println("path-helpers: ok");
 }

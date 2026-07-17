@@ -5,7 +5,12 @@
 
 // ── Plain enum ──────────────────────────────────────────────────────────────
 
-enum Direction { North, East, South, West }
+enum Direction {
+  North,
+  East,
+  South,
+  West,
+}
 
 fn test_plain_all_arms() {
   d = Direction.South;
@@ -27,7 +32,9 @@ fn test_plain_wildcard_first() {
 
 fn label(d: Direction) -> text {
   result = "";
-  match d { North => result = "N", East => result = "E", South => result = "S", West => result = "W" };
+  match d {
+    North => result = "N", East => result = "E", South => result = "S", West => result = "W"
+  };
   result
 }
 
@@ -35,7 +42,11 @@ fn test_plain_as_statement() {
   assert(label(East) == "E", "as statement");
 }
 
-enum Priority { Low, Medium, High }
+enum Priority {
+  Low,
+  Medium,
+  High,
+}
 
 fn test_plain_as_integer_value() {
   p = Priority.High;
@@ -56,7 +67,7 @@ fn test_plain_in_function() {
 enum Shape {
   Circle { radius: float },
   Rect { width: float, height: float },
-  Square { side: float }
+  Square { side: float },
 }
 
 fn test_struct_no_binding() {
@@ -102,17 +113,28 @@ fn test_struct_all_variants() {
 
 // ── Nesting and composition ─────────────────────────────────────────────────
 
-enum NX { NA, NB }
-enum NY { NP, NQ }
+enum NX {
+  NA,
+  NB,
+}
+enum NY {
+  NP,
+  NQ,
+}
 
 fn test_match_nested() {
   x = NX.NA;
   y = NY.NQ;
-  r = match x { NA => match y { NP => 1, NQ => 2 }, NB => 0 };
+  r = match x {
+    NA => match y { NP => 1, NQ => 2 }, NB => 0
+  };
   assert(r == 2, "nested");
 }
 
-enum Flag { On, Off }
+enum Flag {
+  On,
+  Off,
+}
 
 fn test_match_in_call() {
   f = Flag.On;
@@ -128,11 +150,16 @@ fn test_match_non_enum() {
   assert(r == 0, "wildcard");
 }
 
-struct MPoint { x: float, y: float }
+struct MPoint {
+  x: float,
+  y: float,
+}
 
 fn test_match_struct_destructure() {
   p = MPoint { x: 3.0, y: 4.0 };
-  r = match p { MPoint { x, y } => x + y };
+  r = match p {
+    MPoint { x, y } => x + y
+  };
   assert(r == 7.0, "r: {r}");
 }
 
@@ -212,7 +239,11 @@ fn test_guard_basic() {
   assert(r == 10, "basic guard");
 }
 
-enum Level { LA, LB, LC }
+enum Level {
+  LA,
+  LB,
+  LC,
+}
 
 fn score(l: Level, x: integer) -> text {
   match l {
@@ -230,7 +261,7 @@ fn test_guard_multiple() {
 
 enum GShape {
   GCircle { radius: float },
-  GRect { width: float, height: float }
+  GRect { width: float, height: float },
 }
 
 fn garea(s: GShape) -> float {
@@ -245,7 +276,10 @@ fn test_guard_with_binding() {
   assert(garea(GCircle { radius: -1.0 }) == 0.0, "guard with binding");
 }
 
-enum GDir { GNorth, GSouth }
+enum GDir {
+  GNorth,
+  GSouth,
+}
 
 fn glabel(d: GDir) -> text {
   match d { GNorth if false => "never", GNorth => "N", GSouth => "S" }
@@ -271,7 +305,9 @@ fn test_guard_scalar_wildcard() {
 
 fn test_match_arm_block_body() {
   x = 2;
-  r = match x { 1 => { 10 + 1 }, 2 => { 20 + 2 }, _ => 0 };
+  r = match x {
+    1 => { 10 + 1 }, 2 => { 20 + 2 }, _ => 0
+  };
   assert(r == 22, "r: {r}");
 }
 
@@ -291,10 +327,15 @@ fn test_scalar_char_pattern() {
   assert(describe_char('a') == "vowel a", "char pattern");
 }
 
-enum Dir { DNorth, DSouth, DEast, DWest }
+enum Dir {
+  DNorth,
+  DSouth,
+  DEast,
+  DWest,
+}
 
 fn axis(d: Dir) -> text {
-  match d { DNorth | DSouth => "vertical", DEast | DWest => "horizontal" }
+  match d { DNorth|DSouth => "vertical", DEast|DWest => "horizontal" }
 }
 
 fn test_or_pattern_plain_enum() {
@@ -302,7 +343,7 @@ fn test_or_pattern_plain_enum() {
 }
 
 fn classify_or(n: integer) -> text {
-  match n { 1 | 2 | 3 => "low", 10 | 20 => "high", _ => "other" }
+  match n { 1|2|3 => "low", 10|20 => "high", _ => "other" }
 }
 
 fn test_or_pattern_scalar() {
@@ -347,7 +388,7 @@ fn test_scalar_binding_wildcard() {
 }
 
 fn describe_at(x: integer) -> text {
-  match x { v @ 1 => "{v} is one", _ => "other" }
+  match x { v@1 => "{v} is one", _ => "other" }
 }
 
 fn test_scalar_binding_at() {

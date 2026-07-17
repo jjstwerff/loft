@@ -12,7 +12,10 @@
 // Fix: deep-copy the inner record (OpCopyRecord) for a vector element, and use
 // the element-type `known` (`vector_of(in_t)`, matching `new_record`).
 
-struct Pt { x: integer, y: integer }
+struct Pt {
+  x: integer,
+  y: integer,
+}
 
 fn main() {
   // int element, const range
@@ -32,7 +35,9 @@ fn main() {
   assert(sv[2][0] == 1.5f && sv[2][1] == 2.5f, "single {sv[2]}");
 
   // struct element
-  pv: vector<vector<Pt>> = [for i in 0..3 { [Pt{x: i, y: i}] }];
+  pv: vector<vector<Pt>> = [for i in 0..3 { [
+    Pt { x: i, y: i },
+  ] }];
   assert(pv[2][0].x == 2 && pv[2][0].y == 2, "struct {pv[2][0].x},{pv[2][0].y}");
 
   println("nested-comprehension ok");

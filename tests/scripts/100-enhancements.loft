@@ -10,30 +10,35 @@ fn test_bitnot_zero() {
 }
 
 fn test_bitnot_minus_one() {
-  assert(~(-1) == 0, "~-1 = 0");
+  assert(~ (-1) == 0, "~-1 = 0");
 }
 
 fn test_bitnot_clear_bit() {
-  flags = 32 | 64;
-  cleared = flags & ~32;
+  flags = 32|64;
+  cleared = flags&~32;
   assert(cleared == 64, "clear bit 5");
 }
 
 fn test_bitnot_in_expression() {
   x = 255;
   assert(~x == -256, "~255 = -256");
-  assert((x & ~15) == 240, "clear low nibble");
+  assert((x&~15) == 240, "clear low nibble");
 }
 
 // ── `is` variant check ──────────────────────────────────────────
 
-enum Direction { North, East, South, West }
+enum Direction {
+  North,
+  East,
+  South,
+  West,
+}
 
 fn test_is_plain_enum() {
   d = Direction.North;
   assert(d is North, "is North");
-  assert(!(d is South), "not South");
-  assert(!(d is East), "not East");
+  assert(! (d is South), "not South");
+  assert(! (d is East), "not East");
 }
 
 fn test_is_plain_enum_all_variants() {
@@ -46,20 +51,20 @@ fn test_is_plain_enum_all_variants() {
 enum Shape {
   Circle { radius: float },
   Rect { width: float, height: float },
-  Tri { base: float, side: float }
+  Tri { base: float, side: float },
 }
 
 fn test_is_struct_enum() {
   c = Circle { radius: 3.14 };
   assert(c is Circle, "is Circle");
-  assert(!(c is Rect), "not Rect");
-  assert(!(c is Tri), "not Tri");
+  assert(! (c is Rect), "not Rect");
+  assert(! (c is Tri), "not Tri");
 }
 
 fn test_is_struct_enum_rect() {
   r = Rect { width: 5.0, height: 10.0 };
   assert(r is Rect, "is Rect");
-  assert(!(r is Circle), "not Circle");
+  assert(! (r is Circle), "not Circle");
 }
 
 fn test_is_in_if_condition() {
@@ -93,36 +98,41 @@ fn test_is_in_loop() {
 
 fn test_is_with_negation() {
   s = Tri { base: 1.0, side: 2.0 };
-  non_circle = !(s is Circle);
+  non_circle = ! (s is Circle);
   assert(non_circle, "negated is");
 }
 
 // ── &vector mutation detection ──────────────────────────────────
 
-struct MutItem { mv: integer }
+struct MutItem {
+  mv: integer,
+}
 
 fn double_all_items(items: &vector<MutItem>) {
-  for it in items {
-    it.mv = it.mv * 2;
-  }
+  for it in items { it.mv = it.mv * 2; }
 }
 
 fn test_ref_vector_loop_mutation() {
-  v: vector<MutItem> = [MutItem { mv: 5 }, MutItem { mv: 10 }];
+  v: vector<MutItem> = [
+    MutItem { mv: 5 },
+    MutItem { mv: 10 },
+  ];
   double_all_items(v);
   assert(v[0].mv == 10, "doubled[0]");
   assert(v[1].mv == 20, "doubled[1]");
 }
 
 fn add_and_double(items: &vector<MutItem>) {
-  items += [MutItem { mv: 99 }];
-  for it in items {
-    it.mv = it.mv * 2;
-  }
+  items += [
+    MutItem { mv: 99 },
+  ];
+  for it in items { it.mv = it.mv * 2; }
 }
 
 fn test_ref_vector_append_and_mutate() {
-  v: vector<MutItem> = [MutItem { mv: 1 }];
+  v: vector<MutItem> = [
+    MutItem { mv: 1 },
+  ];
   add_and_double(v);
   assert(len(v) == 2, "appended");
   assert(v[0].mv == 2, "first doubled");
@@ -131,14 +141,22 @@ fn test_ref_vector_append_and_mutate() {
 
 // ── v[i] as & parameter (P160) ──────────────────────────────────
 
-struct P160Item { px: integer }
+struct P160Item {
+  px: integer,
+}
 
 // A vector element passed by value still aliases the caller's element (reference-default),
 // so field mutation propagates without `&` — this is the P160 contract.
-fn set_p160(item: P160Item, val: integer) { item.px = val; }
+fn set_p160(item: P160Item, val: integer) {
+  item.px = val;
+}
 
 fn test_vec_element_as_ref_param() {
-  items: vector<P160Item> = [P160Item { px: 0 }, P160Item { px: 0 }, P160Item { px: 0 }];
+  items: vector<P160Item> = [
+    P160Item { px: 0 },
+    P160Item { px: 0 },
+    P160Item { px: 0 },
+  ];
   set_p160(items[1], 42);
   assert(items[1].px == 42, "v[1] modified via &");
   set_p160(items[0], 100);
@@ -147,7 +165,10 @@ fn test_vec_element_as_ref_param() {
 }
 
 fn test_nested_field_as_ref_param() {
-  items: vector<P160Item> = [P160Item { px: 0 }, P160Item { px: 0 }];
+  items: vector<P160Item> = [
+    P160Item { px: 0 },
+    P160Item { px: 0 },
+  ];
   idx = 1;
   set_p160(items[idx], 77);
   assert(items[1].px == 77, "v[expr] modified via &");
@@ -186,19 +207,24 @@ fn test_filter_on_ref_vector() {
 
 // ── for over &vector<T> (P161) ──────────────────────────────────
 
-struct P161Item { pv: integer }
+struct P161Item {
+  pv: integer,
+}
 
 fn sum_p161(items: &vector<P161Item>) -> integer {
-  items += [P161Item { pv: 100 }];
+  items += [
+    P161Item { pv: 100 },
+  ];
   total = 0;
-  for it in items {
-    total = total + it.pv;
-  }
+  for it in items { total = total + it.pv; }
   total
 }
 
 fn test_for_over_ref_vector() {
-  v: vector<P161Item> = [P161Item { pv: 1 }, P161Item { pv: 2 }];
+  v: vector<P161Item> = [
+    P161Item { pv: 1 },
+    P161Item { pv: 2 },
+  ];
   s = sum_p161(v);
   assert(s == 103, "sum 1+2+100");
   assert(len(v) == 3, "appended");
@@ -211,9 +237,7 @@ fn test_struct_enum_json_roundtrip() {
   j = "{c:j}";
   p = Shape.parse(j);
   r = 0.0;
-  if p is Circle { radius } {
-    r = radius;
-  }
+  if p is Circle { radius } { r = radius; }
   assert(r == 2.5, "circle radius round-tripped");
 }
 
@@ -222,9 +246,7 @@ fn test_struct_enum_json_roundtrip_rect() {
   j = "{r:j}";
   p = Shape.parse(j);
   area = 0.0;
-  if p is Rect { width, height } {
-    area = width * height;
-  }
+  if p is Rect { width, height } { area = width * height; }
   assert(area == 24.0, "rect area round-tripped");
 }
 
@@ -232,7 +254,10 @@ fn test_struct_enum_json_roundtrip_rect() {
 
 // Error test: `break value` in void fn → see 101-enhancement-errors.loft
 
-struct BVItem { bvn: text, bvv: integer }
+struct BVItem {
+  bvn: text,
+  bvv: integer,
+}
 
 fn find_bv_val(items: vector<BVItem>, target: text) -> integer {
   for it in items {
@@ -249,12 +274,17 @@ fn first_bv_even(nums: vector<integer>) -> integer {
 }
 
 fn test_break_value_found() {
-  items: vector<BVItem> = [BVItem { bvn: "a", bvv: 10 }, BVItem { bvn: "b", bvv: 20 }];
+  items: vector<BVItem> = [
+    BVItem { bvn: "a", bvv: 10 },
+    BVItem { bvn: "b", bvv: 20 },
+  ];
   assert(find_bv_val(items, "b") == 20, "found b");
 }
 
 fn test_break_value_not_found() {
-  items: vector<BVItem> = [BVItem { bvn: "a", bvv: 10 }];
+  items: vector<BVItem> = [
+    BVItem { bvn: "a", bvv: 10 },
+  ];
   assert(find_bv_val(items, "x") == -1, "not found");
 }
 
@@ -285,38 +315,28 @@ fn test_break_value_while_not_found() {
 fn test_is_capture_single_field() {
   s = Circle { radius: 3.14 };
   result = 0.0;
-  if s is Circle { radius } {
-    result = radius;
-  }
+  if s is Circle { radius } { result = radius; }
   assert(result == 3.14, "captured radius");
 }
 
 fn test_is_capture_multiple_fields() {
   s = Rect { width: 5.0, height: 10.0 };
   area = 0.0;
-  if s is Rect { width, height } {
-    area = width * height;
-  }
+  if s is Rect { width, height } { area = width * height; }
   assert(area == 50.0, "captured both");
 }
 
 fn test_is_capture_wrong_variant() {
   s = Circle { radius: 2.0 };
   was_rect = false;
-  if s is Rect { width, height } {
-    was_rect = true;
-  }
+  if s is Rect { width, height } { was_rect = true; }
   assert(!was_rect, "not rect branch");
 }
 
 fn test_is_capture_with_else() {
   s = Circle { radius: 4.0 };
   area = 0.0;
-  if s is Circle { radius } {
-    area = 3.14 * radius * radius;
-  } else {
-    area = -1.0;
-  }
+  if s is Circle { radius } { area = 3.14 * radius * radius; } else { area = -1.0; }
   assert(area > 50.0, "circle area");
   assert(area < 51.0, "circle area upper");
 }
@@ -324,11 +344,7 @@ fn test_is_capture_with_else() {
 fn test_is_capture_else_taken() {
   s = Tri { base: 3.0, side: 4.0 };
   area = 0.0;
-  if s is Circle { radius } {
-    area = radius;
-  } else {
-    area = -1.0;
-  }
+  if s is Circle { radius } { area = radius; } else { area = -1.0; }
   assert(area == -1.0, "else taken");
 }
 
@@ -341,9 +357,7 @@ fn test_is_capture_in_loop() {
   ];
   total_radius = 0.0;
   for it in items {
-    if it is Circle { radius } {
-      total_radius += radius;
-    }
+    if it is Circle { radius } { total_radius += radius; }
   }
   assert(total_radius == 5.0, "sum of radii");
 }
@@ -351,8 +365,6 @@ fn test_is_capture_in_loop() {
 fn test_is_capture_scope_not_leaking() {
   s = Circle { radius: 99.0 };
   radius = 1.0;
-  if s is Rect { width, height } {
-    radius = width;
-  }
+  if s is Rect { width, height } { radius = width; }
   assert(radius == 1.0, "outer radius unchanged");
 }

@@ -5,12 +5,17 @@
 
 // ── Shared definitions needed by error fns ──────────────────────
 
-enum Direction { North, East, South, West }
+enum Direction {
+  North,
+  East,
+  South,
+  West,
+}
 
 enum Shape {
   Circle { radius: float },
   Rect { width: float, height: float },
-  Square { side: float }
+  Square { side: float },
 }
 
 fn vec_sum(r: vector<integer>) -> integer {
@@ -52,7 +57,7 @@ fn test_empty_comprehension_body() {
 
 // @EXPECT_ERROR: vector concatenation in an expression creates a temporary
 fn test_vector_argument() {
-  assert(vec_sum([1,2,3,4,5]) + 100 * vec_sum([1,2,3] + [4,5]) == 1515, "vector argument");
+  assert(vec_sum([1, 2, 3, 4, 5])+100 * vec_sum([1, 2, 3] + [4, 5]) == 1515, "vector argument");
 }
 
 // @EXPECT_ERROR: vector concatenation in an expression creates a temporary
@@ -69,7 +74,7 @@ fn test_vector_concat_method_receiver() {
 // A `&vector` ref grows the caller's vector in place; reassigning it to a concat
 // (`out = a + x`) used to silently DROP the first operand `a` (appending only the
 // trailing parts).  Now rejected — append with `out += …` instead.
-fn ref_vector_replace(out: & vector < integer >, a: vector<integer>, x: vector<integer>) {
+fn ref_vector_replace(out: &vector<integer>, a: vector<integer>, x: vector<integer>) {
   out = a + x;
 }
 
@@ -84,7 +89,9 @@ fn test_plain_missing_arm() {
 // @EXPECT_ERROR: match on Shape is not exhaustive
 fn test_struct_missing_arm() {
   s = Circle { radius: 1.0 };
-  match s { Circle { radius } => radius, Rect { width, height } => width * height };
+  match s {
+    Circle { radius } => radius, Rect { width, height } => width * height
+  };
 }
 
 // @EXPECT_ERROR: cannot unify: text and integer
@@ -102,7 +109,9 @@ fn test_match_duplicate_arm() {
 // @EXPECT_ERROR: guard must be boolean, got integer
 fn test_guard_non_bool() {
   s = Circle { radius: 3.0 };
-  match s { Circle { radius } if 42 => radius, _ => 0.0 };
+  match s {
+    Circle { radius } if 42 => radius, _ => 0.0
+  };
 }
 
 // ── From 38-parse-warnings.loft ─────────────────────────────────
@@ -125,26 +134,33 @@ fn test_zero_pad_on_text() {
 // @EXPECT_ERROR: vector concatenation in an expression creates a temporary
 fn smb_vec_sum(r: vector<integer>) -> integer {
   total = 0;
-  for smb_e in r {
-    total += smb_e;
-  }
+  for smb_e in r { total += smb_e; }
   total
 }
 
 fn test_struct_method_vec() {
-  assert(smb_vec_sum([1,2] + [3]) + 100 * smb_vec_sum([1,2,3] + [4,5]) == 1506, "struct method vec");
+  assert(
+    smb_vec_sum([1, 2] + [3])+100 * smb_vec_sum([1, 2, 3] + [4, 5]) == 1506,
+    "struct method vec"
+  );
 }
 
 // ── From 90-immutability.loft ───────────────────────────────────
 
 // @EXPECT_ERROR: Parameter 'a' has & but is never modified
-fn ref_read_only(a: &integer) -> integer { a }
+fn ref_read_only(a: &integer) -> integer {
+  a
+}
 
 // @EXPECT_ERROR: Cannot modify const parameter 'a'
-fn const_bad(a: const integer) { a = 42 }
+fn const_bad(a: const integer) {
+  a = 42
+}
 
 // @EXPECT_ERROR: Cannot modify const parameter 'a'
-fn const_ref_bad(a: & const integer) { a = 42 }
+fn const_ref_bad(a: &const integer) {
+  a = 42
+}
 
 // @EXPECT_ERROR: Cannot modify const variable 'x'
 fn test_const_local_int_reassigned() {
@@ -176,19 +192,29 @@ fn test_const_local_ref_reassigned() {
 // allowed (see the positives in 90-immutability.loft).  Binding-const compound
 // append (`const v: vector`, `const t: text` + `+=`) is legal and lives there too.
 
-struct VcRec { x: integer }
+struct VcRec {
+  x: integer,
+}
 
 // @EXPECT_ERROR: Cannot modify const parameter 'p'
-fn vc_param_append(p: const vector<integer>) { p += [3] }
+fn vc_param_append(p: const vector<integer>) {
+  p += [3]
+}
 
 // @EXPECT_ERROR: Cannot modify const parameter 'p'
-fn vc_param_element(p: const vector<integer>) { p[0] = 9 }
+fn vc_param_element(p: const vector<integer>) {
+  p[0] = 9
+}
 
 // @EXPECT_ERROR: Cannot modify const parameter 'p'
-fn vc_param_field(p: const VcRec) { p.x = 9 }
+fn vc_param_field(p: const VcRec) {
+  p.x = 9
+}
 
 // @EXPECT_ERROR: Cannot modify const parameter 'p'
-fn vc_param_text_append(p: const text) { p += "z" }
+fn vc_param_text_append(p: const text) {
+  p += "z"
+}
 
 // @EXPECT_ERROR: Cannot modify const variable 'x'
 fn vc_local_append() {
@@ -207,24 +233,29 @@ fn vc_local_element() {
 // @EXPECT_ERROR: cannot implicitly narrow
 fn test_integer_to_i32_assign() {
   n: integer = 5;
-  x: i32 = n;   // narrowing (non-literal) — requires `as i32`
+  x: i32 = n; // narrowing (non-literal) — requires `as i32`
   assert(x == 5, "unreachable");
 }
 
-fn p370_takes_i32(x: i32) -> i32 { x }
+fn p370_takes_i32(x: i32) -> i32 {
+  x
+}
 
 // @EXPECT_ERROR: cannot implicitly narrow
 fn test_integer_to_i32_arg() {
   n: integer = 5;
-  assert(p370_takes_i32(n) == 5, "unreachable");   // narrowing arg — requires `as i32`
+  assert(p370_takes_i32(n) == 5, "unreachable"); // narrowing arg — requires `as i32`
 }
 
 // ── @PLN22 Phase 1 — a bare variant defining an untyped variable is an error ──
-enum PLN22Dir { PLN22North, PLN22South }
+enum PLN22Dir {
+  PLN22North,
+  PLN22South,
+}
 
 // @EXPECT_ERROR: bare variant 'PLN22North' has no type here
 fn test_pln22_bare_variant_no_context() {
-  d = PLN22North;   // no type context — must write `PLN22Dir.PLN22North`
+  d = PLN22North; // no type context — must write `PLN22Dir.PLN22North`
   assert(d is PLN22North, "unreachable");
 }
 
@@ -286,7 +317,9 @@ fn test_tuple_return_null_elem() -> (integer, integer) {
   (null, 2)
 }
 
-struct TupleFieldBox { t: (integer, integer) }
+struct TupleFieldBox {
+  t: (integer, integer),
+}
 
 // @EXPECT_ERROR: nullable `integer?` cannot be stored into element 0 of the field
 fn test_tuple_field_undischarged_elem(s: text) -> integer {
