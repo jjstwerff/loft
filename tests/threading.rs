@@ -206,7 +206,12 @@ fn worker_id(r: const Num) -> integer { r.v }
     // worker-owned and intentionally writable, so they are not checked.
     let parent_len = state.database.allocations.len();
     let worker_stores = unsafe { state.database.clone_for_light_worker() };
-    for (i, alloc) in worker_stores.allocations.iter().enumerate().take(parent_len) {
+    for (i, alloc) in worker_stores
+        .allocations
+        .iter()
+        .enumerate()
+        .take(parent_len)
+    {
         assert!(
             alloc.is_locked(),
             "borrowed parent store {i} should be locked read-only"

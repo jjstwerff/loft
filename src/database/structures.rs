@@ -834,8 +834,7 @@ impl Stores {
                     return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to)
-                    .set_short(to.rec, to.pos, from, n as i32);
+                self.store_mut(to).set_short(to.rec, to.pos, from, n as i32);
                 Ok(())
             }
             Parts::ShortRaw(from, _null) => {

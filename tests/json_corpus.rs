@@ -17,7 +17,7 @@
 // diagnostic-parity risk), the `Dialect::Lenient` bare-key/ident/constructor
 // paths, and one extracted REAL consumer input (the registry index sample).
 
-use loft::json::{parse, parse_with, Dialect};
+use loft::json::{Dialect, parse, parse_with};
 use std::fmt::Write as _;
 
 /// (label, dialect, input) — dialect selects `parse` (Strict) vs `parse_with`.
@@ -68,10 +68,26 @@ const CORPUS: &[(&str, Dialect, &str)] = &[
     ("struct/flat-array", Dialect::Strict, "[1,2,3]"),
     ("struct/nested-array", Dialect::Strict, "[[1],[2,[3]]]"),
     ("struct/flat-object", Dialect::Strict, "{\"a\":1}"),
-    ("struct/deep-object", Dialect::Strict, "{\"a\":{\"b\":{\"c\":1}}}"),
-    ("struct/mixed", Dialect::Strict, "{\"arr\":[1,2],\"obj\":{\"x\":true}}"),
-    ("struct/whitespace", Dialect::Strict, "  {  \"a\" : 1 ,  \"b\" : [ 2 , 3 ] }  "),
-    ("struct/array-of-objects", Dialect::Strict, "[{\"v\":10},{\"v\":20}]"),
+    (
+        "struct/deep-object",
+        Dialect::Strict,
+        "{\"a\":{\"b\":{\"c\":1}}}",
+    ),
+    (
+        "struct/mixed",
+        Dialect::Strict,
+        "{\"arr\":[1,2],\"obj\":{\"x\":true}}",
+    ),
+    (
+        "struct/whitespace",
+        Dialect::Strict,
+        "  {  \"a\" : 1 ,  \"b\" : [ 2 , 3 ] }  ",
+    ),
+    (
+        "struct/array-of-objects",
+        Dialect::Strict,
+        "[{\"v\":10},{\"v\":20}]",
+    ),
     // ── literals ────────────────────────────────────────────────────────────
     ("lit/true", Dialect::Strict, "true"),
     ("lit/false", Dialect::Strict, "false"),
@@ -93,9 +109,17 @@ const CORPUS: &[(&str, Dialect, &str)] = &[
     ("lenient/bare-key", Dialect::Lenient, "{a: 1}"),
     ("lenient/bare-ident-value", Dialect::Lenient, "{a: b}"),
     ("lenient/mixed-keys", Dialect::Lenient, "{a: 1, \"b\": 2}"),
-    ("lenient/bare-literals", Dialect::Lenient, "{x: true, y: null, z: false}"),
+    (
+        "lenient/bare-literals",
+        Dialect::Lenient,
+        "{x: true, y: null, z: false}",
+    ),
     ("lenient/constructor", Dialect::Lenient, "Point{x: 1, y: 2}"),
-    ("lenient/constructor-array", Dialect::Lenient, "[Red{v: 1}, Blue{v: 2}]"),
+    (
+        "lenient/constructor-array",
+        Dialect::Lenient,
+        "[Red{v: 1}, Blue{v: 2}]",
+    ),
     // ── real extracted consumer input: the registry index sample ────────────
     (
         "real/registry-index",

@@ -1845,7 +1845,9 @@ mod test {
     /// The first [`LexItem`] of `s` lexed in JSON mode.
     #[cfg(test)]
     fn json_first(s: &str) -> LexItem {
-        Lexer::from_str_with(s, "json", LexConfig::json()).peek().has
+        Lexer::from_str_with(s, "json", LexConfig::json())
+            .peek()
+            .has
     }
 
     /// @PLN109 Phase 1c — loft's lexer already distinguishes integer-shaped from
@@ -1856,7 +1858,10 @@ mod test {
     fn json_number_classification() {
         assert_eq!(json_first("42"), LexItem::Integer(42, false));
         // H5: 2^53 + 1 preserved exactly as Long — the whole point of the arc.
-        assert_eq!(json_first("9007199254740993"), LexItem::Long(9_007_199_254_740_993));
+        assert_eq!(
+            json_first("9007199254740993"),
+            LexItem::Long(9_007_199_254_740_993)
+        );
         assert!(matches!(json_first("3.14"), LexItem::Float(_)));
         // Exponent-bearing numbers are Float (1b): `1e3` / `1E5` are not i64.
         assert!(matches!(json_first("1e3"), LexItem::Float(_)));

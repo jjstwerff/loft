@@ -114,7 +114,6 @@ pub struct ParseError {
     pub path: String,
 }
 
-
 /// Parse the entire `input` as a JSON value in strict RFC 8259
 /// mode.  Equivalent to `parse_with(input, Dialect::Strict)`.
 ///
@@ -559,9 +558,7 @@ impl<'a> JParser<'a> {
         let slice = std::str::from_utf8(&bytes[start..i])
             .map_err(|_| ("non-ASCII in number".to_string(), start))?;
         // Integer-shaped and i64-fitting → exact Int (H5); else f64.
-        if !fractional
-            && let Ok(n) = slice.parse::<i64>()
-        {
+        if !fractional && let Ok(n) = slice.parse::<i64>() {
             return Ok((Parsed::Int(n), i));
         }
         let n: f64 = slice
@@ -733,7 +730,6 @@ impl<'a> JParser<'a> {
             }
         }
     }
-
 }
 
 /// @PLN109 Phase 2 — parse `input` by driving loft's JSON-mode lexer.  Same
