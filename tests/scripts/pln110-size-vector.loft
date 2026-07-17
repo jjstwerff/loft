@@ -4,14 +4,22 @@
 // @PLN110 sub-arc 1a — `size(vector<T>)` = element count × the element's
 // in-buffer stride: the allocation-local byte footprint of the vector's own
 // element buffer.  The stride is loft's REAL per-element storage width
-// (`vector_elem_iter_stride`, the same one iteration walks the buffer with),
-// so this reports the bytes the buffer actually occupies — not a shallow
-// "N × 4 references" count (loft stores most elements INLINE, not by reference).
+// (`vector_elem_iter_stride`), so `size` reflects the actual representation:
 //
+//   * inline VECTOR<T>  — T stored inline: stride = size(T), sub-records counted fully.
+//   * by-reference ARRAY<T> — a vector<T> whose element T is ALSO a keyed-collection
+//     element is promoted to Array<T> (`Stores::finish_type`, @P376): each element is
+//     a 4-byte rec-id, so size = 4 × len (the plan's "N × 4 references" rule).
+//
+// Both are the plan's rule #1 (inline sub-records fully / array members by 4-byte ref).
 // Values verified against both backends (interpret + native) during Phase 1.
 
 struct Point { x: integer, y: integer }
 value struct VPoint { x: integer, y: integer }
+
+// Node is used as BOTH a hash element and a vector element → promoted to Array<Node>.
+struct Node { id: integer, w: integer }
+struct Graph { by_id: hash<Node[id]>, nodes: vector<Node> }
 
 fn main() {
   // --- scalar elements: counted inline at their stored width ---
@@ -29,11 +37,17 @@ fn main() {
   b: vector<text> = ["x", "yy", "zzz"];
   assert(size(b) == 12, "vector<text> = 3 × 4 (handles, not content): {size(b)}");
 
-  // --- inline struct elements: counted FULLY (same allocation), not as a ref ---
+  // --- inline VECTOR: struct elements stored inline, counted FULLY (Point is used
+  //     in only this one container, so it is NOT promoted to a by-reference array) ---
   ps: vector<Point> = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];
-  assert(size(ps) == 32, "vector<Point> = 2 × 16 (inline struct): {size(ps)}");
+  assert(size(ps) == 32, "inline vector<Point> = 2 × 16: {size(ps)}");
   vs: vector<VPoint> = [VPoint { x: 1, y: 2 }, VPoint { x: 3, y: 4 }];
-  assert(size(vs) == 32, "vector<VPoint> = 2 × 16 (inline value struct): {size(vs)}");
+  assert(size(vs) == 32, "inline vector<VPoint> = 2 × 16: {size(vs)}");
+
+  // --- by-reference ARRAY: Node is shared with a hash, so `nodes` is promoted to
+  //     Array<Node> — each element a 4-byte rec-id, NOT the inline 16-byte struct ---
+  g = Graph { by_id: [], nodes: [Node { id: 1, w: 9 }, Node { id: 2, w: 8 }, Node { id: 3, w: 7 }] };
+  assert(size(g.nodes) == 12, "array<Node> = 3 × 4 (by-reference, not 3 × 16 inline): {size(g.nodes)}");
 
   // --- nested vector: loft's real element stride is 8 (#477), not 4 ---
   c: vector<vector<integer>> = [[1, 2], [3]];

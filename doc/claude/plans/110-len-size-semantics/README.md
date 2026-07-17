@@ -11,11 +11,12 @@ Tracker: [@PLN110](https://github.com/loft-lang/plans/issues/110) · `subject:lo
 
 **Phase 1 STARTED** (2026-07-17) — sub-arc **1a `size(vector<T>)` ✅ landed**, both backends; the
 uniform mechanism + per-type formulas + build order are in [phase1-size-impl.md](phase1-size-impl.md).
-Two Phase-1 findings: (1) loft stores vector elements **inline** (a `vector<Point>` counts each
-struct fully at 16, a nested vector strides 8 per #477) — the README's illustrative "array = N × 4
-references" rule is wrong for loft and needs a Phase-2 doc fix; `size` faithfully reports N × the
-real stride. (2) The 0f `character` recommendation was **corrected** — `size(character)`=4 (fixed
-slot), keep `len(character)`=UTF-8 width; 1g deferred on an owner contract call.
+Two Phase-1 findings: (1) `size` correctly reflects loft's **two vector representations** — inline
+`Vector<T>` (`size(T) × len`, e.g. a standalone `vector<Point>` = 16 × len) vs by-reference
+`Array<T>` (`4 × len`, when `T` is shared with a keyed collection and promoted at `finish_type`).
+This is exactly the plan's rule #1 (inline sub-records fully / array members by 4-byte ref) — both
+representations are handled and tested. (2) The 0f `character` recommendation was **corrected** —
+`size(character)`=4 (fixed slot), keep `len(character)`=UTF-8 width; 1g deferred on an owner call.
 
 **Phase 0 complete** (2026-07-17) — full inventory + baseline done; see
 [phase0-inventory.md](phase0-inventory.md). Semantics decided (design 2026-07-17). This resolves

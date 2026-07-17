@@ -51,18 +51,31 @@ Verified on **both backends** (`tests/scripts/pln110-size-vector.loft`):
 | empty | — | 0 |
 | after one `+= [7]` | 8 | 8 (not the over-allocated capacity) |
 
-### ⚠ Finding — the plan's "array = N × 4 references" prose is wrong for loft
+### The two representations — `Vector` (inline) vs `Array` (by-reference)
 
-The README's illustrative rule ("an array counts each member as its 4-byte reference (N × 4)")
-assumes vector elements are references. **They are not — loft stores vector elements INLINE:** a
-scalar at its width (int 8, bool 1, narrow at its narrow width), a **struct at its full record size**
-(`Point`/`VPoint` = 16, counted fully), a **text at its 4-byte handle** (the one genuine ref case),
-a **nested vector at 8** (the #477 stride `element_size(inner).max(4)`, *not* 4). The faithful
-`size` = N × real-stride is correct against the plan's **core** definition ("occupied bytes of this
-allocation" — inline sub-records count fully) — it is only the plan's *illustration* that was based
-on a layout loft doesn't use. **Action (Phase 2 doc pass):** correct the README's rule-#1 array
-bullet to "each member at its in-buffer stride — inline value fully, a heap element (text, nested
-collection) as its handle/stride," and keep the concrete table above as the reference.
+loft's surface `vector<T>` compiles to **two distinct internal representations**, and `size`
+correctly reflects whichever is in play — this is exactly the plan's rule #1 ("inline sub-records
+counted fully" AND "an array counts each member as its 4-byte reference, N × 4"):
+
+- **`Parts::Vector<T>` — inline.** `T` is stored inline in the buffer at `size(T)`: a scalar at its
+  width (int 8, bool 1, narrow at its narrow width), a **struct at its full record size** (`Point` =
+  16, counted fully), a **text at its 4-byte handle**. size = `size(T) × len`.
+- **`Parts::Array<T>` — by-reference.** When `T` is *linked* (shared with a keyed collection — it is
+  an element of a `hash`/`index`/`radix` AND a vector, so both refer to the same records),
+  `Stores::finish_type` (@P376, `types.rs:372`) promotes `vector<T>` to `Array<T>`: each element is a
+  **4-byte rec-id** pointing at a separate record. size = `4 × len` (the plan's "N × 4 references").
+
+The choice is a whole-program property decided at `finish()` (before pass-2 parse), and
+`vector_elem_iter_stride` reads it via `is_linked(T)` — returning 4 for a linked/Array element and
+`size(T)` for an inline one — so the parse-time stride const is **not** stale (verified: a genuine
+Array gives `size = 4 × len` on both backends; `tests/scripts/pln110-size-vector.loft` covers both).
+Either way `size` is allocation-local: for the Array it counts the 4-byte pointers, NOT the separate
+Node records they reference. (Nested `vector<vector<T>>` is a third case: the element is an 8-byte
+descriptor, the #477 stride `element_size(inner).max(4)` — `size` reports it faithfully.)
+
+> **Correction:** an earlier draft of this finding claimed the plan's "array = N × 4" prose was
+> wrong; that was a mistake — it had only tested the *inline* case. The plan's rule #1 describes both
+> representations correctly, and the implementation handles both. No README change is needed.
 
 ## Remaining sub-arcs — formulas + open questions
 
