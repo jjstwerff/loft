@@ -1364,13 +1364,23 @@ impl Stores {
         })
     }
 
-    /// Produce a light-worker view — main stores borrowed read-only,
-    /// pool stores provide allocation capacity.
+    /// Produce a light-worker view — the parent stores borrowed read-only, plus a
+    /// small set of **self-allocated** writable scratch stores for the worker's own
+    /// allocations.  @PLN108 R1: the scratch is self-allocated per call (no external
+    /// `WorkerPool` slice), so this composes with any spawner — `thread::scope` OR
+    /// rayon — which is what lets the borrow become the single, always-on path (R2).
     ///
     /// # Safety
-    /// `pool_slice` must remain valid and exclusively owned by this worker.
-    /// The original `Stores` must outlive the worker (guaranteed by `thread::scope`).
-    pub unsafe fn clone_for_light_worker(&self, pool_slice: &mut [Store]) -> WorkerStores {
+    /// The original `Stores` must outlive the worker — guaranteed by the scoped join
+    /// of the spawner (`thread::scope` or rayon's `pool.install`, both block until
+    /// every worker has returned before the parent's borrow ends).
+    pub unsafe fn clone_for_light_worker(&self) -> WorkerStores {
+        // A light worker STARTS with this many writable scratch stores at this word
+        // capacity (matching the retired `WorkerPool` seed of 4 × 1024).  It grows
+        // beyond this on demand (freed-slot reuse / new worker-local stores), so the
+        // count is only a starting reservation, not a ceiling.
+        const SCRATCH_STORES: usize = 4;
+        const SCRATCH_WORDS: u32 = 1024;
         // Borrow ALL stores — the input vector may reference any store.
         let mut allocations: Vec<Store> = self
             .allocations
@@ -1383,14 +1393,11 @@ impl Stores {
                 }
             })
             .collect();
-        // Append pool stores as free slots for the worker's own allocations.
-        for store in pool_slice.iter_mut() {
-            store.init();
-            store.free = true;
-            // Take the store's buffer into the worker via a borrow with owned semantics.
-            // The pool store keeps its buffer; after the scope the worker's stores are dropped
-            // (borrowed flag prevents double-free for main stores; pool stores are NOT borrowed).
-            allocations.push(Store::new(store.byte_capacity() as u32 / 8));
+        // Self-allocated writable scratch: free slots the worker allocates into.
+        // `Store::new` is already `free` + `init`'d, so these land in `free_bits` below
+        // exactly as the old pool-seeded `Store::new(cap)` did.
+        for _ in 0..SCRATCH_STORES {
+            allocations.push(Store::new(SCRATCH_WORDS));
         }
         // Build free_bits: main-thread freed slots + all pool slots.
         let mut free_bits: Vec<u64> = Vec::new();
@@ -1413,8 +1420,8 @@ impl Stores {
             alloc_pc: self.alloc_pc,
             stack_store_at_zero: self.stack_store_at_zero,
             files: Vec::new(),
-            max: self.allocations.len() as u16 + pool_slice.len() as u16,
-            peak: self.allocations.len() as u16 + pool_slice.len() as u16,
+            max: (self.allocations.len() + SCRATCH_STORES) as u16,
+            peak: (self.allocations.len() + SCRATCH_STORES) as u16,
             free_bits,
             bridge_text_dest: None,
             const_refs: self.const_refs.clone(),

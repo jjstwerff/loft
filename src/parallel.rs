@@ -1271,15 +1271,12 @@ fn run_parallel_discard_shared(
     let threads = n_threads.max(1).min(n_rows);
     let program = Arc::new(program);
     let input_t = *input;
-    // Pool seeds each worker's OWN (writable) stores — its stack + scratch.  Sized generously;
-    // a worker that needs more just pushes new worker-local stores.
-    let mut pool = WorkerPool::new(threads, 4, 1024);
     thread::scope(|s| {
         for t in 0..threads {
             let start = t * n_rows / threads;
             let end = (t + 1) * n_rows / threads;
-            // Borrow the parent stores read-only + take this worker's pool slice.
-            let worker_stores = unsafe { stores.clone_for_light_worker(pool.slice_mut(t)) };
+            // Borrow the parent stores read-only; the worker self-allocates its scratch.
+            let worker_stores = unsafe { stores.clone_for_light_worker() };
             let prog = Arc::clone(&program);
             let extras = extra_args.to_vec();
             s.spawn(move || {
@@ -1475,14 +1472,13 @@ fn run_parallel_queue_shared(
     let input_t = *input;
     let prim_in = primitive_input_size;
     let tuple_types_arc = tuple_input_types.map(Arc::new);
-    let mut pool = WorkerPool::new(threads, 4, 1024);
     let batches: Vec<(usize, Vec<u64>)> = thread::scope(|s| {
         let mut handles = Vec::with_capacity(threads);
         for t in 0..threads {
             let start = t * n_rows / threads;
             let end = (t + 1) * n_rows / threads;
-            // Borrow the parent stores read-only + take this worker's pool slice.
-            let worker_stores = unsafe { stores.clone_for_light_worker(pool.slice_mut(t)) };
+            // Borrow the parent stores read-only; the worker self-allocates its scratch.
+            let worker_stores = unsafe { stores.clone_for_light_worker() };
             let prog = Arc::clone(&program);
             let extras = extra_args.to_vec();
             let tuple_types = tuple_types_arc.as_ref().map(Arc::clone);
@@ -1685,8 +1681,8 @@ pub fn run_parallel_light(
             for t in 0..threads {
                 let start = t * n_rows / threads;
                 let end = (t + 1) * n_rows / threads;
-                // borrow main stores + get pool slice for this worker.
-                let worker_stores = unsafe { stores.clone_for_light_worker(pool.slice_mut(t)) };
+                // borrow main stores read-only; the worker self-allocates its scratch.
+                let worker_stores = unsafe { stores.clone_for_light_worker() };
                 let prog = Arc::clone(&program);
                 let input_t = *input;
                 let extras = extra_args.to_vec();
@@ -1762,7 +1758,7 @@ pub fn run_parallel_light(
     }
     #[cfg(not(feature = "threading"))]
     {
-        let worker_stores = unsafe { stores.clone_for_light_worker(pool.slice_mut(0)) };
+        let worker_stores = unsafe { stores.clone_for_light_worker() };
         let mut state = program.new_state(worker_stores);
         for row_idx in 0..n_rows {
             let row_idx_i32 = row_idx as i64;

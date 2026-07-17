@@ -140,7 +140,7 @@ both backends with ASan+TSan green.
 | # | Step | Observable |
 |---|---|---|
 | R0 | Bench baseline on the merged binary (done above) — fold copies, 1→71 ms. | the number to move |
-| R1 | `clone_for_light_worker` self-allocates scratch; drop `pool_slice`. Prove probe 1. | worker still allocates, leak-clean |
+| R1 | ✅ **DONE** — `clone_for_light_worker(&self)` self-allocates its scratch (4 × 1024-word stores, `Store::new` already free+init'd — byte-equivalent to the old `WorkerPool` seed); dropped `pool_slice`. The 2 live dispatchers (`discard_shared`/`queue_shared`) drop `WorkerPool::new`. (The dead `run_parallel_light` + `WorkerPool` + `pool_tests` stay — deleted in R3.) | **DONE** — probe 1 (allocating-worker queue par, borrow==copy==941472, leak-clean via `LOFT_STORES=warn`, both backends); threading suite **47/47** both default AND `LOFT_PAR_SHARE=1` (forced borrow through the self-allocated clone); clippy `-D warnings` clean. |
 | R2 | `parallel_workers` always calls `clone_for_light_worker` (rayon). Delete the copy branch. | fold probe flat vs heap, both backends |
 | R3 | Delete `run_parallel_*_shared`, `par_share_for`, `LOFT_PAR_SHARE`, `WorkerPool`, `clone_for_worker`. | suite green, dead code gone |
 | R4 | Collapse the return-type `run_parallel_*` forks into discard/map/reduce wrappers. | byte-identical `Parsed`/results; fewer fns |
