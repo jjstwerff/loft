@@ -1181,14 +1181,23 @@ pub fn run_parallel_fold(
 /// reaching this dispatcher.
 #[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 #[allow(dead_code, clippy::too_many_arguments)] // step 3 is the first consumer; tested via tests/threading.rs
-/// @PLN108 S3 — is read-only parent-store sharing enabled?  `LOFT_PAR_SHARE`, default OFF.
-/// When set, `run_parallel_discard` BORROWS the parent stores read-only instead of the
-/// per-worker byte-copy (`clone_for_worker`).  Safe because a worker's captured parent state
-/// is read-only (@PLN102 C93 compile error + `read_only` write-panic) and the parent outlives
-/// every worker (`thread::scope` join).  S1 verified no dispatcher mutates a parent mid-par.
+/// @PLN108 S8 — should this par BORROW the parent stores read-only, instead of the per-worker
+/// byte-copy (`clone_for_worker`)?  **Default AUTO** (default-ON above a size threshold): borrow
+/// when the copy it would save (`active_clone_bytes`) exceeds the borrow's per-call thread-spawn
+/// overhead — so a big-heap par (routing's shape) wins, while a small / frequent par keeps the
+/// cheap rayon-pool clone (no regression).  `LOFT_PAR_SHARE=0` forces OFF, `=1` forces ON at any
+/// size.  Safe because captured parent state is read-only (@PLN102 C93 compile error +
+/// `read_only` write-panic), the parent outlives every worker (`thread::scope` join), and S1
+/// verified no dispatcher mutates a parent mid-par.  ASan + TSan clean on this path (S5/S6).
 #[cfg(feature = "threading")]
-fn par_share_enabled() -> bool {
-    std::env::var_os("LOFT_PAR_SHARE").is_some_and(|v| !v.is_empty() && v != "0")
+const PAR_SHARE_MIN_BYTES: u64 = 2 * 1024 * 1024; // 2 MB — below this the rayon clone is cheaper
+#[cfg(feature = "threading")]
+fn par_share_for(stores: &Stores) -> bool {
+    match std::env::var("LOFT_PAR_SHARE").ok().as_deref() {
+        Some("0") => false,
+        Some("1") => true,
+        _ => stores.active_clone_bytes() >= PAR_SHARE_MIN_BYTES, // AUTO (unset or any other value)
+    }
 }
 
 pub fn run_parallel_discard(
@@ -1207,7 +1216,7 @@ pub fn run_parallel_discard(
     }
     // @PLN108 S3 — behind LOFT_PAR_SHARE (default OFF): borrow the parent stores read-only.
     #[cfg(feature = "threading")]
-    if par_share_enabled() {
+    if par_share_for(stores) {
         run_parallel_discard_shared(
             stores,
             program,
@@ -1371,7 +1380,7 @@ pub fn run_parallel_queue(
     // instead of `clone_for_worker`'s byte-copy.  This is the family routing's real workload
     // uses (per-row results), so the copy-elision win is measurable here.
     #[cfg(feature = "threading")]
-    if par_share_enabled() {
+    if par_share_for(stores) {
         return run_parallel_queue_shared(
             stores,
             program,

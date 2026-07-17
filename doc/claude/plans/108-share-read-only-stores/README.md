@@ -14,10 +14,11 @@ Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:lo
 the DATA-RACE GATE IS GREEN. `LOFT_PAR_SHARE=1` turns the S0 queue probe's per-worker
 `clone_for_worker` (8× COPY) into `clone_for_light_worker` (8× BORROW); par_ms goes FLAT vs the
 unrelated heap (0/61/122 MB ⇒ OFF 5/107/211 ms → ON 3/4/4 ms, 53× at 122 MB), `total` identical
-(383995). ASan 47/47 both flags; TSan clean 0 races flag ON + positive control fired. Next: flip
-`LOFT_PAR_SHARE` default-ON for the proven paths, extend to the remaining queue variants, and the
-A-vs-B decision (S10). (An earlier "model failure" note was a stale-binary artifact, retracted;
-§ Correction.)**
+(383995). ASan 47/47 both flags; TSan clean 0 races flag ON + positive control fired. S8 SHIPPED
+default-ON via a heap-size AUTO heuristic (borrow ≥ 2 MB) — no small-par regression, full big-heap
+win, `LOFT_PAR_SHARE=0/1` override. **The interpreter core is CLOSED.** Remaining as follow-ons:
+a `--native` codegen analogue (native par still copies), the other queue variants, S10 recorded as
+"A stands". (An earlier "model failure" note was a stale-binary artifact, retracted; § Correction.)**
 Cherry-picked from the sibling `../loft` checkout into this working tree (the named code is
 in sync:
 `clone_for_worker` `allocation.rs:1277`, `borrow_locked_for_light_worker` `store.rs:1292`,
@@ -170,8 +171,8 @@ building on it).
 | **S4** | **S1 audit follow-through for discard** — if S1 flagged a mid-par parent touch in the discard path, move it before the spawn now; else assert (in a comment) the join-before-touch ordering at the call site. | discard path: no parent-store write/adopt between `scope.spawn` and join (code-read + comment). | — |
 | **S5** ✅ | **ASan** over `binary(threading)`, flag OFF *and* ON (`scripts/asan.sh`, pinned nightly). | **DONE — 47/47 both** flag OFF and ON; no UAF / leak (§ Gate results). | flag off |
 | **S6** ✅ | **TSan** (`-Zbuild-std` + target-scoped `-Zsanitizer=thread`, isolated `target/tsan/`) over the threading suite, flag ON, + a positive control. | **DONE — clean 47/47, 0 races** flag ON; the armed positive control **FIRED** (`data race in run_parallel_queue_shared::{closure#0}`), then reverted → clean run non-vacuous. | flag off |
-| **S7** | **Bench the win vs S0** — re-run S0 with `LOFT_PAR_SHARE=1`. | `par_ms` no longer grows with unrelated heap; `par` scales *down* with threads (inversion gone). | flag off |
-| **S8** | **Flip `LOFT_PAR_SHARE` default-ON for `discard`** once S5+S6+S7 pass. | full suite **both backends** green with default-on. | flip default back to OFF |
+| **S7** ✅ | **Bench the win vs S0.** | **DONE** — par_ms flat vs heap with sharing on (§ S9 win). |
+| **S8** ✅ | **Default-ON — via an AUTO heuristic, not a naive flip.** A naive default-on REGRESSED frequent small pars **5×** (2000 tiny pars 235→1219 ms — the `thread::scope` per-call spawn dwarfs a copy there's nothing to save). So `par_share_for(stores)` is **AUTO**: borrow only when `active_clone_bytes() ≥ 2 MB` (the copy beats the spawn); else the cheap rayon clone. `LOFT_PAR_SHARE=0`/`=1` force off/on. | **DONE (interpreter)** — frequent small pars **no regression** (236 ms), large-heap **flat win** (0/1/4/30/122 MB ⇒ 4 ms), threading **47/47** AUTO+OFF+ON, full suite running. Native par is a **separate** codegen path (still clones — follow-on). | `LOFT_PAR_SHARE=0` |
 | **S9** ✅ | **Extend to the Queue family.** `run_parallel_queue_shared` behind the flag (thread::scope + `clone_for_light_worker`, ordered `Vec<u64>`). The S0 probe routes here (range→vector→`n_parallel_queue`→`run_parallel_queue`). | **DONE — WIN CONFIRMED.** Threading **47/47** flag OFF+ON; par_ms flat vs heap ON (53× at 122 MB), `total` identical (§ S9 win). | unset flag (default) |
 | **S10** | **Decide A-vs-B.** If S1's audit or any S6 TSan run showed the contract-carried safety (A) is fragile (a real mid-par mutation, a race the write-panic can't catch), escalate to **Option B** (`Arc<Store>`) as its own follow-on. Otherwise A stands. Record in `DESIGN_DECISIONS.md`. | decision written to `DESIGN_DECISIONS.md` with the evidence. | — |
 
@@ -232,6 +233,29 @@ Traced (release build): flag OFF = **8× `clone_for_worker` COPY**, flag ON = **
 `par_ms` is **flat vs the heap with the flag ON** (the copy is gone) — up to **53× at 122 MB** —
 and `total` is **identical (383995)** both ways (semantics preserved). This is exactly the
 routing inversion (S0), eliminated.
+
+## S8 — default-ON without regression, via a size heuristic (2026-07-17)
+
+A naive `LOFT_PAR_SHARE` default-ON is **wrong**: the borrow path uses `thread::scope` (per-call
+thread spawn, ~200 µs) vs flag-OFF's rayon pool (~5 µs). For a **big-heap** par that saves a
+multi-MB copy the spawn is noise, but for **frequent small** pars it dominates — measured **5×
+regression** (2000 tiny pars: 235 ms clone → 1219 ms borrow). Flipping that on ships a win to one
+workload and a 5× loss to a commoner one.
+
+So default-ON is a **heap-size auto-select**, not a flip: `par_share_for(stores)` borrows only when
+`Stores::active_clone_bytes()` (the volume `clone_for_worker` would copy) is `≥ 2 MB`; below that the
+rayon clone is cheaper. `LOFT_PAR_SHARE=0`/`=1` still force off/on. Measured (default AUTO):
+
+| | frequent small pars | big-heap par (0/1/4/30/122 MB) |
+|---|---|---|
+| clone (`=0`) | 235 ms | 6 / 9 / 13 / 90 / 190 ms |
+| **AUTO (default)** | **236 ms** (no regression) | **4 / 4 / 4 / 4 / 4 ms** (flat win) |
+
+The heuristic mirrors the shipped auto-light precedent (`finished/06-typed-par/05-auto-light.md`) —
+size-select the cheaper store model. The borrow MECHANISM is unchanged from S3/S9, so the S5/S6
+ASan/TSan results still hold (they forced it ON). **Scope: interpreter.** `--native` par is a
+separate codegen path (`n_parallel_queue_native`) that still byte-copies — a native analogue of
+this heuristic is a documented follow-on, not part of the interpreter core this closes.
 
 ## Gate results — S5 (ASan) + S6 (TSan), the data-race spec (2026-07-17)
 
