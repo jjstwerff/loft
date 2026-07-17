@@ -124,26 +124,32 @@ mechanical, same class as the stdlib byte sites.) `examples/` has no text `len`/
 |---|---|---|
 | `tests/docs/02-text.loft:30` | `len("😃") == 4` | `== 1` |
 | `tests/docs/02-text.loft:31` | `len("♥") == 3` | `== 1` |
-| `tests/docs/23-safety.loft:107` | `len("Hi 😊!") == 8` | `== 5` |
+| `tests/docs/23-safety.loft:106` | `len("Hi 😊!") == 8` | `== 5` |
 | `tests/scripts/03-text.loft:10` | `len("😃") == 4` | `== 1` |
 | `tests/scripts/03-text.loft:11` | `len("♥") == 3` | `== 1` |
+| `tests/scripts/285-json-surrogate-bom.loft:24` | `escaped.len() == 4` (😀) | `== 1` |
+| `tests/scripts/285-json-surrogate-bom.loft:32` | `jhi.as_text().len() == 3` (U+FFFD) | `== 1` |
+| `tests/scripts/285-json-surrogate-bom.loft:34` | `jlo.as_text().len() == 3` (U+FFFD) | `== 1` |
+| `tests/scripts/285-json-surrogate-bom.loft:36` | `jha.as_text().len() == 4` (U+FFFD+'A') | `== 2` |
+| `tests/scripts/102-escape-sequences.loft:62` | `s.len() == 26` (`\u{2192}` arrow) | `== 24` |
+| `tests/host_input.rs:126` (`.rs` harness) | asserts `"echo=[café] len=5\n"` | `len=4` |
 
 ### `size` canaries — expected value changes char → byte at the flip
 
 | file:line | assert (today) | after flip |
 |---|---|---|
-| `tests/docs/23-safety.loft:108` | `size("Hi 😊!") == 5` | `== 8` |
+| `tests/docs/23-safety.loft:107` | `size("Hi 😊!") == 5` | `== 8` |
 | `tests/scripts/41-size-text.loft:10` | `size("héllo") == 5` | `== 6` |
 | `tests/scripts/41-size-text.loft:11` | `size("日本語") == 3` | `== 9` |
 | `tests/scripts/41-size-text.loft:17` | `size("🎉") == 1` | `== 4` |
 | `tests/scripts/41-size-text.loft:18` | `size("♥") == 1` | `== 3` |
 | `tests/scripts/41-size-text.loft:19` | `size("a😃b") == 3` | `== 6` |
 
-Plus the whole **Section A of the 0e golden fixture** (12 paired asserts), designed to flip. ASCII-only
-canaries (`len("hello")`, `len("abc")`, `len("{{}}")==2`, `size("hello")==5`, `size("")==0`,
-`tp_len("hello")`, the `code!` fixtures in `expressions.rs` on `"hi"`/`"item 3"`/`"hello"`) stay green
-— bytes == chars for ASCII. (`str_len` in `n2_cdylib.rs` is a native FFI helper, not loft `len` —
-out of scope.)
+Plus the whole **Section A of the 0e golden fixture** (10 flipping asserts of its 12), designed to
+flip. ~90 other numeric `len`/`size` asserts across `tests/` (in `37-stress`, `51-coroutines`,
+`85-store-lifetime`, `expressions.rs`, `issues.rs`, `threading_chars.rs`, …) use **pure-ASCII**
+strings and stay green — bytes == chars for ASCII. (`str_len` in `n2_cdylib.rs` is a native FFI
+helper, not loft `len` — out of scope.)
 
 ### Doc-prose canaries — statements of the *old* behavior that must be rewritten in Phase 2d
 
@@ -152,11 +158,34 @@ out of scope.)
 - `tests/docs/02-text.loft:26,29,81` — comments ("len() counts bytes", "long to a human reader",
   "positions are byte offsets, consistent with len()"). After the flip **len IS the human count**;
   these invert.
-- `tests/docs/23-safety.loft:100–104` + the assert *messages* on `:107,108` — the len/size explainer.
+- `tests/docs/23-safety.loft:100–104` + the assert *messages* on `:106,107` — the len/size explainer.
 - `tests/scripts/41-size-text.loft:3` — "size(t) — Unicode character count".
+- `tests/scripts/102-escape-sequences.loft:58–60` — "s.len() reports UTF-8 byte length".
+- `tests/scripts/105-starts-with-at.loft:5,62`; `tests/docs/00-general.loft:31`;
+  `tests/docs/06-function.loft:173`; `tests/scripts/124-vector-amortised-growth.loft:15–18` — comments
+  that describe `len` as bytes.
+- `doc/claude/STDLIB.md:168` — the identity `c#next == c#index + len(c)` (relies on
+  `len(character)`=byte width). Becomes `c#next == c#index + size(c)` under sub-arc 1g — see 0f
+  finding 7.
 
-**0c totals:** 11 value canaries (5 `len`, 6 `size`) + 12 golden-Section-A + ~6 doc-prose blocks.
-The 11 value canaries are the definitive red set the Phase-2a flip must reproduce.
+**0c totals:** **17 value canaries** (11 `len` + 6 `size`) + 10 flipping golden-Section-A asserts +
+~9 doc-prose blocks. The 17 value canaries (+ golden) are the definitive red set the Phase-2a flip
+must reproduce. Non-test high-risk BYTE sites live in `tests/fixtures/libs/` — see 0c-libs below.
+
+### 0c-libs — `tests/fixtures/libs/**` (registered-library test copies, missed by 0b's `lib/`-only scan)
+
+| file:line | site | class | risk |
+|---|---|---|---|
+| `graphics/src/glb.loft:150` | `json_len = json.len()` → `json_chunk = json_len + pad` | **BYTE — critical** | writes the **GLB binary JSON-chunk byte length**; a non-ASCII glTF mesh/material name → wrong chunk size → **corrupt `.glb` file** after flip |
+| `graphics/src/glb.loft:456` | same, scene-GLB path | **BYTE — critical** | same |
+| `time/src/time.loft:199` | `cn = len(time_text)` (byte-gate `<5`/`>=8` + `digits_at`) | BYTE | time-string parse over byte offsets |
+| `game_protocol/**` + `tests/integration/multiplayer/**` | `raw.len()<5` header gates, `msg[want_prefix.len()..]` slice, displayed `len={got.len()}` | BYTE | binary message/blob byte lengths |
+| `web/tests/pack.loft:15,24,34,45` | `s.len() == {2,4,1}` on packed-byte-as-text | ASSERTION/BYTE | byte count of a binary buffer; ASCII bytes today (latent) |
+| `arguments`, `web/src`, `moros_editor`, `moros_render`, `imaging` | `len(x) > 0` / `== 0` flag/body/json guards | EMPTINESS | safe |
+
+`graphics/src/glb.loft` is the **2nd-highest-risk site overall** (after `markdown.loft:783`): both write
+a byte length into a binary format. Migrate `len→size` (or an explicit byte-length call) with a
+non-ASCII regression test.
 
 ## 0d — consumers (`moros`, `crawler`, `lib/markdown`) ✅
 
@@ -275,14 +304,16 @@ surface has exactly two numeric worlds with no third axis to reconcile.
      over-allocation and counts *content* bytes, `size(character)` counts the character's UTF-8
      content bytes (1–4), not its fixed 4-byte register width.
 
-   **Blast radius is ~zero:** a
-   whole-codebase scan finds **no caller** of `len` on a `character`-typed value (the classifiers
-   iterate characters but never call `len(c)`; the `.len()` hits on vars named `c`/`t` are all on
-   `text`). So this is a safe, low-churn consistency fix. **Recommendation:** in Phase 1e/2, add
-   `size(character)` = UTF-8 byte width and redefine `len(character)` = 1 (or drop it); document
-   both. Track as a Phase-1/2 surface item so `len`/`size` mean the same thing on `text` and
-   `character`. *(This is the one real half-feature the audit surfaced — everything else in the
-   surface was already coherent.)*
+   **Blast radius is small but not zero:** no *code* calls `len` on a `character`-typed value (the
+   classifiers iterate characters but never call `len(c)`; the `.len()` hits on vars named `c`/`t`
+   are all on `text`). But there is **one documented dependency**: `STDLIB.md:168` states the
+   identity `c#next == c#index + len(c)` (byte offset of the next char = current + the char's byte
+   width) — this relies on `len(character)`=bytes. Under the fix that identity becomes
+   `c#next == c#index + size(c)` (and must be updated in the doc). **Recommendation (sub-arc 1g):**
+   add `size(character)` = UTF-8 content byte width (1–4) and redefine `len(character)` = 1 (or drop
+   the overload); update the `#index`/`#next` identity to `size(c)`; document both. So `len`/`size`
+   mean the same thing on `text` and `character`. *(This is the one real half-feature the audit
+   surfaced — everything else in the surface was already coherent.)*
 
 **0f status:** ✅ surface map complete and coherent on the numeric axis; the watch item (finding 5) is
 resolved — no char-intended slicing anywhere. No half-feature found. The only Phase-2 surface action

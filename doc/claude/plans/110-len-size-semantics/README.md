@@ -16,14 +16,17 @@ Tracker: [@PLN110](https://github.com/loft-lang/plans/issues/110) · `subject:lo
 `size`'s new implementations, not the semantics.
 
 **Phase 0 findings (headline):**
-- The whole migration is a `len→size` byte-conversion — **49 byte-intent sites** (16 stdlib + 4 lib
-  + 29 consumer) + **0 COUNT sites anywhere**. Consumers never used `len` for visible-width layout
-  (crawler measures pixels; markdown pure-byte-slices), so the flip *fixes no consumer bug* — its
-  risk is purely regressing byte-addressing if a site is missed.
-- **The definitive red set** the Phase-2a flip must reproduce = **11 value-assert canaries** (5 `len`
-  + 6 `size`, listed in phase0-inventory.md § 0c) + the 12-pair golden fixture Section A.
-- **Highest-risk site:** `markdown.loft:783` (`i += char_str.len()` byte cursor) — silent multi-byte
-  corruption if unmigrated.
+- The whole migration is a `len→size` byte-conversion — **byte-intent sites dominate** (16 stdlib + 4
+  `lib/lexer` + 29 consumer + a cluster in `tests/fixtures/libs/`) with **0 COUNT sites anywhere**.
+  Consumers never used `len` for visible-width layout (crawler measures pixels; markdown pure-byte-
+  slices), so the flip *fixes no consumer bug* — its risk is purely regressing byte-addressing if a
+  site is missed.
+- **The definitive red set** the Phase-2a flip must reproduce = **17 value-assert canaries** (11
+  `len` + 6 `size`, listed in phase0-inventory.md § 0c) + the golden fixture Section A.
+- **Two top-risk sites — both write a byte length into a binary format:** `markdown.loft:783`
+  (`i += char_str.len()` inline byte cursor) and `graphics/src/glb.loft:150`/`:456` (GLB binary
+  JSON-chunk byte length → corrupt `.glb` on a non-ASCII glTF name). Migrate first, with non-ASCII
+  regression tests.
 - **New sub-arc 1g:** `len(character)` is a real half-feature (returns UTF-8 byte width today, would
   be inconsistent with `len(text)`=chars) — reconcile to `len(character)`=1 / `size(character)`=UTF-8
   bytes. ~0 callers, low-risk.
@@ -152,7 +155,7 @@ tree green at every step. (Decide which at Phase 2 start.)
 |---|---|---|---|
 | 0a | Inventory `len`/`size`-on-text in stdlib (`default/*.loft`), classify count vs byte | read-only | ✅ Done — 16 BYTE (`len→size`), 9 safe, 0 `size(text)` |
 | 0b | Inventory in `lib/*` + registered libraries | read-only | ✅ Done — 4 BYTE + 1 safe (all `lib/lexer.loft`) |
-| 0c | Inventory in `tests/` (scripts, docs, `code!` cases) + examples + STDLIB.md | read-only | ✅ Done — 11 value canaries + ~6 doc-prose blocks |
+| 0c | Inventory in `tests/` (scripts, docs, `code!` cases) + examples + STDLIB.md | read-only | ✅ Done — 17 value canaries + ~9 doc-prose + `tests/fixtures/libs` BYTE (incl. critical `glb.loft`) |
 | 0d | Inventory in the consumer programs (games / crawler / `lib/markdown`) | read-only | ✅ Done — 29 BYTE, **0 COUNT**; caveats ⚠ below |
 | 0e | Land the golden-behavior corpus for the text-using consumers (the visibility baseline) | additive · green | ✅ Done — `tests/scripts/pln110-text-surface-golden.loft`, green both backends |
 | 0f | Audit the **whole** text surface (slices, `#index`/`#next`, `find`/`rfind`, `byte_at`, classifiers) for byte-vs-char unit consistency; reconcile any mismatch so the surface is coherent — **no half-features** | read-only + reconcile | ✅ Done — surface coherent; **1** half-feature found → new 1g |
