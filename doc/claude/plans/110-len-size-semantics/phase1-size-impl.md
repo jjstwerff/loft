@@ -87,12 +87,19 @@ spatial each need their collection's table/tree byte accounting.
 - **1e `size(<scalar>)`** = `element_size(τ)` (L-Scalar/L-Narrow): integer 8, float 8, boolean 1,
   single 4, character 4, u8 1, u16/i16 2, i32 4. A compile-time constant — the parser can emit a
   literal `Value::Int(width)` (no runtime op needed). Simplest; purely additive.
-- **1b `size(struct)`** = the struct's finished **record size** (`database.size(type)` — the packed
-  L-Struct total, with `text`/reference/collection fields at their 4-byte stored width, inline
-  sub-records counted fully). Parser fills the record-size const from the struct type. **Open:** an
-  enum value — 1-byte tag + the (packed) active variant's fields (L-Enum); decide whether `size(enum)`
-  reports the max-variant record size (the allocated footprint) or the active variant's — recommend
-  the **allocated record size** (max variant), since that is the bytes actually reserved.
+- **1b `size(struct)` ✅ DONE** = the struct's finished **record size** (`database.size(type)`), a
+  compile-time constant. `OpSizeStruct(r: reference, sz: const u16)` — the arg `r` is evaluated (so
+  `size(make())` runs its argument, verified) but only its type feeds the const `sz`; parser
+  special-case matches `Type::Reference` gated by `is_struct`. Verified both backends
+  (`tests/scripts/pln110-size-struct.loft`): `Point`{int,int}=16, `Mixed`{text,int}=**12** (text =
+  4-byte handle, **no tail padding**), `WithVec`{vector,int}=12 (collection field = 4-byte pointer),
+  `Nested`{Point,int}=**24** (inline sub-record counted fully), `Flags`{bool,bool,int}=10,
+  `OneByte`{bool}=1. Cross-check holds: `size(inline vector<Point>) == len × size(Point)`.
+  **Enums DEFERRED** (own step, not 1b): a *simple* enum is a **1-byte inline** value (not a `DbRef`),
+  so it cannot reuse `OpSizeStruct` (which reads a `DbRef` off the stack) — it is scalar-like (→1e);
+  a *data* enum is a `DbRef` and would use a struct-like op with `size = database.size` (the
+  max-variant footprint). `size(enum)` currently errors cleanly (falls through). Handle both when the
+  enum step lands.
 - **1c `size(hash<…>)`** = the **full bucket table, holes included** (open addressing IS the format).
   Needs the hash allocation's table byte span from `src/hash.rs` (bucket count × bucket stride), not
   the live entry count. Parser/op reads the table size from the record.

@@ -960,6 +960,15 @@ pub fn len(both: vector) -> integer {
 fn OpSizeVector(r: vector, stride: const u16) -> integer;
 #rust"i64::from(vector::length_vector(&@r, &s.database.allocations)) * i64::from(@stride)"
 
+// The byte footprint of a struct value (@PLN110): its packed record size, a
+// compile-time constant of the struct type (all instances share one layout).
+// Inline fields and inline sub-records count fully; `text` / collection /
+// reference fields count as their 4-byte stored width — allocation-local, no
+// recursion into referenced records.  `r` is evaluated (so `size(make())` runs
+// its argument) but only its type matters; the parser fills `sz` = record size.
+fn OpSizeStruct(r: reference, sz: const u16) -> integer;
+#rust"{{ let _ = @r; i64::from(@sz) }}"
+
 // sorted<T[key]> shares vector's length-prefixed allocation layout
 // (length word at offset 4 of the backing record), so the runtime
 // helper is identical — only the parser-side type tag differs.

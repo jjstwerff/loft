@@ -3076,6 +3076,29 @@ impl Parser {
                 return crate::data::I64.clone();
             }
             Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Reference(_, _))
+        {
+            // @PLN110 1b: `size(s)` for a struct `s` = its packed record size — a
+            // compile-time constant (all instances of a struct type share one
+            // layout).  Inline fields and inline sub-records count fully; `text` /
+            // collection / reference fields count as their 4-byte stored width
+            // (allocation-local).  The argument is still evaluated for its side
+            // effects (the op consumes it); only its type feeds the const size.
+            // `Type::Reference` also covers non-struct references, so `is_struct`
+            // gates it — anything else falls through to the standard error.
+            let known = self.get_type(&types[0]);
+            let op_d_nr = self.data.def_nr("OpSizeStruct");
+            if known != u16::MAX && op_d_nr != u32::MAX && self.database.is_struct(known) {
+                let sz = self.database.size(known);
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(sz)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            Type::Unknown(0)
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {

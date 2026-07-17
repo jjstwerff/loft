@@ -169,7 +169,7 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 0e | Land the golden-behavior corpus for the text-using consumers (the visibility baseline) | additive · green | ✅ Done — `tests/scripts/pln110-text-surface-golden.loft`, green both backends |
 | 0f | Audit the **whole** text surface (slices, `#index`/`#next`, `find`/`rfind`, `byte_at`, classifiers) for byte-vs-char unit consistency; reconcile any mismatch so the surface is coherent — **no half-features** | read-only + reconcile | ✅ Done — surface coherent; **1** half-feature found → new 1g |
 | 1a | `size(vector<T>)` = N × in-buffer stride + tests | additive · green | ✅ Done — `OpSizeVector`, both backends; `tests/scripts/pln110-size-vector.loft` |
-| 1b | `size(struct)` (flat allocation; inline sub-records; `text`/heap fields as ref width) + tests | additive · green | Open |
+| 1b | `size(struct)` = packed record size (inline sub-records fully; `text`/heap fields as 4B) + tests | additive · green | ✅ Done — `OpSizeStruct`, both backends; `tests/scripts/pln110-size-struct.loft`. Enums deferred to their own step |
 | 1c | `size(hash)` (full table, holes included) + tests | additive · green | Open |
 | 1d | `size(sorted / index / spatial)` (table/tree bytes) + tests | additive · green | Open |
 | 1e | `size(<scalar>)` (width) + tests | additive · green | Open |
