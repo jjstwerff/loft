@@ -223,6 +223,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     length_vector,
     vector_is_null,
     ref_is_null,
+    size_vector,
     length_sorted,
     clear_vector,
     get_vector,
@@ -1969,6 +1970,14 @@ fn vector_is_null(s: &mut State) {
 fn ref_is_null(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = v_r.store_nr == u16::MAX;
+    s.put_stack(new_value);
+}
+
+fn size_vector(s: &mut State) {
+    let v_stride = s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value =
+        i64::from(vector::length_vector(&v_r, &s.database.allocations)) * i64::from(v_stride);
     s.put_stack(new_value);
 }
 

@@ -9,6 +9,14 @@ Tracker: [@PLN110](https://github.com/loft-lang/plans/issues/110) · `subject:lo
 
 ## Status
 
+**Phase 1 STARTED** (2026-07-17) — sub-arc **1a `size(vector<T>)` ✅ landed**, both backends; the
+uniform mechanism + per-type formulas + build order are in [phase1-size-impl.md](phase1-size-impl.md).
+Two Phase-1 findings: (1) loft stores vector elements **inline** (a `vector<Point>` counts each
+struct fully at 16, a nested vector strides 8 per #477) — the README's illustrative "array = N × 4
+references" rule is wrong for loft and needs a Phase-2 doc fix; `size` faithfully reports N × the
+real stride. (2) The 0f `character` recommendation was **corrected** — `size(character)`=4 (fixed
+slot), keep `len(character)`=UTF-8 width; 1g deferred on an owner contract call.
+
 **Phase 0 complete** (2026-07-17) — full inventory + baseline done; see
 [phase0-inventory.md](phase0-inventory.md). Semantics decided (design 2026-07-17). This resolves
 @PLN102 arc-E lib-audit **H2** (the `len(text)`=bytes / `size(text)`=chars inversion) and is the
@@ -159,7 +167,7 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 0d | Inventory in the consumer programs (games / crawler / `lib/markdown`) | read-only | ✅ Done — 29 BYTE, **0 COUNT**; caveats ⚠ below |
 | 0e | Land the golden-behavior corpus for the text-using consumers (the visibility baseline) | additive · green | ✅ Done — `tests/scripts/pln110-text-surface-golden.loft`, green both backends |
 | 0f | Audit the **whole** text surface (slices, `#index`/`#next`, `find`/`rfind`, `byte_at`, classifiers) for byte-vs-char unit consistency; reconcile any mismatch so the surface is coherent — **no half-features** | read-only + reconcile | ✅ Done — surface coherent; **1** half-feature found → new 1g |
-| 1a | `size(vector<T>)` (buffer bytes; members as inline size / 4-byte ref) + tests | additive · green | Open |
+| 1a | `size(vector<T>)` = N × in-buffer stride + tests | additive · green | ✅ Done — `OpSizeVector`, both backends; `tests/scripts/pln110-size-vector.loft` |
 | 1b | `size(struct)` (flat allocation; inline sub-records; `text`/heap fields as ref width) + tests | additive · green | Open |
 | 1c | `size(hash)` (full table, holes included) + tests | additive · green | Open |
 | 1d | `size(sorted / index / spatial)` (table/tree bytes) + tests | additive · green | Open |

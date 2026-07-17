@@ -951,6 +951,15 @@ pub fn len(both: vector) -> integer {
 }
 #pure
 
+// The byte footprint of the vector's element buffer (@PLN110): element count ×
+// the element's in-buffer stride.  A heap/reference element (text, nested
+// collection, linked struct) counts as its 4-byte record pointer, never the
+// target's content — `size` is allocation-local and does not recurse into
+// referenced allocations.  The parser fills `stride` from the element type
+// (`vector_elem_iter_stride`), so there is no loft-level wrapper.
+fn OpSizeVector(r: vector, stride: const u16) -> integer;
+#rust"i64::from(vector::length_vector(&@r, &s.database.allocations)) * i64::from(@stride)"
+
 // sorted<T[key]> shares vector's length-prefixed allocation layout
 // (length word at offset 4 of the backing record), so the runtime
 // helper is identical — only the parser-side type tag differs.

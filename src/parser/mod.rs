@@ -3051,6 +3051,31 @@ impl Parser {
                 diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
             }
             Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Vector(_, _))
+        {
+            // @PLN110 1a: `size(v)` for `v: vector<T>` = element count × the
+            // element's in-buffer stride (a heap element — text, nested
+            // collection, linked struct — counts as its 4-byte record pointer,
+            // never the target's content).  Dispatched here (not a stdlib
+            // overload) because the stride is type-derived — the SAME
+            // `vector_elem_iter_stride` iteration walks the buffer with — and
+            // only known at parse time.  Strict arity / named-arg gates mirror
+            // `len(ix)` above; `size(v, x)` falls through to the standard error.
+            let op_d_nr = self.data.def_nr("OpSizeVector");
+            if let Type::Vector(inner, _) = &types[0]
+                && op_d_nr != u32::MAX
+            {
+                let elem = (**inner).clone();
+                let stride = self.vector_elem_iter_stride(&elem);
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(stride)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            Type::Unknown(0)
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {

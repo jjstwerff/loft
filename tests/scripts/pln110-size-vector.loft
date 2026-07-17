@@ -1,0 +1,50 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN110 sub-arc 1a — `size(vector<T>)` = element count × the element's
+// in-buffer stride: the allocation-local byte footprint of the vector's own
+// element buffer.  The stride is loft's REAL per-element storage width
+// (`vector_elem_iter_stride`, the same one iteration walks the buffer with),
+// so this reports the bytes the buffer actually occupies — not a shallow
+// "N × 4 references" count (loft stores most elements INLINE, not by reference).
+//
+// Values verified against both backends (interpret + native) during Phase 1.
+
+struct Point { x: integer, y: integer }
+value struct VPoint { x: integer, y: integer }
+
+fn main() {
+  // --- scalar elements: counted inline at their stored width ---
+  a: vector<integer> = [1, 2, 3];
+  assert(size(a) == 24, "vector<integer> = 3 × 8: {size(a)}");
+  bs: vector<boolean> = [true, false, true];
+  assert(size(bs) == 3, "vector<boolean> = 3 × 1: {size(bs)}");
+
+  // --- narrow int: stored at its narrow width, not 8 ---
+  d: vector<u8> = [10, 20, 30, 40];
+  assert(size(d) == 4, "vector<u8> = 4 × 1 (narrow): {size(d)}");
+
+  // --- text elements: the 4-byte handle, NOT the string content bytes ---
+  //     (allocation-local: size does not recurse into the referenced strings)
+  b: vector<text> = ["x", "yy", "zzz"];
+  assert(size(b) == 12, "vector<text> = 3 × 4 (handles, not content): {size(b)}");
+
+  // --- inline struct elements: counted FULLY (same allocation), not as a ref ---
+  ps: vector<Point> = [Point { x: 1, y: 2 }, Point { x: 3, y: 4 }];
+  assert(size(ps) == 32, "vector<Point> = 2 × 16 (inline struct): {size(ps)}");
+  vs: vector<VPoint> = [VPoint { x: 1, y: 2 }, VPoint { x: 3, y: 4 }];
+  assert(size(vs) == 32, "vector<VPoint> = 2 × 16 (inline value struct): {size(vs)}");
+
+  // --- nested vector: loft's real element stride is 8 (#477), not 4 ---
+  c: vector<vector<integer>> = [[1, 2], [3]];
+  assert(size(c) == 16, "vector<vector<integer>> = 2 × 8 (#477 stride): {size(c)}");
+
+  // --- spare capacity is EXCLUDED: size tracks the logical length ---
+  e: vector<integer> = [];
+  assert(size(e) == 0, "empty vector = 0: {size(e)}");
+  e += [7];
+  assert(size(e) == 8, "after one append = 1 × 8 (not the over-allocated capacity): {size(e)}");
+
+  // --- the defining relationship: size == len × stride ---
+  assert(size(a) == len(a) * 8, "size = len × stride: {size(a)}");
+}

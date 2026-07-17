@@ -291,7 +291,15 @@ surface has exactly two numeric worlds with no third axis to reconcile.
 
 6. **Emptiness stays `len`** (finding 0a) — reads as the natural "is it empty?" and is unit-neutral.
 
-7. **`len(character)` is a genuine half-feature to reconcile (NEW).** Today `len(character)` returns
+7. **`len(character)` — reconsidered in Phase 1 (see phase1-size-impl.md § 1g).** ⚠ The recommendation
+   below (`len(character)`=1, `size(character)`=UTF-8 width) was **RETRACTED** once Phase-1 sub-arc 1a
+   showed a `character` is a fixed 4-byte slot everywhere it stores inline (`vector<character>`
+   strides 4). Corrected recommendation: **`size(character)`=4** (consistent with the scalar/vector
+   rule) and **keep `len(character)`=UTF-8 byte width** (the byte-world encoding quantity that
+   `#index`/`#next` needs) — do NOT redefine it to 1. Deferred on an owner contract call. The
+   original analysis is kept below for the record.
+
+   Today `len(character)` returns
    the character's **UTF-8 byte width** (1–4) — `01_code.loft:693`, `OpLengthCharacter`. After the
    flip, `len(text)` = character count, so `len(character)` returning *bytes* is exactly the
    inconsistency the plan forbids ("`len` means chars for text but bytes for a character"). The
