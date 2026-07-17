@@ -46,7 +46,7 @@ fn test_format_loop_count() {
   v = [10, 20, 30];
   r = "";
   for e in v {
-    if!e#first { r += "," }
+    if !e#first { r += "," }
     r += "{e#count}:{e}";
   }
   assert(r == "0:10,1:20,2:30", r);

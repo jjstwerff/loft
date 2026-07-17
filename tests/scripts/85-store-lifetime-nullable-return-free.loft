@@ -61,7 +61,7 @@ fn check_row() {
 // Exercise the nullable enum return.
 fn check_shape() {
   cs = maybe_shape(true);
-  assert(! (cs == null), "present shape not null");
+  assert(!(cs == null), "present shape not null");
   ns = maybe_shape(false);
   assert(ns == null, "absent shape null");
 }

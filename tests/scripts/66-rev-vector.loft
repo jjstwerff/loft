@@ -6,7 +6,7 @@ fn test_rev_vector_direct() {
   v = [10, 20, 30, 40, 50];
   result = "";
   for rvd_e in rev(v) {
-    if!rvd_e#first { result += ","; }
+    if !rvd_e#first { result += ","; }
     result += "{rvd_e}";
   }
   assert(result == "50,40,30,20,10", "rev(vector): {result}");

@@ -9,7 +9,7 @@ fn main() {
   assert((9.9 as integer) == 9, "9.9 as integer truncates to 9");
   assert((-3.5 as integer) == -3, "-3.5 as integer truncates toward zero");
   // int→character invalid codepoint → null (char 0), not a silent wrong char
-  assert(! (999999999 as character), "invalid codepoint -> null character");
+  assert(!(999999999 as character), "invalid codepoint -> null character");
   assert((65 as character) == 'A', "valid codepoint 65 -> 'A'");
   // text→integer: valid number equal to the reserved sentinel → null (collision)
   assert(("-9223372036854775808" as integer ?? -1) == -1, "i64::MIN text -> null (reserved)");

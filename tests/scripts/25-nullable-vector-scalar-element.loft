@@ -21,7 +21,7 @@ fn check_float() {
   vf: vector<float?> = [1.5, 2.5, 3.5];
   vf[1] = null;
   assert(vf[1] == null, "float: NaN null detected");
-  assert(! (vf[0] == null), "float: neighbour not null");
+  assert(!(vf[0] == null), "float: neighbour not null");
   c = 0; for _x in vf { c += 1; }
   assert(c == 3, "float: full iteration");
 }
@@ -30,14 +30,14 @@ fn check_bool() {
   vb: vector<boolean?> = [true, false, true];
   vb[0] = null;
   assert(vb[0] == null, "bool: null element");
-  assert(! (vb[1] == null), "bool: neighbour not null");
+  assert(!(vb[1] == null), "bool: neighbour not null");
 }
 
 fn check_char() {
   vc: vector<character?> = ['a', 'b', 'c'];
   vc[1] = null;
   assert(vc[1] == null, "char: null element");
-  assert(! (vc[0] == null), "char: neighbour not null");
+  assert(!(vc[0] == null), "char: neighbour not null");
 }
 
 fn check_text() {

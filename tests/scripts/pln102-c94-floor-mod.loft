@@ -33,7 +33,7 @@ fn main() {
 
   // --- div/mod/floor_mod by zero is a null, dischargeable with `??` ---
   zero = 0;
-  assert(! (5 / zero ?? null), "div by zero is null");
-  assert(! (5 % zero ?? null), "mod by zero is null");
+  assert(!(5 / zero ?? null), "div by zero is null");
+  assert(!(5 % zero ?? null), "mod by zero is null");
   assert(((5).floor_mod(zero) ?? -99) == -99, "floor_mod by zero is null");
 }

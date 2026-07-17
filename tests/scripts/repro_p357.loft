@@ -20,7 +20,7 @@ fn parse_empty_after_churn() -> integer {
     big += "]";
     arr = json_parse(big);
     e0 = arr.item(0);
-    got = ! (e0 is JNull);
+    got = !(e0 is JNull);
     if got { total += 1; }
     i += 1;
   }

@@ -42,7 +42,7 @@ fn test_s15_same_named_field_offset() {
 fn test_c11_while() {
   i = 0;
   found = false;
-  while!found {
+  while !found {
     i += 1; found = i * i > 100;
   }
   assert(found, "C11: while loop works");

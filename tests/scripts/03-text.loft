@@ -101,7 +101,7 @@ fn main() {
   parse_pos = 0;
   for p in 0..20 {
     ch = "if_cond " [p];
-    if!ch.is_alphanumeric() and ch != '_' {
+    if !ch.is_alphanumeric() and ch != '_' {
       parse_pos = p;
       p# break;
     }
@@ -170,8 +170,8 @@ fn main() {
   assert("café".to_uppercase() == "CAFÉ", "to_uppercase non-ASCII");
   assert("CAFÉ".to_lowercase() == "café", "to_lowercase non-ASCII");
   // --- Text-to-float parse edge cases ---
-  assert(! ("abc" as float?), "parse non-numeric text to float yields null");
-  assert(! ("" as float?), "parse empty text to float yields null");
+  assert(!("abc" as float?), "parse non-numeric text to float yields null");
+  assert(!("" as float?), "parse empty text to float yields null");
   assert("3.14" as float? == 3.14, "parse valid float text");
   assert("-2.5" as float? == -2.5, "parse negative float text");
   // --- split ---

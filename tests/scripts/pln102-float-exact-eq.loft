@@ -14,12 +14,12 @@ fn main() {
   a = 1.0;
   b = 1.0 + 0.0000000005; // 5e-10 — a distinct double
   assert(a != b, "exact ==: 5e-10 offset is a distinct double");
-  assert(! (a == b), "exact ==: == is false for the offset");
+  assert(!(a == b), "exact ==: == is false for the offset");
 
   // --- trichotomy restored: NEVER (a < b AND a == b) ---
   assert(a < b, "a < b holds");
-  assert(! (a == b), "and a == b is false — no overlap");
-  assert((a != b) == ! (a == b), "!= is the exact complement of ==");
+  assert(!(a == b), "and a == b is false — no overlap");
+  assert((a != b) == !(a == b), "!= is the exact complement of ==");
 
   // --- small-magnitude bug fixed: 1e-12 and 2e-12 are NOT equal ---
   assert(0.000000000001 != 0.000000000002, "exact ==: 1e-12 != 2e-12 (absolute-epsilon bug gone)");
@@ -27,7 +27,7 @@ fn main() {
   // --- null (NaN) model preserved (keystone step 2) ---
   n = 0.0 / 0.0 ?? null;
   assert(n == n, "null == null is still true (uniform null model)");
-  assert(! (n != n), "null != null is still false");
+  assert(!(n != n), "null != null is still false");
   assert(n != 0.0, "null != a real value");
 
   // --- approx() restores tolerance; a null operand is not approximately anything ---

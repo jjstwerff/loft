@@ -37,8 +37,8 @@ enum Direction {
 fn test_is_plain_enum() {
   d = Direction.North;
   assert(d is North, "is North");
-  assert(! (d is South), "not South");
-  assert(! (d is East), "not East");
+  assert(!(d is South), "not South");
+  assert(!(d is East), "not East");
 }
 
 fn test_is_plain_enum_all_variants() {
@@ -57,14 +57,14 @@ enum Shape {
 fn test_is_struct_enum() {
   c = Circle { radius: 3.14 };
   assert(c is Circle, "is Circle");
-  assert(! (c is Rect), "not Rect");
-  assert(! (c is Tri), "not Tri");
+  assert(!(c is Rect), "not Rect");
+  assert(!(c is Tri), "not Tri");
 }
 
 fn test_is_struct_enum_rect() {
   r = Rect { width: 5.0, height: 10.0 };
   assert(r is Rect, "is Rect");
-  assert(! (r is Circle), "not Circle");
+  assert(!(r is Circle), "not Circle");
 }
 
 fn test_is_in_if_condition() {
@@ -98,7 +98,7 @@ fn test_is_in_loop() {
 
 fn test_is_with_negation() {
   s = Tri { base: 1.0, side: 2.0 };
-  non_circle = ! (s is Circle);
+  non_circle = !(s is Circle);
   assert(non_circle, "negated is");
 }
 

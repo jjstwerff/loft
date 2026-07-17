@@ -255,7 +255,7 @@ pub fn sync_payload() -> text {
 // caller's frame, which stays alive for the loop's lifetime.
 pub fn run(port: integer, tick_interval_us: integer, on_event: fn(Event), on_tick: fn()) {
   ok = kernel_listen(port, tick_interval_us);
-  if!ok {
+  if !ok {
     println("engine_host: cannot listen on port {port}");
     return;
   }
@@ -278,7 +278,7 @@ pub fn run(port: integer, tick_interval_us: integer, on_event: fn(Event), on_tic
     // per turn, so the tick check below is never starved by a flood.
     for _ in 0..256 {
       more = kernel_next_event();
-      if!more { break; }
+      if !more { break; }
       ev = Event {
         cid: kernel_event_cid(),
         kind: kernel_event_kind(),
@@ -413,7 +413,7 @@ pub fn run_client(
   on_tick: fn()
 ) {
   ok = kernel_connect(host, port, tick_interval_us);
-  if!ok {
+  if !ok {
     println("engine_host: cannot connect to {host}:{port}");
     return;
   }
@@ -429,7 +429,7 @@ pub fn run_client(
 // handlers.
 pub fn run_local(tick_interval_us: integer, on_event: fn(Event), on_tick: fn()) {
   ok = kernel_local(tick_interval_us);
-  if!ok {
+  if !ok {
     println("engine_host: cannot start the local kernel");
     return;
   }
@@ -457,7 +457,7 @@ fn client_loop(on_event: fn(Event), on_tick: fn()) {
     }
     for _ in 0..256 {
       more = kernel_client_next_event();
-      if!more { break; }
+      if !more { break; }
       ev = Event {
         // 0 = the server; -1 = a local post() (window input).
         cid: kernel_client_event_cid(),

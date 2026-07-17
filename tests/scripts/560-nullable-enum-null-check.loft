@@ -29,9 +29,9 @@ fn test() {
   n: Color? = null;
   m: Color? = Color.Green;
   assert(n == null, "null enum variable == null");
-  assert(! (n != null), "null enum variable != null is false");
+  assert(!(n != null), "null enum variable != null is false");
   assert(m != null, "present enum variable != null");
-  assert(! (m == null), "present enum variable == null is false");
+  assert(!(m == null), "present enum variable == null is false");
 
   // coalescing
   assert((n ?? Color.Blue) == Color.Blue, "null enum coalesces to default");
@@ -63,7 +63,7 @@ fn test() {
   // apply `.store_nr` to a u8 (native E0610) and read a wrong value.  On a present
   // struct the field is never null; through a NULL struct receiver it reads null.
   se: NN = NN { col: Color.Green };
-  assert(! (se.col == null), "non-null enum field of present struct is not null");
+  assert(!(se.col == null), "non-null enum field of present struct is not null");
   sn: NN? = null;
   assert(sn.col == null, "non-null enum field read through a null struct is null");
 }

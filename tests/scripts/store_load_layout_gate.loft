@@ -22,7 +22,7 @@ fn main() {
   if mode == "write" {
     h += Tile { id: 7, name: "seven" };
     h += Tile { id: 42, name: "forty-two" };
-    if!store_persist_bind(h, path) { println("FAIL write-bind"); return }
+    if !store_persist_bind(h, path) { println("FAIL write-bind"); return }
     println("write ok");
   } else if mode == "load" {
     ok = store_load_key(h, path, 42);

@@ -653,12 +653,12 @@ pub fn clamp(both: float, lo: float, hi: float) -> float {
 // tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) * sqrt(2.0), 2.0, 1e-9)`.
 // A null (NaN) operand is not approximately equal to anything, so the result is false.
 pub fn approx(both: float, b: float, eps: float) -> boolean {
-  if!both || !b { false } else { abs(both - b) <= eps }
+  if !both || !b { false } else { abs(both - b) <= eps }
 }
 #pure
 // Approximate equality for single-precision floats (see the float overload).
 pub fn approx(both: single, b: single, eps: single) -> boolean {
-  if!both || !b { false } else { abs(both - b) <= eps }
+  if !both || !b { false } else { abs(both - b) <= eps }
 }
 #pure
 // --- Text ---

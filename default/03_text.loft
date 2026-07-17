@@ -76,7 +76,7 @@ pub fn to_uppercase(self: text) -> text;
 pub fn is_lowercase(self: text) -> boolean {
   if self.len() == 0 { return false }
   for c in self {
-    if!c.is_lowercase() { return false }
+    if !c.is_lowercase() { return false }
   }
   true
 }
@@ -90,7 +90,7 @@ pub fn is_lowercase(self: character) -> boolean;
 pub fn is_uppercase(self: text) -> boolean {
   if self.len() == 0 { return false }
   for c in self {
-    if!c.is_uppercase() { return false }
+    if !c.is_uppercase() { return false }
   }
   true
 }
@@ -104,7 +104,7 @@ pub fn is_uppercase(self: character) -> boolean;
 pub fn is_numeric(self: text) -> boolean {
   if self.len() == 0 { return false }
   for c in self {
-    if!c.is_numeric() { return false }
+    if !c.is_numeric() { return false }
   }
   true
 }
@@ -118,7 +118,7 @@ pub fn is_numeric(self: character) -> boolean;
 pub fn is_alphanumeric(self: text) -> boolean {
   if self.len() == 0 { return false }
   for c in self {
-    if!c.is_alphanumeric() { return false }
+    if !c.is_alphanumeric() { return false }
   }
   true
 }
@@ -132,7 +132,7 @@ pub fn is_alphanumeric(self: character) -> boolean;
 pub fn is_alphabetic(self: text) -> boolean {
   if self.len() == 0 { return false }
   for c in self {
-    if!c.is_alphabetic() { return false }
+    if !c.is_alphabetic() { return false }
   }
   true
 }
@@ -146,7 +146,7 @@ pub fn is_alphabetic(self: character) -> boolean;
 pub fn is_whitespace(self: text) -> boolean {
   if self.len() == 0 { return false }
   for c in self {
-    if!c.is_whitespace() { return false }
+    if !c.is_whitespace() { return false }
   }
   true
 }
@@ -160,7 +160,7 @@ pub fn is_whitespace(self: character) -> boolean;
 pub fn is_control(self: text) -> boolean {
   if self.len() == 0 { return false }
   for c in self {
-    if!c.is_control() { return false }
+    if !c.is_control() { return false }
   }
   true
 }
@@ -175,7 +175,7 @@ pub fn is_control(self: character) -> boolean;
 pub fn join(self: vector<text>, sep: text) -> text {
   result = "";
   for p in self {
-    if!p#first { result += sep; }
+    if !p#first { result += sep; }
     result += p;
   }
   result

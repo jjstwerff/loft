@@ -90,7 +90,7 @@ fn main() {
   cnt_r = "";
   vcnt = [10, 20, 30];
   for e in vcnt {
-    if!e#first { cnt_r += ","; }
+    if !e#first { cnt_r += ","; }
     cnt_r += "{e#count}:{e}";
   }
   assert(cnt_r == "0:10,1:20,2:30", "loop #count in format string: {cnt_r}");

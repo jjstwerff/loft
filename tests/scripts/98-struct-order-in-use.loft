@@ -31,7 +31,7 @@ pub fn make_beta(n: text, c: integer) -> Beta {
 // Nested: struct construction using result of another function
 pub fn make_pair() -> Beta {
   a = make_alpha(10);
-  if!a { return null; }
+  if !a { return null; }
   Beta { name: "test", count: a.value }
 }
 

@@ -65,7 +65,7 @@ fn main() {
 
   // null comparisons on an owned heap temp (the == / != null half).
   assert(mkv() != null, "notnull");
-  assert(! (mkv() == null), "isnull");
+  assert(!(mkv() == null), "isnull");
 
   // nested and reused-twice — each `??` reborns its own owner per site.
   assert(((mkv() ?? [1]) ?? [2]).len() == 3, "nested");

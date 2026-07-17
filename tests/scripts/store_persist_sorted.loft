@@ -42,12 +42,12 @@ fn main() {
     s += SortedEntry { key: 13, value: 1300 };
 
     ok = store_persist_bind(s, path);
-    if!ok { println("FAIL fresh-bind-returned-false"); return }
+    if !ok { println("FAIL fresh-bind-returned-false"); return }
     println("fresh keys={sorted_keys(s)}");
     println("fresh lookup s[13]={sorted_lookup(s)}");
   } else if mode == "reload" {
     ok = store_persist_bind(s, path);
-    if!ok { println("FAIL reload-bind-returned-false"); return }
+    if !ok { println("FAIL reload-bind-returned-false"); return }
     println("reload keys={sorted_keys(s)}");
     // The portability claim: a lookup succeeds in this SEPARATE process.
     println("reload lookup s[13]={sorted_lookup(s)}");
