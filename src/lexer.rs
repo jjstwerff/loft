@@ -121,6 +121,13 @@ pub struct Lexer {
     /// Whether `"…"` literals accept JSON string escapes (`\/`, `\uXXXX` + surrogate
     /// pairs).  See [`LexConfig::json_strings`].
     json_strings: bool,
+    /// @PLN109 — set by [`json_unicode_escape`](Self::json_unicode_escape) when an
+    /// unpaired `\uXXXX` high surrogate had to over-read past its 4th hex digit (to
+    /// look for a low surrogate that was not there), leaving the char iterator one
+    /// position PAST the escape rather than AT its last char.  [`string`](Self::string)
+    /// honours it by skipping its shared post-escape advance, so the following byte
+    /// (e.g. the closing `"`) is not swallowed.
+    json_over_read: bool,
     /// Should we expect code with whitespaces here?
     mode: Mode,
     /// True while the lexer is inside a `{...}` format expression of a string literal.
@@ -337,6 +344,7 @@ impl Default for Lexer {
             comment: cfg.comment,
             interpolate_strings: cfg.interpolate_strings,
             json_strings: cfg.json_strings,
+            json_over_read: false,
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
@@ -379,6 +387,7 @@ impl Lexer {
             comment: config.comment,
             interpolate_strings: config.interpolate_strings,
             json_strings: config.json_strings,
+            json_over_read: false,
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
@@ -802,13 +811,19 @@ impl Lexer {
         // High surrogate: require a following `\uXXXX` low surrogate.  Peek is at
         // this high surrogate's 4th hex; consume it, then match `\ u X X X X`.
         self.next_char(); // consume the high surrogate's 4th hex digit
-        let paired = self.iter.peek() == Some(&'\\') && {
+        let saw_backslash = self.iter.peek() == Some(&'\\');
+        let paired = saw_backslash && {
             self.next_char(); // consume '\'
             self.iter.peek() == Some(&'u')
         };
         if !paired {
             self.err(Level::Error, "\\uXXXX unpaired high surrogate");
             res.push('\u{FFFD}');
+            // We over-read: peek is now PAST the escape (at the char after the 4th
+            // hex, or after a stray `\`), not AT its last char.  Signal `string()` to
+            // skip its post-escape advance so the next byte (e.g. the closing `"`,
+            // matching the old scanner's `Ok(Str("\u{FFFD}"))`) is not swallowed.
+            self.json_over_read = true;
             return;
         }
         self.next_char(); // consume 'u', now at the low surrogate's first hex
@@ -856,6 +871,13 @@ impl Lexer {
                 self.next_char();
                 if !self.escape_seq(&mut res) {
                     break;
+                }
+                // @PLN109: an unpaired `\uXXXX` high surrogate over-read past its 4th
+                // hex; the char iterator is already at the next char, so skip the
+                // shared advance below (which would swallow it — e.g. the closing `"`).
+                if self.json_over_read {
+                    self.json_over_read = false;
+                    continue;
                 }
             } else if c == '\n' {
                 break;
