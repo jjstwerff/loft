@@ -159,6 +159,48 @@ message, an IR-schema doc, a DB snapshot, an advisories doc), plus the escape/ex
 lenient-dialect edge cases the § Falsification points name. The corpus is the executable
 spec for Phase 2's "byte-identical `Parsed`, except the intended int-preservation."
 
+### Phase-0 finding (2026-07-17) — the H5 chokepoint is DOUBLE; Phase 3 is wider than "add an Int arm"
+
+Empirically characterized on loft2 (both backends), `{"id": 9007199254740993}` (2⁵³+1):
+
+```
+typed   Rec.parse(raw).id   = 9007199254740992   (H5: rounded)
+generic json_parse().as_long() = 9007199254740992   (H5: rounded)
+expected                     = 9007199254740993
+```
+
+Both loft paths lose the integer at a **float chokepoint**, and there are **two** of
+them, because the loft-side `JsonValue` is itself f64-backed (`JV_DISCR_NUMBER` stores a
+`float`; `native.rs:2839` `set_float`, `native.rs:2753` `dbref_to_parsed` → `Parsed::Number(f64)`):
+
+1. **Typed** `Type.parse(text)` lowers (parser intercept `parse_type_parse`,
+   `src/parser/fields.rs`) to `struct_from_jsonvalue(json_parse(text), kt)` — so it routes
+   `text → json_parse → JsonValue(float, INT LOST) → dbref_to_parsed → Parsed(float) →
+   populate_struct`. The int is gone at the **first** step, before `populate_struct` runs.
+2. **Generic** `json_parse(text).as_long()` reads `JsonValue::JNumber{value: float}` directly.
+
+**Consequence for the design.** Adding `Parsed::Int(i64)` (Phase 2) + an `Int` arm to
+`populate_struct` (Phase 3) is **necessary but not sufficient** for the typed path: as long
+as `Type.parse(text)` sources its data through the float `JsonValue`, the int is lost before
+any `Parsed::Int` exists. Closing H5 for the typed path therefore **also** requires
+**re-routing `Type.parse(text)`** to feed `populate_struct` a `Parsed` produced *directly*
+by `crate::json::parse(text)` (with `Int`), bypassing the `json_parse → JsonValue`
+materialisation. That is real Phase-3 work the "22 consumer arms" framing understates —
+the arms are read-sites of an *already-built* `Parsed`, but the typed path must first be
+made to *carry* a `Parsed::Int` to `populate_struct` at all.
+
+**Open scope decision (owner).** The lib-audit's H5 cites the **generic** path
+(`06_json.loft:21,93` = `JNumber{value: float}` + `as_long`). Does @PLN109 also give the
+generic `JsonValue`/`as_long` path exact integers — i.e. add a `JsonValue::JInteger`
+variant (a `JV_DISCR_INT` store discriminant, an `as_long` that reads it exactly) — or
+only the **typed** `Type.parse` path (the design's stated "deserialize-only, typed"
+scope)? Typed-only closes the *reported* corruption (a known-schema `integer` field) and is
+smaller; generic-too closes H5 exactly as the audit framed it but widens the change to the
+loft `JsonValue` type + its store layout. **Recommend: typed path in this arc** (matches
+the design's scope + the reported bug), with the generic `JsonValue::JInteger` filed as a
+follow-on if wanted — noting H5 then closes *for the typed path* and the audit row stays
+open pointing at the follow-on. Deferred, not decided, pending owner.
+
 ## Falsification points / risks
 
 - **String escapes** — `\uXXXX` + surrogate-pair combining is the highest correctness
