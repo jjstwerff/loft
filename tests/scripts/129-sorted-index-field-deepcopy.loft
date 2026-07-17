@@ -13,39 +13,62 @@
 // This also fixed the general `array`/`ordered` deep-copy (any struct that
 // owns one).
 
-struct Ent { ck: integer, v: integer }
-struct S { s: sorted<Ent[ck]> }
-struct I { i: index<Ent[ck]> }     // its existence makes Ent index-backed
-struct SBox { s: sorted<Ent[ck]> }
-fn copy_sbox(b: SBox) -> SBox { b }
+struct Ent {
+  ck: integer,
+  v: integer,
+}
+struct S {
+  s: sorted<Ent[ck]>,
+}
+struct I {
+  i: index<Ent[ck]>,
+} // its existence makes Ent index-backed
+struct SBox {
+  s: sorted<Ent[ck]>,
+}
+fn copy_sbox(b: SBox) -> SBox {
+  b
+}
 
 fn main() {
   // (1) struct-with-sorted-field DEEP COPY, with index<Ent> defined
   //     (the committed-code data-loss repro: was len 0).
-  b1 = SBox{ s: [] };
-  b1.s += [Ent{ck: 5, v: 55}];
-  b1.s += [Ent{ck: 2, v: 22}];
-  b2 = copy_sbox(b1);              // by-value → deep copy of the sorted field
+  b1 = SBox { s: [] };
+  b1.s += [
+    Ent { ck: 5, v: 55 },
+  ];
+  b1.s += [
+    Ent { ck: 2, v: 22 },
+  ];
+  b2 = copy_sbox(b1); // by-value → deep copy of the sorted field
   assert(len(b2.s) == 2, "struct-copy preserves sorted field elements");
   assert(b2.s[5].v == 55, "struct-copy preserves value 5");
   assert(b2.s[2].v == 22, "struct-copy preserves value 2");
   // independent of the source
-  b1.s += [Ent{ck: 9, v: 99}];
+  b1.s += [
+    Ent { ck: 9, v: 99 },
+  ];
   assert(len(b1.s) == 3, "source grew");
   assert(len(b2.s) == 2, "copy unchanged by source mutation");
 
   // (2) sorted keyed-field init from a populated local, with index<Ent>
   sc: sorted<Ent[ck]> = [];
-  sc += [Ent{ck: 7, v: 70}];
-  sc += [Ent{ck: 1, v: 10}];
-  f = S{ s: sc };
+  sc += [
+    Ent { ck: 7, v: 70 },
+  ];
+  sc += [
+    Ent { ck: 1, v: 10 },
+  ];
+  f = S { s: sc };
   assert(len(f.s) == 2, "sorted field-init populated");
   assert(f.s[7].v == 70, "sorted field-init value");
 
   // (3) index keyed-field init from a local
   ic: index<Ent[ck]> = [];
-  ic += [Ent{ck: 8, v: 80}];
-  g = I{ i: ic };
+  ic += [
+    Ent { ck: 8, v: 80 },
+  ];
+  g = I { i: ic };
   assert(len(g.i) == 1, "index field-init populated");
   assert(g.i[8].v == 80, "index field-init value");
 

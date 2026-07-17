@@ -26,30 +26,48 @@
 // return-again, plus immediate-call-of-a-call-return and the bind-only case
 // that crashed with NO container at all.
 
-fn dbl(x: integer) -> integer { x * 2 }
-fn trp(x: integer) -> integer { x * 3 }
-fn getdbl() -> fn(integer)->integer { dbl }
-fn gettrp() -> fn(integer)->integer { trp }
-fn mkseven() -> fn()->integer { fn()->integer { 7 } }
-fn passthru() -> fn(integer)->integer { getdbl() }   // return-again layer
-fn apply(f: fn(integer)->integer, n: integer) -> integer { f(n) }
+fn dbl(x: integer) -> integer {
+  x * 2
+}
+fn trp(x: integer) -> integer {
+  x * 3
+}
+fn getdbl() -> fn(integer) -> integer {
+  dbl
+}
+fn gettrp() -> fn(integer) -> integer {
+  trp
+}
+fn mkseven() -> fn() -> integer {
+  fn() -> integer {
+    7
+  }
+}
+fn passthru() -> fn(integer) -> integer {
+  getdbl()
+} // return-again layer
+fn apply(f: fn(integer) -> integer, n: integer) -> integer {
+  f(n)
+}
 
 fn main() {
   // ── direct fn-ref literals in a vec (always worked — guard against regress) ──
-  ga: vector<fn(integer)->integer> = [dbl];
+  ga: vector<fn(integer) -> integer> = [dbl];
   assert(ga[0](5) == 10, "literal named in vec");
-  gb: vector<fn(integer)->integer> = [fn(y:integer)->integer { y + 7 }];
+  gb: vector<fn(integer) -> integer> = [fn(y: integer) -> integer {
+    y + 7
+  }];
   assert(gb[0](5) == 12, "literal lambda in vec");
 
   // ── fn-ref LOCAL copied into a vec element, then called (#263 var site) ──
   f = dbl;
   assert(f(5) == 10, "named->local call (no container)");
-  gc: vector<fn(integer)->integer> = [f];
+  gc: vector<fn(integer) -> integer> = [f];
   assert(len(gc) == 1, "named->local stored, len only");
   assert(gc[0](5) == 10, "named->local stored + read-call");
 
   // append a fn-ref local into a vec
-  gd: vector<fn(integer)->integer> = [];
+  gd: vector<fn(integer) -> integer> = [];
   gd += [f];
   assert(gd[0](5) == 10, "named->local append");
 
@@ -64,19 +82,19 @@ fn main() {
   assert(bind_only(4) == 8, "call-return bound, called late");
 
   // ── CALL-RETURNED fn-ref into a vec element (the filed reproducer) ──
-  ge: vector<fn(integer)->integer> = [getdbl()];
+  ge: vector<fn(integer) -> integer> = [getdbl()];
   assert(ge[0](5) == 10, "call-return in vec literal");
 
-  gf: vector<fn(integer)->integer> = [];
+  gf: vector<fn(integer) -> integer> = [];
   gf += [getdbl()];
   assert(gf[0](5) == 10, "call-return appended to vec");
 
   // a call-returned NON-capturing lambda (mkpair-shape) into a vec
-  gg: vector<fn()->integer> = [mkseven()];
+  gg: vector<fn() -> integer> = [mkseven()];
   assert(gg[0]() == 7, "call-returned lambda in vec");
 
   // ── multiple call-returns of DIFFERENT fns in one literal ──
-  gh: vector<fn(integer)->integer> = [getdbl(), gettrp()];
+  gh: vector<fn(integer) -> integer> = [getdbl(), gettrp()];
   assert(gh[0](5) == 10, "multi: getdbl");
   assert(gh[1](5) == 15, "multi: gettrp");
 
@@ -85,7 +103,7 @@ fn main() {
   assert(apply(f, 5) == 10, "var fn-ref as fn arg");
 
   // ── chained: store call-return, read element into a local, call the local ──
-  gi: vector<fn(integer)->integer> = [getdbl()];
+  gi: vector<fn(integer) -> integer> = [getdbl()];
   g = gi[0];
   assert(g(5) == 10, "read stored call-return into local, call");
 

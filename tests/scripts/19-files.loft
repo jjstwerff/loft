@@ -33,49 +33,54 @@ fn main() {
   assert(!move("tests/example/show.loft", "../outside.txt").ok(), "move: dst outside project");
   assert(!move("../Cargo.toml", "stolen.toml").ok(), "move: src outside project");
   // === Text file write and read ===
- {f = file("test_loft_t.txt");
-  f += "Hello World";
-  assert(f#size == 11, "text write size 11");
-  assert(f#index == 0, "text write #index is start of write");
-  assert(f#next == 11, "text write #next at end");
- }
+  {
+    f = file("test_loft_t.txt");
+    f += "Hello World";
+    assert(f#size == 11, "text write size 11");
+    assert(f#index == 0, "text write #index is start of write");
+    assert(f#next == 11, "text write #next at end");
+  }
   assert(exists("test_loft_t.txt"), "text file created");
- {f = file("test_loft_t.txt");
-  s = f#read(5) as text;
-  assert(s == "Hello", "text read first 5");
-  assert(f#index == 0, "text read #index after first");
-  assert(f#next == 5, "text read #next after first");
-  s2 = f#read(6) as text;
-  assert(s2 == " World", "text read next 6");
-  assert(f#index == 5, "text read #index after second");
-  assert(f#next == 11, "text read #next after second");
-  // Read past EOF returns partial
-  f#next = 8;
-  tail = f#read(100) as text;
-  assert(tail == "rld", "text read past eof returns partial");
-  // Seek back to start
-  f#next = 0;
-  again = f#read(5) as text;
-  assert(again == "Hello", "text seek and reread");
- }
+  {
+    f = file("test_loft_t.txt");
+    s = f#read(5) as text;
+    assert(s == "Hello", "text read first 5");
+    assert(f#index == 0, "text read #index after first");
+    assert(f#next == 5, "text read #next after first");
+    s2 = f#read(6) as text;
+    assert(s2 == " World", "text read next 6");
+    assert(f#index == 5, "text read #index after second");
+    assert(f#next == 11, "text read #next after second");
+    // Read past EOF returns partial
+    f#next = 8;
+    tail = f#read(100) as text;
+    assert(tail == "rld", "text read past eof returns partial");
+    // Seek back to start
+    f#next = 0;
+    again = f#read(5) as text;
+    assert(again == "Hello", "text seek and reread");
+  }
   assert(delete("test_loft_t.txt").ok(), "delete text file");
   // === move() write-and-move cycle ===
- {f = file("test_loft_src.txt");
-  f += "data";
- }
+  {
+    f = file("test_loft_src.txt");
+    f += "data";
+  }
   assert(move("test_loft_src.txt", "test_loft_dst.txt").ok(), "move succeeds");
   assert(!exists("test_loft_src.txt"), "source gone after move");
   assert(exists("test_loft_dst.txt"), "destination exists after move");
   assert(delete("test_loft_dst.txt").ok(), "delete destination");
   // === Seek then overwrite: text file ===
- {f = file("test_loft_t.txt");
-  f += "Hello";
-  f#next = 0;
-  f += "World";
- }
- {f = file("test_loft_t.txt");
-  assert(f#read(5) as text == "World", "text seek overwrite: reads overwritten data");
- }
+  {
+    f = file("test_loft_t.txt");
+    f += "Hello";
+    f#next = 0;
+    f += "World";
+  }
+  {
+    f = file("test_loft_t.txt");
+    assert(f#read(5) as text == "World", "text seek overwrite: reads overwritten data");
+  }
   assert(delete("test_loft_t.txt").ok(), "delete after text seek overwrite test");
   // === file().files() directory listing ===
   dir_list = file("tests/example").files();
@@ -103,15 +108,16 @@ fn main() {
   assert(missing == "", "env_variable of unknown name returns empty string");
   // === mkdir and mkdir_all ===
   // Use a file inside the dir to verify existence, since delete() only removes files.
-  mkdir("test_loft_dir_xyz");            // idempotent pre-clean: ignore result
+  mkdir("test_loft_dir_xyz"); // idempotent pre-clean: ignore result
   delete("test_loft_dir_xyz/sentinel.txt");
   assert(mkdir_all("test_loft_dir_xyz").ok(), "mkdir_all on existing dir ok");
   assert(exists("test_loft_dir_xyz"), "dir exists after mkdir");
   assert(!mkdir("test_loft_dir_xyz").ok(), "mkdir on existing dir not ok");
   // Write a sentinel file then clean up via file delete
- {sentinel = file("test_loft_dir_xyz/sentinel.txt");
-  sentinel += "x";
- }
+  {
+    sentinel = file("test_loft_dir_xyz/sentinel.txt");
+    sentinel += "x";
+  }
   assert(exists("test_loft_dir_xyz/sentinel.txt"), "sentinel file created");
   assert(delete("test_loft_dir_xyz/sentinel.txt").ok(), "sentinel deleted");
   // mkdir_all creates nested directories

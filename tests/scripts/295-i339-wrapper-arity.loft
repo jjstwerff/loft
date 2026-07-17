@@ -12,18 +12,21 @@
 // asserted on the short call.  Fixed by freezing signatures after pass 1
 // (a pass-2-only promotion falls back to the copy-return path).
 
-struct W339 { items: vector<integer>, tag: integer }
+struct W339 {
+  items: vector<integer>,
+  tag: integer,
+}
 
 // Caller parsed BEFORE the wrapper.
 fn use_wrap() -> integer {
   x = wrap339(1, 2, 3);
-  len(x.items) + x.tag
+  len(x.items)+x.tag
 }
 
 // Caller of the two-deep chain, also before it.
 fn use_chain() -> integer {
   y = chain339(2, 3);
-  len(y.items) + y.tag
+  len(y.items)+y.tag
 }
 
 // Thin wrapper chain BEFORE the wide impl.

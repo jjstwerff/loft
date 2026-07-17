@@ -9,13 +9,19 @@
 // A struct with no `to_text` falls back to the generic field dump. All three
 // backends; the raw-vs-grammar branch is two-pass stable.
 
-struct Money { cents: integer not null }
+struct Money {
+  cents: integer not null,
+}
 fn to_text(self: Money, spec: text) -> text {
   if spec == "dollars" { "D{self.cents}" } else { "c{self.cents}" }
 }
 
-struct Plain1 { v: integer not null }
-fn to_text(self: Plain1) -> text { "P{self.v}" }
+struct Plain1 {
+  v: integer not null,
+}
+fn to_text(self: Plain1) -> text {
+  "P{self.v}"
+}
 
 fn main() {
   m = Money { cents: 150 };

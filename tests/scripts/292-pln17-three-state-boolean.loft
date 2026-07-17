@@ -10,30 +10,35 @@
 // (the last one the verification pass caught: `if flip()` lowered to an `if`
 // over a u8-returning dispatch `match` that needed the u8->bool coercion).
 
-struct Flag { name: text, on: boolean? }
+struct Flag {
+  name: text,
+  on: boolean?,
+}
 
-fn nb() -> boolean? { return null; }
+fn nb() -> boolean? {
+  return null;
+}
 
 // hash -> boolean accessor: null comes from the absent case (the motivating use).
 fn get(h: hash<Flag[name]>, k: text) -> boolean? {
   f = h[k];
-  if !f { return null; }
+  if!f { return null; }
   f.on
 }
 
 fn main() {
   // ── scalar truthiness + raw comparison (design A) ──
   assert(false == false, "false==false");
-  assert(!(false == true), "false!=true");
+  assert(! (false == true), "false!=true");
   assert(nb() == null, "null == null");
-  assert(!(nb() == false), "null != false (raw compare, not coerced)");
-  assert(!(nb() == true), "null != true");
+  assert(! (nb() == false), "null != false (raw compare, not coerced)");
+  assert(! (nb() == true), "null != true");
   assert(!nb(), "!null is truthy (null coerces to false)");
   if nb() { assert(false, "null must not take the then-branch"); }
 
   // ── ?? and ?? return ──
   assert(nb() ?? true, "null ?? true -> true");
-  assert(!(false ?? true), "false ?? true -> false (false is NOT null)");
+  assert(! (false ?? true), "false ?? true -> false (false is NOT null)");
   assert(true ?? false, "true ?? false -> true");
 
   // ── struct field holds null ──
@@ -44,30 +49,36 @@ fn main() {
   s.on = null;
   assert(s.on == null, "assign null to field");
   s.on = false;
-  assert(s.on == false && !(s.on == null), "reassign false clears null");
+  assert(s.on == false && ! (s.on == null), "reassign false clears null");
 
   // ── vector<boolean> element holds null ──
   v: vector<boolean?> = [];
   v += [true]; v += [nb()]; v += [false];
-  assert(!(v[0] == null) && v[1] == null && !(v[2] == null), "vec null element");
+  assert(! (v[0] == null) && v[1] == null && ! (v[2] == null), "vec null element");
   v[1] = false;
-  assert(v[1] == false && !(v[1] == null), "vec element reassign false");
+  assert(v[1] == false && ! (v[1] == null), "vec element reassign false");
   v[0] = nb();
   assert(v[0] == null, "vec element assign null");
 
   // ── hash -> boolean: absent vs present-false vs present-true ──
   h: hash<Flag[name]> = [];
-  h += [Flag { name: "x", on: false }];
-  h += [Flag { name: "y", on: true }];
-  assert(get(h, "x") == false && !(get(h, "x") == null), "hash present-false");
+  h += [
+    Flag { name: "x", on: false },
+  ];
+  h += [
+    Flag { name: "y", on: true },
+  ];
+  assert(get(h, "x") == false && ! (get(h, "x") == null), "hash present-false");
   assert(get(h, "y") == true, "hash present-true");
   assert(get(h, "z") == null, "hash ABSENT is null, not false");
 
   // ── boolean-returning fn-ref / closure called as a predicate ──
   flag = false;
-  flip = fn() -> boolean { flag = !flag; flag };
-  r1 = if flip() { 1 } else { 0 };   // toggles to true  -> 1
-  r2 = if flip() { 1 } else { 0 };   // toggles to false -> 0
+  flip = fn() -> boolean {
+    flag = !flag; flag
+  };
+  r1 = if flip() { 1 } else { 0 }; // toggles to true  -> 1
+  r2 = if flip() { 1 } else { 0 }; // toggles to false -> 0
   assert(r1 == 1 && r2 == 0, "boolean fn-ref/closure dispatch in a predicate");
 
   print("PLN17 three-state boolean: ok\n");

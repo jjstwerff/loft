@@ -9,11 +9,11 @@ fn main() {
   assert(10 / 4 == 2, "int div truncates");
   assert(10 % 3 == 1, "int mod");
   assert(1 + 2 * 4 == 9, "int priority: mul before add");
-  assert((1 + 2) * 4 == 12, "int parens override priority");
+  assert((1 + 2)*4 == 12, "int parens override priority");
   // --- Null from division by zero ---
   z = 0;
-  assert(!(1 / z ?? null), "div by zero is null when defended with `?? null`");
-  assert(!(12 % z ?? null), "mod by zero is null when defended with `?? null`");
+  assert(! (1 / z ?? null), "div by zero is null when defended with `?? null`");
+  assert(! (12 % z ?? null), "mod by zero is null when defended with `?? null`");
   // --- Unary and abs ---
   assert(-5 + 5 == 0, "int unary minus");
   assert(abs(-7) == 7, "abs negative");
@@ -31,12 +31,12 @@ fn main() {
   assert(1_000.5 == 1000.5, "underscore separators in float integer part");
   assert(2_000e3 == 2000e3, "underscore separators in exponent mantissa");
   // --- Bitwise ---
-  assert(0b1010 & 0b1100 == 0b1000, "int bitwise and");
-  assert(0b1010 | 0b1100 == 0b1110, "int bitwise or");
-  assert(0b1010 ^ 0b1100 == 0b0110, "int bitwise xor");
-  assert(1 << 3 == 8, "int shift left");
-  assert(16 >> 2 == 4, "int shift right");
-  assert(0x0a8 & 15 == 8, "int hex and mask");
+  assert(0b1010&0b1100 == 0b1000, "int bitwise and");
+  assert(0b1010|0b1100 == 0b1110, "int bitwise or");
+  assert(0b1010^0b1100 == 0b0110, "int bitwise xor");
+  assert(1<<3 == 8, "int shift left");
+  assert(16>>2 == 4, "int shift right");
+  assert(0x0a8&15 == 8, "int hex and mask");
   // --- Literals ---
   assert(0b101010 == 42, "binary literal");
   assert(0x2a == 42, "hex literal");
@@ -59,38 +59,38 @@ fn main() {
   // --- Null propagation through arithmetic ---
   z2 = 0;
   n = 1 / z2 ?? null;
-  assert(!(n + 1), "null + int is null");
-  assert(!(n - 1), "null - int is null");
-  assert(!(n * 5), "null * int is null");
-  assert(!(3 + n), "int + null is null");
-  assert(!(n + n), "null + null is null");
+  assert(! (n + 1), "null + int is null");
+  assert(! (n - 1), "null - int is null");
+  assert(! (n * 5), "null * int is null");
+  assert(! (3 + n), "int + null is null");
+  assert(! (n + n), "null + null is null");
   // --- Null sentinel is i32::MIN, not zero ---
   // Arithmetic operators propagate null; comparison operators see the raw value.
   assert(n != 0, "null sentinel != 0");
-  assert(!(n == 0), "null sentinel is not 0");
+  assert(! (n == 0), "null sentinel is not 0");
   assert(n < 0, "null sentinel i32::MIN is a large negative");
-  assert(!(n > 0), "null sentinel i32::MIN is not positive");
+  assert(! (n > 0), "null sentinel i32::MIN is not positive");
   // --- Bitwise ops with zero operand ---
   // AND/OR/XOR with 0 must NOT produce null (unlike division or shift by 0).
-  assert(0b1010 & 0 == 0, "int bitwise and with 0 is 0, not null");
-  assert(0b1010 | 0 == 0b1010, "int bitwise or with 0 is identity, not null");
-  assert(0b1010 ^ 0 == 0b1010, "int xor with 0 is identity, not null");
-  assert(0 ^ 0b1010 == 0b1010, "int xor 0^x is x, not null");
+  assert(0b1010&0 == 0, "int bitwise and with 0 is 0, not null");
+  assert(0b1010|0 == 0b1010, "int bitwise or with 0 is identity, not null");
+  assert(0b1010^0 == 0b1010, "int xor with 0 is identity, not null");
+  assert(0^0b1010 == 0b1010, "int xor 0^x is x, not null");
   // Long variants:
   la = 0b1010;
-  assert(la & 0 == 0, "long bitwise and with 0 is 0, not null");
-  assert(la | 0 == 0b1010, "long bitwise or with 0 is identity, not null");
-  assert(la ^ 0 == 0b1010, "long xor with 0 is identity, not null");
+  assert(la&0 == 0, "long bitwise and with 0 is 0, not null");
+  assert(la|0 == 0b1010, "long bitwise or with 0 is identity, not null");
+  assert(la^0 == 0b1010, "long xor with 0 is identity, not null");
   // --- Shift operators ---
   // Shifting the value zero by any positive amount stays zero:
-  assert(0 << 1 == 0, "zero shifted left stays zero");
-  assert(0 >> 1 == 0, "zero shifted right stays zero");
+  assert(0<<1 == 0, "zero shifted left stays zero");
+  assert(0>>1 == 0, "zero shifted right stays zero");
   // Shifting by 0 returns the value unchanged (identity):
-  assert(5 << 0 == 5, "shift left by 0 is identity");
-  assert(5 >> 0 == 5, "shift right by 0 is identity");
+  assert(5<<0 == 5, "shift left by 0 is identity");
+  assert(5>>0 == 5, "shift right by 0 is identity");
   // Normal shifts work as expected:
-  assert(1 << 3 == 8, "1 << 3 == 8");
-  assert(16 >> 2 == 4, "16 >> 2 == 4");
+  assert(1<<3 == 8, "1 << 3 == 8");
+  assert(16>>2 == 4, "16 >> 2 == 4");
   // --- Mutating operators ---
   m = 12;
   m -= 6;
@@ -121,47 +121,47 @@ fn main() {
   // --- Null propagation through bitwise ops ---
   z_bit = 0;
   n_bit = 1 / z_bit ?? null;
-  assert(!(n_bit & 5), "null & int is null");
-  assert(!(5 & n_bit), "int & null is null");
-  assert(!(n_bit | 5), "null | int is null");
-  assert(!(5 | n_bit), "int | null is null");
-  assert(!(n_bit ^ 5), "null ^ int is null");
-  assert(!(5 ^ n_bit), "int ^ null is null");
+  assert(! (n_bit&5), "null & int is null");
+  assert(! (5&n_bit), "int & null is null");
+  assert(! (n_bit|5), "null | int is null");
+  assert(! (5|n_bit), "int | null is null");
+  assert(! (n_bit^5), "null ^ int is null");
+  assert(! (5^n_bit), "int ^ null is null");
   // Long null propagation through bitwise ops:
   zl2 = 0;
   nl = 1 / zl2 ?? null;
-  assert(!(nl & 5), "long null & int is null");
-  assert(!(nl | 5), "long null | int is null");
-  assert(!(nl ^ 5), "long null ^ int is null");
+  assert(! (nl&5), "long null & int is null");
+  assert(! (nl|5), "long null | int is null");
+  assert(! (nl^5), "long null ^ int is null");
   // --- Arithmetic (signed) right shift ---
-  assert((-5) >> 1 == -3, "arithmetic right shift: (-5)>>1 == -3");
-  assert((-8) >> 2 == -2, "arithmetic right shift: (-8)>>2 == -2");
-  assert((-1) >> 5 == -1, "arithmetic right shift all-ones stays -1");
-  assert((-128) >> 3 == -16, "arithmetic right shift: (-128)>>3 == -16");
+  assert((-5)>>1 == -3, "arithmetic right shift: (-5)>>1 == -3");
+  assert((-8)>>2 == -2, "arithmetic right shift: (-8)>>2 == -2");
+  assert((-1)>>5 == -1, "arithmetic right shift all-ones stays -1");
+  assert((-128)>>3 == -16, "arithmetic right shift: (-128)>>3 == -16");
   // --- Shift with null operand ---
   z_sh = 0;
   n_sh = 1 / z_sh ?? null;
-  assert(!(n_sh << 1), "null << int is null");
-  assert(!(n_sh >> 1), "null >> int is null");
-  assert(!(1 << n_sh), "int << null is null");
-  assert(!(1 >> n_sh), "int >> null is null");
+  assert(! (n_sh<<1), "null << int is null");
+  assert(! (n_sh>>1), "null >> int is null");
+  assert(! (1<<n_sh), "int << null is null");
+  assert(! (1>>n_sh), "int >> null is null");
   // --- Text-to-int parse edge cases ---
-  assert(!("abc" as integer?), "parse non-numeric text yields null");
-  assert(!("123abc" as integer?), "parse partial-numeric text yields null");
-  assert(!("" as integer?), "parse empty text yields null");
-  assert(!(" 42 " as integer?), "parse text with leading/trailing spaces yields null");
+  assert(! ("abc" as integer?), "parse non-numeric text yields null");
+  assert(! ("123abc" as integer?), "parse partial-numeric text yields null");
+  assert(! ("" as integer?), "parse empty text yields null");
+  assert(! (" 42 " as integer?), "parse text with leading/trailing spaces yields null");
   // Long text-to-long parse edge cases:
-  assert(!("xyz" as integer?), "parse non-numeric text to long yields null");
-  assert(!("" as integer?), "parse empty text to long yields null");
+  assert(! ("xyz" as integer?), "parse non-numeric text to long yields null");
+  assert(! ("" as integer?), "parse empty text to long yields null");
   // --- Null-preserving cross-type casts (GAPS §3) ---
   // i32::MIN (integer null) widens to i64::MIN (long null); does not become -2147483648L.
   n_int = null as integer?;
-  assert(!(n_int as integer?), "integer null cast to long preserves null");
+  assert(! (n_int as integer?), "integer null cast to long preserves null");
   // i32::MIN cast to float produces NaN (float null), not -2147483648.0.
-  assert(!(n_int as float?), "integer null cast to float produces float null");
+  assert(! (n_int as float?), "integer null cast to float produces float null");
   // i64::MIN (long null) narrows to i32::MIN (integer null).
   n_long = null as integer?;
-  assert(!(n_long as integer?), "long null cast to integer preserves null");
+  assert(! (n_long as integer?), "long null cast to integer preserves null");
   // i64::MIN cast to float produces NaN (float null).
-  assert(!(n_long as float?), "long null cast to float produces float null");
+  assert(! (n_long as float?), "long null cast to float produces float null");
 }

@@ -1181,6 +1181,26 @@ pub fn run_parallel_fold(
 /// reaching this dispatcher.
 #[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 #[allow(dead_code, clippy::too_many_arguments)] // step 3 is the first consumer; tested via tests/threading.rs
+/// @PLN108 S8 — should this par BORROW the parent stores read-only, instead of the per-worker
+/// byte-copy (`clone_for_worker`)?  **Default AUTO** (default-ON above a size threshold): borrow
+/// when the copy it would save (`active_clone_bytes`) exceeds the borrow's per-call thread-spawn
+/// overhead — so a big-heap par (routing's shape) wins, while a small / frequent par keeps the
+/// cheap rayon-pool clone (no regression).  `LOFT_PAR_SHARE=0` forces OFF, `=1` forces ON at any
+/// size.  Safe because captured parent state is read-only (@PLN102 C93 compile error +
+/// `read_only` write-panic), the parent outlives every worker (`thread::scope` join), and S1
+/// verified no dispatcher mutates a parent mid-par.  ASan + TSan clean on this path (S5/S6).
+#[cfg(feature = "threading")]
+const PAR_SHARE_MIN_BYTES: u64 = 2 * 1024 * 1024; // 2 MB — below this the rayon clone is cheaper
+#[cfg(feature = "threading")]
+fn par_share_for(stores: &Stores) -> bool {
+    match std::env::var("LOFT_PAR_SHARE").ok().as_deref() {
+        Some("0") => false,
+        Some("1") => true,
+        _ => stores.active_clone_bytes() >= PAR_SHARE_MIN_BYTES, // AUTO (unset or any other value)
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub fn run_parallel_discard(
     stores: &Stores,
     program: WorkerProgram,
@@ -1193,6 +1213,22 @@ pub fn run_parallel_discard(
 ) {
     let n_rows = vector::length_vector(input, &stores.allocations) as usize;
     if n_rows == 0 {
+        return;
+    }
+    // @PLN108 S3 — behind LOFT_PAR_SHARE (default OFF): borrow the parent stores read-only.
+    #[cfg(feature = "threading")]
+    if par_share_for(stores) {
+        run_parallel_discard_shared(
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            n_threads,
+            extra_args,
+            return_size,
+            n_rows,
+        );
         return;
     }
     let input_t = *input;
@@ -1209,6 +1245,56 @@ pub fn run_parallel_discard(
             );
             // Discard the worker's return — Stitch::Discard contract.
             let _ = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
+        }
+    });
+}
+
+/// @PLN108 S3 — the read-only-borrow variant of `run_parallel_discard` (behind `LOFT_PAR_SHARE`).
+/// Instead of `clone_for_worker`'s byte-copy of every parent store, each worker borrows the
+/// parent stores read-only (`clone_for_light_worker`) plus a small pool of its OWN writable
+/// stores.  Each worker OWNS its `WorkerStores` (moved into the `thread::scope` spawn), so no
+/// `&Store` crosses a thread; the shared parent buffers are read-only (C93 + write-panic) and
+/// outlive the workers (scope join).  Discard shape → no adoption, no return-stitch.
+#[cfg(feature = "threading")]
+#[allow(clippy::too_many_arguments)]
+fn run_parallel_discard_shared(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    return_size: u32,
+    n_rows: usize,
+) {
+    let threads = n_threads.max(1).min(n_rows);
+    let program = Arc::new(program);
+    let input_t = *input;
+    // Pool seeds each worker's OWN (writable) stores — its stack + scratch.  Sized generously;
+    // a worker that needs more just pushes new worker-local stores.
+    let mut pool = WorkerPool::new(threads, 4, 1024);
+    thread::scope(|s| {
+        for t in 0..threads {
+            let start = t * n_rows / threads;
+            let end = (t + 1) * n_rows / threads;
+            // Borrow the parent stores read-only + take this worker's pool slice.
+            let worker_stores = unsafe { stores.clone_for_light_worker(pool.slice_mut(t)) };
+            let prog = Arc::clone(&program);
+            let extras = extra_args.to_vec();
+            s.spawn(move || {
+                let mut state = prog.new_state(worker_stores);
+                for row_idx in start..end {
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        row_idx as i64,
+                        &state.database.allocations,
+                    );
+                    // Discard the worker's return — Stitch::Discard contract.
+                    let _ = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
+                }
+            });
         }
     });
 }
@@ -1291,6 +1377,25 @@ pub fn run_parallel_queue(
     if n_rows == 0 {
         return Vec::new();
     }
+    // @PLN108 S9 — behind LOFT_PAR_SHARE (default OFF): borrow the parent stores read-only
+    // instead of `clone_for_worker`'s byte-copy.  This is the family routing's real workload
+    // uses (per-row results), so the copy-elision win is measurable here.
+    #[cfg(feature = "threading")]
+    if par_share_for(stores) {
+        return run_parallel_queue_shared(
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            n_threads,
+            extra_args,
+            return_size,
+            n_rows,
+            primitive_input_size,
+            tuple_input_types,
+        );
+    }
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
@@ -1339,6 +1444,91 @@ pub fn run_parallel_queue(
             batch.push(val);
         }
         (start, batch)
+    });
+    merge_batches(batches, n_rows, 0u64)
+}
+
+/// @PLN108 S9 — the read-only-borrow variant of `run_parallel_queue` (behind `LOFT_PAR_SHARE`).
+/// Same order-preserving `Vec<u64>` result and the same input-dispatch ladder as the copy path,
+/// but each worker BORROWS the parent stores read-only (`clone_for_light_worker`) + owns a
+/// `WorkerPool` slice, instead of `clone_for_worker`'s byte-copy.  `thread::scope` joins every
+/// worker before returning (parent outlives them); each worker owns its `WorkerStores` (moved
+/// into the spawn), so no `&Store` crosses a thread.  Results collected via scoped join handles,
+/// merged in start-index order — identical semantics to the copy path.
+#[cfg(feature = "threading")]
+#[allow(clippy::too_many_arguments)]
+fn run_parallel_queue_shared(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    return_size: u32,
+    n_rows: usize,
+    primitive_input_size: u32,
+    tuple_input_types: Option<Vec<crate::data::Type>>,
+) -> Vec<u64> {
+    let threads = n_threads.max(1).min(n_rows);
+    let program = Arc::new(program);
+    let input_t = *input;
+    let prim_in = primitive_input_size;
+    let tuple_types_arc = tuple_input_types.map(Arc::new);
+    let mut pool = WorkerPool::new(threads, 4, 1024);
+    let batches: Vec<(usize, Vec<u64>)> = thread::scope(|s| {
+        let mut handles = Vec::with_capacity(threads);
+        for t in 0..threads {
+            let start = t * n_rows / threads;
+            let end = (t + 1) * n_rows / threads;
+            // Borrow the parent stores read-only + take this worker's pool slice.
+            let worker_stores = unsafe { stores.clone_for_light_worker(pool.slice_mut(t)) };
+            let prog = Arc::clone(&program);
+            let extras = extra_args.to_vec();
+            let tuple_types = tuple_types_arc.as_ref().map(Arc::clone);
+            handles.push(s.spawn(move || {
+                let mut state = prog.new_state(worker_stores);
+                let mut batch = Vec::with_capacity(end - start);
+                for row_idx in start..end {
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        row_idx as i64,
+                        &state.database.allocations,
+                    );
+                    let val = if prim_in == u32::MAX {
+                        let sv = read_text_at(&state.database, &row_ref);
+                        state.execute_at_raw_text_input(fn_pos, sv, &extras, return_size)
+                    } else if prim_in > 8 {
+                        let buf = if let Some(ref types) = tuple_types {
+                            read_tuple_at_wide(&state.database, &row_ref, types)
+                        } else {
+                            read_primitive_at_wide(&state.database, &row_ref, element_size)
+                        };
+                        state.execute_at_raw_primitive_input_wide(
+                            fn_pos,
+                            &buf[..prim_in as usize],
+                            &extras,
+                            return_size,
+                        )
+                    } else if prim_in > 0 {
+                        let v = read_primitive_at(&state.database, &row_ref, element_size);
+                        state.execute_at_raw_primitive_input(
+                            fn_pos,
+                            v,
+                            prim_in,
+                            &extras,
+                            return_size,
+                        )
+                    } else {
+                        state.execute_at_raw(fn_pos, &row_ref, &extras, return_size)
+                    };
+                    batch.push(val);
+                }
+                (start, batch)
+            }));
+        }
+        handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
     merge_batches(batches, n_rows, 0u64)
 }

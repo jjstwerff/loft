@@ -4,76 +4,120 @@
 
 fn test_sizeof_integer() {
   a = 1;
-  assert(sizeof(1+2+3) + sizeof(integer) + 10 * sizeof(a) == 96, "int sizes");
+  assert(sizeof(1 + 2 + 3)+sizeof(integer)+10 * sizeof(a) == 96, "int sizes");
 }
 
 fn test_sizeof_float() {
   a = 1.1;
-  assert(sizeof(float) + 10 * sizeof(a) == 88, "float sizes");
+  assert(sizeof(float)+10 * sizeof(a) == 88, "float sizes");
 }
 
-enum SzEn { V1, V2, V3 }
+enum SzEn {
+  V1,
+  V2,
+  V3,
+}
 
 fn test_sizeof_enum() {
   v: SzEn = V1;
-  assert(sizeof(SzEn) + 10 * sizeof(v) == 11, "enum sizes");
+  assert(sizeof(SzEn)+10 * sizeof(v) == 11, "enum sizes");
 }
 
 enum SzVal {
   Small { n: u8 },
-  Large { n: integer }
+  Large { n: integer },
 }
 
-fn get_sz_size(v: SzVal) -> integer { sizeof(v) }
+fn get_sz_size(v: SzVal) -> integer {
+  sizeof(v)
+}
 
 fn test_sizeof_enum_structs() {
-  assert(get_sz_size(Small { n: 1 }) != get_sz_size(Large { n: 42 }),
-    "polymorphic enum variants should have different sizes");
+  assert(
+    get_sz_size(Small { n: 1 }) != get_sz_size(Large { n: 42 }),
+    "polymorphic enum variants should have different sizes"
+  );
 }
 
 fn test_sizeof_packed_integer_types() {
-  assert(sizeof(u8) + 10 * sizeof(u16) + 100 * sizeof(i32) == 421, "packed sizes");
+  assert(sizeof(u8)+10 * sizeof(u16)+100 * sizeof(i32) == 421, "packed sizes");
 }
 
-enum SzEn2 { W1, W2 }
-struct SzS { a: integer, b: integer, c: SzEn2 }
+enum SzEn2 {
+  W1,
+  W2,
+}
+struct SzS {
+  a: integer,
+  b: integer,
+  c: SzEn2,
+}
 
 fn test_sizeof_struct() {
   assert(sizeof(SzS) == 17, "struct size");
 }
 
-struct SzHS { a: integer, b: integer, c: integer }
-struct SzHMain { s: hash<SzHS[b]> }
-
-fn test_sizeof_hash_member() {
-  assert(sizeof(SzHS) + 100 * sizeof(SzHMain) == 424, "hash member sizes");
+struct SzHS {
+  a: integer,
+  b: integer,
+  c: integer,
+}
+struct SzHMain {
+  s: hash<SzHS[b]>,
 }
 
-struct SzIS { a: integer, b: integer, c: integer }
-struct SzIMain { s: index<SzIS[a, -c]> }
+fn test_sizeof_hash_member() {
+  assert(sizeof(SzHS)+100 * sizeof(SzHMain) == 424, "hash member sizes");
+}
+
+struct SzIS {
+  a: integer,
+  b: integer,
+  c: integer,
+}
+struct SzIMain {
+  s: index<SzIS[a, -c]>,
+}
 
 fn test_sizeof_index_member() {
   m = SzIMain {};
   // P191: bookkeeping fields are 4-byte int<0,false> (was 8-byte
   // integer), so SzIS shrank by 8 bytes (41→33). 33 + 100*4 = 433.
-  assert(sizeof(SzIS) + 100 * sizeof(m) == 433, "index member sizes");
+  assert(sizeof(SzIS)+100 * sizeof(m) == 433, "index member sizes");
 }
 
-struct SzRS { a: integer, b: integer, c: integer }
-struct SzRMain { s: vector<SzRS>, biggest: reference<SzRS> }
+struct SzRS {
+  a: integer,
+  b: integer,
+  c: integer,
+}
+struct SzRMain {
+  s: vector<SzRS>,
+  biggest: reference < SzRS >,
+}
 
 fn test_sizeof_reference_field() {
   // #328: `biggest: reference<SzRS>` is a 12-byte DbRef pointer field
   // (4B vector header + 12B ref = 16B SzRMain), not SzRS's inline bytes.
-  assert(sizeof(SzRS) + 100 * sizeof(SzRMain) + 10000 * sizeof(vector<SzRS>) == 41624,
-    "reference field sizes");
+  assert(
+    sizeof(SzRS)+100 * sizeof(SzRMain)+10000 * sizeof(vector<SzRS>) == 41624,
+    "reference field sizes"
+  );
 }
 
-struct SzVS { a: integer, b: integer, c: integer }
-struct SzVMain { s: vector<SzVS> }
+struct SzVS {
+  a: integer,
+  b: integer,
+  c: integer,
+}
+struct SzVMain {
+  s: vector<SzVS>,
+}
 
 fn test_sizeof_vector() {
   m = SzVMain {};
-  assert(sizeof(SzVS) + 100 * sizeof(SzVMain) + 10000 * sizeof(m) + 100000 * sizeof(vector<SzVS>) == 440424,
-    "vector sizes");
+  assert(
+    sizeof(SzVS)+100 * sizeof(SzVMain)+10000 * sizeof(m)+100000 * sizeof(vector<SzVS>) == 440424,
+    "vector sizes"
+  );
 }

@@ -10,9 +10,15 @@
 // width from the field's declared type, symmetric with `f += s.field`.
 // @PLN9: cwd-relative paths — this test creates and reads scratch files in the cwd.
 #cwd
-struct LhsTarget { a: i32, b: u8, c: u16 }
+struct LhsTarget {
+  a: i32,
+  b: u8,
+  c: u16,
+}
 
-fn cleanup() { delete("test_loft_inferred.bin"); }
+fn cleanup() {
+  delete("test_loft_inferred.bin");
+}
 
 fn main() {
   cleanup();
@@ -30,18 +36,18 @@ fn main() {
   {
     f = file("test_loft_inferred.bin");
     f#format = LittleEndian;
-    a = f#read as i32;     assert(a == 0x12345678, "i32 inferred");
-    b = f#read as u8;      assert(b == 0xAB,       "u8 inferred");
-    c = f#read as u16;     assert(c == 0xBEEF,     "u16 inferred");
-    d = f#read as u8;      assert(d == 0x42,       "u8 inferred again");
+    a = f#read as i32; assert(a == 0x12345678, "i32 inferred");
+    b = f#read as u8; assert(b == 0xAB, "u8 inferred");
+    c = f#read as u16; assert(c == 0xBEEF, "u16 inferred");
+    d = f#read as u8; assert(d == 0x42, "u8 inferred again");
   }
 
   // The explicit (n) form must still work for back-compat.
   {
     f = file("test_loft_inferred.bin");
     f#format = LittleEndian;
-    a = f#read(4) as i32;  assert(a == 0x12345678, "i32 explicit");
-    b = f#read(1) as u8;   assert(b == 0xAB,       "u8 explicit");
+    a = f#read(4) as i32; assert(a == 0x12345678, "i32 explicit");
+    b = f#read(1) as u8; assert(b == 0xAB, "u8 explicit");
   }
 
   // The two forms must produce byte-identical reads — round-trip a
@@ -56,7 +62,7 @@ fn main() {
   {
     f = file("test_loft_inferred.bin");
     f#format = LittleEndian;
-    v1 = f#read    as u16;
+    v1 = f#read as u16;
     assert(v1 == 0xCAFE, "u16 no-paren");
   }
   {
@@ -70,7 +76,7 @@ fn main() {
   // from the field's declared type (i32 → 4, u8 → 1, u16 → 2).
   // Symmetric with `f += s.field`, which already takes the field's
   // declared width on the write side.
-  s = LhsTarget{a: 0, b: 0, c: 0};
+  s = LhsTarget { a: 0, b: 0, c: 0 };
   {
     f = file("test_loft_inferred.bin");
     f#format = LittleEndian;
@@ -87,8 +93,8 @@ fn main() {
     s.c = f#read;
   }
   assert(s.a == 0x12345678, "LHS-driven i32 width from field type");
-  assert(s.b == 0x5A,        "LHS-driven u8 width from field type");
-  assert(s.c == 0xCAFE,      "LHS-driven u16 width from field type");
+  assert(s.b == 0x5A, "LHS-driven u8 width from field type");
+  assert(s.c == 0xCAFE, "LHS-driven u16 width from field type");
 
   cleanup();
   println("fread-inferred ok");

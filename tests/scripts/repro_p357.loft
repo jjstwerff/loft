@@ -14,11 +14,13 @@ fn parse_empty_after_churn() -> integer {
   while i < 20 {
     big = "[";
     j = 0;
-    while j <= i { if j > 0 { big += ","; } big += "{{\"k\":\"v{j}\"}}"; j += 1; }
+    while j <= i {
+      if j > 0 { big += ","; } big += "{{\"k\":\"v{j}\"}}"; j += 1;
+    }
     big += "]";
     arr = json_parse(big);
     e0 = arr.item(0);
-    got = !(e0 is JNull);
+    got = ! (e0 is JNull);
     if got { total += 1; }
     i += 1;
   }

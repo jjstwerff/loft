@@ -18,8 +18,12 @@
 // under `LOFT_INDEX_DEV=1` it exercises the `Item?` borrower path. Both backends,
 // no leak. See plans/25-nullable-sequences/index-f1a-landing.md § Step 1.
 
-struct Item { v: integer }
-struct G { c: vector<Item> }
+struct Item {
+  v: integer,
+}
+struct G {
+  c: vector<Item>,
+}
 
 // (1) read-only element borrower — ELIDES and reads the live element (== 90).
 fn read_elem(g: G, i: integer) -> integer {
@@ -56,7 +60,10 @@ fn read_late(g: G, i: integer) -> integer {
 }
 
 fn main() {
-  g = G { c: [Item { v: 50 }, Item { v: 90 }] };
+  g = G { c: [
+    Item { v: 50 },
+    Item { v: 90 },
+  ] };
   assert(read_elem(g, 1) == 90, "read-only element borrow reads the live element");
   assert(mut_elem(g, 0) == 50, "mutated borrower keeps copy semantics (source unchanged)");
   esc = esc_elem(g, 1) ?? Item { v: 0 };

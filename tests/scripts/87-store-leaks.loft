@@ -16,7 +16,9 @@
 // minimal reproducer here so the pattern stays exercised by the
 // general test suite.
 
-struct SlSf { sl_v: vector<float> }
+struct SlSf {
+  sl_v: vector<float>,
+}
 
 fn sl_inner(sl_a: const SlSf, sl_b: const SlSf) -> SlSf {
   sl_r = SlSf { sl_v: [sl_a.sl_v[0] + sl_b.sl_v[0]] };

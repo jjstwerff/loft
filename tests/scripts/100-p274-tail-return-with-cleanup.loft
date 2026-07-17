@@ -22,19 +22,19 @@
 // every `tests/scripts/*.loft` through both backends.
 
 fn parse_row(raw: text) -> vector<text> {
-    out: vector<text> = [];
-    out += [raw];
-    out
+  out: vector<text> = [];
+  out += [raw];
+  out
 }
 
 fn find_headers(lines: vector<text>) -> vector<text> {
-    empty: vector<text> = [];
-    if lines.len() > 0 { return parse_row(lines[0]); }
-    empty
+  empty: vector<text> = [];
+  if lines.len() > 0 { return parse_row(lines[0]); }
+  empty
 }
 
 fn main() {
-    lines: vector<text> = ["a", "b"];
-    headers: vector<text> = find_headers(lines);
-    println("nh=" + headers.len());
+  lines: vector<text> = ["a", "b"];
+  headers: vector<text> = find_headers(lines);
+  println("nh=" + headers.len());
 }

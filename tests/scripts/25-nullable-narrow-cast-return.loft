@@ -7,9 +7,15 @@
 // typed as the full source integer, so the tail form was rejected ("cannot implicitly
 // narrow integer to u8") even though the identical `r = e as τ?; r` local form worked.
 // Both-backend guard: it must behave identically on --interpret and --native.
-fn tail_u8(i: integer) -> u8? { i as u8? }
-fn tail_u16(i: integer) -> u16? { i as u16? }
-fn tail_i16(i: integer) -> i16? { i as i16? }
+fn tail_u8(i: integer) -> u8? {
+  i as u8?
+}
+fn tail_u16(i: integer) -> u16? {
+  i as u16?
+}
+fn tail_i16(i: integer) -> i16? {
+  i as i16?
+}
 
 fn main() {
   // 255 is a VALUE, not null — the nullable narrow is carried full-width (i64), so the

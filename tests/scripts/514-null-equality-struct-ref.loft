@@ -14,24 +14,31 @@
 // lookup cases below guard against the fix over-reaching (regressing p285/issue_85). Both
 // backends; leak-checked by tests/ownership_oracle.
 
-struct DT { ms: integer not null }
-struct Ent { name: text not null, v: integer not null }
-struct Box { items: hash<Ent[name]> }
+struct DT {
+  ms: integer not null,
+}
+struct Ent {
+  name: text not null,
+  v: integer not null,
+}
+struct Box {
+  items: hash<Ent[name]>,
+}
 
 fn main() {
   // --- nullable struct-reference variable ---
   s: DT? = null;
   assert(s == null, "null struct ref: == null is true");
-  assert(!(s != null), "null struct ref: != null is false");
+  assert(! (s != null), "null struct ref: != null is false");
 
   d = DT { ms: 5 };
   s2: DT? = d;
-  assert(!(s2 == null), "present struct ref: == null is false");
+  assert(! (s2 == null), "present struct ref: == null is false");
   assert(s2 != null, "present struct ref: != null is true");
 
   // null on the left
   assert(null == s, "null on the left: null == (null ref) is true");
-  assert(!(null == s2), "null on the left: null == (present ref) is false");
+  assert(! (null == s2), "null on the left: null == (present ref) is false");
 
   // `??` must agree with `== null`
   a = s ?? DT { ms: 99 };
@@ -45,7 +52,9 @@ fn main() {
 
   // --- hash LOOKUP membership: bare Reference, rec==0 miss (the over-reach guard) ---
   box = Box { items: [] };
-  box.items += [Ent { name: "x", v: 9 }];
+  box.items += [
+    Ent { name: "x", v: 9 },
+  ];
   found = 0;
   if box.items["x"] == null { found = -1; } else { found = box.items["x"].v; }
   if box.items["y"] != null { found = found + 100; }

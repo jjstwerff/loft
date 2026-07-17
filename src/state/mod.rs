@@ -335,6 +335,28 @@ pub enum WorkerArg {
     Text(crate::keys::Str),
 }
 
+/// What a host call expects the target function to return — selects how the
+/// return value is read off the stack after the call.  Used by `execute_host`
+/// (the `loft::host` Rust→loft entry).  Struct / vector / enum returns are NOT
+/// here yet (they travel through hidden destination params + store adoption).
+#[derive(Clone, Copy)]
+pub enum HostRetKind {
+    /// No return value read.
+    Void,
+    /// A 1/4/8-byte primitive (integer family, boolean, single) read at `size`.
+    Prim(u32),
+    /// A 16-byte `Str`, materialised into an owned `String`.
+    Text,
+}
+
+/// The value a host call read back from a loft function.
+pub enum HostReturn {
+    Void,
+    /// A primitive zero-extended into a `u64`; the host re-narrows by the return type.
+    Prim(u64),
+    Text(String),
+}
+
 impl State {
     /**
     Create a new interpreter state
@@ -5169,6 +5191,137 @@ impl State {
             }
         }
         result
+    }
+
+    /// Rust→loft host call (the `loft::host` API's engine).  Invoke the function
+    /// at `fn_pos` with `args` already marshalled into the stack ABI, and read the
+    /// return per `ret`.  This is the GENERAL, top-level analogue of the par-worker
+    /// `execute_at_*` family: same stack convention (frame push → args → hidden text
+    /// buffers → return sentinel → run → read return), generalised to N arguments.
+    ///
+    /// `n_hidden_text` is the count of hidden text work-buffer params the callee
+    /// carries (a `-> text` return needs them); allocated / pushed / dropped exactly
+    /// as `execute_at_text` does.  Priming (the `parallel_ctx` / `fn_positions` /
+    /// source-span setup `execute_argv` performs) is refreshed here each call, so the
+    /// self-referential context pointers stay valid across an `Instance` move.
+    pub fn execute_host(
+        &mut self,
+        data: &Data,
+        fn_pos: u32,
+        args: &[WorkerArg],
+        n_hidden_text: usize,
+        ret: HostRetKind,
+    ) -> HostReturn {
+        // Prime — mirror the top-level setup in `execute_argv`.  Refreshed every
+        // call so the `&raw const self.bytecode` / `self.library` pointers point at
+        // THIS State's fields (an `Instance` may have moved after `State::new`).
+        let bc_ptr = &raw const self.bytecode;
+        let lib_ptr = &raw const self.library;
+        let data_ptr = std::ptr::from_ref::<Data>(data);
+        self.data_ptr = data_ptr;
+        let stk_lib_nr = self
+            .library_names
+            .get("n_stack_trace")
+            .copied()
+            .unwrap_or(u16::MAX);
+        self.database.parallel_ctx = Some(Box::new(crate::database::ParallelCtx {
+            bytecode: bc_ptr,
+            library: lib_ptr,
+            data: data_ptr,
+            stack_trace_lib_nr: stk_lib_nr,
+        }));
+        if self.fn_positions.is_empty() {
+            self.fn_positions = data.definitions.iter().map(|d| d.code_position).collect();
+        }
+        crate::crash_report::set_source_spans(Some(Arc::new(self.source_spans.clone())));
+
+        let d_nr = self
+            .fn_positions
+            .iter()
+            .position(|&p| p == fn_pos)
+            .map_or(u32::MAX, |i| i as u32);
+        let args_size: u16 = args
+            .iter()
+            .map(|a| match a {
+                WorkerArg::Ref(_) => 12u16,
+                WorkerArg::Primitive { size, .. } => *size as u16,
+                WorkerArg::Text(_) => 16u16,
+            })
+            .sum();
+        self.call_stack.push(CallFrame {
+            d_nr,
+            call_pos: 0,
+            args_base: self.stack_step(4),
+            args_size,
+            line: 0,
+        });
+        // Hidden text work-buffers (String allocated in the stack store), mirroring
+        // `execute_at_text` — a `-> text` callee reads/writes these before the return.
+        let mut work_crs: Vec<DbRef> = Vec::with_capacity(n_hidden_text);
+        for _ in 0..n_hidden_text {
+            let cr = self.database.claim(&self.stack_cur, 4); // 32 bytes; String needs 24
+            unsafe {
+                let p = self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<String>(cr.rec, cr.pos);
+                std::ptr::write(std::ptr::from_mut(p), String::new());
+            }
+            work_crs.push(cr);
+        }
+        self.stack_pos = self.stack_step(4);
+        for a in args {
+            match *a {
+                WorkerArg::Ref(r) => self.put_stack(r),
+                WorkerArg::Primitive { value, size } => match size {
+                    1 => self.put_stack(value as u8),
+                    4 => self.put_stack(value as u32),
+                    _ => self.put_stack(value),
+                },
+                WorkerArg::Text(s) => self.put_stack(s),
+            }
+        }
+        for cr in &work_crs {
+            self.put_stack(*cr);
+        }
+        self.put_stack(u32::MAX); // return address sentinel
+        self.code_pos = fn_pos;
+        let bytecode_len = self.bytecode.len() as u32;
+        while self.code_pos < bytecode_len {
+            let op = self.code::<u8>();
+            if op == 255 {
+                let ext = self.code::<u8>();
+                OPERATORS[255 + ext as usize](self);
+            } else {
+                OPERATORS[op as usize](self);
+            }
+            if self.code_pos == u32::MAX {
+                break;
+            }
+        }
+        let out = match ret {
+            HostRetKind::Void => HostReturn::Void,
+            HostRetKind::Prim(sz) => HostReturn::Prim(match sz {
+                8 => *self.get_stack::<u64>(),
+                1 => u64::from(*self.get_stack::<u8>()),
+                _ => u64::from(*self.get_stack::<u32>()),
+            }),
+            HostRetKind::Text => {
+                let s = *self.get_stack::<Str>();
+                HostReturn::Text(s.str().to_owned())
+            }
+        };
+        // Drop the hidden text buffers to free their heap allocations.
+        for cr in work_crs.iter().rev() {
+            unsafe {
+                let p = self
+                    .database
+                    .store_mut(&self.stack_cur)
+                    .addr_mut::<String>(cr.rec, cr.pos);
+                std::ptr::drop_in_place(std::ptr::from_mut(p));
+            }
+        }
+        out
     }
 
     /// Execute a void function at `fn_pos` with no arguments.

@@ -14,15 +14,23 @@
 // plain `u8` field stores + reads `255` fine). This tests the nullable case, which is
 // what "nullable narrow field" above means; it passes both gate-OFF and F2-ON.
 
-struct B { x: u8? }    struct S { z: u16? }
+struct B {
+  x: u8?,
+} struct S {
+  z: u16?,
+}
 
-fn to_u8(v: integer) -> u8 { (v & 255) as u8 }
-fn to_u16(v: integer) -> u16 { (v & 65535) as u16 }
+fn to_u8(v: integer) -> u8 {
+  (v&255) as u8
+}
+fn to_u16(v: integer) -> u16 {
+  (v&65535) as u16
+}
 
 fn main() {
-  b = B { x: to_u8(255) };       // 255 = the all-ones byte sentinel → reads null
+  b = B { x: to_u8(255) }; // 255 = the all-ones byte sentinel → reads null
   assert(b.x == null, "runtime byte sentinel collision reads back null");
-  s = S { z: to_u16(65535) };    // 65535 = the all-ones short sentinel → reads null
+  s = S { z: to_u16(65535) }; // 65535 = the all-ones short sentinel → reads null
   assert(s.z == null, "runtime short sentinel collision reads back null");
   // an in-range computed value still round-trips
   b2 = B { x: to_u8(200) };

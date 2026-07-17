@@ -19,19 +19,24 @@ interface GwKidded {
   fn gw_kids(self: Self) -> vector<Self>
   fn gw_worth(self: Self) -> integer
 }
-struct GwNode { gwn_v: integer, gwn_kids: vector<GwNode> }
-fn gw_kids(self: GwNode) -> vector<GwNode> { return self.gwn_kids; }
-fn gw_worth(self: GwNode) -> integer { return self.gwn_v; }
+struct GwNode {
+  gwn_v: integer,
+  gwn_kids: vector<GwNode>,
+}
+fn gw_kids(self: GwNode) -> vector<GwNode> {
+  return self.gwn_kids;
+}
+fn gw_worth(self: GwNode) -> integer {
+  return self.gwn_v;
+}
 
-fn gw_walk<T: GwKidded>(gw_root: T, gw_cap: integer) -> vector<T> {
+fn gw_walk < T: GwKidded > (gw_root: T, gw_cap: integer) -> vector<T> {
   gw_order = [gw_root];
   for gw_i in 0..gw_cap {
     if gw_i >= len(gw_order) { gw_i#break; }
     gw_cur = gw_order[gw_i] ?? gw_root;
     for gw_kid in gw_cur.gw_kids() {
-      if len(gw_order) < gw_cap {
-        gw_order += [gw_kid];
-      }
+      if len(gw_order) < gw_cap { gw_order += [gw_kid]; }
     }
   }
   return gw_order;
@@ -45,9 +50,7 @@ fn test_generic_walk_level_order() {
   gt_n3 = GwNode { gwn_v: 3, gwn_kids: [gt_n6] };
   gt_n1 = GwNode { gwn_v: 1, gwn_kids: [gt_n2, gt_n3] };
   gt_seq = "";
-  for gt_w in gw_walk(gt_n1, 1000) {
-    gt_seq = "{gt_seq}{gt_w.gwn_v},";
-  }
+  for gt_w in gw_walk(gt_n1, 1000) { gt_seq = "{gt_seq}{gt_w.gwn_v},"; }
   assert(gt_seq == "1,2,3,4,5,6,", "level order: {gt_seq}");
 }
 
@@ -66,8 +69,13 @@ fn test_generic_walk_cap() {
 // every later registration); `vector_of` now bakes the MAX sentinel inside
 // templates instead of registering.
 
-struct SwNode { swn_v: integer, swn_kids: vector<SwNode> }
-fn children(self: SwNode) -> vector<SwNode> { return self.swn_kids; }
+struct SwNode {
+  swn_v: integer,
+  swn_kids: vector<SwNode>,
+}
+fn children(self: SwNode) -> vector<SwNode> {
+  return self.swn_kids;
+}
 
 fn test_stdlib_tree_walk_level_order() {
   st_n4 = SwNode { swn_v: 4, swn_kids: [] };
@@ -77,9 +85,7 @@ fn test_stdlib_tree_walk_level_order() {
   st_n3 = SwNode { swn_v: 3, swn_kids: [st_n6] };
   st_n1 = SwNode { swn_v: 1, swn_kids: [st_n2, st_n3] };
   st_seq = "";
-  for st_w in tree_walk(st_n1, 1000) {
-    st_seq = "{st_seq}{st_w.swn_v},";
-  }
+  for st_w in tree_walk(st_n1, 1000) { st_seq = "{st_seq}{st_w.swn_v},"; }
   assert(st_seq == "1,2,3,4,5,6,", "stdlib level order: {st_seq}");
 }
 
@@ -98,7 +104,7 @@ fn test_stdlib_tree_walk_cap() {
 // concrete impls), so the bind was OWNED instead of a borrow of the
 // caller-side buffer.  The wrap harness leak-checks this test.
 
-fn gw_walk_dfs<T: GwKidded>(gd_root: T, gd_cap: integer) -> vector<T> {
+fn gw_walk_dfs < T: GwKidded > (gd_root: T, gd_cap: integer) -> vector<T> {
   gd_order: vector<T> = [];
   gd_stack = [gd_root];
   for gd_i in 0..gd_cap {
@@ -125,8 +131,6 @@ fn test_dfs_walk_preorder_no_leak() {
   df_n3 = GwNode { gwn_v: 3, gwn_kids: [df_n6] };
   df_n1 = GwNode { gwn_v: 1, gwn_kids: [df_n2, df_n3] };
   df_seq = "";
-  for df_w in gw_walk_dfs(df_n1, 1000) {
-    df_seq = "{df_seq}{df_w.gwn_v},";
-  }
+  for df_w in gw_walk_dfs(df_n1, 1000) { df_seq = "{df_seq}{df_w.gwn_v},"; }
   assert(df_seq == "1,2,4,5,3,6,", "dfs pre-order: {df_seq}");
 }

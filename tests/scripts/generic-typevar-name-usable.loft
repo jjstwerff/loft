@@ -6,20 +6,26 @@
 // user `enum T` / `struct T` resolves to its OWN definition — not the size-0 marker
 // (which previously divided by zero on `vector<T>` construction).  Cross-mode.
 
-enum T { Circle { r: integer }, Square { pad: integer, r: integer } }
-struct U { label: text }
+enum T {
+  Circle { r: integer },
+  Square { pad: integer, r: integer },
+}
+struct U {
+  label: text,
+}
 
 fn radius(shapes: vector<T>) -> integer {
-  match shapes {
-    [ (Circle { r } | Square { r }) ] => r,
-    _ => -1,
-  }
+  match shapes { [(Circle { r } |Square { r })] => r, _ => -1, }
 }
 
 fn main() {
   // a user `vector<T>` where T is the user's own enum
-  a: vector<T> = [Circle { r: 5 }];
-  b: vector<T> = [Square { pad: 9, r: 7 }];
+  a: vector<T> = [
+    Circle { r: 5 },
+  ];
+  b: vector<T> = [
+    Square { pad: 9, r: 7 },
+  ];
   assert(radius(a) == 5, "Circle r: {radius(a)}");
   assert(radius(b) == 7, "Square r (own offset): {radius(b)}");
 

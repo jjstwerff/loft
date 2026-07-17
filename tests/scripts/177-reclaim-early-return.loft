@@ -18,8 +18,8 @@
 // must succeed; the wrap leak gate confirms zero leaked stores.
 
 fn run(early: boolean) -> integer {
-  if early { return 0; }     // early-return free of a/b/c's body-scoped __vdb
-  a = [1, 2, 3];             // reclaim-eligible; its let-decl must stay at body-0
+  if early { return 0; } // early-return free of a/b/c's body-scoped __vdb
+  a = [1, 2, 3]; // reclaim-eligible; its let-decl must stay at body-0
   b = [4, 5, 6];
   c = [7, 8, 9];
   a[0] + b[1] + c[2]

@@ -33,11 +33,7 @@
 // vector-element-source case that used to fail.
 
 fn probe(v: vector<text>, idx: integer) -> text? {
-  if idx < len(v) {
-    v[idx] ?? null
-  } else {
-    null
-  }
+  if idx < len(v) { v[idx] ?? null } else { null }
 }
 
 fn main() {

@@ -14,9 +14,20 @@
 // a fresh vector<Pair> → wrap → `{w:j}`.  Pulling any step apart already
 // worked; this is the combination that corrupted.
 
-struct Pair { q: integer, r: integer, kind: u8, direction: u8 }
-struct Bag { items: hash<Pair[q, r]> }
-struct Wrapper { version: integer, name: text, items: vector<Pair> }
+struct Pair {
+  q: integer,
+  r: integer,
+  kind: u8,
+  direction: u8,
+}
+struct Bag {
+  items: hash<Pair[q, r]>,
+}
+struct Wrapper {
+  version: integer,
+  name: text,
+  items: vector<Pair>,
+}
 
 fn main() {
   bag = Bag { items: [] };
@@ -25,18 +36,24 @@ fn main() {
 
   out: vector<Pair> = [];
   for e in bag.items {
-    out += [Pair { q: e.q, r: e.r, kind: e.kind, direction: e.direction }];
+    out += [
+      Pair { q: e.q, r: e.r, kind: e.kind, direction: e.direction },
+    ];
   }
 
   // standalone walk has always been correct
-  assert("{out:j}" == `[{{"q":1,"r":1,"kind":0,"direction":0}},{{"q":2,"r":2,"kind":0,"direction":3}}]`,
-         "standalone vector<Pair> with u8 tail fields serialises correctly");
+  assert(
+    "{out:j}" == `[{{"q":1,"r":1,"kind":0,"direction":0}},{{"q":2,"r":2,"kind":0,"direction":3}}]`,
+    "standalone vector<Pair> with u8 tail fields serialises correctly"
+  );
 
   // the wrapped walk is the @P376 regression — must match the standalone,
   // NOT zero every field.
   w = Wrapper { version: 1, name: "test", items: out };
-  assert("{w:j}" == `{{"version":1,"name":"test","items":[{{"q":1,"r":1,"kind":0,"direction":0}},{{"q":2,"r":2,"kind":0,"direction":3}}]}}`,
-         "wrapped vector<Pair> with u8 tail fields preserves all field values");
+  assert(
+    "{w:j}" == `{{"version":1,"name":"test","items":[{{"q":1,"r":1,"kind":0,"direction":0}},{{"q":2,"r":2,"kind":0,"direction":3}}]}}`,
+    "wrapped vector<Pair> with u8 tail fields preserves all field values"
+  );
 
   print("ok");
 }

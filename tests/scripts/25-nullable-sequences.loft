@@ -1,34 +1,36 @@
 // @PLN25 nullable sequences — a vector<T> can be null (absent), distinct from
 // an empty []. Null tests via the store_nr sentinel, NOT rec==0 (which empty
 // also has), so `[] == null` is false. Runs on both --interpret and --native.
-fn maybe(b: boolean) -> vector<integer> { if b { [10, 20] } else { null } }
+fn maybe(b: boolean) -> vector<integer> {
+  if b { [10, 20] } else { null }
+}
 
 fn test() {
-    n = maybe(false);            // null vector
-    p = maybe(true);             // populated
-    e: vector<integer> = [];     // empty (a valid store, length 0)
+  n = maybe(false); // null vector
+  p = maybe(true); // populated
+  e: vector<integer> = []; // empty (a valid store, length 0)
 
-    assert(n == null, "null vector should equal null");
-    assert(!(n != null), "null vector != null should be false");
+  assert(n == null, "null vector should equal null");
+  assert(! (n != null), "null vector != null should be false");
 
-    assert(!(p == null), "populated vector should not equal null");
-    assert(p != null, "populated vector should != null");
-    assert(len(p) == 2, "populated length");
+  assert(! (p == null), "populated vector should not equal null");
+  assert(p != null, "populated vector should != null");
+  assert(len(p) == 2, "populated length");
 
-    // The P1/P2 footgun: empty is NOT null.
-    assert(!(e == null), "empty [] must NOT equal null");
-    assert(e != null, "empty [] should != null");
-    assert(len(e) == 0, "empty length");
+  // The P1/P2 footgun: empty is NOT null.
+  assert(! (e == null), "empty [] must NOT equal null");
+  assert(e != null, "empty [] should != null");
+  assert(len(e) == 0, "empty length");
 
-    // Iterating a null vector yields nothing (no OOB).
-    c = 0;
-    for x in n { c += 1; }
-    assert(c == 0, "iterating a null vector yields zero elements");
+  // Iterating a null vector yields nothing (no OOB).
+  c = 0;
+  for x in n { c += 1; }
+  assert(c == 0, "iterating a null vector yields zero elements");
 
-    slice_bounds();
-    element_null();
-    enum_null();
-    vec_elem_null_source_no_crash();
+  slice_bounds();
+  element_null();
+  enum_null();
+  vec_elem_null_source_no_crash();
 }
 
 // @PLN25 — storing a runtime-null source into a non-nullable inline struct
@@ -39,24 +41,46 @@ fn test() {
 // so the store is a no-op (the element keeps its prior value); the regression
 // only pins crash-freedom + that neighbours are untouched (the band-aid's
 // value semantics change once the gated E2 representation lands).
-struct NRow { id: integer, tag: text }
-struct NBag { items: vector<NRow> }
-fn maybe_row(b: boolean) -> NRow { if b { NRow { id: 9, tag: "z" } } else { null } }
-
-fn vec_elem_null_source_no_crash() {
-    // vector element
-    v: vector<NRow> = [NRow { id: 1, tag: "a" }, NRow { id: 2, tag: "b" }];
-    v[0] = maybe_row(false);   // must not crash (was allocation.rs:560)
-    assert(v[1].id == 2, "neighbour vector element intact after null-source store");
-
-    // embedded struct field reached through a vector
-    b = NBag { items: [NRow { id: 3, tag: "c" }, NRow { id: 4, tag: "d" }] };
-    b.items[0] = maybe_row(false);   // must not crash
-    assert(b.items[1].id == 4, "neighbour field-vector element intact after null-source store");
+struct NRow {
+  id: integer,
+  tag: text,
+}
+struct NBag {
+  items: vector<NRow>,
+}
+fn maybe_row(b: boolean) -> NRow {
+  if b {
+    NRow { id: 9, tag: "z" }
+  } else { null }
 }
 
-enum Shape { Circle { r: integer }, Square { s: integer } }
-fn maybe_shape(b: boolean) -> Shape { if b { Circle { r: 7 } } else { null } }
+fn vec_elem_null_source_no_crash() {
+  // vector element
+  v: vector<NRow> = [
+    NRow { id: 1, tag: "a" },
+    NRow { id: 2, tag: "b" },
+  ];
+  v[0] = maybe_row(false); // must not crash (was allocation.rs:560)
+  assert(v[1].id == 2, "neighbour vector element intact after null-source store");
+
+  // embedded struct field reached through a vector
+  b = NBag { items: [
+    NRow { id: 3, tag: "c" },
+    NRow { id: 4, tag: "d" },
+  ] };
+  b.items[0] = maybe_row(false); // must not crash
+  assert(b.items[1].id == 4, "neighbour field-vector element intact after null-source store");
+}
+
+enum Shape {
+  Circle { r: integer },
+  Square { s: integer },
+}
+fn maybe_shape(b: boolean) -> Shape {
+  if b {
+    Circle { r: 7 }
+  } else { null }
+}
 
 // @PLN25 E1: a nullable enum participates in the null model like a struct
 // reference.  `== null` tests the store_nr sentinel (OpRefIsNull) — NOT the
@@ -64,17 +88,19 @@ fn maybe_shape(b: boolean) -> Shape { if b { Circle { r: 7 } } else { null } }
 // returned from a nullable-returning fn keeps its store_nr on BOTH backends
 // (the native ref-retbuf tail-capture must recognise the enum's variant type).
 fn enum_null() {
-    n = maybe_shape(false);
-    assert(n == null, "null enum == null");
-    assert(!(n != null), "null enum != null is false");
+  n = maybe_shape(false);
+  assert(n == null, "null enum == null");
+  assert(! (n != null), "null enum != null is false");
 
-    p = maybe_shape(true);
-    assert(!(p == null), "present enum is NOT null (native must not corrupt it)");
-    assert(p != null, "present enum != null");
+  p = maybe_shape(true);
+  assert(! (p == null), "present enum is NOT null (native must not corrupt it)");
+  assert(p != null, "present enum != null");
 
-    // the present payload survives the nullable return on both backends
-    v = match p { Circle { r } => r, Square { s } => s, _ => -1 };
-    assert(v == 7, "present enum payload r == 7");
+  // the present payload survives the nullable return on both backends
+  v = match p {
+    Circle { r } => r, Square { s } => s, _ => -1
+  };
+  assert(v == 7, "present enum payload r == 7");
 }
 
 // A simple-typed vector element can be the inner typed null (e.g. integer
@@ -82,76 +108,76 @@ fn enum_null() {
 // elements even when one is null (no early break), and `v[i] == null` detects
 // the typed null (float needs an is-nan test, not equality).
 fn element_null() {
-    // Distinct loop-var names per element type: a single reused `_` would be
-    // type-locked to its first element type, which the native backend rejects.
-    // integer (the loop counts iterations; it must not touch the possibly-null
-    // element value in arithmetic — the null sentinel is i64::MIN).
-    vi: vector<integer?> = [10, 20, 30];
-    vi[1] = null;
-    ci = 0; for xi in vi { ci += 1; }
-    assert(ci == 3 && len(vi) == 3, "int: full iteration past a null element");
-    assert(vi[1] == null && vi[0] == 10 && vi[2] == 30, "int: null element, others intact");
+  // Distinct loop-var names per element type: a single reused `_` would be
+  // type-locked to its first element type, which the native backend rejects.
+  // integer (the loop counts iterations; it must not touch the possibly-null
+  // element value in arithmetic — the null sentinel is i64::MIN).
+  vi: vector<integer?> = [10, 20, 30];
+  vi[1] = null;
+  ci = 0; for xi in vi { ci += 1; }
+  assert(ci == 3 && len(vi) == 3, "int: full iteration past a null element");
+  assert(vi[1] == null && vi[0] == 10 && vi[2] == 30, "int: null element, others intact");
 
-    // float — NaN null is detected by ==null, not by equality
-    vf: vector<float?> = [1.5, 2.5, 3.5];
-    vf[1] = null;
-    cf = 0; for xf in vf { cf += 1; }
-    assert(cf == 3, "float: full iteration past a null element");
-    assert(vf[1] == null && !(vf[0] == null), "float: NaN null detected");
+  // float — NaN null is detected by ==null, not by equality
+  vf: vector<float?> = [1.5, 2.5, 3.5];
+  vf[1] = null;
+  cf = 0; for xf in vf { cf += 1; }
+  assert(cf == 3, "float: full iteration past a null element");
+  assert(vf[1] == null && ! (vf[0] == null), "float: NaN null detected");
 
-    // text — iteration must not break at the null element.
-    vt: vector<text?> = ["a", "b", "c"];
-    vt[1] = null;
-    ct = 0; for xt in vt { ct += 1; }
-    assert(ct == 3, "text: full iteration past a null element");
+  // text — iteration must not break at the null element.
+  vt: vector<text?> = ["a", "b", "c"];
+  vt[1] = null;
+  ct = 0; for xt in vt { ct += 1; }
+  assert(ct == 3, "text: full iteration past a null element");
 
-    // in-loop #remove still drains fully (length-based termination must not hang)
-    vd: vector<integer> = [for i in 0..20 { i }];
-    for xd in vd { xd#remove; }
-    assert(len(vd) == 0, "remove-during-iteration drains the vector");
+  // in-loop #remove still drains fully (length-based termination must not hang)
+  vd: vector<integer> = [for i in 0..20 { i }];
+  for xd in vd { xd#remove; }
+  assert(len(vd) == 0, "remove-during-iteration drains the vector");
 }
 
 // loft#384 — slice bounds resolve negatives from the end and clamp into [0,len],
 // so a slice never runs off either edge.  v = [10,20,30,40,50].
 fn slice_bounds() {
-    v: vector<integer> = [10, 20, 30, 40, 50];
+  v: vector<integer> = [10, 20, 30, 40, 50];
 
-    // negative end resolves from the end (was: silent empty).
-    a: vector<integer> = v[2..-1];
-    assert(len(a) == 2 && a[0] == 30 && a[1] == 40, "v[2..-1] == [30,40]");
+  // negative end resolves from the end (was: silent empty).
+  a: vector<integer> = v[2.. - 1];
+  assert(len(a) == 2 && a[0] == 30 && a[1] == 40, "v[2..-1] == [30,40]");
 
-    // negative start resolves from the end (was: wrap past the end).
-    b: vector<integer> = v[-2..];
-    assert(len(b) == 2 && b[0] == 40 && b[1] == 50, "v[-2..] == [40,50]");
+  // negative start resolves from the end (was: wrap past the end).
+  b: vector<integer> = v[-2..];
+  assert(len(b) == 2 && b[0] == 40 && b[1] == 50, "v[-2..] == [40,50]");
 
-    // over-range end clamps; raw iteration must NOT leak trailing nulls.
-    cnt = 0;
-    for x in v[2..100] { cnt += 1; }
-    assert(cnt == 3, "raw iterate v[2..100] yields exactly 3 elements");
-    c: vector<integer> = v[2..100];
-    assert(len(c) == 3 && c[0] == 30 && c[2] == 50, "v[2..100] == [30,40,50]");
+  // over-range end clamps; raw iteration must NOT leak trailing nulls.
+  cnt = 0;
+  for x in v[2..100] { cnt += 1; }
+  assert(cnt == 3, "raw iterate v[2..100] yields exactly 3 elements");
+  c: vector<integer> = v[2..100];
+  assert(len(c) == 3 && c[0] == 30 && c[2] == 50, "v[2..100] == [30,40,50]");
 
-    // start under -len clamps to 0.
-    d: vector<integer> = v[-100..2];
-    assert(len(d) == 2 && d[0] == 10 && d[1] == 20, "v[-100..2] == [10,20]");
+  // start under -len clamps to 0.
+  d: vector<integer> = v[-100..2];
+  assert(len(d) == 2 && d[0] == 10 && d[1] == 20, "v[-100..2] == [10,20]");
 
-    // inclusive end (also negative) and reversed-empty cases.
-    e: vector<integer> = v[2..=-1];
-    assert(len(e) == 3 && e[0] == 30 && e[2] == 50, "v[2..=-1] == [30,40,50]");
-    f: vector<integer> = v[3..2];
-    assert(len(f) == 0, "v[3..2] is empty");
+  // inclusive end (also negative) and reversed-empty cases.
+  e: vector<integer> = v[2..= - 1];
+  assert(len(e) == 3 && e[0] == 30 && e[2] == 50, "v[2..=-1] == [30,40,50]");
+  f: vector<integer> = v[3..2];
+  assert(len(f) == 0, "v[3..2] is empty");
 
-    // slicing a null/empty base stays safe (len 0, no OOB).
-    nul = maybe(false);
-    g: vector<integer> = nul[-2..];
-    assert(len(g) == 0, "slice of a null vector is empty");
+  // slicing a null/empty base stays safe (len 0, no OOB).
+  nul = maybe(false);
+  g: vector<integer> = nul[-2..];
+  assert(len(g) == 0, "slice of a null vector is empty");
 
-    // rev() on a slice iterates in reverse (was: forward order).
-    rcnt = 0;
-    first = 0;
-    for x in rev(v[2..5]) {
-        if rcnt == 0 { first = x; }
-        rcnt += 1;
-    }
-    assert(rcnt == 3 && first == 50, "rev(v[2..5]) yields 3 elements, first is 50");
+  // rev() on a slice iterates in reverse (was: forward order).
+  rcnt = 0;
+  first = 0;
+  for x in rev(v[2..5]) {
+    if rcnt == 0 { first = x; }
+    rcnt += 1;
+  }
+  assert(rcnt == 3 && first == 50, "rev(v[2..5]) yields 3 elements, first is 50");
 }

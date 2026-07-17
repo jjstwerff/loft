@@ -7,11 +7,18 @@
 // slot-reuse corruption manifests deterministically (extra locals perturb the
 // layout and mask it). The move fix makes `a` own its store; asserts below fail
 // on any regression, and the suite leak gate catches the paired store leak.
-struct P { x: integer, y: integer }
+struct P {
+  x: integer,
+  y: integer,
+}
 
 fn main() {
-  a = { z = P { x: 1, y: 2 }; z };
-  b = { z = P { x: 3, y: 4 }; z };
+  a = {
+    z = P { x: 1, y: 2 }; z
+  };
+  b = {
+    z = P { x: 3, y: 4 }; z
+  };
   assert(a.x == 1, "a.x moved, not clobbered by b");
   assert(a.y == 2, "a.y moved, not clobbered by b");
   assert(b.x == 3, "b.x");

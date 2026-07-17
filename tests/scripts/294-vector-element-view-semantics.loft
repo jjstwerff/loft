@@ -8,7 +8,10 @@
 // updated DELIBERATELY together with LOFT.md — the silent-swap corruption
 // (#338) is the cost of the view semantics and is warned about in the doc.
 
-struct P294 { name: text, val: integer }
+struct P294 {
+  name: text,
+  val: integer,
+}
 
 fn test_element_read_is_view() {
   v: vector<P294> = [];

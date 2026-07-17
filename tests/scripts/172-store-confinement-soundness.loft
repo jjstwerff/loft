@@ -15,20 +15,28 @@
 
 fn test_conf_dead_at_block_exit() {
   total = 0;
-  if true { a: vector<integer> = [1, 2, 3]; total += a[0] + a[2]; }
-  if true { b: vector<integer> = [4, 5, 6]; total += b[1]; }
-  assert(total == (1 + 3) + 5, "dead-at-block-exit sums");
+  if true {
+    a: vector<integer> = [1, 2, 3]; total += a[0] + a[2];
+  }
+  if true {
+    b: vector<integer> = [4, 5, 6]; total += b[1];
+  }
+  assert(total == (1 + 3)+5, "dead-at-block-exit sums");
 }
 
 fn test_conf_grow_in_block() {
   t = 0;
-  if 5 > 0 { a: vector<integer> = [1, 2]; a += [3, 4]; t += a[3]; }
+  if 5 > 0 {
+    a: vector<integer> = [1, 2]; a += [3, 4]; t += a[3];
+  }
   assert(t == 4, "confined += grow in block");
 }
 
 fn test_conf_loop_reuse() {
   total = 0;
-  for i in 0..5 { v: vector<integer> = [i, i + 1]; total += v[0] + v[1]; }
+  for i in 0..5 {
+    v: vector<integer> = [i, i + 1]; total += v[0] + v[1];
+  }
   assert(total == 25, "loop-body per-iter reuse correct");
 }
 
@@ -59,28 +67,44 @@ fn test_esc_both_branch() {
 
 fn esc_outer(n: integer) -> integer {
   out: vector<integer> = [0];
-  if n > 0 { a: vector<integer> = [1, 2, 3]; out = a; }
+  if n > 0 {
+    a: vector<integer> = [1, 2, 3]; out = a;
+  }
   out[0] + out.len()
 }
-fn test_esc_outer_assign() { assert(esc_outer(5) == 4, "escape via outer assign"); }
+fn test_esc_outer_assign() {
+  assert(esc_outer(5) == 4, "escape via outer assign");
+}
 
 fn esc_block_result(n: integer) -> integer {
   x: vector<integer> = if n > 0 { a: vector<integer> = [1, 2, 3]; a } else { [9] };
   x[0] + x.len()
 }
-fn test_esc_block_result() { assert(esc_block_result(5) == 4, "U3 block-result vec escapes to x"); }
+fn test_esc_block_result() {
+  assert(esc_block_result(5) == 4, "U3 block-result vec escapes to x");
+}
 
 fn esc_block_result_alias(n: integer) -> integer {
   out: vector<integer> = [0];
-  if n > 0 { x: vector<integer> = { a: vector<integer> = [1, 2, 3]; a }; out = x; }
+  if n > 0 {
+    x: vector<integer> = { a: vector<integer> = [1, 2, 3]; a }; out = x;
+  }
   out[0] + out.len()
 }
-fn test_esc_block_result_alias() { assert(esc_block_result_alias(5) == 4, "block-result aliased to outer"); }
+fn test_esc_block_result_alias() {
+  assert(esc_block_result_alias(5) == 4, "block-result aliased to outer");
+}
 
-struct Bag { items: vector<integer> }
+struct Bag {
+  items: vector<integer>,
+}
 fn esc_struct_field(n: integer) -> integer {
   b: Bag = Bag { items: [0] };
-  if n > 0 { a: vector<integer> = [1, 2, 3]; b = Bag { items: a }; }
+  if n > 0 {
+    a: vector<integer> = [1, 2, 3]; b = Bag { items: a };
+  }
   b.items[0] + b.items.len()
 }
-fn test_esc_struct_field() { assert(esc_struct_field(5) == 4, "vec escapes into struct field"); }
+fn test_esc_struct_field() {
+  assert(esc_struct_field(5) == 4, "vec escapes into struct field");
+}

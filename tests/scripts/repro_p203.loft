@@ -13,9 +13,9 @@
 // @PLN9: cwd-relative paths — this test does cwd-relative file I/O.
 #cwd
 fn p203_native_block_scope_file() {
-  {f = file("repro_p203.txt");
-   f += "x";
+  {
+    f = file("repro_p203.txt");
+    f += "x";
   }
-  assert(delete("repro_p203.txt") == FileResult.Ok,
-         "p203: delete after block-scope close");
+  assert(delete("repro_p203.txt") == FileResult.Ok, "p203: delete after block-scope close");
 }

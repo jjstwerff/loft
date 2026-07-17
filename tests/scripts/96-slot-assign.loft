@@ -2,7 +2,9 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // Slot assignment: patterns that were historically prone to overlapping stack slots.
 
-struct SANode { val: integer }
+struct SANode {
+  val: integer,
+}
 
 fn find_max(nodes: vector<SANode>) -> integer {
   best = nodes[0].val;
@@ -13,11 +15,18 @@ fn find_max(nodes: vector<SANode>) -> integer {
 }
 
 fn test_int_accumulator_and_struct_loop_element() {
-  nodes = [SANode{val:3}, SANode{val:10}, SANode{val:7}];
+  nodes = [
+    SANode { val: 3 },
+    SANode { val: 10 },
+    SANode { val: 7 },
+  ];
   assert(find_max(nodes) == 10, "Expected 10");
 }
 
-struct SAElm { a: integer, b: integer }
+struct SAElm {
+  a: integer,
+  b: integer,
+}
 
 fn sum_with_first(v: vector<SAElm>) -> integer {
   e = v[0];
@@ -27,18 +36,25 @@ fn sum_with_first(v: vector<SAElm>) -> integer {
 }
 
 fn test_ref_before_loop_and_loop_element() {
-  v = [SAElm{a:1, b:2}, SAElm{a:12, b:13}, SAElm{a:4, b:5}];
+  v = [
+    SAElm { a: 1, b: 2 },
+    SAElm { a: 12, b: 13 },
+    SAElm { a: 4, b: 5 },
+  ];
   assert(sum_with_first(v) == 38, "Expected 38");
 }
 
-struct SAItem { val: integer }
-struct SABag { items: vector<SAItem>, extra: SAItem }
+struct SAItem {
+  val: integer,
+}
+struct SABag {
+  items: vector<SAItem>,
+  extra: SAItem,
+}
 
 fn sa_process(b: SABag) -> integer {
   result = 0;
-  if b.items[0].val > 0 {
-    result = b.items[0].val;
-  } else {
+  if b.items[0].val > 0 { result = b.items[0].val; } else {
     b.items += [b.extra];
     last = b.items[b.items.len() - 1];
     result = last.val;
@@ -52,7 +68,10 @@ fn test_long_lived_int_and_copy_record_followed_by_ref() {
   assert(sa_process(b) == 42, "Expected 42");
 }
 
-struct SAPair { x: integer, y: integer }
+struct SAPair {
+  x: integer,
+  y: integer,
+}
 
 fn sum_matching(pairs: vector<SAPair>, xs: vector<SAPair>) -> integer {
   total = 0;
@@ -65,12 +84,20 @@ fn sum_matching(pairs: vector<SAPair>, xs: vector<SAPair>) -> integer {
 }
 
 fn test_nested_loop_struct_elements() {
-  pairs = [SAPair{x:1, y:10}, SAPair{x:2, y:20}];
-  xs = [SAPair{x:1, y:0}];
+  pairs = [
+    SAPair { x: 1, y: 10 },
+    SAPair { x: 2, y: 20 },
+  ];
+  xs = [
+    SAPair { x: 1, y: 0 },
+  ];
   assert(sum_matching(pairs, xs) == 10, "Expected 10");
 }
 
-struct SAPoint { x: integer, y: integer }
+struct SAPoint {
+  x: integer,
+  y: integer,
+}
 
 fn sum_points(pts: vector<SAPoint>) -> integer {
   acc = 0;
@@ -79,7 +106,10 @@ fn sum_points(pts: vector<SAPoint>) -> integer {
 }
 
 fn test_post_loop_variable_reuses_dead_loop_slot() {
-  pts = [SAPoint{x:1, y:2}, SAPoint{x:3, y:4}];
+  pts = [
+    SAPoint { x: 1, y: 2 },
+    SAPoint { x: 3, y: 4 },
+  ];
   total = sum_points(pts);
   assert(total == 10, "Expected 10");
 }

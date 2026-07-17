@@ -10,11 +10,16 @@
 // Pairing: diff against 06 (nested literal-default `??`).
 // Status: cluster V practical-pattern probe.
 
-struct Cache { items: hash<Entry[name]> }
-struct Entry { name: text, value: text }
+struct Cache {
+  items: hash<Entry[name]>,
+}
+struct Entry {
+  name: text,
+  value: text,
+}
 
 fn lookup(c: Cache, k: text) -> text {
-  return c.items[k].value;  // null if missing
+  return c.items[k].value; // null if missing
 }
 
 fn main() {

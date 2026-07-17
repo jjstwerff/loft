@@ -19,7 +19,9 @@
 // Guard: on the pre-fix code, Miri aborts with a Stacked-Borrows violation.
 // On the fixed code (`get_disjoint_mut`), this runs cleanly.
 
-struct Bag { data: vector<integer> }
+struct Bag {
+  data: vector<integer>,
+}
 
 fn main() {
   c1 = Bag { data: [1, 2, 3] };
@@ -30,8 +32,8 @@ fn main() {
   c1.data += c2.data;
 
   assert(len(c1.data) == 5, "len after cross-store append: got {len(c1.data)}, want 5");
-  assert(c1.data[0] == 1,  "c1.data[0]={c1.data[0]}, want 1");
-  assert(c1.data[2] == 3,  "c1.data[2]={c1.data[2]}, want 3");
+  assert(c1.data[0] == 1, "c1.data[0]={c1.data[0]}, want 1");
+  assert(c1.data[2] == 3, "c1.data[2]={c1.data[2]}, want 3");
   assert(c1.data[3] == 40, "c1.data[3]={c1.data[3]}, want 40");
   assert(c1.data[4] == 50, "c1.data[4]={c1.data[4]}, want 50");
 
@@ -43,9 +45,9 @@ fn main() {
   // Second cross-store append to exercise the path again.
   c3 = Bag { data: [100, 200] };
   c1.data += c3.data;
-  assert(len(c1.data) == 7,   "len after 2nd append: got {len(c1.data)}, want 7");
-  assert(c1.data[5] == 100,   "c1.data[5]={c1.data[5]}, want 100");
-  assert(c1.data[6] == 200,   "c1.data[6]={c1.data[6]}, want 200");
+  assert(len(c1.data) == 7, "len after 2nd append: got {len(c1.data)}, want 7");
+  assert(c1.data[5] == 100, "c1.data[5]={c1.data[5]}, want 100");
+  assert(c1.data[6] == 200, "c1.data[6]={c1.data[6]}, want 200");
 
   println("163-plan53-cross-store-vector-add PASSED");
 }

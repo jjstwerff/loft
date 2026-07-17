@@ -24,13 +24,19 @@
 // Pairing: 21 (same shape + ??), 92 (local var instead of struct field), 93 (primitive inner).
 // Status: cluster IV-Vec-nested-field-push baseline.
 
-struct Inner { tag: integer }
-struct Outer { lists: vector<vector<Inner>> }
+struct Inner {
+  tag: integer,
+}
+struct Outer {
+  lists: vector<vector<Inner>>,
+}
 
 fn main() {
   o = Outer { lists: [] };
-  inner: vector<Inner> = [Inner { tag: 42 }];
-  o.lists += [inner];                          // single-element push (strict-rule explicit form)
+  inner: vector<Inner> = [
+    Inner { tag: 42 },
+  ];
+  o.lists += [inner]; // single-element push (strict-rule explicit form)
   assert(len(o.lists) == 1, "probe 91: len(o.lists) = {len(o.lists)}, want 1");
   a = o.lists[0];
   assert(len(a) == 1, "probe 91: len(a) = {len(a)}, want 1");

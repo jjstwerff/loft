@@ -17,26 +17,33 @@ interface Summable {
 
 // ── Test types ────────────────────────────────────────────────────────
 
-struct IfItem { if_name: text, if_score: integer }
-fn to_label(self: IfItem) -> text { return self.if_name; }
-fn is_valid(self: IfItem) -> boolean { return self.if_score > 0; }
+struct IfItem {
+  if_name: text,
+  if_score: integer,
+}
+fn to_label(self: IfItem) -> text {
+  return self.if_name;
+}
+fn is_valid(self: IfItem) -> boolean {
+  return self.if_score > 0;
+}
 
 // ── Bounded generic functions ─────────────────────────────────────────
 
-fn if_label<T: Labelable>(if_x: T) -> text {
+fn if_label < T: Labelable > (if_x: T) -> text {
   return if_x.to_label();
 }
 
-fn if_describe<T: Labelable + Validatable>(if_x: T) -> text {
+fn if_describe < T: Labelable + Validatable > (if_x: T) -> text {
   if if_x.is_valid() { return if_x.to_label(); }
   return "invalid";
 }
 
-fn if_first<T: Labelable>(if_v: vector<T>) -> T {
+fn if_first < T: Labelable > (if_v: vector<T>) -> T {
   return if_v[0];
 }
 
-fn if_pair_sum<T: Summable>(if_a: T, if_b: T) -> T {
+fn if_pair_sum < T: Summable > (if_a: T, if_b: T) -> T {
   return if_a + if_b;
 }
 
@@ -55,7 +62,10 @@ fn test_multiple_bounds() {
 }
 
 fn test_bounded_vector_access() {
-  if_items = [IfItem { if_name: "first", if_score: 1 }, IfItem { if_name: "second", if_score: 2 }];
+  if_items = [
+    IfItem { if_name: "first", if_score: 1 },
+    IfItem { if_name: "second", if_score: 2 },
+  ];
   if_f = if_first(if_items);
   assert(if_f.if_name == "first", "bounded vec access: {if_f.if_name}");
 }
@@ -72,7 +82,7 @@ fn test_operator_interface_float() {
 
 // ── Stdlib interfaces ─────────────────────────────────────────────────
 
-fn if_max_pair<T: Ordered>(if_a: T, if_b: T) -> T {
+fn if_max_pair < T: Ordered > (if_a: T, if_b: T) -> T {
   if if_a > if_b { return if_a; }
   return if_b;
 }
@@ -83,7 +93,7 @@ fn test_stdlib_ordered_interface() {
 }
 
 // ── P136 fixed: for-loop + bounded method on struct ─────────────────
-fn if_count_valid<T: Validatable>(if_cv: vector<T>) -> integer {
+fn if_count_valid < T: Validatable > (if_cv: vector<T>) -> integer {
   if_cn = 0;
   for if_ci in if_cv {
     if if_ci.is_valid() { if_cn += 1; }
@@ -92,7 +102,11 @@ fn if_count_valid<T: Validatable>(if_cv: vector<T>) -> integer {
 }
 
 fn test_bounded_for_loop_struct() {
-  if_loop_data = [IfItem { if_name: "a", if_score: 1 }, IfItem { if_name: "b", if_score: 0 }, IfItem { if_name: "c", if_score: 3 }];
+  if_loop_data = [
+    IfItem { if_name: "a", if_score: 1 },
+    IfItem { if_name: "b", if_score: 0 },
+    IfItem { if_name: "c", if_score: 3 },
+  ];
   assert(if_count_valid(if_loop_data) == 2, "bounded for-loop count");
 }
 // This crashes with use-after-free (P136). Uncomment when fixed.
@@ -117,16 +131,34 @@ interface IfBendy {
   fn if_bend(self: Self, if_factor: float) -> Self
 }
 
-struct IfVec { if_x: float }
-fn OpMul(self: IfVec, if_factor: float) -> IfVec { IfVec { if_x: self.if_x * if_factor } }
-struct IfSum { if_v: integer }
-fn OpAdd(self: IfSum, if_other: IfSum) -> IfSum { IfSum { if_v: self.if_v + if_other.if_v } }
-struct IfRod { if_x: float }
-fn if_bend(self: IfRod, if_factor: float) -> IfRod { IfRod { if_x: self.if_x * if_factor } }
+struct IfVec {
+  if_x: float,
+}
+fn OpMul(self: IfVec, if_factor: float) -> IfVec {
+  IfVec { if_x: self.if_x * if_factor }
+}
+struct IfSum {
+  if_v: integer,
+}
+fn OpAdd(self: IfSum, if_other: IfSum) -> IfSum {
+  IfSum { if_v: self.if_v + if_other.if_v }
+}
+struct IfRod {
+  if_x: float,
+}
+fn if_bend(self: IfRod, if_factor: float) -> IfRod {
+  IfRod { if_x: self.if_x * if_factor }
+}
 
-fn if_scale<T: IfStretchy>(if_item: T) -> T { return if_item * 2.0; }
-fn if_join<T: IfJoinable>(if_a: T, if_b: T) -> T { return if_a + if_b; }
-fn if_bend_it<T: IfBendy>(if_item: T) -> T { return if_item.if_bend(3.0); }
+fn if_scale < T: IfStretchy > (if_item: T) -> T {
+  return if_item * 2.0;
+}
+fn if_join < T: IfJoinable > (if_a: T, if_b: T) -> T {
+  return if_a + if_b;
+}
+fn if_bend_it < T: IfBendy > (if_item: T) -> T {
+  return if_item.if_bend(3.0);
+}
 
 fn test_self_return_operator_struct() {
   if_r = if_scale(IfVec { if_x: 3.0 });
@@ -153,15 +185,20 @@ interface IfKidded {
   fn if_kids(self: Self) -> vector<Self>
   fn if_worth(self: Self) -> integer
 }
-struct IfNode { ifn_v: integer, ifn_kids: vector<IfNode> }
-fn if_kids(self: IfNode) -> vector<IfNode> { return self.ifn_kids; }
-fn if_worth(self: IfNode) -> integer { return self.ifn_v; }
+struct IfNode {
+  ifn_v: integer,
+  ifn_kids: vector<IfNode>,
+}
+fn if_kids(self: IfNode) -> vector<IfNode> {
+  return self.ifn_kids;
+}
+fn if_worth(self: IfNode) -> integer {
+  return self.ifn_v;
+}
 
-fn if_kid_sum<T: IfKidded>(iks_node: T) -> integer {
+fn if_kid_sum < T: IfKidded > (iks_node: T) -> integer {
   iks_total = 0;
-  for iks_k in iks_node.if_kids() {
-    iks_total += iks_k.if_worth();
-  }
+  for iks_k in iks_node.if_kids() { iks_total += iks_k.if_worth(); }
   return iks_total;
 }
 

@@ -6,10 +6,10 @@
 // kicked the parser through `expression()` and `change_var_type`
 // panicked on an empty file-scope variable table.
 
-const WITH_KW    = 100;
-WITHOUT_KW       = 200;
+const WITH_KW = 100;
+WITHOUT_KW = 200;
 pub const SHARED = 7;
-const NAME       = "loft";
+const NAME = "loft";
 
 fn main() {
   // Both forms produce real, readable file-scope constants.

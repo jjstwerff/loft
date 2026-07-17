@@ -2,11 +2,25 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // JSON: serialization (:j), parsing (.parse), cast (as), errors, nested structs.
 
-struct JUser { id: integer, name: text, email: text }
-struct JScore { val: integer }
-struct JInner { x_coord: integer }
-struct JOuter { label: text, data: JInner }
-struct JItem { tag: text, amount: integer }
+struct JUser {
+  id: integer,
+  name: text,
+  email: text,
+}
+struct JScore {
+  val: integer,
+}
+struct JInner {
+  x_coord: integer,
+}
+struct JOuter {
+  label: text,
+  data: JInner,
+}
+struct JItem {
+  tag: text,
+  amount: integer,
+}
 
 fn test_json_serialize() {
   u = JUser { id: 42, name: "Alice", email: "alice@example.com" };
@@ -60,13 +74,13 @@ fn test_json_parse_vector() {
 }
 
 fn test_json_cast_object() {
-  jt = `{{"tag": "hello", "amount": 42}}` as JItem;
+  jt = `{{"tag": "hello", "amount": 42}}`as JItem;
   assert(jt.tag == "hello", "cast tag: {jt.tag}");
   assert(jt.amount == 42, "cast amount: {jt.amount}");
 }
 
 fn test_json_cast_vector() {
-  items = `[{{"tag":"a","amount":1}},{{"tag":"b","amount":2}}]` as vector<JItem>;
+  items = `[{{"tag":"a","amount":1}},{{"tag":"b","amount":2}}]`as vector<JItem>;
   assert(len(items) == 2, "cast len: {len(items)}");
   assert(items[0].tag == "a", "cast[0].tag");
   assert(items[1].amount == 2, "cast[1].amount");

@@ -13,9 +13,11 @@
 // failure (the `m == n` base case returned an empty commit).
 fn pick(x: integer) -> vector<text> {
   out: vector<text> = [];
-  if x == 0 { out += ["a"]; return out; }   // mid-body return; out aliases the buffer
+  if x == 0 {
+    out += ["a"]; return out;
+  } // mid-body return; out aliases the buffer
   out += ["b"]; out += ["c"];
-  return out;                                // tail return
+  return out; // tail return
 }
 fn main() {
   a = pick(0);

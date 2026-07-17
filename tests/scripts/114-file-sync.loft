@@ -10,34 +10,40 @@
 
 // @PLN9: cwd-relative paths — this test does cwd-relative file I/O.
 #cwd
-fn cleanup() { delete("test_loft_sync.txt"); delete("test_loft_sync.bin"); }
+fn cleanup() {
+  delete("test_loft_sync.txt"); delete("test_loft_sync.bin");
+}
 
 fn main() {
   cleanup();
 
   // --- Text file: write, sync, then read back the synced bytes. ---
- {f = file("test_loft_sync.txt");
-  f += "hello\n";
-  assert(f.sync(), "sync after text write");
- }
- {f = file("test_loft_sync.txt");
-  assert(f#size == 6, "text file size after sync");
-  s = f#read(6) as text;
-  assert(s == "hello\n", "text file content after sync");
- }
+  {
+    f = file("test_loft_sync.txt");
+    f += "hello\n";
+    assert(f.sync(), "sync after text write");
+  }
+  {
+    f = file("test_loft_sync.txt");
+    assert(f#size == 6, "text file size after sync");
+    s = f#read(6) as text;
+    assert(s == "hello\n", "text file content after sync");
+  }
 
   // --- Binary file: same flow with little-endian integers. ---
- {f = file("test_loft_sync.bin");
-  f#format = LittleEndian;
-  f += (0x11223344 as u32);
-  assert(f.sync(), "sync after binary write");
- }
- {f = file("test_loft_sync.bin");
-  f#format = LittleEndian;
-  assert(f#size == 4, "binary file size after sync");
-  v: u32 = f#read as u32;
-  assert(v == 0x11223344, "binary file content after sync");
- }
+  {
+    f = file("test_loft_sync.bin");
+    f#format = LittleEndian;
+    f += (0x11223344 as u32);
+    assert(f.sync(), "sync after binary write");
+  }
+  {
+    f = file("test_loft_sync.bin");
+    f#format = LittleEndian;
+    assert(f#size == 4, "binary file size after sync");
+    v: u32 = f#read as u32;
+    assert(v == 0x11223344, "binary file content after sync");
+  }
 
   // --- sync() on a directory returns false. ---
   assert(!file("tests/example").sync(), "sync on directory false");
@@ -46,9 +52,10 @@ fn main() {
 
   // --- sync() on a freshly-opened file with no writes yet: nothing
   // buffered — returns true (the no-op path). ---
- {f = file("test_loft_sync.txt");
-  assert(f.sync(), "sync no-op on opened-for-read file");
- }
+  {
+    f = file("test_loft_sync.txt");
+    assert(f.sync(), "sync no-op on opened-for-read file");
+  }
 
   cleanup();
   println("114-file-sync ok");

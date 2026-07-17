@@ -11,9 +11,13 @@
 // nested-element stride must not take the append-copy path). Guards: value
 // semantics + no leak, BOTH backends.
 
-struct Box { v: vector<integer> }
+struct Box {
+  v: vector<integer>,
+}
 
-fn getv(b: Box) -> vector<integer> { b.v }
+fn getv(b: Box) -> vector<integer> {
+  b.v
+}
 
 fn main() {
   // control: plain local copy already honoured value semantics

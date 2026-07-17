@@ -27,16 +27,22 @@
 // `Var` copies via the #306 path, matching native (whose join-own already nests
 // in a `Value::Call` gate).
 
-struct Mon { m_key: text, m_hp: integer, m_name: text }
+struct Mon {
+  m_key: text,
+  m_hp: integer,
+  m_name: text,
+}
 
-fn mon_none() -> Mon { Mon { m_key: "", m_hp: 0, m_name: "none" } }
+fn mon_none() -> Mon {
+  Mon { m_key: "", m_hp: 0, m_name: "none" }
+}
 
 // Borrowed-view return with a CALL tail (`mon_none()`) — the pruning trigger,
 // and (via `??`) the join-typed result that drove the interp adopt.
 fn find_join(table: vector<Mon>, key: text) -> Mon {
   for i in 0..len(table) {
     x = table[i] ?? mon_none();
-    if x.m_key == key { return x; }   // returns a VIEW of `table` through `x`
+    if x.m_key == key { return x; } // returns a VIEW of `table` through `x`
   }
   mon_none()
 }
@@ -51,11 +57,15 @@ fn find_cast(table: vector<Mon>, key: text) -> Mon {
   mon_none()
 }
 
-fn mk_hp(md: Mon, bonus: integer) -> integer { md.m_hp + bonus }
+fn mk_hp(md: Mon, bonus: integer) -> integer {
+  md.m_hp + bonus
+}
 
 // D-own-2: a struct-COPY return. `r` owns its store, so `src` is NOT a live view
 // and must stay prunable — mutating the copy must not touch the source.
-fn copy_ret(src: Mon) -> Mon { r = src; r }
+fn copy_ret(src: Mon) -> Mon {
+  r = src; r
+}
 
 // NATIVE half: two consecutive borrowed-view first-sets from ONE vector must
 // leave it intact — the second call's owned-local bind must not free the lender
@@ -88,7 +98,7 @@ fn reassign_loop() {
   out: vector<integer> = [];
   for i in 0..6 {
     md = sa;
-    if (i % 2 ?? 0) == 1 { md = sb; }
+    if(i % 2 ?? 0) == 1 { md = sb; }
     if md.m_hp > 0 { out += [mk_hp(md, 100)]; }
   }
   assert(len(out) == 6, "all six placed, got {len(out)}");

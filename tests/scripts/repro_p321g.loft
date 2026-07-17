@@ -2,8 +2,12 @@
 // `&`-arg is an addressable field that materialises a `Set(__ref_N, …)` ahead
 // of the call — must not emit `let x = let __ref_N = …; call()` (a `let` in
 // expression position) under --native.  output_set unspans before the S35 hoist.
-struct ToolState { ts_current: integer }
-struct Editor { es_tools: ToolState }
+struct ToolState {
+  ts_current: integer,
+}
+struct Editor {
+  es_tools: ToolState,
+}
 
 fn route_click(tools: &ToolState, mx: integer) -> integer {
   tools.ts_current = mx;
@@ -16,7 +20,9 @@ fn editor_click(st: &Editor, mx: integer) -> integer {
 }
 
 fn main() {
-  e = Editor { es_tools: ToolState { ts_current: 0 } };
+  e = Editor {
+    es_tools: ToolState { ts_current: 0 },
+  };
   h = editor_click(e, 5);
   assert(h == 10, "ref-arg call on assignment RHS returns");
   assert(e.es_tools.ts_current == 5, "ref-arg mutation visible to caller");

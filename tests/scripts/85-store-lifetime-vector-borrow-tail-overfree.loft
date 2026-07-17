@@ -13,10 +13,17 @@
 // 85-store-lifetime-vector-view-call-bind-overfree, which was native-only).
 // The EXPLICIT-return form was already correct; this guards the IMPLICIT tail.
 
-struct M { hp: integer, name: text }
-struct Box { rows: vector<M> }
+struct M {
+  hp: integer,
+  name: text,
+}
+struct Box {
+  rows: vector<M>,
+}
 
-fn view_rows(b: Box) -> vector<M> { b.rows }   // borrowed implicit-tail vector view
+fn view_rows(b: Box) -> vector<M> {
+  b.rows
+} // borrowed implicit-tail vector view
 
 fn filler(n: integer) -> integer {
   es: vector<M> = [];
@@ -30,12 +37,15 @@ fn main() {
   b.rows += [M { hp: 8, name: "bat" }];
 
   for i in 0..4 {
-    r = view_rows(b);                          // r := independent copy of b.rows
+    r = view_rows(b); // r := independent copy of b.rows
     acc = 0;
-    for k in 0..6 { acc += filler(4); }         // recycle the slot a bad free released
+    for k in 0..6 { acc += filler(4); } // recycle the slot a bad free released
     assert(acc == 24, "iter {i}: filler churn ran");
     assert(len(r) == 2, "iter {i}: len(r)={len(r)} (copy intact)");
-    assert(len(b.rows) == 2, "iter {i}: len(b.rows)={len(b.rows)} (no over-free of borrowed source)");
+    assert(
+      len(b.rows) == 2,
+      "iter {i}: len(b.rows)={len(b.rows)} (no over-free of borrowed source)"
+    );
     first = b.rows[0] ?? M { hp: 0, name: "" };
     assert(first.name == "rat", "iter {i}: b.rows[0] intact, got '{first.name}'");
   }

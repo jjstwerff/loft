@@ -40,7 +40,11 @@ fn test_sibling_branches() {
   assert(x > 0, "x");
 }
 
-enum DAState { DAStart, DAOngoing, DAHalt }
+enum DAState {
+  DAStart,
+  DAOngoing,
+  DAHalt,
+}
 
 fn da_step(s: DAState) -> DAState {
   if s == DAStart { s = DAOngoing; } else { s = DAHalt; }
@@ -57,15 +61,15 @@ fn test_loop_init() {
   assert(sum == 6, "sum");
 }
 
-enum DAColor { DARed, DAGreen, DABlue }
+enum DAColor {
+  DARed,
+  DAGreen,
+  DABlue,
+}
 
 fn da_label(c: DAColor) -> integer {
   result = 0;
-  match c {
-    DARed => result = 1,
-    DAGreen => result = 2,
-    DABlue => result = 3
-  }
+  match c { DARed => result = 1, DAGreen => result = 2, DABlue => result = 3 }
   result
 }
 

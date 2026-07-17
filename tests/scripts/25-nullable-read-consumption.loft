@@ -17,16 +17,17 @@ pub fn main() {
   for _i in 0..3 {
     raw = recv(false);
     if raw == null { continue; }
-    if raw.starts_with("MAP:") {   // method on text?
-      body = raw[4..];             // open-range slice of text?
-      total += body.len();         // = 5 ("hello")
-      c = raw[0];                  // single char-index of text?  ('M')
-      total += c as integer;       // = 77
+    if raw.starts_with("MAP:") {
+      // method on text?
+      body = raw[4..]; // open-range slice of text?
+      total += body.len(); // = 5 ("hello")
+      c = raw[0]; // single char-index of text?  ('M')
+      total += c as integer; // = 77
     }
-    println("frame {raw}");        // format a text?
+    println("frame {raw}"); // format a text?
   }
-  n = recv(true);                  // a genuinely-null text?
-  println("null fmt: {n}");        // format a null text?  -> "null"
-  println("total={total}");        // (5 + 77) * 3 = 246
+  n = recv(true); // a genuinely-null text?
+  println("null fmt: {n}"); // format a null text?  -> "null"
+  println("total={total}"); // (5 + 77) * 3 = 246
   assert(total == 246, "text? read-consumption total should be 246");
 }

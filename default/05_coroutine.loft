@@ -10,7 +10,7 @@ pub enum CoroutineStatus {
   Created,
   Suspended,
   Running,
-  Exhausted
+  Exhausted,
 }
 
 /// CO1.6: Returns true if the coroutine has finished producing values.

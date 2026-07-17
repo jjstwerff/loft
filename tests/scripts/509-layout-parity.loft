@@ -1,14 +1,40 @@
 // @PLN97 Phase B — dynamic both-backend layout parity.
-struct Scalars { b: boolean, c: character, s: single, f: float, i: integer, t: text }
-struct Narrow { a: i32, b: u8, c: u16 }
-struct Wide { s: i16 }
-struct VecNest { vv: vector<vector<integer>> }
-struct Tup { pair: (integer, text) }
-enum Color { Red, Green, Blue }
-enum Shape { Circle { radius: integer }, Rect { width: integer, height: integer } }
+struct Scalars {
+  b: boolean,
+  c: character,
+  s: single,
+  f: float,
+  i: integer,
+  t: text,
+}
+struct Narrow {
+  a: i32,
+  b: u8,
+  c: u16,
+}
+struct Wide {
+  s: i16,
+}
+struct VecNest {
+  vv: vector<vector<integer>>,
+}
+struct Tup {
+  pair: (integer, text),
+}
+enum Color {
+  Red,
+  Green,
+  Blue,
+}
+enum Shape {
+  Circle { radius: integer },
+  Rect { width: integer, height: integer },
+}
 
 fn shape_val(s: Shape) -> integer {
-  match s { Circle { radius } => radius, Rect { width, height } => width * height }
+  match s {
+    Circle { radius } => radius, Rect { width, height } => width * height
+  }
 }
 
 fn main() {

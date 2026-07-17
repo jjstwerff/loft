@@ -8,7 +8,7 @@
 fn test_wrong_parameter() {
   pe_def(true);
 }
-fn pe_def(i: integer) { }
+fn pe_def(i: integer) {}
 
 // @EXPECT_ERROR: Unknown variable 'a'
 fn test_unknown_var() {
@@ -56,7 +56,7 @@ fn test_wrong_continue() {
 
 // @EXPECT_ERROR: Double attribute
 fn test_double_field(a: integer, b: integer, a: integer) {
-  if a > b { }
+  if a > b {}
 }
 
 // @EXPECT_ERROR: No matching operator '+'
@@ -69,7 +69,9 @@ fn test_wrong_if() {
   if 1 > 0 { 2 } else { "a" };
 }
 
-enum PEType { PEV1 }
+enum PEType {
+  PEV1,
+}
 
 // @EXPECT_ERROR: cannot change type
 fn test_wrong_assign() {
@@ -83,13 +85,19 @@ fn test_wrong_cast() {
 }
 
 // @EXPECT_ERROR: Undefined type V
-fn test_undefined_type(v: V) -> V { v }
+fn test_undefined_type(v: V) -> V {
+  v
+}
 
 // @EXPECT_ERROR: Undefined type V
-fn test_undefined_return(v: integer) -> V { v }
+fn test_undefined_return(v: integer) -> V {
+  v
+}
 
 // @EXPECT_ERROR: Undefined type V
-fn test_undefined_as(v: integer) -> integer { v as V }
+fn test_undefined_as(v: integer) -> integer {
+  v as V
+}
 
 // @EXPECT_ERROR: Indexing a non vector
 fn test_index_non_indexable() {
@@ -102,7 +110,10 @@ fn test_string_type_undefined() {
   x: string = "hello";
 }
 
-struct PEBadKV { pkey: integer, value: text }
+struct PEBadKV {
+  pkey: integer,
+  value: text,
+}
 
 // @EXPECT_ERROR: reserved for hash
 fn test_hash_key_field_clash() {
@@ -111,8 +122,12 @@ fn test_hash_key_field_clash() {
 
 // --- Boolean/enum type errors ---
 
-enum PEEType { PEVal }
-enum PENext { PEVal2 }
+enum PEEType {
+  PEVal,
+}
+enum PENext {
+  PEVal2,
+}
 
 // @EXPECT_ERROR: should be PEEType on call to
 fn test_wrong_boolean() {
@@ -129,23 +144,35 @@ fn test_wrong_compare() {
 fn test_mixed_enums() {
   pe_next_fn(PEEType.PEVal);
 }
-fn pe_next_fn(v: PENext) -> PENext { v }
+fn pe_next_fn(v: PENext) -> PENext {
+  v
+}
 
 // --- Field and key errors ---
 
-struct PEFieldT { v: u8 }
+struct PEFieldT {
+  v: u8,
+}
 
 // @EXPECT_ERROR: Cannot assign text to field
 fn test_field_type() {
   r = PEFieldT { v: "a" };
 }
 
-struct PEKeyT { n: text, v: u16 }
-struct PEKeyN { d: vector<PEKeyT>, h: hash<PEKeyT[n]> }
+struct PEKeyT {
+  n: text,
+  v: u16,
+}
+struct PEKeyN {
+  d: vector<PEKeyT>,
+  h: hash<PEKeyT[n]>,
+}
 
 // @EXPECT_ERROR: Cannot write to key field
 fn test_key_field() {
-  s = PEKeyN { d: [PEKeyT {n: "a", v: 12}] };
+  s = PEKeyN { d: [
+    PEKeyT { n: "a", v: 12 },
+  ] };
   s.d[0].v = 13;
   s.d[0].n = "b";
 }
@@ -177,7 +204,9 @@ fn test_add_to_iterated_vector() {
 // @EXPECT_ERROR: Cannot add elements
 fn test_add_to_outer_loop() {
   v = [1, 2, 3];
-  for _e in v { for n in 1..3 { v += [n]; } }
+  for _e in v {
+    for n in 1..3 { v += [n]; }
+  }
 }
 
 // --- Shadowing and if-expression errors ---
@@ -186,7 +215,7 @@ fn test_add_to_outer_loop() {
 fn test_shadow_different_type() {
   x = 1.5;
   v = [1, 2, 3];
-  for x in v { }
+  for x in v {}
 }
 
 // @EXPECT_ERROR: If-expression produces a value but has no else
@@ -197,15 +226,24 @@ fn test_if_expr_without_else() {
 
 // --- Type cycles ---
 
-struct PENode { val: integer, next: PENode }
+struct PENode {
+  val: integer,
+  next: PENode,
+}
 
 // @EXPECT_ERROR: contains itself
 fn test_type_cycle_self() {
   _n = PENode { val: 1 };
 }
 
-struct PECycA { val: integer, b: PECycB }
-struct PECycB { val: integer, a: PECycA }
+struct PECycA {
+  val: integer,
+  b: PECycB,
+}
+struct PECycB {
+  val: integer,
+  a: PECycA,
+}
 
 // @EXPECT_ERROR: 'PECycA' contains itself
 // @EXPECT_ERROR: 'PECycB' contains itself
@@ -215,8 +253,13 @@ fn test_type_cycle_indirect() {
 
 // --- spatial not implemented ---
 
-struct PEPoint { x: integer, y: integer }
-struct PEWorld { pts: spatial<PEPoint> }
+struct PEPoint {
+  x: integer,
+  y: integer,
+}
+struct PEWorld {
+  pts: spatial<PEPoint>,
+}
 
 // @PLN48 S2: spatial<T[x, y]> works now; a spatial WITHOUT its coordinate keys errors.
 // @EXPECT_ERROR: spatial<T[x, y]> needs coordinate key fields
@@ -226,29 +269,39 @@ fn test_spatial_needs_keys() {
 
 // --- Yield inside par() rejected (P2-R6) ---
 
-fn pe_par_double(pe_x: integer) -> integer { pe_x * 2 }
+fn pe_par_double(pe_x: integer) -> integer {
+  pe_x * 2
+}
 
 // @EXPECT_ERROR: yield is not allowed inside a par
-fn pe_yield_in_par(items: vector<integer>) -> iterator<integer> {
-  for pe_a in items par(pe_b = pe_par_double(pe_a), 1) {
-    yield pe_b;
-  }
+fn pe_yield_in_par(items: vector<integer>) -> iterator < integer > {
+  for pe_a in items par(pe_b = pe_par_double(pe_a), 1) { yield pe_b; }
 }
 
 // --- Partial-key null assignment ---
 
-struct PEIdxElm { pe_id: integer, pe_cat: text, pe_score: integer }
-struct PEIdxDb { pe_map: index<PEIdxElm[pe_id, -pe_cat]> }
+struct PEIdxElm {
+  pe_id: integer,
+  pe_cat: text,
+  pe_score: integer,
+}
+struct PEIdxDb {
+  pe_map: index<PEIdxElm[pe_id, -pe_cat]>,
+}
 
 // @EXPECT_ERROR: Cannot assign null to a partial-key lookup
 fn test_partial_key_null_assign() {
-  db = PEIdxDb { pe_map: [PEIdxElm{pe_id:1,pe_cat:"a",pe_score:10}] };
+  db = PEIdxDb { pe_map: [
+    PEIdxElm { pe_id: 1, pe_cat: "a", pe_score: 10 },
+  ] };
   db.pe_map[1] = null;
 }
 
 // --- L4: literal passed to & parameter ---
 
-fn pe_ref_fill(pe_rv: &vector<integer>) { pe_rv += [1]; }
+fn pe_ref_fill(pe_rv: &vector<integer>) {
+  pe_rv += [1];
+}
 
 // @EXPECT_ERROR: Cannot pass a literal or expression to a '&' parameter
 fn test_literal_to_ref_param() {
@@ -259,32 +312,45 @@ fn test_literal_to_ref_param() {
 
 // @EXPECT_ERROR: 'struct' definitions must be at file scope
 fn test_p85c_struct_inside_fn() {
-  struct PeInner { pe_v: integer }
+  struct PeInner {
+    pe_v: integer,
+  }
   pe_x = 5;
 }
 
 // @EXPECT_ERROR: 'enum' definitions must be at file scope
 fn test_p85c_enum_inside_fn() {
-  enum PeInner { PeA, PeB }
+  enum PeInner {
+    PeA,
+    PeB,
+  }
   pe_x = 5;
 }
 
 // @EXPECT_ERROR: 'fn' definitions must be at file scope
 fn test_p85c_named_fn_inside_fn() {
-  fn pe_inner() -> integer { 5 }
+  fn pe_inner() -> integer {
+    5
+  }
   pe_x = 5;
 }
 
 // Regression: lambda expressions must NOT trigger the file-scope diagnostic.
 fn test_p85c_lambda_still_works() {
-  pe_f = fn(x: integer) -> integer { x * 2 };
+  pe_f = fn(x: integer) -> integer {
+    x * 2
+  };
   assert(pe_f(5) == 10, "lambda works inside fn");
 }
 
 // --- Parallel for-loop clause errors ---
 
-fn pe_double(x: integer) -> integer { return x * 2; }
-struct PeParS { a: integer }
+fn pe_double(x: integer) -> integer {
+  return x * 2;
+}
+struct PeParS {
+  a: integer,
+}
 
 // @P270 regression: par() error recovery used to hang the parser —
 // skip_to_parallel_body looped forever on the `,` it could not consume.
@@ -303,7 +369,9 @@ fn test_par_over_non_iterable() {
 // (the captured state can't cross the thread boundary) instead of the raw
 // dangling-ref panic.  A non-capturing fn-ref return is fine (see 22c).
 fn pe_capturing(x: integer) -> fn(integer) -> integer {
-  return fn(n: integer) -> integer { return n + x; };
+  return fn(n: integer) -> integer {
+    return n + x;
+  };
 }
 // @EXPECT_ERROR: cannot return a capturing closure
 fn test_par_capturing_closure() {

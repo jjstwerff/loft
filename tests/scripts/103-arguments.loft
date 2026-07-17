@@ -15,18 +15,16 @@
 //     when invoked as `loft 103-arguments.loft -- a b c`.
 
 fn main() {
-    args = arguments();
-    n = args.len();
-    println("arguments: {n} args");
-    if n == 0 {
-        // Native test driver runs with no args; this is the
-        // expected path under cargo test --test native.
-        println("arguments: ok (empty)");
-    } else {
-        // Manual invocation with extra args: print them.
-        for i in 0..n {
-            println("  [{i}] = {args[i]}");
-        }
-        println("arguments: ok (with args)");
-    }
+  args = arguments();
+  n = args.len();
+  println("arguments: {n} args");
+  if n == 0 {
+    // Native test driver runs with no args; this is the
+    // expected path under cargo test --test native.
+    println("arguments: ok (empty)");
+  } else {
+    // Manual invocation with extra args: print them.
+    for i in 0..n { println("  [{i}] = {args[i]}"); }
+    println("arguments: ok (with args)");
+  }
 }

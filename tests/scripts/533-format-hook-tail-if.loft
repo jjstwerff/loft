@@ -13,7 +13,9 @@
 // gap went unseen.  The fix classifies params by TYPE, not count.  Both
 // backends (the defect was in the shared IR construction).
 
-value struct P { n: integer }
+value struct P {
+  n: integer,
+}
 
 // Tail `if` with BARE LITERAL arms — no work buffer, so the hook is exactly
 // `(self, spec)`: the #533 shape.
@@ -21,16 +23,22 @@ fn to_text(self: P, spec: text) -> text {
   if spec == "date" { "A" } else { "B" }
 }
 
-value struct Q { n: integer }
+value struct Q {
+  n: integer,
+}
 
-fn label(k: integer) -> text { if k == 1 { "one" } else { "many" } }
+fn label(k: integer) -> text {
+  if k == 1 { "one" } else { "many" }
+}
 
 // Tail `if` whose arms are FN CALLS — also no work buffer.
 fn to_text(self: Q, spec: text) -> text {
   if spec == "count" { label(self.n) } else { "?" }
 }
 
-value struct R { n: integer }
+value struct R {
+  n: integer,
+}
 
 // No-spec, tail-`if`, bare literals — the `(self)` path must stay intact.
 fn to_text(self: R) -> text {

@@ -1,0 +1,244 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Formatter groundwork — Step 3: the layout ENGINE (CST -> Doc -> render), rule-free.
+// The Doc algebra is present (Text / Line / Group); the Group resolver is stubbed to
+// TRANSPARENT (source line breaks are preserved as hard Lines, no breaks added/removed).
+// The only normalisation is trailing-whitespace stripping — enough to establish the
+// pipeline + the NEW invariants (output != input now):
+//   - idempotent:  format(format(x)) == format(x)
+//   - semantics:   the real (non-trivia) token stream of format(x) == that of x
+//   - comments:    comment count in == out
+// Re-indentation and the content-aware break rules are Step 4 (owner's rules).
+// Self-validating harness:
+//   for f in tests/scripts/*.loft; do LOFT_FMT_FILE=$(realpath $f) loft --interpret fmt.loft; done
+
+// ── lexer (Step 1) ───────────────────────────────────────────────────────────
+
+fn is_ws(c: character) -> boolean { c == ' ' || c == '\t' || c == '\r' }
+fn is_word(c: character) -> boolean { c.is_alphanumeric() || c == '_' }
+
+fn slice(chars: vector<character>, a: integer, b: integer) -> text {
+  s = "";
+  k = a;
+  while k < b { s += (chars[k] ?? ' '); k += 1; }
+  s
+}
+
+fn scan_string(chars: vector<character>, i: integer, n: integer) -> integer {
+  j = i + 1;
+  while j < n {
+    c = chars[j] ?? '"';
+    if c == '\\' { j += 2; }
+    else if c == '{' {
+      if j + 1 < n && (chars[j + 1] ?? ' ') == '{' { j += 2; }
+      else { j = scan_slot(chars, j + 1, n); }
+    } else if c == '"' { return j + 1; }
+    else if c == '\n' { return j; }
+    else { j += 1; }
+  }
+  j
+}
+
+fn scan_slot(chars: vector<character>, i: integer, n: integer) -> integer {
+  j = i;
+  depth = 1;
+  while j < n {
+    c = chars[j] ?? '}';
+    if c == '{' { depth += 1; j += 1; }
+    else if c == '}' { depth -= 1; j += 1; if depth == 0 { return j; } }
+    else if c == '"' { j = scan_string(chars, j, n); }
+    else if c == '\\' { j += 2; }
+    else { j += 1; }
+  }
+  j
+}
+
+fn scan_char(chars: vector<character>, i: integer, n: integer) -> integer {
+  j = i + 1;
+  while j < n {
+    c = chars[j] ?? '\'';
+    if c == '\\' { j += 2; }
+    else if c == '\'' { return j + 1; }
+    else { j += 1; }
+  }
+  j
+}
+
+fn lex(src: text) -> vector<text> {
+  chars: vector<character> = [];
+  for c in src { chars += [c]; }
+  n = len(chars);
+  toks: vector<text> = [];
+  i = 0;
+  while i < n {
+    c = chars[i] ?? ' ';
+    start = i;
+    if c == '\n' { i += 1; }
+    else if is_ws(c) { while i < n && is_ws(chars[i] ?? '\n') { i += 1; } }
+    else if c == '/' && i + 1 < n && (chars[i + 1] ?? ' ') == '/' {
+      while i < n && (chars[i] ?? '\n') != '\n' { i += 1; }
+    } else if c == '"' { i = scan_string(chars, i, n); }
+    else if c == '\'' { i = scan_char(chars, i, n); }
+    else if is_word(c) { while i < n && is_word(chars[i] ?? ' ') { i += 1; } }
+    else { i += 1; }
+    toks += [slice(chars, start, i)];
+  }
+  toks
+}
+
+// ── surface tree (Step 2) ────────────────────────────────────────────────────
+
+enum Node {
+  Leaf { tok: text },
+  Group { open: text, kids: vector<Node>, close: text },
+}
+
+struct Seq { nodes: vector<Node>, next: integer, closed: text }
+
+fn is_open(t: text) -> boolean { t == "[" || t == "{{" || t == "(" }
+fn is_close(t: text) -> boolean { t == "]" || t == "}}" || t == ")" }
+fn close_for(open: text) -> text {
+  if open == "[" { "]" } else if open == "{{" { "}}" } else { ")" }
+}
+
+fn parse_seq(toks: vector<text>, start: integer, expect: text) -> Seq {
+  kids: vector<Node> = [];
+  j = start;
+  n = len(toks);
+  while j < n {
+    t = toks[j] ?? "";
+    if is_close(t) {
+      if t == expect { return Seq { nodes: kids, next: j + 1, closed: t }; }
+      else { kids += [Leaf { tok: t }]; j += 1; }
+    } else if is_open(t) {
+      sub = parse_seq(toks, j + 1, close_for(t));
+      kids += [Group { open: t, kids: sub.nodes, close: sub.closed }];
+      j = sub.next;
+    } else { kids += [Leaf { tok: t }]; j += 1; }
+  }
+  Seq { nodes: kids, next: j, closed: "" }
+}
+
+fn parse(toks: vector<text>) -> vector<Node> {
+  r = parse_seq(toks, 0, "");
+  r.nodes
+}
+
+// ── Doc algebra + render (Step 3) ────────────────────────────────────────────
+
+// A layout document.  `Line` is a HARD break (a source newline, preserved in Step 3).
+// `Group` is the container resolver — Step 3 renders it TRANSPARENTLY (no soft breaks).
+enum Doc {
+  DText { s: text },
+  DLine,
+  DGroup { open: text, items: vector<Doc>, close: text },
+}
+
+fn to_doc(nodes: vector<Node>) -> vector<Doc> {
+  out: vector<Doc> = [];
+  for nd in nodes {
+    match nd {
+      Leaf { tok } => {
+        if tok == "\n" { out += [DLine]; }
+        else { out += [DText { s: tok }]; }
+      },
+      Group { open, kids, close } => {
+        out += [DGroup { open: open, items: to_doc(kids), close: close }];
+      },
+    }
+  }
+  out
+}
+
+// Step-3 resolver: flatten every Group inline (source breaks live in `items` as Lines).
+fn flatten(docs: vector<Doc>) -> vector<Doc> {
+  out: vector<Doc> = [];
+  for d in docs {
+    match d {
+      DText { s } => { out += [DText { s: s }]; },
+      DLine => { out += [DLine]; },
+      DGroup { open, items, close } => {
+        out += [DText { s: open }];
+        out += flatten(items);
+        out += [DText { s: close }];
+      },
+    }
+  }
+  out
+}
+
+fn rstrip(s: text) -> text {
+  chars: vector<character> = [];
+  for c in s { chars += [c]; }
+  e = len(chars);
+  while e > 0 && is_ws(chars[e - 1] ?? 'x') { e -= 1; }
+  slice(chars, 0, e)
+}
+
+// Render flat Text/Line atoms, stripping trailing whitespace before each line break.
+fn render_flat(atoms: vector<Doc>) -> text {
+  result = "";
+  line = "";
+  for a in atoms {
+    match a {
+      DText { s } => { line += s; },
+      DLine => { result += rstrip(line); result += "\n"; line = ""; },
+      DGroup { open, items, close } => {},
+    }
+  }
+  result += rstrip(line);
+  result
+}
+
+fn format(src: text) -> text {
+  render_flat(flatten(to_doc(parse(lex(src)))))
+}
+
+// ── validation harness ───────────────────────────────────────────────────────
+
+fn is_trivia(t: text) -> boolean {
+  t.is_whitespace() || t.starts_with("//")
+}
+
+// The real (non-trivia) token stream, joined with a separator — the semantic identity.
+fn real_tokens(src: text) -> text {
+  toks = lex(src);
+  r = "";
+  for t in toks {
+    if !is_trivia(t) { r += t; r += "|"; }
+  }
+  r
+}
+
+fn comment_count(src: text) -> integer {
+  toks = lex(src);
+  c = 0;
+  for t in toks { if t.starts_with("//") { c += 1; } }
+  c
+}
+
+fn main() {
+  path = env_variable("LOFT_FMT_FILE") ?? "";
+  src = file(path).content() ?? "";
+  // Output mode (the active-rewrite half of the dual mode): print the formatted text.
+  if (env_variable("LOFT_FMT_PRINT") ?? "") != "" {
+    print(format(src));
+    return;
+  }
+  f1 = format(src);
+  f2 = format(f1);
+  idem = f1 == f2;
+  sem = real_tokens(src) == real_tokens(f1);
+  cmt = comment_count(src) == comment_count(f1);
+  changed = if f1 == src { "same" } else { "chng" };
+  bad = "";
+  if !idem { bad += " !IDEMPOTENT"; }
+  if !sem { bad += " !SEMANTICS"; }
+  if !cmt { bad += " !COMMENTS"; }
+  if bad == "" {
+    print("OK   {changed} {size(src)}b->{size(f1)}b  {path}\n");
+  } else {
+    print("FAIL{bad}  {size(src)}b->{size(f1)}b  {path}\n");
+  }
+}

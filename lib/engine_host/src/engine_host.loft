@@ -23,10 +23,10 @@
 // status = the HTTP status — negative on transport error / timeout —
 // payload = the response body; status is 0 for every other kind).
 pub struct Event {
-  const cid:     integer,
-  const kind:    integer,
+  const cid: integer,
+  const kind: integer,
   const payload: text,
-  const status:  integer,
+  const status: integer,
 }
 
 fn kernel_listen(port: integer, tick_interval_us: integer) -> boolean;
@@ -253,10 +253,9 @@ pub fn sync_payload() -> text {
 // completed build swap; a headless server simply never calls stop.  `on_event`
 // and `on_tick` are the user's meaning; their captures (the world) live in the
 // caller's frame, which stays alive for the loop's lifetime.
-pub fn run(port: integer, tick_interval_us: integer,
-           on_event: fn(Event), on_tick: fn()) {
+pub fn run(port: integer, tick_interval_us: integer, on_event: fn(Event), on_tick: fn()) {
   ok = kernel_listen(port, tick_interval_us);
-  if !ok {
+  if!ok {
     println("engine_host: cannot listen on port {port}");
     return;
   }
@@ -279,12 +278,12 @@ pub fn run(port: integer, tick_interval_us: integer,
     // per turn, so the tick check below is never starved by a flood.
     for _ in 0..256 {
       more = kernel_next_event();
-      if !more { break; }
+      if!more { break; }
       ev = Event {
-        cid:     kernel_event_cid(),
-        kind:    kernel_event_kind(),
+        cid: kernel_event_cid(),
+        kind: kernel_event_kind(),
         payload: kernel_event_payload(),
-        status:  kernel_event_status(),
+        status: kernel_event_status(),
       };
       on_event(ev);
       work = work + 1;
@@ -294,20 +293,14 @@ pub fn run(port: integer, tick_interval_us: integer,
       // through on_event like everything else — newest per (sender, kind,
       // entity), late-latched to this tick.  Handlers never know the lane.
       while sync_next() {
-        sev = Event {
-          cid:     sync_cid(),
-          kind:    1,
-          payload: sync_payload(),
-        };
+        sev = Event { cid: sync_cid(), kind: 1, payload: sync_payload(), };
         on_event(sev);
         work = work + 1;
       }
       on_tick();
       work = work + 1;
     }
-    if work == 0 {
-      kernel_idle(2000);
-    }
+    if work == 0 { kernel_idle(2000); }
     // The per-turn yield point (twin of run_client's kernel_client_frame):
     // a no-op on native; in a browser it hands the tab back — so a windowed
     // LISTENER (draw in on_tick, observers connected) frames correctly.
@@ -412,10 +405,15 @@ fn kernel_local(tick_interval_us: integer) -> boolean;
 // Mirrors `run` (the same drain rule, the same drift-free tick), but RETURNS
 // once the server connection closes — the kind-2 disconnect event reaches
 // `on_event` first.
-pub fn run_client(host: text, port: integer, tick_interval_us: integer,
-                  on_event: fn(Event), on_tick: fn()) {
+pub fn run_client(
+  host: text,
+  port: integer,
+  tick_interval_us: integer,
+  on_event: fn(Event),
+  on_tick: fn()
+) {
   ok = kernel_connect(host, port, tick_interval_us);
-  if !ok {
+  if!ok {
     println("engine_host: cannot connect to {host}:{port}");
     return;
   }
@@ -429,10 +427,9 @@ pub fn run_client(host: text, port: integer, tick_interval_us: integer,
 // when the window closes.  `send`/`client_send` report false (no peer);
 // switching the program to `run_client` later changes ONE line, not the
 // handlers.
-pub fn run_local(tick_interval_us: integer,
-                 on_event: fn(Event), on_tick: fn()) {
+pub fn run_local(tick_interval_us: integer, on_event: fn(Event), on_tick: fn()) {
   ok = kernel_local(tick_interval_us);
-  if !ok {
+  if!ok {
     println("engine_host: cannot start the local kernel");
     return;
   }
@@ -460,13 +457,13 @@ fn client_loop(on_event: fn(Event), on_tick: fn()) {
     }
     for _ in 0..256 {
       more = kernel_client_next_event();
-      if !more { break; }
+      if!more { break; }
       ev = Event {
         // 0 = the server; -1 = a local post() (window input).
-        cid:     kernel_client_event_cid(),
-        kind:    kernel_client_event_kind(),
+        cid: kernel_client_event_cid(),
+        kind: kernel_client_event_kind(),
         payload: kernel_client_event_payload(),
-        status:  kernel_client_event_status(),
+        status: kernel_client_event_status(),
       };
       on_event(ev);
       work = work + 1;
@@ -475,20 +472,14 @@ fn client_loop(on_event: fn(Event), on_tick: fn()) {
       // ONE receive surface — the server's fast-lane state arrives through
       // on_event, late-latched to this tick (see run()).
       while client_sync_next() {
-        sev = Event {
-          cid:     0,
-          kind:    1,
-          payload: client_sync_payload(),
-        };
+        sev = Event { cid: 0, kind: 1, payload: client_sync_payload(), };
         on_event(sev);
         work = work + 1;
       }
       on_tick();
       work = work + 1;
     }
-    if work == 0 {
-      kernel_client_idle(2000);
-    }
+    if work == 0 { kernel_client_idle(2000); }
     // The per-turn yield point: a no-op on native; in a browser it hands the
     // tab back to the event loop (resumed next animation frame).  Lives here
     // in the SHARED loop so scripts never know which kernel runs them.

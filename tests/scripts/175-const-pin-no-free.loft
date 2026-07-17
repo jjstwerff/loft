@@ -20,17 +20,17 @@ fn read_once() -> integer {
 
 fn churn() -> integer {
   s = 0;
-  for i in [100, 200, 300] {
-    v = [i, i + 1, i + 2];      // transient vectors: alloc/free → may reuse NUMS' slot
+  for i in[100, 200, 300] {
+    v = [i, i + 1, i + 2]; // transient vectors: alloc/free → may reuse NUMS' slot
     s += v[1];
   }
   s
 }
 
 fn main() {
-  a = read_once();              // read NUMS in a callee scope
-  b = churn();                  // churn transient vectors
-  c = read_once();              // re-read NUMS after potential slot reuse
+  a = read_once(); // read NUMS in a callee scope
+  b = churn(); // churn transient vectors
+  c = read_once(); // re-read NUMS after potential slot reuse
   assert(a == 60, "a={a}");
   assert(c == 60, "c={c} (const freed + slot reused → pin regression)");
   assert(b == 603, "b={b}");

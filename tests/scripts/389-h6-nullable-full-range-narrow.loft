@@ -11,25 +11,33 @@
 // read back as `max-1` (e.g. `255`/`126`).  Both backends must agree.
 
 // Full byte range (256 distinct values) — must widen to hold the null sentinel.
-struct FullU8  { x: integer limit(0, 255)? }     // min 0
-struct FullI8  { x: integer limit(-128, 127)? }  // min < 0
+struct FullU8 {
+  x: integer limit(0, 255)?,
+} // min 0
+struct FullI8 {
+  x: integer limit(-128, 127)?,
+} // min < 0
 // One short of full (255 distinct) — stays 1 byte, was already correct.
-struct NearU8  { x: integer limit(0, 254)? }
+struct NearU8 {
+  x: integer limit(0, 254)?,
+}
 // Full short range (65536 distinct) — the 2-byte analogue.
-struct FullU16 { x: integer limit(0, 65535)? }
+struct FullU16 {
+  x: integer limit(0, 65535)?,
+}
 
 fn main() {
   // ── null round-trips for a full-range nullable narrow field ──
-  assert(FullU8  { x: null }.x == null, "full u8 range: null round-trips");
-  assert(FullI8  { x: null }.x == null, "full i8 range (min<0): null round-trips");
-  assert(NearU8  { x: null }.x == null, "near-full u8 range: null round-trips");
+  assert(FullU8 { x: null }.x == null, "full u8 range: null round-trips");
+  assert(FullI8 { x: null }.x == null, "full i8 range (min<0): null round-trips");
+  assert(NearU8 { x: null }.x == null, "near-full u8 range: null round-trips");
   assert(FullU16 { x: null }.x == null, "full u16 range: null round-trips");
 
   // ── the extreme values still store + read back (not swallowed as null) ──
-  assert(FullU8  { x: 255 }.x == 255,  "full u8 range: max value 255 stored");
-  assert(FullU8  { x: 0 }.x == 0,      "full u8 range: min value 0 stored");
-  assert(FullI8  { x: 127 }.x == 127,  "full i8 range: max value 127 stored");
-  assert(FullI8  { x: -128 }.x == -128,"full i8 range: min value -128 stored");
+  assert(FullU8 { x: 255 }.x == 255, "full u8 range: max value 255 stored");
+  assert(FullU8 { x: 0 }.x == 0, "full u8 range: min value 0 stored");
+  assert(FullI8 { x: 127 }.x == 127, "full i8 range: max value 127 stored");
+  assert(FullI8 { x: -128 }.x == -128, "full i8 range: min value -128 stored");
   assert(FullU16 { x: 65535 }.x == 65535, "full u16 range: max value stored");
 
   // ── reassignment + vector element exercise the same write/read pair ──
@@ -39,8 +47,12 @@ fn main() {
   s.x = 127;
   assert(s.x == 127, "full i8 range: reassign to max round-trips");
 
-  v = [FullU8 { x: 100 }, FullU8 { x: null }, FullU8 { x: 255 }];
-  assert(v[0].x == 100,  "vector elem non-null");
+  v = [
+    FullU8 { x: 100 },
+    FullU8 { x: null },
+    FullU8 { x: 255 },
+  ];
+  assert(v[0].x == 100, "vector elem non-null");
   assert(v[1].x == null, "vector elem null round-trips");
-  assert(v[2].x == 255,  "vector elem max value");
+  assert(v[2].x == 255, "vector elem max value");
 }

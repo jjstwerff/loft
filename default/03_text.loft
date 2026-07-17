@@ -70,7 +70,9 @@ pub fn to_uppercase(self: text) -> text;
 #pure
 // True if all characters are lowercase letters.
 pub fn is_lowercase(self: text) -> boolean {
-  for c in self { if !c.is_lowercase() { return false } }
+  for c in self {
+    if!c.is_lowercase() { return false }
+  }
   true
 }
 #pure
@@ -81,7 +83,9 @@ pub fn is_lowercase(self: character) -> boolean;
 #null_safe
 // True if all characters are uppercase letters.
 pub fn is_uppercase(self: text) -> boolean {
-  for c in self { if !c.is_uppercase() { return false } }
+  for c in self {
+    if!c.is_uppercase() { return false }
+  }
   true
 }
 #pure
@@ -92,7 +96,9 @@ pub fn is_uppercase(self: character) -> boolean;
 #null_safe
 // True if all characters are numeric digits (Unicode numeric, not just ASCII 0–9).
 pub fn is_numeric(self: text) -> boolean {
-  for c in self { if !c.is_numeric() { return false } }
+  for c in self {
+    if!c.is_numeric() { return false }
+  }
   true
 }
 #pure
@@ -103,7 +109,9 @@ pub fn is_numeric(self: character) -> boolean;
 #null_safe
 // True if all characters are letters or digits. Use to validate identifiers or tokens.
 pub fn is_alphanumeric(self: text) -> boolean {
-  for c in self { if !c.is_alphanumeric() { return false } }
+  for c in self {
+    if!c.is_alphanumeric() { return false }
+  }
   true
 }
 #pure
@@ -114,7 +122,9 @@ pub fn is_alphanumeric(self: character) -> boolean;
 #null_safe
 // True if all characters are alphabetic.
 pub fn is_alphabetic(self: text) -> boolean {
-  for c in self { if !c.is_alphabetic() { return false } }
+  for c in self {
+    if!c.is_alphabetic() { return false }
+  }
   true
 }
 #pure
@@ -125,7 +135,9 @@ pub fn is_alphabetic(self: character) -> boolean;
 #null_safe
 // True if all characters are whitespace. Use to detect blank lines.
 pub fn is_whitespace(self: text) -> boolean {
-  for c in self { if !c.is_whitespace() { return false } }
+  for c in self {
+    if!c.is_whitespace() { return false }
+  }
   true
 }
 #pure
@@ -136,7 +148,9 @@ pub fn is_whitespace(self: character) -> boolean;
 #null_safe
 // True if all characters are control characters.
 pub fn is_control(self: text) -> boolean {
-  for c in self { if !c.is_control() { return false } }
+  for c in self {
+    if!c.is_control() { return false }
+  }
   true
 }
 #pure
@@ -147,12 +161,10 @@ pub fn is_control(self: character) -> boolean;
 #null_safe
 // Joins parts with sep between each consecutive pair. Returns "" for an empty vector.
 // Use to build comma-separated lists, path segments, or any delimited output.
-pub fn join(self: vector < text >, sep: text) -> text {
+pub fn join(self: vector<text>, sep: text) -> text {
   result = "";
   for p in self {
-    if !p#first {
-      result += sep;
-    }
+    if!p#first { result += sep; }
     result += p;
   }
   result
@@ -163,7 +175,7 @@ pub fn join(self: vector < text >, sep: text) -> text {
 // Returns the script-level arguments passed after the script path.
 // Does not include the loft binary name or loft CLI flags.
 
-pub fn arguments() -> vector < text >;
+pub fn arguments() -> vector<text>;
 #rust"stores.os_arguments()"
 #impure(host_io)
 // Return the BYTE at position `i` (0..len) as integer 0-255,
@@ -183,7 +195,7 @@ pub fn byte_at(self: text, i: integer) -> integer;
 // assemble a byte buffer and need to turn it back into text.  Bytes that are
 // not valid UTF-8 yield the empty text (never a crash); validate first if you
 // must tell "empty input" from "invalid bytes" apart.
-pub fn text_from_bytes(bytes: vector < u8 >) -> text;
+pub fn text_from_bytes(bytes: vector<u8>) -> text;
 #rust"stores.text_from_bytes_native(@bytes)"
 #pure
 
@@ -194,17 +206,17 @@ pub fn ymd_days_ago(days: integer) -> text;
 #impure(host_io)
 // Returns the current working directory, optionally with v appended as a subpath.
 // Use to construct absolute paths relative to where the program was launched.
-pub fn directory(v:  & text = "") -> text;
+pub fn directory(v: &text = "") -> text;
 #rust"Stores::os_directory_native()"
 #impure(host_io)
 // Returns the current user's home directory, optionally with v appended.
 // Use for storing user-specific data or configuration.
-pub fn user_directory(v:  & text = "") -> text;
+pub fn user_directory(v: &text = "") -> text;
 #rust"Stores::os_home_native()"
 #impure(host_io)
 // Returns the directory containing the running executable, optionally with v appended.
 // Use to locate assets bundled alongside the program.
-pub fn program_directory(v:  & text = "") -> text;
+pub fn program_directory(v: &text = "") -> text;
 #rust"Stores::os_executable_native()"
 #impure(host_io)
 // Returns the directory containing the main source file being executed.

@@ -9,12 +9,24 @@
 //   - a var proven non-zero by an `if v == 0 { … } else { a / v }` (ELSE) guard;
 //   - a `??`-discharged result (`a / b ?? d`);
 //   - an honestly-`integer?`-declared result.
-fn constdiv(a: integer) -> integer { a / 2 }
-fn modconst(a: integer) -> integer { a % 3 }
-fn guarded_then(a: integer, b: integer) -> integer { if b != 0 { return a / b; } 0 }
-fn guarded_else(a: integer, b: integer) -> integer { if b == 0 { return -1; } else { a / b } }
-fn discharged(a: integer, b: integer) -> integer { a / b ?? 0 }
-fn honest(a: integer, b: integer) -> integer? { a / b }
+fn constdiv(a: integer) -> integer {
+  a / 2
+}
+fn modconst(a: integer) -> integer {
+  a % 3
+}
+fn guarded_then(a: integer, b: integer) -> integer {
+  if b != 0 { return a / b; } 0
+}
+fn guarded_else(a: integer, b: integer) -> integer {
+  if b == 0 { return -1; } else { a / b }
+}
+fn discharged(a: integer, b: integer) -> integer {
+  a / b ?? 0
+}
+fn honest(a: integer, b: integer) -> integer? {
+  a / b
+}
 
 fn main() {
   assert(constdiv(10) == 5, "constdiv={constdiv(10)}");

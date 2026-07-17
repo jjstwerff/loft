@@ -29,12 +29,8 @@ fn main() {
   found_inner = false;
   found_middle = false;
   for st_fr in nested {
-    if st_fr.function == "st_inner" {
-      found_inner = true;
-    }
-    if st_fr.function == "st_middle" {
-      found_middle = true;
-    }
+    if st_fr.function == "st_inner" { found_inner = true; }
+    if st_fr.function == "st_middle" { found_middle = true; }
   }
   assert(found_inner, "st_inner in trace");
   assert(found_middle, "st_middle in trace");

@@ -13,9 +13,16 @@
 // `codegen_runtime::OpClearKeyed`, both calling `remove_claims`), and
 // recognising it as a first-arg write in `check_ref_mutations`.
 
-struct HRec { ck: integer, v: integer }
-struct SRec { sk: integer }
-struct IRec { ik: integer }
+struct HRec {
+  ck: integer,
+  v: integer,
+}
+struct SRec {
+  sk: integer,
+}
+struct IRec {
+  ik: integer,
+}
 
 // All three keyed kinds as fields, mutated through a `&` param.
 struct Bag {
@@ -25,10 +32,18 @@ struct Bag {
 }
 
 fn bag_fill(b: &Bag) {
-  b.h += [HRec{ck: 1, v: 10}];
-  b.h += [HRec{ck: 2, v: 20}];
-  b.s += [SRec{sk: 7}];
-  b.i += [IRec{ik: 9}];
+  b.h += [
+    HRec { ck: 1, v: 10 },
+  ];
+  b.h += [
+    HRec { ck: 2, v: 20 },
+  ];
+  b.s += [
+    SRec { sk: 7 },
+  ];
+  b.i += [
+    IRec { ik: 9 },
+  ];
 }
 
 // The crux: clearing keyed fields through a `&` param must (a) compile,
@@ -40,7 +55,7 @@ fn bag_clear(b: &Bag) {
 }
 
 fn main() {
-  b = Bag{h: [], s: [], i: []};
+  b = Bag { h: [], s: [], i: [] };
   bag_fill(b);
   assert(len(b.h) == 2, "hash field filled");
   assert(len(b.s) == 1, "sorted field filled");

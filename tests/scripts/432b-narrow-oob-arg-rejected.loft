@@ -13,9 +13,14 @@
 // the file compiles and EXECUTES `main`, where the value is not 231 (= 999 & 0xFF)
 // and the assert fails — so the regression is caught either way.
 
-fn sink_u8(v: vector<u8>) -> integer { v[1] }
+fn sink_u8(v: vector<u8>) -> integer {
+  v[1]
+}
 
 // @EXPECT_ERROR: cannot implicitly narrow integer to u8
 fn main() {
-  assert(sink_u8([10, 999, 20]) == 231, "out-of-range u8 literal arg must be rejected at compile time");
+  assert(
+    sink_u8([10, 999, 20]) == 231,
+    "out-of-range u8 literal arg must be rejected at compile time"
+  );
 }

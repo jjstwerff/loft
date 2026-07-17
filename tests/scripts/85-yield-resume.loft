@@ -10,28 +10,22 @@
 // wrap suite and native compilation both run without per-script
 // mock-fn injection.
 
-struct Mat4 { m: vector<float> }
+struct Mat4 {
+  m: vector<float>,
+}
 
 fn mat4_identity() -> Mat4 {
-  Mat4 { m: [
-    1.0, 0.0, 0.0, 0.0,
-    0.0, 1.0, 0.0, 0.0,
-    0.0, 0.0, 1.0, 0.0,
-    0.0, 0.0, 0.0, 1.0
-  ] }
+  Mat4 { m: [1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 0.0, 1.0] }
 }
 
 fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
-  mul_r = Mat4 { m: [
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0,
-    0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0
-  ] };
+  mul_r = Mat4 {
+    m: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+  };
   for mul_col in 0..4 {
     for mul_row in 0..4 {
       mul_sum = 0.0;
-      for mul_k in 0..4 {
-        mul_sum += ma.m[mul_k * 4 + mul_row] * mb.m[mul_col * 4 + mul_k];
-      }
+      for mul_k in 0..4 { mul_sum += ma.m[mul_k * 4 + mul_row] * mb.m[mul_col * 4 + mul_k]; }
       mul_r.m[mul_col * 4 + mul_row] = mul_sum;
     }
   }
@@ -39,21 +33,11 @@ fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4 {
 }
 
 fn ortho() -> Mat4 {
-  Mat4 { m: [
-    2.0, 0.0, 0.0, 0.0,
-    0.0, -2.0, 0.0, 0.0,
-    0.0, 0.0, -1.0, 0.0,
-    -1.0, 1.0, 0.0, 1.0
-  ] }
+  Mat4 { m: [2.0, 0.0, 0.0, 0.0, 0.0, -2.0, 0.0, 0.0, 0.0, 0.0, -1.0, 0.0, -1.0, 1.0, 0.0, 1.0] }
 }
 
 fn rect_mvp(proj: const Mat4, bx: float, by: float, bw: float, bh: float) -> Mat4 {
-  model = Mat4 { m: [
-    bw, 0.0, 0.0, 0.0,
-    0.0, bh, 0.0, 0.0,
-    0.0, 0.0, 1.0, 0.0,
-    bx, by, 0.0, 1.0
-  ] };
+  model = Mat4 { m: [bw, 0.0, 0.0, 0.0, 0.0, bh, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0, bx, by, 0.0, 1.0] };
   mat4_mul(proj, model)
 }
 
@@ -78,8 +62,8 @@ fn main() {
     for br_dr in 0..5 {
       for br_dc in 0..10 {
         if br_bricks[br_dr * 10 + br_dc] == 1 {
-          br_dx = (br_dc as float) * 76.0 + 12.0;
-          br_dy = (br_dr as float) * 24.0 + 50.0;
+          br_dx = (br_dc as float)*76.0 + 12.0;
+          br_dy = (br_dr as float)*24.0 + 50.0;
           br_mvp = rect_mvp(br_proj, br_dx, br_dy, 72.0, 20.0);
           // simulate gl_set_uniform_mat4 + gl_draw
           assert(len(br_mvp.m) == 16, "brick mvp");

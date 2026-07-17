@@ -6,33 +6,35 @@
 struct RngItem {
   nr: integer,
   label: text,
-  val: integer
+  val: integer,
 }
 
 struct RngStore {
-  items: index < RngItem[nr, -label] >
+  items: index<RngItem[nr, -label]>,
 }
 
 struct RngScore {
   pts: integer,
-  name: text
+  name: text,
 }
 
 struct RngBoard {
-  scores: sorted < RngScore[pts] >
+  scores: sorted<RngScore[pts]>,
 }
 
 fn rng_build_index() -> RngStore {
-  RngStore { items: [
-    RngItem { nr: 10, label: "alpha", val: 1 },
-    RngItem { nr: 20, label: "beta", val: 2 },
-    RngItem { nr: 20, label: "gamma", val: 3 },
-    RngItem { nr: 30, label: "delta", val: 4 },
-    RngItem { nr: 30, label: "epsilon", val: 5 },
-    RngItem { nr: 30, label: "alpha", val: 6 },
-    RngItem { nr: 40, label: "zeta", val: 7 },
-    RngItem { nr: 50, label: "eta", val: 8 }
-  ] }
+  RngStore {
+    items: [
+      RngItem { nr: 10, label: "alpha", val: 1 },
+      RngItem { nr: 20, label: "beta", val: 2 },
+      RngItem { nr: 20, label: "gamma", val: 3 },
+      RngItem { nr: 30, label: "delta", val: 4 },
+      RngItem { nr: 30, label: "epsilon", val: 5 },
+      RngItem { nr: 30, label: "alpha", val: 6 },
+      RngItem { nr: 40, label: "zeta", val: 7 },
+      RngItem { nr: 50, label: "eta", val: 8 },
+    ],
+  }
 }
 
 fn test_index_range_basic() {
@@ -51,9 +53,7 @@ fn test_index_range_empty() {
   ire_db = rng_build_index();
   // Range with no matching primary keys.
   ire_hi = 0;
-  for ire_h in ire_db.items[100..200] {
-    ire_hi += 1;
-  }
+  for ire_h in ire_db.items[100..200] { ire_hi += 1; }
   assert(ire_hi == 0, "range [100..200) returns 0 elements");
 }
 
@@ -74,18 +74,14 @@ fn test_index_range_with_secondary() {
 fn test_index_range_single_element() {
   ise_db = rng_build_index();
   ise_cnt = 0;
-  for ise_e in ise_db.items[10..11] {
-    ise_cnt += 1;
-  }
+  for ise_e in ise_db.items[10..11] { ise_cnt += 1; }
   assert(ise_cnt == 1, "single element range: {ise_cnt}");
 }
 
 fn test_index_full_iteration() {
   ifi_db = rng_build_index();
   ifi_sum = 0;
-  for ifi_e in ifi_db.items {
-    ifi_sum += ifi_e.val;
-  }
+  for ifi_e in ifi_db.items { ifi_sum += ifi_e.val; }
   assert(ifi_sum == 36, "full iteration sum: {ifi_sum}");
 }
 
@@ -100,26 +96,24 @@ fn test_index_range_after_removal() {
   iar_db = rng_build_index();
   iar_db.items[20, "beta"] = null;
   iar_cnt = 0;
-  for iar_e in iar_db.items[20..40] {
-    iar_cnt += 1;
-  }
+  for iar_e in iar_db.items[20..40] { iar_cnt += 1; }
   assert(iar_cnt == 4, "range after removal: {iar_cnt}");
 }
 
 fn test_sorted_integer_key() {
-  sik_board = RngBoard { scores: [
-    RngScore { pts: 100, name: "Alice" },
-    RngScore { pts: 50, name: "Bob" },
-    RngScore { pts: 200, name: "Carol" },
-    RngScore { pts: 150, name: "Dave" },
-    RngScore { pts: 75, name: "Eve" }
-  ] };
+  sik_board = RngBoard {
+    scores: [
+      RngScore { pts: 100, name: "Alice" },
+      RngScore { pts: 50, name: "Bob" },
+      RngScore { pts: 200, name: "Carol" },
+      RngScore { pts: 150, name: "Dave" },
+      RngScore { pts: 75, name: "Eve" },
+    ],
+  };
   sik_prev = 0;
   sik_ok = true;
   for sik_e in sik_board.scores {
-    if sik_e.pts < sik_prev {
-      sik_ok = false;
-    }
+    if sik_e.pts < sik_prev { sik_ok = false; }
     sik_prev = sik_e.pts;
   }
   assert(sik_ok, "sorted integer key ascending");
@@ -129,33 +123,33 @@ fn test_sorted_integer_key() {
 }
 
 fn test_sorted_reverse_iteration() {
-  sri_board = RngBoard { scores: [
-    RngScore { pts: 100, name: "Alice" },
-    RngScore { pts: 50, name: "Bob" },
-    RngScore { pts: 200, name: "Carol" }
-  ] };
+  sri_board = RngBoard {
+    scores: [
+      RngScore { pts: 100, name: "Alice" },
+      RngScore { pts: 50, name: "Bob" },
+      RngScore { pts: 200, name: "Carol" },
+    ],
+  };
   sri_prev = 999;
   sri_ok = true;
   for sri_e in rev(sri_board.scores) {
-    if sri_e.pts > sri_prev {
-      sri_ok = false;
-    }
+    if sri_e.pts > sri_prev { sri_ok = false; }
     sri_prev = sri_e.pts;
   }
   assert(sri_ok, "sorted reverse descending");
 }
 
 fn test_sorted_remove_and_verify() {
-  srv_board = RngBoard { scores: [
-    RngScore { pts: 10, name: "X" },
-    RngScore { pts: 20, name: "Y" },
-    RngScore { pts: 30, name: "Z" }
-  ] };
+  srv_board = RngBoard {
+    scores: [
+      RngScore { pts: 10, name: "X" },
+      RngScore { pts: 20, name: "Y" },
+      RngScore { pts: 30, name: "Z" },
+    ],
+  };
   srv_board.scores[20] = null;
   assert(!srv_board.scores[20], "removed score is null");
   srv_cnt = 0;
-  for srv_e in srv_board.scores {
-    srv_cnt += 1;
-  }
+  for srv_e in srv_board.scores { srv_cnt += 1; }
   assert(srv_cnt == 2, "sorted count after removal: {srv_cnt}");
 }

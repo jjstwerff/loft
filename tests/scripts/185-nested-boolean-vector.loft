@@ -12,14 +12,17 @@
 // stride to ≥4 — without changing the type classification.
 
 fn mk_bool_rows() -> vector<vector<boolean>> {
-  return [[true, false], [false, true, false]];
+  return[[true, false], [false, true, false]];
 }
 
 fn main() {
   // 3 alternating rows + materialise each (the SIGSEGV / empty-row shape)
   vv: vector<vector<boolean>> = [[true, false, true], [false], [false, true]];
   assert(len(vv) == 3, "len {len(vv)}");
-  assert(len(vv[0]) == 3 && len(vv[1]) == 1 && len(vv[2]) == 2, "row lens {len(vv[0])},{len(vv[1])},{len(vv[2])}");
+  assert(
+    len(vv[0]) == 3 && len(vv[1]) == 1 && len(vv[2]) == 2,
+    "row lens {len(vv[0])},{len(vv[1])},{len(vv[2])}"
+  );
   assert(vv[0][0] == true && vv[0][1] == false && vv[0][2] == true, "row0 {vv[0]}");
   assert(vv[1][0] == false, "row1");
   assert(vv[2][0] == false && vv[2][1] == true, "row2 {vv[2]}");

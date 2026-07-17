@@ -9,28 +9,46 @@
 // escapes), value semantics must still hold. The alloc counts themselves are pinned in the Rust
 // test `tests/value_struct_alloc.rs`. Both backends; leak-checked by tests/ownership_oracle.
 
-value struct Pt { x: integer, y: integer }
-struct Bag { items: vector<Pt> }
+value struct Pt {
+  x: integer,
+  y: integer,
+}
+struct Bag {
+  items: vector<Pt>,
+}
 
 // escape: a returned value-struct view must be an independent copy (no dangling alias)
-fn first(b: Bag) -> Pt { p = b.items[0]; p }
+fn first(b: Bag) -> Pt {
+  p = b.items[0]; p
+}
 
 fn main() {
   // read-only iteration is elided (zero-cost) yet still a snapshot: mutating the SOURCE element the
   // loop var currently points at, mid-iteration, must NOT be observed through the loop var.
-  b = Bag { items: [Pt { x: 1, y: 0 }, Pt { x: 2, y: 0 }, Pt { x: 3, y: 0 }] };
+  b = Bag { items: [
+    Pt { x: 1, y: 0 },
+    Pt { x: 2, y: 0 },
+    Pt { x: 3, y: 0 },
+  ] };
   s = 0;
-  for p in b.items { b.items[0].x = 99; s = s + p.x; }
+  for p in b.items {
+    b.items[0].x = 99; s = s + p.x;
+  }
   assert(s == 6, "value-struct loop var is a snapshot under source mutation (got {s}, want 6)");
 
   // straight-line: bind, then mutate the source; the view must have snapshotted
-  b2 = Bag { items: [Pt { x: 10, y: 0 }, Pt { x: 20, y: 0 }] };
+  b2 = Bag { items: [
+    Pt { x: 10, y: 0 },
+    Pt { x: 20, y: 0 },
+  ] };
   q = b2.items[0];
   b2.items[0].x = 77;
   assert(q.x == 10, "snapshot not alias (got {q.x}, want 10)");
 
   // co-alias: mutate the source through a whole-record alias `w = b3`
-  b3 = Bag { items: [Pt { x: 5, y: 0 }] };
+  b3 = Bag { items: [
+    Pt { x: 5, y: 0 },
+  ] };
   r = b3.items[0];
   w = b3;
   w.items[0].x = 88;
@@ -38,7 +56,9 @@ fn main() {
   assert(w.items[0].x == 88, "the copy itself WAS mutated (got {w.items[0].x})");
 
   // escape via return is an independent copy
-  b4 = Bag { items: [Pt { x: 7, y: 8 }] };
+  b4 = Bag { items: [
+    Pt { x: 7, y: 8 },
+  ] };
   e = first(b4);
   b4.items[0].x = 99;
   assert(e.x == 7 && e.y == 8, "returned value struct is an independent copy (got {e.x})");

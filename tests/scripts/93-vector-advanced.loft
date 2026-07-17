@@ -13,7 +13,11 @@
 // because of a sibling 2-arg-lambda method-form inference bug
 // surfaced by closing @P287 — tracked separately as @P288.
 
-enum VVal { VA, VB, VC }
+enum VVal {
+  VA,
+  VB,
+  VC,
+}
 
 fn test_append_vector() {
   v: vector<VVal> = [VA, VA];
@@ -58,12 +62,22 @@ fn test_slice_no_mutation() {
   assert("{v} {s}" == "[10,20,30] [10,20,-1]", "slice no mutation");
 }
 
-struct VElm { a: integer, b: integer }
+struct VElm {
+  a: integer,
+  b: integer,
+}
 
 fn test_format_object() {
-  v = [VElm{a:1, b:2}, VElm{a:12, b:13}, VElm{a:4, b:5}];
+  v = [
+    VElm { a: 1, b: 2 },
+    VElm { a: 12, b: 13 },
+    VElm { a: 4, b: 5 },
+  ];
   v[2].b = 6;
-  assert("{v} sizeof {sizeof(VElm)}" == `[{{a:1,b:2}},{{a:12,b:13}},{{a:4,b:6}}] sizeof 16`, "format object");
+  assert(
+    "{v} sizeof {sizeof(VElm)}" == `[{{a:1,b:2}},{{a:12,b:13}},{{a:4,b:6}}] sizeof 16`,
+    "format object"
+  );
 }
 
 fn vsum(v: vector<integer>) -> integer {
@@ -96,18 +110,29 @@ fn test_fill_result() {
   assert("{t}" == `["aa","bb"]`, "fill result");
 }
 
-struct VCount { t: text, v: integer }
-struct VCounting { v: vector<VCount>, h: hash<VCount[t]> }
+struct VCount {
+  t: text,
+  v: integer,
+}
+struct VCounting {
+  v: vector<VCount>,
+  h: hash<VCount[t]>,
+}
 
 fn cfill(c: VCounting) {
-  c.v = [
-    {t:"One", v:1}, {t:"Two", v:2}
-  ];
+  c.v = [{ t: "One", v: 1 }, { t: "Two", v: 2 }];
   c.v += [
-    {t:"Three", v:3}, {t:"Four", v:4}, {t:"Five", v:5},
-    {t:"Six", v:6}, {t:"Seven", v:7}, {t:"Eight", v:8},
-    {t:"Nine", v:9}, {t:"Ten", v:10}, {t:"Eleven", v:11},
-    {t:"Twelve", v:12}, {t:"Thirteen", v:13}
+    { t: "Three", v: 3 },
+    { t: "Four", v: 4 },
+    { t: "Five", v: 5 },
+    { t: "Six", v: 6 },
+    { t: "Seven", v: 7 },
+    { t: "Eight", v: 8 },
+    { t: "Nine", v: 9 },
+    { t: "Ten", v: 10 },
+    { t: "Eleven", v: 11 },
+    { t: "Twelve", v: 12 },
+    { t: "Thirteen", v: 13 },
   ];
 }
 
@@ -121,13 +146,18 @@ fn test_combination_hash() {
   assert(c.h["Five"].v + c.h["Seven"].v == 12, "hash lookup");
 }
 
-struct VData { name: character, number: integer }
+struct VData {
+  name: character,
+  number: integer,
+}
 
 fn vdata(n: text) -> vector<VData> {
   res: vector<VData> = [];
   nr = 0;
   for ch in n {
-    res += [VData {name: ch, number: nr}];
+    res += [
+      VData { name: ch, number: nr },
+    ];
     nr += 1;
   }
   res
@@ -135,8 +165,10 @@ fn vdata(n: text) -> vector<VData> {
 
 fn test_fill_fn() {
   d = vdata("test");
-  assert("{d}" == `[{{name:'t',number:0}},{{name:'e',number:1}},{{name:'s',number:2}},{{name:'t',number:3}}]`,
-    "fill fn");
+  assert(
+    "{d}" == `[{{name:'t',number:0}},{{name:'e',number:1}},{{name:'s',number:2}},{{name:'t',number:3}}]`,
+    "fill fn"
+  );
 }
 
 fn test_vector_clear() {
@@ -177,11 +209,22 @@ fn test_for_comprehension_if() {
   assert("{v}" == "[2,4,6,8]", "comprehension if");
 }
 
-struct VSortElm { skey: integer, val: integer }
-struct VSortDb { s: sorted<VSortElm[skey]> }
+struct VSortElm {
+  skey: integer,
+  val: integer,
+}
+struct VSortDb {
+  s: sorted<VSortElm[skey]>,
+}
 
 fn test_sorted_reverse_iterator() {
-  db = VSortDb { s: [VSortElm{skey:1,val:10}, VSortElm{skey:2,val:20}, VSortElm{skey:3,val:30}] };
+  db = VSortDb {
+    s: [
+      VSortElm { skey: 1, val: 10 },
+      VSortElm { skey: 2, val: 20 },
+      VSortElm { skey: 3, val: 30 },
+    ],
+  };
   fwd = 0;
   for e in db.s { fwd = fwd * 10 + e.skey }
   assert(fwd == 123, "forward got {fwd}");
@@ -198,20 +241,36 @@ fn test_sorted_reverse_empty() {
 }
 
 fn test_sorted_remove() {
-  db = VSortDb { s: [VSortElm{skey:1,val:10}, VSortElm{skey:2,val:20}, VSortElm{skey:3,val:30}, VSortElm{skey:4,val:40}] };
-  for e in db.s if e.skey % 2 == 0 {
-    e#remove;
-  }
+  db = VSortDb {
+    s: [
+      VSortElm { skey: 1, val: 10 },
+      VSortElm { skey: 2, val: 20 },
+      VSortElm { skey: 3, val: 30 },
+      VSortElm { skey: 4, val: 40 },
+    ],
+  };
+  for e in db.s if e.skey % 2 == 0 { e#remove; }
   total = 0;
   for e in db.s { total += e.skey }
   assert(total == 4, "remaining keys {total}");
 }
 
-struct VIdxElm { ikey: integer, val: integer }
-struct VIdxDb { map: index<VIdxElm[ikey]> }
+struct VIdxElm {
+  ikey: integer,
+  val: integer,
+}
+struct VIdxDb {
+  map: index<VIdxElm[ikey]>,
+}
 
 fn test_index_loop_remove_small() {
-  db = VIdxDb { map: [VIdxElm{ikey:1,val:10}, VIdxElm{ikey:2,val:20}, VIdxElm{ikey:3,val:30}] };
+  db = VIdxDb {
+    map: [
+      VIdxElm { ikey: 1, val: 10 },
+      VIdxElm { ikey: 2, val: 20 },
+      VIdxElm { ikey: 3, val: 30 },
+    ],
+  };
   for e in db.map { e#remove; }
   count = 0;
   for _e in db.map { count += 1; }
@@ -284,7 +343,10 @@ fn test_vector_self_append_empty() {
   assert(len(v) == 0, "empty self-append");
 }
 
-struct VGContainer { src: vector<integer>, dst: vector<integer> }
+struct VGContainer {
+  src: vector<integer>,
+  dst: vector<integer>,
+}
 
 fn test_for_loop_mutation_guard_different_field_ok() {
   db = VGContainer { src: [1, 2, 3], dst: [] };
@@ -297,12 +359,20 @@ fn vsort_merge(lp: vector<integer>, rp: vector<integer>) -> vector<integer> {
   out = [for mg_i in 0..0 { mg_i }];
   li = 0; ri = 0;
   ll = len(lp); rl = len(rp);
-  for _mg_step in 0..(ll + rl) {
+  for _mg_step in 0.. (ll + rl) {
     if li >= ll && ri >= rl { break; }
-    if li >= ll { out += [rp[ri]]; ri += 1; }
-    else if ri >= rl { out += [lp[li]]; li += 1; }
-    else if lp[li] <= rp[ri] { out += [lp[li]]; li += 1; }
-    else { out += [rp[ri]]; ri += 1; }
+    if li >= ll {
+      out += [rp[ri]]; ri += 1;
+    }
+    else if ri >= rl {
+      out += [lp[li]]; li += 1;
+    }
+    else if lp[li] <= rp[ri] {
+      out += [lp[li]]; li += 1;
+    }
+    else {
+      out += [rp[ri]]; ri += 1;
+    }
   }
   out
 }

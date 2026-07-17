@@ -9,10 +9,18 @@
 // literal more than once; it stays a normal local (the `__vdb` + return-copy path,
 // which explicit `return z;` already used correctly).
 
-fn two() -> vector<integer> { z: vector<integer> = [9, 9]; z = [1, 2]; z }
-fn three() -> vector<integer> { z: vector<integer> = [9, 9]; z = [1, 2]; z = [3, 4]; z }
-fn diff_len() -> vector<integer> { z: vector<integer> = [0]; z = [1, 2, 3]; z }
-fn nested() -> vector<vector<integer>> { z: vector<vector<integer>> = [[9]]; z = [[1], [2]]; z }
+fn two() -> vector<integer> {
+  z: vector<integer> = [9, 9]; z = [1, 2]; z
+}
+fn three() -> vector<integer> {
+  z: vector<integer> = [9, 9]; z = [1, 2]; z = [3, 4]; z
+}
+fn diff_len() -> vector<integer> {
+  z: vector<integer> = [0]; z = [1, 2, 3]; z
+}
+fn nested() -> vector<vector<integer>> {
+  z: vector<vector<integer>> = [[9]]; z = [[1], [2]]; z
+}
 
 fn main() {
   a = two();

@@ -38,7 +38,7 @@ fn main() {
   assert(is_dir("p430_dir/blob.bin") == false, "is_dir on a file is false");
 
   // --- read_bytes back: byte-exact round-trip ---
-  back = read_bytes("p430_dir/blob.bin") ?? [];   // @PLN102 H4: read_bytes is vector<u8>?
+  back = read_bytes("p430_dir/blob.bin") ?? []; // @PLN102 H4: read_bytes is vector<u8>?
   assert(back.len() == 5, "read_bytes returns 5 bytes");
   assert(back[0] == 0, "byte 0 round-trips");
   assert(back[1] == 255, "byte 1 round-trips (non-UTF-8)");
@@ -47,7 +47,7 @@ fn main() {
   assert(back[4] == 128, "byte 4 round-trips (non-UTF-8)");
 
   // --- list_dir contains the entry name (base name, not full path) ---
-  entries = list_dir("p430_dir") ?? [];           // @PLN102 H4: list_dir is vector<text>?
+  entries = list_dir("p430_dir") ?? []; // @PLN102 H4: list_dir is vector<text>?
   found = false;
   for e in entries {
     if e == "blob.bin" { found = true; }

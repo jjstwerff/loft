@@ -12,14 +12,27 @@
 // caller's return buffer.  Found live in the routing consumer: every
 // map-matched route arrived as zero points (issue #488).
 
-struct FvPt { lat: float, lon: float, tag: text }
-struct FvMr { pts: vector<FvPt>, gaps: integer }
+struct FvPt {
+  lat: float,
+  lon: float,
+  tag: text,
+}
+struct FvMr {
+  pts: vector<FvPt>,
+  gaps: integer,
+}
 
 fn fv_mk() -> FvMr {
   ps: vector<FvPt> = [];
-  ps += [FvPt { lat: 1.5, lon: 2.5, tag: "alpha" }];
-  ps += [FvPt { lat: 3.5, lon: 4.5, tag: "beta" }];
-  ps += [FvPt { lat: 5.5, lon: 6.5, tag: "gamma" }];
+  ps += [
+    FvPt { lat: 1.5, lon: 2.5, tag: "alpha" },
+  ];
+  ps += [
+    FvPt { lat: 3.5, lon: 4.5, tag: "beta" },
+  ];
+  ps += [
+    FvPt { lat: 5.5, lon: 6.5, tag: "gamma" },
+  ];
   FvMr { pts: ps, gaps: 7 }
 }
 
@@ -34,7 +47,7 @@ fn fv_get_ctx() -> vector<FvPt> {
   fv_extra = "pending free {1}";
   fv_c = fv_mk();
   fv_note = "{fv_extra} still live";
-  if len(fv_note) < 0 { return []; }
+  if len(fv_note) < 0 { return[]; }
   return fv_c.pts;
 }
 
@@ -43,10 +56,11 @@ fn test_field_return_simple() {
   assert(len(ts_v) == 3, "simple: expected 3 points, got {len(ts_v)}");
   ts_first = ts_v[0] ?? FvPt { lat: -1.0, lon: -1.0, tag: "?" };
   ts_last = ts_v[2] ?? FvPt { lat: -1.0, lon: -1.0, tag: "?" };
-  assert(ts_first.lat == 1.5 && ts_first.tag == "alpha",
-         "simple first: {ts_first.lat} {ts_first.tag}");
-  assert(ts_last.lon == 6.5 && ts_last.tag == "gamma",
-         "simple last: {ts_last.lon} {ts_last.tag}");
+  assert(
+    ts_first.lat == 1.5 && ts_first.tag == "alpha",
+    "simple first: {ts_first.lat} {ts_first.tag}"
+  );
+  assert(ts_last.lon == 6.5 && ts_last.tag == "gamma", "simple last: {ts_last.lon} {ts_last.tag}");
 }
 
 fn test_field_return_with_pending_frees() {
@@ -59,7 +73,9 @@ fn test_field_return_with_pending_frees() {
 // The neighbouring shapes the gate must NOT disturb.
 fn fv_get_fresh_local() -> vector<FvPt> {
   fv_own: vector<FvPt> = [];
-  fv_own += [FvPt { lat: 9.5, lon: 8.5, tag: "own" }];
+  fv_own += [
+    FvPt { lat: 9.5, lon: 8.5, tag: "own" },
+  ];
   return fv_own;
 }
 
@@ -69,8 +85,10 @@ fn fv_get_param_field(fp_b: FvMr) -> vector<FvPt> {
 
 fn test_neighbour_shapes_unchanged() {
   tn_own = fv_get_fresh_local();
-  assert(len(tn_own) == 1 && (tn_own[0] ?? FvPt { lat: 0.0, lon: 0.0, tag: "?" }).tag == "own",
-         "fresh local: {len(tn_own)}");
+  assert(
+    len(tn_own) == 1 && (tn_own[0] ?? FvPt { lat: 0.0, lon: 0.0, tag: "?" }).tag == "own",
+    "fresh local: {len(tn_own)}"
+  );
   tn_pf = fv_get_param_field(fv_mk());
   assert(len(tn_pf) == 3, "param field: expected 3, got {len(tn_pf)}");
 }

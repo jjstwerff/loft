@@ -35,6 +35,12 @@ fn test_text_param_read() {
   assert(tp_concat("hello", " world") == "hello world", "concat");
 }
 
-fn tp_len(tp_s: text) -> integer { len(tp_s) }
-fn tp_first(tp_s: text) -> text { tp_s[0..1] }
-fn tp_concat(tp_a: text, tp_b: text) -> text { tp_a + tp_b }
+fn tp_len(tp_s: text) -> integer {
+  len(tp_s)
+}
+fn tp_first(tp_s: text) -> text {
+  tp_s[0..1]
+}
+fn tp_concat(tp_a: text, tp_b: text) -> text {
+  tp_a + tp_b
+}

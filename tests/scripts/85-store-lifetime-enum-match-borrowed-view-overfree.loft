@@ -12,15 +12,32 @@
 //      fires for a struct-enum (`Type::Enum(_, true, _)`) binding, not only
 //      `Type::Reference`, so it deep-copies a borrowed-view return.
 enum CborValue {
-  CNull, CInt { value: integer },
-  CBytes { value: vector<u8> }, CText { value: text },
-  CArray { items: vector<CborValue> }, CMap { entries: vector<CborEntry> },
+  CNull,
+  CInt { value: integer },
+  CBytes { value: vector<u8> },
+  CText { value: text },
+  CArray { items: vector<CborValue> },
+  CMap { entries: vector<CborEntry> },
 }
-struct CborEntry { key: CborValue, value: CborValue }
-struct Holder { tag: text, fields: CborValue, n: integer }
+struct CborEntry {
+  key: CborValue,
+  value: CborValue,
+}
+struct Holder {
+  tag: text,
+  fields: CborValue,
+  n: integer,
+}
 
-fn ent(k: integer, v: CborValue) -> CborEntry { return CborEntry { key: CInt { value: k }, value: v }; }
-fn cnull() -> CborValue { return CNull; }
+fn ent(k: integer, v: CborValue) -> CborEntry {
+  return CborEntry {
+    key: CInt { value: k },
+    value: v,
+  };
+}
+fn cnull() -> CborValue {
+  return CNull;
+}
 
 // returns a BORROWED VIEW of `m` (r = entries[i].value) — the over-free shape.
 fn get_field(m: CborValue, key: integer) -> CborValue {
@@ -28,7 +45,13 @@ fn get_field(m: CborValue, key: integer) -> CborValue {
     CMap { entries } => {
       for i in 0..len(entries) {
         e = entries[i];
-        match e.key { CInt { value } => { if value == key { r = e.value; return r; } }, _ => {} }
+        match e.key {
+          CInt { value } => {
+            if value == key {
+              r = e.value; return r;
+            }
+          }, _ => {}
+        }
       }
       CNull
     },
@@ -36,11 +59,13 @@ fn get_field(m: CborValue, key: integer) -> CborValue {
   }
 }
 fn field_text(m: CborValue, key: integer) -> text {
-  match get_field(m, key) { CText { value } => { return "{value}"; }, _ => {} }
+  match get_field(m, key) {
+    CText { value } => { return "{value}"; }, _ => {}
+  }
   return "";
 }
 fn walk(fields: CborValue) -> boolean {
-  acl = get_field(fields, 3);   // a view into `fields`; freeing it must NOT free fields' store
+  acl = get_field(fields, 3); // a view into `fields`; freeing it must NOT free fields' store
   match acl {
     CArray { items } => {
       for i in 0..len(items) {
@@ -55,20 +80,28 @@ fn walk(fields: CborValue) -> boolean {
 // allocation pressure: same-shaped CMap allocations that recycle a freed store slot.
 fn make_filler(n: integer) -> CborValue {
   es: vector<CborEntry> = [];
-  for j in 0..n { es += [ ent(j*7+1, CText { value: "RECYCLE-FILL-{j}" }) ]; }
+  for j in 0..n { es += [ent(j * 7 + 1, CText { value: "RECYCLE-FILL-{j}" })]; }
   return CMap { entries: es };
 }
 fn fill_depth(c: CborValue) -> integer {
-  match c { CMap { entries } => { return len(entries); }, _ => { return 0; } }
+  match c {
+    CMap { entries } => { return len(entries); }, _ => { return 0; }
+  }
 }
 fn mk_holder() -> Holder {
   acle: vector<CborEntry> = [];
-  acle += [ ent(1, CText { value: "individual" }) ];
+  acle += [ent(1, CText { value: "individual" })];
   acls: vector<CborValue> = [];
-  acls += [ CMap { entries: acle } ];
+  acls += [
+    CMap { entries: acle },
+  ];
   pfe: vector<CborEntry> = [];
-  pfe += [ ent(3, CArray { items: acls }) ];
-  return Holder { tag: "TAG-VALUE-12345", fields: CMap { entries: pfe }, n: 99 };
+  pfe += [ent(3, CArray { items: acls })];
+  return Holder {
+    tag: "TAG-VALUE-12345",
+    fields: CMap { entries: pfe },
+    n: 99,
+  };
 }
 fn main() {
   h = mk_holder();
@@ -81,7 +114,10 @@ fn main() {
     acc = 0;
     for f in 0..6 { acc += fill_depth(make_filler(4)); }
     assert(acc == 24, "filler allocation churn ran");
-    assert(h.tag == "TAG-VALUE-12345", "Holder tag intact after walk (no over-free of borrowed view)");
+    assert(
+      h.tag == "TAG-VALUE-12345",
+      "Holder tag intact after walk (no over-free of borrowed view)"
+    );
     assert(h.n == 99, "Holder n intact after walk");
   }
   assert(found, "walk found the 'individual' entry through the borrowed view");

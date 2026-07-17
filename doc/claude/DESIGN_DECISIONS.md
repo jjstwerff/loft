@@ -2362,3 +2362,25 @@ So absolute compat holds both ways — bare-`use` programs qualify (no collision
 - **Collision resolver — aliased import (ALREADY in loft, @PLN22 P3/P4):** `use lib::(a as x, b);` imports `a` locally as `x` (plus namespace/type/fn aliases: `use lib as el;`, `use lib::Status as St;`, `use lib::make as mk;`). So any clash — two libraries exporting the same name, or an import you want to keep distinct — is resolved by binding it under a chosen local name. This also resolves the two-explicit-imports edge below: `use a::(x); use b::(x as bx);`. **Syntax — keep `as` (owner 2026-07-15):** the resolver already exists and `original as alias` is uniform across all four alias forms, so no new syntax is added (a proposed `alias = original` was declined — it would fragment the shipped alias grammar and break existing `use` statements for a cosmetic disambiguation; the `as` overload with the type-cast `as` is unambiguous inside a `use` group).
 - **Open edges (not ruled here):** an explicitly-imported name vs the program's own top-level def — resolve when specced.
 - Owner ruling 2026-07-15. Companion: [C97](#c97--). **Already shipped (@PLN22 P1–P4):** the whole `use` surface — bare `use lib;` = prefix-required namespace bind, `use lib::*;` = wildcard, `use lib::(a, b, c)` = selective, `use lib::(a as x, b)` / `use lib as el` / `use lib::T as St` = aliasing. So C98 needs **no new syntax**; the only residual is the C97 internal change (a library's `pub` symbol must stop registering as global `n_<name>` — the dual registration that still collides with the stdlib during the library's own compile, per C95 — and be module-scoped only, which the shipped `use` machinery already brings into scope). Import-wins precedence for an explicit `::*` / `::(…)` binding is the one resolution rule to confirm against that change.
+
+---
+
+## C99 — Read-only par-store sharing uses a contract-carried BORROW (Option A), not an `Arc<Store>` rewrite (Option B)
+
+Catalogue: @PLN108
+
+### Question
+
+A par worker's captured parent stores are read-only, so the per-worker byte-copy (`clone_for_worker`) is pure conservatism. Two ways to elide it: **A** — revive the existing `clone_for_light_worker` borrow (`unsafe`, safety *contract-carried* by @PLN102 C93 read-only + `thread::scope`/rayon join + the `read_only` write-panic); **B** — make a store's buffer `Arc`-shareable so sharing is safe *by construction* (type-carried), at the cost of reworking `Store.ptr: *mut u8` across allocation/free/word-addressing.
+
+### Evaluation
+
+A is small (wire an existing, tested path; no `Store` representation change) but its safety is trust, not proof — a future edit that mutated a parent mid-par or let a worker outlive the join would reintroduce UAF/race silently. B is safe by construction but a wide blast radius on the store representation. The plan built A behind a flag and ran the gates: **S1** found the parent-unwritten half is actually *compiler-carried* — 10/11 live dispatchers take `stores: &Stores` (a shared borrow the borrow checker won't let mutate), the one `&mut` (`run_parallel_queue_ref`) adopts strictly post-join. **S5/S6** — ASan 47/47 both flag states, TSan 0 races on the flag-ON path with a firing positive control. So the only thing A's `unsafe` actually carries is the read-only-shared-read claim, which the `read_only` write-panic backstops and TSan proved race-free.
+
+### Decision
+
+**Option A stands** (2026-07-17). Shipped default-ON for the interpreter via a heap-size auto-select (borrow ≥ 2 MB, `LOFT_PAR_SHARE=0/1` override). Notably **no `unsafe impl Sync for Store` was needed** — each worker OWNS its borrowed `WorkerStores` (moved into the spawn), so no `&Store` crosses a thread; `Store: Send` suffices. Option B is declined for now.
+
+### Revisit when
+
+A future edit makes the contract fragile — a dispatcher gains a mid-par parent mutation, a worker is allowed to outlive the join, or a rayon-pool reconciliation shares a `&Store` across threads (then `Sync` / `Arc<Store>` re-enters). Any such change should re-run S5/S6; if it can't stay TSan-clean under A, escalate to B. Design + gates: `plans/108-share-read-only-stores/`.

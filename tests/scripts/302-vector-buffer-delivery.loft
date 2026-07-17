@@ -10,13 +10,19 @@
 // `vector<vector<T>>` element-stride family (`vector_add` strode rows by the
 // 4-byte field-slot size instead of the read path's clamped content size).
 
-fn mk(a: integer) -> vector<integer> { lit = [a, a + 1]; lit }
+fn mk(a: integer) -> vector<integer> {
+  lit = [a, a + 1]; lit
+}
 
-fn vsum(v: vector<integer>) -> integer { t = 0; for x in v { t = t + x; } t }
+fn vsum(v: vector<integer>) -> integer {
+  t = 0; for x in v { t = t + x; } t
+}
 
 // Named-local mid-return + call-chain tail (the vsort shape).
 fn f_b(n: integer) -> vector<integer> {
-  if n == 0 { base = [7, 8]; return base; }
+  if n == 0 {
+    base = [7, 8]; return base;
+  }
   mk(n)
 }
 
@@ -33,7 +39,9 @@ fn f_d(n: integer) -> vector<integer> {
 }
 
 // Bare wrapper (#120 shape).
-fn f_a(n: integer) -> vector<integer> { mk(n) }
+fn f_a(n: integer) -> vector<integer> {
+  mk(n)
+}
 
 // A call inside a loop reuses the caller's fn-scoped hidden buffer: without
 // the clear-on-entry each iteration's delivery piled onto the previous one
@@ -59,7 +67,7 @@ fn test_assign_and_arg_delivery() {
   v1 = f_b(0);
   v2 = f_b(3);
   assert(vsum(v1) == 15 && vsum(v2) == 7, "b/assign {vsum(v1)} {vsum(v2)}");
-  s = vsum(f_c(0)) + vsum(f_c(3));
+  s = vsum(f_c(0))+vsum(f_c(3));
   assert(s == 25, "c/arg s={s} expect 25");
 }
 
@@ -71,12 +79,20 @@ fn vb_merge(lp: vector<integer>, rp: vector<integer>) -> vector<integer> {
   out = [for mg_i in 0..0 { mg_i }];
   li = 0; ri = 0;
   ll = len(lp); rl = len(rp);
-  for _mg_step in 0..(ll + rl) {
+  for _mg_step in 0.. (ll + rl) {
     if li >= ll && ri >= rl { break; }
-    if li >= ll { out += [rp[ri]]; ri += 1; }
-    else if ri >= rl { out += [lp[li]]; li += 1; }
-    else if lp[li] <= rp[ri] { out += [lp[li]]; li += 1; }
-    else { out += [rp[ri]]; ri += 1; }
+    if li >= ll {
+      out += [rp[ri]]; ri += 1;
+    }
+    else if ri >= rl {
+      out += [lp[li]]; li += 1;
+    }
+    else if lp[li] <= rp[ri] {
+      out += [lp[li]]; li += 1;
+    }
+    else {
+      out += [rp[ri]]; ri += 1;
+    }
   }
   out
 }
@@ -104,8 +120,10 @@ fn test_recursive_tail_consumers() {
 fn test_nested_concat() {
   a: vector<vector<integer>> = [[9]];
   a += [[1], [2]];
-  assert(len(a) == 3 && a[0][0] == 9 && a[1][0] == 1 && a[2][0] == 2,
-    "int rows {a[0][0]} {a[1][0]} {a[2][0]}");
+  assert(
+    len(a) == 3 && a[0][0] == 9 && a[1][0] == 1 && a[2][0] == 2,
+    "int rows {a[0][0]} {a[1][0]} {a[2][0]}"
+  );
   t: vector<vector<text>> = [["q"]];
   t += [["ab"], ["cd"]];
   assert(len(t) == 3 && t[1][0] == "ab" && t[2][0] == "cd", "text rows {t[1][0]} {t[2][0]}");
@@ -117,8 +135,10 @@ fn test_nested_concat() {
   assert(len(s) == 3 && s[1][0] == 2.5f && s[2][0] == 3.5f, "single rows");
   d3: vector<vector<vector<integer>>> = [[[7]]];
   d3 += [[[1, 2], [3]]];
-  assert(len(d3) == 2 && d3[1][0][0] == 1 && d3[1][0][1] == 2 && d3[1][1][0] == 3,
-    "depth-3 rows {d3[1][0][0]} {d3[1][1][0]}");
+  assert(
+    len(d3) == 2 && d3[1][0][0] == 1 && d3[1][0][1] == 2 && d3[1][1][0] == 3,
+    "depth-3 rows {d3[1][0][0]} {d3[1][1][0]}"
+  );
 }
 
 // A REASSIGNED nested local at the body tail copy-delivers through the same
@@ -139,7 +159,9 @@ fn test_nested_redelivery() {
 // fn — the original #355 wrong-element shape.  A forward caller can only
 // consult the callee's signature, which is why delivery must be
 // signature-derivable for every loft-bodied vector fn.
-fn use_pickv(json: text) -> vector<integer> { pickv(json) }
+fn use_pickv(json: text) -> vector<integer> {
+  pickv(json)
+}
 
 fn pickv(json: text) -> vector<integer> {
   if json == "" { return mkv(1); }
@@ -148,7 +170,9 @@ fn pickv(json: text) -> vector<integer> {
   result
 }
 
-fn mkv(n: integer) -> vector<integer> { v: vector<integer> = []; v += [n]; v }
+fn mkv(n: integer) -> vector<integer> {
+  v: vector<integer> = []; v += [n]; v
+}
 
 fn test_forward_caller_elements() {
   a = use_pickv("");

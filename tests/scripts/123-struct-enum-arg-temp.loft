@@ -12,17 +12,41 @@
 // work-ref free path).  Both backends; the `clean/` leak case asserts
 // no store leaks.
 
-enum IntE { A { v: integer }, B { w: integer } }
-enum MixE { M { v: integer }, N { s: text } }
-struct S { v: integer }
+enum IntE {
+  A { v: integer },
+  B { w: integer },
+}
+enum MixE {
+  M { v: integer },
+  N { s: text },
+}
+struct S {
+  v: integer,
+}
 
-fn mk_int() -> IntE { A { v: 21 } }
-fn mk_mix() -> MixE { N { s: "hi" } }
-fn mk_struct() -> S { S { v: 7 } }
+fn mk_int() -> IntE {
+  A { v: 21 }
+}
+fn mk_mix() -> MixE {
+  N { s: "hi" }
+}
+fn mk_struct() -> S {
+  S { v: 7 }
+}
 
-fn use_int(e: IntE) -> integer { match e { A { v } => v, B { w } => w } }
-fn use_mix(e: MixE) -> integer { match e { M { v } => v, N { s } => s.len() } }
-fn use_struct(e: S) -> integer { e.v }
+fn use_int(e: IntE) -> integer {
+  match e {
+    A { v } => v, B { w } => w
+  }
+}
+fn use_mix(e: MixE) -> integer {
+  match e {
+    M { v } => v, N { s } => s.len()
+  }
+}
+fn use_struct(e: S) -> integer {
+  e.v
+}
 
 fn main() {
   // direct inline struct-enum temp as call arg (the @P303 shape)

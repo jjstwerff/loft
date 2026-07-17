@@ -13,61 +13,61 @@
 // because '\0' didn't lex; the workaround removed in phase 10.16.
 
 fn test_null_character() {
-    // Loft treats codepoint 0 as the null character itself —
-    // `'\0' as integer` returns `null`, not `0`.  This matches
-    // how `'\x00'` and `'\u{0}'` are handled, and how the
-    // language uses character 0 as the "no character" sentinel
-    // throughout the runtime.  The test documents the
-    // intentional behaviour.
-    n = '\0';
-    n_int = n as integer;
-    assert(n_int == null, "'\\0' as integer is null (loft NUL convention)");
+  // Loft treats codepoint 0 as the null character itself —
+  // `'\0' as integer` returns `null`, not `0`.  This matches
+  // how `'\x00'` and `'\u{0}'` are handled, and how the
+  // language uses character 0 as the "no character" sentinel
+  // throughout the runtime.  The test documents the
+  // intentional behaviour.
+  n = '\0';
+  n_int = n as integer;
+  assert(n_int == null, "'\\0' as integer is null (loft NUL convention)");
 }
 
 fn test_x_ascii() {
-    a   = '\x41';   // 'A'
-    tld = '\x7e';   // '~'
-    nul = '\x00';   // NUL via \x form
-    assert(a == 'A',   "\\x41 == 'A'");
-    assert(tld == '~', "\\x7e == '~'");
-    nul_int = nul as integer;
-    assert(nul_int == null, "\\x00 as integer is null (loft NUL convention)");
+  a = '\x41'; // 'A'
+  tld = '\x7e'; // '~'
+  nul = '\x00'; // NUL via \x form
+  assert(a == 'A', "\\x41 == 'A'");
+  assert(tld == '~', "\\x7e == '~'");
+  nul_int = nul as integer;
+  assert(nul_int == null, "\\x00 as integer is null (loft NUL convention)");
 }
 
 fn test_u_brace_unicode_bmp() {
-    snowman = '\u{2603}';
-    arrow   = '\u{2192}';
-    assert(snowman as integer == 0x2603, "snowman BMP codepoint");
-    assert(arrow as integer == 0x2192,   "arrow BMP codepoint");
+  snowman = '\u{2603}';
+  arrow = '\u{2192}';
+  assert(snowman as integer == 0x2603, "snowman BMP codepoint");
+  assert(arrow as integer == 0x2192, "arrow BMP codepoint");
 }
 
 fn test_u_brace_unicode_supplementary() {
-    laugh = '\u{1F602}';
-    assert(laugh as integer == 0x1F602, "supplementary plane codepoint");
+  laugh = '\u{1F602}';
+  assert(laugh as integer == 0x1F602, "supplementary plane codepoint");
 }
 
 fn test_u_brace_short_form() {
-    a = '\u{41}';   // single hex digit
-    b = '\u{7E}';
-    // Doubled braces escape the format-string interpolation.
-    assert(a == 'A', "\\u{{41}} == 'A'");
-    assert(b == '~', "\\u{{7E}} == '~'");
+  a = '\u{41}'; // single hex digit
+  b = '\u{7E}';
+  // Doubled braces escape the format-string interpolation.
+  assert(a == 'A', "\\u{{41}} == 'A'");
+  assert(b == '~', "\\u{{7E}} == '~'");
 }
 
 fn test_escapes_in_string() {
-    // s.len() reports UTF-8 byte length, so the BMP arrow
-    // counts as 3 bytes (its UTF-8 encoding) even though it's
-    // one codepoint.
-    s = "tab:\x09 null:\0 arrow:\u{2192} bye";
-    assert(s.len() == 26, "string length with mixed escapes (bytes)");
+  // s.len() reports UTF-8 byte length, so the BMP arrow
+  // counts as 3 bytes (its UTF-8 encoding) even though it's
+  // one codepoint.
+  s = "tab:\x09 null:\0 arrow:\u{2192} bye";
+  assert(s.len() == 26, "string length with mixed escapes (bytes)");
 }
 
 fn main() {
-    test_null_character();
-    test_x_ascii();
-    test_u_brace_unicode_bmp();
-    test_u_brace_unicode_supplementary();
-    test_u_brace_short_form();
-    test_escapes_in_string();
-    println("escape-sequences: ok");
+  test_null_character();
+  test_x_ascii();
+  test_u_brace_unicode_bmp();
+  test_u_brace_unicode_supplementary();
+  test_u_brace_short_form();
+  test_escapes_in_string();
+  println("escape-sequences: ok");
 }

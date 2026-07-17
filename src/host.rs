@@ -1,0 +1,357 @@
+//! Rust → loft host-call API.
+//!
+//! Load a loft program once, then call any `pub fn` by name with typed Rust
+//! arguments and get a typed return — errors as a `Result`. See
+//! `doc/claude/plans/rust-host-call-api.md` for the design.
+//!
+//! ```ignore
+//! let mut prog = loft::host::Program::from_source("fn add(a: integer, b: integer) -> integer { a + b }")?;
+//! let out = prog.call("add", &[Value::Int(2), Value::Int(3)])?;   // Value::Int(5)
+//! ```
+//!
+//! The invariant: a host call routes through the SAME stack ABI the interpreter
+//! uses internally (`State::execute_host`, the general analogue of the par-worker
+//! `execute_at_*` family). It never re-implements how a value is pushed or read,
+//! so `call(f, args)` is equivalent to an in-language call of `f`.
+//!
+//! Phase 1 supports parameters and returns of **text, integer-family, single,
+//! boolean, and void**. A struct / vector / enum in the signature returns a clean
+//! [`LoftError::Unsupported`] — those travel through hidden destination params and
+//! store adoption, added when a consumer needs them.
+
+use crate::compile;
+use crate::data::{Data, Type};
+use crate::parser;
+use crate::scopes;
+use crate::state::{HostRetKind, HostReturn, State, WorkerArg};
+
+/// A typed value passed to, or returned from, a loft function.
+#[derive(Debug, Clone, PartialEq)]
+pub enum Value {
+    Void,
+    Bool(bool),
+    /// integer family (`integer`, `u8`, `i32`, …) — width taken from the parameter type.
+    Int(i64),
+    /// `single`.
+    Float(f64),
+    Text(String),
+}
+
+impl Value {
+    /// The return value as an owned `String`, or a type error.
+    ///
+    /// # Errors
+    /// [`LoftError::ReturnType`] if the value is not a `text`.
+    pub fn into_text(self) -> Result<String, LoftError> {
+        match self {
+            Value::Text(s) => Ok(s),
+            other => Err(LoftError::ReturnType {
+                expected: "text".into(),
+                got: other.kind_name().into(),
+            }),
+        }
+    }
+    /// The return value as an `i64`, or `None` if it is not an integer.
+    #[must_use]
+    pub fn as_int(&self) -> Option<i64> {
+        match self {
+            Value::Int(v) => Some(*v),
+            _ => None,
+        }
+    }
+    /// The return value as a `&str`, or `None` if it is not text.
+    #[must_use]
+    pub fn as_text(&self) -> Option<&str> {
+        match self {
+            Value::Text(s) => Some(s),
+            _ => None,
+        }
+    }
+    fn kind_name(&self) -> &'static str {
+        match self {
+            Value::Void => "void",
+            Value::Bool(_) => "boolean",
+            Value::Int(_) => "integer",
+            Value::Float(_) => "single",
+            Value::Text(_) => "text",
+        }
+    }
+}
+
+/// A failure from loading or calling a loft program.
+#[derive(Debug, Clone)]
+pub enum LoftError {
+    /// The source did not parse / compile.
+    Parse(String),
+    /// No `pub fn` (or `fn`) of this name in the program.
+    UnknownFn(String),
+    /// The call passed the wrong number of arguments.
+    ArgCount {
+        func: String,
+        expected: usize,
+        got: usize,
+    },
+    /// An argument's `Value` variant does not match the declared parameter type.
+    ArgType {
+        func: String,
+        index: usize,
+        expected: String,
+        got: String,
+    },
+    /// A parameter or the return type is outside the Phase-1 supported set
+    /// (a struct / vector / enum). Not silently mis-marshalled.
+    Unsupported { func: String, what: String },
+    /// The requested return conversion did not match the value produced.
+    ReturnType { expected: String, got: String },
+    /// The loft function raised / faulted at runtime.
+    Runtime(String),
+}
+
+impl std::fmt::Display for LoftError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            LoftError::Parse(m) => write!(f, "parse error: {m}"),
+            LoftError::UnknownFn(n) => write!(f, "unknown function `{n}`"),
+            LoftError::ArgCount {
+                func,
+                expected,
+                got,
+            } => write!(f, "`{func}` expects {expected} argument(s), got {got}"),
+            LoftError::ArgType {
+                func,
+                index,
+                expected,
+                got,
+            } => write!(
+                f,
+                "`{func}` argument {index}: expected {expected}, got {got}"
+            ),
+            LoftError::Unsupported { func, what } => {
+                write!(f, "`{func}`: unsupported type in signature ({what})")
+            }
+            LoftError::ReturnType { expected, got } => {
+                write!(f, "return is {got}, not {expected}")
+            }
+            LoftError::Runtime(m) => write!(f, "runtime error: {m}"),
+        }
+    }
+}
+
+impl std::error::Error for LoftError {}
+
+/// A loaded, compiled loft program ready to be called from Rust.
+pub struct Program {
+    data: Data,
+    state: State,
+}
+
+impl Program {
+    /// Load `source` (plus the loft standard library) and compile it. The stdlib
+    /// directory is resolved next to the running executable, then via
+    /// `LOFT_DEFAULT_DIR`, then `./default`.
+    ///
+    /// # Errors
+    /// [`LoftError::Parse`] if the stdlib directory cannot be read or the source
+    /// fails to parse / compile.
+    pub fn from_source(source: &str) -> Result<Program, LoftError> {
+        Self::from_source_with_stdlib(source, &default_stdlib_dir())
+    }
+
+    /// Like [`Program::from_source`] but with an explicit stdlib directory
+    /// (the `default/` folder shipped beside the `loft` binary).
+    ///
+    /// # Errors
+    /// [`LoftError::Parse`] if `stdlib_dir` cannot be read or the source fails to
+    /// parse / compile.
+    pub fn from_source_with_stdlib(source: &str, stdlib_dir: &str) -> Result<Program, LoftError> {
+        let mut p = parser::Parser::new();
+        p.parse_dir(stdlib_dir, true, false)
+            .map_err(|e| LoftError::Parse(format!("cannot read stdlib at {stdlib_dir}: {e}")))?;
+        p.parse_str(source, "<host>", false);
+        scopes::check(&mut p.data);
+        let mut data = p.data;
+        let mut state = State::new(p.database);
+        compile::byte_code(&mut state, &mut data);
+        Ok(Program { data, state })
+    }
+
+    /// Call `func` with `args`, returning its value. Reusable — call as many
+    /// times as needed; each call runs on a fresh stack frame.
+    ///
+    /// # Errors
+    /// [`LoftError::UnknownFn`] if no `fn` of that name exists;
+    /// [`LoftError::ArgType`] / [`LoftError::ArgCount`] on an argument mismatch;
+    /// [`LoftError::Runtime`] if the call raises at runtime;
+    /// [`LoftError::ReturnType`] if the return value cannot be marshalled.
+    pub fn call(&mut self, func: &str, args: &[Value]) -> Result<Value, LoftError> {
+        let d_nr = self.data.def_nr(&format!("n_{func}"));
+        if d_nr == u32::MAX {
+            return Err(LoftError::UnknownFn(func.to_string()));
+        }
+        let def = self.data.def(d_nr);
+        let fn_pos = def.code_position;
+
+        // User parameters = the non-hidden attributes, in order.
+        let params: Vec<Type> = def
+            .attributes()
+            .iter()
+            .filter(|a| !a.hidden)
+            .map(|a| a.typedef.clone())
+            .collect();
+        if params.len() != args.len() {
+            return Err(LoftError::ArgCount {
+                func: func.to_string(),
+                expected: params.len(),
+                got: args.len(),
+            });
+        }
+        // Hidden text work-buffers the callee carries (a `-> text` return needs them).
+        let n_hidden_text = def
+            .attributes()
+            .iter()
+            .filter(|a| crate::native_lib::is_text_work_buffer(&a.typedef))
+            .count();
+        let ret = ret_kind(func, &def.returned)?;
+
+        // Marshal arguments by declared type. `WorkerArg::Text` borrows from `args`,
+        // which outlives the call.
+        let mut wargs: Vec<WorkerArg> = Vec::with_capacity(args.len());
+        for (i, (val, ty)) in args.iter().zip(params.iter()).enumerate() {
+            wargs.push(marshal_arg(func, i, val, ty)?);
+        }
+
+        let out = self
+            .state
+            .execute_host(&self.data, fn_pos, &wargs, n_hidden_text, ret);
+
+        // A raise / fault populates `runtime_error`; surface it as an error, drained.
+        if let Some(err) = self.state.database.runtime_error.take() {
+            return Err(LoftError::Runtime(err.message));
+        }
+
+        Ok(marshal_return(&def_return_type(&self.data, d_nr), out))
+    }
+}
+
+/// Owned copy of the return type (avoids borrowing `self.data` across `execute_host`).
+fn def_return_type(data: &Data, d_nr: u32) -> Type {
+    data.def(d_nr).returned.clone()
+}
+
+/// Classify a parameter/return `Type` for the stack ABI, or reject it (Phase 1).
+fn ret_kind(func: &str, ty: &Type) -> Result<HostRetKind, LoftError> {
+    match ty {
+        Type::Void | Type::Null => Ok(HostRetKind::Void),
+        Type::Boolean => Ok(HostRetKind::Prim(1)),
+        Type::Single => Ok(HostRetKind::Prim(4)),
+        Type::Integer(spec) => Ok(HostRetKind::Prim(u32::from(spec.byte_width(false).max(1)))),
+        Type::Text(_) => Ok(HostRetKind::Text),
+        other => Err(LoftError::Unsupported {
+            func: func.to_string(),
+            what: format!("return type {}", type_label(other)),
+        }),
+    }
+}
+
+/// Marshal one Rust `Value` into the stack ABI per its declared loft `Type`.
+fn marshal_arg(func: &str, i: usize, val: &Value, ty: &Type) -> Result<WorkerArg, LoftError> {
+    let mismatch = |expected: &str| LoftError::ArgType {
+        func: func.to_string(),
+        index: i,
+        expected: expected.to_string(),
+        got: val_label(val).to_string(),
+    };
+    match ty {
+        Type::Text(_) => match val {
+            Value::Text(s) => Ok(WorkerArg::Text(crate::keys::Str::new(s))),
+            _ => Err(mismatch("text")),
+        },
+        Type::Boolean => match val {
+            Value::Bool(b) => Ok(WorkerArg::Primitive {
+                value: u64::from(*b),
+                size: 1,
+            }),
+            _ => Err(mismatch("boolean")),
+        },
+        Type::Single => match val {
+            Value::Float(x) => Ok(WorkerArg::Primitive {
+                value: u64::from((*x as f32).to_bits()),
+                size: 4,
+            }),
+            _ => Err(mismatch("single")),
+        },
+        Type::Integer(spec) => match val {
+            Value::Int(v) => {
+                let w = spec.byte_width(false).max(1);
+                let size = match w {
+                    1 => 1,
+                    2..=4 => 4,
+                    _ => 8,
+                };
+                Ok(WorkerArg::Primitive {
+                    value: *v as u64,
+                    size,
+                })
+            }
+            _ => Err(mismatch("integer")),
+        },
+        other => Err(LoftError::Unsupported {
+            func: func.to_string(),
+            what: format!("parameter {i} type {}", type_label(other)),
+        }),
+    }
+}
+
+/// Marshal the ABI return back into a Rust `Value` per the declared return type.
+fn marshal_return(ty: &Type, out: HostReturn) -> Value {
+    match (ty, out) {
+        (_, HostReturn::Void) => Value::Void,
+        (Type::Boolean, HostReturn::Prim(v)) => Value::Bool(v != 0),
+        (Type::Single, HostReturn::Prim(v)) => Value::Float(f64::from(f32::from_bits(v as u32))),
+        (Type::Integer(_), HostReturn::Prim(v)) => Value::Int(v as i64),
+        (_, HostReturn::Prim(v)) => Value::Int(v as i64),
+        (_, HostReturn::Text(s)) => Value::Text(s),
+    }
+}
+
+fn val_label(v: &Value) -> &'static str {
+    match v {
+        Value::Void => "void",
+        Value::Bool(_) => "boolean",
+        Value::Int(_) => "integer",
+        Value::Float(_) => "single",
+        Value::Text(_) => "text",
+    }
+}
+
+fn type_label(t: &Type) -> &'static str {
+    match t {
+        Type::Void => "void",
+        Type::Null => "null",
+        Type::Boolean => "boolean",
+        Type::Single => "single",
+        Type::Integer(_) => "integer",
+        Type::Text(_) => "text",
+        Type::Vector(_, _) => "vector",
+        Type::Reference(_, _) => "struct",
+        Type::Enum(_, _, _) => "enum",
+        _ => "unsupported",
+    }
+}
+
+/// Resolve the stdlib `default/` directory: next to the executable, then
+/// `LOFT_DEFAULT_DIR`, then `./default`.
+fn default_stdlib_dir() -> String {
+    if let Ok(exe) = std::env::current_exe()
+        && let Some(dir) = exe.parent()
+    {
+        let cand = dir.join("../default");
+        if cand.exists() {
+            return cand.to_string_lossy().into_owned();
+        }
+    }
+    if let Ok(dir) = std::env::var("LOFT_DEFAULT_DIR") {
+        return dir;
+    }
+    "default".to_string()
+}

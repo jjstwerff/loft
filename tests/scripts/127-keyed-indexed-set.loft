@@ -9,20 +9,27 @@
 // dedup-insert idiom.  Fixed with a new `OpSetKeyed(coll, value, tp)` op
 // (find-or-insert, dedup by value's key) emitted for keyed `coll[key] =`.
 
-struct Ent { ck: integer, v: integer }
-struct Bag { h: hash<Ent[ck]> }
+struct Ent {
+  ck: integer,
+  v: integer,
+}
+struct Bag {
+  h: hash<Ent[ck]>,
+}
 
 // `coll[key] = value` through a `&`-param collection.
-fn pset(h: &hash<Ent[ck]>, k: integer, val: integer) { h[k] = Ent{ck: k, v: val}; }
+fn pset(h: &hash<Ent[ck]>, k: integer, val: integer) {
+  h[k] = Ent { ck: k, v: val };
+}
 
 fn main() {
   // --- local hash: insert new keys, then replace ---
   h: hash<Ent[ck]> = [];
-  h[1] = Ent{ck: 1, v: 10};   // insert
-  h[2] = Ent{ck: 2, v: 20};   // insert
+  h[1] = Ent { ck: 1, v: 10 }; // insert
+  h[2] = Ent { ck: 2, v: 20 }; // insert
   assert(len(h) == 2, "hash two inserts");
   assert(h[1].v == 10, "hash insert value");
-  h[1] = Ent{ck: 1, v: 11};   // replace existing — no dup
+  h[1] = Ent { ck: 1, v: 11 }; // replace existing — no dup
   assert(len(h) == 2, "hash replace keeps len");
   assert(h[1].v == 11, "hash replace updates value");
 
@@ -34,30 +41,32 @@ fn main() {
   assert(h[1].v == 99, "param replace value");
 
   // --- struct field (single keyed field) ---
-  b = Bag{h: []};
-  b.h[5] = Ent{ck: 5, v: 50};
-  b.h[5] = Ent{ck: 5, v: 51};   // replace in field
-  b.h[6] = Ent{ck: 6, v: 60};
+  b = Bag { h: [] };
+  b.h[5] = Ent { ck: 5, v: 50 };
+  b.h[5] = Ent { ck: 5, v: 51 }; // replace in field
+  b.h[6] = Ent { ck: 6, v: 60 };
   assert(len(b.h) == 2, "field two distinct keys");
   assert(b.h[5].v == 51, "field replace value");
   assert(b.h[6].v == 60, "field insert value");
 
   // --- sorted: indexed-set keeps order + dedup ---
   s: sorted<Ent[ck]> = [];
-  s[3] = Ent{ck: 3, v: 3};
-  s[1] = Ent{ck: 1, v: 1};
-  s[3] = Ent{ck: 3, v: 33};   // replace
+  s[3] = Ent { ck: 3, v: 3 };
+  s[1] = Ent { ck: 1, v: 1 };
+  s[3] = Ent { ck: 3, v: 33 }; // replace
   assert(len(s) == 2, "sorted dedup len");
   first = 0; last = 0; n = 0;
-  for e in s { if n == 0 { first = e.ck; } last = e.ck; n = n + 1; }
+  for e in s {
+    if n == 0 { first = e.ck; } last = e.ck; n = n + 1;
+  }
   assert(first == 1, "sorted order: first key");
   assert(last == 3, "sorted order: last key");
   assert(s[3].v == 33, "sorted replace value");
 
   // --- index ---
   ix: index<Ent[ck]> = [];
-  ix[8] = Ent{ck: 8, v: 80};
-  ix[8] = Ent{ck: 8, v: 88};   // replace
+  ix[8] = Ent { ck: 8, v: 80 };
+  ix[8] = Ent { ck: 8, v: 88 }; // replace
   assert(len(ix) == 1, "index dedup len");
   assert(ix[8].v == 88, "index replace value");
 
@@ -66,25 +75,43 @@ fn main() {
 
   // --- @P306: `+= [entry]` dedups on key collision (latest wins) ---
   dh: hash<Ent[ck]> = [];
-  dh += [Ent{ck: 1, v: 10}];
-  dh += [Ent{ck: 2, v: 20}];
-  dh += [Ent{ck: 1, v: 99}];          // same key 1 — replace, not append
+  dh += [
+    Ent { ck: 1, v: 10 },
+  ];
+  dh += [
+    Ent { ck: 2, v: 20 },
+  ];
+  dh += [
+    Ent { ck: 1, v: 99 },
+  ]; // same key 1 — replace, not append
   assert(len(dh) == 2, "hash += dedup len");
   assert(dh[1].v == 99, "hash += dedup latest wins");
 
   ds: sorted<Ent[ck]> = [];
-  ds += [Ent{ck: 2, v: 1}];
-  ds += [Ent{ck: 1, v: 1}];
-  ds += [Ent{ck: 2, v: 9}];           // replace; order preserved
+  ds += [
+    Ent { ck: 2, v: 1 },
+  ];
+  ds += [
+    Ent { ck: 1, v: 1 },
+  ];
+  ds += [
+    Ent { ck: 2, v: 9 },
+  ]; // replace; order preserved
   assert(len(ds) == 2, "sorted += dedup len");
   assert(ds[2].v == 9, "sorted += dedup latest wins");
   dfirst = 0; dn = 0;
-  for e in ds { if dn == 0 { dfirst = e.ck; } dn = dn + 1; }
+  for e in ds {
+    if dn == 0 { dfirst = e.ck; } dn = dn + 1;
+  }
   assert(dfirst == 1, "sorted += dedup keeps order");
 
   di: index<Ent[ck]> = [];
-  di += [Ent{ck: 5, v: 1}];
-  di += [Ent{ck: 5, v: 9}];           // replace
+  di += [
+    Ent { ck: 5, v: 1 },
+  ];
+  di += [
+    Ent { ck: 5, v: 9 },
+  ]; // replace
   assert(len(di) == 1, "index += dedup len");
   assert(di[5].v == 9, "index += dedup latest wins");
 

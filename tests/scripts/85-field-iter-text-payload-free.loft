@@ -11,7 +11,12 @@
 // own block's use — a real loop's per-iteration scope.  Graduated from
 // probes/corpus-optional-text/ (fi_min / fi_text / fi_text2).
 
-struct Mixed { name: text, count: integer, active: boolean, score: float }
+struct Mixed {
+  name: text,
+  count: integer,
+  active: boolean,
+  score: float,
+}
 
 // Text payload appended DIRECTLY (owned copy consumed in place, per iteration).
 fn names_direct(m: Mixed) -> text {

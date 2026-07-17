@@ -13,13 +13,23 @@
 // NOT a view of the source (guarded here + by tests/ownership_oracle for leaks).
 // All three backends; when NO conversion exists, `as` still errors (see parse_errors).
 
-struct Celsius { deg: integer not null }
-struct Fahrenheit { deg: integer not null }
-struct Money { cents: integer not null }
+struct Celsius {
+  deg: integer not null,
+}
+struct Fahrenheit {
+  deg: integer not null,
+}
+struct Money {
+  cents: integer not null,
+}
 
 // text -> struct (parse-on-cast), actually consuming the source value
-fn OpConvCelsiusFromText(v: text) -> Celsius { Celsius { deg: v.len() } }
-fn OpConvMoneyFromText(v: text) -> Money { Money { cents: v.len() * 100 } }
+fn OpConvCelsiusFromText(v: text) -> Celsius {
+  Celsius { deg: v.len() }
+}
+fn OpConvMoneyFromText(v: text) -> Money {
+  Money { cents: v.len()*100 }
+}
 
 // struct -> struct conversion
 fn OpConvFahrenheitFromCelsius(c: Celsius) -> Fahrenheit {
@@ -27,17 +37,17 @@ fn OpConvFahrenheitFromCelsius(c: Celsius) -> Fahrenheit {
 }
 
 fn main() {
-  a = "abcd" as Celsius;              // literal text source
+  a = "abcd" as Celsius; // literal text source
   assert(a.deg == 4, "literal text length drives the conversion");
 
   t = "abcdefg";
-  b = t as Celsius;                   // variable text source
+  b = t as Celsius; // variable text source
   assert(b.deg == 7, "variable text source is consumed too");
 
-  m = "aa" as Money;                  // a second text->struct target coexists
+  m = "aa" as Money; // a second text->struct target coexists
   assert(m.cents == 200, "the right conversion is chosen by target type");
 
-  f = a as Fahrenheit;                // struct -> struct (concrete-source path)
+  f = a as Fahrenheit; // struct -> struct (concrete-source path)
   assert(f.deg == 39, "celsius 4 converts to fahrenheit 39");
 
   println("first-grade conversions ok");

@@ -15,7 +15,9 @@
 // Locks the fix in all three backends (interp, --native, wasm) via
 // the wrap.rs / native.rs / wrap.rs::wasm_dir trio.
 
-struct S { v: vector<integer> }
+struct S {
+  v: vector<integer>,
+}
 
 fn test_local_slice_assign() {
   // Annotated local LHS, slice from a different vector.
@@ -28,7 +30,7 @@ fn test_local_slice_assign() {
 fn test_struct_field_self_slice() {
   // Self-slice of the SAME field — the failing case from the
   // audience projector's heat-field trim.
-  s = S{v: [1, 2, 3, 4]};
+  s = S { v: [1, 2, 3, 4] };
   s.v = s.v[1..];
   assert(s.v.len() == 3, "struct self-slice len");
   assert(s.v[0] == 2, "struct self-slice first");
@@ -37,7 +39,7 @@ fn test_struct_field_self_slice() {
 fn test_struct_field_other_source_slice() {
   // Slice from a DIFFERENT vector — proves the crash was about slice-
   // RHS, not specifically about self-reference.
-  s = S{v: [1, 2, 3, 4]};
+  s = S { v: [1, 2, 3, 4] };
   src: vector<integer> = [10, 20, 30, 40];
   s.v = src[1..];
   assert(s.v.len() == 3, "struct other-source len");

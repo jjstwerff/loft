@@ -10,7 +10,10 @@
 // bind-written image byte-faithfully. A garbage file must reject cleanly
 // (false), not panic or misread.
 
-struct Rec { id: integer not null, val: integer not null }
+struct Rec {
+  id: integer not null,
+  val: integer not null,
+}
 
 fn keys_of(h: hash<Rec[id]>) -> text {
   result = "";
@@ -38,20 +41,20 @@ fn main() {
 
   if mode == "write" {
     h += Rec { id: 42, val: 4200 };
-    h += Rec { id: 7,  val: 700 };
+    h += Rec { id: 7, val: 700 };
     h += Rec { id: 13, val: 1300 };
     ok = store_persist_bind(h, path);
-    if !ok { println("FAIL write-bind-returned-false"); return }
+    if!ok { println("FAIL write-bind-returned-false"); return }
     println("write keys={keys_of(h)}");
   } else if mode == "load" {
     ok = store_load(h, path);
-    if !ok { println("FAIL load-returned-false"); return }
+    if!ok { println("FAIL load-returned-false"); return }
     println("load keys={keys_of(h)}");
     println("load lookup h[13]={lookup13(h)}");
   } else if mode == "loadkey" {
     // Phase 3a: fetch ONLY key 13 — the working set, not the whole file.
     ok = store_load_key(h, path, 13);
-    if !ok { println("FAIL loadkey-returned-false"); return }
+    if!ok { println("FAIL loadkey-returned-false"); return }
     println("loadkey keys={keys_of(h)}");
     println("loadkey lookup h[13]={lookup13(h)}");
     println("loadkey len={len(h)}");
@@ -81,7 +84,7 @@ fn main() {
     // Untrusted LOCAL file: structurally validated before adoption. A garbage
     // file must reject cleanly (false), never hang or misread.
     ok = store_load_untrusted(h, path);
-    if !ok { println("FAIL untrusted-load-returned-false"); return }
+    if!ok { println("FAIL untrusted-load-returned-false"); return }
     println("untrusted keys={keys_of(h)}");
     println("untrusted lookup h[13]={lookup13(h)}");
     println("untrusted verify={store_verify(h)}");
@@ -89,11 +92,9 @@ fn main() {
     // Trusted HTTP fetch: instant (no SHA), still structurally validated.
     url = env_variable("LOFT_PERSIST_TEST_URL");
     ok = store_load_url_trusted(h, url);
-    if !ok { println("FAIL urltrusted-load-returned-false"); return }
+    if!ok { println("FAIL urltrusted-load-returned-false"); return }
     println("urltrusted keys={keys_of(h)}");
     println("urltrusted lookup h[13]={lookup13(h)}");
     println("urltrusted verify={store_verify(h)}");
-  } else {
-    println("FAIL unknown-mode")
-  }
+  } else { println("FAIL unknown-mode") }
 }

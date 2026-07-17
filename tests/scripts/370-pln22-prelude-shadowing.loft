@@ -7,10 +7,18 @@
 // (source 0), so bare names resolve to the user's defs while `std::Name` still
 // reaches the prelude.  Built-in type-keywords (`integer`, `vector`, …) stay a
 // hard error (see 102-expected-errors.loft) — shadowing them is never intended.
-enum E { Red, Green }            // shadows the math constant E
-pub PI = 3;                      // shadows the math constant PI
-struct File { tag: integer }     // shadows the stdlib struct File
-enum Format { Compact, Pretty }  // shadows the stdlib enum Format
+enum E {
+  Red,
+  Green,
+} // shadows the math constant E
+pub PI = 3; // shadows the math constant PI
+struct File {
+  tag: integer,
+} // shadows the stdlib struct File
+enum Format {
+  Compact,
+  Pretty,
+} // shadows the stdlib enum Format
 
 fn test_pln22_prelude_shadowing() {
   // user enum E wins bare resolution; std::E still reaches Euler's number.

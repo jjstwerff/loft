@@ -33,8 +33,14 @@ fn l2_lambda(n: integer) -> vector<integer> {
 // callers typed the result OWNED (double-freeing the delivered buffer), and a
 // caller-side `v[i] ?? <literal>` discharge made scan_set's dep-prefix
 // null-init allocate an entry store the call assignment then orphaned.
-struct E7 { hp: integer not null, name: text }
-enum Cell7 { Nil, Filled7 { items: vector<E7> } }
+struct E7 {
+  hp: integer not null,
+  name: text,
+}
+enum Cell7 {
+  Nil,
+  Filled7 { items: vector<E7> },
+}
 fn l3_jo(c: Cell7) -> vector<E7> {
   match c {
     Filled7 { items } => { items },

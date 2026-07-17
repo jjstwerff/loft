@@ -11,37 +11,37 @@
 /// recover the concrete value from a StackFrame's argument list.
 pub enum ArgValue {
   NullVal,
-  BoolVal   { b: boolean },
-  IntVal    { n: integer },
-  LongVal   { n: integer },
-  FloatVal  { f: float },
+  BoolVal { b: boolean },
+  IntVal { n: integer },
+  LongVal { n: integer },
+  FloatVal { f: float },
   SingleVal { f: single },
-  CharVal   { c: character },
-  TextVal   { t: text },
-  RefVal    { store: integer, rec: integer, pos: integer },
-  FnVal     { d_nr: integer },
-  OtherVal  { description: text }
+  CharVal { c: character },
+  TextVal { t: text },
+  RefVal { store: integer, rec: integer, pos: integer },
+  FnVal { d_nr: integer },
+  OtherVal { description: text },
 }
 
 /// One function argument in a stack frame.
 pub struct ArgInfo {
-  name:      text,
+  name: text,
   type_name: text,
-  value:     ArgValue,
+  value: ArgValue,
 }
 
 /// One local variable in a stack frame (populated only by stack_trace_full).
 pub struct VarInfo {
-  name:      text,
+  name: text,
   type_name: text,
-  value:     ArgValue,
+  value: ArgValue,
 }
 
 /// One call frame in the stack trace.
 pub struct StackFrame {
-  function:  text,
-  file:      text,
-  line:      integer,
+  function: text,
+  file: text,
+  line: integer,
   arguments: vector<ArgInfo>,
   variables: vector<VarInfo>,
 }

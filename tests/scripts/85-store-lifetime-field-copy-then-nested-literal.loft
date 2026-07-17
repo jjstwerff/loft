@@ -20,13 +20,15 @@
 // Before the fix: `a0.len` and the 3-deep tail both read 0.  Verified RED on
 // both backends; GREEN after.
 
-struct Box { v: vector<integer> }
+struct Box {
+  v: vector<integer>,
+}
 
 fn main() {
   // The minimal shape: a borrowing-read copy, then a 2-deep nested literal.
   bx = Box { v: [1, 2, 3] };
-  af = bx.v;                                   // #415 borrowing-read copy
-  a: vector<vector<integer>> = [[7, 8]];       // inner element must survive
+  af = bx.v; // #415 borrowing-read copy
+  a: vector<vector<integer>> = [[7, 8]]; // inner element must survive
   assert(len(af) == 3, "borrowing-read copy stays length 3");
   assert(len(a[0]) == 2, "nested literal inner element must be [7,8] (was orphaned -> len 0)");
 

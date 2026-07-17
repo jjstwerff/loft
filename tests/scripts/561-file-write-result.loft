@@ -9,7 +9,8 @@
 
 fn test() {
   // success → FileResult.Ok, and the content round-trips (one write per handle)
-  { f = file("h3_write_ok.txt");
+  {
+    f = file("h3_write_ok.txt");
     r = f.write("hello");
     assert(r.ok(), "successful write returns Ok");
     assert(r == FileResult.Ok, "successful write == FileResult.Ok");
@@ -18,13 +19,15 @@ fn test() {
   delete("h3_write_ok.txt");
 
   // discarding the result still compiles and writes
-  { g = file("h3_write_discard.txt");
+  {
+    g = file("h3_write_discard.txt");
     g.write("x");
   }
   delete("h3_write_discard.txt");
 
   // failure (nonexistent parent directory) → NOT Ok, and observable
-  { b = file("h3_no_such_dir/out.txt");
+  {
+    b = file("h3_no_such_dir/out.txt");
     rf = b.write("data");
     assert(!rf.ok(), "failed write is observable (not Ok)");
     assert(rf == FileResult.Other, "failed write == FileResult.Other");

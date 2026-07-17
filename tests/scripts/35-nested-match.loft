@@ -4,13 +4,21 @@
 // `Parcel { detail: Ship { carrier } }` tag-tests the field's variant AND binds its payload —
 // the capability parse_field_sub_pattern gained by recursing into struct-enum fields.
 
-enum Detail { Ship { carrier: text }, Pickup { store: integer } }
-struct Parcel { id: integer, detail: Detail }
+enum Detail {
+  Ship { carrier: text },
+  Pickup { store: integer },
+}
+struct Parcel {
+  id: integer,
+  detail: Detail,
+}
 
 // nested variant + payload binding
 fn carrier(p: Parcel) -> text {
   match p {
-    Parcel { detail: Ship { carrier } } => carrier
+    Parcel {
+      detail: Ship { carrier },
+    } => carrier
     _ => "none"
   }
 }
@@ -27,7 +35,9 @@ fn kind(p: Parcel) -> integer {
 // nested payload from the non-first variant
 fn store_of(p: Parcel) -> integer {
   match p {
-    Parcel { detail: Pickup { store } } => store
+    Parcel {
+      detail: Pickup { store },
+    } => store
     _ => -1
   }
 }
@@ -39,12 +49,21 @@ fn head_ship(ds: vector<Detail>) -> text {
 // mixed: a binding element then a sub-pattern element (the `[a, Inner { x }]` shape) —
 // exercises the "_" placeholder position alignment.
 fn second_ship(ds: vector<Detail>) -> text {
-  match ds { [first, Ship { carrier }] => carrier, _ => "none" }
+  match ds { [
+    first,
+    Ship { carrier },
+  ] => carrier, _ => "none" }
 }
 
 fn main() {
-  ship = Parcel { id: 1, detail: Ship { carrier: "FedEx" } };
-  pick = Parcel { id: 2, detail: Pickup { store: 7 } };
+  ship = Parcel {
+    id: 1,
+    detail: Ship { carrier: "FedEx" },
+  };
+  pick = Parcel {
+    id: 2,
+    detail: Pickup { store: 7 },
+  };
   assert(carrier(ship) == "FedEx", "nested Ship carrier: {carrier(ship)}");
   assert(carrier(pick) == "none", "Pickup falls to wildcard: {carrier(pick)}");
   assert(kind(ship) == 1, "kind ship: {kind(ship)}");
@@ -52,11 +71,20 @@ fn main() {
   assert(store_of(pick) == 7, "nested Pickup store: {store_of(pick)}");
   assert(store_of(ship) == -1, "Ship falls to wildcard: {store_of(ship)}");
   // slice-element sub-patterns
-  parcels = [Ship { carrier: "UPS" }, Pickup { store: 3 }];
+  parcels = [
+    Ship { carrier: "UPS" },
+    Pickup { store: 3 },
+  ];
   assert(head_ship(parcels) == "UPS", "slice head sub-pattern: {head_ship(parcels)}");
-  two = [Pickup { store: 9 }, Ship { carrier: "DHL" }];
+  two = [
+    Pickup { store: 9 },
+    Ship { carrier: "DHL" },
+  ];
   assert(second_ship(two) == "DHL", "slice [binding, sub-pattern]: {second_ship(two)}");
-  mismatch = [Ship { carrier: "X" }, Pickup { store: 1 }];
+  mismatch = [
+    Ship { carrier: "X" },
+    Pickup { store: 1 },
+  ];
   assert(second_ship(mismatch) == "none", "2nd not Ship falls to wildcard");
   print("35-nested-match: PASS");
 }

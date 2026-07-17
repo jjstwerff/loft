@@ -13,13 +13,21 @@
 //
 // Fix: `generate_block` pushes a typed null of the result when a value-typed block's
 // operators leave nothing on the eval stack — mirroring `gen_if`'s null-else arm.
-struct E { hp: integer, name: text }
-enum Cell { Empty, Filled { items: vector<E> } }
+struct E {
+  hp: integer,
+  name: text,
+}
+enum Cell {
+  Empty,
+  Filled { items: vector<E> },
+}
 
 // Empty arm SECOND (the `_` wildcard).
 fn deliver(e: Cell) -> vector<E> {
   match e {
-    Filled { items } => { o: vector<E> = []; o += items; o },
+    Filled { items } => {
+      o: vector<E> = []; o += items; o
+    },
     _ => { [] },
   }
 }
@@ -28,13 +36,15 @@ fn deliver(e: Cell) -> vector<E> {
 fn deliver_rev(e: Cell) -> vector<E> {
   match e {
     Empty => { [] },
-    Filled { items } => { o: vector<E> = []; o += items; o },
+    Filled { items } => {
+      o: vector<E> = []; o += items; o
+    },
   }
 }
 
 fn main() {
   inner: vector<E> = [];
-  for k in 0..3 { inner += [E{hp: k, name: "e"}]; }
+  for k in 0..3 { inner += [E { hp: k, name: "e" }]; }
   cell = Filled { items: inner };
 
   // The crash needed the EMPTY arm taken at runtime; churn makes a short discard fatal.
@@ -52,7 +62,7 @@ fn main() {
     assert(len(rb) == 3, "deliver_rev(Filled) i{i}: len={len(rb)}");
 
     j: vector<E> = [];
-    for q in 0..12 { j += [E{hp: q, name: "x"}]; }
+    for q in 0..12 { j += [E { hp: q, name: "x" }]; }
   }
   println("ok");
 }

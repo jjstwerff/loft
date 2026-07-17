@@ -4,8 +4,13 @@
 // If the leak is per-iter, we should see Canvas×100.  If it's a finite
 // one-time leak, the count should plateau.
 
-struct P { tag: integer }
-struct Canvas { data: vector<integer>, w: integer }
+struct P {
+  tag: integer,
+}
+struct Canvas {
+  data: vector<integer>,
+  w: integer,
+}
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

@@ -13,7 +13,10 @@
 // pre-existing bug unrelated to this fix — which would trip the suite's
 // store-leak gate and mask what this script actually checks.
 
-enum Maybe { Has { s: text }, Gone { n: integer } }
+enum Maybe {
+  Has { s: text },
+  Gone { n: integer },
+}
 
 fn read(v: vector<Maybe>) -> text {
   match v[0] {
@@ -23,7 +26,9 @@ fn read(v: vector<Maybe>) -> text {
 }
 
 fn test() {
-  v: vector<Maybe> = [Gone { n: 0 }];
+  v: vector<Maybe> = [
+    Gone { n: 0 },
+  ];
   // Churn Has -> Gone -> Has, overwriting a present text payload each lap;
   // the Has->Gone step must free the prior text.
   for i in 0..40 {

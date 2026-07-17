@@ -19,7 +19,7 @@ fn getf(v: vector<float>, key: text) -> float? {
 
 fn midf(v: vector<float>) -> float? {
   n = 5;
-  getf(v, "{n}")   // constructed arg → __work free runs before the return
+  getf(v, "{n}")// constructed arg → __work free runs before the return
 }
 
 fn midf_null(v: vector<float>) -> float? {

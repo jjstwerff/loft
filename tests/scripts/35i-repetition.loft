@@ -13,48 +13,58 @@
 // native, so a `for`-accumulator arm returned 0); the index checks stay as they are independent
 // of that path.  See tests/scripts/556-slice-arm-block-result.loft.
 
-enum Tok { Num { n: integer }, Op { o: integer } }
+enum Tok {
+  Num { n: integer },
+  Op { o: integer },
+}
 
 // `*` with rest: run*100 + rest.
 fn take(v: vector<Tok>) -> integer {
-  match v {
-    [ (x: Num)*, ..rest ] => len(x) * 100 + len(rest),
-    _ => -1,
-  }
+  match v { [(x: Num)*, ..rest] => len(x)*100 + len(rest), _ => -1, }
 }
 
 // `*` no rest: the whole slice must be Num (end == len), else fall through to `_`.
 fn allnum(v: vector<Tok>) -> integer {
-  match v {
-    [ (x: Num)* ] => len(x),
-    _ => -1,
-  }
+  match v { [(x: Num)*] => len(x), _ => -1, }
 }
 
 // `+` with rest: at least one Num, else fall through.
 fn plus(v: vector<Tok>) -> integer {
-  match v {
-    [ (x: Num)+, ..rest ] => len(x) * 100 + len(rest),
-    _ => -1,
-  }
+  match v { [(x: Num)+, ..rest] => len(x)*100 + len(rest), _ => -1, }
 }
 
 // value check: the run holds the RIGHT leading element (read x[0] via a head sub-pattern).
 // Uses a bare `..` (unnamed rest) — the run is still a prefix, the remainder is absorbed.
 fn firstof(v: vector<Tok>) -> integer {
   match v {
-    [ (x: Num)*, .. ] => match x { [ Num { n }, .. ] => n, _ => -1 },
+    [(x: Num)*, ..] => match x { [Num { n }, ..] => n, _ => -1 },
     _ => -9,
   }
 }
 
 fn main() {
-  a: vector<Tok> = [Num { n: 5 }, Num { n: 6 }, Op { o: 0 }, Op { o: 0 }];  // run 2, rest 2
-  b: vector<Tok> = [Op { o: 0 }, Num { n: 1 }];                             // run 0, rest 2
-  c: vector<Tok> = [Num { n: 1 }, Num { n: 2 }, Num { n: 3 }];             // run 3, rest 0
-  e: vector<Tok> = [];                                                     // run 0, rest 0
+  a: vector<Tok> = [
+    Num { n: 5 },
+    Num { n: 6 },
+    Op { o: 0 },
+    Op { o: 0 },
+  ]; // run 2, rest 2
+  b: vector<Tok> = [
+    Op { o: 0 },
+    Num { n: 1 },
+  ]; // run 0, rest 2
+  c: vector<Tok> = [
+    Num { n: 1 },
+    Num { n: 2 },
+    Num { n: 3 },
+  ]; // run 3, rest 0
+  e: vector<Tok> = []; // run 0, rest 0
   // run STOPS at the first Op — must NOT grab the later Num{9}.
-  d: vector<Tok> = [Num { n: 7 }, Op { o: 0 }, Num { n: 9 }];              // run 1, rest 2
+  d: vector<Tok> = [
+    Num { n: 7 },
+    Op { o: 0 },
+    Num { n: 9 },
+  ]; // run 1, rest 2
 
   // `*` with rest
   assert(take(a) == 202, "take a run2 rest2: {take(a)}");

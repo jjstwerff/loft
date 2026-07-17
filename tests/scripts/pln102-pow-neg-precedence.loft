@@ -13,15 +13,15 @@ fn main() {
   x = 3;
 
   // --- literal base: SILENT (a signed number), (-2)**2 = 4 ---
-  assert(-2 ** 2 == 4, "literal: -2 ** 2 parses as (-2)**2 = 4");
-  assert(-2.0 ** 2.0 == 4.0, "float literal base is silent too");
+  assert(-2**2 == 4, "literal: -2 ** 2 parses as (-2)**2 = 4");
+  assert(-2.0**2.0 == 4.0, "float literal base is silent too");
 
   // --- parenthesised: unambiguous, SILENT ---
-  assert((-x) ** 2 == 9, "(-x) ** 2 = 9");
-  assert(-(x ** 2) == -9, "-(x ** 2) = -9");
+  assert((-x)**2 == 9, "(-x) ** 2 = 9");
+  assert(-(x**2) == -9, "-(x ** 2) = -9");
 
   // --- non-literal base: WARNS (the @EXPECT_WARNING above); still parses (-x)**2 = 9 ---
-  assert(-x ** 2 == 9, "-x ** 2 parses as (-x)**2 = 9 (the sign binds tighter than **)");
+  assert(-x**2 == 9, "-x ** 2 parses as (-x)**2 = 9 (the sign binds tighter than **)");
 
   print("pln102 pow/neg precedence: uniform rule kept, warning on non-literal base\n");
 }

@@ -12,7 +12,7 @@ capability env
 
 pub struct EnvVariable {
   name: text,
-  value: text
+  value: text,
 }
 // Describes how a file is opened.
 // TextFile: read or write as UTF-8 text (default).
@@ -26,7 +26,7 @@ pub enum Format {
   LittleEndian,
   BigEndian,
   Directory,
-  NotExists
+  NotExists,
 }
 // Result of a filesystem-mutating operation (delete, move, mkdir).
 // Use ok() to get a simple boolean, or match on specific variants for
@@ -38,7 +38,7 @@ pub enum FileResult {
   PermissionDenied,
   IsDirectory,
   NotDirectory,
-  Other
+  Other,
 }
 
 // True when the result is `FileResult.Ok`. Use to test a file op for success.
@@ -61,14 +61,14 @@ pub struct File {
   // 28
   current: integer,
   // 8
-  next: integer  // 16
+  next: integer, // 16
 }
 
 fn OpGetFile(file: File) -> boolean fs#read;
 #rust"stores.get_file(&@file)"
-fn OpGetDir(path: text, result: vector < File >) -> boolean fs#read;
+fn OpGetDir(path: text, result: vector<File>) -> boolean fs#read;
 #rust"stores.get_dir(@path, &@result)"
-fn OpGetFileText(file: File, content:  & text) fs#read;
+fn OpGetFileText(file: File, content: &text) fs#read;
 fn OpWriteFile(file: File, val: reference, db_tp: const u16) fs#update;
 fn OpReadFile(file: File, val: reference, bytes: integer, db_tp: const u16) fs#read;
 fn OpSeekFile(file: File, pos: integer) fs#read;
@@ -112,7 +112,7 @@ fn OpMkdirAll(path: text) -> boolean fs#update;
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
 
-pub fn content(self: File) -> text? fs#read {
+pub fn content(self: File) -> text?fs#read {
   // @PLN102 H4 — a MISSING file reads as null, distinct from an EMPTY file (""),
   // so a missing config is not silently indistinguishable from an empty one.
   if self.format == Format.NotExists { return null }
@@ -129,8 +129,8 @@ pub fn content(self: File) -> text? fs#read {
 // Strips trailing '\r' so CRLF files (Windows) and LF files (Unix) produce
 // identical results. Use when processing line-by-line (logs, CSV, etc.).
 
-pub fn lines(self: File) -> vector < text > fs#read {
-  result =[];
+pub fn lines(self: File) -> vector<text> fs#read {
+  result = [];
   // @PLN102 H4 — content() is now `text?`; a missing file has no lines.
   c = self.content() ?? "";
   p = 0;
@@ -138,18 +138,12 @@ pub fn lines(self: File) -> vector < text > fs#read {
   for ch in c {
     if ch == '\n' {
       e = ch#index;
-      if prev_cr {
-        result +=[c[p..e - 1]];
-      } else {
-        result +=[c[p..e]];
-      }
+      if prev_cr { result += [c[p..e - 1]]; } else { result += [c[p..e]]; }
       p = ch#next;
     }
     prev_cr = ch == '\r';
   }
-  if p < c.len() {
-    result +=[c[p..c.len()]];
-  }
+  if p < c.len() { result += [c[p..c.len()]]; }
   result
 }
 // Par-safe filesystem read (via content()).
@@ -158,21 +152,19 @@ pub fn lines(self: File) -> vector < text > fs#read {
 // Splits self on every occurrence of separator and returns the parts as a vector.
 // Use to parse CSV lines or space-separated tokens.
 
-pub fn split(self: text, separator: character) -> vector < text > {
-  result =[];
+pub fn split(self: text, separator: character) -> vector<text> {
+  result = [];
   p = 0;
   for c in self {
     if c == separator {
-      result +=[self[p..c#index]];
+      result += [self[p..c#index]];
       p = c#next;
     }
   }
   // Always append the trailing segment when the input is non-empty, including
   // the case where no separator was found at all.  Without this, "hello".split(',')
   // returned [] instead of ["hello"].  An empty input returns [] (no segments).
-  if self.len() > 0 {
-    result +=[self[p..self.len()]];
-  }
+  if self.len() > 0 { result += [self[p..self.len()]]; }
   result
 }
 #pure
@@ -186,12 +178,14 @@ pub fn split(self: text, separator: character) -> vector < text > {
 // Named `split_text` (not an overload of `split`) because loft does not
 // overload by non-self parameter type.
 
-pub fn split_text(self: text, separator: text) -> vector < text > {
+pub fn split_text(self: text, separator: text) -> vector<text> {
   out: vector<text> = [];
   n = self.len();
   if n == 0 { return out; }
   sl = separator.len();
-  if sl == 0 { out += [self]; return out; }
+  if sl == 0 {
+    out += [self]; return out;
+  }
   p = 0;
   i = 0;
   while i + sl <= n {
@@ -199,9 +193,7 @@ pub fn split_text(self: text, separator: text) -> vector < text > {
       out += [self[p..i]];
       p = i + sl;
       i = p;
-    } else {
-      i = i + 1;
-    }
+    } else { i = i + 1; }
   }
   out += [self[p..n]];
   out
@@ -228,19 +220,13 @@ fn valid_path(path: text) -> boolean {
       start = c#next;
       if part == ".." {
         depth -= 1;
-        if depth < 0 {
-          return false;
-        }
-      } else if part != "." && part.len() > 0 {
-        depth += 1;
-      }
+        if depth < 0 { return false; }
+      } else if part != "." && part.len() > 0 { depth += 1; }
     }
   }
   if start < path.len() {
     part = path[start..path.len()];
-    if part == ".." {
-      depth -= 1;
-    }
+    if part == ".." { depth -= 1; }
   }
   depth >= 0
 }
@@ -249,12 +235,8 @@ fn valid_path(path: text) -> boolean {
 // Paths outside the project directory are treated as NotExists without touching the filesystem.
 
 pub fn file(path: text) -> File fs#read {
-  result = File {path: path, ref: null };
-  if valid_path(path) {
-    OpGetFile(result);
-  } else {
-    result.format = Format.NotExists;
-  }
+  result = File { path: path, ref: null };
+  if valid_path(path) { OpGetFile(result); } else { result.format = Format.NotExists; }
   result
 }
 // Stat-equivalent filesystem read; par-safe.
@@ -278,7 +260,7 @@ pub fn exists(both: File) -> boolean fs#read {
 // not exist or is outside the project directory.
 
 pub fn delete(path: text) -> FileResult fs#update {
-  if !exists(path) { return FileResult.NotFound }
+  if!exists(path) { return FileResult.NotFound }
   if OpDelete(path) { return FileResult.Ok }
   FileResult.Other
 }
@@ -289,8 +271,8 @@ pub fn delete(path: text) -> FileResult fs#update {
 // not already exist.
 
 pub fn move(from: text, to: text) -> FileResult fs#update {
-  if !valid_path(to) || !valid_path(from) { return FileResult.NotFound }
-  if !exists(from) { return FileResult.NotFound }
+  if!valid_path(to) || !valid_path(from) { return FileResult.NotFound }
+  if!exists(from) { return FileResult.NotFound }
   if exists(to) { return FileResult.Other }
   if OpMoveFile(from, to) { return FileResult.Ok }
   FileResult.Other
@@ -300,7 +282,7 @@ pub fn move(from: text, to: text) -> FileResult fs#update {
 // is outside the project directory.
 
 pub fn mkdir(path: text) -> FileResult fs#update {
-  if !valid_path(path) { return FileResult.NotFound }
+  if!valid_path(path) { return FileResult.NotFound }
   if OpMkdir(path) { return FileResult.Ok }
   FileResult.Other
 }
@@ -309,7 +291,7 @@ pub fn mkdir(path: text) -> FileResult fs#update {
 // Returns FileResult.NotFound if the path is outside the project directory.
 
 pub fn mkdir_all(path: text) -> FileResult fs#update {
-  if !valid_path(path) { return FileResult.NotFound }
+  if!valid_path(path) { return FileResult.NotFound }
   if OpMkdirAll(path) { return FileResult.Ok }
   FileResult.Other
 }
@@ -328,20 +310,20 @@ pub fn is_file(path: text) -> boolean fs#read;
 // sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct
 // from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape.
 // Use to enumerate a directory; join with `path` to build full child paths.
-pub fn list_dir(path: text) -> vector < text > ? fs#read;
+pub fn list_dir(path: text) -> vector<text> ?fs#read;
 #rust"stores.fs_list_dir(@path)"
 #impure(io)
 // Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable
 // file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []`
 // to keep the old shape.  Binary-exact (round-trips with write_bytes); use for
 // non-UTF-8 data — for text prefer `file(path).content()`.
-pub fn read_bytes(path: text) -> vector < u8 > ? fs#read;
+pub fn read_bytes(path: text) -> vector<u8> ?fs#read;
 #rust"stores.fs_read_bytes(@path)"
 #impure(io)
 // Writes `bytes` to file `path`, truncating any existing content.  Returns
 // true on success.  The inverse of read_bytes; the pair round-trips a
 // non-UTF-8 blob byte-for-byte.
-pub fn write_bytes(path: text, bytes: vector < u8 >) -> boolean fs#update;
+pub fn write_bytes(path: text, bytes: vector<u8>) -> boolean fs#update;
 #rust"stores.fs_write_bytes(@path, @bytes)"
 #impure(io)
 // Truncate or extend the file to exactly `size` bytes.
@@ -556,11 +538,9 @@ pub fn sync(self: File) -> boolean fs#update {
 // The File must have format == Format.Directory.
 // Use to iterate over all files in a folder.
 
-pub fn files(self: File) -> vector < File > fs#read {
-  result =[];
-  if self.format == Format.Directory {
-    OpGetDir(self.path, result);
-  }
+pub fn files(self: File) -> vector<File> fs#read {
+  result = [];
+  if self.format == Format.Directory { OpGetDir(self.path, result); }
   result
 }
 #impure(io)
@@ -582,7 +562,7 @@ pub fn write(self: File, v: text) -> FileResult fs#update {
 // Returns all environment variables as a vector of EnvVariable records (fields: name, value).
 // Use to inspect or forward the full environment.
 
-pub fn env_variables() -> vector < EnvVariable > env#read;
+pub fn env_variables() -> vector<EnvVariable> env#read;
 #rust"stores.os_variables()"
 #impure(host_io)
 // Returns the value of the environment variable name, or null if it is not set.
@@ -754,9 +734,7 @@ pub fn resolve(self: text, target: text) -> text {
   base = self;
   t = target;
   // Strip leading `./` repeatedly.
-  while t.len() >= 2 && t[0] == '.' && t[1] == '/' {
-    t = t[2..t.len()];
-  }
+  while t.len() >= 2 && t[0] == '.' && t[1] == '/' { t = t[2..t.len()]; }
   // Apply `../` segments — each one walks up the base dir.
   while t.len() >= 3 && t[0] == '.' && t[1] == '.' && t[2] == '/' {
     bn = base.len();
@@ -770,15 +748,10 @@ pub fn resolve(self: text, target: text) -> text {
       }
       cut = cut - 1;
     }
-    if walked {
-      base = base[0..cut];
-    } else {
-      base = "";
-    }
+    if walked { base = base[0..cut]; } else { base = ""; }
     t = t[3..t.len()];
   }
   if base == "" { return t; }
   "{base}/{t}"
 }
 #pure
-

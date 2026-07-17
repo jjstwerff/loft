@@ -21,7 +21,9 @@
 fn test_local_append_read_len() {
   n = 300;
   adj: vector<vector<integer>> = [];
-  for i in 0..n { r: vector<integer> = []; adj += [r]; }
+  for i in 0..n {
+    r: vector<integer> = []; adj += [r];
+  }
   for j in 0..n { adj[j] += [j * 2]; }
   total = 0;
   for j in 0..n {
@@ -35,27 +37,47 @@ fn test_local_append_read_len() {
 fn test_local_iteration() {
   n = 300;
   adj: vector<vector<integer>> = [];
-  for i in 0..n { r: vector<integer> = []; adj += [r]; }
-  for j in 0..n { adj[j] += [j]; adj[j] += [j + 1]; }
+  for i in 0..n {
+    r: vector<integer> = []; adj += [r];
+  }
+  for j in 0..n {
+    adj[j] += [j]; adj[j] += [j + 1];
+  }
   // iteration strided by a wrapper size (16) pre-fix — read every other element.
   s = 0;
-  for row in adj { for v in row { s += v; } }
+  for row in adj {
+    for v in row { s += v; }
+  }
   assert(s == n * n, "sum of (j)+(j+1) over 0..n = n*n");
 }
 
 // The reporter's exact shape: struct with a hash field beside the nested vector,
 // mutated through a `&` reference parameter.
-struct Ent { coord: text, idx: integer }
-struct G { m: hash<Ent[coord]>, adj: vector<vector<integer>> }
-fn add(g: G, i: integer, x: integer) { g.adj[i] += [x]; }
+struct Ent {
+  coord: text,
+  idx: integer,
+}
+struct G {
+  m: hash<Ent[coord]>,
+  adj: vector<vector<integer>>,
+}
+fn add(g: G, i: integer, x: integer) {
+  g.adj[i] += [x];
+}
 
 fn test_struct_ref_with_hash() {
   n = 300;
   g = G { m: [], adj: [] };
-  for i in 0..n { g.m += [Ent { coord: "n{i}", idx: i }]; r: vector<integer> = []; g.adj += [r]; }
+  for i in 0..n {
+    g.m += [
+      Ent { coord: "n{i}", idx: i },
+    ]; r: vector<integer> = []; g.adj += [r];
+  }
   for j in 0..n { add(g, j, j); }
   t = 0;
-  for j in 0..n { assert(len(g.adj[j]) == 1, "row {j} one element"); t += g.adj[j][0]; }
+  for j in 0..n {
+    assert(len(g.adj[j]) == 1, "row {j} one element"); t += g.adj[j][0];
+  }
   assert(t == n * (n - 1) / 2, "sum 0..n-1");
 }
 
@@ -64,8 +86,12 @@ fn test_struct_ref_with_hash() {
 fn test_inner_widths() {
   bs: vector<vector<boolean>> = [];
   fs: vector<vector<float>> = [];
-  for i in 0..200 { b: vector<boolean> = []; bs += [b]; f: vector<float> = []; fs += [f]; }
-  for j in 0..200 { bs[j] += [true]; fs[j] += [j as float]; }
+  for i in 0..200 {
+    b: vector<boolean> = []; bs += [b]; f: vector<float> = []; fs += [f];
+  }
+  for j in 0..200 {
+    bs[j] += [true]; fs[j] += [j as float];
+  }
   tb = 0;
   fsum = 0.0;
   for j in 0..200 {
@@ -80,8 +106,14 @@ fn test_inner_widths() {
 fn test_double_index_and_empty_rows() {
   n = 200;
   adj: vector<vector<integer>> = [];
-  for i in 0..n { r: vector<integer> = []; adj += [r]; }
-  for j in 0..n { if j % 2 == 0 { adj[j] += [j]; adj[j] += [j + 1]; } }  // only even rows
+  for i in 0..n {
+    r: vector<integer> = []; adj += [r];
+  }
+  for j in 0..n {
+    if j % 2 == 0 {
+      adj[j] += [j]; adj[j] += [j + 1];
+    }
+  } // only even rows
   filled = 0;
   s = 0;
   for j in 0..n {
@@ -89,9 +121,7 @@ fn test_double_index_and_empty_rows() {
       assert(len(adj[j]) == 2, "even row {j} has both appends");
       s += adj[j][0] + adj[j][1];
       filled += 1;
-    } else {
-      assert(len(adj[j]) == 0, "odd row {j} stayed empty");
-    }
+    } else { assert(len(adj[j]) == 0, "odd row {j} stayed empty"); }
   }
   assert(filled == 100, "100 filled rows");
 }
@@ -99,8 +129,12 @@ fn test_double_index_and_empty_rows() {
 fn test_triple_nesting() {
   n = 50;
   a: vector<vector<vector<integer>>> = [];
-  for i in 0..n { r: vector<vector<integer>> = []; a += [r]; }
-  for j in 0..n { inner: vector<integer> = [j, j + 1]; a[j] += [inner]; }
+  for i in 0..n {
+    r: vector<vector<integer>> = []; a += [r];
+  }
+  for j in 0..n {
+    inner: vector<integer> = [j, j + 1]; a[j] += [inner];
+  }
   t = 0;
   for j in 0..n {
     assert(len(a[j]) == 1, "outer row {j}");

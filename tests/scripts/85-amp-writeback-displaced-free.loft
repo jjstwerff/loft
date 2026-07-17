@@ -9,56 +9,76 @@
 // free-before UAF) and still leave no leak.  Values assert on both backends; the
 // wrap leak-gate proves the displaced store is freed exactly once.
 
-struct Obj { x: integer }
-fn mk() -> Obj { Obj { x: 9 } }
-fn mk_n(n: integer) -> Obj { Obj { x: n } }
-fn mk_from(p: Obj) -> Obj { Obj { x: p.x + 5 } }
+struct Obj {
+  x: integer,
+}
+fn mk() -> Obj {
+  Obj { x: 9 }
+}
+fn mk_n(n: integer) -> Obj {
+  Obj { x: n }
+}
+fn mk_from(p: Obj) -> Obj {
+  Obj { x: p.x + 5 }
+}
 
 // (1) call RHS — the t4 cell: displaced Obj{x:1} must be freed.
-fn set_call(o: &Obj) { o = mk(); }
+fn set_call(o: &Obj) {
+  o = mk();
+}
 
 // (2) literal RHS — the P2.2 cell (must stay clean under the new emission).
-fn set_lit(o: &Obj) { o = Obj { x: 9 }; }
+fn set_lit(o: &Obj) {
+  o = Obj { x: 9 };
+}
 
 // (3) literal reading *o — the latent free-before UAF, now hardened.
-fn set_lit_self(o: &Obj) { o = Obj { x: o.x + 5 }; }
+fn set_lit_self(o: &Obj) {
+  o = Obj { x: o.x + 5 };
+}
 
 // (4) call reading *o — aliasing-safe post-free (old store live across the call).
-fn set_call_self(o: &Obj) { o = mk_from(o); }
+fn set_call_self(o: &Obj) {
+  o = mk_from(o);
+}
 
 // (5) conditional write-back — path-sensitive: false path keeps the store.
-fn set_cond(o: &Obj, do_it: boolean) { if do_it { o = mk(); } }
+fn set_cond(o: &Obj, do_it: boolean) {
+  if do_it { o = mk(); }
+}
 
 // (6) repeated write-back in a loop — no per-iteration leak.
-fn set_loop(o: &Obj, n: integer) { o = mk_n(n); }
+fn set_loop(o: &Obj, n: integer) {
+  o = mk_n(n);
+}
 
 fn main() {
-    a = Obj { x: 1 };
-    set_call(a);
-    assert(a.x == 9, "call {a.x}");
+  a = Obj { x: 1 };
+  set_call(a);
+  assert(a.x == 9, "call {a.x}");
 
-    b = Obj { x: 1 };
-    set_lit(b);
-    assert(b.x == 9, "lit {b.x}");
+  b = Obj { x: 1 };
+  set_lit(b);
+  assert(b.x == 9, "lit {b.x}");
 
-    c = Obj { x: 1 };
-    set_lit_self(c);
-    assert(c.x == 6, "lit_self {c.x}");
+  c = Obj { x: 1 };
+  set_lit_self(c);
+  assert(c.x == 6, "lit_self {c.x}");
 
-    d = Obj { x: 1 };
-    set_call_self(d);
-    assert(d.x == 6, "call_self {d.x}");
+  d = Obj { x: 1 };
+  set_call_self(d);
+  assert(d.x == 6, "call_self {d.x}");
 
-    e = Obj { x: 1 };
-    set_cond(e, false);
-    assert(e.x == 1, "cond_false {e.x}");
-    g = Obj { x: 1 };
-    set_cond(g, true);
-    assert(g.x == 9, "cond_true {g.x}");
+  e = Obj { x: 1 };
+  set_cond(e, false);
+  assert(e.x == 1, "cond_false {e.x}");
+  g = Obj { x: 1 };
+  set_cond(g, true);
+  assert(g.x == 9, "cond_true {g.x}");
 
-    h = Obj { x: 0 };
-    for i in 0..50 { set_loop(h, i); }
-    assert(h.x == 49, "loop {h.x}");
+  h = Obj { x: 0 };
+  for i in 0..50 { set_loop(h, i); }
+  assert(h.x == 49, "loop {h.x}");
 
-    println("amp-writeback-displaced-free ok");
+  println("amp-writeback-displaced-free ok");
 }

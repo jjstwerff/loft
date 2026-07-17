@@ -9,7 +9,10 @@
 // gate reads the sidecar and rejects rather than range-read foreign bytes.
 // Driven by `store_persist_loft.rs` (local file and over HTTP).
 
-struct Tile { id: integer not null, name: text not null }
+struct Tile {
+  id: integer not null,
+  name: text not null,
+}
 
 fn main() {
   path = env_variable("LOFT_PERSIST_TEST_PATH");
@@ -17,9 +20,9 @@ fn main() {
 
   h: hash<Tile[id]> = [];
   if mode == "write" {
-    h += Tile { id: 7,  name: "seven" };
+    h += Tile { id: 7, name: "seven" };
     h += Tile { id: 42, name: "forty-two" };
-    if !store_persist_bind(h, path) { println("FAIL write-bind"); return }
+    if!store_persist_bind(h, path) { println("FAIL write-bind"); return }
     println("write ok");
   } else if mode == "load" {
     ok = store_load_key(h, path, 42);
@@ -27,7 +30,5 @@ fn main() {
     println("gate name={(h[42] ?? Tile { id: 0, name: \"?\" }).name}");
     println("gate len={len(h)}");
     println("gate verify={store_verify(h)}");
-  } else {
-    println("FAIL unknown-mode")
-  }
+  } else { println("FAIL unknown-mode") }
 }

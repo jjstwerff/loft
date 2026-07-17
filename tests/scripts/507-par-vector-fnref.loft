@@ -7,10 +7,18 @@
 // pairs it with a NULL closure (vector-stored fn-refs are non-capturing),
 // mirroring the working for-loop unpack.  `par` compiles its worker to native
 // under BOTH backends, so this pins interp and `--native`.
-fn dbl(x: integer) -> integer { return x * 2; }
-fn inc(x: integer) -> integer { return x + 1; }
-fn neg(x: integer) -> integer { return 0 - x; }
-fn apply(f: fn(integer) -> integer) -> integer { return f(10); }
+fn dbl(x: integer) -> integer {
+  return x * 2;
+}
+fn inc(x: integer) -> integer {
+  return x + 1;
+}
+fn neg(x: integer) -> integer {
+  return 0 - x;
+}
+fn apply(f: fn(integer) -> integer) -> integer {
+  return f(10);
+}
 
 fn main() {
   // single element via par

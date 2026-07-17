@@ -11,11 +11,11 @@
 // /tmp/p_followups/tuple_loop/ (2026-06-12 session).
 
 fn hexn(q: integer, r: integer, dir: integer) -> (integer, integer) {
-  if (r & 1) == 0 {
-    if dir == 0 { return (q + 1, r); }
-    return (q, r + 1);
+  if(r&1) == 0 {
+    if dir == 0 { return(q + 1, r); }
+    return(q, r + 1);
   }
-  if dir == 0 { return (q + 1, r); }
+  if dir == 0 { return(q + 1, r); }
   (q + 1, r + 1)
 }
 
@@ -25,7 +25,7 @@ fn test_tuple_destructure_loop() {
   acc = 0;
   for k in 0..4 {
     for d in 0..2 {
-      (nq, nr) = hexn(k & 31, (k / 32) & 31, d);
+      (nq, nr) = hexn(k&31, (k / 32)&31, d);
       acc = acc + nq + nr;
     }
   }
@@ -43,9 +43,13 @@ fn test_tuple_whole_loop() {
   assert(acc == 18, "whole-tuple acc={acc} expect 18");
 }
 
-struct R3 { v: integer }
+struct R3 {
+  v: integer,
+}
 
-fn mk_r3(n: integer) -> R3 { s = R3 { v: n }; s }
+fn mk_r3(n: integer) -> R3 {
+  s = R3 { v: n }; s
+}
 
 fn pick_r3(c: integer) -> R3 {
   if c == 0 { return mk_r3(100); }
@@ -57,11 +61,18 @@ fn pick_r3(c: integer) -> R3 {
 // (interp read null from iteration 1; with the s1 tightening alone, from
 // iteration 0).  The text field guards the claims handling of the in-place
 // destination reuse.
-fn grow_r3(x: R3) -> R3 { s = R3 { v: x.v + 1 }; s }
+fn grow_r3(x: R3) -> R3 {
+  s = R3 { v: x.v + 1 }; s
+}
 
-struct N3 { name: text, v: integer }
+struct N3 {
+  name: text,
+  v: integer,
+}
 
-fn grow_n3(x: N3) -> N3 { t = N3 { name: x.name + "x", v: x.v + 1 }; t }
+fn grow_n3(x: N3) -> N3 {
+  t = N3 { name: x.name + "x", v: x.v + 1 }; t
+}
 
 fn test_self_arg_reassign_loop() {
   s = R3 { v: 0 };

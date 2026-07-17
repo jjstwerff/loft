@@ -4,26 +4,30 @@
 // form captured. Fix: parse_lambda_short gained the closure-param setup block +
 // builds its public Function type from the declared params only (excluding the
 // hidden __closure). Both backends.
-struct Box { v: integer }
+struct Box {
+  v: integer,
+}
 fn main() {
-    // short form captures a scalar local, inline in map
-    x = 10;
-    m = [1, 2, 3].map(|y| { y + x });
-    s = 0; for e in m { s += e; }
-    assert(s == 36, "short map capture {s}");         // (1+10)+(2+10)+(3+10) = 36
+  // short form captures a scalar local, inline in map
+  x = 10;
+  m = [1, 2, 3].map(|y| { y + x });
+  s = 0; for e in m { s += e; }
+  assert(s == 36, "short map capture {s}"); // (1+10)+(2+10)+(3+10) = 36
 
-    // short form captures a HEAP value (shared, like a parameter)
-    b = Box { v: 8 };
-    g = [1].map(|z| { z + b.v });
-    assert(g[0] == 9, "short heap capture {g[0]}");   // 1 + 8
+  // short form captures a HEAP value (shared, like a parameter)
+  b = Box { v: 8 };
+  g = [1].map(|z| { z + b.v });
+  assert(g[0] == 9, "short heap capture {g[0]}"); // 1 + 8
 
-    // non-capturing short form still works unchanged
-    d = [1, 2, 3].map(|w| { w * 2 });
-    assert(d[0] == 2, "non-capturing short {d[0]}");
+  // non-capturing short form still works unchanged
+  d = [1, 2, 3].map(|w| { w * 2 });
+  assert(d[0] == 2, "non-capturing short {d[0]}");
 
-    // the long form captures identically (the sugar it desugars to)
-    lng = [1].map(fn(y: integer) -> integer { y + x });
-    assert(lng[0] == 11, "long form capture {lng[0]}");
+  // the long form captures identically (the sugar it desugars to)
+  lng = [1].map(fn(y: integer) -> integer {
+    y + x
+  });
+  assert(lng[0] == 11, "long form capture {lng[0]}");
 
-    println("85-short-lambda-capture ok");
+  println("85-short-lambda-capture ok");
 }

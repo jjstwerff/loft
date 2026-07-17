@@ -29,16 +29,24 @@
 //
 // Matrix probes: /tmp/{m,mt,pe,pb,ph}.loft (2026-06-13 session).
 
-struct S { x: integer }
+struct S {
+  x: integer,
+}
 
 // heap-text local + struct-or-null return — the failing shape
 fn make(c: boolean, rel: text) -> S {
-  if c { tag = "{rel}/suffix"; r = S { x: 42 }; r } else { null }
+  if c {
+    tag = "{rel}/suffix"; r = S { x: 42 }; r
+  } else { null }
 }
 
 // nested if inside the heap-local branch
 fn nested(c: boolean, d: boolean, rel: text) -> S {
-  if c { tag = "{rel}"; if d { r = S { x: 7 }; r } else { null } } else { null }
+  if c {
+    tag = "{rel}"; if d {
+      r = S { x: 7 }; r
+    } else { null }
+  } else { null }
 }
 
 // A struct-returning `match … { … => null }` lowers to nested ifs of the form
@@ -46,13 +54,29 @@ fn nested(c: boolean, d: boolean, rel: text) -> S {
 // branch and emitted `()`, so the arm failed to unify with the value arm
 // (rustc E0308 `()` vs `DbRef`).  A Null then-branch now emits the typed null
 // sentinel symmetrically to a Null else-branch.
-fn m_expr(c: boolean) -> S { match c { true => S { x: 55 }, false => null } }
-fn m_block(c: boolean) -> S { match c { true => { r = S { x: 66 }; r }, false => null } }
+fn m_expr(c: boolean) -> S {
+  match c {
+    true => S { x: 55 }, false => null
+  }
+}
+fn m_block(c: boolean) -> S {
+  match c {
+    true => {
+      r = S { x: 66 }; r
+    }, false => null
+  }
+}
 // match arm holding a HEAP LOCAL (`tag`) to free, with a `null` sibling arm — the
 // strictest shape: `scopes::insert_free` wraps the arm's last op in the cleanup so
 // the placeholder return is `Return(OpFreeText(tag))`, not `Return(Null)`.  Native
 // codegen must capture `r` before running that free (else E0069 / a null return).
-fn m_heap(c: boolean, rel: text) -> S { match c { true => { tag = "{rel}/x"; r = S { x: 88 }; r }, false => null } }
+fn m_heap(c: boolean, rel: text) -> S {
+  match c {
+    true => {
+      tag = "{rel}/x"; r = S { x: 88 }; r
+    }, false => null
+  }
+}
 
 fn test_struct_branch_returns_value() {
   s = make(true, "abc");

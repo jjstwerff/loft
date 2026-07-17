@@ -17,22 +17,39 @@
 // leak gate verifies zero leaked stores on BOTH backends.
 
 // --- t9: de-NRVO'd vector returns (leaked inline before the Vector lift arm) ---
-fn two_append() -> vector<integer> { z = []; z += [1]; z += [2]; z }
-fn reassign() -> vector<integer> { z: vector<integer> = [9]; z = [1, 2]; z }
-fn loop_trailing(s: text) -> vector<text> {        // the stdlib `split` shape
+fn two_append() -> vector<integer> {
+  z = []; z += [1]; z += [2]; z
+}
+fn reassign() -> vector<integer> {
+  z: vector<integer> = [9]; z = [1, 2]; z
+}
+fn loop_trailing(s: text) -> vector<text> {
+  // the stdlib `split` shape
   r = [];
   p = 0;
-  for c in s { if c == '-' { r += [s[p..c#index]]; p = c#next; } }
+  for c in s {
+    if c == '-' {
+      r += [s[p..c#index]]; p = c#next;
+    }
+  }
   if s.len() > 0 { r += [s[p..s.len()]]; }
   r
 }
 
 // --- t9 negative control: NRVO'd (1 append) must stay clean ---
-fn one_append() -> vector<integer> { z = []; z += [7]; z }
+fn one_append() -> vector<integer> {
+  z = []; z += [7]; z
+}
 
 // --- bug 10: capturing closure returned + passed as an unbound arg ---
-fn apply(f: fn() -> integer) -> integer { f() + f() }
-fn make() -> fn() -> integer { n = 0; fn() -> integer { n = n + 1; n } }
+fn apply(f: fn() -> integer) -> integer {
+  f()+f()
+}
+fn make() -> fn() -> integer {
+  n = 0; fn() -> integer {
+    n = n + 1; n
+  }
+}
 
 fn main() {
   // t9 — inline-unbound de-NRVO'd vector returns (these leaked before the fix)

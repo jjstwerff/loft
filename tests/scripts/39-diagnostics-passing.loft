@@ -79,11 +79,19 @@ fn test_if_statement_without_else_ok() {
   if x > 5 { println("{x}"); }
 }
 
-struct PEInner { x: integer }
-struct PEOuter { i: PEInner, y: integer }
+struct PEInner {
+  x: integer,
+}
+struct PEOuter {
+  i: PEInner,
+  y: integer,
+}
 
 fn test_non_cyclic_nested_struct_ok() {
-  o = PEOuter { i: PEInner { x: 1 }, y: 2 };
+  o = PEOuter {
+    i: PEInner { x: 1 },
+    y: 2,
+  };
   assert(o.i.x == 1, "nested");
 }
 
@@ -107,7 +115,10 @@ fn test_file_write_error_does_not_panic() {
 
 // --- Issue 82 positive: text type works ---
 
-struct DPWord { wkey: text, count: integer }
+struct DPWord {
+  wkey: text,
+  count: integer,
+}
 
 fn test_text_type_works() {
   w = DPWord { wkey: "hello", count: 1 };

@@ -9,33 +9,31 @@
 // Tracked as roadmap item S16b.
 
 enum Shape {
-  Circle { radius: float, score: integer }
+  Circle { radius: float, score: integer },
 }
 
 struct Db {
-  circles: sorted < Circle[score] >
+  circles: sorted<Circle[score]>,
 }
 
 fn main() {
-  db = Db {circles: [
-    Circle {radius: 1.0, score: 10},
-    Circle {radius: 2.0, score: 20},
-    Circle {radius: 3.0, score: 30}
-  ]};
+  db = Db {
+    circles: [
+      Circle { radius: 1.0, score: 10 },
+      Circle { radius: 2.0, score: 20 },
+      Circle { radius: 3.0, score: 30 },
+    ],
+  };
 
   // Full iteration works fine (no range bounds to resolve).
   total = 0;
-  for c in db.circles {
-    total += c.score;
-  }
+  for c in db.circles { total += c.score; }
   assert(total == 60, "full iteration sum: {total}");
 
   // Range query: should return only the circles with score in [15..25).
   // Currently fails: "Unknown in expression type Shape" because the key
   // field `score` is looked up on `Shape` (the parent enum), not `Circle`.
   range_total = 0;
-  for c in db.circles[15..25] {
-    range_total += c.score;
-  }
+  for c in db.circles[15..25] { range_total += c.score; }
   assert(range_total == 20, "range [15..25] sum: {range_total}");
 }

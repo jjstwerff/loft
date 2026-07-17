@@ -21,21 +21,43 @@
 // (@PLN85 P3 — def/type numbering across SEVERAL multi-line match-return functions
 // defined together) is orthogonal to this fix and tracked apart; keeping the arms
 // single-line isolates this regression to the B5 stack-join.
-struct E { hp: integer, name: text }
-enum Cell { Empty, Filled { items: vector<E> } }
+struct E {
+  hp: integer,
+  name: text,
+}
+enum Cell {
+  Empty,
+  Filled { items: vector<E> },
+}
 
 // Heavy (vector-yielding) arm FIRST -> the taller arm is the TRUE arm.
-fn deliver(e: Cell) -> vector<E> { match e { Filled { items } => { o: vector<E> = []; o += items; o }, _ => { [] } } }
+fn deliver(e: Cell) -> vector<E> {
+  match e {
+    Filled { items } => {
+      o: vector<E> = []; o += items; o
+    }, _ => { [] }
+  }
+}
 
 // Heavy arm SECOND -> the taller arm is the FALSE arm (the other ordering).
-fn deliver_rev(e: Cell) -> vector<E> { match e { Empty => { [] }, Filled { items } => { o: vector<E> = []; o += items; o } } }
+fn deliver_rev(e: Cell) -> vector<E> {
+  match e {
+    Empty => { [] }, Filled { items } => {
+      o: vector<E> = []; o += items; o
+    }
+  }
+}
 
 // Match + local promoted to the buffer but NO append -> still a taller true arm.
-fn empty_local(e: Cell) -> vector<E> { match e { Filled { items } => { o: vector<E> = []; o }, _ => { [] } } }
+fn empty_local(e: Cell) -> vector<E> {
+  match e {
+    Filled { items } => { o: vector<E> = []; o }, _ => { [] }
+  }
+}
 
 fn main() {
   inner: vector<E> = [];
-  for k in 0..3 { inner += [E{hp: k, name: "e"}]; }
+  for k in 0..3 { inner += [E { hp: k, name: "e" }]; }
   cell = Filled { items: inner };
 
   // Repeated calls with allocation churn between them: pre-fix this drove the
@@ -54,7 +76,7 @@ fn main() {
 
     // churn: fresh records each iteration so a stale buffer slot is reused.
     j: vector<E> = [];
-    for q in 0..12 { j += [E{hp: q, name: "churn"}]; }
+    for q in 0..12 { j += [E { hp: q, name: "churn" }]; }
     assert(len(j) == 12, "churn i{i}: len={len(j)}");
   }
 

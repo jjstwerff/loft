@@ -46,10 +46,8 @@ fn main() {
   // Nested \" inside format expressions is not supported in .loft files;
   // build the result incrementally instead.
   citer = "";
-  for c in txt[2..- 1] {
-    if citer != "" {
-      citer += ",";
-    }
+  for c in txt[2.. - 1] {
+    if citer != "" { citer += ","; }
     citer += "{c#index}:{c}";
   }
   assert(citer == "0:😊,4:🙃,8:4", "char iter indices built as string");
@@ -90,11 +88,9 @@ fn main() {
   assert("{\"hi\":5}" == "hi   ", "string literal in format with width");
   // --- Loop #count inside format string ---
   cnt_r = "";
-  vcnt =[10, 20, 30];
+  vcnt = [10, 20, 30];
   for e in vcnt {
-    if !e#first {
-      cnt_r += ",";
-    }
+    if!e#first { cnt_r += ","; }
     cnt_r += "{e#count}:{e}";
   }
   assert(cnt_r == "0:10,1:20,2:30", "loop #count in format string: {cnt_r}");

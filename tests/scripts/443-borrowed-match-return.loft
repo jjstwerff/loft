@@ -11,14 +11,24 @@
 //
 // The subject (`cell`) is a NAMED local that out-lives the result, so the borrowed return is
 // sound; the churn loop makes a stale return-address fatal pre-fix.
-struct E { hp: integer, name: text }
-enum Cell { Empty, Filled { items: vector<E> } }
+struct E {
+  hp: integer,
+  name: text,
+}
+enum Cell {
+  Empty,
+  Filled { items: vector<E> },
+}
 
-fn g(e: Cell) -> vector<E> { match e { Filled { items } => { items }, _ => { [] } } }
+fn g(e: Cell) -> vector<E> {
+  match e {
+    Filled { items } => { items }, _ => { [] }
+  }
+}
 
 fn main() {
   inner: vector<E> = [];
-  for k in 0..3 { inner += [E{hp: k, name: "e"}]; }
+  for k in 0..3 { inner += [E { hp: k, name: "e" }]; }
   cell = Filled { items: inner };
 
   for i in 0..12 {
@@ -31,7 +41,7 @@ fn main() {
     assert(len(e) == 0, "empty i{i}: len={len(e)}");
 
     j: vector<E> = [];
-    for q in 0..12 { j += [E{hp: q, name: "x"}]; }
+    for q in 0..12 { j += [E { hp: q, name: "x" }]; }
   }
   println("ok");
 }

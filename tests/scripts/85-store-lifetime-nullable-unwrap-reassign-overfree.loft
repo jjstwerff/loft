@@ -15,9 +15,15 @@
 // view). Drives the same shape under allocation pressure that recycles a wrongly
 // freed slot, asserting both the subject table and the returned value stay intact.
 
-struct M { hp: integer, depth: integer, name: text }
+struct M {
+  hp: integer,
+  depth: integer,
+  name: text,
+}
 
-fn m_none() -> M { M { hp: 0, depth: 0, name: "" } }
+fn m_none() -> M {
+  M { hp: 0, depth: 0, name: "" }
+}
 
 fn pool_of(t: vector<M>) -> vector<M> {
   out: vector<M> = [];
@@ -26,13 +32,13 @@ fn pool_of(t: vector<M>) -> vector<M> {
 }
 
 fn one(t: vector<M>, salt: integer) -> M {
-  pool = pool_of(t);          // a LOCAL vector, freed at fn exit
-  chosen = m_none();          // owned-init
+  pool = pool_of(t); // a LOCAL vector, freed at fn exit
+  chosen = m_none(); // owned-init
   np = len(pool);
   if np > 0 {
-    chosen = pool[salt % np ?? 0] ?? m_none();  // nullable-unwrap view of the local
+    chosen = pool[salt % np ?? 0] ?? m_none(); // nullable-unwrap view of the local
   }
-  chosen                      // returned — must be an owned copy, not a dangling view
+  chosen// returned — must be an owned copy, not a dangling view
 }
 
 fn choose(t: vector<M>, salt: integer) -> M {
@@ -41,7 +47,9 @@ fn choose(t: vector<M>, salt: integer) -> M {
   d = 0;
   while d < 3 {
     cand = one(t, salt * 131 + d * 17);
-    if cand.depth > bestdepth { bestdepth = cand.depth; best = cand; }
+    if cand.depth > bestdepth {
+      bestdepth = cand.depth; best = cand;
+    }
     d += 1;
   }
   best
@@ -59,7 +67,7 @@ fn main() {
   for i in 0..24 {
     r = choose(t, i);
     acc = 0;
-    for f in 0..8 { acc += filler(8); }   // recycle any wrongly-freed slot
+    for f in 0..8 { acc += filler(8); } // recycle any wrongly-freed slot
     assert(len(t) == 8, "iter {i}: len(t)={len(t)} (subject intact, no over-free)");
     assert(r.depth >= 0 && r.depth < 8, "iter {i}: r.depth={r.depth} (returned value not corrupt)");
     e3 = t[3] ?? m_none();

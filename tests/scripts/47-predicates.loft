@@ -2,9 +2,15 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // P3: Vector predicate aggregates — any, all, count_if
 
-fn is_positive(x: integer) -> boolean { x > 0 }
-fn is_even(x: integer) -> boolean { x % 2 == 0 }
-fn is_big(x: integer) -> boolean { x > 100 }
+fn is_positive(x: integer) -> boolean {
+  x > 0
+}
+fn is_even(x: integer) -> boolean {
+  x % 2 == 0
+}
+fn is_big(x: integer) -> boolean {
+  x > 100
+}
 
 fn main() {
   nums = [1, 2, 3, 4, 5];

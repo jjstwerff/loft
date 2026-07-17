@@ -11,14 +11,21 @@
 // Width-general (i16/u8); copy and write paths were already correct.
 
 fn mk_i32_rows() -> vector<vector<i32>> {
-  return [[10, 20, 30], [40]];
+  return[[10, 20, 30], [40]];
 }
 
 fn main() {
   // i32 2-deep literal — every index + lengths, distinctive values
-  vv: vector<vector<i32>> = [[1076895760, 1212630597, 1347440720], [2003195204], [50462976, 117835012]];
+  vv: vector<vector<i32>> = [
+    [1076895760, 1212630597, 1347440720],
+    [2003195204],
+    [50462976, 117835012],
+  ];
   assert(len(vv[0]) == 3 && len(vv[1]) == 1 && len(vv[2]) == 2, "i32 lens");
-  assert(vv[0][0] == 1076895760 && vv[0][1] == 1212630597 && vv[0][2] == 1347440720, "i32 row0: {vv[0]}");
+  assert(
+    vv[0][0] == 1076895760 && vv[0][1] == 1212630597 && vv[0][2] == 1347440720,
+    "i32 row0: {vv[0]}"
+  );
   assert(vv[1][0] == 2003195204, "i32 row1");
   assert(vv[2][0] == 50462976 && vv[2][1] == 117835012, "i32 row2: {vv[2]}");
 
@@ -30,7 +37,10 @@ fn main() {
 
   // 3-deep i32 literal
   vvv: vector<vector<vector<i32>>> = [[[111111, 222222]], [[333333]]];
-  assert(vvv[0][0][0] == 111111 && vvv[0][0][1] == 222222 && vvv[1][0][0] == 333333, "3deep: {vvv[0][0]}");
+  assert(
+    vvv[0][0][0] == 111111 && vvv[0][0][1] == 222222 && vvv[1][0][0] == 333333,
+    "3deep: {vvv[0][0]}"
+  );
 
   // i32 nested vector as a struct field (literal-append)
   h: vector<vector<i32>> = [];

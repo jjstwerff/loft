@@ -14,8 +14,13 @@
 // The leak is detected by `tests/wrap.rs::run_test`'s exit-time
 // "stores not freed" gate (Canvas×9 under the loop below).
 
-struct P { a: integer }
-struct Canvas { data: vector<integer>, w: integer }
+struct P {
+  a: integer,
+}
+struct Canvas {
+  data: vector<integer>,
+  w: integer,
+}
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };
@@ -24,16 +29,24 @@ fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
 }
 
 // CONTROL — scalar-only param.  Returned Canvas is freed cleanly.
-fn render_scalar(a: integer) -> Canvas { cv = alloc_canvas(64, 48, a); cv }
+fn render_scalar(a: integer) -> Canvas {
+  cv = alloc_canvas(64, 48, a); cv
+}
 
 // TRIGGER — one struct param.  Returned Canvas LEAKS one store per call.
-fn render_struct(p: P) -> Canvas { cv = alloc_canvas(64, 48, p.a); cv }
+fn render_struct(p: P) -> Canvas {
+  cv = alloc_canvas(64, 48, p.a); cv
+}
 
 fn main() {
   // CONTROL loop (clean baseline).
-  for ci in 0..9 { cv = render_scalar(ci); _ = len(cv.data); }
+  for ci in 0..9 {
+    cv = render_scalar(ci); _ = len(cv.data);
+  }
   // TRIGGER loop — pre-fix: leaks `Canvas×9`.
   p = P { a: 1 };
-  for ti in 0..9 { cv = render_struct(p); _ = len(cv.data); }
+  for ti in 0..9 {
+    cv = render_struct(p); _ = len(cv.data);
+  }
   println("done");
 }

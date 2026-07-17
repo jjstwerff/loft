@@ -14,22 +14,44 @@
 
 struct Rec {
   k: integer,
-  v: integer
+  v: integer,
 }
 
-fn dbl(x: integer) -> integer { return x * 2; }
-fn half(x: integer) -> float { return (x as float) / 2.0; }
-fn even(x: integer) -> boolean { return x % 2 == 0; }
-fn rec_dbl(r: const Rec) -> integer { return r.v * 2; }
-fn char_one(c: character) -> integer { if c == ' ' { return 0; } return 1; }
-fn label(x: integer) -> text { return "v{x}"; }
-fn wrap(s: text) -> text { return "[{s}]"; }
+fn dbl(x: integer) -> integer {
+  return x * 2;
+}
+fn half(x: integer) -> float {
+  return(x as float) / 2.0;
+}
+fn even(x: integer) -> boolean {
+  return x % 2 == 0;
+}
+fn rec_dbl(r: const Rec) -> integer {
+  return r.v * 2;
+}
+fn char_one(c: character) -> integer {
+  if c == ' ' { return 0; } return 1;
+}
+fn label(x: integer) -> text {
+  return "v{x}";
+}
+fn wrap(s: text) -> text {
+  return "[{s}]";
+}
 // literal-returning text worker (@P205 nwb / #273): no work buffer, owned String.
-fn lit(x: integer) -> text { if x > 1 { return "big"; } return "sm"; }
-fn mk_box(x: integer) -> Rec { return Rec {k: x, v: x * 2}; }
-fn add5(n: integer) -> integer { return n + 5; }
+fn lit(x: integer) -> text {
+  if x > 1 { return "big"; } return "sm";
+}
+fn mk_box(x: integer) -> Rec {
+  return Rec { k: x, v: x * 2 };
+}
+fn add5(n: integer) -> integer {
+  return n + 5;
+}
 // fn-ref-returning worker (#281): native must lower QueueStitch::Fn.
-fn pick(x: integer) -> fn(integer) -> integer { return add5; }
+fn pick(x: integer) -> fn(integer) -> integer {
+  return add5;
+}
 
 fn main() {
   // --- range source, integer worker ---
@@ -44,7 +66,9 @@ fn main() {
 
   // --- range source, boolean worker ---
   c = 0;
-  for i in 0..6 par(r = even(i), 2) { if r { c += 1; } }
+  for i in 0..6 par(r = even(i), 2) {
+    if r { c += 1; }
+  }
   assert(c == 3, "range bool par: {c}");
 
   // --- plain vector<integer> source ---
@@ -96,21 +120,31 @@ fn main() {
 
   // --- hash source (unordered par walk; sum is order-independent) ---
   h: hash<Rec[k]> = [];
-  h += [Rec {k: 3, v: 30}, Rec {k: 1, v: 10}, Rec {k: 2, v: 20}];
+  h += [
+    Rec { k: 3, v: 30 },
+    Rec { k: 1, v: 10 },
+    Rec { k: 2, v: 20 },
+  ];
   hs = 0;
   for x in h par(r = rec_dbl(x), 2) { hs += r; }
   assert(hs == 120, "hash par: {hs}");
 
   // --- sorted source ---
   srt: sorted<Rec[k]> = [];
-  srt += [Rec {k: 2, v: 20}, Rec {k: 1, v: 10}];
+  srt += [
+    Rec { k: 2, v: 20 },
+    Rec { k: 1, v: 10 },
+  ];
   ss = 0;
   for x in srt par(r = rec_dbl(x), 2) { ss += r; }
   assert(ss == 60, "sorted par: {ss}");
 
   // --- index source ---
   ix: index<Rec[k]> = [];
-  ix += [Rec {k: 1, v: 10}, Rec {k: 2, v: 20}];
+  ix += [
+    Rec { k: 1, v: 10 },
+    Rec { k: 2, v: 20 },
+  ];
   ixs = 0;
   for x in ix par(r = rec_dbl(x), 2) { ixs += r; }
   assert(ixs == 60, "index par: {ixs}");

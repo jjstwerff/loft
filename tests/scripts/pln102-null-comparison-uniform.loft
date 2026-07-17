@@ -9,12 +9,12 @@ fn main() {
   fa: float = 5.0;
   fc: float = 3.0;
   assert(nf == nf, "float null==null");
-  assert(!(nf == fa), "float null==x false");
-  assert(!(nf != nf), "float null!=null false");
+  assert(! (nf == fa), "float null==x false");
+  assert(! (nf != nf), "float null!=null false");
   assert(nf != fa, "float null!=x true");
   assert(nf < fa, "float null<x (low extreme)");
-  assert(!(fa < nf), "float x<null false");
-  assert(!(nf < nf), "float null<null false");
+  assert(! (fa < nf), "float x<null false");
+  assert(! (nf < nf), "float null<null false");
   assert(nf <= nf, "float null<=null true");
   assert(fa > nf, "float x>null true");
   assert(fa >= nf, "float x>=null true");
@@ -25,7 +25,7 @@ fn main() {
   ns: single? = null;
   sa: single = 5.0 as single;
   assert(ns == ns, "single null==null");
-  assert(!(ns != ns), "single null!=null false");
+  assert(! (ns != ns), "single null!=null false");
   assert(ns < sa, "single null<x");
   assert(sa > ns, "single x>null");
 

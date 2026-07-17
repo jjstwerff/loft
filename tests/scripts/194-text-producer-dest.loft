@@ -7,7 +7,9 @@
 // were added to `is_text_dest_native`, so the Build-2 synth-temp chokepoint routes
 // their value-position calls away from `stores.scratch`.  Locks correctness on
 // every backend.
-fn took(s: text) -> integer { len(s) }
+fn took(s: text) -> integer {
+  len(s)
+}
 
 fn main() {
   j = json_parse("42");
@@ -22,7 +24,7 @@ fn main() {
   assert("[{j.to_json()}|{j.kind()}]" == "[42|JNumber]", "json format");
 
   // value position: concat
-  assert(j.to_json() + "!" == "42!", "to_json concat");
+  assert(j.to_json()+"!" == "42!", "to_json concat");
 
   // value position: pretty (primitive == canonical today)
   assert(j.to_json_pretty() == "42", "to_json_pretty");
@@ -31,9 +33,7 @@ fn main() {
   assert(took(source_dir()) >= 0, "source_dir arg path");
 
   // loop, value position — no accumulation across iterations
-  for _ in 0..3 {
-    assert(j.kind() == "JNumber", "kind loop no-accumulate");
-  }
+  for _ in 0..3 { assert(j.kind() == "JNumber", "kind loop no-accumulate"); }
 
   println("text-producer dest: all shapes ok");
 }

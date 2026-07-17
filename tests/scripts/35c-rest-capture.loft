@@ -13,15 +13,22 @@
 // Struct-enum tokens use PAYLOAD variants only (no unit variants): a unit-variant enum record
 // leaks in a vector regardless of matching — a separate pre-existing bug (filed).
 
-enum Tok { Kw { word: text }, Ident { name: text }, Num { value: integer } }
-struct P { x: integer, y: integer }
+enum Tok {
+  Kw { word: text },
+  Ident { name: text },
+  Num { value: integer },
+}
+struct P {
+  x: integer,
+  y: integer,
+}
 
 // ── scalar ──────────────────────────────────────────────────────────────────
 fn tail_i(v: vector<integer>) -> vector<integer> {
-  match v { [first, ..rest] => rest, _ => [] }        // scalar `[]` fallback is fine
+  match v { [first, ..rest] => rest, _ => [] } // scalar `[]` fallback is fine
 }
 fn drop2_i(v: vector<integer>) -> vector<integer> {
-  match v { [a, b, ..rest] => rest, _ => [] }         // rest = v[2..len]
+  match v { [a, b, ..rest] => rest, _ => [] } // rest = v[2..len]
 }
 
 // ── text: return, len in-arm, pass rest to a fn ──────────────────────────────
@@ -31,9 +38,11 @@ fn tail_t(v: vector<text>) -> vector<text> {
 fn rest_len_t(v: vector<text>) -> integer {
   match v { [h, ..t] => len(t), whole => -1 }
 }
-fn joinlen(ts: vector<text>) -> integer { len(ts) }
+fn joinlen(ts: vector<text>) -> integer {
+  len(ts)
+}
 fn rest_pass_t(v: vector<text>) -> integer {
-  match v { [h, ..t] => joinlen(t), whole => -1 }     // pass rest to a fn (exercises the read-temp)
+  match v { [h, ..t] => joinlen(t), whole => -1 } // pass rest to a fn (exercises the read-temp)
 }
 
 // ── plain struct: return + independence ──────────────────────────────────────
@@ -46,19 +55,28 @@ fn tail_p(v: vector<P>) -> vector<P> {
 // (rest-store-lifetime/ANALYSIS.md); both sub-classes are now fixed in scopes.rs::insert_free
 // (A: hoist heap-ref returns; B: push sibling store frees into arms for a &text return), so
 // these arms are leak-clean on both backends and guard the fix.
-fn ntoks(ts: vector<Tok>) -> integer { len(ts) }
-enum Stmt { LetS { name: text, count: integer }, Other { count: integer } }
-fn parse(ts: vector<Tok>) -> Stmt {         // sub-class A: enum return + captured field + ..rest
+fn ntoks(ts: vector<Tok>) -> integer {
+  len(ts)
+}
+enum Stmt {
+  LetS { name: text, count: integer },
+  Other { count: integer },
+}
+fn parse(ts: vector<Tok>) -> Stmt {
+  // sub-class A: enum return + captured field + ..rest
   match ts {
-    [ Kw { word }, ..rhs ] => LetS { name: word, count: ntoks(rhs) },
-    whole                  => Other { count: ntoks(whole) }
+    [Kw { word }, ..rhs] => LetS { name: word, count: ntoks(rhs) },
+    whole => Other { count: ntoks(whole) }
   }
 }
 fn stmt_count(s: Stmt) -> integer {
-  match s { LetS { name, count } => count, Other { count } => -count }
+  match s {
+    LetS { name, count } => count, Other { count } => -count
+  }
 }
-fn first_word(ts: vector<Tok>) -> text {    // sub-class B: &text return of a captured field + ..rest
-  match ts { [ Kw { word }, ..rhs ] => word, whole => "none" }
+fn first_word(ts: vector<Tok>) -> text {
+  // sub-class B: &text return of a captured field + ..rest
+  match ts { [Kw { word }, ..rhs] => word, whole => "none" }
 }
 
 fn main() {
@@ -79,7 +97,7 @@ fn main() {
   assert(rest_len_t(["solo"]) == 0, "text single -> empty rest");
 
   // plain struct + independence: mutate rest, subject stays intact
-  src = [P{x:1,y:1}, P{x:2,y:2}, P{x:3,y:3}];
+  src = [P { x: 1, y: 1 }, P { x: 2, y: 2 }, P { x: 3, y: 3 }];
   rp = tail_p(src);
   assert(len(rp) == 2 && rp[0].x == 2 && rp[1].x == 3, "struct rest: {rp[0].x},{rp[1].x}");
   rp[0].x = 99;
@@ -87,19 +105,43 @@ fn main() {
   assert(rp[0].x == 99, "struct rest mutated: {rp[0].x}");
 
   // struct-enum parser shape — captured field escapes into an enum (A) / a text (B), + ..rest
-  ts = [Kw { word: "let" }, Num { value: 1 }, Num { value: 2 }, Num { value: 3 }];
-  assert(stmt_count(parse(ts)) == 3, "sub-class A (enum + captured field + rest): {stmt_count(parse(ts))}");
-  assert(stmt_count(parse([Num { value: 9 }])) == -1, "parse fallthrough (whole count negated)");
-  assert(first_word(ts) == "let", "sub-class B (&text captured-field return + rest): {first_word(ts)}");
-  assert(first_word([Num { value: 9 }]) == "none", "first_word fallthrough");
+  ts = [
+    Kw { word: "let" },
+    Num { value: 1 },
+    Num { value: 2 },
+    Num { value: 3 },
+  ];
+  assert(
+    stmt_count(parse(ts)) == 3,
+    "sub-class A (enum + captured field + rest): {stmt_count(parse(ts))}"
+  );
+  assert(
+    stmt_count(parse([
+      Num { value: 9 },
+    ])) == -1,
+    "parse fallthrough (whole count negated)"
+  );
+  assert(
+    first_word(ts) == "let",
+    "sub-class B (&text captured-field return + rest): {first_word(ts)}"
+  );
+  assert(first_word([
+    Num { value: 9 },
+  ]) == "none", "first_word fallthrough");
 
   // REUSE guard — a `..rest` fn that materialises a struct-enum tail must NOT free a VIEW of the
   // subject's records (the `#Slice materialise` `comp` intermediate dropped the borrow-dep, so its
   // `OpFreeRef` freed the subject's own enum record; interpret-only, invisible until the SAME
   // subject was matched again).  Both calls must agree.  Guards the fix in
   // parser/expressions.rs::materialize_iterator (rest-store-lifetime reuse axis).
-  assert(first_word(ts) == "let" && first_word(ts) == "let", "struct-enum ..rest reuse (subject intact): {first_word(ts)}");
-  assert(stmt_count(parse(ts)) == 3 && stmt_count(parse(ts)) == 3, "struct-enum ..rest reuse (count stable): {stmt_count(parse(ts))}");
+  assert(
+    first_word(ts) == "let" && first_word(ts) == "let",
+    "struct-enum ..rest reuse (subject intact): {first_word(ts)}"
+  );
+  assert(
+    stmt_count(parse(ts)) == 3 && stmt_count(parse(ts)) == 3,
+    "struct-enum ..rest reuse (count stable): {stmt_count(parse(ts))}"
+  );
 
   print("35c-rest-capture: PASS");
 }

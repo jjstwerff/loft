@@ -11,19 +11,33 @@
 // an owned/fresh return must ADOPT (and stay distinct across calls), and a
 // field-of-param return must COPY. Value semantics + no leak, BOTH backends.
 
-struct Pt { x: integer }
-struct Box { v: vector<integer> }
+struct Pt {
+  x: integer,
+}
+struct Box {
+  v: vector<integer>,
+}
 
 // explicit borrow-of-param return → caller copies
-fn idr(v: vector<integer>) -> vector<integer> { return v; }
+fn idr(v: vector<integer>) -> vector<integer> {
+  return v;
+}
 // owned fresh vector return → caller adopts; two calls stay distinct
-fn mk(n: integer) -> vector<integer> { return [n, n]; }
+fn mk(n: integer) -> vector<integer> {
+  return[n, n];
+}
 // struct param return (Reference borrowed view) → caller copies
-fn ids(s: Pt) -> Pt { return s; }
+fn ids(s: Pt) -> Pt {
+  return s;
+}
 // owned fresh struct return → caller adopts
-fn mkpt(n: integer) -> Pt { return Pt { x: n }; }
+fn mkpt(n: integer) -> Pt {
+  return Pt { x: n };
+}
 // field-of-param return (implicit tail) → caller copies (#415)
-fn getv(b: Box) -> vector<integer> { b.v }
+fn getv(b: Box) -> vector<integer> {
+  b.v
+}
 
 fn main() {
   // borrow-of-param vector return must COPY (not alias the arg)

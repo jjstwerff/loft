@@ -11,8 +11,13 @@
 // Pairing: diff against 02 (Set consumer) and 26 (OpAppendText consumer).
 // Status: cluster I consumer-border probe.
 
-struct Entry { name: text, value: text }
-struct DB { entries: hash<Entry[name]> }
+struct Entry {
+  name: text,
+  value: text,
+}
+struct DB {
+  entries: hash<Entry[name]>,
+}
 
 fn main() {
   src = DB { entries: [] };

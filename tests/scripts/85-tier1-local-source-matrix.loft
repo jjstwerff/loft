@@ -16,11 +16,17 @@
 // values are chosen so a WRONG borrow would diverge (d2 would read 99, not 10).
 // See doc/claude/plans/25-nullable-sequences/copy-elision-design.md § Tier 1.
 
-struct G { c: vector<integer> }
-fn bump(g: &G) { g.c[0] = 99; }
+struct G {
+  c: vector<integer>,
+}
+fn bump(g: &G) {
+  g.c[0] = 99;
+}
 
 // ── SAFE (Tier-1 Borrow) ──────────────────────────────────────────────────────
-fn ro_local() -> integer { x = G { c: [10, 20, 30] }; v = x.c; v[1] ?? -1 }
+fn ro_local() -> integer {
+  x = G { c: [10, 20, 30] }; v = x.c; v[1] ?? -1
+}
 fn ro_local_sum() -> integer {
   x = G { c: [10, 20, 30] }; v = x.c; acc = 0;
   for k in 0..len(v) { acc += v[k] ?? 0; }
@@ -31,18 +37,31 @@ fn ro_local_elem() -> integer {
 }
 
 // ── UNSAFE: divergence events — must stay COPY ─────────────────────────────────
-fn d1_write_v() -> integer { x = G { c: [10, 20, 30] }; v = x.c; v[0] = 99; assert((v[0] ?? -1) == 99, "the copy itself WAS mutated"); x.c[0] ?? -1 }
-fn d2_mut_src() -> integer { x = G { c: [10, 20, 30] }; v = x.c; x.c[0] = 99; v[0] ?? -1 }
-fn d3_escape() -> vector<integer> { x = G { c: [10, 20, 30] }; v = x.c; v }
+fn d1_write_v() -> integer {
+  x = G { c: [10, 20, 30] }; v = x.c; v[0] = 99; assert(
+    (v[0] ?? -1) == 99,
+    "the copy itself WAS mutated"
+  ); x.c[0] ?? -1
+}
+fn d2_mut_src() -> integer {
+  x = G { c: [10, 20, 30] }; v = x.c; x.c[0] = 99; v[0] ?? -1
+}
+fn d3_escape() -> vector<integer> {
+  x = G { c: [10, 20, 30] }; v = x.c; v
+}
 
 // ── ADVERSARIAL: the cleanest-claim attacks — must stay COPY ───────────────────
-fn callee_mut() -> integer { x = G { c: [10, 20, 30] }; v = x.c; bump(x); v[0] ?? -1 }
+fn callee_mut() -> integer {
+  x = G { c: [10, 20, 30] }; v = x.c; bump(x); v[0] ?? -1
+}
 fn rebind() -> integer {
   x = G { c: [10, 20, 30] }; v = x.c; x = G { c: [77, 88, 99] }; v[0] ?? -1
 }
 fn in_loop() -> integer {
   acc = 0;
-  for i in 0..3 { x = G { c: [10, 20, 30] }; v = x.c; acc += v[0] ?? 0; }
+  for i in 0..3 {
+    x = G { c: [10, 20, 30] }; v = x.c; acc += v[0] ?? 0;
+  }
   acc
 }
 

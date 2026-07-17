@@ -22,28 +22,43 @@ fn fold(f: fn(integer, integer) -> integer, init: integer, v: vector<integer>) -
 
 fn main() {
   // --- Full-form lambda: basic assignment and call ---
-  dbl = fn(x: integer) -> integer { x * 2 };
+  dbl = fn(x: integer) -> integer {
+    x * 2
+  };
   assert(dbl(5) == 10, "full lambda: dbl(5)={dbl(5)}");
   assert(dbl(21) == 42, "full lambda: dbl(21)={dbl(21)}");
 
   // --- Full-form lambda: two parameters ---
-  add_fn = fn(a: integer, b: integer) -> integer { a + b };
+  add_fn = fn(a: integer, b: integer) -> integer {
+    a + b
+  };
   assert(add_fn(3, 4) == 7, "full lambda 2 params: add(3,4)={add_fn(3,4)}");
 
   // --- Full-form lambda: passed as argument ---
-  assert(apply(fn(x: integer) -> integer { x * x }, 7) == 49, "inline lambda arg: 7^2={apply(fn(x: integer) -> integer { x * x }, 7)}");
+  assert(
+    apply(fn(x: integer) -> integer {
+      x * x
+    }, 7) == 49,
+    "inline lambda arg: 7^2={apply(fn(x: integer) -> integer { x * x }, 7)}"
+  );
 
   // --- Long-form lambda: explicit types ---
-  triple = fn(x: integer) -> integer { x * 3 };
+  triple = fn(x: integer) -> integer {
+    x * 3
+  };
   assert(triple(4) == 12, "long lambda triple(4)={triple(4)}");
   assert(triple(0) == 0, "long lambda triple(0)={triple(0)}");
 
   // --- Short-form lambda: zero params ---
-  const_42 = fn() -> integer { 42 };
+  const_42 = fn() -> integer {
+    42
+  };
   assert(const_42() == 42, "zero-param lambda const_42={const_42()}");
 
   // --- Long-form lambda: two params ---
-  mul_fn = fn(a: integer, b: integer) -> integer { a * b };
+  mul_fn = fn(a: integer, b: integer) -> integer {
+    a * b
+  };
   assert(mul_fn(6, 7) == 42, "long lambda mul(6,7)={mul_fn(6,7)}");
 
   // --- Short-form lambda: type inferred from call context ---
@@ -55,7 +70,9 @@ fn main() {
   assert(!apply_pred(|x| { x > 0 }, -1), "pred lambda: -1 not > 0");
 
   // --- Lambda stored, called multiple times ---
-  inc = fn(x: integer) -> integer { x + 1 };
+  inc = fn(x: integer) -> integer {
+    x + 1
+  };
   assert(inc(0) == 1, "stored lambda inc(0)");
   assert(inc(99) == 100, "stored lambda inc(99)");
 

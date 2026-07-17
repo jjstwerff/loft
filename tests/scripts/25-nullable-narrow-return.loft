@@ -8,10 +8,18 @@
 // rejected it (E0308) — the fn compiled on --interpret but failed to build on --native. The
 // fix: `rust_type(Optional(Integer), _)` is `i64` (src/generation/mod.rs), matching the value.
 // This is a both-backend guard; it must run identically on --interpret and --native.
-fn ret_u8(i: integer) -> u8? { r = i as u8?; r }
-fn lit_u8() -> u8? { 200 }
-fn ret_u16(i: integer) -> u16? { r = i as u16?; r }
-fn ret_i16(i: integer) -> i16? { r = i as i16?; r }
+fn ret_u8(i: integer) -> u8? {
+  r = i as u8?; r
+}
+fn lit_u8() -> u8? {
+  200
+}
+fn ret_u16(i: integer) -> u16? {
+  r = i as u16?; r
+}
+fn ret_i16(i: integer) -> i16? {
+  r = i as i16?; r
+}
 
 fn main() {
   // 255 is a VALUE, not null — proves the full-width carrier (a narrow u8 can't do this).

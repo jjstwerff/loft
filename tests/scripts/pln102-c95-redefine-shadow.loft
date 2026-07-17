@@ -14,10 +14,14 @@
 // @EXPECT_ERROR: Cannot redefine 'clamp'
 
 // stdlib `floor_mod(integer, integer)` exists → this free redefinition is shadowed
-fn floor_mod(ma: integer, mb: integer) -> integer { ma }
+fn floor_mod(ma: integer, mb: integer) -> integer {
+  ma
+}
 
 // stdlib `clamp(float, …)` exists → shadowed even with different parameter names
 // (the free fn's first-arg type `float` has a `clamp(both: float, …)` method)
-pub fn clamp(v: float, a: float, b: float) -> float { v }
+pub fn clamp(v: float, a: float, b: float) -> float {
+  v
+}
 
-fn main() { }
+fn main() {}

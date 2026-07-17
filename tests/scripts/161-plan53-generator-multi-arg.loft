@@ -10,12 +10,12 @@
 // Long-run value: a generator-frame regression guard, AND a V2 differential
 // seed — under `LOFT_ALIGN=1 LOFT_SLOT_V2=drive` the args occupy stepped slots.
 
-fn pair_gen(a: integer, b: integer) -> iterator<integer> {
+fn pair_gen(a: integer, b: integer) -> iterator < integer > {
   yield a;
   yield b;
 }
 
-fn triple_gen(a: integer, b: integer, c: integer) -> iterator<integer> {
+fn triple_gen(a: integer, b: integer, c: integer) -> iterator < integer > {
   yield a;
   yield b;
   yield c;

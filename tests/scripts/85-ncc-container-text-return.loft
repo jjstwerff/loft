@@ -21,7 +21,9 @@ fn coalesce_local(idx: integer, fb: text) -> text {
 fn coalesce_arg(tv: vector<text>, fb: text) -> text {
   return tv[idx_of()] ?? fb;
 }
-fn idx_of() -> integer { return 0; }
+fn idx_of() -> integer {
+  return 0;
+}
 
 // `?? null` over a local vector<text> — the fallback is the null-text sentinel.
 fn coalesce_null(idx: integer) -> text? {

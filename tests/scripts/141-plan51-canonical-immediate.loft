@@ -17,9 +17,16 @@
 // Expected: PASS on both --interpret and --native.
 // Status: closes @P377 (LEAK + CORRUPTION).
 
-struct P { tag: integer }
-struct Q { tag: integer }
-struct Canvas { data: vector<integer>, w: integer }
+struct P {
+  tag: integer,
+}
+struct Q {
+  tag: integer,
+}
+struct Canvas {
+  data: vector<integer>,
+  w: integer,
+}
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };
@@ -27,8 +34,12 @@ fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv
 }
 
-fn render_p(p: P) -> Canvas { cv = alloc_canvas(4, 5, p.tag); cv }
-fn render_q(q: Q) -> Canvas { cv = alloc_canvas(7, 9, q.tag * 2); cv }
+fn render_p(p: P) -> Canvas {
+  cv = alloc_canvas(4, 5, p.tag); cv
+}
+fn render_q(q: Q) -> Canvas {
+  cv = alloc_canvas(7, 9, q.tag * 2); cv
+}
 
 fn main() {
   for i in 0..6 {
@@ -41,7 +52,9 @@ fn main() {
     assert(len(cv_p.data) == 5, "iter {i}: len(cv_p) = {len(cv_p.data)}");
     assert(len(cv_q.data) == 9, "iter {i}: len(cv_q) = {len(cv_q.data)}");
     for k in 0..5 { assert(cv_p.data[k] == i, "iter {i} k {k}: cv_p[{k}] = {cv_p.data[k]}"); }
-    for k in 0..9 { assert(cv_q.data[k] == (i + 100) * 2, "iter {i} k {k}: cv_q[{k}] = {cv_q.data[k]}"); }
+    for k in 0..9 {
+      assert(cv_q.data[k] == (i + 100)*2, "iter {i} k {k}: cv_q[{k}] = {cv_q.data[k]}");
+    }
   }
   println("probe 01 PASSED");
 }

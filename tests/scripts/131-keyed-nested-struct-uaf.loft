@@ -10,23 +10,33 @@
 // silent data loss on the interpreter, use-after-free SIGSEGV once the store
 // was reused under heavier churn.
 
-struct V { a: vector<integer> }
-struct Cont { k: integer, m: V }
-struct Src { items: vector<integer> }
-struct Holder { src: Src, chunks: hash<Cont[k]> }
+struct V {
+  a: vector<integer>,
+}
+struct Cont {
+  k: integer,
+  m: V,
+}
+struct Src {
+  items: vector<integer>,
+}
+struct Holder {
+  src: Src,
+  chunks: hash<Cont[k]>,
+}
 
 fn mk(n: integer) -> V {
   v: vector<integer> = [];
   for j in 0..n { v += [j]; }
-  V{a: v}
+  V { a: v }
 }
 
 // Plain hash, inline-literal RHS in a loop — the minimal shape.
 fn test_p311_inline_literal_keyed_set() {
   h: hash<Cont[k]> = [];
-  for k in [10, 20, 30, 40] {
+  for k in[10, 20, 30, 40] {
     cm = mk(30);
-    h[k] = Cont{k: k, m: cm};   // inline struct literal as keyed-SET RHS
+    h[k] = Cont { k: k, m: cm }; // inline struct literal as keyed-SET RHS
   }
   total = 0;
   for ce in h { total = total + len(ce.m.a); }
@@ -37,8 +47,8 @@ fn test_p311_inline_literal_keyed_set() {
 // Struct-returning CALL RHS — the sibling case (must stay leak-free & correct).
 fn test_p311_struct_call_keyed_set() {
   h: hash<Cont[k]> = [];
-  for k in [1, 2, 3, 4, 5] {
-    h[k] = Cont{k: k, m: mk(7)};
+  for k in[1, 2, 3, 4, 5] {
+    h[k] = Cont { k: k, m: mk(7) };
   }
   total = 0;
   for ce in h { total = total + len(ce.m.a); }
@@ -57,12 +67,15 @@ fn fill(c: Holder) {
   ks = derive(c.src);
   for k in ks {
     cm = mk(12);
-    c.chunks[k] = Cont{k: k, m: cm};
+    c.chunks[k] = Cont { k: k, m: cm };
   }
 }
 
 fn test_p311_sibling_field_derived_keys() {
-  c = Holder{src: Src{items: [100, 200, 300, 400]}, chunks: []};
+  c = Holder {
+    src: Src { items: [100, 200, 300, 400] },
+    chunks: [],
+  };
   fill(c);
   assert(len(c.chunks) == 4, "p311 sibling: entries={len(c.chunks)} (expect 4)");
   total = 0;

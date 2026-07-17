@@ -15,28 +15,24 @@ const TAGS: vector<text> = ["alpha", "beta", "gamma"];
 // const and local).  Re-add a `const FLOATS` case once @P284 lands.
 
 fn test_int_const() {
-    sum = 0;
-    for n in NUMS {
-        sum += n;
-    }
-    assert(sum == 60, "sum of NUMS");
-    assert(NUMS.len() == 3, "NUMS length");
-    assert(NUMS[0] == 10, "NUMS[0]");
-    assert(NUMS[2] == 30, "NUMS[2]");
+  sum = 0;
+  for n in NUMS { sum += n; }
+  assert(sum == 60, "sum of NUMS");
+  assert(NUMS.len() == 3, "NUMS length");
+  assert(NUMS[0] == 10, "NUMS[0]");
+  assert(NUMS[2] == 30, "NUMS[2]");
 }
 
 fn test_text_const() {
-    joined = "";
-    for t in TAGS {
-        joined = joined + t;
-    }
-    assert(joined == "alphabetagamma", "concat TAGS");
-    assert(TAGS.len() == 3, "TAGS length");
-    assert(TAGS[1] == "beta", "TAGS[1]");
+  joined = "";
+  for t in TAGS { joined = joined + t; }
+  assert(joined == "alphabetagamma", "concat TAGS");
+  assert(TAGS.len() == 3, "TAGS length");
+  assert(TAGS[1] == "beta", "TAGS[1]");
 }
 
 fn main() {
-    test_int_const();
-    test_text_const();
-    println("const-vector: ok");
+  test_int_const();
+  test_text_const();
+  println("const-vector: ok");
 }

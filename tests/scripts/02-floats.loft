@@ -26,7 +26,7 @@ fn main() {
   assert(pow(4.0, 0.5) == 2.0, "pow sqrt via pow");
   assert(log(pow(4.0, 5.0), 2.0) == 10.0, "log2 of 4^5");
   // --- Trig ---
-  assert(ceil(sin(PI) + cos(PI) * 1000.0) == -1000.0, "sin and cos of PI");
+  assert(ceil(sin(PI)+cos(PI)*1000.0) == -1000.0, "sin and cos of PI");
   // --- PI constant ---
   assert(round(PI * 1000.0) == 3142.0, "PI rounded");
   // --- Null (NaN) ---
@@ -39,9 +39,9 @@ fn main() {
   // Null float comparisons are UNIFORM with every scalar (@PLN102): null == null
   // is true, null != a real value, null orders as the low extreme.
   assert(bad == bad, "null == null is true (uniform null model)");
-  assert(!(bad != bad), "null != null is false");
+  assert(! (bad != bad), "null != null is false");
   assert(bad != 0.0, "null != 0.0 is true");
-  assert(!(bad == 0.0), "null == 0.0 is false");
+  assert(! (bad == 0.0), "null == 0.0 is false");
   assert(bad < 0.0, "null < 0.0 is true (null orders low)");
   assert(bad <= 0.0, "null <= 0.0 is true (null orders low)");
   // Null-coalescing works correctly on floats:
@@ -76,9 +76,9 @@ fn main() {
   assert(abs(-0.0) == 0.0, "float abs negative zero");
   // --- Null (NaN) propagation ---
   bad = (0.0 / 0.0) ?? null;
-  assert(!(bad + 1.0), "nan + float is null");
-  assert(!(bad * 2.0), "nan * float is null");
-  assert(!(1.0 + bad), "float + nan is null");
+  assert(! (bad + 1.0), "nan + float is null");
+  assert(! (bad * 2.0), "nan * float is null");
+  assert(! (1.0 + bad), "float + nan is null");
   // --- Math domain boundaries: out-of-domain inputs produce NaN (null) ---
   assert(!sqrt(-1.0), "sqrt of negative is null");
   assert(!asin(2.0), "asin out of [-1,1] is null");
@@ -96,12 +96,12 @@ fn main() {
   assert(pow(2.0, 0.0) == 1.0, "x^0 == 1");
   assert(pow(0.0, 2.0) == 0.0, "0^n == 0 for n>0");
   // --- Trig inverse: asin, acos, atan ---
-  assert(round(asin(1.0) * 10000.0) == round(PI / 2.0 * 10000.0), "asin(1) == PI/2");
+  assert(round(asin(1.0)*10000.0) == round(PI / 2.0 * 10000.0), "asin(1) == PI/2");
   assert(acos(1.0) == 0.0, "acos(1) == 0");
-  assert(round(atan(1.0) * 10000.0) == round(PI / 4.0 * 10000.0), "atan(1) == PI/4");
-  assert(round(atan2(1.0, 1.0) * 10000.0) == round(PI / 4.0 * 10000.0), "atan2(1,1) == PI/4");
+  assert(round(atan(1.0)*10000.0) == round(PI / 4.0 * 10000.0), "atan(1) == PI/4");
+  assert(round(atan2(1.0, 1.0)*10000.0) == round(PI / 4.0 * 10000.0), "atan2(1,1) == PI/4");
   // --- tan ---
-  assert(round(tan(PI / 4.0) * 10000.0) == 10000.0, "tan(PI/4) == 1");
+  assert(round(tan(PI / 4.0)*10000.0) == 10000.0, "tan(PI/4) == 1");
   // --- sqrt ---
   assert(sqrt(9.0) == 3.0, "sqrt(9) == 3");
   assert(sqrt(0.0) == 0.0, "sqrt(0) == 0");
@@ -121,7 +121,10 @@ fn main() {
   assert(pow(2.0f, 3.0f) == 8.0f, "single pow(2,3) == 8");
   assert(abs(-3.5f) == 3.5f, "single abs(-3.5) == 3.5");
   assert(sqrt(4.0f) == 2.0f, "single sqrt(4) == 2");
-  assert(round(asin(1.0f) * 1000.0f) == round(PI as single / 2.0f * 1000.0f), "single asin(1) == PI/2");
+  assert(
+    round(asin(1.0f)*1000.0f) == round(PI as single / 2.0f * 1000.0f),
+    "single asin(1) == PI/2"
+  );
   assert(acos(1.0f) == 0.0f, "single acos(1) == 0");
   // --- Single equality is EXACT IEEE (@PLN102); use approx() for tolerance ---
   assert(1.0f + 0.0000005f != 1.0f, "exact ==: a 5e-7 offset is a distinct single");
@@ -129,22 +132,22 @@ fn main() {
   assert(!approx(1.0f + 0.0000015f, 1.0f, 0.000001f), "approx: a 1.5e-6 offset exceeds 1e-6");
   // --- Float-to-int cast edge cases ---
   nan_val = sqrt(-1.0);
-  assert(!(nan_val as integer?), "NaN as integer is null");
-  assert(!(nan_val as integer?), "NaN as integer is null");
+  assert(! (nan_val as integer?), "NaN as integer is null");
+  assert(! (nan_val as integer?), "NaN as integer is null");
   inf_pos = (1.0 / 0.0) ?? null;
   // @PLN102 D-op-null-2: an out-of-range float→int no longer silently saturates;
   // it reports + yields null (like ÷0), so +inf/-inf as integer are both null.
-  assert(!(inf_pos as integer?), "positive infinity as integer is null (out of range)");
+  assert(! (inf_pos as integer?), "positive infinity as integer is null (out of range)");
   inf_neg = (-1.0 / 0.0) ?? null;
-  assert(!(inf_neg as integer?), "negative infinity as integer is null (out of range)");
+  assert(! (inf_neg as integer?), "negative infinity as integer is null (out of range)");
   // --- Float infinity arithmetic (IEEE 754) ---
   assert(inf_pos + inf_pos > 1000000.0, "inf + inf is positive infinity");
-  assert(!(inf_pos - inf_pos), "inf - inf is NaN (null)");
-  assert(!(inf_pos * 0.0), "inf * 0.0 is NaN (null)");
+  assert(! (inf_pos - inf_pos), "inf - inf is NaN (null)");
+  assert(! (inf_pos * 0.0), "inf * 0.0 is NaN (null)");
   // --- null (NaN) comparisons are uniform: null orders as the low extreme ---
   nan_cmp = (0.0 / 0.0) ?? null;
   assert(nan_cmp < 0.0, "null < 0.0 is true (null orders low)");
-  assert(!(0.0 < nan_cmp), "0.0 < null is false (null is the low extreme)");
+  assert(! (0.0 < nan_cmp), "0.0 < null is false (null is the low extreme)");
   assert(nan_cmp <= nan_cmp, "null <= null is true (uniform null model)");
   // --- Truncation toward zero (not floor) ---
   assert((-3.9) as integer == -3, "(-3.9) as integer truncates toward zero");

@@ -50,14 +50,18 @@ fn test_typed_null_local_tail_return() {
 
 // Shape 3: vector<text?> source + break-accumulate into a `text?` local
 // (was "Incorrect var ...[64] versus 56" — the 8-byte frame-layout skew).
-struct HoistBox { hb_items: vector<text?> }
+struct HoistBox {
+  hb_items: vector<text?>,
+}
 
 fn hoist_pick_vec(hb: HoistBox) -> text? {
   hv_found: text? = null as text?;
   hv_attempts = 0;
   while hv_attempts < 4 {
     hv_raw = hb.hb_items[hv_attempts];
-    if hv_raw != null { hv_found = hv_raw; break; }
+    if hv_raw != null {
+      hv_found = hv_raw; break;
+    }
     hv_attempts += 1;
   }
   hv_found

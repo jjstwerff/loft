@@ -43,8 +43,8 @@ pub SQRT3 = 1.7320508075688772;
 // - If NO cells sit on that axis, the main is a short STUB extending
 //   `STUB_RAY_FRAC` of a centre-to-centre span into empty space.  It
 //   doesn't reach where a non-existent neighbour's centre would be.
-pub OVER_REACH      = 0.30;
-pub STUB_RAY_FRAC   = 0.55;
+pub OVER_REACH = 0.30;
+pub STUB_RAY_FRAC = 0.55;
 
 // Maximum main-line length in hex STEPS (2 steps = a line spanning 3
 // hex cells = "3 hexes long").  A main connects a cell back to the
@@ -93,7 +93,6 @@ pub HEIGHT_BASE = 0.18;
 pub HEIGHT_PER_NBR = 0.04;
 pub HEIGHT_JITTER = 0.10;
 
-
 // Segment kinds — the dominant SPINE (main) vs the DETAIL (side branch).
 pub KIND_MAIN = 0;
 pub KIND_SIDE = 1;
@@ -106,28 +105,22 @@ pub KIND_SIDE = 1;
 
 pub fn palette_r(idx: integer) -> float {
   rs: vector<float> = [
-    0.04,
-    217.0/255.0, 63.0/255.0,  58.0/255.0,
-     63.0/255.0, 208.0/255.0, 223.0/255.0,
-    230.0/255.0, 124.0/255.0, 156.0/255.0,
+    0.04, 217.0 / 255.0, 63.0 / 255.0, 58.0 / 255.0, 63.0 / 255.0, 208.0 / 255.0, 223.0 / 255.0,
+    230.0 / 255.0, 124.0 / 255.0, 156.0 / 255.0,
   ];
   rs[idx] ?? 0.0
 }
 pub fn palette_g(idx: integer) -> float {
   gs: vector<float> = [
-    0.04,
-     70.0/255.0, 200.0/255.0, 114.0/255.0,
-    200.0/255.0,  70.0/255.0, 216.0/255.0,
-    230.0/255.0, 124.0/255.0, 106.0/255.0,
+    0.04, 70.0 / 255.0, 200.0 / 255.0, 114.0 / 255.0, 200.0 / 255.0, 70.0 / 255.0, 216.0 / 255.0,
+    230.0 / 255.0, 124.0 / 255.0, 106.0 / 255.0,
   ];
   gs[idx] ?? 0.0
 }
 pub fn palette_b(idx: integer) -> float {
   bs: vector<float> = [
-    0.08,
-     70.0/255.0,  88.0/255.0, 229.0/255.0,
-    200.0/255.0, 208.0/255.0,  64.0/255.0,
-    236.0/255.0, 138.0/255.0,  60.0/255.0,
+    0.08, 70.0 / 255.0, 88.0 / 255.0, 229.0 / 255.0, 200.0 / 255.0, 208.0 / 255.0, 64.0 / 255.0,
+    236.0 / 255.0, 138.0 / 255.0, 60.0 / 255.0,
   ];
   bs[idx] ?? 0.0
 }
@@ -138,8 +131,8 @@ pub fn palette_b(idx: integer) -> float {
 // taking a struct parameter (sidesteps @P290).
 
 pub struct CellSnap {
-  const xs:     vector<integer>,
-  const ys:     vector<integer>,
+  const xs: vector<integer>,
+  const ys: vector<integer>,
   const colors: vector<integer>,
 }
 
@@ -151,13 +144,13 @@ pub struct CellSnap {
 // can give the two classes different widths / styling.
 
 pub struct CrystalMesh {
-  const kinds:  vector<integer>,
-  const x0s:    vector<float>,
-  const y0s:    vector<float>,
-  const z0s:    vector<float>,
-  const x1s:    vector<float>,
-  const y1s:    vector<float>,
-  const z1s:    vector<float>,
+  const kinds: vector<integer>,
+  const x0s: vector<float>,
+  const y0s: vector<float>,
+  const z0s: vector<float>,
+  const x1s: vector<float>,
+  const y1s: vector<float>,
+  const z1s: vector<float>,
   const colors: vector<integer>,
   // Owning cell index (into the source CellSnap) for each segment.  Lets
   // a consumer attribute a segment back to the cell whose paint produced
@@ -181,23 +174,20 @@ pub struct CrystalMesh {
 // new fork-points separately when a main grows), or per-supporter
 // timing — placeholders are deliberately omitted until needed.
 pub struct CrystalState {
-  const main_x:     vector<integer>,
-  const main_y:     vector<integer>,
-  const main_d:     vector<integer>,
+  const main_x: vector<integer>,
+  const main_y: vector<integer>,
+  const main_d: vector<integer>,
   const birth_tick: vector<integer>,
 }
 
 // Look up the recorded birth tick of (cx, cy, d) main.  Returns -1
 // if this main has never been recorded (caller treats as "newborn
 // this tick").
-pub fn lookup_main_birth(state: CrystalState,
-                         cx: integer, cy: integer, d: integer) -> integer {
+pub fn lookup_main_birth(state: CrystalState, cx: integer, cy: integer, d: integer) -> integer {
   for lb_i in 0..len(state.main_x) {
     if state.main_x[lb_i] == cx
-       && state.main_y[lb_i] == cy
-       && state.main_d[lb_i] == d {
-      return state.birth_tick[lb_i];
-    }
+    && state.main_y[lb_i] == cy
+    && state.main_d[lb_i] == d { return state.birth_tick[lb_i]; }
   }
   0 - 1
 }
@@ -209,15 +199,15 @@ pub fn lookup_main_birth(state: CrystalState,
 pub fn update_state(state: CrystalState, snap: CellSnap, tick: integer) {
   parent = assign_cells(snap);
   for us_i in 0..len(snap.xs) {
-    if parent[us_i] != us_i { continue; }   // skip supporters
+    if parent[us_i] != us_i { continue; } // skip supporters
     cx = snap.xs[us_i] ?? 0;
     cy = snap.ys[us_i] ?? 0;
     for d in 0..6 {
       existing = lookup_main_birth(state, cx, cy, d);
       if existing >= 0 { continue; }
-      state.main_x     += [cx];
-      state.main_y     += [cy];
-      state.main_d     += [d];
+      state.main_x += [cx];
+      state.main_y += [cy];
+      state.main_d += [d];
       state.birth_tick += [tick];
     }
   }
@@ -260,7 +250,7 @@ pub fn fill_factor(birth: integer, tick: integer) -> float {
 // Used by `hex_distance` to compute the standard 6-direction hex
 // metric and by the axis-alignment helpers below.
 fn axial_q(cx: integer, cy: integer) -> integer {
-  par = cy - (cy / 2) * 2;
+  par = cy - (cy / 2)*2;
   if par < 0 { par = par + 2; }
   cx - (cy - par) / 2
 }
@@ -270,8 +260,7 @@ fn axial_q(cx: integer, cy: integer) -> integer {
 // when a new paint sits on an existing centre's growth path — those
 // later paints become supporters, not new centres, no matter how
 // far down the line they fall.
-pub fn on_same_hex_axis(x1: integer, y1: integer,
-                        x2: integer, y2: integer) -> boolean {
+pub fn on_same_hex_axis(x1: integer, y1: integer, x2: integer, y2: integer) -> boolean {
   if x1 == x2 && y1 == y2 { return false; }
   q1 = axial_q(x1, y1);
   q2 = axial_q(x2, y2);
@@ -287,8 +276,7 @@ pub fn on_same_hex_axis(x1: integer, y1: integer,
 // direction-index 0..5 (using the same convention as the main loop:
 // d=0 east, d=1 SE, d=2 SW, d=3 west, d=4 NW, d=5 NE).
 // Otherwise return -1.
-pub fn hex_axis_dir(x1: integer, y1: integer,
-                    x2: integer, y2: integer) -> integer {
+pub fn hex_axis_dir(x1: integer, y1: integer, x2: integer, y2: integer) -> integer {
   q1 = axial_q(x1, y1);
   q2 = axial_q(x2, y2);
   r1 = y1;
@@ -333,10 +321,10 @@ pub fn is_hex_nbr(x1: integer, y1: integer, x2: integer, y2: integer) -> boolean
   dx = x2 - x1;
   if dy == 0 { return dx == -1 || dx == 1; }
   if dy != -1 && dy != 1 { return false; }
-  parity = y1 - (y1 / 2) * 2;
+  parity = y1 - (y1 / 2)*2;
   if parity < 0 { parity = parity + 2; }
   if parity == 0 { dx == -1 || dx == 0 }
-  else            { dx == 0  || dx == 1 }
+  else { dx == 0 || dx == 1 }
 }
 
 // Number of filled neighbours of cell (cx, cy) within the snapshot.
@@ -350,13 +338,15 @@ pub fn snap_nbr_count(snap: CellSnap, cx: integer, cy: integer) -> integer {
 
 // World-XZ position of a cell's centre.
 pub fn cell_wx(cx: integer, cy: integer) -> float {
-  par = cy - (cy / 2) * 2;
+  par = cy - (cy / 2)*2;
   if par < 0 { par = par + 2; }
   shift = 0.0;
   if par == 1 { shift = SQRT3 / 2.0 * HEX_SIZE; }
   cx as float * SQRT3 * HEX_SIZE + shift
 }
-pub fn cell_wz(cy: integer) -> float { cy as float * 1.5 * HEX_SIZE }
+pub fn cell_wz(cy: integer) -> float {
+  cy as float * 1.5 * HEX_SIZE
+}
 
 // Per-cell Y height — rises with filled-neighbour count + deterministic
 // jitter (stable across frames).
@@ -365,10 +355,10 @@ pub fn cell_h(snap: CellSnap, ix: integer) -> float {
   cell_y = snap.ys[ix] ?? 0;
   nbr = snap_nbr_count(snap, cell_x, cell_y);
   base = HEIGHT_BASE + nbr as float * HEIGHT_PER_NBR;
-  hh = (cell_x * 73856093) ^ (cell_y * 19349663);
+  hh = (cell_x * 73856093)^ (cell_y * 19349663);
   if hh < 0 { hh = 0 - hh; }
-  jitter = (hh - (hh / 100) * 100) as float / 100.0;
-  (base + jitter * HEIGHT_JITTER) * HEX_SIZE
+  jitter = (hh - (hh / 100)*100) as float / 100.0;
+  (base + jitter * HEIGHT_JITTER)*HEX_SIZE
 }
 
 // ── Spatial index (PF2) ──────────────────────────────────────────────
@@ -394,10 +384,10 @@ pub fn cell_h_at(snap: CellSnap, cidx: hash<CellRef[ck]>, ix: integer) -> float 
   cell_y = snap.ys[ix] ?? 0;
   nbr = nbr_count_idx(cidx, cell_x, cell_y);
   base = HEIGHT_BASE + nbr as float * HEIGHT_PER_NBR;
-  hh = (cell_x * 73856093) ^ (cell_y * 19349663);
+  hh = (cell_x * 73856093)^ (cell_y * 19349663);
   if hh < 0 { hh = 0 - hh; }
-  jitter = (hh - (hh / 100) * 100) as float / 100.0;
-  (base + jitter * HEIGHT_JITTER) * HEX_SIZE
+  jitter = (hh - (hh / 100)*100) as float / 100.0;
+  (base + jitter * HEIGHT_JITTER)*HEX_SIZE
 }
 
 // Index-backed neighbour-colour collector — colours of filled cells at
@@ -405,21 +395,20 @@ pub fn cell_h_at(snap: CellSnap, cidx: hash<CellRef[ck]>, ix: integer) -> float 
 // linear scan so pick_segment_color is unchanged).  Enumerates the
 // distance-`dist` axial ring (≤ 12 candidates for dist 2) instead of
 // scanning all cells.
-fn nbr_colors_idx(snap: CellSnap, cidx: hash<CellRef[ck]>,
-                  cx: integer, cy: integer, dist: integer) -> vector<integer> {
-  ixs:  vector<integer> = [];
+fn nbr_colors_idx(snap: CellSnap, cidx: hash<CellRef[ck]>, cx: integer, cy: integer, dist: integer) -> vector<integer> {
+  ixs: vector<integer> = [];
   cols: vector<integer> = [];
-  par = cy - (cy / 2) * 2; if par < 0 { par = par + 2; }
+  par = cy - (cy / 2)*2; if par < 0 { par = par + 2; }
   cq = cx - (cy - par) / 2;
-  for dq in (0 - dist)..(dist + 1) {
-    for dr in (0 - dist)..(dist + 1) {
+  for dq in(0 - dist).. (dist + 1) {
+    for dr in(0 - dist).. (dist + 1) {
       adq = if dq < 0 { 0 - dq } else { dq };
       adr = if dr < 0 { 0 - dr } else { dr };
       sm = dq + dr; asm = if sm < 0 { 0 - sm } else { sm };
-      if (adq + adr + asm) / 2 != dist { continue; }
+      if(adq + adr + asm) / 2 != dist { continue; }
       r2 = cy + dr;
-      p2 = r2 - (r2 / 2) * 2; if p2 < 0 { p2 = p2 + 2; }
-      x2 = (cq + dq) + (r2 - p2) / 2;
+      p2 = r2 - (r2 / 2)*2; if p2 < 0 { p2 = p2 + 2; }
+      x2 = (cq + dq)+(r2 - p2) / 2;
       j = idx_at(cidx, x2, r2);
       if j < 0 { continue; }
       ixs += [j]; cols += [snap.colors[j] ?? 0];
@@ -428,9 +417,9 @@ fn nbr_colors_idx(snap: CellSnap, cidx: hash<CellRef[ck]>,
   // sort colours by ascending snap index (insertion; ≤ 12 elements)
   m = len(ixs);
   for _sa in 0..m {
-    for sb in 0..(m - 1) {
+    for sb in 0.. (m - 1) {
       if ixs[sb] > ixs[sb + 1] {
-        ti = ixs[sb] ?? 0;  ixs[sb]  = ixs[sb + 1] ?? 0;  ixs[sb + 1]  = ti;
+        ti = ixs[sb] ?? 0; ixs[sb] = ixs[sb + 1] ?? 0; ixs[sb + 1] = ti;
         tc = cols[sb] ?? 0; cols[sb] = cols[sb + 1] ?? 0; cols[sb + 1] = tc;
       }
     }
@@ -464,7 +453,7 @@ pub fn assign_cells(snap: CellSnap) -> vector<integer> {
     cy = snap.ys[ac_s] ?? 0;
     joined = false;
     for ac_a in 0..ac_s {
-      if parent[ac_a] != ac_a { continue; }   // skip non-centres
+      if parent[ac_a] != ac_a { continue; } // skip non-centres
       ax = snap.xs[ac_a] ?? 0;
       ay = snap.ys[ac_a] ?? 0;
       d = hex_axis_dir(ax, ay, cx, cy);
@@ -486,7 +475,7 @@ pub fn assign_cells(snap: CellSnap) -> vector<integer> {
         break;
       }
     }
-    if !joined { parent[ac_s] = ac_s; }
+    if!joined { parent[ac_s] = ac_s; }
   }
   parent
 }
@@ -503,8 +492,7 @@ pub fn pick_centers(snap: CellSnap) -> vector<boolean> {
 // (i.e., a supporter whose parent is A) that lies on A's axis in
 // direction `d`.  Returns -1 if no such supporter.  Used by
 // `crystal_segments` to extend A's main past the chain's tip.
-pub fn find_furthest_supporter(snap: CellSnap, parent: vector<integer>,
-                               a_ix: integer, d: integer) -> integer {
+pub fn find_furthest_supporter(snap: CellSnap, parent: vector<integer>, a_ix: integer, d: integer) -> integer {
   ax = snap.xs[a_ix] ?? 0;
   ay = snap.ys[a_ix] ?? 0;
   best_ix = 0 - 1;
@@ -577,15 +565,18 @@ fn nbr_colors_at(snap: CellSnap, cx: integer, cy: integer, dist: integer) -> vec
 // Deterministic per-segment colour pick.  `seg_id` is a unique
 // integer per segment within a cell (we use direction * 100 + fork *
 // 10 + side where main = -1, side = 0/1, fork = 0..N-1).
-pub fn pick_segment_color(self_c: integer,
-                          one_away: vector<integer>,
-                          two_away: vector<integer>,
-                          cell_x: integer, cell_y: integer,
-                          seg_id: integer) -> integer {
-  hh = (cell_x * 73856093) ^ (cell_y * 19349663) ^ (seg_id * 83492791);
+pub fn pick_segment_color(
+  self_c: integer,
+  one_away: vector<integer>,
+  two_away: vector<integer>,
+  cell_x: integer,
+  cell_y: integer,
+  seg_id: integer
+) -> integer {
+  hh = (cell_x * 73856093)^ (cell_y * 19349663)^ (seg_id * 83492791);
   if hh < 0 { hh = 0 - hh; }
-  bucket = hh - (hh / 100) * 100;          // 0..99
-  pick_seed = hh / 100;                    // independent stream
+  bucket = hh - (hh / 100)*100; // 0..99
+  pick_seed = hh / 100; // independent stream
   if bucket < 70 { return self_c; }
   // Hoist len() AND the modulo expression to locals — native codegen
   // otherwise mutably borrows `stores` twice in a single subscript:
@@ -595,11 +586,11 @@ pub fn pick_segment_color(self_c: integer,
   one_n = len(one_away);
   two_n = len(two_away);
   if bucket < 95 && one_n > 0 {
-    one_ix = pick_seed - (pick_seed / one_n) * one_n;
+    one_ix = pick_seed - (pick_seed / one_n)*one_n;
     return one_away[one_ix] ?? self_c;
   }
   if two_n > 0 {
-    two_ix = pick_seed - (pick_seed / two_n) * two_n;
+    two_ix = pick_seed - (pick_seed / two_n)*two_n;
     return two_away[two_ix] ?? self_c;
   }
   self_c
@@ -630,8 +621,8 @@ pub fn pick_segment_color(self_c: integer,
 // see `CrystalIncr`).  `chunk_shift` / `halo_k` are TUNABLE PARAMETERS
 // (the engine is mechanism, the game is policy) — the consts are only this
 // consumer's defaults; the bench sweeps them.
-pub const CRYSTAL_CHUNK_SHIFT = 4;   // 1<<4 = 16 cells/axis per chunk
-pub const CRYSTAL_HALO_K      = 2;   // crystal reads neighbours ≤ dist 2
+pub const CRYSTAL_CHUNK_SHIFT = 4; // 1<<4 = 16 cells/axis per chunk
+pub const CRYSTAL_HALO_K = 2; // crystal reads neighbours ≤ dist 2
 
 // Emit ONE cell's crystal segments (mains + ±30° side branches) into `m`.
 // Neighbour reads go through the shared GLOBAL `cidx`, so a cell in any
@@ -639,9 +630,14 @@ pub const CRYSTAL_HALO_K      = 2;   // crystal reads neighbours ≤ dist 2
 // segment is tagged with the owning cell `cs_i` (cell_ix) so it stays
 // attributed to this cell's chunk (bounded extent).  `ChunkInput.halo_ixs`
 // is contextual-only for this rule — reads go through `cidx` directly.
-pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
-                             state: CrystalState, tick: integer,
-                             cs_i: integer, m: SegMesh) {
+pub fn crystal_cell_segments(
+  snap: CellSnap,
+  cidx: hash<CellRef[ck]>,
+  state: CrystalState,
+  tick: integer,
+  cs_i: integer,
+  m: SegMesh
+) {
   branch_base = HEX_SIZE * BRANCH_LEN_BASE;
   branch_spacing_world = HEX_SIZE * BRANCH_SPACING;
   deg30 = PI / 6.0;
@@ -654,10 +650,10 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
   wx = cell_wx(cell_x, cell_y);
   wz = cell_wz(cell_y);
   cell_yh = cell_h_at(snap, cidx, cs_i);
-  best_ix:   vector<integer> = [0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1];
+  best_ix: vector<integer> = [0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1];
   best_dist: vector<integer> = [99, 99, 99, 99, 99, 99];
   for jd in 0..6 {
-    for jk in 1..(MAX_MAIN_HEXES + 1) {
+    for jk in 1.. (MAX_MAIN_HEXES + 1) {
       jj = idx_at(cidx, step_x(cell_x, cell_y, jd, jk), step_y(cell_x, cell_y, jd, jk));
       if jj >= 0 {
         // Stop at the NEAREST filled cell on this axis.  Connect only if it is
@@ -665,13 +661,17 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
         // Never span PAST a filled cell: a longer main reaching a 2-hex
         // supporter would overlap the intermediate cell's own main and
         // double-draw that segment (the on-screen artefact).
-        if jj < cs_i { best_dist[jd] = jk; best_ix[jd] = jj; }
+        if jj < cs_i {
+          best_dist[jd] = jk; best_ix[jd] = jj;
+        }
         break;
       }
     }
   }
   has_main = false;
-  for hd in 0..6 { if best_ix[hd] >= 0 { has_main = true; } }
+  for hd in 0..6 {
+    if best_ix[hd] >= 0 { has_main = true; }
+  }
   for d in 0..6 {
     j = best_ix[d];
     is_stub = j < 0;
@@ -680,14 +680,14 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
     src_x = 0.0; src_y = 0.0; src_z = 0.0;
     tip_x = 0.0; tip_y = 0.0; tip_z = 0.0;
     if is_stub {
-      ray_ang = (60.0 * d as float) * PI / 180.0;
+      ray_ang = (60.0 * d as float)*PI / 180.0;
       ray_len_d = centre_to_centre * STUB_RAY_FRAC;
       src_x = wx; src_y = cell_yh; src_z = wz;
       tip_x = wx + ray_len_d * cos(ray_ang);
       tip_y = cell_yh;
       tip_z = wz + ray_len_d * sin(ray_ang);
     } else {
-      ray_ang = (60.0 * d as float + 180.0) * PI / 180.0;
+      ray_ang = (60.0 * d as float + 180.0)*PI / 180.0;
       ray_len_d = best_dist[d] as float * centre_to_centre;
       src_x = cell_wx(snap.xs[j] ?? 0, snap.ys[j] ?? 0);
       src_y = cell_h_at(snap, cidx, j);
@@ -705,50 +705,69 @@ pub fn crystal_cell_segments(snap: CellSnap, cidx: hash<CellRef[ck]>,
     main_birth = lookup_main_birth(state, cell_x, cell_y, d);
     connect_f = connect_factor(main_birth, tick);
     fill_f = fill_factor(main_birth, tick);
-    if connect_f <= 0.0 { continue; }   // not yet growing toward this point
+    if connect_f <= 0.0 { continue; } // not yet growing toward this point
     ext_tip_x = src_x + rdx * connect_f;
     ext_tip_y = src_y + dy * connect_f;
     ext_tip_z = src_z + rdz * connect_f;
     main_seg_id = d * 100 + 99;
-    main_col = pick_segment_color(cell_c, one_away, two_away,
-                                  cell_x, cell_y, main_seg_id);
+    main_col = pick_segment_color(cell_c, one_away, two_away, cell_x, cell_y, main_seg_id);
     emit_segment(m, KIND_MAIN, src_x, src_y, src_z, ext_tip_x, ext_tip_y, ext_tip_z, main_col, cs_i);
     raw_forks = (ray_len_d / branch_spacing_world) as integer? ?? 0;
     n_forks = raw_forks - 1;
     if n_forks < 0 { n_forks = 0; }
     branch_t_per_len = cos(deg30) / ray_len_d ?? 0.0;
-    for f in 1..(n_forks + 1) {
+    for f in 1.. (n_forks + 1) {
       t = f as float * branch_spacing_world / ray_len_d ?? 0.0;
-      if t > connect_f { break; }            // past where the connection has reached
-      blen = branch_base * (1.0 - t) * fill_f;
-      if blen <= 0.0 { continue; }           // branches grow only after the connection lands
+      if t > connect_f { break; } // past where the connection has reached
+      blen = branch_base * (1.0 - t)*fill_f;
+      if blen <= 0.0 { continue; } // branches grow only after the connection lands
       fork_x = src_x + rdx * t;
       fork_z = src_z + rdz * t;
       fork_y = src_y + t * dy;
-      branch_end_y = src_y + (t + blen * branch_t_per_len) * dy;
+      branch_end_y = src_y + (t + blen * branch_t_per_len)*dy;
       plus_ang = ray_ang + deg30;
       plus_seg_id = d * 100 + f * 10 + 0;
-      plus_col = pick_segment_color(cell_c, one_away, two_away,
-                                    cell_x, cell_y, plus_seg_id);
-      emit_segment(m, KIND_SIDE, fork_x, fork_y, fork_z,
-                   fork_x + blen * cos(plus_ang), branch_end_y, fork_z + blen * sin(plus_ang),
-                   plus_col, cs_i);
+      plus_col = pick_segment_color(cell_c, one_away, two_away, cell_x, cell_y, plus_seg_id);
+      emit_segment(
+        m,
+        KIND_SIDE,
+        fork_x,
+        fork_y,
+        fork_z,
+        fork_x + blen * cos(plus_ang),
+        branch_end_y,
+        fork_z + blen * sin(plus_ang),
+        plus_col,
+        cs_i
+      );
       minus_ang = ray_ang - deg30;
       minus_seg_id = d * 100 + f * 10 + 1;
-      minus_col = pick_segment_color(cell_c, one_away, two_away,
-                                     cell_x, cell_y, minus_seg_id);
-      emit_segment(m, KIND_SIDE, fork_x, fork_y, fork_z,
-                   fork_x + blen * cos(minus_ang), branch_end_y, fork_z + blen * sin(minus_ang),
-                   minus_col, cs_i);
+      minus_col = pick_segment_color(cell_c, one_away, two_away, cell_x, cell_y, minus_seg_id);
+      emit_segment(
+        m,
+        KIND_SIDE,
+        fork_x,
+        fork_y,
+        fork_z,
+        fork_x + blen * cos(minus_ang),
+        branch_end_y,
+        fork_z + blen * sin(minus_ang),
+        minus_col,
+        cs_i
+      );
     }
   }
 }
 
 // The per-cell RULE for one chunk: emit every owned cell's segments into a
 // fresh SegMesh (cross-chunk neighbour reads via the shared `cidx`).
-pub fn build_crystal_chunk(snap: CellSnap, cidx: hash<CellRef[ck]>,
-                           state: CrystalState, tick: integer,
-                           ci: ChunkInput) -> SegMesh {
+pub fn build_crystal_chunk(
+  snap: CellSnap,
+  cidx: hash<CellRef[ck]>,
+  state: CrystalState,
+  tick: integer,
+  ci: ChunkInput
+) -> SegMesh {
   m = seg_mesh_new();
   for bk in 0..len(ci.cell_ixs) {
     crystal_cell_segments(snap, cidx, state, tick, ci.cell_ixs[bk] ?? 0, m);
@@ -757,8 +776,7 @@ pub fn build_crystal_chunk(snap: CellSnap, cidx: hash<CellRef[ck]>,
 }
 
 // Full build at default tuning (the consumer API).
-pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
-                             tick: integer) -> SegMesh {
+pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState, tick: integer) -> SegMesh {
   crystal_segments_aged_tuned(snap, state, tick, CRYSTAL_CHUNK_SHIFT, CRYSTAL_HALO_K)
 }
 
@@ -766,8 +784,13 @@ pub fn crystal_segments_aged(snap: CellSnap, state: CrystalState,
 // sweeps these).  Builds the field once, runs the rule per chunk, concats
 // into one SegMesh.  Segment ORDER is grouped by chunk (vs the legacy
 // placement order) — immaterial to consumers, which key by `cell_ix`.
-pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: integer,
-                                   chunk_shift: integer, halo_k: integer) -> SegMesh {
+pub fn crystal_segments_aged_tuned(
+  snap: CellSnap,
+  state: CrystalState,
+  tick: integer,
+  chunk_shift: integer,
+  halo_k: integer
+) -> SegMesh {
   field = field_new(0, snap.xs, snap.ys, chunk_shift, halo_k);
   out = seg_mesh_new();
   inputs = all_inputs(field, halo_k);
@@ -814,7 +837,10 @@ pub fn crystal_segments_aged_tuned(snap: CellSnap, state: CrystalState, tick: in
 // copy_claims_hash_body re-inserts via hash::add).  This in-place build stays
 // because it is also faster (no deep-copy of a populated field).
 
-struct ChunkMeshEntry { const ck: integer, const mesh: SegMesh }
+struct ChunkMeshEntry {
+  const ck: integer,
+  const mesh: SegMesh,
+}
 
 // Per-CHUNK cached meshes are the source of truth + the CPU-reuse unit:
 // crystal_incr_rebuild re-runs the rule for ONLY the dirty chunks and reuses
@@ -826,26 +852,36 @@ struct ChunkMeshEntry { const ck: integer, const mesh: SegMesh }
 // (`c.snap.xs += […]`, field_add_cell(c.field,…)), `chunks` only via keyed element-set
 // (`c.chunks[k] = …`), and `group_dim` is a read-only dial — none rebinds the field itself.
 pub struct CrystalIncr {
-  const snap:      CellSnap,                  // source of truth (xs, ys, colors)
-  const field:     ChunkField,                // spatial index + buckets + dirty set
-  const group_dim: integer,                   // tunable: G=1 per-chunk … G large ~one VBO
-  const chunks:    hash<ChunkMeshEntry[ck]>,  // per-chunk cached mesh (reused if not dirty)
+  const snap: CellSnap, // source of truth (xs, ys, colors)
+  const field: ChunkField, // spatial index + buckets + dirty set
+  const group_dim: integer, // tunable: G=1 per-chunk … G large ~one VBO
+  const chunks: hash<ChunkMeshEntry[ck]>, // per-chunk cached mesh (reused if not dirty)
 }
 
 // Re-run the rule for the given chunk inputs, upserting each into the cache
 // (unchanged chunks are left untouched = reused).
-fn crystal_incr_rebuild_chunks(c: CrystalIncr, inputs: vector<ChunkInput>,
-                               state: CrystalState, tick: integer) {
+fn crystal_incr_rebuild_chunks(
+  c: CrystalIncr,
+  inputs: vector<ChunkInput>,
+  state: CrystalState,
+  tick: integer
+) {
   for ci in inputs {
     cm = build_crystal_chunk(c.snap, c.field.cidx, state, tick, ci);
-    c.chunks[ci.key.ck] = ChunkMeshEntry{ck: ci.key.ck, mesh: cm};
+    c.chunks[ci.key.ck] = ChunkMeshEntry { ck: ci.key.ck, mesh: cm };
   }
 }
 
 // Build a CrystalIncr from an initial snapshot (may be empty), full-building
 // every chunk's mesh once.  chunk_shift / group_dim / halo_k are the dials.
-pub fn crystal_incr_new(snap: CellSnap, chunk_shift: integer, group_dim: integer,
-                        halo_k: integer, state: CrystalState, tick: integer) -> CrystalIncr {
+pub fn crystal_incr_new(
+  snap: CellSnap,
+  chunk_shift: integer,
+  group_dim: integer,
+  halo_k: integer,
+  state: CrystalState,
+  tick: integer
+) -> CrystalIncr {
   // @P317 — build the field IN PLACE via field_add_cell rather than
   // deep-copying a POPULATED `field_new(snap)` into `c.field`.  Deep-copying a
   // ChunkField whose `cidx` spatial-index hash is non-empty corrupts the cidx
@@ -856,16 +892,14 @@ pub fn crystal_incr_new(snap: CellSnap, chunk_shift: integer, group_dim: integer
   // correct; this constructor now does the same.  The underlying core deep-copy
   // bug (@P318) is now fixed too (copy_claims_hash_body re-inserts via hash::add);
   // building in place is kept because it is also faster.
-  c = CrystalIncr{
+  c = CrystalIncr {
     snap: snap,
-    field: field_new(0, [], [], chunk_shift, halo_k),   // empty — built in place below
+    field: field_new(0, [], [], chunk_shift, halo_k), // empty — built in place below
     group_dim: group_dim,
     chunks: [],
   };
-  for cn_i in 0..len(snap.xs) {
-    field_add_cell(c.field, snap.xs[cn_i] ?? 0, snap.ys[cn_i] ?? 0);
-  }
-  clear_dirty(c.field);   // the per-cell adds marked everything dirty; we full-build below
+  for cn_i in 0..len(snap.xs) { field_add_cell(c.field, snap.xs[cn_i] ?? 0, snap.ys[cn_i] ?? 0); }
+  clear_dirty(c.field); // the per-cell adds marked everything dirty; we full-build below
   // @P312 fixed (2026-05-22): native codegen now hoists a `c.field`-derived argument
   // into a temp before forming the `&mut c` borrow, so passing `c` (&-ref) AND a
   // `c.field` read to the same call no longer trips E0503 — inline form is fine.
@@ -939,12 +973,17 @@ pub fn crystal_incr_full_mesh(c: CrystalIncr) -> SegMesh {
 // Legacy float `CrystalMesh` full build — kept as the gridmesh-C1
 // SET-equivalence golden (tests/scripts/130).  Removable once the SegMesh
 // path is battle-tested in the projector.
-pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
-                             tick: integer) -> CrystalMesh {
-  mesh = CrystalMesh{
-    kinds: [], colors: [], cell_ix: [],
-    x0s: [], y0s: [], z0s: [],
-    x1s: [], y1s: [], z1s: [],
+pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState, tick: integer) -> CrystalMesh {
+  mesh = CrystalMesh {
+    kinds: [],
+    colors: [],
+    cell_ix: [],
+    x0s: [],
+    y0s: [],
+    z0s: [],
+    x1s: [],
+    y1s: [],
+    z1s: [],
   };
   branch_base = HEX_SIZE * BRANCH_LEN_BASE;
   branch_spacing_world = HEX_SIZE * BRANCH_SPACING;
@@ -978,19 +1017,21 @@ pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
     // PF2: O(1) per-axis lookups against the coord→index hash — for each
     // axis, probe the cells 1 then 2 steps along it and take the nearest
     // OLDER (lower snap index) one.  Equivalent to the old O(older) scan.
-    best_ix:   vector<integer> = [0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1];
+    best_ix: vector<integer> = [0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1, 0 - 1];
     best_dist: vector<integer> = [99, 99, 99, 99, 99, 99];
     for jd in 0..6 {
-      for jk in 1..(MAX_MAIN_HEXES + 1) {
+      for jk in 1.. (MAX_MAIN_HEXES + 1) {
         jj = idx_at(cidx, step_x(cell_x, cell_y, jd, jk), step_y(cell_x, cell_y, jd, jk));
         if jj >= 0 && jj < cs_i {
           best_dist[jd] = jk; best_ix[jd] = jj;
-          break;   // nearest older on this axis
+          break; // nearest older on this axis
         }
       }
     }
     has_main = false;
-    for hd in 0..6 { if best_ix[hd] >= 0 { has_main = true; } }
+    for hd in 0..6 {
+      if best_ix[hd] >= 0 { has_main = true; }
+    }
     for d in 0..6 {
       j = best_ix[d];
       is_stub = j < 0;
@@ -1006,14 +1047,14 @@ pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
       src_x = 0.0; src_y = 0.0; src_z = 0.0;
       tip_x = 0.0; tip_y = 0.0; tip_z = 0.0;
       if is_stub {
-        ray_ang = (60.0 * d as float) * PI / 180.0;
+        ray_ang = (60.0 * d as float)*PI / 180.0;
         ray_len_d = centre_to_centre * STUB_RAY_FRAC;
         src_x = wx; src_y = cell_yh; src_z = wz;
         tip_x = wx + ray_len_d * cos(ray_ang);
         tip_y = cell_yh;
         tip_z = wz + ray_len_d * sin(ray_ang);
       } else {
-        ray_ang = (60.0 * d as float + 180.0) * PI / 180.0;
+        ray_ang = (60.0 * d as float + 180.0)*PI / 180.0;
         ray_len_d = best_dist[d] as float * centre_to_centre;
         src_x = cell_wx(snap.xs[j] ?? 0, snap.ys[j] ?? 0);
         src_y = cell_h_at(snap, cidx, j);
@@ -1025,11 +1066,10 @@ pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
       rdz = tip_z - src_z;
       dy = tip_y - src_y;
       main_seg_id = d * 100 + 99;
-      main_col = pick_segment_color(cell_c, one_away, two_away,
-                                    cell_x, cell_y, main_seg_id);
-      mesh.kinds  += [KIND_MAIN];
-      mesh.x0s    += [src_x]; mesh.y0s += [src_y]; mesh.z0s += [src_z];
-      mesh.x1s    += [tip_x]; mesh.y1s += [tip_y]; mesh.z1s += [tip_z];
+      main_col = pick_segment_color(cell_c, one_away, two_away, cell_x, cell_y, main_seg_id);
+      mesh.kinds += [KIND_MAIN];
+      mesh.x0s += [src_x]; mesh.y0s += [src_y]; mesh.z0s += [src_z];
+      mesh.x1s += [tip_x]; mesh.y1s += [tip_y]; mesh.z1s += [tip_z];
       mesh.colors += [main_col];
       mesh.cell_ix += [cs_i];
       // Per-main age factor (0 = newborn, 1 = fully grown), keyed on the
@@ -1042,29 +1082,31 @@ pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
       n_forks = raw_forks - 1;
       if n_forks < 0 { n_forks = 0; }
       branch_t_per_len = cos(deg30) / ray_len_d ?? 0.0;
-      for f in 1..(n_forks + 1) {
+      for f in 1.. (n_forks + 1) {
         t = f as float * branch_spacing_world / ray_len_d ?? 0.0;
         fork_x = src_x + rdx * t;
         fork_z = src_z + rdz * t;
         fork_y = src_y + t * dy;
-        blen = branch_base * (1.0 - t) * age_f;
-        branch_end_y = src_y + (t + blen * branch_t_per_len) * dy;
+        blen = branch_base * (1.0 - t)*age_f;
+        branch_end_y = src_y + (t + blen * branch_t_per_len)*dy;
         plus_ang = ray_ang + deg30;
         plus_seg_id = d * 100 + f * 10 + 0;
-        plus_col = pick_segment_color(cell_c, one_away, two_away,
-                                      cell_x, cell_y, plus_seg_id);
-        mesh.kinds  += [KIND_SIDE];
-        mesh.x0s    += [fork_x];                        mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
-        mesh.x1s    += [fork_x + blen * cos(plus_ang)]; mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(plus_ang)];
+        plus_col = pick_segment_color(cell_c, one_away, two_away, cell_x, cell_y, plus_seg_id);
+        mesh.kinds += [KIND_SIDE];
+        mesh.x0s += [fork_x]; mesh.y0s += [fork_y]; mesh.z0s += [fork_z];
+        mesh.x1s += [fork_x + blen * cos(plus_ang)]; mesh.y1s += [branch_end_y]; mesh.z1s += [
+          fork_z + blen * sin(plus_ang)
+        ];
         mesh.colors += [plus_col];
         mesh.cell_ix += [cs_i];
         minus_ang = ray_ang - deg30;
         minus_seg_id = d * 100 + f * 10 + 1;
-        minus_col = pick_segment_color(cell_c, one_away, two_away,
-                                       cell_x, cell_y, minus_seg_id);
-        mesh.kinds  += [KIND_SIDE];
-        mesh.x0s    += [fork_x];                         mesh.y0s += [fork_y];        mesh.z0s += [fork_z];
-        mesh.x1s    += [fork_x + blen * cos(minus_ang)]; mesh.y1s += [branch_end_y];  mesh.z1s += [fork_z + blen * sin(minus_ang)];
+        minus_col = pick_segment_color(cell_c, one_away, two_away, cell_x, cell_y, minus_seg_id);
+        mesh.kinds += [KIND_SIDE];
+        mesh.x0s += [fork_x]; mesh.y0s += [fork_y]; mesh.z0s += [fork_z];
+        mesh.x1s += [fork_x + blen * cos(minus_ang)]; mesh.y1s += [branch_end_y]; mesh.z1s += [
+          fork_z + blen * sin(minus_ang)
+        ];
         mesh.colors += [minus_col];
         mesh.cell_ix += [cs_i];
       }
@@ -1078,9 +1120,7 @@ pub fn crystal_segments_aged_legacy(snap: CellSnap, state: CrystalState,
 // empty state, which the aged code treats as "no birth records ⇒ render
 // at DEFAULT_AGE".
 pub fn crystal_segments(snap: CellSnap) -> SegMesh {
-  empty_state = CrystalState{
-    main_x: [], main_y: [], main_d: [], birth_tick: [],
-  };
+  empty_state = CrystalState { main_x: [], main_y: [], main_d: [], birth_tick: [], };
   crystal_segments_aged(snap, empty_state, 0)
 }
 
@@ -1103,15 +1143,15 @@ pub fn hex_at_world(wx: float, wz: float) -> (integer, integer) {
   best_cx = 0;
   best_cy = 0;
   best_d2 = 1000000000.0;
-  for haw_dcy in -1..=1 {
-    cy = iround(cy_f) + haw_dcy;
-    par = cy - (cy / 2) * 2;
+  for haw_dcy in - 1..=1 {
+    cy = iround(cy_f)+haw_dcy;
+    par = cy - (cy / 2)*2;
     if par < 0 { par = par + 2; }
     shift = 0.0;
     if par == 1 { shift = SQRT3 / 2.0 * HEX_SIZE; }
     cx_f = (wx - shift) / (SQRT3 * HEX_SIZE);
-    for haw_dcx in -1..=1 {
-      cx = iround(cx_f) + haw_dcx;
+    for haw_dcx in - 1..=1 {
+      cx = iround(cx_f)+haw_dcx;
       ccx = cell_wx(cx, cy);
       ccz = cell_wz(cy);
       dx = wx - ccx;
@@ -1170,27 +1210,68 @@ pub fn ground_hexes_to_verts(snap: CellSnap, alpha: single) -> vector<single> {
       if kk > 5 { kk = 0; }
       // triangle: centre, corner k, corner k+1
       out += [cxs, 0.0f, czs, 0.0f, 0.0f, 0.0f, r, g, b, alpha];
-      out += [(wx + cdx[gh_k]) as single, 0.0f, (wz + cdz[gh_k]) as single,
-              0.0f, 0.0f, 0.0f, r, g, b, alpha];
-      out += [(wx + cdx[kk]) as single? ?? 0.0f, 0.0f, (wz + cdz[kk]) as single? ?? 0.0f,
-              0.0f, 0.0f, 0.0f, r, g, b, alpha];
+      out += [
+        (wx + cdx[gh_k]) as single,
+        0.0f,
+        (wz + cdz[gh_k]) as single,
+        0.0f,
+        0.0f,
+        0.0f,
+        r,
+        g,
+        b,
+        alpha,
+      ];
+      out += [
+        (wx + cdx[kk]) as single? ?? 0.0f,
+        0.0f,
+        (wz + cdz[kk]) as single? ?? 0.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        r,
+        g,
+        b,
+        alpha,
+      ];
     }
   }
   out
 }
 
 // One flat (y=0) triangle as stride-10 verts (pos + normal pad + rgba).
-fn beam_tri(tax: float, taz: float, tbx: float, tbz: float, tcx: float, tcz: float,
-            tr: single, tg: single, tb: single) -> vector<single> {
-  [tax as single, 0.0f, taz as single, 0.0f, 0.0f, 0.0f, tr, tg, tb, 1.0f,
-   tbx as single, 0.0f, tbz as single, 0.0f, 0.0f, 0.0f, tr, tg, tb, 1.0f,
-   tcx as single, 0.0f, tcz as single, 0.0f, 0.0f, 0.0f, tr, tg, tb, 1.0f]
+fn beam_tri(
+  tax: float,
+  taz: float,
+  tbx: float,
+  tbz: float,
+  tcx: float,
+  tcz: float,
+  tr: single,
+  tg: single,
+  tb: single
+) -> vector<single> {
+  [
+    tax as single, 0.0f, taz as single, 0.0f, 0.0f, 0.0f, tr, tg, tb, 1.0f, tbx as single, 0.0f,
+    tbz as single, 0.0f, 0.0f, 0.0f, tr, tg, tb, 1.0f, tcx as single, 0.0f, tcz as single, 0.0f,
+    0.0f, 0.0f, tr, tg, tb, 1.0f,
+  ]
 }
 
 // One flat (y=0) quad a→b→c→d as two stride-10 triangles.
-fn beam_quad(qax: float, qaz: float, qbx: float, qbz: float,
-             qcx: float, qcz: float, qdx: float, qdz: float,
-             qr: single, qg: single, qb2: single) -> vector<single> {
+fn beam_quad(
+  qax: float,
+  qaz: float,
+  qbx: float,
+  qbz: float,
+  qcx: float,
+  qcz: float,
+  qdx: float,
+  qdz: float,
+  qr: single,
+  qg: single,
+  qb2: single
+) -> vector<single> {
   o: vector<single> = [];
   o += beam_tri(qax, qaz, qbx, qbz, qcx, qcz, qr, qg, qb2);
   o += beam_tri(qax, qaz, qcx, qcz, qdx, qdz, qr, qg, qb2);
@@ -1225,24 +1306,46 @@ pub fn crystal_mesh_to_beams(m: SegMesh, width: float) -> vector<single> {
     seglen = sqrt(len2);
     ux = sdx / seglen ?? 0.0;
     uz = sdz / seglen ?? 0.0;
-    ox = (0.0 - uz) * hw;   // perpendicular offset (× half-width)
+    ox = (0.0 - uz)*hw; // perpendicular offset (× half-width)
     oz = ux * hw;
-    if (m.kinds[cb_i] as integer) == KIND_MAIN {
+    if(m.kinds[cb_i] as integer) == KIND_MAIN {
       if seglen > tlen {
         wx2 = x0 + ux * tlen;
         wz2 = z0 + uz * tlen;
         // 30° wedge from the centre point to the full-width cross-section …
         out += beam_tri(x0, z0, wx2 + ox, wz2 + oz, wx2 - ox, wz2 - oz, r, g, b);
         // … then the constant-width body to the tip.
-        out += beam_quad(wx2 + ox, wz2 + oz, wx2 - ox, wz2 - oz,
-                         x1 - ox, z1 - oz, x1 + ox, z1 + oz, r, g, b);
+        out += beam_quad(
+          wx2 + ox,
+          wz2 + oz,
+          wx2 - ox,
+          wz2 - oz,
+          x1 - ox,
+          z1 - oz,
+          x1 + ox,
+          z1 + oz,
+          r,
+          g,
+          b
+        );
       } else {
         // main shorter than the taper: a single point→tip triangle.
         out += beam_tri(x0, z0, x1 + ox, z1 + oz, x1 - ox, z1 - oz, r, g, b);
       }
     } else {
-      out += beam_quad(x0 + ox, z0 + oz, x0 - ox, z0 - oz,
-                       x1 - ox, z1 - oz, x1 + ox, z1 + oz, r, g, b);
+      out += beam_quad(
+        x0 + ox,
+        z0 + oz,
+        x0 - ox,
+        z0 - oz,
+        x1 - ox,
+        z1 - oz,
+        x1 + ox,
+        z1 + oz,
+        r,
+        g,
+        b
+      );
     }
   }
   out

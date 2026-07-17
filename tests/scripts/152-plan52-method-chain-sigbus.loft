@@ -16,7 +16,9 @@
 // Status: critical-severity SIGBUS probe.  Run with LOFT_LOG=crash_tail:30
 // to capture the last opcode before signal.
 
-struct H { items: vector<text> }
+struct H {
+  items: vector<text>,
+}
 
 fn main() {
   h = H { items: [] };

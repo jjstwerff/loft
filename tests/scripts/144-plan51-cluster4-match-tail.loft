@@ -13,8 +13,13 @@
 // Tests: does the @P236 unify_if_branches_work_refs machinery handle
 // the match-lowered nested-If case correctly?
 
-struct P { tag: integer }
-struct Canvas { data: vector<integer>, w: integer }
+struct P {
+  tag: integer,
+}
+struct Canvas {
+  data: vector<integer>,
+  w: integer,
+}
 
 fn alloc_canvas(w: integer, h: integer, fill: integer) -> Canvas {
   cv = Canvas { data: [], w: w };

@@ -16,25 +16,57 @@
 //     recurses through chained projections and capture blocks (#489 pattern).
 // Run under LOFT_POISON=1 to make regressions loud; values assert either way.
 
-struct Holder { data: vector<integer>, tag: text }
-struct Nested { inner: Mid, id: integer }
-struct Mid { value: Holder, pad: integer }
-fn mk_nested() -> Nested {
-  return Nested { inner: Mid { value: Holder { data: [1,2,3,4,5,6,7,8], tag: "H" }, pad: 0 }, id: 5 };
+struct Holder {
+  data: vector<integer>,
+  tag: text,
 }
-fn mk_mid() -> Mid { return Mid { value: Holder { data: [1,2,3,4,5,6,7,8], tag: "H" }, pad: 0 }; }
+struct Nested {
+  inner: Mid,
+  id: integer,
+}
+struct Mid {
+  value: Holder,
+  pad: integer,
+}
+fn mk_nested() -> Nested {
+  return Nested {
+    inner: Mid {
+      value: Holder { data: [1, 2, 3, 4, 5, 6, 7, 8], tag: "H" },
+      pad: 0,
+    },
+    id: 5,
+  };
+}
+fn mk_mid() -> Mid {
+  return Mid {
+    value: Holder { data: [1, 2, 3, 4, 5, 6, 7, 8], tag: "H" },
+    pad: 0,
+  };
+}
 
 // return tail, chain depth 2 (the original failing cell)
-fn t1_ret() -> Holder { return mk_nested().inner.value; }
+fn t1_ret() -> Holder {
+  return mk_nested().inner.value;
+}
 // implicit tail
-fn t2_implicit() -> Holder { mk_nested().inner.value }
+fn t2_implicit() -> Holder {
+  mk_nested().inner.value
+}
 // named-local container, chained (the x3 native-null face)
-fn t3_local() -> Holder { t = mk_nested(); return t.inner.value; }
+fn t3_local() -> Holder {
+  t = mk_nested(); return t.inner.value;
+}
 // depth-1 controls (must stay on their existing paths)
-fn t4_chain1() -> Mid { return mk_nested().inner; }
-fn t5_single() -> Holder { return mk_mid().value; }
+fn t4_chain1() -> Mid {
+  return mk_nested().inner;
+}
+fn t5_single() -> Holder {
+  return mk_mid().value;
+}
 // argument position
-fn t6_take(h: const Holder) -> integer { return len(h.data); }
+fn t6_take(h: const Holder) -> integer {
+  return len(h.data);
+}
 
 fn main() {
   a = t1_ret();

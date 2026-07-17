@@ -5,9 +5,15 @@
 // text LITERAL (`&str`) generated a non-unifying `if`/`else` (E0308 "expected `Str`, found
 // `&str`").  The desugar now unifies both arms to owned `String`.  --native-only bug; interp
 // was always correct.  Runs on both backends.
-fn g(n: integer) -> text { if n > 0 { "pos" } else { "neg" } }
-fn h(v: vector<integer>) -> text { match v { [x, ..] => g(x), _ => "empty" } }
-fn litfirst(v: vector<integer>) -> text { match v { [x, ..] => "has", _ => g(len(v)) } }
+fn g(n: integer) -> text {
+  if n > 0 { "pos" } else { "neg" }
+}
+fn h(v: vector<integer>) -> text {
+  match v { [x, ..] => g(x), _ => "empty" }
+}
+fn litfirst(v: vector<integer>) -> text {
+  match v { [x, ..] => "has", _ => g(len(v)) }
+}
 fn main() {
   assert(h([5]) == "pos", "call-then-literal (h(5))");
   assert(h([0]) == "neg", "call arm negative (h(0))");

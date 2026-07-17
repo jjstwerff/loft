@@ -11,9 +11,16 @@
 // `{ if b { […] } else { null } }`, which native cannot deliver into __retbuf).
 // Guards: correct values + no leak, BOTH backends.
 
-enum CV { CN, CI { value: integer } }
+enum CV {
+  CN,
+  CI { value: integer },
+}
 
-fn enc(c: CV) -> vector<u8> { match c { CN => [0 as u8], CI { value } => [(value & 255) as u8] } }
+fn enc(c: CV) -> vector<u8> {
+  match c {
+    CN => [0 as u8], CI { value } => [(value&255) as u8]
+  }
+}
 
 fn main() {
   a = enc(CI { value: 1 });

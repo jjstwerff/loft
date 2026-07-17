@@ -25,6 +25,8 @@ fn test_block_rhs() {
 
 fn test_loop_built() {
   u = "x";
-  for i in 0..3 { u = if i % 2 == 0 { u + "a" } else { u + "b" }; }
+  for i in 0..3 {
+    u = if i % 2 == 0 { u + "a" } else { u + "b" };
+  }
   assert(u == "xaba", "loop if-rhs: got {u}");
 }

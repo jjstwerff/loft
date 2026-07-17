@@ -4,12 +4,12 @@
 
 struct CScore {
   val: integer assert($.val >= 0, "val must be >= 0"),
-  cap: integer assert($.cap >= $.val, "cap must be >= val")
+  cap: integer assert($.cap >= $.val, "cap must be >= val"),
 }
 
 struct CItem {
   label: text,
-  qty: integer assert($.qty > 0, "qty must be > 0 for '{$.label}'")
+  qty: integer assert($.qty > 0, "qty must be > 0 for '{$.label}'"),
 }
 
 fn test_constraint_valid_construction() {
@@ -27,12 +27,10 @@ fn test_constraint_valid_assignment() {
 fn test_constraint_valid_vector_of_structs() {
   items = [
     CItem { label: "apple", qty: 3 },
-    CItem { label: "banana", qty: 5 }
+    CItem { label: "banana", qty: 5 },
   ];
   total = 0;
-  for ci_it in items {
-    total += ci_it.qty;
-  }
+  for ci_it in items { total += ci_it.qty; }
   assert(total == 8, "total: {total}");
 }
 

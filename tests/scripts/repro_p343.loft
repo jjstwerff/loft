@@ -9,10 +9,18 @@
 // out-of-bounds — both <= 0; every real fn d_nr is > 0).  Index access
 // (`fs[i]`) already worked via @P214; this pins the iteration path on both
 // backends.
-fn dbl(x: integer) -> integer { return x * 2; }
-fn inc(x: integer) -> integer { return x + 1; }
-fn neg(x: integer) -> integer { return 0 - x; }
-fn apply(f: fn(integer) -> integer) -> integer { return f(10); }
+fn dbl(x: integer) -> integer {
+  return x * 2;
+}
+fn inc(x: integer) -> integer {
+  return x + 1;
+}
+fn neg(x: integer) -> integer {
+  return 0 - x;
+}
+fn apply(f: fn(integer) -> integer) -> integer {
+  return f(10);
+}
 
 fn main() {
   // single element
@@ -27,14 +35,18 @@ fn main() {
   fs: vector<fn(integer) -> integer> = [dbl, inc, neg];
   total = 0;
   n = 0;
-  for f in fs { total += apply(f); n += 1; }
+  for f in fs {
+    total += apply(f); n += 1;
+  }
   assert(total == 21, "multi for-loop total: {total}");
   assert(n == 3, "multi for-loop count: {n}");
 
   // for-loop result must match index-apply (the @P214 path)
   idx_total = 0;
   i = 0;
-  while i < len(fs) { idx_total += apply(fs[i]); i += 1; }
+  while i < len(fs) {
+    idx_total += apply(fs[i]); i += 1;
+  }
   assert(idx_total == total, "for-loop vs index disagree: {total} vs {idx_total}");
 
   print("p343 ok\n");

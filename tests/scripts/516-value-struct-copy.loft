@@ -12,27 +12,47 @@
 // change. A plain reference `struct` still ALIASES (this file pins the difference). Both
 // backends; leak-checked by tests/ownership_oracle.
 
-value struct Money { cents: integer }
-fn OpLt(self: Money, other: Money) -> boolean { self.cents < other.cents }
-fn OpEq(self: Money, other: Money) -> boolean { self.cents == other.cents }
+value struct Money {
+  cents: integer,
+}
+fn OpLt(self: Money, other: Money) -> boolean {
+  self.cents < other.cents
+}
+fn OpEq(self: Money, other: Money) -> boolean {
+  self.cents == other.cents
+}
 
-struct Wallet { main: Money, backup: Money }
-struct Bag { coins: vector<Money> }
+struct Wallet {
+  main: Money,
+  backup: Money,
+}
+struct Bag {
+  coins: vector<Money>,
+}
 
 // Control: a plain reference struct still aliases (proves the difference is value-struct-specific).
-struct RefBox { n: integer }
-struct RefHolder { r: vector<RefBox> }
+struct RefBox {
+  n: integer,
+}
+struct RefHolder {
+  r: vector<RefBox>,
+}
 
 fn main() {
   // --- value struct FIELD read copies ---
-  w = Wallet { main: Money { cents: 100 }, backup: Money { cents: 5 } };
+  w = Wallet {
+    main: Money { cents: 100 },
+    backup: Money { cents: 5 },
+  };
   m = w.main;
   m.cents = 999;
   assert(m.cents == 999, "the copy took the mutation");
   assert(w.main.cents == 100, "value-struct field read copies, not aliases");
 
   // --- value struct VECTOR-ELEMENT read copies ---
-  b = Bag { coins: [for i in 0..4 { Money { cents: i * 10 } }] };
+  b = Bag { coins: [for i in 0..4 {
+    Money { cents: i * 10 }
+  }] };
   c = b.coins[2];
   c.cents = -1;
   assert(c.cents == -1, "the element copy took the mutation");
@@ -45,11 +65,15 @@ fn main() {
 
   // --- loop-bind copies each element; leak-free ---
   s = 0;
-  for e in b.coins { pick = e; s = s + pick.cents; }
+  for e in b.coins {
+    pick = e; s = s + pick.cents;
+  }
   assert(s == 60, "loop-bind copies; sum is correct");
 
   // --- CONTROL: a plain reference struct still ALIASES (mutation writes back) ---
-  h = RefHolder { r: [RefBox { n: 7 }] };
+  h = RefHolder { r: [
+    RefBox { n: 7 },
+  ] };
   ref = h.r[0];
   ref.n = 42;
   assert(h.r[0].n == 42, "reference struct still aliases (value-struct change is isolated)");

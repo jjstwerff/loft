@@ -10,8 +10,13 @@
 // release, caught by the armed-assert build (`store.rs` `valid()`).
 // Cross-mode: interpreter + --native must agree.
 
-struct OneBool { on: boolean? }
-struct TwoBool { a: boolean, b: boolean? }
+struct OneBool {
+  on: boolean?,
+}
+struct TwoBool {
+  a: boolean,
+  b: boolean?,
+}
 
 fn main() {
   // 1-byte struct record: construct, read, overwrite, read back.
@@ -25,7 +30,9 @@ fn main() {
   // Closure record capturing exactly one boolean (the @PLN17 shape that
   // surfaced this): the captured byte lives in a 1-byte-payload record.
   flag = false;
-  flip = fn() -> boolean { flag = !flag; flag };
+  flip = fn() -> boolean {
+    flag = !flag; flag
+  };
   r1 = if flip() { 1 } else { 0 };
   r2 = if flip() { 1 } else { 0 };
   assert(r1 == 1 && r2 == 0, "one-bool closure capture: {r1} {r2}");

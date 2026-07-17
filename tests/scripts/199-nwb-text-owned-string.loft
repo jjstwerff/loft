@@ -12,9 +12,7 @@
 
 // nwb: every return is a literal, reached via an if (no work buffer).
 fn label(n: integer) -> text {
-  if n > 5 {
-    return "big";
-  }
+  if n > 5 { return "big"; }
   return "small";
 }
 
@@ -35,7 +33,9 @@ fn forward(n: integer) -> text {
   return label(n);
 }
 
-struct Items { vals: vector<text> }
+struct Items {
+  vals: vector<text>,
+}
 
 fn main() {
   assert(label(7) == "big", "nwb if-return big");
@@ -48,7 +48,9 @@ fn main() {
   // site (the closure's `__work_ret` is written, not scratch).
   it = Items { vals: [] };
   it.vals += ["present"];
-  pick = fn(idx: integer) -> text { it.vals[idx] ?? "fallback" };
+  pick = fn(idx: integer) -> text {
+    it.vals[idx] ?? "fallback"
+  };
   p = pick(0);
   q = pick(9);
   assert(p == "present", "ncc closure present arm, got '{p}'");

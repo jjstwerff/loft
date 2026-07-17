@@ -9,9 +9,7 @@
 // Interp was correct; the fix is the `.base()` peel on the collapse gate.
 
 fn f(n: integer) -> text? {
-  if n < 0 {
-    return null;
-  }
+  if n < 0 { return null; }
   s = "v";
   s += "{n}";
   s
@@ -19,9 +17,7 @@ fn f(n: integer) -> text? {
 
 // The buffer-less twin was always fine — pinned as the contrast.
 fn g(n: integer) -> text? {
-  if n < 0 {
-    return null;
-  }
+  if n < 0 { return null; }
   "plain"
 }
 

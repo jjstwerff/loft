@@ -8,7 +8,9 @@
 // generic field-access error.  Fix: add the symmetric `OpGetCharacter` read arm.
 // This also unblocked nested `vector<vector<character>>` (gated by the same arm).
 
-struct Holder { letters: vector<character> }
+struct Holder {
+  letters: vector<character>,
+}
 
 fn main() {
   // flat index read

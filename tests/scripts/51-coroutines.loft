@@ -3,41 +3,43 @@
 // CO1: Coroutines — yield, iterator<T>, next(), exhausted(), for-loop, text param, nested call.
 // CO1.4: yield from delegation.
 
-fn count() -> iterator<integer> {
+fn count() -> iterator < integer > {
   yield 10;
   yield 20;
   yield 30;
 }
 
-fn one_val() -> iterator<integer> {
+fn one_val() -> iterator < integer > {
   yield 42;
 }
 
-fn double(x: integer) -> integer { x * 2 }
+fn double(x: integer) -> integer {
+  x * 2
+}
 
-fn gen_doubles() -> iterator<integer> {
+fn gen_doubles() -> iterator < integer > {
   yield double(5);
   yield double(10);
 }
 
-fn gen_len(s: text) -> iterator<integer> {
+fn gen_len(s: text) -> iterator < integer > {
   yield len(s);
   yield len(s);
 }
 
-fn inner_vals() -> iterator<integer> {
+fn inner_vals() -> iterator < integer > {
   yield 10;
   yield 20;
 }
 
-fn outer_with_from() -> iterator<integer> {
+fn outer_with_from() -> iterator < integer > {
   yield 1;
   yield from inner_vals();
   yield 2;
 }
 
 // P211: text-yielding generator with sequential top-level yields.
-fn names() -> iterator<text> {
+fn names() -> iterator < text > {
   yield "alice";
   yield "bob";
   yield "carol";
@@ -46,7 +48,7 @@ fn names() -> iterator<text> {
 // P211: text-yielding generator driven by `while` (exercises both
 // P210's Value::Loop arm in collect_segments and the next_text path
 // for non-trivial state).
-fn ticks_text(n: integer) -> iterator<text> {
+fn ticks_text(n: integer) -> iterator < text > {
   i = 0;
   while i < n {
     yield "tick";
@@ -59,7 +61,7 @@ fn ticks_text(n: integer) -> iterator<text> {
 // pre-declaration in `next_text` — without it, `var___work_*` for
 // each yield-arm's format string declared inside arm 0's scope and
 // rejected with E0425 in subsequent arms.
-fn greet_p218(who: text) -> iterator<text> {
+fn greet_p218(who: text) -> iterator < text > {
   yield "hello, {who}";
   yield "bye, {who}";
 }
@@ -69,7 +71,7 @@ fn greet_p218(who: text) -> iterator<text> {
 // counter).  Exercises pre-declaration in the eager-collect factory
 // (`emit_for_body_factory`) — same shape as `next_text` but
 // distinct codegen path.
-fn enumerate_p218(label: text, n: integer) -> iterator<text> {
+fn enumerate_p218(label: text, n: integer) -> iterator < text > {
   i = 0;
   while i < n {
     yield "{label}={i}";
@@ -81,10 +83,8 @@ fn enumerate_p218(label: text, n: integer) -> iterator<text> {
 // under native because `patch_hoisted_returns` coalesced the
 // trailing `Return(Null)` with the `Loop` into `Return(Loop)`,
 // emitted as `return 'l4: loop {…}` (E0308 unit vs Box<...>).
-fn nums_p219() -> iterator<integer> {
-  for n in [10, 20, 30] {
-    yield n;
-  }
+fn nums_p219() -> iterator < integer > {
+  for n in[10, 20, 30] { yield n; }
 }
 
 fn main() {
@@ -129,20 +129,20 @@ fn main() {
 
   // --- P211: text yield from a `while` loop ---
   ticks_seen = 0;
-  for t in ticks_text(4) { ticks_seen = ticks_seen + 1; assert(t == "tick", "tick val"); }
+  for t in ticks_text(4) {
+    ticks_seen = ticks_seen + 1; assert(t == "tick", "tick val");
+  }
   assert(ticks_seen == 4, "ticks count: {ticks_seen}");
 
   // --- P218: text yield interpolating a captured parameter ---
   greet_total = 0;
   for s in greet_p218("world") { greet_total = greet_total + s.len(); }
-  assert(greet_total == "hello, world".len() + "bye, world".len(),
-         "greet len: {greet_total}");
+  assert(greet_total == "hello, world".len()+"bye, world".len(), "greet len: {greet_total}");
 
   // --- P218 follow-up: while + format-with-param + counter ---
   enum_total = 0;
   for s in enumerate_p218("x", 3) { enum_total = enum_total + s.len(); }
-  assert(enum_total == "x=0".len() + "x=1".len() + "x=2".len(),
-         "enumerate len: {enum_total}");
+  assert(enum_total == "x=0".len()+"x=1".len()+"x=2".len(), "enumerate len: {enum_total}");
 
   // --- P219: vector-element for-loop in generator ---
   p219_sum = 0;

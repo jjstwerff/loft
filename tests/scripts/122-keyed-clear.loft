@@ -12,39 +12,64 @@
 // store is freed.  Re-populating after a clear must still work (the
 // self-dep stays, so `+=` re-inits in place).
 
-struct Item { k: integer }
-struct HRec { ck: integer, v: integer }
-struct IRec { n: integer }
+struct Item {
+  k: integer,
+}
+struct HRec {
+  ck: integer,
+  v: integer,
+}
+struct IRec {
+  n: integer,
+}
 
 fn main() {
   // --- sorted: populate, clear, re-populate ---
   s: sorted<Item[k]> = [];
-  s += [Item{k: 3}];
-  s += [Item{k: 1}];
+  s += [
+    Item { k: 3 },
+  ];
+  s += [
+    Item { k: 1 },
+  ];
   assert(len(s) == 2, "sorted populated");
   s = [];
   assert(len(s) == 0, "sorted cleared");
-  s += [Item{k: 9}];
+  s += [
+    Item { k: 9 },
+  ];
   assert(len(s) == 1, "sorted re-populated after clear");
 
   // --- hash: populate, clear, re-populate + key lookup ---
   h: hash<HRec[ck]> = [];
-  h += [HRec{ck: 5, v: 50}];
-  h += [HRec{ck: 8, v: 80}];
+  h += [
+    HRec { ck: 5, v: 50 },
+  ];
+  h += [
+    HRec { ck: 8, v: 80 },
+  ];
   assert(len(h) == 2, "hash populated");
   h = [];
   assert(len(h) == 0, "hash cleared");
-  h += [HRec{ck: 7, v: 70}];
+  h += [
+    HRec { ck: 7, v: 70 },
+  ];
   assert(len(h) == 1 && h[7].v == 70, "hash re-populated after clear");
 
   // --- index: populate, clear, re-populate ---
   ix: index<IRec[n]> = [];
-  ix += [IRec{n: 5}];
-  ix += [IRec{n: 7}];
+  ix += [
+    IRec { n: 5 },
+  ];
+  ix += [
+    IRec { n: 7 },
+  ];
   assert(len(ix) == 2, "index populated");
   ix = [];
   assert(len(ix) == 0, "index cleared");
-  ix += [IRec{n: 3}];
+  ix += [
+    IRec { n: 3 },
+  ];
   assert(len(ix) == 1, "index re-populated after clear");
 
   println("122-keyed-clear ok");

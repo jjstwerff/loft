@@ -4,12 +4,12 @@
 
 struct BcPoint {
   x: float,
-  y: float
+  y: float,
 }
 
 struct BcRect {
   pos: BcPoint,
-  size: BcPoint
+  size: BcPoint,
 }
 
 // --- O-B2: Return store adoption (function returns fresh struct) ---

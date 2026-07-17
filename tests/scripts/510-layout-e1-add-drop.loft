@@ -7,8 +7,15 @@
 // Note: an ADDED field defaults to null (the absent sentinel) — even a
 // `not null` field — since the serialized old data carries no value for it. A
 // program that adds a not-null field must supply a default at another layer.
-struct V1 { name: text, score: integer not null }
-struct V2 { name: text, score: integer not null, level: integer not null }
+struct V1 {
+  name: text,
+  score: integer not null,
+}
+struct V2 {
+  name: text,
+  score: integer not null,
+  level: integer not null,
+}
 
 fn main() {
   // ADD (V1 → V2): the new field `level` defaults; name/score preserved.

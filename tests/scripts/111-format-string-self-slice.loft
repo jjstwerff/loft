@@ -18,23 +18,21 @@
 // @P283.
 
 fn render(rb: text, id: text) -> text {
-    full_pref = "**@P" + id + "** — ";
-    plen = full_pref.len();
-    olen = rb.len();
-    if rb.starts_with(full_pref) {
-        rb = rb[plen..olen];
-    }
-    "[{id}] {rb}"
+  full_pref = "**@P" + id + "** — ";
+  plen = full_pref.len();
+  olen = rb.len();
+  if rb.starts_with(full_pref) { rb = rb[plen..olen]; }
+  "[{id}] {rb}"
 }
 
 fn test_with_prefix() {
-    out = render("**@P259** — body text", "259");
-    assert(out == "[259] body text", "prefix stripped + formatted");
+  out = render("**@P259** — body text", "259");
+  assert(out == "[259] body text", "prefix stripped + formatted");
 }
 
 fn test_without_prefix() {
-    out = render("plain body", "300");
-    assert(out == "[300] plain body", "no slice, just format");
+  out = render("plain body", "300");
+  assert(out == "[300] plain body", "no slice, just format");
 }
 
 // IDs `1` and `22` in the next test are synthetic format-string
@@ -42,15 +40,15 @@ fn test_without_prefix() {
 // call (and on this comment line) keep the scanner from surfacing
 // nonexistent tags as broken @-refs.   <!--noindex-->
 fn test_two_calls_same_buffer() {
-    a = render("**@P1** — first", "1");   // <!--noindex-->
-    b = render("**@P22** — second body", "22");   // <!--noindex-->
-    assert(a == "[1] first", "a survives second call");
-    assert(b == "[22] second body", "b correct");
+  a = render("**@P1** — first", "1"); // <!--noindex-->
+  b = render("**@P22** — second body", "22"); // <!--noindex-->
+  assert(a == "[1] first", "a survives second call");
+  assert(b == "[22] second body", "b correct");
 }
 
 fn main() {
-    test_with_prefix();
-    test_without_prefix();
-    test_two_calls_same_buffer();
-    println("format-string-self-slice: ok");
+  test_with_prefix();
+  test_without_prefix();
+  test_two_calls_same_buffer();
+  println("format-string-self-slice: ok");
 }

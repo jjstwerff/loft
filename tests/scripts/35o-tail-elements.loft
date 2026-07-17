@@ -6,36 +6,51 @@
 // element uses a fixed negative index — reading from the run cursor diverges on native.  Works
 // with `*`/`+`, a head, and multiple tail elements.  Cross-mode + leak-checked.
 
-enum Tok { Num { n: integer }, End { e: integer }, Semi { s: integer } }
+enum Tok {
+  Num { n: integer },
+  End { e: integer },
+  Semi { s: integer },
+}
 
 // variant sub-pattern tail
 fn vsub(v: vector<Tok>) -> integer {
-  match v { [ (x: Num)*, End { e } ] => x.len() * 100 + e, _ => -1 }
+  match v { [(x: Num)*, End { e }] => x.len()*100 + e, _ => -1 }
 }
 // bind tail (whole element), used via a nested match
 fn btail(v: vector<Tok>) -> integer {
   match v {
-    [ (x: Num)*, last ] => match last { End { e } => x.len() * 10 + e, Num { n } => x.len() * 10 + n, _ => -5 },
+    [(x: Num)*, last] => match last {
+      End { e } => x.len()*10 + e, Num { n } => x.len()*10 + n, _ => -5
+    },
     _ => -1,
   }
 }
 // `+` before the variant tail — needs >=1 Num.
 fn pvar(v: vector<Tok>) -> integer {
-  match v { [ (x: Num)+, End { e } ] => x.len() * 100 + e, _ => -1 }
+  match v { [(x: Num)+, End { e }] => x.len()*100 + e, _ => -1 }
 }
 // head variant sub-pattern + run + variant tail.
 fn ht(v: vector<Tok>) -> integer {
-  match v { [ Num { n }, (x: Num)*, End { e } ] => n * 1000 + x.len() * 100 + e, _ => -1 }
+  match v { [Num { n }, (x: Num)*, End { e }] => n * 1000 + x.len()*100 + e, _ => -1 }
 }
 // two tail elements: two variant sub-patterns (tail_len = 2), distinct variants.
 fn mix(v: vector<Tok>) -> integer {
-  match v { [ (x: Num)*, Semi { s }, End { e } ] => x.len() * 1000 + s * 10 + e, _ => -1 }
+  match v { [(x: Num)*, Semi { s }, End { e }] => x.len()*1000 + s * 10 + e, _ => -1 }
 }
 
 fn main() {
-  s1: vector<Tok> = [Num { n: 1 }, Num { n: 2 }, End { e: 9 }];
-  s2: vector<Tok> = [End { e: 9 }];
-  s3: vector<Tok> = [Num { n: 1 }, Num { n: 2 }];   // no End tail
+  s1: vector<Tok> = [
+    Num { n: 1 },
+    Num { n: 2 },
+    End { e: 9 },
+  ];
+  s2: vector<Tok> = [
+    End { e: 9 },
+  ];
+  s3: vector<Tok> = [
+    Num { n: 1 },
+    Num { n: 2 },
+  ]; // no End tail
 
   assert(vsub(s1) == 209, "vsub s1: {vsub(s1)}");
   assert(vsub(s2) == 9, "vsub s2 empty run: {vsub(s2)}");
@@ -49,12 +64,25 @@ fn main() {
   assert(pvar(s1) == 209, "pvar s1: {pvar(s1)}");
   assert(pvar(s2) == -1, "pvar s2 no Num -> _: {pvar(s2)}");
 
-  h1: vector<Tok> = [Num { n: 5 }, Num { n: 1 }, Num { n: 2 }, End { e: 9 }];
-  h2: vector<Tok> = [Num { n: 5 }, End { e: 9 }];
+  h1: vector<Tok> = [
+    Num { n: 5 },
+    Num { n: 1 },
+    Num { n: 2 },
+    End { e: 9 },
+  ];
+  h2: vector<Tok> = [
+    Num { n: 5 },
+    End { e: 9 },
+  ];
   assert(ht(h1) == 5209, "ht h1: {ht(h1)}");
   assert(ht(h2) == 5009, "ht h2 empty run: {ht(h2)}");
 
-  m1: vector<Tok> = [Num { n: 1 }, Num { n: 2 }, Semi { s: 7 }, End { e: 9 }];
+  m1: vector<Tok> = [
+    Num { n: 1 },
+    Num { n: 2 },
+    Semi { s: 7 },
+    End { e: 9 },
+  ];
   assert(mix(m1) == 2079, "mix two-variant tail: {mix(m1)}");
 
   print("35o-tail-elements: PASS");

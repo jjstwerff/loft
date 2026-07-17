@@ -17,7 +17,7 @@ fn main() {
   assert(-1 % 3 == -1, "rem -1 %% 3 is -1, not 2");
 
   // --- the division identity holds ---
-  assert((-7 / 2) * 2 + (-7 % 2) == -7, "a == (a/b)*b + a%%b");
+  assert((-7 / 2)*2 + (-7 % 2) == -7, "a == (a/b)*b + a%%b");
 
   // --- floor_mod wraps into [0, divisor) (divisor's sign) ---
   assert((-1).floor_mod(3) == 2, "floor_mod(-1, 3) wraps to 2");
@@ -33,7 +33,7 @@ fn main() {
 
   // --- div/mod/floor_mod by zero is a null, dischargeable with `??` ---
   zero = 0;
-  assert(!(5 / zero ?? null), "div by zero is null");
-  assert(!(5 % zero ?? null), "mod by zero is null");
+  assert(! (5 / zero ?? null), "div by zero is null");
+  assert(! (5 % zero ?? null), "mod by zero is null");
   assert(((5).floor_mod(zero) ?? -99) == -99, "floor_mod by zero is null");
 }

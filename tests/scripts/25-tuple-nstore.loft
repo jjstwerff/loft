@@ -29,7 +29,9 @@ fn nested(s: text) -> ((integer, integer), integer) {
 }
 
 // A tuple FIELD with a discharged element (the field-construct accept twin).
-struct PairBox { t: (integer, integer) }
+struct PairBox {
+  t: (integer, integer),
+}
 
 fn boxed(s: text) -> integer {
   bx_q = s as integer?;

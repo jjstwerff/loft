@@ -14,7 +14,9 @@ fn test_integer_null() {
   assert(r == 99, "r: {r}");
 }
 
-struct NRow { val: integer }
+struct NRow {
+  val: integer,
+}
 
 fn test_field_non_null() {
   r = NRow { val: 7 };
@@ -48,7 +50,9 @@ fn test_zero_divide() {
   assert(!r, "div by zero is null when defended with `?? null`");
 }
 
-fn add_null(a: integer, b: integer) -> integer { a + b }
+fn add_null(a: integer, b: integer) -> integer {
+  a + b
+}
 
 fn test_call_with_null() {
   r = add_null(1, null);
@@ -83,7 +87,9 @@ fn test_if_typing() {
   assert(!r2, "if typing null");
 }
 
-struct NNCounter { count: integer }
+struct NNCounter {
+  count: integer,
+}
 
 // @EXPECT_WARNING: Redundant null check
 fn test_redundant_null_eq() {
@@ -130,13 +136,13 @@ fn test_coalesce_call_once_null() {
   assert(c == 1, "call count: {c}");
 }
 
-struct NItem { value: integer }
+struct NItem {
+  value: integer,
+}
 
 fn test_no_warning_nullable_null_check() {
   it = NItem {};
-  if it.value == null {
-    assert(true, "ok");
-  }
+  if it.value == null { assert(true, "ok"); }
 }
 
 fn test_no_warning_nullable_coalesce() {

@@ -207,8 +207,26 @@ fn OpLeInt(v1: integer, v2: integer) -> boolean;
 // / OpCastIntFromLong were duplicates of their OpXxxInt counterparts
 // (post-2c all integers are i64 at rest) — removed.  Format* renamed
 // from Long to Int.
-fn OpFormatInt(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
-fn OpFormatStackInt(pos: const u16, val: integer, radix: const u8, width: integer, token: const u8, plus: const boolean, note: const boolean, dir: const i8);
+fn OpFormatInt(
+  pos: const u16,
+  val: integer,
+  radix: const u8,
+  width: integer,
+  token: const u8,
+  plus: const boolean,
+  note: const boolean,
+  dir: const i8
+);
+fn OpFormatStackInt(
+  pos: const u16,
+  val: integer,
+  radix: const u8,
+  width: integer,
+  token: const u8,
+  plus: const boolean,
+  note: const boolean,
+  dir: const i8
+);
 // Floor modulo — the remainder that takes the sign of the DIVISOR, so
 // `x.floor_mod(n)` lands in `[0, n)` for a positive `n`.  The `%` operator
 // truncates toward zero and keeps the DIVIDEND's sign (`-1 % 3 == -1`);
@@ -216,7 +234,7 @@ fn OpFormatStackInt(pos: const u16, val: integer, radix: const u8, width: intege
 // / wrap-around wants (`grid[(i - 1).floor_mod(w)]`).  `x.floor_mod(0)` is null,
 // like `%` (C80 — an undefined value is a null, never a fault).
 pub fn floor_mod(both: integer, divisor: integer) -> integer? {
-  ((both % divisor) + divisor) % divisor
+  ((both % divisor)+divisor) % divisor
 }
 #pure
 // Single-precision (32-bit) floating-point math.
@@ -365,7 +383,13 @@ fn OpLtSingle(v1: single, v2: single) -> boolean;
 fn OpLeSingle(v1: single, v2: single) -> boolean;
 #rust"@v1.is_nan() || (!@v2.is_nan() && @v1 <= @v2)"
 fn OpFormatSingle(pos: const u16, val: single, width: integer, precision: integer, dir: const i8);
-fn OpFormatStackSingle(pos: const u16, val: single, width: integer, precision: integer, dir: const i8);
+fn OpFormatStackSingle(
+  pos: const u16,
+  val: single,
+  width: integer,
+  precision: integer,
+  dir: const i8
+);
 // Double-precision (64-bit) floating-point math.
 // Choose float over single when precision matters.
 fn OpConstFloat(val: const float) -> float;
@@ -580,20 +604,12 @@ fn OpFormatStackFloat(pos: const u16, val: float, width: integer, precision: int
 // overloads carry the propagation: null if either argument is null.
 // Smallest of two integer values.
 pub fn min(both: integer, b: integer) -> integer {
-  if both <= b {
-    both
-  } else {
-    b
-  }
+  if both <= b { both } else { b }
 }
 #pure
 // Largest of two integer values.
 pub fn max(both: integer, b: integer) -> integer {
-  if both >= b {
-    both
-  } else {
-    b
-  }
+  if both >= b { both } else { b }
 }
 #pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
@@ -604,20 +620,12 @@ pub fn clamp(both: integer, lo: integer, hi: integer) -> integer {
 
 // Smallest of two single-precision float values.
 pub fn min(both: single, b: single) -> single {
-  if both <= b {
-    both
-  } else {
-    b
-  }
+  if both <= b { both } else { b }
 }
 #pure
 // Largest of two single-precision float values.
 pub fn max(both: single, b: single) -> single {
-  if both >= b {
-    both
-  } else {
-    b
-  }
+  if both >= b { both } else { b }
 }
 #pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
@@ -627,20 +635,12 @@ pub fn clamp(both: single, lo: single, hi: single) -> single {
 #pure
 // Smallest of two double-precision float values.
 pub fn min(both: float, b: float) -> float {
-  if both <= b {
-    both
-  } else {
-    b
-  }
+  if both <= b { both } else { b }
 }
 #pure
 // Largest of two double-precision float values.
 pub fn max(both: float, b: float) -> float {
-  if both >= b {
-    both
-  } else {
-    b
-  }
+  if both >= b { both } else { b }
 }
 #pure
 // Clamps v into the inclusive range [lo, hi]. Returns null if any argument is null.
@@ -653,12 +653,12 @@ pub fn clamp(both: float, lo: float, hi: float) -> float {
 // tolerance, e.g. comparing computed transcendentals: `approx(sqrt(2.0) * sqrt(2.0), 2.0, 1e-9)`.
 // A null (NaN) operand is not approximately equal to anything, so the result is false.
 pub fn approx(both: float, b: float, eps: float) -> boolean {
-  if !both || !b { false } else { abs(both - b) <= eps }
+  if!both || !b { false } else { abs(both - b) <= eps }
 }
 #pure
 // Approximate equality for single-precision floats (see the float overload).
 pub fn approx(both: single, b: single, eps: single) -> boolean {
-  if !both || !b { false } else { abs(both - b) <= eps }
+  if!both || !b { false } else { abs(both - b) <= eps }
 }
 #pure
 // --- Text ---
@@ -1096,7 +1096,18 @@ fn radix_sorted(r: reference, tp: integer) -> reference;
 // rewrites the slice expression, injecting the collection's type id.  Coordinates
 // carry up to MAX_AXES (3) axes; the range builder reads only the collection's own
 // axis count, so `fz`/`tz` are ignored (0) for a 2D `spatial<T[x,y]>`.
-fn spatial_range(r: reference, tp: integer, fx: integer, fy: integer, fz: integer, has_till: integer, tx: integer, ty: integer, tz: integer, limit: integer) -> reference;
+fn spatial_range(
+  r: reference,
+  tp: integer,
+  fx: integer,
+  fy: integer,
+  fz: integer,
+  has_till: integer,
+  tx: integer,
+  ty: integer,
+  tz: integer,
+  limit: integer
+) -> reference;
 #impure(parent_write)
 type index size(4);
 
@@ -1180,7 +1191,14 @@ pub fn eprintln(v1: text) {
 #impure(host_io)
 
 type keys_definition;
-fn OpIterate(data: reference, on: const u8, arg: const u16, keys: const keys_definition, from_key: const u8, till_key: const u8) -> integer;
+fn OpIterate(
+  data: reference,
+  on: const u8,
+  arg: const u16,
+  keys: const keys_definition,
+  from_key: const u8,
+  till_key: const u8
+) -> integer;
 fn OpStep(state_var: const u16, data: reference, on: const u8, arg: const u16) -> reference[data];
 fn OpRemove(state_var: const u16, data: reference, on: const u8, tp: const u16);
 fn OpClear(data: reference, tp: const u16);
@@ -1316,7 +1334,13 @@ fn yield_frame();
 // Internal: compiler-checked parallel map.
 // The compiler rewrites `par(...)` clauses into calls to this function.
 // Raw 5-arg internal signature; not callable from user code.
-fn parallel_for(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> reference;
+fn parallel_for(
+  input: reference,
+  element_size: integer,
+  return_size: integer,
+  threads: integer,
+  func: integer
+) -> reference;
 // Plan-06 phase 5a (DESIGN.md D8.1): #impure(par_call) — par-safety
 // analyser allows nested calls when the inner worker fn is itself
 // par-safe (D8 R2 / D2.1.1 recursive Arc promotion).
@@ -1334,7 +1358,13 @@ fn parallel_for(input: reference, element_size: integer, return_size: integer, t
 // `for x in input par(r=fn(x), N) { /* no use of r */ }`).
 // Same arg layout as parallel_for; void return.  Not callable from
 // user code — this is an IR-only entry the codegen produces.
-fn parallel_discard(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer);
+fn parallel_discard(
+  input: reference,
+  element_size: integer,
+  return_size: integer,
+  threads: integer,
+  func: integer
+);
 #impure(par_call)
 // Plan-06 PRIORITY.md spine step 8a — `Stitch::Queue` runtime entry.
 // Internal: workers run, each row's u64-encoded return value is pushed
@@ -1346,7 +1376,13 @@ fn parallel_discard(input: reference, element_size: integer, return_size: intege
 // the first user; until then this is exercised only by Rust unit
 // tests.  Same arg layout as parallel_for.  Not callable from user
 // code — IR-only entry the codegen produces.
-fn parallel_queue(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+fn parallel_queue(
+  input: reference,
+  element_size: integer,
+  return_size: integer,
+  threads: integer,
+  func: integer
+) -> integer;
 #impure(par_call)
 // Step 8a — read one row's u64 result from the active queue buffer.
 // `idx` is the input row index.  Returns the worker's return value
@@ -1363,7 +1399,13 @@ fn parallel_buf_drop();
 // `integer` (i64) — see parallel_queue's note about `_par_len_N`'s
 // 8-byte slot width.  Not callable from user code — IR-only entry
 // the fused for-par desugar emits.
-fn parallel_queue_text(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+fn parallel_queue_text(
+  input: reference,
+  element_size: integer,
+  return_size: integer,
+  threads: integer,
+  func: integer
+) -> integer;
 // Step 8c — read one text from the active text-queue buffer.  Clones
 // the String into stores.scratch following the standard text-return
 // convention.
@@ -1379,7 +1421,13 @@ fn parallel_buf_drop_text();
 // stores.par_ref_buffer_stack; the row count is returned for use as
 // a loop bound.  Not callable from user code — IR-only entry the
 // fused for-par desugar emits.
-fn parallel_queue_ref(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+fn parallel_queue_ref(
+  input: reference,
+  element_size: integer,
+  return_size: integer,
+  threads: integer,
+  func: integer
+) -> integer;
 // Step 8d.1 — read one rebased DbRef from the active par-ref buffer.
 fn parallel_buf_get_ref(idx: integer) -> reference;
 // Step 8d.1 — pop the active par-ref buffer; free every adopted
@@ -1393,7 +1441,13 @@ fn parallel_buf_drop_ref();
 // pushed onto stores.par_narrow_buffer_stack; the row count is
 // returned for use as a loop bound.  Not callable from user code —
 // IR-only entry the fused for-par desugar emits.
-fn parallel_queue_narrow(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+fn parallel_queue_narrow(
+  input: reference,
+  element_size: integer,
+  return_size: integer,
+  threads: integer,
+  func: integer
+) -> integer;
 // Plan-06 ARC.md A3 — read one narrow row.  return_size is the
 // per-row stride (1, 2, or 4); signed selects sign-extension
 // (passed as integer 0/1 — boolean would push only 1 byte but
@@ -1440,7 +1494,13 @@ fn parallel_fold(input: reference, init: integer, fold: integer, threads: intege
 // stores.par_fn_buffer_stack; the row count is returned for use
 // as a loop bound.  Not callable from user code — IR-only entry
 // the fused for-par desugar emits.
-fn parallel_queue_fn(input: reference, element_size: integer, return_size: integer, threads: integer, func: integer) -> integer;
+fn parallel_queue_fn(
+  input: reference,
+  element_size: integer,
+  return_size: integer,
+  threads: integer,
+  func: integer
+) -> integer;
 // Plan-06 ARC.md A6.b — read one 20-byte fn-ref blob from the
 // active fn-buffer.  Declared with a `fn(integer) -> integer`
 // return type so the codegen tracker advances by 20 bytes
@@ -1465,51 +1525,55 @@ fn OpPreAllocVector(r: vector, capacity: const u16, elem_size: const u16);
 #rust"vector::pre_alloc_vector(&@r, u32::from(@capacity), u32::from(@elem_size), &mut s.database.allocations);"
 // --- Vector aggregates ---
 // Internal helpers for reduce-based aggregates.
-fn __add_int(a: integer, b: integer) -> integer { a + b }
+fn __add_int(a: integer, b: integer) -> integer {
+  a + b
+}
 
 // Sum of all integer elements. Returns 0 for an empty vector.
-pub fn sum_of(v: vector<integer>) -> integer { reduce(v, 0, __add_int) }
+pub fn sum_of(v: vector<integer>) -> integer {
+  reduce(v, 0, __add_int)
+}
 #pure
 // Smallest element in a vector, or null when the vector is empty (@PLN102 keystone
 // step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
-pub fn min_of<T: Ordered>(v: vector<T>) -> T? {
+pub fn min_of < T: Ordered > (v: vector<T>) -> T? {
   result = v[0];
-  for i in 1..v.len() { if v[i] < result { result = v[i] } };
+  for i in 1..v.len() {
+    if v[i] < result { result = v[i] }
+  };
   result
 }
 #pure
 // Largest element in a vector, or null when the vector is empty (@PLN102 keystone
 // step 4 — the type is honest about the empty case).  Works on any Ordered type (op <).
-pub fn max_of<T: Ordered>(v: vector<T>) -> T? {
+pub fn max_of < T: Ordered > (v: vector<T>) -> T? {
   result = v[0];
-  for i in 1..v.len() { if result < v[i] { result = v[i] } };
+  for i in 1..v.len() {
+    if result < v[i] { result = v[i] }
+  };
   result
 }
 #pure
 // Sum of vector elements with caller-supplied identity.  Works on any Addable type.
 // Example: sum([10, 20, 12], 0) == 42
-pub fn sum<T: Addable>(v: vector<T>, init: T) -> T {
+pub fn sum < T: Addable > (v: vector<T>, init: T) -> T {
   result = init;
   for i in 0..v.len() { result = result + v[i] };
   result
 }
 #pure
 
-
-
 pub interface Walkable {
   fn children(self: Self) -> vector<Self>
 }
 
-pub fn tree_walk<T: Walkable>(wk_root: T, cap: integer) -> vector<T> {
+pub fn tree_walk < T: Walkable > (wk_root: T, cap: integer) -> vector<T> {
   wk_order = [wk_root];
   for wk_i in 0..cap {
     if wk_i >= len(wk_order) { wk_i#break; }
     wk_cur = wk_order[wk_i] ?? wk_root;
     for wk_kid in wk_cur.children() {
-      if len(wk_order) < cap {
-        wk_order += [wk_kid];
-      }
+      if len(wk_order) < cap { wk_order += [wk_kid]; }
     }
   }
   wk_order
@@ -1520,18 +1584,18 @@ pub fn tree_walk<T: Walkable>(wk_root: T, cap: integer) -> vector<T> {
 
 // Wraps a field value in a type-discriminated enum for compile-time field iteration.
 pub enum FieldValue {
-  FvBool   { v: boolean },
-  FvInt    { v: integer },
-  FvLong   { v: integer },
-  FvFloat  { v: float },
+  FvBool { v: boolean },
+  FvInt { v: integer },
+  FvLong { v: integer },
+  FvFloat { v: float },
   FvSingle { v: single },
-  FvChar   { v: character },
-  FvText   { v: text }
+  FvChar { v: character },
+  FvText { v: text },
 }
 
 // Represents a single struct field during compile-time iteration.
 pub struct StructField {
-  name:  text,
+  name: text,
   value: FieldValue,
 }
 
@@ -1541,14 +1605,26 @@ pub struct StructField {
 // can resolve to the relevant built-in.  Without these impls,
 // Converts an integer to its decimal text. Built-in types define `to_text` so
 // they satisfy the `Printable` interface (used by `print`, format strings, …).
-pub fn to_text(self: integer) -> text { "{self}" }
+pub fn to_text(self: integer) -> text {
+  "{self}"
+}
 // Converts a float to its text representation.
-pub fn to_text(self: float) -> text { "{self}" }
+pub fn to_text(self: float) -> text {
+  "{self}"
+}
 // Converts a single-precision float to its text representation.
-pub fn to_text(self: single) -> text { "{self}" }
+pub fn to_text(self: single) -> text {
+  "{self}"
+}
 // Converts a boolean to "true" or "false".
-pub fn to_text(self: boolean) -> text { "{self}" }
+pub fn to_text(self: boolean) -> text {
+  "{self}"
+}
 // Converts a character to a one-character text.
-pub fn to_text(self: character) -> text { "{self}" }
+pub fn to_text(self: character) -> text {
+  "{self}"
+}
 // Returns the text unchanged — the identity case, so `text` satisfies `Printable` too.
-pub fn to_text(self: text) -> text { self }
+pub fn to_text(self: text) -> text {
+  self
+}

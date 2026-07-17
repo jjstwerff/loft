@@ -23,10 +23,16 @@
 // with "uninitialized memory" because it tracks init status per byte.
 // On the fixed (MaybeUninit) code, Miri accepts the copy unconditionally.
 
-fn double(x: integer) -> integer { x * 2 }
-fn triple(x: integer) -> integer { x * 3 }
+fn double(x: integer) -> integer {
+  x * 2
+}
+fn triple(x: integer) -> integer {
+  x * 3
+}
 
-fn apply(f: fn(integer) -> integer, v: integer) -> integer { f(v) }
+fn apply(f: fn(integer) -> integer, v: integer) -> integer {
+  f(v)
+}
 
 fn main() {
   // Non-capturing function reference stored in a local variable.
@@ -46,7 +52,9 @@ fn main() {
   // The lambda has no captures (x is the parameter, 100 is a literal),
   // so the closure DbRef in the slot is the null sentinel.
   // OpVarFnRef reads the 20-byte slot including the (uninit-padded) closure.
-  add100 = fn(x: integer) -> integer { x + 100 };
+  add100 = fn(x: integer) -> integer {
+    x + 100
+  };
   t = add100(3);
   assert(t == 103, "fn-ref non-capturing lambda: got {t}, want 103");
 

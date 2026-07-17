@@ -8,7 +8,9 @@
 // synth-temp chokepoint routes their value-position calls away from
 // `stores.scratch` (proven scratch-free under `LOFT_SCRATCH_TRIP`).  This locks
 // correctness on every backend.
-fn took(s: text) -> integer { len(s) }
+fn took(s: text) -> integer {
+  len(s)
+}
 
 fn main() {
   d = ymd_days_ago(0);
@@ -24,12 +26,10 @@ fn main() {
   assert("[{ymd_days_ago(0)}]" == "[{d}]", "ymd format");
 
   // value position: concat
-  assert(ymd_days_ago(0) + "!" == d + "!", "ymd concat");
+  assert(ymd_days_ago(0)+"!" == d + "!", "ymd concat");
 
   // loop, value position — no accumulation across iterations
-  for _ in 0..3 {
-    assert(len(ymd_days_ago(0)) == 10, "ymd loop no-accumulate");
-  }
+  for _ in 0..3 { assert(len(ymd_days_ago(0)) == 10, "ymd loop no-accumulate"); }
 
   // store_memory in value positions (non-empty report)
   assert(took(store_memory()) > 0, "store_memory arg");

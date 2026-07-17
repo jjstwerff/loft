@@ -23,9 +23,15 @@
 // Fixed by teaching `if_tail_yields_text` the `scalar_match` see-through, exactly
 // as it already does for the `ncc`/`ncr` coalesce blocks.
 
-fn tmt_computed() -> text { "a" + "b" }        // buffer-taking callee (computed body)
-fn tmt_literal() -> text { "lit" }             // bufferless callee (owned String)
-fn tmt_param(s: text) -> text { s + "!" }      // params are irrelevant to the trigger
+fn tmt_computed() -> text {
+  "a" + "b"
+} // buffer-taking callee (computed body)
+fn tmt_literal() -> text {
+  "lit"
+} // bufferless callee (owned String)
+fn tmt_param(s: text) -> text {
+  s + "!"
+} // params are irrelevant to the trigger
 
 // integer subject → the E0716 mask
 fn tmt_int_subject(k: integer) -> text {
