@@ -51,10 +51,10 @@ fn main() {
     return;
   }
   op = ws.last_opcode();
-  println("v5-t1: recv opcode={op} len={msg.len()}");
+  println("v5-t1: recv opcode={op} len={msg.size()}");
 
   ok = ws.send_binary(msg);
-  if !ok {
+  if!ok {
     println("v5-t1: send-failed");
     return;
   }

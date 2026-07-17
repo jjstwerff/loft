@@ -1,18 +1,15 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// @PLN110 Phase 0e — golden pre-flip behavior of the whole text surface.
+// @PLN110 — golden pin of the whole text surface AFTER the len/size flip.
 //
-// This fixture PINS today's numbers so the Phase-2 `len`/`size` flip produces a
-// reviewed diff, never a silent move.  TODAY: `len(text)` = BYTE count,
-// `size(text)` = CHARACTER count.  After the flip those swap.
+// `len(text)` = CHARACTER count; `size(text)` = BYTE count (@PLN110 Phase 2a).
 //
-//   * Section A (FLIP CANARY) is the ONLY section whose expected values change
-//     at the flip — every `len(x)`/`size(x)` pair swaps.  When Phase 2a lands,
-//     exactly these asserts go red, and the red set here == the intended move.
-//   * Section B (BYTE-WORLD STABILITY) must stay GREEN across the flip.  Byte
-//     offsets (`s[p]`, slices, `find`, `byte_at`) and character iteration do not
-//     move — this section proves the flip is surgical and touches only len/size.
+//   * Section A pins the len (character count) / size (byte count) values across
+//     ASCII / 2- / 3- / 4-byte / mixed inputs.
+//   * Section B (BYTE-WORLD STABILITY) — byte offsets (`s[p]`, slices, `find`,
+//     `byte_at`) and character iteration — is byte-positioned and did NOT move in
+//     the flip; it proves the flip touched only `len`/`size`.
 //
 // UTF-8 widths used below: 'é'=2 bytes (0xC3 0xA9 = 195,169), '♥'=3 bytes
 // (0xE2 0x99 0xA5 = 226,153,165), CJK '日'/'本'=3 bytes each, '😃'=4 bytes.
@@ -26,24 +23,23 @@ fn main() {
   mix = "a♥b"; // 5 bytes, 3 chars
 
   // ===================================================================
-  // SECTION A — FLIP CANARY.  Every value here swaps at Phase 2a.
-  //   TODAY: len = bytes, size = chars.   AFTER: len = chars, size = bytes.
+  // SECTION A — len = CHARACTER count, size = BYTE count (@PLN110).
   // ===================================================================
-  // len (today = BYTE count) — after flip these become the char counts below.
-  assert(len(ascii) == 5, "A: len ascii bytes");
-  assert(len(cafe) == 5, "A: len café bytes");
-  assert(len(heart) == 3, "A: len heart bytes");
-  assert(len(cjk) == 6, "A: len cjk bytes");
-  assert(len(emoji) == 4, "A: len emoji bytes");
-  assert(len(mix) == 5, "A: len mix bytes");
-  // size (today = CHARACTER count) — after flip these become the byte counts above.
-  assert(size(ascii) == 5, "A: size ascii chars");
-  assert(size(cafe) == 4, "A: size café chars");
-  assert(size(heart) == 1, "A: size heart chars");
-  assert(size(cjk) == 2, "A: size cjk chars");
-  assert(size(emoji) == 1, "A: size emoji chars");
-  assert(size(mix) == 3, "A: size mix chars");
-  // Cross-check: today len==size only for pure ASCII; they diverge on multi-byte.
+  // len = character count (the human count)
+  assert(len(ascii) == 5, "A: len ascii chars");
+  assert(len(cafe) == 4, "A: len café chars");
+  assert(len(heart) == 1, "A: len heart chars");
+  assert(len(cjk) == 2, "A: len cjk chars");
+  assert(len(emoji) == 1, "A: len emoji chars");
+  assert(len(mix) == 3, "A: len mix chars");
+  // size = byte count (the byte-indexing bound)
+  assert(size(ascii) == 5, "A: size ascii bytes");
+  assert(size(cafe) == 5, "A: size café bytes");
+  assert(size(heart) == 3, "A: size heart bytes");
+  assert(size(cjk) == 6, "A: size cjk bytes");
+  assert(size(emoji) == 4, "A: size emoji bytes");
+  assert(size(mix) == 5, "A: size mix bytes");
+  // Cross-check: len==size only for pure ASCII; they diverge on multi-byte.
   assert(len(ascii) == size(ascii), "A: ascii len==size (no multibyte)");
   assert(len(cafe) != size(cafe), "A: café len!=size (multibyte diverges)");
 
@@ -83,7 +79,7 @@ fn main() {
   assert(cafe.find("é") == 3, "B: find é at byte 3");
   assert(cjk.find("本") == 3, "B: find 本 at byte 3");
 
-  // --- character iteration: count == char count (== size today, len after flip) ---
+  // --- character iteration: count == char count (== len) ---
   n_mix = 0;
   for _ in mix { n_mix += 1; }
   assert(n_mix == 3, "B: iterate mix -> 3 chars");

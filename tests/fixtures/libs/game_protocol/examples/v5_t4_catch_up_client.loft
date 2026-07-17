@@ -27,12 +27,12 @@ use web;
 
 // LE u32 read at byte offset `off` of `buf` (mirrors t2 client).
 fn read_u32_le(buf: text, off: integer) -> integer {
-  rb0 = web::byte_at(off,     buf);
+  rb0 = web::byte_at(off, buf);
   rb1 = web::byte_at(off + 1, buf);
   rb2 = web::byte_at(off + 2, buf);
   rb3 = web::byte_at(off + 3, buf);
   if rb0 < 0 || rb1 < 0 || rb2 < 0 || rb3 < 0 { return -1; }
-  rb0 | (rb1 << 8) | (rb2 << 16) | (rb3 << 24)
+  rb0| (rb1<<8)| (rb2<<16)| (rb3<<24)
 }
 
 // Drain expected blobs from a freshly-opened handler, recording
@@ -45,7 +45,8 @@ fn drain_phase(h: web::WsHandler, seen: vector<integer>, expected: integer, labe
     raw = h.try_recv();
     if raw == null {
       idle += 1;
-      if idle > 600 {        // ~3s ceiling at 5ms/poll
+      if idle > 600 {
+        // ~3s ceiling at 5ms/poll
         println("v5-t4c: {label}-timeout drained={drained} expected={expected}");
         return drained;
       }
@@ -54,8 +55,8 @@ fn drain_phase(h: web::WsHandler, seen: vector<integer>, expected: integer, labe
     }
     idle = 0;
     op = h.last_opcode();
-    if op != 2 { continue; }            // skip text frames
-    if raw.len() < 5 { continue; }      // malformed blob
+    if op != 2 { continue; } // skip text frames
+    if raw.size() < 5 { continue; } // malformed blob
     sid = read_u32_le(raw, 1);
     seen += [sid];
     drained += 1;
@@ -68,7 +69,7 @@ fn main() {
   port = if port_raw == "" { 18094 } else { port_raw as integer };
   total_raw = env_variable("LOFT_T4_SESSIONS");
   total = if total_raw == "" { 5 } else { total_raw as integer };
-  initial = total / 2;       // half on phase A, half on phase B
+  initial = total / 2; // half on phase A, half on phase B
   if initial < 1 { initial = 1; }
   url = "ws://127.0.0.1:{port}";
 
@@ -77,19 +78,23 @@ fn main() {
   // Phase A: connect, subscribe to first `initial` sessions.
   println("v5-t4c: connecting-A port={port}");
   h_a = web::ws_handler(url);
-  if h_a == null { println("v5-t4c: ws_handler-A-failed"); return; }
+  if h_a == null {
+    println("v5-t4c: ws_handler-A-failed"); return;
+  }
   ok_a = h_a.send("1:{initial}");
-  if !ok_a {
+  if!ok_a {
     web::sleep_ms(100);
     ok_a = h_a.send("1:{initial}");
   }
-  if !ok_a { println("v5-t4c: subscribe-failed"); h_a.close(); return; }
+  if!ok_a {
+    println("v5-t4c: subscribe-failed"); h_a.close(); return;
+  }
   drained_a = drain_phase(h_a, seen, initial, "phase-A");
   if drained_a > 0 {
-    println("v5-t4c: phase-A drained={drained_a} first_seen={seen[0]} last_seen={seen[drained_a - 1]}");
-  } else {
-    println("v5-t4c: phase-A drained=0");
-  }
+    println(
+      "v5-t4c: phase-A drained={drained_a} first_seen={seen[0]} last_seen={seen[drained_a - 1]}"
+    );
+  } else { println("v5-t4c: phase-A drained=0"); }
   h_a.close();
   // Brief settle so the server's slot disconnect propagates before
   // the next ws_handler reuses the table.
@@ -98,20 +103,24 @@ fn main() {
   // Phase B: reconnect, ask for catch_up since `initial`.
   println("v5-t4c: connecting-B port={port}");
   h_b = web::ws_handler(url);
-  if h_b == null { println("v5-t4c: ws_handler-B-failed"); return; }
+  if h_b == null {
+    println("v5-t4c: ws_handler-B-failed"); return;
+  }
   ok_b = h_b.send("2:{initial}");
-  if !ok_b {
+  if!ok_b {
     web::sleep_ms(100);
     ok_b = h_b.send("2:{initial}");
   }
-  if !ok_b { println("v5-t4c: catch_up-failed"); h_b.close(); return; }
+  if!ok_b {
+    println("v5-t4c: catch_up-failed"); h_b.close(); return;
+  }
   remaining = total - initial;
   drained_b = drain_phase(h_b, seen, remaining, "phase-B");
   if drained_b > 0 {
-    println("v5-t4c: phase-B drained={drained_b} first_seen={seen[initial]} last_seen={seen[initial + drained_b - 1]}");
-  } else {
-    println("v5-t4c: phase-B drained=0");
-  }
+    println(
+      "v5-t4c: phase-B drained={drained_b} first_seen={seen[initial]} last_seen={seen[initial + drained_b - 1]}"
+    );
+  } else { println("v5-t4c: phase-B drained=0"); }
   h_b.close();
 
   // Verify the merged sequence covers 1..=total contiguously.

@@ -121,9 +121,10 @@ fn host_output_goes_to_stderr_on_both_backends() {
 /// Bytes pass through verbatim, including a UTF-8 multi-byte char (len is bytes).
 #[test]
 fn host_input_utf8_passthrough() {
-    // "café" = 5 bytes (é is 2).  The engine moves opaque bytes; loft counts them.
+    // "café" = 4 characters over 5 UTF-8 bytes (é is 2).  The engine moves opaque
+    // bytes; loft decodes them and `len` counts characters (@PLN110).
     let interp = run("--interpret", "café");
-    assert_eq!(interp, "echo=[café] len=5\n", "interpret: {interp:?}");
+    assert_eq!(interp, "echo=[café] len=4\n", "interpret: {interp:?}");
     assert_eq!(
         interp,
         run("--native", "café"),

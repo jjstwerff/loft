@@ -159,7 +159,7 @@ pub fn lines(self: File) -> vector<text> fs#read {
     }
     prev_cr = ch == '\r';
   }
-  if p < c.len() { result += [c[p..c.len()]]; }
+  if p < c.size() { result += [c[p..c.size()]]; }
   result
 }
 // Par-safe filesystem read (via content()).
@@ -180,7 +180,7 @@ pub fn split(self: text, separator: character) -> vector<text> {
   // Always append the trailing segment when the input is non-empty, including
   // the case where no separator was found at all.  Without this, "hello".split(',')
   // returned [] instead of ["hello"].  An empty input returns [] (no segments).
-  if self.len() > 0 { result += [self[p..self.len()]]; }
+  if self.len() > 0 { result += [self[p..self.size()]]; }
   result
 }
 #pure
@@ -196,9 +196,9 @@ pub fn split(self: text, separator: character) -> vector<text> {
 
 pub fn split_text(self: text, separator: text) -> vector<text> {
   out: vector<text> = [];
-  n = self.len();
+  n = self.size();
   if n == 0 { return out; }
-  sl = separator.len();
+  sl = separator.size();
   if sl == 0 {
     out += [self]; return out;
   }
@@ -240,8 +240,8 @@ fn valid_path(path: text) -> boolean {
       } else if part != "." && part.len() > 0 { depth += 1; }
     }
   }
-  if start < path.len() {
-    part = path[start..path.len()];
+  if start < path.size() {
+    part = path[start..path.size()];
     if part == ".." { depth -= 1; }
   }
   depth >= 0
@@ -699,7 +699,7 @@ pub fn ends_with(self: text, value: text) -> boolean;
 //   "/etc/passwd".dir()            → "/etc"
 //   "".dir()                        → ""
 pub fn dir(self: text) -> text {
-  n = self.len();
+  n = self.size();
   i = n;
   while i > 0 {
     if self[i - 1] == '/' { return self[0..i - 1]; }
@@ -714,7 +714,7 @@ pub fn dir(self: text) -> text {
 //   "/foo/".basename()                   → ""    (trailing slash)
 //   "".basename()                        → ""
 pub fn basename(self: text) -> text {
-  n = self.len();
+  n = self.size();
   i = n;
   while i > 0 {
     if self[i - 1] == '/' { return self[i..n]; }
@@ -746,10 +746,10 @@ pub fn resolve(self: text, target: text) -> text {
   base = self;
   t = target;
   // Strip leading `./` repeatedly.
-  while t.len() >= 2 && t[0] == '.' && t[1] == '/' { t = t[2..t.len()]; }
+  while t.size() >= 2 && t[0] == '.' && t[1] == '/' { t = t[2..t.size()]; }
   // Apply `../` segments — each one walks up the base dir.
-  while t.len() >= 3 && t[0] == '.' && t[1] == '.' && t[2] == '/' {
-    bn = base.len();
+  while t.size() >= 3 && t[0] == '.' && t[1] == '.' && t[2] == '/' {
+    bn = base.size();
     cut = bn;
     walked = false;
     while cut > 0 {
@@ -761,7 +761,7 @@ pub fn resolve(self: text, target: text) -> text {
       cut = cut - 1;
     }
     if walked { base = base[0..cut]; } else { base = ""; }
-    t = t[3..t.len()];
+    t = t[3..t.size()];
   }
   if base == "" { return t; }
   "{base}/{t}"

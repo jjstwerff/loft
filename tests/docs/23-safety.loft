@@ -14,7 +14,9 @@ fn counted_call(calls: &integer, value: integer) -> integer {
 }
 
 // Used to obtain a null text value (an uninitialized field is the NUL sentinel).
-struct NullTextHolder { s: text }
+struct NullTextHolder {
+  s: text,
+}
 
 fn main() {
   // ## Null values — hidden reserved values
@@ -39,7 +41,7 @@ fn main() {
   assert(n != 0, "null is not zero; it is -9 223 372 036 854 775 808");
   assert(n < 0, "i64::MIN is the most negative 64-bit integer");
   // Arithmetic on null propagates: null plus anything is null.
-  assert(!(n + 1), "null + 1 is still null");
+  assert(! (n + 1), "null + 1 is still null");
   // Text null is the NUL character ('\0'), not the empty string.
   // Parsing a JSON object with a missing text field produces the NUL sentinel:
   holder = NullTextHolder.parse(`{{}}`);
@@ -68,16 +70,16 @@ fn main() {
   // To trace where overflows arise, opt into the debug log level. Mitigation:
   // check the result for null, or keep intermediate values within range.
   huge = 9223372036854775807;
-  assert(!(huge + 1), "overflow yields null, not a wrapped value");
+  assert(! (huge + 1), "overflow yields null, not a wrapped value");
 
   // ## Bitwise operators with zero
   // All bitwise operators (AND, OR, XOR, shift) work correctly with zero.
   // Zero is the identity element for OR, XOR, and shift; zero for AND.
-  assert(0b1010 & 0 == 0, "AND with 0: zero");
-  assert(0b1010 | 0 == 0b1010, "OR with 0: identity");
-  assert(0b1010 ^ 0 == 0b1010, "XOR with 0: identity");
-  assert(5 << 0 == 5, "shift left by 0: identity");
-  assert(5 >> 0 == 5, "shift right by 0: identity");
+  assert(0b1010&0 == 0, "AND with 0: zero");
+  assert(0b1010|0 == 0b1010, "OR with 0: identity");
+  assert(0b1010^0 == 0b1010, "XOR with 0: identity");
+  assert(5<<0 == 5, "shift left by 0: identity");
+  assert(5>>0 == 5, "shift right by 0: identity");
 
   // ## Float null compares uniformly with every other scalar
   // Floats store null as `NaN` internally, but null COMPARISON is uniform with
@@ -92,19 +94,18 @@ fn main() {
   assert(!bad, "a null float is falsy");
   assert(bad == null, "detect a null float with `== null`");
   assert(bad == bad, "null == null is true (uniform null model)");
-  assert(!(bad != null), "a null float `!= null` is false");
+  assert(! (bad != null), "a null float `!= null` is false");
   assert(bad != 0.0, "null != 0.0 is true");
   // Use `f == null`, `!f`, or `f ?? default` to check for null floats.
 
-  // ## Text length counts bytes, not characters
-  // `len()` on text returns the number of UTF-8 bytes, not the number of
-  // visible characters. Multi-byte characters (accented letters, emoji,
-  // CJK) each occupy 2-4 bytes.
-  // `size()` returns the number of Unicode code points (characters).
-  // These two values differ whenever the text contains any multi-byte character.
+  // ## Text length counts characters; size counts bytes
+  // `len()` on text returns the number of characters (Unicode code points) — the
+  // human count. `size()` returns the number of UTF-8 bytes; multi-byte characters
+  // (accented letters, emoji, CJK) each occupy 2-4 bytes. The two values differ
+  // whenever the text contains any multi-byte character.
   emoji = "Hi 😊!";
-  assert(len(emoji) == 8, "5 visible chars but 8 bytes (emoji is 4 bytes)");
-  assert(size(emoji) == 5, "size() counts code points: {size(emoji)}");
+  assert(len(emoji) == 5, "5 characters (H, i, space, 😊, !)");
+  assert(size(emoji) == 8, "8 UTF-8 bytes (the emoji is 4): {size(emoji)}");
   // Slicing and indexing also use byte offsets. Slicing in the middle of a
   // multi-byte character is an error.
   // Mitigation: Use `for c in text` to iterate by character. Use
@@ -206,7 +207,7 @@ fn main() {
   // `2.0 ** 3.0 == 8.0`) or the `pow()` function. Watch one precedence footgun:
   // `-x ** y` parses as `-(x ** y)`, so loft warns on it — write `(-x) ** y`
   // when you mean to raise a negated base.
-  assert((0b1010 ^ 0b1100) == 0b0110, "^ is XOR");
-  assert(2 ** 10 == 1024, "** is the power operator");
+  assert((0b1010^0b1100) == 0b0110, "^ is XOR");
+  assert(2**10 == 1024, "** is the power operator");
   assert(pow(2.0, 3.0) == 8.0, "pow() also computes powers");
 }

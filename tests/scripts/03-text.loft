@@ -5,10 +5,10 @@ fn main() {
   // --- Concatenation ---
   assert("hello" + " world" == "hello world", "text concat");
   assert("" + "x" == "x", "concat with empty");
-  // --- Length (byte count) ---
+  // --- Length (character count; @PLN110 — byte length is `size`) ---
   assert(len("hello") == 5, "len ascii");
-  assert(len("😃") == 4, "len emoji 4 bytes");
-  assert(len("♥") == 3, "len heart 3 bytes");
+  assert(len("😃") == 1, "len emoji 1 char");
+  assert(len("♥") == 1, "len heart 1 char");
   assert(len("") == 0, "len empty");
   // --- Character indexing ---
   s = "ABCDE";

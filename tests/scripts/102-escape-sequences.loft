@@ -55,11 +55,11 @@ fn test_u_brace_short_form() {
 }
 
 fn test_escapes_in_string() {
-  // s.len() reports UTF-8 byte length, so the BMP arrow
+  // s.size() reports UTF-8 byte length, so the BMP arrow
   // counts as 3 bytes (its UTF-8 encoding) even though it's
-  // one codepoint.
+  // one codepoint (@PLN110: byte length is `size`, char count is `len`).
   s = "tab:\x09 null:\0 arrow:\u{2192} bye";
-  assert(s.len() == 26, "string length with mixed escapes (bytes)");
+  assert(s.size() == 26, "string byte length with mixed escapes");
 }
 
 fn main() {

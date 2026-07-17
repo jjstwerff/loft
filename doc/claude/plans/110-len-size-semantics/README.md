@@ -9,7 +9,19 @@ Tracker: [@PLN110](https://github.com/loft-lang/plans/issues/110) · `subject:lo
 
 ## Status
 
-**Phase 1 STARTED** (2026-07-17) — sub-arc **1a `size(vector<T>)` ✅ landed**, both backends; the
+**Phase 2a FLIP LANDED** (2026-07-17) — `len(text)` now = character count, `size(text)` = byte
+count (swapped `OpLengthText`/`OpSizeText`). The red set after the flip matched the Phase-0 inventory
+**exactly** (17 value canaries + golden Section A), validating the inventory. All converted to green
+(2b–2e): stdlib byte sites (`starts_with_at`, path helpers) + `lib/lexer` + `tests/fixtures/libs`
+(incl. the critical `glb.loft` binary chunk length) moved `len→size`; canaries updated by intent
+(value flip vs `len→size` where the test verifies a byte count); doc-prose + `doc/examples.js` fixed.
+Script suites, `strings`, `host_input`, `doc_hygiene` all green both backends. `len(character)` kept
+as UTF-8 byte width (owner call), so the `c#next == c#index + len(c)` identity still holds.
+**Remaining:** 3a (strict-index lint default-on for text), Phase-4 validation/dogfood, then the
+`CONTRACT_VERSION 0 → 1` flip. (Pre-existing, not from this work: `index_hygiene` flags 14 closed-issue
+`@P*` refs in untouched files.)
+
+**Phase 1 COMPLETE** (2026-07-17) — sub-arc **1a `size(vector<T>)` ✅ landed**, both backends; the
 uniform mechanism + per-type formulas + build order are in [phase1-size-impl.md](phase1-size-impl.md).
 Two Phase-1 findings: (1) `size` correctly reflects loft's **two vector representations** — inline
 `Vector<T>` (`size(T) × len`, e.g. a standalone `vector<Point>` = 16 × len) vs by-reference
@@ -176,11 +188,11 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 1h | **(discovered)** `size(enum)`: simple = 1 (scalar-like); data enum-typed = max-variant record; bare variant = its own record. Fixes a 1b silent-empty on non-struct references. + tests | additive · green | ✅ Done — both backends; `tests/scripts/pln110-size-enum.loft` |
 | 1g | **(found in 0f, corrected in 1e)** `size(character)` = 4 (the code-point slot, ✅ done via 1e); **keep `len(character)` = UTF-8 byte width** (the byte-world quantity `#index`/`#next` needs — do NOT redefine to 1). Only the `len(character)` decision remains, deferred on an owner contract call. | contract call | ⏸ Deferred (size half done) |
 | 1f | `s[p]` unchanged — the original (pre-Claude) implementation, already has its own tests (verified: mid-char snaps to the char's start; out-of-byte-range → null; negatives from the end). Not a build; just **don't regress**. | no-op | Open |
-| 2a | Flip `len(text)`=chars / `size(text)`=content bytes — one commit (corpus/suite red = the worklist) | flip | Open |
-| 2b | Convert stdlib text sites → re-green | convert | Open |
-| 2c | Convert libraries → re-green | convert | Open |
-| 2d | Convert tests / docs / examples → re-green | convert | Open |
-| 2e | Convert consumer programs → re-green | convert | Open |
+| 2a | Flip `len(text)`=chars / `size(text)`=content bytes (swap `OpLengthText`/`OpSizeText` `#rust` bodies + doc comments) | flip | ✅ Done — red set == the Phase-0 inventory (validated) |
+| 2b | Convert stdlib text sites → re-green | convert | ✅ Done — `03_text.loft` (starts_with_at), `02_files.loft` (path helpers); emptiness kept as `len` |
+| 2c | Convert libraries → re-green | convert | ✅ Done — `lib/lexer.loft` (4 byte sites) |
+| 2d | Convert tests / docs / examples → re-green | convert | ✅ Done — canaries updated (value or `len→size` by intent), doc-prose (STDLIB.md, doc tests), `doc/examples.js` regenerated |
+| 2e | Convert consumer programs → re-green | convert | ✅ Done — `tests/fixtures/libs` (incl. `glb.loft` binary chunk length); ⚠ `lib/markdown` not checked out (re-run against `loft-libs-docs`) |
 | 3a | Strict-index lint **default-on** for the text case | lint | Open |
 | 4a | Full suite, **both backends** | validate | Open |
 | 4b | Run the known consumer programs (dogfood) | validate | Open |

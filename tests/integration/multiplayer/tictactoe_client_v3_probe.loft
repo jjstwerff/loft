@@ -45,14 +45,13 @@ fn next_msg(h: web::WsHandler) -> text? {
 // Send `frame` and assert the next inbound matches `want_prefix`,
 // returning the trailing payload (the bit after the prefix).  On
 // any failure prints a diagnostic and returns null.
-fn click_and_expect(h: web::WsHandler, r: integer, c: integer,
-                     want_prefix: text) -> text? {
+fn click_and_expect(h: web::WsHandler, r: integer, c: integer, want_prefix: text) -> text? {
   ok = h.send("click:{r},{c}");
-  if !ok {
+  if!ok {
     web::sleep_ms(100);
     ok = h.send("click:{r},{c}");
   }
-  if !ok {
+  if!ok {
     println("v3-probe: send-failed click {r},{c}");
     return null;
   }
@@ -61,11 +60,11 @@ fn click_and_expect(h: web::WsHandler, r: integer, c: integer,
     println("v3-probe: recv-timeout after click {r},{c}");
     return null;
   }
-  if !msg.starts_with(want_prefix) {
+  if!msg.starts_with(want_prefix) {
     println("v3-probe: prefix-mismatch want=\"{want_prefix}\" got=\"{msg}\"");
     return null;
   }
-  msg[want_prefix.len()..]
+  msg[want_prefix.size()..]
 }
 
 fn main() {
@@ -75,12 +74,16 @@ fn main() {
 
   println("v3-probe: connecting port={port}");
   h = web::ws_handler(url);
-  if h == null { println("v3-probe: handler-failed"); return; }
+  if h == null {
+    println("v3-probe: handler-failed"); return;
+  }
 
   // Move 1 — X at (0,0).  After the X placement the server replies
   // with its O placement at the first empty cell (idx 1 = row 0 col 1).
   payload = click_and_expect(h, 0, 0, "place:X,");
-  if payload == null { h.close(); return; }
+  if payload == null {
+    h.close(); return;
+  }
   if payload != "0,0" {
     println("v3-probe: X-pos-mismatch want=\"0,0\" got=\"{payload}\"");
     h.close();

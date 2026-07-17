@@ -9,16 +9,16 @@
 // helpers there can call them; both still available as `text.starts_with`
 // / `text.ends_with`.)
 // Returns true if self contains `prefix` starting at byte position
-// `pos`.  Sugar over `self[pos..pos + prefix.len()] == prefix` for
+// `pos`.  Sugar over `self[pos..pos + prefix.size()] == prefix` for
 // the common "is this token at this offset?" pattern in scanners /
-// parsers.  Returns false (not an error) when pos + prefix.len()
-// exceeds self.len() — same shape as `starts_with` for the
+// parsers.  Returns false (not an error) when pos + prefix.size()
+// exceeds self.size() — same shape as `starts_with` for the
 // "prefix too long for input" case.
 //
 // Faster than comparing characters one at a time for a known prefix at `pos`.
 pub fn starts_with_at(self: text, pos: integer, prefix: text) -> boolean {
-  pl = prefix.len();
-  sl = self.len();
+  pl = prefix.size();
+  sl = self.size();
   if pos < 0 { return false; }
   if pos + pl > sl { return false; }
   self[pos..pos + pl] == prefix

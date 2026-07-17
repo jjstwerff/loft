@@ -21,7 +21,7 @@ fn main() {
   raw = jraw.as_text();
   assert(escaped == raw, "escaped pair must equal raw UTF-8");
   assert(escaped == "😀", "pair decodes to U+1F600");
-  assert(escaped.len() == 4, "U+1F600 is 4 UTF-8 bytes (was 6 = two U+FFFD)");
+  assert(escaped.size() == 4, "U+1F600 is 4 UTF-8 bytes (was 6 = two U+FFFD)");
 
   // (2) mixed BMP + non-BMP + ASCII in one string, pair not at the end.
   jmix = json_parse("\"a\\u2192b\\uD83D\\uDE00c\"");
@@ -29,11 +29,11 @@ fn main() {
 
   // (3) lone/half surrogates and BMP escapes still behave (regression guard).
   jhi = json_parse("\"\\uD83D\""); // lone high  → U+FFFD
-  assert(jhi.as_text().len() == 3, "lone high surrogate is one U+FFFD");
+  assert(jhi.as_text().size() == 3, "lone high surrogate is one U+FFFD");
   jlo = json_parse("\"\\uDE00\""); // lone low   → U+FFFD
-  assert(jlo.as_text().len() == 3, "lone low surrogate is one U+FFFD");
+  assert(jlo.as_text().size() == 3, "lone low surrogate is one U+FFFD");
   jha = json_parse("\"\\uD83D\\u0041\""); // high + 'A' (not a low surrogate)
-  assert(jha.as_text().len() == 4, "lone high (U+FFFD) + 'A' = 4 bytes");
+  assert(jha.as_text().size() == 4, "lone high (U+FFFD) + 'A' = 4 bytes");
   jbmp = json_parse("\"\\u2192\""); // → (BMP, unchanged)
   assert(jbmp.as_text() == "→", "BMP \\u escape unchanged");
 

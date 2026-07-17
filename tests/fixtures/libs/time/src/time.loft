@@ -29,8 +29,8 @@
 //                    month_name
 //   Parse failure returns null (i64::MIN) — test with `!result`.
 
-const MS_PER_DAY    = 86400000;
-const MS_PER_HOUR   = 3600000;
+const MS_PER_DAY = 86400000;
+const MS_PER_HOUR = 3600000;
 const MS_PER_MINUTE = 60000;
 const MS_PER_SECOND = 1000;
 
@@ -38,175 +38,201 @@ const MS_PER_SECOND = 1000;
 // loft `/` and `%` truncate toward zero; the calendar math needs floor.
 
 fn floor_div(fa: integer, fb: integer) -> integer {
-    q = fa / fb ?? 0;
-    r = fa % fb ?? 0;
-    if (r != 0) && ((fa < 0) != (fb < 0)) { q - 1 } else { q }
+  q = fa / fb ?? 0;
+  r = fa % fb ?? 0;
+  if(r != 0) && ((fa < 0) != (fb < 0)) { q - 1 } else { q }
 }
 
 // Days since the Unix epoch for this instant (floored to the UTC day).
-fn epoch_day(ed_t: integer) -> integer { floor_div(ed_t, MS_PER_DAY) }
+fn epoch_day(ed_t: integer) -> integer {
+  floor_div(ed_t, MS_PER_DAY)
+}
 
 // ── civil calendar (Hinnant) ──────────────────────────────────
 
 // (year, month, day) for a day number `z` counted from 1970-01-01.
 fn civil_from_days(z: integer) -> (integer, integer, integer) {
-    zz  = z + 719468;
-    eshift = if zz >= 0 { zz } else { zz - 146096 };
-    era = floor_div(eshift, 146097);
-    doe = zz - era * 146097;                                  // [0, 146096]
-    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;  // [0, 399]
-    y   = yoe + era * 400;
-    doy = doe - (365 * yoe + yoe / 4 - yoe / 100);            // [0, 365]
-    mp  = (5 * doy + 2) / 153;                                // [0, 11]
-    d   = doy - (153 * mp + 2) / 5 + 1;                       // [1, 31]
-    m   = if mp < 10 { mp + 3 } else { mp - 9 };              // [1, 12]
-    yr  = if m <= 2 { y + 1 } else { y };
-    (yr, m, d)
+  zz = z + 719468;
+  eshift = if zz >= 0 { zz } else { zz - 146096 };
+  era = floor_div(eshift, 146097);
+  doe = zz - era * 146097; // [0, 146096]
+  yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365; // [0, 399]
+  y = yoe + era * 400;
+  doy = doe - (365 * yoe + yoe / 4 - yoe / 100); // [0, 365]
+  mp = (5 * doy + 2) / 153; // [0, 11]
+  d = doy - (153 * mp + 2) / 5 + 1; // [1, 31]
+  m = if mp < 10 { mp + 3 } else { mp - 9 }; // [1, 12]
+  yr = if m <= 2 { y + 1 } else { y };
+  (yr, m, d)
 }
 
 // Day number counted from 1970-01-01 for a (year, month, day).
 fn days_from_civil(cy: integer, cm: integer, cd: integer) -> integer {
-    yy  = if cm <= 2 { cy - 1 } else { cy };
-    yshift = if yy >= 0 { yy } else { yy - 399 };
-    era = floor_div(yshift, 400);
-    yoe = yy - era * 400;                                     // [0, 399]
-    mpart = if cm > 2 { cm - 3 } else { cm + 9 };
-    doy = (153 * mpart + 2) / 5 + cd - 1;                     // [0, 365]
-    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;              // [0, 146096]
-    era * 146097 + doe - 719468
+  yy = if cm <= 2 { cy - 1 } else { cy };
+  yshift = if yy >= 0 { yy } else { yy - 399 };
+  era = floor_div(yshift, 400);
+  yoe = yy - era * 400; // [0, 399]
+  mpart = if cm > 2 { cm - 3 } else { cm + 9 };
+  doy = (153 * mpart + 2) / 5 + cd - 1; // [0, 365]
+  doe = yoe * 365 + yoe / 4 - yoe / 100 + doy; // [0, 146096]
+  era * 146097 + doe - 719468
 }
 
 // ── construction / parsing ────────────────────────────────────
 
 // Epoch-ms at UTC midnight of the given calendar date.
 pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer {
-    days_from_civil(fy, fmo, fd) * MS_PER_DAY
+  days_from_civil(fy, fmo, fd)*MS_PER_DAY
 }
 
 // Identity wrapper — for readability where a raw ms count becomes a time.
-pub fn from_millis(ms: integer) -> integer { ms }
+pub fn from_millis(ms: integer) -> integer {
+  ms
+}
 
 // Epoch-SECONDS boundary.  Garmin / Strava REST APIs speak Unix seconds
 // (`.timestamp()`), while loft times are milliseconds — convert at the edge.
-pub fn from_unix_seconds(secs: integer) -> integer { secs * MS_PER_SECOND }
-pub fn to_unix_seconds(uts: integer) -> integer { floor_div(uts, MS_PER_SECOND) }
+pub fn from_unix_seconds(secs: integer) -> integer {
+  secs * MS_PER_SECOND
+}
+pub fn to_unix_seconds(uts: integer) -> integer {
+  floor_div(uts, MS_PER_SECOND)
+}
 
 fn digit_value(dc: character) -> integer {
-    if dc >= '0' && dc <= '9' { (dc as integer) - ('0' as integer) } else { -1 }
+  if dc >= '0' && dc <= '9' { (dc as integer) - ('0' as integer) } else { -1 }
 }
 
 // Parse `count` decimal digits beginning at character index `start`.
 // Returns -1 if any character in the span is not a digit.
 fn digits_at(ds: text, start: integer, count: integer) -> integer {
-    val  = 0;
-    seen = 0;
-    for dch in ds {
-        if dch#index >= start && dch#index < start + count {
-            dv = digit_value(dch);
-            if dv < 0 { return -1; }
-            val = val * 10 + dv;
-            seen += 1;
-        }
+  val = 0;
+  seen = 0;
+  for dch in ds {
+    if dch#index >= start && dch#index < start + count {
+      dv = digit_value(dch);
+      if dv < 0 { return -1; }
+      val = val * 10 + dv;
+      seen += 1;
     }
-    if seen == count { val } else { -1 }
+  }
+  if seen == count { val } else { -1 }
 }
 
 // Parse an ISO date "YYYY-MM-DD", optionally followed by " HH:MM[:SS]"
 // or "THH:MM[:SS]" with an optional trailing "Z".  Returns null on any
 // malformed input (test with `!result`).
 pub fn parse(ps: text) -> integer? {
-    n = len(ps);
-    if n < 10 { return null; }
-    py  = digits_at(ps, 0, 4);
-    pmo = digits_at(ps, 5, 2);
-    pd  = digits_at(ps, 8, 2);
-    if py < 0 || pmo < 0 || pd < 0 { return null; }
-    pt = from_ymd(py, pmo, pd);
-    if n >= 16 {
-        ph = digits_at(ps, 11, 2);
-        pmi = digits_at(ps, 14, 2);
-        if ph >= 0 && pmi >= 0 {
-            pt += ph * MS_PER_HOUR + pmi * MS_PER_MINUTE;
-            if n >= 19 {
-                psec = digits_at(ps, 17, 2);
-                if psec >= 0 { pt += psec * MS_PER_SECOND; }
-            }
-        }
+  n = size(ps);
+  if n < 10 { return null; }
+  py = digits_at(ps, 0, 4);
+  pmo = digits_at(ps, 5, 2);
+  pd = digits_at(ps, 8, 2);
+  if py < 0 || pmo < 0 || pd < 0 { return null; }
+  pt = from_ymd(py, pmo, pd);
+  if n >= 16 {
+    ph = digits_at(ps, 11, 2);
+    pmi = digits_at(ps, 14, 2);
+    if ph >= 0 && pmi >= 0 {
+      pt += ph * MS_PER_HOUR + pmi * MS_PER_MINUTE;
+      if n >= 19 {
+        psec = digits_at(ps, 17, 2);
+        if psec >= 0 { pt += psec * MS_PER_SECOND; }
+      }
     }
-    pt
+  }
+  pt
 }
 
 // ── field accessors ───────────────────────────────────────────
 
 pub fn year(yt: integer) -> integer {
-    yc = civil_from_days(epoch_day(yt));
-    yc.0
+  yc = civil_from_days(epoch_day(yt));
+  yc.0
 }
 
 pub fn month(mt: integer) -> integer {
-    mc = civil_from_days(epoch_day(mt));
-    mc.1
+  mc = civil_from_days(epoch_day(mt));
+  mc.1
 }
 
 pub fn day(dt: integer) -> integer {
-    dc = civil_from_days(epoch_day(dt));
-    dc.2
+  dc = civil_from_days(epoch_day(dt));
+  dc.2
 }
 
-fn ms_of_day(mt2: integer) -> integer { floor_mod(mt2, MS_PER_DAY) ?? 0 }
+fn ms_of_day(mt2: integer) -> integer {
+  floor_mod(mt2, MS_PER_DAY) ?? 0
+}
 
-pub fn hour(ht: integer)   -> integer { ms_of_day(ht) / MS_PER_HOUR }
-pub fn minute(mit: integer) -> integer { (ms_of_day(mit) / MS_PER_MINUTE) % 60 }
-pub fn second(st: integer)  -> integer { (ms_of_day(st) / MS_PER_SECOND) % 60 }
+pub fn hour(ht: integer) -> integer {
+  ms_of_day(ht) / MS_PER_HOUR
+}
+pub fn minute(mit: integer) -> integer {
+  (ms_of_day(mit) / MS_PER_MINUTE) % 60
+}
+pub fn second(st: integer) -> integer {
+  (ms_of_day(st) / MS_PER_SECOND) % 60
+}
 
 // 0 = Monday .. 6 = Sunday.  1970-01-01 was a Thursday (weekday 3).
-pub fn weekday(wt: integer) -> integer { floor_mod(epoch_day(wt) + 3, 7) ?? 0 }
+pub fn weekday(wt: integer) -> integer {
+  floor_mod(epoch_day(wt)+3, 7) ?? 0
+}
 
 // ── stepping ──────────────────────────────────────────────────
 
-pub fn add_days(adt: integer, days: integer)     -> integer { adt + days * MS_PER_DAY }
-pub fn add_weeks(awt: integer, weeks: integer)   -> integer { awt + weeks * 7 * MS_PER_DAY }
-pub fn add_seconds(ast: integer, secs: integer)  -> integer { ast + secs * MS_PER_SECOND }
+pub fn add_days(adt: integer, days: integer) -> integer {
+  adt + days * MS_PER_DAY
+}
+pub fn add_weeks(awt: integer, weeks: integer) -> integer {
+  awt + weeks * 7 * MS_PER_DAY
+}
+pub fn add_seconds(ast: integer, secs: integer) -> integer {
+  ast + secs * MS_PER_SECOND
+}
 
 // ── differences ───────────────────────────────────────────────
 
 // Whole calendar days from `a` to `b` (b later → positive).
 pub fn days_between(da: integer, db: integer) -> integer {
-    epoch_day(db) - epoch_day(da)
+  epoch_day(db) - epoch_day(da)
 }
 
 pub fn seconds_between(sa: integer, sb: integer) -> integer {
-    (sb - sa) / MS_PER_SECOND
+  (sb - sa) / MS_PER_SECOND
 }
 
 // ── boundaries ────────────────────────────────────────────────
 
-pub fn start_of_day(sdt: integer) -> integer { epoch_day(sdt) * MS_PER_DAY }
+pub fn start_of_day(sdt: integer) -> integer {
+  epoch_day(sdt)*MS_PER_DAY
+}
 
 // Monday 00:00 UTC of the week containing `t`.
 pub fn start_of_week(swt: integer) -> integer {
-    start_of_day(swt) - weekday(swt) * MS_PER_DAY
+  start_of_day(swt) - weekday(swt)*MS_PER_DAY
 }
 
 // Combine a date with a time-of-day given as components (datetime.combine).
 pub fn at_time(atd: integer, hh: integer, mm: integer, ss: integer) -> integer {
-    start_of_day(atd) + hh * MS_PER_HOUR + mm * MS_PER_MINUTE + ss * MS_PER_SECOND
+  start_of_day(atd)+hh * MS_PER_HOUR + mm * MS_PER_MINUTE + ss * MS_PER_SECOND
 }
 
 // Combine a date with an "HH:MM" or "HH:MM:SS" time string.  Mirrors
 // `datetime.combine(date, time.fromisoformat(s))`.  Null on a malformed time.
 pub fn combine(cmd: integer, time_text: text) -> integer? {
-    cn = len(time_text);
-    if cn < 5 { return null; }
-    chh = digits_at(time_text, 0, 2);
-    cmm = digits_at(time_text, 3, 2);
-    if chh < 0 || cmm < 0 { return null; }
-    css = 0;
-    if cn >= 8 {
-        css = digits_at(time_text, 6, 2);
-        if css < 0 { css = 0; }
-    }
-    at_time(cmd, chh, cmm, css)
+  cn = size(time_text);
+  if cn < 5 { return null; }
+  chh = digits_at(time_text, 0, 2);
+  cmm = digits_at(time_text, 3, 2);
+  if chh < 0 || cmm < 0 { return null; }
+  css = 0;
+  if cn >= 8 {
+    css = digits_at(time_text, 6, 2);
+    if css < 0 { css = 0; }
+  }
+  at_time(cmd, chh, cmm, css)
 }
 
 // ── ISO week numbering ────────────────────────────────────────
@@ -214,105 +240,105 @@ pub fn combine(cmd: integer, time_text: text) -> integer? {
 // (iso_year, iso_week) — weeks start Monday; week 1 contains the year's
 // first Thursday.
 fn iso_calendar(it: integer) -> (integer, integer) {
-    iday = epoch_day(it);
-    iwd  = weekday(it);                       // 0=Mon..6=Sun
-    thursday = iday - iwd + 3;                // Thursday of this week
-    tc = civil_from_days(thursday);
-    iy = tc.0;
-    jan1 = days_from_civil(iy, 1, 1);
-    week = (thursday - jan1) / 7 + 1;
-    (iy, week)
+  iday = epoch_day(it);
+  iwd = weekday(it); // 0=Mon..6=Sun
+  thursday = iday - iwd + 3; // Thursday of this week
+  tc = civil_from_days(thursday);
+  iy = tc.0;
+  jan1 = days_from_civil(iy, 1, 1);
+  week = (thursday - jan1) / 7 + 1;
+  (iy, week)
 }
 
 pub fn iso_year(iyt: integer) -> integer {
-    iyc = iso_calendar(iyt);
-    iyc.0
+  iyc = iso_calendar(iyt);
+  iyc.0
 }
 
 pub fn iso_week(iwt: integer) -> integer {
-    iwc = iso_calendar(iwt);
-    iwc.1
+  iwc = iso_calendar(iwt);
+  iwc.1
 }
 
 // ── local time (fixed offset, no DST) ─────────────────────────
 
 // Shift so that the field accessors / formatters yield local values.
 pub fn to_local(lt: integer, offset_min: integer) -> integer {
-    lt + offset_min * MS_PER_MINUTE
+  lt + offset_min * MS_PER_MINUTE
 }
 
 // UTC-midnight key of the local calendar day containing `t`.
 pub fn local_day(ldt: integer, offset_min: integer) -> integer {
-    start_of_day(to_local(ldt, offset_min))
+  start_of_day(to_local(ldt, offset_min))
 }
 
 // The local calendar day for "now" at the given offset.
 pub fn today(offset_min: integer) -> integer {
-    local_day(now(), offset_min)
+  local_day(now(), offset_min)
 }
 
 // ── formatting ────────────────────────────────────────────────
 
 pub fn format_date(fdt: integer) -> text {
-    fc = civil_from_days(epoch_day(fdt));
-    fyy = fc.0;
-    fmm = fc.1;
-    fdd = fc.2;
-    "{fyy:04}-{fmm:02}-{fdd:02}"
+  fc = civil_from_days(epoch_day(fdt));
+  fyy = fc.0;
+  fmm = fc.1;
+  fdd = fc.2;
+  "{fyy:04}-{fmm:02}-{fdd:02}"
 }
 
 pub fn format_time(ftt: integer) -> text {
-    fth = hour(ftt);
-    ftm = minute(ftt);
-    "{fth:02}:{ftm:02}"
+  fth = hour(ftt);
+  ftm = minute(ftt);
+  "{fth:02}:{ftm:02}"
 }
 
 pub fn format_seconds(fst: integer) -> text {
-    fsh = hour(fst);
-    fsm = minute(fst);
-    fss = second(fst);
-    "{fsh:02}:{fsm:02}:{fss:02}"
+  fsh = hour(fst);
+  fsm = minute(fst);
+  fss = second(fst);
+  "{fsh:02}:{fsm:02}:{fss:02}"
 }
 
 pub fn format_datetime(fdtt: integer) -> text {
-    fdd2 = format_date(fdtt);
-    ftt2 = format_time(fdtt);
-    "{fdd2} {ftt2}"
+  fdd2 = format_date(fdtt);
+  ftt2 = format_time(fdtt);
+  "{fdd2} {ftt2}"
 }
 
 pub fn format_iso(fit: integer) -> text {
-    fid = format_date(fit);
-    fis = format_seconds(fit);
-    "{fid}T{fis}Z"
+  fid = format_date(fit);
+  fis = format_seconds(fit);
+  "{fid}T{fis}Z"
 }
 
 pub fn weekday_name(wnt: integer) -> text {
-    match weekday(wnt) {
-        0 => "Mon",
-        1 => "Tue",
-        2 => "Wed",
-        3 => "Thu",
-        4 => "Fri",
-        5 => "Sat",
-        _ => "Sun",
-    }
+  match weekday(wnt) {
+    0 => "Mon",
+    1 => "Tue",
+    2 => "Wed",
+    3 => "Thu",
+    4 => "Fri",
+    5 => "Sat",
+    _ => "Sun",
+  }
 }
 
 pub fn month_name(mnt: integer) -> text {
-    match month(mnt) {
-        1  => "Jan",
-        2  => "Feb",
-        3  => "Mar",
-        4  => "Apr",
-        5  => "May",
-        6  => "Jun",
-        7  => "Jul",
-        8  => "Aug",
-        9  => "Sep",
-        10 => "Oct",
-        11 => "Nov",
-        _  => "Dec",
-    }
+  match month(mnt) {
+    1 => "Jan",
+    2 => "Feb",
+    3 => "Mar",
+    4 => "Apr",
+    5 => "May",
+    6 => "Jun",
+    7 => "Jul",
+    8 => "Aug",
+    9 => "Sep",
+    10 => "Oct",
+    11 => "Nov",
+    _ => "Dec",
+  }
 }
 
 // ══════════════════════════════════════════════════════════════
@@ -341,109 +367,207 @@ pub fn month_name(mnt: integer) -> text {
 // The `"…" as DateTime` conversion is a TOTAL best-effort parse (bad input →
 // epoch) for the ergonomic path where an invalid date need not be caught.
 
-pub value struct DateTime { ms: integer }
-pub value struct Duration { ms: integer }
+pub value struct DateTime {
+  ms: integer,
+}
+pub value struct Duration {
+  ms: integer,
+}
 
 // ── DateTime construction ──
 pub fn date(dcy: integer, dcmo: integer, dcd: integer) -> DateTime {
-    DateTime { ms: from_ymd(dcy, dcmo, dcd) }
+  DateTime { ms: from_ymd(dcy, dcmo, dcd) }
 }
-pub fn datetime(tcy: integer, tcmo: integer, tcd: integer,
-                tch: integer, tcmi: integer, tcs: integer) -> DateTime {
-    DateTime { ms: at_time(from_ymd(tcy, tcmo, tcd), tch, tcmi, tcs) }
+pub fn datetime(
+  tcy: integer,
+  tcmo: integer,
+  tcd: integer,
+  tch: integer,
+  tcmi: integer,
+  tcs: integer
+) -> DateTime {
+  DateTime { ms: at_time(from_ymd(tcy, tcmo, tcd), tch, tcmi, tcs) }
 }
 
 // ── Duration construction ──
-pub fn milliseconds(nms: integer) -> Duration { Duration { ms: nms } }
-pub fn seconds(nsec: integer)     -> Duration { Duration { ms: nsec * MS_PER_SECOND } }
-pub fn minutes(nmin: integer)     -> Duration { Duration { ms: nmin * MS_PER_MINUTE } }
-pub fn hours(nhr: integer)        -> Duration { Duration { ms: nhr * MS_PER_HOUR } }
-pub fn days(nday: integer)        -> Duration { Duration { ms: nday * MS_PER_DAY } }
-pub fn weeks(nwk: integer)        -> Duration { Duration { ms: nwk * 7 * MS_PER_DAY } }
+pub fn milliseconds(nms: integer) -> Duration {
+  Duration { ms: nms }
+}
+pub fn seconds(nsec: integer) -> Duration {
+  Duration { ms: nsec * MS_PER_SECOND }
+}
+pub fn minutes(nmin: integer) -> Duration {
+  Duration { ms: nmin * MS_PER_MINUTE }
+}
+pub fn hours(nhr: integer) -> Duration {
+  Duration { ms: nhr * MS_PER_HOUR }
+}
+pub fn days(nday: integer) -> Duration {
+  Duration { ms: nday * MS_PER_DAY }
+}
+pub fn weeks(nwk: integer) -> Duration {
+  Duration { ms: nwk * 7 * MS_PER_DAY }
+}
 
 // ── DateTime field accessors (methods; delegate to the integer API above) ──
-pub fn year(self: DateTime)         -> integer { year(self.ms) }
-pub fn month(self: DateTime)        -> integer { month(self.ms) }
-pub fn day(self: DateTime)          -> integer { day(self.ms) }
-pub fn hour(self: DateTime)         -> integer { hour(self.ms) }
-pub fn minute(self: DateTime)       -> integer { minute(self.ms) }
-pub fn second(self: DateTime)       -> integer { second(self.ms) }
-pub fn weekday(self: DateTime)      -> integer { weekday(self.ms) }
-pub fn iso_year(self: DateTime)     -> integer { iso_year(self.ms) }
-pub fn iso_week(self: DateTime)     -> integer { iso_week(self.ms) }
-pub fn weekday_name(self: DateTime) -> text    { weekday_name(self.ms) }
-pub fn month_name(self: DateTime)   -> text    { month_name(self.ms) }
-pub fn to_millis(self: DateTime)    -> integer { self.ms }
+pub fn year(self: DateTime) -> integer {
+  year(self.ms)
+}
+pub fn month(self: DateTime) -> integer {
+  month(self.ms)
+}
+pub fn day(self: DateTime) -> integer {
+  day(self.ms)
+}
+pub fn hour(self: DateTime) -> integer {
+  hour(self.ms)
+}
+pub fn minute(self: DateTime) -> integer {
+  minute(self.ms)
+}
+pub fn second(self: DateTime) -> integer {
+  second(self.ms)
+}
+pub fn weekday(self: DateTime) -> integer {
+  weekday(self.ms)
+}
+pub fn iso_year(self: DateTime) -> integer {
+  iso_year(self.ms)
+}
+pub fn iso_week(self: DateTime) -> integer {
+  iso_week(self.ms)
+}
+pub fn weekday_name(self: DateTime) -> text {
+  weekday_name(self.ms)
+}
+pub fn month_name(self: DateTime) -> text {
+  month_name(self.ms)
+}
+pub fn to_millis(self: DateTime) -> integer {
+  self.ms
+}
 
 // ── Duration accessors ──
-pub fn total_millis(self: Duration)  -> integer { self.ms }
-pub fn total_seconds(self: Duration) -> integer { self.ms / MS_PER_SECOND }
-pub fn total_minutes(self: Duration) -> integer { self.ms / MS_PER_MINUTE }
-pub fn total_hours(self: Duration)   -> integer { self.ms / MS_PER_HOUR }
-pub fn total_days(self: Duration)    -> integer { self.ms / MS_PER_DAY }
+pub fn total_millis(self: Duration) -> integer {
+  self.ms
+}
+pub fn total_seconds(self: Duration) -> integer {
+  self.ms / MS_PER_SECOND
+}
+pub fn total_minutes(self: Duration) -> integer {
+  self.ms / MS_PER_MINUTE
+}
+pub fn total_hours(self: Duration) -> integer {
+  self.ms / MS_PER_HOUR
+}
+pub fn total_days(self: Duration) -> integer {
+  self.ms / MS_PER_DAY
+}
 
 // ── DateTime operators (comparison + typed arithmetic) ──
-pub fn OpLt(self: DateTime, other: DateTime) -> boolean { self.ms < other.ms }
-pub fn OpLe(self: DateTime, other: DateTime) -> boolean { self.ms <= other.ms }
-pub fn OpGt(self: DateTime, other: DateTime) -> boolean { self.ms > other.ms }
-pub fn OpGe(self: DateTime, other: DateTime) -> boolean { self.ms >= other.ms }
-pub fn OpEq(self: DateTime, other: DateTime) -> boolean { self.ms == other.ms }
-pub fn OpNe(self: DateTime, other: DateTime) -> boolean { self.ms != other.ms }
-pub fn OpMin(self: DateTime, other: DateTime) -> Duration { Duration { ms: self.ms - other.ms } }
-pub fn OpAdd(self: DateTime, span: Duration)  -> DateTime { DateTime { ms: self.ms + span.ms } }
+pub fn OpLt(self: DateTime, other: DateTime) -> boolean {
+  self.ms < other.ms
+}
+pub fn OpLe(self: DateTime, other: DateTime) -> boolean {
+  self.ms <= other.ms
+}
+pub fn OpGt(self: DateTime, other: DateTime) -> boolean {
+  self.ms > other.ms
+}
+pub fn OpGe(self: DateTime, other: DateTime) -> boolean {
+  self.ms >= other.ms
+}
+pub fn OpEq(self: DateTime, other: DateTime) -> boolean {
+  self.ms == other.ms
+}
+pub fn OpNe(self: DateTime, other: DateTime) -> boolean {
+  self.ms != other.ms
+}
+pub fn OpMin(self: DateTime, other: DateTime) -> Duration {
+  Duration { ms: self.ms - other.ms }
+}
+pub fn OpAdd(self: DateTime, span: Duration) -> DateTime {
+  DateTime { ms: self.ms + span.ms }
+}
 // `-` on a DateTime is the difference `dt - dt` (above); operators key on the
 // receiver type, so subtracting a Duration is the `minus` method (or `dt + (-span)`).
-pub fn minus(self: DateTime, span: Duration) -> DateTime { DateTime { ms: self.ms - span.ms } }
-pub fn negate(self: Duration) -> Duration { Duration { ms: 0 - self.ms } }
+pub fn minus(self: DateTime, span: Duration) -> DateTime {
+  DateTime { ms: self.ms - span.ms }
+}
+pub fn negate(self: Duration) -> Duration {
+  Duration { ms: 0 - self.ms }
+}
 
 // ── Duration operators ──
-pub fn OpAdd(self: Duration, other: Duration) -> Duration { Duration { ms: self.ms + other.ms } }
-pub fn OpMin(self: Duration, other: Duration) -> Duration { Duration { ms: self.ms - other.ms } }
-pub fn OpMul(self: Duration, factor: integer) -> Duration { Duration { ms: self.ms * factor } }
-pub fn OpLt(self: Duration, other: Duration) -> boolean { self.ms < other.ms }
-pub fn OpLe(self: Duration, other: Duration) -> boolean { self.ms <= other.ms }
-pub fn OpGt(self: Duration, other: Duration) -> boolean { self.ms > other.ms }
-pub fn OpGe(self: Duration, other: Duration) -> boolean { self.ms >= other.ms }
-pub fn OpEq(self: Duration, other: Duration) -> boolean { self.ms == other.ms }
-pub fn OpNe(self: Duration, other: Duration) -> boolean { self.ms != other.ms }
+pub fn OpAdd(self: Duration, other: Duration) -> Duration {
+  Duration { ms: self.ms + other.ms }
+}
+pub fn OpMin(self: Duration, other: Duration) -> Duration {
+  Duration { ms: self.ms - other.ms }
+}
+pub fn OpMul(self: Duration, factor: integer) -> Duration {
+  Duration { ms: self.ms * factor }
+}
+pub fn OpLt(self: Duration, other: Duration) -> boolean {
+  self.ms < other.ms
+}
+pub fn OpLe(self: Duration, other: Duration) -> boolean {
+  self.ms <= other.ms
+}
+pub fn OpGt(self: Duration, other: Duration) -> boolean {
+  self.ms > other.ms
+}
+pub fn OpGe(self: Duration, other: Duration) -> boolean {
+  self.ms >= other.ms
+}
+pub fn OpEq(self: Duration, other: Duration) -> boolean {
+  self.ms == other.ms
+}
+pub fn OpNe(self: Duration, other: Duration) -> boolean {
+  self.ms != other.ms
+}
 
 // ── custom formatting (the per-type to_text hook) ──
 // "" / "datetime" -> YYYY-MM-DD HH:MM · "date" -> YYYY-MM-DD · "time" -> HH:MM
 // "seconds" -> HH:MM:SS · "iso" -> …THH:MM:SSZ · "wday" -> Mon · "month" -> May
 pub fn to_text(self: DateTime, spec: text) -> text {
-    // The if-chain is bound to `r` and returned, NOT left as the tail expression:
-    // a tail `if` inside a format-hook `to_text(self, spec)` mis-selects its branch
-    // on both backends (a loft format-hook bug — repro filed upstream). Binding the
-    // result to a local sidesteps it.
-    // Each branch is wrapped in "{…}" so every arm is an owned text: on native a
-    // bare `text`-returning call whose body is a match of string literals (weekday_name /
-    // month_name → &str) does NOT unify with a String-returning arm (format_* interpolate),
-    // giving rustc E0308. Interpolating each arm normalises them (a second loft bug, filed).
-    r = if spec == "date" { "{format_date(self.ms)}" }
-        else if spec == "time" { "{format_time(self.ms)}" }
-        else if spec == "seconds" || spec == "secs" { "{format_seconds(self.ms)}" }
-        else if spec == "iso" { "{format_iso(self.ms)}" }
-        else if spec == "wday" || spec == "weekday" { "{weekday_name(self.ms)}" }
-        else if spec == "month" { "{month_name(self.ms)}" }
-        else { "{format_datetime(self.ms)}" };
-    r
+  // The if-chain is bound to `r` and returned, NOT left as the tail expression:
+  // a tail `if` inside a format-hook `to_text(self, spec)` mis-selects its branch
+  // on both backends (a loft format-hook bug — repro filed upstream). Binding the
+  // result to a local sidesteps it.
+  // Each branch is wrapped in "{…}" so every arm is an owned text: on native a
+  // bare `text`-returning call whose body is a match of string literals (weekday_name /
+  // month_name → &str) does NOT unify with a String-returning arm (format_* interpolate),
+  // giving rustc E0308. Interpolating each arm normalises them (a second loft bug, filed).
+  r = if spec == "date" { "{format_date(self.ms)}" }
+  else if spec == "time" { "{format_time(self.ms)}" }
+  else if spec == "seconds" || spec == "secs" { "{format_seconds(self.ms)}" }
+  else if spec == "iso" { "{format_iso(self.ms)}" }
+  else if spec == "wday" || spec == "weekday" { "{weekday_name(self.ms)}" }
+  else if spec == "month" { "{month_name(self.ms)}" }
+  else { "{format_datetime(self.ms)}" };
+  r
 }
 // A Duration renders as [-]H:MM:SS (hours may exceed 24).
 pub fn to_text(self: Duration, spec: text) -> text {
-    neg = self.ms < 0;
-    tot = if neg { 0 - self.ms } else { self.ms };
-    ss = (tot / MS_PER_SECOND) % 60;
-    mm = (tot / MS_PER_MINUTE) % 60;
-    hh = tot / MS_PER_HOUR;
-    sign = if neg { "-" } else { "" };
-    "{sign}{hh}:{mm:02}:{ss:02}"
+  neg = self.ms < 0;
+  tot = if neg { 0 - self.ms } else { self.ms };
+  ss = (tot / MS_PER_SECOND) % 60;
+  mm = (tot / MS_PER_MINUTE) % 60;
+  hh = tot / MS_PER_HOUR;
+  sign = if neg { "-" } else { "" };
+  "{sign}{hh}:{mm:02}:{ss:02}"
 }
 
 // ── conversions (`as`) ──
-fn OpConvIntFromDateTime(civ: DateTime) -> integer { civ.ms }
-fn OpConvDateTimeFromInt(civ: integer)  -> DateTime { DateTime { ms: civ } }
+fn OpConvIntFromDateTime(civ: DateTime) -> integer {
+  civ.ms
+}
+fn OpConvDateTimeFromInt(civ: integer) -> DateTime {
+  DateTime { ms: civ }
+}
 // text -> DateTime: a TOTAL best-effort parse (bad input -> epoch); see the
 // FALLIBILITY note above for the checked path via `parse`.
 fn OpConvDateTimeFromText(civ: text) -> DateTime {
-    DateTime { ms: parse(civ) ?? 0 }
+  DateTime { ms: parse(civ) ?? 0 }
 }

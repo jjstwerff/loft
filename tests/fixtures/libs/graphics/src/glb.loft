@@ -10,27 +10,21 @@ use scene;
 // Build the float32 position buffer (3 × f32 per vertex, x y z).
 fn glb_pos_buf(verts: vector<mesh::Vertex>) -> vector<single> {
   result = [];
-  for v in verts {
-    result += [v.pos.x as single, v.pos.y as single, v.pos.z as single];
-  }
+  for v in verts { result += [v.pos.x as single, v.pos.y as single, v.pos.z as single]; }
   result
 }
 
 // Build the float32 normal buffer (3 × f32 per vertex).
 fn glb_norm_buf(verts: vector<mesh::Vertex>) -> vector<single> {
   result = [];
-  for v in verts {
-    result += [v.normal.x as single, v.normal.y as single, v.normal.z as single];
-  }
+  for v in verts { result += [v.normal.x as single, v.normal.y as single, v.normal.z as single]; }
   result
 }
 
 // Build the float32 UV buffer (2 × f32 per vertex, u=x v=y).
 fn glb_uv_buf(verts: vector<mesh::Vertex>) -> vector<single> {
   result = [];
-  for v in verts {
-    result += [v.uv.x as single, v.uv.y as single];
-  }
+  for v in verts { result += [v.uv.x as single, v.uv.y as single]; }
   result
 }
 
@@ -39,17 +33,13 @@ fn glb_uv_buf(verts: vector<mesh::Vertex>) -> vector<single> {
 // matching the glTF BIN chunk-size accounting for `f += glb_idx_buf(...)`.
 fn glb_idx_buf(tris: vector<mesh::Triangle>) -> vector<i32> {
   result: vector<i32> = [];
-  for t in tris {
-    result += [t.a as i32, t.b as i32, t.c as i32];
-  }
+  for t in tris { result += [t.a as i32, t.b as i32, t.c as i32]; }
   result
 }
 
 // Compute the minimum position across all vertices (component-wise).
 fn glb_pos_min(verts: vector<mesh::Vertex>) -> math::Vec3 {
-  if verts.len() == 0 {
-    math::vec3(0.0, 0.0, 0.0)
-  } else {
+  if verts.len() == 0 { math::vec3(0.0, 0.0, 0.0) } else {
     mx = verts[0].pos.x;
     my = verts[0].pos.y;
     mz = verts[0].pos.z;
@@ -59,14 +49,12 @@ fn glb_pos_min(verts: vector<mesh::Vertex>) -> math::Vec3 {
       if v.pos.z < mz { mz = v.pos.z; }
     }
     math::vec3(mx, my, mz)
-  }
+  },
 }
 
 // Compute the maximum position across all vertices (component-wise).
 fn glb_pos_max(verts: vector<mesh::Vertex>) -> math::Vec3 {
-  if verts.len() == 0 {
-    math::vec3(0.0, 0.0, 0.0)
-  } else {
+  if verts.len() == 0 { math::vec3(0.0, 0.0, 0.0) } else {
     mx = verts[0].pos.x;
     my = verts[0].pos.y;
     mz = verts[0].pos.z;
@@ -76,7 +64,7 @@ fn glb_pos_max(verts: vector<mesh::Vertex>) -> math::Vec3 {
       if v.pos.z > mz { mz = v.pos.z; }
     }
     math::vec3(mx, my, mz)
-  }
+  },
 }
 
 // Number of padding bytes needed to reach the next 4-byte boundary.
@@ -95,14 +83,14 @@ fn glb_json(m: mesh::Mesh, pos_min: math::Vec3, pos_max: math::Vec3) -> text {
   nv = m.vertices.len();
   nt = m.triangles.len();
   ni = nt * 3;
-  pos_bytes  = nv * 12;
+  pos_bytes = nv * 12;
   norm_bytes = nv * 12;
-  uv_bytes   = nv * 8;
-  idx_bytes  = ni * 4;
-  bin_bytes  = pos_bytes + norm_bytes + uv_bytes + idx_bytes;
-  off_norm   = pos_bytes;
-  off_uv     = pos_bytes + norm_bytes;
-  off_idx    = pos_bytes + norm_bytes + uv_bytes;
+  uv_bytes = nv * 8;
+  idx_bytes = ni * 4;
+  bin_bytes = pos_bytes + norm_bytes + uv_bytes + idx_bytes;
+  off_norm = pos_bytes;
+  off_uv = pos_bytes + norm_bytes;
+  off_idx = pos_bytes + norm_bytes + uv_bytes;
 
   mn = m.name;
   minx = pos_min.x; miny = pos_min.y; minz = pos_min.z;
@@ -137,18 +125,18 @@ pub fn save_glb(m: mesh::Mesh, path: text) {
   nt = m.triangles.len();
   ni = nt * 3;
 
-  pos_bytes  = nv * 12;
+  pos_bytes = nv * 12;
   norm_bytes = nv * 12;
-  uv_bytes   = nv * 8;
-  idx_bytes  = ni * 4;
-  bin_bytes  = pos_bytes + norm_bytes + uv_bytes + idx_bytes;
+  uv_bytes = nv * 8;
+  idx_bytes = ni * 4;
+  bin_bytes = pos_bytes + norm_bytes + uv_bytes + idx_bytes;
 
   pmin = glb_pos_min(m.vertices);
   pmax = glb_pos_max(m.vertices);
 
-  json      = glb_json(m, pmin, pmax);
-  json_len  = json.len();
-  json_pad  = glb_pad4(json_len);
+  json = glb_json(m, pmin, pmax);
+  json_len = json.size();
+  json_pad = glb_pad4(json_len);
   json_chunk = json_len + json_pad;
 
   // Total file size: 12 (header) + 8 (json chunk hdr) + json_chunk + 8 (bin chunk hdr) + bin_bytes
@@ -163,22 +151,20 @@ pub fn save_glb(m: mesh::Mesh, path: text) {
   // GLB header (12 bytes — each u32 is 4 bytes).  Post-2c `integer`
   // is 8 bytes; cast each scalar header field to `i32` so the file
   // lands the expected GLB 2.0 layout.
-  f += 0x46546C67 as i32;  // magic 'glTF'
-  f += 2 as i32;           // version 2
-  f += total_len as i32;   // total file length
+  f += 0x46546C67 as i32; // magic 'glTF'
+  f += 2 as i32; // version 2
+  f += total_len as i32; // total file length
 
   // JSON chunk (8-byte header + padded JSON)
-  f += json_chunk as i32;  // chunk data length (padded)
-  f += 0x4E4F534A as i32;  // chunk type 'JSON'
-  f += json;               // JSON bytes (raw UTF-8)
+  f += json_chunk as i32; // chunk data length (padded)
+  f += 0x4E4F534A as i32; // chunk type 'JSON'
+  f += json; // JSON bytes (raw UTF-8)
   // Pad JSON to 4-byte boundary with ASCII spaces
-  for _ in 0..json_pad {
-    f += 32 as u8;
-  }
+  for _ in 0..json_pad { f += 32 as u8; }
 
   // BIN chunk (8-byte header + binary buffers)
-  f += bin_bytes as i32;   // chunk data length
-  f += 0x004E4942 as i32;  // chunk type 'BIN\0'
+  f += bin_bytes as i32; // chunk data length
+  f += 0x004E4942 as i32; // chunk type 'BIN\0'
   f += glb_pos_buf(m.vertices);
   f += glb_norm_buf(m.vertices);
   f += glb_uv_buf(m.vertices);
@@ -221,9 +207,9 @@ fn glb_is_identity_mat4(tr: math::Mat4) -> boolean {
 // glTF 2.0 also uses column-major order, so emit elements directly.
 fn glb_mat4_json(tr: math::Mat4) -> text {
   mm = tr.m;
-  c0  = mm[0]  as single; c1  = mm[1]  as single; c2  = mm[2]  as single; c3  = mm[3]  as single;
-  c4  = mm[4]  as single; c5  = mm[5]  as single; c6  = mm[6]  as single; c7  = mm[7]  as single;
-  c8  = mm[8]  as single; c9  = mm[9]  as single; c10 = mm[10] as single; c11 = mm[11] as single;
+  c0 = mm[0] as single; c1 = mm[1] as single; c2 = mm[2] as single; c3 = mm[3] as single;
+  c4 = mm[4] as single; c5 = mm[5] as single; c6 = mm[6] as single; c7 = mm[7] as single;
+  c8 = mm[8] as single; c9 = mm[9] as single; c10 = mm[10] as single; c11 = mm[11] as single;
   c12 = mm[12] as single; c13 = mm[13] as single; c14 = mm[14] as single; c15 = mm[15] as single;
   result = "\"matrix\":[{c0:.6},{c1:.6},{c2:.6},{c3:.6},";
   result += "{c4:.6},{c5:.6},{c6:.6},{c7:.6},";
@@ -236,10 +222,7 @@ fn glb_light_node_json(lt: scene::Light, li: integer) -> text {
   lname = lt.name;
   result = "{{\"name\":\"{lname}\",\"extensions\":{{\"KHR_lights_punctual\":{{\"light\":{li}}}}}";
   if lt.light_type == scene::Point {
-    px = lt.position.x as single;
-    py = lt.position.y as single;
-    pz = lt.position.z as single;
-    result += ",\"translation\":[{px:.6},{py:.6},{pz:.6}]";
+    px = lt.position.x as single; py = lt.position.y as single; pz = lt.position.z as single; result += ",\"translation\":[{px:.6},{py:.6},{pz:.6}]";,
   } else {
     dir = math::normalize3(lt.direction);
     dx = dir.x; dy = dir.y; dz = dir.z;
@@ -279,9 +262,7 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
   for _ in sc.meshes {
     found = 0;
     for nd in sc.nodes {
-      if nd.mesh_idx == mm_i {
-        found = nd.material_idx;
-      }
+      if nd.mesh_idx == mm_i { found = nd.material_idx; }
     }
     mesh_mat += [found];
     mm_i = mm_i + 1;
@@ -306,9 +287,9 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
       cb = lt.color_b as single;
       inten = lt.intensity as single;
       if lt.light_type == scene::Point {
-        result += "{{\"name\":\"{ltname}\",\"type\":\"point\",\"color\":[{cr:.6},{cg:.6},{cb:.6}],\"intensity\":{inten:.6}}}";
+        result += "{{\"name\":\"{ltname}\",\"type\":\"point\",\"color\":[{cr:.6},{cg:.6},{cb:.6}],\"intensity\":{inten:.6}}}";,
       } else if lt.light_type == scene::Directional {
-        result += "{{\"name\":\"{ltname}\",\"type\":\"directional\",\"color\":[{cr:.6},{cg:.6},{cb:.6}],\"intensity\":{inten:.6}}}";
+        result += "{{\"name\":\"{ltname}\",\"type\":\"directional\",\"color\":[{cr:.6},{cg:.6},{cb:.6}],\"intensity\":{inten:.6}}}";,
       } else {
         result += "{{\"name\":\"{ltname}\",\"type\":\"spot\",\"color\":[{cr:.6},{cg:.6},{cb:.6}],\"intensity\":{inten:.6}}}";
       }
@@ -334,9 +315,7 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     if ni > 0 { result += ","; }
     mid = nd.mesh_idx;
     ndname = nd.name;
-    if glb_is_identity_mat4(nd.transform) {
-      result += "{{\"name\":\"{ndname}\",\"mesh\":{mid}}}";
-    } else {
+    if glb_is_identity_mat4(nd.transform) { result += "{{\"name\":\"{ndname}\",\"mesh\":{mid}}}"; } else {
       mat_str = glb_mat4_json(nd.transform);
       result += "{{\"name\":\"{ndname}\",\"mesh\":{mid},{mat_str}}}";
     }
@@ -358,11 +337,11 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
   for me in sc.meshes {
     if mi > 0 { result += ","; }
     mename = me.name;
-    acc_pos  = mi * 4;
+    acc_pos = mi * 4;
     acc_norm = mi * 4 + 1;
-    acc_uv   = mi * 4 + 2;
-    acc_idx  = mi * 4 + 3;
-    mat_idx  = mesh_mat[mi] ?? 0;
+    acc_uv = mi * 4 + 2;
+    acc_idx = mi * 4 + 3;
+    mat_idx = mesh_mat[mi] ?? 0;
     result += "{{\"name\":\"{mename}\",\"primitives\":[{{\"attributes\":{{\"POSITION\":{acc_pos},\"NORMAL\":{acc_norm},\"TEXCOORD_0\":{acc_uv}}},\"indices\":{acc_idx},\"material\":{mat_idx}}}]}}";
     mi = mi + 1;
   }
@@ -380,10 +359,10 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     pmax = glb_pos_max(me.vertices);
     minx = pmin.x as single; miny = pmin.y as single; minz = pmin.z as single;
     maxx = pmax.x as single; maxy = pmax.y as single; maxz = pmax.z as single;
-    bv_pos  = mi * 4;
+    bv_pos = mi * 4;
     bv_norm = mi * 4 + 1;
-    bv_uv   = mi * 4 + 2;
-    bv_idx  = mi * 4 + 3;
+    bv_uv = mi * 4 + 2;
+    bv_idx = mi * 4 + 3;
     result += "{{\"bufferView\":{bv_pos},\"componentType\":5126,\"count\":{nv},\"type\":\"VEC3\",\"min\":[{minx:.6},{miny:.6},{minz:.6}],\"max\":[{maxx:.6},{maxy:.6},{maxz:.6}]}},";
     result += "{{\"bufferView\":{bv_norm},\"componentType\":5126,\"count\":{nv},\"type\":\"VEC3\"}},";
     result += "{{\"bufferView\":{bv_uv},\"componentType\":5126,\"count\":{nv},\"type\":\"VEC2\"}},";
@@ -400,14 +379,14 @@ fn glb_scene_json(sc: scene::Scene, bin_offset: vector<integer>) -> text {
     nv = me.vertices.len();
     nt = me.triangles.len();
     nidx = nt * 3;
-    pos_bytes  = nv * 12;
+    pos_bytes = nv * 12;
     norm_bytes = nv * 12;
-    uv_bytes   = nv * 8;
-    idx_bytes  = nidx * 4;
+    uv_bytes = nv * 8;
+    idx_bytes = nidx * 4;
     base = bin_offset[mi] ?? 0;
     off_norm = base + pos_bytes;
-    off_uv   = base + pos_bytes + norm_bytes;
-    off_idx  = base + pos_bytes + norm_bytes + uv_bytes;
+    off_uv = base + pos_bytes + norm_bytes;
+    off_idx = base + pos_bytes + norm_bytes + uv_bytes;
     result += "{{\"buffer\":0,\"byteOffset\":{base},\"byteLength\":{pos_bytes},\"target\":34962}},";
     result += "{{\"buffer\":0,\"byteOffset\":{off_norm},\"byteLength\":{norm_bytes},\"target\":34962}},";
     result += "{{\"buffer\":0,\"byteOffset\":{off_uv},\"byteLength\":{uv_bytes},\"target\":34962}},";
@@ -452,9 +431,9 @@ pub fn save_scene_glb(sc: scene::Scene, path: text) {
   }
   total_bin = cur_offset;
 
-  json      = glb_scene_json(sc, bin_offset);
-  json_len  = json.len();
-  json_pad  = glb_pad4(json_len);
+  json = glb_scene_json(sc, bin_offset);
+  json_len = json.size();
+  json_pad = glb_pad4(json_len);
   json_chunk = json_len + json_pad;
 
   total_len = 12 + 8 + json_chunk + 8 + total_bin;
@@ -476,9 +455,7 @@ pub fn save_scene_glb(sc: scene::Scene, path: text) {
   f += json_chunk as i32;
   f += 0x4E4F534A as i32;
   f += json;
-  for _ in 0..json_pad {
-    f += 32 as u8;
-  }
+  for _ in 0..json_pad { f += 32 as u8; }
 
   // BIN chunk
   f += total_bin as i32;

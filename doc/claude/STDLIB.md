@@ -127,8 +127,8 @@ Functions for working with `text` (UTF-8 strings) and `character` values.
 
 | Function | Description |
 |----------|-------------|
-| `len(v: text) -> integer` | Number of bytes in the text. |
-| `size(v: text) -> integer` | Number of Unicode code points (characters) in the text. |
+| `len(v: text) -> integer` | Number of characters (Unicode code points) in the text — the human count. |
+| `size(v: text) -> integer` | Number of bytes in the text — the bound for byte-positioned `s[i]`, slices, and `find`/`rfind`. |
 | `len(v: character) -> integer` | Byte length of the character's UTF-8 encoding (1–4). |
 
 ### Searching

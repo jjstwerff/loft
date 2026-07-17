@@ -673,16 +673,20 @@ fn OpConstText(_value: const text) -> text;
 fn OpConvTextFromNull() -> text;
 #rust"Str::new(crate::state::STRING_NULL)"
 fn OpLengthText(v1: text) -> integer;
-#rust"@v1.len() as i64"
-// Number of bytes in the text. Use for bounds checks and iteration limits.
+#rust"@v1.chars().count() as i64"
+// Number of characters (Unicode code points) in the text (@PLN110) — the human
+// count, as in every mainstream language. For a byte length (bounds checks, the
+// limit of byte-positioned indexing / slicing) use `size`.
 pub fn len(both: text) -> integer {
   OpLengthText(both)
 }
 #pure
 
 fn OpSizeText(v1: text) -> integer;
-#rust"@v1.chars().count() as i64"
-// Number of Unicode code points (characters) in the text.
+#rust"@v1.len() as i64"
+// Number of bytes in the text (@PLN110). This is the bound for byte-positioned
+// operations: `s[i]`, slices `s[a..b]`, and `find`/`rfind` all use byte offsets.
+// For the human character count use `len`.
 pub fn size(both: text) -> integer {
   OpSizeText(both)
 }

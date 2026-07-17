@@ -19,8 +19,8 @@
 
 fn render(rb: text, id: text) -> text {
   full_pref = "**@P" + id + "** — ";
-  plen = full_pref.len();
-  olen = rb.len();
+  plen = full_pref.size();
+  olen = rb.size();
   if rb.starts_with(full_pref) { rb = rb[plen..olen]; }
   "[{id}] {rb}"
 }
