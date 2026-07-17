@@ -90,6 +90,9 @@ impl LexResult {
 ///
 /// It defaults to reading all found data into Text elements but has a list of TOKENS and
 /// KEYWORDS that are parsed when a line starts with a token.
+// The bool fields are independent lexer modes (interpolation, JSON strings, format-expr /
+// backtick state), not a state enum — each toggles a distinct behaviour.
+#[allow(clippy::struct_excessive_bools)]
 pub struct Lexer {
     lines: Box<dyn Iterator<Item = IoResult<String>>>,
     /// In-memory sources by name (`parse_string` registers them): `switch`
@@ -115,6 +118,9 @@ pub struct Lexer {
     /// Whether `"…"` literals interpret `{…}` as interpolation (loft) or as literal
     /// braces (configs).  See [`LexConfig::interpolate_strings`].
     interpolate_strings: bool,
+    /// Whether `"…"` literals accept JSON string escapes (`\/`, `\uXXXX` + surrogate
+    /// pairs).  See [`LexConfig::json_strings`].
+    json_strings: bool,
     /// Should we expect code with whitespaces here?
     mode: Mode,
     /// True while the lexer is inside a `{...}` format expression of a string literal.
@@ -192,6 +198,12 @@ pub struct LexConfig {
     /// When true (loft), a lone `{` in a `"…"` literal opens a `{expr}` format slot;
     /// when false (configs), `{` / `}` are literal string content.
     pub interpolate_strings: bool,
+    /// When true (@PLN109 JSON mode), `"…"` literals additionally accept JSON's
+    /// string escapes — `\/` and `\uXXXX` (four hex, no braces) with surrogate-pair
+    /// combining — on top of loft's own escape set (loft is a lenient superset, not
+    /// a JSON validator).  Off for all normal loft / config lexing, so loft source
+    /// string semantics are unchanged.
+    pub json_strings: bool,
 }
 
 impl Default for LexConfig {
@@ -203,6 +215,7 @@ impl Default for LexConfig {
             keywords: KEYWORDS.iter().map(|s| (*s).to_string()).collect(),
             comment: "//".to_string(),
             interpolate_strings: true,
+            json_strings: false,
         }
     }
 }
@@ -220,6 +233,26 @@ impl LexConfig {
             keywords: HashSet::new(),
             comment: comment.to_string(),
             interpolate_strings: false,
+            json_strings: false,
+        }
+    }
+
+    /// A lexicon for JSON (@PLN109): the structural tokens `{ } [ ] : ,`, no
+    /// keywords (`true`/`false`/`null` lex as identifiers — the JSON parser
+    /// dispatches on them), no comment, no `{…}` interpolation, and JSON string
+    /// escapes enabled.  The token set is refined as the JSON parser is built.
+    #[must_use]
+    pub fn json() -> Self {
+        let tokens: HashSet<String> = ["{", "}", "[", "]", ":", ","]
+            .iter()
+            .map(|s| (*s).to_string())
+            .collect();
+        LexConfig {
+            tokens,
+            keywords: HashSet::new(),
+            comment: String::new(),
+            interpolate_strings: false,
+            json_strings: true,
         }
     }
 }
@@ -301,6 +334,7 @@ impl Default for Lexer {
             keywords: cfg.keywords,
             comment: cfg.comment,
             interpolate_strings: cfg.interpolate_strings,
+            json_strings: cfg.json_strings,
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
@@ -342,6 +376,7 @@ impl Lexer {
             keywords: config.keywords,
             comment: config.comment,
             interpolate_strings: config.interpolate_strings,
+            json_strings: config.json_strings,
             mode: Mode::Code,
             in_format_expr: false,
             in_backtick: false,
@@ -633,6 +668,8 @@ impl Lexer {
         if let Some(&c) = self.iter.peek() {
             match c {
                 '"' | '\'' | '\\' => res.push(c),
+                // @PLN109 JSON: `\/` is a JSON escape for `/`; loft rejects it.
+                '/' if self.json_strings => res.push('/'),
                 't' => res.push('\t'),
                 'r' => res.push('\r'),
                 'n' | '\n' => res.push('\n'),
@@ -672,8 +709,14 @@ impl Lexer {
                 'u' => {
                     // \u{NNNN} — Unicode codepoint, 1-6 hex digits, must
                     // be a valid Unicode scalar value (excludes surrogates).
-                    self.next_char(); // consume 'u', now at '{'
+                    self.next_char(); // consume 'u', now at '{' (loft) or first hex (JSON)
                     if self.iter.peek() != Some(&'{') {
+                        // @PLN109 JSON mode: `\uXXXX` (four hex, no braces) with
+                        // surrogate-pair combining.  loft's own form needs `\u{…}`.
+                        if self.json_strings {
+                            self.json_unicode_escape(res);
+                            return true;
+                        }
                         self.err(Level::Error, "\\u escape requires \\u{NNNN} form");
                         res.push('?');
                         return true;
@@ -724,6 +767,77 @@ impl Lexer {
         } else {
             false
         }
+    }
+
+    /// @PLN109 — decode a JSON `\uXXXX` escape (four hex digits, no braces),
+    /// already positioned past the `u`, with surrogate-pair combining.  Follows
+    /// the [`escape_seq`](Self::escape_seq) convention: on return the iterator's
+    /// peek is at the LAST consumed hex digit (the caller's outer loop skips it).
+    /// Pushes the decoded scalar, or `\u{FFFD}` + a diagnostic for a malformed or
+    /// unpaired-surrogate escape.
+    fn json_unicode_escape(&mut self, res: &mut String) {
+        let Some(cp) = self.read_hex4() else {
+            self.err(Level::Error, "\\uXXXX escape requires four hex digits");
+            res.push('\u{FFFD}');
+            return;
+        };
+        // Not a surrogate — a direct Unicode scalar value.
+        if !(0xD800..=0xDFFF).contains(&cp) {
+            if let Some(ch) = char::from_u32(cp) {
+                res.push(ch);
+            } else {
+                self.err(Level::Error, "\\uXXXX escape is not a valid codepoint");
+                res.push('\u{FFFD}');
+            }
+            return;
+        }
+        // A low surrogate cannot lead a pair.
+        if cp >= 0xDC00 {
+            self.err(Level::Error, "\\uXXXX unpaired low surrogate");
+            res.push('\u{FFFD}');
+            return;
+        }
+        // High surrogate: require a following `\uXXXX` low surrogate.  Peek is at
+        // this high surrogate's 4th hex; consume it, then match `\ u X X X X`.
+        self.next_char(); // consume the high surrogate's 4th hex digit
+        let paired = self.iter.peek() == Some(&'\\') && {
+            self.next_char(); // consume '\'
+            self.iter.peek() == Some(&'u')
+        };
+        if !paired {
+            self.err(Level::Error, "\\uXXXX unpaired high surrogate");
+            res.push('\u{FFFD}');
+            return;
+        }
+        self.next_char(); // consume 'u', now at the low surrogate's first hex
+        match self.read_hex4() {
+            Some(low) if (0xDC00..=0xDFFF).contains(&low) => {
+                let c = 0x1_0000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
+                res.push(char::from_u32(c).unwrap_or('\u{FFFD}'));
+            }
+            _ => {
+                self.err(
+                    Level::Error,
+                    "\\uXXXX high surrogate not followed by a low surrogate",
+                );
+                res.push('\u{FFFD}');
+            }
+        }
+    }
+
+    /// Read exactly four hex digits, consuming the first three and leaving the
+    /// iterator's peek at the fourth (the [`escape_seq`](Self::escape_seq)
+    /// last-char convention).  Returns `None` if four hex digits do not follow.
+    fn read_hex4(&mut self) -> Option<u32> {
+        let mut val: u32 = 0;
+        for i in 0..4 {
+            let d = self.iter.peek().and_then(|c| c.to_digit(16))?;
+            val = (val << 4) | d;
+            if i < 3 {
+                self.next_char(); // leave peek at the 4th digit
+            }
+        }
+        Some(val)
     }
 
     /// Parse a string for the lexer.
@@ -1658,6 +1772,78 @@ mod test {
     fn validate(s: &'static str, data: &[LexItem]) {
         let res = array(&mut Lexer::from_str(s, "validate"));
         assert_eq!(res, data);
+    }
+
+    /// Lex a single `"…"` literal in JSON mode ([`LexConfig::json`]) and return the
+    /// decoded [`LexItem::CString`] content.
+    #[cfg(test)]
+    fn json_str(s: &str) -> String {
+        let l = Lexer::from_str_with(s, "json", LexConfig::json());
+        match l.peek().has {
+            LexItem::CString(c) => c,
+            other => panic!("expected CString, got {other:?}"),
+        }
+    }
+
+    /// Lex a single `"…"` literal in normal loft mode and return the decoded string.
+    #[cfg(test)]
+    fn loft_str(s: &str) -> String {
+        let l = Lexer::from_str(s, "loft");
+        match l.peek().has {
+            LexItem::CString(c) => c,
+            other => panic!("expected CString, got {other:?}"),
+        }
+    }
+
+    /// The first [`LexItem`] of `s` lexed in JSON mode.
+    #[cfg(test)]
+    fn json_first(s: &str) -> LexItem {
+        Lexer::from_str_with(s, "json", LexConfig::json()).peek().has
+    }
+
+    /// @PLN109 Phase 1c — loft's lexer already distinguishes integer-shaped from
+    /// fractional numbers (the basis for Phase 2's `Parsed::Int` vs
+    /// `Parsed::Number` mapping).  Load-bearing for H5: a 16-digit integer must
+    /// reach the parser as an exact `Long(u64)`, NOT rounded through f64.
+    #[test]
+    fn json_number_classification() {
+        assert_eq!(json_first("42"), LexItem::Integer(42, false));
+        // H5: 2^53 + 1 preserved exactly as Long — the whole point of the arc.
+        assert_eq!(json_first("9007199254740993"), LexItem::Long(9_007_199_254_740_993));
+        assert!(matches!(json_first("3.14"), LexItem::Float(_)));
+        // Exponent-bearing numbers are Float (1b): `1e3` / `1E5` are not i64.
+        assert!(matches!(json_first("1e3"), LexItem::Float(_)));
+        assert!(matches!(json_first("1E5"), LexItem::Float(_)));
+    }
+
+    /// @PLN109 Phase 1a — JSON string escapes decode in JSON mode: `\/` and
+    /// `\uXXXX` (four hex, no braces) with surrogate-pair combining.  The `\\uXXXX`
+    /// in each Rust literal is the two chars backslash-u reaching the lexer (the
+    /// JSON source text); the expected side is the decoded scalar.
+    #[test]
+    fn json_string_escapes() {
+        assert_eq!(json_str("\"a\\/b\""), "a/b"); // \/ -> /
+        assert_eq!(json_str("\"\\u0041\""), "A"); // A -> A
+        assert_eq!(json_str("\"\\u00e9\""), "é"); // é -> é
+        assert_eq!(json_str("\"\\u2764\""), "❤"); // ❤ -> ❤ (BMP)
+        assert_eq!(json_str("\"\\uD83D\\uDE00\""), "😀"); // surrogate pair -> U+1F600
+        assert_eq!(json_str("\"\\uD834\\uDD1E\""), "𝄞"); // astral pair -> U+1D11E
+        assert_eq!(json_str("\"a\\u0041b\\/c\""), "aAb/c"); // mixed in one string
+        // loft's own escapes still work in JSON mode (lenient superset).
+        assert_eq!(json_str("\"x\\ty\""), "x\ty");
+    }
+
+    /// @PLN109 Phase 1a — normal loft string lexing is UNCHANGED: `\u{…}` braces
+    /// form still decodes, `\t` still works, and the JSON-only escapes are NOT
+    /// silently accepted (they still route to loft's error path, not `/` / a char).
+    #[test]
+    fn loft_string_escapes_unchanged() {
+        assert_eq!(loft_str("\"\\u{41}\""), "A"); // braces form still works
+        assert_eq!(loft_str("\"a\\tb\""), "a\tb"); // \t
+        // `\/` and `\uXXXX` are NOT decoded in loft mode — bare `\u` and unknown
+        // `\/` route to the error path (emit `?`), so they do NOT decode.
+        assert_ne!(loft_str("\"a\\/b\""), "a/b");
+        assert_ne!(loft_str("\"\\u0041\""), "A");
     }
 
     #[cfg(test)]
