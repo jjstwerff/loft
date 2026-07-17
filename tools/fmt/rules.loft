@@ -7,8 +7,10 @@
 //   object/block); otherwise it stays INLINE.
 // So: vector of numbers -> inline; vector of objects -> multi-line (one per line);
 //     object with simple fields -> inline; object with a nested object field -> multi-line.
-// Spacing is re-derived (subset of src/formatter.rs need_space); indent = depth*2.
-// Demo: prints the four canonical cases.  Width fallback + comment alignment are next.
+// Plus a WIDTH fallback: a simple container that overruns breaks anyway ("unless too
+// long").  Spacing re-derived (subset of src/formatter.rs need_space); indent = depth*2;
+// broken containers get a trailing comma.  Demo: the canonical cases + width + empty.
+// Next: comment column alignment + whole-file integration.
 
 // ── lexer + CST (Steps 1-2) ──────────────────────────────────────────────────
 
@@ -168,24 +170,44 @@ fn has_real(kids: vector<Node>, a: integer, b: integer) -> boolean {
   false
 }
 
-// Render kids[a..b] INLINE — spacing via `sp`, groups via render_group.
-fn render_range(kids: vector<Node>, a: integer, b: integer, indent: integer) -> text {
+// The line-width budget — the "unless too long" fallback (owner dial).
+fn width() -> integer { (env_variable("LOFT_FMT_WIDTH") ?? "60") as integer ?? 60 }
+
+// The column after appending `g` at column `before`: `before + len` on the same line,
+// or the length of `g`'s LAST line if it broke.
+fn last_line_len(g: text, before: integer) -> integer {
+  chars: vector<character> = [];
+  for c in g { chars += [c]; }
+  n = len(chars);
+  last_nl = 0 - 1;
+  k = 0;
+  while k < n { if (chars[k] ?? 'x') == '\n' { last_nl = k; } k += 1; }
+  if last_nl < 0 { before + n } else { n - last_nl - 1 }
+}
+
+// Render kids[a..b] INLINE starting at column `col0` — spacing via `sp`, nested
+// groups via render_group (which may itself break, tracked through `col`).
+fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, indent: integer) -> text {
   s = "";
   prev = "";
+  col = col0;
   k = a;
   while k < b {
     nd = kids[k] ?? Leaf { tok: "" };
     match nd {
       Leaf { tok } => {
         if !is_trivia_tok(tok) {
-          if sp(prev, tok) { s += " "; }
+          if sp(prev, tok) { s += " "; col += 1; }
           s += tok;
+          col += tok.size();
           prev = tok;
         }
       },
       Group { open, kids, close } => {
-        if sp(prev, open) { s += " "; }
-        s += render_group(open, kids, close, indent);
+        if sp(prev, open) { s += " "; col += 1; }
+        g = render_group(open, kids, close, col, indent);
+        s += g;
+        col = last_line_len(g, col);
         prev = close;
       },
     }
@@ -194,10 +216,16 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, indent: integer) -> 
   s
 }
 
-// A container: MULTI-LINE iff any DIRECT-CHILD element is a `{…}` object/block
-// (that is what "owns a line").  Elements are the top-level comma-delimited ranges.
-fn render_group(open: text, kids: vector<Node>, close: text, indent: integer) -> text {
+// A container.  BREAK (one element per line, trailing comma) iff any direct-child
+// element is a `{…}` object/block ("owns a line") OR the inline form does not fit the
+// width budget from column `col`.  Otherwise INLINE.  Empty -> `open close`.
+fn render_group(open: text, kids: vector<Node>, close: text, col: integer, indent: integer) -> text {
   n = len(kids);
+  if !has_real(kids, 0, n) {
+    s = open;
+    s += close;
+    return s;
+  }
   brk = false;
   k = 0;
   while k < n {
@@ -208,58 +236,69 @@ fn render_group(open: text, kids: vector<Node>, close: text, indent: integer) ->
     }
     k += 1;
   }
-  if brk {
-    s = open;
-    s += "\n";
-    start = 0;
-    k = 0;
-    while k <= n {
-      at_end = k == n;
-      is_comma = false;
-      if !at_end {
-        nd = kids[k] ?? Leaf { tok: "" };
-        match nd {
-          Leaf { tok } => { if tok == "," { is_comma = true; } },
-          Group { open, kids, close } => {},
-        }
-      }
-      if is_comma || at_end {
-        if has_real(kids, start, k) {
-          s += spaces(indent + 2);
-          s += render_range(kids, start, k, indent + 2);
-          s += ",\n";
-        }
-        start = k + 1;
-      }
-      k += 1;
-    }
-    s += spaces(indent);
-    s += close;
-    s
-  } else {
+  if !brk {
     inner = if open == "{{" { " " } else { "" };
-    s = open;
-    s += inner;
-    s += render_range(kids, 0, n, indent);
-    s += inner;
-    s += close;
-    s
+    inline = open;
+    inline += inner;
+    inline += render_range(kids, 0, n, col + open.size() + inner.size(), indent);
+    inline += inner;
+    inline += close;
+    if col + inline.size() <= width() {
+      return inline;
+    }
+    brk = true;
   }
+  s = open;
+  s += "\n";
+  start = 0;
+  k = 0;
+  while k <= n {
+    at_end = k == n;
+    is_comma = false;
+    if !at_end {
+      nd = kids[k] ?? Leaf { tok: "" };
+      match nd {
+        Leaf { tok } => { if tok == "," { is_comma = true; } },
+        Group { open, kids, close } => {},
+      }
+    }
+    if is_comma || at_end {
+      if has_real(kids, start, k) {
+        s += spaces(indent + 2);
+        s += render_range(kids, start, k, indent + 2, indent + 2);
+        s += ",\n";
+      }
+      start = k + 1;
+    }
+    k += 1;
+  }
+  s += spaces(indent);
+  s += close;
+  s
 }
 
 fn fmt_expr(src: text) -> text {
   nodes = parse(lex(src));
-  render_range(nodes, 0, len(nodes), 0)
+  render_range(nodes, 0, len(nodes), 0, 0)
 }
 
 fn main() {
   // NB: `{{`/`}}` are literal-brace escapes in these loft input strings.
+  print("[width budget = {width()}]\n\n");
   a = fmt_expr("[1, 2, 3]");
-  print("vec of numbers:\n{a}\n\n");
+  print("vec of numbers (short):\n{a}\n\n");
   b = fmt_expr("[P {{ x: 1, y: 2 }}, P {{ x: 3, y: 4 }}]");
   print("vec of objects:\n{b}\n\n");
   c = fmt_expr("P {{ x: 1, y: 2 }}");
   print("simple object:\n{c}\n\n");
   d = fmt_expr("Widget {{ pos: Coord {{ x: 1, y: 2 }}, size: 5 }}");
   print("object w/ nested object field:\n{d}\n\n");
+  e = fmt_expr("[111, 222, 333, 444, 555, 666, 777, 888, 999, 1010, 1111, 1212]");
+  print("vec of numbers (too long -> width fallback):\n{e}\n\n");
+  f = fmt_expr("[]");
+  print("empty vector:\n{f}\n\n");
+  // idempotency: re-formatting a formatted output must be a fixpoint
+  ok = (fmt_expr(a) == a) && (fmt_expr(b) == b) && (fmt_expr(c) == c)
+    && (fmt_expr(d) == d) && (fmt_expr(e) == e) && (fmt_expr(f) == f);
+  print("idempotent on all cases: {ok}\n");
 }
