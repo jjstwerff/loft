@@ -524,7 +524,10 @@ fn render_stmts(kids: vector<Node>, a: integer, b: integer, indent: integer) -> 
 
 fn format(src: text) -> text {
   nodes = parse(lex(src));
-  render_stmts(nodes, 0, len(nodes), 0)
+  body = render_stmts(nodes, 0, len(nodes), 0);
+  // canonical files end with exactly one trailing newline (render_stmts emits none);
+  // an empty file stays empty.
+  if body == "" { body } else { body + "\n" }
 }
 
 // ── validation harness ───────────────────────────────────────────────────────
