@@ -9,6 +9,7 @@
 // Const/var indices are byte-identical (no user call → no hoist).
 
 struct Ctr { n: integer }
+struct Pt { x: integer, y: integer }
 fn nxt(c: Ctr) -> integer { c.n = c.n + 1; c.n }
 
 fn main() {
@@ -30,6 +31,15 @@ fn main() {
   f = Ctr { n: 0 };
   m[nxt(e)][nxt(f)] += 100;
   assert(e.n == 1 && f.n == 1 && m[1][1] == 104, "nested: e={e.n} f={f.n} m11={m[1][1]}");
+
+  // --- STRUCT FIELD at a NONZERO offset through a call-index: the field's addressing
+  // must hoist too. Before the fix the index ran twice, so a divergent index wrote
+  // one element's field from a value read at ANOTHER element (silent corruption). The
+  // scalar/nested cases above are all offset 0, so they never exercised this. ---
+  ps = [Pt { x: 1, y: 2 }, Pt { x: 3, y: 4 }];
+  h = Ctr { n: 0 };
+  ps[nxt(h)].y += 5;
+  assert(h.n == 1 && ps[1].y == 9 && ps[0].y == 2, "struct-field: n={h.n} p1y={ps[1].y} p0y={ps[0].y}");
 
   // --- every compound operator, side-effecting index (separate counters, each → 1) ---
   a = [8, 40, 100];

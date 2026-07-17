@@ -5,9 +5,21 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN102 F2 — Compound assignment evaluates its place once (fix scope)
 
-> **Status: IMPLEMENTED + VALIDATED + LANDED (2026-07-16).** Owner ruling: evaluate the place
+> **Status: IMPLEMENTED + VALIDATED + LANDED (2026-07-16); GAP FOUND + CLOSED (2026-07-17).**
+> A code-eval sweep found the original hoist fired ONLY when the field offset was the literal
+> `Int(0)` — so a compound write to a struct field at a NONZERO offset (`w[idx()].y += 5`) still
+> emitted the index call twice and, with a divergent index, wrote one element's field from a value
+> read at another (the exact C92 corruption, both backends). A second facet: the hoist rewrote the
+> place to a temp BEFORE `validate_write`, silently bypassing #584's value-const / const-field
+> enforcement (`r.v[idx()] += 9` on a `const` field was accepted). Both closed: the hoist now fires
+> for ANY offset (rebuilding `OpGet(elem_ref, offset)` on a once-evaluated element ref for the
+> nonzero case), and it runs `validate_write` on the ORIGINAL place first (`parse_assign_op` gains a
+> `skip_validate` flag to avoid a double-fire). Regression extended with a struct-field-at-offset
+> case. Verified both backends.
+> Owner ruling: evaluate the place
 > exactly once. Decision record: [DESIGN_DECISIONS.md C92](../../DESIGN_DECISIONS.md). Fix in
-> `src/parser/expressions.rs` (`ir_has_user_call` + the `_place` RefVar hoist in `parse_assign`);
+> `src/parser/expressions.rs` (`ir_has_user_call` + the `_place` hoist in `parse_assign`, now
+> offset-general + const-check-preserving);
 > regression `tests/scripts/pln102-f2-place-once.loft`. Validated per the loft-codegen method:
 > the double-eval reproduces pre-fix on both backends (instrument-can-fail); post-fix the boundary
 > matrix (count + value + divergence + nested + all five ops + Op-wrapped calls) passes on both
