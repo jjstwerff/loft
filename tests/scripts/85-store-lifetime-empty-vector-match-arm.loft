@@ -39,14 +39,8 @@ fn take_mid(v: vector<Tok>) -> vector<Tok> {
 }
 
 fn main() {
-  full: vector<Tok> = [
-    V { n: 1 },
-    V { n: 2 },
-    V { n: 3 },
-  ];
-  one: vector<Tok> = [
-    V { n: 7 },
-  ];
+  full: vector<Tok> = [V { n: 1 }, V { n: 2 }, V { n: 3 }];
+  one: vector<Tok> = [V { n: 7 }];
   empty: vector<Tok> = [];
 
   // `..rest`: full -> tail of 2; empty -> the `[]` arm (len 0).
@@ -62,10 +56,7 @@ fn main() {
   assert(len(take_mid(empty)) == 0, "mid empty arm (+ with no run)");
 
   // rebuilt literal: exactly two -> [a,b]; else `[]`.
-  two: vector<Tok> = [
-    V { n: 4 },
-    V { n: 5 },
-  ];
+  two: vector<Tok> = [V { n: 4 }, V { n: 5 }];
   assert(len(take_two(two)) == 2, "two: rebuilt");
   assert(len(take_two(full)) == 0, "two: len 3 falls to []");
 
@@ -82,9 +73,7 @@ fn main() {
   assert(len(cap_two) == 2, "bind rebuild: {len(cap_two)}");
   // the bound copy is INDEPENDENT of the source (value semantics)
   cap_ind = match full { [(ws: V)*] => ws, _ => [] };
-  full += [
-    V { n: 9 },
-  ];
+  full += [V { n: 9 }];
   assert(len(cap_ind) == 3 && len(full) == 4, "bind copy independent of source");
 
   // Reuse axis: hit the empty-arm path repeatedly (no store leak / stale buffer).

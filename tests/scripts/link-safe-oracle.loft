@@ -6,9 +6,7 @@
 // emits ONE unambiguous `link-safe-dbg: fn=… var=a base=… safe=0|1` per cell.
 // tests/link_safe_oracle.rs pins the verdicts. See alias-where-correct-build.md § Matrix S.
 
-struct S {
-  v: vector<integer>,
-}
+struct S { v: vector<integer> }
 
 // S1 — SAFE: the source `s` outlives `a` (read after), `a` is read-only + non-escaping.
 fn s1_safe() -> integer {

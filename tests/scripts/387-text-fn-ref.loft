@@ -3,9 +3,7 @@
 // fn SIGSEGV'd (interp) or hit an arity error (the synthetic return buffer leaked
 // into the fn-ref type); a struct/vector fn hit the same arity error; a capturing
 // text lambda as a fn-value crashed (out-of-context captured-var marking).
-pub struct S {
-  v: integer,
-}
+pub struct S { v: integer }
 
 fn mk_lit(_n: integer) -> text {
   "z"

@@ -16,9 +16,7 @@
 struct Item {
   v: integer,
 }
-struct G {
-  c: vector<Item>,
-}
+struct G { c: vector<Item> }
 
 // read-only element borrower — ELIDES (xs inlined; e borrows the live g.c element)
 fn read_elem(g: G, i: integer) -> integer {

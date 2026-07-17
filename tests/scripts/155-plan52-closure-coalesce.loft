@@ -9,9 +9,7 @@
 // Pairing: diff against 02 — same logic, different containing scope.
 // Status: cluster I shape-border probe; tests closure code path.
 
-struct H {
-  items: vector<text>,
-}
+struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };

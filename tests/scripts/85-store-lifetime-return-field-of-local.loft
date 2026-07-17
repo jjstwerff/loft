@@ -61,9 +61,7 @@ struct Wrap {
   value: Num,
 }
 fn mk_num() -> Wrap {
-  return Wrap {
-    value: N { n: 77 },
-  };
+  return Wrap { value: N { n: 77 } };
 }
 fn num_val(x: Num) -> integer {
   match x {

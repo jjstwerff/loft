@@ -9,11 +9,7 @@
 //   3. conditional alias into the returned  (reassignment deep-copy)
 //   4. view of a fn-LOCAL vector returned   (materialise into an owned copy)
 
-struct M {
-  hp: integer,
-  depth: integer,
-  name: text,
-}
+struct M { hp: integer, depth: integer, name: text }
 
 fn m_none() -> M {
   M { hp: 0, depth: 0, name: "" }
@@ -48,21 +44,15 @@ fn choose(table: vector<M>, salt: integer) -> M {
 //    materialised (pre-fix: dangled into the local's freed store).
 fn pick_from_local(seed: integer) -> M {
   pool: vector<M> = [];
-  pool += [
-    M { hp: seed, depth: seed + 1, name: "local" },
-  ];
+  pool += [M { hp: seed, depth: seed + 1, name: "local" }];
   found = pool[0] ?? m_none();
   found
 }
 
 fn main() {
   t: vector<M> = [];
-  t += [
-    M { hp: 5, depth: 3, name: "rat" },
-  ];
-  t += [
-    M { hp: 8, depth: 5, name: "bat" },
-  ];
+  t += [M { hp: 5, depth: 3, name: "rat" }];
+  t += [M { hp: 8, depth: 5, name: "bat" }];
 
   for i in 0..6 {
     a = pick_local(t, i % 2 ?? 0);

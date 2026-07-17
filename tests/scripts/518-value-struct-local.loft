@@ -9,11 +9,7 @@
 // local initialised from another local already gets full copy semantics with NO extra machinery.
 // This pins that: mutating one local never disturbs the source, and loops of copies stay leak-free.
 
-value struct P {
-  name: text,
-  nums: vector<integer>,
-  v: integer,
-}
+value struct P { name: text, nums: vector<integer>, v: integer }
 
 // self (a caller DbRef, zero-copy param) bound to a local must copy, not alias the caller.
 fn tweak(self: P) -> integer {

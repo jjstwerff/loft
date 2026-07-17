@@ -18,9 +18,7 @@
 //   boolean=255  integer=i64::MIN  float/single=NaN  character='\0'
 //   text=internal-null-ptr  reference/value-enum/vector=DbRef::NULL.
 
-struct S {
-  x: integer,
-}
+struct S { x: integer }
 enum Shape {
   Circle { r: integer },
   Square { s: integer },

@@ -20,12 +20,8 @@
 // Status: known broken.  Possibly same fix surface as probe 02 (extended
 // S1 / parse-time substitution for struct-literal RHS into hidden buffer).
 
-struct P {
-  tag: integer,
-}
-struct Q {
-  tag: integer,
-}
+struct P { tag: integer }
+struct Q { tag: integer }
 struct Canvas {
   data: vector<integer>,
   w: integer,

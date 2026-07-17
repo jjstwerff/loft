@@ -21,9 +21,7 @@
 //
 // Status: known broken.  Target for fix arc.
 
-struct P {
-  tag: integer,
-}
+struct P { tag: integer }
 struct Canvas {
   data: vector<integer>,
   w: integer,

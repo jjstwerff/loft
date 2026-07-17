@@ -19,15 +19,8 @@
 // Shape 2 (composition): two borrowed-return locals from two captures in one
 // loop — the shape of crawler's build_walls phase B.
 
-struct WC {
-  x: float,
-  deg: integer,
-  n1: integer,
-}
-struct WE {
-  a: integer,
-  b: integer,
-}
+struct WC { x: float, deg: integer, n1: integer }
+struct WE { a: integer, b: integer }
 struct Graph {
   corners: vector<WC>,
   edges: vector<WE>,
@@ -38,18 +31,14 @@ fn get_or_add(g: &Graph, x: float) -> integer {
   for i in 0..len(cs0) {
     c0 = cs0[i]; if c0 != null && c0.x == x { return i; }
   }
-  g.corners += [
-    WC { x: x, deg: 0, n1: -1 },
-  ];
+  g.corners += [WC { x: x, deg: 0, n1: -1 }];
   len(g.corners) - 1
 }
 
 fn add_edge(g: &Graph, xa: float, xb: float) {
   ia = get_or_add(g, xa);
   ib = get_or_add(g, xb);
-  g.edges += [
-    WE { a: ia, b: ib },
-  ];
+  g.edges += [WE { a: ia, b: ib }];
 }
 
 fn corner_at(cs: vector<WC>, i: integer) -> WC {

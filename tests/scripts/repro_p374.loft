@@ -7,12 +7,8 @@
 // `return` path skipped block_result's tuple→synthetic-struct rewrite and
 // failed with "expected __tuple<…>, got (…)".
 
-struct A {
-  x: integer,
-}
-struct B {
-  y: integer,
-}
+struct A { x: integer }
+struct B { y: integer }
 
 fn early_return(flag: boolean) -> (A, B) {
   if flag { return(A { x: 1 }, B { y: 2 }); }

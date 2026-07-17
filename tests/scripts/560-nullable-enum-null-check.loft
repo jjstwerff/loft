@@ -17,9 +17,7 @@ enum Color {
 struct Box {
   c: Color?,
 }
-struct NN {
-  col: Color,
-}
+struct NN { col: Color }
 fn pick(present: boolean) -> Color? {
   if present { Color.Red } else { null }
 }

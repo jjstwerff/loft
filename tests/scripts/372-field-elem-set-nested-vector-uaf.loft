@@ -28,9 +28,7 @@
 // release build the reads below produce correct values, and the baselines guard
 // against over-fixing (scalar-field / whole-element / struct-call set paths).
 
-struct V {
-  a: vector<integer>,
-}
+struct V { a: vector<integer> }
 struct Cont {
   m: V,
 }
@@ -52,9 +50,7 @@ fn mk(n: integer) -> V {
 fn test_field_elem_set_vector() {
   xs: vector<Cont> = [];
   for i in 0..4 { xs += [
-    Cont {
-      m: V { a: [] },
-    },
+    Cont { m: V { a: [] } },
   ]; }
   for i in 0..4 {
     xs[i].m = V { a: [i * 10, i * 10 + 1, i * 10 + 2] };
@@ -90,14 +86,10 @@ fn test_field_elem_set_scalar_unaffected() {
 fn test_whole_elem_set_unaffected() {
   xs: vector<Cont> = [];
   for i in 0..3 { xs += [
-    Cont {
-      m: V { a: [] },
-    },
+    Cont { m: V { a: [] } },
   ]; }
   for i in 0..3 {
-    xs[i] = Cont {
-      m: V { a: [i, i, i, i] },
-    };
+    xs[i] = Cont { m: V { a: [i, i, i, i] } };
   }
   total = 0;
   for x in xs { total = total + len(x.m.a); }
@@ -109,9 +101,7 @@ fn test_whole_elem_set_unaffected() {
 fn test_field_set_from_call_unaffected() {
   xs: vector<Cont> = [];
   for i in 0..3 { xs += [
-    Cont {
-      m: V { a: [] },
-    },
+    Cont { m: V { a: [] } },
   ]; }
   for i in 0..3 { xs[i].m = mk(i + 2); }
   total = 0;

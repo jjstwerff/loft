@@ -17,12 +17,8 @@
 // Expected: PASS on both --interpret and --native.
 // Status: closes @P377 (LEAK + CORRUPTION).
 
-struct P {
-  tag: integer,
-}
-struct Q {
-  tag: integer,
-}
+struct P { tag: integer }
+struct Q { tag: integer }
 struct Canvas {
   data: vector<integer>,
   w: integer,

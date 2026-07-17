@@ -17,12 +17,8 @@ struct Word {
   text: text,
   count: integer,
 }
-struct H {
-  by: hash<Word[text]>,
-}
-struct V {
-  v: vector<integer>,
-}
+struct H { by: hash<Word[text]> }
+struct V { v: vector<integer> }
 struct Counter {
   ordered: vector<Word>,
   by_text: hash<Word[text]>,
@@ -31,7 +27,9 @@ struct Counter {
 // `{}` for a HASH field — works as an empty hash (warns toward `[]`).
 // @EXPECT_WARNING: empty `{}` is not a collection literal
 fn test_empty_braces_hash_field() {
-  c = H { by: {} };
+  c = H {
+    by: {}
+  };
   c.by += Word { text: "a", count: 7 };
   c.by += Word { text: "b", count: 9 };
   assert(
@@ -43,7 +41,9 @@ fn test_empty_braces_hash_field() {
 // `{}` for a VECTOR field — works as an empty vector (warns toward `[]`).
 // @EXPECT_WARNING: empty `{}` is not a collection literal
 fn test_empty_braces_vector_field() {
-  s = V { v: {} };
+  s = V {
+    v: {}
+  };
   s.v += [3];
   s.v += [4];
   assert(len(s.v) == 2 && s.v[0] == 3 && s.v[1] == 4, "vector braces-init: {s.v[0]},{s.v[1]}");

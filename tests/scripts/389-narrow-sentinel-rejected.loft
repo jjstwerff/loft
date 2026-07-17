@@ -9,9 +9,7 @@
 // `not null` for the full range.  A param/cast is a full-width register and is
 // NOT subject to this — only narrow FIELD stores reserve the sentinel.
 
-struct U8N {
-  x: u8,
-}
+struct U8N { x: u8 }
 
 fn main() {
   b = U8N { x: 255 };

@@ -9,19 +9,11 @@
 // dispatch_read_data (mirroring the vector arm). Value asserts catch a
 // regression; the suite leak-gate catches the record leak.
 #cwd
-struct P {
-  x: integer,
-  y: integer,
-}
+struct P { x: integer, y: integer }
 struct One {
   v: integer,
 }
-struct M {
-  a: i32,
-  b: i16,
-  c: u8,
-  d: integer,
-}
+struct M { a: i32, b: i16, c: u8, d: integer }
 struct Inner {
   a: integer,
   b: integer,
@@ -65,10 +57,7 @@ fn main() {
   // mixed widths (c2)
   {
     f = file("wr86.bin"); f#format = LittleEndian; f.set_file_size(0); m = M {
-      a: 100000,
-      b: -3000,
-      c: 250,
-      d: 9000000000,
+      a: 100000, b: -3000, c: 250, d: 9000000000
     }; f += m; f.sync();
   }
   {

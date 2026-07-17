@@ -15,9 +15,7 @@
 // Locks the fix in all three backends (interp, --native, wasm) via
 // the wrap.rs / native.rs / wrap.rs::wasm_dir trio.
 
-struct S {
-  v: vector<integer>,
-}
+struct S { v: vector<integer> }
 
 fn test_local_slice_assign() {
   // Annotated local LHS, slice from a different vector.

@@ -16,17 +16,9 @@
 // a DbRef's 12 bytes — frame drift downstream of an integer `??` followed
 // by a struct `??`, which the mixed asserts below exercise).
 
-struct P {
-  x: integer,
-  t: text,
-}
-struct S {
-  v: vector<integer>,
-  ps: vector<P>,
-}
-struct Q {
-  n: integer,
-}
+struct P { x: integer, t: text }
+struct S { v: vector<integer>, ps: vector<P> }
+struct Q { n: integer }
 
 fn main() {
   // #319: struct-literal comprehension + struct ?? reads (literal + call fallback).
@@ -38,17 +30,13 @@ fn main() {
 
   // #320: capture-append-reassign on both an integer-vector and a
   // struct-vector field, with mixed ?? reads in between.
-  s = S { v: [7], ps: [
-    P { x: 1, t: "a" },
-  ] };
+  s = S { v: [7], ps: [P { x: 1, t: "a" }] };
   w = s.v;
   w += [43];
   s.v = w;
   assert(len(s.v) == 2 && (s.v[1] ?? -1) == 43, "i320 int: {len(s.v)}");
   wp = s.ps;
-  wp += [
-    P { x: 2, t: "b" },
-  ];
+  wp += [P { x: 2, t: "b" }];
   s.ps = wp;
   p1 = s.ps[1] ?? P { x: -1, t: "?" };
   assert(len(s.ps) == 2 && p1.x == 2 && p1.t == "b", "i320 struct: {len(s.ps)} {p1.x} {p1.t}");

@@ -13,9 +13,7 @@
 //
 // Distinctive value per return path; every path checked.
 
-struct S {
-  v: integer,
-}
+struct S { v: integer }
 
 // `mk` is defined AFTER its callers — the forward-reference shape that
 // materializes a per-site `__ref_N` (a pre-parsed callee chains the

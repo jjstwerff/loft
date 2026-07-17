@@ -4,12 +4,8 @@
 // >= 2 such fns coexist" — assertions on the returned Canvas's data length and
 // element values catch that.
 
-struct P {
-  tag: integer,
-}
-struct Q {
-  tag: integer,
-}
+struct P { tag: integer }
+struct Q { tag: integer }
 struct Canvas {
   data: vector<integer>,
   w: integer,

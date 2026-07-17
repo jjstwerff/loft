@@ -113,14 +113,8 @@ fn test_struct_all_variants() {
 
 // ── Nesting and composition ─────────────────────────────────────────────────
 
-enum NX {
-  NA,
-  NB,
-}
-enum NY {
-  NP,
-  NQ,
-}
+enum NX { NA, NB }
+enum NY { NP, NQ }
 
 fn test_match_nested() {
   x = NX.NA;

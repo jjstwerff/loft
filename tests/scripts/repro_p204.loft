@@ -18,9 +18,7 @@
 // before matching, so the tail-position Call is properly captured
 // via `let __native_tail_ret: DbRef = call(...);` and returned
 // instead of the null sentinel.
-struct P204_S {
-  p204_v: vector<float>,
-}
+struct P204_S { p204_v: vector<float> }
 
 fn p204_inner(p204_a: const P204_S, p204_b: const P204_S) -> P204_S {
   P204_S { p204_v: [p204_a.p204_v[0] + p204_b.p204_v[0]] }

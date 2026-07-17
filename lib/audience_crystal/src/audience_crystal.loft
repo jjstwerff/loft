@@ -469,7 +469,11 @@ pub fn assign_cells(snap: CellSnap) -> vector<integer> {
         if dist_b > furthest { furthest = dist_b; }
       }
       this_dist = hex_distance(ax, ay, cx, cy);
-      if this_dist - furthest <= MAX_AXIS_GAP { parent[ac_s] = ac_a; joined = true; break; }
+      if this_dist - furthest <= MAX_AXIS_GAP {
+        parent[ac_s] = ac_a;
+        joined = true;
+        break;
+      }
     }
     if!joined { parent[ac_s] = ac_s; }
   }
@@ -1327,7 +1331,7 @@ pub fn crystal_mesh_to_beams(m: SegMesh, width: float) -> vector<single> {
       } else {
         // main shorter than the taper: a single point→tip triangle.
         out += beam_tri(x0, z0, x1 + ox, z1 + oz, x1 - ox, z1 - oz, r, g, b);
-      },
+      }
     } else {
       out += beam_quad(
         x0 + ox,

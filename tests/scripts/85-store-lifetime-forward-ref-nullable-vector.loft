@@ -12,9 +12,7 @@
 // resolvers through ONE home (`typedef::nullable_vector_elem`).  This guard READS the
 // fields (no append) so it stays leak-free; the @P377 append-leak is a separate issue.
 enum CV {
-  CN,
-  CI { value: integer },
-  CM { entries: vector<Entry> },
+  CN, CI { value: integer }, CM { entries: vector<Entry> }
 }
 struct Entry {
   key: CV,
@@ -30,15 +28,9 @@ fn val(c: CV) -> integer {
 fn main() {
   m = CM {
     entries: [
-      Entry {
-        key: CI { value: 1 },
-        value: CI { value: 2 },
-      },
-      Entry {
-        key: CI { value: 3 },
-        value: CI { value: 4 },
-      },
-    ],
+      Entry { key: CI { value: 1 }, value: CI { value: 2 } },
+      Entry { key: CI { value: 3 }, value: CI { value: 4 } },
+    ]
   };
   match m {
     CM { entries } => {

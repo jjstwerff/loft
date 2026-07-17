@@ -24,22 +24,19 @@ fn t1_scalar_tail(n: integer) -> integer {
 }
 
 // (1b) text closure-field capture (p227): the text-result variant of the hoist.
-struct G {
-  fmt: fn(integer) -> text,
-}
+struct G { fmt: fn(integer) -> text }
 fn t2_text_tail() -> text {
   label = "z";
-  g = G { fmt: fn(n: integer) -> text {
-    "{label}: {n}"
-  } };
+  g = G {
+    fmt: fn(n: integer) -> text {
+      "{label}: {n}"
+    }
+  };
   g.fmt(42)
 }
 
 // (2) &-place tails (pln87 L3/L4): returning the ref derefs AFTER the frees.
-struct S {
-  a: integer,
-  b: integer,
-}
+struct S { a: integer, b: integer }
 fn t3_field_ref() -> integer {
   s = S { a: 3, b: 7 };
   r = &s.b;
@@ -58,9 +55,7 @@ fn t4_elem_ref() -> integer {
 struct Counter {
   n: integer not null,
 }
-struct K {
-  cb: fn(text),
-}
+struct K { cb: fn(text) }
 fn t5_fire(k: K, p: text) {
   c = k.cb; c(p);
 }
@@ -69,9 +64,11 @@ fn t5_fire_direct(k: K, p: text) {
 }
 fn t5_cross_fn() -> integer {
   w = Counter { n: 0 };
-  k = K { cb: fn(p: text) {
-    w.n = w.n + 1;
-  } };
+  k = K {
+    cb: fn(p: text) {
+      w.n = w.n + 1;
+    }
+  };
   t5_fire(k, "a");
   t5_fire_direct(k, "b");
   w.n

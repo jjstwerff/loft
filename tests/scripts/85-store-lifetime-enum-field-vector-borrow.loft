@@ -9,11 +9,7 @@
 // (`tail_borrows_arg`) through CopyBorrow → copy_borrow_tail_into_retbuf, the
 // same copy the struct-field tail (#415) and whole-arg tail (a2) already use.
 
-struct M {
-  hp: integer,
-  depth: integer,
-  name: text,
-}
+struct M { hp: integer, depth: integer, name: text }
 enum Cell {
   Empty,
   Filled { items: vector<M> },
@@ -25,9 +21,7 @@ fn m_none() -> M {
 
 fn filler(n: integer) -> integer {
   es: vector<M> = [];
-  for j in 0..n { es += [
-    M { hp: j, depth: j, name: "RECYCLE-{j}" },
-  ]; }
+  for j in 0..n { es += [M { hp: j, depth: j, name: "RECYCLE-{j}" }]; }
   return len(es);
 }
 
@@ -41,12 +35,8 @@ fn items_of(c: Cell) -> vector<M> {
 
 fn main() {
   inner: vector<M> = [];
-  inner += [
-    M { hp: 1, depth: 1, name: "a" },
-  ];
-  inner += [
-    M { hp: 2, depth: 2, name: "b" },
-  ];
+  inner += [M { hp: 1, depth: 1, name: "a" }];
+  inner += [M { hp: 2, depth: 2, name: "b" }];
   c = Filled { items: inner };
 
   for i in 0..6 {

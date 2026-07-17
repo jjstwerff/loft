@@ -10,9 +10,7 @@
 // a non-empty-literal default in LEN (`len(expr ?? [99])`), and a plain (non-
 // nested) vector-field default.  (The dense/nullable LEN-empty + for-loop cells
 // stay native-E0308 — a separate, pre-existing @PLN25 branch-unification gap.)
-struct B {
-  v: vector<integer>,
-}
+struct B { v: vector<integer> }
 
 fn main() {
   out: vector<vector<integer>> = [[1, 2], [3]];

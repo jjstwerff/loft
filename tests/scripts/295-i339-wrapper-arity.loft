@@ -12,10 +12,7 @@
 // asserted on the short call.  Fixed by freezing signatures after pass 1
 // (a pass-2-only promotion falls back to the copy-return path).
 
-struct W339 {
-  items: vector<integer>,
-  tag: integer,
-}
+struct W339 { items: vector<integer>, tag: integer }
 
 // Caller parsed BEFORE the wrapper.
 fn use_wrap() -> integer {

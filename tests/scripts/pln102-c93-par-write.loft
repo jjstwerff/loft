@@ -12,9 +12,7 @@
 // @EXPECT_ERROR: worker writevec writes captured `v`
 // @EXPECT_ERROR: worker outer → bump writes captured `s`
 
-struct S {
-  n: integer,
-}
+struct S { n: integer }
 fn writeit(e: S) -> integer {
   e.n = 5; e.n
 } // writes the struct element
@@ -29,19 +27,13 @@ fn outer(e: S) -> integer {
 } // transitive element write
 
 fn use_direct() {
-  rows: vector<S> = [
-    S { n: 1 },
-    S { n: 2 },
-  ]; for e in rows par(r = writeit(e), 2) {}
+  rows: vector<S> = [S { n: 1 }, S { n: 2 }]; for e in rows par(r = writeit(e), 2) {}
 }
 fn use_vec() {
   vv: vector<vector<integer>> = [[1], [2]]; for v in vv par(r = writevec(v), 2) {}
 }
 fn use_indirect() {
-  rows: vector<S> = [
-    S { n: 1 },
-    S { n: 2 },
-  ]; for e in rows par(r = outer(e), 2) {}
+  rows: vector<S> = [S { n: 1 }, S { n: 2 }]; for e in rows par(r = outer(e), 2) {}
 }
 
 fn main() {}

@@ -11,9 +11,7 @@
 // Fix: in copy_ref, set 0x8000 only for a struct-returning CALL source (an
 // unowned temporary), never for a Block literal (which owns a scope free).
 
-struct V {
-  a: vector<integer>,
-}
+struct V { a: vector<integer> }
 struct Cont {
   m: V,
 }
@@ -32,9 +30,7 @@ fn mkc(n: integer) -> Cont {
 fn test_p313_inline_literal_elem_set() {
   xs: vector<Cont> = [];
   for i in 0..4 { xs += [
-    Cont {
-      m: V { a: [] },
-    },
+    Cont { m: V { a: [] } },
   ]; }
   for i in 0..4 {
     cm = mk(30);
@@ -51,9 +47,7 @@ fn test_p313_inline_literal_elem_set() {
 fn test_p313_struct_call_elem_set() {
   xs: vector<Cont> = [];
   for i in 0..5 { xs += [
-    Cont {
-      m: V { a: [] },
-    },
+    Cont { m: V { a: [] } },
   ]; }
   for i in 0..5 { xs[i] = mkc(7); }
   total = 0;
@@ -66,9 +60,7 @@ fn test_p313_struct_call_elem_set() {
 fn test_p313_field_and_append_unaffected() {
   xs: vector<Cont> = [];
   for i in 0..3 { xs += [
-    Cont {
-      m: V { a: [] },
-    },
+    Cont { m: V { a: [] } },
   ]; }
   for i in 0..3 {
     xs[i].m = V { a: [1, 2, 3, 4] };

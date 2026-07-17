@@ -33,9 +33,7 @@ fn main() {
     Id { x },
   ] => x * 10 + c.pos, _ => -1 }; // Id.x=7 at pos 1, advance to 2
   assert(r2 == 72, "Id x=7 -> 72: {r2}");
-  r3 = match c { [
-    LP { x },
-  ] => x * 10 + c.pos, _ => -1 }; // LP.x=3 at pos 2, advance to 3
+  r3 = match c { [LP { x }] => x * 10 + c.pos, _ => -1 }; // LP.x=3 at pos 2, advance to 3
   assert(r3 == 33, "LP x=3 -> 33: {r3}");
 
   // At end: no match, `pos` unchanged.

@@ -14,9 +14,7 @@
 // the fix widens both `??` branches to `i64` so the element-coalesce typechecks.
 // This script therefore runs on BOTH backends (no longer in SCRIPTS_NATIVE_SKIP).
 
-struct V {
-  a: vector<u8>,
-}
+struct V { a: vector<u8> }
 
 fn isum(v: vector<u8>) -> integer {
   s = 0; for i in 0..len(v) { s = s + (v[i] ?? 0); } s

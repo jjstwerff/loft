@@ -12,9 +12,7 @@
 // AND an adjacent real value does NOT), so it pins the *specific* pattern, not just
 // "some null exists". Runs on both backends via the wrap harness.
 
-struct U8N {
-  x: u8?,
-}
+struct U8N { x: u8? }
 struct BoolN {
   b: boolean?,
 }

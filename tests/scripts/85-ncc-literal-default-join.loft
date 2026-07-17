@@ -15,14 +15,8 @@
 // returned deps type the join as a pure borrow of `t`) — the deps-carried-join
 // completion, D-own-1/D-own-2 territory.  Native is clean on all paths.
 
-struct N {
-  vs: vector<integer>,
-  id: integer,
-}
-struct E {
-  hp: integer not null,
-  name: text,
-}
+struct N { vs: vector<integer>, id: integer }
+struct E { hp: integer not null, name: text }
 fn e_default() -> E {
   E { hp: 0, name: "" }
 }
@@ -48,13 +42,9 @@ fn collect_n(t: vector<N>) -> vector<N> {
 
 fn main() {
   tn: vector<N> = [];
-  for k in 0..3 { tn += [
-    N { vs: [k, k + 1], id: k },
-  ]; }
+  for k in 0..3 { tn += [N { vs: [k, k + 1], id: k }]; }
   te: vector<E> = [];
-  for k in 0..3 { te += [
-    E { hp: k, name: "x" },
-  ]; }
+  for k in 0..3 { te += [E { hp: k, name: "x" }]; }
   acc = 0;
   for i in 0..6 {
     a = pick_n(tn, i % 3);

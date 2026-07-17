@@ -15,9 +15,7 @@ struct Ent {
   ck: integer,
   v: integer,
 }
-struct F {
-  h: hash<Ent[ck]>,
-}
+struct F { h: hash<Ent[ck]> }
 
 fn mk() -> hash<Ent[ck]> {
   r: hash<Ent[ck]> = [];

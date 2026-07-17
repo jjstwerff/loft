@@ -5,11 +5,7 @@
 // mon_choose / m_one shape leaked ~3 per call, 65k-exhausting long runs).
 // The wrap suite's leak gate enforces the zero-leak expectation here.
 
-struct M {
-  hp: integer,
-  depth: integer,
-  name: text,
-}
+struct M { hp: integer, depth: integer, name: text }
 
 fn m_none() -> M {
   M { hp: 0, depth: 0, name: "" }
@@ -17,15 +13,9 @@ fn m_none() -> M {
 
 fn m_table() -> vector<M> {
   t: vector<M> = [];
-  t += [
-    M { hp: 5, depth: 3, name: "rat" },
-  ];
-  t += [
-    M { hp: 8, depth: 5, name: "bat" },
-  ];
-  t += [
-    M { hp: 12, depth: 7, name: "orc" },
-  ];
+  t += [M { hp: 5, depth: 3, name: "rat" }];
+  t += [M { hp: 8, depth: 5, name: "bat" }];
+  t += [M { hp: 12, depth: 7, name: "orc" }];
   t
 }
 

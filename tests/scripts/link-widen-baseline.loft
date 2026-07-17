@@ -10,9 +10,7 @@
 // The safety cells are the UAF targets: a wrong link dangles, caught by the leak gates
 // (LOFT_POISON / LOFT_NATIVE_LEAK_CHECK) that tests/alias_link_baseline.rs runs. Both backends.
 
-struct S {
-  v: vector<integer>,
-}
+struct S { v: vector<integer> }
 
 // --- Matrix S (safety): the source must outlive the local; a wrong link would UAF ---
 

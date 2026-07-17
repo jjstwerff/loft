@@ -61,10 +61,7 @@ fn pickbox(c: boolean) -> Box {
   }
 }
 
-struct P {
-  x: integer,
-  y: integer,
-}
+struct P { x: integer, y: integer }
 fn pickp3(n: integer) -> P {
   if n == 0 {
     P { x: 1, y: 2 }

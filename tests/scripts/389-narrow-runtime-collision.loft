@@ -14,11 +14,7 @@
 // plain `u8` field stores + reads `255` fine). This tests the nullable case, which is
 // what "nullable narrow field" above means; it passes both gate-OFF and F2-ON.
 
-struct B {
-  x: u8?,
-} struct S {
-  z: u16?,
-}
+struct B { x: u8? } struct S { z: u16? }
 
 fn to_u8(v: integer) -> u8 {
   (v&255) as u8

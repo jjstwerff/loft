@@ -19,14 +19,7 @@ struct Inner {
   kind: text,
 }
 struct G8 {
-  c1: integer,
-  c2: integer,
-  c3: integer,
-  c4: integer,
-  c5: integer,
-  c6: integer,
-  c7: integer,
-  cv: vector<Inner>,
+  c1: integer, c2: integer, c3: integer, c4: integer, c5: integer, c6: integer, c7: integer, cv: vector<Inner>
 }
 struct IntVec8 {
   d1: integer,

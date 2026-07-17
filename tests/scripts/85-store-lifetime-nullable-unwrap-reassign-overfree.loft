@@ -15,11 +15,7 @@
 // view). Drives the same shape under allocation pressure that recycles a wrongly
 // freed slot, asserting both the subject table and the returned value stay intact.
 
-struct M {
-  hp: integer,
-  depth: integer,
-  name: text,
-}
+struct M { hp: integer, depth: integer, name: text }
 
 fn m_none() -> M {
   M { hp: 0, depth: 0, name: "" }
@@ -57,17 +53,13 @@ fn choose(t: vector<M>, salt: integer) -> M {
 
 fn filler(n: integer) -> integer {
   es: vector<M> = [];
-  for j in 0..n { es += [
-    M { hp: j, depth: j, name: "RECYCLE-{j}" },
-  ]; }
+  for j in 0..n { es += [M { hp: j, depth: j, name: "RECYCLE-{j}" }]; }
   return len(es);
 }
 
 fn main() {
   t: vector<M> = [];
-  for k in 0..8 { t += [
-    M { hp: k, depth: k, name: "mon{k}" },
-  ]; }
+  for k in 0..8 { t += [M { hp: k, depth: k, name: "mon{k}" }]; }
   for i in 0..24 {
     r = choose(t, i);
     acc = 0;

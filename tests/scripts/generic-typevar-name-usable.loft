@@ -7,12 +7,9 @@
 // (which previously divided by zero on `vector<T>` construction).  Cross-mode.
 
 enum T {
-  Circle { r: integer },
-  Square { pad: integer, r: integer },
+  Circle { r: integer }, Square { pad: integer, r: integer }
 }
-struct U {
-  label: text,
-}
+struct U { label: text }
 
 fn radius(shapes: vector<T>) -> integer {
   match shapes { [(Circle { r } |Square { r })] => r, _ => -1, }
@@ -30,9 +27,7 @@ fn main() {
   assert(radius(b) == 7, "Square r (own offset): {radius(b)}");
 
   // a user `struct U` in a vector, alongside
-  us: vector<U> = [
-    U { label: "hi" },
-  ];
+  us: vector<U> = [U { label: "hi" }];
   assert(us[0].label == "hi", "struct U field");
 
   // the stdlib generics that USE <T> internally still work in the same program

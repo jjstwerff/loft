@@ -15,9 +15,7 @@ enum Color {
   Green,
   Blue,
 }
-struct S {
-  x: integer,
-}
+struct S { x: integer }
 struct Box {
   y: integer,
   hit: boolean,

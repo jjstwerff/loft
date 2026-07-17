@@ -78,10 +78,7 @@ fn main() {
     Op { o: 1 },
   ]) == -1, "plusrest no num -> _: {plusrest([Op { o: 1 }])}");
 
-  pts: vector<Pt> = [
-    P { x: 1, y: 10 },
-    P { x: 2, y: 20 },
-  ];
+  pts: vector<Pt> = [P { x: 1, y: 10 }, P { x: 2, y: 20 }];
   assert(twofields(pts) == 3030, "twofields sx=3 sy=30: {twofields(pts)}");
 
   ws: vector<Tok> = [

@@ -10,9 +10,7 @@
 // silent data loss on the interpreter, use-after-free SIGSEGV once the store
 // was reused under heavier churn.
 
-struct V {
-  a: vector<integer>,
-}
+struct V { a: vector<integer> }
 struct Cont {
   k: integer,
   m: V,

@@ -16,9 +16,7 @@
 // shifts to a default-init Canvas being orphaned, AND whether the leak
 // count tracks if-firings.
 
-struct P {
-  tag: integer,
-}
+struct P { tag: integer }
 struct Canvas {
   data: vector<integer>,
   w: integer,

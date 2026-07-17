@@ -18,10 +18,7 @@ enum Tok {
   Ident { name: text },
   Num { value: integer },
 }
-struct P {
-  x: integer,
-  y: integer,
-}
+struct P { x: integer, y: integer }
 
 // ── scalar ──────────────────────────────────────────────────────────────────
 fn tail_i(v: vector<integer>) -> vector<integer> {
@@ -97,11 +94,7 @@ fn main() {
   assert(rest_len_t(["solo"]) == 0, "text single -> empty rest");
 
   // plain struct + independence: mutate rest, subject stays intact
-  src = [
-    P { x: 1, y: 1 },
-    P { x: 2, y: 2 },
-    P { x: 3, y: 3 },
-  ];
+  src = [P { x: 1, y: 1 }, P { x: 2, y: 2 }, P { x: 3, y: 3 }];
   rp = tail_p(src);
   assert(len(rp) == 2 && rp[0].x == 2 && rp[1].x == 3, "struct rest: {rp[0].x},{rp[1].x}");
   rp[0].x = 99;

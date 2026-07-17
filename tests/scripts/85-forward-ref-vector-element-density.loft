@@ -19,9 +19,7 @@
 
 // Forward-referenced, recursive, DENSE element (the #465 shape).
 enum V {
-  CNull,
-  CInt { value: integer },
-  CMap { entries: vector<Entry> },
+  CNull, CInt { value: integer }, CMap { entries: vector<Entry> }
 }
 struct Entry {
   key: V,

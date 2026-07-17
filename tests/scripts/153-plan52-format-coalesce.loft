@@ -21,9 +21,7 @@
 // Pairing: diff against 02 — same `??` inside, different consumer.
 // Status: cluster III canonical probe.
 
-struct H {
-  items: vector<text>,
-}
+struct H { items: vector<text> }
 
 fn main() {
   h = H { items: [] };

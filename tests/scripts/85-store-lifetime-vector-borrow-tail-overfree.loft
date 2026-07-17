@@ -13,10 +13,7 @@
 // 85-store-lifetime-vector-view-call-bind-overfree, which was native-only).
 // The EXPLICIT-return form was already correct; this guards the IMPLICIT tail.
 
-struct M {
-  hp: integer,
-  name: text,
-}
+struct M { hp: integer, name: text }
 struct Box {
   rows: vector<M>,
 }
@@ -27,20 +24,14 @@ fn view_rows(b: Box) -> vector<M> {
 
 fn filler(n: integer) -> integer {
   es: vector<M> = [];
-  for j in 0..n { es += [
-    M { hp: j, name: "RECYCLE-{j}" },
-  ]; }
+  for j in 0..n { es += [M { hp: j, name: "RECYCLE-{j}" }]; }
   return len(es);
 }
 
 fn main() {
   b = Box { rows: [] };
-  b.rows += [
-    M { hp: 5, name: "rat" },
-  ];
-  b.rows += [
-    M { hp: 8, name: "bat" },
-  ];
+  b.rows += [M { hp: 5, name: "rat" }];
+  b.rows += [M { hp: 8, name: "bat" }];
 
   for i in 0..4 {
     r = view_rows(b); // r := independent copy of b.rows
