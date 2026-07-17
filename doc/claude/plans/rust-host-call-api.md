@@ -1,6 +1,8 @@
 # Design — a Rust → loft host-call API (`loft::host`)
 
-> Status: DESIGN (grounded in code, not yet built). Driver: `loft fmt` needs to call the
+> Status: **P1 + P2 SHIPPED** (`src/host.rs`, `State::execute_host`, `tests/host_call.rs`,
+> `loft fmt`). P3 (struct/vector/enum returns) deferred until a consumer needs it — the
+> language server is the expected driver. Driver: `loft fmt` needs to call the
 > loft-written formatter's `format(text) -> text` from Rust. But the gap is general —
 > embedding loft, tool integration, and testing all want a first-class "call a loft
 > function by name with typed args, get a typed return, errors as `Result`" surface.

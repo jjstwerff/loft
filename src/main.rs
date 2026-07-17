@@ -177,6 +177,9 @@ fn print_help() {
         "                                (inspect/edit/step the live frame; :help at the prompt)"
     );
     println!("  check <file>                  same as --check <file>");
+    println!("  fmt [--check|--write] <file…> format loft source (parser-driven, written in loft)");
+    println!("                                default prints; --write rewrites in place; --check");
+    println!("                                exits non-zero if unformatted (CI gate); `-` = stdin");
     println!(
         "  sandbox-check <file>          report the @PLN86 sandbox admission verdict and STOP"
     );
@@ -4009,6 +4012,125 @@ fn run_layout_command(sub: &str, file: &str) -> i32 {
     }
 }
 
+/// `loft fmt [--check|--write] <file…>` — the parser-driven formatter, written in
+/// loft (`tools/fmt/whole.loft`) and invoked via the `loft::host` call API.  Default
+/// prints the formatted source; `--write` rewrites in place (reporting changes);
+/// `--check` exits non-zero if any file is not already formatted (a CI gate).  `-`
+/// reads stdin → stdout.  The formatter source is embedded in the binary.
+fn run_fmt_command(args: &[String]) -> i32 {
+    use loft::host::{Program, Value};
+    const FMT_SRC: &str = include_str!("../tools/fmt/whole.loft");
+
+    let mut check = false;
+    let mut write = false;
+    let mut files: Vec<String> = Vec::new();
+    for a in args {
+        match a.as_str() {
+            "--check" => check = true,
+            "--write" | "-w" => write = true,
+            "-" => files.push("-".to_string()),
+            s if s.starts_with('-') => {
+                eprintln!("loft fmt: unknown option `{s}`");
+                return 1;
+            }
+            s => files.push(s.to_string()),
+        }
+    }
+    if files.is_empty() {
+        eprintln!("loft fmt: usage: loft fmt [--check|--write] <file…>   (`-` = stdin→stdout)");
+        return 1;
+    }
+    if check && write {
+        eprintln!("loft fmt: --check and --write are mutually exclusive");
+        return 1;
+    }
+
+    // Resolve the stdlib `default/` dir next to the binary (release layout), else the
+    // source tree — same resolution as `run_layout_command`.
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    let default_dir = exe_dir.join("../default");
+    let default_str = if default_dir.exists() {
+        default_dir.to_string_lossy().to_string()
+    } else {
+        format!("{}/default", project_dir())
+    };
+    let mut prog = match Program::from_source_with_stdlib(FMT_SRC, &default_str) {
+        Ok(p) => p,
+        Err(e) => {
+            eprintln!("loft fmt: could not load formatter: {e}");
+            return 1;
+        }
+    };
+
+    let mut exit = 0;
+    let mut unformatted: Vec<String> = Vec::new();
+    for file in &files {
+        let src = if file == "-" {
+            use std::io::Read;
+            let mut s = String::new();
+            if std::io::stdin().read_to_string(&mut s).is_err() {
+                eprintln!("loft fmt: cannot read stdin");
+                return 1;
+            }
+            s
+        } else {
+            match std::fs::read_to_string(file) {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("loft fmt: cannot read {file}: {e}");
+                    exit = 1;
+                    continue;
+                }
+            }
+        };
+        let formatted = match prog.call("format", &[Value::Text(src.clone())]) {
+            Ok(v) => match v.into_text() {
+                Ok(t) => t,
+                Err(e) => {
+                    eprintln!("loft fmt: {file}: {e}");
+                    exit = 1;
+                    continue;
+                }
+            },
+            Err(e) => {
+                eprintln!("loft fmt: {file}: {e}");
+                exit = 1;
+                continue;
+            }
+        };
+        if check {
+            if formatted != src {
+                unformatted.push(file.clone());
+            }
+        } else if write && file != "-" {
+            if formatted != src {
+                if let Err(e) = std::fs::write(file, &formatted) {
+                    eprintln!("loft fmt: cannot write {file}: {e}");
+                    exit = 1;
+                    continue;
+                }
+                println!("formatted {file}");
+            }
+        } else {
+            print!("{formatted}");
+        }
+    }
+    if check && !unformatted.is_empty() {
+        eprintln!(
+            "loft fmt: {} file(s) need formatting:",
+            unformatted.len()
+        );
+        for f in &unformatted {
+            eprintln!("  {f}");
+        }
+        return 1;
+    }
+    exit
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
@@ -4938,6 +5060,9 @@ fn main() {
                 std::process::exit(1);
             };
             std::process::exit(run_layout_command(&sub, &file));
+        } else if a == "fmt" {
+            // Parser-driven formatter (loft-written, via the host-call API).
+            std::process::exit(run_fmt_command(&argv[i..]));
         } else if a == "publish" {
             // @PLAN12 Phase 6.16 — author-side publish helper.
             // Repackages locally (deterministic), verifies the
