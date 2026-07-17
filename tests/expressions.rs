@@ -1812,6 +1812,22 @@ fn sorted_subscript_is_key_addressed_not_positional() {
     .result(Value::Int(500200));
 }
 
+/// @PLN109 pre-step: loft's number lexer accepts the full IEEE/JSON exponent
+/// forms — uppercase `E` and a `+` sign — not just `e` / `e-`. This lets loft's
+/// own lexer parse valid JSON numbers when the hand-rolled JSON scanner is
+/// retired, and is harmless for normal loft (no `<digit>E<digit>` literal existed
+/// before; hex `0x1E` is consumed separately).
+#[test]
+fn number_exponent_accepts_uppercase_e_and_plus_sign() {
+    code!(
+        "fn ok() -> boolean {
+           1E5 == 1e5 && 1e+5 == 1e5 && 1.5E3 == 1500.0 && 2.5e-2 == 0.025 && 1E+2 == 100.0
+         }"
+    )
+    .expr("ok()")
+    .result(Value::Boolean(true));
+}
+
 // ── A8.3 — Partial-key match iterator ───────────────────────────────────────
 
 /// A8.3: `idx[k1]` on a multi-key index iterates all elements matching k1.
