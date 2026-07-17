@@ -111,3 +111,42 @@ fn formatter_dogfood() {
     assert!(out.contains("struct P {"), "got: {out:?}");
     assert!(out.contains("x: integer,"), "got: {out:?}");
 }
+
+#[test]
+fn formatter_enum_variant_if_body_is_a_block() {
+    // Regression: `if x == Enum.Variant { <stmts> }` — the CamelCase variant name
+    // (`Directory`) reached via `.` must NOT be mistaken for a `Directory { … }` struct
+    // literal.  When it was, the if-body was rendered as a COMMA container and the last
+    // statement got a stray trailing comma (`walk_into(cp, out);,`), which is invalid
+    // loft.  The formatter mirrors the compiler here: a dotted name (`Format.Directory`)
+    // is an enum-value access, never a struct construction (see objects.rs::parse_object,
+    // gated on `Name` being a Struct/EnumValue type + the next token being `{`).
+    let src = std::fs::read_to_string("tools/fmt/whole.loft").expect("formatter source");
+    let mut p = Program::from_source(&src).expect("formatter compiles");
+    let input =
+        "enum E { A, B }\nfn f(m: E) {\n  if m == E.A {\n    x = 1;\n    print(\"{x}\");\n  }\n}\n";
+    let out = p
+        .call("format", &[Value::Text(input.into())])
+        .unwrap()
+        .into_text()
+        .unwrap();
+    // No stray comma anywhere (the exact bug symptom).
+    assert!(
+        !out.contains(";,"),
+        "stray comma from struct-lit misclassification: {out:?}"
+    );
+    // The body is a real multi-statement BLOCK: each statement on its own line, not
+    // comma-joined and not collapsed onto one line.
+    assert!(
+        out.contains("x = 1;\n"),
+        "if-body statement 1 on its own line: {out:?}"
+    );
+    assert!(
+        out.contains("print(\"{x}\");"),
+        "if-body statement 2 preserved: {out:?}"
+    );
+    assert!(
+        !out.contains("x = 1; print"),
+        "multi-statement if-body must not be inlined as a container: {out:?}"
+    );
+}

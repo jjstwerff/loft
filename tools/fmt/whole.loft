@@ -339,10 +339,14 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
         // A struct/enum DEFINITION (`prev2` is `struct`/`enum`) is a container regardless of
         // the name's case — `struct IST { … }` must still expand, even though `IST` is not
         // CamelCase.  A struct LITERAL is `CamelName { … }` in value position.  Everything else
-        // (`if x == KIND_MAIN { … }`, `-> Type { … }`, a bare `{ … }`) is a BLOCK.
+        // (`if x == KIND_MAIN { … }`, `if x == Enum.Variant { … }`, `-> Type { … }`, a bare
+        // `{ … }`) is a BLOCK.  A CamelCase name reached via `.` (`Format.Directory`) is an
+        // enum-value access ending a condition, NOT a struct literal — loft never constructs a
+        // struct through a dotted name, and a data variant is built bare (`Circle { … }`).
         is_struct_def = prev2 == "struct" || prev2 == "enum";
         is_iface_def = prev2 == "interface";
-        is_struct_lit = is_camel(prev) && prev2 != "->" && !is_struct_def && !is_iface_def;
+        is_struct_lit =
+          is_camel(prev) && prev2 != "->" && prev2 != "." && !is_struct_def && !is_iface_def;
         g = "";
         if open == "{{" && (is_struct_def || is_struct_lit) {
           g = render_container(open, kids, close, col, indent, is_struct_def);
