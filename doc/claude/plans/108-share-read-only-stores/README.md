@@ -9,9 +9,13 @@ Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:lo
 
 ## Status
 
-**Live progress: S0 (bench) ✓, S1 (audit) ✓, S2 (deferred — not needed), S3 (discard borrow
-behind `LOFT_PAR_SHARE`) ✓ & gate-green. Next: S4→S6 (audit-follow-through + ASan + TSan) to
-harden the discard path, then S9 (extend to the queue family, where routing's win is measurable).**
+**Live progress: S0 (bench) ✓, S1 (audit) ✓, S2 (deferred — not needed), S3 (discard borrow) ✓
+& gate-green, S9 (queue borrow) wired & gate-green — but ⛔ the WIN IS DISPROVEN for these
+shapes: `clone_for_worker` is NOT called for a fused for-par over a range/vector (reduce OR
+collect) in loft2's interpreter, yet par_ms still grows with heap. The number did not move with
+`LOFT_PAR_SHARE`. Per routing's own rule ("if the number doesn't move, the model is wrong — stop
+and re-measure"), the arc is PAUSED pending re-measurement of where the copy cost actually lives
+(see § Model failure). Do NOT claim PLN108 helps until that is answered.**
 Cherry-picked from the sibling `../loft` checkout into this working tree (the named code is
 in sync:
 `clone_for_worker` `allocation.rs:1277`, `borrow_locked_for_light_worker` `store.rs:1292`,
@@ -166,7 +170,7 @@ building on it).
 | **S6** | **TSan with the flag ON + positive control** (@PLN54 S2: `-Zbuild-std` + target-scoped `-Zsanitizer=thread`) over the threading suite — the shared-read race axis. Include a **temporarily-patched positive control** (let a worker write a parent) and confirm **TSan FIRES**, then revert it, so the clean run is non-vacuous. | clean TSan with flag ON **AND** the positive control fires when armed. | flag off |
 | **S7** | **Bench the win vs S0** — re-run S0 with `LOFT_PAR_SHARE=1`. | `par_ms` no longer grows with unrelated heap; `par` scales *down* with threads (inversion gone). | flag off |
 | **S8** | **Flip `LOFT_PAR_SHARE` default-ON for `discard`** once S5+S6+S7 pass. | full suite **both backends** green with default-on. | flip default back to OFF |
-| **S9** | **Extend one dispatcher at a time** — Queue family, then heavy. For EACH: repeat S1(audit)→S3(wire)→S5(ASan)→S6(TSan)→S7(bench) for that dispatcher before enabling it. Unify `run_parallel_light` (`parallel.rs:1451`) into the `parallel_workers` template (`parallel.rs:99`). | per-dispatcher: same gate set green before its default-on. | per-dispatcher flag/default |
+| **S9** ⛔ | **Extend to the Queue family.** `run_parallel_queue_shared` wired behind the flag (thread::scope + `clone_for_light_worker`, ordered `Vec<u64>`). Threading **47/47** flag OFF+ON. **But the WIN is DISPROVEN** — the routing probe's fused for-par never reaches `run_parallel_queue`/`clone_for_worker` (§ Model failure). PAUSED; re-measure before extending further. | gate green, **win NOT shown** | unset flag (default) |
 | **S10** | **Decide A-vs-B.** If S1's audit or any S6 TSan run showed the contract-carried safety (A) is fragile (a real mid-par mutation, a race the write-panic can't catch), escalate to **Option B** (`Arc<Store>`) as its own follow-on. Otherwise A stands. Record in `DESIGN_DECISIONS.md`. | decision written to `DESIGN_DECISIONS.md` with the evidence. | — |
 
 ### S1 audit — no dispatcher writes a parent between spawn and join (2026-07-17)
@@ -206,6 +210,41 @@ parent store, so the borrow checker already guarantees "parent unwritten during 
 4. **No blocker found → S3 is GO.** Nothing needs moving before a spawn. `run_parallel_discard`
    is the ideal first target: `&Stores`, no adoption, no stitch — the borrow only has to make
    `clone_for_worker` a `borrow` and keep the read-only/​write-panic guard.
+
+## ⛔ Model failure — the copy cost is NOT where the plan assumed (2026-07-17)
+
+S9 wired `run_parallel_queue_shared` (the borrow variant of `run_parallel_queue`) behind the
+flag, gated correctly (threading 47/47 flag OFF *and* ON). **But it moves no number**, and
+tracing showed why:
+
+- **`clone_for_worker` is never called** for the shapes the S0 / routing probe uses — a *fused*
+  for-par (`for a in xs par(b = spin(a), N) { … }`) over a range OR a vector, whether the body
+  reduces (`total += b`) or collects (`out += [b]`). Traces on `clone_for_worker`,
+  `clone_locked_for_worker`, `clone_for_light_worker`, every `run_parallel_*` dispatcher, and the
+  native `n_parallel_queue/_fold/_narrow` entries **all stayed silent** for these programs.
+- Yet **par_ms still grows with the unrelated heap** (S0: 0→122 MB ⇒ 5→231 ms) and par **is**
+  parallel (16× over sequential). So the growth is real but it is **not** the per-worker
+  store byte-copy PLN108 targets — it is something else (allocator pressure under a large live
+  heap, a per-worker setup cost, or a path that shares stores already).
+- `run_parallel_queue` (which S9 borrows) is reached only by **value-position** par
+  (`let r = parallel_for(…)`), NOT the fused for-par the probe/routing use. The fused path
+  streams through a different mechanism that the traces show does not clone.
+
+**Consequence.** The plan's load-bearing premise — *"the live par dispatch `clone_for_worker`s a
+byte-copy of every active parent store per worker"* — does **not** hold for these interpreter
+shapes. S3/S9's borrow is correct code that eliminates a copy **that isn't happening here**, so it
+cannot deliver the routing win as-is. This is exactly the design-protocol failure mode: a clean
+invariant assumed, not probed, that the first real measurement breaks.
+
+**Corrected next step (re-measure, do not build):**
+1. Identify the ACTUAL par path the routing probe takes — instrument from `n_parallel_*` down and
+   find what scales with heap (is it `--native`'s `n_parallel_queue_native`, a value-position par,
+   allocator pressure, or a store op O(heap)?). Routing's original measurement may have been on
+   `--native` (native par_ms also grew: 0/30/61 MB ⇒ 1/89/102) — the native clone is a **separate**
+   path from the interpreter borrow S3/S9 wired.
+2. Only once the copy is located and confirmed on-path does the borrow (S3/S9) or a native
+   analogue become the fix. Re-point the plan there; the current discard/queue borrows stay as
+   correct-but-dormant infra behind the default-OFF flag.
 
 ### S2/S3 notes (2026-07-17)
 
