@@ -16,9 +16,12 @@ the DATA-RACE GATE IS GREEN. `LOFT_PAR_SHARE=1` turns the S0 queue probe's per-w
 unrelated heap (0/61/122 MB ⇒ OFF 5/107/211 ms → ON 3/4/4 ms, 53× at 122 MB), `total` identical
 (383995). ASan 47/47 both flags; TSan clean 0 races flag ON + positive control fired. S8 SHIPPED
 default-ON via a heap-size AUTO heuristic (borrow ≥ 2 MB) — no small-par regression, full big-heap
-win, `LOFT_PAR_SHARE=0/1` override. **The interpreter core is CLOSED.** Remaining as follow-ons:
-a `--native` codegen analogue (native par still copies), the other queue variants, S10 recorded as
-"A stands". (An earlier "model failure" note was a stale-binary artifact, retracted; § Correction.)**
+win, `LOFT_PAR_SHARE=0/1` override. S10 decided: **Option A stands** (no fragility surfaced —
+compiler `&Stores` + C93 + ASan/TSan). **The interpreter core is CLOSED; this plan is done for the
+interpreter.** The remaining items are **parked in § Deferred below — re-open THIS plan to pick
+them up** (all the design + safety proof is here, this is the good spot for the additions); they are
+NOT separate follow-on plans. (An earlier "model failure" note was a stale-binary artifact,
+retracted; § Correction.)**
 Cherry-picked from the sibling `../loft` checkout into this working tree (the named code is
 in sync:
 `clone_for_worker` `allocation.rs:1277`, `borrow_locked_for_light_worker` `store.rs:1292`,
@@ -174,7 +177,7 @@ building on it).
 | **S7** ✅ | **Bench the win vs S0.** | **DONE** — par_ms flat vs heap with sharing on (§ S9 win). |
 | **S8** ✅ | **Default-ON — via an AUTO heuristic, not a naive flip.** A naive default-on REGRESSED frequent small pars **5×** (2000 tiny pars 235→1219 ms — the `thread::scope` per-call spawn dwarfs a copy there's nothing to save). So `par_share_for(stores)` is **AUTO**: borrow only when `active_clone_bytes() ≥ 2 MB` (the copy beats the spawn); else the cheap rayon clone. `LOFT_PAR_SHARE=0`/`=1` force off/on. | **DONE (interpreter)** — frequent small pars **no regression** (236 ms), large-heap **flat win** (0/1/4/30/122 MB ⇒ 4 ms), threading **47/47** AUTO+OFF+ON, full suite running. Native par is a **separate** codegen path (still clones — follow-on). | `LOFT_PAR_SHARE=0` |
 | **S9** ✅ | **Extend to the Queue family.** `run_parallel_queue_shared` behind the flag (thread::scope + `clone_for_light_worker`, ordered `Vec<u64>`). The S0 probe routes here (range→vector→`n_parallel_queue`→`run_parallel_queue`). | **DONE — WIN CONFIRMED.** Threading **47/47** flag OFF+ON; par_ms flat vs heap ON (53× at 122 MB), `total` identical (§ S9 win). | unset flag (default) |
-| **S10** | **Decide A-vs-B.** If S1's audit or any S6 TSan run showed the contract-carried safety (A) is fragile (a real mid-par mutation, a race the write-panic can't catch), escalate to **Option B** (`Arc<Store>`) as its own follow-on. Otherwise A stands. Record in `DESIGN_DECISIONS.md`. | decision written to `DESIGN_DECISIONS.md` with the evidence. | — |
+| **S10** ✅ | **Decide A-vs-B.** | **A STANDS.** No fragility surfaced: S1 proved parent-unwritten *by the `&Stores` signature* (compiler-carried, not just contract), and S5/S6 (ASan + TSan, positive control fired) are green on the flag-ON path. Option B (`Arc<Store>`) parked in § Deferred — revisit only if a future edit breaks the contract. | — |
 
 ### S1 audit — no dispatcher writes a parent between spawn and join (2026-07-17)
 
@@ -256,6 +259,28 @@ size-select the cheaper store model. The borrow MECHANISM is unchanged from S3/S
 ASan/TSan results still hold (they forced it ON). **Scope: interpreter.** `--native` par is a
 separate codegen path (`n_parallel_queue_native`) that still byte-copies — a native analogue of
 this heuristic is a documented follow-on, not part of the interpreter core this closes.
+
+## Deferred — parked here; re-open THIS plan to pick up
+
+The interpreter core is closed. These are genuine extensions, not gaps — each has its design
+already above. Per the working style, they stay in this plan (all context at hand); re-open it
+and add under the matching step when one is wanted.
+
+- **`--native` codegen analogue.** Native par (`n_parallel_queue_native`, the codegen path) still
+  byte-copies the parent per worker — the AUTO borrow is interpreter-only (confirmed: `--native`
+  par_ms still grows with heap). A native analogue of `clone_for_light_worker` + the `≥ 2 MB`
+  auto-select is the biggest remaining win, on its own gate set (native ASan already exists).
+- **The other queue variants.** `run_parallel_queue_ref` (struct/vec returns — needs care: it's
+  `&mut Stores` and adopts worker data post-join, so the borrow must not alias the adopt path),
+  `_text`, `_narrow`, `_fn`, and `run_parallel_fold`. Each: repeat S1(audit)→wire→S5/S6 for it.
+- **Rayon reconciliation.** Move the borrow off `thread::scope` onto the rayon pool (the atomic-
+  dispenser pattern `run_parallel_queue_ref` uses, not a `&mut WorkerPool`) — removes the per-call
+  spawn overhead the AUTO heuristic currently sidesteps, so the borrow could engage at a *lower*
+  heap threshold. This is the design's "clean end-state" (`parallel.rs:99`).
+- **Threshold tuning.** `PAR_SHARE_MIN_BYTES = 2 MB` is a first cut; refine against real workloads
+  (routing) — and lower it if the rayon reconciliation lands.
+- **Option B (`Arc<Store>`).** Not needed — A is proven safe. Only revisit if a future edit makes
+  the contract-carried safety fragile (S10 would flip).
 
 ## Gate results — S5 (ASan) + S6 (TSan), the data-race spec (2026-07-17)
 
