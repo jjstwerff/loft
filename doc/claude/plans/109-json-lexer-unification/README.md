@@ -15,10 +15,10 @@ field on deserialize). Rather than patch the duplicate scanner, retire it: drive
 tokenization from loft's own lexer, which already distinguishes int from float. **H5 is
 fixed as a consequence.**
 
-**loft2 branch state (2026-07-17):** step 1b (uppercase-`E`/`e+` exponent completeness)
-is cherry-picked onto `tuxedo-pln109-json-lexer` (commit `699fae10`, from ../loft's
-`e2c95637`) with its golden test `number_exponent_accepts_uppercase_e_and_plus_sign`.
-Steps 0, 1a, 1c, 2–5 open — see § Execution: safe small steps.
+**loft2 branch state (2026-07-17):** on `tuxedo_work2`. **Phase 0 + Phase 1 DONE** (golden
+corpus; JSON-mode lexer escapes/exponents; H5 exact-`Long` lex verified). **Phase 2 is
+decomposed into 2a–2e** with the byte-offset impedance resolved by **Option 1** (§ Phase-2
+finding). Phases 2–5 open — see § Sub-arcs + § Execution.
 
 **Scope resolved (owner, 2026-07-17):** UNIFORM integer semantics — typed and generic
 behave identically; the only change is that an integer-shaped number (no `.`, no exponent,
@@ -130,7 +130,12 @@ committing to the phasing:
 |---|---|---|
 | 0 | **Characterize** — ✅ **DONE** — `tests/json_corpus.rs` + `tests/json_corpus.golden`: a bless-able `Debug`-string golden over a liberal corpus (66 entries: every number/exponent form incl. H5, all string escapes incl. `\uXXXX`+surrogate-pair+astral+`\/`, structure/whitespace, literals, error byte-offsets, `Dialect::Lenient` bare-key/ident/constructor, + the real registry-index sample & an RPC line). Throwaway (deleted Phase 4); `harness_is_not_vacuous` proves it can fail. Pins the current behavior the rewrite must preserve — incl. the H5 cells (`9007199254740993` → `Number(…992.0)`) that flip to `Int` in Phase 2. Noted: the current byte-scanner ALREADY decodes surrogate pairs + `\/`, so Phase 1a is about the new lexer path reproducing them (golden pins the target). | **Done** |
 | 1 | **JSON reading in loft's lexer (small — validated)** — ✅ **DONE.** (a) `LexConfig::json()` + a `json_strings` flag gate JSON escapes in `string()`/`escape_seq`: `\/` and `\uXXXX` (four hex, no braces) with surrogate-pair combining — a lenient superset over loft's own escapes, OFF for all normal loft/config lexing (verified `loft_string_escapes_unchanged` + full lexer module green, so loft source semantics are byte-identical). Tests `json_string_escapes` (ASCII/BMP/surrogate/astral/`\/`/mixed). (b) ✅ uppercase-`E`/`e+` exponent completeness (golden `number_exponent_accepts_uppercase_e_and_plus_sign`). (c) integer-shaped→i64 is a Phase-2 *mapping* (loft's lexer already emits `Integer`/`Long` vs `Float`); the load-bearing H5 claim is **verified** by `json_number_classification` — `9007199254740993` lexes to exact `Long(u64)`, NOT rounded through f64. Structure / literals / whitespace / `Dialect::Lenient` identifiers reuse loft's lexing as-is. | **Done** |
-| 2 | **Reimplement `parse()` / `parse_with()`** on the JSON mode → same `Parsed` tree + `Int` preserved. Prove byte-identical vs the Phase-0 corpus (except int-preservation). Preserve error line/col/context + `json_errors()`. | Open |
+| 2 | **Reimplement `parse()` / `parse_with()`** on the JSON mode → same `Parsed` tree + `Int` preserved. Prove byte-identical vs the Phase-0 corpus (except int-preservation). **Decomposed into 2a–2e (§ Phase-2 finding).** | Open |
+| 2a | **Byte-offset mapper + value/literal skeleton.** A `ByteMapper` (line-starts table + UTF-8-width walk) maps the lexer's `Position{line, char-col}` back to the absolute `byte_offset` the old scanner reported. Drive `LexConfig::json()` via `peek()`/`cont()`; parse `null`/`true`/`false` (identifiers) + trailing-byte + root whitespace/BOM. Golden-gated. | Open |
+| 2b | **Strings** → `Parsed::Str` from `CString` (JSON escapes already gated in Phase 1a). | Open |
+| 2c | **Numbers** → `Parsed::Int` (from `Integer`/`Long`) vs `Parsed::Number` (from `Float`/`Single`); combine the leading `-` token. This is the intended golden diff (H5 cells flip to `Int`). | Open |
+| 2d | **Array / object / Lenient / Constructor** — nesting, `Object` key `byte_offset`s (via `ByteMapper`), bare-identifier keys + `Tag{…}` constructors, path stack for JSON-pointer diagnostics. | Open |
+| 2e | **Error parity** — reproduce the old scanner's messages + `byte_offset`s + `path` for every error cell in the golden; `json_errors()` unchanged. | Open |
 | 3 | **Uniform integer semantics (owner decision — see § Phase-0 finding).** Add `JsonValue::JInteger{value: integer}` (`06_json.loft`) + `JV_DISCR_INT`; `materialise_primitive_into`/`dbref_to_parsed` gain `Int` arms; `as_long`/`as_integer` read it exact, `as_number`/`as_float` convert i64→float, `kind()`→`"JInteger"`; `unwrap_long`/`unwrap_int` accept `JV_DISCR_INT`. Update the 22 Rust `Parsed::Number` arms + the 3 loft JNumber consumers (matchers flag the rest at compile time). Both typed AND generic now read the exact i64 — **H5 fixed uniformly**. | Open |
 | 4 | **Delete** the hand-rolled scanner (`parse_number`/`parse_string`/`parse_value` byte-scanning) + the differential scaffold. Confirm `crate::json` is now a thin layer over loft's lexer. **No hybrid remains.** | Open |
 | 5 | **Verify + freeze** — full suite both backends; corpus → regression suite; H5 typed-integer golden added; STDLIB.md JSON number semantics (int→i64, float→f64, > i64 ceiling) + lib-audit H5 → DONE. | Open |
@@ -239,6 +244,34 @@ exponent** — so `1e3` is a `float` (1000.0), matching loft's own number lexer 
 mainstream JSON libraries (Python `json.loads("1e3")` → `1000.0`). The user's rule ("no
 `.123` → i64") holds for the common case; exponent-bearing numbers stay float by this
 loft-lexer-consistent refinement.
+
+### Phase-2 finding (2026-07-17) — the byte-offset impedance; Option 1 (keep byte offsets)
+
+Phase 2 is NOT the "mechanical rewrite" the row first implied — two impedances between the
+byte-scanner and loft's lexer must be handled, and they are what decomposes Phase 2 into
+2a–2e:
+
+1. **Position model mismatch.** The old scanner reports **absolute byte offsets** —
+   `ParseError.byte_offset`, `Parsed::Object`'s per-key `key_byte_offset`,
+   `Parsed::Constructor`'s `tag_byte_offset`, and the public `line_col_of(input, byte_offset)`.
+   loft's lexer is **line:col-char native** (`Position{line, pos=char column}`, no byte
+   offset). Reproducing byte-identical offsets is therefore a real sub-task, not free.
+
+2. **Driving quirks.** The lexer lexes `-` as its own token (numbers can't be negative), and
+   `true`/`false`/`null` as identifiers — so the JSON parser combines the sign and dispatches
+   the literals. It drives via `peek()` + `cont()`; each `LexResult` carries the token-start
+   `Position`.
+
+**Decision (owner, 2026-07-17) — Option 1: keep the byte-offset model.** A small `ByteMapper`
+(a line-starts table built once from the input + a UTF-8-width walk along the target line)
+converts the lexer's `(line, char-col)` back to the exact absolute `byte_offset` the old
+scanner produced. This keeps `ParseError`, the `Object`/`Constructor` offset fields, and
+`line_col_of` **byte-for-byte unchanged**, so the Phase-0 golden stays valid and **no consumer
+changes** — Phase 2 is a true drop-in replacement. Option 2 (migrate the public model to
+line:col) was rejected: it would rewrite the golden, change `ParseError`'s public shape, and
+ripple into every diagnostic consumer for no functional gain, violating the minimal-blast-
+radius + NO-HYBRID discipline. The mapper is throwaway-free (it stays; it is genuinely how the
+lexer-driven parser reports positions).
 
 ## Falsification points / risks
 
