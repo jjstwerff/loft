@@ -1148,6 +1148,19 @@ pub fn len(both: hash) -> integer {
 }
 #pure
 
+fn OpSizeHash(r: hash) -> integer;
+#rust"i64::from(hash::table_bytes(&@r, &s.database.allocations))"
+// The byte footprint of a hash (@PLN110): its full bucket table, holes
+// included.  The table is the hash's own allocation — `elms` slots, each a
+// 4-byte record-id (an empty slot is a hole and still counts, because open
+// addressing's spare capacity IS the format).  Allocation-local: the entry
+// records live in separate allocations and are not counted.  Grows in steps as
+// the table rehashes (load factor 0.75).  0 for an empty (unallocated) hash.
+pub fn size(both: hash) -> integer {
+  OpSizeHash(both)
+}
+#pure
+
 // P192: index<T[key]> red-black tree walk.  `fields` is the
 // per-record bookkeeping byte offset (database.fields(tp));
 // the parser fills this constant when generating `len(ix)` for

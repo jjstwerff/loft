@@ -247,6 +247,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     hash_find,
     hash_remove,
     length_hash,
+    size_hash,
     length_index,
     eq_bool,
     ne_bool,
@@ -2137,6 +2138,12 @@ fn hash_remove(s: &mut State) {
 fn length_hash(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = i64::from(hash::count(&v_r, &s.database.allocations));
+    s.put_stack(new_value);
+}
+
+fn size_hash(s: &mut State) {
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = i64::from(hash::table_bytes(&v_r, &s.database.allocations));
     s.put_stack(new_value);
 }
 

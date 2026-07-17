@@ -79,7 +79,7 @@ descriptor, the #477 stride `element_size(inner).max(4)` — `size` reports it f
 
 ## Remaining sub-arcs — formulas + open questions
 
-Done so far: **1a (vector), 1b (struct), 1e (scalar)**. Remaining: **1c (hash) → 1d (sorted/index/
+Done so far: **1a (vector), 1b (struct), 1e (scalar), 1c (hash)**. Remaining: **1d (sorted/index/
 spatial) → enums → 1g (`len(character)` contract call, deferred).** Rationale: hash/sorted/index/
 spatial each need their collection's table/tree byte accounting; enums split into simple (scalar-
 like) and data (struct-like); 1g's *size* half is already done (via 1e, `size(character)`=4), leaving
@@ -112,9 +112,17 @@ only the deferred `len(character)` decision.
   a *data* enum is a `DbRef` and would use a struct-like op with `size = database.size` (the
   max-variant footprint). `size(enum)` currently errors cleanly (falls through). Handle both when the
   enum step lands.
-- **1c `size(hash<…>)`** = the **full bucket table, holes included** (open addressing IS the format).
-  Needs the hash allocation's table byte span from `src/hash.rs` (bucket count × bucket stride), not
-  the live entry count. Parser/op reads the table size from the record.
+- **1c `size(hash<…>)` ✅ DONE** = the **full bucket table, holes included** = `elms × 4` where
+  `elms = (record_words(claim) − 2) · 2` — each bucket a 4-byte `u32` rec-id, the two reserved
+  header/seed words excluded (mirrors `size(vector)` counting content, not the length prefix). An
+  empty slot (zero rec-id) still counts — open addressing's spare capacity IS the format, so unlike a
+  vector's spare capacity it is NOT reserve. Allocation-local: the entry records are separate
+  allocations, not counted. Needs no type-derived const, so it is a clean **stdlib overload**
+  (`size(both: hash) → OpSizeHash → hash::table_bytes`), not a parser special-case — like
+  `len(hash)`. Verified both backends (`tests/scripts/pln110-size-hash.loft`): empty → 0; initial
+  table (room 10) → 16 slots × 4 = 64; after rehashes (room 10→19→37, load 0.75) → 136 → 280. The
+  step sizes encode the resize policy, so a policy change flips the test (a conscious layout change,
+  @PLN97).
 - **1d `size(sorted / index / spatial)`** = the collection's table/tree bytes (sorted: the
   length-prefixed sorted buffer like vector; index: the red-black tree nodes; spatial: the radix/
   Morton tree). Each reads its structure's allocated byte span. **Open:** confirm whether "holes/
