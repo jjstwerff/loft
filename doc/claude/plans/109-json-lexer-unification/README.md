@@ -20,6 +20,11 @@ is cherry-picked onto `tuxedo-pln109-json-lexer` (commit `699fae10`, from ../lof
 `e2c95637`) with its golden test `number_exponent_accepts_uppercase_e_and_plus_sign`.
 Steps 0, 1a, 1c, 2–5 open — see § Execution: safe small steps.
 
+**Scope resolved (owner, 2026-07-17):** UNIFORM integer semantics — typed and generic
+behave identically; the only change is that an integer-shaped number (no `.`, no exponent,
+fits i64) is assumed to be an i64, realized once via `JsonValue::JInteger` so both paths
+read it exactly. See § Phase-0 finding → **Decision**.
+
 ## Goal
 
 Delete the hand-rolled Rust JSON scanner in `src/json.rs` and re-drive `crate::json`'s
@@ -126,7 +131,7 @@ committing to the phasing:
 | 0 | **Characterize** — a golden corpus of current `crate::json` output over every consumer's real inputs (JSON stdlib tests, registry index, RPC messages, IR schema, snapshots, advisories) + a throwaway differential harness (old vs new → identical `Parsed`, except the intended int-preservation). | Open |
 | 1 | **JSON reading in loft's lexer (small — validated)** — (a) reuse `string()` with `interpolate_strings=false`, add JSON `\uXXXX`+surrogate pairs and `\/` to the escape path; (b) ✅ **DONE** — uppercase-`E`/`e+` exponent completeness landed in loft's number lexer as a standalone improvement (golden `number_exponent_accepts_uppercase_e_and_plus_sign`, both backends; normal loft unbroken); (c) integer-shaped→i64 classification. Structure / literals / whitespace / `Dialect::Lenient` identifiers reuse loft's lexing as-is. | 1b done; 1a/1c open |
 | 2 | **Reimplement `parse()` / `parse_with()`** on the JSON mode → same `Parsed` tree + `Int` preserved. Prove byte-identical vs the Phase-0 corpus (except int-preservation). Preserve error line/col/context + `json_errors()`. | Open |
-| 3 | **Update `Parsed::Number` consumers** for the `Int` case; the typed `populate_struct_from_jsonvalue` reads `Int`→i64 into an `integer` field exactly — **H5 fixed**. Each consumer re-verified. | Open |
+| 3 | **Uniform integer semantics (owner decision — see § Phase-0 finding).** Add `JsonValue::JInteger{value: integer}` (`06_json.loft`) + `JV_DISCR_INT`; `materialise_primitive_into`/`dbref_to_parsed` gain `Int` arms; `as_long`/`as_integer` read it exact, `as_number`/`as_float` convert i64→float, `kind()`→`"JInteger"`; `unwrap_long`/`unwrap_int` accept `JV_DISCR_INT`. Update the 22 Rust `Parsed::Number` arms + the 3 loft JNumber consumers (matchers flag the rest at compile time). Both typed AND generic now read the exact i64 — **H5 fixed uniformly**. | Open |
 | 4 | **Delete** the hand-rolled scanner (`parse_number`/`parse_string`/`parse_value` byte-scanning) + the differential scaffold. Confirm `crate::json` is now a thin layer over loft's lexer. **No hybrid remains.** | Open |
 | 5 | **Verify + freeze** — full suite both backends; corpus → regression suite; H5 typed-integer golden added; STDLIB.md JSON number semantics (int→i64, float→f64, > i64 ceiling) + lib-audit H5 → DONE. | Open |
 
@@ -189,17 +194,51 @@ materialisation. That is real Phase-3 work the "22 consumer arms" framing unders
 the arms are read-sites of an *already-built* `Parsed`, but the typed path must first be
 made to *carry* a `Parsed::Int` to `populate_struct` at all.
 
-**Open scope decision (owner).** The lib-audit's H5 cites the **generic** path
-(`06_json.loft:21,93` = `JNumber{value: float}` + `as_long`). Does @PLN109 also give the
-generic `JsonValue`/`as_long` path exact integers — i.e. add a `JsonValue::JInteger`
-variant (a `JV_DISCR_INT` store discriminant, an `as_long` that reads it exactly) — or
-only the **typed** `Type.parse` path (the design's stated "deserialize-only, typed"
-scope)? Typed-only closes the *reported* corruption (a known-schema `integer` field) and is
-smaller; generic-too closes H5 exactly as the audit framed it but widens the change to the
-loft `JsonValue` type + its store layout. **Recommend: typed path in this arc** (matches
-the design's scope + the reported bug), with the generic `JsonValue::JInteger` filed as a
-follow-on if wanted — noting H5 then closes *for the typed path* and the audit row stays
-open pointing at the follow-on. Deferred, not decided, pending owner.
+**Decision (owner, 2026-07-17) — UNIFORM integer semantics, no path divergence.** Typed
+and generic MUST behave identically. The *only* semantic change is the type a bare number
+is assumed to have: **a JSON number with no fractional part is an i64** (integer-shaped →
+`integer`), a number with a `.` (or that overflows i64) is a `float`. This is realized
+once, in the shared representation, so both `Type.parse(text).field` and
+`json_parse(text).as_long()` read the exact integer — there is deliberately **no** typed-
+only path and no second walker (option A is rejected).
+
+**Realization on loft2 — one representation, `JsonValue::JInteger{value: integer}`.**
+Because loft2's typed path and generic path *share* the store-backed `JsonValue` walker
+(`populate_struct_from_jsonvalue` reads the store `JsonValue`, not a Rust `Parsed`), giving
+the number an integer representation in the store `JsonValue` fixes both at once:
+
+- **loft type** — add `JInteger { value: integer }` to the `JsonValue` enum (`06_json.loft`)
+  beside `JNumber { value: float }`. A store discriminant `JV_DISCR_INT`.
+- **Rust `Parsed`** — `crate::json::parse` produces `Parsed::Int(i64)` for integer-shaped
+  numbers (falls out of loft's lexer, which already lexes `Integer`/`Long` vs `Float`);
+  `materialise_primitive_into` gets an `Int` arm → `JV_DISCR_INT`; `dbref_to_parsed` reads
+  `JV_DISCR_INT` → `Parsed::Int`.
+- **extractors** (`06_json.loft` + `native.rs`) — `as_long`/`as_integer` on a `JInteger`
+  reads the i64 exactly; `as_number`/`as_float` on a `JInteger` converts i64→float;
+  `kind()` on a `JInteger` returns `"JInteger"`.
+- **typed populate** — for an `integer`/`long` field, `unwrap_long`/`unwrap_int` accept a
+  `JV_DISCR_INT` source and read the i64 exactly (today they only accept `JV_DISCR_NUMBER`
+  and `get_float`); for a `float` field fed a `JInteger`, convert i64→float.
+
+**Blast radius (loft2, verified) — small and compile-loud.** loft-side JNumber consumers
+are exactly 3 files (`06_json.loft`; `tests/scripts/194-text-producer-dest.loft` and
+`198-null-text-format.loft`, which assert `kind()=="JNumber"` / `"[42|JNumber]"` on integer
+`42` and flip to `JInteger`); Rust-side, `codegen_runtime.rs`/`database/format.rs`/
+`native.rs`. Adding a `JInteger` enum case makes loft's matchers flag every non-exhaustive
+`match jv { … }` at **compile time** — the design-protocol "make omission loud" property
+(the N-site silence factor drops to ~zero).
+
+**Behaviour change to acknowledge (intended).** `json_parse("42").kind()` goes from
+`"JNumber"` to `"JInteger"`, and a bare integer's `JsonValue` variant changes — this is the
+deliberate consequence of "assume i64", not a regression. Consumers wanting the old float
+reading write `42.0` or call `as_number()`. **H5 closes fully** (both the typed field and
+the generic `as_long`), exactly as the lib-audit framed it.
+
+**One edge pinned:** *integer-shaped* = loft's `LexItem::Integer`/`Long` = no `.` **and no
+exponent** — so `1e3` is a `float` (1000.0), matching loft's own number lexer and
+mainstream JSON libraries (Python `json.loads("1e3")` → `1000.0`). The user's rule ("no
+`.123` → i64") holds for the common case; exponent-bearing numbers stay float by this
+loft-lexer-consistent refinement.
 
 ## Falsification points / risks
 
