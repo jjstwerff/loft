@@ -179,7 +179,9 @@ fn print_help() {
     println!("  check <file>                  same as --check <file>");
     println!("  fmt [--check|--write] <file…> format loft source (parser-driven, written in loft)");
     println!("                                default prints; --write rewrites in place; --check");
-    println!("                                exits non-zero if unformatted (CI gate); `-` = stdin");
+    println!(
+        "                                exits non-zero if unformatted (CI gate); `-` = stdin"
+    );
     println!(
         "  sandbox-check <file>          report the @PLN86 sandbox admission verdict and STOP"
     );
@@ -4119,10 +4121,7 @@ fn run_fmt_command(args: &[String]) -> i32 {
         }
     }
     if check && !unformatted.is_empty() {
-        eprintln!(
-            "loft fmt: {} file(s) need formatting:",
-            unformatted.len()
-        );
+        eprintln!("loft fmt: {} file(s) need formatting:", unformatted.len());
         for f in &unformatted {
             eprintln!("  {f}");
         }

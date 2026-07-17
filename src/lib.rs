@@ -121,12 +121,12 @@ mod lexer;
 pub mod native;
 // `net::fetch_bytes` (behind `store_load_url*`) exists exactly where `load_url`
 // does: a native `registry` build, or the browser (`--html`) target.
+pub mod host;
 #[cfg(any(
     feature = "registry",
     all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
 ))]
 pub(crate) mod net;
-pub mod host;
 pub mod ownership_cfg;
 #[cfg(feature = "remote-store")]
 pub mod paged_reader;
