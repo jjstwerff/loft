@@ -1,0 +1,42 @@
+// @PLN108 S0 — the copy-cost win baseline (ported from ../routing/tools/par_copy_probe.loft,
+// the consumer's shape that answered step 1: NOT a rounding error).
+//
+// The worker touches NONE of the big structure — it spins on its own element only.  If par's
+// wall-clock STILL grows with the size of that UNRELATED live heap, the per-worker byte-copy
+// of "every active store" (interpreter `clone_for_worker`; native `n_parallel_queue_native`
+// clones too) is confirmed, and its cost is a function of the SESSION's live heap, not the
+// workload.  This is the number @PLN108 must drive to zero; re-run with LOFT_PAR_SHARE=1 (S7)
+// and the growth must disappear.
+//
+//   PROBE_NODES — unrelated live heap, at 32 B/node (default 2_000_000 ≈ 61 MB)
+//
+// The thread count is the LITERAL `8` (run.sh rewrites it for the thread sweep): native codegen
+// rejects a VARIABLE thread count — `par(expr, var)` emits an i64 where n_parallel_queue_native
+// wants i32 (E0308) — so keep it a literal to measure BOTH backends.
+
+struct Node { const id: integer, x: float, y: float, z: float }
+struct Heap { nodes: vector<Node> }
+
+// A pure per-element workload: it reads ONLY its own index `i`, never the captured `Heap`.
+fn spin(i: integer) -> integer {
+  s = 0;
+  for j in 0..2000 { s += (i + j) % 7; }
+  s
+}
+
+fn main() {
+  nodes = (env_variable("PROBE_NODES") ?? "2000000") as integer ?? 2000000;
+
+  h = Heap { nodes: [] };
+  for i in 0..nodes { h.nodes += [Node { id: i, x: 1.0, y: 2.0, z: 3.0 }]; }
+  guard = len(h.nodes);   // touch it so it cannot be optimised away
+
+  t0 = now();
+  total = 0;
+  for a in 0..64 par(b = spin(a), 8) { total += b; }
+  t1 = now();
+
+  // `total` is INVARIANT to heap/threads (identical work) — a moving `total` means the probe
+  // is measuring the wrong thing; a moving `par_ms` at constant `total` is the copy cost.
+  println("heap_mb={guard * 32 / 1048576} par_ms={t1 - t0} total={total}");
+}

@@ -9,8 +9,9 @@ Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:lo
 
 ## Status
 
-**Design ready, step 1 (the measure-or-stop gate) ANSWERED — proceed.** Cherry-picked
-from the sibling `../loft` checkout into this working tree (the named code is in sync:
+**Design ready, step 1 ANSWERED, S0 (win-baseline bench) LANDED — next is S1 (the audit).**
+Cherry-picked from the sibling `../loft` checkout into this working tree (the named code is
+in sync:
 `clone_for_worker` `allocation.rs:1277`, `borrow_locked_for_light_worker` `store.rs:1292`,
 `clone_for_light_worker` `allocation.rs:1361`, `run_parallel_discard` `parallel.rs:1184`,
 `run_parallel_light` `parallel.rs:1451`). This is the deferred **phase 5** of the legacy
@@ -150,7 +151,7 @@ building on it).
 
 | S | Step | Verify (gate) | Rollback |
 |---|---|---|---|
-| **S0** | **Repro bench = committed win baseline.** Turn the routing measurement into a loft bench under `tests/scripts/` (or `benches/`): `par` over 64 elems, worker reads NONE of a captured structure of parameterised size; record `par_ms` vs unrelated-heap-MB and vs thread-count. | Bench runs both backends; reproduces the inversion (`par_ms` grows with unrelated heap, ~5× over 1→16 threads). | delete bench |
+| **S0** ✅ | **Repro bench = committed win baseline.** `bench/par_copy_probe.loft` + `bench/run.sh` (co-located, NOT a CI gate — timing is machine-dependent). Ported from `../routing/tools/par_copy_probe.loft`. | **DONE** — runs both backends; reproduces the inversion (see § S0 baseline). | delete `bench/` |
 | **S1** | **Safety audit — NO code change.** For each of the 6 live `clone_for_worker` sites + `run_parallel_discard`, write down: does the dispatcher *materialise / adopt / lazily grow* a parent store between spawn and join? Produce a table (dispatcher × "parent untouched during join? Y/N"). Any `N` is a blocker: move that work BEFORE the spawn, or exclude that dispatcher from sharing. | The audit table is committed to this plan. A confirmed `Y` for `run_parallel_discard` is the green light for S3. | — (doc only) |
 | **S2** | **`unsafe impl Sync for Store`** with a comment pinning the justification (read-only shared `addr()` access + `read_only` write-panic backstop) and naming @PLN108. No sharing path goes live yet. | Compiles; `borrow_locked_reads_original_data` + `borrow_locked_write_panics` green; **ASan baseline 47/47 unchanged** (no new live sharing). | revert the `impl` |
 | **S3** | **Wire Option A behind `LOFT_PAR_SHARE` (default OFF) on `run_parallel_discard` ONLY** (no return-stitch → smallest surface). Flag ON → route through `clone_for_light_worker` (borrow + pool); flag OFF → `clone_for_worker` (today's copy, byte-identical behaviour). | Flag OFF: **entire threading suite green, unchanged**. Flag ON: `parallel_store_is_read_only_in_workers` + `par_discard_does_not_grow_parent_stores` green. | unset the flag (default) |
@@ -161,6 +162,33 @@ building on it).
 | **S8** | **Flip `LOFT_PAR_SHARE` default-ON for `discard`** once S5+S6+S7 pass. | full suite **both backends** green with default-on. | flip default back to OFF |
 | **S9** | **Extend one dispatcher at a time** — Queue family, then heavy. For EACH: repeat S1(audit)→S3(wire)→S5(ASan)→S6(TSan)→S7(bench) for that dispatcher before enabling it. Unify `run_parallel_light` (`parallel.rs:1451`) into the `parallel_workers` template (`parallel.rs:99`). | per-dispatcher: same gate set green before its default-on. | per-dispatcher flag/default |
 | **S10** | **Decide A-vs-B.** If S1's audit or any S6 TSan run showed the contract-carried safety (A) is fragile (a real mid-par mutation, a race the write-panic can't catch), escalate to **Option B** (`Arc<Store>`) as its own follow-on. Otherwise A stands. Record in `DESIGN_DECISIONS.md`. | decision written to `DESIGN_DECISIONS.md` with the evidence. | — |
+
+### S0 baseline (recorded 2026-07-17, `bench/run.sh`)
+
+Reproduced in THIS tree; near-identical to the routing consumer's numbers. `total` is
+constant across every cell (identical work) — the moving column is pure copy cost.
+
+| unrelated heap | 0 MB | 15 | 30 | 61 | 122 |
+|---|---|---|---|---|---|
+| **interpret par_ms** (8 thr) | 5 | 51 | 104 | 107 | 231 |
+| **native par_ms** (8 thr) | 1 | — | 89 | 102 | — |
+| *routing par_ms* | 2 | 40 | 98 | 101 | 205 |
+
+| threads @ 61 MB | 1 | 4 | 8 | 16 |
+|---|---|---|---|---|
+| **interpret par_ms** | 54 | 71 | 98 | 184 |
+| *routing par_ms* | 36 | 60 | 98 | 178 |
+
+**Two findings the bench surfaced:**
+
+1. **Native par clones too.** `par_ms` grows with the unrelated heap on `--native` as well
+   (`n_parallel_queue_native`), so the copy cost is **both-backends** — the interpreter is
+   where the sharing infra (S2–S9) lives, but a native follow-on may be needed for parity.
+2. **Native rejects a VARIABLE thread count.** `par(expr, var)` emits an `i64` where
+   `n_parallel_queue_native` wants `i32` → `rustc E0308`; a literal (`par(expr, 8)`) is fine.
+   The bench bakes a literal per thread-sweep value to work around it. This is an
+   independent native-codegen bug (cast the thread-count var to `i32`), not part of S0 —
+   note it for a separate fix.
 
 **Why this order is the safe one.** S0 makes the win measurable *before* touching the
 memory model. S1 (audit) is the falsification probe of the invariant's lifetime claim and
