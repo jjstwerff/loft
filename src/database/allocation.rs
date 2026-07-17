@@ -1273,19 +1273,6 @@ impl Stores {
     /// Freed slots (store.free == true) are replaced with fresh empty stores so that
     /// `State::new_worker → Stores::database` can safely re-initialise them without
     /// hitting the "Write to locked store" debug assert.
-    #[must_use]
-    /// @PLN108 S8 — the byte volume `clone_for_worker` would copy per worker: the sum of the
-    /// active (non-free) stores' buffers.  Above a threshold this copy dominates the borrow's
-    /// per-call thread-spawn overhead, so par sharing auto-engages; below it, the cheap
-    /// rayon-pool clone wins.  Drives `par_share_for` (`src/parallel.rs`).
-    pub fn active_clone_bytes(&self) -> u64 {
-        self.allocations
-            .iter()
-            .filter(|s| !s.free)
-            .map(super::super::store::Store::byte_capacity)
-            .sum()
-    }
-
     pub fn clone_for_worker(&self) -> WorkerStores {
         let allocations = self
             .allocations

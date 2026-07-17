@@ -14,6 +14,7 @@ use crate::state::State;
 use crate::vector;
 use std::sync::Arc;
 #[cfg(feature = "threading")]
+#[cfg(all(feature = "threading", not(feature = "wasm")))]
 use std::thread;
 
 /// Shared bytecode + library for a single `parallel_for` dispatch.
@@ -83,27 +84,26 @@ impl WorkerProgram {
 
 // ── Plan-06 phase 1 step 4.5 — shared run_parallel_* template ─────────────────
 //
-// Five of the six run_parallel_* variants share a uniform shape after the
-// channel→thread::scope conversion in steps 2–4:
+// The run_parallel_* variants share a uniform shape:
 //
-//   1. Spawn N worker threads via `thread::scope`.
-//   2. Each worker gets a fresh `clone_for_worker()` snapshot, an Arc-bumped
-//      reference to the WorkerProgram, and a row range `start..end`.
+//   1. Slice `n_rows` across N rayon tasks (the work-stealing pool).
+//   2. Each worker BORROWS the parent stores read-only (`clone_for_light_worker`,
+//      @PLN108) + a small self-allocated writable scratch, an Arc-bumped reference
+//      to the WorkerProgram, and a row range `start..end`.
 //   3. Each worker computes some R from its row range and returns it.
-//   4. The main thread joins all workers, collecting `Vec<R>` in worker-id order.
+//   4. The main thread collects `Vec<R>` in worker-id order.
 //
 // `parallel_workers` captures that scaffolding; the per-variant `run_parallel_*`
-// fns become thin wrappers that pass a closure describing the per-worker work.
-// `run_parallel_light` is **not** on this template — it uses
-// `clone_for_light_worker(pool_slice)` with a mutable borrow of pre-allocated
-// pool stores.  Phase 5's `Arc<Store>` rewrite makes every path light by
-// default; at that point the template absorbs run_parallel_light too.
+// fns are thin wrappers that pass a closure describing the per-worker work.
+// @PLN108: there is exactly ONE clone path (always the read-only borrow) — no
+// byte-copy, no size heuristic, no second `thread::scope` dispatcher.
 
 /// Common scope-spawn-collect scaffolding for the parallel runtime.
 ///
-/// Spawns N worker threads (N = `min(n_threads, n_rows)`), each running
-/// `f(start, end, worker_stores) -> R` over its row range with a fresh
-/// `clone_for_worker` snapshot.  Returns `Vec<R>` in worker-id order.
+/// Spawns N rayon tasks (N = `min(n_threads, n_rows)`), each running
+/// `f(start, end, worker_stores) -> R` over its row range with a read-only
+/// `clone_for_light_worker` borrow of the parent.  Returns `Vec<R>` in
+/// worker-id order.
 ///
 /// Used by both the interpreter dispatchers in this file and the native
 /// codegen dispatchers in `src/codegen_runtime.rs`.  The interpreter
@@ -115,9 +115,10 @@ impl WorkerProgram {
 /// - `f` is captured by reference inside the spawn closures.  The
 ///   spawn closures are `move`, so they capture `&f` by `Copy`; the
 ///   `Sync` bound ensures concurrent calls are safe.
-/// - Each worker gets its own `WorkerStores` via `clone_for_worker`;
-///   the closure may call `add_output_slot` / `take_slot` as needed
-///   and include them in its `R` payload.
+/// - Each worker gets its own `WorkerStores` via `clone_for_light_worker`
+///   (read-only borrow of the parent + self-allocated scratch); the closure
+///   may call `add_output_slot` / `take_slot` as needed and include them in
+///   its `R` payload.
 /// - `n_threads` is clamped to `min(n_threads, n_rows)`; for `n_rows == 0`
 ///   the caller is expected to short-circuit before calling.
 #[cfg(feature = "threading")]
@@ -1187,27 +1188,6 @@ pub fn run_parallel_fold(
 /// sentinel) is silently absorbed — the caller is expected to enforce
 /// par-safety + side-effect-correctness via phase 5's analyser before
 /// reaching this dispatcher.
-#[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
-#[allow(dead_code, clippy::too_many_arguments)] // step 3 is the first consumer; tested via tests/threading.rs
-/// @PLN108 S8 — should this par BORROW the parent stores read-only, instead of the per-worker
-/// byte-copy (`clone_for_worker`)?  **Default AUTO** (default-ON above a size threshold): borrow
-/// when the copy it would save (`active_clone_bytes`) exceeds the borrow's per-call thread-spawn
-/// overhead — so a big-heap par (routing's shape) wins, while a small / frequent par keeps the
-/// cheap rayon-pool clone (no regression).  `LOFT_PAR_SHARE=0` forces OFF, `=1` forces ON at any
-/// size.  Safe because captured parent state is read-only (@PLN102 C93 compile error +
-/// `read_only` write-panic), the parent outlives every worker (`thread::scope` join), and S1
-/// verified no dispatcher mutates a parent mid-par.  ASan + TSan clean on this path (S5/S6).
-#[cfg(feature = "threading")]
-const PAR_SHARE_MIN_BYTES: u64 = 2 * 1024 * 1024; // 2 MB — below this the rayon clone is cheaper
-#[cfg(feature = "threading")]
-fn par_share_for(stores: &Stores) -> bool {
-    match std::env::var("LOFT_PAR_SHARE").ok().as_deref() {
-        Some("0") => false,
-        Some("1") => true,
-        _ => stores.active_clone_bytes() >= PAR_SHARE_MIN_BYTES, // AUTO (unset or any other value)
-    }
-}
-
 #[allow(clippy::too_many_arguments)]
 pub fn run_parallel_discard(
     stores: &Stores,
@@ -1223,22 +1203,8 @@ pub fn run_parallel_discard(
     if n_rows == 0 {
         return;
     }
-    // @PLN108 S3 — behind LOFT_PAR_SHARE (default OFF): borrow the parent stores read-only.
-    #[cfg(feature = "threading")]
-    if par_share_for(stores) {
-        run_parallel_discard_shared(
-            stores,
-            program,
-            fn_pos,
-            input,
-            element_size,
-            n_threads,
-            extra_args,
-            return_size,
-            n_rows,
-        );
-        return;
-    }
+    // @PLN108 R2/R3: `parallel_workers` always borrows the parent read-only, so there is
+    // no copy-vs-borrow choice left — this is the single path.
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
@@ -1253,53 +1219,6 @@ pub fn run_parallel_discard(
             );
             // Discard the worker's return — Stitch::Discard contract.
             let _ = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
-        }
-    });
-}
-
-/// @PLN108 S3 — the read-only-borrow variant of `run_parallel_discard` (behind `LOFT_PAR_SHARE`).
-/// Instead of `clone_for_worker`'s byte-copy of every parent store, each worker borrows the
-/// parent stores read-only (`clone_for_light_worker`) plus a small pool of its OWN writable
-/// stores.  Each worker OWNS its `WorkerStores` (moved into the `thread::scope` spawn), so no
-/// `&Store` crosses a thread; the shared parent buffers are read-only (C93 + write-panic) and
-/// outlive the workers (scope join).  Discard shape → no adoption, no return-stitch.
-#[cfg(feature = "threading")]
-#[allow(clippy::too_many_arguments)]
-fn run_parallel_discard_shared(
-    stores: &Stores,
-    program: WorkerProgram,
-    fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    n_threads: usize,
-    extra_args: &[u64],
-    return_size: u32,
-    n_rows: usize,
-) {
-    let threads = n_threads.max(1).min(n_rows);
-    let program = Arc::new(program);
-    let input_t = *input;
-    thread::scope(|s| {
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            // Borrow the parent stores read-only; the worker self-allocates its scratch.
-            let worker_stores = unsafe { stores.clone_for_light_worker() };
-            let prog = Arc::clone(&program);
-            let extras = extra_args.to_vec();
-            s.spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                for row_idx in start..end {
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx as i64,
-                        &state.database.allocations,
-                    );
-                    // Discard the worker's return — Stitch::Discard contract.
-                    let _ = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
-                }
-            });
         }
     });
 }
@@ -1382,25 +1301,8 @@ pub fn run_parallel_queue(
     if n_rows == 0 {
         return Vec::new();
     }
-    // @PLN108 S9 — behind LOFT_PAR_SHARE (default OFF): borrow the parent stores read-only
-    // instead of `clone_for_worker`'s byte-copy.  This is the family routing's real workload
-    // uses (per-row results), so the copy-elision win is measurable here.
-    #[cfg(feature = "threading")]
-    if par_share_for(stores) {
-        return run_parallel_queue_shared(
-            stores,
-            program,
-            fn_pos,
-            input,
-            element_size,
-            n_threads,
-            extra_args,
-            return_size,
-            n_rows,
-            primitive_input_size,
-            tuple_input_types,
-        );
-    }
+    // @PLN108 R2/R3: `parallel_workers` always borrows the parent read-only (the win
+    // routing's per-row-results workload needs), so this is the single path.
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
@@ -1449,90 +1351,6 @@ pub fn run_parallel_queue(
             batch.push(val);
         }
         (start, batch)
-    });
-    merge_batches(batches, n_rows, 0u64)
-}
-
-/// @PLN108 S9 — the read-only-borrow variant of `run_parallel_queue` (behind `LOFT_PAR_SHARE`).
-/// Same order-preserving `Vec<u64>` result and the same input-dispatch ladder as the copy path,
-/// but each worker BORROWS the parent stores read-only (`clone_for_light_worker`) + owns a
-/// `WorkerPool` slice, instead of `clone_for_worker`'s byte-copy.  `thread::scope` joins every
-/// worker before returning (parent outlives them); each worker owns its `WorkerStores` (moved
-/// into the spawn), so no `&Store` crosses a thread.  Results collected via scoped join handles,
-/// merged in start-index order — identical semantics to the copy path.
-#[cfg(feature = "threading")]
-#[allow(clippy::too_many_arguments)]
-fn run_parallel_queue_shared(
-    stores: &Stores,
-    program: WorkerProgram,
-    fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    n_threads: usize,
-    extra_args: &[u64],
-    return_size: u32,
-    n_rows: usize,
-    primitive_input_size: u32,
-    tuple_input_types: Option<Vec<crate::data::Type>>,
-) -> Vec<u64> {
-    let threads = n_threads.max(1).min(n_rows);
-    let program = Arc::new(program);
-    let input_t = *input;
-    let prim_in = primitive_input_size;
-    let tuple_types_arc = tuple_input_types.map(Arc::new);
-    let batches: Vec<(usize, Vec<u64>)> = thread::scope(|s| {
-        let mut handles = Vec::with_capacity(threads);
-        for t in 0..threads {
-            let start = t * n_rows / threads;
-            let end = (t + 1) * n_rows / threads;
-            // Borrow the parent stores read-only; the worker self-allocates its scratch.
-            let worker_stores = unsafe { stores.clone_for_light_worker() };
-            let prog = Arc::clone(&program);
-            let extras = extra_args.to_vec();
-            let tuple_types = tuple_types_arc.as_ref().map(Arc::clone);
-            handles.push(s.spawn(move || {
-                let mut state = prog.new_state(worker_stores);
-                let mut batch = Vec::with_capacity(end - start);
-                for row_idx in start..end {
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx as i64,
-                        &state.database.allocations,
-                    );
-                    let val = if prim_in == u32::MAX {
-                        let sv = read_text_at(&state.database, &row_ref);
-                        state.execute_at_raw_text_input(fn_pos, sv, &extras, return_size)
-                    } else if prim_in > 8 {
-                        let buf = if let Some(ref types) = tuple_types {
-                            read_tuple_at_wide(&state.database, &row_ref, types)
-                        } else {
-                            read_primitive_at_wide(&state.database, &row_ref, element_size)
-                        };
-                        state.execute_at_raw_primitive_input_wide(
-                            fn_pos,
-                            &buf[..prim_in as usize],
-                            &extras,
-                            return_size,
-                        )
-                    } else if prim_in > 0 {
-                        let v = read_primitive_at(&state.database, &row_ref, element_size);
-                        state.execute_at_raw_primitive_input(
-                            fn_pos,
-                            v,
-                            prim_in,
-                            &extras,
-                            return_size,
-                        )
-                    } else {
-                        state.execute_at_raw(fn_pos, &row_ref, &extras, return_size)
-                    };
-                    batch.push(val);
-                }
-                (start, batch)
-            }));
-        }
-        handles.into_iter().map(|h| h.join().unwrap()).collect()
     });
     merge_batches(batches, n_rows, 0u64)
 }
@@ -1640,182 +1458,6 @@ pub fn run_parallel_queue_fn(
         }
     }
     buf
-}
-
-// ── A14.4 — run_parallel_light ───────────────────────────────────────────────
-
-/// Lightweight parallel dispatch — borrows main stores read-only instead
-/// of deep-copying them.  Structurally identical to `run_parallel_direct` but
-/// uses `clone_for_light_worker` with a pre-allocated `WorkerPool`.
-///
-/// # Panics
-/// Panics if any row index exceeds `i32::MAX`.
-#[allow(clippy::too_many_arguments)]
-#[allow(dead_code, unused_variables)]
-// A14.6 will wire this into the parser
-// See `run_parallel_direct` for the threading-vs-non-threading split rationale.
-#[cfg_attr(
-    not(feature = "threading"),
-    allow(clippy::needless_pass_by_value, clippy::not_unsafe_ptr_arg_deref,)
-)]
-pub fn run_parallel_light(
-    stores: &Stores,
-    program: WorkerProgram,
-    fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    return_size: u32,
-    n_threads: usize,
-    extra_args: &[u64],
-    out_ptr: *mut u8,
-    n_rows: usize,
-    pool: &mut WorkerPool,
-    primitive_input_size: u32,
-    tuple_input_types: Option<Vec<crate::data::Type>>,
-) {
-    if n_rows == 0 {
-        return;
-    }
-    #[cfg(feature = "threading")]
-    {
-        let threads = n_threads.max(1).min(n_rows);
-        let program = Arc::new(program);
-        let out = Arc::new(SendMutPtr(out_ptr));
-        // P189d: Arc-wrap the per-element type list so each worker
-        // thread shares the same Vec instead of cloning it.
-        let tuple_types_arc = tuple_input_types.map(Arc::new);
-
-        thread::scope(|s| {
-            for t in 0..threads {
-                let start = t * n_rows / threads;
-                let end = (t + 1) * n_rows / threads;
-                // borrow main stores read-only; the worker self-allocates its scratch.
-                let worker_stores = unsafe { stores.clone_for_light_worker() };
-                let prog = Arc::clone(&program);
-                let input_t = *input;
-                let extras = extra_args.to_vec();
-                let out_t = Arc::clone(&out);
-                let ret_sz = return_size as usize;
-                let prim_in = primitive_input_size;
-                let tuple_types = tuple_types_arc.as_ref().map(Arc::clone);
-
-                s.spawn(move || {
-                    let mut state = prog.new_state(worker_stores);
-                    for row_idx in start..end {
-                        let row_idx_i32 = row_idx as i64;
-                        let row_ref = vector::get_vector(
-                            &input_t,
-                            element_size,
-                            row_idx_i32,
-                            &state.database.allocations,
-                        );
-                        // Plan-06 phase 1 G2/G3 — input-type dispatch.
-                        // Three paths selected by prim_in:
-                        //   0          → struct/ref input, push DbRef
-                        //   u32::MAX   → text input, read &str at row
-                        //                offset and push 16-byte Str
-                        //   1/4/8      → primitive input (slot width);
-                        //                read element_size bytes and
-                        //                zero-extend into a slot of
-                        //                that width
-                        let val = if prim_in == u32::MAX {
-                            let s = read_text_at(&state.database, &row_ref);
-                            state.execute_at_raw_text_input(fn_pos, s, &extras, ret_sz as u32)
-                        } else if prim_in > 8 {
-                            // P189c — wide-input path for tuple /
-                            // fn-ref / 9..=64 byte first-arg slots.
-                            // Mirrors the run_parallel_direct branch.
-                            // P189d: tuple inputs walk per-element so
-                            // text fields inflate from heap-pointer
-                            // into argument-slot `Str`.
-                            let buf = if let Some(ref types) = tuple_types {
-                                read_tuple_at_wide(&state.database, &row_ref, types)
-                            } else {
-                                read_primitive_at_wide(&state.database, &row_ref, element_size)
-                            };
-                            state.execute_at_raw_primitive_input_wide(
-                                fn_pos,
-                                &buf[..prim_in as usize],
-                                &extras,
-                                ret_sz as u32,
-                            )
-                        } else if prim_in > 0 {
-                            let v = read_primitive_at(&state.database, &row_ref, element_size);
-                            state.execute_at_raw_primitive_input(
-                                fn_pos,
-                                v,
-                                prim_in,
-                                &extras,
-                                ret_sz as u32,
-                            )
-                        } else {
-                            state.execute_at_raw(fn_pos, &row_ref, &extras, ret_sz as u32)
-                        };
-                        unsafe {
-                            let dst = out_t.0.add(row_idx * ret_sz);
-                            std::ptr::copy_nonoverlapping(
-                                (&raw const val).cast::<u8>(),
-                                dst,
-                                ret_sz,
-                            );
-                        }
-                    }
-                });
-            }
-        });
-    }
-    #[cfg(not(feature = "threading"))]
-    {
-        let worker_stores = unsafe { stores.clone_for_light_worker() };
-        let mut state = program.new_state(worker_stores);
-        for row_idx in 0..n_rows {
-            let row_idx_i32 = row_idx as i64;
-            let row_ref = vector::get_vector(
-                input,
-                element_size,
-                row_idx_i32,
-                &state.database.allocations,
-            );
-            let val = if primitive_input_size == u32::MAX {
-                let s = read_text_at(&state.database, &row_ref);
-                state.execute_at_raw_text_input(fn_pos, s, extra_args, return_size)
-            } else if primitive_input_size > 8 {
-                // P189c — wide-input path.
-                // P189d: tuple inputs walk per-element so text fields
-                // inflate from heap-pointer into argument-slot `Str`.
-                let buf = if let Some(ref types) = tuple_input_types {
-                    read_tuple_at_wide(&state.database, &row_ref, types)
-                } else {
-                    read_primitive_at_wide(&state.database, &row_ref, element_size)
-                };
-                state.execute_at_raw_primitive_input_wide(
-                    fn_pos,
-                    &buf[..primitive_input_size as usize],
-                    extra_args,
-                    return_size,
-                )
-            } else if primitive_input_size > 0 {
-                let v = read_primitive_at(&state.database, &row_ref, element_size);
-                state.execute_at_raw_primitive_input(
-                    fn_pos,
-                    v,
-                    primitive_input_size,
-                    extra_args,
-                    return_size,
-                )
-            } else {
-                state.execute_at_raw(fn_pos, &row_ref, extra_args, return_size)
-            };
-            unsafe {
-                let dst = out_ptr.add(row_idx * return_size as usize);
-                std::ptr::copy_nonoverlapping(
-                    (&raw const val).cast::<u8>(),
-                    dst,
-                    return_size as usize,
-                );
-            }
-        }
-    }
 }
 
 /// Plan-06 phase 1 G3 — read the `&str` slice that the input row's
@@ -1978,47 +1620,6 @@ pub(crate) fn read_tuple_at_wide(
     buf
 }
 
-// ── A14.2 — WorkerPool ──────────────────────────────────────────────────────
-
-use crate::store::Store;
-
-/// Pre-allocated pool of stores for `par_light` workers.
-/// Worker `i` owns the exclusive slice `[i*spw .. (i+1)*spw]`.
-pub struct WorkerPool {
-    stores: Vec<Store>,
-    stores_per_worker: usize,
-}
-
-impl WorkerPool {
-    /// Create a pool with `n_workers × stores_per_worker` stores, each with
-    /// `store_capacity` words of initial capacity.
-    // ARC.md A4 (closed 2026-05-07) — the binary side has no callers
-    // any more: `parallel_light_execute_and_collect` (the sole user)
-    // was deleted when every par return type routed through Queue.
-    // The pool stays for `run_parallel_light` itself, which still
-    // exercises tests at `parallel.rs::par_light_*` until A8 collapses
-    // the dispatcher family.  `cfg_attr` retained for `--no-default-
-    // features` builds.
-    #[cfg_attr(not(feature = "threading"), allow(dead_code))]
-    #[allow(dead_code)] // bin sees no callers post-A4; tests at parallel::par_light_* still use it
-    #[must_use]
-    pub fn new(n_workers: usize, stores_per_worker: usize, store_capacity: u32) -> Self {
-        let total = n_workers * stores_per_worker;
-        let stores = (0..total).map(|_| Store::new(store_capacity)).collect();
-        WorkerPool {
-            stores,
-            stores_per_worker,
-        }
-    }
-
-    /// Return the exclusive mutable slice for worker `idx`.
-    #[must_use]
-    pub fn slice_mut(&mut self, worker_idx: usize) -> &mut [Store] {
-        let spw = self.stores_per_worker;
-        &mut self.stores[worker_idx * spw..(worker_idx + 1) * spw]
-    }
-}
-
 /// Run N independent arms concurrently, each at a given bytecode position.
 #[allow(dead_code)]
 /// Each arm runs as a void function (no args, no return value).
@@ -2061,35 +1662,6 @@ pub fn run_parallel_block(
         for &pos in arm_positions {
             let mut state = program.new_state(stores.clone_for_worker());
             state.execute_at_void_with_snapshot(pos, parent_snapshot.as_ref());
-        }
-    }
-}
-
-#[cfg(test)]
-mod pool_tests {
-    use super::*;
-
-    #[test]
-    fn worker_slices_are_disjoint() {
-        let mut pool = WorkerPool::new(4, 3, 16);
-        // Each worker's slice has 3 stores.
-        let ptrs: Vec<*const Store> = (0..4).map(|i| pool.slice_mut(i).as_ptr()).collect();
-        // All slice start pointers must be distinct.
-        for i in 0..4 {
-            for j in (i + 1)..4 {
-                assert_ne!(ptrs[i], ptrs[j], "worker {i} and {j} share a slice");
-            }
-        }
-    }
-
-    #[test]
-    fn pool_stores_can_claim_after_init() {
-        let mut pool = WorkerPool::new(2, 2, 16);
-        for s in pool.slice_mut(0) {
-            s.init();
-            s.free = false;
-            let rec = s.claim(4);
-            assert!(rec > 0, "claim on pool store must succeed");
         }
     }
 }
