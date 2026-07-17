@@ -126,6 +126,7 @@ pub mod native;
     all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm"))
 ))]
 pub(crate) mod net;
+pub mod host;
 pub mod ownership_cfg;
 #[cfg(feature = "remote-store")]
 pub mod paged_reader;
