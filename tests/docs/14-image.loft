@@ -81,8 +81,10 @@ fn main() {
       imaging::Pixel { r: 128, g: 128, b: 128 }
     ]
   };
-  // Write to a temporary path so the example leaves nothing behind in the project.
-  scratch = "/tmp/loft-doc-swatch.png";
+  // Write to a scratch file in the working directory, then delete it below so the
+  // example leaves nothing behind. A cwd-relative path (with `#cwd`) works on every
+  // OS — a hard-coded `/tmp/…` would not exist on Windows.
+  scratch = "loft-doc-swatch.png";
   saved = swatch.save_png(scratch);
   assert(saved, "save_png reported success");
 
