@@ -5,7 +5,14 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 108 — Share read-only parent stores across par workers
 
-Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:loft` · `status:ready`
+Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:loft` · `status:done`
+
+> **CLOSED (interpreter core) — 2026-07-17.** Every step done and gate-green (S0–S10 below);
+> the read-only par-store borrow ships default-ON via the size heuristic, win confirmed
+> (par_ms flat vs heap, 53×), ASan + TSan clean. The § Deferred items (native analogue, other
+> queue variants, rayon reconciliation, threshold, Option B) stay parked here — **re-open this
+> plan to pick one up.** Landing note: the work rides the `tuxedo-work`/formatter working branch;
+> the tracker issue closes on merge to `main`.
 
 ## Status
 
