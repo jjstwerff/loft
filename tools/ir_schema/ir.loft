@@ -19,33 +19,38 @@
 struct Position {
   file: text,
   line: integer,
-  pos: integer
+  pos: integer,
 }
 
-struct Key {           // src/keys.rs::Key
-  type_nr: integer,    // i8
-  position: integer    // u16
+struct Key {
+  // src/keys.rs::Key
+  type_nr: integer, // i8
+  position: integer, // u16
 }
 
-struct SortKey {       // one (String, bool) entry of a sort/index key list
+struct SortKey {
+  // one (String, bool) entry of a sort/index key list
   name: text,
-  asc: boolean
+  asc: boolean,
 }
 
-struct NameRef {       // one String entry of a Vec<String> (spatial/hash keys)
-  name: text
-}
-
-struct NameNr {        // one Function.names entry (variable name -> var_nr)
+struct NameRef {
+  // one String entry of a Vec<String> (spatial/hash keys)
   name: text,
-  nr: integer          // u16
 }
 
-struct IntegerSpec {   // src/data.rs::IntegerSpec
-  min: integer,        // i32
-  max: integer,        // u32
+struct NameNr {
+  // one Function.names entry (variable name -> var_nr)
+  name: text,
+  nr: integer, // u16
+}
+
+struct IntegerSpec {
+  // src/data.rs::IntegerSpec
+  min: integer, // i32
+  max: integer, // u32
   not_null: boolean,
-  forced_size: integer // Option<NonZeroU8> -> 0 = None
+  forced_size: integer, // Option<NonZeroU8> -> 0 = None
 }
 
 // ---- Type (24 variants) -----------------------------------------------------
@@ -82,7 +87,7 @@ enum TypeT {
   // @PLN25 — the `τ?` nullability marker. A box-of-one child like TyRefVar; the
   // runtime layout is the base's (sentinel storage), but the marker is persisted
   // so a nullable type survives the store round-trip (its N-Store contract).
-  TyOptional { inner: vector<TypeT> }
+  TyOptional { inner: vector<TypeT> },
 }
 
 // ---- Value (34 variants) ----------------------------------------------------
@@ -101,7 +106,7 @@ enum Node {
   NdText { s: text },
   NdCall { def_nr: integer, args: vector<Node> },
   NdCallRef { var: integer, args: vector<Node> },
-  NdBlock { block: reference<Block> },
+  NdBlock { block: reference < Block > },
   NdInsert { items: vector<Node> },
   NdVar { n: integer },
   NdSet { var: integer, inner: vector<Node> },
@@ -110,7 +115,7 @@ enum Node {
   NdBreakWith { n: integer, inner: vector<Node> },
   NdContinue { n: integer },
   NdIf { cond: vector<Node>, t: vector<Node>, f: vector<Node> },
-  NdLoop { block: reference<Block> },
+  NdLoop { block: reference < Block > },
   NdDrop { inner: vector<Node> },
   NdIter { var: integer, create: vector<Node>, next: vector<Node>, init: vector<Node> },
   NdKeys { keys: vector<Key> },
@@ -121,31 +126,34 @@ enum Node {
   NdFnRef { def_nr: integer, var: integer, t: vector<TypeT> },
   NdFnRefDnr { n: integer },
   NdParallel { arms: vector<Node> },
-  NdParFor { body: reference<ParForBody> },
-  NdRawExpr { s: text }
+  NdParFor { body: reference < ParForBody > },
+  NdRawExpr { s: text },
 }
 
-struct Block {         // src/data.rs::Block
+struct Block {
+  // src/data.rs::Block
   name: text,
   operators: vector<Node>,
   result: vector<TypeT>,
   scope: integer,
-  var_size: integer
+  var_size: integer,
 }
 
-struct ParForBody {    // src/data.rs::ParForBody
+struct ParForBody {
+  // src/data.rs::ParForBody
   input: vector<Node>,
   x_var: integer,
   r_var: integer,
   worker: vector<Node>,
   threads: vector<Node>,
   body: vector<Node>,
-  stitch_id: integer
+  stitch_id: integer,
 }
 
 // ---- Definition / Attribute / Function / Variable ---------------------------
 
-struct Attribute {     // src/data.rs::Attribute
+struct Attribute {
+  // src/data.rs::Attribute
   name: text,
   typedef: vector<TypeT>,
   mutable: boolean,
@@ -154,16 +162,17 @@ struct Attribute {     // src/data.rs::Attribute
   nullable: boolean,
   primary: boolean,
   hidden: boolean,
-  const_field: boolean,      // @PLN40 — write-once struct field; last bool keeps prior offsets stable
+  const_field: boolean, // @PLN40 — write-once struct field; last bool keeps prior offsets stable
   value: vector<Node>,
   check: vector<Node>,
   check_message: vector<Node>,
   alias_d_nr: integer,
   assigned_lambda_d_nr: integer,
-  links: text                // @PLN86 F8b — group#right member links; "" = unlinked
+  links: text, // @PLN86 F8b — group#right member links; "" = unlinked
 }
 
-struct Variable {      // src/variables/mod.rs::Variable (debug-symbol subset)
+struct Variable {
+  // src/variables/mod.rs::Variable (debug-symbol subset)
   name: text,
   type_def: vector<TypeT>,
   stack_pos: integer,
@@ -172,30 +181,32 @@ struct Variable {      // src/variables/mod.rs::Variable (debug-symbol subset)
   stack_allocated: boolean,
   skip_free: boolean,
   captured: boolean,
-  caller_hidden_buf: boolean
+  caller_hidden_buf: boolean,
 }
 
-struct Function {      // src/variables/mod.rs::Function (the stored subset)
+struct Function {
+  // src/variables/mod.rs::Function (the stored subset)
   name: text,
   file: text,
   variables: vector<Variable>,
-  names: vector<NameNr>,        // name -> var_nr map (pruned on scope exit; not
-                                // reconstructible from `variables`, so stored)
-  inline_refs: vector<integer>  // inline_ref_vars set (compile-derived; stored)
+  names: vector<NameNr>, // name -> var_nr map (pruned on scope exit; not
+  // reconstructible from `variables`, so stored)
+  inline_refs: vector<integer>, // inline_ref_vars set (compile-derived; stored)
 }
 
 struct LinkedFieldGroup {
-  kind: integer,       // Tuple=0 / Index=1
+  kind: integer, // Tuple=0 / Index=1
   instance: integer,
   field_indices: vector<integer>,
   alignment: integer,
-  size: integer
+  size: integer,
 }
 
-struct Definition {    // src/data.rs::Definition (portable IR subset)
+struct Definition {
+  // src/data.rs::Definition (portable IR subset)
   name: text,
   source: integer,
-  def_type: integer,   // DefType ordinal
+  def_type: integer, // DefType ordinal
   parent: integer,
   position: Position,
   attributes: vector<Attribute>,
@@ -208,22 +219,23 @@ struct Definition {    // src/data.rs::Definition (portable IR subset)
   known_type: integer,
   variables: Function,
   pub_visible: boolean,
-  null_safe: boolean,      // @PLN46 W2 #null_safe -> false = unannotated
+  null_safe: boolean, // @PLN46 W2 #null_safe -> false = unannotated
   closure_record: integer,
   mutated_captures: vector<NameRef>,
   scalars_to_box: vector<NameRef>,
   bounds: vector<integer>,
-  forced_size: integer,    // Option<u8> -> 0 = None
-  purity: integer,         // Purity ordinal
+  forced_size: integer, // Option<u8> -> 0 = None
+  purity: integer, // Purity ordinal
   field_groups: vector<LinkedFieldGroup>,
-  synthetic: text,         // Option<&'static str> -> "" = None
-  cap: text,               // @PLN86 #cap "group" -> "" = unannotated
-  superseded: text         // @PLN102 arc C #superseded "Y" -> "" = not superseded
+  synthetic: text, // Option<&'static str> -> "" = None
+  cap: text, // @PLN86 #cap "group" -> "" = unannotated
+  superseded: text, // @PLN102 arc C #superseded "Y" -> "" = not superseded
 }
 
-struct Data {          // src/data.rs::Data (the stored core)
+struct Data {
+  // src/data.rs::Data (the stored core)
   definitions: vector<Definition>,
-  source: integer
+  source: integer,
 }
 
 // ---- Database type schema (src/database) ------------------------------------
@@ -234,32 +246,37 @@ struct Data {          // src/data.rs::Data (the stored core)
 // `Type.parents` is a derived back-reference index (rebuilt on load, not
 // stored); `Key` and `LinkedFieldGroup` above are reused verbatim.
 
-enum DbContent {       // src/keys.rs::Content — a field's default value
+enum DbContent {
+  // src/keys.rs::Content — a field's default value
   DcLong { v: integer },
   DcFloat { v: float },
   DcSingle { v: single },
-  DcStr { v: text }
+  DcStr { v: text },
 }
 
-struct DbField {       // src/database/mod.rs::Field
+struct DbField {
+  // src/database/mod.rs::Field
   name: text,
-  content: integer,    // u16 known_type of the field value
-  position: integer,   // u16 byte offset
-  default: vector<DbContent>,   // Content (box-of-one)
-  other_indexes: vector<integer>
+  content: integer, // u16 known_type of the field value
+  position: integer, // u16 byte offset
+  default: vector<DbContent>, // Content (box-of-one)
+  other_indexes: vector<integer>,
 }
 
-struct EnumPair {      // one (u16, text) of Parts::Enum
+struct EnumPair {
+  // one (u16, text) of Parts::Enum
   nr: integer,
-  name: text
+  name: text,
 }
 
-struct KeyField {      // one (u16, bool) of a Sorted/Ordered/Index key list
+struct KeyField {
+  // one (u16, bool) of a Sorted/Ordered/Index key list
   nr: integer,
-  asc: boolean
+  asc: boolean,
 }
 
-enum DbParts {         // src/database/mod.rs::Parts (17 variants)
+enum DbParts {
+  // src/database/mod.rs::Parts (17 variants)
   PtBase,
   PtStruct { fields: vector<DbField> },
   PtEnum { values: vector<EnumPair> },
@@ -276,24 +293,25 @@ enum DbParts {         // src/database/mod.rs::Parts (17 variants)
   PtIndex { content: integer, keys: vector<KeyField>, left: integer },
   PtRadix { content: integer, fields: vector<integer> },
   PtDbRef,
-  PtChildRec { content: integer }
+  PtChildRec { content: integer },
 }
 
-struct DbType {        // src/database/types.rs::Type (parents = derived, not stored)
+struct DbType {
+  // src/database/types.rs::Type (parents = derived, not stored)
   name: text,
-  parts: vector<DbParts>,         // Parts (box-of-one)
+  parts: vector<DbParts>, // Parts (box-of-one)
   keys: vector<Key>,
   complex: boolean,
   linked: boolean,
   size: integer,
   align: integer,
-  field_groups: vector<LinkedFieldGroup>
+  field_groups: vector<LinkedFieldGroup>,
 }
 
 // The store root for a saved bundle: the IR plus its database type schema.
 struct Bundle {
   data: Data,
-  types: vector<DbType>
+  types: vector<DbType>,
 }
 
 fn main() {
@@ -303,6 +321,9 @@ fn main() {
   //   loft --introspect --show-rust --rust-out out.rs ir_full.loft
   // Constructing deeply-nested records would additionally need each recursive
   // field wrapped as a reference literal — not needed to study the schema.
-  b = Bundle { data: Data { definitions: [], source: 0 }, types: [] };
+  b = Bundle {
+    data: Data { definitions: [], source: 0 },
+    types: [],
+  };
   print("bundle with {b.data.definitions.len()} defs, {b.types.len()} types");
 }

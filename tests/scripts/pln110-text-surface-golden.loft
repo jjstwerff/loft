@@ -18,12 +18,12 @@
 // (0xE2 0x99 0xA5 = 226,153,165), CJK '日'/'本'=3 bytes each, '😃'=4 bytes.
 
 fn main() {
-  ascii = "hello";   // 5 bytes, 5 chars
-  cafe  = "café";    // 5 bytes, 4 chars
-  heart = "♥";       // 3 bytes, 1 char
-  cjk   = "日本";     // 6 bytes, 2 chars
-  emoji = "😃";       // 4 bytes, 1 char
-  mix   = "a♥b";     // 5 bytes, 3 chars
+  ascii = "hello"; // 5 bytes, 5 chars
+  cafe = "café"; // 5 bytes, 4 chars
+  heart = "♥"; // 3 bytes, 1 char
+  cjk = "日本"; // 6 bytes, 2 chars
+  emoji = "😃"; // 4 bytes, 1 char
+  mix = "a♥b"; // 5 bytes, 3 chars
 
   // ===================================================================
   // SECTION A — FLIP CANARY.  Every value here swaps at Phase 2a.
@@ -31,57 +31,57 @@ fn main() {
   // ===================================================================
   // len (today = BYTE count) — after flip these become the char counts below.
   assert(len(ascii) == 5, "A: len ascii bytes");
-  assert(len(cafe)  == 5, "A: len café bytes");
+  assert(len(cafe) == 5, "A: len café bytes");
   assert(len(heart) == 3, "A: len heart bytes");
-  assert(len(cjk)   == 6, "A: len cjk bytes");
+  assert(len(cjk) == 6, "A: len cjk bytes");
   assert(len(emoji) == 4, "A: len emoji bytes");
-  assert(len(mix)   == 5, "A: len mix bytes");
+  assert(len(mix) == 5, "A: len mix bytes");
   // size (today = CHARACTER count) — after flip these become the byte counts above.
   assert(size(ascii) == 5, "A: size ascii chars");
-  assert(size(cafe)  == 4, "A: size café chars");
+  assert(size(cafe) == 4, "A: size café chars");
   assert(size(heart) == 1, "A: size heart chars");
-  assert(size(cjk)   == 2, "A: size cjk chars");
+  assert(size(cjk) == 2, "A: size cjk chars");
   assert(size(emoji) == 1, "A: size emoji chars");
-  assert(size(mix)   == 3, "A: size mix chars");
+  assert(size(mix) == 3, "A: size mix chars");
   // Cross-check: today len==size only for pure ASCII; they diverge on multi-byte.
   assert(len(ascii) == size(ascii), "A: ascii len==size (no multibyte)");
-  assert(len(cafe)  != size(cafe),  "A: café len!=size (multibyte diverges)");
+  assert(len(cafe) != size(cafe), "A: café len!=size (multibyte diverges)");
 
   // ===================================================================
   // SECTION B — BYTE-WORLD STABILITY.  Must stay GREEN across the flip.
   // ===================================================================
 
   // --- byte_at: raw O(1) byte read, byte-indexed, 0 when out of range ---
-  assert(cafe.byte_at(0) == 99,  "B: byte_at café[0]='c'");
+  assert(cafe.byte_at(0) == 99, "B: byte_at café[0]='c'");
   assert(cafe.byte_at(3) == 195, "B: byte_at café[3]=é lead");
   assert(cafe.byte_at(4) == 169, "B: byte_at café[4]=é continuation");
-  assert(cafe.byte_at(5) == 0,   "B: byte_at café[5] out-of-range -> 0");
-  assert(mix.byte_at(1)  == 226, "B: byte_at mix[1]=♥ lead");
+  assert(cafe.byte_at(5) == 0, "B: byte_at café[5] out-of-range -> 0");
+  assert(mix.byte_at(1) == 226, "B: byte_at mix[1]=♥ lead");
 
   // --- s[p]: byte-positioned char read; a mid-char byte snaps to the char's start ---
-  assert(mix[0] == 'a',  "B: mix[0]=a");
-  assert(mix[1] == '♥',  "B: mix[1]=♥ (byte 1 = ♥ lead)");
-  assert(mix[2] == '♥',  "B: mix[2] snaps back to ♥ (continuation byte)");
-  assert(mix[3] == '♥',  "B: mix[3] snaps back to ♥ (continuation byte)");
-  assert(mix[4] == 'b',  "B: mix[4]=b");
+  assert(mix[0] == 'a', "B: mix[0]=a");
+  assert(mix[1] == '♥', "B: mix[1]=♥ (byte 1 = ♥ lead)");
+  assert(mix[2] == '♥', "B: mix[2] snaps back to ♥ (continuation byte)");
+  assert(mix[3] == '♥', "B: mix[3] snaps back to ♥ (continuation byte)");
+  assert(mix[4] == 'b', "B: mix[4]=b");
   assert(cafe[3] == 'é', "B: café[3]=é lead");
   assert(cafe[4] == 'é', "B: café[4] snaps back to é");
 
   // --- slices s[a..b]: byte offsets, snapping to char boundaries ---
-  assert(mix[0..1] == "a",   "B: slice mix[0..1]");
-  assert(mix[1..4] == "♥",   "B: slice mix[1..4] = ♥ (3 bytes)");
-  assert(mix[0..4] == "a♥",  "B: slice mix[0..4]");
-  assert(mix[4..5] == "b",   "B: slice mix[4..5]");
-  assert(mix[1..]  == "♥b",  "B: open slice mix[1..]");
+  assert(mix[0..1] == "a", "B: slice mix[0..1]");
+  assert(mix[1..4] == "♥", "B: slice mix[1..4] = ♥ (3 bytes)");
+  assert(mix[0..4] == "a♥", "B: slice mix[0..4]");
+  assert(mix[4..5] == "b", "B: slice mix[4..5]");
+  assert(mix[1..] == "♥b", "B: open slice mix[1..]");
   assert(cafe[0..3] == "caf", "B: slice café[0..3]");
-  assert(cafe[3..5] == "é",   "B: slice café[3..5] = é");
+  assert(cafe[3..5] == "é", "B: slice café[3..5] = é");
 
   // --- find/rfind: return a BYTE offset (null when absent) ---
-  assert(mix.find("♥")  == 1,    "B: find ♥ at byte 1");
-  assert(mix.find("b")  == 4,    "B: find b at byte 4");
-  assert(mix.find("z")  == null, "B: find absent -> null");
-  assert(cafe.find("é") == 3,    "B: find é at byte 3");
-  assert(cjk.find("本") == 3,    "B: find 本 at byte 3");
+  assert(mix.find("♥") == 1, "B: find ♥ at byte 1");
+  assert(mix.find("b") == 4, "B: find b at byte 4");
+  assert(mix.find("z") == null, "B: find absent -> null");
+  assert(cafe.find("é") == 3, "B: find é at byte 3");
+  assert(cjk.find("本") == 3, "B: find 本 at byte 3");
 
   // --- character iteration: count == char count (== size today, len after flip) ---
   n_mix = 0;
@@ -89,7 +89,9 @@ fn main() {
   assert(n_mix == 3, "B: iterate mix -> 3 chars");
   n_cjk = 0;
   last_index = -1;
-  for c in cjk { n_cjk += 1; last_index = c#index; }
+  for c in cjk {
+    n_cjk += 1; last_index = c#index;
+  }
   assert(n_cjk == 2, "B: iterate cjk -> 2 chars");
   assert(last_index == 3, "B: cjk last char #index = byte 3");
 }

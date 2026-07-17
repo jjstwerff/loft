@@ -26,15 +26,22 @@
 
 use web;
 
-struct RegEntry { name: text, id: integer }
-struct Registry { by_name: hash<RegEntry[name]> }
+struct RegEntry {
+  name: text,
+  id: integer,
+}
+struct Registry {
+  by_name: hash<RegEntry[name]>,
+}
 
 fn install(reg: Registry, name: text, id: integer) {
-  reg.by_name += [RegEntry { name: name, id: id }];
+  reg.by_name += [
+    RegEntry { name: name, id: id },
+  ];
 }
 
 fn lookup_id(reg: Registry, name: text) -> integer {
-  if !reg.by_name[name] { return -1; }
+  if!reg.by_name[name] { return -1; }
   reg.by_name[name].id
 }
 
@@ -46,9 +53,7 @@ fn install_map(reg: Registry, payload: text) {
     if comma != null {
       entry = rest[..comma];
       rest = rest[comma + 1..];
-    } else {
-      rest = "";
-    }
+    } else { rest = ""; }
     eq = entry.find("=");
     if eq != null {
       n = entry[..eq];
@@ -74,17 +79,19 @@ fn parse_payload(raw: text) -> text {
   raw[i + 1..]
 }
 
-fn frame_label(id: integer,
-               h_placement: integer,
-               h_gameover: integer,
-               h_spec_placement: integer,
-               h_spec_gameover: integer,
-               h_shutdown: integer) -> text {
-  if id == h_placement      { return "Placement"; }
-  if id == h_gameover       { return "GameOver"; }
+fn frame_label(
+  id: integer,
+  h_placement: integer,
+  h_gameover: integer,
+  h_spec_placement: integer,
+  h_spec_gameover: integer,
+  h_shutdown: integer
+) -> text {
+  if id == h_placement { return "Placement"; }
+  if id == h_gameover { return "GameOver"; }
   if id == h_spec_placement { return "SpectatorPlacement"; }
-  if id == h_spec_gameover  { return "SpectatorGameOver"; }
-  if id == h_shutdown       { return "Shutdown"; }
+  if id == h_spec_gameover { return "SpectatorGameOver"; }
+  if id == h_shutdown { return "Shutdown"; }
   "<unknown>"
 }
 
@@ -99,11 +106,7 @@ fn main() {
   // harness can spin up server+clients on a unique ephemeral port.
   // Default 7878 keeps the standalone-launch behaviour.
   port_raw = env_variable("LOFT_TICTACTOE_PORT");
-  url = if port_raw == "" {
-    "ws://localhost:7878/"
-  } else {
-    "ws://localhost:{port_raw}/"
-  };
+  url = if port_raw == "" { "ws://localhost:7878/" } else { "ws://localhost:{port_raw}/" };
   ws = web::ws_handler(url);
   if ws == null {
     println("[{label}] malformed URL");
@@ -115,7 +118,7 @@ fn main() {
   // Phase 1 — wait for MAP.
   got_map = false;
   attempts = 0;
-  while !got_map {
+  while!got_map {
     raw = ws.try_recv();
     if raw == null {
       attempts = attempts + 1;
@@ -129,27 +132,27 @@ fn main() {
     if raw.starts_with("MAP:") {
       install_map(reg, raw[4..]);
       got_map = true;
-    } else {
-      println("[{label}] unexpected pre-MAP frame: {raw}");
-    }
+    } else { println("[{label}] unexpected pre-MAP frame: {raw}"); }
   }
 
-  h_click          = lookup_id(reg, "Click");
-  h_placement      = lookup_id(reg, "Placement");
-  h_gameover       = lookup_id(reg, "GameOver");
+  h_click = lookup_id(reg, "Click");
+  h_placement = lookup_id(reg, "Placement");
+  h_gameover = lookup_id(reg, "GameOver");
   h_spec_placement = lookup_id(reg, "SpectatorPlacement");
-  h_spec_gameover  = lookup_id(reg, "SpectatorGameOver");
+  h_spec_gameover = lookup_id(reg, "SpectatorGameOver");
   // Shutdown is optional — only present when the server is in
   // test-orchestration mode.  -1 if absent; client just won't see
   // it in production builds.
-  h_shutdown       = lookup_id(reg, "__Shutdown__");
+  h_shutdown = lookup_id(reg, "__Shutdown__");
   if h_click < 0 || h_placement < 0 || h_gameover < 0
-     || h_spec_placement < 0 || h_spec_gameover < 0 {
+  || h_spec_placement < 0 || h_spec_gameover < 0 {
     println("[{label}] MAP missing required handlers");
     ws.close();
     return;
   }
-  println("[{label}] handlers learned: Click={h_click} Placement={h_placement} GameOver={h_gameover} SpectatorPlacement={h_spec_placement} SpectatorGameOver={h_spec_gameover}");
+  println(
+    "[{label}] handlers learned: Click={h_click} Placement={h_placement} GameOver={h_gameover} SpectatorPlacement={h_spec_placement} SpectatorGameOver={h_spec_gameover}"
+  );
 
   // P229a: optional post-handshake pause so a partner client can
   // complete its own handshake and register with the server before
@@ -160,9 +163,7 @@ fn main() {
   // routing.  The two-client integration test sets the env var to
   // ~200 ms; the single-client test leaves it unset (no delay).
   delay_raw = env_variable("LOFT_TICTACTOE_CLIENT_DELAY_MS");
-  if delay_raw != "" {
-    sleep_ms(delay_raw as integer);
-  }
+  if delay_raw != "" { sleep_ms(delay_raw as integer); }
 
   // Phase 2 — short warmup so a second client can join (3 polls).
   poll_count = 0;
@@ -195,15 +196,17 @@ fn main() {
     spin = 0;
     while own_seen < 2 && !game_over && !shutdown && spin < 2000 {
       raw = ws.try_recv();
-      if raw == null { spin = spin + 1; continue; }
+      if raw == null {
+        spin = spin + 1; continue;
+      }
       id = parse_id(raw);
       body = parse_payload(raw);
       lab = frame_label(id, h_placement, h_gameover, h_spec_placement, h_spec_gameover, h_shutdown);
       println("[{label}] {lab}: {body}");
-      if id == h_placement          { own_seen = own_seen + 1; }
-      else if id == h_gameover       { game_over = true; }
-      else if id == h_spec_gameover  { spectator_done = true; }
-      else if id == h_shutdown       { shutdown = true; }
+      if id == h_placement { own_seen = own_seen + 1; }
+      else if id == h_gameover { game_over = true; }
+      else if id == h_spec_gameover { spectator_done = true; }
+      else if id == h_shutdown { shutdown = true; }
     }
   }
 
@@ -215,17 +218,19 @@ fn main() {
   // received frame resets the idle counter.  If no partner ever
   // showed up, we still exit promptly after the idle threshold.
   idle = 0;
-  while !shutdown && (!game_over || (idle < 100 && !spectator_done)) {
+  while!shutdown && (!game_over || (idle < 100 && !spectator_done)) {
     raw = ws.try_recv();
-    if raw == null { idle = idle + 1; continue; }
+    if raw == null {
+      idle = idle + 1; continue;
+    }
     idle = 0;
     id = parse_id(raw);
     body = parse_payload(raw);
     lab = frame_label(id, h_placement, h_gameover, h_spec_placement, h_spec_gameover, h_shutdown);
     println("[{label}] {lab}: {body}");
-    if id == h_gameover            { game_over = true; }
-    else if id == h_spec_gameover   { spectator_done = true; }
-    else if id == h_shutdown        { shutdown = true; }
+    if id == h_gameover { game_over = true; }
+    else if id == h_spec_gameover { spectator_done = true; }
+    else if id == h_shutdown { shutdown = true; }
   }
 
   ws.close();

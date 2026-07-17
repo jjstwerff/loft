@@ -41,7 +41,7 @@ pub enum FileResult {
   NotFound,
   PermissionDenied,
   IsDirectory,
-  Other
+  Other,
 }
 
 // True when the result is `FileResult.Ok`. Use to test a file op for success.
@@ -276,7 +276,7 @@ pub fn exists(both: File) -> boolean fs#read {
 // not exist or is outside the project directory.
 
 pub fn delete(path: text) -> FileResult fs#update {
-  if !exists(path) { return FileResult.NotFound }
+  if!exists(path) { return FileResult.NotFound }
   fs_result(OpDelete(path))
 }
 // Par-safe filesystem write; the host bridge serialises mutations.
@@ -296,7 +296,7 @@ pub fn move(from: text, to: text) -> FileResult fs#update {
 // is outside the project directory.
 
 pub fn mkdir(path: text) -> FileResult fs#update {
-  if !valid_path(path) { return FileResult.NotFound }
+  if!valid_path(path) { return FileResult.NotFound }
   fs_result(OpMkdir(path))
 }
 #impure(io)
@@ -304,7 +304,7 @@ pub fn mkdir(path: text) -> FileResult fs#update {
 // Returns FileResult.NotFound if the path is outside the project directory.
 
 pub fn mkdir_all(path: text) -> FileResult fs#update {
-  if !valid_path(path) { return FileResult.NotFound }
+  if!valid_path(path) { return FileResult.NotFound }
   fs_result(OpMkdirAll(path))
 }
 #impure(io)

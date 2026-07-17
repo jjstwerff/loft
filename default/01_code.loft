@@ -1574,7 +1574,9 @@ pub fn sum < T: Addable > (v: vector<T>, init: T) -> T {
 // @PLN102 arc C — superseded by the general `sum(v, init)`; kept as a shim over it
 // (the old form keeps working). `sum_of(v)` == `sum(v, 0)`. Defined AFTER `sum` so the
 // shim's call resolves — a forward reference to a generic is not yet supported.
-pub fn sum_of(v: vector<integer>) -> integer { sum(v, 0) }
+pub fn sum_of(v: vector<integer>) -> integer {
+  sum(v, 0)
+}
 #superseded "sum"
 #pure
 
