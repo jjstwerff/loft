@@ -9,6 +9,34 @@ All notable changes to the loft language and interpreter.
 
 ## [Unreleased]
 
+### @PLN108 "Share read-only parent stores across par workers" — interpreter core (2026-07-17)
+
+- A par worker whose captured parent state is read-only (@PLN102 C93) now **BORROWS** the parent
+  stores read-only instead of `clone_for_worker`'s per-worker byte-copy, for `run_parallel_discard`
+  and `run_parallel_queue`. Copy-elision, no semantic change.
+- **Auto-selected by heap size:** the borrow engages only when the copy it would save is ≥ 2 MB
+  (`Stores::active_clone_bytes`), so small/frequent pars keep the cheap rayon-pool clone (no
+  regression) while a par over a large read-only structure goes flat instead of copying the session
+  heap per worker (measured ~53× on a 122 MB shape). `LOFT_PAR_SHARE=0`/`=1` force off/on.
+- Safety is compiler-carried (the dispatcher's `&Stores` signature proves parent-unwritten) +
+  the `read_only` write-panic; **ASan + TSan clean** on the flag-ON path (positive control fires).
+  `--native` par still copies (a native analogue is deferred). Decision recorded as C99.
+
+### `loft fmt` — parser-driven formatter, written in loft
+
+- New `loft fmt [--check|--write] <file…>` (`-` = stdin): a canonical formatter (`tools/fmt/whole.loft`)
+  driven through the new host-call API. Default prints; `--write` rewrites in place; `--check` is a
+  CI gate (non-zero if unformatted). One canonical style — struct/enum/interface defs + fn bodies
+  expand; struct-literal/control-flow VALUES stay inline; number vectors pack, object vectors break;
+  trailing comments stay at end of line. Coexists with the older Rust `--format`.
+
+### `loft::host` — Rust→loft call API
+
+- `Program::from_source(src)` → `prog.call("fn", &[Value::…])` → `Result<Value, LoftError>`: call any
+  loft `pub fn` by name with typed args, typed return, errors as a `Result`. Routes through the
+  interpreter's stack ABI (`State::execute_host`). Phase 1 supports text / integer / single / boolean
+  / void; struct/vector returns are a clean `Unsupported`. Consumed by `loft fmt`.
+
 ### @PLN28 "Better error messages" — closeout (2026-07-07)
 
 Phases 5, 6, 1, and 7 landed, completing the plan (0/2/3/4 shipped earlier).
