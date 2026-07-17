@@ -5,7 +5,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 108 — Share read-only parent stores across par workers
 
-Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:loft` · `status:future`
+Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:loft` · `status:active`
+
+> **RE-OPENED — 2026-07-17.** The shipped core (S0–S10, below) wired the borrow into only
+> `discard`/`queue` behind the size heuristic, so **../routing cannot reproduce the win** — its
+> reduction par (`run_parallel_fold`) still copies (measured 1→71 ms, 0→61 MB, both backends).
+> Re-open consumes the § Deferred items (**rayon reconciliation**, other queue variants, native
+> analogue, threshold) under one goal: **one clone, one spawn primitive, always sharing — no copy
+> path, no heuristic.** Design + steps: **[single-implementation.md](single-implementation.md).**
+>
+> **Original close note (interpreter core — 2026-07-17):** S0–S10 done and gate-green; borrow
+> shipped default-ON via the size heuristic, win confirmed (par_ms flat vs heap, 53×), ASan + TSan
+> clean. Retained below as the closure record of the first cut.
 
 ## Status
 
