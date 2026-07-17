@@ -6447,6 +6447,31 @@ impl Parser {
                 }
                 let default = self.data.def(d_nr).attributes()[a_nr].value.clone();
                 let tp = self.data.attr_type(d_nr, a_nr);
+                // Arity (routing SIGSEGV): a missing FUNCTION-TYPED argument with no default is
+                // filled with a broken `()` — a stdlib segfault several frames away, and it can
+                // corrupt earlier args. There is no valid "empty function" to fill, so a missing
+                // fn-typed param is unambiguously a too-few-arguments error. Scoped to fn-typed on
+                // purpose: it is the crash, and a compiler-promoted return buffer (`ref_return`) is
+                // never fn-typed, so this has ZERO false positives. The GENERAL too-few check (a
+                // missing scalar fills null, a vector fills empty) needs a user-param vs
+                // promoted-param distinction and is a follow-up (see code-eval-followups.md).
+                // `= expr` default (value != Null) is filled below; pass 1 defers (a forward-ref
+                // `&` arg lowers to Null and only looks missing until pass 2).
+                let a_name = self.data.def(d_nr).attributes()[a_nr].name.clone();
+                if !self.first_pass
+                    && default == Value::Null
+                    && matches!(tp, Type::Function(_, _, _))
+                {
+                    let fname = self.data.def(d_nr).display_name().to_string();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "missing argument for parameter '{a_name}' of `{fname}` — the call supplies \
+                         too few arguments (a function-typed parameter has no default and must be \
+                         passed)"
+                    );
+                    continue;
+                }
                 if let Type::Vector(content, _) = &tp {
                     assert_eq!(
                         default,

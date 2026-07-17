@@ -577,6 +577,25 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
+// @PLN102 (routing consumer): a call MISSING a function-typed argument was silently filled
+// with a broken `()` — a SIGSEGV inside stdlib `len` several frames from the bad call, and it
+// corrupted the earlier arguments. There is no valid "empty function" to fill, so a missing
+// fn-typed param with no default is now a too-few-arguments error at parse time. (The general
+// too-few check — a missing scalar fills null, a vector empty — is a follow-up; it needs a
+// user-param vs promoted-return-buffer distinction. See code-eval-followups.md.)
+#[test]
+fn call_missing_fn_typed_arg_is_rejected() {
+    code!(
+        "fn five(a: integer, b: text, cb: fn(integer)) -> integer { cb(a); b.len() }
+fn test() { five(1, \"x\"); }"
+    )
+    .error(
+        "missing argument for parameter 'cb' of `five` — the call supplies too few arguments \
+(a function-typed parameter has no default and must be passed) \
+at call_missing_fn_typed_arg_is_rejected:2:26",
+    );
+}
+
 // ── map / filter / reduce ─────────────────────────────────────────────────────
 
 #[test]

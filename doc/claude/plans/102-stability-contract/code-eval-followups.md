@@ -122,6 +122,48 @@ copy of load-bearing string parsing is a drift trap for whoever next touches the
 
 ---
 
+## K5 — general too-few-arguments check (the routing SIGSEGV, fn-typed half FIXED)
+
+**Context.** The `../routing` consumer hit a SIGSEGV inside stdlib `len`, minimised to: **loft has
+no too-few-arguments check** (too-MANY is caught: "Too many parameters"). `add_defaults` fills
+EVERY missing trailing slot with a type-specific empty/default — vector→empty, scalar→null,
+fn-typed→a broken `()`. The fn-typed fill is the crash (and it corrupts the *earlier* args). Likely
+regressed with named parameters: `call_with_named` builds `args = [Null; n_params]` and fills gaps
+by name/default, which made an internal Null slot normal and lost the required-arg check.
+
+**FIXED (fn-typed half).** A missing FUNCTION-TYPED param with no default is now a parse-time error
+("missing argument for parameter '…' of `F` …"). Scoped to fn-typed because it is the crash and a
+compiler-promoted return buffer (`ref_return`) is never fn-typed → **zero false positives**. The
+error fires before codegen, so the earlier-arg corruption is unreachable too. Regression:
+`tests/issues.rs::call_missing_fn_typed_arg_is_rejected`. Suite green.
+
+**OPEN (the general half).** A missing SCALAR still fills null (`f(7)` for `f(a, b: integer)` →
+`b = null`, a silent wrong), a missing non-null VECTOR fills empty. Extending the check to them is
+blocked by ONE thing: `add_defaults` iterates raw attribute slots, which include compiler-PROMOTED
+params (a heap-return's source local promoted to a caller-provided buffer by `ref_return`, e.g.
+`tv` in `via_index() -> text { tv: vector<text> = […]; return tv[0] }`). Those are NOT `hidden` and
+NOT `__`-named, so a naive "missing non-null no-default slot → error" false-positives on them (it
+did, in the first attempt — `tret_bind_forward_ref_pass_stable`).
+
+**Design — small safe steps.**
+1. **Find the reliable user-param vs promoted-param signal.** The promotion marks the VARIABLE
+   `caller_hidden_buf` (`src/variables/mod.rs`), not the attribute. Either surface that onto the
+   attribute, or record the USER-declared param count on the def (before `ref_return` promotion)
+   and check the call against THAT, not `attributes(d_nr)`.
+2. **Matrix (both backends).** missing scalar / non-null vector / ref / `&`-param / nullable
+   (stays optional) / `= default` (stays filled) / named-arg-skipping-a-defaulted-middle-param
+   (stays legal) / a return-promoted fn (`via_index`, must NOT error) / method self.
+3. **Extend the check** at the `add_defaults` chokepoint (both the positional and named paths
+   converge there) using the step-1 signal, gated to pass 2 (forward-ref `&` args lower to Null on
+   pass 1).
+4. **MEASURE the blast radius** — the first attempt at the general check turned up ~a handful of
+   fixtures that omit real args relying on the silent fill (e.g. `greet` in `multiplayer_v2`); each
+   is either a genuine arity bug to fix or an intentional omission to make explicit. This is an
+   error-add → must land pre-freeze.
+5. **Diagnostic position.** `add_defaults` has no call-site position, so the error currently falls
+   back to the lexer cursor (usually the call, sometimes the callee body). Thread the call position
+   (`call_nr` already has `arg_pos`) if the fall-through proves confusing for real consumers.
+
 ## K4 — trivial: `plans/35-match-peg/README.md` status is stale
 
 **What.** `doc/claude/plans/35-match-peg/README.md` still reads "Status: design draft… Phase 0 in
