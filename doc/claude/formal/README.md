@@ -74,7 +74,7 @@ shrinks operational.md's single meta-deviation (D-op-1: conformance is *differen
 | doc | area | status |
 |---|---|---|
 | [types.md](types.md) | type system + conversion relation (incl. integer width) | **0 open** — @PLN25 value/null model landed; DN1–DN6 + D2 closed |
-| [binding.md](binding.md) | reference types & `&` (the bind-site link law) | **0 open** — `&` is a TYPE ANNOTATION (`&τ` = `Type::RefVar`); the @PLN87 ladder L1–L6 landed (PR#436); D-bind-7 (bare `&a;` reject) closed |
+| [binding.md](binding.md) | reference types & `&` (the bind-site link law) + the `const` immutability axis | **1 open (D-const-1)** — `&` is a TYPE ANNOTATION (`&τ` = `Type::RefVar`), @PLN87 ladder L1–L6 + D-bind-7 closed; the @PLN40 two-level `const` model (Const-Bind/Value/…) shipped, D-const-1 open (enum-variant const not enforced) |
 | [grammar.md](grammar.md) | concrete grammar + operator precedence | **0 open** — the 12-level precedence ladder written; the prefix-`&`/infix-`&` overload + non-CFG surface resolved as decided edges (C81/C82) |
 | [operational.md](operational.md) | small-step semantics — the scalar core | **rules complete for the core, 2 open** — values/null sentinels, left-to-right order, uncomputable→null (C80) + `??`, state steps; the 2 open are the META deviation D-op-1/2 (differential-not-definitional conformance), inherited by every operational file below |
 | [heap.md](heap.md) | store steps — alloc / read / write / **copy** / free | **rules written (2026-07-04), 0 own** — the `DbRef`/`Store` model; the whole-value COPY (C86); the LIFO free discipline whose soundness is ownership.md; conformance via the oracle (D-op-1) |
