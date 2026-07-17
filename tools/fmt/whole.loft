@@ -160,6 +160,12 @@ fn is_binop(t: text) -> boolean {
     || t == "+=" || t == "-=" || t == "*=" || t == "/=" || t == "%="
 }
 
+// A `-`/`+`/`*`/`&` right after an expression-START is UNARY -> no space after it.
+fn unary_ctx(prev: text) -> boolean {
+  prev == "" || prev == "(" || prev == "[" || prev == "{{" || prev == "," || prev == ";"
+    || prev == ":" || prev == "return" || is_binop(prev)
+}
+
 fn sp(prev: text, tok: text) -> boolean {
   if prev == "" { return false; }
   if prev == "(" || prev == "[" { return false; }
@@ -218,6 +224,7 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
   s = "";
   prev = "";
   col = col0;
+  pu = false;   // pending unary: suppress the space before the next token
   k = a;
   while k < b {
     nd = kids[k] ?? Leaf { tok: "" };
@@ -225,14 +232,15 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
       Leaf { tok } => {
         if !is_ws_tok(tok) {
           // emit real tokens AND comments (whitespace is re-derived)
-          if sp(prev, tok) { s += " "; col += 1; }
+          if !pu && sp(prev, tok) { s += " "; col += 1; }
           s += tok;
           col += tok.size();
+          pu = (tok == "-" || tok == "+" || tok == "*" || tok == "&") && unary_ctx(prev);
           prev = tok;
         }
       },
       Group { open, kids, close } => {
-        if sp(prev, open) { s += " "; col += 1; }
+        if !pu && sp(prev, open) { s += " "; col += 1; }
         // dispatch inline: a `{…}` after a Camel type name is a struct-lit/def
         // (container rule); otherwise a block.
         g = "";
@@ -243,6 +251,7 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
         }
         s += g;
         col = last_line_len(g, col);
+        pu = false;
         prev = close;
       },
     }
