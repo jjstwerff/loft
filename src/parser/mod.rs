@@ -3099,6 +3099,37 @@ impl Parser {
                 return crate::data::I64.clone();
             }
             Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(
+                types[0],
+                Type::Integer(_) | Type::Float | Type::Boolean | Type::Character | Type::Single
+            )
+        {
+            // @PLN110 1e: `size(x)` for a scalar `x` = its storage width — a
+            // compile-time constant (L-Scalar / L-Narrow).  The arg is evaluated
+            // for its side effects (every scalar is one 8-byte eval-stack slot,
+            // which the op consumes) but only its type feeds the const width.
+            // Integers go through the FINISHED type (`get_type` → `database.size`)
+            // so a narrow / `forced_size` width (u8 1, u16 2, i32 4) is honoured —
+            // `Type::size` reads the value range only and would over-report i32 as
+            // 8.  The other scalars have a fixed width via `element_size`
+            // (boolean 1, character / single 4, float 8).
+            let known = self.get_type(&types[0]);
+            let sz: u16 = if matches!(types[0], Type::Integer(_)) && known != u16::MAX {
+                self.database.size(known)
+            } else {
+                crate::data::element_size(&types[0]) as u16
+            };
+            let op_d_nr = self.data.def_nr("OpSizeScalar");
+            if op_d_nr != u32::MAX {
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(sz)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            Type::Unknown(0)
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {

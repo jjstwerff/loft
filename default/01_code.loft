@@ -969,6 +969,15 @@ fn OpSizeVector(r: vector, stride: const u16) -> integer;
 fn OpSizeStruct(r: reference, sz: const u16) -> integer;
 #rust"{{ let _ = @r; i64::from(@sz) }}"
 
+// The byte footprint of a scalar value (@PLN110): its storage width — a
+// compile-time constant of the type (boolean 1; character / single 4; integer /
+// float 8; a narrow integer its narrow width, u8 1 / u16 2 / i32 4).  `v` is
+// evaluated (a side-effecting argument still runs) but only its type feeds the
+// const `sz`.  Every scalar occupies one 8-byte eval-stack slot, so the op reads
+// that slot to consume any scalar; the value is discarded.
+fn OpSizeScalar(v: integer, sz: const u16) -> integer;
+#rust"{{ let _ = @v; i64::from(@sz) }}"
+
 // sorted<T[key]> shares vector's length-prefixed allocation layout
 // (length word at offset 4 of the backing record), so the runtime
 // helper is identical — only the parser-side type tag differs.

@@ -79,14 +79,26 @@ descriptor, the #477 stride `element_size(inner).max(4)` — `size` reports it f
 
 ## Remaining sub-arcs — formulas + open questions
 
-Order: **1e (scalar) → 1b (struct) → 1c (hash) → 1d (sorted/index/spatial) → 1g (character, deferred
-on a contract decision — below).** Rationale: scalar is a trivial constant (validates nothing new
-but is free); struct reuses the record-size the vector stride already exposed; hash/sorted/index/
-spatial each need their collection's table/tree byte accounting.
+Done so far: **1a (vector), 1b (struct), 1e (scalar)**. Remaining: **1c (hash) → 1d (sorted/index/
+spatial) → enums → 1g (`len(character)` contract call, deferred).** Rationale: hash/sorted/index/
+spatial each need their collection's table/tree byte accounting; enums split into simple (scalar-
+like) and data (struct-like); 1g's *size* half is already done (via 1e, `size(character)`=4), leaving
+only the deferred `len(character)` decision.
 
-- **1e `size(<scalar>)`** = `element_size(τ)` (L-Scalar/L-Narrow): integer 8, float 8, boolean 1,
-  single 4, character 4, u8 1, u16/i16 2, i32 4. A compile-time constant — the parser can emit a
-  literal `Value::Int(width)` (no runtime op needed). Simplest; purely additive.
+- **1e `size(<scalar>)` ✅ DONE** = the value's storage width (L-Scalar/L-Narrow): integer/float 8,
+  boolean 1, character/single 4, u8 1, u16 2, i32 4. `OpSizeScalar(v: integer, sz: const u16)` — the
+  arg is evaluated (side effects run: **every scalar is one 8-byte eval-stack slot**
+  (`aligned_stack_step = size.next_multiple_of(8)`), so a single op reading an 8-byte slot consumes
+  *any* scalar and discards it). Two width-source gotchas (both fixed): `element_size(Type::Integer)`
+  and `Type::size(false)` both **over-report a narrow / `forced_size` integer** — `i32` reads as 8
+  (its value range), not its declared 4 — so integers take the width from the FINISHED type
+  (`get_type` → `database.size`, narrow-aware); the non-integer scalars use `element_size` (correct:
+  bool 1, char/single 4, float 8). NOT a bare `Value::Int` rewrite — that would drop a side-effecting
+  argument, inconsistent with the other `size` ops. Verified both backends
+  (`tests/scripts/pln110-size-scalar.loft`), incl. `size(calc())` runs the call and the cross-check
+  `size(inline vector<T>) == len × size(T)`. **`size(character) = 4` — this settles the *size* half of
+  1g** (the code-point slot width, consistent with `size(vector<character>)` striding 4); it does NOT
+  touch `len(character)`, so it does not pre-empt the deferred `len(character)` contract call.
 - **1b `size(struct)` ✅ DONE** = the struct's finished **record size** (`database.size(type)`), a
   compile-time constant. `OpSizeStruct(r: reference, sz: const u16)` — the arg `r` is evaluated (so
   `size(make())` runs its argument, verified) but only its type feeds the const `sz`; parser

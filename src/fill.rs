@@ -225,6 +225,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     ref_is_null,
     size_vector,
     size_struct,
+    size_scalar,
     length_sorted,
     clear_vector,
     get_vector,
@@ -1987,6 +1988,16 @@ fn size_struct(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = {
         let _ = v_r;
+        i64::from(v_sz)
+    };
+    s.put_stack(new_value);
+}
+
+fn size_scalar(s: &mut State) {
+    let v_sz = s.code::<u16>();
+    let v_v = *s.get_stack::<i64>();
+    let new_value = {
+        let _ = v_v;
         i64::from(v_sz)
     };
     s.put_stack(new_value);
