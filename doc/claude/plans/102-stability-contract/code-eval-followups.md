@@ -122,7 +122,7 @@ copy of load-bearing string parsing is a drift trap for whoever next touches the
 
 ---
 
-## K5 — general too-few-arguments check (the routing SIGSEGV, fn-typed half FIXED)
+## K5 — general too-few-arguments check · **DONE (2026-07-17): lenience REMOVED**
 
 **Context.** The `../routing` consumer hit a SIGSEGV inside stdlib `len`, minimised to: **loft has
 no too-few-arguments check** (too-MANY is caught: "Too many parameters"). `add_defaults` fills
@@ -157,13 +157,22 @@ check answered both open questions:
   feature removal**, not a bug fix — the routing consumer's "silent wrong" IS this feature, seen as
   a footgun.
 
-**Decision (owner's, pre-freeze).** Keep "defaulted-null args" (only the fn-typed crash is a bug —
-DONE), or remove the lenience (make too-few strict, an error-add that must land pre-freeze and
-breaks the #307 feature + its fixtures). If removing: the check is READY (the three-way exclusion
-above); the work is then (a) update `n2_cdylib::auto_native_text_return_shapes` to pass explicit
-args, (b) fix the multiplayer_v2 fixtures, (c) decide whether nullable stays implicitly-optional,
-(d) note the diagnostic falls back to the lexer position when `arg_pos` is empty — thread it if
-confusing. NOT taken unilaterally: removing a tested feature is a value call, not a mechanical fix.
+**Decision (owner, 2026-07-17): REMOVE the lenience — too-few is now strict.** "defaulted-null args"
+was a footgun (a real consumer hit it as a crash AND a silent-wrong) and a surprising default; the
+pre-freeze window was the only chance to make it an error. Landed:
+- `add_defaults` now errors on a missing slot with no default, non-nullable, and NOT compiler-inserted
+  (the three-way exclusion above: `hidden` / `__`-prefixed / in `returned.depend()`). Nullable params
+  stay implicitly-optional (fill null); `= expr` defaults still fill.
+- Fixtures updated to the strict behaviour: `n2_cdylib::auto_native_text_return_shapes` passes explicit
+  empty args (`greet("x","","")`, same result); the `multiplayer_v2` client (both copies —
+  integration + game_protocol fixtures) passes `h_shutdown` to `frame_label` (it was in scope,
+  matching the two other call sites). Regression `call_missing_fn_typed_arg_is_rejected` retargeted to
+  the general message. Full suite green (2990/2992, only the known wasm/socket flakes); zero
+  false positives (the promoted-buffer distinction holds across the whole corpus).
+
+Residual (minor): the diagnostic falls back to the lexer position when `arg_pos` is empty (usually the
+call, sometimes the callee body) — `add_defaults` has no call-site position. Thread it if a consumer
+finds it confusing.
 
 ## K4 — trivial: `plans/35-match-peg/README.md` status is stale
 

@@ -591,7 +591,7 @@ fn test() { five(1, \"x\"); }"
     )
     .error(
         "missing argument for parameter 'cb' of `five` — the call supplies too few arguments \
-(a function-typed parameter has no default and must be passed) \
+(add it, or give the parameter a default `= …`) \
 at call_missing_fn_typed_arg_is_rejected:2:26",
     );
 }

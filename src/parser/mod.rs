@@ -6447,26 +6447,38 @@ impl Parser {
                 }
                 let default = self.data.def(d_nr).attributes()[a_nr].value.clone();
                 let tp = self.data.attr_type(d_nr, a_nr);
-                // Arity (routing SIGSEGV): a missing FUNCTION-TYPED argument with no default is
-                // filled with a broken `()` — a stdlib segfault several frames away, and it can
-                // corrupt earlier args. There is no valid "empty function" to fill, so a missing
-                // fn-typed param is unambiguously a too-few-arguments error. Scoped to fn-typed on
-                // purpose: a missing SCALAR/VECTOR/etc. is loft's deliberate "defaulted-null args"
-                // feature (omitting a trailing arg fills it null/empty — #307, tested by
-                // `n2_cdylib::auto_native_text_return_shapes`), NOT a bug; only the fn-typed fill is
-                // unrepresentable. `= expr` default (value != Null) is filled below; pass 1 defers.
-                let a_name = self.data.def(d_nr).attributes()[a_nr].name.clone();
+                // Arity: a slot with NO provided argument and NO explicit default is a
+                // too-few-arguments error. loft's old "defaulted-null args" lenience (omit a trailing
+                // arg → null/empty fill) was REMOVED (owner decision 2026-07-17): it was a footgun —
+                // a real consumer hit it as both a stdlib SIGSEGV (a missing fn-typed arg fills a
+                // broken `()`) and a silent-wrong (a missing scalar fills null). Skip the cases that
+                // are NOT a user argument:
+                //  · a NULLABLE param defaults to null (still optional);
+                //  · a `= expr` default (value != Null) is filled below;
+                //  · a COMPILER-inserted return slot — `hidden` (a `ref_return` out-buffer), a
+                //    `__`-prefixed name (`__retbuf` / `__work_N` / `__tret`), OR an attr the RETURN
+                //    VALUE depends on (a local promoted to a caller buffer, e.g. a returned view
+                //    `return tv[0]` keeps the local's name, so `returned.depend()` names that index).
+                // Pass 1 defers (a forward-ref `&` arg lowers to Null and only looks missing then);
+                // the named-param feature made an internal Null slot normal, which lost this check.
+                let (a_name, a_hidden) = {
+                    let a = &self.data.def(d_nr).attributes()[a_nr];
+                    (a.name.clone(), a.hidden)
+                };
+                let promoted = a_hidden
+                    || a_name.starts_with("__")
+                    || self.data.def(d_nr).returned.depend().contains(&(a_nr as u16));
                 if !self.first_pass
                     && default == Value::Null
-                    && matches!(tp, Type::Function(_, _, _))
+                    && !matches!(tp, Type::Optional(_))
+                    && !promoted
                 {
                     let fname = self.data.def(d_nr).display_name().to_string();
                     diagnostic!(
                         self.lexer,
                         Level::Error,
                         "missing argument for parameter '{a_name}' of `{fname}` — the call supplies \
-                         too few arguments (a function-typed parameter has no default and must be \
-                         passed)"
+                         too few arguments (add it, or give the parameter a default `= …`)"
                     );
                     continue;
                 }

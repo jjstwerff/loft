@@ -171,7 +171,7 @@ fn main() {
     if raw != null {
       id = parse_id(raw);
       body = parse_payload(raw);
-      lab = frame_label(id, h_placement, h_gameover, h_spec_placement, h_spec_gameover);
+      lab = frame_label(id, h_placement, h_gameover, h_spec_placement, h_spec_gameover, h_shutdown);
       println("[{label}] (warmup) {lab}: {body}");
     }
     poll_count = poll_count + 1;
