@@ -10,12 +10,13 @@ Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:lo
 ## Status
 
 **Live progress: S0 (bench) ✓, S1 (audit) ✓, S2 (deferred — not needed), S3 (discard borrow) ✓
-& gate-green, S9 (queue borrow) wired & gate-green — but ⛔ the WIN IS DISPROVEN for these
-shapes: `clone_for_worker` is NOT called for a fused for-par over a range/vector (reduce OR
-collect) in loft2's interpreter, yet par_ms still grows with heap. The number did not move with
-`LOFT_PAR_SHARE`. Per routing's own rule ("if the number doesn't move, the model is wrong — stop
-and re-measure"), the arc is PAUSED pending re-measurement of where the copy cost actually lives
-(see § Model failure). Do NOT claim PLN108 helps until that is answered.**
+& gate-green, S9 (queue borrow) ✓ & gate-green — WIN CONFIRMED. `LOFT_PAR_SHARE=1` turns the
+S0 queue probe's per-worker `clone_for_worker` (8× COPY) into `clone_for_light_worker` (8×
+BORROW), and par_ms goes FLAT vs the unrelated heap: 0/61/122 MB ⇒ OFF 5/107/211 ms → ON
+3/4/4 ms (53× at 122 MB), `total` identical (383995) both ways. Next: S5/S6 (ASan + TSan) to
+harden the shared read as the data-race gate, then extend to the remaining queue variants +
+default-on. (Earlier this doc recorded a "model failure" — that was a stale-binary artifact,
+now retracted; see § Correction.)**
 Cherry-picked from the sibling `../loft` checkout into this working tree (the named code is
 in sync:
 `clone_for_worker` `allocation.rs:1277`, `borrow_locked_for_light_worker` `store.rs:1292`,
@@ -170,7 +171,7 @@ building on it).
 | **S6** | **TSan with the flag ON + positive control** (@PLN54 S2: `-Zbuild-std` + target-scoped `-Zsanitizer=thread`) over the threading suite — the shared-read race axis. Include a **temporarily-patched positive control** (let a worker write a parent) and confirm **TSan FIRES**, then revert it, so the clean run is non-vacuous. | clean TSan with flag ON **AND** the positive control fires when armed. | flag off |
 | **S7** | **Bench the win vs S0** — re-run S0 with `LOFT_PAR_SHARE=1`. | `par_ms` no longer grows with unrelated heap; `par` scales *down* with threads (inversion gone). | flag off |
 | **S8** | **Flip `LOFT_PAR_SHARE` default-ON for `discard`** once S5+S6+S7 pass. | full suite **both backends** green with default-on. | flip default back to OFF |
-| **S9** ⛔ | **Extend to the Queue family.** `run_parallel_queue_shared` wired behind the flag (thread::scope + `clone_for_light_worker`, ordered `Vec<u64>`). Threading **47/47** flag OFF+ON. **But the WIN is DISPROVEN** — the routing probe's fused for-par never reaches `run_parallel_queue`/`clone_for_worker` (§ Model failure). PAUSED; re-measure before extending further. | gate green, **win NOT shown** | unset flag (default) |
+| **S9** ✅ | **Extend to the Queue family.** `run_parallel_queue_shared` behind the flag (thread::scope + `clone_for_light_worker`, ordered `Vec<u64>`). The S0 probe routes here (range→vector→`n_parallel_queue`→`run_parallel_queue`). | **DONE — WIN CONFIRMED.** Threading **47/47** flag OFF+ON; par_ms flat vs heap ON (53× at 122 MB), `total` identical (§ S9 win). | unset flag (default) |
 | **S10** | **Decide A-vs-B.** If S1's audit or any S6 TSan run showed the contract-carried safety (A) is fragile (a real mid-par mutation, a race the write-panic can't catch), escalate to **Option B** (`Arc<Store>`) as its own follow-on. Otherwise A stands. Record in `DESIGN_DECISIONS.md`. | decision written to `DESIGN_DECISIONS.md` with the evidence. | — |
 
 ### S1 audit — no dispatcher writes a parent between spawn and join (2026-07-17)
@@ -211,40 +212,40 @@ parent store, so the borrow checker already guarantees "parent unwritten during 
    is the ideal first target: `&Stores`, no adoption, no stitch — the borrow only has to make
    `clone_for_worker` a `borrow` and keep the read-only/​write-panic guard.
 
-## ⛔ Model failure — the copy cost is NOT where the plan assumed (2026-07-17)
+## S9 win CONFIRMED — the borrow elides the copy (2026-07-17)
 
-S9 wired `run_parallel_queue_shared` (the borrow variant of `run_parallel_queue`) behind the
-flag, gated correctly (threading 47/47 flag OFF *and* ON). **But it moves no number**, and
-tracing showed why:
+Re-measured with `n_parallel_queue` → `run_parallel_queue` on the actual path. The S0/routing
+probe (`for a in 0..64 par(b = spin(a), 8) { total += b; }`) **does** route through
+`run_parallel_queue`: the range materialises to a `vector<integer>`, then `n_parallel_queue`
+→ `parallel_queue_dispatch(Int)` → `run_parallel_queue`, which byte-copies every parent store
+per worker via `clone_for_worker`. Flag ON swaps that for `clone_for_light_worker` (borrow).
 
-- **`clone_for_worker` is never called** for the shapes the S0 / routing probe uses — a *fused*
-  for-par (`for a in xs par(b = spin(a), N) { … }`) over a range OR a vector, whether the body
-  reduces (`total += b`) or collects (`out += [b]`). Traces on `clone_for_worker`,
-  `clone_locked_for_worker`, `clone_for_light_worker`, every `run_parallel_*` dispatcher, and the
-  native `n_parallel_queue/_fold/_narrow` entries **all stayed silent** for these programs.
-- Yet **par_ms still grows with the unrelated heap** (S0: 0→122 MB ⇒ 5→231 ms) and par **is**
-  parallel (16× over sequential). So the growth is real but it is **not** the per-worker
-  store byte-copy PLN108 targets — it is something else (allocator pressure under a large live
-  heap, a per-worker setup cost, or a path that shares stores already).
-- `run_parallel_queue` (which S9 borrows) is reached only by **value-position** par
-  (`let r = parallel_for(…)`), NOT the fused for-par the probe/routing use. The fused path
-  streams through a different mechanism that the traces show does not clone.
+Traced (release build): flag OFF = **8× `clone_for_worker` COPY**, flag ON = **8×
+`clone_for_light_worker` BORROW**. Wall-clock (interpret, `bench/par_copy_probe.loft`):
 
-**Consequence.** The plan's load-bearing premise — *"the live par dispatch `clone_for_worker`s a
-byte-copy of every active parent store per worker"* — does **not** hold for these interpreter
-shapes. S3/S9's borrow is correct code that eliminates a copy **that isn't happening here**, so it
-cannot deliver the routing win as-is. This is exactly the design-protocol failure mode: a clean
-invariant assumed, not probed, that the first real measurement breaks.
+| unrelated heap | 0 MB | 30 | 61 | 122 |
+|---|---|---|---|---|
+| **OFF** par_ms | 5 | 96 | 107 | 211 |
+| **ON**  par_ms | 3 | 5 | 4 | **4** |
 
-**Corrected next step (re-measure, do not build):**
-1. Identify the ACTUAL par path the routing probe takes — instrument from `n_parallel_*` down and
-   find what scales with heap (is it `--native`'s `n_parallel_queue_native`, a value-position par,
-   allocator pressure, or a store op O(heap)?). Routing's original measurement may have been on
-   `--native` (native par_ms also grew: 0/30/61 MB ⇒ 1/89/102) — the native clone is a **separate**
-   path from the interpreter borrow S3/S9 wired.
-2. Only once the copy is located and confirmed on-path does the borrow (S3/S9) or a native
-   analogue become the fix. Re-point the plan there; the current discard/queue borrows stay as
-   correct-but-dormant infra behind the default-OFF flag.
+`par_ms` is **flat vs the heap with the flag ON** (the copy is gone) — up to **53× at 122 MB** —
+and `total` is **identical (383995)** both ways (semantics preserved). This is exactly the
+routing inversion (S0), eliminated.
+
+## Correction — the retracted "model failure"
+
+An earlier revision of this doc (commit `5e500930`) claimed the win was DISPROVEN and
+`clone_for_worker` was "never called." **That was wrong — a test-harness error, not a real
+result.** `cargo build --bin loft` builds `target/debug/loft`, but the probes were run with
+`./target/release/loft` — a **stale release binary that predated the trace instrumentation**, so
+every trace stayed silent and I mis-read "silent traces" as "not called." Rebuilding *release*
+with the traces showed `clone_for_worker` firing 8× and the flag flipping it to the borrow, with
+the flat-par_ms win above.
+
+**Lesson (recorded):** before concluding "X is never called" from a silent probe, **prove the
+harness can fire** — run it on a known-positive case first (design-protocol: a no-output cell is
+vacuous). And keep the build target and the run target the same binary. `make ci` / a single
+`cargo build --release --bin loft` before release-binary probing would have caught it in one step.
 
 ### S2/S3 notes (2026-07-17)
 
