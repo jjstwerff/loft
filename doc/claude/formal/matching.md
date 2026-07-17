@@ -17,10 +17,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > A `match`'s headline guarantee is **compile-time exhaustiveness**: a `match` that forgets a
 > variant does not compile. That is a promise to the user, checked before the program runs.
 >
-> **@PLN35 extension (planned, SPEC-FIRST):** the § *Rules — PEG patterns* below adds sequence /
-> alternation / optional / repetition / capture patterns as the **target** for the PEG build (not
-> yet shipped). It generalises this exhaustiveness guarantee to `M-Total`, so the promise survives
-> patterns that can *fail*.
+> **@PLN35 extension (SHIPPED):** the § *Rules — PEG patterns* below adds sequence / alternation /
+> optional / repetition / capture patterns, built in phases 1–7 + PC1–PC5 (350e660c #554, 3fda4e1e
+> #558, 50cc4c18 #561, a37917ff #562) and verified on both backends. It generalises this
+> exhaustiveness guarantee to `M-Total`, so the promise survives patterns that can *fail*.
 
 ## Notation
 
@@ -80,16 +80,15 @@ statically, before the program runs.
 
 ---
 
-## Rules — PEG patterns (@PLN35, SPEC-FIRST · planned, NOT yet implemented)
+## Rules — PEG patterns (@PLN35, SHIPPED)
 
-> **@PLN35 · SPEC-FIRST.** Unlike everything above (shipped semantics, pinned by the oracle), the
-> rules in THIS section are the **target** for the PEG match-pattern extension — written *ahead* of
-> the code at the maker's direction, so the phased build in
-> [../plans/35-match-peg/](../plans/35-match-peg/) is constructed to satisfy them. They are **not
-> yet met by either backend.** Each is pinned per-phase by the @PLN89 oracle as its phase lands
-> (worklist: [VERIFICATION.md § matching.md — PEG patterns](VERIFICATION.md)). Until a rule's phase
-> ships, read it as design, not a guarantee. Overview + phase↔rule map:
-> [../plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
+> **@PLN35 · SHIPPED.** Like everything above, the rules in THIS section are shipped semantics,
+> pinned by the oracle: phases 1–7 + PC1–PC5 of the PEG match-pattern extension in
+> [../plans/35-match-peg/](../plans/35-match-peg/) landed (350e660c #554, 3fda4e1e #558, 50cc4c18
+> #561, a37917ff #562) and every named rule below — `P-Seq`, `P-Alt`, `P-Opt`, `P-Rep`, `P-Cap`,
+> `P-Rest`, `P-Multi`, `P-Atomic` — is verified passing on both backends via
+> `tests/scripts/35*.loft` (worklist: [VERIFICATION.md § matching.md — PEG patterns](VERIFICATION.md)).
+> Overview + phase↔rule map: [../plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
 
 PEG patterns generalise a *point* pattern (unit/struct variant, `_`) to a **sequence** that may
 branch (`|`), skip (`?`), repeat (`*`/`+`), and **capture** sub-results — over a vector/slice or an
@@ -214,11 +213,10 @@ is a view; `..rest` / repetition are fresh vectors); the pattern grammar + prece
 
 OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code deviation).
 
-- **PEG patterns are SPEC-FIRST (@PLN35)** — the *Rules — PEG patterns* § is written ahead of the
-  code, so it opens **no** deviation (there is no implementation yet to break a rule). The gap is a
-  build obligation tracked in [VERIFICATION.md § matching.md — PEG patterns](VERIFICATION.md) and
-  pinned per-phase by the @PLN89 oracle; each rule graduates to a ✓ there as its
-  [plans/35-match-peg](../plans/35-match-peg/) phase lands.
+- **PEG patterns are SHIPPED (@PLN35)** — the *Rules — PEG patterns* § opens **no** deviation: the
+  shipped implementation (phases 1–7 + PC1–PC5, [plans/35-match-peg](../plans/35-match-peg/))
+  conforms to the stated rules, verified both backends. Each rule is pinned by the @PLN89 oracle in
+  [VERIFICATION.md § matching.md — PEG patterns](VERIFICATION.md).
 - **Conformance is differential** — `match` dispatch is enforced across the two backends by the
   @PLN89 oracle (D-op-1): `20-nested-enum-match` and `07-enum-match-dispatch` carry struct-payload
   variants, recursive walks, and matches whose arms return different variants, precisely because

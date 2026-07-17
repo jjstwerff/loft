@@ -131,11 +131,13 @@ plan for the new rules — the oracle already guards each *area*; this drives it
 - ✓ **M-Wild** — `_` matches any; an arm AFTER `_` REJECTS on both backends (driver-agreement). *Guard.*
 - ✓ **M-Exhaust** — a missing variant REJECTS on both backends (driver-agreement). *Guard: oracle `19`-style.*
 
-## matching.md — PEG patterns (@PLN35, spec-first)
+## matching.md — PEG patterns (@PLN35, SHIPPED)
 
-Rules WRITTEN AHEAD OF CODE ([matching.md § Rules — PEG patterns](matching.md)). Every row is ☐
-until its [plans/35-match-peg](../plans/35-match-peg/) phase lands and graduates an oracle program
-(`tests/oracle/35-*.loft`, both-backends + leak + driver-agreement). Design + phase↔rule map:
+Rules SHIPPED ([matching.md § Rules — PEG patterns](matching.md)) — phases 1–7 + PC1–PC5 landed
+(350e660c #554, 3fda4e1e #558, 50cc4c18 #561, a37917ff #562) and pass on both backends via
+`tests/scripts/35*.loft` (in the full suite). Each row below tracks the stricter @PLN89
+DIFFERENTIAL-oracle pin (both-backends + leak + driver-agreement); ☐ = shipped + both-backends but
+not yet graduated to that oracle. Design + phase↔rule map:
 [plans/35-match-peg/FORMAL-DESIGN.md](../plans/35-match-peg/FORMAL-DESIGN.md).
 
 - ☐ **M-Total (the invariant)** — a match with a non-total pattern and no total final arm REJECTS on
