@@ -66,6 +66,19 @@ That is loft's development model, stated plainly: **a human with taste, a coding
 with capability, and a repository that carries the method between them.** None of the
 three is a specific, irreplaceable person.
 
+**Owning the stack, not renting it, is part of the same choice.** loft is self-hosted
+with few external dependencies — not because external code is bad, but because a borrowed
+component you don't control becomes a liability exactly at ship time: you end up having to
+learn its internals and flaws, and often clone it, to make it reliable. The sharpened
+rule is narrow, though — **external libraries are welcome for capabilities loft genuinely
+lacks; the rule only bites when the stack *already* owns something similar, and then loft
+does not carry a parallel external copy of it.** One capability, one owned implementation:
+fewer external single points of failure (which is the bus-factor thesis applied to
+dependencies), and no duplicate that can quietly hide the other's flaws. Worked example:
+loft already has a lexer, so a separate hand-rolled JSON tokenizer is redundant — it is
+being folded onto the one lexer ([plans @PLN109](https://github.com/loft-lang/plans/issues/109)),
+which also fixes a precision bug the duplicate had been hiding.
+
 ## Everything on this page is independently verifiable
 
 Take none of this on trust. Every claim here is checkable **without a word from anyone**
