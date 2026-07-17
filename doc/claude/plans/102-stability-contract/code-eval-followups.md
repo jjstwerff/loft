@@ -137,32 +137,33 @@ compiler-promoted return buffer (`ref_return`) is never fn-typed → **zero fals
 error fires before codegen, so the earlier-arg corruption is unreachable too. Regression:
 `tests/issues.rs::call_missing_fn_typed_arg_is_rejected`. Suite green.
 
-**OPEN (the general half).** A missing SCALAR still fills null (`f(7)` for `f(a, b: integer)` →
-`b = null`, a silent wrong), a missing non-null VECTOR fills empty. Extending the check to them is
-blocked by ONE thing: `add_defaults` iterates raw attribute slots, which include compiler-PROMOTED
-params (a heap-return's source local promoted to a caller-provided buffer by `ref_return`, e.g.
-`tv` in `via_index() -> text { tv: vector<text> = […]; return tv[0] }`). Those are NOT `hidden` and
-NOT `__`-named, so a naive "missing non-null no-default slot → error" false-positives on them (it
-did, in the first attempt — `tret_bind_forward_ref_pass_stable`).
+**The general half is NOT a bug — it is a DESIGN DECISION (2026-07-17).** Attempting the general
+check answered both open questions:
 
-**Design — small safe steps.**
-1. **Find the reliable user-param vs promoted-param signal.** The promotion marks the VARIABLE
-   `caller_hidden_buf` (`src/variables/mod.rs`), not the attribute. Either surface that onto the
-   attribute, or record the USER-declared param count on the def (before `ref_return` promotion)
-   and check the call against THAT, not `attributes(d_nr)`.
-2. **Matrix (both backends).** missing scalar / non-null vector / ref / `&`-param / nullable
-   (stays optional) / `= default` (stays filled) / named-arg-skipping-a-defaulted-middle-param
-   (stays legal) / a return-promoted fn (`via_index`, must NOT error) / method self.
-3. **Extend the check** at the `add_defaults` chokepoint (both the positional and named paths
-   converge there) using the step-1 signal, gated to pass 2 (forward-ref `&` args lower to Null on
-   pass 1).
-4. **MEASURE the blast radius** — the first attempt at the general check turned up ~a handful of
-   fixtures that omit real args relying on the silent fill (e.g. `greet` in `multiplayer_v2`); each
-   is either a genuine arity bug to fix or an intentional omission to make explicit. This is an
-   error-add → must land pre-freeze.
-5. **Diagnostic position.** `add_defaults` has no call-site position, so the error currently falls
-   back to the lexer cursor (usually the call, sometimes the callee body). Thread the call position
-   (`call_nr` already has `arg_pos`) if the fall-through proves confusing for real consumers.
+- **The promoted-buffer distinction is SOLVED.** A compiler-inserted return slot is reliably
+  identified — at the `add_defaults` call site, using only PERSISTED fields — as: `hidden` (a
+  `ref_return` out-buffer) OR a `__`-prefixed name (`__retbuf` / `__work_N` / `__tret`) OR an
+  attribute index in `self.data.def(d_nr).returned.depend()` (a local promoted to a caller buffer,
+  e.g. the returned view `return tv[0]` keeps the local's name `tv`, so only the return-type deps
+  name it). The callee's variable table (`caller_hidden_buf`) is EMPTY at the call site (transient),
+  so the signal had to be a persisted one — `returned.depend()` is it. With those three exclusions
+  the matrix was clean (routing / scalar / vector error; `via_index` / nullable / default /
+  named-gap allowed).
+- **But it REMOVES a deliberate, tested feature.** A missing SCALAR filling null and a missing
+  VECTOR filling empty is loft's **"defaulted-null args"** behaviour — omitting a trailing argument
+  fills it null/empty. It is intentional and #307 specifically fixed the frame accounting for it;
+  `tests/n2_cdylib.rs::auto_native_text_return_shapes` asserts `greet("x") == "x::"` for
+  `greet(a,b,c)`, and multiplayer_v2 fixtures rely on it too. So the general check is a **semantic
+  feature removal**, not a bug fix — the routing consumer's "silent wrong" IS this feature, seen as
+  a footgun.
+
+**Decision (owner's, pre-freeze).** Keep "defaulted-null args" (only the fn-typed crash is a bug —
+DONE), or remove the lenience (make too-few strict, an error-add that must land pre-freeze and
+breaks the #307 feature + its fixtures). If removing: the check is READY (the three-way exclusion
+above); the work is then (a) update `n2_cdylib::auto_native_text_return_shapes` to pass explicit
+args, (b) fix the multiplayer_v2 fixtures, (c) decide whether nullable stays implicitly-optional,
+(d) note the diagnostic falls back to the lexer position when `arg_pos` is empty — thread it if
+confusing. NOT taken unilaterally: removing a tested feature is a value call, not a mechanical fix.
 
 ## K4 — trivial: `plans/35-match-peg/README.md` status is stale
 

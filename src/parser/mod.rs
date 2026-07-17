@@ -6451,12 +6451,10 @@ impl Parser {
                 // filled with a broken `()` — a stdlib segfault several frames away, and it can
                 // corrupt earlier args. There is no valid "empty function" to fill, so a missing
                 // fn-typed param is unambiguously a too-few-arguments error. Scoped to fn-typed on
-                // purpose: it is the crash, and a compiler-promoted return buffer (`ref_return`) is
-                // never fn-typed, so this has ZERO false positives. The GENERAL too-few check (a
-                // missing scalar fills null, a vector fills empty) needs a user-param vs
-                // promoted-param distinction and is a follow-up (see code-eval-followups.md).
-                // `= expr` default (value != Null) is filled below; pass 1 defers (a forward-ref
-                // `&` arg lowers to Null and only looks missing until pass 2).
+                // purpose: a missing SCALAR/VECTOR/etc. is loft's deliberate "defaulted-null args"
+                // feature (omitting a trailing arg fills it null/empty — #307, tested by
+                // `n2_cdylib::auto_native_text_return_shapes`), NOT a bug; only the fn-typed fill is
+                // unrepresentable. `= expr` default (value != Null) is filled below; pass 1 defers.
                 let a_name = self.data.def(d_nr).attributes()[a_nr].name.clone();
                 if !self.first_pass
                     && default == Value::Null
