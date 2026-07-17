@@ -9,7 +9,8 @@ Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:lo
 
 ## Status
 
-**Design ready, step 1 ANSWERED, S0 (win-baseline bench) LANDED — next is S1 (the audit).**
+**Design ready; step 1 ANSWERED, S0 (win-baseline bench) LANDED, S1 (safety audit) DONE &
+all-clean — next is S2/S3 (`unsafe impl Sync` + wire the borrow behind `LOFT_PAR_SHARE`).**
 Cherry-picked from the sibling `../loft` checkout into this working tree (the named code is
 in sync:
 `clone_for_worker` `allocation.rs:1277`, `borrow_locked_for_light_worker` `store.rs:1292`,
@@ -76,12 +77,16 @@ pure conservatism — nothing the worker does could observe a divergence between
 and the shared original. Sharing does not *weaken* an invariant; it *rests on* one the
 compiler already enforces. Two facts make the lifetime sound:
 
-- **`thread::scope`** — every dispatcher spawns workers inside a scope and **joins them
-  before the scope ends** (`parallel_workers`). The parent `Stores` outlives every worker
-  by construction; a borrowed pointer cannot dangle.
+- **Blocking join** — the dispatcher blocks the calling thread until every worker finishes.
+  Most dispatchers use **rayon** (`parallel_workers` = `rayon_pool().install(par_iter.collect())`);
+  `install` returns only after `collect`, so the parent `Stores` outlives every task. Two
+  (`run_parallel_light`, `run_parallel_block`) use `thread::scope` literally. Either way a
+  borrowed pointer cannot dangle. *(S1 corrected the design's "every dispatcher uses
+  `thread::scope`" — see § S1 audit finding 3.)*
 - **Synchronous par** — the main thread blocks in the join; it does **not** run (so cannot
-  mutate a parent store) while workers borrow. (Must VERIFY no dispatcher
-  materialises/adopts a parent store mid-par before the join — **S1**.)
+  mutate a parent store) while workers borrow. **VERIFIED (S1):** no dispatcher writes/adopts
+  a parent store between spawn and join; 10/11 take `&Stores` (compiler-proven), and the one
+  `&mut` (`run_parallel_queue_ref`) adopts strictly post-`collect`.
 
 ## Current state (what exists, what's live)
 
@@ -152,7 +157,7 @@ building on it).
 | S | Step | Verify (gate) | Rollback |
 |---|---|---|---|
 | **S0** ✅ | **Repro bench = committed win baseline.** `bench/par_copy_probe.loft` + `bench/run.sh` (co-located, NOT a CI gate — timing is machine-dependent). Ported from `../routing/tools/par_copy_probe.loft`. | **DONE** — runs both backends; reproduces the inversion (see § S0 baseline). | delete `bench/` |
-| **S1** | **Safety audit — NO code change.** For each of the 6 live `clone_for_worker` sites + `run_parallel_discard`, write down: does the dispatcher *materialise / adopt / lazily grow* a parent store between spawn and join? Produce a table (dispatcher × "parent untouched during join? Y/N"). Any `N` is a blocker: move that work BEFORE the spawn, or exclude that dispatcher from sharing. | The audit table is committed to this plan. A confirmed `Y` for `run_parallel_discard` is the green light for S3. | — (doc only) |
+| **S1** ✅ | **Safety audit — NO code change.** Walk every live dispatcher: does it *materialise / adopt / lazily grow* a parent store between spawn and join? | **DONE — all clean** (see § S1 audit). Green light for S3 (`run_parallel_discard` is `&Stores`, no stitch). | — (doc only) |
 | **S2** | **`unsafe impl Sync for Store`** with a comment pinning the justification (read-only shared `addr()` access + `read_only` write-panic backstop) and naming @PLN108. No sharing path goes live yet. | Compiles; `borrow_locked_reads_original_data` + `borrow_locked_write_panics` green; **ASan baseline 47/47 unchanged** (no new live sharing). | revert the `impl` |
 | **S3** | **Wire Option A behind `LOFT_PAR_SHARE` (default OFF) on `run_parallel_discard` ONLY** (no return-stitch → smallest surface). Flag ON → route through `clone_for_light_worker` (borrow + pool); flag OFF → `clone_for_worker` (today's copy, byte-identical behaviour). | Flag OFF: **entire threading suite green, unchanged**. Flag ON: `parallel_store_is_read_only_in_workers` + `par_discard_does_not_grow_parent_stores` green. | unset the flag (default) |
 | **S4** | **S1 audit follow-through for discard** — if S1 flagged a mid-par parent touch in the discard path, move it before the spawn now; else assert (in a comment) the join-before-touch ordering at the call site. | discard path: no parent-store write/adopt between `scope.spawn` and join (code-read + comment). | — |
@@ -162,6 +167,44 @@ building on it).
 | **S8** | **Flip `LOFT_PAR_SHARE` default-ON for `discard`** once S5+S6+S7 pass. | full suite **both backends** green with default-on. | flip default back to OFF |
 | **S9** | **Extend one dispatcher at a time** — Queue family, then heavy. For EACH: repeat S1(audit)→S3(wire)→S5(ASan)→S6(TSan)→S7(bench) for that dispatcher before enabling it. Unify `run_parallel_light` (`parallel.rs:1451`) into the `parallel_workers` template (`parallel.rs:99`). | per-dispatcher: same gate set green before its default-on. | per-dispatcher flag/default |
 | **S10** | **Decide A-vs-B.** If S1's audit or any S6 TSan run showed the contract-carried safety (A) is fragile (a real mid-par mutation, a race the write-panic can't catch), escalate to **Option B** (`Arc<Store>`) as its own follow-on. Otherwise A stands. Record in `DESIGN_DECISIONS.md`. | decision written to `DESIGN_DECISIONS.md` with the evidence. | — |
+
+### S1 audit — no dispatcher writes a parent between spawn and join (2026-07-17)
+
+Read of `src/parallel.rs`. The verdict is **type-carried, not eyeballed**: the dispatcher's
+`stores` parameter *is* the proof — a `&Stores` (shared) borrow structurally cannot mutate a
+parent store, so the borrow checker already guarantees "parent unwritten during the par."
+
+| Dispatcher | `stores` | Parent untouched spawn→join? | Evidence |
+|---|---|---|---|
+| `run_parallel_discard` (1184) | `&Stores` | **Y** | no `&mut`; no adopt/stitch (Discard) — **the S3 target** |
+| `run_parallel_raw` (542) | `&Stores` | **Y** | shared borrow |
+| `run_parallel_text` (586) | `&Stores` | **Y** | worker writes its String into a worker-local output slot; merged post-`collect` |
+| `run_parallel_int` (954) | `&Stores` | **Y** | shared borrow; `merge_batches` post-`collect` |
+| `run_parallel_queue` (1278) | `&Stores` | **Y** | primitive returns, no adoption |
+| `run_parallel_queue_fn` (1374) | `&Stores` | **Y** | shared borrow |
+| `run_parallel_fold` (1023) | `&Stores` | **Y** | combine runs on a worker-local state, sequential, after the par |
+| `run_parallel_light` (1467) | `&Stores` | **Y** | already the borrow path (`clone_for_light_worker` + `thread::scope`) — the S3 model |
+| `run_parallel_block` (1840) | `&Stores` | **Y** | `thread::scope`; workers read a shared `parent_snapshot: &Arc<Vec<u8>>` |
+| `run_parallel_queue_ref` (691) | **`&mut Stores`** | **Y** | the ONE `&mut` — but its parent write (`adopt_worker_excess` + grow-allocations) is strictly **post-`collect`** (`parallel.rs:810+`); mid-par it only reads + dispenses atomic slot INDICES for worker-local stores |
+
+**Findings**
+
+1. **10 / 11 live dispatchers take `&Stores`** — the parent-unwritten invariant is
+   *compiler-enforced by the signature*, not a hand-checked property. This is stronger than
+   the design assumed and shrinks the audit to the single `&mut` case.
+2. **`run_parallel_queue_ref`'s only parent mutation is post-join.** The rayon `pool.install`
+   / `collect` is the barrier; adoption + allocation-grow happen after it returns. Mid-par it
+   touches only an atomic slot-index dispenser and worker-local `allocations` clones — never a
+   parent store's buffer.
+3. **Mechanism correction (feeds "Why it is safe").** `parallel_workers` (the template most
+   dispatchers use) is **rayon** — `rayon_pool().install(|| (0..threads).into_par_iter().map(worker).collect())`
+   — *not* `thread::scope`. The lifetime argument is identical (`install` blocks the calling
+   thread until `collect`, so the borrowed `&Stores` outlives every task), but only
+   `run_parallel_light` / `run_parallel_block` use `thread::scope` literally. Nested par submits
+   onto the same global pool; the borrows nest (inner `install` completes within an outer worker).
+4. **No blocker found → S3 is GO.** Nothing needs moving before a spawn. `run_parallel_discard`
+   is the ideal first target: `&Stores`, no adoption, no stitch — the borrow only has to make
+   `clone_for_worker` a `borrow` and keep the read-only/​write-panic guard.
 
 ### S0 baseline (recorded 2026-07-17, `bench/run.sh`)
 
