@@ -28,7 +28,9 @@
 // release build the reads below produce correct values, and the baselines guard
 // against over-fixing (scalar-field / whole-element / struct-call set paths).
 
-struct V { a: vector<integer> }
+struct V {
+  a: vector<integer>,
+}
 struct Cont {
   m: V,
 }

@@ -21,7 +21,9 @@
 struct Item {
   v: integer,
 }
-struct G { c: vector<Item> }
+struct G {
+  c: vector<Item>,
+}
 
 // (1) read-only element borrower — ELIDES and reads the live element (== 90).
 fn read_elem(g: G, i: integer) -> integer {

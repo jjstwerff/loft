@@ -5,7 +5,9 @@
 // One function per Matrix-O cell, distinct `a` per cell → one `link-obs-dbg: fn=… var=a … unobs=0|1`
 // each. tests/link_obs_oracle.rs pins the verdicts. See alias-where-correct-build.md § Matrix O.
 
-struct S { v: vector<integer> }
+struct S {
+  v: vector<integer>,
+}
 
 // O1 — UNOBSERVABLE: both read-only after the bind (no write can diverge copy from link).
 fn o1_readonly_both() -> integer {

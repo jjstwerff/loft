@@ -8,8 +8,16 @@
 // holds `255`.  Now `get_i16_raw` delegates to `get_short_full` (no sentinel), so
 // all narrow-vector widths reach their full range.  Both backends.
 
-struct U8B { v: vector<u8> } struct I8B { v: vector<i8> }
-struct U16B { v: vector<u16> } struct I16B { v: vector<i16> }
+struct U8B {
+  v: vector<u8>,
+} struct I8B {
+  v: vector<i8>,
+}
+struct U16B {
+  v: vector<u16>,
+} struct I16B {
+  v: vector<i16>,
+}
 
 fn main() {
   a = U8B { v: [] }; a.v += [0 as u8, 254 as u8, 255 as u8];

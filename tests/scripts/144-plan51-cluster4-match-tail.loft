@@ -13,7 +13,9 @@
 // Tests: does the @P236 unify_if_branches_work_refs machinery handle
 // the match-lowered nested-If case correctly?
 
-struct P { tag: integer }
+struct P {
+  tag: integer,
+}
 struct Canvas {
   data: vector<integer>,
   w: integer,

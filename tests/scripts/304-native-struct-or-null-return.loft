@@ -29,7 +29,9 @@
 //
 // Matrix probes: /tmp/{m,mt,pe,pb,ph}.loft (2026-06-13 session).
 
-struct S { x: integer }
+struct S {
+  x: integer,
+}
 
 // heap-text local + struct-or-null return — the failing shape
 fn make(c: boolean, rel: text) -> S {

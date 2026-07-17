@@ -10,7 +10,10 @@
 // backends.  Mutating a collection WRAPPED IN A STRUCT field works the same way and is
 // guarded here too.
 
-struct K { id: integer, v: integer }
+struct K {
+  id: integer,
+  v: integer,
+}
 
 fn c0(cb: fn() -> integer) -> integer {
   cb()

@@ -12,7 +12,8 @@
 // Guards: correct values + no leak, BOTH backends.
 
 enum CV {
-  CN, CI { value: integer }
+  CN,
+  CI { value: integer },
 }
 
 fn enc(c: CV) -> vector<u8> {

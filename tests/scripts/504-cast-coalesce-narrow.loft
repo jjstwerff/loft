@@ -14,7 +14,9 @@
 //
 // @PLN25 DN4 family (the checked-cast lowering). Runs on BOTH backends.
 
-struct S { b: u8 }
+struct S {
+  b: u8,
+}
 
 fn ret_natural(x: integer) -> u8 {
   return x as u8 ?? 0

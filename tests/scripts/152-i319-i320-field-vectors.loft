@@ -16,9 +16,17 @@
 // a DbRef's 12 bytes — frame drift downstream of an integer `??` followed
 // by a struct `??`, which the mixed asserts below exercise).
 
-struct P { x: integer, t: text }
-struct S { v: vector<integer>, ps: vector<P> }
-struct Q { n: integer }
+struct P {
+  x: integer,
+  t: text,
+}
+struct S {
+  v: vector<integer>,
+  ps: vector<P>,
+}
+struct Q {
+  n: integer,
+}
 
 fn main() {
   // #319: struct-literal comprehension + struct ?? reads (literal + call fallback).

@@ -12,7 +12,9 @@
 // @EXPECT_ERROR: worker writevec writes captured `v`
 // @EXPECT_ERROR: worker outer → bump writes captured `s`
 
-struct S { n: integer }
+struct S {
+  n: integer,
+}
 fn writeit(e: S) -> integer {
   e.n = 5; e.n
 } // writes the struct element

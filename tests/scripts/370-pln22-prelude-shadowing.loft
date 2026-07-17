@@ -7,7 +7,10 @@
 // (source 0), so bare names resolve to the user's defs while `std::Name` still
 // reaches the prelude.  Built-in type-keywords (`integer`, `vector`, …) stay a
 // hard error (see 102-expected-errors.loft) — shadowing them is never intended.
-enum E { Red, Green } // shadows the math constant E
+enum E {
+  Red,
+  Green,
+} // shadows the math constant E
 pub PI = 3; // shadows the math constant PI
 struct File {
   tag: integer,

@@ -20,7 +20,9 @@ enum MixE {
   M { v: integer },
   N { s: text },
 }
-struct S { v: integer }
+struct S {
+  v: integer,
+}
 
 fn mk_int() -> IntE {
   A { v: 21 }

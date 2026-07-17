@@ -263,13 +263,17 @@ fn test_pln22_bare_variant_no_context() {
 // type-keyword (`integer`, `vector`, …) is NEVER shadowable: it stays a hard
 // error so the language's own types can't be silently re-pointed. ──
 // @EXPECT_ERROR: conflicts with a type
-struct integer { pln22_field: i32 }
+struct integer {
+  pln22_field: i32,
+}
 
 // A bodyless stdlib forward-decl (`type iterator;`) is `DefType::Type` with an
 // Unknown returned type.  Before the adopt-branch `DefType::Unknown` guard,
 // `struct iterator` was silently swallowed (adopted) instead of rejected.
 // @EXPECT_ERROR: conflicts with a type
-struct iterator { pln22_field: i32 }
+struct iterator {
+  pln22_field: i32,
+}
 
 // `enum`/`type` reusing a keyed-collection keyword used to PANIC in
 // `complete_definition` (re-`set_returned` on an already-typed builtin) because
@@ -278,7 +282,10 @@ struct iterator { pln22_field: i32 }
 // fires first — annotate both diagnostics.)
 // @EXPECT_ERROR: Expect enum definitions to be in camel case style
 // @EXPECT_ERROR: conflicts with a type
-enum hash { Pln22A, Pln22B }
+enum hash {
+  Pln22A,
+  Pln22B,
+}
 
 // @EXPECT_ERROR: Expect type definitions to be in camel case style
 // @EXPECT_ERROR: conflicts with a type

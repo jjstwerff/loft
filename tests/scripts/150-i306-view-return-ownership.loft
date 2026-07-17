@@ -9,7 +9,11 @@
 //   3. conditional alias into the returned  (reassignment deep-copy)
 //   4. view of a fn-LOCAL vector returned   (materialise into an owned copy)
 
-struct M { hp: integer, depth: integer, name: text }
+struct M {
+  hp: integer,
+  depth: integer,
+  name: text,
+}
 
 fn m_none() -> M {
   M { hp: 0, depth: 0, name: "" }

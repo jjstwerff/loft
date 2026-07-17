@@ -19,8 +19,15 @@
 // Shape 2 (composition): two borrowed-return locals from two captures in one
 // loop — the shape of crawler's build_walls phase B.
 
-struct WC { x: float, deg: integer, n1: integer }
-struct WE { a: integer, b: integer }
+struct WC {
+  x: float,
+  deg: integer,
+  n1: integer,
+}
+struct WE {
+  a: integer,
+  b: integer,
+}
 struct Graph {
   corners: vector<WC>,
   edges: vector<WE>,

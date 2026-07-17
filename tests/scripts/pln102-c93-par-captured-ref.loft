@@ -12,7 +12,9 @@
 // @EXPECT_ERROR: captured argument 's' is a reference
 // @EXPECT_ERROR: first parameter 'first' is the loop element
 
-struct S { n: integer }
+struct S {
+  n: integer,
+}
 fn vcap(x: integer, cap: vector<integer>) -> integer {
   (cap[0] ?? 0)+x
 } // captured vector

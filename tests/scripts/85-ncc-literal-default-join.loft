@@ -15,8 +15,14 @@
 // returned deps type the join as a pure borrow of `t`) — the deps-carried-join
 // completion, D-own-1/D-own-2 territory.  Native is clean on all paths.
 
-struct N { vs: vector<integer>, id: integer }
-struct E { hp: integer not null, name: text }
+struct N {
+  vs: vector<integer>,
+  id: integer,
+}
+struct E {
+  hp: integer not null,
+  name: text,
+}
 fn e_default() -> E {
   E { hp: 0, name: "" }
 }

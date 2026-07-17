@@ -9,7 +9,9 @@
 // runtime cursor is step 5.)
 
 enum E {
-  A { p: integer }, B { q: integer }, C { r: integer }
+  A { p: integer },
+  B { q: integer },
+  C { r: integer },
 }
 
 // varying width: branch 1 = [A, B] (binds p, q), branch 2 = [C] (binds r).

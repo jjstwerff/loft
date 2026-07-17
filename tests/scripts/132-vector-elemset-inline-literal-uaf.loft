@@ -11,7 +11,9 @@
 // Fix: in copy_ref, set 0x8000 only for a struct-returning CALL source (an
 // unowned temporary), never for a Block literal (which owns a scope free).
 
-struct V { a: vector<integer> }
+struct V {
+  a: vector<integer>,
+}
 struct Cont {
   m: V,
 }

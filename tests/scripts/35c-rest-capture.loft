@@ -18,7 +18,10 @@ enum Tok {
   Ident { name: text },
   Num { value: integer },
 }
-struct P { x: integer, y: integer }
+struct P {
+  x: integer,
+  y: integer,
+}
 
 // ── scalar ──────────────────────────────────────────────────────────────────
 fn tail_i(v: vector<integer>) -> vector<integer> {

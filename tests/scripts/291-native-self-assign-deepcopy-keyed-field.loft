@@ -16,8 +16,12 @@ struct CornerRef {
   rk: text,
   x: integer,
 }
-struct G { look: hash<CornerRef[rk]> }
-struct V { items: vector<CornerRef> }
+struct G {
+  look: hash<CornerRef[rk]>,
+}
+struct V {
+  items: vector<CornerRef>,
+}
 
 fn id_g(g: G) -> G {
   return g;

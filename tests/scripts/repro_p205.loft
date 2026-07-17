@@ -15,7 +15,9 @@ interface P205Labelable {
   fn p205_to_label(self: Self) -> text
 }
 
-struct P205_S { p205_name: text }
+struct P205_S {
+  p205_name: text,
+}
 fn p205_to_label(self: P205_S) -> text {
   return self.p205_name;
 }

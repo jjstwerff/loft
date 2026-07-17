@@ -15,7 +15,9 @@
 // expression in any position.  Must compile + run identically on --interpret and --native (and
 // wasm, which shares the Rust generator).
 
-value struct D { ms: integer }
+value struct D {
+  ms: integer,
+}
 fn OpEq(self: D, other: D) -> boolean {
   self.ms == other.ms
 }

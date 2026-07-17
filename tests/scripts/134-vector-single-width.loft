@@ -11,7 +11,9 @@
 // silent truncation); single values reach the vector via the `f`-suffix single
 // literal (`1.0f`), an explicit `as single` cast, or a single-typed variable.
 
-struct V { a: vector<single> }
+struct V {
+  a: vector<single>,
+}
 struct Ent {
   k: integer,
   m: V,

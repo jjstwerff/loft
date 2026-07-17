@@ -15,7 +15,9 @@ struct Entry {
   name: text,
   value: text,
 }
-struct DB { entries: hash<Entry[name]> }
+struct DB {
+  entries: hash<Entry[name]>,
+}
 
 fn main() {
   src = DB { entries: [] };

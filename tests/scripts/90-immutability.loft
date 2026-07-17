@@ -49,7 +49,9 @@ fn test_const_local_read_only() {
   assert(x == 42, "ok");
 }
 
-struct CLP { x: integer }
+struct CLP {
+  x: integer,
+}
 
 fn test_const_local_vector_read_only() {
   const v = [CLP { x: 1 }, CLP { x: 2 }];

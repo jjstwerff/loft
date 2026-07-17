@@ -12,7 +12,8 @@
 // (1) enum match-return, value flows through a second fn (the p54 shape —
 // multi-line arms on purpose: layout shifted poison visibility, never the bug).
 pub enum V {
-  A { v: integer }, B { v: text }
+  A { v: integer },
+  B { v: text },
 }
 fn dbl(x: const V) -> V {
   match x {

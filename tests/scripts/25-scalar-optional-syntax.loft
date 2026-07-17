@@ -11,7 +11,11 @@
 // (`vector<S?>`) is a separate, already-shipped opt-in (see the 85-* tests).
 // Design: doc/claude/plans/25-nullable-sequences/implementation-steps.md § Phase 0.
 
-struct S { a: integer?, b: text?, c: integer }
+struct S {
+  a: integer?,
+  b: text?,
+  c: integer,
+}
 
 fn pick(x: integer?, y: text?) -> integer? {
   x

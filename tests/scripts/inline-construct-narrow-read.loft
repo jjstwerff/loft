@@ -10,8 +10,16 @@
 // the normal emit which inlines the #rust body (its `let db = @v1; ..` sequences
 // the mutating arg before the read borrow). Both backends.
 
-struct B { x: u8? } struct BNN { x: u8 }
-struct S { z: u16 } struct SNN { z: u16 }
+struct B {
+  x: u8?,
+} struct BNN {
+  x: u8,
+}
+struct S {
+  z: u16,
+} struct SNN {
+  z: u16,
+}
 struct I8s {
   y: i8,
 } struct I16s {

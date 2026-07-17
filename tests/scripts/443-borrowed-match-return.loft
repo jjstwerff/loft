@@ -11,7 +11,10 @@
 //
 // The subject (`cell`) is a NAMED local that out-lives the result, so the borrowed return is
 // sound; the churn loop makes a stale return-address fatal pre-fix.
-struct E { hp: integer, name: text }
+struct E {
+  hp: integer,
+  name: text,
+}
 enum Cell {
   Empty,
   Filled { items: vector<E> },

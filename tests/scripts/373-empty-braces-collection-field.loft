@@ -17,8 +17,12 @@ struct Word {
   text: text,
   count: integer,
 }
-struct H { by: hash<Word[text]> }
-struct V { v: vector<integer> }
+struct H {
+  by: hash<Word[text]>,
+}
+struct V {
+  v: vector<integer>,
+}
 struct Counter {
   ordered: vector<Word>,
   by_text: hash<Word[text]>,

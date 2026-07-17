@@ -14,7 +14,9 @@
 // lookup cases below guard against the fix over-reaching (regressing p285/issue_85). Both
 // backends; leak-checked by tests/ownership_oracle.
 
-struct DT { ms: integer not null }
+struct DT {
+  ms: integer not null,
+}
 struct Ent {
   name: text not null,
   v: integer not null,

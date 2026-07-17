@@ -21,7 +21,10 @@
 // (@PLN85 P3 — def/type numbering across SEVERAL multi-line match-return functions
 // defined together) is orthogonal to this fix and tracked apart; keeping the arms
 // single-line isolates this regression to the B5 stack-join.
-struct E { hp: integer, name: text }
+struct E {
+  hp: integer,
+  name: text,
+}
 enum Cell {
   Empty,
   Filled { items: vector<E> },

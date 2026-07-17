@@ -57,7 +57,10 @@ struct Ent {
   coord: text,
   idx: integer,
 }
-struct G { m: hash<Ent[coord]>, adj: vector<vector<integer>> }
+struct G {
+  m: hash<Ent[coord]>,
+  adj: vector<vector<integer>>,
+}
 fn add(g: G, i: integer, x: integer) {
   g.adj[i] += [x];
 }

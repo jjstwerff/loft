@@ -23,8 +23,15 @@
 // Isolated lib reproducer: lib/moros_render/tests/adversarial.loft
 // (test_adv_lambda_mutates_mesh).
 
-struct P319V3 { x: float, y: float, z: float }
-struct P319V2 { x: float, y: float }
+struct P319V3 {
+  x: float,
+  y: float,
+  z: float,
+}
+struct P319V2 {
+  x: float,
+  y: float,
+}
 struct P319Vtx {
   pos: P319V3,
   normal: P319V3,

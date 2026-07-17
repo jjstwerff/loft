@@ -12,7 +12,10 @@
 // default on, LOFT_NO_A1B opts out) keeps the three stores DISTINCT: the subject
 // work-ref is skipped (kept a local, freed after the copy) and the buffer work-ref
 // materialises an owned copy into a separate `__retbuf`. Pins both backends.
-struct E { hp: integer, name: text }
+struct E {
+  hp: integer,
+  name: text,
+}
 enum Cell {
   Empty,
   Filled { items: vector<E> },

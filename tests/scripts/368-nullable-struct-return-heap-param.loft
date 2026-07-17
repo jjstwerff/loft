@@ -23,7 +23,9 @@
 // fail the `== null` assertions.  Boolean selectors are VARIABLES, not literals,
 // to avoid the unrelated #366 boolean-literal-arg native E0308.
 
-struct S { x: integer }
+struct S {
+  x: integer,
+}
 struct Box {
   y: integer,
 }

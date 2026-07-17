@@ -13,7 +13,10 @@ struct Item {
   val: integer,
 }
 
-struct DB { idx: index<Item[nr, label]>, s: sorted<Item[nr]> }
+struct DB {
+  idx: index<Item[nr, label]>,
+  s: sorted<Item[nr]>,
+}
 
 fn build() -> DB {
   DB {

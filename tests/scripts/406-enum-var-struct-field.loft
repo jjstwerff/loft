@@ -17,7 +17,7 @@
 // arm directly above it.
 
 enum CV {
-  CInt { value: integer }
+  CInt { value: integer },
 }
 struct Entry {
   key: CV,

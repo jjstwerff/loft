@@ -291,7 +291,9 @@ fn test_assign_text() {
   assert("{o}" == `{{a:"bcdef"}}`, "assign text");
 }
 
-struct IST { name: text }
+struct IST {
+  name: text,
+}
 
 fn test_independent_strings() {
   a = IST { name: "hello" };

@@ -16,7 +16,9 @@
 // values are chosen so a WRONG borrow would diverge (d2 would read 99, not 10).
 // See doc/claude/plans/25-nullable-sequences/copy-elision-design.md § Tier 1.
 
-struct G { c: vector<integer> }
+struct G {
+  c: vector<integer>,
+}
 fn bump(g: &G) {
   g.c[0] = 99;
 }

@@ -7,9 +7,12 @@
 // (which previously divided by zero on `vector<T>` construction).  Cross-mode.
 
 enum T {
-  Circle { r: integer }, Square { pad: integer, r: integer }
+  Circle { r: integer },
+  Square { pad: integer, r: integer },
 }
-struct U { label: text }
+struct U {
+  label: text,
+}
 
 fn radius(shapes: vector<T>) -> integer {
   match shapes { [(Circle { r } |Square { r })] => r, _ => -1, }

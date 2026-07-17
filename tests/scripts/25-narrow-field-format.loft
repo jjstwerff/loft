@@ -14,7 +14,11 @@
 // 2-byte field is `Parts::ShortRaw` (direct), matching `ShortFull`. Interp = typedef.rs; native
 // = generation/mod.rs emit_field. Both backends.
 
-struct NF { h: u16, w: i16, t: u8 }
+struct NF {
+  h: u16,
+  w: i16,
+  t: u8,
+}
 
 fn main() {
   x = NF { h: 7, w: -5, t: 1 };
