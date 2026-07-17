@@ -228,7 +228,9 @@ fn sp(prev: text, tok: text) -> boolean {
   if prev == "," || prev == ":" || prev == ";" { return true; }
   if is_binop(prev) || is_binop(tok) { return true; }
   pw = ends_word(prev) || prev == ")" || prev == "]" || prev.starts_with("\"") || prev.starts_with("'");
-  tw = starts_word(tok) || tok.starts_with("\"") || tok.starts_with("'");
+  // `!` (prefix logical-not) begins an operand like a word/string, so it must not glue
+  // to a preceding keyword/identifier: `if !c`, not `if!c` (`!=` is a distinct token).
+  tw = starts_word(tok) || tok.starts_with("\"") || tok.starts_with("'") || tok == "!";
   if pw && tw { return true; }
   false
 }
@@ -324,7 +326,8 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
           // pending-tight for the NEXT token: after a generic `<` (so `<T` hugs), a repetition
           // postfix (`)*(sep)` hugs), or a unary op
           pu = gen_open || rep_post
-            || ((tok == "-" || tok == "+" || tok == "*" || tok == "&") && unary_ctx(prev));
+            || ((tok == "-" || tok == "+" || tok == "*" || tok == "&") && unary_ctx(prev))
+            || tok == "!";   // `!` is always prefix-unary — it hugs its operand: `!c`, `!(c)`
           prev2 = prev;
           prev = tok;
         }
