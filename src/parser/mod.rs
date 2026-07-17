@@ -6467,7 +6467,12 @@ impl Parser {
                 };
                 let promoted = a_hidden
                     || a_name.starts_with("__")
-                    || self.data.def(d_nr).returned.depend().contains(&(a_nr as u16));
+                    || self
+                        .data
+                        .def(d_nr)
+                        .returned
+                        .depend()
+                        .contains(&(a_nr as u16));
                 if !self.first_pass
                     && default == Value::Null
                     && !matches!(tp, Type::Optional(_))
