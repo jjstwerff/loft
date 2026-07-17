@@ -39,6 +39,9 @@ pub enum Value {
 
 impl Value {
     /// The return value as an owned `String`, or a type error.
+    ///
+    /// # Errors
+    /// [`LoftError::ReturnType`] if the value is not a `text`.
     pub fn into_text(self) -> Result<String, LoftError> {
         match self {
             Value::Text(s) => Ok(s),
@@ -146,12 +149,20 @@ impl Program {
     /// Load `source` (plus the loft standard library) and compile it. The stdlib
     /// directory is resolved next to the running executable, then via
     /// `LOFT_DEFAULT_DIR`, then `./default`.
+    ///
+    /// # Errors
+    /// [`LoftError::Parse`] if the stdlib directory cannot be read or the source
+    /// fails to parse / compile.
     pub fn from_source(source: &str) -> Result<Program, LoftError> {
         Self::from_source_with_stdlib(source, &default_stdlib_dir())
     }
 
     /// Like [`Program::from_source`] but with an explicit stdlib directory
     /// (the `default/` folder shipped beside the `loft` binary).
+    ///
+    /// # Errors
+    /// [`LoftError::Parse`] if `stdlib_dir` cannot be read or the source fails to
+    /// parse / compile.
     pub fn from_source_with_stdlib(source: &str, stdlib_dir: &str) -> Result<Program, LoftError> {
         let mut p = parser::Parser::new();
         p.parse_dir(stdlib_dir, true, false)
@@ -166,6 +177,12 @@ impl Program {
 
     /// Call `func` with `args`, returning its value. Reusable — call as many
     /// times as needed; each call runs on a fresh stack frame.
+    ///
+    /// # Errors
+    /// [`LoftError::UnknownFn`] if no `fn` of that name exists;
+    /// [`LoftError::ArgType`] / [`LoftError::ArgCount`] on an argument mismatch;
+    /// [`LoftError::Runtime`] if the call raises at runtime;
+    /// [`LoftError::ReturnType`] if the return value cannot be marshalled.
     pub fn call(&mut self, func: &str, args: &[Value]) -> Result<Value, LoftError> {
         let d_nr = self.data.def_nr(&format!("n_{func}"));
         if d_nr == u32::MAX {

@@ -1200,6 +1200,7 @@ fn par_share_for(stores: &Stores) -> bool {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn run_parallel_discard(
     stores: &Stores,
     program: WorkerProgram,
@@ -1512,7 +1513,13 @@ fn run_parallel_queue_shared(
                         )
                     } else if prim_in > 0 {
                         let v = read_primitive_at(&state.database, &row_ref, element_size);
-                        state.execute_at_raw_primitive_input(fn_pos, v, prim_in, &extras, return_size)
+                        state.execute_at_raw_primitive_input(
+                            fn_pos,
+                            v,
+                            prim_in,
+                            &extras,
+                            return_size,
+                        )
                     } else {
                         state.execute_at_raw(fn_pos, &row_ref, &extras, return_size)
                     };
