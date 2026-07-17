@@ -237,13 +237,15 @@ impl LexConfig {
         }
     }
 
-    /// A lexicon for JSON (@PLN109): the structural tokens `{ } [ ] : ,`, no
-    /// keywords (`true`/`false`/`null` lex as identifiers — the JSON parser
+    /// A lexicon for JSON (@PLN109): the structural tokens `{ } [ ] : ,` plus the
+    /// number sign `-` (loft's lexer reports `-` as its own token; the JSON parser
+    /// combines it with the following number, since a JSON number can be negative).
+    /// No keywords (`true`/`false`/`null` lex as identifiers — the JSON parser
     /// dispatches on them), no comment, no `{…}` interpolation, and JSON string
-    /// escapes enabled.  The token set is refined as the JSON parser is built.
+    /// escapes enabled.
     #[must_use]
     pub fn json() -> Self {
-        let tokens: HashSet<String> = ["{", "}", "[", "]", ":", ","]
+        let tokens: HashSet<String> = ["{", "}", "[", "]", ":", ",", "-"]
             .iter()
             .map(|s| (*s).to_string())
             .collect();
