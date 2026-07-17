@@ -151,7 +151,7 @@ Pops (reverse declaration order): `func`, `threads`, `return_size`, `element_siz
 
 ## `par(...)` Parallel For-Loop Syntax
 
-The `par(b=worker(a), N)` clause on a `for ... in` loop is a shorthand that runs the worker in parallel over the source and iterates the results in order.
+The `par(b=worker(a), N)` clause on a `for ... in` loop is a shorthand that runs the worker in parallel over the source and iterates the results in the source's materialised order — deterministic for an ordered source (`vector` / range / `iterator` / `text` / `sorted`), but **non-deterministic for a `hash`** (see the § below).
 
 ### Syntax
 
@@ -168,10 +168,17 @@ vector are materialised into one (`materialise_iter_for_par` for ranges /
 iterators / text via the comprehension lowering; `materialise_keyed_for_par`
 for keyed collections) before the queue dispatcher partitions it across
 threads.  A **hash** uses an *unsorted* bucket walk for par (`hash_unsorted`)
-since the queue has no use for the hash's key order — so a par loop over a hash
-may visit elements in a different order than sequential `for x in h` (which is
-key-ordered).  The queue itself is order-preserving relative to the
-materialised input.
+since the queue has no use for the hash's key order.  **This walk is NOT
+deterministic:** a par loop over a hash yields its results in an order that
+**varies run to run** (verified, both backends) — unlike sequential `for x in h`,
+which is stably key-ordered.  The queue is order-preserving relative to the
+materialised input, but for a hash that materialised order is *itself* unstable,
+so **the par result order over a hash is non-deterministic.**  Ordered sources
+stay deterministic — a `vector` / range / `iterator` / `text` par preserves the
+source order, and a `sorted` par preserves key order (both verified, stable
+across runs).  So if you accumulate hash-par results into a vector and need a
+stable, reproducible order, par over a `sorted` (or sort the results) instead of
+a `hash`.
 
 Two worker call forms are supported:
 
