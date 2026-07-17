@@ -42,9 +42,14 @@ advanced 1 char not N bytes → re-emits; `n = line.len()` byte-walk bounds trun
 `align` count left as `len`). After: the oracle test passes and the multi-byte doc renders correctly.
 The verified diff is saved at [`artifacts/markdown-len-to-size.patch`](artifacts/markdown-len-to-size.patch)
 — it must be PR'd to `loft-libs-docs` and republished (**user-gated**: loft-ship touch-signing).
-**Remaining (all user/env-gated):** publish the markdown patch + republish the affected registry libs
-(graphics etc.) via loft-ship; the branch merge then closes @PLN110. The stdlib/language work and all
-on-box validation are complete — H2 is cleared (below). (Pre-existing, not from this work:
+**Remaining to close @PLN110 — a single coordinated release, not a checklist of chores.** The
+stdlib/language work and all on-box validation are complete and H2 is cleared (below). What's left is
+inherently one event: (1) land this branch on `main` (80 commits stacked with @PLN102/@PLN109; needs
+the `../loft2` @PLN108 reconciliation first, per owner) and ship the flipped loft; (2) *in the same
+release*, republish the converted libs (markdown patch + graphics) — they can't publish earlier
+because the `size()`-for-bytes conversion only works on the flipped loft (§4c). That release is the
+`CONTRACT_VERSION 0→1` bump. Until it happens, @PLN110 stays open by design; closing it earlier would
+either hand-close unmerged work or ship libs that break on the current release. (Pre-existing, not from this work:
 `index_hygiene` flags 14 closed-issue `@P*` refs in untouched files.)
 
 **Phase 1 COMPLETE** (2026-07-17) — sub-arc **1a `size(vector<T>)` ✅ landed**, both backends; the
@@ -222,7 +227,7 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 3a | Strict-index lint **default-on** for the text case | lint | ✅ Done — `text_index_units_lint_enabled` (opt-out `LOFT_NO_STRICT_INDEX_TEXT`); warns on `for i in 0..len(s){s[i]}`; oracle `tests/strict_index_text_lint.rs`, both backends; broke 0 existing tests |
 | 4a | Full suite, **both backends** | validate | ✅ Done — fresh run 2998/2998 pass, 0 fail (an earlier run flaked `wasm_debug_relay`/`s7_debugger`; both pass in isolation) |
 | 4b | Run the known consumer programs (dogfood) | validate | ✅ Done — 0e golden corpus (both backends), `glb.loft` (5 tests), `audience_crystal`, **`lib/markdown`** (cloned `loft-libs-docs`; multi-byte render corrupted → converted → `tests/01-render.loft` green) |
-| 4c | Republish / validate affected libraries | validate | ✅ Validated + fixes ready; markdown converted (`artifacts/markdown-len-to-size.patch`, 25 sites). **Publish is user-gated** (loft-ship touch-signing): PR the markdown patch + republish graphics etc. |
+| 4c | Republish / validate affected libraries | validate | ✅ Validated + fixes ready (markdown converted — `artifacts/markdown-len-to-size.patch`, 25 sites). **RELEASE-COUPLED, not pending:** the converted libs use `size()` for byte ops, which is only correct on the FLIPPED loft — publishing them before the flip ships would break them on the current (pre-flip) release (mirror-image bug). So they republish *with* the flip release (the `CONTRACT 0→1` event), via a held `loft-libs-docs` PR + touch-signed `loft ship`. Nothing to publish until then. |
 | 4d | Clear @PLN102 **H2** → the `CONTRACT_VERSION 0 → 1` flip is unblocked on the stdlib side | close-out | ✅ **H2 CLEARED** — language + stdlib done, all consumers validated (glb + markdown top-risk sites correct). Only user-gated republish + branch merge remain |
 | 4e | **(discovered in 4b)** Formatter mis-classified `::`-/`.`-qualified names before a block as struct literals → corrupted `glb.loft` at Phase 2a; classify block-vs-container by the body instead | fix | ✅ Done — `9cafd92c` (fmt) + `007d2481` (glb restore); regression `host_call::formatter_qualified_variant_before_block_is_not_a_struct_lit` |
 
