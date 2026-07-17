@@ -535,6 +535,19 @@ pub fn strict_index_lint_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_LINT_STRICT_INDEX").is_some())
 }
 
+/// `LOFT_NO_STRICT_INDEX_TEXT` (@PLN110 3a) — the TEXT strict-index units lint, DEFAULT ON
+/// (opt-out). After the @PLN110 flip `len(text)` is a CHARACTER count while `text[i]` is
+/// byte-indexed, so `for i in 0..len(s) { s[i] }` under-runs / misreads multi-byte text (it walks
+/// char-count byte positions). Warns on exactly that shape — a loop var bounded by `len(s)` used to
+/// index that same text `s`. Advisory only (the type is unchanged): iterate with `for c in s`, or
+/// use `0..size(s)` for a genuine byte walk. Unlike the vector lint this is default-on, because for
+/// text the units are ALWAYS mismatched (char count vs byte offset), not just on a mismatched
+/// collection.
+pub fn text_index_units_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_STRICT_INDEX_TEXT").is_none())
+}
+
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar
 /// (`integer`, `text`, `bool`, …) is NON-NULL by default; `τ?` is the only nullable form. Turns
 /// `IntegerSpec.not_null` default `false → true` (and the analog for other scalars rides

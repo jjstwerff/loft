@@ -1154,6 +1154,9 @@ impl Parser {
         p: &mut Value,
         index_t: &Type,
     ) -> Type {
+        // @PLN110 3a — snapshot the raw index BEFORE `convert` may wrap it, so the
+        // strict-index lint below can still recognise a bare loop variable.
+        let raw_index = p.unspan().clone();
         if !self.convert(p, index_t, &I32) {
             diagnostic!(self.lexer, Level::Error, "Invalid index on string");
         }
@@ -1177,6 +1180,26 @@ impl Parser {
             }
             Type::Text(crate::data::Deps::none())
         } else {
+            // @PLN110 3a — `for i in 0..len(s) { s[i] }` is a units error: `len(s)` is a
+            // CHARACTER count but `s[i]` is byte-indexed, so the loop walks char-count byte
+            // positions and under-runs / misreads multi-byte text. Warn (default-on) when the
+            // index is a loop var bounded by `len` of the SAME text being indexed. Advisory —
+            // iterate with `for c in s`, or use `0..size(s)` for a byte walk.
+            if !self.first_pass
+                && crate::keys::text_index_units_lint_enabled()
+                && let Value::Var(iv) = &raw_index
+                && let Some(bound) = self.vars.loop_len_bound(*iv)
+                && crate::parser::operators::vec_key(code, &self.data) == Some(bound)
+            {
+                let iname = self.vars.name(*iv).to_string();
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "index `{iname}` walks `0..len(text)` (a character count) but `text[{iname}]` \
+                     is byte-indexed — this under-runs / misreads multi-byte text; iterate with \
+                     `for c in text`, or use `0..size(text)` for a byte walk (@PLN110 strict-index)"
+                );
+            }
             *code = self.cl("OpTextCharacter", &[code.clone(), p.clone()]);
             Type::Character
         }

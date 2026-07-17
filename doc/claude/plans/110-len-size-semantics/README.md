@@ -17,8 +17,9 @@ count (swapped `OpLengthText`/`OpSizeText`). The red set after the flip matched 
 (value flip vs `len→size` where the test verifies a byte count); doc-prose + `doc/examples.js` fixed.
 Script suites, `strings`, `host_input`, `doc_hygiene` all green both backends. `len(character)` kept
 as UTF-8 byte width (owner call), so the `c#next == c#index + len(c)` identity still holds.
-**Remaining:** 3a (strict-index lint default-on for text), Phase-4 validation/dogfood, then the
-`CONTRACT_VERSION 0 → 1` flip. (Pre-existing, not from this work: `index_hygiene` flags 14 closed-issue
+**3a DONE** — the text strict-index lint is default-on (`for i in 0..len(s){s[i]}` warns; opt-out
+`LOFT_NO_STRICT_INDEX_TEXT`); it broke 0 existing tests (no code used that units-error shape).
+**Remaining:** Phase-4 validation/dogfood, then the `CONTRACT_VERSION 0 → 1` flip. (Pre-existing, not from this work: `index_hygiene` flags 14 closed-issue
 `@P*` refs in untouched files.)
 
 **Phase 1 COMPLETE** (2026-07-17) — sub-arc **1a `size(vector<T>)` ✅ landed**, both backends; the
@@ -193,7 +194,7 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 2c | Convert libraries → re-green | convert | ✅ Done — `lib/lexer.loft` (4 byte sites) |
 | 2d | Convert tests / docs / examples → re-green | convert | ✅ Done — canaries updated (value or `len→size` by intent), doc-prose (STDLIB.md, doc tests), `doc/examples.js` regenerated |
 | 2e | Convert consumer programs → re-green | convert | ✅ Done — `tests/fixtures/libs` (incl. `glb.loft` binary chunk length); ⚠ `lib/markdown` not checked out (re-run against `loft-libs-docs`) |
-| 3a | Strict-index lint **default-on** for the text case | lint | Open |
+| 3a | Strict-index lint **default-on** for the text case | lint | ✅ Done — `text_index_units_lint_enabled` (opt-out `LOFT_NO_STRICT_INDEX_TEXT`); warns on `for i in 0..len(s){s[i]}`; oracle `tests/strict_index_text_lint.rs`, both backends; broke 0 existing tests |
 | 4a | Full suite, **both backends** | validate | Open |
 | 4b | Run the known consumer programs (dogfood) | validate | Open |
 | 4c | Republish / validate affected libraries | validate | Open |

@@ -240,6 +240,9 @@ read, e.g. `d = self.data; d[i]=x` where the bind COPIES so the write is lost) �
 `LOFT_NO_STEER` (@PLN102 arc C recommended-idiom channel: a call FROM OWNED source to a
 `#superseded "Y"` symbol warns *"`X` is superseded — use `Y`"* + a CI fold-lint; inert until a
 symbol is marked — see [COMPATIBILITY.md § Folding](doc/claude/COMPATIBILITY.md)) ·
+`LOFT_NO_STRICT_INDEX_TEXT` (@PLN110 3a text strict-index units lint: warns on
+`for i in 0..len(s) { s[i] }` — `len(text)` is a CHARACTER count but `s[i]` is byte-indexed, so
+the loop misreads multi-byte text; advisory, use `for c in s` or `0..size(s)`) ·
 `LOFT_LINT_STRICT_INDEX` (**opt-in**, @PLN102 case-D audit: warns where a for-loop iter var
 bounded by `len(<one vector>)` indexes a DIFFERENT vector — `for i in 0..len(v) { w[i] }` types
 non-null yet reads C80-null on overrun; advisory, the type is unchanged) ·
