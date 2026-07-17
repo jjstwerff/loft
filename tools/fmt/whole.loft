@@ -336,10 +336,15 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
         // Definitions always break, matching the stdlib: struct/enum bodies as forced
         // COMMA containers (one field/variant per line); interface bodies (newline-
         // separated members) and fn bodies as forced BLOCKS.
+        // A struct/enum DEFINITION (`prev2` is `struct`/`enum`) is a container regardless of
+        // the name's case — `struct IST { … }` must still expand, even though `IST` is not
+        // CamelCase.  A struct LITERAL is `CamelName { … }` in value position.  Everything else
+        // (`if x == KIND_MAIN { … }`, `-> Type { … }`, a bare `{ … }`) is a BLOCK.
         is_struct_def = prev2 == "struct" || prev2 == "enum";
         is_iface_def = prev2 == "interface";
+        is_struct_lit = is_camel(prev) && prev2 != "->" && !is_struct_def && !is_iface_def;
         g = "";
-        if open == "{{" && is_camel(prev) && prev2 != "->" && !is_iface_def {
+        if open == "{{" && (is_struct_def || is_struct_lit) {
           g = render_container(open, kids, close, col, indent, is_struct_def);
         } else if open == "{{" {
           g = render_block(kids, close, col, indent, saw_fn || is_iface_def);
