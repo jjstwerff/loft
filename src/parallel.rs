@@ -215,7 +215,7 @@ pub(crate) fn parallel_workers<R, F>(
 where
     F: FnOnce(usize, usize, WorkerStores) -> R,
 {
-    let worker_stores = stores.clone_for_worker();
+    let worker_stores = unsafe { stores.clone_for_light_worker() };
     vec![f(0, n_rows, worker_stores)]
 }
 
@@ -740,6 +740,11 @@ pub fn run_parallel_queue_ref(
             .map(|t| {
                 let start = t * n_rows / n_workers;
                 let end = (t + 1) * n_rows / n_workers;
+                // @PLN108 R4: queue_ref stays on the byte-copy clone for now — its
+                // dispenser-based output-slot adoption collides with the light clone's
+                // self-allocated scratch ("Allocating a used store" — probe 3). Needs a
+                // scratch-free / dispenser-aware borrow variant; deferred to R4b. This is
+                // the SOLE remaining `clone_for_worker` caller.
                 let mut ws = stores_immut.clone_for_worker();
                 ws.stores.free_bits.clear();
                 ws.stores.disable_slot_reuse = true;
@@ -1098,7 +1103,7 @@ pub fn run_parallel_fold(
     if sorted_partials.is_empty() {
         return init;
     }
-    let mut combine_state = prog.new_state(stores.clone_for_worker());
+    let mut combine_state = prog.new_state(unsafe { stores.clone_for_light_worker() });
     let mut acc = init;
     for (_, partial) in sorted_partials {
         let new_acc = combine_state.execute_at_raw_primitive_input(
@@ -1131,7 +1136,7 @@ pub fn run_parallel_fold(
         return init;
     }
     let prog = Arc::new(program);
-    let mut state = prog.new_state(stores.clone_for_worker());
+    let mut state = prog.new_state(unsafe { stores.clone_for_light_worker() });
     let mut acc = init;
     let extras = extra_args.to_vec();
     for row_idx in 0..n_rows {
@@ -1444,7 +1449,7 @@ pub fn run_parallel_queue_fn(
         return Vec::new();
     }
     let mut buf = vec![0u8; n_rows * FN_REF_SIZE];
-    let mut state = program.new_state(stores.clone_for_worker());
+    let mut state = program.new_state(unsafe { stores.clone_for_light_worker() });
     for row_idx in 0..n_rows {
         let row_ref = vector::get_vector(
             input,
@@ -1646,7 +1651,7 @@ pub fn run_parallel_block(
         let program = Arc::new(program);
         thread::scope(|s| {
             for &pos in arm_positions {
-                let worker_stores = stores.clone_for_worker();
+                let worker_stores = unsafe { stores.clone_for_light_worker() };
                 let prog = Arc::clone(&program);
                 let snapshot = Arc::clone(parent_snapshot);
                 s.spawn(move || {
@@ -1660,7 +1665,7 @@ pub fn run_parallel_block(
     {
         // Sequential fallback (WASM or threading disabled).
         for &pos in arm_positions {
-            let mut state = program.new_state(stores.clone_for_worker());
+            let mut state = program.new_state(unsafe { stores.clone_for_light_worker() });
             state.execute_at_void_with_snapshot(pos, parent_snapshot.as_ref());
         }
     }
