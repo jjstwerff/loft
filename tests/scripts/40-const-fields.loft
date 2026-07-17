@@ -42,6 +42,10 @@ enum Shape {
   Circle { const radius: integer },
   Square { side: integer },
 }
+enum EFrz {
+  Cv { const v: vector<integer> }, // binding-const collection variant field
+  Vv { v: const vector<integer> }, // value-const collection variant field
+} // @PLN102 K1 — const on enum-VARIANT fields is enforced identically to structs
 
 fn main() {
   // ── construct + read a const field ─────────────────────────────
@@ -124,4 +128,24 @@ fn main() {
   //    at parse time (append by value-const, rebind by binding-const). ─
   ff = FullFrz { fv: [5, 6] };
   assert(ff.fv[1] == 6 && len(ff.fv) == 2, "fully-frozen field constructs and reads");
+
+  // ── @PLN102 K1 — const on enum-VARIANT fields (POSITIVE cells) ──
+  // A `const` / value-const variant field enforces exactly like a struct field: the
+  // NEGATIVE cells (a direct `x.f = …` reassign / value-const append) are parse-time
+  // (tests/issues.rs pln40_enum_variant_*).  These are the allowed writes.
+  sq = Square { side: 3 };
+  if sq is Square { _g = 0; sq.side = 9; assert(sq.side == 9, "non-const variant field is writable"); }
+
+  // binding-const collection variant field: element write + append are contents mutation.
+  cv = Cv { v: [1, 2] };
+  if cv is Cv { _g = 0; cv.v[0] = 7; assert(cv.v[0] == 7, "const variant vector: element write allowed"); }
+  if cv is Cv { _g = 0; cv.v += [3]; assert(len(cv.v) == 3 && cv.v[2] == 3, "const variant vector: append allowed"); }
+
+  // value-const collection variant field: a whole-value REBIND re-points the slot.
+  vv = Vv { v: [1, 2] };
+  if vv is Vv { _g = 0; vv.v = [9, 8, 7]; assert(len(vv.v) == 3 && vv.v[0] == 9, "value-const variant vector: rebind allowed"); }
+
+  // over-reach guard: a pattern-bound LOCAL copy of a const scalar variant field is mutable.
+  ci = Circle { radius: 5 };
+  if ci is Circle { radius } { radius = 9; assert(radius == 9, "bound local copy of a const variant field is mutable"); }
 }

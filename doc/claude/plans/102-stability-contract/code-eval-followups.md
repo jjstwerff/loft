@@ -10,9 +10,10 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > the same session: two silent-corruption/soundness bugs in F2 compound-assign place-once (the
 > nonzero-offset double-eval + the value-const bypass, `5deea479`) and a fold-lint false-negative
 > (`8f915023`). This doc records the REMAINING kinks it surfaced, each with a small-safe-steps
-> design so it can be picked up independently. **K1 is a pre-freeze DECISION** (an error-add — it
-> can only land while `CONTRACT_VERSION` is 0); K2–K4 are low-risk cleanups. Method throughout:
-> matrix-first, one chokepoint, both backends, gated where it changes an observed value
+> design so it can be picked up independently. **K1 — enforce, DONE (2026-07-18):** the
+> pre-freeze decision was made (enforce, not accept-decorative); enum-variant `const` / value-const
+> now reject identically to struct fields, both backends. K2–K4 are low-risk cleanups. Method
+> throughout: matrix-first, one chokepoint, both backends, gated where it changes an observed value
 > ([engineering-rigor](../../STABILITY_METHOD.md), [loft-codegen](../../CODEGEN_METHOD.md)).
 
 Everything else the reviewers checked came back clean: clippy, the hand-maintained IR offset
@@ -22,7 +23,7 @@ the two byte-identical layout dumps (F9), the `#superseded` store round-trip, an
 
 ---
 
-## K1 — enum-variant `const` is NOT enforced (D-const-1) · **PRE-FREEZE DECISION**
+## K1 — enum-variant `const` is NOT enforced (D-const-1) · **DONE 2026-07-18 (enforce)**
 
 **What.** `const` on an enum-VARIANT field is declared, constructed, and read, but its write-once
 guarantee never fires. With `enum Shape { Circle { const radius: integer }, … }`, after a
@@ -72,8 +73,18 @@ Recommendation: **enforce** — an unenforced `const` is a footgun, and the fix 
    (+ the README/ROADMAP index rows). If MEASURED conversions are non-zero, that is the owner's
    call on whether to still enforce.
 
-**Blocked-on:** the owner's pre-freeze decision (enforce vs accept-decorative). Everything above is
-the *enforce* branch.
+**Blocked-on:** ~~the owner's pre-freeze decision (enforce vs accept-decorative).~~ **RESOLVED —
+enforce.** Landed 2026-07-18 exactly as the *enforce* branch above. The 10-cell struct-oracle matrix
+(const_field / value_const × scalar/vector × assign/compound/element, plus the bound-local over-reach
+guard) confirmed the boundary; the fix extends BOTH `Parts::Struct`-only chokepoints — the leaf-field
+block in `validate_write` and the value-const chain-walk `lhs_frozen_through` — to also walk
+`Parts::EnumValue(_, fields)`. Verified the variant def's `attributes()[f_nr]` aligns with the
+`EnumValue` field order (positive cells stayed accepted; no false positives). Diagnostics name the
+owner as a "variant". **Blast radius: zero** — the full suite (2998) passed unchanged before the new
+tests were added, so no in-tree program mutates an enum-variant const field. Regression tests:
+`pln40_enum_variant_*` (negatives + over-reach guard) in `tests/issues.rs`; positive cells in
+`tests/scripts/40-const-fields.loft` (both backends). D-const-1 closed in
+[binding.md](../../formal/binding.md) + [formal/README.md](../../formal/README.md) (D-const: 0 open).
 
 ---
 

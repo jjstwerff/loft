@@ -3612,9 +3612,22 @@ use a separate collection or add after the loop"
             let d_nr = self.data.type_def_nr(parent_tp);
             if d_nr != u32::MAX {
                 let known = self.data.def(d_nr).known_type();
+                // @PLN102 K1 — a `const` / value-const field is enforced identically whether it
+                // lives on a struct (`Parts::Struct`) or an enum VARIANT (`Parts::EnumValue`).
+                // The variant def's `attributes()[f_nr]` aligns with its `EnumValue` field order,
+                // so the same const_field / value_const checks below apply unchanged.
                 if known != u16::MAX
-                    && let Parts::Struct(fields) = &self.database.types[known as usize].parts
+                    && let Parts::Struct(fields) | Parts::EnumValue(_, fields) =
+                        &self.database.types[known as usize].parts
                 {
+                    // @PLN102 K1 — name the owner accurately: an enum-variant owner is a
+                    // "variant", a struct owner a "struct" (the struct wording is unchanged).
+                    let owner_kind =
+                        if self.data.def(d_nr).def_type() == crate::data::DefType::EnumValue {
+                            "variant"
+                        } else {
+                            "struct"
+                        };
                     for (f_nr, f) in fields.iter().enumerate() {
                         if f.position != pos as u16 {
                             continue;
@@ -3649,8 +3662,9 @@ use a separate collection or add after the loop"
                                 diagnostic!(
                                     self.lexer,
                                     Level::Error,
-                                    "cannot reassign const field '{}' of struct '{}' — const fields are write-once-at-construction",
+                                    "cannot reassign const field '{}' of {} '{}' — const fields are write-once-at-construction",
                                     f.name,
+                                    owner_kind,
                                     self.data.def(d_nr).name()
                                 );
                             }
@@ -3677,8 +3691,9 @@ use a separate collection or add after the loop"
                                 diagnostic!(
                                     self.lexer,
                                     Level::Error,
-                                    "cannot mutate value-const field '{}' of struct '{}' — its value is read-only (rebind with '=' to re-point, or drop 'const')",
+                                    "cannot mutate value-const field '{}' of {} '{}' — its value is read-only (rebind with '=' to re-point, or drop 'const')",
                                     f.name,
+                                    owner_kind,
                                     self.data.def(d_nr).name()
                                 );
                             }
@@ -3744,7 +3759,11 @@ use a separate collection or add after the loop"
                     if known == u16::MAX {
                         return None;
                     }
-                    let Parts::Struct(fields) = &self.database.types[known as usize].parts else {
+                    // @PLN102 K1 — a value-const field is read-only through whether it lives on a
+                    // struct or an enum variant; walk both `Parts::Struct` and `Parts::EnumValue`.
+                    let (Parts::Struct(fields) | Parts::EnumValue(_, fields)) =
+                        &self.database.types[known as usize].parts
+                    else {
                         return None;
                     };
                     let f_nr = fields.iter().position(|f| f.position == *pos as u16)?;
