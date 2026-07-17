@@ -124,7 +124,7 @@ Beyond the null-sentinel cluster above:
 | H6 | ✅ **FIXED (2026-07-16)** — the 7 all-quantified text classifiers now return `false` on `""` (was vacuously `true`) | closed the `if input.is_numeric()` accepts-empty footgun; empty→false matches Python's `"".isdigit()`/`.isalpha()`/`.isspace()` | DONE — an `if self.len()==0 { return false }` guard on each of the 7; regression in `tests/scripts/03-text.loft`; verified both backends; ZERO in-tree callers relied on the vacuous-true | `03_text.loft:74–146` |
 | H7 | ~~**`text as integer/single/float` silently yields null / NaN**~~ **DONE — already closed by @PLN25 N-Parse** (verified 2026-07-17, both backends): a text parse `as integer` types **`integer?`** (`as float`→`float?`, `as single`→`single?`), and storing it non-null is a **compile error** (`n: integer = "abc" as integer` → *"a text parse `as integer` may fail — use `integer?` … or `?? <default>`"*). The blessed checked path IS `s as integer?` / `s as integer ?? d`; `"1.2.3" as float` → null (discharged), never a silent NaN. Exactly the proposed fix, already shipped. | ~~silent~~ | `fill.rs:466,472,478` |
 | H8 | **`sorted[a..b]` is a KEY-range query sharing vector's positional-slice syntax** (INC#2) | a vector→sorted port silently reads the wrong elements | reject positional-shaped slices on sorted, or make key-range slicing syntactically distinct | INC#2; `LOFT.md` |
-| H9 | **`FileResult` advertises error variants that never fire** (`PermissionDenied`, `IsDirectory`, …) | the *frozen error identity* mismatches reality; a perm-denied delete returns `Other` | map OS errors to the variants, or remove the aspirational ones | `02_files.loft:38–40` |
+| H9 | ~~**`FileResult` advertises error variants that never fire**~~ **DONE (2026-07-17, both backends)** — the classifier is now real: `delete`/`move`/`mkdir`/`mkdir_all` map the OS error to `NotFound` / `PermissionDenied` / `IsDirectory` / `Other` (shared chokepoint `codegen_runtime::fs_classify` → integer code → the loft `fs_result` mapper; verified `delete(dir)`→IsDirectory + read-only-dir→PermissionDenied, both backends). The one variant that could **not** be produced portably — `NotDirectory` (needs `ErrorKind::NotADirectory`, unstable before Rust 1.83, and `codegen_runtime` is recompiled by the user's rustc for `--native`) — was **removed** rather than frozen as a lie. Codes are decoupled from the enum's declaration order (explicit `match`). Regression extended in `tests/scripts/42-file-result.loft`. | ~~frozen lie~~ | `02_files.loft` |
 
 ---
 
@@ -222,7 +222,7 @@ Beyond the null-sentinel cluster above:
 | Sev | Item | Fix | Ref |
 |---|---|---|---|
 | High | `write()` void → silent failure (H3); `content`/`read_bytes` conflate missing/empty (H4) | see H3/H4 | `:545,97` |
-| High | JSON f64 integer precision (H5); `FileResult` phantom variants (H9) | see H5/H9 | `06_json.loft:21` |
+| High | JSON f64 integer precision (H5); ~~`FileResult` phantom variants (H9)~~ ✅ H9 DONE — variants classified (`fs_classify`), `NotDirectory` removed | see H5/H9 | `06_json.loft:21` |
 | Med | time units split: `now()` ms / `mtime()` s / `ticks()` µs — silent `/1000` to compare | unit-suffixed peers or loud doc | `:583,336,587` |
 | Med | JSON errors via process-global `json_errors()` string side-channel (frozen surface) | reconsider the error channel | `06_json.loft:50` |
 | Med | no `copy(from,to)`, no `append` (write truncates), no `rmdir` | add the three (additive; but the gap+idioms calcify) | `:269,545` |

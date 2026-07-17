@@ -1948,7 +1948,7 @@ if !result.ok() { println("delete failed"); }
 ```
 
 `FileResult` variants: `Ok`, `NotFound`, `PermissionDenied`, `IsDirectory`,
-`NotDirectory`, `Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`,
+`Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`,
 `set_file_size`.
 
 There are no hidden exception paths — every function's failure mode is visible

@@ -35,6 +35,12 @@ fn main() {
   r = mkdir("test_loft_fr_dir");
   assert(!r.ok(), "mkdir on existing dir not ok");
 
+  // delete() on a directory returns IsDirectory (remove_file refuses a directory).
+  // @PLN102 H9 — the classified variants (IsDirectory, PermissionDenied) are now
+  // produced by the runtime, not collapsed to Other. (PermissionDenied is not
+  // asserted here: CI may run as root, which bypasses the permission check.)
+  assert(delete("test_loft_fr_dir") == FileResult.IsDirectory, "delete directory -> IsDirectory");
+
   // --- move() returns FileResult ---
   {
     f2 = file("test_loft_fr.txt");

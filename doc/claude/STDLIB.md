@@ -487,9 +487,12 @@ Mutating filesystem operations return a `FileResult` enum:
 | `FileResult.Ok` | Operation succeeded. |
 | `FileResult.NotFound` | Path does not exist or is outside the project directory. |
 | `FileResult.PermissionDenied` | OS permission denied. |
-| `FileResult.IsDirectory` | Expected a file, got a directory. |
-| `FileResult.NotDirectory` | Expected a directory, got a file. |
+| `FileResult.IsDirectory` | A file operation targeted a directory (e.g. `delete()` on a directory). |
 | `FileResult.Other` | Any other OS error. |
+
+Every variant is actually produced: `--native` and `--interpret` classify from the OS
+error; the wasm host reports only `Ok` / `Other`, and `NotFound` still comes from the
+loft-level existence check.
 
 | Function | Description |
 |----------|-------------|

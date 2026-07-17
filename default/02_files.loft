@@ -30,20 +30,36 @@ pub enum Format {
 }
 // Result of a filesystem-mutating operation (delete, move, mkdir).
 // Use ok() to get a simple boolean, or match on specific variants for
-// detailed error handling.
-
+// detailed error handling.  Every variant can actually be produced: Ok on
+// success, NotFound for a missing / out-of-project path, PermissionDenied when
+// the OS refuses access, IsDirectory when a file op targets a directory
+// (e.g. deleting a directory with delete()), and Other for anything else.
+// (--native and --interpret classify from the OS error; the wasm host reports
+// only Ok / Other, and NotFound still comes from the loft-level existence check.)
 pub enum FileResult {
   Ok,
   NotFound,
   PermissionDenied,
   IsDirectory,
-  NotDirectory,
-  Other,
+  Other
 }
 
 // True when the result is `FileResult.Ok`. Use to test a file op for success.
 pub fn ok(self: FileResult) -> boolean {
   self == FileResult.Ok
+}
+#pure
+// Maps a runtime FS_* result code (from OpDelete / OpMoveFile / OpMkdir / OpMkdirAll)
+// to a FileResult variant. The codes are fixed in codegen_runtime.rs (shared by
+// both backends); an unknown code falls through to Other.
+fn fs_result(code: integer) -> FileResult {
+  match code {
+    0 => FileResult.Ok,
+    1 => FileResult.NotFound,
+    2 => FileResult.PermissionDenied,
+    3 => FileResult.IsDirectory,
+    _ => FileResult.Other,
+  }
 }
 #pure
 // A handle to a filesystem entry.
@@ -73,9 +89,9 @@ fn OpWriteFile(file: File, val: reference, db_tp: const u16) fs#update;
 fn OpReadFile(file: File, val: reference, bytes: integer, db_tp: const u16) fs#read;
 fn OpSeekFile(file: File, pos: integer) fs#read;
 fn OpSizeFile(file: File) -> integer fs#read;
-fn OpDelete(path: text) -> boolean fs#update;
+fn OpDelete(path: text) -> integer fs#update;
 #rust"codegen_runtime::fs_delete(&s.database.resolve_path(@path))"
-fn OpMoveFile(from: text, to: text) -> boolean fs#update;
+fn OpMoveFile(from: text, to: text) -> integer fs#update;
 #rust"codegen_runtime::fs_move(&s.database.resolve_path(@from), &s.database.resolve_path(@to))"
 fn OpTruncateFile(self: File, size: integer) -> boolean fs#update;
 fn OpSyncFile(self: File) -> boolean fs#update;
@@ -105,9 +121,9 @@ fn OpRelease(tag: integer, val: reference, db_tp: const u16) fs#update;
 // arg_size — total byte size of the already-pushed arguments.
 fn OpCallRef(fn_var: const u16, arg_size: const u16);
 #rust"s.fn_call_ref(@fn_var, @arg_size);"
-fn OpMkdir(path: text) -> boolean fs#update;
+fn OpMkdir(path: text) -> integer fs#update;
 #rust"codegen_runtime::fs_mkdir(&s.database.resolve_path(@path))"
-fn OpMkdirAll(path: text) -> boolean fs#update;
+fn OpMkdirAll(path: text) -> integer fs#update;
 #rust"codegen_runtime::fs_mkdir_all(&s.database.resolve_path(@path))"
 // Reads the entire file as a UTF-8 text value.
 // Use for small configuration files or scripts.
@@ -260,9 +276,8 @@ pub fn exists(both: File) -> boolean fs#read {
 // not exist or is outside the project directory.
 
 pub fn delete(path: text) -> FileResult fs#update {
-  if!exists(path) { return FileResult.NotFound }
-  if OpDelete(path) { return FileResult.Ok }
-  FileResult.Other
+  if !exists(path) { return FileResult.NotFound }
+  fs_result(OpDelete(path))
 }
 // Par-safe filesystem write; the host bridge serialises mutations.
 #impure(io)
@@ -274,26 +289,23 @@ pub fn move(from: text, to: text) -> FileResult fs#update {
   if!valid_path(to) || !valid_path(from) { return FileResult.NotFound }
   if!exists(from) { return FileResult.NotFound }
   if exists(to) { return FileResult.Other }
-  if OpMoveFile(from, to) { return FileResult.Ok }
-  FileResult.Other
+  fs_result(OpMoveFile(from, to))
 }
 #impure(io)
 // Create a single directory level. Returns FileResult.NotFound if the path
 // is outside the project directory.
 
 pub fn mkdir(path: text) -> FileResult fs#update {
-  if!valid_path(path) { return FileResult.NotFound }
-  if OpMkdir(path) { return FileResult.Ok }
-  FileResult.Other
+  if !valid_path(path) { return FileResult.NotFound }
+  fs_result(OpMkdir(path))
 }
 #impure(io)
 // Create a directory and all missing parents (like Unix mkdir -p).
 // Returns FileResult.NotFound if the path is outside the project directory.
 
 pub fn mkdir_all(path: text) -> FileResult fs#update {
-  if!valid_path(path) { return FileResult.NotFound }
-  if OpMkdirAll(path) { return FileResult.Ok }
-  FileResult.Other
+  if !valid_path(path) { return FileResult.NotFound }
+  fs_result(OpMkdirAll(path))
 }
 #impure(io)
 // Returns true if `path` exists and is a directory.

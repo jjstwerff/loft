@@ -332,7 +332,7 @@ result = <span class="fn-call">delete</span>(<span class="st">"old.txt"</span>);
 </div>
 </div>
 <div class="verdict">
-<p class="up"><strong>Upside</strong> File errors are represented as a typed <code>FileResult</code> enum — <code>Ok</code>, <code>NotFound</code>, <code>PermissionDenied</code>, <code>IsDirectory</code>, <code>NotDirectory</code>, <code>Other</code> — so every failure case is named and exhaustively matchable. No accidental exception swallowing, no hidden exit paths, no stack-unwinding overhead. The control flow of every loft function is straightforward to read.</p>
+<p class="up"><strong>Upside</strong> File errors are represented as a typed <code>FileResult</code> enum — <code>Ok</code>, <code>NotFound</code>, <code>PermissionDenied</code>, <code>IsDirectory</code>, <code>Other</code> — so every failure case is named and exhaustively matchable. No accidental exception swallowing, no hidden exit paths, no stack-unwinding overhead. The control flow of every loft function is straightforward to read.</p>
 <p class="down"><strong>Downside</strong> Logic errors (<code>assert</code>, <code>panic</code>) abort the entire program — there is no <code>try</code>/<code>except</code> to catch them. Python's exception hierarchy supports retry logic, cleanup via <code>finally</code>, and graceful degradation from arbitrary errors anywhere in the call stack — patterns that are not expressible in loft today.</p>
 </div>
 
