@@ -428,15 +428,38 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
   }
   brk = force;
   has_group = false;
-  // A `(…)` is a call / grouping / param list, NOT a data container: it breaks on WIDTH
-  // only, never because an argument contains a `{…}` block (a lambda `|x| { … }` or a
-  // struct-literal arg).  Breaking `map(|x| { … })` and adding a trailing comma corrupts
-  // the call (a trailing comma after a lambda makes loft see the wrong argument count).
+  // A `(…)` call / grouping / param list, and a `[for … { … }]` COMPREHENSION, are single
+  // expressions — NOT comma-separated data.  They break on WIDTH only (never on a nested
+  // `{…}` block), and carry no trailing comma: a `,` after a lambda / comprehension body
+  // makes loft mis-parse (`map requires 2 arguments`, `Expect token ]`).
   is_call = open == "(";
+  first_tok = "";
+  got = false;
+  fk = 0;
+  while fk < n && !got {
+    fnode = kids[fk] ?? Leaf { tok: "" };
+    match fnode {
+      Leaf { tok } => { if !is_ws_tok(tok) { first_tok = tok; got = true; } },
+      Group { open, kids, close } => { got = true; },
+    }
+    fk += 1;
+  }
+  is_bare = is_call || (open == "[" && first_tok == "for");
+  // Only a STRUCT-LITERAL child (`Name { … }`, Camel-prefixed) makes a `[…]` a vector-of-
+  // objects that breaks one-per-line; a bare block (lambda / comprehension / if-arm body)
+  // does not.  Track the preceding token to tell them apart.
+  prevtok = "";
   k = 0;
   while k < n {
     nd = kids[k] ?? Leaf { tok: "" };
-    match nd { Leaf { tok } => {}, Group { open, kids, close } => { has_group = true; if open == "{{" && !is_call { brk = true; } }, }
+    match nd {
+      Leaf { tok } => { if !is_ws_tok(tok) { prevtok = tok; } },
+      Group { open, kids, close } => {
+        has_group = true;
+        if open == "{{" && is_camel(prevtok) && !is_bare { brk = true; }
+        prevtok = close;
+      },
+    }
     k += 1;
   }
   // a `//` comment can't live inline (it would swallow the close) → force multi-line
@@ -486,9 +509,9 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
       }
     }
     if has_real(kids, start, elem_end) {
-      // a `(…)` call/param list omits the comma on its LAST element (no trailing comma)
+      // a call/param list or comprehension omits the comma on its LAST element
       is_last = !has_real(kids, elem_end, n);
-      s += render_elem(kids, start, elem_end, indent + 2, !(is_call && is_last));
+      s += render_elem(kids, start, elem_end, indent + 2, !(is_bare && is_last));
     }
     start = elem_end;
   }
