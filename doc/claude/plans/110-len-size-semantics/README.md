@@ -9,10 +9,27 @@ Tracker: [@PLN110](https://github.com/loft-lang/plans/issues/110) · `subject:lo
 
 ## Status
 
-Open — semantics decided (design discussion 2026-07-17), no implementation. This is the
-resolution of @PLN102 arc-E lib-audit **H2** (the `len(text)`=bytes / `size(text)`=chars
-inversion) and is the **last open stdlib freeze blocker** for `CONTRACT_VERSION 0 → 1`.
-The risk is the migration + `size`'s new implementations, not the semantics.
+**Phase 0 complete** (2026-07-17) — full inventory + baseline done; see
+[phase0-inventory.md](phase0-inventory.md). Semantics decided (design 2026-07-17). This resolves
+@PLN102 arc-E lib-audit **H2** (the `len(text)`=bytes / `size(text)`=chars inversion) and is the
+**last open stdlib freeze blocker** for `CONTRACT_VERSION 0 → 1`. The risk is the migration +
+`size`'s new implementations, not the semantics.
+
+**Phase 0 findings (headline):**
+- The whole migration is a `len→size` byte-conversion — **49 byte-intent sites** (16 stdlib + 4 lib
+  + 29 consumer) + **0 COUNT sites anywhere**. Consumers never used `len` for visible-width layout
+  (crawler measures pixels; markdown pure-byte-slices), so the flip *fixes no consumer bug* — its
+  risk is purely regressing byte-addressing if a site is missed.
+- **The definitive red set** the Phase-2a flip must reproduce = **11 value-assert canaries** (5 `len`
+  + 6 `size`, listed in phase0-inventory.md § 0c) + the 12-pair golden fixture Section A.
+- **Highest-risk site:** `markdown.loft:783` (`i += char_str.len()` byte cursor) — silent multi-byte
+  corruption if unmigrated.
+- **New sub-arc 1g:** `len(character)` is a real half-feature (returns UTF-8 byte width today, would
+  be inconsistent with `len(text)`=chars) — reconcile to `len(character)`=1 / `size(character)`=UTF-8
+  bytes. ~0 callers, low-risk.
+- ⚠ **Caveats for later phases:** `moros` has **no loft code** (drop it from the consumer list);
+  `lib/markdown` is **not checked out on this box** (Phase 0d used a mirror — re-inventory the real
+  `loft-libs-docs` repo at Phase-2e convert time).
 
 ## Goal
 
@@ -133,17 +150,18 @@ tree green at every step. (Decide which at Phase 2 start.)
 
 | # | Step | Kind | Status |
 |---|---|---|---|
-| 0a | Inventory `len`/`size`-on-text in stdlib (`default/*.loft`), classify count vs byte | read-only | Open |
-| 0b | Inventory in `lib/*` + registered libraries | read-only | Open |
-| 0c | Inventory in `tests/` (scripts, docs, `code!` cases) + examples + STDLIB.md | read-only | Open |
-| 0d | Inventory in the consumer programs (games / crawler / `lib/markdown`) | read-only | Open |
-| 0e | Land the golden-behavior corpus for the text-using consumers (the visibility baseline) | additive · green | Open |
-| 0f | Audit the **whole** text surface (slices, `#index`/`#next`, `find`/`rfind`, `byte_at`, classifiers) for byte-vs-char unit consistency; reconcile any mismatch so the surface is coherent — **no half-features** | read-only + reconcile | Open |
+| 0a | Inventory `len`/`size`-on-text in stdlib (`default/*.loft`), classify count vs byte | read-only | ✅ Done — 16 BYTE (`len→size`), 9 safe, 0 `size(text)` |
+| 0b | Inventory in `lib/*` + registered libraries | read-only | ✅ Done — 4 BYTE + 1 safe (all `lib/lexer.loft`) |
+| 0c | Inventory in `tests/` (scripts, docs, `code!` cases) + examples + STDLIB.md | read-only | ✅ Done — 11 value canaries + ~6 doc-prose blocks |
+| 0d | Inventory in the consumer programs (games / crawler / `lib/markdown`) | read-only | ✅ Done — 29 BYTE, **0 COUNT**; caveats ⚠ below |
+| 0e | Land the golden-behavior corpus for the text-using consumers (the visibility baseline) | additive · green | ✅ Done — `tests/scripts/pln110-text-surface-golden.loft`, green both backends |
+| 0f | Audit the **whole** text surface (slices, `#index`/`#next`, `find`/`rfind`, `byte_at`, classifiers) for byte-vs-char unit consistency; reconcile any mismatch so the surface is coherent — **no half-features** | read-only + reconcile | ✅ Done — surface coherent; **1** half-feature found → new 1g |
 | 1a | `size(vector<T>)` (buffer bytes; members as inline size / 4-byte ref) + tests | additive · green | Open |
 | 1b | `size(struct)` (flat allocation; inline sub-records; `text`/heap fields as ref width) + tests | additive · green | Open |
 | 1c | `size(hash)` (full table, holes included) + tests | additive · green | Open |
 | 1d | `size(sorted / index / spatial)` (table/tree bytes) + tests | additive · green | Open |
 | 1e | `size(<scalar>)` (width) + tests | additive · green | Open |
+| 1g | **(found in 0f)** `size(character)` = UTF-8 content byte width (1–4, *not* the 4-byte slot); redefine `len(character)` = 1. Mirrors text; ~0 callers, low-risk. + tests | additive · green | Open |
 | 1f | `s[p]` unchanged — the original (pre-Claude) implementation, already has its own tests (verified: mid-char snaps to the char's start; out-of-byte-range → null; negatives from the end). Not a build; just **don't regress**. | no-op | Open |
 | 2a | Flip `len(text)`=chars / `size(text)`=content bytes — one commit (corpus/suite red = the worklist) | flip | Open |
 | 2b | Convert stdlib text sites → re-green | convert | Open |
@@ -165,6 +183,8 @@ tree green at every step. (Decide which at Phase 2 start.)
 
 ## See also
 
+- [phase0-inventory.md](phase0-inventory.md) — the full Phase-0 inventory, canary red set, and
+  whole-surface audit (the worklist Phase 2 converts against).
 - [lib-audit.md](../102-stability-contract/lib-audit.md) § H2 — the trigger.
 - [INCONSISTENCIES.md](../../INCONSISTENCIES.md) #9 (`txt[i]`→character) — bears on the `s[p]` question.
 - `default/01_code.loft` (`len`/`size`), `03_text.loft` — the stdlib surface being redefined.
