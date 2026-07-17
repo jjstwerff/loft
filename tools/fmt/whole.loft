@@ -265,6 +265,18 @@ fn has_line_comment(kids: vector<Node>, a: integer, b: integer) -> boolean {
   }
   false
 }
+// A `[…]` that is a match SLICE PATTERN, not a data vector: it carries a repetition
+// postfix (`( V )*` / `+` → a bare `*`/`+` Leaf) or a `..rest` tail.  Such a `[…]` must
+// NOT break as a vector-of-objects or gain a trailing comma (pattern syntax rejects it).
+fn has_rep_token(kids: vector<Node>, a: integer, b: integer) -> boolean {
+  k = a;
+  while k < b {
+    nd = kids[k] ?? Leaf { tok: "" };
+    match nd { Leaf { tok } => { if tok == "*" || tok == "+" || tok.starts_with("..") { return true; } }, Group { open, kids, close } => {}, }
+    k += 1;
+  }
+  false
+}
 
 // ── render (Step 4 whole-file) ───────────────────────────────────────────────
 
@@ -287,14 +299,19 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
           // emit real tokens AND comments (whitespace is re-derived)
           gen_open = tok == "<" && is_generic_head(prev);
           gen_close = (tok == ">" || tok == ">>") && gdepth > 0;
-          if !pu && !gen_open && !gen_close && sp(prev, tok) { s += " "; col += 1; }
+          // match-PEG repetition postfix: `( V )*` / `( V )+` must hug the `)` — a space
+          // there breaks the pattern parse.  Whitespace around `*`/`+` is insignificant
+          // everywhere else, so forcing `)*`/`)+` tight (both sides) is always safe.
+          rep_post = (tok == "*" || tok == "+") && prev == ")";
+          if !pu && !gen_open && !gen_close && !rep_post && sp(prev, tok) { s += " "; col += 1; }
           s += tok;
           col += tok.size();
           if gen_open { gdepth += 1; }
           else if tok == ">>" && gdepth >= 2 { gdepth -= 2; }
           else if gen_close { gdepth -= 1; }
-          // pending-tight for the NEXT token: after a generic `<` (so `<T` hugs) or a unary op
-          pu = gen_open
+          // pending-tight for the NEXT token: after a generic `<` (so `<T` hugs), a repetition
+          // postfix (`)*(sep)` hugs), or a unary op
+          pu = gen_open || rep_post
             || ((tok == "-" || tok == "+" || tok == "*" || tok == "&") && unary_ctx(prev));
           prev2 = prev;
           prev = tok;
@@ -444,7 +461,7 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
     }
     fk += 1;
   }
-  is_bare = is_call || (open == "[" && first_tok == "for");
+  is_bare = is_call || (open == "[" && (first_tok == "for" || has_rep_token(kids, 0, n)));
   // Only a STRUCT-LITERAL child (`Name { … }`, Camel-prefixed) makes a `[…]` a vector-of-
   // objects that breaks one-per-line; a bare block (lambda / comprehension / if-arm body)
   // does not.  Track the preceding token to tell them apart.
