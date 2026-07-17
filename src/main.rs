@@ -5387,7 +5387,6 @@ fn main() {
             .to_string();
     }
 
-
     // Handle --generate-log-config before requiring an input file
     if let Some(path_opt) = generate_log_config {
         handle_generate_log_config(path_opt.as_deref());
