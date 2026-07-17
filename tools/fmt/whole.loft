@@ -1,0 +1,410 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Formatter Step 4 — WHOLE-FILE integration (first cut).  Re-derives indentation +
+// spacing, applies the content-aware container rule, and distinguishes BLOCKS
+// (`fn`/`if`/`for`/… bodies -> multi-line statements, but a single-expression block
+// stays inline) from STRUCT-LITERALS / defs (`Name { … }` -> the container rule).
+// Statement line-structure is PRESERVED (the natural flow); blank runs collapse to one.
+// Self-validating: idempotent + semantics + comment preservation.
+//   LOFT_FMT_PRINT=1 -> emit formatted text;  else -> OK/FAIL over the invariants.
+
+// ── lexer + CST (Steps 1-2) ──────────────────────────────────────────────────
+
+fn is_ws(c: character) -> boolean { c == ' ' || c == '\t' || c == '\r' }
+fn is_word(c: character) -> boolean { c.is_alphanumeric() || c == '_' }
+
+fn slice(chars: vector<character>, a: integer, b: integer) -> text {
+  s = "";
+  k = a;
+  while k < b { s += (chars[k] ?? ' '); k += 1; }
+  s
+}
+
+fn scan_string(chars: vector<character>, i: integer, n: integer) -> integer {
+  j = i + 1;
+  while j < n {
+    c = chars[j] ?? '"';
+    if c == '\\' { j += 2; }
+    else if c == '{' {
+      if j + 1 < n && (chars[j + 1] ?? ' ') == '{' { j += 2; }
+      else { j = scan_slot(chars, j + 1, n); }
+    } else if c == '"' { return j + 1; }
+    else if c == '\n' { return j; }
+    else { j += 1; }
+  }
+  j
+}
+
+fn scan_slot(chars: vector<character>, i: integer, n: integer) -> integer {
+  j = i;
+  depth = 1;
+  while j < n {
+    c = chars[j] ?? '}';
+    if c == '{' { depth += 1; j += 1; }
+    else if c == '}' { depth -= 1; j += 1; if depth == 0 { return j; } }
+    else if c == '"' { j = scan_string(chars, j, n); }
+    else if c == '\\' { j += 2; }
+    else { j += 1; }
+  }
+  j
+}
+
+fn scan_char(chars: vector<character>, i: integer, n: integer) -> integer {
+  j = i + 1;
+  while j < n {
+    c = chars[j] ?? '\'';
+    if c == '\\' { j += 2; }
+    else if c == '\'' { return j + 1; }
+    else { j += 1; }
+  }
+  j
+}
+
+// Is a+b a known 2-char operator?
+fn two_char(a: character, b: character) -> boolean {
+  (a == '-' && b == '>') || (a == '=' && b == '>') || (a == '=' && b == '=')
+    || (a == '!' && b == '=') || (a == '<' && b == '=') || (a == '>' && b == '=')
+    || (a == ':' && b == ':') || (a == '.' && b == '.') || (a == '&' && b == '&')
+    || (a == '|' && b == '|') || (a == '?' && b == '?') || (a == '<' && b == '<')
+    || (a == '>' && b == '>') || (a == '*' && b == '*')
+    || (a == '+' && b == '=') || (a == '-' && b == '=') || (a == '*' && b == '=')
+    || (a == '/' && b == '=') || (a == '%' && b == '=')
+}
+
+fn lex(src: text) -> vector<text> {
+  chars: vector<character> = [];
+  for c in src { chars += [c]; }
+  n = len(chars);
+  toks: vector<text> = [];
+  i = 0;
+  while i < n {
+    c = chars[i] ?? ' ';
+    start = i;
+    if c == '\n' { i += 1; }
+    else if is_ws(c) { while i < n && is_ws(chars[i] ?? '\n') { i += 1; } }
+    else if c == '/' && i + 1 < n && (chars[i + 1] ?? ' ') == '/' {
+      while i < n && (chars[i] ?? '\n') != '\n' { i += 1; }
+    } else if c == '"' { i = scan_string(chars, i, n); }
+    else if c == '\'' { i = scan_char(chars, i, n); }
+    else if is_word(c) { while i < n && is_word(chars[i] ?? ' ') { i += 1; } }
+    else if i + 2 < n && c == '.' && (chars[i + 1] ?? ' ') == '.' && (chars[i + 2] ?? ' ') == '=' { i += 3; }
+    else if i + 1 < n && two_char(c, chars[i + 1] ?? ' ') { i += 2; }
+    else { i += 1; }
+    toks += [slice(chars, start, i)];
+  }
+  toks
+}
+
+enum Node {
+  Leaf { tok: text },
+  Group { open: text, kids: vector<Node>, close: text },
+}
+struct Seq { nodes: vector<Node>, next: integer, closed: text }
+
+fn is_open(t: text) -> boolean { t == "[" || t == "{{" || t == "(" }
+fn is_close(t: text) -> boolean { t == "]" || t == "}}" || t == ")" }
+fn close_for(open: text) -> text {
+  if open == "[" { "]" } else if open == "{{" { "}}" } else { ")" }
+}
+
+fn parse_seq(toks: vector<text>, start: integer, expect: text) -> Seq {
+  kids: vector<Node> = [];
+  j = start;
+  n = len(toks);
+  while j < n {
+    t = toks[j] ?? "";
+    if is_close(t) {
+      if t == expect { return Seq { nodes: kids, next: j + 1, closed: t }; }
+      else { kids += [Leaf { tok: t }]; j += 1; }
+    } else if is_open(t) {
+      sub = parse_seq(toks, j + 1, close_for(t));
+      kids += [Group { open: t, kids: sub.nodes, close: sub.closed }];
+      j = sub.next;
+    } else { kids += [Leaf { tok: t }]; j += 1; }
+  }
+  Seq { nodes: kids, next: j, closed: "" }
+}
+
+fn parse(toks: vector<text>) -> vector<Node> {
+  r = parse_seq(toks, 0, "");
+  r.nodes
+}
+
+// ── shared helpers ───────────────────────────────────────────────────────────
+
+fn is_trivia_tok(t: text) -> boolean { t.is_whitespace() || t.starts_with("//") }
+fn is_ws_tok(t: text) -> boolean { t.is_whitespace() }
+fn is_camel(t: text) -> boolean { for c in t { return c.is_uppercase(); } false }
+fn width() -> integer { (env_variable("LOFT_FMT_WIDTH") ?? "100") as integer ?? 100 }
+
+fn spaces(n: integer) -> text {
+  s = "";
+  k = 0;
+  while k < n { s += " "; k += 1; }
+  s
+}
+
+fn starts_word(t: text) -> boolean { for c in t { return c.is_alphanumeric() || c == '_'; } false }
+fn ends_word(t: text) -> boolean {
+  r = false;
+  for c in t { r = c.is_alphanumeric() || c == '_'; }
+  r
+}
+// NB: `<` / `>` are deliberately EXCLUDED — they are ambiguous with generics
+// (`vector<T>` must stay tight); disambiguating comparison-vs-generic is a later refinement.
+fn is_binop(t: text) -> boolean {
+  t == "=" || t == "==" || t == "!=" || t == "<=" || t == ">="
+    || t == "&&" || t == "||" || t == "??" || t == "->" || t == "=>"
+    || t == "+" || t == "-" || t == "*" || t == "/" || t == "%"
+    || t == "+=" || t == "-=" || t == "*=" || t == "/=" || t == "%="
+}
+
+fn sp(prev: text, tok: text) -> boolean {
+  if prev == "" { return false; }
+  if prev == "(" || prev == "[" { return false; }
+  if tok == ")" || tok == "]" || tok == "," || tok == ";" || tok == ":" { return false; }
+  if tok == "." || prev == "." || tok == "::" || prev == "::" { return false; }
+  if tok == "{{" || prev == "{{" || tok == "}}" || prev == "}}" { return true; }
+  // `(` / `[` — no space when indexing/calling (prev is word/`)`/`]`), else grouping/literal
+  if tok == "(" || tok == "[" {
+    return !(ends_word(prev) || prev == ")" || prev == "]");
+  }
+  if prev == "," || prev == ":" || prev == ";" { return true; }
+  if is_binop(prev) || is_binop(tok) { return true; }
+  pw = ends_word(prev) || prev == ")" || prev == "]" || prev.starts_with("\"") || prev.starts_with("'");
+  tw = starts_word(tok) || tok.starts_with("\"") || tok.starts_with("'");
+  if pw && tw { return true; }
+  false
+}
+
+fn has_real(kids: vector<Node>, a: integer, b: integer) -> boolean {
+  k = a;
+  while k < b {
+    nd = kids[k] ?? Leaf { tok: "" };
+    match nd {
+      Leaf { tok } => { if !is_ws_tok(tok) { return true; } },
+      Group { open, kids, close } => { return true; },
+    }
+    k += 1;
+  }
+  false
+}
+
+fn last_line_len(g: text, before: integer) -> integer {
+  chars: vector<character> = [];
+  for c in g { chars += [c]; }
+  n = len(chars);
+  last_nl = 0 - 1;
+  k = 0;
+  while k < n { if (chars[k] ?? 'x') == '\n' { last_nl = k; } k += 1; }
+  if last_nl < 0 { before + n } else { n - last_nl - 1 }
+}
+
+fn count_semis(kids: vector<Node>) -> integer {
+  c = 0;
+  for nd in kids { match nd { Leaf { tok } => { if tok == ";" { c += 1; } }, Group { open, kids, close } => {}, } }
+  c
+}
+fn has_child_brace(kids: vector<Node>) -> boolean {
+  for nd in kids { match nd { Leaf { tok } => {}, Group { open, kids, close } => { if open == "{{" { return true; } }, } }
+  false
+}
+
+// ── render (Step 4 whole-file) ───────────────────────────────────────────────
+
+// Render kids[a..b] INLINE from column `col0`; nested groups dispatch by kind.
+fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, indent: integer) -> text {
+  s = "";
+  prev = "";
+  col = col0;
+  k = a;
+  while k < b {
+    nd = kids[k] ?? Leaf { tok: "" };
+    match nd {
+      Leaf { tok } => {
+        if !is_ws_tok(tok) {
+          // emit real tokens AND comments (whitespace is re-derived)
+          if sp(prev, tok) { s += " "; col += 1; }
+          s += tok;
+          col += tok.size();
+          prev = tok;
+        }
+      },
+      Group { open, kids, close } => {
+        if sp(prev, open) { s += " "; col += 1; }
+        // dispatch inline: a `{…}` after a Camel type name is a struct-lit/def
+        // (container rule); otherwise a block.
+        g = "";
+        if open == "{{" && !is_camel(prev) {
+          g = render_block(kids, close, col, indent);
+        } else {
+          g = render_container(open, kids, close, col, indent);
+        }
+        s += g;
+        col = last_line_len(g, col);
+        prev = close;
+      },
+    }
+    k += 1;
+  }
+  s
+}
+
+// Data container: break iff a direct child is a `{…}` object, or too long.
+fn render_container(open: text, kids: vector<Node>, close: text, col: integer, indent: integer) -> text {
+  n = len(kids);
+  if !has_real(kids, 0, n) {
+    s = open; s += close; return s;
+  }
+  brk = false;
+  k = 0;
+  while k < n {
+    nd = kids[k] ?? Leaf { tok: "" };
+    match nd { Leaf { tok } => {}, Group { open, kids, close } => { if open == "{{" { brk = true; } }, }
+    k += 1;
+  }
+  if !brk {
+    pad = if open == "{{" { " " } else { "" };
+    inline = open;
+    inline += pad;
+    inline += render_range(kids, 0, n, col + open.size() + pad.size(), indent);
+    inline += pad;
+    inline += close;
+    if col + inline.size() <= width() { return inline; }
+    brk = true;
+  }
+  s = open;
+  s += "\n";
+  start = 0;
+  k = 0;
+  while k <= n {
+    at_end = k == n;
+    is_comma = false;
+    if !at_end {
+      nd = kids[k] ?? Leaf { tok: "" };
+      match nd { Leaf { tok } => { if tok == "," { is_comma = true; } }, Group { open, kids, close } => {}, }
+    }
+    if is_comma || at_end {
+      if has_real(kids, start, k) {
+        s += spaces(indent + 2);
+        s += render_range(kids, start, k, indent + 2, indent + 2);
+        s += ",\n";
+      }
+      start = k + 1;
+    }
+    k += 1;
+  }
+  s += spaces(indent);
+  s += close;
+  s
+}
+
+// Block: inline `{ expr }` when it holds ≤1 statement, no nested block, and fits;
+// otherwise multi-line with statements re-indented and preserved.
+fn render_block(kids: vector<Node>, close: text, col: integer, indent: integer) -> text {
+  n = len(kids);
+  if !has_real(kids, 0, n) {
+    s = "{{"; s += close; return s;
+  }
+  if count_semis(kids) <= 1 && !has_child_brace(kids) {
+    inline = "{{ ";
+    inline += render_range(kids, 0, n, col + 2, indent);
+    inline += " }}";
+    if col + inline.size() <= width() { return inline; }
+  }
+  s = "{{";
+  s += "\n";
+  s += render_stmts(kids, 0, n, indent + 2);
+  s += "\n";
+  s += spaces(indent);
+  s += close;
+  s
+}
+
+// Render kids[a..b] as STATEMENTS: one source-line per output line, re-indented to
+// `indent`; blank runs collapse to a single blank line.
+fn render_stmts(kids: vector<Node>, a: integer, b: integer, indent: integer) -> text {
+  s = "";
+  line_start = a;
+  first = true;
+  pending_blank = false;
+  k = a;
+  while k <= b {
+    at_end = k == b;
+    is_nl = false;
+    if !at_end {
+      nd = kids[k] ?? Leaf { tok: "" };
+      match nd { Leaf { tok } => { if tok == "\n" { is_nl = true; } }, Group { open, kids, close } => {}, }
+    }
+    if is_nl || at_end {
+      if has_real(kids, line_start, k) {
+        if !first { s += "\n"; }
+        if pending_blank { s += "\n"; }
+        s += spaces(indent);
+        s += render_range(kids, line_start, k, indent, indent);
+        first = false;
+        pending_blank = false;
+      } else if !first {
+        pending_blank = true;
+      }
+      line_start = k + 1;
+    }
+    k += 1;
+  }
+  s
+}
+
+fn format(src: text) -> text {
+  nodes = parse(lex(src));
+  render_stmts(nodes, 0, len(nodes), 0)
+}
+
+// ── validation harness ───────────────────────────────────────────────────────
+
+// The real (non-trivia) token stream, with TRAILING commas dropped (a `,` before a
+// close bracket is meaning-preserving in loft, so the formatter may add/remove it).
+fn real_tokens(src: text) -> text {
+  toks = lex(src);
+  reals: vector<text> = [];
+  for t in toks { if !is_trivia_tok(t) { reals += [t]; } }
+  m = len(reals);
+  r = "";
+  k = 0;
+  while k < m {
+    t = reals[k] ?? "";
+    nxt = if k + 1 < m { reals[k + 1] ?? "" } else { "" };
+    if !(t == "," && (nxt == "]" || nxt == "}}" || nxt == ")")) {
+      r += t;
+      r += "|";
+    }
+    k += 1;
+  }
+  r
+}
+fn comment_count(src: text) -> integer {
+  toks = lex(src);
+  c = 0;
+  for t in toks { if t.starts_with("//") { c += 1; } }
+  c
+}
+
+fn main() {
+  path = env_variable("LOFT_FMT_FILE") ?? "";
+  src = file(path).content() ?? "";
+  if (env_variable("LOFT_FMT_PRINT") ?? "") != "" {
+    print(format(src));
+    return;
+  }
+  f1 = format(src);
+  f2 = format(f1);
+  bad = "";
+  if f1 != f2 { bad += " !IDEMPOTENT"; }
+  if real_tokens(src) != real_tokens(f1) { bad += " !SEMANTICS"; }
+  if comment_count(src) != comment_count(f1) { bad += " !COMMENTS"; }
+  if bad == "" {
+    print("OK   {size(src)}b->{size(f1)}b  {path}\n");
+  } else {
+    print("FAIL{bad}  {size(src)}b->{size(f1)}b  {path}\n");
+  }
+}
