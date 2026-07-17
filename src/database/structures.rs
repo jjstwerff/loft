@@ -822,37 +822,35 @@ impl Stores {
                 Ok(())
             }
             Parts::Byte(from, _null) => {
-                let crate::json::Parsed::Number(n) = parsed else {
+                let Some(n) = parsed.as_i64() else {
                     return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to).set_byte(to.rec, to.pos, from, *n as i32);
+                self.store_mut(to).set_byte(to.rec, to.pos, from, n as i32);
                 Ok(())
             }
             Parts::Short(from, _null) => {
-                let crate::json::Parsed::Number(n) = parsed else {
+                let Some(n) = parsed.as_i64() else {
                     return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to)
-                    .set_short(to.rec, to.pos, from, *n as i32);
+                self.store_mut(to).set_short(to.rec, to.pos, from, n as i32);
                 Ok(())
             }
             Parts::ShortRaw(from, _null) => {
-                let crate::json::Parsed::Number(n) = parsed else {
+                let Some(n) = parsed.as_i64() else {
                     return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
                 self.store_mut(to)
-                    .set_i16_raw(to.rec, to.pos, from, *n as i32);
+                    .set_i16_raw(to.rec, to.pos, from, n as i32);
                 Ok(())
             }
             Parts::Int(_from, _null) => {
-                let crate::json::Parsed::Number(n) = parsed else {
+                let Some(v) = parsed.as_i64() else {
                     return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
-                let v = *n as i64;
                 let raw = if v == i64::MIN { i32::MIN } else { v as i32 };
                 self.store_mut(to).set_i32_raw(to.rec, to.pos, raw);
                 Ok(())
@@ -977,34 +975,32 @@ impl Stores {
         };
         match tp {
             0 | 6 => {
-                let crate::json::Parsed::Number(n) = parsed else {
+                let Some(n) = parsed.as_i64() else {
                     return Err(mismatch());
                 };
-                #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to).set_int(to.rec, to.pos, *n as i64);
+                self.store_mut(to).set_int(to.rec, to.pos, n);
                 Ok(())
             }
             1 => {
-                let crate::json::Parsed::Number(n) = parsed else {
+                let Some(n) = parsed.as_i64() else {
                     return Err(mismatch());
                 };
-                #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to).set_long(to.rec, to.pos, *n as i64);
+                self.store_mut(to).set_long(to.rec, to.pos, n);
                 Ok(())
             }
             2 => {
-                let crate::json::Parsed::Number(n) = parsed else {
+                let Some(n) = parsed.as_f64() else {
                     return Err(mismatch());
                 };
                 #[allow(clippy::cast_possible_truncation)]
-                self.store_mut(to).set_single(to.rec, to.pos, *n as f32);
+                self.store_mut(to).set_single(to.rec, to.pos, n as f32);
                 Ok(())
             }
             3 => {
-                let crate::json::Parsed::Number(n) = parsed else {
+                let Some(n) = parsed.as_f64() else {
                     return Err(mismatch());
                 };
-                self.store_mut(to).set_float(to.rec, to.pos, *n);
+                self.store_mut(to).set_float(to.rec, to.pos, n);
                 Ok(())
             }
             4 => {

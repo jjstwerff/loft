@@ -17,11 +17,11 @@ fn main() {
   // value position: argument
   assert(took(j.to_json()) == 2, "to_json arg");
 
-  // value position: comparison
-  assert(j.kind() == "JNumber", "kind compare");
+  // value position: comparison (@PLN109 — `42` is now a JInteger, not JNumber)
+  assert(j.kind() == "JInteger", "kind compare");
 
   // value position: format interpolation (two producers in one buffer)
-  assert("[{j.to_json()}|{j.kind()}]" == "[42|JNumber]", "json format");
+  assert("[{j.to_json()}|{j.kind()}]" == "[42|JInteger]", "json format");
 
   // value position: concat
   assert(j.to_json()+"!" == "42!", "to_json concat");
@@ -33,7 +33,7 @@ fn main() {
   assert(took(source_dir()) >= 0, "source_dir arg path");
 
   // loop, value position — no accumulation across iterations
-  for _ in 0..3 { assert(j.kind() == "JNumber", "kind loop no-accumulate"); }
+  for _ in 0..3 { assert(j.kind() == "JInteger", "kind loop no-accumulate"); }
 
   println("text-producer dest: all shapes ok");
 }

@@ -577,8 +577,8 @@ impl Clone for Stores {
 unsafe impl Send for Stores {}
 unsafe impl Sync for Stores {}
 
-/// Type-level proof that a [`Stores`] was produced by [`Stores::clone_for_worker`]
-/// and belongs to exactly one worker thread.
+/// Type-level proof that a [`Stores`] was produced by
+/// [`Stores::clone_for_light_worker`] and belongs to exactly one worker thread.
 ///
 /// `WorkerStores` is `Send` (movable to a worker thread) but intentionally not
 /// `Sync` (cannot be shared across threads).  The `PhantomData<*mut ()>` field
@@ -641,7 +641,7 @@ impl WorkerStores {
     /// Append a fresh empty Store to `allocations` and return the
     /// new slot's index as a `WorkerOutputSlot` marker.
     ///
-    /// Called by the parallel dispatcher right after `clone_for_worker`,
+    /// Called by the parallel dispatcher right after `clone_for_light_worker`,
     /// before handing the `WorkerStores` to the worker thread.  The
     /// worker writes its result into the slot via ordinary `OpSet*`
     /// opcodes addressed by a `DbRef { store_nr: slot.store_nr, .. }`.
@@ -841,9 +841,9 @@ impl Stores {
     /// beyond `parent_store_count` and build a `StoreRebase` mapping
     /// worker-local `store_nr` → parent-side `store_nr` for each.
     ///
-    /// `clone_for_worker` clones every parent allocation into the
+    /// `clone_for_light_worker` borrows every parent allocation into the
     /// worker (so worker's `allocations[0..parent_store_count]` are
-    /// read-only copies); any store the worker creates above that
+    /// read-only views); any store the worker creates above that
     /// index is genuinely new.  This helper takes those new stores
     /// (replacing each with a freed sentinel so the worker's drop is
     /// a no-op for that slot) and adopts them into `self`.

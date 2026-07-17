@@ -501,6 +501,12 @@ impl Parser {
         let mut t = Type::Void;
         let mut l = Vec::new();
         let mut terminated: Option<&str> = None;
+        // @PLN25/#585 guard-clause flow-narrowing: a `narrowed_non_null` push made INSIDE this
+        // block (by a fall-through guard, below) holds only for the rest of THIS block, so record
+        // the entry depth and restore it before returning. Without the restore the proof leaks to
+        // sibling blocks / later functions (whose var slots collide), silently suppressing real
+        // `(N-Store)` warnings.
+        let nn_base = self.narrowed_non_null.len();
         // T1.7: track the start-position of the last expression for not-null diagnostics.
         let mut last_expr_peek = self.lexer.peek();
         loop {
@@ -624,6 +630,24 @@ impl Parser {
                 Value::Break(_) | Value::BreakWith(_, _) => terminated = Some("break"),
                 Value::Continue(_) => terminated = Some("continue"),
                 _ => {}
+            }
+            // @PLN25/#585 guard-clause flow-narrowing: after `if <null-test> { <unconditional
+            // exit> }` WITHOUT an else, the null case has already left the block, so the
+            // fall-through proves the tested var non-null for the rest of THIS block — the same
+            // fact `if v { … }` establishes for its THEN branch, applied to the fall-through.
+            // Conservative: only a SIMPLE negated-nullness test of one name (`!v` / `v == null`,
+            // i.e. `narrowing_from_condition` proving `v` non-null on the ELSE side) and only an
+            // UNCONDITIONALLY divergent body with no else. A body that can fall through, a
+            // `v != null` / truthy `v` guard (fall-through is the NULL case), or a compound
+            // condition all correctly decline to narrow (they still warn).
+            if let Value::If(test, true_code, false_code) = n.unspan()
+                && matches!(false_code.unspan(), Value::Null)
+                && let Value::Block(bl) = true_code.unspan()
+                && is_block_divergent(&bl.operators)
+                && let Some((v, false)) = self.narrowing_from_condition(test)
+                && !self.narrowed_non_null.contains(&v)
+            {
+                self.narrowed_non_null.push(v);
             }
             if let Value::Insert(ls) = n {
                 Self::move_insert_elements(&mut l, ls);
@@ -893,6 +917,9 @@ impl Parser {
             }
         }
         t = self.block_result(context, result, &t, &mut l, &last_expr_peek.position);
+        // @PLN25/#585: drop any guard-clause fall-through narrowing this block introduced — the
+        // proof does not escape the block (see `nn_base` above).
+        self.narrowed_non_null.truncate(nn_base);
         *val = v_block(l, t.clone(), "block");
         t
     }
@@ -2475,6 +2502,23 @@ impl Parser {
             && let Value::Var(v) = args[0].unspan()
         {
             return Some((*v, true));
+        }
+        // `if !v` — negated truthy: `!v` is the null/falsy test, so `v` is non-null on the
+        // ELSE side (where `v` is truthy). This is the guard-clause condition `if !v { return }`
+        // (#585): the THEN branch is the null case, and the fall-through (else) proves `v`
+        // non-null. Mirrors `v == null` → non-null-in-ELSE.
+        if name == "OpNot"
+            && args.len() == 1
+            && let Value::Call(inner_op, inner_args) = args[0].unspan()
+            && self
+                .data
+                .def(*inner_op)
+                .name()
+                .starts_with("OpConvBoolFrom")
+            && inner_args.len() == 1
+            && let Value::Var(v) = inner_args[0].unspan()
+        {
+            return Some((*v, false));
         }
         None
     }

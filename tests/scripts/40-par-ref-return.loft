@@ -78,3 +78,76 @@ fn test_par_struct_return_empty() {
   }
   assert(count == 0, "empty: {count}");
 }
+
+// Workers returning a vector<T> — the ref path deep-copies each result into the
+// `main_vector<T>` wrapper.  Regression guard for the native ref-return bug: the
+// scalar path used to cast `DbRef as i64` (E0605), and row 0 read len 0 because
+// its result landed at buffer pos 0 (a vector's null sentinel).
+fn worker_vec(src: const Item) -> vector<integer> {
+  v: vector<integer> = [];
+  v += [src.value];
+  v += [src.value * 2];
+  v
+}
+
+fn worker_vec_text(src: const Item) -> vector<text> {
+  v: vector<text> = [];
+  v += ["a{src.value}"];
+  v += ["bb{src.value}"];
+  v
+}
+
+fn test_par_vector_return() {
+  data = Items {};
+  data.list += [
+    Item { name: "a", value: 3 },
+    Item { name: "b", value: 7 },
+  ];
+  total = 0;
+  count = 0;
+  for it in data.list par(vr = worker_vec(it), 2) {
+    count += len(vr);          // row 0 (pos 0) MUST read len 2, not 0
+    for x in vr { total += x; }
+  }
+  // rows [3,6] and [7,14]
+  assert(count == 4, "vector return count: {count}");
+  assert(total == 30, "vector return contents: {total}");
+}
+
+fn test_par_vector_text_return() {
+  data = Items {};
+  data.list += [
+    Item { name: "a", value: 1 },
+    Item { name: "b", value: 2 },
+    Item { name: "c", value: 3 },
+  ];
+  nch = 0;
+  for it in data.list par(vr = worker_vec_text(it), 2) {
+    for s in vr { nch += len(s); }
+  }
+  // each row: "a{v}" (2 chars) + "bb{v}" (3 chars) = 5, over 3 rows = 15
+  assert(nch == 15, "vector<text> return chars: {nch}");
+}
+
+// A variable (not literal) thread count — the native emitter used to leave it an
+// i64 where the runtime helper wants i32 (E0308).
+fn test_par_variable_thread_count() {
+  data = Items {};
+  data.list += [
+    Item { name: "a", value: 5 },
+    Item { name: "b", value: 15 },
+    Item { name: "c", value: 25 },
+  ];
+  th = 2;
+  scalar_total = 0;
+  for it in data.list par(d = make_pair(it), th) { scalar_total += d.a + d.b; }
+  // make_pair(v) = Pair { a: v, b: v*3 } → v + 3v = 4v; 4*(5+15+25) = 180
+  assert(scalar_total == 180, "variable-thread scalar: {scalar_total}");
+
+  vec_total = 0;
+  for it in data.list par(vr = worker_vec(it), th) {
+    for x in vr { vec_total += x; }
+  }
+  // worker_vec(v) = [v, 2v] → 3v; 3*(5+15+25) = 135
+  assert(vec_total == 135, "variable-thread vector: {vec_total}");
+}

@@ -278,23 +278,23 @@ fn field<'a>(obj: &'a Parsed, name: &str) -> Result<&'a Parsed, TypeDecodeError>
     }
 }
 
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn as_u32(p: &Parsed) -> Result<u32, TypeDecodeError> {
-    if let Parsed::Number(n) = p {
-        Ok(*n as u32)
-    } else {
-        Err(TypeDecodeError::Shape("expected number".into()))
-    }
+    // @PLN109 — `as_i64` accepts an integer-shaped `Parsed::Int` (exact) or a
+    // legacy `Number` (truncated).
+    p.as_i64()
+        .map(|n| n as u32)
+        .ok_or_else(|| TypeDecodeError::Shape("expected number".into()))
 }
 
 /// Read a signed `i32` (e.g. `IntegerSpec.min`, which can be negative —
 /// `i32::MIN + 1` for plain-integer templates).  `as_u32` would clamp a
 /// negative `f64` to 0, so decode the float directly.
+#[allow(clippy::cast_possible_truncation)]
 fn as_i32(p: &Parsed) -> Result<i32, TypeDecodeError> {
-    if let Parsed::Number(n) = p {
-        Ok(*n as i32)
-    } else {
-        Err(TypeDecodeError::Shape("expected number".into()))
-    }
+    p.as_i64()
+        .map(|n| n as i32)
+        .ok_or_else(|| TypeDecodeError::Shape("expected number".into()))
 }
 
 fn as_u16(p: &Parsed) -> Result<u16, TypeDecodeError> {
@@ -696,17 +696,16 @@ fn as_i64(p: &Parsed) -> Result<i64, TypeDecodeError> {
         Parsed::Str(s) => s
             .parse::<i64>()
             .map_err(|_| TypeDecodeError::Shape("expected an i64 string".into())),
+        // @PLN109 — an integer-shaped bare number now decodes exactly via `Int`.
+        Parsed::Int(n) => Ok(*n),
         Parsed::Number(n) => Ok(*n as i64),
         _ => Err(TypeDecodeError::Shape("expected number".into())),
     }
 }
 
 fn as_f64(p: &Parsed) -> Result<f64, TypeDecodeError> {
-    if let Parsed::Number(n) = p {
-        Ok(*n)
-    } else {
-        Err(TypeDecodeError::Shape("expected number".into()))
-    }
+    p.as_f64()
+        .ok_or_else(|| TypeDecodeError::Shape("expected number".into()))
 }
 
 fn as_u8(p: &Parsed) -> Result<u8, TypeDecodeError> {

@@ -13,7 +13,12 @@
 
 /// Typed union of JSON values.  The discriminant (1..6) picks the
 /// active variant; variant data lives in the variant's fields.
-/// Matches the six RFC 8259 kinds.
+/// Matches the RFC 8259 kinds, plus `JInteger` (@PLN109) for an
+/// integer-shaped number preserved to an exact `integer` (i64).
+///
+/// `JInteger` MUST stay the LAST variant: the store discriminant it
+/// gets (7) is hard-coded as `JV_DISCR_INT` in `src/native.rs`, and the
+/// existing variants' discriminants (1–6) must not shift.
 pub enum JsonValue {
   JNull,
   JBool { value: boolean },
@@ -21,6 +26,7 @@ pub enum JsonValue {
   JString { value: text },
   JArray { items: vector<JsonValue> },
   JObject { fields: vector<JsonField> },
+  JInteger { value: integer },
 }
 
 /// One field of a `JObject`.  Stored as a `vector<JsonField>` rather

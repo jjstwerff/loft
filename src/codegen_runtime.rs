@@ -2284,7 +2284,12 @@ pub fn t_9JsonValue_as_text(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> S
 pub fn t_9JsonValue_as_long(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> i64 {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
-    if discr == crate::native::JV_DISCR_NUMBER {
+    // @PLN109 — a JInteger reads its EXACT i64 (H5); a JNumber truncates.
+    if discr == crate::native::JV_DISCR_INT {
+        let int_tp = stores.name("JInteger");
+        let value_pos = u32::from(stores.position(int_tp, "value")) + v.pos;
+        stores.store(&v).get_int(v.rec, value_pos)
+    } else if discr == crate::native::JV_DISCR_NUMBER {
         let num_tp = stores.name("JNumber");
         let value_pos = u32::from(stores.position(num_tp, "value")) + v.pos;
         let n = stores.store(&v).get_float(v.rec, value_pos);
@@ -2312,6 +2317,7 @@ pub fn t_9JsonValue_kind(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Stri
         x if x == crate::native::JV_DISCR_STRING => "JString",
         x if x == crate::native::JV_DISCR_ARRAY => "JArray",
         x if x == crate::native::JV_DISCR_OBJECT => "JObject",
+        x if x == crate::native::JV_DISCR_INT => "JInteger",
         _ => "JNull",
     };
     s.to_string()
@@ -2324,10 +2330,18 @@ pub fn t_9JsonValue_kind(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Stri
 pub fn t_9JsonValue_as_number(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> f64 {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    // @PLN109 — a JInteger widens to f64; a JNumber reads as-is.
     if discr == crate::native::JV_DISCR_NUMBER {
         let num_tp = stores.name("JNumber");
         let value_pos = u32::from(stores.position(num_tp, "value")) + v.pos;
         stores.store(&v).get_float(v.rec, value_pos)
+    } else if discr == crate::native::JV_DISCR_INT {
+        let int_tp = stores.name("JInteger");
+        let value_pos = u32::from(stores.position(int_tp, "value")) + v.pos;
+        #[allow(clippy::cast_precision_loss)]
+        {
+            stores.store(&v).get_int(v.rec, value_pos) as f64
+        }
     } else {
         f64::NAN
     }
@@ -3040,8 +3054,9 @@ where
 
 /// Parallel worker dispatcher for native primitive-return par.
 /// Mirrors `src/parallel.rs::run_parallel_raw` but takes a Rust closure
-/// instead of a bytecode fn pos.  Each thread gets its own `Stores` clone
-/// via `clone_for_worker`; per-thread results merge on the main thread.
+/// instead of a bytecode fn pos.  Each thread borrows the parent stores
+/// read-only via `parallel_workers` (`clone_for_light_worker`); per-thread
+/// results merge on the main thread.
 fn run_native_workers_primitive<F>(
     stores: &Stores,
     input: &DbRef,
@@ -3433,8 +3448,13 @@ where
         return 0;
     }
 
+    // Reserve one leading element slot so no result lands at `pos == 0`: a vector
+    // (and every keyed collection) reads `pos == 0` as its null/empty sentinel
+    // (`vector::length_vector`), so an element stored there would always read as
+    // empty.  Structs have no such sentinel, but the uniform `+1` offset is
+    // harmless for them — every `refs[i]` carries its true position to the reader.
     let result_db = stores.null();
-    let total_words = ((n as u32) * sz).div_ceil(8).max(1);
+    let total_words = ((n as u32 + 1) * sz).div_ceil(8).max(1);
     let result_cr = stores.claim(&result_db, total_words);
     let result_store_nr = result_db.store_nr;
     let result_rec = result_cr.rec;
@@ -3448,7 +3468,7 @@ where
             let dest = DbRef {
                 store_nr: result_store_nr,
                 rec: result_rec,
-                pos: (i as u32) * sz,
+                pos: (i as u32 + 1) * sz,
             };
             if unowned {
                 stores.copy_from_worker_unowned(&src_ref, &dest, &mut worker_stores, kt);

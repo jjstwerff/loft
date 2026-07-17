@@ -4496,7 +4496,7 @@ impl State {
 
     /// Create a `State` for use in a parallel worker thread.
     ///
-    /// `worker` must be produced by [`Stores::clone_for_worker`]; the
+    /// `worker` must be produced by [`Stores::clone_for_light_worker`]; the
     /// `WorkerStores` newtype is the compile-time proof of that invariant (S30).
     /// This call allocates a fresh stack store at the next available index.
     #[must_use]

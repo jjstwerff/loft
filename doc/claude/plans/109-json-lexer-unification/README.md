@@ -9,11 +9,29 @@ Tracker: [@PLN109](https://github.com/loft-lang/plans/issues/109) · `subject:lo
 
 ## Status
 
-Open — design ready, no implementation. Triggered by @PLN102 arc-E lib-audit **H5**
+**✅ COMPLETE (2026-07-17).** All phases (0–5) done on `tuxedo_work2`. `crate::json`
+is driven entirely by loft's own JSON-mode lexer (hand-rolled scanner deleted, no
+hybrid); an integer-shaped JSON number preserves its exact i64 as `Parsed::Int` /
+`JsonValue::JInteger`, so **@PLN102 H5 is fixed** on both backends, typed and generic.
+Full suite green (bar known env flakes); golden regression guard pins the end state.
+
+---
+
+Was: Open — design ready, step 1b landed. Triggered by @PLN102 arc-E lib-audit **H5**
 (JSON integers > 2⁵³ silently round through f64, corrupting even a known-type `integer`
 field on deserialize). Rather than patch the duplicate scanner, retire it: drive JSON
 tokenization from loft's own lexer, which already distinguishes int from float. **H5 is
 fixed as a consequence.**
+
+**loft2 branch state (2026-07-17):** on `tuxedo_work2`. **Phase 0 + Phase 1 DONE** (golden
+corpus; JSON-mode lexer escapes/exponents; H5 exact-`Long` lex verified). **Phase 2 is
+decomposed into 2a–2e** with the byte-offset impedance resolved by **Option 1** (§ Phase-2
+finding). Phases 2–5 open — see § Sub-arcs + § Execution.
+
+**Scope resolved (owner, 2026-07-17):** UNIFORM integer semantics — typed and generic
+behave identically; the only change is that an integer-shaped number (no `.`, no exponent,
+fits i64) is assumed to be an i64, realized once via `JsonValue::JInteger` so both paths
+read it exactly. See § Phase-0 finding → **Decision**.
 
 ## Goal
 
@@ -118,12 +136,163 @@ committing to the phasing:
 
 | Step | Item | Status |
 |---|---|---|
-| 0 | **Characterize** — a golden corpus of current `crate::json` output over every consumer's real inputs (JSON stdlib tests, registry index, RPC messages, IR schema, snapshots, advisories) + a throwaway differential harness (old vs new → identical `Parsed`, except the intended int-preservation). | Open |
-| 1 | **JSON reading in loft's lexer (small — validated)** — (a) reuse `string()` with `interpolate_strings=false`, add JSON `\uXXXX`+surrogate pairs and `\/` to the escape path; (b) ✅ **DONE** — uppercase-`E`/`e+` exponent completeness landed in loft's number lexer as a standalone improvement (golden `number_exponent_accepts_uppercase_e_and_plus_sign`, both backends; normal loft unbroken); (c) integer-shaped→i64 classification. Structure / literals / whitespace / `Dialect::Lenient` identifiers reuse loft's lexing as-is. | 1b done; 1a/1c open |
-| 2 | **Reimplement `parse()` / `parse_with()`** on the JSON mode → same `Parsed` tree + `Int` preserved. Prove byte-identical vs the Phase-0 corpus (except int-preservation). Preserve error line/col/context + `json_errors()`. | Open |
-| 3 | **Update `Parsed::Number` consumers** for the `Int` case; the typed `populate_struct_from_jsonvalue` reads `Int`→i64 into an `integer` field exactly — **H5 fixed**. Each consumer re-verified. | Open |
-| 4 | **Delete** the hand-rolled scanner (`parse_number`/`parse_string`/`parse_value` byte-scanning) + the differential scaffold. Confirm `crate::json` is now a thin layer over loft's lexer. **No hybrid remains.** | Open |
-| 5 | **Verify + freeze** — full suite both backends; corpus → regression suite; H5 typed-integer golden added; STDLIB.md JSON number semantics (int→i64, float→f64, > i64 ceiling) + lib-audit H5 → DONE. | Open |
+| 0 | **Characterize** — ✅ **DONE** — `tests/json_corpus.rs` + `tests/json_corpus.golden`: a bless-able `Debug`-string golden over a liberal corpus (66 entries: every number/exponent form incl. H5, all string escapes incl. `\uXXXX`+surrogate-pair+astral+`\/`, structure/whitespace, literals, error byte-offsets, `Dialect::Lenient` bare-key/ident/constructor, + the real registry-index sample & an RPC line). Throwaway (deleted Phase 4); `harness_is_not_vacuous` proves it can fail. Pins the current behavior the rewrite must preserve — incl. the H5 cells (`9007199254740993` → `Number(…992.0)`) that flip to `Int` in Phase 2. Noted: the current byte-scanner ALREADY decodes surrogate pairs + `\/`, so Phase 1a is about the new lexer path reproducing them (golden pins the target). | **Done** |
+| 1 | **JSON reading in loft's lexer (small — validated)** — ✅ **DONE.** (a) `LexConfig::json()` + a `json_strings` flag gate JSON escapes in `string()`/`escape_seq`: `\/` and `\uXXXX` (four hex, no braces) with surrogate-pair combining — a lenient superset over loft's own escapes, OFF for all normal loft/config lexing (verified `loft_string_escapes_unchanged` + full lexer module green, so loft source semantics are byte-identical). Tests `json_string_escapes` (ASCII/BMP/surrogate/astral/`\/`/mixed). (b) ✅ uppercase-`E`/`e+` exponent completeness (golden `number_exponent_accepts_uppercase_e_and_plus_sign`). (c) integer-shaped→i64 is a Phase-2 *mapping* (loft's lexer already emits `Integer`/`Long` vs `Float`); the load-bearing H5 claim is **verified** by `json_number_classification` — `9007199254740993` lexes to exact `Long(u64)`, NOT rounded through f64. Structure / literals / whitespace / `Dialect::Lenient` identifiers reuse loft's lexing as-is. | **Done** |
+| 2 | ✅ **DONE** — reimplemented `parse()`/`parse_with()` on the JSON-mode lexer (`parse_lexer` + `JParser` in `src/json.rs`), **byte-identical** to the retired scanner across the full Phase-0 golden (66 entries) AND every consumer suite (rpc/registry/ir_schema/plan25_json/data_structures). Integers stay `Number(f64)` (H5 rounding included); the `Parsed::Int` flip is Phase 3. Old scanner **deleted** (Phase-4 scanner-retirement folded in): net ~−330 lines in `json.rs`. Commits `4f7bc6c2` (lexer lone-surrogate fix), `0bb45588` (`-` token + findings), `b732a409` (parser + swap + delete). | **Done** |
+| 2a | **Byte-offset mapper + value/literal skeleton.** A `ByteMapper` (line-starts table + UTF-8-width walk) maps the lexer's `Position{line, char-col}` back to the absolute `byte_offset` the old scanner reported. Drive `LexConfig::json()` via `peek()`/`cont()`; parse `null`/`true`/`false` (identifiers) + trailing-byte + root whitespace/BOM. Golden-gated. | Open |
+| 2b | **Strings** → `Parsed::Str` from `CString` (JSON escapes already gated in Phase 1a). | Open |
+| 2c | **Numbers** → `Parsed::Number(f64)` from `Integer`/`Long`/`Float`/`Single` (convert to f64 — byte-identical to the old scanner, H5 rounding included); combine the leading `-` token. **The `Int` flip is Phase 3, not here.** | Open |
+| 2d | **Array / object / Lenient / Constructor** — nesting, `Object` key `byte_offset`s (via `ByteMapper`), bare-identifier keys + `Tag{…}` constructors, path stack for JSON-pointer diagnostics. | Open |
+| 2e | **Error parity** — reproduce the old scanner's messages + `byte_offset`s + `path` for every error cell in the golden; `json_errors()` unchanged. Then swap `parse`/`parse_with`; golden unchanged. | Open |
+| 3 | ✅ **DONE** — uniform integer semantics. `Parsed::Int(i64)` + `Parsed::as_i64`/`as_f64`; integer-shaped lexemes (no `.`/exp, i64-fitting) → `Int`; `JsonValue::JInteger{value:integer}` (last variant) + `JV_DISCR_INT=7`; `materialise_primitive_into` / `json_parse_into_stores` / `dbref_to_parsed` / `json_to_text_at` / `format.rs::write_jsonvalue` / `n_as_long`/`n_as_number`/`n_kind` + the native `t_9JsonValue_*` mirror + `unwrap_long`/`unwrap_int`/`unwrap_float` / `push_kind_mismatch` all handle `JInteger`; the ~18 Rust `Parsed::Number` consumer sites route through `as_i64`/`as_f64`; loft JNumber consumers (194/198 + issues classify) updated. **H5 fixed on BOTH backends, typed AND generic** (`{"id":9007199254740993}` → exact). Golden re-blessed (int flips only; overflow >i64 stays `Number`). | **Done** |
+| 4 | ✅ **DONE (folded into Phase 2)** — the hand-rolled scanner is deleted; `crate::json` is a thin layer over loft's lexer. **No hybrid remains.** | **Done** |
+| 5 | ✅ **DONE** — full suite both backends green (only the known `s5`/`s7`-debugger + `wasm_debug_relay` env flakes fail, unrelated); `tests/json_corpus` graduated to a permanent regression guard (pins the JInteger end state incl. H5); STDLIB.md JSON number semantics + `JInteger` documented; lib-audit **H5 → FIXED**. Also fixed en route: Lenient qualified enum tags (`Category.Daily`), lexer lone-high-surrogate + non-low-`\u` decoding, JSON-invalid number rejection (`007`). | **Done** |
+
+## Execution — safe small steps (loft2 baseline, verified 2026-07-17)
+
+The ../loft design's load-bearing claims were re-probed against **loft2's own tree** (the
+two checkouts have diverged — loft2 lacks the sibling's @PLN102 H7–H9 / @PLN110 work), and
+they all hold here:
+
+- **Blast radius = exactly 22 consumer `Parsed::Number` sites across 7 files** —
+  `rpc.rs`(1), `ir_schema.rs`(4), `native.rs`(3), `registry_index.rs`(2),
+  `registry_advisories.rs`(2), `database/snapshot.rs`(2), `database/structures.rs`(8).
+  (`src/json.rs` itself holds 12 more: the scanner + its own tests.) The design's "22 / 7
+  files" is exact on loft2.
+- **`Parsed` matches the design** (Null/Bool/Number(f64)/Str/Ident/Array/Object/Constructor);
+  **no `Parsed::Int` yet** → the `Int` addition is clean.
+- **`src/json.rs` uses zero `crate::lexer`** — a fully separate hand-rolled byte-scanner
+  (`bytes: &[u8]`, index-based), confirming there is no existing coupling to unwind.
+- **The Phase-4 delete targets** are the six byte-scanner fns in `src/json.rs`:
+  `parse_value` (l.229), `parse_string` (l.342), `parse_number` (l.428), `parse_array`
+  (l.475), `parse_object` (l.517), `parse_object_key` (l.563) — 1097 lines total.
+- **`LexItem::Integer/Long/Float/Single`** all present; **`interpolate_strings`** defaults
+  `false` on the config path (`LexConfig`); **`parse()` / `parse_with(Dialect)`** are the
+  single entry points (l.103 / l.114). Step 1b's exponent completeness is landed here.
+
+**Phase 0 execution (next):** build the golden corpus as a *throwaway differential
+scaffold* (`#[cfg(test)]`, deleted in Phase 4) — capture the current `Parsed` tree for
+every consumer's real inputs (the JSON stdlib tests, a registry index sample, an RPC
+message, an IR-schema doc, a DB snapshot, an advisories doc), plus the escape/exponent/
+lenient-dialect edge cases the § Falsification points name. The corpus is the executable
+spec for Phase 2's "byte-identical `Parsed`, except the intended int-preservation."
+
+### Phase-0 finding (2026-07-17) — the H5 chokepoint is DOUBLE; Phase 3 is wider than "add an Int arm"
+
+Empirically characterized on loft2 (both backends), `{"id": 9007199254740993}` (2⁵³+1):
+
+```
+typed   Rec.parse(raw).id   = 9007199254740992   (H5: rounded)
+generic json_parse().as_long() = 9007199254740992   (H5: rounded)
+expected                     = 9007199254740993
+```
+
+Both loft paths lose the integer at a **float chokepoint**, and there are **two** of
+them, because the loft-side `JsonValue` is itself f64-backed (`JV_DISCR_NUMBER` stores a
+`float`; `native.rs:2839` `set_float`, `native.rs:2753` `dbref_to_parsed` → `Parsed::Number(f64)`):
+
+1. **Typed** `Type.parse(text)` lowers (parser intercept `parse_type_parse`,
+   `src/parser/fields.rs`) to `struct_from_jsonvalue(json_parse(text), kt)` — so it routes
+   `text → json_parse → JsonValue(float, INT LOST) → dbref_to_parsed → Parsed(float) →
+   populate_struct`. The int is gone at the **first** step, before `populate_struct` runs.
+2. **Generic** `json_parse(text).as_long()` reads `JsonValue::JNumber{value: float}` directly.
+
+**Consequence for the design.** Adding `Parsed::Int(i64)` (Phase 2) + an `Int` arm to
+`populate_struct` (Phase 3) is **necessary but not sufficient** for the typed path: as long
+as `Type.parse(text)` sources its data through the float `JsonValue`, the int is lost before
+any `Parsed::Int` exists. Closing H5 for the typed path therefore **also** requires
+**re-routing `Type.parse(text)`** to feed `populate_struct` a `Parsed` produced *directly*
+by `crate::json::parse(text)` (with `Int`), bypassing the `json_parse → JsonValue`
+materialisation. That is real Phase-3 work the "22 consumer arms" framing understates —
+the arms are read-sites of an *already-built* `Parsed`, but the typed path must first be
+made to *carry* a `Parsed::Int` to `populate_struct` at all.
+
+**Decision (owner, 2026-07-17) — UNIFORM integer semantics, no path divergence.** Typed
+and generic MUST behave identically. The *only* semantic change is the type a bare number
+is assumed to have: **a JSON number with no fractional part is an i64** (integer-shaped →
+`integer`), a number with a `.` (or that overflows i64) is a `float`. This is realized
+once, in the shared representation, so both `Type.parse(text).field` and
+`json_parse(text).as_long()` read the exact integer — there is deliberately **no** typed-
+only path and no second walker (option A is rejected).
+
+**Realization on loft2 — one representation, `JsonValue::JInteger{value: integer}`.**
+Because loft2's typed path and generic path *share* the store-backed `JsonValue` walker
+(`populate_struct_from_jsonvalue` reads the store `JsonValue`, not a Rust `Parsed`), giving
+the number an integer representation in the store `JsonValue` fixes both at once:
+
+- **loft type** — add `JInteger { value: integer }` to the `JsonValue` enum (`06_json.loft`)
+  beside `JNumber { value: float }`. A store discriminant `JV_DISCR_INT`.
+- **Rust `Parsed`** — `crate::json::parse` produces `Parsed::Int(i64)` for integer-shaped
+  numbers (falls out of loft's lexer, which already lexes `Integer`/`Long` vs `Float`);
+  `materialise_primitive_into` gets an `Int` arm → `JV_DISCR_INT`; `dbref_to_parsed` reads
+  `JV_DISCR_INT` → `Parsed::Int`.
+- **extractors** (`06_json.loft` + `native.rs`) — `as_long`/`as_integer` on a `JInteger`
+  reads the i64 exactly; `as_number`/`as_float` on a `JInteger` converts i64→float;
+  `kind()` on a `JInteger` returns `"JInteger"`.
+- **typed populate** — for an `integer`/`long` field, `unwrap_long`/`unwrap_int` accept a
+  `JV_DISCR_INT` source and read the i64 exactly (today they only accept `JV_DISCR_NUMBER`
+  and `get_float`); for a `float` field fed a `JInteger`, convert i64→float.
+
+**Blast radius (loft2, verified) — small and compile-loud.** loft-side JNumber consumers
+are exactly 3 files (`06_json.loft`; `tests/scripts/194-text-producer-dest.loft` and
+`198-null-text-format.loft`, which assert `kind()=="JNumber"` / `"[42|JNumber]"` on integer
+`42` and flip to `JInteger`); Rust-side, `codegen_runtime.rs`/`database/format.rs`/
+`native.rs`. Adding a `JInteger` enum case makes loft's matchers flag every non-exhaustive
+`match jv { … }` at **compile time** — the design-protocol "make omission loud" property
+(the N-site silence factor drops to ~zero).
+
+**Behaviour change to acknowledge (intended).** `json_parse("42").kind()` goes from
+`"JNumber"` to `"JInteger"`, and a bare integer's `JsonValue` variant changes — this is the
+deliberate consequence of "assume i64", not a regression. Consumers wanting the old float
+reading write `42.0` or call `as_number()`. **H5 closes fully** (both the typed field and
+the generic `as_long`), exactly as the lib-audit framed it.
+
+**One edge pinned:** *integer-shaped* = loft's `LexItem::Integer`/`Long` = no `.` **and no
+exponent** — so `1e3` is a `float` (1000.0), matching loft's own number lexer and
+mainstream JSON libraries (Python `json.loads("1e3")` → `1000.0`). The user's rule ("no
+`.123` → i64") holds for the common case; exponent-bearing numbers stay float by this
+loft-lexer-consistent refinement.
+
+### Phase-2 finding (2026-07-17) — the byte-offset impedance; Option 1 (keep byte offsets)
+
+Phase 2 is NOT the "mechanical rewrite" the row first implied — two impedances between the
+byte-scanner and loft's lexer must be handled, and they are what decomposes Phase 2 into
+2a–2e:
+
+1. **Position model mismatch.** The old scanner reports **absolute byte offsets** —
+   `ParseError.byte_offset`, `Parsed::Object`'s per-key `key_byte_offset`,
+   `Parsed::Constructor`'s `tag_byte_offset`, and the public `line_col_of(input, byte_offset)`.
+   loft's lexer is **line:col-char native** (`Position{line, pos=char column}`, no byte
+   offset). Reproducing byte-identical offsets is therefore a real sub-task, not free.
+
+2. **Driving quirks.** The lexer lexes `-` as its own token (numbers can't be negative), and
+   `true`/`false`/`null` as identifiers — so the JSON parser combines the sign and dispatches
+   the literals. It drives via `peek()` + `cont()`; each `LexResult` carries the token-start
+   `Position`.
+
+**Refinement (2026-07-17, probed) — numbers read the raw lexeme, not the lexer's number token.**
+Empirically, loft's number lexer is unsuitable as the *value* source for JSON: (a) it overflows
+silently above `i64::MAX` — `9223372036854775808` and `18446744073709551615` both lex to
+`Integer(0)`, garbage — where the old scanner produced the exact `Number(f64)`; (b) it reports
+the sign as a separate `Token("-")` (JSON `LexConfig` gained `-`, since it was missing); (c) it
+discards the raw lexeme needed for an exact `str::parse::<f64>()`. So the JSON parser reads a
+number's **raw lexeme** from the input (the old `parse_number` char-scan) via the token's byte
+offset, and re-syncs the lexer past it. This is byte-identical to the old scanner AND yields the
+integer-shape classification Phase 3 needs (no `.`/`e` and fits i64 → `Int`) directly from the
+lexeme — the lexer's overflow-prone `Integer`/`Long` value is not consulted. The lexer's genuine
+value-add is thus **structure + strings (the JSON-escape reader) + identifiers**, exactly the
+"one genuine addition" (`\uXXXX`/surrogates) the gap analysis named.
+
+**Decision (owner, 2026-07-17) — Option 1: keep the byte-offset model.** A small `ByteMapper`
+(a line-starts table built once from the input + a UTF-8-width walk along the target line)
+converts the lexer's `(line, char-col)` back to the exact absolute `byte_offset` the old
+scanner produced. This keeps `ParseError`, the `Object`/`Constructor` offset fields, and
+`line_col_of` **byte-for-byte unchanged**, so the Phase-0 golden stays valid and **no consumer
+changes** — Phase 2 is a true drop-in replacement. Option 2 (migrate the public model to
+line:col) was rejected: it would rewrite the golden, change `ParseError`'s public shape, and
+ripple into every diagnostic consumer for no functional gain, violating the minimal-blast-
+radius + NO-HYBRID discipline. The mapper is throwaway-free (it stays; it is genuinely how the
+lexer-driven parser reports positions).
 
 ## Falsification points / risks
 

@@ -35,6 +35,11 @@ pub enum Parsed {
     Null,
     Bool(bool),
     Number(f64),
+    /// @PLN109 — an integer-shaped JSON number (no `.`, no exponent) that fits
+    /// `i64`.  Preserves the exact integer through deserialize (fixes @PLN102 H5:
+    /// values > 2⁵³ used to round through `f64`).  A number with a fraction or
+    /// exponent, or one that overflows `i64`, stays [`Number`](Self::Number).
+    Int(i64),
     Str(String),
     Ident(String),
     Array(Vec<Parsed>),
@@ -50,6 +55,32 @@ pub enum Parsed {
     /// (un-tagged) dumps still read as fields.  Fields: `(tag, tag_byte_offset,
     /// body)`, where `body` is the `{ … }` [`Parsed::Object`].
     Constructor(String, usize, Box<Parsed>),
+}
+
+impl Parsed {
+    /// The integer value of a numeric leaf: an exact `i64` from [`Int`](Self::Int)
+    /// (H5-preserved), or a truncated [`Number`](Self::Number) (backward-compatible
+    /// with the pre-@PLN109 float path).  `None` for a non-numeric value.
+    #[must_use]
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Parsed::Int(n) => Some(*n),
+            Parsed::Number(n) => Some(*n as i64),
+            _ => None,
+        }
+    }
+
+    /// The float value of a numeric leaf: [`Number`](Self::Number) as-is, or an
+    /// [`Int`](Self::Int) widened to `f64`.  `None` for a non-numeric value.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Parsed::Number(n) => Some(*n),
+            Parsed::Int(n) => Some(*n as f64),
+            _ => None,
+        }
+    }
 }
 
 /// Input dialect selector.
@@ -83,11 +114,6 @@ pub struct ParseError {
     pub path: String,
 }
 
-/// Internal: a single parse step's result — value + advance, or
-/// (message, offset).  The path is threaded out-of-band via the
-/// `&mut Vec<String>` path stack so most arms don't need to mention it.
-type ParseResult = Result<(Parsed, usize), (String, usize)>;
-
 /// Parse the entire `input` as a JSON value in strict RFC 8259
 /// mode.  Equivalent to `parse_with(input, Dialect::Strict)`.
 ///
@@ -112,37 +138,9 @@ pub fn parse(input: &str) -> Result<Parsed, ParseError> {
 /// Returns a [`ParseError`] when the input is not valid in the
 /// chosen dialect.
 pub fn parse_with(input: &str, dialect: Dialect) -> Result<Parsed, ParseError> {
-    let bytes = input.as_bytes();
-    // RFC 8259 allows a parser to ignore a single leading UTF-8 BOM
-    // (`EF BB BF`).  Skip it by advancing the start index rather than
-    // re-slicing, so reported `byte_offset`s still index into `input`.
-    let bom = if bytes.starts_with(&[0xEF, 0xBB, 0xBF]) {
-        3
-    } else {
-        0
-    };
-    let start = skip_ws(bytes, bom);
-    let mut path: Vec<String> = Vec::new();
-    let res = parse_value(bytes, start, &mut path, dialect);
-    let (value, mut i) = match res {
-        Ok(ok) => ok,
-        Err((msg, at)) => {
-            return Err(ParseError {
-                message: msg,
-                byte_offset: at,
-                path: render_path(&path),
-            });
-        }
-    };
-    i = skip_ws(bytes, i);
-    if i != bytes.len() {
-        return Err(ParseError {
-            message: format!("unexpected trailing byte at offset {i}"),
-            byte_offset: i,
-            path: render_path(&path),
-        });
-    }
-    Ok(value)
+    // @PLN109 Phase 2 — driven by loft's own JSON-mode lexer (`parse_lexer`),
+    // proven byte-identical to the retired byte-scanner over the Phase-0 corpus.
+    parse_lexer(input, dialect)
 }
 
 /// Render the path stack as an RFC 6901 JSON Pointer.  Empty
@@ -226,92 +224,6 @@ fn context_snippet(input: &str, line: usize, col: usize, before: usize, after: u
     out
 }
 
-fn parse_value(bytes: &[u8], i: usize, path: &mut Vec<String>, dialect: Dialect) -> ParseResult {
-    if i >= bytes.len() {
-        return Err(("unexpected end of input".to_string(), i));
-    }
-    match bytes[i] {
-        b'"' => parse_string(bytes, i),
-        b'-' | b'0'..=b'9' => parse_number(bytes, i),
-        b'[' => parse_array(bytes, i, path, dialect),
-        b'{' => parse_object(bytes, i, path, dialect),
-        c if dialect == Dialect::Lenient && (c.is_ascii_alphabetic() || c == b'_') => {
-            let (tag, j) = parse_bare_identifier_value(bytes, i);
-            // Type-tagged constructor shape: `Tag { fields }` — a struct
-            // type-tag (`Point{…}`) or an enum-struct variant (`Red{…}`).
-            // Emitted as a distinct `Parsed::Constructor` (NOT an `Object`) so
-            // the schema walker can tell it apart from a plain object that has a
-            // field named like the tag — the disambiguation that lets new dumps
-            // carry type tags while old un-tagged dumps still read as fields.
-            // Only when the identifier is not a reserved word (null/true/false).
-            if let Parsed::Ident(name) = &tag {
-                let k = skip_ws(bytes, j);
-                if k < bytes.len() && bytes[k] == b'{' {
-                    let (obj, end) = parse_object(bytes, k, path, dialect)?;
-                    return Ok((Parsed::Constructor(name.clone(), i, Box::new(obj)), end));
-                }
-            }
-            Ok((tag, j))
-        }
-        b'n' => parse_literal(bytes, i, b"null", Parsed::Null),
-        b't' => parse_literal(bytes, i, b"true", Parsed::Bool(true)),
-        b'f' => parse_literal(bytes, i, b"false", Parsed::Bool(false)),
-        b => Err((format!("unexpected byte {b:#x} at offset {i}"), i)),
-    }
-}
-
-/// Parse a bare identifier in value position under
-/// `Dialect::Lenient`.  Consumes `[A-Za-z_][A-Za-z0-9_]*`.
-/// Reserved words `null` / `true` / `false` produce the
-/// corresponding [`Parsed`] variant so callers don't have to
-/// special-case them; any other identifier becomes
-/// [`Parsed::Ident`].  Infallible because the caller only
-/// invokes it after verifying the leading byte is alphabetic
-/// or underscore.
-fn parse_bare_identifier_value(bytes: &[u8], i: usize) -> (Parsed, usize) {
-    let start = i;
-    let mut j = i + 1;
-    // First segment, then any `.`-joined segments — a *qualified* enum tag like
-    // `Color.Red`, which loft source uses everywhere (`FileResult.Ok`).  A `.` is
-    // consumed only when followed by another identifier segment, so a trailing
-    // dot or `tag.0` is left for the caller rather than swallowed.
-    loop {
-        while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-            j += 1;
-        }
-        if j + 1 < bytes.len()
-            && bytes[j] == b'.'
-            && (bytes[j + 1].is_ascii_alphabetic() || bytes[j + 1] == b'_')
-        {
-            j += 1; // consume the '.', loop to take the next segment
-        } else {
-            break;
-        }
-    }
-    // Safe: all bytes accepted above are ASCII.
-    let name = std::str::from_utf8(&bytes[start..j]).expect("ASCII identifier slice");
-    let value = match name {
-        "null" => Parsed::Null,
-        "true" => Parsed::Bool(true),
-        "false" => Parsed::Bool(false),
-        _ => Parsed::Ident(name.to_string()),
-    };
-    (value, j)
-}
-
-fn parse_literal(bytes: &[u8], i: usize, word: &[u8], value: Parsed) -> ParseResult {
-    if i + word.len() > bytes.len() || &bytes[i..i + word.len()] != word {
-        return Err((
-            format!(
-                "expected `{}` at offset {i}",
-                std::str::from_utf8(word).unwrap_or("?")
-            ),
-            i,
-        ));
-    }
-    Ok((value, i + word.len()))
-}
-
 /// Length of the UTF-8 codepoint whose first byte is `b`.  Returns 1 for
 /// ASCII or any malformed lead byte (continuation / 0xF8+); returns 2/3/4
 /// for the 2-byte / 3-byte / 4-byte forms.  Used by `parse_string` to
@@ -329,267 +241,6 @@ fn utf8_lead_len(b: u8) -> usize {
 /// Read exactly four hex digits of a `\uXXXX` escape starting at `pos`
 /// (the index of the first hex digit, i.e. just past the `u`) and return
 /// their value.  Errors if fewer than four bytes remain or any is not
-/// ASCII hex.
-fn parse_hex4(bytes: &[u8], pos: usize) -> Result<u32, (String, usize)> {
-    if pos + 4 > bytes.len() {
-        return Err(("truncated \\uXXXX escape".to_string(), pos));
-    }
-    let hex = std::str::from_utf8(&bytes[pos..pos + 4])
-        .map_err(|_| ("non-ASCII in \\uXXXX escape".to_string(), pos))?;
-    u32::from_str_radix(hex, 16).map_err(|_| ("invalid hex in \\uXXXX escape".to_string(), pos))
-}
-
-fn parse_string(bytes: &[u8], start: usize) -> ParseResult {
-    debug_assert_eq!(bytes[start], b'"');
-    let mut i = start + 1;
-    let mut out = String::new();
-    while i < bytes.len() {
-        let b = bytes[i];
-        match b {
-            b'"' => return Ok((Parsed::Str(out), i + 1)),
-            b'\\' => {
-                if i + 1 >= bytes.len() {
-                    return Err(("unterminated escape".to_string(), i));
-                }
-                i += 1;
-                match bytes[i] {
-                    b'"' => out.push('"'),
-                    b'\\' => out.push('\\'),
-                    b'/' => out.push('/'),
-                    b'b' => out.push('\u{0008}'),
-                    b'f' => out.push('\u{000c}'),
-                    b'n' => out.push('\n'),
-                    b'r' => out.push('\r'),
-                    b't' => out.push('\t'),
-                    b'u' => {
-                        // `i` points at the `u`; the 4 hex digits are at i+1..i+5.
-                        let hi = parse_hex4(bytes, i + 1)?;
-                        i += 4; // consume the hex digits; i now at the last one
-                        if (0xD800..=0xDBFF).contains(&hi) {
-                            // High surrogate: a non-BMP char is encoded as a
-                            // UTF-16 pair `😀`.  Combine with a
-                            // following `\uDCxx` low surrogate; the looked-ahead
-                            // `\uDCxx` sits at i+1..i+7 (i+1=`\`, i+2=`u`).
-                            let low = if i + 2 < bytes.len()
-                                && bytes[i + 1] == b'\\'
-                                && bytes[i + 2] == b'u'
-                            {
-                                parse_hex4(bytes, i + 3)
-                                    .ok()
-                                    .filter(|lo| (0xDC00..=0xDFFF).contains(lo))
-                            } else {
-                                None
-                            };
-                            if let Some(lo) = low {
-                                let cp = 0x10000 + ((hi - 0xD800) << 10) + (lo - 0xDC00);
-                                out.push(char::from_u32(cp).unwrap_or('\u{fffd}'));
-                                i += 6; // consume the looked-ahead `\uDCxx`
-                            } else {
-                                // Lone/half high surrogate: replacement char.
-                                // Leave any following escape for the next pass.
-                                out.push('\u{fffd}');
-                            }
-                        } else if (0xDC00..=0xDFFF).contains(&hi) {
-                            // Lone low surrogate (no preceding high): replacement.
-                            out.push('\u{fffd}');
-                        } else {
-                            out.push(char::from_u32(hi).unwrap_or('\u{fffd}'));
-                        }
-                    }
-                    other => return Err((format!("invalid escape \\{}", other as char), i)),
-                }
-                i += 1;
-            }
-            c if c < 0x20 => {
-                return Err((format!("raw control byte {c:#x} in string"), i));
-            }
-            _ => {
-                // P264: the input was originally `&str` so the bytes are
-                // valid UTF-8.  Slurp the whole codepoint at once via the
-                // lead byte's encoded-length field, then `push_str` the
-                // already-valid slice.  The previous one-byte-per-iteration
-                // `push(bytes[i] as char)` widened each byte to a separate
-                // codepoint (e.g. `→` U+2192 = bytes E2 86 92 → three chars
-                // U+00E2 U+0086 U+0092), each re-encoded as 2-byte UTF-8 →
-                // 3-byte input became 6-byte output, displaying as `âââ`.
-                let n = utf8_lead_len(bytes[i]);
-                let end = (i + n).min(bytes.len());
-                // Safety: parse_string is called with bytes from a `&str`,
-                // so &bytes[i..end] is a valid UTF-8 boundary slice.
-                let s = std::str::from_utf8(&bytes[i..end]).unwrap_or("\u{fffd}");
-                out.push_str(s);
-                i = end;
-            }
-        }
-    }
-    Err(("unterminated string".to_string(), start))
-}
-
-fn parse_number(bytes: &[u8], start: usize) -> ParseResult {
-    let mut i = start;
-    if bytes[i] == b'-' {
-        i += 1;
-    }
-    // integer part
-    if i >= bytes.len() || !bytes[i].is_ascii_digit() {
-        return Err(("expected digit in number".to_string(), i));
-    }
-    if bytes[i] == b'0' {
-        i += 1;
-    } else {
-        while i < bytes.len() && bytes[i].is_ascii_digit() {
-            i += 1;
-        }
-    }
-    // fraction
-    if i < bytes.len() && bytes[i] == b'.' {
-        i += 1;
-        if i >= bytes.len() || !bytes[i].is_ascii_digit() {
-            return Err(("expected digit after `.`".to_string(), i));
-        }
-        while i < bytes.len() && bytes[i].is_ascii_digit() {
-            i += 1;
-        }
-    }
-    // exponent
-    if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
-        i += 1;
-        if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
-            i += 1;
-        }
-        if i >= bytes.len() || !bytes[i].is_ascii_digit() {
-            return Err(("expected digit in exponent".to_string(), i));
-        }
-        while i < bytes.len() && bytes[i].is_ascii_digit() {
-            i += 1;
-        }
-    }
-    let slice = std::str::from_utf8(&bytes[start..i])
-        .map_err(|_| ("non-ASCII in number".to_string(), start))?;
-    let n: f64 = slice
-        .parse()
-        .map_err(|_| (format!("invalid number `{slice}`"), start))?;
-    Ok((Parsed::Number(n), i))
-}
-
-fn parse_array(
-    bytes: &[u8],
-    start: usize,
-    path: &mut Vec<String>,
-    dialect: Dialect,
-) -> ParseResult {
-    debug_assert_eq!(bytes[start], b'[');
-    let mut i = skip_ws(bytes, start + 1);
-    let mut items: Vec<Parsed> = Vec::new();
-    if i < bytes.len() && bytes[i] == b']' {
-        return Ok((Parsed::Array(items), i + 1));
-    }
-    let mut idx: usize = 0;
-    loop {
-        path.push(idx.to_string());
-        let res = parse_value(bytes, i, path, dialect);
-        let (v, j) = match res {
-            Ok(ok) => ok,
-            Err(e) => {
-                // Leave path in place — render_path captures it
-                // for the diagnostic.
-                return Err(e);
-            }
-        };
-        path.pop();
-        items.push(v);
-        i = skip_ws(bytes, j);
-        if i >= bytes.len() {
-            return Err(("unterminated array".to_string(), start));
-        }
-        match bytes[i] {
-            b',' => {
-                i = skip_ws(bytes, i + 1);
-                idx += 1;
-            }
-            b']' => return Ok((Parsed::Array(items), i + 1)),
-            b => return Err((format!("expected `,` or `]` in array, got {b:#x}"), i)),
-        }
-    }
-}
-
-#[allow(clippy::many_single_char_names)]
-fn parse_object(
-    bytes: &[u8],
-    start: usize,
-    path: &mut Vec<String>,
-    dialect: Dialect,
-) -> ParseResult {
-    debug_assert_eq!(bytes[start], b'{');
-    let mut i = skip_ws(bytes, start + 1);
-    let mut fields: Vec<(String, usize, Parsed)> = Vec::new();
-    if i < bytes.len() && bytes[i] == b'}' {
-        return Ok((Parsed::Object(fields), i + 1));
-    }
-    loop {
-        if i >= bytes.len() {
-            return Err(("expected object key".to_string(), i));
-        }
-        let key_at = i;
-        let (name, j) = parse_object_key(bytes, i, dialect)?;
-        i = skip_ws(bytes, j);
-        if i >= bytes.len() || bytes[i] != b':' {
-            return Err(("expected `:` after object key".to_string(), i));
-        }
-        i = skip_ws(bytes, i + 1);
-        path.push(name.clone());
-        let res = parse_value(bytes, i, path, dialect);
-        let (v, k) = res?;
-        path.pop();
-        fields.push((name, key_at, v));
-        i = skip_ws(bytes, k);
-        if i >= bytes.len() {
-            return Err(("unterminated object".to_string(), start));
-        }
-        match bytes[i] {
-            b',' => i = skip_ws(bytes, i + 1),
-            b'}' => return Ok((Parsed::Object(fields), i + 1)),
-            b => return Err((format!("expected `,` or `}}` in object, got {b:#x}"), i)),
-        }
-    }
-}
-
-/// Parse an object key.  In `Dialect::Strict` the key must be a
-/// quoted JSON string.  In `Dialect::Lenient` a leading
-/// ASCII-letter or `_` additionally opens a bare identifier
-/// that continues while the next byte is alphanumeric or `_` —
-/// matching the loft identifier grammar used by the legacy
-/// `vector<T>.parse(text)` path.
-fn parse_object_key(
-    bytes: &[u8],
-    i: usize,
-    dialect: Dialect,
-) -> Result<(String, usize), (String, usize)> {
-    if i < bytes.len() && bytes[i] == b'"' {
-        let (key, j) = parse_string(bytes, i)?;
-        match key {
-            Parsed::Str(s) => Ok((s, j)),
-            _ => unreachable!("parse_string always returns Parsed::Str"),
-        }
-    } else if dialect == Dialect::Lenient
-        && i < bytes.len()
-        && (bytes[i].is_ascii_alphabetic() || bytes[i] == b'_')
-    {
-        let start = i;
-        let mut j = i + 1;
-        while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
-            j += 1;
-        }
-        // Safe: all bytes accepted above are ASCII.
-        let name = std::str::from_utf8(&bytes[start..j])
-            .expect("ASCII identifier slice")
-            .to_string();
-        Ok((name, j))
-    } else {
-        Err(("expected string key in object".to_string(), i))
-    }
-}
-
 fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
     while i < bytes.len() {
         match bytes[i] {
@@ -598,6 +249,526 @@ fn skip_ws(bytes: &[u8], mut i: usize) -> usize {
         }
     }
     i
+}
+
+// ============================================================================
+// @PLN109 Phase 2 — lexer-driven parser (byte-identical replacement).
+//
+// Drives loft's own lexer (`LexConfig::json()`) for structure, strings (the
+// JSON-escape decoder — the one genuinely shared piece) and identifiers.
+// Numbers are read from the raw lexeme (loft's number lexer overflows above
+// i64::MAX and drops the raw text), and string *errors* are detected by a
+// syntactic scan (`json_string_validate`) that reproduces the old scanner's
+// messages/offsets without re-decoding.  Byte offsets (Option 1) are recovered
+// from the lexer's (line, char-col) `Position` via `ByteMapper`.  Phase 2 keeps
+// integers as `Number(f64)` (byte-identical to the old scanner, H5 rounding
+// included); the `Parsed::Int` flip is Phase 3.
+// ============================================================================
+
+use crate::lexer::{LexConfig, LexItem, Lexer, Position};
+
+/// Maps the lexer's 1-based `(line, char-column)` back to the absolute byte
+/// offset the old byte-scanner reported (Option 1 — keep the byte-offset model).
+struct ByteMapper {
+    /// Byte offset of the start of each 1-based line (`line_starts[0]` = 0).
+    line_starts: Vec<usize>,
+}
+
+impl ByteMapper {
+    fn new(input: &str) -> Self {
+        let mut line_starts = vec![0usize];
+        for (i, b) in input.bytes().enumerate() {
+            if b == b'\n' {
+                line_starts.push(i + 1);
+            }
+        }
+        ByteMapper { line_starts }
+    }
+
+    /// Absolute byte offset of `(line, col)`.  `col` is a 1-based char column, so
+    /// the byte offset walks `col - 1` chars from the line start summing UTF-8
+    /// widths — exact for non-ASCII lines.
+    fn byte(&self, input: &str, line: u32, col: u32) -> usize {
+        let li = (line.max(1) as usize) - 1;
+        let start = self.line_starts.get(li).copied().unwrap_or(input.len());
+        if start >= input.len() {
+            return input.len();
+        }
+        let mut off = start;
+        let mut remaining = col.saturating_sub(1) as usize;
+        for ch in input[start..].chars() {
+            if remaining == 0 {
+                break;
+            }
+            off += ch.len_utf8();
+            remaining -= 1;
+        }
+        off.min(input.len())
+    }
+}
+
+/// Scan a bare identifier in value position (`Dialect::Lenient`) from `start`,
+/// returning `(name, end)`.  Consumes `[A-Za-z0-9_]` and `.`-joined segments — a
+/// *qualified* enum tag like `Color.Red` (a `.` is taken only when followed by
+/// another identifier segment, so a trailing dot or `tag.0` is left for the
+/// caller).  Mirrors the retired `parse_bare_identifier_value`.
+fn scan_bare_ident(bytes: &[u8], start: usize) -> (String, usize) {
+    let mut j = start + 1;
+    loop {
+        while j < bytes.len() && (bytes[j].is_ascii_alphanumeric() || bytes[j] == b'_') {
+            j += 1;
+        }
+        if j + 1 < bytes.len()
+            && bytes[j] == b'.'
+            && (bytes[j + 1].is_ascii_alphabetic() || bytes[j + 1] == b'_')
+        {
+            j += 1; // consume the '.', loop to take the next segment
+        } else {
+            break;
+        }
+    }
+    // Safe: every accepted byte is ASCII.
+    let name = std::str::from_utf8(&bytes[start..j])
+        .expect("ASCII identifier slice")
+        .to_string();
+    (name, j)
+}
+
+/// Old-scanner string error detection + terminator scan, WITHOUT decoding (the
+/// decode is the lexer's `CString`).  `start` is the opening-quote offset.
+/// Returns the byte offset just past the closing `"` on success, or the first
+/// error exactly as the old byte-scanner reported it.
+fn json_string_validate(bytes: &[u8], start: usize) -> Result<usize, (String, usize)> {
+    let mut i = start + 1;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'"' => return Ok(i + 1),
+            b'\\' => {
+                if i + 1 >= bytes.len() {
+                    return Err(("unterminated escape".to_string(), i));
+                }
+                i += 1;
+                match bytes[i] {
+                    b'"' | b'\\' | b'/' | b'b' | b'f' | b'n' | b'r' | b't' => i += 1,
+                    b'u' => {
+                        if i + 4 >= bytes.len() {
+                            return Err(("truncated \\uXXXX escape".to_string(), i + 1));
+                        }
+                        if !bytes[i + 1..i + 5].iter().all(u8::is_ascii_hexdigit) {
+                            return Err(("invalid hex in \\uXXXX escape".to_string(), i + 1));
+                        }
+                        i += 5;
+                    }
+                    other => return Err((format!("invalid escape \\{}", other as char), i)),
+                }
+            }
+            c if c < 0x20 => return Err((format!("raw control byte {c:#x} in string"), i)),
+            _ => {
+                let n = utf8_lead_len(bytes[i]);
+                i = (i + n).min(bytes.len());
+            }
+        }
+    }
+    Err(("unterminated string".to_string(), start))
+}
+
+struct JParser<'a> {
+    lx: Lexer,
+    input: &'a str,
+    bytes: &'a [u8],
+    map: ByteMapper,
+    dialect: Dialect,
+    path: Vec<String>,
+    /// Byte offset just past the value most recently parsed, in the RAW input.
+    /// loft's number lexer over-consumes JSON-invalid forms (`007`, `0x1f`,
+    /// `1_0`) as a single token, so the lexer's next-token position would hide
+    /// the trailing bytes the old scanner rejected.  Structural / trailing-byte
+    /// checks read `skip_ws(value_end)` instead, matching the old scanner exactly.
+    value_end: usize,
+}
+
+impl<'a> JParser<'a> {
+    fn new(input: &'a str, dialect: Dialect) -> Self {
+        JParser {
+            lx: Lexer::from_str_with(input, "json", LexConfig::json()),
+            input,
+            bytes: input.as_bytes(),
+            map: ByteMapper::new(input),
+            dialect,
+            path: Vec::new(),
+            value_end: 0,
+        }
+    }
+
+    /// The next non-whitespace byte after the value just parsed — the raw
+    /// position a delimiter (`,` / `]` / `}` / EOF) must appear at.
+    fn after_value(&self) -> usize {
+        skip_ws(self.bytes, self.value_end)
+    }
+
+    /// Byte offset of the lexer's current token (or input end at EOF).  Exact for
+    /// the non-number tokens that never over-consume.
+    fn peek_pos(&self) -> usize {
+        let r = self.lx.peek();
+        if r.has == LexItem::None {
+            self.bytes.len()
+        } else {
+            self.byte_of(&r.position)
+        }
+    }
+
+    fn byte_of(&self, p: &Position) -> usize {
+        self.map.byte(self.input, p.line, p.pos)
+    }
+
+    /// Advance the lexer until its next token starts at or after `end` (or EOF).
+    /// Used after a raw number lexeme is consumed, to re-sync the token stream.
+    fn advance_past(&mut self, end: usize) {
+        loop {
+            let r = self.lx.peek();
+            if r.has == LexItem::None || self.byte_of(&r.position) >= end {
+                break;
+            }
+            self.lx.cont();
+        }
+    }
+
+    /// Parse a JSON value.  `at` is the byte offset where the value is expected
+    /// (skip-whitespace'd) — used only to attribute a lexer `None` to a failed
+    /// string (the old scanner's `"unterminated string"` etc.) vs genuine EOF.
+    fn parse_value(&mut self, at: usize) -> Result<Parsed, (String, usize)> {
+        let r = self.lx.peek();
+        match &r.has {
+            LexItem::None => {
+                // The lexer produced no token where a value is expected.  Attribute
+                // it to the raw byte at `at`: loft's lexer fails to tokenise some
+                // valid-position JSON (a string it can't terminate; a number like
+                // `1.` with a trailing dot).  Scan the raw input so the error (or
+                // value) matches the old byte-scanner; otherwise it is real EOF.
+                if at < self.bytes.len() {
+                    match self.bytes[at] {
+                        b'"' => {
+                            return Err(json_string_validate(self.bytes, at)
+                                .expect_err("lexer string failure must be an error"));
+                        }
+                        b'-' | b'0'..=b'9' => {
+                            let (value, end) = self.scan_number(at)?;
+                            self.value_end = end;
+                            self.advance_past(end);
+                            return Ok(value);
+                        }
+                        _ => {}
+                    }
+                }
+                Err(("unexpected end of input".to_string(), self.bytes.len()))
+            }
+            LexItem::Token(t) if t == "-" => self.parse_number(),
+            LexItem::Integer(..) | LexItem::Long(_) | LexItem::Float(_) | LexItem::Single(_) => {
+                self.parse_number()
+            }
+            LexItem::Token(t) if t == "[" => self.parse_array(),
+            LexItem::Token(t) if t == "{" => self.parse_object(),
+            LexItem::CString(_) => {
+                let s = self.take_string()?;
+                Ok(Parsed::Str(s))
+            }
+            LexItem::Identifier(name) => {
+                let name = name.clone();
+                let pos = r.position.clone();
+                self.parse_identifier_value(&name, &pos)
+            }
+            _ => {
+                // An unexpected structural token (`}`, `]`, `,`, `:`) in value
+                // position — the old scanner's "unexpected byte 0xNN at offset N".
+                let off = self.byte_of(&r.position);
+                let b = self.bytes.get(off).copied().unwrap_or(0);
+                Err((format!("unexpected byte {b:#x} at offset {off}"), off))
+            }
+        }
+    }
+
+    /// Consume the current `CString` token, validating it against the old
+    /// scanner's error semantics first (the lexer decodes leniently).
+    fn take_string(&mut self) -> Result<String, (String, usize)> {
+        let r = self.lx.peek();
+        // A `CString` token's position is the first *content* char; the opening
+        // quote is one byte before it.
+        let quote = self.byte_of(&r.position).saturating_sub(1);
+        self.value_end = json_string_validate(self.bytes, quote)?;
+        let LexItem::CString(s) = r.has else {
+            unreachable!("take_string called off a CString");
+        };
+        self.lx.cont();
+        Ok(s)
+    }
+
+    fn parse_number(&mut self) -> Result<Parsed, (String, usize)> {
+        let start = self.byte_of(&self.lx.peek().position);
+        let (value, end) = self.scan_number(start)?;
+        self.value_end = end;
+        self.advance_past(end);
+        Ok(value)
+    }
+
+    /// Scan a JSON number lexeme from the raw input (mirrors the old
+    /// `parse_number`): optional `-`, integer part, fraction, exponent.  @PLN109
+    /// Phase 3: an integer-shaped lexeme (no `.`, no exponent) that fits `i64`
+    /// becomes [`Parsed::Int`] (H5-exact); a fractional/exponent number, or one
+    /// that overflows `i64`, becomes [`Parsed::Number`] (`f64`).
+    fn scan_number(&self, start: usize) -> Result<(Parsed, usize), (String, usize)> {
+        let bytes = self.bytes;
+        let mut i = start;
+        if i < bytes.len() && bytes[i] == b'-' {
+            i += 1;
+        }
+        if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+            return Err(("expected digit in number".to_string(), i));
+        }
+        if bytes[i] == b'0' {
+            i += 1;
+        } else {
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        let mut fractional = false;
+        if i < bytes.len() && bytes[i] == b'.' {
+            fractional = true;
+            i += 1;
+            if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+                return Err(("expected digit after `.`".to_string(), i));
+            }
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+            fractional = true;
+            i += 1;
+            if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
+                i += 1;
+            }
+            if i >= bytes.len() || !bytes[i].is_ascii_digit() {
+                return Err(("expected digit in exponent".to_string(), i));
+            }
+            while i < bytes.len() && bytes[i].is_ascii_digit() {
+                i += 1;
+            }
+        }
+        let slice = std::str::from_utf8(&bytes[start..i])
+            .map_err(|_| ("non-ASCII in number".to_string(), start))?;
+        // Integer-shaped and i64-fitting → exact Int (H5); else f64.
+        if !fractional && let Ok(n) = slice.parse::<i64>() {
+            return Ok((Parsed::Int(n), i));
+        }
+        let n: f64 = slice
+            .parse()
+            .map_err(|_| (format!("invalid number `{slice}`"), start))?;
+        Ok((Parsed::Number(n), i))
+    }
+
+    /// An identifier in value position: `null`/`true`/`false` in either dialect,
+    /// or (Lenient only) a bare identifier / `Tag{…}` constructor.  In Strict, a
+    /// non-literal identifier is the old scanner's "unexpected byte" / bad-literal.
+    fn parse_identifier_value(
+        &mut self,
+        name: &str,
+        pos: &Position,
+    ) -> Result<Parsed, (String, usize)> {
+        let off = self.byte_of(pos);
+        if self.dialect == Dialect::Lenient {
+            // Raw-scan the FULL bare identifier — including `.`-joined segments for a
+            // qualified enum tag (`Category.Daily`) — since the lexer tokenises the
+            // dots separately.  Then re-sync the token stream past the whole thing.
+            let _ = name;
+            let (full, end) = scan_bare_ident(self.bytes, off);
+            self.value_end = end;
+            self.advance_past(end);
+            let value = match full.as_str() {
+                "null" => Parsed::Null,
+                "true" => Parsed::Bool(true),
+                "false" => Parsed::Bool(false),
+                _ => Parsed::Ident(full),
+            };
+            // `Tag{…}` — a type-tagged constructor (kept distinct from Object).
+            if let Parsed::Ident(tag) = &value
+                && self.lx.peek().has == LexItem::Token("{".to_string())
+            {
+                let obj = self.parse_object()?; // sets value_end past `}`
+                return Ok(Parsed::Constructor(tag.clone(), off, Box::new(obj)));
+            }
+            return Ok(value);
+        }
+        // Strict: only n/t/f open a literal; anything else is an unexpected byte.
+        let b = self.bytes.get(off).copied().unwrap_or(0);
+        match b {
+            b'n' | b't' | b'f' => {
+                let (word, val) = match b {
+                    b'n' => ("null", Parsed::Null),
+                    b't' => ("true", Parsed::Bool(true)),
+                    _ => ("false", Parsed::Bool(false)),
+                };
+                if name == word {
+                    self.lx.cont();
+                    self.value_end = self.peek_pos();
+                    Ok(val)
+                } else {
+                    Err((format!("expected `{word}` at offset {off}"), off))
+                }
+            }
+            _ => Err((format!("unexpected byte {b:#x} at offset {off}"), off)),
+        }
+    }
+
+    fn parse_array(&mut self) -> Result<Parsed, (String, usize)> {
+        let start = self.byte_of(&self.lx.peek().position); // the `[`
+        self.lx.cont();
+        let mut items: Vec<Parsed> = Vec::new();
+        if self.lx.peek().has == LexItem::Token("]".to_string()) {
+            self.lx.cont();
+            self.value_end = self.peek_pos();
+            return Ok(Parsed::Array(items));
+        }
+        // First element starts just past the `[`; each subsequent one past its `,`.
+        let mut at = skip_ws(self.bytes, start + 1);
+        let mut idx = 0usize;
+        loop {
+            self.path.push(idx.to_string());
+            let v = self.parse_value(at)?;
+            self.path.pop();
+            items.push(v);
+            // The delimiter must appear at the RAW position after the value; the
+            // lexer's peek could be past it if the value was an over-consumed
+            // JSON-invalid number.  For a valid value the two coincide, so the
+            // lexer stays synced to consume the delimiter.
+            let d = self.after_value();
+            match self.bytes.get(d).copied() {
+                None => return Err(("unterminated array".to_string(), start)),
+                Some(b',') => {
+                    self.lx.cont();
+                    at = skip_ws(self.bytes, d + 1);
+                    idx += 1;
+                }
+                Some(b']') => {
+                    self.lx.cont();
+                    self.value_end = self.peek_pos();
+                    return Ok(Parsed::Array(items));
+                }
+                Some(b) => {
+                    return Err((format!("expected `,` or `]` in array, got {b:#x}"), d));
+                }
+            }
+        }
+    }
+
+    fn parse_object(&mut self) -> Result<Parsed, (String, usize)> {
+        let start = self.byte_of(&self.lx.peek().position); // the `{`
+        self.lx.cont();
+        let mut fields: Vec<(String, usize, Parsed)> = Vec::new();
+        if self.lx.peek().has == LexItem::Token("}".to_string()) {
+            self.lx.cont();
+            self.value_end = self.peek_pos();
+            return Ok(Parsed::Object(fields));
+        }
+        loop {
+            let (name, key_at) = self.parse_object_key(start)?;
+            let colon = self.lx.peek();
+            if colon.has != LexItem::Token(":".to_string()) {
+                let off = if colon.has == LexItem::None {
+                    self.bytes.len()
+                } else {
+                    self.byte_of(&colon.position)
+                };
+                return Err(("expected `:` after object key".to_string(), off));
+            }
+            let colon = self.byte_of(&colon.position);
+            self.lx.cont(); // consume `:`
+            let at = skip_ws(self.bytes, colon + 1);
+            self.path.push(name.clone());
+            let v = self.parse_value(at)?;
+            self.path.pop();
+            fields.push((name, key_at, v));
+            // Delimiter at the RAW position after the value (see `parse_array`).
+            let d = self.after_value();
+            match self.bytes.get(d).copied() {
+                None => return Err(("unterminated object".to_string(), start)),
+                Some(b',') => self.lx.cont(),
+                Some(b'}') => {
+                    self.lx.cont();
+                    self.value_end = self.peek_pos();
+                    return Ok(Parsed::Object(fields));
+                }
+                Some(b) => {
+                    return Err((format!("expected `,` or `}}` in object, got {b:#x}"), d));
+                }
+            }
+        }
+    }
+
+    /// A quoted string key (either dialect) or a bare identifier key (Lenient).
+    /// Returns `(name, key_byte_offset)` where the offset is the opening quote /
+    /// identifier start, matching the old scanner's `Parsed::Object` key offset.
+    fn parse_object_key(&mut self, obj_start: usize) -> Result<(String, usize), (String, usize)> {
+        let r = self.lx.peek();
+        match &r.has {
+            LexItem::None => Err(("expected object key".to_string(), self.bytes.len())),
+            LexItem::CString(_) => {
+                let quote = self.byte_of(&r.position).saturating_sub(1);
+                let name = self.take_string()?;
+                Ok((name, quote))
+            }
+            LexItem::Identifier(name) if self.dialect == Dialect::Lenient => {
+                let name = name.clone();
+                let off = self.byte_of(&r.position);
+                self.lx.cont();
+                Ok((name, off))
+            }
+            _ => {
+                let _ = obj_start;
+                let off = self.byte_of(&r.position);
+                Err(("expected string key in object".to_string(), off))
+            }
+        }
+    }
+}
+
+/// @PLN109 Phase 2 — parse `input` by driving loft's JSON-mode lexer.  Same
+/// `Parsed` tree + errors as the old byte-scanner (byte-identical; integers stay
+/// `Number(f64)` until Phase 3).
+fn parse_lexer(input: &str, dialect: Dialect) -> Result<Parsed, ParseError> {
+    // RFC 8259 allows ignoring a leading UTF-8 BOM.  The lexer would merge the BOM
+    // char with the following token, so strip it before lexing; reported byte
+    // offsets are then relative to the post-BOM body (a BOM-prefixed document is
+    // rare and its offsets are not a pinned contract — the common bom == 0 path is
+    // byte-exact).
+    let body = if input.as_bytes().starts_with(&[0xEF, 0xBB, 0xBF]) {
+        &input[3..]
+    } else {
+        input
+    };
+    let mut p = JParser::new(body, dialect);
+    let at = skip_ws(p.bytes, 0);
+    let value = match p.parse_value(at) {
+        Ok(v) => v,
+        Err((message, byte_offset)) => {
+            return Err(ParseError {
+                message,
+                byte_offset,
+                path: render_path(&p.path),
+            });
+        }
+    };
+    // Trailing check against the RAW position after the value: the lexer may have
+    // over-consumed a JSON-invalid number's suffix, which the old scanner rejected.
+    let end = p.after_value();
+    if end != p.bytes.len() {
+        return Err(ParseError {
+            message: format!("unexpected trailing byte at offset {end}"),
+            byte_offset: end,
+            path: render_path(&p.path),
+        });
+    }
+    Ok(value)
 }
 
 /// Serialise a [`Parsed`] tree back to compact JSON text — the inverse of
@@ -618,6 +789,9 @@ fn write_json(out: &mut String, value: &Parsed) {
     match value {
         Parsed::Null => out.push_str("null"),
         Parsed::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Parsed::Int(n) => {
+            let _ = write!(out, "{n}");
+        }
         Parsed::Number(n) => {
             // Whole, in-range values render without a trailing `.0` so a round
             // trip through `parse` reproduces the same text.  2^53 is the
@@ -713,10 +887,10 @@ mod tests {
 
     #[test]
     fn numbers() {
-        assert!(matches!(parse("0").unwrap(), Parsed::Number(v) if (v - 0.0).abs() < f64::EPSILON));
-        assert!(
-            matches!(parse("42").unwrap(), Parsed::Number(v) if (v - 42.0).abs() < f64::EPSILON)
-        );
+        // @PLN109 — integer-shaped numbers are `Parsed::Int`; fractional/exponent
+        // numbers stay `Parsed::Number`.
+        assert!(matches!(parse("0").unwrap(), Parsed::Int(0)));
+        assert!(matches!(parse("42").unwrap(), Parsed::Int(42)));
         assert!(
             matches!(parse("-17.5").unwrap(), Parsed::Number(v) if (v - (-17.5)).abs() < f64::EPSILON)
         );
@@ -843,7 +1017,7 @@ mod tests {
             panic!("expected array");
         };
         assert_eq!(v.len(), 3);
-        assert!(matches!(v[0], Parsed::Number(n) if (n - 1.0).abs() < f64::EPSILON));
+        assert!(matches!(v[0], Parsed::Int(1)));
         let nested = parse("[[1], [2, 3]]").unwrap();
         let Parsed::Array(outer) = nested else {
             panic!("expected array");
@@ -860,7 +1034,7 @@ mod tests {
         };
         assert_eq!(fields.len(), 2);
         assert_eq!(fields[0].0, "a");
-        assert!(matches!(fields[0].2, Parsed::Number(n) if (n - 1.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[0].2, Parsed::Int(1)));
         assert_eq!(fields[1].0, "b");
         assert!(matches!(fields[1].2, Parsed::Str(ref s) if s == "hi"));
     }
@@ -987,7 +1161,7 @@ mod tests {
         };
         assert_eq!(fields.len(), 1);
         assert_eq!(fields[0].0, "val");
-        assert!(matches!(fields[0].2, Parsed::Number(n) if (n - 7.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[0].2, Parsed::Int(7)));
     }
 
     #[test]
@@ -1091,7 +1265,7 @@ mod tests {
         assert_eq!(fields.len(), 4);
         assert!(matches!(&fields[0].2, Parsed::Str(s) if s == "Hello World!"));
         assert!(matches!(&fields[1].2, Parsed::Ident(s) if s == "Hourly"));
-        assert!(matches!(fields[2].2, Parsed::Number(n) if (n - 12345.0).abs() < f64::EPSILON));
+        assert!(matches!(fields[2].2, Parsed::Int(12345)));
         assert!(matches!(fields[3].2, Parsed::Number(n) if (n - 0.15).abs() < 1e-9));
     }
 }

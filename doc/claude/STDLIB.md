@@ -681,20 +681,31 @@ JSON support has two layers:
 ```loft
 pub enum JsonValue {
   JNull,
-  JBool   { value: boolean },
-  JNumber { value: float not null },
-  JString { value: text },
-  JArray  { items: vector<JsonValue> },
-  JObject { fields: vector<JsonField> }
+  JBool    { value: boolean },
+  JNumber  { value: float not null },
+  JString  { value: text },
+  JArray   { items: vector<JsonValue> },
+  JObject  { fields: vector<JsonField> },
+  JInteger { value: integer }   // @PLN109 — integer-shaped number, exact i64
 }
 pub struct JsonField { name: text, value: JsonValue }
 ```
+
+**Number semantics (@PLN109).** A JSON number with **no fraction and no exponent**
+that fits `i64` parses to **`JInteger`** and preserves the exact integer — so
+`json_parse("9007199254740993").as_long()` and a typed `integer` field both read
+`9007199254740993`, not the `f64`-rounded `…992` (fixes @PLN102 H5). A number with
+a `.` or an exponent (`1.5`, `1e3`), or one that overflows `i64`, is a **`JNumber`**
+(`f64`). `1e3` is a float (`1000.0`), matching mainstream JSON. `as_long()`/an
+`integer` field read a `JInteger` exactly and truncate a `JNumber`; `as_number()`/a
+`float` field read a `JNumber` as-is and widen a `JInteger`. Serialisation is exact
+in both cases. `json_number(x)` always builds a `JNumber` (it takes a `float`).
 
 | Function | Description |
 |---|---|
 | `json_parse(text) -> JsonValue` | Parse JSON; malformed input returns `JNull` |
 | `json_errors() -> text` | Pipe-separated diagnostics from the last `json_parse` |
-| `kind(v) -> text` | Variant name: `"JNull"` / `"JBool"` / `"JNumber"` / `"JString"` / `"JArray"` / `"JObject"` |
+| `kind(v) -> text` | Variant name: `"JNull"` / `"JBool"` / `"JNumber"` / `"JInteger"` / `"JString"` / `"JArray"` / `"JObject"` |
 | `len(v) -> integer` | Length of a `JArray`/`JObject`; null sentinel for any other variant |
 | `field(v, name) -> JsonValue` | `JObject` lookup; `JNull` on miss / wrong kind |
 | `item(v, index) -> JsonValue` | `JArray` index; `JNull` on out-of-bounds / wrong kind |

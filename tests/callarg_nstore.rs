@@ -116,6 +116,79 @@ fn narrow_param_hard_errors() {
     }
 }
 
+// ── #585: guard-clause fall-through narrowing suppresses the false positive ───────────────────
+//
+// `if !s { return } … sink(s)` proves `s` non-null on the fall-through (the null case already
+// left the block), exactly like the positive `if s { sink(s) }`. The lint used to narrow only the
+// positive THEN branch, so the idiomatic guard clause false-positived. These lock BOTH directions:
+// the four guard shapes (exit kind × null-test) go silent, and the conservative boundary (a body
+// that can fall through, a `!= null` guard whose fall-through is the NULL case, a guard nested in
+// another conditional) must STILL warn.
+
+const G_RETURN_BANG: &str = "fn sink(s: text) -> integer { len(s) }\n\
+fn f(s: text?) -> integer { if !s { return 0; } sink(s) }\n\
+fn main() { x = f(\"hi\"); print(\"x={x}\"); }\n";
+const G_RETURN_EQNULL: &str = "fn sink(s: text) -> integer { len(s) }\n\
+fn f(s: text?) -> integer { if s == null { return 0; } sink(s) }\n\
+fn main() { x = f(\"hi\"); print(\"x={x}\"); }\n";
+const G_BREAK_BANG: &str = "fn sink(s: text) -> integer { len(s) }\n\
+fn f(s: text?) -> integer { t = 0; for i in 0..3 { if !s { break; } t = t + sink(s); } t }\n\
+fn main() { x = f(\"hi\"); print(\"x={x}\"); }\n";
+const G_CONTINUE_BANG: &str = "fn sink(s: text) -> integer { len(s) }\n\
+fn f(s: text?) -> integer { t = 0; for i in 0..3 { if !s { continue; } t = t + sink(s); } t }\n\
+fn main() { x = f(\"hi\"); print(\"x={x}\"); }\n";
+
+const W_BODY_NOEXIT: &str = "fn sink(s: text) -> integer { len(s) }\n\
+fn f(s: text?) -> integer { if !s { print(\"z\"); } sink(s) }\n\
+fn main() { x = f(\"hi\"); print(\"x={x}\"); }\n";
+const W_NENULL_GUARD: &str = "fn sink(s: text) -> integer { len(s) }\n\
+fn f(s: text?) -> integer { if s != null { return 0; } sink(s) }\n\
+fn main() { x = f(\"hi\"); print(\"x={x}\"); }\n";
+const W_NESTED_COND: &str = "fn sink(s: text) -> integer { len(s) }\n\
+fn f(s: text?, b: boolean) -> integer { if b { if !s { return 0; } } sink(s) }\n\
+fn main() { x = f(\"hi\", true); print(\"x={x}\"); }\n";
+
+const GUARD_SILENT: &[(&str, &str)] = &[
+    (G_RETURN_BANG, "g_return_bang"),
+    (G_RETURN_EQNULL, "g_return_eqnull"),
+    (G_BREAK_BANG, "g_break_bang"),
+    (G_CONTINUE_BANG, "g_continue_bang"),
+];
+const GUARD_STILL_WARNS: &[(&str, &str)] = &[
+    (W_BODY_NOEXIT, "w_body_noexit"),
+    (W_NENULL_GUARD, "w_nenull_guard"),
+    (W_NESTED_COND, "w_nested_cond"),
+];
+
+fn assert_guard_585(backend: &str) {
+    for (body, tag) in GUARD_SILENT {
+        let (ok, warns, _o) = run(body, backend, true, &format!("{tag}_{backend}"));
+        assert!(ok, "[{backend}] `{tag}` must compile and run");
+        assert_eq!(
+            warns, 0,
+            "[{backend}] `{tag}`: a guard-clause fall-through proves the var non-null — no N-Store warning (#585)"
+        );
+    }
+    for (body, tag) in GUARD_STILL_WARNS {
+        let (ok, warns, _o) = run(body, backend, true, &format!("{tag}_{backend}"));
+        assert!(ok, "[{backend}] `{tag}` must compile and run");
+        assert_eq!(
+            warns, 1,
+            "[{backend}] `{tag}`: the var may still be null here — the N-Store warning must still fire"
+        );
+    }
+}
+
+#[test]
+fn guard_clause_narrows_interpret_585() {
+    assert_guard_585("--interpret");
+}
+
+#[test]
+fn guard_clause_narrows_native_585() {
+    assert_guard_585("--native");
+}
+
 // ── OK: discharged arg, τ? param, null-transparent fn — all silent ────────────────────────────
 
 #[test]

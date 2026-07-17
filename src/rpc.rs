@@ -455,12 +455,10 @@ fn as_str(p: &Parsed) -> Option<&str> {
 fn text<'a>(p: &'a Parsed, key: &str) -> Option<&'a str> {
     field(p, key).and_then(as_str)
 }
-#[allow(clippy::cast_possible_truncation)]
 fn num(p: &Parsed, key: &str) -> Option<i64> {
-    match field(p, key) {
-        Some(Parsed::Number(n)) => Some(*n as i64),
-        _ => None,
-    }
+    // @PLN109 — an integer field now arrives as `Parsed::Int` (exact); `as_i64`
+    // also accepts a `Number` (truncated) for backward compatibility.
+    field(p, key).and_then(Parsed::as_i64)
 }
 fn bp_bool(p: &Parsed, key: &str) -> Option<bool> {
     match field(p, key) {
