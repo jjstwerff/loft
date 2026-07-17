@@ -2713,6 +2713,16 @@ pub struct Definition {
     /// stdlib helper loaded from the `LOFT_STDLIB_CACHE` bundle still suppresses;
     /// mirrored in `tools/ir_schema/ir.loft` (`Definition.null_safe`).
     pub null_safe: bool,
+    /// @PLN102 arc C — `#superseded "Y"`: the bare name of the successor symbol
+    /// this callable is superseded by (e.g. `"write_through"`).  Empty = not
+    /// superseded.  Set by the `#superseded` attribute; step 1 only parses +
+    /// stores it (nothing reads it yet, so it is inert).  A later step reads it
+    /// at the call chokepoint to steer an OWNED-source caller toward `Y`, and a
+    /// `make ci` lint checks `Y` resolves and this body is a shim over it.
+    /// Persisted through the IR store (`DEF_SUPERSEDED`) so a `#superseded`
+    /// stdlib symbol loaded from the `LOFT_STDLIB_CACHE` bundle keeps its mark;
+    /// mirrored in `tools/ir_schema/ir.loft` (`Definition.superseded`).
+    pub superseded: String,
     /// Definition number of the closure record struct for capturing lambdas.
     /// `u32::MAX` if this function does not capture.
     pub closure_record: u32,
@@ -2816,6 +2826,40 @@ impl Definition {
     #[must_use]
     pub fn null_safe(&self) -> bool {
         self.null_safe
+    }
+
+    /// `#superseded "Y"` (@PLN102 arc C): the bare successor-symbol name this
+    /// callable is superseded by, or empty if not superseded.  Inert in step 1
+    /// (parsed + stored only); a later step reads it to steer owned-source callers.
+    #[must_use]
+    pub fn superseded(&self) -> &str {
+        &self.superseded
+    }
+
+    /// If this is a method — stored `t_<LEN><Type>_<method>` (LEN = chars in the
+    /// receiver type name) — the `t_<LEN><Type>_` prefix (e.g. `t_4text_` for a
+    /// `text` method); `None` for a free fn (`n_…`) or operator (`Op…`).
+    #[must_use]
+    pub fn method_type_prefix(&self) -> Option<&str> {
+        let rest = self.name.strip_prefix("t_")?;
+        let nd = rest.chars().take_while(char::is_ascii_digit).count();
+        let len: usize = rest.get(..nd)?.parse().ok()?;
+        // `t_`(2) + digits(nd) + type(len) + `_`(1) + method. The byte AFTER the type name
+        // must be the `_` separator — the other four manglers (`api_surface::method_name`,
+        // `generation::is_t_param_stub`, `parser::h5_names_a_generic_template`) require it; a
+        // longer `rest` alone is not enough, so `t_4textX…` must NOT be read as a method.
+        (rest.as_bytes().get(nd + len) == Some(&b'_')).then_some(&self.name[..=2 + nd + len])
+    }
+
+    /// The user-facing name of this definition — the internal `n_` (free fn) or
+    /// `t_<LEN><Type>_` (method) prefix stripped, so `t_4text_contains` reads as
+    /// `contains`.  Used by diagnostics (the @PLN102 arc-C steer + fold lint).
+    #[must_use]
+    pub fn display_name(&self) -> &str {
+        match self.method_type_prefix() {
+            Some(p) => &self.name[p.len()..],
+            None => self.name.strip_prefix("n_").unwrap_or(&self.name),
+        }
     }
 
     /// Source-file id this definition was parsed from.
@@ -3708,6 +3752,7 @@ impl Data {
             variables: Function::new(name, &position.file),
             pub_visible: false,
             null_safe: false,
+            superseded: String::new(),
             closure_record: u32::MAX,
             mutated_captures: Vec::new(),
             scalars_to_box: Vec::new(),
@@ -4592,6 +4637,34 @@ impl Data {
         } else {
             u32::MAX
         }
+    }
+
+    /// @PLN102 arc C — is `source` the compilation's OWNED entry project (vs a
+    /// resolved dependency or the stdlib)?  loft numbers sources `STD_SOURCE` (0)
+    /// = stdlib, `MAIN_SOURCE` (1) = the entry being compiled, `2..` = imported
+    /// dependencies — so a source is owned exactly when it is the entry.  This is
+    /// RELATIVE to what is being built: a library's own source is owned when its
+    /// author compiles it, and a dependency when a consumer imports it (the
+    /// consumer re-parses the library at a `2..` source, never `MAIN_SOURCE`).
+    /// The arc-C steer gate (a later step) reads this so a `#superseded` warning
+    /// reaches only whoever can act on it.
+    ///
+    /// Boundary: loft's entry is a single `MAIN_SOURCE` file plus `use`d
+    /// libraries; were an entry package ever spread across several sources this
+    /// would need the package-path-prefix map, but until then owned == the entry.
+    #[must_use]
+    pub fn source_is_owned(&self, source: u16) -> bool {
+        source == MAIN_SOURCE
+    }
+
+    /// @PLN102 arc C — is the source CURRENTLY being compiled owned (see
+    /// [`Data::source_is_owned`])?  This is the caller-provenance fact the steer
+    /// gate reads at a call site: `self.source` is the source of the code doing
+    /// the call, so a steer fires only when the caller is the entry project,
+    /// never when the call sits in a re-parsed dependency's or the stdlib's source.
+    #[must_use]
+    pub fn caller_source_is_owned(&self) -> bool {
+        self.source_is_owned(self.source)
     }
 
     #[must_use]

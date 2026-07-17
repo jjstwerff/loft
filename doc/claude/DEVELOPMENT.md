@@ -5,6 +5,8 @@ Step-by-step process for taking a PLANNING.md item from backlog to merged.
 
 **Session start:** Review [CLAUDE.md](../../CLAUDE.md) at the project root — it contains the project overview, architecture, branch policy, and documentation index.
 
+**Who develops loft:** almost entirely AI coding agents, steered by the owner (who prioritized documentation and tooling above writing code). Everything needed to work on loft is in this repo, so the project has no single point of failure — see [BUS_FACTOR.md](BUS_FACTOR.md).
+
 ---
 
 ## Contents

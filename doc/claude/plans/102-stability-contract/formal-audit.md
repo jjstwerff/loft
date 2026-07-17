@@ -60,10 +60,10 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 > | Item | Status now | Evidence |
 > |---|---|---|
 > | F1 float `==` | ✅ **exact** | `1.0 == 1.0000000001` → false; `!=` exact complement |
-> | F2 compound-assign | ⚠️ **DECIDED single-eval (C92), NOT yet implemented** — still **double-evals** | `v[idx()] += 5` calls `idx()` **twice** (re-verified 2026-07-14, both backends); the earlier "single-eval ✅" here was wrong. Owner ruling 2026-07-14: eval once. Scope: [compound-assign-place-once.md](compound-assign-place-once.md) |
+> | F2 compound-assign | ✅ **single-eval (C92) — IMPLEMENTED + VALIDATED + LANDED (2026-07-16)** | `v[idx()] += 5` now calls `idx()` **once**; a divergent index reads + writes the SAME slot. Validated both backends (boundary matrix + byte-identical corpus + no leak; suite green modulo known flakes). On `tuxedo-f2-impl-steps`. Scope + method: [compound-assign-place-once.md](compound-assign-place-once.md) |
 > | F3 `&&`/`\|\|` short-circuit | ✅ **specified** | `operational.md` E-And/E-Or; E-Left scoped to non-short-circuit |
-> | F5 match non-enum + guards | ✅ **works** (spec = confirm `matching.md` states it) | `match x { 2..=5 => … }` + `n if n>2` run |
-> | F6 `&v` alias | ✅ **aliases** + sandbox hole closed | `w=&v; w[0]=99` → `v[0]==99` (reconcile `heap.md` "copies" prose) |
+> | F5 match non-enum + guards | ✅ **works** + **spec'd (2026-07-16)** | `matching.md` now has P-Range (`a..=b` incl / `a..b` half-open), P-Guard (fail→next arm), and a two-regime M-Total: ENUM = static exhaustiveness (a guard never covers a variant), SCALAR = nullable fall-through (C80). Verified both backends |
+> | F6 `&v` alias | ✅ **aliases** + sandbox hole closed + **docs reconciled** | `w=&v; w[0]=99` → `v[0]==99`; `heap.md` (H-Ref/H-Copy), `binding.md` (B-Ref/B-Copy), `capabilities.md` (D-cap-3) all state `&`-bind ALIASES / plain bind COPIES — no doc still says `&v` copies |
 > | F8 comparison chaining | ✅ **rejected** (non-assoc) | `1 == 2 == 3` → "comparison operators do not chain" |
 > | runtime errors | ✅ **stable kinds** | `RuntimeErrorKind::{CastOutOfRange,DivideByZero,ShiftOutOfRange}` |
 > | layout guard wired | ✅ | `allocation.rs:2726` refuses a mismatched-layout load |
@@ -80,9 +80,35 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 > want must land before the flip, because we can never add one after. See § The error surface.
 >
 > **Genuinely OPEN:** **E2** (the error-boundary maximal-strictness audit — *the* priority) · **F9**
-> (guard is wired, but `layout_algo_hash` at `types.rs:1674` omits **endianness** + the
-> **not-null↔nullable** distinction) · **F4** (assign place/RHS eval order — re-verify) ·
-> spec-honesty for the ✅-behavior rows.
+> — **endianness half DONE (2026-07-17):** the layout identity now pins the host endianness (an
+> `@endian\t<little|big>` line in `layout_dump` + the `descriptor.rs` twin; hash re-blessed;
+> positive control `endian_flip_is_never_a_raw_handoff`). **Still open — the not-null↔nullable half
+> is ARCHITECTURAL, not a `layout_dump` patch (root-caused 2026-07-17):** `layout_dump` renders
+> `i@0:integer` for both `integer` and `integer?` because full-width nullability is a DEF-level fact
+> (`Type::Optional`) that is **stripped during type resolution before the storage type table** — the
+> storage `Field`/content is byte-identical (verified: `NN{i:integer}` ≡ `NL{i:integer?}` dump; only
+> NARROW ints carry it, via `Parts::Byte(_,nullable)`). And the raw-handoff GUARD
+> (`allocation.rs:2596/2781` `LayoutIdentity::of(self,…)`) is **Stores-only — no `Data`** — so it
+> cannot compute the schema (`ir_schema::data_to_json`, which DOES serialize `Optional`) to compare.
+> The layout hash was DESIGNED to be byte-layout only ("pair it with the schema for the full
+> identity", `layout_algo_hash` doc); the gap is that the guard never pairs with the schema. Two
+> clean fixes, both @PLN97 persistence-wiring (a focused piece, not rushed): (a) thread the current
+> program's `Data`/schema-inclusive identity down to the `allocation.rs` guard (main.rs builds it
+> WITH `Data` at `3639/3951`; the guard rebuilds it Stores-only — unify them + add `data_to_json` to
+> `LayoutIdentity`); or (b) carry full-width nullability into the storage type table (a per-`Field`
+> flag set by `fill_database` from the attr `Optional`, rendered in `layout_dump` like narrow's
+> `null=`). (a) matches the doc's design; (b) is more invasive (a resolution→layout pipeline change).
+> A full-width flip is a real but EDGE handoff hazard (a persisted value == the null sentinel across
+> the flip); scoped, not dropped.
+> **Spec-honesty for the ✅-behavior rows — DONE (2026-07-16):** F1 (float `==` exact, pinned in
+> `operational.md`), F3 (short-circuit E-And/E-Or), F4 (assign eval order), F5 (P-Range/P-Guard +
+> two-regime M-Total in `matching.md`), F6 (`&v` aliases), F8 (chaining rejected) all reconciled +
+> re-verified both backends; F7 decided (C91). The ✅ rows now match reality.
+> **F4 — DONE (re-verified 2026-07-16):** `operational.md` E-Asgn already specifies the place
+> reduces **first** (left-to-right), **then** the RHS, then the store update (by E-Left) — no
+> "RHS first" contradiction remains. Re-verified both backends: `a[idx()]=rhs()` prints the
+> place index before the RHS; nested `m[outer()][inner()]=rhs()` is strictly left-to-right
+> (outer, inner, rhs). Off the open list.
 > **F7 — DECIDED (C91, 2026-07-13):** `==` = value-by-value / reference-by-identity (one uniform rule,
 > bounded by the value's own storage, NEVER chasing a reference — so `==` is never a deep crawl);
 > `===` reserved for opt-in deep structural equality. A shallow/hybrid `==` was rejected as internally
@@ -94,15 +120,15 @@ contract 0 allows, because after the freeze changing an observed value is a regr
 | # | Item | Why pre-freeze-only | Verified/ref |
 |---|---|---|---|
 | K | the null-sentinel model (above) | changes signatures + values | — |
-| F1 | **float `==`/`!=` are epsilon-approximate but `<`/`<=` exact** — `1.0 == 1.0000000001` → true; `a<b` **and** `a==b` both true near the boundary; `!=` not the exact complement of `==` | a trichotomy/transitivity violation frozen forever; no formal rule pins it at all | `fill.rs:1018,1025` |
-| F2 | **compound assignment double-evaluates its place** — `w[f()] += g()` calls `f()` **twice** (nested `m[i()][j()]` → 4×); a divergent index reads one slot and writes another — ~~unspecified~~ **DECIDED (C92, 2026-07-14): eval the place once**; NOT yet implemented → [scope](compound-assign-place-once.md) | a silent duplicate side-effect + a divergent-index corruption; lowering the place to eval-once is a semantics change | verified both backends |
-| F3 | **`&&` / `||` short-circuit is unspecified** — and the one general rule (E-Left) says both operands evaluate (false) | the most-depended-on eval rule is unwritten; freezes as impl-defined | verified; `operational.md` E-Left |
-| F4 | **assignment place-vs-RHS eval order unspecified** (`a[f()] = g()`); E-Asgn prose "RHS first" contradicts observed LHS-first | evaluation-order gap = the canonical silent-freeze trap | verified `[L][R]` |
-| F5 | **`match` guards have no formal semantics**; **`match` on non-enum** (int/range/literal) unspecified | a shipped feature freezes as impl-defined | `matching.md` |
-| F6 | **`&v` on a vector: `heap.md`+`capabilities.md` say COPIES; `binding.md`+reality say ALIASES** — and the sandbox soundness proof rests on the false "copies" premise | a memory-model spec contradiction + a possible sandbox-admission hole; must reconcile AND verify the `&`-alias-into-host write is gated | verified `v[0]==99` |
+| F1 | ~~**float `==`/`!=` are epsilon-approximate but `<`/`<=` exact**~~ — **RECONCILED (re-verified 2026-07-16)**: float `==` is **exact IEEE**, no epsilon (`fill.rs` has no tolerance logic). `1.0 == 1.0000000001` → **false**; `0.1 + 0.2 == 0.3` → **false**; `!=` the exact complement; `<`/`<=` consistent (no trichotomy violation — NaN is null, so non-null floats are a total order). Now **pinned in the formal spec** (`operational.md` § comparison, "Float `==` is exact, never epsilon") | ~~a trichotomy violation frozen forever; no formal rule pins it~~ — spec added, both backends agree | verified both backends |
+| F2 | ~~compound assignment double-evaluates its place~~ — **FIXED (C92, 2026-07-16)**: `w[f()] += g()` now calls `f()` once (nested `m[i()][j()]` → 2×), and a divergent index reads + writes the SAME slot. `ir_has_user_call` + a `_place` RefVar hoist in `parse_assign` → [scope + validation](compound-assign-place-once.md) | the duplicate side-effect + divergent-index corruption are gone; byte-identical for no-user-call places | LANDED, validated both backends |
+| F3 | ~~**`&&` / `||` short-circuit is unspecified**~~ — **SPEC'D + verified (2026-07-16)**: `operational.md` has E-And/E-Or (reduce left; skip right when the left decides the result), and the E-Left "in words" scopes the general both-evaluate rule to explicitly EXCLUDE `&&`/`||`. Verified both backends: `false && boom()` / `true \|\| boom()` never call `boom()` | short-circuit is now written down, not impl-defined | verified; `operational.md` E-And/E-Or |
+| F4 | ~~**assignment place-vs-RHS eval order unspecified** (`a[f()] = g()`); E-Asgn prose "RHS first" contradicts observed LHS-first~~ — **RECONCILED (re-verified 2026-07-16)**: `operational.md` E-Asgn specifies the place reduces first (left-to-right), then the RHS, then the store (by E-Left); no contradiction remains | evaluation-order gap — CLOSED (spec matches both backends) | verified `[L][R]` both backends: `a[idx()]=rhs()` prints place before RHS; nested `m[o()][i()]=rhs()` strictly left-to-right |
+| F5 | ~~**`match` guards have no formal semantics**; **`match` on non-enum** (int/range/literal) unspecified~~ — **SPEC'D (2026-07-16)**: `matching.md` P-Range (`a..=b` inclusive / `a..b` half-open, upper exclusive), P-Guard (guard false ⟹ arm Fail, next arm; provisional binds invisible), and a corrected two-regime M-Total — ENUM subject = static exhaustiveness error (a variant is covered only by a TOTAL arm, never a guard), SCALAR subject = the match may select nothing and yields null (C80), result type nullable. The old blanket "non-exhaustive = static error" was itself stale post-null-model | shipped feature now formally pinned | verified both backends (range boundaries, guard fallthrough, enum-missing error, scalar-nullable) |
+| F6 | ~~**`&v` on a vector: `heap.md`+`capabilities.md` say COPIES; `binding.md`+reality say ALIASES**~~ — **RECONCILED** (2026-07-11 fix + docs, re-verified 2026-07-16): all three specs now state `&`-bind ALIASES / plain bind COPIES (`heap.md` H-Ref/H-Copy, `binding.md` B-Ref/B-Copy, `capabilities.md` D-cap-3); the sandbox gate `raw_write_is_host_owned` follows the dep chain (`root_aliases_argument`), so an `&`-alias-into-host write is host-gated, not laundered | memory-model spec contradiction + sandbox-admission hole — both CLOSED | verified both backends: `w=&v; w[0]=99`→`v[0]==99`; plain bind independent (`c=v; c[1]=77` leaves `v[1]==2`) |
 | F7 | **reference `==` defaults to identity, not structural** — ~~unspecified~~ **DECIDED (C91)**: `==` = value-by-value / reference-by-identity (uniform, bounded, no reference-chase); `===` reserved for opt-in deep equality; shallow hybrid rejected as inconsistent | ~~a decision~~ | `DESIGN_DECISIONS.md` C91 |
-| F8 | **comparison operators are one left-assoc level** — `a == b == c` type-checks and misbehaves on booleans | non-associative comparison is a grouping change (pre-freeze-only) | `grammar.md` level 3 |
-| F9 | **layout persistence guard not wired into the load path** (D-layout-1); layout hash ignores **endianness** and can't see a **not-null↔nullable** schema flip | the frozen persistence promise's own detector doesn't run; a stale/foreign store reads raw | `@PLN97`; `types.rs:1674` |
+| F8 | ~~**comparison operators are one left-assoc level** — `a == b == c` type-checks and misbehaves~~ — **RECONCILED + verified (2026-07-16)**: comparison is NON-associative (`grammar.md` level 3); `1 == 2 == 3` is a STATIC ERROR ("comparison operators do not chain — parenthesise or combine with `&&`") on both backends, not a silent misbehave | grouping change landed (chaining rejected pre-freeze) | verified both backends; `grammar.md` level 3 |
+| F9 | **layout persistence guard not wired into the load path** (D-layout-1); ~~layout hash ignores **endianness**~~ **FIXED 2026-07-17** (`@endian` line in `layout_dump` + descriptor twin) — and still can't see a **not-null↔nullable** schema flip on a FULL-WIDTH field (`layout_dump` renders `i@0:integer` for both `integer` and `integer not null`; narrow ints already differ via `null=<sentinel>`) | the frozen persistence promise's own detector: endianness now caught; a full-width nullability flip still reads raw | `@PLN97`; `types.rs` `layout_dump`; positive control `endian_flip_is_never_a_raw_handoff` |
 | E1 | **diagnostics have no stable identity code** (`DiagEntry` = level+message) + 41 golden baselines → loft freezes **error prose as identity** | add a stable code/kind now → prose stays improvable forever behind a frozen code | `diagnostics.rs:16` |
 | E2 | **missing errors (the too-permissive class)** — see the error section; the sentinel-collision adds are ~zero conversion cost | adding an error is the one-way door | verified |
 
@@ -235,7 +261,7 @@ their behaviour.  Lesson: a `touch src/*.rs` / clean rebuild before trusting a g
   unspecified; no unit/1-tuple type; `char`-null (`'\0'`) collides with a real NUL, both invisible.
 
 ### Ownership / heap / layout (the memory model — highest stakes)
-- **F6 (`&v` copies-vs-aliases contradiction)** and **F7 (reference `==` identity)** above.
+- ~~**F6 (`&v` copies-vs-aliases contradiction)**~~ **RECONCILED** (see the must-fix table above) and **F7 (reference `==` identity)** above.
 - **C80 write-side drop:** `obj.field = x` when `obj` is null **silently discards the write** and
   continues (`H-WriteNull`/`H-WriteOOB`) — the write side is more dangerous than the read side and
   isn't separately justified. State it deliberately.

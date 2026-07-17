@@ -5,11 +5,30 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # @PLN102 F2 — Compound assignment evaluates its place once (fix scope)
 
-> **Status: DECIDED, NOT YET IMPLEMENTED (2026-07-14).** Owner ruling: evaluate the place
-> exactly once. Decision record: [DESIGN_DECISIONS.md C92](../../DESIGN_DECISIONS.md). This doc
-> scopes the fix. (The `formal-audit.md` reconciliation table once marked F2 "✅ single-eval" —
-> that was **wrong**: it double-evaluates, re-verified 2026-07-14 on both backends. Corrected
-> there.)
+> **Status: IMPLEMENTED + VALIDATED + LANDED (2026-07-16); GAP FOUND + CLOSED (2026-07-17).**
+> A code-eval sweep found the original hoist fired ONLY when the field offset was the literal
+> `Int(0)` — so a compound write to a struct field at a NONZERO offset (`w[idx()].y += 5`) still
+> emitted the index call twice and, with a divergent index, wrote one element's field from a value
+> read at another (the exact C92 corruption, both backends). A second facet: the hoist rewrote the
+> place to a temp BEFORE `validate_write`, silently bypassing #584's value-const / const-field
+> enforcement (`r.v[idx()] += 9` on a `const` field was accepted). Both closed: the hoist now fires
+> for ANY offset (rebuilding `OpGet(elem_ref, offset)` on a once-evaluated element ref for the
+> nonzero case), and it runs `validate_write` on the ORIGINAL place first (`parse_assign_op` gains a
+> `skip_validate` flag to avoid a double-fire). Regression extended with a struct-field-at-offset
+> case. Verified both backends.
+> Owner ruling: evaluate the place
+> exactly once. Decision record: [DESIGN_DECISIONS.md C92](../../DESIGN_DECISIONS.md). Fix in
+> `src/parser/expressions.rs` (`ir_has_user_call` + the `_place` hoist in `parse_assign`, now
+> offset-general + const-check-preserving);
+> regression `tests/scripts/pln102-f2-place-once.loft`. Validated per the loft-codegen method:
+> the double-eval reproduces pre-fix on both backends (instrument-can-fail); post-fix the boundary
+> matrix (count + value + divergence + nested + all five ops + Op-wrapped calls) passes on both
+> backends; the no-user-call corpus is byte-identical (IR + bytecode + native Rust); no leak
+> (`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`); full suite green (only the 3 known heavy-serial
+> flakes + the pre-existing viewer `content()`→`text?` consumer break, both outside F2's `op != "="`
+> path). On `tuxedo-f2-impl-steps`, stacked on arc-D → PR #583; no PR. (The `formal-audit.md`
+> reconciliation table once marked F2 "✅ single-eval" — that was **wrong**: it double-evaluated,
+> re-verified 2026-07-14 on both backends, now genuinely fixed.)
 
 ## The behaviour (verified 2026-07-14, both backends)
 
@@ -102,3 +121,64 @@ unless the owner rules F4 too.
 - [formal-audit.md](formal-audit.md) F2 / F4 — the audit rows.
 - [COMPATIBILITY.md](../../COMPATIBILITY.md) § the error surface — "a would-be-error is first a
   rewrite-to-correct-function," the principle this fix instances.
+
+## Implementation steps (each with its verification)
+
+Grounded in the actual emitted IR (`loft introspect`, 2026-07-14). Current `w[idx()] += 5`:
+
+```
+OpSetInt( OpGetVector(w, 8, n_idx()), 0,                              // write target
+          OpAddInt( OpGetInt(OpGetVector(w, 8, n_idx()), 0), 5 ) )    // read — n_idx() AGAIN
+```
+
+`n_idx()` is embedded in BOTH `OpGetVector` calls. Target after the fix:
+
+```
+__place_1 = n_idx();                                                  // once
+OpSetInt( OpGetVector(w, 8, __place_1), 0,
+          OpAddInt( OpGetInt(OpGetVector(w, 8, __place_1), 0), 5 ) )
+```
+
+**Step 0 — baseline instruments (before touching the compiler).**
+- 0a. Byte-identical corpus `f2-untouched.loft`: one fn per path that must NOT change — `w[1] += 5`
+  (const index), `w[i] += 5` (var index), `s.v += 5` (field), each op `+= -= *= /= %= &= |= ^= <<=
+  >>=`, keyed `h[k] += v`; a `main` runs all. *Verify:* clean on both backends; capture
+  `loft introspect f2-untouched.loft > before.txt`.
+- 0b. Boundary matrix `f2-matrix.loft`: `w[idx()] += 5` (idx prints), nested `m[i()][j()] += 5`, and
+  the divergence probe `w[next()] += 5` where `next()` returns 1 then 2. *Verify (CURRENT/broken):*
+  idx 2×, nested 4×, divergence reads `w[1]` / writes `w[2]` — the recorded before-state.
+
+**Step 1 — prove the target IR standalone (the spec).** The once-eval form is exactly what the
+hand-written `p = idx(); w[p] += 5` already emits. *Verify:* `loft introspect` that source →
+`n_idx()` bound once, both `OpGetVector` read `p`; runs correct on both backends. That is the
+working bytecode proven beside the broken one.
+
+**Step 2 — locate the duplication point.** In `parse_assign_op` (`src/parser/expressions.rs`, the
+`op != "="` compound path), the place `to` (which embeds the `n_idx()` `Call`) is used for the write
+target AND cloned into the read `OpGetInt(to.clone(), …)`. *Verify:* one env-gated `eprintln` at the
+construction fires for `w[idx()] += 5` and shows `to` containing `n_idx()`.
+
+**Step 3 — hoist non-idempotent addressing sub-expressions once.** Before the place is duplicated,
+walk `to`; for each addressing arg (the index arg of `OpGetVector`, a container-producing
+`OpGetField`/call) that is NOT a bare `Var`/`Int`/const, create `__place_N`, prepend
+`Set(__place_N, expr)`, and `substitute_value` (`expressions.rs:224`) the arg → `Var(__place_N)` in
+BOTH the write and read copies. Idempotent args (bare `Var`/`Int`) are left inline. *Verify:*
+`introspect` on `w[idx()] += 5` matches the Step-1 target IR (one `__place_1 = n_idx()`, both
+`OpGetVector` use it).
+
+**Step 4 — byte-identical gate (untouched paths).** `loft introspect f2-untouched.loft > after.txt;
+diff before.txt after.txt`. *Verify:* EMPTY diff — interp IR AND native Rust — for const/var index,
+field, keyed. (Re-run after `cargo fmt`.)
+
+**Step 5 — boundary matrix, value + count, both backends.** Re-run `f2-matrix.loft`. *Verify on
+`--interpret` AND `--native`:* `w[idx()] += 5` → idx ONCE, `w[1]==25`; nested → each level once;
+divergence `w[next()] += 5` → read and write hit the SAME slot (`w[1]`), value correct.
+`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK` clean — a container-producing-call place binds a heap
+VIEW to `__place_N`; confirm it is a borrow (not owned), so not freed / not double-freed.
+
+**Step 6 — conversion set + full suite + graduate.** *Verify:* full `cargo nextest` green on both
+backends; `log()` any in-tree program whose place-fn call count changed (expected ≈ 0 — a
+side-effecting place is rare/unintentional). Graduate the matrix to `tests/scripts/pln102-f2-place-once.loft`.
+
+**Done when:** Steps 4 (empty diff) AND 5 (matrix correct, both backends, leak-clean) both hold, and
+the full suite is green. Effort **S** — one hoist at one chokepoint, no new op, no runtime change.

@@ -2276,6 +2276,100 @@ pub fn warn_dead_stores(
     }
 }
 
+/// @PLN102 arc C step 4 — the FOLD lint (C5.2).  For every `#superseded "Y"` symbol X in loft's
+/// OWN code — the stdlib (`STD_SOURCE`, so loft's `make ci` enforces its stdlib folds) or the entry
+/// project (`MAIN_SOURCE`, a library author's own lib / a user's program); a third-party dependency
+/// (source `2..`) is excluded, since a consumer cannot fix its fold: (a) the successor `Y` must
+/// RESOLVE — an unresolvable successor is a hard
+/// `Level::Error`, so a *dangling* steer never ships; (b) X's body must CALL `Y` — X is a shim over
+/// the successor, not independent code — else an advisory `Level::Warning` (promote to a hard
+/// `make ci` check once the surface is clean).  Every steer thus ships with its fold, or the lint
+/// fires.  INERT until a symbol is actually marked `#superseded`, so the suite is byte-identical.
+/// Populates `diags`; the caller renders them with the other diagnostics.
+pub fn superseded_fold_diagnostics(
+    data: &Data,
+    diags: &mut crate::diagnostics::Diagnostics,
+    fallback_file: &str,
+) {
+    for d_nr in 0..data.definitions() {
+        let def = data.def(d_nr);
+        let succ = def.superseded();
+        // Scope to loft's OWN code — the stdlib (`STD_SOURCE`, checked by loft's `make ci`) or the
+        // entry project being built (`MAIN_SOURCE`, a library author's own lib / a user's program).
+        // A THIRD-PARTY dependency (source `2..`) is excluded: a consumer cannot fix a dependency's
+        // fold, so it must not error their compile (the dependency's author catches it in their own
+        // build, where their lib is the entry).
+        let own = def.source == crate::data::STD_SOURCE || data.source_is_owned(def.source);
+        if succ.is_empty() || !own {
+            continue;
+        }
+        let pos = def.position();
+        let file = if pos.file.is_empty() {
+            fallback_file
+        } else {
+            pos.file.as_str()
+        };
+        let shown = def.display_name();
+        // (a) the successor must resolve — as a free fn `n_<succ>`, or (if X is a
+        // method) the same-receiver method `t_<LEN><Type>_<succ>`.  Each tried in
+        // X's own source, then the stdlib (`STD_SOURCE`, visible everywhere).
+        let mut candidates = vec![format!("n_{succ}")];
+        if let Some(prefix) = def.method_type_prefix() {
+            candidates.push(format!("{prefix}{succ}"));
+        }
+        let y_nr = candidates
+            .iter()
+            .map(|name| {
+                let n = data.source_nr(def.source, name);
+                if n == u32::MAX {
+                    data.source_nr(crate::data::STD_SOURCE, name)
+                } else {
+                    n
+                }
+            })
+            .find(|&n| n != u32::MAX)
+            .unwrap_or(u32::MAX);
+        if y_nr == u32::MAX {
+            diags.add_at(
+                crate::diagnostics::Level::Error,
+                &format!(
+                    "`#superseded \"{succ}\"` on `{shown}`: no such successor `{succ}` — a \
+                     superseded symbol must name a real replacement, or a dangling steer would ship"
+                ),
+                file,
+                pos.line,
+                pos.pos,
+            );
+            continue;
+        }
+        // (b) the shim check — X's body must CALL Y (fold the old form onto the new).
+        // For a GENERIC successor the body's call targets the monomorphised
+        // instantiation (`t_<Type>_sum`), not the `n_sum` template `y_nr` resolved to,
+        // so also match by the user-facing name (both render as `sum`). Gate that loose
+        // match on the successor ACTUALLY being generic, so an unrelated same-named
+        // symbol can't masquerade as the fold — a non-generic successor must be the
+        // direct call to `y_nr`.
+        let succ_generic = matches!(data.def(y_nr).def_type, crate::data::DefType::Generic);
+        let folds = def.code.any_node(&mut |n| {
+            matches!(n, Value::Call(d, _)
+                if *d == y_nr || (succ_generic && data.def(*d).display_name() == succ))
+        });
+        if !folds {
+            diags.add_at(
+                crate::diagnostics::Level::Warning,
+                &format!(
+                    "`{shown}` is `#superseded` by `{succ}` but its body never calls `{succ}` — \
+                     fold it onto the successor (reimplement `{shown}` as a shim over `{succ}`) so \
+                     the steer ships with its fold"
+                ),
+                file,
+                pos.line,
+                pos.pos,
+            );
+        }
+    }
+}
+
 /// @PLN90 W5 — the ENFORCED copy lint (`LOFT_WARN_COPIES`). Routes every **Avoidable** unbound
 /// structure copy (a still-live value duplicated where a borrow/move would remove it — the
 /// worklist) through the normal `Level::Warning` diagnostics channel, so it surfaces during a

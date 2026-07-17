@@ -124,6 +124,38 @@ cell that can't compute shows null and never stops the other cells. A fault is *
 degrades one value, never the whole run. The same holds for every uncomputable step (an
 out-of-bounds index, a deref of an absent value): null, continue.
 
+**Float `==` is exact, never epsilon.** For two *non-null* floats, `==`/`!=` compare the IEEE
+values exactly — `1.0 == 1.0000000001` is **false**, `0.1 + 0.2 == 0.3` is **false** (the sum is
+`0.30000000000000004`), and `!=` is the exact complement of `==`. There is no tolerance band. The
+ordering operators (`<` `<=` `>` `>=`) agree with it: among non-null floats they form a **total
+order** — NaN cannot occur (it is represented as null, D-op-null-1), so exactly one of `a < b`,
+`a == b`, `a > b` holds for every pair, and no value is ever both `<` and `==` its neighbour.
+`single` (32-bit) behaves the same. Verified both backends.
+
+### Integer division and modulo — truncate toward zero, dividend-sign remainder
+
+```
+  (E-Op-IntDivMod)   refines (E-Op) for integer `/` and `%`: `/` TRUNCATES toward zero and
+                     `%` returns the remainder with the SIGN OF THE DIVIDEND, so
+                     `a == (a / b) * b + a % b` holds for every non-zero `b`:
+                       -7 / 2  == -3      7 / 2  == 3       -7 / -2 == 3
+                       -7 % 2  == -1      7 % -2 == 1       -7 % -2 == -1
+                     (E-Uncomp still governs `b = 0`: both `/` and `%` yield null.)
+```
+
+**In words.** Integer `/` drops the fractional part toward zero rather than flooring toward
+`-∞` — `-7 / 2` is `-3`, not `-4` — and `%` always carries the sign of the **dividend**, its
+matching remainder (`-7 % 2` is `-1`, `7 % -2` is `1`). This is the C/Rust convention, one of
+two legitimate, self-consistent choices (the other floors, as Python/Ruby do) — so it is a
+place a backend could silently diverge (Rust's native `/`/`%` already truncate; an
+interpreter or a future backend implemented against a floor-toward-`-∞` intuition would not),
+which is exactly why it belongs in the shared contract rather than being left "the obvious
+result when it fits." The stdlib `floor_mod(a, b)` is the companion for the cyclic case that
+genuinely wants the divisor's sign and a `[0, b)` result — `floor_mod(-7, 2) == 1` — so
+circular indexing (`grid[(i - 1).floor_mod(w)]`) never silently reads a negative index the
+way a bare `%` would. [DESIGN_DECISIONS.md C94](../DESIGN_DECISIONS.md) (commit `a2eaba66`);
+verified both backends.
+
 ### `??` — a non-null fallback (no trap mode)
 
 ```
@@ -173,6 +205,34 @@ place first (left-to-right), then its right side, then updates the store; a sequ
 finished statement; an `if` picks the branch
 its (already-evaluated) condition selected. Standard — pinned here only so both backends
 share them.
+
+### Compound assignment — the place evaluates exactly once
+
+```
+  (E-Asgn-Compound)   ⟨place op= e, σ⟩ steps as:
+                      1. reduce place's ADDRESSING sub-expressions — index exprs, a
+                         container-producing call — to values, EXACTLY ONCE, binding
+                         each to a hoisted temp slot t̄ (left-to-right, by E-Left);
+                      2. ⟨t̄, σ⟩ → ⟨v₁, σ⟩                       (read through t̄)
+                      3. ⟨e, σ⟩ → ⟨v₂, σ⟩                       (reduce the RHS)
+                      4. ⟨v₁ op v₂, σ⟩ → ⟨v, σ⟩ or ⟨null, σ⟩    (by E-Op / E-Uncomp)
+                      5. σ' = σ[t̄ ↦ v]                          (write through the SAME t̄)
+                      ⟨place op= e, σ⟩ → ⟨v, σ'⟩
+```
+
+**In words.** `place op= e` is not the naive desugaring `place = place op e` — that would
+reduce `place`'s addressing sub-expressions **twice** (once to read, once to write), and if
+one of them is side-effecting or divergent (`w[next()] += 5` where `next()` returns 1 then 2),
+the read and the write land on **different slots** — a plausible-looking, silently wrong
+result with no error. Instead, the addressing sub-expressions — an index, or a call that
+produces the container/struct being indexed — are evaluated **exactly once** and bound to a
+temp; both the read and the write go through that same temp. This holds for **every** place a
+compound assignment can target, including a struct field at a nonzero offset reached through
+a call-index (`w[idx()].y += 5` calls `idx()` once, and reads/writes the same element's `y`)
+and nested indices (`m[i()][j()] += n` evaluates `i()` once and `j()` once, not per read/write
+or per nesting level). Contrast `E-Asgn`: a plain `x = v` already writes its place once, so
+there is no double-eval to close. [DESIGN_DECISIONS.md C92](../DESIGN_DECISIONS.md); verified
+both backends — `tests/scripts/pln102-f2-place-once.loft`.
 
 ---
 

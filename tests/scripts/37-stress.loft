@@ -41,7 +41,7 @@ fn main() {
   // 0 + 1 + ... + 99 = 4950
   assert(sum == 4950, "vector int sum {sum}");
   for x in v { x#remove; }
-  assert(! (v[0] ?? null), "vector int empty after remove");
+  assert(!(v[0] ?? null), "vector int empty after remove");
   // Three fill-and-clear cycles to exercise store recycling.
   for cycle in 0..3 {
     v += [for i in 0..50 { i }];
@@ -50,18 +50,18 @@ fn main() {
     assert(cnt == 50, "vector cycle {cycle} count {cnt}");
     for x in v { x#remove; }
   }
-  assert(! (v[0] ?? null), "vector empty after 3 cycles");
+  assert(!(v[0] ?? null), "vector empty after 3 cycles");
   // Single-element: remove, reinsert, remove again.
   sv = [42];
   assert(sv[0] == 42, "single element read");
   for x in sv { x#remove; }
-  assert(! (sv[0] ?? null), "single element removed");
+  assert(!(sv[0] ?? null), "single element removed");
   sv += [99];
   assert(sv[0] == 99, "single reinserted");
   for x in sv { x#remove; }
   // Out-of-bounds access must return null, not crash.
   bounds = [10, 20, 30];
-  assert(! (bounds[999] ?? null), "vector oob null when defended");
+  assert(!(bounds[999] ?? null), "vector oob null when defended");
   for x in bounds { x#remove; }
   // Append-remove-append: verify buffer reuse.
   for i in 0..20 { v += [i * i]; }
@@ -81,7 +81,7 @@ fn main() {
   // "item0".."item9" = 5 chars × 10, "item10".."item99" = 6 chars × 90 → 590
   assert(tlen == 590, "text vector total length {tlen}");
   for s in tv { s#remove; }
-  assert(! (tv[0] ?? null), "text vector empty after remove");
+  assert(!(tv[0] ?? null), "text vector empty after remove");
   // Long strings (27 chars each): build 30, verify, free.
   alphabet = "abcdefghijklmnopqrstuvwxyz";
   tv2 = [for i in 0..30 { "{alphabet}{i}" }];
@@ -236,7 +236,7 @@ fn main() {
   ];
   order = "";
   for ir in idb_c.rows {
-    if!ir#first { order += ","; }
+    if !ir#first { order += ","; }
     order += "{ir.id}:{ir.name}"
   }
   // id ascending; within same id, name descending: beta > alpha

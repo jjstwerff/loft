@@ -475,7 +475,7 @@ pub fn assign_cells(snap: CellSnap) -> vector<integer> {
         break;
       }
     }
-    if!joined { parent[ac_s] = ac_s; }
+    if !joined { parent[ac_s] = ac_s; }
   }
   parent
 }

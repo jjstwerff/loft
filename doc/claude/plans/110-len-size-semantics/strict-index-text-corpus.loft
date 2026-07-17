@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN110 3a — the TEXT strict-index units lint corpus (DEFAULT ON, opt-out
+// LOFT_NO_STRICT_INDEX_TEXT).  `len(text)` is a character count while `text[i]`
+// is byte-indexed, so `for i in 0..len(s) { s[i] }` walks char-count byte
+// positions and misreads multi-byte text.  Each function is FIRE (must warn) or
+// OK (silent).  The oracle is tests/strict_index_text_lint.rs.
+
+// FIRE: a loop var bounded by len(s) indexing that same text s (`s[i]` on line 15 warns).
+fn fire_len_text_byte_index() {
+  s = "café";
+  hits = 0;
+  for i in 0..len(s) {
+    if s[i] == 'é' { hits += 1; }
+  }
+  assert(hits >= 0, "runs (advisory lint, not an error)");
+}
+
+// OK: character iteration — the correct way to visit characters.
+fn ok_char_iteration() {
+  s = "café";
+  n = 0;
+  for c in s {
+    if c == 'é' { n += 1; }
+  }
+  assert(n == 1, "one é");
+}
+
+// OK: a genuine byte walk uses size(s) (byte count), here via byte_at.
+fn ok_byte_walk_with_size() {
+  s = "café";
+  lead = 0;
+  for i in 0..size(s) {
+    if s.byte_at(i) == 195 { lead += 1; }
+  }
+  assert(lead == 1, "one é lead byte");
+}
+
+// OK: indexing a vector bounded by len(vector) — unaffected (this lint is text-only).
+fn ok_vector_index() {
+  v = [10, 20, 30];
+  total = 0;
+  for i in 0..len(v) { total += v[i]; }
+  assert(total == 60, "vector sum");
+}
+
+fn main() {
+  fire_len_text_byte_index();
+  ok_char_iteration();
+  ok_byte_walk_with_size();
+  ok_vector_index();
+}

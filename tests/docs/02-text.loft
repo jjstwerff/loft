@@ -23,13 +23,12 @@ fn main() {
   a = "1" + "2";
   assert("'{a:4}'" == "'12  '", "Formatting text");
   assert(len(a + "123") == 5, "Text length");
-  // 'len()' counts bytes, not visible characters.
-  // An emoji like '😃' takes 4 bytes in UTF-8, a heart symbol '♥' takes 3,
-  // and every plain ASCII letter takes exactly 1. Keep this in mind whenever
-  // you use len() to check how "long" something is to a human reader.
-  assert(len("😃") == 4, "Emoji byte length");
-  assert(len("♥") == 3, "Heart byte length");
-  assert(len("abc") == 3, "ASCII byte length");
+  // 'len()' counts characters (Unicode code points), the human count: an emoji
+  // like '😃' is one character, a heart symbol '♥' is one, and each ASCII letter
+  // is one. For the UTF-8 byte length (bounds checks, byte indexing) use 'size()'.
+  assert(len("😃") == 1, "Emoji is one character");
+  assert(len("♥") == 1, "Heart is one character");
+  assert(len("abc") == 3, "ASCII character count");
   // ## Reading individual characters
   // Square brackets with a single byte index give you the character at that
   // position. For plain ASCII text every byte is one character, so indexing
@@ -51,7 +50,7 @@ fn main() {
   // '-1' means "stop one byte before the very last byte". Combined with a
   // start offset this lets you trim a known suffix without knowing the exact length.
   txt = "12😊🙃45";
-  assert(txt[2..- 1] == "😊🙃4", "UTF-8 sub-string by byte range");
+  assert(txt[2.. - 1] == "😊🙃4", "UTF-8 sub-string by byte range");
   // ## Iterating over characters
   // A 'for' loop over a text value visits one character at a time,
   // even when characters span multiple bytes. Two loop helpers give you
@@ -61,14 +60,12 @@ fn main() {
   // This makes it easy to build a byte-offset map or to collect characters
   // starting from a specific position.
   result = "";
-  positions =[];
-  nexts =[];
+  positions = [];
+  nexts = [];
   for c in "Hi 😊!" {
-    positions +=[c#index];
-    nexts +=[c#next];
-    if c#index >= 3 {
-      result += c;
-    }
+    positions += [c#index];
+    nexts += [c#next];
+    if c#index >= 3 { result += c; }
   }
   assert(result == "😊!", "Character iteration was {result}");
   assert("{positions}" == "[0,1,2,3,7]", "Character positions was {positions}");

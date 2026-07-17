@@ -991,8 +991,8 @@ fn auto_native_text_return_shapes() {
         "fn main() {\n\
          \x20   r = greet(\"x\", \"y\", \"z\");\n\
          \x20   assert(r == \"x:y:z\", \"assignment (dest-mode) shape, got {r}\");\n\
-         \x20   d = greet(\"x\");\n\
-         \x20   assert(d == \"x::\", \"defaulted-null args, got {d}\");\n\
+         \x20   d = greet(\"x\", \"\", \"\");\n\
+         \x20   assert(d == \"x::\", \"explicit empty args (defaulted-null lenience removed), got {d}\");\n\
          \x20   n = \"[\" + greet(\"a\", \"b\", \"c\") + \"]\";\n\
          \x20   assert(n == \"[a:b:c]\", \"nested (non-dest) shape, got {n}\");\n\
          }",

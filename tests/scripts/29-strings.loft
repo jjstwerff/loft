@@ -106,7 +106,7 @@ fn test_strange_if() {
 fn parse_ident(s: text) -> integer {
   for t in 0..300 {
     l = s[t];
-    if!l.is_alphanumeric() and l != '_' { return t; }
+    if !l.is_alphanumeric() and l != '_' { return t; }
   }
   return 0;
 }

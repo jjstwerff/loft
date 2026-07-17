@@ -577,6 +577,25 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
+// @PLN102 (routing consumer): a call MISSING a function-typed argument was silently filled
+// with a broken `()` — a SIGSEGV inside stdlib `len` several frames from the bad call, and it
+// corrupted the earlier arguments. There is no valid "empty function" to fill, so a missing
+// fn-typed param with no default is now a too-few-arguments error at parse time. (The general
+// too-few check — a missing scalar fills null, a vector empty — is a follow-up; it needs a
+// user-param vs promoted-return-buffer distinction. See code-eval-followups.md.)
+#[test]
+fn call_missing_fn_typed_arg_is_rejected() {
+    code!(
+        "fn five(a: integer, b: text, cb: fn(integer)) -> integer { cb(a); b.len() }
+fn test() { five(1, \"x\"); }"
+    )
+    .error(
+        "missing argument for parameter 'cb' of `five` — the call supplies too few arguments \
+(add it, or give the parameter a default `= …`) \
+at call_missing_fn_typed_arg_is_rejected:2:26",
+    );
+}
+
 // ── map / filter / reduce ─────────────────────────────────────────────────────
 
 #[test]
@@ -9135,7 +9154,7 @@ fn p140_vector_range_slice_auto_materialises_to_vector() {
     // to a local now auto-materialises into a `vector<T>` instead of
     // leaving the local typed as `iterator<T>`.  The slice's elements
     // get copied into a fresh vector at the assignment site, and
-    // downstream uses (`sum_of(s)` here) see a normal `vector<integer>`.
+    // downstream uses (`sum(s, 0)` here) see a normal `vector<integer>`.
     // The old shape of this test asserted the reverse — that the
     // slice-to-vector mismatch was rejected with a diagnostic — but a
     // working materialisation is a strictly better user experience and
@@ -9145,7 +9164,7 @@ fn p140_vector_range_slice_auto_materialises_to_vector() {
         "fn run() -> integer {
     v = [10, 20, 30, 40, 50];
     s = v[1..4];
-    sum_of(s)
+    sum(s, 0)
 }"
     )
     .expr("run()")
@@ -9201,7 +9220,7 @@ fn inc02_vector_comprehension_works() {
     code!(
         "fn run() -> integer {
     v = [1, 2, 3, 4, 5, 6];
-    sum_of([for x in v if x > 3 { x }])
+    sum([for x in v if x > 3 { x }], 0)
 }"
     )
     .expr("run()")

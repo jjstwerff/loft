@@ -68,7 +68,7 @@ fn test_pln22_shared_variants() {
   // comparison RHS resolves by the LHS enum.
   a = Light.Green;
   c = Berry.Red;
-  assert(! (a == Red), "a (Green) != Light::Red");
+  assert(!(a == Red), "a (Green) != Light::Red");
   assert(c == Red, "c == Berry::Red");
 
   // return position: direct and if-branch tail.
@@ -89,5 +89,5 @@ fn test_pln22_shared_variants() {
   // qualified construction + qualified `==`, per enum (both `::` and `.`).
   assert(Light::Red == Light.Red, ":: and . qualified forms agree");
   assert(Berry::Red == Berry::Red, "Berry::Red == Berry::Red");
-  assert(! (Light::Red == Light::Green), "Light::Red != Light::Green");
+  assert(!(Light::Red == Light::Green), "Light::Red != Light::Green");
 }

@@ -248,6 +248,27 @@ pub fn count(hash_ref: &DbRef, stores: &[Store]) -> u32 {
     total
 }
 
+/// Byte size of a hash's bucket table — the full table, holes included
+/// (@PLN110 `size`).
+///
+/// The hash's own allocation is the bucket array: `elms` slots, each a 4-byte
+/// `u32` record-id (an empty slot is a hole — a zero rec-id — and still counts,
+/// because open addressing's spare capacity IS the format). Allocation-local:
+/// the pointed-to entry records live in separate allocations and are NOT
+/// counted. Excludes the two reserved header words (record header + seed),
+/// mirroring `size(vector)` counting content, not the length prefix. Returns 0
+/// for an uninitialised hash (no claim allocated yet).
+#[must_use]
+pub fn table_bytes(hash_ref: &DbRef, stores: &[Store]) -> u32 {
+    let claim = keys::store(hash_ref, stores).get_u32_raw(hash_ref.rec, hash_ref.pos);
+    if claim == 0 {
+        return 0;
+    }
+    let room = keys::store(hash_ref, stores).record_words(claim);
+    let elms = (room - 2) * 2;
+    elms * 4
+}
+
 /// C60 Step 1: collect every live record's record-number from a hash.
 ///
 /// Walks the hash's internal bucket array — the same traversal pattern

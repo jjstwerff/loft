@@ -29,7 +29,7 @@ fn main() {
   iter_src = [1, 3, 6, 9];
   b = "";
   for v in iter_src {
-    if!v#first { b += " "; }
+    if !v#first { b += " "; }
     b += "{v#index}:{v}";
   }
   assert(b == "0:1 1:3 2:6 3:9", "iteration with #index");

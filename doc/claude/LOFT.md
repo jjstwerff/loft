@@ -1358,6 +1358,18 @@ if h[key] { /* found */ }
 elem = idx[42, "foo"]    // null if not present
 ```
 
+**All keyed-collection subscripting is by KEY, never by position (C99).** On a
+`sorted` / `index` / `hash`, `coll[k]` looks up the element whose key **equals**
+`k` — not the element at position `k` — so `s[20]` finds key 20 and `s[1]`
+returns `null` when there is no key 1 (it is not position 1). On an ordered
+`sorted` / `spatial`, a **range** subscript is likewise key-addressed: `s[lo..hi]`
+is a **key-range** query (`s[15..35]` selects the elements whose key is in
+`[15, 35)`, not positions 15..35), and `spatial` uses the same form for proximity
+(`xs[(x,y)..(x2,y2)]`). This is the same key-addressing as `s[k]` and
+`s[k] = null` — it only *looks* like a vector's positional slice `v[1..3]`.
+**Porting a positional `v[1..3]` to a sorted changes its meaning**; use the key
+range you want, or iterate and count positions yourself.
+
 **Gotcha (INC#2) — vector has a richer literal/build API than the keyed
 collections.** All four collection types share `+=`, `for` iteration
 (hash iterates via its internal ordered index), and subscript removal
@@ -1948,7 +1960,7 @@ if !result.ok() { println("delete failed"); }
 ```
 
 `FileResult` variants: `Ok`, `NotFound`, `PermissionDenied`, `IsDirectory`,
-`NotDirectory`, `Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`,
+`Other`.  Used by `delete`, `move`, `mkdir`, `mkdir_all`,
 `set_file_size`.
 
 There are no hidden exception paths — every function's failure mode is visible

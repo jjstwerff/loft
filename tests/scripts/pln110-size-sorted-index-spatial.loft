@@ -1,0 +1,64 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN110 sub-arc 1d — `size` for the remaining keyed collections.
+//
+//   * `sorted<T[key]>` shares vector's length-prefixed BUFFER, so its size is a
+//     real aggregate: element count × the element node's in-buffer stride
+//     (`size(sorted) == len × size(node)`), exactly like `size(vector)`.
+//   * `index<T[key]>` (red-black tree) and `spatial<T[keys]>` (radix / Morton
+//     tree) keep their ordering as bookkeeping embedded IN each element record —
+//     there is NO separate structure allocation to sum, so `size` reports a
+//     SINGLE node record's size (a compile-time constant, INDEPENDENT of the
+//     element count). An index node record is the element plus its red-black
+//     bookkeeping (left / right / colour).
+//
+// Values verified against both backends (interpret + native) during Phase 1.
+
+struct K {
+  id: integer,
+  v: integer,
+}
+struct P {
+  x: integer,
+  y: integer,
+  tag: integer,
+}
+
+fn main() {
+  // --- sorted: a real buffer, size scales with the element count ---
+  s: sorted<K[id]> = [];
+  s += K { id: 1, v: 10 };
+  s += K { id: 2, v: 20 };
+  s += K { id: 3, v: 30 };
+  assert(size(s) == 3 * size(K { id: 0, v: 0 }), "sorted = len × node record: {size(s)}");
+  assert(size(s) == len(s)*size(K { id: 0, v: 0 }), "sorted scales with len: {size(s)}");
+
+  // --- index: a single node record, INDEPENDENT of the element count ---
+  ix: index<K[id]> = [];
+  ix += K { id: 1, v: 10 };
+  ix += K { id: 2, v: 20 };
+  two = size(ix);
+  ix += K { id: 3, v: 30 };
+  ix += K { id: 4, v: 40 };
+  ix += K { id: 5, v: 50 };
+  assert(size(ix) == two, "index size is one record — unchanged as len grows: {size(ix)} vs {two}");
+  assert(size(ix) == size(K { id: 0, v: 0 }), "index = a single node record: {size(ix)}");
+  assert(
+    size(ix) > 0 && len(ix) == 5,
+    "one node record, 5 live elements: size={size(ix)} len={len(ix)}"
+  );
+
+  // an empty index still reports the node record size (the type's footprint)
+  ie: index<K[id]> = [];
+  assert(
+    size(ie) == size(K { id: 0, v: 0 }),
+    "empty index reports the node record size: {size(ie)}"
+  );
+
+  // --- spatial: same — a single node record, independent of the element count ---
+  sp: spatial<P[x, y]> = [];
+  sp += P { x: 1, y: 2, tag: 100 };
+  sp += P { x: 3, y: 4, tag: 200 };
+  assert(size(sp) == size(P { x: 0, y: 0, tag: 0 }), "spatial = a single node record: {size(sp)}");
+}

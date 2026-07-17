@@ -12,7 +12,7 @@ fn test_pack_u8_roundtrip() {
   web::pack_u8(0x41);
   web::pack_u8(0x42);
   s = web::pack_take();
-  assert(s.len() == 2, "len 2, got {s.len()}");
+  assert(s.size() == 2, "len 2, got {s.size()}");
   assert(s[0] == 'A', "byte 0 = A");
   assert(s[1] == 'B', "byte 1 = B");
 }
@@ -21,7 +21,7 @@ fn test_pack_u16_le() {
   web::pack_reset();
   web::pack_u16_le(0x4142);
   s = web::pack_take();
-  assert(s.len() == 2, "len 2, got {s.len()}");
+  assert(s.size() == 2, "len 2, got {s.size()}");
   // little-endian: low byte first
   assert(s[0] == 'B', "byte 0 = B (0x42)");
   assert(s[1] == 'A', "byte 1 = A (0x41)");
@@ -31,7 +31,7 @@ fn test_pack_u32_le() {
   web::pack_reset();
   web::pack_u32_le(0x41424344);
   s = web::pack_take();
-  assert(s.len() == 4, "len 4, got {s.len()}");
+  assert(s.size() == 4, "len 4, got {s.size()}");
   assert(s[0] == 'D', "byte 0 = D");
   assert(s[3] == 'A', "byte 3 = A");
 }
@@ -42,6 +42,6 @@ fn test_pack_reset_clears() {
   s1 = web::pack_take();
   web::pack_reset();
   s2 = web::pack_take();
-  assert(s1.len() == 1, "first take len 1");
+  assert(s1.size() == 1, "first take len 1");
   assert(s2.len() == 0, "after reset, len 0, got {s2.len()}");
 }

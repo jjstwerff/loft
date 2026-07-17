@@ -16,7 +16,7 @@ struct Data {
 }
 
 fn add(r: &Data = null, val: integer) {
-  if!r {
+  if !r {
     r = Data { num: 0 };
   }
   r.num += val;
@@ -26,7 +26,7 @@ fn add(r: &Data = null, val: integer) {
 // A second shape: conditional write-back with NO trailing vector append (no
 // `_elm_N` slot reuse) — proves the leak was the buffer's null-init, not the reuse.
 fn bump(r: &Data = null, val: integer) {
-  if!r {
+  if !r {
     r = Data { num: 0 };
   }
   r.num += val;

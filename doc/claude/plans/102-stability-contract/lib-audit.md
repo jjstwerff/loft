@@ -117,14 +117,14 @@ Beyond the null-sentinel cluster above:
 | # | Item | Why permanent-if-frozen | Fix | Ref |
 |---|---|---|---|---|
 | H1 | **Float `==`/`!=` are approximate (fixed epsilon) but `<`/`<=` are exact** | `a<b` **and** `a==b` both true near the boundary; sub-epsilon values collapse non-transitively; a float `hash`/`sorted` key hashes on exact bits but compares fuzzy | make `==` exact IEEE; expose `approx_eq(a,b,eps)` as a named fn | `01_code.loft:344,548` |
-| H2 | **`len(text)` = BYTES, `size(text)` = chars** (inverted from every mainstream lang); text indexing/`find` are byte-addressed while `size`/`for c in s` are char-based | `for i in 0..s.len()` / `s[i]` silently wrong on any non-ASCII input | make `len(text)`=chars + `byte_len` for bytes, or add a char-indexed `char_at`; decide + freeze consciously | `01_code.loft:736,744,765` |
+| H2 | ~~**`len(text)` = BYTES, `size(text)` = chars** (inverted from every mainstream lang)~~ **DONE via [@PLN110](../110-len-size-semantics/README.md)** — flipped: `len(text)`=character count, `size(text)`=byte footprint (and `size` is now a real allocation-local memory primitive on every structure). Byte indexing/`find`/slices stay byte-addressed and pair with `size`; a `for i in 0..len(s){s[i]}` units error is caught by the default-on strict-index lint. `len(character)` kept = UTF-8 byte width (owner call). Validated both backends: full suite 2998/2998, both top-risk consumers correct (`glb.loft` binary chunk length; `lib/markdown` multi-byte render). Republish of the affected registry libs is the only user-gated tail. | ~~silently wrong on non-ASCII~~ | `01_code.loft` (`len`/`size`), `03_text.loft` |
 | H3 | ~~**`File.write()` returns void**~~ **DONE** — now returns `FileResult` (`Ok`/`Other`), like delete/move/mkdir; a failed write is observable (`f.write(s).ok()`); discarding callers unaffected. Runtime `Stores::write_file` returns bool; loft `write` wraps it. Both backends; test scripts/561. | ~~unobservable~~ | `02_files.loft` `write` |
 | H4 | ~~`content()`/`read_bytes()`/`list_dir()` return `""`/`[]` for a missing file~~ **DONE** — now `text?`/`vector<u8>?`/`vector<text>?`; a MISSING file/dir reads NULL, an EMPTY-present one reads `""`/`[]` (the honest-`τ?` C90 pattern). Discharge with `?? ""`/`?? []`. Fixed `vector<T>? == null` (vec_null peels Optional). Both backends; tests scripts/430,562. | ~~silent~~ | `02_files.loft` |
-| H5 | **JSON numbers are f64-backed** — a JSON integer > 2⁵³ silently rounds; `as_long()` truncates it | silent precision loss on IDs / ns-timestamps, frozen | integer-preserving JSON number variant, or documented-lossy | `06_json.loft:21,93` |
-| H6 | **All-quantified classifiers return `true` on `""`** (`is_numeric`/`is_alphabetic`/…) | `if input.is_numeric()` accepts empty input | decide the empty case (most want `false`) + regression test | `03_text.loft:70–139` |
-| H7 | **`text as integer/single/float` silently yields null / NaN** on unparseable input | `"abc" as integer` → null, `"1.2.3" as float` → NaN propagates silently | a checked parse (`try_parse` → null, never NaN) as the blessed path | `fill.rs:466,472,478` |
-| H8 | **`sorted[a..b]` is a KEY-range query sharing vector's positional-slice syntax** (INC#2) | a vector→sorted port silently reads the wrong elements | reject positional-shaped slices on sorted, or make key-range slicing syntactically distinct | INC#2; `LOFT.md` |
-| H9 | **`FileResult` advertises error variants that never fire** (`PermissionDenied`, `IsDirectory`, …) | the *frozen error identity* mismatches reality; a perm-denied delete returns `Other` | map OS errors to the variants, or remove the aspirational ones | `02_files.loft:38–40` |
+| H5 | **JSON numbers are f64-backed** — a JSON integer > 2⁵³ silently rounds even into a *known-type* `integer` field (verified `Rec.parse` → `id` corrupted) | silent precision loss on IDs / ns-timestamps, frozen | **ROUTED → [@PLN109](../109-json-lexer-unification/README.md)** (2026-07-17): root-caused as fallout of the early typed/generic JSON *merge* — the hand-rolled `crate::json` scanner flattens every number to f64 *before* the field type is seen. Owner-directed fix: retire that scanner, re-drive JSON tokenization on loft's own lexer (which already distinguishes int/float), **no hybrid**; H5 preserved-to-i64 falls out. Serialize already exact; deser-only; no i128. | `06_json.loft`; @PLN109 |
+| H6 | ✅ **FIXED (2026-07-16)** — the 7 all-quantified text classifiers now return `false` on `""` (was vacuously `true`) | closed the `if input.is_numeric()` accepts-empty footgun; empty→false matches Python's `"".isdigit()`/`.isalpha()`/`.isspace()` | DONE — an `if self.len()==0 { return false }` guard on each of the 7; regression in `tests/scripts/03-text.loft`; verified both backends; ZERO in-tree callers relied on the vacuous-true | `03_text.loft:74–146` |
+| H7 | ~~**`text as integer/single/float` silently yields null / NaN**~~ **DONE — already closed by @PLN25 N-Parse** (verified 2026-07-17, both backends): a text parse `as integer` types **`integer?`** (`as float`→`float?`, `as single`→`single?`), and storing it non-null is a **compile error** (`n: integer = "abc" as integer` → *"a text parse `as integer` may fail — use `integer?` … or `?? <default>`"*). The blessed checked path IS `s as integer?` / `s as integer ?? d`; `"1.2.3" as float` → null (discharged), never a silent NaN. Exactly the proposed fix, already shipped. | ~~silent~~ | `fill.rs:466,472,478` |
+| H8 | ~~**`sorted[a..b]` is a KEY-range query sharing vector's positional-slice syntax**~~ **CONSCIOUSLY ACCEPTED ([C99](../../DESIGN_DECISIONS.md), 2026-07-17)** — sorted's subscript is *uniformly* KEY-addressed: `s[k]` single-lookup, `s[k]=null` removal, and `s[a..b]` key-range are ONE model (verified `s[20]`→key20, `s[1]`→null, so the SINGLE subscript is already key-addressed, not positional). The audit's "reject positional-shaped slices" is incoherent — it can't reject the range while keeping the key-addressed single lookup, and it breaks `spatial`'s deliberate proximity syntax. The cross-type footgun (visually like vector's positional slice) is inherent to key-addressing and is documented (LOFT.md Gotcha) + golden-locked (`sorted_subscript_is_key_addressed_not_positional`, keys far from positions), not removed. | ~~trap~~ deliberate + consistent | C99; `LOFT.md` |
+| H9 | ~~**`FileResult` advertises error variants that never fire**~~ **DONE (2026-07-17, both backends)** — the classifier is now real: `delete`/`move`/`mkdir`/`mkdir_all` map the OS error to `NotFound` / `PermissionDenied` / `IsDirectory` / `Other` (shared chokepoint `codegen_runtime::fs_classify` → integer code → the loft `fs_result` mapper; verified `delete(dir)`→IsDirectory + read-only-dir→PermissionDenied, both backends). The one variant that could **not** be produced portably — `NotDirectory` (needs `ErrorKind::NotADirectory`, unstable before Rust 1.83, and `codegen_runtime` is recompiled by the user's rustc for `--native`) — was **removed** rather than frozen as a lie. Codes are decoupled from the enum's declaration order (explicit `match`). Regression extended in `tests/scripts/42-file-result.loft`. | ~~frozen lie~~ | `02_files.loft` |
 
 ---
 
@@ -140,7 +140,7 @@ Beyond the null-sentinel cluster above:
    `i64::MIN`, a global `json_errors()` string, or a `raise`. **Fix: pick one convention per
    surface** (fault vs nullable-return) before it calcifies.
 3. **Empty-collection / empty-input edge behavior is undecided per-op.** `min_of([])`=null vs
-   `sum_of([])`=0; `v[0]` raises vs `h[key]` returns null; `split("")`=`[]`; `is_numeric("")`=true.
+   `sum_of([])`=0; `v[0]` raises vs `h[key]` returns null; `split("")`=`[]`; `is_numeric("")`=false (H6 FIXED).
    **Fix: a single stated rule for "operation over empty."**
 4. **Naming conventions drift.** The `_of` suffix is on `min_of`/`max_of`/`sum_of` but not
    `sum`; `dir` vs `directory` split within one module; `float`/`single` inverted from C-family;
@@ -157,7 +157,7 @@ Beyond the null-sentinel cluster above:
 | Sev | Item | Fix | Ref |
 |---|---|---|---|
 | High | `min_of`/`max_of` typed `-> integer` but return null on empty | pin `-> τ?` (or raise) + fix doc | `:1532,1539` |
-| High | `sorted[a..b]` positional-shaped key-range slice (INC#2, H8) | see H8 | — |
+| High | ~~`sorted[a..b]` positional-shaped key-range slice (INC#2, H8)~~ ✅ ACCEPTED (C99) — uniform key-addressing, deliberate | see H8 | — |
 | Med | **`spacial` → `spatial`** misspelled keyword (from #550, just merged) | rename now, contract 0 | `:1281,1157` |
 | Med | compiler-desugar internals are `pub` (`hash_sorted`/`radix_sorted`/`spacial_range`…) | make non-pub or `__`-reserve | `:1136–1157` |
 | Med | `clear()` only on vector (op `OpClearKeyed` already exists) | add `clear(both:)` to all keyed types | `:1026,1266` |
@@ -178,9 +178,9 @@ Beyond the null-sentinel cluster above:
 
 | Sev | Item | Fix | Ref |
 |---|---|---|---|
-| High | `len`=bytes/`size`=chars + byte-indexing vs char-iteration (H2) | see H2 | `:736,744,765` |
-| High | classifiers vacuously `true` on `""` (H6) | see H6 | `03_text.loft:70` |
-| High | `text as int/float` silent null/NaN (H7) | see H7 | `fill.rs:466` |
+| High | ~~`len`=bytes/`size`=chars + byte-indexing vs char-iteration (H2)~~ ✅ DONE (@PLN110) — `len`=chars / `size`=bytes; units error lint default-on | see H2 | `01_code.loft` |
+| High | ~~classifiers vacuously `true` on `""`~~ ✅ FIXED (H6) — empty → false | see H6 | `03_text.loft:74` |
+| High | ~~`text as int/float` silent null/NaN (H7)~~ ✅ DONE (@PLN25 N-Parse) — typed `τ?` + forced discharge | see H7 | `fill.rs:466` |
 | Med | `split(character)` vs `split_text(text)` — permanent two-name split | unify on `text` needle before freeze | `02_files.loft:139,167` |
 | Med | `join` = both string-join and path-join (receiver-dispatched) | rename path form `path_join` | `03_text.loft:148` / `02_files.loft:706` |
 | Med | no `character` case conversion (`to_lowercase` text-only, but `is_lowercase` has char form) | add char overloads | `03_text.loft:62` |
@@ -222,7 +222,7 @@ Beyond the null-sentinel cluster above:
 | Sev | Item | Fix | Ref |
 |---|---|---|---|
 | High | `write()` void → silent failure (H3); `content`/`read_bytes` conflate missing/empty (H4) | see H3/H4 | `:545,97` |
-| High | JSON f64 integer precision (H5); `FileResult` phantom variants (H9) | see H5/H9 | `06_json.loft:21` |
+| High | JSON f64 integer precision (H5) → **routed to @PLN109** (retire the hand-rolled scanner, use loft's lexer); ~~`FileResult` phantom variants (H9)~~ ✅ H9 DONE — variants classified (`fs_classify`), `NotDirectory` removed | see H5/H9 | `06_json.loft:21` |
 | Med | time units split: `now()` ms / `mtime()` s / `ticks()` µs — silent `/1000` to compare | unit-suffixed peers or loud doc | `:583,336,587` |
 | Med | JSON errors via process-global `json_errors()` string side-channel (frozen surface) | reconsider the error channel | `06_json.loft:50` |
 | Med | no `copy(from,to)`, no `append` (write truncates), no `rmdir` | add the three (additive; but the gap+idioms calcify) | `:269,545` |

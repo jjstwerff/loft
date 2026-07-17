@@ -11,6 +11,8 @@ expression-oriented, struct/enum, store-based heap, stdlib from `default/*.loft`
 the interpreter and `--native` (compiles via `rustc`). It's the **language** layer of a stack:
 **lavition** (the engine/brand) → **loft** (this repo) → games **moros**/**dryopea** + consumer
 libs (crawler, `lib/markdown`) that dogfood the language. History: [LAVITION.md](doc/claude/LAVITION.md).
+Developed almost entirely by AI agents (steered; docs + tooling prioritized above code), so
+everything needed to work on loft is in this repo — [BUS_FACTOR.md](doc/claude/BUS_FACTOR.md).
 
 ## Dogfood loop
 
@@ -188,6 +190,7 @@ that changes the working tree.** Compare without switching: `git diff main -- <f
 
 **Quality / stability / formal:** [CODE.md](doc/claude/CODE.md) · [DOC_QUALITY.md](doc/claude/DOC_QUALITY.md) ·
 [QUALITY.md](doc/claude/QUALITY.md) open work · [GOALS.md](doc/claude/GOALS.md) (purpose + goals A–F) ·
+[BUS_FACTOR.md](doc/claude/BUS_FACTOR.md) (the development model — repo + agent, no single point of failure) ·
 [STRONG_POINTS.md](doc/claude/STRONG_POINTS.md) · [DESIGN.md](doc/claude/DESIGN.md) algorithms ·
 [DESIGN_DECISIONS.md](doc/claude/DESIGN_DECISIONS.md) declined-features register ·
 [DESIGN_PROTOCOL.md](doc/claude/DESIGN_PROTOCOL.md) / [DESIGN_VERIFICATION.md](doc/claude/DESIGN_VERIFICATION.md) ·
@@ -234,6 +237,12 @@ the last two which are opt-in): `LOFT_NO_WARN_RUNTIME` (undefended-fault-site wa
 `LOFT_NO_HINT_NOT_NULL` (`not null` field hint) · `LOFT_FORMAT_BARE_NULL` (drop the `(reason)`
 suffix on `null`) · `LOFT_NO_DEAD_STORES` (@PLN107 dead-store lint: a copy mutated but never
 read, e.g. `d = self.data; d[i]=x` where the bind COPIES so the write is lost) ·
+`LOFT_NO_STEER` (@PLN102 arc C recommended-idiom channel: a call FROM OWNED source to a
+`#superseded "Y"` symbol warns *"`X` is superseded — use `Y`"* + a CI fold-lint; inert until a
+symbol is marked — see [COMPATIBILITY.md § Folding](doc/claude/COMPATIBILITY.md)) ·
+`LOFT_NO_STRICT_INDEX_TEXT` (@PLN110 3a text strict-index units lint: warns on
+`for i in 0..len(s) { s[i] }` — `len(text)` is a CHARACTER count but `s[i]` is byte-indexed, so
+the loop misreads multi-byte text; advisory, use `for c in s` or `0..size(s)`) ·
 `LOFT_LINT_STRICT_INDEX` (**opt-in**, @PLN102 case-D audit: warns where a for-loop iter var
 bounded by `len(<one vector>)` indexes a DIFFERENT vector — `for i in 0..len(v) { w[i] }` types
 non-null yet reads C80-null on overrun; advisory, the type is unchanged) ·

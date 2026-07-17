@@ -1078,6 +1078,8 @@ fn write_definition(out: &mut String, d: &Definition) {
     write_str(out, &d.native);
     out.push_str(",\"cap\":"); // @PLN86
     write_str(out, &d.cap);
+    out.push_str(",\"superseded\":"); // @PLN102 arc C
+    write_str(out, &d.superseded);
     let _ = write!(
         out,
         ",\"op_code\":{},\"known_type\":{},\"pub_visible\":{},\"null_safe\":{},\"closure_record\":{}",
@@ -1331,7 +1333,8 @@ fn definition_from_parsed(p: &Parsed) -> Result<Definition, TypeDecodeError> {
         returned_not_null: as_bool(field(p, "returned_not_null")?)?,
         rust: as_str(field(p, "rust")?)?,
         native: as_str(field(p, "native")?)?,
-        cap: as_str(field(p, "cap")?)?, // @PLN86
+        cap: as_str(field(p, "cap")?)?,               // @PLN86
+        superseded: as_str(field(p, "superseded")?)?, // @PLN102 arc C
         op_code: as_u16(field(p, "op_code")?)?,
         known_type: as_u16(field(p, "known_type")?)?,
         pub_visible: as_bool(field(p, "pub_visible")?)?,
@@ -2228,6 +2231,7 @@ mod tests {
             rust: String::new(),
             native: String::new(),
             cap: String::new(),
+            superseded: String::new(),
             op_code: u16::MAX,
             code_position: 0,
             code_length: 0,
@@ -2299,6 +2303,7 @@ mod tests {
             rust: String::new(),
             native: String::new(),
             cap: String::new(),
+            superseded: String::new(),
             op_code: u16::MAX,
             code_position: 0,
             code_length: 0,

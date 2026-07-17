@@ -720,6 +720,7 @@ pub fn register_ir_schema(db: &mut Stores) -> IrSchemaIds {
     db.field(t145, "field_groups", vec_field_groups);
     db.field(t145, "synthetic", t5);
     db.field(t145, "cap", t5); // @PLN86 — kept in sync with ir.loft Definition.cap
+    db.field(t145, "superseded", t5); // @PLN102 arc C — kept in sync with ir.loft Definition.superseded
     let t146 = db.vector(t139);
     let _ = t146; // may be unused
     let t147 = db.vector(t144);

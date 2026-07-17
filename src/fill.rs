@@ -223,6 +223,9 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     length_vector,
     vector_is_null,
     ref_is_null,
+    size_vector,
+    size_struct,
+    size_scalar,
     length_sorted,
     clear_vector,
     get_vector,
@@ -244,6 +247,7 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     hash_find,
     hash_remove,
     length_hash,
+    size_hash,
     length_index,
     eq_bool,
     ne_bool,
@@ -1135,13 +1139,13 @@ fn conv_text_from_null(s: &mut State) {
 
 fn length_text(s: &mut State) {
     let v_v1 = s.string();
-    let new_value = v_v1.str().len() as i64;
+    let new_value = v_v1.str().chars().count() as i64;
     s.put_stack(new_value);
 }
 
 fn size_text(s: &mut State) {
     let v_v1 = s.string();
-    let new_value = v_v1.str().chars().count() as i64;
+    let new_value = v_v1.str().len() as i64;
     s.put_stack(new_value);
 }
 
@@ -1972,6 +1976,34 @@ fn ref_is_null(s: &mut State) {
     s.put_stack(new_value);
 }
 
+fn size_vector(s: &mut State) {
+    let v_stride = s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value =
+        i64::from(vector::length_vector(&v_r, &s.database.allocations)) * i64::from(v_stride);
+    s.put_stack(new_value);
+}
+
+fn size_struct(s: &mut State) {
+    let v_sz = s.code::<u16>();
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = {
+        let _ = v_r;
+        i64::from(v_sz)
+    };
+    s.put_stack(new_value);
+}
+
+fn size_scalar(s: &mut State) {
+    let v_sz = s.code::<u16>();
+    let v_v = *s.get_stack::<i64>();
+    let new_value = {
+        let _ = v_v;
+        i64::from(v_sz)
+    };
+    s.put_stack(new_value);
+}
+
 fn length_sorted(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = i64::from(vector::length_vector(&v_r, &s.database.allocations));
@@ -2106,6 +2138,12 @@ fn hash_remove(s: &mut State) {
 fn length_hash(s: &mut State) {
     let v_r = *s.get_stack::<DbRef>();
     let new_value = i64::from(hash::count(&v_r, &s.database.allocations));
+    s.put_stack(new_value);
+}
+
+fn size_hash(s: &mut State) {
+    let v_r = *s.get_stack::<DbRef>();
+    let new_value = i64::from(hash::table_bytes(&v_r, &s.database.allocations));
     s.put_stack(new_value);
 }
 

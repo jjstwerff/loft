@@ -1,0 +1,223 @@
+diff --git a/markdown/src/markdown.loft b/markdown/src/markdown.loft
+index ef39234..b07cd5b 100644
+--- a/markdown/src/markdown.loft
++++ b/markdown/src/markdown.loft
+@@ -175,7 +175,7 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
+             ul_item = is_ul_item(line);
+             ol_item = is_ol_item(line);
+             if ul_item || ol_item {
+-                bn = list_item_buf.len();
++                bn = list_item_buf.size();
+                 if bn >= 4 && (list_item_buf[0] ?? '\0') == '[' && (list_item_buf[2] ?? '\0') == ']' && (list_item_buf[3] ?? '\0') == ' ' && ((list_item_buf[1] ?? '\0') == ' ' || (list_item_buf[1] ?? '\0') == 'x' || (list_item_buf[1] ?? '\0') == 'X') {
+                     chk = "";
+                     if (list_item_buf[1] ?? '\0') != ' ' { chk = " checked"; }
+@@ -200,7 +200,7 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
+                 }
+                 continue;
+             }
+-            bn = list_item_buf.len();
++            bn = list_item_buf.size();
+                 if bn >= 4 && (list_item_buf[0] ?? '\0') == '[' && (list_item_buf[2] ?? '\0') == ']' && (list_item_buf[3] ?? '\0') == ' ' && ((list_item_buf[1] ?? '\0') == ' ' || (list_item_buf[1] ?? '\0') == 'x' || (list_item_buf[1] ?? '\0') == 'X') {
+                     chk = "";
+                     if (list_item_buf[1] ?? '\0') != ' ' { chk = " checked"; }
+@@ -219,7 +219,7 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
+                 out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
+                 para_buf = "";
+             }
+-            n = line.len();
++            n = line.size();
+             if n > 3 { code_lang = line[3..n]; }
+             in_code = true;
+             continue;
+@@ -228,7 +228,7 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
+         // a list (lists own indent semantics) and not in a paragraph
+         // (a 4-space indent within a paragraph is just continuation).
+         if line.starts_with("    ") && para_buf.len() == 0 && bq_buf == "" {
+-            n = line.len();
++            n = line.size();
+             esc_code = html_escape(line[4..n]);
+             // Aggregate consecutive 4-space lines — handled via
+             // the code_buf state when in_code is true.  Simpler:
+@@ -255,7 +255,7 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
+                 out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
+                 para_buf = "";
+             }
+-            ln = line.len();
++            ln = line.size();
+             start = hlevel + 1;
+             heading_text = "";
+             if start < ln { heading_text = line[start..ln]; }
+@@ -305,7 +305,7 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
+                 out += "<p>{render_inline(para_buf, base_dir, tag_url_prefix, image_url_prefix)}</p>";
+                 para_buf = "";
+             }
+-            ln = line.len();
++            ln = line.size();
+             quote_text = "";
+             if ln > 2 { quote_text = line[2..ln]; }
+             if bq_buf == "" {
+@@ -351,7 +351,7 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
+         }
+     }
+     if list_kind != "" {
+-        bn = list_item_buf.len();
++        bn = list_item_buf.size();
+                 if bn >= 4 && (list_item_buf[0] ?? '\0') == '[' && (list_item_buf[2] ?? '\0') == ']' && (list_item_buf[3] ?? '\0') == ' ' && ((list_item_buf[1] ?? '\0') == ' ' || (list_item_buf[1] ?? '\0') == 'x' || (list_item_buf[1] ?? '\0') == 'X') {
+                     chk = "";
+                     if (list_item_buf[1] ?? '\0') != ' ' { chk = " checked"; }
+@@ -381,7 +381,7 @@ pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_pref
+ // ── Block-level helpers ─────────────────────────────────────
+ 
+ fn atx_heading_level(line: text) -> integer {
+-    n = line.len();
++    n = line.size();
+     if n == 0 { return 0; }
+     count = 0;
+     i = 0;
+@@ -395,7 +395,7 @@ fn atx_heading_level(line: text) -> integer {
+ }
+ 
+ fn strip_trailing_hashes(s: text) -> text {
+-    n = s.len();
++    n = s.size();
+     if n == 0 { return s; }
+     end = n;
+     while end > 0 && (s[end - 1] ?? '\0') == '#' { end = end - 1; }
+@@ -404,7 +404,7 @@ fn strip_trailing_hashes(s: text) -> text {
+ }
+ 
+ fn is_setext_underline(line: text, ch: character) -> boolean {
+-    n = line.len();
++    n = line.size();
+     if n < 2 { return false; }
+     i = 0;
+     while i < n {
+@@ -441,7 +441,7 @@ fn is_ul_item(line: text) -> boolean {
+ }
+ 
+ fn is_ol_item(line: text) -> boolean {
+-    n = line.len();
++    n = line.size();
+     if n < 3 { return false; }
+     i = 0;
+     while i < n && (line[i] ?? '\0') >= '0' && (line[i] ?? '\0') <= '9' {
+@@ -453,7 +453,7 @@ fn is_ol_item(line: text) -> boolean {
+ }
+ 
+ fn strip_list_marker(line: text) -> text {
+-    n = line.len();
++    n = line.size();
+     if line.starts_with("- ") || line.starts_with("* ") {
+         return line[2..n];
+     }
+@@ -469,7 +469,7 @@ fn strip_list_marker(line: text) -> text {
+ 
+ fn is_table_row(line: text) -> boolean {
+     if !line.starts_with("|") { return false; }
+-    n = line.len();
++    n = line.size();
+     if n < 3 { return false; }
+     i = 1;
+     while i < n {
+@@ -481,7 +481,7 @@ fn is_table_row(line: text) -> boolean {
+ 
+ fn is_table_separator(line: text) -> boolean {
+     if !is_table_row(line) { return false; }
+-    n = line.len();
++    n = line.size();
+     i = 0;
+     seen_dash = false;
+     while i < n {
+@@ -500,7 +500,7 @@ fn parse_table_align(sep: text) -> text {
+     for cell in cells {
+         t = cell.trim();
+         if t == "" { continue; }
+-        n = t.len();
++        n = t.size();
+         starts_colon = n > 0 && (t[0] ?? '\0') == ':';
+         ends_colon = n > 0 && (t[n - 1] ?? '\0') == ':';
+         if starts_colon && ends_colon { out += "c"; }
+@@ -547,13 +547,13 @@ fn rewrite_image(url: text, base_dir: text, image_url_prefix: text) -> text {
+     if is_abs { return url; }
+     cleaned = url;
+     while cleaned.starts_with("./") {
+-        cl = cleaned.len();
++        cl = cleaned.size();
+         cleaned = cleaned[2..cl];
+     }
+     cur_base = base_dir;
+     while cleaned.starts_with("../") {
+         cur_base = parent_dir(cur_base);
+-        cl = cleaned.len();
++        cl = cleaned.size();
+         cleaned = cleaned[3..cl];
+     }
+     if cur_base == "" {
+@@ -564,7 +564,7 @@ fn rewrite_image(url: text, base_dir: text, image_url_prefix: text) -> text {
+ 
+ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_prefix: text) -> text {
+     out = "";
+-    n = src.len();
++    n = src.size();
+     i = 0;
+     while i < n {
+         c = (src[i] ?? '\0');
+@@ -780,7 +780,7 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
+         else {
+             char_str = "{c}";
+             out += char_str;
+-            i = i + char_str.len();
++            i = i + char_str.size();
+         }
+     }
+     out
+@@ -792,7 +792,7 @@ pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_
+ // returns the URL portion; `title_part_of` returns the title
+ // (without quotes) or empty.
+ fn url_part_of(raw: text) -> text {
+-    n = raw.len();
++    n = raw.size();
+     i = 0;
+     // Skip leading whitespace
+     while i < n && (raw[i] ?? '\0') == ' ' { i = i + 1; }
+@@ -803,7 +803,7 @@ fn url_part_of(raw: text) -> text {
+ }
+ 
+ fn title_part_of(raw: text) -> text {
+-    n = raw.len();
++    n = raw.size();
+     // Find a `"` after a space.
+     quote_at = -1;
+     i = 0;
+@@ -833,19 +833,19 @@ pub fn rewrite_link(url: text, base_dir: text) -> text {
+     target = url;
+     hash_at = url.find("#");
+     if hash_at >= 0 {
+-        ulen = url.len();
++        ulen = url.size();
+         target = url[0..hash_at];
+         anchor = url[hash_at..ulen];
+     }
+     cleaned = target;
+     while cleaned.starts_with("./") {
+-        cl = cleaned.len();
++        cl = cleaned.size();
+         cleaned = cleaned[2..cl];
+     }
+     cur_base = base_dir;
+     while cleaned.starts_with("../") {
+         cur_base = parent_dir(cur_base);
+-        cl = cleaned.len();
++        cl = cleaned.size();
+         cleaned = cleaned[3..cl];
+     }
+     if cur_base == "" {
+@@ -971,7 +971,7 @@ pub fn extract_headings(source: text) -> vector<Heading> {
+         }
+         hlevel = atx_heading_level(line);
+         if hlevel > 0 {
+-            ln = line.len();
++            ln = line.size();
+             start = hlevel + 1;
+             txt = "";
+             if start < ln { txt = line[start..ln]; }

@@ -1,6 +1,9 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 // P3: Vector aggregates — sum, min_of, max_of
+// @PLN102 arc C — `sum_of` is now superseded by `sum` (a shim over it); this test
+// still exercises the shim, so it EXPECTS the steer rather than silently tolerating it.
+// @EXPECT_WARNING: `sum_of` is superseded
 
 fn main() {
   nums = [1, 2, 3, 4, 5];

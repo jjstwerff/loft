@@ -103,7 +103,7 @@ fn main() {
   assert(cif == null, "char if/else null arm");
   iif = if cond { 7 } else { null };
   assert(iif == null, "int if/else null arm");
-  ival = if!cond { 7 } else { null };
+  ival = if !cond { 7 } else { null };
   assert(ival == 7, "int if/else value arm");
 
   // heap-ref returns: null round-trips, value branch is not null

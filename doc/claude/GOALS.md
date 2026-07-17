@@ -383,7 +383,10 @@ Healthy when all three hold *and keep holding* as new code lands.
 people who would value it *can* find and recognise it. A language that never
 reaches a stable release, or that only its authors can run, never gives those
 people the chance. Adoption itself is a *result, not a goal* (see Purpose); this
-goal is met by the starting path *existing*, not by a user count.
+goal is met by the starting path *existing*, not by a user count. The same legibility
+governs *developing* loft: everything needed to work on it lives in the repo — the
+source, the docs, and the executable skills — so any coding agent can continue it, and
+the project has no single point of failure. See [BUS_FACTOR.md](BUS_FACTOR.md).
 
 **Check.**
 - A release tag exists within the project's release cadence (`git tag` → latest),

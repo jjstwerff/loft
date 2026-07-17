@@ -1,0 +1,48 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN110 sub-arc 1c — `size(hash)` = the full bucket table, HOLES INCLUDED.
+// The hash's own allocation is the bucket array: `elms` slots, each a 4-byte
+// record-id.  An empty slot is a hole (a zero rec-id) and still counts, because
+// open addressing's spare capacity IS the format — unlike a vector, whose spare
+// capacity is reserve and is excluded.  Allocation-local: the pointed-to entry
+// records live in separate allocations and are NOT counted.  The table grows in
+// steps as it rehashes (load factor 0.75, room → room·2−1); those step sizes
+// encode the resize policy, so a policy change is a conscious layout change that
+// flips this test (that is the intent — @PLN97).
+//
+// Values verified against both backends (interpret + native) during Phase 1.
+
+struct K {
+  id: integer,
+  v: integer,
+}
+
+fn main() {
+  h: hash<K[id]> = [];
+  assert(size(h) == 0, "empty hash = 0 (no table allocated yet): {size(h)}");
+
+  h += K { id: 1, v: 10 };
+  h += K { id: 2, v: 20 };
+  h += K { id: 3, v: 30 };
+  // initial table: room = 10 words, elms = (10 − 2) · 2 = 16 slots × 4 bytes
+  assert(size(h) == 64, "initial table = 16 slots × 4 = 64 (13 holes counted): {size(h)}");
+  assert(size(h) >= len(h)*4, "table ≥ live entries × 4 (holes make it larger)");
+
+  for i in 4..14 {
+    h += K { id: i, v: i * 10 };
+  }
+  // first rehash (load 0.75): room 10 → 19, elms = 34 slots × 4
+  assert(size(h) == 136, "after 1st rehash = 34 slots × 4 = 136: {size(h)}");
+
+  for i in 14..40 {
+    h += K { id: i, v: i * 10 };
+  }
+  // second rehash: room 19 → 37, elms = 70 slots × 4
+  assert(size(h) == 280, "after 2nd rehash = 70 slots × 4 = 280: {size(h)}");
+  // the full table exceeds the live count: 39 live entries in a 70-slot table
+  assert(
+    len(h) == 39 && size(h) / 4 == 70,
+    "70-slot table holds 39 live: len={len(h)} slots={size(h) / 4}"
+  );
+}

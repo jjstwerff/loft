@@ -297,6 +297,17 @@ impl LayoutDesc {
         let mut ids: Vec<u16> = self.nodes.keys().copied().collect();
         ids.sort_by(|a, b| self.name(*a).cmp(&self.name(*b)).then(a.cmp(b)));
         let mut out = String::new();
+        // @PLN97 F9 — pin the HOST endianness (see `Stores::layout_dump`). MUST stay
+        // byte-identical with that twin; `descriptor_render_reproduces_layout_dump` enforces it.
+        let _ = writeln!(
+            out,
+            "@endian\t{}",
+            if cfg!(target_endian = "big") {
+                "big"
+            } else {
+                "little"
+            }
+        );
         for id in ids {
             let _ = writeln!(
                 out,

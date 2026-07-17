@@ -784,8 +784,12 @@ globalThis.loftHost = {
 | 1 | `NotFound` |
 | 2 | `PermissionDenied` |
 | 3 | `IsDirectory` |
-| 4 | `NotDirectory` |
 | 5 | `Other` |
+
+The current loft wasm bridge distinguishes only `0` (→ `Ok`) from any nonzero code
+(→ `Other`); codes 1–3 / 5 are the host-protocol space (mirroring the native OS-error
+classification) reserved for a future wasm classification pass. Code 4 was retired with
+the `FileResult.NotDirectory` variant (@PLN102 H9 — it could not be produced portably).
 
 ### Random bridge
 

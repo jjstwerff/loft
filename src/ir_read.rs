@@ -631,6 +631,7 @@ pub fn read_definition(stores: &Stores, r: Record, bodies: bool) -> Definition {
         rust: r.field_str(stores, ds::DEF_RUST).to_string(),
         native: r.field_str(stores, ds::DEF_NATIVE).to_string(),
         cap: r.field_str(stores, ds::DEF_CAP).to_string(), // @PLN86
+        superseded: r.field_str(stores, ds::DEF_SUPERSEDED).to_string(), // @PLN102 arc C
         op_code: r.field_int(stores, ds::DEF_OP_CODE) as u16,
         known_type: r.field_int(stores, ds::DEF_KNOWN_TYPE) as u16,
         pub_visible: r.field_bool(stores, ds::DEF_PUB_VISIBLE),
@@ -1592,6 +1593,254 @@ mod tests {
             "null_safe must survive the store round-trip"
         );
         crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. null_safe");
+    }
+
+    #[test]
+    /// @PLN102 arc C step 1 — `#superseded "Y"` parses to the bare successor name
+    /// and survives both the binary-store and JSON round-trips (so a marked stdlib
+    /// symbol keeps its mark when loaded from the `LOFT_STDLIB_CACHE` bundle).
+    fn superseded_survives_store_round_trip() {
+        use crate::data::Data;
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+        let src = "fn old_add(a: integer, b: integer) -> integer { a + b }\n#superseded \"new_add\"\nfn new_add(a: integer, b: integer) -> integer { a + b }\n";
+        let lpath = std::env::temp_dir().join(format!("loft_sup_rt_{}.loft", std::process::id()));
+        std::fs::write(&lpath, src).unwrap();
+        p.parse(lpath.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&lpath);
+        assert_eq!(
+            p.data.def(p.data.def_nr("n_old_add")).superseded(),
+            "new_add",
+            "parsed `#superseded \"new_add\"` must store the bare successor name"
+        );
+
+        let fresh = p.data;
+        let spath = std::env::temp_dir().join(format!("loft_sup_rt_{}.store", std::process::id()));
+        let spath_str = spath.to_str().unwrap();
+        fresh.save(spath_str).expect("Data::save");
+        let loaded = Data::open(spath_str).expect("Data::open");
+        let _ = std::fs::remove_file(&spath);
+        assert_eq!(
+            loaded.def(loaded.def_nr("n_old_add")).superseded(),
+            "new_add",
+            "the #superseded mark must survive the store round-trip"
+        );
+        crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. superseded");
+    }
+
+    #[test]
+    /// @PLN102 arc C step 2 — `source_is_owned` / `caller_source_is_owned`
+    /// distinguish the OWNED entry project (`MAIN_SOURCE`) from a re-parsed
+    /// dependency (source `2..`, what a `use`d library gets) and the stdlib
+    /// (`STD_SOURCE`).  This is the caller-provenance fact the arc-C steer gate
+    /// (step 3) reads so a `#superseded` warning reaches only whoever can act.
+    fn source_ownership_distinguishes_entry_dependency_stdlib() {
+        use crate::data::{MAIN_SOURCE, STD_SOURCE};
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+
+        // The bare fact on each source class.
+        assert!(
+            p.data.source_is_owned(MAIN_SOURCE),
+            "entry (MAIN_SOURCE) is owned"
+        );
+        assert!(!p.data.source_is_owned(STD_SOURCE), "stdlib is NOT owned");
+        assert!(
+            !p.data.source_is_owned(2),
+            "a dependency source (2..) is NOT owned"
+        );
+
+        // The stdlib parse produced defs, and none of them reads as owned.
+        assert!(
+            (0..p.data.definitions.len()).any(|d| p.data.def(d as u32).source() == STD_SOURCE),
+            "stdlib parse produced STD_SOURCE defs"
+        );
+
+        // An entry-file def, parsed at MAIN_SOURCE, IS owned; and the current
+        // compile source is owned right after.
+        p.parse_snippet(
+            "fn my_entry_fn() -> integer { 42 }\n",
+            "<main>",
+            MAIN_SOURCE,
+        );
+        assert!(
+            p.data.caller_source_is_owned(),
+            "MAIN_SOURCE current -> owned"
+        );
+        let entry = p.data.source_nr(MAIN_SOURCE, "n_my_entry_fn");
+        assert_ne!(entry, u32::MAX, "entry fn resolves at MAIN_SOURCE");
+        assert!(
+            p.data.source_is_owned(p.data.def(entry).source()),
+            "an entry-file def IS owned"
+        );
+
+        // A dependency def, parsed at source 2 (what a `use`d library gets), is
+        // NOT owned; and the current compile source is NOT owned right after.
+        p.parse_snippet("fn my_dep_fn() -> integer { 7 }\n", "<dep>", 2);
+        assert!(
+            !p.data.caller_source_is_owned(),
+            "source 2 current -> NOT owned"
+        );
+        let dep = p.data.source_nr(2, "n_my_dep_fn");
+        assert_ne!(dep, u32::MAX, "dependency fn resolves at source 2");
+        assert!(
+            !p.data.source_is_owned(p.data.def(dep).source()),
+            "a dependency def is NOT owned"
+        );
+    }
+
+    #[test]
+    /// @PLN102 arc C step 3 — the recommended-idiom STEER fires for a call to a
+    /// `#superseded` symbol FROM OWNED source and is SILENT from a dependency
+    /// source (the caller-provenance Q3 gate).  Same shape both times — a marked
+    /// fn plus a caller — differing ONLY in the source number, so the owned case
+    /// proves the mechanism can steer and the dependency case proves the gate
+    /// blocks it.  The steer lives in the shared parser (`call_nr`), so this is
+    /// backend-agnostic; `LOFT_NO_STEER` opt-out + the both-backends surface are
+    /// covered by the CLI probe.
+    fn steer_fires_from_owned_source_silent_from_dependency() {
+        use crate::data::MAIN_SOURCE;
+        use crate::diagnostics::Level;
+
+        // {0} is superseded by {1} and FOLDED onto it (a shim); {2} calls {0}
+        // (the owned-source call that steers).
+        let marked = |names: (&str, &str, &str)| {
+            format!(
+                "fn {0}() -> integer {{ {1}() }}\n#superseded \"{1}\"\nfn {1}() -> integer {{ 2 }}\nfn {2}() -> integer {{ {0}() }}\n",
+                names.0, names.1, names.2
+            )
+        };
+        let is_steer = |e: &crate::diagnostics::DiagEntry| {
+            e.level == Level::Warning && e.message.contains("is superseded")
+        };
+
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+
+        // OWNED (MAIN_SOURCE): a call to a #superseded fn steers.
+        let pre = p.diagnostics.entries().len();
+        p.parse_snippet(
+            &marked(("old_fn", "new_fn", "caller")),
+            "<main>",
+            MAIN_SOURCE,
+        );
+        assert!(
+            p.diagnostics.entries()[pre..].iter().any(is_steer),
+            "a #superseded call from OWNED source must steer"
+        );
+
+        // DEPENDENCY (source 2): the SAME shape is silent — the caller is not owned.
+        let pre = p.diagnostics.entries().len();
+        p.parse_snippet(&marked(("dep_old", "dep_new", "dep_caller")), "<dep>", 2);
+        assert!(
+            !p.diagnostics.entries()[pre..].iter().any(is_steer),
+            "a #superseded call from a DEPENDENCY source must NOT steer"
+        );
+    }
+
+    #[test]
+    /// @PLN102 arc C step 4 — the fold lint: a `#superseded "Y"` symbol must
+    /// RESOLVE Y (an unresolvable successor is a hard Error — a dangling steer
+    /// never ships) and its body must CALL Y (a shim over the successor — an
+    /// un-folded steer is an advisory Warning); a properly-folded one is clean.
+    fn fold_lint_flags_dangling_and_unfolded_superseded() {
+        use crate::diagnostics::{Diagnostics, Level};
+
+        let check = |src: &str| -> Vec<(Level, String)> {
+            let mut p = crate::parser::Parser::new();
+            p.parse_dir("default", true, false).expect("parse stdlib");
+            p.parse_snippet(src, "<main>", crate::data::MAIN_SOURCE);
+            let mut diags = Diagnostics::new();
+            crate::use_analysis::superseded_fold_diagnostics(&p.data, &mut diags, "<main>");
+            diags
+                .entries()
+                .iter()
+                .map(|e| (e.level, e.message.clone()))
+                .collect()
+        };
+
+        // (1) folded → clean: old_f is a shim over new_f.
+        let clean = check(
+            "fn old_f() -> integer { new_f() }\n#superseded \"new_f\"\nfn new_f() -> integer { 2 }\n",
+        );
+        assert!(
+            clean.is_empty(),
+            "a folded #superseded symbol must be clean; got {clean:?}"
+        );
+
+        // (2) un-folded → advisory Warning: old_g does not call new_g.
+        let unfolded = check(
+            "fn old_g() -> integer { 1 }\n#superseded \"new_g\"\nfn new_g() -> integer { 2 }\n",
+        );
+        assert!(
+            unfolded
+                .iter()
+                .any(|(l, m)| *l == Level::Warning && m.contains("never calls")),
+            "an un-folded #superseded symbol must warn; got {unfolded:?}"
+        );
+
+        // (3) dangling successor → hard Error.
+        let dangling = check("fn old_h() -> integer { 1 }\n#superseded \"nonesuch\"\n");
+        assert!(
+            dangling
+                .iter()
+                .any(|(l, m)| *l == Level::Error && m.contains("no such successor")),
+            "a dangling #superseded successor must error; got {dangling:?}"
+        );
+
+        // (4) a METHOD successor resolves (`t_<LEN><Type>_<succ>`, not just `n_<succ>`):
+        // a folded method is clean; an un-folded one warns by its bare method name.
+        let clean_method = check(
+            "struct Box { n: integer }\nfn old_m(self: Box) -> integer { self.new_m() }\n#superseded \"new_m\"\nfn new_m(self: Box) -> integer { self.n }\n",
+        );
+        assert!(
+            clean_method.is_empty(),
+            "a folded #superseded METHOD must resolve its successor and be clean; got {clean_method:?}"
+        );
+        let unfolded_method = check(
+            "struct Box { n: integer }\nfn keep_m(self: Box) -> integer { self.n }\n#superseded \"other_m\"\nfn other_m(self: Box) -> integer { self.n + 1 }\n",
+        );
+        assert!(
+            unfolded_method.iter().any(|(l, m)| *l == Level::Warning
+                && m.contains("`keep_m`")
+                && m.contains("never calls")),
+            "an un-folded #superseded METHOD must warn by its bare name; got {unfolded_method:?}"
+        );
+    }
+
+    #[test]
+    /// @PLN102 arc C — a stdlib fn (parsed under `self.default`, i.e. `STD_SOURCE`)
+    /// can call a GENERIC stdlib fn.  Before the fix the generic-instantiation block
+    /// in `parse_call` was gated on `!self.default`, so a stdlib-internal generic
+    /// call resolved to "Unknown function" (surfaced by the step-6 dogfood: folding
+    /// `sum_of` onto the generic `sum` failed at stdlib load, though `sum(v, 0)`
+    /// worked from a user program).  Generic instantiation is now caller-source-agnostic.
+    fn stdlib_fn_can_call_a_generic() {
+        let mut p = crate::parser::Parser::new();
+        p.parse_dir("default", true, false).expect("parse stdlib");
+        let pre = p.diagnostics.entries().len();
+        // Parse a helper WITH default=true (the stdlib parse context) that calls the
+        // generic `min_of` — the exact shape that used to fail.
+        p.parse_source(
+            "fn my_std_helper(v: vector<integer>) -> integer { min_of(v) ?? 0 }\n",
+            "<std-generic-test>",
+            true,
+        );
+        let new_diags: Vec<String> = p.diagnostics.entries()[pre..]
+            .iter()
+            .map(|e| e.message.clone())
+            .collect();
+        assert!(
+            !new_diags.iter().any(|m| m.contains("Unknown function")),
+            "a stdlib fn calling a generic must resolve, not 'Unknown function'; got {new_diags:?}"
+        );
+        assert_ne!(
+            p.data.source_nr(crate::data::STD_SOURCE, "n_my_std_helper"),
+            u32::MAX,
+            "the stdlib-context helper that calls a generic must parse"
+        );
     }
 
     /// @PLN11 arc D micro-bench — wall-clock of producing the native stdlib

@@ -46,7 +46,7 @@ fn main() {
     h += Entry { key: 42, value: 4200 };
 
     ok = store_persist_bind(h, path);
-    if!ok { println("FAIL fresh-bind-returned-false"); return }
+    if !ok { println("FAIL fresh-bind-returned-false"); return }
     // After bind, the slot is mmap'd.  Read keys back to confirm the
     // record layout survived the swap.
     println("fresh keys={record_keys(h)}");
@@ -54,7 +54,7 @@ fn main() {
   } else if mode == "reload" {
     // Empty hash; bind should overlay the on-disk contents.
     ok = store_persist_bind(h, path);
-    if!ok { println("FAIL reload-bind-returned-false"); return }
+    if !ok { println("FAIL reload-bind-returned-false"); return }
     println("reload keys={record_keys(h)}");
     // #523 — a KEY LOOKUP must succeed in this SEPARATE process, not just
     // iteration.  The hash stores its seed in its bucket record, so a fresh

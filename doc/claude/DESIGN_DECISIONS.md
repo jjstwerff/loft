@@ -2363,24 +2363,28 @@ So absolute compat holds both ways — bare-`use` programs qualify (no collision
 - **Open edges (not ruled here):** an explicitly-imported name vs the program's own top-level def — resolve when specced.
 - Owner ruling 2026-07-15. Companion: [C97](#c97--). **Already shipped (@PLN22 P1–P4):** the whole `use` surface — bare `use lib;` = prefix-required namespace bind, `use lib::*;` = wildcard, `use lib::(a, b, c)` = selective, `use lib::(a as x, b)` / `use lib as el` / `use lib::T as St` = aliasing. So C98 needs **no new syntax**; the only residual is the C97 internal change (a library's `pub` symbol must stop registering as global `n_<name>` — the dual registration that still collides with the stdlib during the library's own compile, per C95 — and be module-scoped only, which the shipped `use` machinery already brings into scope). Import-wins precedence for an explicit `::*` / `::(…)` binding is the one resolution rule to confirm against that change.
 
----
+## C99 — A keyed collection's subscript is uniformly KEY-addressed (lookup / range / removal), never positional
 
-## C99 — Read-only par-store sharing uses a contract-carried BORROW (Option A), not an `Arc<Store>` rewrite (Option B)
-
-Catalogue: @PLN108
+**Catalogue:** @F8 (sorted) / @PLN102 arc-E lib-audit **H8** (INC#2). The freeze-time resolution of "the sorted key-range slice shares vector's positional-slice syntax."
 
 ### Question
 
-A par worker's captured parent stores are read-only, so the per-worker byte-copy (`clone_for_worker`) is pure conservatism. Two ways to elide it: **A** — revive the existing `clone_for_light_worker` borrow (`unsafe`, safety *contract-carried* by @PLN102 C93 read-only + `thread::scope`/rayon join + the `read_only` write-panic); **B** — make a store's buffer `Arc`-shareable so sharing is safe *by construction* (type-carried), at the cost of reworking `Store.ptr: *mut u8` across allocation/free/word-addressing.
+`sorted<T[key]>` (and `index` / `hash` / `spatial`) accept subscript syntax that *looks* like vector's positional indexing: `s[i]`, `s[a..b]`. But on a sorted, `s[a..b]` is a **key-range** query — `s[15..35]` selects the elements whose KEY is in `[15, 35)`, not positions 15..35. The @PLN102 lib-audit flagged this as the "sharpest remaining trap": a `vector → sorted` port writing `s[1..3]` silently reads the wrong elements (an empty result when no key is in `[1, 3)`), and proposed *rejecting positional-shaped slices on sorted*. Should the range slice be rejected or made syntactically distinct before the contract-1 freeze?
 
 ### Evaluation
 
-A is small (wire an existing, tested path; no `Store` representation change) but its safety is trust, not proof — a future edit that mutated a parent mid-par or let a worker outlive the join would reintroduce UAF/race silently. B is safe by construction but a wide blast radius on the store representation. The plan built A behind a flag and ran the gates: **S1** found the parent-unwritten half is actually *compiler-carried* — 10/11 live dispatchers take `stores: &Stores` (a shared borrow the borrow checker won't let mutate), the one `&mut` (`run_parallel_queue_ref`) adopts strictly post-join. **S5/S6** — ASan 47/47 both flag states, TSan 0 races on the flag-ON path with a firing positive control. So the only thing A's `unsafe` actually carries is the read-only-shared-read claim, which the `read_only` write-panic backstops and TSan proved race-free.
+The proposed fix is **incoherent once you look at the whole subscript surface.** A sorted's subscript is key-addressed *everywhere*, not just for ranges (verified both backends, keys `10,20,30,40`):
+
+- `s[20]` → the element with **key** 20 (a key lookup) — **not** position 20 (which would be null).
+- `s[1]` → **null** (no key 1) — **not** position 1.
+- `s[key] = null` → removes the element with that **key** ([C68](#c68--keyed-collections-dedup-on-insert--and-collkeyvalue), documented).
+- `s[a..b]` → the **key-range** query (`sorted_range_positions`), the natural extension of the single-key lookup.
+
+So `s[i]` single-subscript is *already* a key lookup — the core, documented sorted API nobody proposes removing. Rejecting only the *range* form `s[a..b]` while keeping `s[i]`/`s[key]` key-addressed would make the subscript surface **less** consistent, not more, and it would break `spatial<T[x,y]>`, which **deliberately reuses the same range-slice syntax** for proximity queries (`xs[(x,y)..(x2,y2)]`, @PLN48). The visual similarity to vector's positional `v[a..b]` is a **cross-type** footgun that is *inherent to having key-addressed collections at all* — it applies equally to `s[key]`, which is not up for removal. You cannot remove the footgun without removing key-addressing.
 
 ### Decision
 
-**Option A stands** (2026-07-17). Shipped default-ON for the interpreter via a heap-size auto-select (borrow ≥ 2 MB, `LOFT_PAR_SHARE=0/1` override). Notably **no `unsafe impl Sync for Store` was needed** — each worker OWNS its borrowed `WorkerStores` (moved into the spawn), so no `&Store` crosses a thread; `Store: Send` suffices. Option B is declined for now.
-
-### Revisit when
-
-A future edit makes the contract fragile — a dispatcher gains a mid-par parent mutation, a worker is allowed to outlive the join, or a rayon-pool reconciliation shares a `&Store` across threads (then `Sync` / `Arc<Store>` re-enters). Any such change should re-run S5/S6; if it can't stay TSan-clean under A, escalate to B. Design + gates: `plans/108-share-read-only-stores/`.
+- **Keep the uniform key-addressed subscript.** For every keyed collection (`sorted` / `index` / `hash` / `spatial`), `coll[k]` is a **key lookup**, `coll[k] = null` a **key removal**, and (where ordered — `sorted`/`spatial`) `coll[lo..hi]` a **key-range / proximity query**. None is positional. This is deliberate and matches [C68](#c68--keyed-collections-dedup-on-insert--and-collkeyvalue) (keyed insert) and the `spatial` proximity API.
+- **Consciously ACCEPTED, not fixed** — the design is internally consistent and defensible; the audit's "reject positional-shaped slices" was based on treating `[a..b]` as a special case, but the single subscript is already key-addressed, so there is no inconsistency *within* sorted to fix.
+- **Freeze guards:** the key-range semantics are golden-locked in `tests/expressions.rs` (`sorted_range_iteration` — `sum_range(2,4)` over keys `1..4` = `50`, i.e. keys 2,3, *not* positions 2,3 = `70`), and made un-missable by `sorted_subscript_is_key_addressed_not_positional` (keys far from positions). Documented as a Gotcha in `LOFT.md § Key-based collections` and `INCONSISTENCIES.md #2`.
+- Owner-reviewable; reverses the lib-audit's H8 lean on the strength of the `s[i]`-is-already-key-addressed finding. Reversible at contract 0 if the owner prefers the reject-and-add-`.range()` path (which would then also have to re-home `s[key]` for coherence and carve out `spatial`).

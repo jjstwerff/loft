@@ -470,6 +470,18 @@ pub fn nullflow_enabled() -> bool {
     *ON.get_or_init(|| std::env::var_os("LOFT_NO_NULLFLOW").is_none())
 }
 
+/// `LOFT_NO_STEER=1` (@PLN102 arc C — the recommended-idiom steer channel) — DEFAULT ON, opt OUT.
+/// When on, a call FROM OWNED source (the entry project) to a `#superseded "Y"` symbol emits a
+/// `Level::Warning` steering the author toward `Y` (the old form keeps working — a never-break
+/// signpost, never a removal). Inert regardless until a symbol is actually marked `#superseded`,
+/// so default-on is safe from day one. One cached env read; mirrors `nullflow_enabled`. See
+/// `doc/claude/plans/102-stability-contract/recommended-idiom-channel.md`.
+#[must_use]
+pub fn steer_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_STEER").is_none())
+}
+
 /// `LOFT_NO_CALLARG_NSTORE=1` (@PLN102 gate-2 residual — the call-arg N-Store hole) — DEFAULT ON,
 /// opt OUT. The `(N-Store)` teeth previously sat only on the LOCAL-slot / field / return / index
 /// store sites, so a nullable `τ?` (or bare `null`) passed into a non-null PARAMETER slipped
@@ -521,6 +533,19 @@ pub fn math_domain_enabled() -> bool {
 pub fn strict_index_lint_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LOFT_LINT_STRICT_INDEX").is_some())
+}
+
+/// `LOFT_NO_STRICT_INDEX_TEXT` (@PLN110 3a) — the TEXT strict-index units lint, DEFAULT ON
+/// (opt-out). After the @PLN110 flip `len(text)` is a CHARACTER count while `text[i]` is
+/// byte-indexed, so `for i in 0..len(s) { s[i] }` under-runs / misreads multi-byte text (it walks
+/// char-count byte positions). Warns on exactly that shape — a loop var bounded by `len(s)` used to
+/// index that same text `s`. Advisory only (the type is unchanged): iterate with `for c in s`, or
+/// use `0..size(s)` for a genuine byte walk. Unlike the vector lint this is default-on, because for
+/// text the units are ALWAYS mismatched (char count vs byte offset), not just on a mismatched
+/// collection.
+pub fn text_index_units_lint_enabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_STRICT_INDEX_TEXT").is_none())
 }
 
 /// `LOFT_PLN25_DN1=1` (@PLN25 Phase-2 CONTRACT, IN PROGRESS) — the DEFAULT FLIP: a plain scalar

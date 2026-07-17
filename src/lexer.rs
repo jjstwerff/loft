@@ -1166,13 +1166,17 @@ impl Lexer {
             }
             val += &part;
         }
-        if let Some('e') = self.iter.peek() {
+        // Exponent: accept both `e` and `E`, and a `+` or `-` sign — the full
+        // JSON/IEEE form (`1E5`, `1e+5`).  Harmless for normal loft (no `<digit>E`
+        // literal exists today; hex `0x1E` is consumed in get_number before here).
+        // The `val` string is normalised to lowercase `e` for the f64/f32 parse.
+        if let Some('e' | 'E') = self.iter.peek() {
             f = true;
             val.push('e');
             self.next_char();
-            if let Some('-') = self.iter.peek() {
+            if let Some(sign @ ('-' | '+')) = self.iter.peek().copied() {
                 self.next_char();
-                val.push('-');
+                val.push(sign);
             }
             let (exp, _) = self.get_number();
             if exp.is_empty() {

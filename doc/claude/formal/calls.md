@@ -50,6 +50,32 @@ Uses [operational.md](operational.md)'s `⟨e, σ⟩ → ⟨e', σ'⟩` and [hea
 in the evaluation-order sense: arguments are values before the body sees them); loft has no lazy
 arguments.
 
+### Arity — every required parameter must be supplied (static)
+
+```
+  (F-Arity)   a call `f(a₁…aₖ)` is WELL-FORMED (checked before the program runs) only if every
+              parameter is filled.  A parameter is filled by a positional argument, a named
+              argument (`name: e`), or — when no argument targets it — a DEFAULT: a `= e` default
+              (bound to e) or a nullable type `τ?` (bound to null).  A parameter with NEITHER a
+              default nor a nullable type is REQUIRED: omitting it is a COMPILE ERROR (too FEW
+              arguments), and supplying more arguments than parameters is a COMPILE ERROR (too
+              MANY).  A compiler-inserted slot (a return buffer) is not a user parameter and is
+              exempt from the requirement.
+```
+
+**In words.** Every parameter must get a value. A parameter is optional only if it declares a
+default (`= e`) or is nullable (`τ?`, which defaults to `null`); otherwise it is required, and
+omitting it is a compile error — `missing argument for parameter '…' — the call supplies too few
+arguments` — just as passing extra arguments is (`Too many parameters`). loft does **not** silently
+fill a missing argument: an earlier "defaulted-null" lenience (a missing argument quietly became
+`null`/empty) was **removed** (2026-07-17), because it was a footgun — a missing function-typed
+argument filled a broken value and crashed the stdlib, and a missing scalar silently read `null`.
+Named arguments may fill parameters out of order and skip a middle parameter that carries a default
+(`f(a: 1, c: 3)` when `b` has one). Verified both backends. (Arity is about the *count*; a supplied
+argument's *nullability* is checked separately — passing a `τ?` value into a non-null parameter
+warns, or errors for a narrow width: [types.md](types.md)'s `N-Store` rule at the call-argument
+site.)
+
 ### The call binds parameters and yields the return value
 
 ```
@@ -127,6 +153,9 @@ OPEN: **0** (a *rules* doc — it shrinks operational.md's D-op-1, adds no code 
 ## Conformance
 
 - **Arg order (`F-Args`)** — `add(tag("A"), tag("B"))` prints `AB` before returning.
+- **Arity (`F-Arity`)** — `f(1)` for `fn f(a, b: integer)` (no default) → "missing argument for
+  parameter 'b' … too few arguments"; `f(1, 2, 3)` for a 2-param `f` → "Too many parameters"; a
+  `b = 5` default or a `b: integer?` nullable parameter may be omitted.
 - **Scalar copy (`F-ParamScalar`)** — `fn inc(n){ n=n+1 }` leaves the caller's `x==5`.
 - **Heap mutate-through (`F-ParamHeap`)** — `fn mut(e: E){ e.h=99 }` makes the caller's `o.h==99`;
   `fn f(v){ v[0]=99 }` makes the caller's `orig[0]==99`.

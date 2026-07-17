@@ -1,0 +1,71 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 F2 (DESIGN_DECISIONS C92) — a compound assignment evaluates its place
+// EXACTLY ONCE.  Before the fix `w[idx()] += 5` called `idx()` twice (nested
+// `m[i()][j()]` four times), and a divergent index read one slot but wrote
+// another — a silent-wrong.  The place's non-idempotent addressing sub-expressions
+// are now bound to a `_place` RefVar temp evaluated once (the internal `&place`).
+// Const/var indices are byte-identical (no user call → no hoist).
+
+struct Ctr {
+  n: integer,
+}
+struct Pt {
+  x: integer,
+  y: integer,
+}
+fn nxt(c: Ctr) -> integer {
+  c.n = c.n + 1; c.n
+}
+
+fn main() {
+  // --- call-count: a side-effecting index runs ONCE per compound ---
+  w = [10, 20, 30];
+  c = Ctr { n: 0 };
+  w[nxt(c)] += 5;
+  assert(c.n == 1 && w[1] == 25, "single-eval: n={c.n} w1={w[1]}");
+
+  // --- divergent index: read and write hit the SAME slot (no corruption) ---
+  v = [100, 200, 300];
+  d = Ctr { n: 0 };
+  v[nxt(d)] += 7;
+  assert(v[1] == 207 && v[2] == 300, "no-divergence: v1={v[1]} v2={v[2]}");
+
+  // --- nested place: each index level evaluated once ---
+  m = [[1, 2], [3, 4]];
+  e = Ctr { n: 0 };
+  f = Ctr { n: 0 };
+  m[nxt(e)][nxt(f)] += 100;
+  assert(e.n == 1 && f.n == 1 && m[1][1] == 104, "nested: e={e.n} f={f.n} m11={m[1][1]}");
+
+  // --- STRUCT FIELD at a NONZERO offset through a call-index: the field's addressing
+  // must hoist too. Before the fix the index ran twice, so a divergent index wrote
+  // one element's field from a value read at ANOTHER element (silent corruption). The
+  // scalar/nested cases above are all offset 0, so they never exercised this. ---
+  ps = [
+    Pt { x: 1, y: 2 },
+    Pt { x: 3, y: 4 },
+  ];
+  h = Ctr { n: 0 };
+  ps[nxt(h)].y += 5;
+  assert(
+    h.n == 1 && ps[1].y == 9 && ps[0].y == 2,
+    "struct-field: n={h.n} p1y={ps[1].y} p0y={ps[0].y}"
+  );
+
+  // --- every compound operator, side-effecting index (separate counters, each → 1) ---
+  a = [8, 40, 100];
+  g1 = Ctr { n: 0 }; a[nxt(g1)] -= 5; assert(a[1] == 35, "minus: {a[1]}");
+  g2 = Ctr { n: 0 }; a[nxt(g2)] *= 2; assert(a[1] == 70, "times: {a[1]}");
+  g3 = Ctr { n: 0 }; a[nxt(g3)] /= 10; assert(a[1] == 7, "div: {a[1]}");
+  assert(g1.n == 1 && g2.n == 1 && g3.n == 1, "op-count");
+
+  // --- const / var index unaffected (byte-identical path, still correct) ---
+  b = [1, 2, 3];
+  b[0] += 100; assert(b[0] == 101, "const-idx");
+  i = 2;
+  b[i] += 100; assert(b[2] == 103, "var-idx");
+
+  println("f2-place-once ok");
+}

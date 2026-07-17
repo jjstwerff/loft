@@ -17,6 +17,10 @@
 <p>Absolute value. Removes the sign from a negative integer.</p>
 </div>
 <div class="item">
+<pre><code>pub fn floor_mod(both: integer, divisor: integer) -&gt; integer?</code></pre>
+<p>Floor modulo — the remainder that takes the sign of the DIVISOR, so `x.floor_mod(n)` lands in `[0, n)` for a positive `n`.  The `%` operator truncates toward zero and keeps the DIVIDEND's sign (`-1 % 3 == -1`); `floor_mod` wraps (`(-1).floor_mod(3) == 2`), which is what circular indexing / wrap-around wants (`grid[(i - 1).floor_mod(w)]`).  `x.floor_mod(0)` is null, like `%` (C80 — an undefined value is a null, never a fault).</p>
+</div>
+<div class="item">
 <pre><code>pub fn abs(both: single) -&gt; single</code></pre>
 <p>Absolute value for single-precision floats.</p>
 </div>

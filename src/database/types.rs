@@ -243,6 +243,15 @@ impl Stores {
         tp != u16::MAX && matches!(self.types[tp as usize].parts, Parts::Struct(_))
     }
 
+    /// True if `tp` is a data-carrying enum variant (`Parts::EnumValue`) — a
+    /// struct-like record (a tag byte + the variant's packed fields).  A bare
+    /// variant value (e.g. `Circle { r: 2.0 }`) has this type; `size` treats it
+    /// like a struct, reporting its own packed record size.
+    #[must_use]
+    pub fn is_enum_value(&self, tp: u16) -> bool {
+        tp != u16::MAX && matches!(self.types[tp as usize].parts, Parts::EnumValue(_, _))
+    }
+
     /// @PLN16.J — resolve a struct field by **name** to `(position, content)`:
     /// `position` is the field's byte offset within the record (added to the
     /// struct's `DbRef.pos`, matching the `ShowDb` read path), `content` its
@@ -1664,10 +1673,12 @@ impl Stores {
 
     /// @PLN97 — a stable FNV-1a hash of the STORAGE layout of `roots` and every
     /// type they reference (record sizes + `Parts` field byte positions,
-    /// narrow-int encodings, collection element strides). Changes iff the byte
-    /// layout changes — the compact "layout identity" phases D (the schema
-    /// sidecar) and F (the compiler migration aid) embed and compare to decide a
-    /// raw-vs-serialize handoff. Sensitive to the #477 class (nested-vector
+    /// narrow-int encodings, collection element strides) AND the host endianness
+    /// (@PLN97 F9 — the store is a host-endian raw image, so the identity must
+    /// reject a same-layout store from the other endianness). Changes iff the byte
+    /// layout or host endianness changes — the compact "layout identity" phases D
+    /// (the schema sidecar) and F (the compiler migration aid) embed and compare to
+    /// decide a raw-vs-serialize handoff. Sensitive to the #477 class (nested-vector
     /// strides); pair it with the schema (`ir_schema::data_to_json`) for the full
     /// identity. NOT `DefaultHasher` (that is not stable across Rust versions).
     #[must_use]
@@ -1680,12 +1691,13 @@ impl Stores {
     }
 
     /// @PLN97 — a human-readable, stable dump of the STORAGE layout of `roots`
-    /// and every type they reference: one line per type, `name\tsize=N\t<parts>`,
-    /// sorted by name. `<parts>` renders the load-bearing layout facts only
-    /// (struct field byte positions, narrow-int encodings, collection element
-    /// strides — the #477 surface), keyed by type NAME so the dump is stable
-    /// across unrelated known-type renumbering. Backs [`layout_algo_hash`] and
-    /// the @PLN97 golden layout-conformance test.
+    /// and every type they reference: a leading `@endian\t<little|big>` line
+    /// (@PLN97 F9 — host endianness), then one line per type,
+    /// `name\tsize=N\t<parts>`, sorted by name. `<parts>` renders the load-bearing
+    /// layout facts only (struct field byte positions, narrow-int encodings,
+    /// collection element strides — the #477 surface), keyed by type NAME so the
+    /// dump is stable across unrelated known-type renumbering. Backs
+    /// [`layout_algo_hash`] and the @PLN97 golden layout-conformance test.
     ///
     /// [`layout_algo_hash`]: Self::layout_algo_hash
     #[must_use]
@@ -1698,6 +1710,20 @@ impl Stores {
         });
         use std::fmt::Write as _;
         let mut out = String::new();
+        // @PLN97 F9 — pin the HOST endianness in the layout identity. The store is a
+        // host-endian RAW image, so a byte-identical layout written on the other
+        // endianness is NOT a valid raw handoff; without this line the identity hash
+        // would match and misread it. Keep byte-identical with the twin in
+        // `descriptor.rs::render_dump` (guarded by `descriptor_render_reproduces_layout_dump`).
+        let _ = writeln!(
+            out,
+            "@endian\t{}",
+            if cfg!(target_endian = "big") {
+                "big"
+            } else {
+                "little"
+            }
+        );
         for kt in items {
             let _ = writeln!(
                 out,

@@ -7,7 +7,7 @@ fn test_rev_range_on_vector() {
   vrr_nums = [10, 20, 30, 40, 50];
   vrr_result = "";
   for vrr_e in vrr_nums[rev(0..=4)] {
-    if!vrr_e#first { vrr_result += ","; }
+    if !vrr_e#first { vrr_result += ","; }
     vrr_result += "{vrr_e}";
   }
   assert(vrr_result == "50,40,30,20,10", "rev range on vector: {vrr_result}");
@@ -42,7 +42,7 @@ fn test_index_tracking() {
   vit_v = [100, 200, 300];
   vit_str = "";
   for vit_e in vit_v {
-    if!vit_e#first { vit_str += ","; }
+    if !vit_e#first { vit_str += ","; }
     vit_str += "{vit_e#index}={vit_e}";
   }
   assert(vit_str == "0=100,1=200,2=300", "index tracking: {vit_str}");

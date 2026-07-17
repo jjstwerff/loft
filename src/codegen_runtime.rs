@@ -4014,55 +4014,113 @@ pub fn coroutine_is_exhausted(gen_ref: DbRef) -> bool {
 // Under `--features wasm` each function calls the host bridge; otherwise it
 // calls the real filesystem.
 
-/// Delete `path`.  Returns `true` on success.
-#[must_use]
-pub fn fs_delete(path: &str) -> bool {
-    #[cfg(feature = "wasm")]
-    {
-        crate::wasm::host_fs_delete(path) == 0
-    }
-    #[cfg(not(feature = "wasm"))]
-    {
-        std::fs::remove_file(path).is_ok()
+// Filesystem-op result codes shared by the interpreter and the native runtime.
+// The `default/02_files.loft` wrappers map these to `FileResult` variants via an
+// explicit `match`, so the codes are deliberately decoupled from the enum's
+// declaration order — reordering the loft enum can never silently remap a code.
+const FS_OK: i64 = 0;
+const FS_OTHER: i64 = 9;
+#[cfg(not(feature = "wasm"))]
+const FS_NOT_FOUND: i64 = 1;
+#[cfg(not(feature = "wasm"))]
+const FS_PERMISSION_DENIED: i64 = 2;
+#[cfg(not(feature = "wasm"))]
+const FS_IS_DIRECTORY: i64 = 3;
+
+/// Classify a filesystem mutation's result into an `FS_*` code.  `dir_is_err`
+/// asks for the "target is a directory" failure to be reported as
+/// `FS_IS_DIRECTORY` (true for `remove_file`, which refuses directories); it is
+/// detected by a portable `fs_is_dir` stat rather than `ErrorKind::IsADirectory`,
+/// which only stabilised in Rust 1.83 and this file is recompiled by the user's
+/// rustc for `--native`.
+#[cfg(not(feature = "wasm"))]
+fn fs_classify(r: std::io::Result<()>, path: &str, dir_is_err: bool) -> i64 {
+    match r {
+        Ok(()) => FS_OK,
+        Err(e) => {
+            // "target is a directory" must be checked BEFORE PermissionDenied: Linux
+            // reports `remove_file` on a directory as EISDIR, but macOS/BSD report it as
+            // EPERM (→ ErrorKind::PermissionDenied).  Consulting the portable `fs_is_dir`
+            // stat first makes a directory target classify as FS_IS_DIRECTORY uniformly,
+            // instead of leaking the platform's errno (a real EPERM on a *file* still
+            // falls through, because `fs_is_dir` is false for it and for a missing path).
+            if dir_is_err && fs_is_dir(path) {
+                return FS_IS_DIRECTORY;
+            }
+            match e.kind() {
+                std::io::ErrorKind::NotFound => FS_NOT_FOUND,
+                std::io::ErrorKind::PermissionDenied => FS_PERMISSION_DENIED,
+                _ => FS_OTHER,
+            }
+        }
     }
 }
 
-/// Rename / move `from` to `to`.  Returns `true` on success.
-#[must_use]
-pub fn fs_move(from: &str, to: &str) -> bool {
+/// Delete file `path`.  Returns an `FS_*` code (mapped to `FileResult` by the
+/// `delete` wrapper).  A directory target yields `FS_IS_DIRECTORY`.
+pub fn fs_delete(path: &str) -> i64 {
     #[cfg(feature = "wasm")]
     {
-        crate::wasm::host_fs_move(from, to) == 0
+        if crate::wasm::host_fs_delete(path) == 0 {
+            FS_OK
+        } else {
+            FS_OTHER
+        }
     }
     #[cfg(not(feature = "wasm"))]
     {
-        std::fs::rename(from, to).is_ok()
+        fs_classify(std::fs::remove_file(path), path, true)
     }
 }
 
-/// Create directory `path`.  Returns `true` on success.
+/// Rename / move `from` to `to`.  Returns an `FS_*` code.
 #[must_use]
-pub fn fs_mkdir(path: &str) -> bool {
+pub fn fs_move(from: &str, to: &str) -> i64 {
     #[cfg(feature = "wasm")]
     {
-        crate::wasm::host_fs_mkdir(path) == 0
+        if crate::wasm::host_fs_move(from, to) == 0 {
+            FS_OK
+        } else {
+            FS_OTHER
+        }
     }
     #[cfg(not(feature = "wasm"))]
     {
-        std::fs::create_dir(path).is_ok()
+        fs_classify(std::fs::rename(from, to), from, false)
     }
 }
 
-/// Create directory `path` and all parents.  Returns `true` on success.
+/// Create directory `path`.  Returns an `FS_*` code.
 #[must_use]
-pub fn fs_mkdir_all(path: &str) -> bool {
+pub fn fs_mkdir(path: &str) -> i64 {
     #[cfg(feature = "wasm")]
     {
-        crate::wasm::host_fs_mkdir_all(path) == 0
+        if crate::wasm::host_fs_mkdir(path) == 0 {
+            FS_OK
+        } else {
+            FS_OTHER
+        }
     }
     #[cfg(not(feature = "wasm"))]
     {
-        std::fs::create_dir_all(path).is_ok()
+        fs_classify(std::fs::create_dir(path), path, false)
+    }
+}
+
+/// Create directory `path` and all parents.  Returns an `FS_*` code.
+#[must_use]
+pub fn fs_mkdir_all(path: &str) -> i64 {
+    #[cfg(feature = "wasm")]
+    {
+        if crate::wasm::host_fs_mkdir_all(path) == 0 {
+            FS_OK
+        } else {
+            FS_OTHER
+        }
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        fs_classify(std::fs::create_dir_all(path), path, false)
     }
 }
 

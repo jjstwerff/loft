@@ -92,8 +92,10 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
 > **One former, representation derived — the integer model applied to null.** `τ?` is the
 > *optional* type ("a `τ`, or `null`"). **Storage is non-null by default**: a binding,
 > field, or `vector` element of type `τ` never holds `null` — `τ?` is the *only* way a slot
-> admits it. `not null` is accepted but a **no-op** (non-null is already the default; kept
-> for source back-compat). Null enters values only through the **fallible operations**
+> admits it. `not null` still parses (kept for source back-compat) but is **deprecated**: it
+> is a semantic no-op (non-null is already the default) and, since #546, WARNS ("`not null` is
+> deprecated and has no effect… delete `not null`") rather than staying silent. Null enters
+> values only through the **fallible operations**
 > below, which synthesise `τ?`; it leaves only through an explicit **discharge** (`??` /
 > `match`). There is no implicit unwrap.
 
@@ -125,7 +127,10 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
   elimination (discharge — REQUIRED; there is NO  τ? ⤳ τ)
   (N-Coal)     Γ ⊢ e ⇒ τ?,  Γ ⊢ d ⇐ τ                ⟹   Γ ⊢ (e ?? d) ⇒ τ
   (N-Match)    match e { null ⇒ …,  x ⇒ …(x:τ)… }      eliminates τ?, binds the τ arm
-  (N-Store)    storing  e:τ?  into a  τ  slot is ILL-TYPED — discharge first
+  (N-Store)    storing  e:τ?  into a  τ  slot without discharge is REJECTED — a WARNING for
+               most τ (the null is representable-and-distinct in τ's non-null form), a hard
+               ERROR only for narrow widths (u8…u32, § Null-flow below, where the null would
+               collide with a real value); discharge first (`?? d` / `match`) either way
 
   inference — declared vs inferred storage (the "by definition vs by use" split)
   (N-Decl)     a DECLARED slot `x: τ` is a COMMITMENT: `x = e` checks `e ⇐ τ`. If e:τ? it is
@@ -134,7 +139,7 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
                iff some `τᵢ` is optional.  `?` rides the SAME join as integer width `(I-Join)`
                — `integer ⊔ integer? = integer?`.
 
-  @PLN102 (spec-first — see § Null-flow, the general laws below):
+  @PLN102 (SHIPPED, default-on since 2026-07-11 — see § Null-flow, the general laws below):
    · (N-Prop)   null PROPAGATES through arithmetic (a:τ? op b ⇒ τ?), across every type.
    · (N-Parse)  FOLDS INTO (N-Cast): a parse is a cast — `s as τ` asserts (non-null), `s as
                 τ?` checks.  The auto-`τ?` reading above is superseded.
@@ -222,10 +227,14 @@ and *stored*. They are checked **throughout the stack** by a cross-type conforma
 (each type × each law, both backends), so a gap in any one type is a caught deviation, not a
 silent hole.
 
-**Spec-first (2026-07-11):** (N-Prop), the (N-Store) warn/error split, the (N-Domain)
-generalisation, and folding (N-Parse) into (N-Cast) are the @PLN102 target — the code does not
-fully conform yet (float `/` still types non-null; the store is a uniform hard error;
-`text as τ` still auto-wraps to `τ?`). Tracked in
+**Shipped (2026-07-11, default-on — @PLN102 #559; `nullflow_enabled()` in `src/keys.rs`, opt-out
+`LOFT_NO_NULLFLOW`):** (N-Prop), the (N-Store) warn/error split, the (N-Domain) generalisation,
+and folding (N-Parse) into (N-Cast) are live across every type, verified both backends. Float
+`/`/`%` and the domain-partial functions (`sqrt`, `ln`, `log`, `asin`, `acos`, `pow`) now type
+`τ?` exactly like integer `/`/`%`: a variable-divisor `1.0 / b` stored into a non-null `float`
+WARNS (the (N-Store) split above, not a uniform hard error); and a text parse `s as float` is
+now a hard COMPILE ERROR ("a text parse `as float` may fail — use `float?`"), superseding the
+old auto-`τ?` reading. Design record:
 [../plans/102-stability-contract/float-null-domain-typing.md](../plans/102-stability-contract/float-null-domain-typing.md).
 
 ```
@@ -383,22 +392,26 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **1** (spec-first) — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02);
-D1/D2/D4 closed by fix/reconciliation.  The one open item is the **@PLN102 DN3-Float
-extension** (below): the rule is written 2026-07-11 ahead of the code (spec-first), so
-float `/`/`%` and the domain-partial float functions still type non-null until it lands.
-Every DN1–DN6 entry is CLOSED, retained as the record.  Per-situation mitigation
-catalogue: [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
+OPEN: **0** — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
+default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
+exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
+record.  Per-situation mitigation catalogue:
+[../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
 
 ### DN1 — CLOSED (2026-07-02): scalar / field storage is non-null by default
 `(N-Dense)` now holds for scalars + struct fields, not just vector elements: a plain
 `integer`/`text`/`bool`/`float`/`char` field/local/return is NON-null by default (nullability
-rides `?`/`Optional`), and `not null` is a redundant no-op — stripped from in-tree source; the
-parser still ACCEPTS it for backward compat pending the registry republish (task #4). `a.x = null`
+rides `?`/`Optional`), and `not null` is redundant — stripped from in-tree source; the parser
+still ACCEPTS it for backward compat pending the registry republish (task #4), and (since #546)
+WARNS "deprecated and has no effect" rather than staying silent. `a.x = null`
 on `x: integer` is now a compile error ("declare it `integer?`"). Landed: the DN1 default flip
 (PR #471, default-on; `LOFT_PLN25_OFF` opts the whole model out) + the F2 field-attribute flip for
 ALL scalars + the `not null` source strip + parser no-op. Enforced by `(N-Store)`/`(N-Decl)` at
-return / field / typed-store / index sites. Both backends.
+return / field / typed-store / index / call-argument sites — the last (a nullable `τ?` passed
+into a non-null PARAMETER) closed 2026-07-16 (`callarg_nstore_enabled`, `src/keys.rs`; the
+identical warn/error split at the `process_call_args` chokepoint, opt-out
+`LOFT_NO_CALLARG_NSTORE`). Both backends.
 
 ### DN2 — CLOSED (2026-07-02): no implicit `S? ⤳ S` unwrap
 The implicit `Enum(__nullable<S>) ⤳ Reference(S)` (and scalar `τ? ⤳ τ`) unwrap is gone — a `τ?`
@@ -473,7 +486,7 @@ widening it underflowed `fn_return`'s discard / native E0308), so a text null-st
 `s: text? = null`. Regression: `tests/scripts/25-null-join.loft` + reject twins in
 `102-expected-errors.loft`.
 
-### DN3-Float — @PLN102 pre-freeze (spec-first, 2026-07-11): float/single `/`, `%`, and domain-partial functions type `τ?`
+### DN3-Float — CLOSED (2026-07-11, shipped default-on, @PLN102 #559): float/single `/`, `%`, and domain-partial functions type `τ?`
 
 > This is the **float instance** of the general **§ Null-flow laws** (N-Domain / N-Prop /
 > N-Cast / N-Store) above — those laws hold for every type; this entry records the float
@@ -497,9 +510,12 @@ from an input a normal program reaches** — the DN3 boundary read across to flo
   proof keeps `x / 2.0` and a guarded `if b != 0.0` non-null); `sqrt` (arg `< 0`);
   `ln`/`log`/`log2`/`log10` (arg `≤ 0`); `asin`/`acos` (arg outside `[-1, 1]`); `pow` (base
   `< 0` ∧ fractional exp — resolved 2026-07-11: a genuine domain error, folded in). A
-  **provably-in-domain constant argument blocks the `τ?`** — `sqrt(4.0)`, `sqrt(PI)`,
-  `ln(2.0)` stay non-null (the function analogue of the constant-non-zero divisor); a
-  *variable* argument is `τ?`. A constant *out-of-domain* argument (`sqrt(-1.0)`) may warn
+  **provably-in-domain argument blocks the `τ?`** — not just a literal constant (`sqrt(4.0)`,
+  `sqrt(PI)`, `ln(2.0)`) but any expression the sign/interval lattice proves in-domain
+  (`sqrt(dx*dx + dy*dy)`, `sqrt(max(x, 0.01))`, `asin(clamp(e, -1, 1))` all stay non-null,
+  @PLN102 #581, 2026-07-16 — [design](../plans/102-stability-contract/soften-nullflow-discharge.md));
+  an argument that is **not** provably in-domain is `τ?` (bare `sqrt(x)` on an unknown-sign `x`
+  stays nullable). A constant *out-of-domain* argument (`sqrt(-1.0)`) may warn
   *"always null"*, the parallel of the existing constant-`/0` warning.
 - **Non-null (C85-style decided edge):** `sin`/`cos`/`tan`/`atan`/`atan2`/`exp`/`abs`/
   `ceil`/`floor`/`round` — a *finite* argument is always finite; NaN arises only from an
@@ -536,11 +552,12 @@ both backends), so the type only has to stop lying:
 
 Together, a `float?` rides through inference, arithmetic, comparison, interpolation, and
 calls, and is nudged only at a non-null STORAGE site (field / return / explicitly-typed
-local). Mechanism: extend the
-`div_nullable` gate to `Float`/`Single` (the nullable runtime peers `OpDiv{Float,Single}Nullable`
-+ the `??`-swap already exist, phase 4f.5); set the domain-partial function return types in
-`default/01_code.loft` to `float?`/`single?`. **Spec-first: the code does NOT yet conform;
-implementation, the pow / domain-proving forks, and the conversion set are tracked in
+local / call-argument). Mechanism (shipped): the
+`div_nullable` gate was extended to `Float`/`Single` (the nullable runtime peers
+`OpDiv{Float,Single}Nullable` + the `??`-swap, phase 4f.5); the domain-partial function return
+types in `default/01_code.loft` are `float?`/`single?`. **Shipped, default-on 2026-07-11
+(@PLN102 #559), verified both backends; the pow / domain-proving forks and the conversion set
+are recorded in
 [../plans/102-stability-contract/float-null-domain-typing.md](../plans/102-stability-contract/float-null-domain-typing.md).**
 
 ### D2 — CLOSED by reconciliation (2026-06-24): `integer` = i64 is a *user-visible* contract met by a *compact* internal encoding

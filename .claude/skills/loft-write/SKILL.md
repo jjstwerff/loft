@@ -631,7 +631,7 @@ Two lambda syntaxes, each with a clear job:
 ```loft
 fn double(x: integer) -> integer { x * 2 }
 
-doubled  = map(nums, fn double);          // named function ref
+doubled  = map(nums, double);             // named function ref — bare name, no `fn` prefix
 positive = filter(nums, |x| { x > 0 });  // inferred lambda
 total    = reduce(nums, 0, |a, b| { a + b });
 

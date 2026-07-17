@@ -2958,7 +2958,16 @@ impl Parser {
         // creates the monomorphised def.  First-pass IR for the call
         // is `Value::Null` placeholder; second-pass re-parse builds
         // the real `Value::Call`.
-        if d_nr == u32::MAX && !self.default {
+        // @PLN102 arc C — generic instantiation is CALLER-SOURCE-AGNOSTIC: a
+        // stdlib fn calling a generic (`sum_of`→`sum`) instantiates it exactly like
+        // a user program does.  The old `&& !self.default` guard skipped the stdlib
+        // parse, so a stdlib-internal generic call resolved to "Unknown function"
+        // (surfaced by the step-6 dogfood).  Inert for the current stdlib — no
+        // stdlib call was a generic — and inert for a non-generic unresolved name
+        // (`predict_generic_return_type` / `try_generic_instantiation` return
+        // Unknown/MAX with no side effect, so it falls through to "Unknown function"
+        // exactly as before).
+        if d_nr == u32::MAX {
             if self.first_pass {
                 let predicted = self.predict_generic_return_type(name, types);
                 if !predicted.is_unknown() {
@@ -3040,6 +3049,164 @@ impl Parser {
                 );
             } else {
                 diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            }
+            Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Vector(_, _))
+        {
+            // @PLN110 1a: `size(v)` for `v: vector<T>` = element count × the
+            // element's in-buffer stride (a heap element — text, nested
+            // collection, linked struct — counts as its 4-byte record pointer,
+            // never the target's content).  Dispatched here (not a stdlib
+            // overload) because the stride is type-derived — the SAME
+            // `vector_elem_iter_stride` iteration walks the buffer with — and
+            // only known at parse time.  Strict arity / named-arg gates mirror
+            // `len(ix)` above; `size(v, x)` falls through to the standard error.
+            let op_d_nr = self.data.def_nr("OpSizeVector");
+            if let Type::Vector(inner, _) = &types[0]
+                && op_d_nr != u32::MAX
+            {
+                let elem = (**inner).clone();
+                let stride = self.vector_elem_iter_stride(&elem);
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(stride)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Reference(_, _))
+        {
+            // @PLN110 1b: `size(s)` for a struct `s` = its packed record size — a
+            // compile-time constant (all instances of a struct type share one
+            // layout).  Inline fields and inline sub-records count fully; `text` /
+            // collection / reference fields count as their 4-byte stored width
+            // (allocation-local).  The argument is still evaluated for its side
+            // effects (the op consumes it); only its type feeds the const size.
+            // A bare enum-variant value (`Circle { r: 2.0 }`) is also a
+            // `Type::Reference`, to an `EnumValue` — a struct-like record — so it is
+            // handled here too, reporting the variant's own packed record size.  A
+            // `Type::Reference` that is NEITHER a struct NOR a variant record is not
+            // a valid `size` target: emit the standard error (never a silent
+            // `Unknown`, which would leave the call unresolved).
+            let known = self.get_type(&types[0]);
+            let op_d_nr = self.data.def_nr("OpSizeStruct");
+            if known != u16::MAX
+                && op_d_nr != u32::MAX
+                && (self.database.is_struct(known) || self.database.is_enum_value(known))
+            {
+                let sz = self.database.size(known);
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(sz)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(
+                types[0],
+                Type::Integer(_) | Type::Float | Type::Boolean | Type::Character | Type::Single
+            )
+        {
+            // @PLN110 1e: `size(x)` for a scalar `x` = its storage width — a
+            // compile-time constant (L-Scalar / L-Narrow).  The arg is evaluated
+            // for its side effects (every scalar is one 8-byte eval-stack slot,
+            // which the op consumes) but only its type feeds the const width.
+            // Integers go through the FINISHED type (`get_type` → `database.size`)
+            // so a narrow / `forced_size` width (u8 1, u16 2, i32 4) is honoured —
+            // `Type::size` reads the value range only and would over-report i32 as
+            // 8.  The other scalars have a fixed width via `element_size`
+            // (boolean 1, character / single 4, float 8).
+            let known = self.get_type(&types[0]);
+            let sz: u16 = if matches!(types[0], Type::Integer(_)) && known != u16::MAX {
+                self.database.size(known)
+            } else {
+                crate::data::element_size(&types[0]) as u16
+            };
+            let op_d_nr = self.data.def_nr("OpSizeScalar");
+            if op_d_nr != u32::MAX {
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(sz)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Sorted(_, _, _))
+        {
+            // @PLN110 1d: a `sorted` shares vector's length-prefixed buffer, so its
+            // size is that buffer = element count × the element's in-buffer stride
+            // (identical to `size(vector)` — reuse `OpSizeVector`).
+            let elem = types[0].content();
+            let stride = self.vector_elem_iter_stride(&elem);
+            let op_d_nr = self.data.def_nr("OpSizeVector");
+            if op_d_nr != u32::MAX {
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(stride)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Index(_, _, _) | Type::Radix(_, _, _))
+        {
+            // @PLN110 1d: an `index` (red-black tree) / `spatial` (radix/Morton tree)
+            // keeps its ordering as bookkeeping embedded IN each element record —
+            // there is NO separate structure allocation to sum, so `size` reports a
+            // SINGLE node record's size (a compile-time constant), reusing the
+            // struct-record path.  The arg is evaluated; only its element type feeds
+            // the const record size.
+            let elem_kt = match &types[0] {
+                Type::Index(tp, _, _) | Type::Radix(tp, _, _) => self.data.def(*tp).known_type(),
+                _ => u16::MAX,
+            };
+            let op_d_nr = self.data.def_nr("OpSizeStruct");
+            if elem_kt != u16::MAX && op_d_nr != u32::MAX {
+                let sz = self.database.size(elem_kt);
+                let mut args = list.to_vec();
+                args.push(Value::Int(i32::from(sz)));
+                *code = Value::Call(op_d_nr, args);
+                return crate::data::I64.clone();
+            }
+            Type::Unknown(0)
+        } else if name == "size"
+            && types.len() == 1
+            && named_args.is_empty()
+            && matches!(types[0], Type::Enum(_, _, _))
+        {
+            // @PLN110 enums: a SIMPLE enum (no data-carrying variant) is a 1-byte
+            // inline discriminant — scalar-like, reuse `OpSizeScalar` (an 8-byte eval
+            // slot it consumes); a DATA enum is a `DbRef` to a record (1-byte tag +
+            // the max variant's packed fields) — struct-like, reuse `OpSizeStruct`.
+            // `database.size` gives the right width either way (1 vs the record size);
+            // only the op differs, because the two are delivered differently (inline
+            // value vs reference). The arg is evaluated; only its type feeds the const.
+            let known = self.get_type(&types[0]);
+            if known != u16::MAX {
+                let sz = self.database.size(known);
+                let op_name = if matches!(types[0], Type::Enum(_, true, _)) {
+                    "OpSizeStruct"
+                } else {
+                    "OpSizeScalar"
+                };
+                let op_d_nr = self.data.def_nr(op_name);
+                if op_d_nr != u32::MAX {
+                    let mut args = list.to_vec();
+                    args.push(Value::Int(i32::from(sz)));
+                    *code = Value::Call(op_d_nr, args);
+                    return crate::data::I64.clone();
+                }
             }
             Type::Unknown(0)
         } else {
@@ -6083,6 +6250,29 @@ impl Parser {
         self.add_defaults(d_nr, &mut actual, &mut all_types);
         let tp = self.call_dependencies(d_nr, &all_types);
         *code = Value::Call(d_nr, actual);
+        // @PLN102 arc C step 3 — the recommended-idiom STEER.  A resolved call FROM
+        // OWNED source (the entry project) to a `#superseded "Y"` symbol warns the
+        // author toward `Y`; the old form keeps working (a never-break signpost, not
+        // a removal).  The caller-provenance gate (`caller_source_is_owned`) means a
+        // consumer re-parsing a dependency's source is NEVER nagged about the
+        // dependency's internal old-idiom use — only whoever can act sees it.
+        // Second-pass + `report` only, so it fires exactly once per call site;
+        // `LOFT_NO_STEER` opts out; inert until a symbol is actually marked.
+        if report
+            && !self.first_pass
+            && crate::keys::steer_enabled()
+            && self.data.caller_source_is_owned()
+        {
+            let succ = self.data.def(d_nr).superseded().to_string();
+            if !succ.is_empty() {
+                let shown = self.data.def(d_nr).display_name().to_string();
+                diagnostic!(
+                    self.lexer,
+                    Level::Warning,
+                    "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
+                );
+            }
+        }
         tp
     }
 
@@ -6415,6 +6605,46 @@ impl Parser {
                 }
                 let default = self.data.def(d_nr).attributes()[a_nr].value.clone();
                 let tp = self.data.attr_type(d_nr, a_nr);
+                // Arity: a slot with NO provided argument and NO explicit default is a
+                // too-few-arguments error. loft's old "defaulted-null args" lenience (omit a trailing
+                // arg → null/empty fill) was REMOVED (owner decision 2026-07-17): it was a footgun —
+                // a real consumer hit it as both a stdlib SIGSEGV (a missing fn-typed arg fills a
+                // broken `()`) and a silent-wrong (a missing scalar fills null). Skip the cases that
+                // are NOT a user argument:
+                //  · a NULLABLE param defaults to null (still optional);
+                //  · a `= expr` default (value != Null) is filled below;
+                //  · a COMPILER-inserted return slot — `hidden` (a `ref_return` out-buffer), a
+                //    `__`-prefixed name (`__retbuf` / `__work_N` / `__tret`), OR an attr the RETURN
+                //    VALUE depends on (a local promoted to a caller buffer, e.g. a returned view
+                //    `return tv[0]` keeps the local's name, so `returned.depend()` names that index).
+                // Pass 1 defers (a forward-ref `&` arg lowers to Null and only looks missing then);
+                // the named-param feature made an internal Null slot normal, which lost this check.
+                let (a_name, a_hidden) = {
+                    let a = &self.data.def(d_nr).attributes()[a_nr];
+                    (a.name.clone(), a.hidden)
+                };
+                let promoted = a_hidden
+                    || a_name.starts_with("__")
+                    || self
+                        .data
+                        .def(d_nr)
+                        .returned
+                        .depend()
+                        .contains(&(a_nr as u16));
+                if !self.first_pass
+                    && default == Value::Null
+                    && !matches!(tp, Type::Optional(_))
+                    && !promoted
+                {
+                    let fname = self.data.def(d_nr).display_name().to_string();
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "missing argument for parameter '{a_name}' of `{fname}` — the call supplies \
+                         too few arguments (add it, or give the parameter a default `= …`)"
+                    );
+                    continue;
+                }
                 if let Type::Vector(content, _) = &tp {
                     assert_eq!(
                         default,

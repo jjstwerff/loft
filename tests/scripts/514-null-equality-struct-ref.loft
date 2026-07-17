@@ -29,16 +29,16 @@ fn main() {
   // --- nullable struct-reference variable ---
   s: DT? = null;
   assert(s == null, "null struct ref: == null is true");
-  assert(! (s != null), "null struct ref: != null is false");
+  assert(!(s != null), "null struct ref: != null is false");
 
   d = DT { ms: 5 };
   s2: DT? = d;
-  assert(! (s2 == null), "present struct ref: == null is false");
+  assert(!(s2 == null), "present struct ref: == null is false");
   assert(s2 != null, "present struct ref: != null is true");
 
   // null on the left
   assert(null == s, "null on the left: null == (null ref) is true");
-  assert(! (null == s2), "null on the left: null == (present ref) is false");
+  assert(!(null == s2), "null on the left: null == (present ref) is false");
 
   // `??` must agree with `== null`
   a = s ?? DT { ms: 99 };

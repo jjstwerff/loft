@@ -408,6 +408,7 @@ fn write_definition(stores: &mut Stores, r: &Record, d: &Definition) {
     r.set_field_str(stores, ds::DEF_RUST, &d.rust);
     r.set_field_str(stores, ds::DEF_NATIVE, &d.native);
     r.set_field_str(stores, ds::DEF_CAP, &d.cap); // @PLN86
+    r.set_field_str(stores, ds::DEF_SUPERSEDED, &d.superseded); // @PLN102 arc C
     r.set_field_int(stores, ds::DEF_OP_CODE, i64::from(d.op_code));
     r.set_field_int(stores, ds::DEF_KNOWN_TYPE, i64::from(d.known_type));
     write_function(stores, r, ds::DEF_VARIABLES, &d.variables);

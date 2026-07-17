@@ -33,7 +33,7 @@ fn main() {
 
   payload = "ABCD";
   ok = h.send_binary(payload);
-  if !ok {
+  if!ok {
     println("v5-t1c: send-failed");
     h.close();
     return;
@@ -58,7 +58,7 @@ fn main() {
     web::sleep_ms(5);
   }
   op = h.last_opcode();
-  println("v5-t1c: recv opcode={op} len={got.len()}");
+  println("v5-t1c: recv opcode={op} len={got.size()}");
 
   if op != 2 {
     println("v5-t1c: opcode-mismatch op={op}");

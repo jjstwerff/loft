@@ -103,13 +103,13 @@ fn read_valid_pids() -> vector<text> {
     f = file("doc/claude/PROBLEMS.md");
     if f.format == Format.NotExists { return out; }
     src = f.content();
-    n = src.len();
+    n = src.size();
     line_start = 0;
     i = 0;
     while i <= n {
         if i == n || src[i] == '\n' {
             line = src[line_start..i];
-            ll = line.len();
+            ll = line.size();
             // Match `^| <digits> |` (open form).
             if ll > 4 && line[0] == '|' && line[1] == ' '
                 && ll > 2 && is_digit_leaf(line[2]) {
@@ -178,7 +178,7 @@ fn walk_plan_dirs(root: text, out: vector<text>) {
         // Plan dir basenames start with digits, then `-`.
         cp = child.path;
         base = cp.basename();
-        bl = base.len();
+        bl = base.size();
         if bl < 2 { continue; }
         first_c = base[0];
         if !is_digit_leaf(first_c) { continue; }
@@ -213,7 +213,7 @@ fn set_contains(valid_set: vector<text>, needle: text) -> boolean {
 // refs (`legacy:P<n>`, `legacy:plan-<n>`) are accepted as-is
 // (the migration index doesn't gate them — same as scan.sh).
 fn tag_is_valid(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) -> boolean {
-    tlen = tag.len();
+    tlen = tag.size();
     if tlen == 0 { return true; }
     // Legacy refs are never marked broken.
     if tag.starts_with("legacy:") { return true; }
@@ -412,7 +412,7 @@ const BYTE_HYPHEN   = 45;   // '-'
 
 fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>) {
     if is_noindex_line(line) { return; }
-    n = line.len();
+    n = line.size();
     if n < 3 { return; }
     // Compute the JSON-escaped context once per line that has any
     // potential match — the inner loop emits one row per tag, and
@@ -685,7 +685,7 @@ const BYTE_SLASH    = 47;   // '/'
 
 fn scan_link_line(file_path: text, line_no: integer, line: text, base_dir: text, out: vector<LinkRef>) {
     if is_noindex_line(line) { return; }
-    nl = line.len();
+    nl = line.size();
     if nl < 6 { return; }
     ctx_esc = "";
     ctx_escaped = false;
@@ -706,7 +706,7 @@ fn scan_link_line(file_path: text, line_no: integer, line: text, base_dir: text,
         }
         if lj == nl || line.byte_at(lj) != BYTE_RPAREN { li = li + 1; continue; }
         inner = line[li + 2..lj];
-        ilen = inner.len();
+        ilen = inner.size();
         if ilen < 4 {
             li = lj + 1;
             continue;
@@ -730,7 +730,7 @@ fn scan_link_line(file_path: text, line_no: integer, line: text, base_dir: text,
         // `\.md(#…)?`, so every link target must end `.md`
         // before the optional `#`.  Avoids picking up `.png`
         // / `.html` / arbitrary URL paths.
-        tlen = target_raw.len();
+        tlen = target_raw.size();
         if tlen < 3 || !(target_raw.byte_at(tlen - 3) == BYTE_DOT
             && target_raw.byte_at(tlen - 2) == BYTE_M_LOWER
             && target_raw.byte_at(tlen - 1) == BYTE_D_LOWER) {
@@ -783,7 +783,7 @@ fn emit_row(tag: text, file_path: text, line_no: integer, ctx_escaped: text, val
 fn normalize_path(p: text) -> text {
     out = "";
     i = 0;
-    n = p.len();
+    n = p.size();
     while i < n {
         c = p[i];
         if c == '\\' { out += "/"; } else { out += "{c}"; }
@@ -914,7 +914,7 @@ fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>,
     fence_marker = "";
     line_no = 1;
     start = 0;
-    n = src.len();
+    n = src.size();
     i = 0;
     while i < n {
         if src[i] == '\n' {
@@ -959,7 +959,7 @@ fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>,
 // Strip leading ASCII whitespace (spaces + tabs).  Cheap;
 // only used for fence-marker detection.
 fn lstrip_ws(s: text) -> text {
-    n = s.len();
+    n = s.size();
     i = 0;
     while i < n && (s[i] == ' ' || s[i] == '\t') { i = i + 1; }
     if i == 0 { return s; }
@@ -971,7 +971,7 @@ fn lstrip_ws(s: text) -> text {
 // either character); "" otherwise.  Mirrors scan.sh's
 // `substr(stripped, 1, 3) == "\`\`\`"` check.
 fn is_fence_marker(stripped: text) -> text {
-    n = stripped.len();
+    n = stripped.size();
     if n < 3 { return ""; }
     if stripped[0] == '`' && stripped[1] == '`' && stripped[2] == '`' { return "```"; }
     if stripped[0] == '~' && stripped[1] == '~' && stripped[2] == '~' { return "~~~"; }
@@ -1189,7 +1189,7 @@ fn emit_link_bucket(target: text, links: vector<LinkRef>) {
 // extraction, which strips the optional `legacy:` prefix before
 // the set-diff against VALID_PIDS / VALID_PLANS).
 fn tag_is_broken(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) -> boolean {
-    tlen = tag.len();
+    tlen = tag.size();
     work = tag;
     wlen = tlen;
     if tag.starts_with("legacy:") {
@@ -1276,7 +1276,7 @@ fn emit_broken_array(rows: vector<RawRef>, valid_pids: vector<text>,
 fn severity_is_open(sev: text) -> boolean {
     lower = sev.to_lowercase();
     if lower.find("(partial") >= 0 { return true; }
-    n = lower.len();
+    n = lower.size();
     pos = 0;
     while pos < n {
         rel = lower[pos..n].find("open") ?? -1;
@@ -1307,8 +1307,8 @@ fn severity_is_open(sev: text) -> boolean {
 fn strip_tag_prefix(body: text, id: text) -> text {
     s = body.trim();
     prefix = "**@P{id}** — ";
-    plen = prefix.len();
-    slen = s.len();
+    plen = prefix.size();
+    slen = s.size();
     if slen >= plen && s.starts_with(prefix) {
         return s[plen..slen];
     }
@@ -1323,7 +1323,7 @@ fn truncate_summary(body: text) -> text {
     if pos > 0 {
         summary = summary[0..pos + 1];
     }
-    if summary.len() > 280 {
+    if summary.size() > 280 {
         summary = summary[0..277] + "...";
     }
     summary
@@ -1332,7 +1332,7 @@ fn truncate_summary(body: text) -> text {
 // True for a PROBLEMS.md row prefix `| <digits> ` (the issue
 // number).  Cheap pre-filter before the more expensive split('|').
 fn is_problems_row(line: text) -> boolean {
-    n = line.len();
+    n = line.size();
     if n < 5 || !line.starts_with("| ") { return false; }
     j = 2;
     if line[j] < '0' || line[j] > '9' { return false; }
@@ -1367,7 +1367,7 @@ fn read_plan_title(readme_path: text) -> text {
     if f.format == Format.NotExists { return ""; }
     for line in f.lines() {
         if line.starts_with("# ") {
-            n = line.len();
+            n = line.size();
             return line[2..n].trim();
         }
     }
@@ -1397,7 +1397,7 @@ fn collect_plans_dir(dir_path: text, set: PlanSet) {
         title = read_plan_title(readme);
         if title == "" { title = slug; }
         path = normalize_path(entry.path);
-        n = path.len();
+        n = path.size();
         if n > 0 && path[n - 1] == '/' { path = path[0..n - 1]; }
         set.entries += [PlanEntry{slug: slug, path: path, title: title}];
     }
@@ -1441,7 +1441,7 @@ fn collect_plans_dir_recent(dir_path: text, set: PlanSet, window_secs: integer) 
         title = read_plan_title(readme);
         if title == "" { title = slug; }
         path = normalize_path(entry.path);
-        n = path.len();
+        n = path.size();
         if n > 0 && path[n - 1] == '/' { path = path[0..n - 1]; }
         set.entries += [PlanEntry{slug: slug, path: path, title: title}];
     }
@@ -1475,7 +1475,7 @@ fn severity_is_closed(sev: text) -> boolean {
     if lower.find("(partial") >= 0 { return false; }
     // Match `(closed)` or `...closed$`.
     if lower.find("(closed)") >= 0 { return true; }
-    n = lower.len();
+    n = lower.size();
     if n >= 6 && lower[n - 6..n] == "closed" { return true; }
     false
 }
@@ -1486,12 +1486,12 @@ fn severity_is_closed(sev: text) -> boolean {
 fn find_last_closed_date(body: text) -> text {
     needle = "Closed (";
     last = "";
-    n = body.len();
+    n = body.size();
     pos = 0;
     while pos < n {
         rel = body[pos..n].find(needle) ?? -1;
         if rel < 0 { return last; }
-        at = pos + rel + needle.len();
+        at = pos + rel + needle.size();
         // Expect YYYY-MM-DD at `at` (10 chars) followed by ')'.
         if at + 11 <= n
             && body[at] >= '0' && body[at] <= '9'
@@ -1581,7 +1581,7 @@ fn emit_problems_open_array() -> integer {
         if !severity_is_open(severity) { i = i + 1; continue; }
         summary = strip_tag_prefix(body, id_text);
         summary = truncate_summary(summary);
-        if fix.len() > 280 { fix = fix[0..277] + "..."; }
+        if fix.size() > 280 { fix = fix[0..277] + "..."; }
         if !first { print(","); }
         first = false;
         count = count + 1;
@@ -1692,7 +1692,7 @@ fn main() {
         for entry in root.files() {
             if entry.format != Format.Directory && is_indexable_ext(entry.path) {
                 p = entry.path;
-                if p.starts_with("./") { p = p[2..p.len()]; }
+                if p.starts_with("./") { p = p[2..p.size()]; }
                 scan_file(p, rows, links, timings);
             }
         }

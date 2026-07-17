@@ -1,5 +1,8 @@
 blank_issues_enabled: false
 contact_links:
+  - name: Is this a library or a game bug? File it in that repo
+    url: https://github.com/orgs/loft-lang/repositories
+    about: The language, compiler, interpreter, and runtime belong here. A library's behaviour (web, graphics, time, …) belongs in its loft-libs-* repo; a game belongs in its own repo. When in doubt, file here and we'll route it.
   - name: Try loft in the browser
     url: https://loft-lang.org/loft/playground.html
     about: The web playground runs the same loft binary used to build issues — try a quick repro here first.

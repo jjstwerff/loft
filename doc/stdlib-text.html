@@ -58,7 +58,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn contains(self: text, value: text) -&gt; boolean</code></pre>
-<p>Returns true if value appears anywhere in self. Simpler than find when you only need a yes/no answer.</p>
+<p>Returns true if value appears anywhere in self. @PLN102 arc C — superseded by `find`; kept as a shim over it (the old form keeps working). `s.contains(v)` == `s.find(v) != null` — `find` returns the position, `contains` is its found?/not-found? projection.</p>
 </div>
 <div class="item">
 <pre><code>pub fn replace(self: text, value: text, with: text) -&gt; text</code></pre>
@@ -74,7 +74,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn is_lowercase(self: text) -&gt; boolean</code></pre>
-<p>True if all characters are lowercase letters.</p>
+<p>True if the text is non-empty and all characters are lowercase letters.</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_lowercase(self: character) -&gt; boolean</code></pre>
@@ -82,7 +82,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn is_uppercase(self: text) -&gt; boolean</code></pre>
-<p>True if all characters are uppercase letters.</p>
+<p>True if the text is non-empty and all characters are uppercase letters.</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_uppercase(self: character) -&gt; boolean</code></pre>
@@ -90,7 +90,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn is_numeric(self: text) -&gt; boolean</code></pre>
-<p>True if all characters are numeric digits (Unicode numeric, not just ASCII 0–9).</p>
+<p>True if the text is non-empty and all characters are numeric digits (Unicode numeric, not just ASCII 0–9).</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_numeric(self: character) -&gt; boolean</code></pre>
@@ -98,7 +98,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn is_alphanumeric(self: text) -&gt; boolean</code></pre>
-<p>True if all characters are letters or digits. Use to validate identifiers or tokens.</p>
+<p>True if the text is non-empty and all characters are letters or digits. Use to validate identifiers or tokens.</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_alphanumeric(self: character) -&gt; boolean</code></pre>
@@ -106,7 +106,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn is_alphabetic(self: text) -&gt; boolean</code></pre>
-<p>True if all characters are alphabetic.</p>
+<p>True if the text is non-empty and all characters are alphabetic.</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_alphabetic(self: character) -&gt; boolean</code></pre>
@@ -114,7 +114,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn is_whitespace(self: text) -&gt; boolean</code></pre>
-<p>True if all characters are whitespace. Use to detect blank lines.</p>
+<p>True if the text is non-empty and all characters are whitespace. Use to detect blank lines.</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_whitespace(self: character) -&gt; boolean</code></pre>
@@ -122,7 +122,7 @@
 </div>
 <div class="item">
 <pre><code>pub fn is_control(self: text) -&gt; boolean</code></pre>
-<p>True if all characters are control characters.</p>
+<p>True if the text is non-empty and all characters are control characters.</p>
 </div>
 <div class="item">
 <pre><code>pub fn is_control(self: character) -&gt; boolean</code></pre>

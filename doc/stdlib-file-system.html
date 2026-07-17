@@ -33,9 +33,9 @@
   NotFound,
   PermissionDenied,
   IsDirectory,
-  NotDirectory,
   Other
 }</code></pre>
+<p>Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)</p>
 </div>
 <div class="item">
 <pre><code>pub fn ok(self: FileResult) -&gt; boolean</code></pre>
@@ -57,7 +57,7 @@
 }</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn content(self: File) -&gt; text fs#read</code></pre>
+<pre><code>pub fn content(self: File) -&gt; text? fs#read</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn lines(self: File) -&gt; vector &lt; text &gt; fs#read</code></pre>
@@ -97,12 +97,12 @@
 <p>Returns true if `path` exists and is a regular file. Use to confirm a directory entry is a readable file before opening it.</p>
 </div>
 <div class="item">
-<pre><code>pub fn list_dir(path: text) -&gt; vector &lt; text &gt; fs#read</code></pre>
-<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  Returns an empty vector when `path` is not a readable directory. Use to enumerate a directory; join with `path` to build full child paths.</p>
+<pre><code>pub fn list_dir(path: text) -&gt; vector &lt; text &gt; ? fs#read</code></pre>
+<p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.</p>
 </div>
 <div class="item">
-<pre><code>pub fn read_bytes(path: text) -&gt; vector &lt; u8 &gt; fs#read</code></pre>
-<p>Reads the whole file `path` as raw bytes.  Returns an empty vector on a missing file or IO error.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.</p>
+<pre><code>pub fn read_bytes(path: text) -&gt; vector &lt; u8 &gt; ? fs#read</code></pre>
+<p>Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn write_bytes(path: text, bytes: vector &lt; u8 &gt;) -&gt; boolean fs#update</code></pre>
@@ -176,7 +176,8 @@
 <pre><code>pub fn files(self: File) -&gt; vector &lt; File &gt; fs#read</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn write(self: File, v: text) fs#update</code></pre>
+<pre><code>pub fn write(self: File, v: text) -&gt; FileResult fs#update</code></pre>
+<p>Writes v as UTF-8 text to the file, overwriting existing content.  Returns FileResult.Ok on success and FileResult.Other on an OS write failure (disk full, permission denied, a bad path) — a failed write is OBSERVABLE, not silently swallowed.  Discarding callers (`f.write(s)` as a statement) are unaffected; check with `f.write(s).ok()` or match the result.</p>
 </div>
 
   </article>

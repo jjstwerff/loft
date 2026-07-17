@@ -233,7 +233,7 @@ struct MData {
 }
 
 fn m_add(r: &MData = null, val: integer) {
-  if!r {
+  if !r {
     r = MData { num: 0 };
   }
   r.num += val;

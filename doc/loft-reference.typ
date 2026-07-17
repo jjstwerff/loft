@@ -854,7 +854,7 @@ if !move("a.txt", "b.txt").ok() { print("rename failed"); }
     <span class="bi">print</span>(<span class="st">"is a directory"</span>)
 ```
 
-Upside File errors are represented as a typed FileResult enum — Ok, NotFound, PermissionDenied, IsDirectory, NotDirectory, Other — so every failure case is named and exhaustively matchable. No accidental exception swallowing, no hidden exit paths, no stack-unwinding overhead. The control flow of every loft function is straightforward to read.
+Upside File errors are represented as a typed FileResult enum — Ok, NotFound, PermissionDenied, IsDirectory, Other — so every failure case is named and exhaustively matchable. No accidental exception swallowing, no hidden exit paths, no stack-unwinding overhead. The control flow of every loft function is straightforward to read.
 
 Downside Logic errors (assert, panic) abort the entire program — there is no try/except to catch them. Python's exception hierarchy supports retry logic, cleanup via finally, and graceful degradation from arbitrary errors anywhere in the call stack — patterns that are not expressible in loft today.
 
@@ -5822,6 +5822,12 @@ pub fn abs(both: integer) -> integer
 Absolute value. Removes the sign from a negative integer.
 
 ```rust
+pub fn floor_mod(both: integer, divisor: integer) -> integer?
+```
+
+Floor modulo — the remainder that takes the sign of the DIVISOR, so `x.floor\_mod(n)` lands in `\[0, n)` for a positive `n`.  The `%` operator truncates toward zero and keeps the DIVIDEND's sign (`-1 % 3 == -1`); `floor\_mod` wraps (`(-1).floor\_mod(3) == 2`), which is what circular indexing / wrap-around wants (`grid\[(i - 1).floor\_mod(w)\]`).  `x.floor\_mod(0)` is null, like `%` (C80 — an undefined value is a null, never a fault).
+
+```rust
 pub fn abs(both: single) -> single
 ```
 
@@ -6146,7 +6152,7 @@ Returns the byte index of the last occurrence of value, or null if not found. Us
 pub fn contains(self: text, value: text) -> boolean
 ```
 
-Returns true if value appears anywhere in self. Simpler than find when you only need a yes/no answer.
+Returns true if value appears anywhere in self. \@PLN102 arc C — superseded by `find`; kept as a shim over it (the old form keeps working). `s.contains(v)` == `s.find(v) != null` — `find` returns the position, `contains` is its found?/not-found? projection.
 
 ```rust
 pub fn replace(self: text, value: text, with: text) -> text
@@ -6170,7 +6176,7 @@ Returns an uppercase copy.
 pub fn is_lowercase(self: text) -> boolean
 ```
 
-True if all characters are lowercase letters.
+True if the text is non-empty and all characters are lowercase letters.
 
 ```rust
 pub fn is_lowercase(self: character) -> boolean
@@ -6182,7 +6188,7 @@ True if the character is a lowercase letter.
 pub fn is_uppercase(self: text) -> boolean
 ```
 
-True if all characters are uppercase letters.
+True if the text is non-empty and all characters are uppercase letters.
 
 ```rust
 pub fn is_uppercase(self: character) -> boolean
@@ -6194,7 +6200,7 @@ True if the character is an uppercase letter.
 pub fn is_numeric(self: text) -> boolean
 ```
 
-True if all characters are numeric digits (Unicode numeric, not just ASCII 0–9).
+True if the text is non-empty and all characters are numeric digits (Unicode numeric, not just ASCII 0–9).
 
 ```rust
 pub fn is_numeric(self: character) -> boolean
@@ -6206,7 +6212,7 @@ True if the character is a numeric digit.
 pub fn is_alphanumeric(self: text) -> boolean
 ```
 
-True if all characters are letters or digits. Use to validate identifiers or tokens.
+True if the text is non-empty and all characters are letters or digits. Use to validate identifiers or tokens.
 
 ```rust
 pub fn is_alphanumeric(self: character) -> boolean
@@ -6218,7 +6224,7 @@ True if the character is a letter or digit.
 pub fn is_alphabetic(self: text) -> boolean
 ```
 
-True if all characters are alphabetic.
+True if the text is non-empty and all characters are alphabetic.
 
 ```rust
 pub fn is_alphabetic(self: character) -> boolean
@@ -6230,7 +6236,7 @@ True if the character is alphabetic.
 pub fn is_whitespace(self: text) -> boolean
 ```
 
-True if all characters are whitespace. Use to detect blank lines.
+True if the text is non-empty and all characters are whitespace. Use to detect blank lines.
 
 ```rust
 pub fn is_whitespace(self: character) -> boolean
@@ -6242,7 +6248,7 @@ True if the character is whitespace.
 pub fn is_control(self: text) -> boolean
 ```
 
-True if all characters are control characters.
+True if the text is non-empty and all characters are control characters.
 
 ```rust
 pub fn is_control(self: character) -> boolean
@@ -6352,14 +6358,6 @@ Number of elements in a spatial (radix / Morton tree) collection.
 
 == Vector aggregates
 
-Internal helpers for reduce-based aggregates.
-
-```rust
-pub fn sum_of(v: vector<integer>) -> integer
-```
-
-Sum of all integer elements. Returns 0 for an empty vector.
-
 ```rust
 pub fn min_of<T: Ordered>(v: vector<T>) -> T?
 ```
@@ -6377,6 +6375,12 @@ pub fn sum<T: Addable>(v: vector<T>, init: T) -> T
 ```
 
 Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum(\[10, 20, 12\], 0) == 42
+
+```rust
+pub fn sum_of(v: vector<integer>) -> integer
+```
+
+Sum of all integer elements. Returns 0 for an empty vector. \@PLN102 arc C — superseded by the general `sum(v, init)`; kept as a shim over it (the old form keeps working). `sum\_of(v)` == `sum(v, 0)`. Defined AFTER `sum` so the shim's call resolves — a forward reference to a generic is not yet supported.
 
 ```rust
 pub interface Walkable
@@ -6474,10 +6478,11 @@ pub enum FileResult {
   NotFound,
   PermissionDenied,
   IsDirectory,
-  NotDirectory,
   Other
 }
 ```
+
+Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)
 
 ```rust
 pub fn ok(self: FileResult) -> boolean
@@ -6502,7 +6507,7 @@ pub struct File {
 ```
 
 ```rust
-pub fn content(self: File) -> text fs#read
+pub fn content(self: File) -> text? fs#read
 ```
 
 ```rust
@@ -6558,16 +6563,16 @@ pub fn is_file(path: text) -> boolean fs#read
 Returns true if `path` exists and is a regular file. Use to confirm a directory entry is a readable file before opening it.
 
 ```rust
-pub fn list_dir(path: text) -> vector < text > fs#read
+pub fn list_dir(path: text) -> vector < text > ? fs#read
 ```
 
-Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  Returns an empty vector when `path` is not a readable directory. Use to enumerate a directory; join with `path` to build full child paths.
+Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  \@PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `\[\]`); discharge with `?? \[\]` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.
 
 ```rust
-pub fn read_bytes(path: text) -> vector < u8 > fs#read
+pub fn read_bytes(path: text) -> vector < u8 > ? fs#read
 ```
 
-Reads the whole file `path` as raw bytes.  Returns an empty vector on a missing file or IO error.  Binary-exact (round-trips with write\_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.
+Reads the whole file `path` as raw bytes.  \@PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `\[\]`); discharge with `?? \[\]` to keep the old shape.  Binary-exact (round-trips with write\_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.
 
 ```rust
 pub fn write_bytes(path: text, bytes: vector < u8 >) -> boolean fs#update
@@ -6673,8 +6678,10 @@ pub fn files(self: File) -> vector < File > fs#read
 ```
 
 ```rust
-pub fn write(self: File, v: text) fs#update
+pub fn write(self: File, v: text) -> FileResult fs#update
 ```
+
+Writes v as UTF-8 text to the file, overwriting existing content.  Returns FileResult.Ok on success and FileResult.Other on an OS write failure (disk full, permission denied, a bad path) — a failed write is OBSERVABLE, not silently swallowed.  Discarding callers (`f.write(s)` as a statement) are unaffected; check with `f.write(s).ok()` or match the result.
 
 == Environment
 
