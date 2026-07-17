@@ -1,0 +1,965 @@
+# @PLN109 Phase 0 golden — CURRENT crate::json output (auto-generated; bless to update)
+
+=== num/zero [Strict] ===
+input: "0"
+Ok(
+    Number(
+        0.0,
+    ),
+)
+
+=== num/neg-zero [Strict] ===
+input: "-0"
+Ok(
+    Number(
+        -0.0,
+    ),
+)
+
+=== num/small [Strict] ===
+input: "42"
+Ok(
+    Number(
+        42.0,
+    ),
+)
+
+=== num/neg [Strict] ===
+input: "-42"
+Ok(
+    Number(
+        -42.0,
+    ),
+)
+
+=== num/i32-max [Strict] ===
+input: "2147483647"
+Ok(
+    Number(
+        2147483647.0,
+    ),
+)
+
+=== num/i32-max+1 [Strict] ===
+input: "2147483648"
+Ok(
+    Number(
+        2147483648.0,
+    ),
+)
+
+=== num/2^53 [Strict] ===
+input: "9007199254740992"
+Ok(
+    Number(
+        9007199254740992.0,
+    ),
+)
+
+=== num/2^53+1-H5 [Strict] ===
+input: "9007199254740993"
+Ok(
+    Number(
+        9007199254740992.0,
+    ),
+)
+
+=== num/i64-max [Strict] ===
+input: "9223372036854775807"
+Ok(
+    Number(
+        9.223372036854776e18,
+    ),
+)
+
+=== num/i64-max+1 [Strict] ===
+input: "9223372036854775808"
+Ok(
+    Number(
+        9.223372036854776e18,
+    ),
+)
+
+=== num/u64-max [Strict] ===
+input: "18446744073709551615"
+Ok(
+    Number(
+        1.8446744073709552e19,
+    ),
+)
+
+=== num/frac [Strict] ===
+input: "3.14"
+Ok(
+    Number(
+        3.14,
+    ),
+)
+
+=== num/neg-frac [Strict] ===
+input: "-3.14"
+Ok(
+    Number(
+        -3.14,
+    ),
+)
+
+=== num/one-point-zero [Strict] ===
+input: "1.0"
+Ok(
+    Number(
+        1.0,
+    ),
+)
+
+=== num/frac-zero [Strict] ===
+input: "0.0"
+Ok(
+    Number(
+        0.0,
+    ),
+)
+
+=== num/exp-lower [Strict] ===
+input: "1e3"
+Ok(
+    Number(
+        1000.0,
+    ),
+)
+
+=== num/exp-upper [Strict] ===
+input: "1E3"
+Ok(
+    Number(
+        1000.0,
+    ),
+)
+
+=== num/exp-plus [Strict] ===
+input: "1e+3"
+Ok(
+    Number(
+        1000.0,
+    ),
+)
+
+=== num/exp-minus [Strict] ===
+input: "1e-3"
+Ok(
+    Number(
+        0.001,
+    ),
+)
+
+=== num/exp-upper-plus [Strict] ===
+input: "1E+5"
+Ok(
+    Number(
+        100000.0,
+    ),
+)
+
+=== num/frac-exp [Strict] ===
+input: "1.5e3"
+Ok(
+    Number(
+        1500.0,
+    ),
+)
+
+=== num/frac-exp-neg [Strict] ===
+input: "2.5e-2"
+Ok(
+    Number(
+        0.025,
+    ),
+)
+
+=== str/plain [Strict] ===
+input: "\"hello\""
+Ok(
+    Str(
+        "hello",
+    ),
+)
+
+=== str/empty [Strict] ===
+input: "\"\""
+Ok(
+    Str(
+        "",
+    ),
+)
+
+=== str/escaped-quote [Strict] ===
+input: "\"a\\\"b\""
+Ok(
+    Str(
+        "a\"b",
+    ),
+)
+
+=== str/escaped-backslash [Strict] ===
+input: "\"a\\\\b\""
+Ok(
+    Str(
+        "a\\b",
+    ),
+)
+
+=== str/tab [Strict] ===
+input: "\"t\\tb\""
+Ok(
+    Str(
+        "t\tb",
+    ),
+)
+
+=== str/newline [Strict] ===
+input: "\"n\\nb\""
+Ok(
+    Str(
+        "n\nb",
+    ),
+)
+
+=== str/carriage [Strict] ===
+input: "\"c\\rb\""
+Ok(
+    Str(
+        "c\rb",
+    ),
+)
+
+=== str/json-slash [Strict] ===
+input: "\"a\\/b\""
+Ok(
+    Str(
+        "a/b",
+    ),
+)
+
+=== str/u-ascii [Strict] ===
+input: "\"\\u0041\""
+Ok(
+    Str(
+        "A",
+    ),
+)
+
+=== str/u-latin [Strict] ===
+input: "\"\\u00e9\""
+Ok(
+    Str(
+        "é",
+    ),
+)
+
+=== str/u-bmp [Strict] ===
+input: "\"\\u2764\""
+Ok(
+    Str(
+        "❤",
+    ),
+)
+
+=== str/surrogate-pair [Strict] ===
+input: "\"\\uD83D\\uDE00\""
+Ok(
+    Str(
+        "😀",
+    ),
+)
+
+=== str/astral-clef [Strict] ===
+input: "\"\\uD834\\uDD1E\""
+Ok(
+    Str(
+        "𝄞",
+    ),
+)
+
+=== str/braces-literal [Strict] ===
+input: "\"a{b}c\""
+Ok(
+    Str(
+        "a{b}c",
+    ),
+)
+
+=== struct/empty-array [Strict] ===
+input: "[]"
+Ok(
+    Array(
+        [],
+    ),
+)
+
+=== struct/empty-object [Strict] ===
+input: "{}"
+Ok(
+    Object(
+        [],
+    ),
+)
+
+=== struct/flat-array [Strict] ===
+input: "[1,2,3]"
+Ok(
+    Array(
+        [
+            Number(
+                1.0,
+            ),
+            Number(
+                2.0,
+            ),
+            Number(
+                3.0,
+            ),
+        ],
+    ),
+)
+
+=== struct/nested-array [Strict] ===
+input: "[[1],[2,[3]]]"
+Ok(
+    Array(
+        [
+            Array(
+                [
+                    Number(
+                        1.0,
+                    ),
+                ],
+            ),
+            Array(
+                [
+                    Number(
+                        2.0,
+                    ),
+                    Array(
+                        [
+                            Number(
+                                3.0,
+                            ),
+                        ],
+                    ),
+                ],
+            ),
+        ],
+    ),
+)
+
+=== struct/flat-object [Strict] ===
+input: "{\"a\":1}"
+Ok(
+    Object(
+        [
+            (
+                "a",
+                1,
+                Number(
+                    1.0,
+                ),
+            ),
+        ],
+    ),
+)
+
+=== struct/deep-object [Strict] ===
+input: "{\"a\":{\"b\":{\"c\":1}}}"
+Ok(
+    Object(
+        [
+            (
+                "a",
+                1,
+                Object(
+                    [
+                        (
+                            "b",
+                            6,
+                            Object(
+                                [
+                                    (
+                                        "c",
+                                        11,
+                                        Number(
+                                            1.0,
+                                        ),
+                                    ),
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+        ],
+    ),
+)
+
+=== struct/mixed [Strict] ===
+input: "{\"arr\":[1,2],\"obj\":{\"x\":true}}"
+Ok(
+    Object(
+        [
+            (
+                "arr",
+                1,
+                Array(
+                    [
+                        Number(
+                            1.0,
+                        ),
+                        Number(
+                            2.0,
+                        ),
+                    ],
+                ),
+            ),
+            (
+                "obj",
+                13,
+                Object(
+                    [
+                        (
+                            "x",
+                            20,
+                            Bool(
+                                true,
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+        ],
+    ),
+)
+
+=== struct/whitespace [Strict] ===
+input: "  {  \"a\" : 1 ,  \"b\" : [ 2 , 3 ] }  "
+Ok(
+    Object(
+        [
+            (
+                "a",
+                5,
+                Number(
+                    1.0,
+                ),
+            ),
+            (
+                "b",
+                16,
+                Array(
+                    [
+                        Number(
+                            2.0,
+                        ),
+                        Number(
+                            3.0,
+                        ),
+                    ],
+                ),
+            ),
+        ],
+    ),
+)
+
+=== struct/array-of-objects [Strict] ===
+input: "[{\"v\":10},{\"v\":20}]"
+Ok(
+    Array(
+        [
+            Object(
+                [
+                    (
+                        "v",
+                        2,
+                        Number(
+                            10.0,
+                        ),
+                    ),
+                ],
+            ),
+            Object(
+                [
+                    (
+                        "v",
+                        11,
+                        Number(
+                            20.0,
+                        ),
+                    ),
+                ],
+            ),
+        ],
+    ),
+)
+
+=== lit/true [Strict] ===
+input: "true"
+Ok(
+    Bool(
+        true,
+    ),
+)
+
+=== lit/false [Strict] ===
+input: "false"
+Ok(
+    Bool(
+        false,
+    ),
+)
+
+=== lit/null [Strict] ===
+input: "null"
+Ok(
+    Null,
+)
+
+=== err/empty-input [Strict] ===
+input: ""
+Err(
+    ParseError {
+        message: "unexpected end of input",
+        byte_offset: 0,
+        path: "",
+    },
+)
+
+=== err/unterminated-object [Strict] ===
+input: "{"
+Err(
+    ParseError {
+        message: "expected object key",
+        byte_offset: 1,
+        path: "",
+    },
+)
+
+=== err/unterminated-array [Strict] ===
+input: "[1,2"
+Err(
+    ParseError {
+        message: "unterminated array",
+        byte_offset: 0,
+        path: "",
+    },
+)
+
+=== err/missing-value [Strict] ===
+input: "{\"a\":}"
+Err(
+    ParseError {
+        message: "unexpected byte 0x7d at offset 5",
+        byte_offset: 5,
+        path: "/a",
+    },
+)
+
+=== err/missing-colon [Strict] ===
+input: "{\"a\" 1}"
+Err(
+    ParseError {
+        message: "expected `:` after object key",
+        byte_offset: 5,
+        path: "",
+    },
+)
+
+=== err/trailing-comma-array [Strict] ===
+input: "[1,2,]"
+Err(
+    ParseError {
+        message: "unexpected byte 0x5d at offset 5",
+        byte_offset: 5,
+        path: "/2",
+    },
+)
+
+=== err/trailing-comma-object [Strict] ===
+input: "{\"a\":1,}"
+Err(
+    ParseError {
+        message: "expected string key in object",
+        byte_offset: 7,
+        path: "",
+    },
+)
+
+=== err/bad-literal [Strict] ===
+input: "nul"
+Err(
+    ParseError {
+        message: "expected `null` at offset 0",
+        byte_offset: 0,
+        path: "",
+    },
+)
+
+=== err/unterminated-string [Strict] ===
+input: "\"abc"
+Err(
+    ParseError {
+        message: "unterminated string",
+        byte_offset: 0,
+        path: "",
+    },
+)
+
+=== err/bare-key-strict [Strict] ===
+input: "{a:1}"
+Err(
+    ParseError {
+        message: "expected string key in object",
+        byte_offset: 1,
+        path: "",
+    },
+)
+
+=== err/bad-escape [Strict] ===
+input: "\"a\\qb\""
+Err(
+    ParseError {
+        message: "invalid escape \\q",
+        byte_offset: 3,
+        path: "",
+    },
+)
+
+=== err/lone-high-surrogate [Strict] ===
+input: "\"\\uD83D\""
+Ok(
+    Str(
+        "�",
+    ),
+)
+
+=== lenient/bare-key [Lenient] ===
+input: "{a: 1}"
+Ok(
+    Object(
+        [
+            (
+                "a",
+                1,
+                Number(
+                    1.0,
+                ),
+            ),
+        ],
+    ),
+)
+
+=== lenient/bare-ident-value [Lenient] ===
+input: "{a: b}"
+Ok(
+    Object(
+        [
+            (
+                "a",
+                1,
+                Ident(
+                    "b",
+                ),
+            ),
+        ],
+    ),
+)
+
+=== lenient/mixed-keys [Lenient] ===
+input: "{a: 1, \"b\": 2}"
+Ok(
+    Object(
+        [
+            (
+                "a",
+                1,
+                Number(
+                    1.0,
+                ),
+            ),
+            (
+                "b",
+                7,
+                Number(
+                    2.0,
+                ),
+            ),
+        ],
+    ),
+)
+
+=== lenient/bare-literals [Lenient] ===
+input: "{x: true, y: null, z: false}"
+Ok(
+    Object(
+        [
+            (
+                "x",
+                1,
+                Bool(
+                    true,
+                ),
+            ),
+            (
+                "y",
+                10,
+                Null,
+            ),
+            (
+                "z",
+                19,
+                Bool(
+                    false,
+                ),
+            ),
+        ],
+    ),
+)
+
+=== lenient/constructor [Lenient] ===
+input: "Point{x: 1, y: 2}"
+Ok(
+    Constructor(
+        "Point",
+        0,
+        Object(
+            [
+                (
+                    "x",
+                    6,
+                    Number(
+                        1.0,
+                    ),
+                ),
+                (
+                    "y",
+                    12,
+                    Number(
+                        2.0,
+                    ),
+                ),
+            ],
+        ),
+    ),
+)
+
+=== lenient/constructor-array [Lenient] ===
+input: "[Red{v: 1}, Blue{v: 2}]"
+Ok(
+    Array(
+        [
+            Constructor(
+                "Red",
+                1,
+                Object(
+                    [
+                        (
+                            "v",
+                            5,
+                            Number(
+                                1.0,
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+            Constructor(
+                "Blue",
+                12,
+                Object(
+                    [
+                        (
+                            "v",
+                            17,
+                            Number(
+                                2.0,
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+        ],
+    ),
+)
+
+=== real/registry-index [Strict] ===
+input: "{\n            \"schema_version\": 1,\n            \"updated\": \"2026-05-24T08:00:00Z\",\n            \"packages\": {\n                \"crypto\": {\n                    \"description\": \"SHA-256 etc.\",\n                    \"categories\": [\"crypto\"],\n                    \"yanked\": [\"0.1.0\"],\n                    \"versions\": {\n                        \"0.1.1\": {\n                            \"url\": \"https://example.com/crypto-0.1.1.tar.gz\",\n                            \"sha256\": \"def\",\n                            \"size\": 110,\n                            \"loft\": \">=0.8\",\n                            \"deps\": {\"hash\": \">=0.1\"},\n                            \"prerelease\": true\n                        }\n                    }\n                }\n            }\n        }"
+Ok(
+    Object(
+        [
+            (
+                "schema_version",
+                14,
+                Number(
+                    1.0,
+                ),
+            ),
+            (
+                "updated",
+                47,
+                Str(
+                    "2026-05-24T08:00:00Z",
+                ),
+            ),
+            (
+                "packages",
+                94,
+                Object(
+                    [
+                        (
+                            "crypto",
+                            124,
+                            Object(
+                                [
+                                    (
+                                        "description",
+                                        156,
+                                        Str(
+                                            "SHA-256 etc.",
+                                        ),
+                                    ),
+                                    (
+                                        "categories",
+                                        207,
+                                        Array(
+                                            [
+                                                Str(
+                                                    "crypto",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                    (
+                                        "yanked",
+                                        253,
+                                        Array(
+                                            [
+                                                Str(
+                                                    "0.1.0",
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                    (
+                                        "versions",
+                                        294,
+                                        Object(
+                                            [
+                                                (
+                                                    "0.1.1",
+                                                    332,
+                                                    Object(
+                                                        [
+                                                            (
+                                                                "url",
+                                                                371,
+                                                                Str(
+                                                                    "https://example.com/crypto-0.1.1.tar.gz",
+                                                                ),
+                                                            ),
+                                                            (
+                                                                "sha256",
+                                                                449,
+                                                                Str(
+                                                                    "def",
+                                                                ),
+                                                            ),
+                                                            (
+                                                                "size",
+                                                                494,
+                                                                Number(
+                                                                    110.0,
+                                                                ),
+                                                            ),
+                                                            (
+                                                                "loft",
+                                                                535,
+                                                                Str(
+                                                                    ">=0.8",
+                                                                ),
+                                                            ),
+                                                            (
+                                                                "deps",
+                                                                580,
+                                                                Object(
+                                                                    [
+                                                                        (
+                                                                            "hash",
+                                                                            589,
+                                                                            Str(
+                                                                                ">=0.1",
+                                                                            ),
+                                                                        ),
+                                                                    ],
+                                                                ),
+                                                            ),
+                                                            (
+                                                                "prerelease",
+                                                                635,
+                                                                Bool(
+                                                                    true,
+                                                                ),
+                                                            ),
+                                                        ],
+                                                    ),
+                                                ),
+                                            ],
+                                        ),
+                                    ),
+                                ],
+                            ),
+                        ),
+                    ],
+                ),
+            ),
+        ],
+    ),
+)
+
+=== real/rpc-request [Strict] ===
+input: "{\"method\":\"eval\",\"params\":[\"greet()\"],\"id\":7,\"verified\":true}"
+Ok(
+    Object(
+        [
+            (
+                "method",
+                1,
+                Str(
+                    "eval",
+                ),
+            ),
+            (
+                "params",
+                17,
+                Array(
+                    [
+                        Str(
+                            "greet()",
+                        ),
+                    ],
+                ),
+            ),
+            (
+                "id",
+                38,
+                Number(
+                    7.0,
+                ),
+            ),
+            (
+                "verified",
+                45,
+                Bool(
+                    true,
+                ),
+            ),
+        ],
+    ),
+)
+
