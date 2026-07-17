@@ -150,3 +150,31 @@ fn formatter_enum_variant_if_body_is_a_block() {
         "multi-statement if-body must not be inlined as a container: {out:?}"
     );
 }
+
+#[test]
+fn formatter_width_counts_characters_not_bytes() {
+    // Regression (@PLN110): the formatter measures DISPLAY width, which is a CHARACTER
+    // count — not a byte count. This assert line is 89 characters but 103 UTF-8 bytes
+    // (em-dashes are 1 char / 3 bytes); it fits the 100-column budget and must stay on
+    // one line. When width was measured with `size(text)` (which became the BYTE count
+    // at the flip), the formatter over-measured multi-byte lines and wrapped ones that
+    // visually fit — the fix uses `len` (characters) for column/width math.
+    let src = std::fs::read_to_string("tools/fmt/whole.loft").expect("formatter source");
+    let mut p = Program::from_source(&src).expect("formatter compiles");
+    let input = "fn f(a: integer, b: integer) {\n  assert(a == b, \"mismatch —  —  —  —  —  —  — end padding to reach target length here\");\n}\n";
+    let out = p
+        .call("format", &[Value::Text(input.into())])
+        .unwrap()
+        .into_text()
+        .unwrap();
+    // the assert's args stay on ONE line (char-width 89 < 100); a byte-width measure
+    // (103 > 100) would have wrapped them onto separate lines (`assert(\n a == b, …`).
+    assert!(
+        out.contains("assert(a == b, \"mismatch"),
+        "multi-byte line under the char budget must stay one line: {out:?}"
+    );
+    assert!(
+        !out.contains("assert(\n"),
+        "args must not wrap — width is character count, not bytes: {out:?}"
+    );
+}

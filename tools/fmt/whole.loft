@@ -317,7 +317,7 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
           rep_post = (tok == "*" || tok == "+") && prev == ")";
           if !pu && !gen_open && !gen_close && !rep_post && sp(prev, tok) { s += " "; col += 1; }
           s += tok;
-          col += tok.size();
+          col += tok.len();
           if gen_open { gdepth += 1; }
           else if tok == ">>" && gdepth >= 2 { gdepth -= 2; }
           else if gen_close { gdepth -= 1; }
@@ -438,7 +438,7 @@ fn pack_scalars(open: text, kids: vector<Node>, close: text, indent: integer) ->
     if has_real(kids, start, code_end) {
       piece = render_range(kids, start, code_end, indent + 2, indent + 2);
       piece += ",";
-      if line_has && line.size() + 1 + piece.size() > width() {
+      if line_has && line.len() + 1 + piece.len() > width() {
         s += line; s += "\n";
         line = spaces(indent + 2);
         line_has = false;
@@ -506,10 +506,10 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
     pad = if open == "{{" { " " } else { "" };
     inline = open;
     inline += pad;
-    inline += render_range(kids, 0, n, col + open.size() + pad.size(), indent);
+    inline += render_range(kids, 0, n, col + open.len() + pad.len(), indent);
     inline += pad;
     inline += close;
-    if col + inline.size() <= width() { return inline; }
+    if col + inline.len() <= width() { return inline; }
     // overflow: a pure-scalar `[…]` vector WRAPS (packed rows) rather than 1-per-line
     if open == "[" && !has_group { return pack_scalars(open, kids, close, indent); }
     brk = true;
@@ -570,7 +570,7 @@ fn render_block(kids: vector<Node>, close: text, col: integer, indent: integer, 
     inline = "{{ ";
     inline += render_range(kids, 0, n, col + 2, indent);
     inline += " }}";
-    if col + inline.size() <= width() { return inline; }
+    if col + inline.len() <= width() { return inline; }
   }
   s = "{{";
   s += "\n";
