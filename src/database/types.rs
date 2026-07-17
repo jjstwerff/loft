@@ -243,6 +243,15 @@ impl Stores {
         tp != u16::MAX && matches!(self.types[tp as usize].parts, Parts::Struct(_))
     }
 
+    /// True if `tp` is a data-carrying enum variant (`Parts::EnumValue`) — a
+    /// struct-like record (a tag byte + the variant's packed fields).  A bare
+    /// variant value (e.g. `Circle { r: 2.0 }`) has this type; `size` treats it
+    /// like a struct, reporting its own packed record size.
+    #[must_use]
+    pub fn is_enum_value(&self, tp: u16) -> bool {
+        tp != u16::MAX && matches!(self.types[tp as usize].parts, Parts::EnumValue(_, _))
+    }
+
     /// @PLN16.J — resolve a struct field by **name** to `(position, content)`:
     /// `position` is the field's byte offset within the record (added to the
     /// struct's `DbRef.pos`, matching the `ShowDb` read path), `content` its

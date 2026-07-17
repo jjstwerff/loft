@@ -80,7 +80,8 @@ descriptor, the #477 stride `element_size(inner).max(4)` — `size` reports it f
 ## Remaining sub-arcs — formulas + open questions
 
 Done so far: **1a (vector), 1b (struct), 1e (scalar), 1c (hash), 1d (sorted/index/spatial)**.
-Remaining: **enums → 1g (`len(character)` contract call, deferred).** Rationale: hash/sorted/index/
+Remaining: **1g (`len(character)` contract call, deferred).** (enums ✅ done; the `size` half of 1g
+is also done via 1e — only the `len(character)` decision is left.) Rationale: hash/sorted/index/
 spatial each need their collection's table/tree byte accounting; enums split into simple (scalar-
 like) and data (struct-like); 1g's *size* half is already done (via 1e, `size(character)`=4), leaving
 only the deferred `len(character)` decision.
@@ -107,11 +108,20 @@ only the deferred `len(character)` decision.
   4-byte handle, **no tail padding**), `WithVec`{vector,int}=12 (collection field = 4-byte pointer),
   `Nested`{Point,int}=**24** (inline sub-record counted fully), `Flags`{bool,bool,int}=10,
   `OneByte`{bool}=1. Cross-check holds: `size(inline vector<Point>) == len × size(Point)`.
-  **Enums DEFERRED** (own step, not 1b): a *simple* enum is a **1-byte inline** value (not a `DbRef`),
-  so it cannot reuse `OpSizeStruct` (which reads a `DbRef` off the stack) — it is scalar-like (→1e);
-  a *data* enum is a `DbRef` and would use a struct-like op with `size = database.size` (the
-  max-variant footprint). `size(enum)` currently errors cleanly (falls through). Handle both when the
-  enum step lands.
+- **enums ✅ DONE** — dispatch splits three ways, all reusing existing ops:
+  - a **simple** enum (`Type::Enum(_, false, _)`) is a **1-byte inline** discriminant (scalar-like) →
+    `OpSizeScalar`, width 1.
+  - a **data** enum referred to by the ENUM type (`Type::Enum(_, true, _)`) is a `DbRef` to a record
+    = 1-byte tag + the **max variant's** packed fields → `OpSizeStruct`, `database.size(enum)`. A
+    `Shape` slot reports the same size (24) for every variant — it must hold any of them.
+  - a **bare variant** value (`Circle { r: 2.0 }`) has the VARIANT's type — a `Type::Reference` to an
+    `EnumValue`, a struct-like record — so it reports the *variant's own* record (Circle 16, Rect 24),
+    which is ≤ the enum's max-variant record. **This fixed a silent-empty bug in 1b:** the
+    `size(struct)` branch matched `Type::Reference` broadly and returned `Unknown(0)` (→ silent empty
+    output) for a non-struct reference; it now also accepts `is_enum_value` records and emits the
+    standard `Unknown function` **error** (never a silent Unknown) for any other reference.
+  Verified both backends (`tests/scripts/pln110-size-enum.loft`): simple 1; Shape-typed 24 (any
+  variant); bare Circle 16 / bare Rect 24.
 - **1c `size(hash<…>)` ✅ DONE** = the **full bucket table, holes included** = `elms × 4` where
   `elms = (record_words(claim) − 2) · 2` — each bucket a 4-byte `u32` rec-id, the two reserved
   header/seed words excluded (mirrors `size(vector)` counting content, not the length prefix). An
