@@ -2685,6 +2685,10 @@ pub(crate) const JV_DISCR_NUMBER: i32 = 3;
 pub(crate) const JV_DISCR_STRING: i32 = 4;
 pub(crate) const JV_DISCR_ARRAY: i32 = 5;
 pub(crate) const JV_DISCR_OBJECT: i32 = 6;
+// @PLN109 — integer-shaped JSON numbers preserve their exact i64 (H5).  The
+// `JInteger` variant is declared LAST in `JsonValue` (06_json.loft) so the
+// existing discriminants 1–6 stay stable; this must match its position.
+pub(crate) const JV_DISCR_INT: i32 = 7;
 
 /// Allocate a fresh `JsonValue` record in its own store and return
 /// the DbRef.  Caller writes the discriminant byte at pos+0 and any
@@ -2751,6 +2755,12 @@ pub(crate) fn dbref_to_parsed(stores: &Stores, src: &DbRef) -> crate::json::Pars
             let val_pos = u32::from(stores.position(num_tp, "value"));
             let n = stores.store(src).get_float(src.rec, src.pos + val_pos);
             crate::json::Parsed::Number(n)
+        }
+        JV_DISCR_INT => {
+            let int_tp = stores.name("JInteger");
+            let val_pos = u32::from(stores.position(int_tp, "value"));
+            let n = stores.store(src).get_int(src.rec, src.pos + val_pos);
+            crate::json::Parsed::Int(n)
         }
         JV_DISCR_STRING => {
             let str_tp = stores.name("JString");
@@ -2837,6 +2847,15 @@ pub(crate) fn materialise_primitive_into(
             let sm = stores.store_mut(slot);
             sm.set_byte(slot.rec, slot.pos, 0, JV_DISCR_NUMBER);
             sm.set_float(slot.rec, val_pos, *n);
+        }
+        // @PLN109 — an integer-shaped number materialises as `JInteger`, holding
+        // the exact i64 (H5); `as_long`/`as_integer` read it without f64 rounding.
+        crate::json::Parsed::Int(n) => {
+            let int_tp = stores.name("JInteger");
+            let val_pos = u32::from(stores.position(int_tp, "value")) + slot.pos;
+            let sm = stores.store_mut(slot);
+            sm.set_byte(slot.rec, slot.pos, 0, JV_DISCR_INT);
+            sm.set_int(slot.rec, val_pos, *n);
         }
         // Both `Str` and `Ident` materialise the same way — a
         // `JString` JsonValue.  `Ident` only arises under
@@ -2959,6 +2978,15 @@ pub fn json_parse_into_stores(stores: &mut Stores, raw: &str) -> DbRef {
             let store_mut = stores.store_mut(&result);
             store_mut.set_byte(result.rec, pos, 0, JV_DISCR_NUMBER);
             store_mut.set_float(result.rec, value_pos, n);
+            stores.last_json_errors.clear();
+        }
+        // @PLN109 — an integer-shaped top-level number → `JInteger` (exact i64).
+        Ok(crate::json::Parsed::Int(n)) => {
+            let int_tp = stores.name("JInteger");
+            let value_pos = u32::from(stores.position(int_tp, "value")) + pos;
+            let store_mut = stores.store_mut(&result);
+            store_mut.set_byte(result.rec, pos, 0, JV_DISCR_INT);
+            store_mut.set_int(result.rec, value_pos, n);
             stores.last_json_errors.clear();
         }
         // `Ident` is only emitted under `Dialect::Lenient`; the
@@ -3132,27 +3160,38 @@ fn n_as_text_dest(stores: &mut Stores, stack: &mut DbRef) {
 fn n_as_number(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
-    if discr == JV_DISCR_NUMBER {
+    // @PLN109 — a JInteger widens to f64; a JNumber reads as-is; else NaN.
+    #[allow(clippy::cast_precision_loss)]
+    let n = if discr == JV_DISCR_NUMBER {
         let num_tp = stores.name("JNumber");
         let value_pos = u32::from(stores.position(num_tp, "value")) + v.pos;
-        let n = stores.store(&v).get_float(v.rec, value_pos);
-        stores.put(stack, n);
+        stores.store(&v).get_float(v.rec, value_pos)
+    } else if discr == JV_DISCR_INT {
+        let int_tp = stores.name("JInteger");
+        let value_pos = u32::from(stores.position(int_tp, "value")) + v.pos;
+        stores.store(&v).get_int(v.rec, value_pos) as f64
     } else {
-        stores.put(stack, f64::NAN);
-    }
+        f64::NAN
+    };
+    stores.put(stack, n);
 }
 
 fn n_as_long(stores: &mut Stores, stack: &mut DbRef) {
     let v = *stores.get::<DbRef>(stack);
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
-    if discr == JV_DISCR_NUMBER {
+    // @PLN109 — a JInteger reads its EXACT i64 (H5); a JNumber truncates; else MIN.
+    let n = if discr == JV_DISCR_INT {
+        let int_tp = stores.name("JInteger");
+        let value_pos = u32::from(stores.position(int_tp, "value")) + v.pos;
+        stores.store(&v).get_int(v.rec, value_pos)
+    } else if discr == JV_DISCR_NUMBER {
         let num_tp = stores.name("JNumber");
         let value_pos = u32::from(stores.position(num_tp, "value")) + v.pos;
-        let n = stores.store(&v).get_float(v.rec, value_pos);
-        stores.put(stack, n.trunc() as i64);
+        stores.store(&v).get_float(v.rec, value_pos).trunc() as i64
     } else {
-        stores.put(stack, i64::MIN);
-    }
+        i64::MIN
+    };
+    stores.put(stack, n);
 }
 
 fn n_as_bool(stores: &mut Stores, stack: &mut DbRef) {
@@ -3557,6 +3596,7 @@ fn push_kind_mismatch(
         JV_DISCR_STRING => "JString",
         JV_DISCR_ARRAY => "JArray",
         JV_DISCR_OBJECT => "JObject",
+        JV_DISCR_INT => "JInteger",
         _ => "JUnknown",
     };
     let expected_name = match expected_discr {
@@ -3572,6 +3612,19 @@ fn push_kind_mismatch(
     ));
 }
 
+/// @PLN109 — read the exact i64 out of a `JInteger` store value, or `None` if
+/// `item_discr` is not `JV_DISCR_INT`.  Integer-shaped JSON numbers materialise
+/// as `JInteger` (H5), so `unwrap_long`/`unwrap_int` read them without f64
+/// rounding; `unwrap_float` widens them.
+fn jinteger_value(stores: &Stores, sub: &DbRef, item_discr: i32) -> Option<i64> {
+    if item_discr != JV_DISCR_INT {
+        return None;
+    }
+    let int_tp = stores.name("JInteger");
+    let value_pos = u32::from(stores.position(int_tp, "value")) + sub.pos;
+    Some(stores.store(sub).get_int(sub.rec, value_pos))
+}
+
 fn unwrap_long(
     stores: &mut Stores,
     sub: &DbRef,
@@ -3579,6 +3632,9 @@ fn unwrap_long(
     struct_name: &str,
     field_name: &str,
 ) -> i64 {
+    if let Some(n) = jinteger_value(stores, sub, item_discr) {
+        return n;
+    }
     push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
     if item_discr != JV_DISCR_NUMBER {
         return i64::MIN;
@@ -3596,6 +3652,9 @@ fn unwrap_int(
     struct_name: &str,
     field_name: &str,
 ) -> i64 {
+    if let Some(n) = jinteger_value(stores, sub, item_discr) {
+        return n;
+    }
     push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
     if item_discr != JV_DISCR_NUMBER {
         return i64::MIN;
@@ -3616,6 +3675,11 @@ fn unwrap_float(
     struct_name: &str,
     field_name: &str,
 ) -> f64 {
+    // A JInteger fed to a float field widens to f64 (no mismatch).
+    #[allow(clippy::cast_precision_loss)]
+    if let Some(n) = jinteger_value(stores, sub, item_discr) {
+        return n as f64;
+    }
     push_kind_mismatch(stores, item_discr, JV_DISCR_NUMBER, struct_name, field_name);
     if item_discr != JV_DISCR_NUMBER {
         return f64::NAN;
@@ -4112,6 +4176,7 @@ fn n_kind_dest(stores: &mut Stores, stack: &mut DbRef) {
         JV_DISCR_STRING => "JString",
         JV_DISCR_ARRAY => "JArray",
         JV_DISCR_OBJECT => "JObject",
+        JV_DISCR_INT => "JInteger",
         _ => "JUnknown",
     };
     stores
@@ -4180,6 +4245,12 @@ fn json_to_text_at(stores: &Stores, v: &DbRef, pretty: bool, depth: usize) -> St
             } else {
                 "null".to_string()
             }
+        }
+        // @PLN109 — a JInteger serialises as its exact integer (no `.0`).
+        JV_DISCR_INT => {
+            let int_tp = stores.name("JInteger");
+            let value_pos = u32::from(stores.position(int_tp, "value")) + v.pos;
+            format!("{}", stores.store(v).get_int(v.rec, value_pos))
         }
         JV_DISCR_STRING => {
             let str_tp = stores.name("JString");

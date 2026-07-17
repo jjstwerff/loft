@@ -135,10 +135,10 @@ pub fn parse_index(content: &str) -> Result<RegistryIndex, String> {
     for (k, _, v) in &root {
         match k.as_str() {
             "schema_version" => {
-                if let Parsed::Number(n) = v {
+                if let Some(n) = v.as_i64() {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     {
-                        schema_version = Some(*n as u32);
+                        schema_version = Some(n as u32);
                     }
                 }
             }
@@ -257,10 +257,14 @@ fn parse_version(pkg_name: &str, semver: &str, val: &Parsed) -> Result<Version, 
         match (k.as_str(), v) {
             ("url", Parsed::Str(s)) => url = Some(s.clone()),
             ("sha256", Parsed::Str(s)) => sha256 = Some(s.clone()),
-            ("size", Parsed::Number(n)) => {
-                #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-                {
-                    size = Some(*n as u64);
+            ("size", num) => {
+                // @PLN109 — accept an integer-shaped size (`Parsed::Int`) or a
+                // legacy `Number`.
+                if let Some(n) = num.as_i64() {
+                    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+                    {
+                        size = Some(n as u64);
+                    }
                 }
             }
             ("loft", Parsed::Str(s)) => loft = Some(s.clone()),

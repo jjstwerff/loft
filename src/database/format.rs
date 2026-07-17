@@ -1393,10 +1393,17 @@ impl ShowDb<'_> {
         const JV_STRING: i32 = 4;
         const JV_ARRAY: i32 = 5;
         const JV_OBJECT: i32 = 6;
+        // @PLN109 — integer-shaped numbers preserve their exact i64 as JInteger.
+        const JV_INT: i32 = 7;
         let store = self.store();
         let discr = store.get_byte(self.rec, self.pos, 0);
         match discr {
             JV_NULL => s.push_str("null"),
+            JV_INT => {
+                let int_tp = self.stores.name("JInteger");
+                let val_pos = u32::from(self.stores.position(int_tp, "value")) + self.pos;
+                write!(s, "{}", store.get_int(self.rec, val_pos)).unwrap();
+            }
             JV_BOOL => {
                 let bool_tp = self.stores.name("JBool");
                 let val_pos = u32::from(self.stores.position(bool_tp, "value")) + self.pos;

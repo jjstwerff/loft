@@ -832,7 +832,25 @@ impl Lexer {
                 let c = 0x1_0000 + ((cp - 0xD800) << 10) + (low - 0xDC00);
                 res.push(char::from_u32(c).unwrap_or('\u{FFFD}'));
             }
-            _ => {
+            Some(low) => {
+                // High surrogate followed by a `\uXXXX` that is NOT a low
+                // surrogate: the high is lone (U+FFFD), and the second escape
+                // decodes as its OWN codepoint — a BMP scalar (`A` → `A`),
+                // or U+FFFD if it too is a surrogate.  Matches the old byte-scanner,
+                // which left the second `\uXXXX` for the next pass rather than
+                // swallowing it.
+                self.err(
+                    Level::Error,
+                    "\\uXXXX high surrogate not followed by a low surrogate",
+                );
+                res.push('\u{FFFD}');
+                if (0xD800..=0xDFFF).contains(&low) {
+                    res.push('\u{FFFD}');
+                } else {
+                    res.push(char::from_u32(low).unwrap_or('\u{FFFD}'));
+                }
+            }
+            None => {
                 self.err(
                     Level::Error,
                     "\\uXXXX high surrogate not followed by a low surrogate",

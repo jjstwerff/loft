@@ -2284,7 +2284,12 @@ pub fn t_9JsonValue_as_text(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> S
 pub fn t_9JsonValue_as_long(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> i64 {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
-    if discr == crate::native::JV_DISCR_NUMBER {
+    // @PLN109 — a JInteger reads its EXACT i64 (H5); a JNumber truncates.
+    if discr == crate::native::JV_DISCR_INT {
+        let int_tp = stores.name("JInteger");
+        let value_pos = u32::from(stores.position(int_tp, "value")) + v.pos;
+        stores.store(&v).get_int(v.rec, value_pos)
+    } else if discr == crate::native::JV_DISCR_NUMBER {
         let num_tp = stores.name("JNumber");
         let value_pos = u32::from(stores.position(num_tp, "value")) + v.pos;
         let n = stores.store(&v).get_float(v.rec, value_pos);
@@ -2312,6 +2317,7 @@ pub fn t_9JsonValue_kind(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Stri
         x if x == crate::native::JV_DISCR_STRING => "JString",
         x if x == crate::native::JV_DISCR_ARRAY => "JArray",
         x if x == crate::native::JV_DISCR_OBJECT => "JObject",
+        x if x == crate::native::JV_DISCR_INT => "JInteger",
         _ => "JNull",
     };
     s.to_string()
@@ -2324,10 +2330,18 @@ pub fn t_9JsonValue_kind(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> Stri
 pub fn t_9JsonValue_as_number(cell: &std::cell::UnsafeCell<Stores>, v: DbRef) -> f64 {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     let discr = stores.store(&v).get_byte(v.rec, v.pos, 0);
+    // @PLN109 — a JInteger widens to f64; a JNumber reads as-is.
     if discr == crate::native::JV_DISCR_NUMBER {
         let num_tp = stores.name("JNumber");
         let value_pos = u32::from(stores.position(num_tp, "value")) + v.pos;
         stores.store(&v).get_float(v.rec, value_pos)
+    } else if discr == crate::native::JV_DISCR_INT {
+        let int_tp = stores.name("JInteger");
+        let value_pos = u32::from(stores.position(int_tp, "value")) + v.pos;
+        #[allow(clippy::cast_precision_loss)]
+        {
+            stores.store(&v).get_int(v.rec, value_pos) as f64
+        }
     } else {
         f64::NAN
     }

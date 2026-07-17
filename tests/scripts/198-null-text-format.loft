@@ -6,7 +6,7 @@
 // backends route text interpolation through `ops::format_text`, so the one fix
 // there covers interpreter + native.
 fn main() {
-  jn = json_parse("42"); // JNumber → as_text() is null
+  jn = json_parse("42"); // JInteger (@PLN109) → as_text() is null (not a string)
   a = "{jn.as_text()}";
   assert(a == "null", "null text → 'null', got '{a}'");
 

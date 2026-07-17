@@ -4304,6 +4304,7 @@ fn p54_match_on_jsonvalue_classifies_each_kind() {
         JObject { fields: _ } => \"object\",
         JArray  { items: _ }  => \"array\",
         JNumber { value: _ }  => \"number\",
+        JInteger { value: _ } => \"number\",
         JNull                 => \"null-or-error\",
         _                     => \"other\"
     }
@@ -4749,7 +4750,7 @@ fn run() -> boolean {
     u = User.parse(v);
     if u == u {}
     err = json_errors();
-    err.contains(\"User.name\") && err.contains(\"expected JString\") && err.contains(\"got JNumber\")
+    err.contains(\"User.name\") && err.contains(\"expected JString\") && err.contains(\"got JInteger\")
 }"
     )
     .expr("run()")
@@ -7007,7 +7008,8 @@ fn p54_parse_negative_zero_is_accepted() {
 }"
     )
     .expr("run_pnz()")
-    .result(Value::str("JNumber"));
+    // @PLN109 — `-0` is integer-shaped, so it is a JInteger (exact 0), not JNumber.
+    .result(Value::str("JInteger"));
 }
 
 /// Pretty-print depth counting — the `to_json_pretty` path
@@ -7817,7 +7819,7 @@ fn run_q3prt() -> integer {
     if check_q3prt(\"null\", \"JNull\") { score_q3prt += 1; }
     if check_q3prt(\"true\", \"JBool\") { score_q3prt += 1; }
     if check_q3prt(\"false\", \"JBool\") { score_q3prt += 1; }
-    if check_q3prt(\"42\", \"JNumber\") { score_q3prt += 1; }
+    if check_q3prt(\"42\", \"JInteger\") { score_q3prt += 1; }
     if check_q3prt(\"3.14\", \"JNumber\") { score_q3prt += 1; }
     if check_q3prt(\"\\\"hi\\\"\", \"JString\") { score_q3prt += 1; }
     score_q3prt
@@ -7864,7 +7866,8 @@ fn q3_array_of_mixed_kinds_round_trip() {
 }"
     )
     .expr("run_q3amkrt()")
-    .result(Value::str("JNumber|JBool|JString"));
+    // @PLN109 — the leading `1` round-trips as a JInteger.
+    .result(Value::str("JInteger|JBool|JString"));
 }
 
 /// Q3 — pretty-printed output is still valid JSON: `parse(to_json_pretty(v))`

@@ -75,19 +75,14 @@ fn field<'a>(p: &'a Parsed, name: &str) -> Result<&'a Parsed, SchemaDecodeError>
 }
 
 fn as_i64(p: &Parsed) -> Result<i64, SchemaDecodeError> {
-    if let Parsed::Number(n) = p {
-        Ok(*n as i64)
-    } else {
-        Err(SchemaDecodeError::Shape("expected number".into()))
-    }
+    // @PLN109 — `Parsed::as_i64` accepts both `Int` (exact i64) and `Number`.
+    p.as_i64()
+        .ok_or_else(|| SchemaDecodeError::Shape("expected number".into()))
 }
 
 fn as_f64(p: &Parsed) -> Result<f64, SchemaDecodeError> {
-    if let Parsed::Number(n) = p {
-        Ok(*n)
-    } else {
-        Err(SchemaDecodeError::Shape("expected number".into()))
-    }
+    p.as_f64()
+        .ok_or_else(|| SchemaDecodeError::Shape("expected number".into()))
 }
 
 fn as_u32(p: &Parsed) -> Result<u32, SchemaDecodeError> {

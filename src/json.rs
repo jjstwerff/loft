@@ -35,6 +35,11 @@ pub enum Parsed {
     Null,
     Bool(bool),
     Number(f64),
+    /// @PLN109 — an integer-shaped JSON number (no `.`, no exponent) that fits
+    /// `i64`.  Preserves the exact integer through deserialize (fixes @PLN102 H5:
+    /// values > 2⁵³ used to round through `f64`).  A number with a fraction or
+    /// exponent, or one that overflows `i64`, stays [`Number`](Self::Number).
+    Int(i64),
     Str(String),
     Ident(String),
     Array(Vec<Parsed>),
@@ -50,6 +55,32 @@ pub enum Parsed {
     /// (un-tagged) dumps still read as fields.  Fields: `(tag, tag_byte_offset,
     /// body)`, where `body` is the `{ … }` [`Parsed::Object`].
     Constructor(String, usize, Box<Parsed>),
+}
+
+impl Parsed {
+    /// The integer value of a numeric leaf: an exact `i64` from [`Int`](Self::Int)
+    /// (H5-preserved), or a truncated [`Number`](Self::Number) (backward-compatible
+    /// with the pre-@PLN109 float path).  `None` for a non-numeric value.
+    #[must_use]
+    pub fn as_i64(&self) -> Option<i64> {
+        match self {
+            Parsed::Int(n) => Some(*n),
+            Parsed::Number(n) => Some(*n as i64),
+            _ => None,
+        }
+    }
+
+    /// The float value of a numeric leaf: [`Number`](Self::Number) as-is, or an
+    /// [`Int`](Self::Int) widened to `f64`.  `None` for a non-numeric value.
+    #[must_use]
+    #[allow(clippy::cast_precision_loss)]
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            Parsed::Number(n) => Some(*n),
+            Parsed::Int(n) => Some(*n as f64),
+            _ => None,
+        }
+    }
 }
 
 /// Input dialect selector.
@@ -322,6 +353,12 @@ struct JParser<'a> {
     map: ByteMapper,
     dialect: Dialect,
     path: Vec<String>,
+    /// Byte offset just past the value most recently parsed, in the RAW input.
+    /// loft's number lexer over-consumes JSON-invalid forms (`007`, `0x1f`,
+    /// `1_0`) as a single token, so the lexer's next-token position would hide
+    /// the trailing bytes the old scanner rejected.  Structural / trailing-byte
+    /// checks read `skip_ws(value_end)` instead, matching the old scanner exactly.
+    value_end: usize,
 }
 
 impl<'a> JParser<'a> {
@@ -333,6 +370,24 @@ impl<'a> JParser<'a> {
             map: ByteMapper::new(input),
             dialect,
             path: Vec::new(),
+            value_end: 0,
+        }
+    }
+
+    /// The next non-whitespace byte after the value just parsed — the raw
+    /// position a delimiter (`,` / `]` / `}` / EOF) must appear at.
+    fn after_value(&self) -> usize {
+        skip_ws(self.bytes, self.value_end)
+    }
+
+    /// Byte offset of the lexer's current token (or input end at EOF).  Exact for
+    /// the non-number tokens that never over-consume.
+    fn peek_pos(&self) -> usize {
+        let r = self.lx.peek();
+        if r.has == LexItem::None {
+            self.bytes.len()
+        } else {
+            self.byte_of(&r.position)
         }
     }
 
@@ -371,9 +426,10 @@ impl<'a> JParser<'a> {
                                 .expect_err("lexer string failure must be an error"));
                         }
                         b'-' | b'0'..=b'9' => {
-                            let (n, end) = self.scan_number(at)?;
+                            let (value, end) = self.scan_number(at)?;
+                            self.value_end = end;
                             self.advance_past(end);
-                            return Ok(Parsed::Number(n));
+                            return Ok(value);
                         }
                         _ => {}
                     }
@@ -412,7 +468,7 @@ impl<'a> JParser<'a> {
         // A `CString` token's position is the first *content* char; the opening
         // quote is one byte before it.
         let quote = self.byte_of(&r.position).saturating_sub(1);
-        json_string_validate(self.bytes, quote)?;
+        self.value_end = json_string_validate(self.bytes, quote)?;
         let LexItem::CString(s) = r.has else {
             unreachable!("take_string called off a CString");
         };
@@ -422,14 +478,18 @@ impl<'a> JParser<'a> {
 
     fn parse_number(&mut self) -> Result<Parsed, (String, usize)> {
         let start = self.byte_of(&self.lx.peek().position);
-        let (n, end) = self.scan_number(start)?;
+        let (value, end) = self.scan_number(start)?;
+        self.value_end = end;
         self.advance_past(end);
-        Ok(Parsed::Number(n))
+        Ok(value)
     }
 
     /// Scan a JSON number lexeme from the raw input (mirrors the old
-    /// `parse_number`): optional `-`, integer part, fraction, exponent → f64.
-    fn scan_number(&self, start: usize) -> Result<(f64, usize), (String, usize)> {
+    /// `parse_number`): optional `-`, integer part, fraction, exponent.  @PLN109
+    /// Phase 3: an integer-shaped lexeme (no `.`, no exponent) that fits `i64`
+    /// becomes [`Parsed::Int`] (H5-exact); a fractional/exponent number, or one
+    /// that overflows `i64`, becomes [`Parsed::Number`] (`f64`).
+    fn scan_number(&self, start: usize) -> Result<(Parsed, usize), (String, usize)> {
         let bytes = self.bytes;
         let mut i = start;
         if i < bytes.len() && bytes[i] == b'-' {
@@ -445,7 +505,9 @@ impl<'a> JParser<'a> {
                 i += 1;
             }
         }
+        let mut fractional = false;
         if i < bytes.len() && bytes[i] == b'.' {
+            fractional = true;
             i += 1;
             if i >= bytes.len() || !bytes[i].is_ascii_digit() {
                 return Err(("expected digit after `.`".to_string(), i));
@@ -455,6 +517,7 @@ impl<'a> JParser<'a> {
             }
         }
         if i < bytes.len() && (bytes[i] == b'e' || bytes[i] == b'E') {
+            fractional = true;
             i += 1;
             if i < bytes.len() && (bytes[i] == b'+' || bytes[i] == b'-') {
                 i += 1;
@@ -468,10 +531,16 @@ impl<'a> JParser<'a> {
         }
         let slice = std::str::from_utf8(&bytes[start..i])
             .map_err(|_| ("non-ASCII in number".to_string(), start))?;
+        // Integer-shaped and i64-fitting → exact Int (H5); else f64.
+        if !fractional
+            && let Ok(n) = slice.parse::<i64>()
+        {
+            return Ok((Parsed::Int(n), i));
+        }
         let n: f64 = slice
             .parse()
             .map_err(|_| (format!("invalid number `{slice}`"), start))?;
-        Ok((n, i))
+        Ok((Parsed::Number(n), i))
     }
 
     /// An identifier in value position: `null`/`true`/`false` in either dialect,
@@ -485,6 +554,7 @@ impl<'a> JParser<'a> {
         let off = self.byte_of(pos);
         if self.dialect == Dialect::Lenient {
             self.lx.cont();
+            self.value_end = self.peek_pos();
             let value = match name {
                 "null" => Parsed::Null,
                 "true" => Parsed::Bool(true),
@@ -495,7 +565,7 @@ impl<'a> JParser<'a> {
             if let Parsed::Ident(tag) = &value
                 && self.lx.peek().has == LexItem::Token("{".to_string())
             {
-                let obj = self.parse_object()?;
+                let obj = self.parse_object()?; // sets value_end past `}`
                 return Ok(Parsed::Constructor(tag.clone(), off, Box::new(obj)));
             }
             return Ok(value);
@@ -511,6 +581,7 @@ impl<'a> JParser<'a> {
                 };
                 if name == word {
                     self.lx.cont();
+                    self.value_end = self.peek_pos();
                     Ok(val)
                 } else {
                     Err((format!("expected `{word}` at offset {off}"), off))
@@ -526,6 +597,7 @@ impl<'a> JParser<'a> {
         let mut items: Vec<Parsed> = Vec::new();
         if self.lx.peek().has == LexItem::Token("]".to_string()) {
             self.lx.cont();
+            self.value_end = self.peek_pos();
             return Ok(Parsed::Array(items));
         }
         // First element starts just past the `[`; each subsequent one past its `,`.
@@ -536,23 +608,25 @@ impl<'a> JParser<'a> {
             let v = self.parse_value(at)?;
             self.path.pop();
             items.push(v);
-            let r = self.lx.peek();
-            match &r.has {
-                LexItem::None => return Err(("unterminated array".to_string(), start)),
-                LexItem::Token(t) if t == "," => {
-                    let comma = self.byte_of(&r.position);
+            // The delimiter must appear at the RAW position after the value; the
+            // lexer's peek could be past it if the value was an over-consumed
+            // JSON-invalid number.  For a valid value the two coincide, so the
+            // lexer stays synced to consume the delimiter.
+            let d = self.after_value();
+            match self.bytes.get(d).copied() {
+                None => return Err(("unterminated array".to_string(), start)),
+                Some(b',') => {
                     self.lx.cont();
-                    at = skip_ws(self.bytes, comma + 1);
+                    at = skip_ws(self.bytes, d + 1);
                     idx += 1;
                 }
-                LexItem::Token(t) if t == "]" => {
+                Some(b']') => {
                     self.lx.cont();
+                    self.value_end = self.peek_pos();
                     return Ok(Parsed::Array(items));
                 }
-                _ => {
-                    let off = self.byte_of(&r.position);
-                    let b = self.bytes.get(off).copied().unwrap_or(0);
-                    return Err((format!("expected `,` or `]` in array, got {b:#x}"), off));
+                Some(b) => {
+                    return Err((format!("expected `,` or `]` in array, got {b:#x}"), d));
                 }
             }
         }
@@ -564,6 +638,7 @@ impl<'a> JParser<'a> {
         let mut fields: Vec<(String, usize, Parsed)> = Vec::new();
         if self.lx.peek().has == LexItem::Token("}".to_string()) {
             self.lx.cont();
+            self.value_end = self.peek_pos();
             return Ok(Parsed::Object(fields));
         }
         loop {
@@ -584,18 +659,18 @@ impl<'a> JParser<'a> {
             let v = self.parse_value(at)?;
             self.path.pop();
             fields.push((name, key_at, v));
-            let r = self.lx.peek();
-            match &r.has {
-                LexItem::None => return Err(("unterminated object".to_string(), start)),
-                LexItem::Token(t) if t == "," => self.lx.cont(),
-                LexItem::Token(t) if t == "}" => {
+            // Delimiter at the RAW position after the value (see `parse_array`).
+            let d = self.after_value();
+            match self.bytes.get(d).copied() {
+                None => return Err(("unterminated object".to_string(), start)),
+                Some(b',') => self.lx.cont(),
+                Some(b'}') => {
                     self.lx.cont();
+                    self.value_end = self.peek_pos();
                     return Ok(Parsed::Object(fields));
                 }
-                _ => {
-                    let off = self.byte_of(&r.position);
-                    let b = self.bytes.get(off).copied().unwrap_or(0);
-                    return Err((format!("expected `,` or `}}` in object, got {b:#x}"), off));
+                Some(b) => {
+                    return Err((format!("expected `,` or `}}` in object, got {b:#x}"), d));
                 }
             }
         }
@@ -655,12 +730,13 @@ fn parse_lexer(input: &str, dialect: Dialect) -> Result<Parsed, ParseError> {
             });
         }
     };
-    let r = p.lx.peek();
-    if r.has != LexItem::None {
-        let at = p.byte_of(&r.position);
+    // Trailing check against the RAW position after the value: the lexer may have
+    // over-consumed a JSON-invalid number's suffix, which the old scanner rejected.
+    let end = p.after_value();
+    if end != p.bytes.len() {
         return Err(ParseError {
-            message: format!("unexpected trailing byte at offset {at}"),
-            byte_offset: at,
+            message: format!("unexpected trailing byte at offset {end}"),
+            byte_offset: end,
             path: render_path(&p.path),
         });
     }
@@ -685,6 +761,9 @@ fn write_json(out: &mut String, value: &Parsed) {
     match value {
         Parsed::Null => out.push_str("null"),
         Parsed::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+        Parsed::Int(n) => {
+            let _ = write!(out, "{n}");
+        }
         Parsed::Number(n) => {
             // Whole, in-range values render without a trailing `.0` so a round
             // trip through `parse` reproduces the same text.  2^53 is the

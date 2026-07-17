@@ -168,10 +168,10 @@ pub fn parse_advisories(content: &str) -> Result<AdvisoryFeed, String> {
     for (k, _, v) in &root {
         match k.as_str() {
             "schema_version" => {
-                if let Parsed::Number(n) = v {
+                if let Some(n) = v.as_i64() {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     {
-                        schema_version = Some(*n as u32);
+                        schema_version = Some(n as u32);
                     }
                 }
             }
@@ -181,10 +181,10 @@ pub fn parse_advisories(content: &str) -> Result<AdvisoryFeed, String> {
                 }
             }
             "retention_days" => {
-                if let Parsed::Number(n) = v {
+                if let Some(n) = v.as_i64() {
                     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
                     {
-                        retention_days = Some(*n as u32);
+                        retention_days = Some(n as u32);
                     }
                 }
             }
