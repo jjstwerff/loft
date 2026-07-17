@@ -1181,6 +1181,16 @@ pub fn run_parallel_fold(
 /// reaching this dispatcher.
 #[cfg_attr(not(feature = "threading"), allow(clippy::needless_pass_by_value))]
 #[allow(dead_code, clippy::too_many_arguments)] // step 3 is the first consumer; tested via tests/threading.rs
+/// @PLN108 S3 — is read-only parent-store sharing enabled?  `LOFT_PAR_SHARE`, default OFF.
+/// When set, `run_parallel_discard` BORROWS the parent stores read-only instead of the
+/// per-worker byte-copy (`clone_for_worker`).  Safe because a worker's captured parent state
+/// is read-only (@PLN102 C93 compile error + `read_only` write-panic) and the parent outlives
+/// every worker (`thread::scope` join).  S1 verified no dispatcher mutates a parent mid-par.
+#[cfg(feature = "threading")]
+fn par_share_enabled() -> bool {
+    std::env::var_os("LOFT_PAR_SHARE").is_some_and(|v| !v.is_empty() && v != "0")
+}
+
 pub fn run_parallel_discard(
     stores: &Stores,
     program: WorkerProgram,
@@ -1193,6 +1203,22 @@ pub fn run_parallel_discard(
 ) {
     let n_rows = vector::length_vector(input, &stores.allocations) as usize;
     if n_rows == 0 {
+        return;
+    }
+    // @PLN108 S3 — behind LOFT_PAR_SHARE (default OFF): borrow the parent stores read-only.
+    #[cfg(feature = "threading")]
+    if par_share_enabled() {
+        run_parallel_discard_shared(
+            stores,
+            program,
+            fn_pos,
+            input,
+            element_size,
+            n_threads,
+            extra_args,
+            return_size,
+            n_rows,
+        );
         return;
     }
     let input_t = *input;
@@ -1209,6 +1235,56 @@ pub fn run_parallel_discard(
             );
             // Discard the worker's return — Stitch::Discard contract.
             let _ = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
+        }
+    });
+}
+
+/// @PLN108 S3 — the read-only-borrow variant of `run_parallel_discard` (behind `LOFT_PAR_SHARE`).
+/// Instead of `clone_for_worker`'s byte-copy of every parent store, each worker borrows the
+/// parent stores read-only (`clone_for_light_worker`) plus a small pool of its OWN writable
+/// stores.  Each worker OWNS its `WorkerStores` (moved into the `thread::scope` spawn), so no
+/// `&Store` crosses a thread; the shared parent buffers are read-only (C93 + write-panic) and
+/// outlive the workers (scope join).  Discard shape → no adoption, no return-stitch.
+#[cfg(feature = "threading")]
+#[allow(clippy::too_many_arguments)]
+fn run_parallel_discard_shared(
+    stores: &Stores,
+    program: WorkerProgram,
+    fn_pos: u32,
+    input: &DbRef,
+    element_size: u32,
+    n_threads: usize,
+    extra_args: &[u64],
+    return_size: u32,
+    n_rows: usize,
+) {
+    let threads = n_threads.max(1).min(n_rows);
+    let program = Arc::new(program);
+    let input_t = *input;
+    // Pool seeds each worker's OWN (writable) stores — its stack + scratch.  Sized generously;
+    // a worker that needs more just pushes new worker-local stores.
+    let mut pool = WorkerPool::new(threads, 4, 1024);
+    thread::scope(|s| {
+        for t in 0..threads {
+            let start = t * n_rows / threads;
+            let end = (t + 1) * n_rows / threads;
+            // Borrow the parent stores read-only + take this worker's pool slice.
+            let worker_stores = unsafe { stores.clone_for_light_worker(pool.slice_mut(t)) };
+            let prog = Arc::clone(&program);
+            let extras = extra_args.to_vec();
+            s.spawn(move || {
+                let mut state = prog.new_state(worker_stores);
+                for row_idx in start..end {
+                    let row_ref = vector::get_vector(
+                        &input_t,
+                        element_size,
+                        row_idx as i64,
+                        &state.database.allocations,
+                    );
+                    // Discard the worker's return — Stitch::Discard contract.
+                    let _ = state.execute_at_raw(fn_pos, &row_ref, &extras, return_size);
+                }
+            });
         }
     });
 }

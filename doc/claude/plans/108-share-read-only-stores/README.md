@@ -9,8 +9,9 @@ Tracker: [@PLN108](https://github.com/loft-lang/plans/issues/108) · `subject:lo
 
 ## Status
 
-**Design ready; step 1 ANSWERED, S0 (win-baseline bench) LANDED, S1 (safety audit) DONE &
-all-clean — next is S2/S3 (`unsafe impl Sync` + wire the borrow behind `LOFT_PAR_SHARE`).**
+**Live progress: S0 (bench) ✓, S1 (audit) ✓, S2 (deferred — not needed), S3 (discard borrow
+behind `LOFT_PAR_SHARE`) ✓ & gate-green. Next: S4→S6 (audit-follow-through + ASan + TSan) to
+harden the discard path, then S9 (extend to the queue family, where routing's win is measurable).**
 Cherry-picked from the sibling `../loft` checkout into this working tree (the named code is
 in sync:
 `clone_for_worker` `allocation.rs:1277`, `borrow_locked_for_light_worker` `store.rs:1292`,
@@ -158,8 +159,8 @@ building on it).
 |---|---|---|---|
 | **S0** ✅ | **Repro bench = committed win baseline.** `bench/par_copy_probe.loft` + `bench/run.sh` (co-located, NOT a CI gate — timing is machine-dependent). Ported from `../routing/tools/par_copy_probe.loft`. | **DONE** — runs both backends; reproduces the inversion (see § S0 baseline). | delete `bench/` |
 | **S1** ✅ | **Safety audit — NO code change.** Walk every live dispatcher: does it *materialise / adopt / lazily grow* a parent store between spawn and join? | **DONE — all clean** (see § S1 audit). Green light for S3 (`run_parallel_discard` is `&Stores`, no stitch). | — (doc only) |
-| **S2** | **`unsafe impl Sync for Store`** with a comment pinning the justification (read-only shared `addr()` access + `read_only` write-panic backstop) and naming @PLN108. No sharing path goes live yet. | Compiles; `borrow_locked_reads_original_data` + `borrow_locked_write_panics` green; **ASan baseline 47/47 unchanged** (no new live sharing). | revert the `impl` |
-| **S3** | **Wire Option A behind `LOFT_PAR_SHARE` (default OFF) on `run_parallel_discard` ONLY** (no return-stitch → smallest surface). Flag ON → route through `clone_for_light_worker` (borrow + pool); flag OFF → `clone_for_worker` (today's copy, byte-identical behaviour). | Flag OFF: **entire threading suite green, unchanged**. Flag ON: `parallel_store_is_read_only_in_workers` + `par_discard_does_not_grow_parent_stores` green. | unset the flag (default) |
+| **S2** ⏭️ | **`unsafe impl Sync for Store`** — *turned out NOT needed for S3* and is **deferred**. The `thread::scope` borrow path gives each worker an **owned** `WorkerStores` (moved into the spawn); no `&Store` crosses a thread, so `Store: Send` (already impl'd) suffices — S3 compiles clean without a `Sync` impl. Add it ONLY when a **rayon-based** shared dispatcher (S9 queue, where `&closure`/`&Stores` is shared across pool threads) actually demands it — keep the unsafe surface minimal. | (n/a — no impl added) | — |
+| **S3** ✅ | **Wire Option A behind `LOFT_PAR_SHARE` (default OFF) on `run_parallel_discard`** (no return-stitch → smallest surface). Flag ON → `run_parallel_discard_shared`: `thread::scope` + `clone_for_light_worker` (borrow parents read-only + a `WorkerPool` of worker-owned stores); flag OFF → `clone_for_worker` (today's copy, byte-identical). | **DONE** — flag OFF: threading suite **47/47**, unchanged. Flag ON: **47/47**, incl. `parallel_store_is_read_only_in_workers` + `par_discard_does_not_grow_parent_stores`. | unset the flag (default) |
 | **S4** | **S1 audit follow-through for discard** — if S1 flagged a mid-par parent touch in the discard path, move it before the spawn now; else assert (in a comment) the join-before-touch ordering at the call site. | discard path: no parent-store write/adopt between `scope.spawn` and join (code-read + comment). | — |
 | **S5** | **ASan with the flag ON** (`scripts/asan.sh -E 'binary(threading)'`) — the borrow-lifetime / UAF axis, `LOFT_PAR_SHARE=1`. | **47/47** (must match baseline). | flag off |
 | **S6** | **TSan with the flag ON + positive control** (@PLN54 S2: `-Zbuild-std` + target-scoped `-Zsanitizer=thread`) over the threading suite — the shared-read race axis. Include a **temporarily-patched positive control** (let a worker write a parent) and confirm **TSan FIRES**, then revert it, so the clean run is non-vacuous. | clean TSan with flag ON **AND** the positive control fires when armed. | flag off |
@@ -205,6 +206,27 @@ parent store, so the borrow checker already guarantees "parent unwritten during 
 4. **No blocker found → S3 is GO.** Nothing needs moving before a spawn. `run_parallel_discard`
    is the ideal first target: `&Stores`, no adoption, no stitch — the borrow only has to make
    `clone_for_worker` a `borrow` and keep the read-only/​write-panic guard.
+
+### S2/S3 notes (2026-07-17)
+
+- **S2 dropped as unnecessary — a real simplification.** The design assumed Option A "needs
+  `unsafe impl Sync for Store`." It does not, for the `thread::scope` path: `clone_for_light_worker`
+  is called on the dispatching thread and returns an **owned** `WorkerStores` that is *moved* into
+  the spawn, so the only thing crossing the thread boundary is a `Send` value — no `&Store` is ever
+  shared. `run_parallel_light` already compiled without a `Sync` impl, and so does S3. This shrinks
+  Option A's unsafe surface to zero new `impl`s; the write-panic + C93 remain the safety backstops.
+  A `Sync` impl re-enters scope only if S9 wires a **rayon**-scheduled shared dispatcher.
+- **S3 win not yet visible from a loft program — expected, not a regression.** The heap-copy win
+  is measurable only where a par actually reaches `run_parallel_discard`. The parser lowers to
+  `n_parallel_discard` **only** for an empty-body par (and a pure-worker empty-body par is often
+  dead-code-eliminated), so the S0-style probe routes through other dispatchers. The borrow path is
+  proven **correct** (the direct `par_discard_does_not_grow_parent_stores` gate exercises it flag-ON),
+  but the measurable heap-win arrives at **S9**, when the borrow extends to the **queue** family —
+  which is what routing's real workload (results returned) uses. S6/S7 bench there.
+- **Scheduler note.** Flag-ON uses `thread::scope` (per-call thread spawn, ~200 µs) vs flag-OFF's
+  rayon pool (~5 µs). For routing's shapes the 175 MB copy dwarfs both, but S9 should reconcile the
+  borrow path onto the rayon pool (needs the atomic-dispenser pattern `run_parallel_queue_ref` uses,
+  not a `&mut WorkerPool`) — record the scheduler choice with the S7 bench.
 
 ### S0 baseline (recorded 2026-07-17, `bench/run.sh`)
 
