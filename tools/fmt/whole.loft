@@ -334,7 +334,7 @@ fn render_range(kids: vector<Node>, a: integer, b: integer, col0: integer, inden
 // Rendered as full line(s) at `indent`: leading comments each on their own line; then the
 // code on one line with the comma placed BEFORE the trailing comment (`field: val, // note`)
 // — so a `//` never swallows code or the comma, and the layout is a fixpoint (idempotent).
-fn render_elem(kids: vector<Node>, a: integer, b: integer, indent: integer) -> text {
+fn render_elem(kids: vector<Node>, a: integer, b: integer, indent: integer, comma_ok: boolean) -> text {
   first_code = 0 - 1;
   comma = 0 - 1;
   tcmt = 0 - 1;
@@ -365,7 +365,9 @@ fn render_elem(kids: vector<Node>, a: integer, b: integer, indent: integer) -> t
   code_end = if comma >= 0 { comma } else if tcmt >= 0 { tcmt } else { b };
   s += spaces(indent);
   s += render_range(kids, first_code, code_end, indent, indent);
-  s += ",";
+  // omit the trailing comma on a call/param list's LAST element (a `,` after a lambda
+  // breaks loft's argument parsing); data containers always keep it.
+  if comma_ok { s += ","; }
   if tcmt >= 0 {
     ct = kids[tcmt] ?? Leaf { tok: "" };
     match ct { Leaf { tok } => { s += " "; s += tok; }, Group { open, kids, close } => {}, }
@@ -426,10 +428,15 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
   }
   brk = force;
   has_group = false;
+  // A `(…)` is a call / grouping / param list, NOT a data container: it breaks on WIDTH
+  // only, never because an argument contains a `{…}` block (a lambda `|x| { … }` or a
+  // struct-literal arg).  Breaking `map(|x| { … })` and adding a trailing comma corrupts
+  // the call (a trailing comma after a lambda makes loft see the wrong argument count).
+  is_call = open == "(";
   k = 0;
   while k < n {
     nd = kids[k] ?? Leaf { tok: "" };
-    match nd { Leaf { tok } => {}, Group { open, kids, close } => { has_group = true; if open == "{{" { brk = true; } }, }
+    match nd { Leaf { tok } => {}, Group { open, kids, close } => { has_group = true; if open == "{{" && !is_call { brk = true; } }, }
     k += 1;
   }
   // a `//` comment can't live inline (it would swallow the close) → force multi-line
@@ -479,7 +486,9 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
       }
     }
     if has_real(kids, start, elem_end) {
-      s += render_elem(kids, start, elem_end, indent + 2);
+      // a `(…)` call/param list omits the comma on its LAST element (no trailing comma)
+      is_last = !has_real(kids, elem_end, n);
+      s += render_elem(kids, start, elem_end, indent + 2, !(is_call && is_last));
     }
     start = elem_end;
   }
