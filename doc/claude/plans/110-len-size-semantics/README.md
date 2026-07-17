@@ -5,9 +5,19 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # 110 — `len` = logical count, `size` = occupied bytes (allocation-local)
 
-Tracker: [@PLN110](https://github.com/loft-lang/plans/issues/110) · `subject:loft` · `status:next`
+Tracker: [@PLN110](https://github.com/loft-lang/plans/issues/110) · `subject:loft` · **CLOSED (landed on `main`)**
 
 ## Status
+
+**✅ CLOSED — landed on `main` in `b3e05d9f` (#587), 2026-07-17.** All phases done: the text
+`len`/`size` flip + the allocation-local `size` primitive on every structure, both backends, full
+suite 2998/2998, both top-risk byte sites (glb chunk length, markdown cursor) validated, and @PLN102
+arc-E **H2 cleared**. The four affected published libs are converted with held draft PRs (§4c) that
+publish **with** the `CONTRACT_VERSION 0 → 1` release — the one downstream event this plan unblocks
+but does not itself perform (it is gated on the wider freeze + the owner's `../loft2` @PLN108 merge).
+Details below.
+
+---
 
 **Phase 2a FLIP LANDED** (2026-07-17) — `len(text)` now = character count, `size(text)` = byte
 count (swapped `OpLengthText`/`OpSizeText`). The red set after the flip matched the Phase-0 inventory
@@ -227,7 +237,7 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 3a | Strict-index lint **default-on** for the text case | lint | ✅ Done — `text_index_units_lint_enabled` (opt-out `LOFT_NO_STRICT_INDEX_TEXT`); warns on `for i in 0..len(s){s[i]}`; oracle `tests/strict_index_text_lint.rs`, both backends; broke 0 existing tests |
 | 4a | Full suite, **both backends** | validate | ✅ Done — fresh run 2998/2998 pass, 0 fail (an earlier run flaked `wasm_debug_relay`/`s7_debugger`; both pass in isolation) |
 | 4b | Run the known consumer programs (dogfood) | validate | ✅ Done — 0e golden corpus (both backends), `glb.loft` (5 tests), `audience_crystal`, **`lib/markdown`** (cloned `loft-libs-docs`; multi-byte render corrupted → converted → `tests/01-render.loft` green) |
-| 4c | Republish / validate affected libraries | validate | ✅ Fixes verified + **DRAFT PRs opened, held for the release**: markdown [loft-libs-docs#1](https://github.com/loft-lang/loft-libs-docs/pull/1) (25 sites, strengthened UTF-8 test), graphics/glb [loft-libs-graphics#14](https://github.com/loft-lang/loft-libs-graphics/pull/14) (2 `json.len→size` sites + a non-ASCII-name `total_len` regression test). **RELEASE-COUPLED:** the converted libs use `size()` for byte ops, correct only on the FLIPPED loft — merging/publishing before the flip ships would break them on the current release. Un-draft + touch-signed `loft ship` both **with** the `CONTRACT 0→1` release, not before. (Local patch also parked at `artifacts/markdown-len-to-size.patch`.) |
+| 4c | Republish / validate affected libraries | validate | ✅ Fixes verified + **all four affected published libs have DRAFT PRs, held for the release**: markdown [loft-libs-docs#1](https://github.com/loft-lang/loft-libs-docs/pull/1) (25 sites + UTF-8 test), graphics/glb [loft-libs-graphics#14](https://github.com/loft-lang/loft-libs-graphics/pull/14) (2 `json.len→size` + non-ASCII `total_len` test), time [loft-libs-game#2](https://github.com/loft-lang/loft-libs-game/pull/2) (2 byte-offset-parse sites; self-validating parse, no differential), web [loft-libs-net#11](https://github.com/loft-lang/loft-libs-net/pull/11) (4 pack byte-count assertions → `size` + multi-byte pack test). **#587's CI covered only the in-repo `tests/fixtures/libs` COPIES (all converted, green); the separate published-lib repos are not in that CI — hence the four manual PRs.** **RELEASE-COUPLED:** the converted libs use `size()` for byte ops, correct only on the FLIPPED loft — publishing before the flip ships would break them on the current release. Un-draft + touch-signed `loft ship` all four **with** the `CONTRACT 0→1` release, not before. (markdown patch also parked at `artifacts/markdown-len-to-size.patch`.) |
 | 4d | Clear @PLN102 **H2** → the `CONTRACT_VERSION 0 → 1` flip is unblocked on the stdlib side | close-out | ✅ **H2 CLEARED** — language + stdlib done, all consumers validated (glb + markdown top-risk sites correct). Only user-gated republish + branch merge remain |
 | 4e | **(discovered in 4b)** Formatter mis-classified `::`-/`.`-qualified names before a block as struct literals → corrupted `glb.loft` at Phase 2a; classify block-vs-container by the body instead | fix | ✅ Done — `9cafd92c` (fmt) + `007d2481` (glb restore); regression `host_call::formatter_qualified_variant_before_block_is_not_a_struct_lit` |
 
