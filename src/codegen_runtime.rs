@@ -3040,8 +3040,9 @@ where
 
 /// Parallel worker dispatcher for native primitive-return par.
 /// Mirrors `src/parallel.rs::run_parallel_raw` but takes a Rust closure
-/// instead of a bytecode fn pos.  Each thread gets its own `Stores` clone
-/// via `clone_for_worker`; per-thread results merge on the main thread.
+/// instead of a bytecode fn pos.  Each thread borrows the parent stores
+/// read-only via `parallel_workers` (`clone_for_light_worker`); per-thread
+/// results merge on the main thread.
 fn run_native_workers_primitive<F>(
     stores: &Stores,
     input: &DbRef,

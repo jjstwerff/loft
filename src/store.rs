@@ -137,8 +137,8 @@ pub struct Store {
     /// HARD lock: when `true`, the store is immutable.  All `addr_mut`,
     /// `claim`, and `delete` calls panic.  Set by CONST_STORE init
     /// (`compile.rs`), the JSON null sentinel (`native.rs`), and worker
-    /// store borrows (`clone_locked` / `clone_locked_for_worker` /
-    /// `borrow_locked_for_light_worker`).  Cleared via `unlock()`.
+    /// store borrows (`clone_locked` / `borrow_locked_for_light_worker`).
+    /// Cleared via `unlock()`.
     pub read_only: bool,
     /// SOFT lock: when `true`, only `delete` is illegal — `addr_mut`
     /// and `claim` are still allowed.  Set by the fn-call deep-copy
@@ -1244,38 +1244,6 @@ impl Store {
             last_op_at: 0,
             pinned: self.pinned,
             lock_origin: "clone_locked".to_string(),
-            known_type: self.known_type,
-            durable_meta_path: None,
-            durable_tier: 0,
-        }
-    }
-
-    /// Like [`clone_locked`] but omits the `claims` clone (S29/P1-R3).
-    /// Worker stores are always locked and never call `validate()`, so the claims
-    /// `HashSet` is wasted memory — O(records) allocation per worker per `par()` call.
-    pub fn clone_locked_for_worker(&self) -> Store {
-        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("Problem");
-        let ptr = unsafe { A.alloc(l) };
-        unsafe { std::ptr::copy_nonoverlapping(self.ptr, ptr, self.size as usize * 8) };
-        Store {
-            ptr,
-            size: self.size,
-            claims: HashSet::new(), // S29/P1-R3: workers never validate(); skip clone
-            #[cfg(feature = "mmap")]
-            file: None,
-            free: self.free,
-            read_only: true,
-            free_protected: false,
-            free_root: 0,
-            needs_coalesce: false,
-            generation: self.generation,
-            recording: None,
-            tag: self.tag,
-            borrowed: false,
-            created_at: 0,
-            last_op_at: 0,
-            pinned: self.pinned,
-            lock_origin: "clone_locked_for_worker".to_string(),
             known_type: self.known_type,
             durable_meta_path: None,
             durable_tier: 0,

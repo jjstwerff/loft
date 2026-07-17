@@ -190,7 +190,8 @@ fn worker_sum(r: const Pair) -> integer { r.a + r.b }
 
 #[test]
 fn parallel_store_is_read_only_in_workers() {
-    // Verify that input stores are locked for workers (clone_for_worker).
+    // Verify that parent stores are borrowed read-only for workers
+    // (clone_for_light_worker, @PLN108 — the single always-sharing clone).
     let code = r#"
 struct Num { v: integer }
 fn worker_id(r: const Num) -> integer { r.v }
@@ -199,10 +200,17 @@ fn worker_id(r: const Num) -> integer { r.v }
     let values = vec![1i32, 2, 3];
     let input = build_int_vector(&mut state.database, &values);
 
-    // After clone_for_worker, all stores in the clone should be locked.
-    let worker_stores = state.database.clone_for_worker();
-    for alloc in &worker_stores.allocations {
-        assert!(alloc.is_locked(), "worker store should be locked read-only");
+    // After clone_for_light_worker, every BORROWED parent store (index <
+    // parent_len) is locked read-only (C93 — workers cannot write the parent).
+    // The self-allocated scratch stores appended past parent_len are
+    // worker-owned and intentionally writable, so they are not checked.
+    let parent_len = state.database.allocations.len();
+    let worker_stores = unsafe { state.database.clone_for_light_worker() };
+    for (i, alloc) in worker_stores.allocations.iter().enumerate().take(parent_len) {
+        assert!(
+            alloc.is_locked(),
+            "borrowed parent store {i} should be locked read-only"
+        );
     }
 
     // The main stores should NOT be locked (except the constant store

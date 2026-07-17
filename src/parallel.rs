@@ -204,7 +204,7 @@ fn rayon_pool() -> &'static rayon::ThreadPool {
 
 /// Sequential equivalent of `parallel_workers` for the `not(threading)` path.
 /// Runs the closure once with `start = 0`, `end = n_rows`, and a single
-/// `clone_for_worker()` snapshot.  Returned `Vec<R>` always has length 1.
+/// `clone_for_light_worker()` snapshot.  Returned `Vec<R>` always has length 1.
 #[cfg(not(feature = "threading"))]
 pub(crate) fn parallel_workers<R, F>(
     stores: &Stores,
@@ -740,12 +740,15 @@ pub fn run_parallel_queue_ref(
             .map(|t| {
                 let start = t * n_rows / n_workers;
                 let end = (t + 1) * n_rows / n_workers;
-                // @PLN108 R4: queue_ref stays on the byte-copy clone for now — its
-                // dispenser-based output-slot adoption collides with the light clone's
-                // self-allocated scratch ("Allocating a used store" — probe 3). Needs a
-                // scratch-free / dispenser-aware borrow variant; deferred to R4b. This is
-                // the SOLE remaining `clone_for_worker` caller.
-                let mut ws = stores_immut.clone_for_worker();
+                // @PLN108 R4b: queue_ref borrows the parent read-only like every other
+                // par worker — but with ZERO scratch stores.  Its output slots are
+                // assigned by the shared `dispenser` (floor `parent_len + 1`); pre-seeded
+                // scratch would push the worker's stack store into that range and the
+                // dispenser would climb into a live slot ("Allocating a used store" —
+                // probe 3).  Scratch-free ⇒ layout identical to the retired byte-copy
+                // clone (borrows at `0..parent_len`, stack at `parent_len`), so the
+                // dispenser math is unchanged.
+                let mut ws = unsafe { stores_immut.clone_for_light_worker_with_scratch(0) };
                 ws.stores.free_bits.clear();
                 ws.stores.disable_slot_reuse = true;
                 // The worker's stack store (allocated by

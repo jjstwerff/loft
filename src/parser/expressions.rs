@@ -607,8 +607,8 @@ impl Parser {
             // allocates sort scratch IN THE HASH'S STORE — i.e. `p`'s store —
             // and panics on the locked claim.  Par-worker safety is
             // INDEPENDENT and untouched: `clone_locked` /
-            // `clone_locked_for_worker` / `borrow_locked_for_light_worker`
-            // set `read_only = true` on the worker's cloned store, so a
+            // `borrow_locked_for_light_worker` set `read_only = true` on
+            // the worker's borrowed store, so a
             // worker that writes through a `const` arg still panics on
             // `addr_mut`.  See PROBLEMS.md @P376 follow-up + PLANNING.md S22
             // (the S22 motivation — par-worker silent-mutation in release —

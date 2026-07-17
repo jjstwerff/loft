@@ -1266,107 +1266,45 @@ impl Stores {
         );
     }
 
-    /// Clone all current stores as locked read-only copies for use in a worker thread.
-    /// The returned `Stores` has the same type schema but no files and no `parallel_ctx`.
-    /// When a worker `State` is created from this, `State::new()` will allocate its own
-    /// stack store at index `self.max` without conflicting with the cloned data stores.
-    /// Freed slots (store.free == true) are replaced with fresh empty stores so that
-    /// `State::new_worker → Stores::database` can safely re-initialise them without
-    /// hitting the "Write to locked store" debug assert.
-    pub fn clone_for_worker(&self) -> WorkerStores {
-        let allocations = self
-            .allocations
-            .iter()
-            .map(|s| {
-                if s.free {
-                    super::super::store::Store::new(100)
-                } else {
-                    // S29/P1-R3: use claims-free clone — workers never call validate()
-                    s.clone_locked_for_worker()
-                }
-            })
-            .collect();
-        // S29: build a free_bits bitmap for the worker that reflects which slots are
-        // free (main-thread freed slots become fresh empty stores in the worker clone,
-        // so they are available for re-allocation by the worker).
-        let mut free_bits: Vec<u64> = Vec::new();
-        for (i, s) in self.allocations.iter().enumerate() {
-            if s.free {
-                let word = i / 64;
-                let bit = i % 64;
-                while free_bits.len() <= word {
-                    free_bits.push(0);
-                }
-                free_bits[word] |= 1u64 << bit;
-            }
-        }
-        WorkerStores::new(Stores {
-            types: self.types.clone(),
-            names: self.names.clone(),
-            allocations,
-            records_created: self.records_created,
-            stores_allocated: self.stores_allocated,
-            alloc_pc: self.alloc_pc,
-            stack_store_at_zero: self.stack_store_at_zero,
-            files: Vec::new(),
-            max: self.max,
-            peak: self.max,
-            free_bits,
-            bridge_text_dest: None,
-            const_refs: self.const_refs.clone(),
-            last_parse_errors: Vec::new(),
-            last_json_errors: Vec::new(),
-            parallel_ctx: None,
-            par_buffer_stack: Vec::new(),
-            par_text_buffer_stack: Vec::new(),
-            par_ref_buffer_stack: Vec::new(),
-            par_narrow_buffer_stack: Vec::new(),
-            par_fn_buffer_stack: Vec::new(),
-            par_fn_native_buffer_stack: Vec::new(),
-            logger: self.logger.clone(),
-            had_fatal: false,
-            runtime_error: None,
-            format_fault_tag: None,
-            // #255 / @PLN9: a parallel worker's file ops must resolve paths the
-            // same way as the main thread — carry the anchor + mode.
-            source_dir: self.source_dir.clone(),
-            program_relative: self.program_relative,
-            frame_yield: false,
-            poison_free: self.poison_free,
-            disable_slot_reuse: self.disable_slot_reuse,
-            uaf_freed_this_op: Vec::new(),
-            worker_slot_dispenser: None,
-            worker_allocated_indices: Vec::new(),
-            report_asserts: false,
-            assert_results: Vec::new(),
-            user_args: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
-            start_time: self.start_time,
-            #[cfg(target_arch = "wasm32")]
-            start_time_ms: self.start_time_ms,
-            call_stack_snapshot: Vec::new(),
-            variables_snapshot: Vec::new(),
-            closure_map: std::collections::HashMap::new(),
-            jnull_sentinel: None,
-        })
-    }
-
     /// Produce a light-worker view — the parent stores borrowed read-only, plus a
     /// small set of **self-allocated** writable scratch stores for the worker's own
     /// allocations.  @PLN108 R1: the scratch is self-allocated per call (no external
     /// `WorkerPool` slice), so this composes with any spawner — `thread::scope` OR
     /// rayon — which is what lets the borrow become the single, always-on path (R2).
     ///
+    /// Seeds `4` scratch stores, matching the retired `WorkerPool`.  The
+    /// dispenser-driven `queue_ref` path wants **zero** scratch (its output slots come
+    /// from the parent-namespace dispenser, and any pre-seeded scratch would push the
+    /// worker's stack store into the dispenser's index range) — it calls
+    /// [`clone_for_light_worker_with_scratch`](Self::clone_for_light_worker_with_scratch)
+    /// with `0`.
+    ///
     /// # Safety
     /// The original `Stores` must outlive the worker — guaranteed by the scoped join
     /// of the spawner (`thread::scope` or rayon's `pool.install`, both block until
     /// every worker has returned before the parent's borrow ends).
     pub unsafe fn clone_for_light_worker(&self) -> WorkerStores {
-        // A light worker STARTS with this many writable scratch stores at this word
-        // capacity (matching the retired `WorkerPool` seed of 4 × 1024).  It grows
-        // beyond this on demand (freed-slot reuse / new worker-local stores), so the
-        // count is only a starting reservation, not a ceiling.
+        // A light worker STARTS with this many writable scratch stores (matching the
+        // retired `WorkerPool` seed of 4 × 1024).  It grows beyond this on demand
+        // (freed-slot reuse / new worker-local stores), so it is only a reservation.
         const SCRATCH_STORES: usize = 4;
+        unsafe { self.clone_for_light_worker_with_scratch(SCRATCH_STORES) }
+    }
+
+    /// Light-worker view with an explicit scratch-store count — see
+    /// [`clone_for_light_worker`](Self::clone_for_light_worker).  Pass `0` for the
+    /// `queue_ref` dispenser path: with no scratch, the worker's `allocations` are
+    /// exactly the `parent_len` borrows, so its stack store lands at `parent_len`
+    /// (push-at-end) — below the shared slot dispenser's floor (`parent_len + 1`),
+    /// which therefore never climbs into a live worker-local slot.
+    ///
+    /// # Safety
+    /// Same contract as [`clone_for_light_worker`](Self::clone_for_light_worker): the
+    /// parent `Stores` must outlive the worker.
+    pub unsafe fn clone_for_light_worker_with_scratch(
+        &self,
+        scratch_stores: usize,
+    ) -> WorkerStores {
         const SCRATCH_WORDS: u32 = 1024;
         // Borrow ALL stores — the input vector may reference any store.
         let mut allocations: Vec<Store> = self
@@ -1383,7 +1321,7 @@ impl Stores {
         // Self-allocated writable scratch: free slots the worker allocates into.
         // `Store::new` is already `free` + `init`'d, so these land in `free_bits` below
         // exactly as the old pool-seeded `Store::new(cap)` did.
-        for _ in 0..SCRATCH_STORES {
+        for _ in 0..scratch_stores {
             allocations.push(Store::new(SCRATCH_WORDS));
         }
         // Build free_bits: main-thread freed slots + all pool slots.
@@ -1407,8 +1345,8 @@ impl Stores {
             alloc_pc: self.alloc_pc,
             stack_store_at_zero: self.stack_store_at_zero,
             files: Vec::new(),
-            max: (self.allocations.len() + SCRATCH_STORES) as u16,
-            peak: (self.allocations.len() + SCRATCH_STORES) as u16,
+            max: (self.allocations.len() + scratch_stores) as u16,
+            peak: (self.allocations.len() + scratch_stores) as u16,
             free_bits,
             bridge_text_dest: None,
             const_refs: self.const_refs.clone(),
