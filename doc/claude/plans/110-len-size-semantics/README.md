@@ -211,7 +211,7 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 2d | Convert tests / docs / examples → re-green | convert | ✅ Done — canaries updated (value or `len→size` by intent), doc-prose (STDLIB.md, doc tests), `doc/examples.js` regenerated |
 | 2e | Convert consumer programs → re-green | convert | ✅ Done — `tests/fixtures/libs` (incl. `glb.loft` binary chunk length); ⚠ `lib/markdown` not checked out (re-run against `loft-libs-docs`) |
 | 3a | Strict-index lint **default-on** for the text case | lint | ✅ Done — `text_index_units_lint_enabled` (opt-out `LOFT_NO_STRICT_INDEX_TEXT`); warns on `for i in 0..len(s){s[i]}`; oracle `tests/strict_index_text_lint.rs`, both backends; broke 0 existing tests |
-| 4a | Full suite, **both backends** | validate | ✅ Done — 2995 pass; 2 known flakes (`wasm_debug_relay`, `s7_debugger`) pass in isolation |
+| 4a | Full suite, **both backends** | validate | ✅ Done — fresh run 2998/2998 pass, 0 fail (an earlier run flaked `wasm_debug_relay`/`s7_debugger`; both pass in isolation) |
 | 4b | Run the known consumer programs (dogfood) | validate | ✅ Done (on-box) — 0e golden corpus (both backends), `glb.loft` (5 tests), `audience_crystal`. ⚠ `lib/markdown` not checked out — run vs `loft-libs-docs` |
 | 4c | Republish / validate affected libraries | validate | ◑ Validated (fixture libs green); **republish is user-gated** (loft-ship, touch-signing) + pending lib/markdown |
 | 4d | Clear @PLN102 **H2** → the `CONTRACT_VERSION 0 → 1` flip is unblocked on the stdlib side | close-out | ◑ Ready pending 4c (lib/markdown republish) |
