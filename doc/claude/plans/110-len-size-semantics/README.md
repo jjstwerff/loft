@@ -19,8 +19,24 @@ Script suites, `strings`, `host_input`, `doc_hygiene` all green both backends. `
 as UTF-8 byte width (owner call), so the `c#next == c#index + len(c)` identity still holds.
 **3a DONE** — the text strict-index lint is default-on (`for i in 0..len(s){s[i]}` warns; opt-out
 `LOFT_NO_STRICT_INDEX_TEXT`); it broke 0 existing tests (no code used that units-error shape).
-**Remaining:** Phase-4 validation/dogfood, then the `CONTRACT_VERSION 0 → 1` flip. (Pre-existing, not from this work: `index_hygiene` flags 14 closed-issue
-`@P*` refs in untouched files.)
+
+**Phase 4 validation (2026-07-17)** — full suite green both backends (2995 pass; the 2 reds are the
+known `wasm_debug_relay` / `s7_debugger` flakes, both pass in isolation). Dogfood green on the
+consumers available on this box: the 0e golden corpus (both backends), the `glb.loft` top-risk
+fixture (5 tests), and `audience_crystal`. **Validation caught a real 2e gap:** the Phase-2a flip
+commit (`be5d7f98`) had run the then-buggy `loft fmt` over `tests/fixtures/libs/graphics/src/glb.loft`
+and left it **un-parseable** — the formatter mis-rendered two blocks whose names reach a brace
+through `::` (`if … == scene::Point { … }`, `-> math::Vec3 { … }`) as comma containers, inserting
+stray `;,`/`},`. It slipped 2e because the graphics fixture is a `--lib`/`--tests` target that skips
+here (no native system lib), so nothing parsed it standalone. Fixed both: un-mangled glb.loft (parses
++ 5 tests green) and fixed `loft fmt` to classify block-vs-container by the BODY (a `field:` pair, no
+`;`), not the preceding token — the type-free rule that closes the qualified-name hole for good
+(commits `9cafd92c` + `007d2481`). ⚠ `lib/markdown` still not checked out — its dogfood + republish
+must run against `loft-libs-docs` before H2 is fully closed.
+**Remaining:** 4c republish of the affected registry libs (user-gated, loft-ship) + lib/markdown
+validation, then 4d clears H2 and the `CONTRACT_VERSION 0 → 1` flip is unblocked on the stdlib side.
+(Pre-existing, not from this work: `index_hygiene` flags 14 closed-issue `@P*` refs in untouched
+files.)
 
 **Phase 1 COMPLETE** (2026-07-17) — sub-arc **1a `size(vector<T>)` ✅ landed**, both backends; the
 uniform mechanism + per-type formulas + build order are in [phase1-size-impl.md](phase1-size-impl.md).
@@ -195,10 +211,11 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 2d | Convert tests / docs / examples → re-green | convert | ✅ Done — canaries updated (value or `len→size` by intent), doc-prose (STDLIB.md, doc tests), `doc/examples.js` regenerated |
 | 2e | Convert consumer programs → re-green | convert | ✅ Done — `tests/fixtures/libs` (incl. `glb.loft` binary chunk length); ⚠ `lib/markdown` not checked out (re-run against `loft-libs-docs`) |
 | 3a | Strict-index lint **default-on** for the text case | lint | ✅ Done — `text_index_units_lint_enabled` (opt-out `LOFT_NO_STRICT_INDEX_TEXT`); warns on `for i in 0..len(s){s[i]}`; oracle `tests/strict_index_text_lint.rs`, both backends; broke 0 existing tests |
-| 4a | Full suite, **both backends** | validate | Open |
-| 4b | Run the known consumer programs (dogfood) | validate | Open |
-| 4c | Republish / validate affected libraries | validate | Open |
-| 4d | Clear @PLN102 **H2** → the `CONTRACT_VERSION 0 → 1` flip is unblocked on the stdlib side | close-out | Open |
+| 4a | Full suite, **both backends** | validate | ✅ Done — 2995 pass; 2 known flakes (`wasm_debug_relay`, `s7_debugger`) pass in isolation |
+| 4b | Run the known consumer programs (dogfood) | validate | ✅ Done (on-box) — 0e golden corpus (both backends), `glb.loft` (5 tests), `audience_crystal`. ⚠ `lib/markdown` not checked out — run vs `loft-libs-docs` |
+| 4c | Republish / validate affected libraries | validate | ◑ Validated (fixture libs green); **republish is user-gated** (loft-ship, touch-signing) + pending lib/markdown |
+| 4d | Clear @PLN102 **H2** → the `CONTRACT_VERSION 0 → 1` flip is unblocked on the stdlib side | close-out | ◑ Ready pending 4c (lib/markdown republish) |
+| 4e | **(discovered in 4b)** Formatter mis-classified `::`-/`.`-qualified names before a block as struct literals → corrupted `glb.loft` at Phase 2a; classify block-vs-container by the body instead | fix | ✅ Done — `9cafd92c` (fmt) + `007d2481` (glb restore); regression `host_call::formatter_qualified_variant_before_block_is_not_a_struct_lit` |
 
 ## Cross-arc dependencies
 
