@@ -77,28 +77,22 @@ the *enforce* branch.
 
 ---
 
-## K2 — the fold-lint runs only on the single-file compile path
+## K2 — the fold-lint's coverage · **AUDITED 2026-07-17 — no live gap**
 
-**What.** `superseded_fold_diagnostics` (`src/use_analysis.rs`) is invoked only from `src/main.rs`'s
-single-file compile path. The arc-C contract advertises it as "a `make ci` fold-lint"
-([COMPATIBILITY.md § Folding](../../COMPATIBILITY.md)), but a bulk / library-authoring build may not
-reach it. Inert today (no unfolded `#superseded` symbol exists in-tree), so no live miss — but the
-promised guarantee is only as good as the paths that run it.
+**Audit result.** `superseded_fold_diagnostics` is called at `src/main.rs:5581`, in the SAME
+author-facing-lint block as `warn_copies` / `warn_dead_stores` — consistent wiring, not an anomaly.
+The "`make ci` fold-lint" promise ([COMPATIBILITY.md § Folding](../../COMPATIBILITY.md)) IS met: the
+unit test `fold_lint_flags_dangling_and_unfolded_superseded` (`src/ir_read.rs`) loads the REAL
+stdlib (`parse_dir("default")`) and runs the lint over it, so every in-tree fold (`sum_of→sum`,
+`contains→find`) is checked in `cargo test`, and the test's synthetic dangling/unfolded snippets are
+the positive control. Any author who compiles their program or lib via `loft <file>` also triggers
+it. No code change made — wiring the lint into MORE paths than its sibling author-lints would be the
+inconsistency.
 
-**Design — small safe steps.**
-
-1. **Audit (usage sentinel, not a grep).** Trace which entry points render diagnostics: the
-   single-file `loft <file>`, the test-runner path, and the library-authoring / `features-gen` /
-   `loft publish` paths. A static grep over-counts — instead confirm at RUNTIME (a temporary
-   `eprintln` at the fold-lint call, or a count) whether each path reaches
-   `superseded_fold_diagnostics`.
-2. **Positive control BEFORE trusting silence.** Inject a synthetic unfolded `#superseded` symbol
-   in a fixture and confirm each target path WARNS on it — a silent lint reads the same whether the
-   symbol is folded or the lint never ran.
-3. **Wire the missing paths**, gated identically to the steer (`LOFT_NO_STEER` off ⇒ on), so the
-   lint fires wherever a `#superseded` symbol can be authored. Additive; low risk.
-4. **Regression.** A test that an unfolded `#superseded` symbol warns via the bulk path (not only
-   the single-file one).
+**Residual (inert, deferred).** Whether the `loft publish` / lib-build path ALSO runs it is a
+consistency nicety, not a live gap — a lib author already triggers it on any CLI compile. If wired
+there later, gate it identically to the steer (`LOFT_NO_STEER`) and add a positive control (a
+synthetic unfolded `#superseded`) in that path first — silence is evidence only after the control.
 
 ---
 

@@ -2844,8 +2844,11 @@ impl Definition {
         let rest = self.name.strip_prefix("t_")?;
         let nd = rest.chars().take_while(char::is_ascii_digit).count();
         let len: usize = rest.get(..nd)?.parse().ok()?;
-        // `t_`(2) + digits(nd) + type(len) + `_`(1); require a method name after it.
-        (rest.len() > nd + len).then_some(&self.name[..=2 + nd + len])
+        // `t_`(2) + digits(nd) + type(len) + `_`(1) + method. The byte AFTER the type name
+        // must be the `_` separator — the other four manglers (`api_surface::method_name`,
+        // `generation::is_t_param_stub`, `parser::h5_names_a_generic_template`) require it; a
+        // longer `rest` alone is not enough, so `t_4textX…` must NOT be read as a method.
+        (rest.as_bytes().get(nd + len) == Some(&b'_')).then_some(&self.name[..=2 + nd + len])
     }
 
     /// The user-facing name of this definition — the internal `n_` (free fn) or

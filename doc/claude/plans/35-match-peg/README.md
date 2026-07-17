@@ -4,15 +4,18 @@
 
 # @PLN35 — PEG-Style Match Patterns with Anchor-Revert Captures (L3)
 
-> **Status: design draft — reconciled to loft reality (2026-07-10).**  Extends the base
+> **Status: SHIPPED (phases 1–7 + PC1–PC5; #554/#558/#561/#562).**  The formal spec
+> ([formal/matching.md](../../formal/matching.md), [formal/VERIFICATION.md](../../formal/VERIFICATION.md))
+> is reconciled to SHIPPED; every PEG rule (P-Seq/Alt/Opt/Rep/Cap/Rest/Multi/Atomic) is
+> verified on both backends via `tests/scripts/35*.loft`.  Extends the base
 > match syntax ([LOFT.md](../../LOFT.md) § Match expressions) with sequence patterns,
 > alternation, optionals, repetition, and multi-variable capture.  Backtracking is
 > modelled on the existing `Lexer::link()` / `revert()` anchor mechanic so a
 > partially-matched branch can be cleanly undone.  **Build plan:**
 > [IMPLEMENTATION.md](IMPLEMENTATION.md).  **Strict-spec changes:**
-> [FORMAL-DESIGN.md](FORMAL-DESIGN.md).  **Phase 0 in progress** — the D2 architecture
-> bet (slice backtracking needs no new opcode) is CONFIRMED on both backends
-> (`probes/p0-d2-backtrack.loft`).
+> [FORMAL-DESIGN.md](FORMAL-DESIGN.md).  The D2 architecture bet (slice backtracking
+> needs no new opcode) was CONFIRMED on both backends (`probes/p0-d2-backtrack.loft`) and
+> carried through all phases.
 
 ---
 
