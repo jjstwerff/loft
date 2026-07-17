@@ -40,10 +40,13 @@
 // working directory; #cwd opts out of the program-relative default.
 #cwd
 fn source_roots() -> vector<text> {
-    // Match the set bash's `git ls-files` enumerates.  `examples`
-    // is included optimistically (currently empty); `.claude` and
-    // `.config` are dot-dirs that git tracks intentionally.
-    [".claude", ".config", "bench", "default", "doc", "lib", "scripts", "src", "tests", "tools", "examples"]
+  // Match the set bash's `git ls-files` enumerates.  `examples`
+  // is included optimistically (currently empty); `.claude` and
+  // `.config` are dot-dirs that git tracks intentionally.
+  [
+    ".claude", ".config", "bench", "default", "doc", "lib", "scripts", "src", "tests", "tools",
+    "examples",
+  ]
 }
 
 // ── Leaf helpers (declared first so the validators below can
@@ -55,16 +58,16 @@ fn source_roots() -> vector<text> {
 
 // True for ASCII digits.
 fn is_digit_leaf(c: character) -> boolean {
-    c >= '0' && c <= '9'
+  c >= '0' && c <= '9'
 }
 
 // True for `[a-zA-Z0-9_]` — the boundary class that the bash
 // scanner's `\B` / `\b` checks effectively gate against.
 fn is_word_char_leaf(c: character) -> boolean {
-    if c >= '0' && c <= '9' { return true; }
-    if c >= 'a' && c <= 'z' { return true; }
-    if c >= 'A' && c <= 'Z' { return true; }
-    c == '_'
+  if c >= '0' && c <= '9' { return true; }
+  if c >= 'a' && c <= 'z' { return true; }
+  if c >= 'A' && c <= 'Z' { return true; }
+  c == '_'
 }
 
 // ── ASCII byte-class helpers — hot-loop fast path ────────────
@@ -75,16 +78,18 @@ fn is_word_char_leaf(c: character) -> boolean {
 // All ASCII; non-ASCII bytes (0x80+) compare false against
 // every literal here, which matches scan.sh's awk regex
 // semantics for ASCII-only tag tokens.
-fn is_digit_b(b: integer) -> boolean { b >= 48 && b <= 57 }
+fn is_digit_b(b: integer) -> boolean {
+  b >= 48 && b <= 57
+}
 fn is_word_char_b(b: integer) -> boolean {
-    if b >= 48 && b <= 57 { return true; }   // 0-9
-    if b >= 97 && b <= 122 { return true; }  // a-z
-    if b >= 65 && b <= 90 { return true; }   // A-Z
-    b == 95                                  // _
+  if b >= 48 && b <= 57 { return true; } // 0-9
+  if b >= 97 && b <= 122 { return true; } // a-z
+  if b >= 65 && b <= 90 { return true; } // A-Z
+  b == 95// _
 }
 fn is_segment_char_b(b: integer) -> boolean {
-    if is_word_char_b(b) { return true; }
-    b == 46                                  // .
+  if is_word_char_b(b) { return true; }
+  b == 46// .
 }
 
 // Build the set of valid P-issue numbers from PROBLEMS.md.
@@ -99,53 +104,53 @@ fn is_segment_char_b(b: integer) -> boolean {
 // Returned as a `vector<text>` of bare numeric strings (no `@P`
 // prefix) — same shape scan.sh's `VALID_PIDS` uses.
 fn read_valid_pids() -> vector<text> {
-    out: vector<text> = [];
-    f = file("doc/claude/PROBLEMS.md");
-    if f.format == Format.NotExists { return out; }
-    src = f.content();
-    n = src.len();
-    line_start = 0;
-    i = 0;
-    while i <= n {
-        if i == n || src[i] == '\n' {
-            line = src[line_start..i];
-            ll = line.len();
-            // Match `^| <digits> |` (open form).
-            if ll > 4 && line[0] == '|' && line[1] == ' '
-                && ll > 2 && is_digit_leaf(line[2]) {
-                j = 2;
-                while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
-                if j + 2 <= ll && line[j] == ' ' && line[j + 1] == '|' {
-                    pid = line[2..j];
-                    out += [pid];
-                }
-            }
-            // Match `^| ~~<digits>~~ |` (closed/fixed form).
-            else if ll > 8 && line[0] == '|' && line[1] == ' '
-                && line[2] == '~' && line[3] == '~'
-                && is_digit_leaf(line[4]) {
-                j = 4;
-                while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
-                if j + 4 <= ll && line[j] == '~' && line[j + 1] == '~'
-                    && line[j + 2] == ' ' && line[j + 3] == '|' {
-                    pid = line[4..j];
-                    out += [pid];
-                }
-            }
-            // Issue-migration: the freeze banner maps migrated @P to GitHub
-            // Issues as `> @P<digits>→[#NNN]...`.  Those @P resolve to a gh
-            // Issue (not a broken ref) → mark them VALID, fully offline.
-            else if ll > 4 && line[0] == '>' && line[1] == ' '
-                && line[2] == '@' && line[3] == 'P' && is_digit_leaf(line[4]) {
-                j = 4;
-                while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
-                out += [line[4..j]];
-            }
-            line_start = i + 1;
+  out: vector<text> = [];
+  f = file("doc/claude/PROBLEMS.md");
+  if f.format == Format.NotExists { return out; }
+  src = f.content();
+  n = src.size();
+  line_start = 0;
+  i = 0;
+  while i <= n {
+    if i == n || src[i] == '\n' {
+      line = src[line_start..i];
+      ll = line.size();
+      // Match `^| <digits> |` (open form).
+      if ll > 4 && line[0] == '|' && line[1] == ' '
+      && ll > 2 && is_digit_leaf(line[2]) {
+        j = 2;
+        while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
+        if j + 2 <= ll && line[j] == ' ' && line[j + 1] == '|' {
+          pid = line[2..j];
+          out += [pid];
         }
-        i = i + 1;
+      }
+      // Match `^| ~~<digits>~~ |` (closed/fixed form).
+      else if ll > 8 && line[0] == '|' && line[1] == ' '
+      && line[2] == '~' && line[3] == '~'
+      && is_digit_leaf(line[4]) {
+        j = 4;
+        while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
+        if j + 4 <= ll && line[j] == '~' && line[j + 1] == '~'
+        && line[j + 2] == ' ' && line[j + 3] == '|' {
+          pid = line[4..j];
+          out += [pid];
+        }
+      }
+      // Issue-migration: the freeze banner maps migrated @P to GitHub
+      // Issues as `> @P<digits>→[#NNN]...`.  Those @P resolve to a gh
+      // Issue (not a broken ref) → mark them VALID, fully offline.
+      else if ll > 4 && line[0] == '>' && line[1] == ' '
+      && line[2] == '@' && line[3] == 'P' && is_digit_leaf(line[4]) {
+        j = 4;
+        while j < ll && is_digit_leaf(line[j]) { j = j + 1; }
+        out += [line[4..j]];
+      }
+      line_start = i + 1;
     }
-    out
+    i = i + 1;
+  }
+  out
 }
 
 // Build the set of valid plan numbers by walking the plan
@@ -156,51 +161,51 @@ fn read_valid_pids() -> vector<text> {
 // the four sub-buckets (top-level / future / deferred /
 // finished) to match scan.sh.
 fn read_valid_plans() -> vector<text> {
-    out: vector<text> = [];
-    walk_plan_dirs("doc/claude/plans", out);
-    walk_plan_dirs("doc/claude/plans/future", out);
-    walk_plan_dirs("doc/claude/plans/deferred", out);
-    walk_plan_dirs("doc/claude/plans/finished", out);
-    walk_plan_dirs("doc/claude/lib_plans", out);
-    walk_plan_dirs("doc/claude/lib_plans/future", out);
-    walk_plan_dirs("doc/claude/lib_plans/deferred", out);
-    walk_plan_dirs("doc/claude/lib_plans/finished", out);
-    out
+  out: vector<text> = [];
+  walk_plan_dirs("doc/claude/plans", out);
+  walk_plan_dirs("doc/claude/plans/future", out);
+  walk_plan_dirs("doc/claude/plans/deferred", out);
+  walk_plan_dirs("doc/claude/plans/finished", out);
+  walk_plan_dirs("doc/claude/lib_plans", out);
+  walk_plan_dirs("doc/claude/lib_plans/future", out);
+  walk_plan_dirs("doc/claude/lib_plans/deferred", out);
+  walk_plan_dirs("doc/claude/lib_plans/finished", out);
+  out
 }
 
 fn walk_plan_dirs(root: text, out: vector<text>) {
-    f = file(root);
-    if f.format == Format.NotExists { return; }
-    if f.format != Format.Directory { return; }
-    children = f.files();
-    for child in children {
-        if child.format != Format.Directory { continue; }
-        // Plan dir basenames start with digits, then `-`.
-        cp = child.path;
-        base = cp.basename();
-        bl = base.len();
-        if bl < 2 { continue; }
-        first_c = base[0];
-        if !is_digit_leaf(first_c) { continue; }
-        j = 0;
-        while j < bl && is_digit_leaf(base[j]) { j = j + 1; }
-        if j < bl {
-            sep_c = base[j];
-            if sep_c == '-' {
-                pid = base[0..j];
-                out += [pid];
-            }
-        }
+  f = file(root);
+  if f.format == Format.NotExists { return; }
+  if f.format != Format.Directory { return; }
+  children = f.files();
+  for child in children {
+    if child.format != Format.Directory { continue; }
+    // Plan dir basenames start with digits, then `-`.
+    cp = child.path;
+    base = cp.basename();
+    bl = base.size();
+    if bl < 2 { continue; }
+    first_c = base[0];
+    if!is_digit_leaf(first_c) { continue; }
+    j = 0;
+    while j < bl && is_digit_leaf(base[j]) { j = j + 1; }
+    if j < bl {
+      sep_c = base[j];
+      if sep_c == '-' {
+        pid = base[0..j];
+        out += [pid];
+      }
     }
+  }
 }
 
 // Linear "is in" check.  `valid_set` holds <300 entries; a
 // vector + linear scan is fine and avoids needing a hash type.
 fn set_contains(valid_set: vector<text>, needle: text) -> boolean {
-    for v in valid_set {
-        if v == needle { return true; }
-    }
-    false
+  for v in valid_set {
+    if v == needle { return true; }
+  }
+  false
 }
 
 // Classify a tag as valid (resolves to an existing PROBLEMS
@@ -213,30 +218,30 @@ fn set_contains(valid_set: vector<text>, needle: text) -> boolean {
 // refs (`legacy:P<n>`, `legacy:plan-<n>`) are accepted as-is
 // (the migration index doesn't gate them — same as scan.sh).
 fn tag_is_valid(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) -> boolean {
-    tlen = tag.len();
-    if tlen == 0 { return true; }
-    // Legacy refs are never marked broken.
-    if tag.starts_with("legacy:") { return true; }
-    if tag.starts_with("@PLAN") {
-        // Extract the digit prefix immediately after @PLAN.
-        i = 5;
-        if i >= tlen || !is_digit_leaf(tag[i]) { return true; }
-        j = i;
-        while j < tlen && is_digit_leaf(tag[j]) { j = j + 1; }
-        num = tag[i..j];
-        return set_contains(valid_plans, num);
-    }
-    if tag.starts_with("@P") {
-        // Extract the digit prefix; strip an optional trailing
-        // letter (`@P229b` → `229`).
-        i = 2;
-        if i >= tlen || !is_digit_leaf(tag[i]) { return true; }
-        j = i;
-        while j < tlen && is_digit_leaf(tag[j]) { j = j + 1; }
-        num = tag[i..j];
-        return set_contains(valid_pids, num);
-    }
-    true
+  tlen = tag.size();
+  if tlen == 0 { return true; }
+  // Legacy refs are never marked broken.
+  if tag.starts_with("legacy:") { return true; }
+  if tag.starts_with("@PLAN") {
+    // Extract the digit prefix immediately after @PLAN.
+    i = 5;
+    if i >= tlen || !is_digit_leaf(tag[i]) { return true; }
+    j = i;
+    while j < tlen && is_digit_leaf(tag[j]) { j = j + 1; }
+    num = tag[i..j];
+    return set_contains(valid_plans, num);
+  }
+  if tag.starts_with("@P") {
+    // Extract the digit prefix; strip an optional trailing
+    // letter (`@P229b` → `229`).
+    i = 2;
+    if i >= tlen || !is_digit_leaf(tag[i]) { return true; }
+    j = i;
+    while j < tlen && is_digit_leaf(tag[j]) { j = j + 1; }
+    num = tag[i..j];
+    return set_contains(valid_pids, num);
+  }
+  true
 }
 
 // Scratch struct used by the bucketed emission path —
@@ -245,7 +250,9 @@ fn tag_is_valid(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) 
 // per-tag arrays in `index/tags.json`-shape JSON.  Same trick
 // for link targets.  Slot is a one-field wrapper because loft
 // `sorted<>` keys must come from a struct field.
-struct TagSlot { name: text }
+struct TagSlot {
+  name: text,
+}
 
 // Wrapper so the `sorted` collection can be a STRUCT FIELD —
 // loft's two-pass parser infers `sorted<TagSlot[name]>` more
@@ -255,20 +262,20 @@ struct TagSlot { name: text }
 // sorted<...> to vector<...>" because the literal append was
 // re-typed as vector mid-flight).
 struct DistinctSets {
-    tags: sorted<TagSlot[name]>,
-    links: sorted<TagSlot[name]>
+  tags: sorted<TagSlot[name]>,
+  links: sorted<TagSlot[name]>,
 }
 
 // File extensions worth scanning.  Matches scan.sh's grep
 // surface (markdown + Rust + loft + manifest files + scripts).
 fn is_indexable_ext(name: text) -> boolean {
-    if name.ends_with(".md") { return true; }
-    if name.ends_with(".rs") { return true; }
-    if name.ends_with(".loft") { return true; }
-    if name.ends_with(".toml") { return true; }
-    if name.ends_with(".sh") { return true; }
-    if name.ends_with(".py") { return true; }
-    false
+  if name.ends_with(".md") { return true; }
+  if name.ends_with(".rs") { return true; }
+  if name.ends_with(".loft") { return true; }
+  if name.ends_with(".toml") { return true; }
+  if name.ends_with(".sh") { return true; }
+  if name.ends_with(".py") { return true; }
+  false
 }
 
 // Raw row collected during the scan.  emitted to stdout as a
@@ -276,10 +283,10 @@ fn is_indexable_ext(name: text) -> boolean {
 // the valid-IDs sets — at which point we can attach the
 // `valid` field directly without a re-parse round trip.
 struct RawRef {
-    tag: text,
-    file: text,
-    line: integer,
-    ctx_escaped: text
+  tag: text,
+  file: text,
+  line: integer,
+  ctx_escaped: text,
 }
 
 // Markdown-link row collected during the scan.  Mirrors the
@@ -291,80 +298,79 @@ struct RawRef {
 // resolved repo-relative path; `anchor` is the optional
 // `#fragment` portion (empty when absent).
 struct LinkRef {
-    target: text,
-    file: text,
-    line: integer,
-    anchor: text,
-    ctx_escaped: text
+  target: text,
+  file: text,
+  line: integer,
+  anchor: text,
+  ctx_escaped: text,
 }
 
 // Directory names to skip during the recursive walk.  Any
 // match (basename equality) prunes the entire subtree.
 fn is_skipped_dir(name: text) -> boolean {
-    if name == "target" { return true; }
-    if name == ".git" { return true; }
-    if name == "node_modules" { return true; }
-    if name == ".loft" { return true; }
-    // `bin` and `state` show up under tools/viewer/ and
-    // tools/indexer/ as build-output / runtime-state dirs but
-    // ALSO as legit code dirs (e.g., src/state/codegen.rs).
-    // The bin dirs hold non-indexable binaries; the state dirs
-    // hold non-indexable JSON.  Neither has indexable
-    // extensions, so we don't actually need to skip them — the
-    // is_indexable_ext filter does the work.  Kept the previous
-    // exclusion of generated test artefacts (tests/generated/
-    // is .gitignored) since loft otherwise picks up their
-    // tag refs and bash doesn't.
-    if name == "generated" { return true; }
-    // Git worktree dirs (`.claude/worktrees/`) are local-only
-    // copies of in-flight work; bash's `git ls-files` skips
-    // them because they're untracked, but the loft walker would
-    // descend into them and re-index every loft source twice.
-    if name == "worktrees" { return true; }
-    // `pkg` directories hold WASM / package build output
-    // (`loft.js` / `loft_bg.wasm` / generated README).  The
-    // generated README contains relative links anchored to
-    // the wrong root and would surface as false-positive
-    // broken links — bash's `git ls-files` skips these
-    // (they're gitignored); loft mirrors via the dir name.
-    if name == "pkg" { return true; }
-    false
+  if name == "target" { return true; }
+  if name == ".git" { return true; }
+  if name == "node_modules" { return true; }
+  if name == ".loft" { return true; }
+  // `bin` and `state` show up under tools/viewer/ and
+  // tools/indexer/ as build-output / runtime-state dirs but
+  // ALSO as legit code dirs (e.g., src/state/codegen.rs).
+  // The bin dirs hold non-indexable binaries; the state dirs
+  // hold non-indexable JSON.  Neither has indexable
+  // extensions, so we don't actually need to skip them — the
+  // is_indexable_ext filter does the work.  Kept the previous
+  // exclusion of generated test artefacts (tests/generated/
+  // is .gitignored) since loft otherwise picks up their
+  // tag refs and bash doesn't.
+  if name == "generated" { return true; }
+  // Git worktree dirs (`.claude/worktrees/`) are local-only
+  // copies of in-flight work; bash's `git ls-files` skips
+  // them because they're untracked, but the loft walker would
+  // descend into them and re-index every loft source twice.
+  if name == "worktrees" { return true; }
+  // `pkg` directories hold WASM / package build output
+  // (`loft.js` / `loft_bg.wasm` / generated README).  The
+  // generated README contains relative links anchored to
+  // the wrong root and would surface as false-positive
+  // broken links — bash's `git ls-files` skips these
+  // (they're gitignored); loft mirrors via the dir name.
+  if name == "pkg" { return true; }
+  false
 }
 
 // Aliases that resolve to the leaf helpers near the top of
 // the file.  Kept distinct names so older callers below didn't
 // have to be renamed when the validators were added — both
 // names compile to the same body.
-fn is_digit(c: character) -> boolean { is_digit_leaf(c) }
-fn is_word_char(c: character) -> boolean { is_word_char_leaf(c) }
+fn is_digit(c: character) -> boolean {
+  is_digit_leaf(c)
+}
+fn is_word_char(c: character) -> boolean {
+  is_word_char_leaf(c)
+}
 
 // Walks the tree rooted at `path`, calling visit on every
 // indexable file.  Pruning happens at directory boundaries
 // (is_skipped_dir).  visit receives the relative path so
 // downstream code can write it as-is into the index.
 fn walk_tree(root: text) -> vector<text> {
-    out: vector<text> = [];
-    walk_into(root, out);
-    out
+  out: vector<text> = [];
+  walk_into(root, out);
+  out
 }
 
 fn walk_into(path: text, out: vector<text>) {
-    f = file(path);
-    if f.format == Format.NotExists { return; }
-    if f.format == Format.Directory {
-        for child in f.files() {
-            cp = child.path;
-            base = cp.basename();
-            if child.format == Format.Directory {
-                if is_skipped_dir(base) { continue; }
-                walk_into(cp, out);
-            } else if is_indexable_ext(cp) {
-                out += [cp];
-            }
-        }
-    } else if is_indexable_ext(path) {
-        out += [path];
-    }
+  f = file(path);
+  if f.format == Format.NotExists { return; }
+  if f.format == Format.Directory {
+    for child in f.files() {
+      cp = child.path;
+      base = cp.basename();
+      if child.format == Format.Directory {
+        if is_skipped_dir(base) { continue; } walk_into(cp, out);,
+      } else if is_indexable_ext(cp) { out += [cp]; }
+    },
+  } else if is_indexable_ext(path) { out += [path]; }
 }
 
 // `basename_of` removed in @PLAN37 phase 10.16 — call sites
@@ -376,7 +382,7 @@ fn walk_into(path: text, out: vector<text>) {
 // formal HTML-comment parsing isn't required because the
 // convention is a single inline marker.
 fn is_noindex_line(line: text) -> boolean {
-    line.find("<!--noindex-->") >= 0
+  line.find("<!--noindex-->") >= 0
 }
 
 // Scan one line for tracker tags, append `<file>:<line>:<tag>`
@@ -394,229 +400,251 @@ fn is_noindex_line(line: text) -> boolean {
 // once converted).  Literal numbers in the loop are harder to
 // audit; named constants stay close to the regex semantics
 // scan.sh used to express.
-const BYTE_AT       = 64;   // '@'
-const BYTE_P_UPPER  = 80;   // 'P'
-const BYTE_G_UPPER  = 71;   // 'G'
-const BYTE_H_UPPER  = 72;   // 'H'
-const BYTE_F_UPPER  = 70;   // 'F'  (@F<n> — loft-lang/features feature)
-const BYTE_I_UPPER  = 73;   // 'I'  (@I<n> — loft-lang/features infrastructure)
-const BYTE_P_LOWER  = 112;  // 'p'
-const BYTE_L        = 76;   // 'L'
-const BYTE_A        = 65;   // 'A'
-const BYTE_N        = 78;   // 'N'
-const BYTE_L_LOWER  = 108;  // 'l'
-const BYTE_A_LOWER  = 97;   // 'a'
-const BYTE_N_LOWER  = 110;  // 'n'
-const BYTE_Z_LOWER  = 122;  // 'z'
-const BYTE_HYPHEN   = 45;   // '-'
+const BYTE_AT = 64; // '@'
+const BYTE_P_UPPER = 80; // 'P'
+const BYTE_G_UPPER = 71; // 'G'
+const BYTE_H_UPPER = 72; // 'H'
+const BYTE_F_UPPER = 70; // 'F'  (@F<n> — loft-lang/features feature)
+const BYTE_I_UPPER = 73; // 'I'  (@I<n> — loft-lang/features infrastructure)
+const BYTE_P_LOWER = 112; // 'p'
+const BYTE_L = 76; // 'L'
+const BYTE_A = 65; // 'A'
+const BYTE_N = 78; // 'N'
+const BYTE_L_LOWER = 108; // 'l'
+const BYTE_A_LOWER = 97; // 'a'
+const BYTE_N_LOWER = 110; // 'n'
+const BYTE_Z_LOWER = 122; // 'z'
+const BYTE_HYPHEN = 45; // '-'
 
 fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>) {
-    if is_noindex_line(line) { return; }
-    n = line.len();
-    if n < 3 { return; }
-    // Compute the JSON-escaped context once per line that has any
-    // potential match — the inner loop emits one row per tag, and
-    // they share the same context string.  Building the JSON
-    // record is then literal concat (no per-row escape work).
-    ctx_esc = "";
-    ctx_escaped = false;
-    i = 0;
-    while i < n {
-        // Byte-level fast path (no UTF-8 decode per byte).  All
-        // tag tokens are ASCII so byte == codepoint here.  See
-        // doc/claude/plans/37-tracker-index/07-loft-native-scanner.md
-        // for the codegen analysis driving this conversion.
-        b = line.byte_at(i);
-        // The pre-@-tag legacy bare-name forms (`P<n>`, `plan-<n>`)
-        // start with a different prefix byte — the per-byte
-        // dispatch below only enters the `@`-prefixed branches
-        // when b == '@', otherwise it falls through to the legacy
-        // checks at the bottom of the loop.  Note: scan.sh's
-        // `@`-prefix regex is `@P\d+...\b` — the trailing `\b` is
-        // enforced by our digit-then-non-alpha consume, but the
-        // LEADING `@` has no boundary constraint.  So
-        // `user@P259.com` matches by design.
-        if b == BYTE_AT {
-        // Try @PLAN first.
-        if i + 6 <= n && line.byte_at(i + 1) == BYTE_P_UPPER
-            && line.byte_at(i + 2) == BYTE_L
-            && line.byte_at(i + 3) == BYTE_A
-            && line.byte_at(i + 4) == BYTE_N
-            && is_digit_b(line.byte_at(i + 5)) {
-            // Consume @PLAN<digits>(-<segment>)*
-            j = i + 5;
-            while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
-            // Optional `-<segment>` repeats.
-            while j + 1 < n && line.byte_at(j) == BYTE_HYPHEN
-                && is_segment_char_b(line.byte_at(j + 1)) {
-                j = j + 1;
-                while j < n && is_segment_char_b(line.byte_at(j)) { j = j + 1; }
-            }
-            // Trailing `\b` check: the next byte (if any) must
-            // be a non-word byte.  `@PLAN37foo` has `f` (word)
-            // after the digits with no `-` separator → no
-            // boundary, no match.
-            if j == n || !is_word_char_b(line.byte_at(j)) {
-                tag = line[i..j];
-                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
-                i = j;
-                continue;
-            }
-            // Trailing boundary failed; skip past `@PLAN` and resume.
-            i = i + 5;
-            continue;
+  if is_noindex_line(line) { return; }
+  n = line.size();
+  if n < 3 { return; }
+  // Compute the JSON-escaped context once per line that has any
+  // potential match — the inner loop emits one row per tag, and
+  // they share the same context string.  Building the JSON
+  // record is then literal concat (no per-row escape work).
+  ctx_esc = "";
+  ctx_escaped = false;
+  i = 0;
+  while i < n {
+    // Byte-level fast path (no UTF-8 decode per byte).  All
+    // tag tokens are ASCII so byte == codepoint here.  See
+    // doc/claude/plans/37-tracker-index/07-loft-native-scanner.md
+    // for the codegen analysis driving this conversion.
+    b = line.byte_at(i);
+    // The pre-@-tag legacy bare-name forms (`P<n>`, `plan-<n>`)
+    // start with a different prefix byte — the per-byte
+    // dispatch below only enters the `@`-prefixed branches
+    // when b == '@', otherwise it falls through to the legacy
+    // checks at the bottom of the loop.  Note: scan.sh's
+    // `@`-prefix regex is `@P\d+...\b` — the trailing `\b` is
+    // enforced by our digit-then-non-alpha consume, but the
+    // LEADING `@` has no boundary constraint.  So
+    // `user@P259.com` matches by design.
+    if b == BYTE_AT {
+      // Try @PLAN first.
+      if i + 6 <= n && line.byte_at(i + 1) == BYTE_P_UPPER
+      && line.byte_at(i + 2) == BYTE_L
+      && line.byte_at(i + 3) == BYTE_A
+      && line.byte_at(i + 4) == BYTE_N
+      && is_digit_b(line.byte_at(i + 5)) {
+        // Consume @PLAN<digits>(-<segment>)*
+        j = i + 5;
+        while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
+        // Optional `-<segment>` repeats.
+        while j + 1 < n && line.byte_at(j) == BYTE_HYPHEN
+        && is_segment_char_b(line.byte_at(j + 1)) {
+          j = j + 1;
+          while j < n && is_segment_char_b(line.byte_at(j)) { j = j + 1; }
         }
-        // Fall back to @P<digits>[a-z]?
-        if i + 3 <= n && line.byte_at(i + 1) == BYTE_P_UPPER
-            && is_digit_b(line.byte_at(i + 2)) {
-            j = i + 2;
-            while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
-            // Mirror bash regex `@P[0-9]+[a-z]?\b`.  After the
-            // digits there are three possibilities:
-            //   1. Next byte is non-word → match `@P<digits>`.
-            //   2. Next byte is `[a-z]` and the byte AFTER that
-            //      is non-word → match `@P<digits><letter>`.
-            //   3. Otherwise → no match (`@P229bing` and `@P229_x`
-            //      both fail because `\b` can't be satisfied).
-            matched = false;
-            if j == n {
-                matched = true;
-            } else if !is_word_char_b(line.byte_at(j)) {
-                matched = true;
-            } else if line.byte_at(j) >= BYTE_A_LOWER && line.byte_at(j) <= BYTE_Z_LOWER
-                && (j + 1 == n || !is_word_char_b(line.byte_at(j + 1))) {
-                j = j + 1;
-                matched = true;
-            }
-            if matched {
-                tag = line[i..j];
-                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
-                i = j;
-                continue;
-            }
-            // Failed: skip past the `@P` and resume scanning.
-            i = i + 2;
-            continue;
+        // Trailing `\b` check: the next byte (if any) must
+        // be a non-word byte.  `@PLAN37foo` has `f` (word)
+        // after the digits with no `-` separator → no
+        // boundary, no match.
+        if j == n || !is_word_char_b(line.byte_at(j)) {
+          tag = line[i..j];
+          if!ctx_escaped {
+            ctx_esc = json_escape(line); ctx_escaped = true;
+          }
+          out += [
+            RawRef { tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc },
+          ];
+          i = j;
+          continue;
         }
-        // @GH<digits> — a GitHub Issue/PR reference (issues + PRs share ONE
-        // number space; the `/issues/<n>` URL redirects to the PR when n is a
-        // PR).  No optional trailing letter (unlike @P).  Same boundary rules.
-        if i + 4 <= n && line.byte_at(i + 1) == BYTE_G_UPPER
-            && line.byte_at(i + 2) == BYTE_H_UPPER
-            && is_digit_b(line.byte_at(i + 3)) {
-            j = i + 3;
-            while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
-            if j == n || !is_word_char_b(line.byte_at(j)) {
-                tag = line[i..j];
-                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
-                i = j;
-                continue;
-            }
-            // Trailing boundary failed; skip past `@GH` and resume.
-            i = i + 3;
-            continue;
+        // Trailing boundary failed; skip past `@PLAN` and resume.
+        i = i + 5;
+        continue;
+      }
+      // Fall back to @P<digits>[a-z]?
+      if i + 3 <= n && line.byte_at(i + 1) == BYTE_P_UPPER
+      && is_digit_b(line.byte_at(i + 2)) {
+        j = i + 2;
+        while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
+        // Mirror bash regex `@P[0-9]+[a-z]?\b`.  After the
+        // digits there are three possibilities:
+        //   1. Next byte is non-word → match `@P<digits>`.
+        //   2. Next byte is `[a-z]` and the byte AFTER that
+        //      is non-word → match `@P<digits><letter>`.
+        //   3. Otherwise → no match (`@P229bing` and `@P229_x`
+        //      both fail because `\b` can't be satisfied).
+        matched = false;
+        if j == n { matched = true; } else if!is_word_char_b(line.byte_at(j)) { matched = true; } else if line.byte_at(
+          j
+        ) >= BYTE_A_LOWER && line.byte_at(j) <= BYTE_Z_LOWER
+        && (j + 1 == n || !is_word_char_b(line.byte_at(j + 1))) {
+          j = j + 1;
+          matched = true;
         }
-        // @F<digits> / @I<digits> — loft-lang/features catalogue refs
-        // (user feature / infrastructure).  Number-only identity
-        // (gh-minted, can't go stale); NO optional trailing letter
-        // (unlike @P); same trailing-`\b` rule as @GH.  Validity +
-        // title resolve against the features tracker, not a local
-        // file, so tag_is_valid accepts them via its fallthrough.
-        if i + 3 <= n
-            && (line.byte_at(i + 1) == BYTE_F_UPPER || line.byte_at(i + 1) == BYTE_I_UPPER)
-            && is_digit_b(line.byte_at(i + 2)) {
-            j = i + 2;
-            while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
-            if j == n || !is_word_char_b(line.byte_at(j)) {
-                tag = line[i..j];
-                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
-                i = j;
-                continue;
-            }
-            // Trailing boundary failed; skip past `@F`/`@I` and resume.
-            i = i + 2;
-            continue;
+        if matched {
+          tag = line[i..j];
+          if!ctx_escaped {
+            ctx_esc = json_escape(line); ctx_escaped = true;
+          }
+          out += [
+            RawRef { tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc },
+          ];
+          i = j;
+          continue;
         }
-        }  // end if b == BYTE_AT
-        // Legacy bare-name `P<digits>[a-z]?\b` — the pre-`@`-tag
-        // form that scan.sh keeps indexing under `legacy:P<n>`.
-        // Combined leading + trailing boundary check matches the
-        // bash GREP filter regex
-        //     \bP[0-9]+[a-z]?\b
-        // (the awk extraction is lazier — uses
-        // `(^|[^@a-zA-Z0-9])P[0-9]+[a-z]?` without trailing
-        // `\b` — but anything not surviving grep never reaches
-        // awk anyway, so the effective semantics is the strict
-        // `\b...\b` form).  Without the trailing boundary we'd
-        // incorrectly emit `legacy:P204` for `P204_S` (struct
-        // names follow that shape in the loft suite).
-        if b == BYTE_P_UPPER && i + 1 < n && is_digit_b(line.byte_at(i + 1)) {
-            // Leading boundary: position 0, or previous byte is
-            // not in `[@a-zA-Z0-9_]`.  Specifically reject `@`
-            // (the @-form was already handled above).
-            ok = i == 0;
-            if !ok && i > 0 {
-                pb = line.byte_at(i - 1);
-                ok = pb != BYTE_AT && !is_word_char_b(pb);
-            }
-            if ok {
-                j = i + 1;
-                while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
-                // Optional trailing letter, same as @P-form.
-                end_with_letter = false;
-                if j < n && line.byte_at(j) >= BYTE_A_LOWER
-                    && line.byte_at(j) <= BYTE_Z_LOWER
-                    && (j + 1 == n || !is_word_char_b(line.byte_at(j + 1))) {
-                    j = j + 1;
-                    end_with_letter = true;
-                }
-                // Trailing `\b`: next byte (if any) must be
-                // non-word.  Without this, `P204_S` slips
-                // through as `legacy:P204`.
-                trailing_ok = j == n || !is_word_char_b(line.byte_at(j));
-                // If the trailing-letter branch already moved j
-                // past a known non-word boundary, trailing_ok
-                // is automatic.
-                if !trailing_ok && end_with_letter { trailing_ok = true; }
-                if trailing_ok {
-                    bare = line[i..j];
-                    tag = "legacy:{bare}";
-                    if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                    out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
-                    i = j;
-                    continue;
-                }
-            }
+        // Failed: skip past the `@P` and resume scanning.
+        i = i + 2;
+        continue;
+      }
+      // @GH<digits> — a GitHub Issue/PR reference (issues + PRs share ONE
+      // number space; the `/issues/<n>` URL redirects to the PR when n is a
+      // PR).  No optional trailing letter (unlike @P).  Same boundary rules.
+      if i + 4 <= n && line.byte_at(i + 1) == BYTE_G_UPPER
+      && line.byte_at(i + 2) == BYTE_H_UPPER
+      && is_digit_b(line.byte_at(i + 3)) {
+        j = i + 3;
+        while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
+        if j == n || !is_word_char_b(line.byte_at(j)) {
+          tag = line[i..j];
+          if!ctx_escaped {
+            ctx_esc = json_escape(line); ctx_escaped = true;
+          }
+          out += [
+            RawRef { tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc },
+          ];
+          i = j;
+          continue;
         }
-        // Legacy bare-name `plan-<digits>` — the pre-`@PLAN`
-        // form, indexed under `legacy:plan-<n>`.  Bash regex:
-        //     \bplan-[0-9]+
-        // Word boundary on the leading `p`; no trailing
-        // boundary (greedy digits to first non-digit).
-        if b == BYTE_P_LOWER && i + 6 <= n
-            && line.byte_at(i + 1) == BYTE_L_LOWER
-            && line.byte_at(i + 2) == BYTE_A_LOWER
-            && line.byte_at(i + 3) == BYTE_N_LOWER
-            && line.byte_at(i + 4) == BYTE_HYPHEN
-            && is_digit_b(line.byte_at(i + 5)) {
-            ok = i == 0 || !is_word_char_b(line.byte_at(i - 1));
-            if ok {
-                j = i + 5;
-                while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
-                bare = line[i..j];
-                tag = "legacy:{bare}";
-                if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-                out += [RawRef{tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc}];
-                i = j;
-                continue;
-            }
+        // Trailing boundary failed; skip past `@GH` and resume.
+        i = i + 3;
+        continue;
+      }
+      // @F<digits> / @I<digits> — loft-lang/features catalogue refs
+      // (user feature / infrastructure).  Number-only identity
+      // (gh-minted, can't go stale); NO optional trailing letter
+      // (unlike @P); same trailing-`\b` rule as @GH.  Validity +
+      // title resolve against the features tracker, not a local
+      // file, so tag_is_valid accepts them via its fallthrough.
+      if i + 3 <= n
+      && (line.byte_at(i + 1) == BYTE_F_UPPER || line.byte_at(i + 1) == BYTE_I_UPPER)
+      && is_digit_b(line.byte_at(i + 2)) {
+        j = i + 2;
+        while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
+        if j == n || !is_word_char_b(line.byte_at(j)) {
+          tag = line[i..j];
+          if!ctx_escaped {
+            ctx_esc = json_escape(line); ctx_escaped = true;
+          }
+          out += [
+            RawRef { tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc },
+          ];
+          i = j;
+          continue;
         }
-        i = i + 1;
+        // Trailing boundary failed; skip past `@F`/`@I` and resume.
+        i = i + 2;
+        continue;
+      }
+    } // end if b == BYTE_AT
+    // Legacy bare-name `P<digits>[a-z]?\b` — the pre-`@`-tag
+    // form that scan.sh keeps indexing under `legacy:P<n>`.
+    // Combined leading + trailing boundary check matches the
+    // bash GREP filter regex
+    //     \bP[0-9]+[a-z]?\b
+    // (the awk extraction is lazier — uses
+    // `(^|[^@a-zA-Z0-9])P[0-9]+[a-z]?` without trailing
+    // `\b` — but anything not surviving grep never reaches
+    // awk anyway, so the effective semantics is the strict
+    // `\b...\b` form).  Without the trailing boundary we'd
+    // incorrectly emit `legacy:P204` for `P204_S` (struct
+    // names follow that shape in the loft suite).
+    if b == BYTE_P_UPPER && i + 1 < n && is_digit_b(line.byte_at(i + 1)) {
+      // Leading boundary: position 0, or previous byte is
+      // not in `[@a-zA-Z0-9_]`.  Specifically reject `@`
+      // (the @-form was already handled above).
+      ok = i == 0;
+      if!ok && i > 0 {
+        pb = line.byte_at(i - 1);
+        ok = pb != BYTE_AT && !is_word_char_b(pb);
+      }
+      if ok {
+        j = i + 1;
+        while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
+        // Optional trailing letter, same as @P-form.
+        end_with_letter = false;
+        if j < n && line.byte_at(j) >= BYTE_A_LOWER
+        && line.byte_at(j) <= BYTE_Z_LOWER
+        && (j + 1 == n || !is_word_char_b(line.byte_at(j + 1))) {
+          j = j + 1;
+          end_with_letter = true;
+        }
+        // Trailing `\b`: next byte (if any) must be
+        // non-word.  Without this, `P204_S` slips
+        // through as `legacy:P204`.
+        trailing_ok = j == n || !is_word_char_b(line.byte_at(j));
+        // If the trailing-letter branch already moved j
+        // past a known non-word boundary, trailing_ok
+        // is automatic.
+        if!trailing_ok && end_with_letter { trailing_ok = true; }
+        if trailing_ok {
+          bare = line[i..j];
+          tag = "legacy:{bare}";
+          if!ctx_escaped {
+            ctx_esc = json_escape(line); ctx_escaped = true;
+          }
+          out += [
+            RawRef { tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc },
+          ];
+          i = j;
+          continue;
+        }
+      }
     }
+    // Legacy bare-name `plan-<digits>` — the pre-`@PLAN`
+    // form, indexed under `legacy:plan-<n>`.  Bash regex:
+    //     \bplan-[0-9]+
+    // Word boundary on the leading `p`; no trailing
+    // boundary (greedy digits to first non-digit).
+    if b == BYTE_P_LOWER && i + 6 <= n
+    && line.byte_at(i + 1) == BYTE_L_LOWER
+    && line.byte_at(i + 2) == BYTE_A_LOWER
+    && line.byte_at(i + 3) == BYTE_N_LOWER
+    && line.byte_at(i + 4) == BYTE_HYPHEN
+    && is_digit_b(line.byte_at(i + 5)) {
+      ok = i == 0 || !is_word_char_b(line.byte_at(i - 1));
+      if ok {
+        j = i + 5;
+        while j < n && is_digit_b(line.byte_at(j)) { j = j + 1; }
+        bare = line[i..j];
+        tag = "legacy:{bare}";
+        if!ctx_escaped {
+          ctx_esc = json_escape(line); ctx_escaped = true;
+        }
+        out += [
+          RawRef { tag: tag, file: file_path, line: line_no, ctx_escaped: ctx_esc },
+        ];
+        i = j;
+        continue;
+      }
+    }
+    i = i + 1;
+  }
 }
 
 // Build one JSON-Lines record.  `ctx_escaped` is already passed
@@ -634,10 +662,17 @@ fn scan_line(file_path: text, line_no: integer, line: text, out: vector<RawRef>)
 // stable for downstream consumers.  `valid` is the broken-
 // link validator's verdict — true = target file exists,
 // false = `broken_links:` material.
-fn emit_link(target: text, file_path: text, line_no: integer, anchor: text, ctx_escaped: text, valid: boolean) -> text {
-    valid_str = "true";
-    if !valid { valid_str = "false"; }
-    "{{\"link\":\"{target}\",\"file\":\"{file_path}\",\"line\":{line_no},\"anchor\":\"{anchor}\",\"context\":\"{ctx_escaped}\",\"valid\":{valid_str}}}"
+fn emit_link(
+  target: text,
+  file_path: text,
+  line_no: integer,
+  anchor: text,
+  ctx_escaped: text,
+  valid: boolean
+) -> text {
+  valid_str = "true";
+  if!valid { valid_str = "false"; }
+  "{{\"link\":\"{target}\",\"file\":\"{file_path}\",\"line\":{line_no},\"anchor\":\"{anchor}\",\"context\":\"{ctx_escaped}\",\"valid\":{valid_str}}}"
 }
 
 // True when the link's resolved target file exists on disk.
@@ -649,8 +684,8 @@ fn emit_link(target: text, file_path: text, line_no: integer, anchor: text, ctx_
 // filters out) wouldn't reach here, but defaulting to true
 // keeps the function total.
 fn link_target_exists(target: text) -> boolean {
-    if target == "" { return true; }
-    file(target).format != Format.NotExists
+  if target == "" { return true; }
+  file(target).format != Format.NotExists
 }
 
 // `dir_of` and `resolve_link_path` removed in @PLAN37 phase 10.16.
@@ -672,104 +707,122 @@ fn link_target_exists(target: text) -> boolean {
 //     `\.md(#…)?` regex).
 // ASCII byte constants for scan_link_line.  See scan_line for
 // the rationale on going byte-level instead of per-codepoint.
-const BYTE_RBRACKET = 93;   // ']'
-const BYTE_LPAREN   = 40;   // '('
-const BYTE_RPAREN   = 41;   // ')'
-const BYTE_SPACE    = 32;
-const BYTE_TAB      = 9;
-const BYTE_HASH     = 35;   // '#'
-const BYTE_DOT      = 46;   // '.'
-const BYTE_M_LOWER  = 109;  // 'm'
-const BYTE_D_LOWER  = 100;  // 'd'
-const BYTE_SLASH    = 47;   // '/'
+const BYTE_RBRACKET = 93; // ']'
+const BYTE_LPAREN = 40; // '('
+const BYTE_RPAREN = 41; // ')'
+const BYTE_SPACE = 32;
+const BYTE_TAB = 9;
+const BYTE_HASH = 35; // '#'
+const BYTE_DOT = 46; // '.'
+const BYTE_M_LOWER = 109; // 'm'
+const BYTE_D_LOWER = 100; // 'd'
+const BYTE_SLASH = 47; // '/'
 
-fn scan_link_line(file_path: text, line_no: integer, line: text, base_dir: text, out: vector<LinkRef>) {
-    if is_noindex_line(line) { return; }
-    nl = line.len();
-    if nl < 6 { return; }
-    ctx_esc = "";
-    ctx_escaped = false;
-    li = 0;
-    while li + 5 < nl {
-        // Match `](` at byte level.
-        if line.byte_at(li) != BYTE_RBRACKET || line.byte_at(li + 1) != BYTE_LPAREN {
-            li = li + 1;
-            continue;
-        }
-        // Find the closing `)` — bounded scan; bail at first
-        // whitespace, `(`, or end-of-line within the URL.
-        lj = li + 2;
-        while lj < nl {
-            lb = line.byte_at(lj);
-            if lb == BYTE_RPAREN || lb == BYTE_SPACE || lb == BYTE_TAB { break; }
-            lj = lj + 1;
-        }
-        if lj == nl || line.byte_at(lj) != BYTE_RPAREN { li = li + 1; continue; }
-        inner = line[li + 2..lj];
-        ilen = inner.len();
-        if ilen < 4 {
-            li = lj + 1;
-            continue;
-        }
-        // Split on `#` for optional anchor — byte-level scan,
-        // text slice (target/anchor may legitimately contain
-        // multi-byte chars elsewhere in the path, but `#` is
-        // a single ASCII byte).
-        anchor = "";
-        target_raw = inner;
-        lh = 0;
-        while lh < ilen {
-            if inner.byte_at(lh) == BYTE_HASH {
-                target_raw = inner[0..lh];
-                anchor = inner[lh + 1..ilen];
-                break;
-            }
-            lh = lh + 1;
-        }
-        // Skip non-`.md` targets: scan.sh's regex is
-        // `\.md(#…)?`, so every link target must end `.md`
-        // before the optional `#`.  Avoids picking up `.png`
-        // / `.html` / arbitrary URL paths.
-        tlen = target_raw.len();
-        if tlen < 3 || !(target_raw.byte_at(tlen - 3) == BYTE_DOT
-            && target_raw.byte_at(tlen - 2) == BYTE_M_LOWER
-            && target_raw.byte_at(tlen - 1) == BYTE_D_LOWER) {
-            li = lj + 1;
-            continue;
-        }
-        // Skip URL schemes.
-        if target_raw.starts_with("http://") || target_raw.starts_with("https://")
-            || target_raw.starts_with("mailto:") {
-            li = lj + 1;
-            continue;
-        }
-        // Resolve.  Leading `/` means repo-rooted (strip slash);
-        // otherwise resolve against base_dir.
-        resolved = "";
-        if tlen > 0 && target_raw.byte_at(0) == BYTE_SLASH {
-            resolved = target_raw[1..tlen];
-        } else {
-            resolved = base_dir.resolve(target_raw);
-        }
-        if !ctx_escaped { ctx_esc = json_escape(line); ctx_escaped = true; }
-        // Inline the anchor escape — the previous `anchor_esc =
-        // json_escape(anchor); ...` form tripped a type-inference
-        // quirk where `anchor` ended up as `unknown(0)` from the
-        // `if`-arm reassignment, even though every assignment to
-        // `anchor` produced text.  Inline call works because the
-        // typer evaluates the call's return type independently.
-        a_esc: text = json_escape(anchor);
-        out += [LinkRef{target: resolved, file: file_path, line: line_no, anchor: a_esc, ctx_escaped: ctx_esc}];
-        li = lj + 1;
+fn scan_link_line(
+  file_path: text,
+  line_no: integer,
+  line: text,
+  base_dir: text,
+  out: vector<LinkRef>
+) {
+  if is_noindex_line(line) { return; }
+  nl = line.size();
+  if nl < 6 { return; }
+  ctx_esc = "";
+  ctx_escaped = false;
+  li = 0;
+  while li + 5 < nl {
+    // Match `](` at byte level.
+    if line.byte_at(li) != BYTE_RBRACKET || line.byte_at(li + 1) != BYTE_LPAREN {
+      li = li + 1;
+      continue;
     }
+    // Find the closing `)` — bounded scan; bail at first
+    // whitespace, `(`, or end-of-line within the URL.
+    lj = li + 2;
+    while lj < nl {
+      lb = line.byte_at(lj);
+      if lb == BYTE_RPAREN || lb == BYTE_SPACE || lb == BYTE_TAB { break; }
+      lj = lj + 1;
+    }
+    if lj == nl || line.byte_at(lj) != BYTE_RPAREN {
+      li = li + 1; continue;
+    }
+    inner = line[li + 2..lj];
+    ilen = inner.size();
+    if ilen < 4 {
+      li = lj + 1;
+      continue;
+    }
+    // Split on `#` for optional anchor — byte-level scan,
+    // text slice (target/anchor may legitimately contain
+    // multi-byte chars elsewhere in the path, but `#` is
+    // a single ASCII byte).
+    anchor = "";
+    target_raw = inner;
+    lh = 0;
+    while lh < ilen {
+      if inner.byte_at(lh) == BYTE_HASH {
+        target_raw = inner[0..lh];
+        anchor = inner[lh + 1..ilen];
+        break;
+      }
+      lh = lh + 1;
+    }
+    // Skip non-`.md` targets: scan.sh's regex is
+    // `\.md(#…)?`, so every link target must end `.md`
+    // before the optional `#`.  Avoids picking up `.png`
+    // / `.html` / arbitrary URL paths.
+    tlen = target_raw.size();
+    if tlen < 3 || ! (
+      target_raw.byte_at(tlen - 3) == BYTE_DOT && target_raw.byte_at(tlen - 2) == BYTE_M_LOWER && target_raw.byte_at(
+        tlen - 1
+      ) == BYTE_D_LOWER
+    ) {
+      li = lj + 1;
+      continue;
+    }
+    // Skip URL schemes.
+    if target_raw.starts_with("http://") || target_raw.starts_with("https://")
+    || target_raw.starts_with("mailto:") {
+      li = lj + 1;
+      continue;
+    }
+    // Resolve.  Leading `/` means repo-rooted (strip slash);
+    // otherwise resolve against base_dir.
+    resolved = "";
+    if tlen > 0 && target_raw.byte_at(0) == BYTE_SLASH { resolved = target_raw[1..tlen]; } else {
+      resolved = base_dir.resolve(target_raw);
+    }
+    if!ctx_escaped {
+      ctx_esc = json_escape(line); ctx_escaped = true;
+    }
+    // Inline the anchor escape — the previous `anchor_esc =
+    // json_escape(anchor); ...` form tripped a type-inference
+    // quirk where `anchor` ended up as `unknown(0)` from the
+    // `if`-arm reassignment, even though every assignment to
+    // `anchor` produced text.  Inline call works because the
+    // typer evaluates the call's return type independently.
+    a_esc: text = json_escape(anchor);
+    out += [
+      LinkRef {
+        target: resolved,
+        file: file_path,
+        line: line_no,
+        anchor: a_esc,
+        ctx_escaped: ctx_esc,
+      },
+    ];
+    li = lj + 1;
+  }
 }
 
 fn emit_row(tag: text, file_path: text, line_no: integer, ctx_escaped: text, valid: boolean) -> text {
-    // `{{` and `}}` produce literal `{` and `}` in a loft format
-    // string (loft uses doubled braces for the brace escape).
-    valid_str = "true";
-    if !valid { valid_str = "false"; }
-    "{{\"tag\":\"{tag}\",\"file\":\"{file_path}\",\"line\":{line_no},\"context\":\"{ctx_escaped}\",\"valid\":{valid_str}}}"
+  // `{{` and `}}` produce literal `{` and `}` in a loft format
+  // string (loft uses doubled braces for the brace escape).
+  valid_str = "true";
+  if!valid { valid_str = "false"; }
+  "{{\"tag\":\"{tag}\",\"file\":\"{file_path}\",\"line\":{line_no},\"context\":\"{ctx_escaped}\",\"valid\":{valid_str}}}"
 }
 
 // Replace `\` separators with `/` so JSON `path` / `file` /
@@ -781,15 +834,15 @@ fn emit_row(tag: text, file_path: text, line_no: integer, ctx_escaped: text, val
 // identical on all three platforms.  See @PLAN37 phase 07's
 // "Pre-flight problems P2" for the analysis.
 fn normalize_path(p: text) -> text {
-    out = "";
-    i = 0;
-    n = p.len();
-    while i < n {
-        c = p[i];
-        if c == '\\' { out += "/"; } else { out += "{c}"; }
-        i = i + 1;
-    }
-    out
+  out = "";
+  i = 0;
+  n = p.size();
+  while i < n {
+    c = p[i];
+    if c == '\\' { out += "/"; } else { out += "{c}"; }
+    i = i + 1;
+  }
+  out
 }
 
 // JSON-escape a text: backslash, double-quote, control chars
@@ -808,59 +861,49 @@ fn normalize_path(p: text) -> text {
 // `emit_problems_open` (sub-commit B) surfaced it via the
 // `jq -S` parity check.
 fn json_escape(s: text) -> text {
-    out = "";
-    for c in s {
-        if c == '\\' {
-            out += "\\\\";
-        } else if c == '"' {
-            out += "\\\"";
-        } else if c == '\n' {
-            out += "\\n";
-        } else if c == '\t' {
-            out += "\\t";
-        } else if c == '\r' {
-            out += "\\r";
-        } else {
-            // Control chars below 0x20 (excluding the three above)
-            // are rare in source text but JSON requires the `\u`
-            // escape if they appear.  All other chars (including
-            // multi-byte UTF-8) pass through verbatim.
-            cn = c as integer;
-            if cn < 32 {
-                out += "\\u00";
-                out += hex_byte(cn);
-            } else {
-                out += "{c}";
-            }
-        }
+  out = "";
+  for c in s {
+    if c == '\\' { out += "\\\\"; } else if c == '"' { out += "\\\""; } else if c == '\n' {
+      out += "\\n";
+    } else if c == '\t' { out += "\\t"; } else if c == '\r' { out += "\\r"; } else {
+      // Control chars below 0x20 (excluding the three above)
+      // are rare in source text but JSON requires the `\u`
+      // escape if they appear.  All other chars (including
+      // multi-byte UTF-8) pass through verbatim.
+      cn = c as integer;
+      if cn < 32 {
+        out += "\\u00";
+        out += hex_byte(cn);
+      } else { out += "{c}"; }
     }
-    out
+  }
+  out
 }
 
 // Two-hex-digit string for `n` in [0, 255].  Used by json_escape's
 // `\u00XX` path; two-byte hex is enough because the only chars
 // hitting the escape are 0x00–0x1F (control characters).
 fn hex_byte(n: integer) -> text {
-    hi = n / 16;
-    lo = n - (hi * 16);
-    "{hex_digit(hi)}{hex_digit(lo)}"
+  hi = n / 16;
+  lo = n - (hi * 16);
+  "{hex_digit(hi)}{hex_digit(lo)}"
 }
 
 fn hex_digit(n: integer) -> text {
-    if n < 10 { return "{n}"; }
-    if n == 10 { return "a"; }
-    if n == 11 { return "b"; }
-    if n == 12 { return "c"; }
-    if n == 13 { return "d"; }
-    if n == 14 { return "e"; }
-    "f"
+  if n < 10 { return "{n}"; }
+  if n == 10 { return "a"; }
+  if n == 11 { return "b"; }
+  if n == 12 { return "c"; }
+  if n == 13 { return "d"; }
+  if n == 14 { return "e"; }
+  "f"
 }
 
 // Segment-char class for `@PLAN-<segment>` continuations.  Bash
 // scanner uses `[a-zA-Z0-9._]+`.
 fn is_segment_char(c: character) -> boolean {
-    if is_word_char(c) { return true; }
-    c == '.'
+  if is_word_char(c) { return true; }
+  c == '.'
 }
 
 // Read a file's lines and scan each.  Files that fail to read
@@ -871,99 +914,96 @@ fn is_segment_char(c: character) -> boolean {
 // Bracket overhead: ~3 ticks() calls per file (~1500 total on
 // the loft tree) ≈ 1ms — well within measurement noise.
 struct SubTimings {
-    io_us: integer,
-    walk_us: integer,
-    dir_us: integer,
-    file_count: integer,
+  io_us: integer,
+  walk_us: integer,
+  dir_us: integer,
+  file_count: integer,
 }
 
 // Shared instance for the profile path.  Loft has no module-
 // scope mutable state, so we hang it off a singleton-ish
 // pattern: main() creates one ScanTimings and passes it down.
 struct ScanTimings {
-    st: SubTimings,
+  st: SubTimings,
 }
 
-fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>,
-             timings: ScanTimings) {
-    t0 = ticks();
-    f = file(file_path);
-    if f.format == Format.NotExists { return; }
-    if f.format == Format.Directory { return; }
-    src = f.content();
-    t1 = ticks();
-    timings.st.io_us = timings.st.io_us + (t1 - t0);
-    timings.st.file_count = timings.st.file_count + 1;
-    // Markdown link extraction is .md-only; computing base_dir
-    // once outside the loop avoids per-line allocation for the
-    // 99% of source files that aren't markdown.  Fenced-code-
-    // block state (`in_fence`) is also .md-only; tracked here
-    // so example links inside ```...``` or ~~~ blocks (which
-    // illustrate syntax, not real refs) don't pollute the
-    // links bucket.  Mirrors scan.sh's `in_fence` awk variable
-    // — a fence opens on a stripped line starting with ``` or
-    // ~~~, closes on a matching marker, and absorbs every
-    // intermediate line.  Tag scanning (`scan_line`) is NOT
-    // gated on fence state — code-block tag refs like
-    // `// @P259 fix lands here` inside a Rust snippet ARE
-    // intentional indices.
-    is_md = file_path.ends_with(".md");
-    base_dir = "";
-    if is_md { base_dir = file_path.dir(); }
-    in_fence = false;
-    fence_marker = "";
-    line_no = 1;
-    start = 0;
-    n = src.len();
-    i = 0;
-    while i < n {
-        if src[i] == '\n' {
-            ln = src[start..i];
-            scan_line(file_path, line_no, ln, out);
-            if is_md {
-                stripped = lstrip_ws(ln);
-                fence_open_close = is_fence_marker(stripped);
-                if in_fence {
-                    if fence_open_close == fence_marker {
-                        in_fence = false;
-                        fence_marker = "";
-                    }
-                } else {
-                    if fence_open_close != "" {
-                        in_fence = true;
-                        fence_marker = fence_open_close;
-                    } else {
-                        scan_link_line(file_path, line_no, ln, base_dir, links_out);
-                    }
-                }
-            }
-            line_no = line_no + 1;
-            start = i + 1;
+fn scan_file(file_path: text, out: vector<RawRef>, links_out: vector<LinkRef>, timings: ScanTimings) {
+  t0 = ticks();
+  f = file(file_path);
+  if f.format == Format.NotExists { return; }
+  if f.format == Format.Directory { return; }
+  src = f.content();
+  t1 = ticks();
+  timings.st.io_us = timings.st.io_us + (t1 - t0);
+  timings.st.file_count = timings.st.file_count + 1;
+  // Markdown link extraction is .md-only; computing base_dir
+  // once outside the loop avoids per-line allocation for the
+  // 99% of source files that aren't markdown.  Fenced-code-
+  // block state (`in_fence`) is also .md-only; tracked here
+  // so example links inside ```...``` or ~~~ blocks (which
+  // illustrate syntax, not real refs) don't pollute the
+  // links bucket.  Mirrors scan.sh's `in_fence` awk variable
+  // — a fence opens on a stripped line starting with ``` or
+  // ~~~, closes on a matching marker, and absorbs every
+  // intermediate line.  Tag scanning (`scan_line`) is NOT
+  // gated on fence state — code-block tag refs like
+  // `// @P259 fix lands here` inside a Rust snippet ARE
+  // intentional indices.
+  is_md = file_path.ends_with(".md");
+  base_dir = "";
+  if is_md { base_dir = file_path.dir(); }
+  in_fence = false;
+  fence_marker = "";
+  line_no = 1;
+  start = 0;
+  n = src.size();
+  i = 0;
+  while i < n {
+    if src[i] == '\n' {
+      ln = src[start..i];
+      scan_line(file_path, line_no, ln, out);
+      if is_md {
+        stripped = lstrip_ws(ln);
+        fence_open_close = is_fence_marker(stripped);
+        if in_fence {
+          if fence_open_close == fence_marker {
+            in_fence = false;
+            fence_marker = "";
+          }
+        } else {
+          if fence_open_close != "" {
+            in_fence = true;
+            fence_marker = fence_open_close;
+          } else { scan_link_line(file_path, line_no, ln, base_dir, links_out); }
         }
-        i = i + 1;
+      }
+      line_no = line_no + 1;
+      start = i + 1;
     }
-    if start < n {
-        ln = src[start..n];
-        scan_line(file_path, line_no, ln, out);
-        if is_md && !in_fence {
-            stripped = lstrip_ws(ln);
-            if is_fence_marker(stripped) == "" {
-                scan_link_line(file_path, line_no, ln, base_dir, links_out);
-            }
-        }
+    i = i + 1;
+  }
+  if start < n {
+    ln = src[start..n];
+    scan_line(file_path, line_no, ln, out);
+    if is_md && !in_fence {
+      stripped = lstrip_ws(ln);
+      if is_fence_marker(stripped) == "" {
+        scan_link_line(file_path, line_no, ln, base_dir, links_out);
+      }
     }
-    t_end = ticks();
-    timings.st.walk_us = timings.st.walk_us + (t_end - t1);
+  }
+  t_end = ticks();
+  timings.st.walk_us = timings.st.walk_us + (t_end - t1);
 }
 
 // Strip leading ASCII whitespace (spaces + tabs).  Cheap;
 // only used for fence-marker detection.
 fn lstrip_ws(s: text) -> text {
-    n = s.len();
-    i = 0;
-    while i < n && (s[i] == ' ' || s[i] == '\t') { i = i + 1; }
-    if i == 0 { return s; }
-    s[i..n]
+  n = s.size();
+  i = 0;
+  while i < n && (s[i] == ' ' || s[i] == '\t') { i = i + 1; }
+  if i == 0 { return s; }
+  s[i..n]
 }
 
 // Returns "```" or "~~~" if `stripped` opens or closes a
@@ -971,11 +1011,11 @@ fn lstrip_ws(s: text) -> text {
 // either character); "" otherwise.  Mirrors scan.sh's
 // `substr(stripped, 1, 3) == "\`\`\`"` check.
 fn is_fence_marker(stripped: text) -> text {
-    n = stripped.len();
-    if n < 3 { return ""; }
-    if stripped[0] == '`' && stripped[1] == '`' && stripped[2] == '`' { return "```"; }
-    if stripped[0] == '~' && stripped[1] == '~' && stripped[2] == '~' { return "~~~"; }
-    ""
+  n = stripped.size();
+  if n < 3 { return ""; }
+  if stripped[0] == '`' && stripped[1] == '`' && stripped[2] == '`' { return "```"; }
+  if stripped[0] == '~' && stripped[1] == '~' && stripped[2] == '~' { return "~~~"; }
+  ""
 }
 
 // Counter struct for the trailing summary stats line (sub-commit G).
@@ -984,21 +1024,21 @@ fn is_fence_marker(stripped: text) -> text {
 // separate re-walk pass.  Mirrors the count fields scan.sh's tail
 // `echo` block computes via `jq '.X | length'`.
 struct Summary {
-    distinct_tags: integer,
-    new_form: integer,
-    legacy_form: integer,
-    total_refs: integer,
-    link_targets: integer,
-    inbound_links: integer,
-    problems_open: integer,
-    problems_recent: integer,
-    plans_active: integer,
-    plans_future: integer,
-    plans_deferred: integer,
-    plans_recent: integer,
-    lib_plans_future: integer,
-    broken_refs: integer,
-    broken_links: integer,
+  distinct_tags: integer,
+  new_form: integer,
+  legacy_form: integer,
+  total_refs: integer,
+  link_targets: integer,
+  inbound_links: integer,
+  problems_open: integer,
+  problems_recent: integer,
+  plans_active: integer,
+  plans_future: integer,
+  plans_deferred: integer,
+  plans_recent: integer,
+  lib_plans_future: integer,
+  broken_refs: integer,
+  broken_links: integer,
 }
 
 // Print the summary stats line(s) to stderr — companion to the
@@ -1007,18 +1047,20 @@ struct Summary {
 // Format matches scan.sh's tail `echo` block (whitespace-
 // significant; the leading two-space indent is grep-friendly).
 fn emit_summary(s: Summary) {
-    eprintln("tools/indexer/scan.loft: wrote index/tags.json");
-    eprintln("  {s.distinct_tags} distinct tags ({s.new_form} new-form, {s.legacy_form} legacy-form)");
-    eprintln("  {s.total_refs} total references");
-    eprintln("  {s.link_targets} link targets ({s.inbound_links} inbound links)");
-    eprintln("  {s.problems_open} open P-issues, {s.problems_recent} closed in last 30 days");
-    eprintln("  plans: {s.plans_active} active, {s.plans_future} future, {s.plans_deferred} deferred, {s.plans_recent} finished in last 60 days");
-    if s.broken_refs > 0 {
-        eprintln("  {s.broken_refs} broken @-references — run: ./scripts/idx broken");
-    }
-    if s.broken_links > 0 {
-        eprintln("  {s.broken_links} broken markdown links — run: ./scripts/idx broken-links");
-    }
+  eprintln("tools/indexer/scan.loft: wrote index/tags.json");
+  eprintln("  {s.distinct_tags} distinct tags ({s.new_form} new-form, {s.legacy_form} legacy-form)");
+  eprintln("  {s.total_refs} total references");
+  eprintln("  {s.link_targets} link targets ({s.inbound_links} inbound links)");
+  eprintln("  {s.problems_open} open P-issues, {s.problems_recent} closed in last 30 days");
+  eprintln(
+    "  plans: {s.plans_active} active, {s.plans_future} future, {s.plans_deferred} deferred, {s.plans_recent} finished in last 60 days"
+  );
+  if s.broken_refs > 0 {
+    eprintln("  {s.broken_refs} broken @-references — run: ./scripts/idx broken");
+  }
+  if s.broken_links > 0 {
+    eprintln("  {s.broken_links} broken markdown links — run: ./scripts/idx broken-links");
+  }
 }
 
 // Emit the bucketed `index/tags.json`-shape JSON object on
@@ -1035,148 +1077,152 @@ fn emit_summary(s: Summary) {
 // buckets (broken / broken_links / problems_open / plans_*)
 // stay in the bash post-processor for now and merge over
 // the loft output via `jq +` when the full pipeline is wired.
-fn emit_bucketed(rows: vector<RawRef>, links: vector<LinkRef>,
-                 valid_pids: vector<text>, valid_plans: vector<text>,
-                 s: Summary) {
-    sets = DistinctSets {};
-    for r in rows {
-        if sets.tags[r.tag] == null {
-            sets.tags += [TagSlot{name: r.tag}];
-        }
+fn emit_bucketed(
+  rows: vector<RawRef>,
+  links: vector<LinkRef>,
+  valid_pids: vector<text>,
+  valid_plans: vector<text>,
+  s: Summary
+) {
+  sets = DistinctSets {};
+  for r in rows {
+    if sets.tags[r.tag] == null { sets.tags += [
+      TagSlot { name: r.tag },
+    ]; }
+  }
+  for lr in links {
+    if sets.links[lr.target] == null { sets.links += [
+      TagSlot { name: lr.target },
+    ]; }
+  }
+  // Populate summary counts that scan with the existing data.
+  s.total_refs = rows.len();
+  s.inbound_links = links.len();
+  s.link_targets = sets.links.len();
+  s.distinct_tags = sets.tags.len();
+  for slot in sets.tags {
+    if slot.name.starts_with("legacy:") { s.legacy_form = s.legacy_form + 1; } else {
+      s.new_form = s.new_form + 1;
     }
-    for lr in links {
-        if sets.links[lr.target] == null {
-            sets.links += [TagSlot{name: lr.target}];
-        }
-    }
-    // Populate summary counts that scan with the existing data.
-    s.total_refs = rows.len();
-    s.inbound_links = links.len();
-    s.link_targets = sets.links.len();
-    s.distinct_tags = sets.tags.len();
-    for slot in sets.tags {
-        if slot.name.starts_with("legacy:") {
-            s.legacy_form = s.legacy_form + 1;
-        } else {
-            s.new_form = s.new_form + 1;
-        }
-    }
-    println("{{");
-    // Per-tag buckets.  Comma management: emit the leading
-    // comma BEFORE each entry except the first.
-    first = true;
-    for slot in sets.tags {
-        if !first { println(","); }
-        first = false;
-        // The per-row `valid` field is intentionally omitted
-        // from the bucketed shape — every ref to a broken tag
-        // is itself broken (the validity is a property of the
-        // KEY, not the ref).  Same shape scan.sh's tags.json
-        // uses; downstream consumers (`./scripts/idx broken`,
-        // viewer's red-banner surface) reconstruct the broken
-        // set by intersecting bucket keys with valid_pids /
-        // valid_plans.
-        emit_tag_bucket(slot.name, rows);
-    }
-    // Links bucket — wrapped in `"links": { ... }`.  Mirrors
-    // scan.sh's `links` field.
-    if sets.links.len() > 0 {
-        if !first { println(","); }
-        first = false;
-        println("  \"links\": {{");
-        first_link = true;
-        for slot in sets.links {
-            if !first_link { println(","); }
-            first_link = false;
-            emit_link_bucket(slot.name, links);
-        }
-        println("");
-        println("  }}");
-    }
-    // Broken @-tag refs.  Always emit (matches scan.sh, which
-    // unconditionally merges `{broken: [...]}` even when empty).
-    if !first { println(","); }
+  }
+  println("{{");
+  // Per-tag buckets.  Comma management: emit the leading
+  // comma BEFORE each entry except the first.
+  first = true;
+  for slot in sets.tags {
+    if!first { println(","); }
     first = false;
-    println("  \"broken\": [");
-    s.broken_refs = emit_broken_array(rows, valid_pids, valid_plans);
+    // The per-row `valid` field is intentionally omitted
+    // from the bucketed shape — every ref to a broken tag
+    // is itself broken (the validity is a property of the
+    // KEY, not the ref).  Same shape scan.sh's tags.json
+    // uses; downstream consumers (`./scripts/idx broken`,
+    // viewer's red-banner surface) reconstruct the broken
+    // set by intersecting bucket keys with valid_pids /
+    // valid_plans.
+    emit_tag_bucket(slot.name, rows);
+  }
+  // Links bucket — wrapped in `"links": { ... }`.  Mirrors
+  // scan.sh's `links` field.
+  if sets.links.len() > 0 {
+    if!first { println(","); }
+    first = false;
+    println("  \"links\": {{");
+    first_link = true;
+    for slot in sets.links {
+      if!first_link { println(","); }
+      first_link = false;
+      emit_link_bucket(slot.name, links);
+    }
     println("");
-    println("  ]");
-    // Broken markdown links.  Same always-emit discipline.
-    println(",");
-    println("  \"broken_links\": [");
-    s.broken_links = emit_broken_links_array(links);
-    println("");
-    println("  ]");
-    // problems_open — parsed from PROBLEMS.md severity column.
-    println(",");
-    println("  \"problems_open\": [");
-    s.problems_open = emit_problems_open_array();
-    println("");
-    println("  ]");
-    // problems_recent — closed P-issues from the last 30 days,
-    // sorted by close-date descending.
-    println(",");
-    println("  \"problems_recent\": [");
-    s.problems_recent = emit_problems_recent_array();
-    println("");
-    println("  ]");
-    // plans_active / plans_future / plans_deferred / lib_plans_future
-    // — alphabetical {slug, path, title} per plan dir.
-    println(",");
-    println("  \"plans_active\": [");
-    s.plans_active = emit_plans_bucket("doc/claude/plans");
-    println("");
-    println("  ]");
-    println(",");
-    println("  \"plans_future\": [");
-    s.plans_future = emit_plans_bucket("doc/claude/plans/future");
-    println("");
-    println("  ]");
-    println(",");
-    println("  \"plans_deferred\": [");
-    s.plans_deferred = emit_plans_bucket("doc/claude/plans/deferred");
-    println("");
-    println("  ]");
-    println(",");
-    println("  \"lib_plans_future\": [");
-    s.lib_plans_future = emit_plans_bucket("doc/claude/lib_plans/future");
-    println("");
-    println("  ]");
-    // plans_recent — finished plans modified in last 60 days.
-    // Uses mtime(path) + now() to compute the window.
-    println(",");
-    println("  \"plans_recent\": [");
-    s.plans_recent = emit_plans_recent_bucket("doc/claude/plans/finished", 60 * 86400);
-    println("");
-    println("  ]");
-    println("");
-    println("}}");
+    println("  }}");
+  }
+  // Broken @-tag refs.  Always emit (matches scan.sh, which
+  // unconditionally merges `{broken: [...]}` even when empty).
+  if!first { println(","); }
+  first = false;
+  println("  \"broken\": [");
+  s.broken_refs = emit_broken_array(rows, valid_pids, valid_plans);
+  println("");
+  println("  ]");
+  // Broken markdown links.  Same always-emit discipline.
+  println(",");
+  println("  \"broken_links\": [");
+  s.broken_links = emit_broken_links_array(links);
+  println("");
+  println("  ]");
+  // problems_open — parsed from PROBLEMS.md severity column.
+  println(",");
+  println("  \"problems_open\": [");
+  s.problems_open = emit_problems_open_array();
+  println("");
+  println("  ]");
+  // problems_recent — closed P-issues from the last 30 days,
+  // sorted by close-date descending.
+  println(",");
+  println("  \"problems_recent\": [");
+  s.problems_recent = emit_problems_recent_array();
+  println("");
+  println("  ]");
+  // plans_active / plans_future / plans_deferred / lib_plans_future
+  // — alphabetical {slug, path, title} per plan dir.
+  println(",");
+  println("  \"plans_active\": [");
+  s.plans_active = emit_plans_bucket("doc/claude/plans");
+  println("");
+  println("  ]");
+  println(",");
+  println("  \"plans_future\": [");
+  s.plans_future = emit_plans_bucket("doc/claude/plans/future");
+  println("");
+  println("  ]");
+  println(",");
+  println("  \"plans_deferred\": [");
+  s.plans_deferred = emit_plans_bucket("doc/claude/plans/deferred");
+  println("");
+  println("  ]");
+  println(",");
+  println("  \"lib_plans_future\": [");
+  s.lib_plans_future = emit_plans_bucket("doc/claude/lib_plans/future");
+  println("");
+  println("  ]");
+  // plans_recent — finished plans modified in last 60 days.
+  // Uses mtime(path) + now() to compute the window.
+  println(",");
+  println("  \"plans_recent\": [");
+  s.plans_recent = emit_plans_recent_bucket("doc/claude/plans/finished", 60 * 86400);
+  println("");
+  println("  ]");
+  println("");
+  println("}}");
 }
 
 fn emit_tag_bucket(tag: text, rows: vector<RawRef>) {
-    print("  \"{tag}\": [");
-    inner_first = true;
-    for r in rows {
-        if r.tag == tag {
-            if !inner_first { print(","); }
-            inner_first = false;
-            print("{{\"file\":\"{r.file}\",\"line\":{r.line},\"context\":\"{r.ctx_escaped}\"}}");
-        }
+  print("  \"{tag}\": [");
+  inner_first = true;
+  for r in rows {
+    if r.tag == tag {
+      if!inner_first { print(","); }
+      inner_first = false;
+      print("{{\"file\":\"{r.file}\",\"line\":{r.line},\"context\":\"{r.ctx_escaped}\"}}");
     }
-    print("]");
+  }
+  print("]");
 }
 
 fn emit_link_bucket(target: text, links: vector<LinkRef>) {
-    print("    \"{target}\": [");
-    inner_first = true;
-    for lr in links {
-        if lr.target == target {
-            if !inner_first { print(","); }
-            inner_first = false;
-            print("{{\"file\":\"{lr.file}\",\"line\":{lr.line},\"anchor\":\"{lr.anchor}\",\"context\":\"{lr.ctx_escaped}\"}}");
-        }
+  print("    \"{target}\": [");
+  inner_first = true;
+  for lr in links {
+    if lr.target == target {
+      if!inner_first { print(","); }
+      inner_first = false;
+      print(
+        "{{\"file\":\"{lr.file}\",\"line\":{lr.line},\"anchor\":\"{lr.anchor}\",\"context\":\"{lr.ctx_escaped}\"}}"
+      );
     }
-    print("]");
+  }
+  print("]");
 }
 
 // True when the tag's underlying P-issue / plan ID is not present
@@ -1189,73 +1235,68 @@ fn emit_link_bucket(target: text, links: vector<LinkRef>) {
 // extraction, which strips the optional `legacy:` prefix before
 // the set-diff against VALID_PIDS / VALID_PLANS).
 fn tag_is_broken(tag: text, valid_pids: vector<text>, valid_plans: vector<text>) -> boolean {
-    tlen = tag.len();
-    work = tag;
-    wlen = tlen;
-    if tag.starts_with("legacy:") {
-        work = tag[7..tlen];
-        wlen = tlen - 7;
-    }
-    is_plan = false;
-    digit_start = 0;
-    if work.starts_with("@PLAN") {
-        digit_start = 5;
-        is_plan = true;
-    } else if work.starts_with("plan-") {
-        digit_start = 5;
-        is_plan = true;
-    } else if work.starts_with("@P") {
-        digit_start = 2;
-    } else if wlen > 1 && work[0] == 'P' && is_digit_leaf(work[1]) {
-        digit_start = 1;
-    } else {
-        return false;
-    }
-    if digit_start >= wlen || !is_digit_leaf(work[digit_start]) { return false; }
-    j = digit_start;
-    while j < wlen && is_digit_leaf(work[j]) { j = j + 1; }
-    num = work[digit_start..j];
-    if is_plan { return !set_contains(valid_plans, num); }
-    return !set_contains(valid_pids, num);
+  tlen = tag.size();
+  work = tag;
+  wlen = tlen;
+  if tag.starts_with("legacy:") {
+    work = tag[7..tlen];
+    wlen = tlen - 7;
+  }
+  is_plan = false;
+  digit_start = 0;
+  if work.starts_with("@PLAN") {
+    digit_start = 5;
+    is_plan = true;
+  } else if work.starts_with("plan-") {
+    digit_start = 5;
+    is_plan = true;
+  } else if work.starts_with("@P") { digit_start = 2; } else if wlen > 1 && work[0] == 'P' && is_digit_leaf(
+    work[1]
+  ) { digit_start = 1; } else { return false; }
+  if digit_start >= wlen || !is_digit_leaf(work[digit_start]) { return false; }
+  j = digit_start;
+  while j < wlen && is_digit_leaf(work[j]) { j = j + 1; }
+  num = work[digit_start..j];
+  if is_plan { return!set_contains(valid_plans, num); }
+  return!set_contains(valid_pids, num);
 }
 
 // Emit the `broken` array contents: one `{tag, refs: ["file:line", ...]}`
 // object per distinct broken tag.  Caller writes the surrounding
 // `"broken": [ ... ]` brackets so this prints only the inner
 // objects, comma-separated.  Mirrors scan.sh's BROKEN_JSON shape.
-fn emit_broken_array(rows: vector<RawRef>, valid_pids: vector<text>,
-                     valid_plans: vector<text>) -> integer {
-    distinct = DistinctSets {};
+fn emit_broken_array(rows: vector<RawRef>, valid_pids: vector<text>, valid_plans: vector<text>) -> integer {
+  distinct = DistinctSets {};
+  for r in rows {
+    if!tag_is_broken(r.tag, valid_pids, valid_plans) { continue; }
+    // scan.sh's broken bucket lists only the canonical `@P*` /
+    // `@PLAN*` keys.  Legacy `legacy:P*` / `legacy:plan-*` refs
+    // are tracked in their own buckets and the migration metering
+    // (`make problems` summary) doesn't surface them as broken
+    // even when their underlying ID isn't in the valid set.
+    // Mirror that — filter out tags with the `legacy:` prefix.
+    if r.tag.starts_with("legacy:") { continue; }
+    if distinct.tags[r.tag] == null { distinct.tags += [
+      TagSlot { name: r.tag },
+    ]; }
+  }
+  first = true;
+  count = 0;
+  for slot in distinct.tags {
+    if!first { print(","); }
+    first = false;
+    count = count + 1;
+    print("    {{\"tag\":\"{slot.name}\",\"refs\":[");
+    ref_first = true;
     for r in rows {
-        if !tag_is_broken(r.tag, valid_pids, valid_plans) { continue; }
-        // scan.sh's broken bucket lists only the canonical `@P*` /
-        // `@PLAN*` keys.  Legacy `legacy:P*` / `legacy:plan-*` refs
-        // are tracked in their own buckets and the migration metering
-        // (`make problems` summary) doesn't surface them as broken
-        // even when their underlying ID isn't in the valid set.
-        // Mirror that — filter out tags with the `legacy:` prefix.
-        if r.tag.starts_with("legacy:") { continue; }
-        if distinct.tags[r.tag] == null {
-            distinct.tags += [TagSlot{name: r.tag}];
-        }
+      if r.tag != slot.name { continue; }
+      if!ref_first { print(","); }
+      ref_first = false;
+      print("\"{r.file}:{r.line}\"");
     }
-    first = true;
-    count = 0;
-    for slot in distinct.tags {
-        if !first { print(","); }
-        first = false;
-        count = count + 1;
-        print("    {{\"tag\":\"{slot.name}\",\"refs\":[");
-        ref_first = true;
-        for r in rows {
-            if r.tag != slot.name { continue; }
-            if !ref_first { print(","); }
-            ref_first = false;
-            print("\"{r.file}:{r.line}\"");
-        }
-        print("]}}");
-    }
-    count
+    print("]}}");
+  }
+  count
 }
 
 // Emit the `broken_links` array contents: one `{target, refs: ["file:line", ...]}`
@@ -1274,70 +1315,64 @@ fn emit_broken_array(rows: vector<RawRef>, valid_pids: vector<text>,
 // Body summary: strip `**@P<n>** — ` prefix, take up to first `. `,
 // cap at 280 bytes (suffix `...` if truncated).
 fn severity_is_open(sev: text) -> boolean {
-    lower = sev.to_lowercase();
-    if lower.find("(partial") >= 0 { return true; }
-    n = lower.len();
-    pos = 0;
-    while pos < n {
-        rel = lower[pos..n].find("open") ?? -1;
-        if rel < 0 { return false; }
-        at = pos + rel;
-        ok_lead = at == 0;
-        if !ok_lead {
-            pc = lower[at - 1];
-            ok_lead = pc == ' ' || pc == '(';
-        }
-        if ok_lead {
-            end_pos = at + 4;
-            ok_trail = end_pos == n;
-            if !ok_trail {
-                nc = lower[end_pos];
-                ok_trail = nc == ' ' || nc == ',' || nc == ')';
-            }
-            if ok_trail { return true; }
-        }
-        pos = at + 1;
+  lower = sev.to_lowercase();
+  if lower.find("(partial") >= 0 { return true; }
+  n = lower.size();
+  pos = 0;
+  while pos < n {
+    rel = lower[pos..n].find("open") ?? -1;
+    if rel < 0 { return false; }
+    at = pos + rel;
+    ok_lead = at == 0;
+    if!ok_lead {
+      pc = lower[at - 1];
+      ok_lead = pc == ' ' || pc == '(';
     }
-    false
+    if ok_lead {
+      end_pos = at + 4;
+      ok_trail = end_pos == n;
+      if!ok_trail {
+        nc = lower[end_pos];
+        ok_trail = nc == ' ' || nc == ',' || nc == ')';
+      }
+      if ok_trail { return true; }
+    }
+    pos = at + 1;
+  }
+  false
 }
 
 // Strip leading whitespace and the literal `**@P<id>** — ` prefix
 // added by the 2026-05-14 self-tagging migration.  No-op if the
 // prefix isn't present (older rows).
 fn strip_tag_prefix(body: text, id: text) -> text {
-    s = body.trim();
-    prefix = "**@P{id}** — ";
-    plen = prefix.len();
-    slen = s.len();
-    if slen >= plen && s.starts_with(prefix) {
-        return s[plen..slen];
-    }
-    s
+  s = body.trim();
+  prefix = "**@P{id}** — ";
+  plen = prefix.size();
+  slen = s.size();
+  if slen >= plen && s.starts_with(prefix) { return s[plen..slen]; }
+  s
 }
 
 // Take body up to first `. ` (period + space — bare `.` would
 // split file extensions); cap at 280 bytes, suffix `...` if cut.
 fn truncate_summary(body: text) -> text {
-    summary = body;
-    pos = summary.find(". ");
-    if pos > 0 {
-        summary = summary[0..pos + 1];
-    }
-    if summary.len() > 280 {
-        summary = summary[0..277] + "...";
-    }
-    summary
+  summary = body;
+  pos = summary.find(". ");
+  if pos > 0 { summary = summary[0..pos + 1]; }
+  if summary.size() > 280 { summary = summary[0..277] + "..."; }
+  summary
 }
 
 // True for a PROBLEMS.md row prefix `| <digits> ` (the issue
 // number).  Cheap pre-filter before the more expensive split('|').
 fn is_problems_row(line: text) -> boolean {
-    n = line.len();
-    if n < 5 || !line.starts_with("| ") { return false; }
-    j = 2;
-    if line[j] < '0' || line[j] > '9' { return false; }
-    while j < n && line[j] >= '0' && line[j] <= '9' { j = j + 1; }
-    j < n && line[j] == ' '
+  n = line.size();
+  if n < 5 || !line.starts_with("| ") { return false; }
+  j = 2;
+  if line[j] < '0' || line[j] > '9' { return false; }
+  while j < n && line[j] >= '0' && line[j] <= '9' { j = j + 1; }
+  j < n && line[j] == ' '
 }
 
 // ── plans_* buckets ─────────────────────────────────────────────
@@ -1352,33 +1387,33 @@ fn is_problems_row(line: text) -> boolean {
 //          (fallback to slug if no README or no heading)
 
 struct PlanEntry {
-    slug: text,
-    path: text,
-    title: text,
+  slug: text,
+  path: text,
+  title: text,
 }
 struct PlanSet {
-    entries: sorted<PlanEntry[slug]>,
+  entries: sorted<PlanEntry[slug]>,
 }
 
 // First `# ` heading line in `readme_path` (text after the `# `
 // prefix, trimmed).  Empty string if file missing or no heading.
 fn read_plan_title(readme_path: text) -> text {
-    f = file(readme_path);
-    if f.format == Format.NotExists { return ""; }
-    for line in f.lines() {
-        if line.starts_with("# ") {
-            n = line.len();
-            return line[2..n].trim();
-        }
+  f = file(readme_path);
+  if f.format == Format.NotExists { return ""; }
+  for line in f.lines() {
+    if line.starts_with("# ") {
+      n = line.size();
+      return line[2..n].trim();
     }
-    ""
+  }
+  ""
 }
 
 // True if `slug` begins with `<digit><digit-or-other>-` — the
 // `[0-9]+-` glob prefix that bash's `[0-9]*-*/` matches.
 fn slug_starts_with_digit(slug: text) -> boolean {
-    if slug.len() < 1 { return false; }
-    slug[0] >= '0' && slug[0] <= '9'
+  if slug.len() < 1 { return false; }
+  slug[0] >= '0' && slug[0] <= '9'
 }
 
 // Walk `dir_path` and add a PlanEntry for every numeric-prefixed
@@ -1386,82 +1421,86 @@ fn slug_starts_with_digit(slug: text) -> boolean {
 // date-window variant (`collect_plans_dir_recent`); this one
 // has no date filter and is used by the four no-date buckets.
 fn collect_plans_dir(dir_path: text, set: PlanSet) {
-    d = file(dir_path);
-    if d.format != Format.Directory { return; }
-    for entry in d.files() {
-        if entry.format != Format.Directory { continue; }
-        slug = entry.path.basename();
-        if !slug_starts_with_digit(slug) { continue; }
-        readme = "{entry.path}/README.md";
-        if file(readme).format == Format.NotExists { continue; }
-        title = read_plan_title(readme);
-        if title == "" { title = slug; }
-        path = normalize_path(entry.path);
-        n = path.len();
-        if n > 0 && path[n - 1] == '/' { path = path[0..n - 1]; }
-        set.entries += [PlanEntry{slug: slug, path: path, title: title}];
-    }
+  d = file(dir_path);
+  if d.format != Format.Directory { return; }
+  for entry in d.files() {
+    if entry.format != Format.Directory { continue; }
+    slug = entry.path.basename();
+    if!slug_starts_with_digit(slug) { continue; }
+    readme = "{entry.path}/README.md";
+    if file(readme).format == Format.NotExists { continue; }
+    title = read_plan_title(readme);
+    if title == "" { title = slug; }
+    path = normalize_path(entry.path);
+    n = path.size();
+    if n > 0 && path[n - 1] == '/' { path = path[0..n - 1]; }
+    set.entries += [
+      PlanEntry { slug: slug, path: path, title: title },
+    ];
+  }
 }
 
 // Emit `[{slug, path, title}, ...]` for the given plan dir layer.
 // Caller writes the surrounding `"<key>": [` / `]`.
 fn emit_plans_bucket(dir_path: text) -> integer {
-    set = PlanSet {};
-    collect_plans_dir(dir_path, set);
-    first = true;
-    count = 0;
-    for e in set.entries {
-        if !first { print(","); }
-        first = false;
-        count = count + 1;
-        esc_title = json_escape(e.title);
-        esc_path = json_escape(e.path);
-        esc_slug = json_escape(e.slug);
-        print("\n    {{\"slug\":\"{esc_slug}\",\"path\":\"{esc_path}\",\"title\":\"{esc_title}\"}}");
-    }
-    count
+  set = PlanSet {};
+  collect_plans_dir(dir_path, set);
+  first = true;
+  count = 0;
+  for e in set.entries {
+    if!first { print(","); }
+    first = false;
+    count = count + 1;
+    esc_title = json_escape(e.title);
+    esc_path = json_escape(e.path);
+    esc_slug = json_escape(e.slug);
+    print("\n    {{\"slug\":\"{esc_slug}\",\"path\":\"{esc_path}\",\"title\":\"{esc_title}\"}}");
+  }
+  count
 }
 
 // Walk `dir_path`, include only subdirs whose mtime is within
 // `window_secs` of now.  Mirrors bash's `[ $((now - m)) -le
 // "$mtime_window" ]` check for `plans_recent` (60-day window).
 fn collect_plans_dir_recent(dir_path: text, set: PlanSet, window_secs: integer) {
-    d = file(dir_path);
-    if d.format != Format.Directory { return; }
-    now_secs = now() / 1000;
-    cutoff = now_secs - window_secs;
-    for entry in d.files() {
-        if entry.format != Format.Directory { continue; }
-        slug = entry.path.basename();
-        if !slug_starts_with_digit(slug) { continue; }
-        readme = "{entry.path}/README.md";
-        if file(readme).format == Format.NotExists { continue; }
-        m = mtime(entry.path);
-        if m <= 0 || m < cutoff { continue; }
-        title = read_plan_title(readme);
-        if title == "" { title = slug; }
-        path = normalize_path(entry.path);
-        n = path.len();
-        if n > 0 && path[n - 1] == '/' { path = path[0..n - 1]; }
-        set.entries += [PlanEntry{slug: slug, path: path, title: title}];
-    }
+  d = file(dir_path);
+  if d.format != Format.Directory { return; }
+  now_secs = now() / 1000;
+  cutoff = now_secs - window_secs;
+  for entry in d.files() {
+    if entry.format != Format.Directory { continue; }
+    slug = entry.path.basename();
+    if!slug_starts_with_digit(slug) { continue; }
+    readme = "{entry.path}/README.md";
+    if file(readme).format == Format.NotExists { continue; }
+    m = mtime(entry.path);
+    if m <= 0 || m < cutoff { continue; }
+    title = read_plan_title(readme);
+    if title == "" { title = slug; }
+    path = normalize_path(entry.path);
+    n = path.size();
+    if n > 0 && path[n - 1] == '/' { path = path[0..n - 1]; }
+    set.entries += [
+      PlanEntry { slug: slug, path: path, title: title },
+    ];
+  }
 }
 
 fn emit_plans_recent_bucket(dir_path: text, window_secs: integer) -> integer {
-    set = PlanSet {};
-    collect_plans_dir_recent(dir_path, set, window_secs);
-    first = true;
-    count = 0;
-    for e in set.entries {
-        if !first { print(","); }
-        first = false;
-        count = count + 1;
-        esc_title = json_escape(e.title);
-        esc_path = json_escape(e.path);
-        esc_slug = json_escape(e.slug);
-        print("\n    {{\"slug\":\"{esc_slug}\",\"path\":\"{esc_path}\",\"title\":\"{esc_title}\"}}");
-    }
-    count
+  set = PlanSet {};
+  collect_plans_dir_recent(dir_path, set, window_secs);
+  first = true;
+  count = 0;
+  for e in set.entries {
+    if!first { print(","); }
+    first = false;
+    count = count + 1;
+    esc_title = json_escape(e.title);
+    esc_path = json_escape(e.path);
+    esc_slug = json_escape(e.slug);
+    print("\n    {{\"slug\":\"{esc_slug}\",\"path\":\"{esc_path}\",\"title\":\"{esc_title}\"}}");
+  }
+  count
 }
 
 // True when severity matches the bash regex
@@ -1469,130 +1508,145 @@ fn emit_plans_recent_bucket(dir_path: text, window_secs: integer) -> integer {
 // `[(]open|[(]partial` (excludes partial-state rows like @P229).
 // Same case-insensitive semantics as severity_is_open.
 fn severity_is_closed(sev: text) -> boolean {
-    lower = sev.to_lowercase();
-    // Exclude partial-state.
-    if lower.find("(open") >= 0 { return false; }
-    if lower.find("(partial") >= 0 { return false; }
-    // Match `(closed)` or `...closed$`.
-    if lower.find("(closed)") >= 0 { return true; }
-    n = lower.len();
-    if n >= 6 && lower[n - 6..n] == "closed" { return true; }
-    false
+  lower = sev.to_lowercase();
+  // Exclude partial-state.
+  if lower.find("(open") >= 0 { return false; }
+  if lower.find("(partial") >= 0 { return false; }
+  // Match `(closed)` or `...closed$`.
+  if lower.find("(closed)") >= 0 { return true; }
+  n = lower.size();
+  if n >= 6 && lower[n - 6..n] == "closed" { return true; }
+  false
 }
 
 // Find the LAST `Closed (YYYY-MM-DD)` in body; return the
 // 10-byte date or "" if none.  Bash uses `while (match(...))`
 // advancing past each match to find the last.
 fn find_last_closed_date(body: text) -> text {
-    needle = "Closed (";
-    last = "";
-    n = body.len();
-    pos = 0;
-    while pos < n {
-        rel = body[pos..n].find(needle) ?? -1;
-        if rel < 0 { return last; }
-        at = pos + rel + needle.len();
-        // Expect YYYY-MM-DD at `at` (10 chars) followed by ')'.
-        if at + 11 <= n
-            && body[at] >= '0' && body[at] <= '9'
-            && body[at + 4] == '-'
-            && body[at + 7] == '-'
-            && body[at + 10] == ')'
-        {
-            last = body[at..at + 10];
-        }
-        pos = at;
-    }
-    last
+  needle = "Closed (";
+  last = "";
+  n = body.size();
+  pos = 0;
+  while pos < n {
+    rel = body[pos..n].find(needle) ?? -1;
+    if rel < 0 { return last; }
+    at = pos + rel + needle.size();
+    // Expect YYYY-MM-DD at `at` (10 chars) followed by ')'.
+    if at + 11 <= n
+    && body[at] >= '0' && body[at] <= '9'
+    && body[at + 4] == '-'
+    && body[at + 7] == '-'
+    && body[at + 10] == ')'
+    { last = body[at..at + 10]; }
+    pos = at;
+  }
+  last
 }
 
 // Slot struct + wrapper for `sorted<...[-closed]>` (descending
 // by date).  Loft sorted<> must be a struct field, not a local.
 struct ProblemRecent {
-    tag: text,
-    line_no: integer,
-    closed: text,
-    summary: text,
+  tag: text,
+  line_no: integer,
+  closed: text,
+  summary: text,
 }
 struct RecentSet {
-    items: sorted<ProblemRecent[-closed]>,
+  items: sorted<ProblemRecent[-closed]>,
 }
 
 fn emit_problems_recent_array() -> integer {
-    f = file("doc/claude/PROBLEMS.md");
-    if f.format == Format.NotExists { return 0; }
-    cutoff = ymd_days_ago(30);
-    set = RecentSet {};
-    lines = f.lines();
-    nl = lines.len();
-    i = 0;
-    while i < nl {
-        line = lines[i];
-        if !is_problems_row(line) { i = i + 1; continue; }
-        cells = line.split('|');
-        if cells.len() < 5 { i = i + 1; continue; }
-        id_text = cells[1].trim();
-        body = cells[2];
-        severity = cells[3].trim();
-        if !severity_is_closed(severity) { i = i + 1; continue; }
-        close_date = find_last_closed_date(body);
-        if close_date == "" { i = i + 1; continue; }
-        // YYYY-MM-DD sorts lexicographically.  Skip older.
-        if close_date < cutoff { i = i + 1; continue; }
-        summary = strip_tag_prefix(body, id_text);
-        summary = truncate_summary(summary);
-        set.items += [ProblemRecent{
-            tag: "@P{id_text}",
-            line_no: i + 1,
-            closed: close_date,
-            summary: summary,
-        }];
-        i = i + 1;
+  f = file("doc/claude/PROBLEMS.md");
+  if f.format == Format.NotExists { return 0; }
+  cutoff = ymd_days_ago(30);
+  set = RecentSet {};
+  lines = f.lines();
+  nl = lines.len();
+  i = 0;
+  while i < nl {
+    line = lines[i];
+    if!is_problems_row(line) {
+      i = i + 1; continue;
     }
-    first = true;
-    count = 0;
-    for e in set.items {
-        if !first { print(","); }
-        first = false;
-        count = count + 1;
-        esc_sum = json_escape(e.summary);
-        print("\n    {{\"tag\":\"{e.tag}\",\"line\":{e.line_no},\"closed\":\"{e.closed}\",\"summary\":\"{esc_sum}\"}}");
+    cells = line.split('|');
+    if cells.len() < 5 {
+      i = i + 1; continue;
     }
-    count
+    id_text = cells[1].trim();
+    body = cells[2];
+    severity = cells[3].trim();
+    if!severity_is_closed(severity) {
+      i = i + 1; continue;
+    }
+    close_date = find_last_closed_date(body);
+    if close_date == "" {
+      i = i + 1; continue;
+    }
+    // YYYY-MM-DD sorts lexicographically.  Skip older.
+    if close_date < cutoff {
+      i = i + 1; continue;
+    }
+    summary = strip_tag_prefix(body, id_text);
+    summary = truncate_summary(summary);
+    set.items += [
+      ProblemRecent { tag: "@P{id_text}", line_no: i + 1, closed: close_date, summary: summary, },
+    ];
+    i = i + 1;
+  }
+  first = true;
+  count = 0;
+  for e in set.items {
+    if!first { print(","); }
+    first = false;
+    count = count + 1;
+    esc_sum = json_escape(e.summary);
+    print(
+      "\n    {{\"tag\":\"{e.tag}\",\"line\":{e.line_no},\"closed\":\"{e.closed}\",\"summary\":\"{esc_sum}\"}}"
+    );
+  }
+  count
 }
 
 fn emit_problems_open_array() -> integer {
-    f = file("doc/claude/PROBLEMS.md");
-    if f.format == Format.NotExists { return 0; }
-    lines = f.lines();
-    nl = lines.len();
-    first = true;
-    count = 0;
-    i = 0;
-    while i < nl {
-        line = lines[i];
-        if !is_problems_row(line) { i = i + 1; continue; }
-        cells = line.split('|');
-        if cells.len() < 5 { i = i + 1; continue; }
-        id_text = cells[1].trim();
-        body = cells[2];
-        severity = cells[3].trim();
-        fix = cells[4].trim();
-        if !severity_is_open(severity) { i = i + 1; continue; }
-        summary = strip_tag_prefix(body, id_text);
-        summary = truncate_summary(summary);
-        if fix.len() > 280 { fix = fix[0..277] + "..."; }
-        if !first { print(","); }
-        first = false;
-        count = count + 1;
-        line_no = i + 1;
-        esc_sev = json_escape(severity);
-        esc_sum = json_escape(summary);
-        esc_fix = json_escape(fix);
-        print("\n    {{\"tag\":\"@P{id_text}\",\"line\":{line_no},\"severity\":\"{esc_sev}\",\"summary\":\"{esc_sum}\",\"fix\":\"{esc_fix}\"}}");
-        i = i + 1;
+  f = file("doc/claude/PROBLEMS.md");
+  if f.format == Format.NotExists { return 0; }
+  lines = f.lines();
+  nl = lines.len();
+  first = true;
+  count = 0;
+  i = 0;
+  while i < nl {
+    line = lines[i];
+    if!is_problems_row(line) {
+      i = i + 1; continue;
     }
-    count
+    cells = line.split('|');
+    if cells.len() < 5 {
+      i = i + 1; continue;
+    }
+    id_text = cells[1].trim();
+    body = cells[2];
+    severity = cells[3].trim();
+    fix = cells[4].trim();
+    if!severity_is_open(severity) {
+      i = i + 1; continue;
+    }
+    summary = strip_tag_prefix(body, id_text);
+    summary = truncate_summary(summary);
+    if fix.size() > 280 { fix = fix[0..277] + "..."; }
+    if!first { print(","); }
+    first = false;
+    count = count + 1;
+    line_no = i + 1;
+    esc_sev = json_escape(severity);
+    esc_sum = json_escape(summary);
+    esc_fix = json_escape(fix);
+    print(
+      "\n    {{\"tag\":\"@P{id_text}\",\"line\":{line_no},\"severity\":\"{esc_sev}\",\"summary\":\"{esc_sum}\",\"fix\":\"{esc_fix}\"}}"
+    );
+    i = i + 1;
+  }
+  count
 }
 
 // Per-distinct-target existence cache.  ~1300 inbound LinkRefs
@@ -1600,11 +1654,11 @@ fn emit_problems_open_array() -> integer {
 // `link_target_exists` walks ~1000 redundant `stat()` calls.
 // One-pass memo: build cache keyed by target, then read.
 struct TargetExists {
-    target: text,
-    exists: boolean,
+  target: text,
+  exists: boolean,
 }
 struct TargetCache {
-    seen: hash<TargetExists[target]>,
+  seen: hash<TargetExists[target]>,
 }
 
 // True when `file` is under `tests/fixtures/libs/<pkg>/` — the
@@ -1613,138 +1667,153 @@ struct TargetCache {
 // reflect chunk-repo doc state, not monorepo source-of-truth, so
 // the monorepo broken-link gate shouldn't flag them.
 fn link_source_is_fixture(file: text) -> boolean {
-    file.starts_with("tests/fixtures/libs/")
+  file.starts_with("tests/fixtures/libs/")
 }
 
 fn emit_broken_links_array(links: vector<LinkRef>) -> integer {
-    // Build the per-distinct existence cache first (one stat per
-    // distinct target rather than per LinkRef).
-    cache = TargetCache {};
+  // Build the per-distinct existence cache first (one stat per
+  // distinct target rather than per LinkRef).
+  cache = TargetCache {};
+  for lr in links {
+    if link_source_is_fixture(lr.file) { continue; }
+    if cache.seen[lr.target] == null {
+      cache.seen += [
+        TargetExists { target: lr.target, exists: link_target_exists(lr.target), },
+      ];
+    }
+  }
+  distinct = DistinctSets {};
+  for lr in links {
+    if link_source_is_fixture(lr.file) { continue; }
+    hit = cache.seen[lr.target];
+    if hit != null && hit.exists { continue; }
+    if distinct.tags[lr.target] == null {
+      distinct.tags += [
+        TagSlot { name: lr.target },
+      ];
+    }
+  }
+  first = true;
+  count = 0;
+  for slot in distinct.tags {
+    if!first { print(","); }
+    first = false;
+    count = count + 1;
+    print("    {{\"target\":\"{slot.name}\",\"refs\":[");
+    ref_first = true;
     for lr in links {
-        if link_source_is_fixture(lr.file) { continue; }
-        if cache.seen[lr.target] == null {
-            cache.seen += [TargetExists{
-                target: lr.target,
-                exists: link_target_exists(lr.target),
-            }];
-        }
+      if link_source_is_fixture(lr.file) { continue; }
+      if lr.target != slot.name { continue; }
+      if!ref_first { print(","); }
+      ref_first = false;
+      print("\"{lr.file}:{lr.line}\"");
     }
-    distinct = DistinctSets {};
-    for lr in links {
-        if link_source_is_fixture(lr.file) { continue; }
-        hit = cache.seen[lr.target];
-        if hit != null && hit.exists { continue; }
-        if distinct.tags[lr.target] == null {
-            distinct.tags += [TagSlot{name: lr.target}];
-        }
-    }
-    first = true;
-    count = 0;
-    for slot in distinct.tags {
-        if !first { print(","); }
-        first = false;
-        count = count + 1;
-        print("    {{\"target\":\"{slot.name}\",\"refs\":[");
-        ref_first = true;
-        for lr in links {
-            if link_source_is_fixture(lr.file) { continue; }
-            if lr.target != slot.name { continue; }
-            if !ref_first { print(","); }
-            ref_first = false;
-            print("\"{lr.file}:{lr.line}\"");
-        }
-        print("]}}");
-    }
-    count
+    print("]}}");
+  }
+  count
 }
 
 fn main() {
-    // Optional per-phase timing.  Set LOFT_INDEX_PROFILE=1 to
-    // print microsecond deltas for each major phase to stderr.
-    // Default off — keeps `make index`'s stderr clean.
-    profile = env_variable("LOFT_INDEX_PROFILE") == "1";
-    t_start = ticks();
-    t_prev = t_start;
+  // Optional per-phase timing.  Set LOFT_INDEX_PROFILE=1 to
+  // print microsecond deltas for each major phase to stderr.
+  // Default off — keeps `make index`'s stderr clean.
+  profile = env_variable("LOFT_INDEX_PROFILE") == "1";
+  t_start = ticks();
+  t_prev = t_start;
 
-    // Phase 03 broken-tag validator: load valid PROBLEMS row IDs
-    // and plan-dir number prefixes upfront, then check each scanned
-    // ref against them.  Sets are passed to emit-time so each
-    // JSON-Lines record carries a `valid` boolean — downstream
-    // tooling (`./scripts/idx broken`, the viewer's red-banner
-    // surface) filters via `select(.valid == false)`.
-    valid_pids = read_valid_pids();
-    if profile { t_now = ticks(); eprintln("  perf: read_valid_pids {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
-    valid_plans = read_valid_plans();
-    if profile { t_now = ticks(); eprintln("  perf: read_valid_plans {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
+  // Phase 03 broken-tag validator: load valid PROBLEMS row IDs
+  // and plan-dir number prefixes upfront, then check each scanned
+  // ref against them.  Sets are passed to emit-time so each
+  // JSON-Lines record carries a `valid` boolean — downstream
+  // tooling (`./scripts/idx broken`, the viewer's red-banner
+  // surface) filters via `select(.valid == false)`.
+  valid_pids = read_valid_pids();
+  if profile {
+    t_now = ticks(); eprintln("  perf: read_valid_pids {(t_now - t_prev) / 1000}ms"); t_prev = t_now;
+  }
+  valid_plans = read_valid_plans();
+  if profile {
+    t_now = ticks(); eprintln("  perf: read_valid_plans {(t_now - t_prev) / 1000}ms"); t_prev = t_now;
+  }
 
-    rows: vector<RawRef> = [];
-    links: vector<LinkRef> = [];
-    timings = ScanTimings {};
-    // Top-level indexable files (CLAUDE.md, README.md,
-    // CHANGELOG.md, Cargo.toml, etc.) — iterate explicitly so
-    // they don't require the recursive walker to descend from
-    // `.` (which would re-walk every source root and double-count).
-    // file(".").files() returns paths with a leading `./`; strip
-    // it so the output matches the bash scanner's bare-relative
-    // shape (`CLAUDE.md`, not `./CLAUDE.md`).
-    root = file(".");
-    if root.format == Format.Directory {
-        for entry in root.files() {
-            if entry.format != Format.Directory && is_indexable_ext(entry.path) {
-                p = entry.path;
-                if p.starts_with("./") { p = p[2..p.len()]; }
-                scan_file(p, rows, links, timings);
-            }
-        }
-    }
-    if profile { t_now = ticks(); eprintln("  perf: scan top-level files {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
-    for src_root in source_roots() {
-        files = walk_tree(src_root);
-        for fp in files {
-            scan_file(fp, rows, links, timings);
-        }
-    }
-    if profile { t_now = ticks(); eprintln("  perf: walk + scan source roots {(t_now - t_prev) / 1000}ms (rows={rows.len()} links={links.len()})"); t_prev = t_now; }
+  rows: vector<RawRef> = [];
+  links: vector<LinkRef> = [];
+  timings = ScanTimings {};
+  // Top-level indexable files (CLAUDE.md, README.md,
+  // CHANGELOG.md, Cargo.toml, etc.) — iterate explicitly so
+  // they don't require the recursive walker to descend from
+  // `.` (which would re-walk every source root and double-count).
+  // file(".").files() returns paths with a leading `./`; strip
+  // it so the output matches the bash scanner's bare-relative
+  // shape (`CLAUDE.md`, not `./CLAUDE.md`).
+  root = file(".");
+  if root.format == Format.Directory {
+    for entry in root.files() {
+      if entry.format != Format.Directory && is_indexable_ext(entry.path) {
+        p = entry.path;
+        if p.starts_with("./") { p = p[2..p.size()]; }
+        scan_file(p, rows, links, timings);
+      }
+    },
+  }
+  if profile {
+    t_now = ticks(); eprintln("  perf: scan top-level files {(t_now - t_prev) / 1000}ms"); t_prev = t_now;
+  }
+  for src_root in source_roots() {
+    files = walk_tree(src_root);
+    for fp in files { scan_file(fp, rows, links, timings); }
+  }
+  if profile {
+    t_now = ticks(); eprintln(
+      "  perf: walk + scan source roots {(t_now - t_prev) / 1000}ms (rows={rows.len()} links={links.len()})"
+    ); t_prev = t_now;
+  }
+  if profile {
+    eprintln(
+      "    sub: file IO {timings.st.io_us / 1000}ms / scan loop {timings.st.walk_us / 1000}ms over {timings.st.file_count} files"
+    );
+  }
+  // Output mode dispatch.  `LOFT_INDEX_BUCKETED=1` switches
+  // to the `index/tags.json`-shape JSON object emission
+  // (per-tag arrays + `links` map); the default stays JSON
+  // Lines (one record per match) so the existing test gate
+  // and downstream consumers (`./scripts/idx`, the viewer's
+  // disk fallback) keep working unchanged.
+  bucketed = env_variable("LOFT_INDEX_BUCKETED");
+  if bucketed == "1" {
+    s = Summary {};
+    emit_bucketed(rows, links, valid_pids, valid_plans, s);
     if profile {
-        eprintln("    sub: file IO {timings.st.io_us / 1000}ms / scan loop {timings.st.walk_us / 1000}ms over {timings.st.file_count} files");
+      t_now = ticks(); eprintln("  perf: emit_bucketed {(t_now - t_prev) / 1000}ms"); t_prev = t_now;
     }
-    // Output mode dispatch.  `LOFT_INDEX_BUCKETED=1` switches
-    // to the `index/tags.json`-shape JSON object emission
-    // (per-tag arrays + `links` map); the default stays JSON
-    // Lines (one record per match) so the existing test gate
-    // and downstream consumers (`./scripts/idx`, the viewer's
-    // disk fallback) keep working unchanged.
-    bucketed = env_variable("LOFT_INDEX_BUCKETED");
-    if bucketed == "1" {
-        s = Summary {};
-        emit_bucketed(rows, links, valid_pids, valid_plans, s);
-        if profile { t_now = ticks(); eprintln("  perf: emit_bucketed {(t_now - t_prev) / 1000}ms"); t_prev = t_now; }
-        emit_summary(s);
-        if profile { t_end = ticks(); eprintln("  perf: total {(t_end - t_start) / 1000}ms"); }
-        return;
+    emit_summary(s);
+    if profile {
+      t_end = ticks(); eprintln("  perf: total {(t_end - t_start) / 1000}ms");
     }
-    // Second pass: emit JSON Lines with validity.  Validity is
-    // O(N × M) where N = rows (~4000) and M = valid set size
-    // (~270 pids + ~50 plans).  ~1.3M comparisons on the loft
-    // suite — well under a second on the warm-cache path.
-    for r in rows {
-        v = tag_is_valid(r.tag, valid_pids, valid_plans);
-        println(emit_row(r.tag, r.file, r.line, r.ctx_escaped, v));
-    }
-    // Emit markdown link rows after the tag rows.  Downstream
-    // jq filters on the presence of the `link` field
-    // (`select(.link)` vs `select(.tag)`) to fan out — the
-    // mixed JSON-Lines stream stays compact enough for stdio.
-    // Validity here is per-row file existence: the target was
-    // already resolved repo-relative by scan_link_line, so
-    // `file(target).format != NotExists` is the same check
-    // scan.sh's broken_links pass uses.  Cached lookups would
-    // help (~1300 links over ~250 distinct targets) but for an
-    // MVP the per-row file() call is fast enough — the loft
-    // file() primitive's stat path is sub-microsecond on a
-    // warm cache.
-    for lr in links {
-        v = link_target_exists(lr.target);
-        println(emit_link(lr.target, lr.file, lr.line, lr.anchor, lr.ctx_escaped, v));
-    }
+    return;
+  }
+  // Second pass: emit JSON Lines with validity.  Validity is
+  // O(N × M) where N = rows (~4000) and M = valid set size
+  // (~270 pids + ~50 plans).  ~1.3M comparisons on the loft
+  // suite — well under a second on the warm-cache path.
+  for r in rows {
+    v = tag_is_valid(r.tag, valid_pids, valid_plans);
+    println(emit_row(r.tag, r.file, r.line, r.ctx_escaped, v));
+  }
+  // Emit markdown link rows after the tag rows.  Downstream
+  // jq filters on the presence of the `link` field
+  // (`select(.link)` vs `select(.tag)`) to fan out — the
+  // mixed JSON-Lines stream stays compact enough for stdio.
+  // Validity here is per-row file existence: the target was
+  // already resolved repo-relative by scan_link_line, so
+  // `file(target).format != NotExists` is the same check
+  // scan.sh's broken_links pass uses.  Cached lookups would
+  // help (~1300 links over ~250 distinct targets) but for an
+  // MVP the per-row file() call is fast enough — the loft
+  // file() primitive's stat path is sub-microsecond on a
+  // warm cache.
+  for lr in links {
+    v = link_target_exists(lr.target);
+    println(emit_link(lr.target, lr.file, lr.line, lr.anchor, lr.ctx_escaped, v));
+  }
 }
