@@ -31,14 +31,14 @@ fn last_line_bytewalk(src: text) -> text {
 fn main() {
   // Content whose last line sits AFTER heavy multi-byte text, exactly like a
   // deep PROBLEMS.md row.  size(doc) >> len(doc) here.
-  doc = "| 21 | 🟢 FIXED — first row |\n| 31 | 🟢 FIXED — second row |\nLAST @P38 row";
+  doc = "| 21 | 🟢 FIXED — first row |\n| 31 | 🟢 FIXED — second row |\nLAST row wins";
   assert(size(doc) > len(doc), "doc is genuinely multi-byte: size={size(doc)} len={len(doc)}");
 
   // A `size`-bounded walk reaches the end and returns the true last line.
   // A `len`-bounded walk would stop inside the multi-byte region and return a
   // wrong (short) slice — the scan.loft regression.
   last = last_line_bytewalk(doc);
-  assert(last == "LAST @P38 row", "byte walk reached the last line: {last}");
+  assert(last == "LAST row wins", "byte walk reached the last line: {last}");
 
   // Sanity: len is the character count, size is the byte count (@PLN110).
   assert(len("🟢") == 1 && size("🟢") == 4, "🟢 is 1 char / 4 bytes");
