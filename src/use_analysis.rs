@@ -2345,10 +2345,14 @@ pub fn superseded_fold_diagnostics(
         // (b) the shim check — X's body must CALL Y (fold the old form onto the new).
         // For a GENERIC successor the body's call targets the monomorphised
         // instantiation (`t_<Type>_sum`), not the `n_sum` template `y_nr` resolved to,
-        // so match by the user-facing name (both render as `sum`); a plain fn/method
-        // is the direct call to `y_nr`.
+        // so also match by the user-facing name (both render as `sum`). Gate that loose
+        // match on the successor ACTUALLY being generic, so an unrelated same-named
+        // symbol can't masquerade as the fold — a non-generic successor must be the
+        // direct call to `y_nr`.
+        let succ_generic = matches!(data.def(y_nr).def_type, crate::data::DefType::Generic);
         let folds = def.code.any_node(&mut |n| {
-            matches!(n, Value::Call(d, _) if *d == y_nr || data.def(*d).display_name() == succ)
+            matches!(n, Value::Call(d, _)
+                if *d == y_nr || (succ_generic && data.def(*d).display_name() == succ))
         });
         if !folds {
             diags.add_at(
