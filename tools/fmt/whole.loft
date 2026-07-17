@@ -352,18 +352,62 @@ fn render_elem(kids: vector<Node>, a: integer, b: integer, indent: integer) -> t
   s
 }
 
-// Data container: break iff `force` (a struct/enum DEFINITION → one field per line), a
-// direct child is a `{…}` object, a `//` comment is present, or it's too long.
+// Pack a pure-scalar `[…]` vector into WRAPPED rows: elements greedily filled onto each
+// line up to the width budget, one indent step in, trailing comma.  No `//` comments or
+// nested groups reach here (the caller routes those to one-per-line), so each element is
+// a clean inline render.
+fn pack_scalars(open: text, kids: vector<Node>, close: text, indent: integer) -> text {
+  n = len(kids);
+  s = open;
+  s += "\n";
+  line = spaces(indent + 2);
+  line_has = false;
+  start = 0;
+  while start < n {
+    comma = 0 - 1;
+    k = start;
+    while k < n {
+      nd = kids[k] ?? Leaf { tok: "" };
+      match nd { Leaf { tok } => { if tok == "," { comma = k; } }, Group { open, kids, close } => {}, }
+      if comma >= 0 { break; }
+      k += 1;
+    }
+    code_end = if comma >= 0 { comma } else { n };
+    if has_real(kids, start, code_end) {
+      piece = render_range(kids, start, code_end, indent + 2, indent + 2);
+      piece += ",";
+      if line_has && line.size() + 1 + piece.size() > width() {
+        s += line; s += "\n";
+        line = spaces(indent + 2);
+        line_has = false;
+      }
+      if line_has { line += " "; }
+      line += piece;
+      line_has = true;
+    }
+    start = if comma >= 0 { comma + 1 } else { n };
+  }
+  if line_has { s += line; s += "\n"; }
+  s += spaces(indent);
+  s += close;
+  s
+}
+
+// Data container.  Stays INLINE when simple + it fits.  When it must break: a struct/enum
+// DEFINITION (`force`), an OBJECT vector (a `{…}` child), or a container with a `//` comment
+// goes ONE ELEMENT PER LINE; but a pure-SCALAR `[…]` vector (numbers/idents/arithmetic, no
+// nested group) WRAPS to fill the width — keeps number grids dense, not 1-per-line.
 fn render_container(open: text, kids: vector<Node>, close: text, col: integer, indent: integer, force: boolean) -> text {
   n = len(kids);
   if !has_real(kids, 0, n) {
     s = open; s += close; return s;
   }
   brk = force;
+  has_group = false;
   k = 0;
   while k < n {
     nd = kids[k] ?? Leaf { tok: "" };
-    match nd { Leaf { tok } => {}, Group { open, kids, close } => { if open == "{{" { brk = true; } }, }
+    match nd { Leaf { tok } => {}, Group { open, kids, close } => { has_group = true; if open == "{{" { brk = true; } }, }
     k += 1;
   }
   // a `//` comment can't live inline (it would swallow the close) → force multi-line
@@ -376,6 +420,8 @@ fn render_container(open: text, kids: vector<Node>, close: text, col: integer, i
     inline += pad;
     inline += close;
     if col + inline.size() <= width() { return inline; }
+    // overflow: a pure-scalar `[…]` vector WRAPS (packed rows) rather than 1-per-line
+    if open == "[" && !has_group { return pack_scalars(open, kids, close, indent); }
     brk = true;
   }
   s = open;
