@@ -4037,12 +4037,22 @@ const FS_IS_DIRECTORY: i64 = 3;
 fn fs_classify(r: std::io::Result<()>, path: &str, dir_is_err: bool) -> i64 {
     match r {
         Ok(()) => FS_OK,
-        Err(e) => match e.kind() {
-            std::io::ErrorKind::NotFound => FS_NOT_FOUND,
-            std::io::ErrorKind::PermissionDenied => FS_PERMISSION_DENIED,
-            _ if dir_is_err && fs_is_dir(path) => FS_IS_DIRECTORY,
-            _ => FS_OTHER,
-        },
+        Err(e) => {
+            // "target is a directory" must be checked BEFORE PermissionDenied: Linux
+            // reports `remove_file` on a directory as EISDIR, but macOS/BSD report it as
+            // EPERM (→ ErrorKind::PermissionDenied).  Consulting the portable `fs_is_dir`
+            // stat first makes a directory target classify as FS_IS_DIRECTORY uniformly,
+            // instead of leaking the platform's errno (a real EPERM on a *file* still
+            // falls through, because `fs_is_dir` is false for it and for a missing path).
+            if dir_is_err && fs_is_dir(path) {
+                return FS_IS_DIRECTORY;
+            }
+            match e.kind() {
+                std::io::ErrorKind::NotFound => FS_NOT_FOUND,
+                std::io::ErrorKind::PermissionDenied => FS_PERMISSION_DENIED,
+                _ => FS_OTHER,
+            }
+        }
     }
 }
 
