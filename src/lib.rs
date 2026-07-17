@@ -210,7 +210,6 @@ pub mod timeout;
 pub mod triggers;
 
 pub mod documentation;
-pub mod formatter;
 pub mod migrate_long;
 pub mod stdlib_sources;
 

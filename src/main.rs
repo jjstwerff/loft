@@ -35,7 +35,6 @@ use loft::data;
 use loft::diagnostics;
 pub mod diagnostic_render;
 use loft::extensions;
-use loft::formatter;
 use loft::generation;
 use loft::log_config;
 use loft::logger;
@@ -93,10 +92,6 @@ fn print_help() {
     println!(
         "  --generate-log-config [path]  write a documented config file with defaults and exit"
     );
-    println!(
-        "  --format <file>               format file in-place (use - to read stdin/write stdout)"
-    );
-    println!("  --format-check <file>         exit 1 if file is not in canonical format");
     println!(
         "  --interpret                   run in interpreter/bytecode mode (native is default)"
     );
@@ -4177,7 +4172,6 @@ fn main() {
     let mut log_conf: Option<String> = None;
     let mut production = false;
     let mut generate_log_config: Option<Option<String>> = None;
-    let mut format_mode: Option<(&'static str, String)> = None;
     let mut native_mode = true;
     // LibCI: `loft test` / `--tests` default to the interpreter, but honour an
     // EXPLICIT `--native` (matching the `--help` docs for `--tests --native`).
@@ -4301,14 +4295,6 @@ fn main() {
                 None
             };
             generate_log_config = Some(path);
-        } else if a == "--format" {
-            let path = argv.get(i).cloned().unwrap_or_default();
-            i += 1;
-            format_mode = Some(("format", path));
-        } else if a == "--format-check" {
-            let path = argv.get(i).cloned().unwrap_or_default();
-            i += 1;
-            format_mode = Some(("check", path));
         // @F48 — the loft CLI (run a program; --interpret / --native, --timeout, --help)
         } else if a == "--interpret" || a == "--bytecode" {
             native_mode = false;
@@ -5401,39 +5387,6 @@ fn main() {
             .to_string();
     }
 
-    // Handle --format / --format-check before requiring an input file
-    if let Some((mode, path)) = format_mode {
-        if path == "-" {
-            // stdin → stdout
-            use std::io::Read;
-            let mut src = String::new();
-            std::io::stdin().read_to_string(&mut src).unwrap_or(0);
-            print!("{}", formatter::format_source(&src));
-        } else if path.is_empty() {
-            println!("loft: --{mode} requires a file argument");
-            std::process::exit(1);
-        } else {
-            let src = match std::fs::read_to_string(&path) {
-                Ok(s) => s,
-                Err(e) => {
-                    println!("loft: cannot read '{path}': {e}");
-                    std::process::exit(1);
-                }
-            };
-            if mode == "check" {
-                if !formatter::check_source(&src) {
-                    std::process::exit(1);
-                }
-            } else {
-                let formatted = formatter::format_source(&src);
-                if let Err(e) = std::fs::write(&path, &formatted) {
-                    println!("loft: cannot write '{path}': {e}");
-                    std::process::exit(1);
-                }
-            }
-        }
-        return;
-    }
 
     // Handle --generate-log-config before requiring an input file
     if let Some(path_opt) = generate_log_config {
