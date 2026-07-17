@@ -31,12 +31,21 @@ stray `;,`/`},`. It slipped 2e because the graphics fixture is a `--lib`/`--test
 here (no native system lib), so nothing parsed it standalone. Fixed both: un-mangled glb.loft (parses
 + 5 tests green) and fixed `loft fmt` to classify block-vs-container by the BODY (a `field:` pair, no
 `;`), not the preceding token — the type-free rule that closes the qualified-name hole for good
-(commits `9cafd92c` + `007d2481`). ⚠ `lib/markdown` still not checked out — its dogfood + republish
-must run against `loft-libs-docs` before H2 is fully closed.
-**Remaining:** 4c republish of the affected registry libs (user-gated, loft-ship) + lib/markdown
-validation, then 4d clears H2 and the `CONTRACT_VERSION 0 → 1` flip is unblocked on the stdlib side.
-(Pre-existing, not from this work: `index_hygiene` flags 14 closed-issue `@P*` refs in untouched
-files.)
+(commits `9cafd92c` + `007d2481`).
+
+**`lib/markdown` validated + converted** (the OTHER top-risk site, `markdown.loft:783`). Cloned
+`loft-libs-docs` and ran the published markdown through the flipped binary: it corrupted multi-byte
+input badly — `Café — déjà vu 🎉` → `Caféé ——`, `日本語` → `日日日本本本` (the `char_str.len()` cursor
+advanced 1 char not N bytes → re-emits; `n = line.len()` byte-walk bounds truncate), and its own
+`tests/01-render.loft` failed ("UTF-8 in heading"). Converted the **25 byte-intent** `len→size` sites
+(byte-index / byte-slice bounds + the cursor; the 17 emptiness `para_buf.len()>0` and the ASCII
+`align` count left as `len`). After: the oracle test passes and the multi-byte doc renders correctly.
+The verified diff is saved at [`artifacts/markdown-len-to-size.patch`](artifacts/markdown-len-to-size.patch)
+— it must be PR'd to `loft-libs-docs` and republished (**user-gated**: loft-ship touch-signing).
+**Remaining (all user/env-gated):** publish the markdown patch + republish the affected registry libs
+(graphics etc.) via loft-ship; the branch merge then closes @PLN110. The stdlib/language work and all
+on-box validation are complete — H2 is cleared (below). (Pre-existing, not from this work:
+`index_hygiene` flags 14 closed-issue `@P*` refs in untouched files.)
 
 **Phase 1 COMPLETE** (2026-07-17) — sub-arc **1a `size(vector<T>)` ✅ landed**, both backends; the
 uniform mechanism + per-type formulas + build order are in [phase1-size-impl.md](phase1-size-impl.md).
@@ -212,9 +221,9 @@ tree green at every step. (Decide which at Phase 2 start.)
 | 2e | Convert consumer programs → re-green | convert | ✅ Done — `tests/fixtures/libs` (incl. `glb.loft` binary chunk length); ⚠ `lib/markdown` not checked out (re-run against `loft-libs-docs`) |
 | 3a | Strict-index lint **default-on** for the text case | lint | ✅ Done — `text_index_units_lint_enabled` (opt-out `LOFT_NO_STRICT_INDEX_TEXT`); warns on `for i in 0..len(s){s[i]}`; oracle `tests/strict_index_text_lint.rs`, both backends; broke 0 existing tests |
 | 4a | Full suite, **both backends** | validate | ✅ Done — fresh run 2998/2998 pass, 0 fail (an earlier run flaked `wasm_debug_relay`/`s7_debugger`; both pass in isolation) |
-| 4b | Run the known consumer programs (dogfood) | validate | ✅ Done (on-box) — 0e golden corpus (both backends), `glb.loft` (5 tests), `audience_crystal`. ⚠ `lib/markdown` not checked out — run vs `loft-libs-docs` |
-| 4c | Republish / validate affected libraries | validate | ◑ Validated (fixture libs green); **republish is user-gated** (loft-ship, touch-signing) + pending lib/markdown |
-| 4d | Clear @PLN102 **H2** → the `CONTRACT_VERSION 0 → 1` flip is unblocked on the stdlib side | close-out | ◑ Ready pending 4c (lib/markdown republish) |
+| 4b | Run the known consumer programs (dogfood) | validate | ✅ Done — 0e golden corpus (both backends), `glb.loft` (5 tests), `audience_crystal`, **`lib/markdown`** (cloned `loft-libs-docs`; multi-byte render corrupted → converted → `tests/01-render.loft` green) |
+| 4c | Republish / validate affected libraries | validate | ✅ Validated + fixes ready; markdown converted (`artifacts/markdown-len-to-size.patch`, 25 sites). **Publish is user-gated** (loft-ship touch-signing): PR the markdown patch + republish graphics etc. |
+| 4d | Clear @PLN102 **H2** → the `CONTRACT_VERSION 0 → 1` flip is unblocked on the stdlib side | close-out | ✅ **H2 CLEARED** — language + stdlib done, all consumers validated (glb + markdown top-risk sites correct). Only user-gated republish + branch merge remain |
 | 4e | **(discovered in 4b)** Formatter mis-classified `::`-/`.`-qualified names before a block as struct literals → corrupted `glb.loft` at Phase 2a; classify block-vs-container by the body instead | fix | ✅ Done — `9cafd92c` (fmt) + `007d2481` (glb restore); regression `host_call::formatter_qualified_variant_before_block_is_not_a_struct_lit` |
 
 ## Cross-arc dependencies
