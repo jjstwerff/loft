@@ -106,6 +106,13 @@ ARC.md itself.
 | [09-tuple-support.md](09-tuple-support.md) | Tuple inputs / returns for par |
 | [10-no-output-vector.md](10-no-output-vector.md) | Strategic shift — drop materialised result vector; stream-only |
 
+**Deferred phase-5 tail (now its own plan):** the auto-light *heuristic* shipped
+([05-auto-light.md](05-auto-light.md)), but the parent-store **sharing** it was meant
+to unlock (the `Arc<Store>` / read-only-borrow that would stop workers byte-copying a
+large captured structure per job) did not — the live dispatch still `clone_for_worker()`s.
+That work is tracked as [@PLN108](https://github.com/loft-lang/plans/issues/108)
+([`108-share-read-only-stores/`](../../108-share-read-only-stores/README.md)).
+
 Cross-cutting design docs:
 
 - [ARC.md](ARC.md) — live execution sequence (A1–A11) with
