@@ -1785,6 +1785,33 @@ fn sorted_reverse_range() {
     .result(Value::Int(2010));
 }
 
+/// C99 (@PLN102 H8): a sorted's subscript is uniformly KEY-addressed, never
+/// positional — the single lookup `s[k]` AND the range `s[lo..hi]` both address
+/// by key.  Keys are deliberately placed far from positions (10,20,30,40) so a
+/// positional misread yields a wildly different number:
+///   key-addressed: range[15..35)=keys 20,30 (val 500); s[20]=key20 (val 200);
+///                  s[1]=null (no key 1, flag 0)  ->  500*1000 + 200 + 0 = 500200
+///   positional:    range[15..35)=empty (0); s[20]=pos 20=null (-1);
+///                  s[1]=pos 1=key20 present (flag 1)  ->  0 - 1 + 1 = 0
+#[test]
+fn sorted_subscript_is_key_addressed_not_positional() {
+    code!(
+        "struct Elm { key: integer, val: integer }
+         struct Db { map: sorted<Elm[key]> }
+         fn probe(db: Db) -> integer {
+           range_sum = 0;
+           for e in db.map[15..35] { range_sum = range_sum + e.val };
+           hit = db.map[20];
+           hit_val = if hit { hit.val } else { -1 };
+           miss = db.map[1];
+           miss_flag = if miss { 1 } else { 0 };
+           range_sum * 1000 + hit_val + miss_flag
+         }"
+    )
+    .expr("probe(Db{map:[Elm{key:10,val:100}, Elm{key:20,val:200}, Elm{key:30,val:300}, Elm{key:40,val:400}]})")
+    .result(Value::Int(500200));
+}
+
 // ── A8.3 — Partial-key match iterator ───────────────────────────────────────
 
 /// A8.3: `idx[k1]` on a multi-key index iterates all elements matching k1.
