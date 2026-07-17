@@ -7,7 +7,7 @@
 // positions and misreads multi-byte text.  Each function is FIRE (must warn) or
 // OK (silent).  The oracle is tests/strict_index_text_lint.rs.
 
-// FIRE (line 14): a loop var bounded by len(s) indexing that same text s.
+// FIRE: a loop var bounded by len(s) indexing that same text s (`s[i]` on line 15 warns).
 fn fire_len_text_byte_index() {
   s = "café";
   hits = 0;

@@ -73,8 +73,8 @@ fn assert_default_on(backend: &str) {
          got {n}\n{diag}"
     );
     assert!(
-        diag.contains("strict-index-text-corpus.loft:14:"),
-        "[{backend}] the FIRE at line 14 (for i in 0..len(s) {{ s[i] }}) must warn\n{diag}"
+        diag.contains("strict-index-text-corpus.loft:15:"),
+        "[{backend}] the FIRE `s[i]` at line 15 (loop var bounded by len(s)) must warn\n{diag}"
     );
     assert!(
         diag.contains("index `i`"),
