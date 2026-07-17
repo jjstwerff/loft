@@ -9,11 +9,16 @@ Tracker: [@PLN109](https://github.com/loft-lang/plans/issues/109) · `subject:lo
 
 ## Status
 
-Open — design ready, no implementation. Triggered by @PLN102 arc-E lib-audit **H5**
+Open — design ready, step 1b landed. Triggered by @PLN102 arc-E lib-audit **H5**
 (JSON integers > 2⁵³ silently round through f64, corrupting even a known-type `integer`
 field on deserialize). Rather than patch the duplicate scanner, retire it: drive JSON
 tokenization from loft's own lexer, which already distinguishes int from float. **H5 is
 fixed as a consequence.**
+
+**loft2 branch state (2026-07-17):** step 1b (uppercase-`E`/`e+` exponent completeness)
+is cherry-picked onto `tuxedo-pln109-json-lexer` (commit `699fae10`, from ../loft's
+`e2c95637`) with its golden test `number_exponent_accepts_uppercase_e_and_plus_sign`.
+Steps 0, 1a, 1c, 2–5 open — see § Execution: safe small steps.
 
 ## Goal
 
@@ -124,6 +129,35 @@ committing to the phasing:
 | 3 | **Update `Parsed::Number` consumers** for the `Int` case; the typed `populate_struct_from_jsonvalue` reads `Int`→i64 into an `integer` field exactly — **H5 fixed**. Each consumer re-verified. | Open |
 | 4 | **Delete** the hand-rolled scanner (`parse_number`/`parse_string`/`parse_value` byte-scanning) + the differential scaffold. Confirm `crate::json` is now a thin layer over loft's lexer. **No hybrid remains.** | Open |
 | 5 | **Verify + freeze** — full suite both backends; corpus → regression suite; H5 typed-integer golden added; STDLIB.md JSON number semantics (int→i64, float→f64, > i64 ceiling) + lib-audit H5 → DONE. | Open |
+
+## Execution — safe small steps (loft2 baseline, verified 2026-07-17)
+
+The ../loft design's load-bearing claims were re-probed against **loft2's own tree** (the
+two checkouts have diverged — loft2 lacks the sibling's @PLN102 H7–H9 / @PLN110 work), and
+they all hold here:
+
+- **Blast radius = exactly 22 consumer `Parsed::Number` sites across 7 files** —
+  `rpc.rs`(1), `ir_schema.rs`(4), `native.rs`(3), `registry_index.rs`(2),
+  `registry_advisories.rs`(2), `database/snapshot.rs`(2), `database/structures.rs`(8).
+  (`src/json.rs` itself holds 12 more: the scanner + its own tests.) The design's "22 / 7
+  files" is exact on loft2.
+- **`Parsed` matches the design** (Null/Bool/Number(f64)/Str/Ident/Array/Object/Constructor);
+  **no `Parsed::Int` yet** → the `Int` addition is clean.
+- **`src/json.rs` uses zero `crate::lexer`** — a fully separate hand-rolled byte-scanner
+  (`bytes: &[u8]`, index-based), confirming there is no existing coupling to unwind.
+- **The Phase-4 delete targets** are the six byte-scanner fns in `src/json.rs`:
+  `parse_value` (l.229), `parse_string` (l.342), `parse_number` (l.428), `parse_array`
+  (l.475), `parse_object` (l.517), `parse_object_key` (l.563) — 1097 lines total.
+- **`LexItem::Integer/Long/Float/Single`** all present; **`interpolate_strings`** defaults
+  `false` on the config path (`LexConfig`); **`parse()` / `parse_with(Dialect)`** are the
+  single entry points (l.103 / l.114). Step 1b's exponent completeness is landed here.
+
+**Phase 0 execution (next):** build the golden corpus as a *throwaway differential
+scaffold* (`#[cfg(test)]`, deleted in Phase 4) — capture the current `Parsed` tree for
+every consumer's real inputs (the JSON stdlib tests, a registry index sample, an RPC
+message, an IR-schema doc, a DB snapshot, an advisories doc), plus the escape/exponent/
+lenient-dialect edge cases the § Falsification points name. The corpus is the executable
+spec for Phase 2's "byte-identical `Parsed`, except the intended int-preservation."
 
 ## Falsification points / risks
 
