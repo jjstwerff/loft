@@ -160,7 +160,19 @@ fn parse(toks: vector<text>) -> vector<Node> {
 
 fn is_trivia_tok(t: text) -> boolean { t.is_whitespace() || t.starts_with("//") }
 fn is_ws_tok(t: text) -> boolean { t.is_whitespace() }
-fn is_camel(t: text) -> boolean { for c in t { return c.is_uppercase(); } false }
+// A TYPE NAME (`Point`, `SegMesh`) heads a struct-literal / generic; an ALL-CAPS constant
+// (`KIND_MAIN`, `SQRT3`) does not — so `x == KIND_MAIN { … }` is an if-block, not a struct
+// literal.  Require CamelCase: first letter upper AND at least one lowercase letter.
+fn is_camel(t: text) -> boolean {
+  first_upper = false;
+  has_lower = false;
+  first = true;
+  for c in t {
+    if first { first_upper = c.is_uppercase(); first = false; }
+    if c.is_lowercase() { has_lower = true; }
+  }
+  first_upper && has_lower
+}
 fn width() -> integer { (env_variable("LOFT_FMT_WIDTH") ?? "100") as integer ?? 100 }
 
 fn spaces(n: integer) -> text {
