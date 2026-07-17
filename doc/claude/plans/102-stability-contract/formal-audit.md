@@ -82,12 +82,24 @@ concentrated in the newly-added faults (near-zero, per the error audit). Either 
 > **Genuinely OPEN:** **E2** (the error-boundary maximal-strictness audit — *the* priority) · **F9**
 > — **endianness half DONE (2026-07-17):** the layout identity now pins the host endianness (an
 > `@endian\t<little|big>` line in `layout_dump` + the `descriptor.rs` twin; hash re-blessed;
-> positive control `endian_flip_is_never_a_raw_handoff`). **Still open:** the **not-null↔nullable**
-> distinction for FULL-WIDTH fields — `layout_dump` renders `i@0:integer` for BOTH `integer` and
-> `integer not null` (verified: corpus `NotNull.i` vs `Scalars.i`), so a full-width nullability
-> flip produces the same dump+hash and misclassifies `Identical`. (Narrow ints already differ via
-> the `null=<sentinel>`.) This is a real raw-handoff soundness gap, NOT covered by the sidecar
-> `dump` compare (that dump IS `layout_dump`, not the `ir_schema` `not_null` schema).
+> positive control `endian_flip_is_never_a_raw_handoff`). **Still open — the not-null↔nullable half
+> is ARCHITECTURAL, not a `layout_dump` patch (root-caused 2026-07-17):** `layout_dump` renders
+> `i@0:integer` for both `integer` and `integer?` because full-width nullability is a DEF-level fact
+> (`Type::Optional`) that is **stripped during type resolution before the storage type table** — the
+> storage `Field`/content is byte-identical (verified: `NN{i:integer}` ≡ `NL{i:integer?}` dump; only
+> NARROW ints carry it, via `Parts::Byte(_,nullable)`). And the raw-handoff GUARD
+> (`allocation.rs:2596/2781` `LayoutIdentity::of(self,…)`) is **Stores-only — no `Data`** — so it
+> cannot compute the schema (`ir_schema::data_to_json`, which DOES serialize `Optional`) to compare.
+> The layout hash was DESIGNED to be byte-layout only ("pair it with the schema for the full
+> identity", `layout_algo_hash` doc); the gap is that the guard never pairs with the schema. Two
+> clean fixes, both @PLN97 persistence-wiring (a focused piece, not rushed): (a) thread the current
+> program's `Data`/schema-inclusive identity down to the `allocation.rs` guard (main.rs builds it
+> WITH `Data` at `3639/3951`; the guard rebuilds it Stores-only — unify them + add `data_to_json` to
+> `LayoutIdentity`); or (b) carry full-width nullability into the storage type table (a per-`Field`
+> flag set by `fill_database` from the attr `Optional`, rendered in `layout_dump` like narrow's
+> `null=`). (a) matches the doc's design; (b) is more invasive (a resolution→layout pipeline change).
+> A full-width flip is a real but EDGE handoff hazard (a persisted value == the null sentinel across
+> the flip); scoped, not dropped.
 > **Spec-honesty for the ✅-behavior rows — DONE (2026-07-16):** F1 (float `==` exact, pinned in
 > `operational.md`), F3 (short-circuit E-And/E-Or), F4 (assign eval order), F5 (P-Range/P-Guard +
 > two-regime M-Total in `matching.md`), F6 (`&v` aliases), F8 (chaining rejected) all reconciled +
