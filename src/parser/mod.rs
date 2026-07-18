@@ -7483,9 +7483,7 @@ impl Parser {
             }
             self.root_dep_pins = Some(map);
         }
-        self.root_dep_pins
-            .as_ref()
-            .and_then(|m| m.get(id).cloned())
+        self.root_dep_pins.as_ref().and_then(|m| m.get(id).cloned())
     }
 
     /// Initial guess: the project-supplied `lib/<id>.loft`, falling back to
