@@ -29,7 +29,7 @@ for repo in "${REPOS[@]}"; do
       status="UNMERGED (${#files[@]} files) — $last"
     fi
     pr=$(gh pr list --repo "$R" --head "$b" --state all --json number,state,isDraft \
-          --jq 'first(.[]) | "#\(.number) \(.state|ascii_downcase)\(if .isDraft then "/draft" else "" end)" // "no-PR"' 2>/dev/null)
+          --jq 'if length==0 then "no-PR" else (.[0] | "#\(.number) \(.state|ascii_downcase)\(if .isDraft then "/draft" else "" end)") end' 2>/dev/null)
     printf "%-9s %-40s %-16s %s\n" "$repo" "$b" "$pr" "$status"
   done
 done
