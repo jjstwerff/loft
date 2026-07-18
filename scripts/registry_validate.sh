@@ -24,8 +24,56 @@ export LOFT_TIMEOUT="${LOFT_TIMEOUT:-300}"
 fail() { echo "registry-validate: $PKG: FAIL — $*" >&2; exit 1; }
 note() { echo "registry-validate: $PKG: $*"; }
 
+# The loft commit under test — stamped into every failure so a red night names
+# the exact loft that broke a package (captured before the cd into the scratch
+# dir, while we are still in the loft checkout).
+LOFT_SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+PKG_VER="?"   # filled once the installed version dir is known (step 2)
+
+# On a test failure the raw CI log buries the assertion under cargo/rustc noise.
+# Surface the salient lines three ways — a GHA ::error annotation (top of the
+# run), a collapsible ::group, and the job Step Summary — each stamped with the
+# package version + loft commit, so the cause is visible without log-diving.
+emit_failure() {
+    local backend="$1" logfile="$2" salient assertln
+    salient="$(grep -avE '^[[:space:]]*(Compiling|Downloaded|Updating|Finished|Building|Fresh|Locking|Downloading) ' "$logfile" \
+               | grep -aviE 'Node\.js 20|being deprecated|deprecation-of-node' | tail -40)"
+    assertln="$(grep -aiE 'assertion failed|Error:|panic|^ *FAIL ' "$logfile" | head -1 | tr -d '[:cntrl:]')"
+    {
+        echo "::error title=registry-validate $PKG ($backend)::${assertln:-tests failed against loft $LOFT_SHA}"
+        echo "::group::registry-validate $PKG $PKG_VER — $backend failure detail (loft $LOFT_SHA)"
+        echo "$salient"
+        echo "::endgroup::"
+    } >&2
+    if [ -n "${GITHUB_STEP_SUMMARY:-}" ]; then
+        {
+            echo "### ❌ \`$PKG\` $PKG_VER — $backend tests failed"
+            echo "_loft \`$LOFT_SHA\` · rustc \`$(rustc --version 2>/dev/null | awk '{print $2}')\`_"
+            echo
+            echo '```'
+            echo "$salient"
+            echo '```'
+        } >> "$GITHUB_STEP_SUMMARY"
+    fi
+}
+
+# Run one backend's test suite with output captured; on failure show the full
+# output (raw log) then the distilled diagnostic block.
+run_backend() {
+    local backend="$1"
+    local log="$SCRATCH/test-$backend.log"
+    note "tests: --$backend"
+    if (cd "$PKG_DIR" && LOFT_ERRORS=pretty "$LOFT" --"$backend" test) >"$log" 2>&1; then
+        grep -aiE 'test result|passed' "$log" | tail -1
+        return 0
+    fi
+    cat "$log" >&2
+    emit_failure "$backend" "$log"
+    return 1
+}
+
 command -v "$LOFT" >/dev/null 2>&1 || fail "loft binary '$LOFT' not found"
-note "toolchain: $("$LOFT" --version 2>/dev/null | head -1) | $(rustc --version 2>/dev/null)"
+note "toolchain: $("$LOFT" --version 2>/dev/null | head -1) | loft@$LOFT_SHA | $(rustc --version 2>/dev/null)"
 
 # Work in a scratch project dir so the install's .loft/api stubs and lockfile
 # never land in a real tree.
@@ -42,7 +90,8 @@ note "loft install $PKG"
 #    version suffix from the name — package names themselves use underscores).
 PKG_DIR="$(ls -d "$HOME/.loft/registry/$PKG"-* 2>/dev/null | sort -V | tail -1)"
 [ -n "$PKG_DIR" ] && [ -d "$PKG_DIR" ] || fail "installed package dir not found under ~/.loft/registry/"
-note "validating $PKG_DIR"
+PKG_VER="$(basename "$PKG_DIR" | sed "s/^${PKG}-//")"
+note "validating $PKG_DIR (version $PKG_VER)"
 
 # 3. Build the native crate against current rustc, if the package ships one.
 #    (loft can rebuild these on demand, but an explicit build gives the
@@ -56,10 +105,8 @@ fi
 #    no LOFT_DENY_WARNINGS: a released artifact must WORK on the new
 #    toolchain; warning-cleanliness is the source repo CI's job.
 if [ -d "$PKG_DIR/tests" ]; then
-    note "tests: --interpret"
-    (cd "$PKG_DIR" && "$LOFT" --interpret test) || fail "interpreter tests failed"
-    note "tests: --native"
-    (cd "$PKG_DIR" && "$LOFT" --native test) || fail "native tests failed"
+    run_backend interpret || fail "interpreter tests failed — see the ::group / Step Summary above"
+    run_backend native    || fail "native tests failed — see the ::group / Step Summary above"
 else
     # No tests in the tarball — still prove it loads: compile a bare `use`.
     note "no tests/ shipped — smoke-compiling 'use $PKG;'"
