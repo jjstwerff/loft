@@ -26,6 +26,20 @@ env:
   CARGO_TERM_COLOR: always
 
 jobs:
+  # Coverage guard: the matrix below is built from the registry index, so a
+  # package that lives in a loft-libs-* repo but was never published/indexed is
+  # tested by NOTHING and no red night ever appears (how graphics-stack packages
+  # sat untested).  Fail the night if any repo package is missing from the index.
+  coverage:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Every loft-libs-* package is in the nightly matrix
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # LIB_COVERAGE_IGNORE: "name1 name2"   # intentionally-unpublished packages
+        run: scripts/lib_coverage_check.sh
+
   discover:
     runs-on: ubuntu-latest
     outputs:
