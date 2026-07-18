@@ -338,10 +338,14 @@ jobs:
       # baseline 0.  Includes `library_suite` (dropped from the fast sweep) so a leak in
       # ANY library's interpreted test suite (its spawned `loft test` child inherits
       # detect_leaks=1 and exits non-zero) reds this gate.  Suppressions cover only the
-      # intentional `ir_read` Box::leak + the macOS dyld thread-TLS frame.
+      # intentional `ir_read`/`ir_schema`/`database::snapshot` Box::leak interner + the
+      # macOS dyld thread-TLS frame.  `-Cforce-frame-pointers=yes` is REQUIRED: without it
+      # the optimized release build truncates the leak stack at `RawVec::…finish_grow`
+      # (frame-pointer unwind stops there), so the interner frame never appears and the
+      # name-based suppression cannot match — the benign leak then reds the gate.
       - name: Leak gate (detect_leaks=1, whole corpus incl. libraries)
         env:
-          RUSTFLAGS: '-Zsanitizer=address'
+          RUSTFLAGS: '-Zsanitizer=address -Cforce-frame-pointers=yes'
           ASAN_OPTIONS: 'detect_leaks=1'
           LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
         run: >
@@ -360,7 +364,7 @@ jobs:
       - name: Build ASan loft binary (for per-file leak scan)
         if: always()
         env:
-          RUSTFLAGS: '-Zsanitizer=address'
+          RUSTFLAGS: '-Zsanitizer=address -Cforce-frame-pointers=yes'
         run: |
           cargo +nightly build --release --bin loft --target ${{ matrix.target }}
           ln -sfn "$PWD/default" target/${{ matrix.target }}/release/default
