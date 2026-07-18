@@ -240,6 +240,14 @@ pub struct Parser {
     /// names.  `None` = no manifest above that directory.
     pkg_dep_cache:
         std::collections::HashMap<String, Option<(String, std::collections::HashSet<String>)>>,
+    /// Root project's `[dependencies]` version constraints (name → req), read
+    /// once from the main script's nearest-ancestor `loft.toml` (via
+    /// `source_dir`).  Pins source-level auto-installs across the WHOLE tree —
+    /// direct AND transitive — so a consumer can pin any package it pulls (e.g.
+    /// `glb = "=0.1.0"`), making exact pinning an available option instead of
+    /// always resolving the newest release.  `None` until first looked up.
+    #[cfg(feature = "registry")]
+    root_dep_pins: Option<std::collections::HashMap<String, String>>,
     /// Tier-1 text-method trigger map: `method name -> providing package`,
     /// derived once per top-level parse from the current package's (and its
     /// trigger-enabled dependencies') declared triggers.  `None` until built.
@@ -681,6 +689,8 @@ impl Parser {
             pending_pkg_deps: Vec::new(),
             auto_use_scan_cache: std::collections::HashMap::new(),
             pkg_dep_cache: std::collections::HashMap::new(),
+            #[cfg(feature = "registry")]
+            root_dep_pins: None,
             auto_use_trigger_map: None,
             auto_use_catalog_map: None,
             pending_imports: Vec::new(),
@@ -7451,6 +7461,33 @@ impl Parser {
         found
     }
 
+    /// The root project's declared version constraint for dependency `id`, if
+    /// any — read once (cached) from the main script's nearest-ancestor
+    /// `loft.toml` via `source_dir`.  Threaded into source-level auto-installs
+    /// so a root pin overrides the default "resolve newest", including for a
+    /// package pulled transitively by a lib that didn't pin it itself.  This is
+    /// what makes `glb = "=0.1.0"` (exact) — or any range — an honoured option.
+    #[cfg(feature = "registry")]
+    fn root_dep_constraint(&mut self, id: &str) -> Option<String> {
+        if self.root_dep_pins.is_none() {
+            let mut map = std::collections::HashMap::new();
+            if let Some(root) = Self::find_project_root(&self.database.source_dir) {
+                let manifest_path = root.join("loft.toml");
+                if let Some(manifest) =
+                    crate::manifest::read_manifest(&manifest_path.to_string_lossy())
+                {
+                    for (name, req) in manifest.dependencies {
+                        map.insert(name, req);
+                    }
+                }
+            }
+            self.root_dep_pins = Some(map);
+        }
+        self.root_dep_pins
+            .as_ref()
+            .and_then(|m| m.get(id).cloned())
+    }
+
     /// Initial guess: the project-supplied `lib/<id>.loft`, falling back to
     /// `<id>.loft` in the current working directory.
     fn probe_project_lib(id: &str) -> String {
@@ -8091,7 +8128,11 @@ impl Parser {
             allow_prerelease: false,
             lock_path,
         };
-        match crate::install::auto_install_if_in_catalog(id, &opts) {
+        // Honour the root project's declared constraint for `id` (if any), so a
+        // consumer's pin — exact or ranged — wins over "resolve newest", even
+        // when `id` is pulled transitively by a lib that didn't pin it.
+        let pin = self.root_dep_constraint(id);
+        match crate::install::auto_install_if_in_catalog(id, pin.as_deref(), &opts) {
             Ok(Some(_report)) => {
                 // Install succeeded; re-probe via lockfile-based
                 // resolution to populate `f`.  Try project lockfile

@@ -490,8 +490,13 @@ fn build_lockfile(graph: &[ResolvedPackage]) -> LockFile {
 ///
 /// Surfaces any error from `install_one` — network failure, sig
 /// mismatch, tarball corruption, lockfile write failure.
+/// `constraint` is the root project's declared version requirement for `name`
+/// (e.g. `Some("=0.1.0")`), threaded through so a source-level `use` honours the
+/// consumer's pin instead of always resolving the latest release.  `None` keeps
+/// the historical behaviour (newest satisfying `*`).
 pub fn auto_install_if_in_catalog(
     name: &str,
+    constraint: Option<&str>,
     opts: &InstallOptions,
 ) -> Result<Option<InstallReport>, String> {
     // Load the index FIRST so we can check membership without
@@ -502,7 +507,7 @@ pub fn auto_install_if_in_catalog(
         return Ok(None);
     }
     eprintln!("[registry] resolving {name} from registry");
-    let report = install_one(name, None, opts)?;
+    let report = install_one(name, constraint, opts)?;
     for (n, v) in &report.installed {
         eprintln!("[registry] installed {n} {v}");
     }
@@ -695,6 +700,25 @@ mod tests {
         let mut graph = Vec::new();
         resolve_recursive(&idx, "a", None, &opts(), &mut graph).unwrap();
         assert_eq!(graph[0].version.semver, "0.1.5");
+    }
+
+    #[test]
+    fn exact_pin_overrides_highest() {
+        // An exact (`=`) constraint pins the OLDER version even when a newer one
+        // exists — the feature behind `glb = "=0.1.0"`: pinning is an option, not
+        // "always resolve latest".  `auto_install_if_in_catalog` threads this same
+        // constraint through from the root project's manifest.
+        let idx = index(vec![pkg(
+            "a",
+            vec![ver("0.1.0", &[]), ver("0.1.1", &[]), ver("0.2.0", &[])],
+        )]);
+        let mut graph = Vec::new();
+        resolve_recursive(&idx, "a", Some("=0.1.0"), &opts(), &mut graph).unwrap();
+        assert_eq!(graph[0].version.semver, "0.1.0");
+        // Sanity: without the pin the newest wins.
+        let mut g2 = Vec::new();
+        resolve_recursive(&idx, "a", None, &opts(), &mut g2).unwrap();
+        assert_eq!(g2[0].version.semver, "0.2.0");
     }
 
     #[test]
