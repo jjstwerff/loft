@@ -317,6 +317,9 @@ jobs:
       - name: Point the sanitizer at llvm-symbolizer (LSan suppressions need symbols)
         shell: bash
         run: |
+          # Best-effort discovery — never fail the job (macOS symbolizes via atos by
+          # default when ASAN_SYMBOLIZER_PATH is unset, so an empty result is fine).
+          set +e +o pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
             SYM=$(command -v llvm-symbolizer || true)
             [ -z "$SYM" ] && SYM=$(ls /usr/lib/llvm-*/bin/llvm-symbolizer /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -1)
@@ -343,11 +346,27 @@ jobs:
       # the optimized release build truncates the leak stack at `RawVec::…finish_grow`
       # (frame-pointer unwind stops there), so the interner frame never appears and the
       # name-based suppression cannot match — the benign leak then reds the gate.
+      #
+      # `library_suite` spawns the `--target`-built loft binary
+      # (`CARGO_BIN_EXE_loft`) from a temp cwd, so that binary looks for `default/`
+      # next to itself.  Pre-create the release dir + symlink `default/` there so the
+      # spawned interpreter can load the stdlib — else every lib test fails "cannot
+      # load default library" (the per-file scan below does the same symlink, but too
+      # late for the nextest run).
+      - name: Symlink default/ for library_suite's spawned loft (ASan build)
+        run: |
+          mkdir -p "target/${{ matrix.target }}/release"
+          ln -sfn "$PWD/default" "target/${{ matrix.target }}/release/default"
       - name: Leak gate (detect_leaks=1, whole corpus incl. libraries)
         env:
           RUSTFLAGS: '-Zsanitizer=address -Cforce-frame-pointers=yes'
           ASAN_OPTIONS: 'detect_leaks=1'
           LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
+        # The fault-path text class (append_text / format_text / format_long / text_tl_fmt)
+        # is suppressed in lsan_suppressions.txt — a faulting program never frees its
+        # in-flight text local, an accepted non-cleanup on the terminating abort path (the
+        # real binary process::exits, so this is never a production leak).  No test is
+        # excluded; the deliberately-faulting fixtures now run under the gate too.
         run: >
           cargo +nightly nextest run --profile ci --release --no-fail-fast
           --target ${{ matrix.target }}

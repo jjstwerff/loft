@@ -143,11 +143,21 @@ jobs:
         working-directory: lib/${{ matrix.sub }}
         run: |
           set -uo pipefail
-          if LOFT_TIMEOUT=240 loft --interpret --tests tests; then
+          # Capture the suite output (pipefail makes the pipe carry loft's exit).
+          if LOFT_TIMEOUT=240 loft --interpret --tests tests 2>&1 | tee suite.log; then
             echo "✅ ${{ matrix.name }} — full interpret suite green against this loft"
             exit 0
           fi
           echo "── full suite failed; re-classifying: language-break vs environment/native-deps ──"
+          # Distil the runtime failure once — the assertion + the test's own context
+          # prints — so BOTH branches below (best-effort PASS and hard FAIL) can name
+          # the real cause instead of the bland "environment" verdict that let a real
+          # runtime regression (e.g. the @PLN110 len/size flip corrupting multi-byte
+          # text) hide behind a green.
+          loft_sha="$(git -C "$GITHUB_WORKSPACE/loft-src" rev-parse --short HEAD 2>/dev/null || echo '?')"
+          detail="$(grep -aiE 'FAIL |assertion|Error:|panic|expected|got |haystack|needle|mismatch' suite.log \
+                    | grep -aviE 'Compiling|Downloaded|Updating|Finished' | tail -30)"
+          [ -n "$detail" ] || detail="$(tail -20 suite.log)"
           rc=0; n=0
           while IFS= read -r f; do
             n=$((n+1))
@@ -157,15 +167,23 @@ jobs:
               rc=1
             fi
           done < <(find tests -name '*.loft' 2>/dev/null)
+          {
+            echo "### ${{ matrix.name }} ${{ matrix.version }} — interpret suite FAILED against loft \`$loft_sha\`"
+            echo "_re-classified as: $([ "$n" -eq 0 ] && echo 'no .loft to check' || { [ "$rc" -eq 0 ] && echo 'runtime failure, still COMPILES → best-effort PASS (VERIFY not a real regression)' || echo 'COMPILE break → hard FAIL'; })_"
+            echo '```'; echo "$detail"; echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
           if [ "$n" -eq 0 ]; then
             echo "::error::${{ matrix.name }}: suite failed and no .loft found to re-classify — failing conservatively."
+            echo "$detail" | sed 's/^/    /'
             exit 1
           fi
           if [ "$rc" -eq 0 ]; then
-            echo "::warning::${{ matrix.name }}: full suite failed but every .loft still COMPILES against this loft — the failure is environment / native-deps (ALSA, a display, …), NOT a language break. Best-effort PASS; the full run is hard-gated in the lib's own CI."
+            echo "::warning::${{ matrix.name }}: full suite failed at RUNTIME but every .loft still COMPILES against loft@$loft_sha — classified environment/native-deps (ALSA, a display, …), best-effort PASS. VERIFY the detail below is not a real regression:"
+            echo "$detail" | sed 's/^/    /'
             exit 0
           fi
           echo "::error::${{ matrix.name }}: a published library FAILS to compile against this loft — the freeze forbids a language change retro-breaking a shipped lib."
+          echo "$detail" | sed 's/^/    /'
           exit 1
 
       # Native adds codegen/divergence coverage but needs each lib's own system deps

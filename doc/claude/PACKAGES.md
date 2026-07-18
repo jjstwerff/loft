@@ -171,10 +171,23 @@ A package declares its dependencies in `loft.toml`:
 
 ```toml
 [dependencies]
-math = ">=0.2"                    # version requirement
+math = ">=0.2"                    # version requirement (newest satisfying)
 utils = { path = "../utils" }     # local path (for development)
 json = { version = ">=1.0" }      # explicit version field
+glb = "=0.1.0"                    # EXACT pin — this version, never newer
 ```
+
+**Version constraints.** `>=`, `>`, `<=`, `<`, `^` (caret), `~` (tilde), a
+comma-list (`>=0.2, <0.3`), and `*` / empty (any) resolve to the **newest**
+version that satisfies them.  `=X.Y.Z` — or a bare `X.Y.Z` — is an **exact pin**:
+that version and no other.  Reach for an exact pin for reproducibility, or to
+dodge a bad release without waiting for a fix.  Pinning is an *option*, not the
+rule — omit it and you get the newest compatible release.
+
+The **root project's** declared constraints pin the **whole tree**, including
+packages pulled in *transitively* by a `use` inside a dependency: a source-level
+auto-install honours the root's pin, so `glb = "=0.1.0"` holds even when it's
+`graphics` (not your code) that does `use glb;`.
 
 In loft source, the dependency is imported with `use`:
 

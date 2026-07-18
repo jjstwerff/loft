@@ -177,6 +177,47 @@ Folding works **only when Y is a genuine superset** — same observable semantic
 Stating this boundary is load-bearing: it stops the elegant over-absorption of C86 into the bare
 `#superseded` channel, where it would be a lie (the fold cannot exist).
 
+## First applications + the pre-freeze survey (2026-07-18)
+
+Before applying `#superseded` broadly, we surveyed both the stdlib and the whole `loft-libs-*`
+ecosystem for genuine candidates. **The finding is that clear-cut candidates are rare — and that
+scarcity is the point.** Needing many marks at pre-freeze would be a *smell*: it says the surface you
+are about to freeze is full of idioms you already regret and are steering away from, when the
+pre-freeze window (arc E) exists to *fix* those (remove/rename while contract 0 allows), not ship them
+and paper over with steers. A clean surface needs almost no steering.
+
+**The load-bearing distinction the survey surfaced: FOLD ≠ SUPERSEDE.** Many functions are thin shims
+over a more general one (`ln`→`log(x, E)`, `clamp`→`min(max(...))`, `contains`→`find(v) != null`,
+`exists`→`file(p).format != NotExists`, the lib native-wrappers). Folding an implementation onto a
+primitive is good DRY — but it is *not* a reason to steer callers away from the name. You supersede
+only when the new form is **strictly better AND the old adds no distinct concept**; you fold for
+implementation reuse regardless. `ln`/`clamp`/`contains` are all fold-yes, steer-no.
+
+The three real cases:
+
+| Symbol | Verdict | Why |
+|---|---|---|
+| `sum_of` → `sum` (stdlib) | **keep marked** | `sum(v, init)` is a strict *generalization* (superset, same return type, `sum(v, 0)` costs ~nothing); `_of` adds no concept. The one defensible stdlib supersession. |
+| `contains` → `find` (stdlib) | **mark REMOVED** | `find` is not a generalization of `contains` — it returns a *position*, `contains` a *boolean*; different questions. Steering the membership test to `find(v) != null` is more verbose + less clear. A fold, wrongly marked as a supersede. |
+| `regex` — 4 spellings → clean verbs `search`/`matches`/`split_on` (loft-libs-core) | **first ecosystem mark** | regex exposed *four* spellings for two ops: pattern-first free fns (`regex::find`/`regex::split`) **and** `regex_`-prefixed methods (`line.regex_find`/`line.regex_split`). The prefix was a mechanical dodge: bare `find`/`split` as `text` methods collide with the stdlib literal `text.find`/`text.split` — and **C95 blocks reusing the name even as an argument-type overload** (verified: `Cannot redefine 'split'`). Consolidated on the *conventional* regex verbs as clean methods — `search` (cf. JS `String.search`, Python `re.search`), `matches`, `split_on` — and superseded all four old spellings → the two clean verbs. A genuine *pre-freeze API cleanup* that `#superseded` implements. |
+
+**Naming under the collision constraint (why the clean form is a method with a *conventional* verb, not
+a prefix).** The instinct "just call it `find`" fails: the stdlib owns `text.find`/`text.split` as the
+*literal* operations, so a regex method cannot reuse those names (C95, hard error — not even a
+by-argument overload). The mechanical fix (`regex_find`) reads badly. The clean fix is the verb every
+regex API already uses: `search` for find-position and `split_on` for pattern-split (only `split` needs
+a distinguishing word; `search` and `matches` are collision-free bare names). This keeps the *method*
+ergonomics the caller wants (`line.search(p)`) without the prefix. The lesson generalizes: when a clean
+name is taken by a neighbouring literal operation, prefer the domain's **conventional verb** over a
+namespacing prefix.
+
+**Mechanism validated end-to-end** on the regex case: a consumer calling *either* old spelling from
+OWNED source — `regex::find(...)` or `line.regex_find(...)` — gets `warning: `find` (resp.
+`regex_find`) is superseded — use `search` (the old form keeps working)`, the program still returns the
+correct result, and `LOFT_NO_STEER=1` silences it. That is the whole channel exercised on one clean,
+real case — not a scattering of marks. (The same PR also fixed a latent @PLN110 bug the audit surfaced:
+`split_iter` used `len()`, a character count, as a *byte* slice bound → now `size()`.)
+
 ## See also
 
 - [COMPATIBILITY.md](../../COMPATIBILITY.md) — § Deprecation is soft steering · § Folding · § Two
