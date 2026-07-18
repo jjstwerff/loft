@@ -317,6 +317,9 @@ jobs:
       - name: Point the sanitizer at llvm-symbolizer (LSan suppressions need symbols)
         shell: bash
         run: |
+          # Best-effort discovery — never fail the job (macOS symbolizes via atos by
+          # default when ASAN_SYMBOLIZER_PATH is unset, so an empty result is fine).
+          set +e +o pipefail
           if [ "$RUNNER_OS" = "Linux" ]; then
             SYM=$(command -v llvm-symbolizer || true)
             [ -z "$SYM" ] && SYM=$(ls /usr/lib/llvm-*/bin/llvm-symbolizer /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -1)
