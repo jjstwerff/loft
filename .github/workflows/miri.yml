@@ -343,6 +343,17 @@ jobs:
       # the optimized release build truncates the leak stack at `RawVec::…finish_grow`
       # (frame-pointer unwind stops there), so the interner frame never appears and the
       # name-based suppression cannot match — the benign leak then reds the gate.
+      #
+      # `library_suite` spawns the `--target`-built loft binary
+      # (`CARGO_BIN_EXE_loft`) from a temp cwd, so that binary looks for `default/`
+      # next to itself.  Pre-create the release dir + symlink `default/` there so the
+      # spawned interpreter can load the stdlib — else every lib test fails "cannot
+      # load default library" (the per-file scan below does the same symlink, but too
+      # late for the nextest run).
+      - name: Symlink default/ for library_suite's spawned loft (ASan build)
+        run: |
+          mkdir -p "target/${{ matrix.target }}/release"
+          ln -sfn "$PWD/default" "target/${{ matrix.target }}/release/default"
       - name: Leak gate (detect_leaks=1, whole corpus incl. libraries)
         env:
           RUSTFLAGS: '-Zsanitizer=address -Cforce-frame-pointers=yes'
