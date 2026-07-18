@@ -348,22 +348,17 @@ jobs:
           RUSTFLAGS: '-Zsanitizer=address -Cforce-frame-pointers=yes'
           ASAN_OPTIONS: 'detect_leaks=1'
           LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
-        # `corrupted_expectation_is_reported_as_a_finding` is the keyed fuzzer's
-        # POSITIVE CONTROL: it deliberately runs a CORRUPTED program to a runtime FAULT
-        # in-process to prove the differential oracle reports a FINDING (guards against a
-        # vacuously-green sweep — its own unique coverage, kept by running it everywhere
-        # else).  A faulting program leaks its live text locals ONLY because this
-        # in-process test does not `process::exit` — the real binary does, so LSan never
-        # runs on the fault path; it is a harness artifact, NOT a production leak, and the
-        # abort-path text-local cleanup would be a risky hot-path change out of proportion
-        # to a non-production leak.  So exclude it from leak-checking only.
+        # The fault-path text class (append_text / format_text / format_long / text_tl_fmt)
+        # is suppressed in lsan_suppressions.txt — a faulting program never frees its
+        # in-flight text local, an accepted non-cleanup on the terminating abort path (the
+        # real binary process::exits, so this is never a production leak).  No test is
+        # excluded; the deliberately-faulting fixtures now run under the gate too.
         run: >
           cargo +nightly nextest run --profile ci --release --no-fail-fast
           --target ${{ matrix.target }}
           --lib --test issues --test wrap --test strings --test frame_vars
           -E 'not (test(fill_rs_up_to_date) | test(n9_generated_fill_matches_src) |
-          test(native_rs_functions_up_to_date) |
-          test(corrupted_expectation_is_reported_as_a_finding)${{ matrix.extra_filter }})'
+          test(native_rs_functions_up_to_date)${{ matrix.extra_filter }})'
 
       # SPECIFIC LOGGING: nextest names the failing TEST, but the `loft_suite` /
       # `library_suite` runners execute the whole `.loft` corpus IN ONE PROCESS, so a

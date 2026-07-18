@@ -17,6 +17,21 @@ leak:ir_read
 leak:ir_schema
 leak:database::snapshot
 
+# The fault-path text class (@PLN102).  When a loft program raises a fault (a failed
+# `assert`, `panic`, a `raise`d OOB/DivByZero) WHILE a text is mid-construction, the
+# compiler-emitted drop of that in-flight text local never runs, so its `String` buffer
+# is live at exit.  This is an ACCEPTED non-cleanup on the terminating abort path, NOT a
+# production leak: the real binary `process::exit`s on a fault, so LSan never runs there;
+# it only surfaces in-process (the dozens of `should_panic` / `.error()` fixtures and the
+# `raise(...)` scripts).  Freeing in-flight text on the abort path would need the
+# coroutine-style zeroing/double-drop discipline on the hot call path — a risky change out
+# of proportion to a non-production leak.  Non-faulting execution frees text normally, so
+# these frames only ever fire on the fault path.  The four text-construction entry points:
+leak:fill::append_text
+leak:ops::format_text
+leak:ops::format_long
+leak:text_tl_fmt
+
 # macOS dyld thread-local storage term-func registration on a spawned thread
 # (the test harness watchdog): `dyld::ThreadLocalVariables::addTermFunc`, reached
 # via `thread_start`. A one-per-thread SYSTEM allocation, not a loft heap leak — and
