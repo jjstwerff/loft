@@ -12,5 +12,11 @@ name    = "p310_save_png"
 version = "0.0.0"
 loft    = ">=0.8"
 
+# The lockfile pins the FULL tree (graphics 0.3.0 -> glb 0.1.0 -> mesh3d 0.1.0)
+# so this codegen guard can't be broken by unrelated registry churn.  graphics
+# does `use glb;` at source level, so glb resolves transitively; without a lock
+# pin it floats to the latest glb, and glb-0.1.1 (republished 2026-07-18) is
+# broken (`use mesh;`/`use scene;` -> Library not found, vs 0.1.0's `use mesh3d;`).
+# Regenerate the lock with `loft install` ONLY after glb-0.1.1 is fixed/yanked.
 [dependencies]
 graphics = ">=0.1"
