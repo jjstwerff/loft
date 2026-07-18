@@ -14,9 +14,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > `loft2` worktree, branch `tuxedo-work2`) **realises this model** and landed via PR#436
 > (merged into this branch); the `&`-ladder's own deviation list is **closed (D-bind: 0
 > open)** — D-bind-7, the last residual, was fixed this cycle. This doc's SECOND axis,
-> `const` (@PLN40, shipped), completes the binding table alongside `&`/copy/view — it
-> currently carries **1 open deviation** (D-const-1, enum-variant enforcement scope; see
-> § Deviations), unrelated to the `&`-ladder.
+> `const` (@PLN40, shipped), completes the binding table alongside `&`/copy/view — its
+> deviation list is now **closed (D-const: 0 open)**; D-const-1 (enum-variant enforcement
+> scope) was fixed via @PLN102 K1 (see § Deviations), unrelated to the `&`-ladder.
 >
 > The model here is now also the one in [OWNERSHIP_MODEL.md § The law](../OWNERSHIP_MODEL.md) —
 > @PLN87 rewrote it to the bind-site-link framing (the old "`&` = reassignment write-back"
@@ -232,28 +232,29 @@ avoiding an interior-sub-slice lifetime that neither backend models cleanly.
 
 ## Deviations
 
-OPEN: **1** (D-const-1, below). The @PLN87 ladder (L1–L6), the model + doc reconciliation
+OPEN: **0**. The @PLN87 ladder (L1–L6), the model + doc reconciliation
 (PR#436), and the last residual D-bind-7 are all closed and verified below; @PLN40's
 Const-Bind / Const-Value / Const-ScalarCollapse / Const-Compose are shipped and enforced
-for struct fields, parameters, and locals — D-const-1 is their one residual gap.
+for struct fields, parameters, and locals — and, since @PLN102 K1, for **enum-variant
+fields** too (their one former residual gap, D-const-1, now closed).
 
-> **Open:**
-> - **D-const-1 — enum-variant `const` field is declared and constructed, but its
->   write-once guarantee does NOT fire.**  `enum Shape { Circle { const radius: integer },
->   … }`; after `if s is Circle { radius }`, the write `s.radius = 9` is ACCEPTED and
->   mutates, on **both backends** (parse-time rejection is backend-independent, so there is
->   no interp/native split to check). Root cause: the field-write guard
->   (`validate_write`, `src/parser/expressions.rs:3616`) resolves the written struct's
->   field table via `Parts::Struct(fields)` only; an enum's variant fields live under a
->   different `Parts` shape, so the `const_field`/`value_const` lookup never matches and
->   the whole guard silently no-ops for a variant field. Declaration, construction, and
->   read all work (`tests/scripts/40-const-fields.loft`: `"const field on an enum
->   variant"`); no test exercises the write, so nothing catches the gap today.
->   **Enforcement scope is struct fields only** — enum-variant const, laundering-via-local
->   (`x = s.radius; …`), laundering-via-return, and laundering-via-generic are all deferred
+> **Landed via @PLN102 K1 (verified, closed):**
+> - **D-const-1 — enum-variant `const` / value-const fields are now enforced identically
+>   to struct fields.**  `enum Shape { Circle { const radius: integer }, … }`; after
+>   `if s is Circle { … }`, the direct write `s.radius = 9` is now REJECTED at parse time
+>   (backend-independent, so no interp/native split). Root cause was that the field-write
+>   guard resolved the field table via `Parts::Struct(fields)` only; the fix extends BOTH
+>   the leaf-field block (`validate_write`) and the value-const chain-walk
+>   (`lhs_frozen_through`) to also walk `Parts::EnumValue(_, fields)` — the variant def's
+>   `attributes()[f_nr]` aligns with its `EnumValue` field order, so the const_field /
+>   value_const checks apply unchanged (verified: the positive cells stay accepted, no
+>   over-reach into a pattern-bound local copy). Diagnostics now name the owner as a
+>   "variant". A pre-freeze error-add (`CONTRACT_VERSION` was 0). Regression: the boundary
+>   matrix graduated to `pln40_enum_variant_*` in `tests/issues.rs` (negatives + the
+>   over-reach guard) and the positive cells in `tests/scripts/40-const-fields.loft`, both
+>   backends. The remaining laundering-via-local / -return / -generic scopes stay deferred
 >   (Phase 3, post-1.0; see
 >   [../plans/40-const-fields/const-model-phase2.md § Phase 3](../plans/40-const-fields/const-model-phase2.md)).
->   Do **not** read `const` as enforced on enum-variant fields until this closes.
 
 > **Landed via @PLN87 / PR#436 (verified, closed):**
 > - **D-bind-0** — `&τ` is now `Type::RefVar` (a reference type the variable carries); `&` is
@@ -296,10 +297,11 @@ out of per-site flags. When OPEN reaches 0, `&`-binding is formal and feeds the 
 `deps`/borrow `ownership.md`.
 
 The `const` rules' falsifying programs are `tests/scripts/40-const-fields.loft` (positive
-cells: construct/read/contents-mutation for every quadrant) plus the `pln40_const_*` /
-`pln40_vc_*` negatives in `tests/issues.rs` — both graduated from the boundary matrix in
+cells: construct/read/contents-mutation for every quadrant, struct **and** enum-variant)
+plus the `pln40_const_*` / `pln40_vc_*` / `pln40_enum_variant_*` negatives in
+`tests/issues.rs` — all graduated from the boundary matrix in
 [../plans/40-const-fields/const-model.md](../plans/40-const-fields/const-model.md) and
 [const-model-phase2.md](../plans/40-const-fields/const-model-phase2.md). D-const-1's
-falsifier is the enum-variant write probe above (`s.radius = 9` after a `Circle` match);
-it has no regression test yet, by construction — the gap is that nothing today would fail
-if it regressed further.
+falsifier — the enum-variant write `s.radius = 9` after a `Circle` match — is now a pinned
+regression (`pln40_enum_variant_const_reassign_rejected`), so a further regression fails
+the suite.

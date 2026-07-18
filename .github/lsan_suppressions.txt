@@ -2,12 +2,20 @@
 # Syntax: `leak:<substr>` suppresses any leak whose stack contains a frame whose
 # demangled name contains <substr>.
 #
-# ir_read: the interpreter interns IR node/schema/store names as `&'static str`
-# via an intentional, bounded `Box::leak` (interner-style, not a growing leak) —
-# ~16 ir_read/ir_schema/ir_store round-trip lib tests report it. Documented in
-# miri.yml. This is the ONLY class suppressed; every real interpreter leak stays
-# visible and is gated by the shrinking count baseline (scripts/asan_leak_ratchet.sh).
+# The interpreter interns IR node/schema/store names (and reconstructed string
+# content) as `&'static str` via an intentional, bounded `Box::leak` (interner-style,
+# not a growing leak) when loading IR back from a store. The SAME class lives in three
+# sibling modules — the demangled allocating frame names the module, so each needs its
+# own line: `loft::ir_read::{read_db_content,read_block,read_definition}`,
+# `loft::ir_schema::{block_from_parsed,definition_from_parsed}`, and
+# `loft::database::snapshot::content_from`. ~16 ir_read/ir_schema/store round-trip lib
+# tests report it. Documented in miri.yml. These are the ONLY classes suppressed; every
+# real interpreter leak stays visible and is gated by the shrinking count baseline
+# (scripts/asan_leak_ratchet.sh). NOTE: matching requires SYMBOLIZED stacks — the leak
+# gate sets ASAN_SYMBOLIZER_PATH so these frame names resolve.
 leak:ir_read
+leak:ir_schema
+leak:database::snapshot
 
 # macOS dyld thread-local storage term-func registration on a spawned thread
 # (the test harness watchdog): `dyld::ThreadLocalVariables::addTermFunc`, reached

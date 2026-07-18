@@ -424,16 +424,32 @@ fn s5_kill_stale(stem: &str) {
 /// port-scoped reap closes that gap regardless of the orphan's command line.  Call AFTER
 /// `s5_kill_stale` and BEFORE spawning this run's child, so it never kills our own child.
 fn reap_port(port: u16) {
-    if let Ok(out) = Command::new("lsof")
-        .arg("-ti")
-        .arg(format!("tcp:{port}"))
-        .output()
-    {
-        for pid in String::from_utf8_lossy(&out.stdout).split_whitespace() {
-            if let Ok(pid) = pid.parse::<i32>() {
-                unsafe { libc::kill(pid, libc::SIGKILL) };
-            }
+    // Killing is not enough: `SIGKILL` is asynchronous, and with `SO_REUSEPORT` a dying
+    // orphan's listener can still accept a connection while the kernel tears it down — so
+    // a kill-then-immediately-bind still races onto the stale world.  The orphans are
+    // reparented to init (not our children), so we cannot `waitpid` them; instead POLL
+    // `lsof` until the port is genuinely free.  The happy path (no orphan) is a single
+    // `lsof` that returns empty and exits at once; the loop is bounded so a genuinely
+    // stuck holder surfaces via the spawn/connect below rather than hanging here.
+    for _ in 0..40 {
+        let pids: Vec<i32> = match Command::new("lsof")
+            .arg("-ti")
+            .arg(format!("tcp:{port}"))
+            .output()
+        {
+            Ok(out) => String::from_utf8_lossy(&out.stdout)
+                .split_whitespace()
+                .filter_map(|p| p.parse::<i32>().ok())
+                .collect(),
+            Err(_) => return, // no lsof available — nothing to poll
+        };
+        if pids.is_empty() {
+            return; // port is genuinely free
         }
+        for pid in pids {
+            unsafe { libc::kill(pid, libc::SIGKILL) };
+        }
+        std::thread::sleep(Duration::from_millis(50));
     }
 }
 

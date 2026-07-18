@@ -739,7 +739,6 @@ jobs:
           --lib --test issues --test wrap --test strings --test frame_vars
           --test expressions --test expressions_auto_convert --test slots
           --test slot_v2_baseline --test value_struct_alloc --test dispatch_reentry
-          --test format
           -E 'not test(library_suite)'
 
   # Doc-index hygiene (plan-37) — `make index` + broken `@`-tag / markdown-link

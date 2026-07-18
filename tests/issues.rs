@@ -1736,6 +1736,81 @@ fn test() {
     .result(loft::data::Value::Null);
 }
 
+// ── @PLN102 K1 — enum-VARIANT const enforcement (uniform with struct fields) ──
+// `const` / value-const on an enum-variant field was declared, constructed, and
+// read but NEVER enforced: `validate_write` resolved the field table only through
+// `Parts::Struct`, so a variant's `Parts::EnumValue` fields silently no-op'd the
+// guard.  These pin the enforcement now that both parts are walked — the negative
+// cells that flipped from silently-accepted to rejected, plus the over-reach guard
+// that a pattern-bound LOCAL copy stays mutable.  A pre-freeze error-add (only
+// legal while CONTRACT_VERSION is 0); see plans/102/code-eval-followups.md K1.
+
+/// `const` scalar variant field, direct reassign `x.r = …` → rejected (was accepted).
+#[test]
+fn pln40_enum_variant_const_reassign_rejected() {
+    code!(
+        "enum Kx { V { const r: integer }, Other { z: integer } }
+fn test() { x = V { r: 1 }; if x is V { _g = 0; x.r = 5; } }"
+    )
+    .error(
+        "cannot reassign const field 'r' of variant 'V' — const fields are write-once-at-construction at pln40_enum_variant_const_reassign_rejected:2:57",
+    );
+}
+
+/// `const` scalar variant field, compound `x.n += …` → rejected (a scalar has no
+/// "contents" to append into, same as the struct rule).
+#[test]
+fn pln40_enum_variant_const_compound_rejected() {
+    code!(
+        "enum Kx { V { const n: integer }, Other { z: integer } }
+fn test() { x = V { n: 1 }; if x is V { _g = 0; x.n += 1; } }"
+    )
+    .error(
+        "cannot reassign const field 'n' of variant 'V' — const fields are write-once-at-construction at pln40_enum_variant_const_compound_rejected:2:58",
+    );
+}
+
+/// value-const collection variant field, append `x.v += …` → rejected (contents
+/// mutation of a read-only value; the leaf value-const block).
+#[test]
+fn pln40_enum_variant_vc_append_rejected() {
+    code!(
+        "enum Kx { V { v: const vector<integer> }, Other { z: integer } }
+fn test() { x = V { v: [1] }; if x is V { _g = 0; x.v += [2]; } }"
+    )
+    .error(
+        "cannot mutate value-const field 'v' of variant 'V' — its value is read-only (rebind with '=' to re-point, or drop 'const') at pln40_enum_variant_vc_append_rejected:2:62",
+    );
+}
+
+/// value-const collection variant field, element write `x.v[i] = …` → rejected by
+/// the LHS chain-walk (`lhs_frozen_through`, the second `Parts::EnumValue` gap).
+#[test]
+fn pln40_enum_variant_vc_element_rejected() {
+    code!(
+        "enum Kx { V { v: const vector<integer> }, Other { z: integer } }
+fn test() { x = V { v: [1] }; if x is V { _g = 0; x.v[0] = 9; } }"
+    )
+    .error(
+        "Cannot modify value-const field 'V.v'; its value is read-only at pln40_enum_variant_vc_element_rejected:2:62",
+    );
+}
+
+/// Over-reach guard: a pattern-bound LOCAL from a `const` variant field is a COPY
+/// (B-Copy), so mutating the LOCAL stays legal — only the direct `x.r = …` write on
+/// the enum value is the violation.  Guards against enforcing into the copied local.
+#[test]
+fn pln40_enum_variant_bound_local_copy_allowed() {
+    code!(
+        "enum Kx { V { const r: integer }, Other { z: integer } }
+fn test() {
+    x = V { r: 5 };
+    if x is V { r } { r = 9; assert(r == 9, \"a copy of a const variant field is mutable\"); }
+}"
+    )
+    .result(loft::data::Value::Null);
+}
+
 // ── P139 regression guards ──────────────────────────────────────────────────
 // The slot allocator placed zone-1 byte-sized vars (plain enum, boolean) at
 // fixed slots inside the zone-2 frontier, leaving codegen's TOS one byte
