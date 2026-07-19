@@ -20,5 +20,3 @@ match.enum = 4
 text.len = 11
 text.find = 6
 text.slice = hello
-
-probe = 1
