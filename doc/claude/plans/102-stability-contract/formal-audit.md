@@ -181,9 +181,9 @@ sentinel-collision edges the owner's C80 rule says accept.
 | **cross-type `==`/`!=` → truthiness** (`5 == "banana"` → **true**) | **FIXED** (449c4f64) — reject at compile, like the ordering ops. See § below the K-table note. |
 | **`single as integer` overflow → i64::MAX** (saturates; `float as integer` already nulled) | **FIXED** (b230b957) — mirrors float→int: overflow reads null (C80). |
 | **`enum == int` → discriminant leak** (`Color.Green == 1` → **false**, comparing the +1-biased internal disc) | **FIXED** (b5d33b5d) — reject at compile, "No matching operator"; enum==enum / enum==null untouched. |
-| `1e30 as integer` (float) → **null** | already C80-correct (bounds check → i64::MIN). No add. |
+| `1e30 as integer` (float) → **null** | **COMPILE ERROR (E2-B, 2026-07-19)** `[cast-constant-out-of-range]` when the operand is a LITERAL/const-expr; a variable-held value (`fb: float = 1e30; fb as integer`) still nulls (C80), and the checked `as integer?` / `?? d` forms stay the escape. |
 | `"…" as integer` (text parse) → **null** | already a COMPILE ERROR (`as integer` "may fail — use `integer?`"). No add. |
-| `1 << 100` / `1 << -1` (out-of-range shift) → **null** | already C80-correct (`ShiftOutOfRange` → i64::MIN). No add. |
+| `1 << 100` / `1 << -1` (out-of-range shift) → **null** | **COMPILE ERROR (E2-B, 2026-07-19)** `[shift-amount-out-of-range]` when the amount is a const-expr outside `0..=63`; `?? d` fallback + a *dynamic* amount still null (C80/C85). |
 | `999999999 as character` → NUL | renders null; C80-adjacent. No genuine wrong value. |
 | `sqrt(-1)` / `log(-1)` / `asin(2)` → **null** | **ACCEPT** ([C80](../../DESIGN_DECISIONS.md): undefined → null, never a fault). No decision needed. |
 
@@ -194,11 +194,18 @@ the program may malfunction") and strictly BETTER than a two's-complement wrap b
 *detectable/handleable* (`??`, `== null`) where a wrapped value corrupts silently. Not an error to
 add, not a flip blocker — the consistent consequence of the total-null model. Off the debatable list.
 
-**Debatable — need the owner's call (do NOT unilaterally add; conflicts with "null is a valid result
-/ no runtime errors"):**
-- **Constant out-of-range as a COMPILE error** (`1 << 100`, `1e30 as integer` where the operand is a
-  literal) — the runtime already nulls these (C80-correct), so a compile error would reject a program
-  with well-defined (null) behaviour. Stricter, but arguably against the spreadsheet model.
+**Constant out-of-range as a COMPILE error — DECIDED: ADD (owner ruling 2026-07-19), IMPLEMENTED
++ VALIDATED (E2-B).** `1 << 100`, `1 << -1`, `1e30 as integer` where the operand is a LITERAL /
+const-expr (`const_int` / `const_eval` fold — catches `-1`=neg(1), `60+10`, named consts) is now a
+compile error. Owner's rationale: *"error too, because `x = null` is a fallback"* — the null-return
+is a fallback the developer can still opt into explicitly, so erroring the BARE constant (which the
+developer can SEE is wrong) removes no capability. The escape hatches are preserved and uniform
+across both ops: the `?? d` fallback (shift + cast) and the checked `as τ?` (cast) skip the check;
+a *dynamic* operand (a variable, even one holding a constant) stays C80-null. Codes:
+`shift-amount-out-of-range`, `cast-constant-out-of-range`. Both backends agree (the diagnostic
+fires in the parser, pre-codegen). Regression: `tests/scripts/pln102-const-out-of-range.loft`
+(+ existing `pln102-shift-collision-guard.loft` / `559-narrowing-cast-overflow-null.loft` unchanged
+— they exercise the `?? d` and variable-operand escapes).
 **Nullable value-enum null-check — FIXED (9582a70a).** `n: Color? = null` rendered `null` but
 `n == null` was false, `n ?? d` didn't coalesce, `if !n` read present.  Root at the PRODUCER:
 `convert(Null, Enum)` skipped `OpConvEnumFromNull` (the `FromNull` loop matches by RETURN type, and
@@ -233,7 +240,15 @@ their behaviour.  Lesson: a `touch src/*.rs` / clean rebuild before trusting a g
   frozen contract, not left implicit.
 
 ### Error-surface hygiene (identity, taxonomy, drops)
-- **E1 (the headline):** add a stable diagnostic code/kind so prose stays improvable.
+- **E1 (the headline) — REOPENED + IMPLEMENTED (owner ruling 2026-07-19).** Owner: *"only WHICH
+  errors are frozen, the exact text can change — so codes to show the precise error are handy."*
+  A `DiagEntry.code: Option<&'static str>` (kebab-case kind slug) rendered rustc-style
+  `error[shift-amount-out-of-range]: …`; the `diagnostic!` macro gained a `code = "…"` arm and
+  `to_string_compact` emits the `[code]` tag. Seeded on the new + highest-value diagnostics
+  (`text-parse-may-fail`, `format-unescaped-brace`, `shift-amount-out-of-range`,
+  `cast-constant-out-of-range`); back-filling the ~470 legacy sites is an additive follow-up (a
+  code can be added post-freeze — only the BOUNDARY is frozen, not the code set). Contract line in
+  COMPATIBILITY.md.
 - The **`null(/0)` format-suffix** leaks fault identity into observable output — but for only 4
   fault kinds (inconsistent). Decide if it's frozen; if kept, cover all faults; else flip
   `LOFT_FORMAT_BARE_NULL` to default.
@@ -244,8 +259,10 @@ their behaviour.  Lesson: a `touch src/*.rs` / clean rebuild before trusting a g
   `*Nullable` op split, the dead `not null` field-hint path.
 - **Renderer vocab disagreement** (`Debug` vs `note`); compact format is an unversioned parseable
   line (add `--errors=json` so the human line stays improvable).
-- **Unterminated-format-brace is a WARNING not an error** — if malformed interpolation should
-  reject, promoting Warning→Error is a tightening only contract-0 allows (last chance).
+- **Unterminated-format-brace WARNING→ERROR — DONE (E2-A, owner ruling 2026-07-19).** A literal
+  `}` in a format string that is not written `}}` is now `error[format-unescaped-brace]` (was a
+  Warning). Promoting Warning→Error is a tightening only contract-0 (pre-freeze) allows — this was
+  the last chance. Zero blast radius (no corpus program relied on the old warning-and-continue).
 
 ---
 

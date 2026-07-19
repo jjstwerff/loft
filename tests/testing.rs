@@ -22,9 +22,31 @@ use std::io::Write;
 /// on) `default/*.loft` line numbers when the stdlib shifts — e.g. when a
 /// catalogue tag is inserted anywhere in a stdlib file.  User code is referenced
 /// by test name, not a `.loft` path, so only stdlib references are affected.
+/// Remove a leading `Level[code]:` tag, collapsing it to `Level:` (E1). Only a
+/// `[...]` sitting between a known level word and the first `:` is stripped, so
+/// brackets elsewhere in a message are untouched.
+fn strip_diag_code(s: &str) -> String {
+    for level in ["Error", "Warning", "Fatal", "Debug"] {
+        if let Some(after) = s.strip_prefix(level)
+            && after.starts_with('[')
+            && let Some(close) = after.find("]:")
+        {
+            return format!("{level}{}", &after[close + 1..]);
+        }
+    }
+    s.to_string()
+}
+
 fn normalize_loft_loc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
+    // @PLN102 arc-E E1 — a diagnostic may carry a stable `[code]` tag rendered
+    // between the level and the colon (`Error[shift-amount-out-of-range]: …`).
+    // The code is orthogonal to the (improvable) prose these assertions pin, so
+    // collapse a leading `Level[...]:` back to `Level:` — expected strings never
+    // carry a tag, so this only touches the found lines and keeps existing
+    // `.error("<prose>")` assertions matching a now-coded diagnostic.
+    let stripped = strip_diag_code(s);
+    let mut out = String::with_capacity(stripped.len());
+    let mut rest = stripped.as_str();
     while let Some(pos) = rest.find(".loft:") {
         out.push_str(&rest[..pos]);
         out.push_str(".loft");

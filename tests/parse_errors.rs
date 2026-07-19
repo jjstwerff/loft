@@ -245,6 +245,35 @@ fn null_element_in_value_enum_vector_rejected() {
         .error("cannot store null elements in a vector<Color> (would lose precision); cast each element explicitly with 'as Color' at null_element_in_value_enum_vector_rejected:2:50");
 }
 
+// @PLN102 arc-E E2 (B) — a STATICALLY out-of-range constant operation is a
+// COMPILE error (owner ruling 2026-07-19), not a silent null.  The runtime
+// still nulls a *dynamic* out-of-range value (C80/C85) and the `?? d` / checked
+// `as τ?` escapes stay valid (see tests/scripts/pln102-const-out-of-range.loft);
+// only the BARE constant the developer can SEE is wrong is rejected.  These
+// diagnostics carry E1 codes (`[shift-amount-out-of-range]` /
+// `[cast-constant-out-of-range]`); the harness strips the tag before matching,
+// so the pinned prose is the improvable text, the code is the stable handle.
+#[test]
+fn pln102_const_shift_over_range() {
+    code!("fn test() { x = 1 << 100; }")
+        .error("shift by 100 is out of the valid range 0..=63 — a constant out-of-range shift has no defined result at pln102_const_shift_over_range:1:26")
+        .warning("Variable x is never read at pln102_const_shift_over_range:1:16");
+}
+
+#[test]
+fn pln102_const_shift_negative() {
+    code!("fn test() { x = 1 << -1; }")
+        .error("shift by -1 is out of the valid range 0..=63 — a constant out-of-range shift has no defined result at pln102_const_shift_negative:1:25")
+        .warning("Variable x is never read at pln102_const_shift_negative:1:16");
+}
+
+#[test]
+fn pln102_const_cast_over_range() {
+    code!("fn test() { x = 1e30 as integer; }")
+        .error("the constant 1000000000000000000000000000000 is out of range for `integer` — a bare cast asserts the value fits; use `integer?` for a checked cast (value or null), or `?? d` for a fallback at pln102_const_cast_over_range:1:33")
+        .warning("Variable x is never read at pln102_const_cast_over_range:1:16");
+}
+
 #[test]
 fn wrong_if() {
     code!("fn test() {if 1 > 0 { 2 } else {\"a\"}\n}")
