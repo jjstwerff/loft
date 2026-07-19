@@ -3,10 +3,15 @@
 
 # @PLN102 arc E — remove the tolerated-warnings filter (test hygiene)
 
-> **Status: DESIGN (2026-07-19).** The warning-surface half of arc E's "be strict
-> now" one-way-door audit. Bounded, in-repo, both backends. The ladder removes the
-> filter **one category at a time** so each category's blast radius is isolated and
-> committed separately. Reference: README § *Pre-freeze test-hygiene*.
+> **Status: ✅ BUILT (2026-07-19).** The warning-surface half of arc E's "be strict
+> now" one-way-door audit — DONE. The `is_runtime_warning` filter is deleted; the
+> `code!` harness now asserts exactly what loft emits, guarded by a meta-lock test.
+> Measured reality (test-hygiene-buckets.md): **7 of 9 clauses were dead** (0 fixtures
+> — better than the "5 dead" estimate: the two N-Store nudges also had no `code!`
+> fixture), so only **2 live families** needed fixture work — redundant-`&` (12,
+> dropped) and `not null` (110, deleted; 2 genuine-feature tests keep it + assert the
+> deprecation). Commits: measure+dead-clauses, `not null`, `&`+delete+lock.
+> Reference: [test-hygiene-buckets.md](test-hygiene-buckets.md).
 
 ## The hazard
 

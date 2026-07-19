@@ -47,7 +47,7 @@ single reconciled view (supersedes the scattered "open" markers).
 | **Formats** | Layout/persistence identity distinguishes every semantically-distinct layout | 🔶 F9 nullability half open → [layout-nullability-identity.md](layout-nullability-identity.md) |
 | **Formats** | Format sub-language (interpolation) warts fixed | ✅ E2-A (unescaped `}`) shipped; format-brace is the last known one |
 | **Mechanism** | Drift gates make an omitted bump loud (layout-hash ⇒ bump; golden-corpus ⇒ classify) | ✅ **built + inert 2026-07-19** (Gate 1 + Gate 2 below) |
-| **Test hygiene** | The `code!` harness asserts the diagnostics loft *actually* emits (no tolerated-warnings filter) | 🔶 → [test-hygiene-warnings.md](test-hygiene-warnings.md) |
+| **Test hygiene** | The `code!` harness asserts the diagnostics loft *actually* emits (no tolerated-warnings filter) | ✅ **built 2026-07-19** — filter deleted + meta-lock ([test-hygiene-warnings.md](test-hygiene-warnings.md)) |
 
 **"Syntax-settled" is not a vibe — make it a query.** The gate is "no open plan with
 `subject:syntax`/`subject:language` that changes a *frozen* surface". Operationalise:
