@@ -3,14 +3,18 @@
 
 # @PLN102 arc E — F9: the layout identity must distinguish `τ` from `τ?`
 
-> **Status: DESIGN (2026-07-19).** The nullability half of F9 (the endianness half
-> shipped 2026-07-17). A raw-persistence handoff between a full-width `integer` store
-> and an `integer?` store is currently accepted as "same layout" — it is a silent data
-> break the freeze must close. This designs the audit-preferred **fix (a)** (add a
-> schema component to the layout identity) as an additive, inert-first ladder, records
-> **fix (b)** as the more-invasive alternative, and pins the sentinel edge hazard.
-> Root-cause + code-points from the 2026-07-17 investigation; line numbers below are
-> current-tree (they drift — grep the named symbol).
+> **Status: ✅ BUILT (2026-07-19).** The nullability half of F9 — DONE via the
+> audit-preferred **fix (a)**. `LayoutIdentity` gains a `schema` field (a DEF-level
+> nullability signature from `Data`, via `of_scoped` at the CLI sites); `classify`
+> compares it only when the byte layout already matches, emitting `@schema` on a
+> `τ`↔`τ?` mismatch, and GRANDFATHERS an absent schema (a `nn/1` marker keeps
+> "no-nullable-fields" distinct from "absent"). Proven end-to-end: `loft layout
+> accept`(i:integer)→check(i:integer?) reports `reshaped: @schema` (was "unchanged"),
+> and step 6 folded it into the flip-gate golden (a corpus `τ→τ?` flip fails
+> `layout_golden` + trips `check_contract_goldens`). The deep persistence gate
+> (`allocation.rs`, no `Data`) stays grandfathered — a documented follow-up (stash the
+> schema on `Stores`) if the raw-store gate needs F9 too. Commits on
+> `tuxedo-e1-diag-codes`. The design below is kept as the record.
 
 ## The defect (root-caused)
 

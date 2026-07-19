@@ -44,7 +44,7 @@ single reconciled view (supersedes the scattered "open" markers).
 | **Syntax** | The last in-flight syntax plans settled (they *define* what contract 1 is) | 🔶 **THE gate** — see "Syntax-settled" below |
 | **Stdlib / libs** | lib-audit worklist resolved (H1–H9) | ✅ done or consciously accepted (H8 = C99) |
 | **Stdlib / libs** | The dedicated unhurried lib pass (owner phase 2 — stdlib + core libs, equally permanent) | 🔶 the second half of the E gate |
-| **Formats** | Layout/persistence identity distinguishes every semantically-distinct layout | 🔶 F9 nullability half open → [layout-nullability-identity.md](layout-nullability-identity.md) |
+| **Formats** | Layout/persistence identity distinguishes every semantically-distinct layout | ✅ **F9 built 2026-07-19** — `τ` vs `τ?` distinguished ([layout-nullability-identity.md](layout-nullability-identity.md)); deep raw-store gate grandfathered |
 | **Formats** | Format sub-language (interpolation) warts fixed | ✅ E2-A (unescaped `}`) shipped; format-brace is the last known one |
 | **Mechanism** | Drift gates make an omitted bump loud (layout-hash ⇒ bump; golden-corpus ⇒ classify) | ✅ **built + inert 2026-07-19** (Gate 1 + Gate 2 below) |
 | **Test hygiene** | The `code!` harness asserts the diagnostics loft *actually* emits (no tolerated-warnings filter) | ✅ **built 2026-07-19** — filter deleted + meta-lock ([test-hygiene-warnings.md](test-hygiene-warnings.md)) |
