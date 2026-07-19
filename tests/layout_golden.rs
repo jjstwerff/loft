@@ -79,7 +79,7 @@ const LAYOUT_ALGO_HASH: u64 = 14_478_928_954_060_894_342;
 /// CURRENT layout was frozen. The store layout IS the persistence contract, so
 /// POST-FLIP a change to `LAYOUT_ALGO_HASH` / the golden may land only alongside a
 /// `CONTRACT_VERSION` bump (a declared, epoch-style break) — enforced git-side by
-/// `scripts/check_layout_contract.sh`. When you re-bless the layout at
+/// `scripts/check_contract_goldens.sh`. When you re-bless the layout at
 /// `CONTRACT_VERSION > 0`, set this to the new `CONTRACT_VERSION` too. INERT while
 /// `CONTRACT_VERSION == 0` (pre-freeze: the language is still settling, layout
 /// changes are free). Invariant: `LAYOUT_CONTRACT <= CONTRACT_VERSION` always — a
@@ -157,7 +157,7 @@ fn layout_golden() {
 /// the running `CONTRACT_VERSION` can never be BELOW it (a layout cannot be frozen at a
 /// contract the runtime has not reached). This pins the in-tree half of the coupling;
 /// the "a layout change requires a contract bump" half is git-diff-shaped and lives in
-/// `scripts/check_layout_contract.sh` (also inert while `CONTRACT_VERSION == 0`). When
+/// `scripts/check_contract_goldens.sh` (also inert while `CONTRACT_VERSION == 0`). When
 /// the two are equal the layout is frozen at the current contract — the normal state.
 #[test]
 fn layout_contract_pin_is_consistent() {

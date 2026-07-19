@@ -1,0 +1,74 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 arc-E flip-gate — Gate 2 behavioural corpus (the frozen-OUTPUT baseline).
+//
+// A deterministic program that prints one labelled VALUE per frozen semantic surface.
+// Its stdout is snapshotted to tests/golden/behavior/corpus.out; a change to that
+// output is a behavioural drift, and post-freeze a change to a VALID program's VALID
+// output is a silent break (Gate 2). Prose/error-TEXT is deliberately NOT exercised
+// here (E1: prose is improvable; only values + typed-error CODES are frozen) — this
+// corpus prints VALUES only, so a wording change never trips it.
+//
+// Coverage is a starting SURFACE set, grown deliberately (no silent truncation): it
+// covers integer/float arithmetic, the C80/C85 null model (÷0, overflow, OOB, parse),
+// casts, shifts, ?? coalescing, vectors + comprehensions, match (scalar + enum), and
+// text. NOT yet covered here: collections (hash/sorted/spatial), coroutines, files,
+// par — add a labelled line when a surface is frozen.
+
+enum Shape { Circle, Square, Triangle }
+
+fn classify(n: integer) -> text {
+  match n {
+    0 => "zero",
+    1..=9 => "small",
+    _ => "big",
+  }
+}
+
+fn main() {
+  // --- integer arithmetic + the C85 overflow-null model ---
+  print("int.add = {2 + 3 * 4}\n");
+  print("int.div = {17 / 5}\n");
+  print("int.mod = {17 % 5}\n");
+  print("int.overflow = {9223372036854775807 * 2 ?? -1}\n"); // C85 overflow -> null -> -1
+
+  // --- the C80 fault-null model (÷0, OOB, text-parse) ---
+  zero = len(""); // dynamic 0 (avoids the constant-÷0 compile warning)
+  print("div0 = {10 / zero ?? -1}\n");
+  print("parse.ok = {\"42\" as integer ?? -1}\n");
+  print("parse.bad = {\"xyz\" as integer ?? -1}\n");
+
+  // --- float ---
+  print("float.add = {0.5 + 0.25}\n");
+  print("float.trunc = {5.9 as integer}\n");
+
+  // --- casts + shifts (in-range; const out-of-range is a COMPILE error, arc-E E2-B) ---
+  print("shift = {1 << 10}\n");
+  print("cast.narrow = {300 as u8 ?? -1}\n"); // 300 out of u8 -> checked -> null -> -1
+
+  // --- ?? coalescing + boolean ---
+  print("bool = {true and (false or true)}\n");
+  print("coalesce = {null ?? 7}\n");
+
+  // --- vectors + comprehensions ---
+  v = [1, 2, 3, 4, 5];
+  print("vec.len = {len(v)}\n");
+  print("vec.sum = {sum(v, 0)}\n");
+  doubled = [for x in v { x * 2 }];
+  print("vec.map = {doubled[4]}\n");
+  evens = filter(v, |x| { x % 2 == 0 });
+  print("vec.filter.len = {len(evens)}\n");
+
+  // --- match (scalar range + enum) ---
+  print("match.scalar = {classify(0)}/{classify(5)}/{classify(99)}\n");
+  s: Shape = Shape.Square;
+  side = match s { Circle => 0, Square => 4, Triangle => 3 };
+  print("match.enum = {side}\n");
+
+  // --- text ---
+  greeting = "hello" + " " + "world";
+  print("text.len = {len(greeting)}\n");
+  print("text.find = {greeting.find(\"world\") ?? -1}\n");
+  print("text.slice = {greeting[0..5]}\n");
+}
