@@ -2520,3 +2520,195 @@ pub fn report_copies(data: &Data) {
         }
     }
 }
+
+/// @PLN103 (temporal extension) — static free-before-dependent-read detector.
+///
+/// The `--show-ownership` overlay classifies WHO owns each store, but the verdict is
+/// temporal-agnostic: it renders identically whether a store's `OpFreeRef` lands
+/// before or after the last read of a view into it. The captured-group element-access
+/// UAF (`plans/captured-group-elem-uaf.md`) was invisible to it for exactly that
+/// reason — the correct and the use-after-free lowering share every ownership verdict.
+/// This walk adds the missing temporal check.
+///
+/// Invariant enforced: along each straight-line path of the committed IR, an
+/// `OpFreeRef(S)` must not be followed by a genuine READ of any binding `B` whose
+/// static deps include `S` (`B` is a live view into the freed store), unless `S` is
+/// re-allocated (`OpDatabase(S)`) between the free and the read.
+///
+/// Returns `(store, via)` pairs — the freed store var and the view read after it —
+/// sorted + deduped. Empty = clean. Conservative by construction (branch state is
+/// intersected at joins; only an UNCONDITIONAL `OpFreeRef` frees), so it under-reports
+/// rather than false-positives.
+pub fn free_before_dependent_read(data: &Data, d_nr: u32) -> Vec<(u16, u16)> {
+    let def = data.def(d_nr);
+    let vars = &def.variables;
+    let free_ref = data.def_nr("OpFreeRef");
+    let op_db = data.def_nr("OpDatabase");
+    // Reverse map: store var `S` -> bindings `B` that VIEW `S`, TRANSITIVELY. A view
+    // of a view keeps `S` live through an intermediate local — a nested `match arg {…}`
+    // binds `_match_subj_2 = arg`, and `arg` deps `__vdb_1`, so a deref of
+    // `_match_subj_2` reads `__vdb_1`. A single-hop map misses it (`arg` is only
+    // bare-MOVED into `_match_subj_2`, never deref'd), so walk the dep graph to a
+    // fixpoint — the same closure `scopes::transitive_depers` uses for reclaim.
+    // Skip marker deps (the u16::MAX one-buffer sentinel, the 0x8000 callee-frame tag)
+    // and self-deps (work-refs carry their own var in the dep list).
+    let n = vars.count();
+    let direct = |b: u16| -> Vec<u16> {
+        vars.tp(b)
+            .depend()
+            .into_iter()
+            .filter(|&d| d != u16::MAX && d & 0x8000 == 0 && d != b)
+            .collect::<Vec<u16>>()
+    };
+    let mut reaches: Vec<HashSet<u16>> = (0..n).map(|b| direct(b).into_iter().collect()).collect();
+    loop {
+        let mut changed = false;
+        for b in 0..n as usize {
+            for m in reaches[b].iter().copied().collect::<Vec<u16>>() {
+                if (m as usize) < n as usize {
+                    for a in reaches[m as usize].iter().copied().collect::<Vec<u16>>() {
+                        if reaches[b].insert(a) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut dependents: HashMap<u16, Vec<u16>> = HashMap::new();
+    for b in 0..n {
+        for &s in &reaches[b as usize] {
+            dependents.entry(s).or_default().push(b);
+        }
+    }
+    if dependents.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<(u16, u16)> = Vec::new();
+    let mut freed: HashSet<u16> = HashSet::new();
+    scan_uaf(
+        &def.code,
+        &mut freed,
+        &dependents,
+        free_ref,
+        op_db,
+        &mut out,
+    );
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn scan_uaf(
+    node: &Value,
+    freed: &mut HashSet<u16>,
+    dependents: &HashMap<u16, Vec<u16>>,
+    free_ref: u32,
+    op_db: u32,
+    out: &mut Vec<(u16, u16)>,
+) {
+    match node.unspan() {
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                scan_uaf(op, freed, dependents, free_ref, op_db, out);
+            }
+        }
+        Value::Insert(ops) => {
+            for op in ops {
+                scan_uaf(op, freed, dependents, free_ref, op_db, out);
+            }
+        }
+        Value::If(c, t, e) => {
+            scan_uaf(c, freed, dependents, free_ref, op_db, out);
+            let mut ft = freed.clone();
+            scan_uaf(t, &mut ft, dependents, free_ref, op_db, out);
+            let mut fe = freed.clone();
+            scan_uaf(e, &mut fe, dependents, free_ref, op_db, out);
+            // Definitely-freed after the join = freed on BOTH branches. A store freed
+            // on only one path is live on the other, so it is NOT carried as freed.
+            *freed = ft.intersection(&fe).copied().collect();
+        }
+        Value::Return(inner)
+        | Value::Drop(inner)
+        | Value::Yield(inner)
+        | Value::BreakWith(_, inner) => {
+            scan_uaf(inner, freed, dependents, free_ref, op_db, out);
+        }
+        Value::Call(op, args) if *op == free_ref => {
+            if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
+                freed.insert(*s);
+            }
+        }
+        Value::Call(op, args) if *op == op_db => {
+            if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
+                freed.remove(s); // re-allocated — the store is live again
+            }
+        }
+        // Any other op is a read-leaf for this walk: it neither frees/allocs a store
+        // nor branches, so check whether it DEREFERENCES a view of a freed store.
+        other => check_reads(other, freed, dependents, out),
+    }
+}
+
+fn check_reads(
+    node: &Value,
+    freed: &HashSet<u16>,
+    dependents: &HashMap<u16, Vec<u16>>,
+    out: &mut Vec<(u16, u16)>,
+) {
+    if freed.is_empty() {
+        return;
+    }
+    for &s in freed {
+        if let Some(views) = dependents.get(&s) {
+            for &b in views {
+                if deref_read(node, b, false) {
+                    out.push((s, b));
+                }
+            }
+        }
+    }
+}
+
+/// True when `node` DEREFERENCES var `target` — reads the CONTENTS of its store,
+/// as opposed to merely delivering the reference. The distinction is what separates
+/// a real use-after-free from a benign stale dep:
+///
+///   * A bare `Var(target)` in a DELIVERY position — `return v`, `x = v` (a move),
+///     a block tail — hands the *reference* on. The ownership / retbuf machinery
+///     moves it safely, so a stale dep on an already-freed store there is NOT a UAF
+///     (the return-hoist `__ret_N` false positives, `85-...` / `562-...`).
+///   * `target` consumed inside a `Call` (`OpGetVector(v, …)`, `OpGetText(…v…)`, a
+///     fn arg) reads the store's contents — a genuine deref that IS a UAF once the
+///     store is freed (the captured-group `arg[0]` access).
+///
+/// So a bare `Var` only counts when it is already inside a call (`in_call`); the
+/// inherently-dereferencing slots (`TupleGet` / `CallRef` / `Iter` / `FnRef` /
+/// `ParFor`) always count. Write targets (`Set`/`TuplePut` LHS) never do —
+/// `for_each_child` restricts those to their RHS.
+fn deref_read(node: &Value, target: u16, in_call: bool) -> bool {
+    let n = node.unspan();
+    let hit = match n {
+        Value::Var(x) => in_call && *x == target,
+        Value::TupleGet(x, _) | Value::FnRefDnr(x) => *x == target,
+        Value::CallRef(x, _) | Value::Iter(x, _, _, _) => *x == target,
+        Value::FnRef(_, w, _) => *w == target,
+        Value::ParFor(b) => b.x_var == target || b.r_var == target,
+        _ => false,
+    };
+    if hit {
+        return true;
+    }
+    // A Call / CallRef consumes its arguments, so a bare `Var` beneath one is a read.
+    let child_in_call = in_call || matches!(n, Value::Call(_, _) | Value::CallRef(_, _));
+    let mut found = false;
+    n.for_each_child(&mut |c| {
+        if !found && deref_read(c, target, child_in_call) {
+            found = true;
+        }
+    });
+    found
+}

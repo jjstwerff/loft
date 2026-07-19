@@ -14,9 +14,40 @@ freeing the group's backing store), matching the WORKING reference captured belo
 delivery change in loft's #1-weakness subsystem, so it needs the full both-backend
 verification matrix, not a one-line patch.
 
-Owns two failing scripts (same root):
-- `tests/scripts/35m-mid-slice-repetition.loft` — `get_vector: use-after-free on store N`.
-- `tests/scripts/35c-rest-capture.loft` — `sub-class A (enum + captured field + rest): null`.
+## Static gate (2026-07-19) — `introspect --show-ownership` now MAKES THIS VISIBLE
+
+The @PLN103 lifetime inspector was blind to this bug: its static ownership verdicts are
+temporal-agnostic (identical for a correct free and a use-after-free) and its runtime timeline
+tracks leaks, not reads-after-free. It now carries a **free-before-dependent-read overlay**
+(`use_analysis::free_before_dependent_read`, rendered under `--show-ownership`): along each
+straight-line path, an `OpFreeRef(S)` followed by a DEREFERENCE of any (transitive) view of `S`
+prints `⚠ UAF: \`arg\` is read AFTER \`OpFreeRef(__vdb_1)\` …`. Run it:
+
+```
+loft introspect --show-ownership tests/scripts/35m-mid-slice-repetition.loft   # ⚠ UAF fires
+```
+
+Boundary (verified): fires on 35m + the minimal repro + the nested-match variant; SILENT on the
+int-return twin, the owned-vector twin, and 511/512 corpus scripts (the one hit is 35m). Two axes
+were load-bearing to get it precise — **transitive** deps (a nested `match arg{…}` derefs `arg`
+through an intermediate `_match_subj_2` that only transitively views `__vdb_1`) and **deref-only**
+reads (a bare `Var` in a `return`/move is a safe delivery, not a UAF — this is what cleared the
+`__ret_N` return-hoist false positives on `85-…`/`562-…`). Regression gate:
+`tests/introspect.rs::ownership_overlay_flags_free_before_dependent_read` (+ `tests/data/uaf_overlay.loft`).
+
+**This overlay is the fix's static gate:** it fires now; after the materialisation fix it must go
+SILENT on 35m (both backends share the verdict), with no new corpus hit. It also proved 35c is a
+different root (35c stays silent — its free is correctly placed).
+
+Owns two failing scripts — **NOT the same root** (a 2026-07-19 finding, see the Static gate
+below; the earlier "same root" claim is retracted):
+- `tests/scripts/35m-mid-slice-repetition.loft` — `get_vector: use-after-free on store N`. THIS
+  plan's bug: a free-before-dependent-read (the group's `__vdb_1` freed before `arg[0]` deref).
+- `tests/scripts/35c-rest-capture.loft` — `sub-class A (enum + captured field + rest): null`. A
+  DIFFERENT root: `parse`'s `OpFreeRef(__vdb_1)` is correctly placed AFTER the `rhs` read; its UAF
+  is a dropped-dep / return-alias free (a `#Slice materialise` `comp` intermediate freeing a view
+  whose borrow-dep was dropped — the script's own comment). A dep-annotation-based check cannot
+  see it (the dep is missing), so it is out of scope for this plan's fix + gate.
 
 These are why the nightly **miri** workflow's *Debug-assertions gate* and *LOFT_POISON
 arena-UAF gate* have been red (both `#[cfg(debug_assertions)]`-only; the scripts PASS on a
