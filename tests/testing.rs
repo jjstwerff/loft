@@ -538,8 +538,7 @@ impl Test {
             //  · redundant-`&` (12 fixtures) — drop the `&`;
             //  · `not null` deprecation (110) — delete the deprecated no-op.
             // End-to-end coverage of every family lives in `tests/runtime_warnings.rs`.
-            let is_runtime_warning = l.starts_with("Warning: `&` on parameter ")
-                || l.starts_with("Warning: `not null` is deprecated");
+            let is_runtime_warning = l.starts_with("Warning: `&` on parameter ");
             if expected.contains(&l) {
                 expected.remove(&l);
             } else if is_runtime_warning {

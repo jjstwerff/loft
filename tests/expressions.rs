@@ -620,7 +620,7 @@ fn coroutine_text_local_survives_yield() {
 #[test]
 fn not_null_element_assignment() {
     // `integer not null` element in a tuple type — basic assignment compiles and runs.
-    code!("fn count_pair() -> (integer not null, integer not null) { (1, 2) }")
+    code!("fn count_pair() -> (integer, integer) { (1, 2) }")
         .expr("p = count_pair(); p.0 + p.1")
         .result(Value::Int(3));
 }
