@@ -2388,3 +2388,72 @@ So `s[i]` single-subscript is *already* a key lookup — the core, documented so
 - **Consciously ACCEPTED, not fixed** — the design is internally consistent and defensible; the audit's "reject positional-shaped slices" was based on treating `[a..b]` as a special case, but the single subscript is already key-addressed, so there is no inconsistency *within* sorted to fix.
 - **Freeze guards:** the key-range semantics are golden-locked in `tests/expressions.rs` (`sorted_range_iteration` — `sum_range(2,4)` over keys `1..4` = `50`, i.e. keys 2,3, *not* positions 2,3 = `70`), and made un-missable by `sorted_subscript_is_key_addressed_not_positional` (keys far from positions). Documented as a Gotcha in `LOFT.md § Key-based collections` and `INCONSISTENCIES.md #2`.
 - Owner-reviewable; reverses the lib-audit's H8 lean on the strength of the `s[i]`-is-already-key-addressed finding. Reversible at contract 0 if the owner prefers the reject-and-add-`.range()` path (which would then also have to re-home `s[key]` for coherence and carve out `spatial`).
+
+---
+
+## C100 — `print` stays text-only (no bare `print(value)` or variadic `print`)
+
+**Catalogue:** @PLN13 (beginner-friendly scripts — step 5).
+
+### Question
+
+@PLN13 step 5 proposed making `print(42)` / `println(3.5)` work directly, so a
+beginner need not wrap a lone value in a format string (`print("{42}")`). The
+follow-on question (raised during the work) was whether to go further and adopt a
+Python-style variadic `print(a, b, c)` for multiple values.
+
+### Evaluation
+
+**The any-value capability already exists.** `print`/`println` take `text`, and a
+format string interpolates *any* `Printable` through its `to_text` — every scalar, and
+a user type once it defines `fn to_text(self: T) -> text`. So `print("{x}")`,
+`print("{a} {b} {c}")`, and `print("{p}")` all work today. Step 5 was only ever the
+bare-call *sugar* `print(42)` vs `print("{42}")` — three characters.
+
+**That sugar costs core-compiler surgery, because it forces `print` to overload.** loft
+free functions cannot be redefined, and a generic `print<T: Printable>` fails to compile
+*in the stdlib* (no call site to monomorphise the body — "missing built-in operation").
+The only stdlib overload mechanism is concrete `self`-method overloads, which turn
+`print` from a global free function into a method and thereby cause two real
+regressions:
+
+1. **REPL completion breaks** — `completion_names` excludes `t_…` methods ("not called
+   by bare name"), but `print(x)` *is* a bare-name method call, so `print`/`println`
+   drop out of tab-completion. Fixing it means broadening the completion model to list
+   bare-callable methods (unclear scope).
+2. **The @P376 poison-cascade returns** — `print(undefinedvar)` / `print(NoSuchType{})`
+   emit a spurious *second* error ("Unknown function print — did you mean the method…"),
+   because a poisoned `Never` argument cannot pick among the overloads. A single,
+   non-overloaded `print(text)` silences it cleanly. Fixing it means touching the
+   parser's call-resolution / error-recovery.
+
+So the bare-call sugar fights three separate core systems (the global-vs-method model,
+the completion model, and @P376 error recovery) — the "the fix wants more and more →
+the structure is wrong" signal — for a three-character convenience whose capability
+already ships via the format string.
+
+**Variadic `print(a, b, c)`** is a further step: loft has no variadic functions (and
+lists variadic tuples as a non-goal, [TUPLES.md § Non-goals](TUPLES.md)). It would also
+duplicate what the format string already does — and *less* explicitly: `print(a, b)`
+hides its separator (Python inserts a space you cannot see), whereas `print("{a} {b}")`
+writes the separator in place. loft deliberately keeps ONE string-building tool (the
+format string) that serves printing a value, separating several, and appending — rather
+than Python's two (variadic `print` + f-strings).
+
+### Decision
+
+**Closed — declined (2026-07-20).** `print`/`println` stay `(v: text)`. The any-value
+and multi-value need is met by the format string (`print("{x}")`, `print("{a} {b}")`),
+which is loft's single, explicit string-building idiom; documented in
+[STDLIB.md § Output and Diagnostics](STDLIB.md#output-and-diagnostics). No bare
+`print(value)`, no variadic `print`. @PLN13 step 5 is closed as **delivered by existing
+capability** (nothing to build).
+
+### Revisit when
+
+The owner wants the bare-call ergonomic enough to accept a print-specific arg coercion
+(keep `print(v: text)` a single global; in the call checker auto-insert `.to_text()`
+when the arg is a non-text `Printable`) — the one contained path that adds the sugar
+without the method-overload regressions above. That is a deliberate type-checker
+special case, not folded into step 5. Variadic `print` would additionally require
+reversing the no-variadics stance and is not on the table for contract 1.
