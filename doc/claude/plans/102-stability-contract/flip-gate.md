@@ -41,7 +41,7 @@ single reconciled view (supersedes the scattered "open" markers).
 | **Semantics** | INCONSISTENCIES.md Medium/Low resolved-as-design-point (documented + regression-guarded) | ✅ all in the resolved table |
 | **Errors** | Pre-freeze error surface maximally strict (add every error we might want — one-way) | ✅ Tier 0/1 fixed; E2-A + E2-B shipped (`tuxedo-e1-diag-codes`); sentinel collisions accepted (C85) |
 | **Errors** | Diagnostic machine-identity exists (codes, so prose stays improvable) | ✅ E1 shipped (codes are additive post-flip, so full back-fill is NOT a gate) |
-| **Syntax** | The last in-flight syntax plans settled (they *define* what contract 1 is) | 🔶 **THE gate** — see "Syntax-settled" below |
+| **Syntax** | The last in-flight syntax plans settled (they *define* what contract 1 is) | 🔶 **effectively settled** (query 2026-07-19: all syntax plans `future`/additive) — pending 2 owner rulings (@PLN15, @PLN91); see "Syntax-settled" below |
 | **Stdlib / libs** | lib-audit worklist resolved (H1–H9) | ✅ done or consciously accepted (H8 = C99) |
 | **Stdlib / libs** | The dedicated unhurried lib pass (owner phase 2 — stdlib + core libs, equally permanent) | 🔶 the second half of the E gate |
 | **Formats** | Layout/persistence identity distinguishes every semantically-distinct layout | ✅ **F9 built 2026-07-19** — `τ` vs `τ?` distinguished ([layout-nullability-identity.md](layout-nullability-identity.md)); deep raw-store gate grandfathered |
@@ -55,6 +55,32 @@ single reconciled view (supersedes the scattered "open" markers).
 to language/syntax subjects; each must be closed **or** its remaining work explicitly
 classified *additive* (safe to land post-flip). This list — reviewed with the owner —
 is the literal flip trigger, not a judgement call.
+
+**Query result (2026-07-19).** No `status:active` plan touches syntax — the whole open
+language set is `future`/`parked`. The syntax-touching plans, classified:
+
+| Plan | Syntax | Class for the flip |
+|---|---|---|
+| **@PLN37** [libs] Language features | `@get`/`@post`/`@ws` route decorators (C57), `type` aliases (C55), `?? return` (C56), `parallel { }` (A15), iterator protocol (I13) | **Additive** — all new forms; safe post-flip |
+| **@PLN24** `#c` C-ABI binding | a new `#c "<sym>"` definition annotation | **Additive** |
+| **@PLN15** cross-branch references | `ref struct T` + serialisable `&T` field refs | **⚠ owner decision** — see below; additive IFF inferred, breaking IFF declared |
+| **@PLN91** self-hosting epic | parser operator/precedence → bundles (internal); configurable default int width | Bundle restructure semantics-preserving; int-width is an **opt-in** SBC profile, not a default change |
+
+**Two edges need an explicit owner ruling before the flip** (the rest classify additive):
+1. **@PLN15 — declared vs inferred referenceability.** The provisional design makes
+   `&T` on an *unmarked* type a COMPILE ERROR (referenceability via `ref struct T`). That
+   is a one-directional tightening → if it's part of contract 1 it MUST land pre-flip.
+   The plan itself flags this "toll" as provisional and prefers **inferred+reported**
+   (auto-detect + warn), which is additive/post-flip-safe. Owner picks: declared
+   (pre-flip blocker) vs inferred (not a blocker). Scope to pin: whether `ref struct`
+   would collide with EXISTING `&` uses (`fn f(o: &S)`, `b: &integer = a`) or only gate
+   the new field-level `&T` reference.
+2. **@PLN91 — configurable default integer width.** Confirm it stays a per-build **SBC
+   profile** (opt-in), never a change to the default width — else it is a silent
+   semantics break that must precede the flip.
+
+**Verdict:** the syntax surface is effectively settled — every syntax plan is additive
+or deferred; the gate is MET once the owner rules on the two edges above.
 
 ## The CI drift gates (versioning-decision.md item 4) — BUILT + inert
 
