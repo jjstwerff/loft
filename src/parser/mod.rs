@@ -6009,6 +6009,22 @@ impl Parser {
 
     /// Try to find a matching defined operator. There can be multiple possible definitions for each operator.
     fn call_op(&mut self, code: &mut Value, op: &str, list: &[Value], types: &[Type]) -> Type {
+        // A first-pass UNARY op on an operand whose type is still UNRESOLVED — an
+        // Unknown-rooted value, e.g. `x = f()` where `f`'s return type isn't linked
+        // yet (a cross-package fn resolved only after this body's first pass) — must
+        // stay re-typeable.  Otherwise the `possible` loop below matches a concrete
+        // built-in (`-x` → OpMinInt → integer) and locks the result var to integer;
+        // pass 2 then re-resolves `x` to its real (e.g. float) type and the assignment
+        // errors "cannot change type from integer to float".  Return Unknown so pass 2
+        // refines it cleanly — the same re-typeable escape the generic-type-variable
+        // arm below takes on the first pass.  Scoped to a single unknown operand (a
+        // unary `-`/`~`/`!`): binary ops keep erroring so a genuine "No matching
+        // operator '<' on 'unknown' and 'boolean'" still fires.  A truly-unresolvable
+        // unary operand re-errors on pass 2 (this guard is first-pass only).
+        // (@PLN102 transitive cross-package inference.)
+        if self.first_pass && types.len() == 1 && types[0].is_unknown() {
+            return Type::Unknown(0);
+        }
         // I8.1: if any operand is a generic type variable, skip the main operator loop
         // and go straight to the T-stub lookup.  The main loop would otherwise false-match
         // concrete operators (e.g. OpEqRef, OpEqBool) via implicit type conversions on T.

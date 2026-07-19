@@ -9374,6 +9374,28 @@ fn run() -> integer {
     );
 }
 
+/// @PLN102 — a unary `-` on a value whose type is only resolved on the SECOND
+/// pass (here a forward reference to the struct-returning `mk`) must not lock the
+/// result variable to integer.  Before the fix, `-z` matched `OpMinInt` on pass 1
+/// (unknown operand) → `dot`/`run` inferred integer; pass 2 then resolved `z` to
+/// float and the assignment errored "cannot change type from integer to float".
+/// This is the same-file form of the cross-package transitive case that mis-typed
+/// `normalize3().z` in a graphics → glb → mesh3d tree (registry resolution order).
+#[test]
+fn pln102_unary_minus_on_forward_resolved_operand() {
+    code!(
+        "struct V3 { x: float, y: float, z: float }
+fn run() -> float {
+    d = mk();
+    z = d.z;
+    -z
+}
+fn mk() -> V3 { V3 { x: 1.0, y: 2.0, z: 3.0 } }"
+    )
+    .expr("run()")
+    .result(Value::Float(-3.0));
+}
+
 /// QUALITY 6c — the free-function hint must NOT fire when there is
 /// no `n_<field>` function compatible with the receiver.  Locks the
 /// specificity of the hint: a genuinely-misspelled field produces
