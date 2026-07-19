@@ -3,6 +3,14 @@
 
 # @PLN102 arc-E flip-gate — coverage-gap analysis (the two de-risking studies)
 
+> **Update (2026-07-20): both HIGH items BUILT.** Finding-1's gate = `tests/e1_code_set.rs`
+> (pins the 4 codes, 2 teeth, positive-control verified). Finding-2's HIGH rows = the
+> behaviour corpus grew 22→47 lines (rendering, structs, struct-enum payload, keyed
+> collections, text stdlib, null keystone, math, sort) — interpret==native verified.
+> Building it surfaced a real bug: `h[absent] ?? <mismatched-type>` (e.g. `Row? ?? int`)
+> is not rejected by loft's type checker → the interpreter **SIGSEGVs** while native gives
+> rustc `E0308` (a silent-crash + backend-divergence bug); omitted from the corpus, TO FILE.
+>
 > **Status: ANALYSIS (2026-07-19).** Answers the two falsification questions
 > [flip-gate.md](flip-gate.md) left open before the `0→1` flip: **(1)** is there a
 > FOURTH mechanically-driftable frozen surface with no gate? and **(2)** is the Gate-2

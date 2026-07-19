@@ -46,7 +46,7 @@ single reconciled view (supersedes the scattered "open" markers).
 | **Stdlib / libs** | The dedicated unhurried lib pass (owner phase 2 — stdlib + core libs, equally permanent) | 🔶 the second half of the E gate |
 | **Formats** | Layout/persistence identity distinguishes every semantically-distinct layout | ✅ **F9 built 2026-07-19** — `τ` vs `τ?` distinguished ([layout-nullability-identity.md](layout-nullability-identity.md)); deep raw-store gate grandfathered |
 | **Formats** | Format sub-language (interpolation) warts fixed | ✅ E2-A (unescaped `}`) shipped; format-brace is the last known one |
-| **Mechanism** | Drift gates make an omitted bump loud (layout-hash ⇒ bump; golden-corpus ⇒ classify) | ✅ **built + inert 2026-07-19** (Gate 1 + Gate 2 below). **Residual (coverage survey):** +an E1 **code-set** gate (4th ungated surface) + the Gate-2 **HIGH corpus rows** → [flip-gate-coverage-gaps.md](flip-gate-coverage-gaps.md) |
+| **Mechanism** | Drift gates make an omitted bump loud (layout-hash ⇒ bump; golden-corpus ⇒ classify) | ✅ **built + inert** (Gate 1 + Gate 2 below); the coverage-survey residual **also built 2026-07-20** — the E1 **code-set** gate (`tests/e1_code_set.rs`, the 4th surface) + the Gate-2 **HIGH corpus rows** (22→47 lines) → [flip-gate-coverage-gaps.md](flip-gate-coverage-gaps.md) |
 | **Test hygiene** | The `code!` harness asserts the diagnostics loft *actually* emits (no tolerated-warnings filter) | ✅ **built 2026-07-19** — filter deleted + meta-lock ([test-hygiene-warnings.md](test-hygiene-warnings.md)) |
 
 **"Syntax-settled" is not a vibe — make it a query.** The gate is "no open plan with
