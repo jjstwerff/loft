@@ -7,6 +7,30 @@ use loft::data::Value;
 
 mod testing;
 
+/// @PLN102 arc-E test-hygiene LOCK — the `code!` harness has NO silent-tolerance
+/// filter: a fixture that emits a warning it does not `.warning(..)`-assert MUST fail.
+/// This guards against re-introducing an `is_runtime_warning`-style tolerance (the one
+/// this pass deleted). The probe emits a redundant-`&` warning and asserts nothing, so
+/// evaluating it (on `Test` drop) must panic.
+#[test]
+fn harness_rejects_an_unasserted_warning() {
+    let prev = std::panic::take_hook();
+    std::panic::set_hook(Box::new(|_| {})); // silence the EXPECTED panic
+    let outcome = std::panic::catch_unwind(|| {
+        // `&S` param mutated by a field write → a redundant-`&` warning; asserting
+        // nothing must be a failure now that the tolerance filter is gone.
+        let _t = testing::testing_code(
+            "struct S { x: integer } fn f(o: &S) { o.x = 1; } fn test() { s = S { x: 0 }; f(s); }",
+            "harness_rejects_an_unasserted_warning_probe",
+        );
+    });
+    std::panic::set_hook(prev);
+    assert!(
+        outcome.is_err(),
+        "the harness must FAIL on an unasserted warning — silent tolerance is gone"
+    );
+}
+
 #[test]
 fn wrong_parameter() {
     code!("fn def(i: integer) { }\nfn test() { def(true); }")

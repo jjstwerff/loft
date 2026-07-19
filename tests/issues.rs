@@ -1605,11 +1605,11 @@ fn test() { r = Rec { n: 1 }; r.n += 1; }"
 fn pln40_const_reassign_via_ref_rejected() {
     code!(
         "struct Rec { const x: integer }
-fn touch(t: &Rec) { t.x = 9; }
+fn touch(t: Rec) { t.x = 9; }
 fn test() { t = Rec { x: 1 }; touch(t); }"
     )
     .error(
-        "cannot reassign const field 'x' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_reassign_via_ref_rejected:2:29",
+        "cannot reassign const field 'x' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_reassign_via_ref_rejected:2:28",
     );
 }
 
@@ -10251,7 +10251,7 @@ fn test() {
 fn p160_vec_element_as_ref_param() {
     code!(
         "struct S { x: integer }
-fn modify(s: &S, val: integer) { s.x = val; }
+fn modify(s: S, val: integer) { s.x = val; }
 fn test() {
     items: vector<S> = [S { x: 0 }, S { x: 10 }];
     modify(items[1], 42);
@@ -10266,7 +10266,7 @@ fn p160_nested_field_vec_element_as_ref_param() {
     code!(
         "struct Inner { val: integer }
 struct Outer { items: vector<Inner> }
-fn set_val(inner: &Inner, v: integer) { inner.val = v; }
+fn set_val(inner: Inner, v: integer) { inner.val = v; }
 fn test() {
     o = Outer { items: [Inner { val: 0 }, Inner { val: 0 }] };
     set_val(o.items[1], 99);
@@ -10476,7 +10476,7 @@ fn test() {
 fn p170_struct_placeholder_then_vec_elem_reassign() {
     code!(
         "struct P170Bag { items: vector<integer> }
-fn p170_mutate_bag(b: &P170Bag, v: integer) { b.items += [v]; }
+fn p170_mutate_bag(b: P170Bag, v: integer) { b.items += [v]; }
 fn test() {
     p170_bs: vector<P170Bag> = [];
     p170_x = P170Bag {};
@@ -10496,7 +10496,7 @@ fn test() {
 fn p170_placeholder_conditional_then_reassign() {
     code!(
         "struct P170CBag { val: integer }
-fn p170c_bump(b: &P170CBag) { b.val = b.val + 1; }
+fn p170c_bump(b: P170CBag) { b.val = b.val + 1; }
 fn test() {
     p170c_v: vector<P170CBag> = [P170CBag { val: 5 }];
     p170c_x = P170CBag { val: 0 };
@@ -10626,7 +10626,7 @@ fn p178_is_capture_slot_alias() {
         "enum P178Ui { P178UhToolButton { tb_id: integer } }
 struct P178Tools { ft_cur: integer }
 fn p178_hit() -> P178Ui { P178UhToolButton { tb_id: 2 } }
-fn p178_router(dummy: integer, tools: &P178Tools) -> P178Ui {
+fn p178_router(dummy: integer, tools: P178Tools) -> P178Ui {
     _ = dummy;
     rc = p178_hit();
     if rc is P178UhToolButton { tb_id } {
@@ -10660,7 +10660,7 @@ fn p179_ref_field_arg_corrupts_sibling() {
     code!(
         "struct P179Inner { pin_n: integer }
 struct P179Outer { po_x: P179Inner, po_q: integer }
-fn p179_int_ref(n: integer, r: &P179Inner) { r.pin_n = n; }
+fn p179_int_ref(n: integer, r: P179Inner) { r.pin_n = n; }
 fn test() {
     o = P179Outer { po_x: P179Inner { pin_n: 0 }, po_q: 0 };
     p179_int_ref(42, o.po_x);
@@ -10681,7 +10681,7 @@ fn p176_ref_param_method_style_mutation() {
     code!(
         "struct P176Box { items: vector<integer> }
 fn p176_add(self: P176Box, x: integer) { self.items += [x]; }
-fn p176_caller(b: &P176Box) { p176_add(b, 1); }
+fn p176_caller(b: P176Box) { p176_add(b, 1); }
 fn test() {
     bx = P176Box { items: [] };
     p176_caller(bx);
@@ -10701,7 +10701,7 @@ fn p176_transitive_forwarding_three_levels() {
         "struct P176Tx { val: integer }
 fn p176_inner(self: P176Tx)   { self.val = self.val + 1; }
 fn p176_mid(self: P176Tx)     { p176_inner(self); }
-fn p176_outer(b: &P176Tx)     { p176_mid(b); }
+fn p176_outer(b: P176Tx)     { p176_mid(b); }
 fn test() {
     b = P176Tx { val: 0 };
     p176_outer(b);
@@ -10719,7 +10719,7 @@ fn test() {
 fn p176_recursive_self_call_terminates() {
     code!(
         "struct P176Rec { val: integer }
-fn p176_bump(n: &P176Rec, depth: integer) {
+fn p176_bump(n: P176Rec, depth: integer) {
     n.val = n.val + 1;
     if depth > 0 { p176_bump(n, depth - 1); }
 }
@@ -16109,7 +16109,7 @@ fn pln87_link_l6_param_write_through() {
 #[test]
 fn pln87_link_l6_struct_param_field_writes_back() {
     code!(
-        "struct S { x: integer } fn g(obj: &S) { obj.x = 5; } \
+        "struct S { x: integer } fn g(obj: S) { obj.x = 5; } \
          fn check() -> integer { s = S { x: 1 }; g(s); s.x }"
     )
     .expr("check()")

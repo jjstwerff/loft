@@ -383,7 +383,7 @@ fn p178_is_capture_body() {
         "enum P04Ui { P04UhButton { tb_id: integer } }
 struct P04Tools { ft_cur: integer }
 fn p04_hit() -> P04Ui { P04UhButton { tb_id: 2 } }
-fn p04_router(dummy: integer, tools: &P04Tools) -> P04Ui {
+fn p04_router(dummy: integer, tools: P04Tools) -> P04Ui {
     _ = dummy;
     rc = p04_hit();
     if rc is P04UhButton { tb_id } {

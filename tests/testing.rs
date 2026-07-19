@@ -528,21 +528,16 @@ impl Test {
             // Stdlib source locations are location-agnostic in assertions
             // (@PLN92): match the normalized form used to build `expected`.
             let l = normalize_loft_loc(l);
-            // @PLN102 arc-E test-hygiene — the tolerated-warning filter is being RETIRED
-            // so the `code!` harness asserts EXACTLY what loft emits (no silent
-            // absorption). Measured 2026-07-19 (test-hygiene-buckets.md): the 5
-            // DN1-retired families (÷/%/`v[i]`/`s[i]` "may produce null", the `not null`
-            // field hint) and the two N-Store nudges had ZERO `code!` fixtures, so their
-            // clauses were dropped with no test delta (step 1). What remains is filtered
-            // only until its fixtures are corrected (assert-or-fix, then the clause goes):
-            //  · redundant-`&` (12 fixtures) — drop the `&`;
-            //  · `not null` deprecation (110) — delete the deprecated no-op.
-            // End-to-end coverage of every family lives in `tests/runtime_warnings.rs`.
-            let is_runtime_warning = l.starts_with("Warning: `&` on parameter ");
+            // @PLN102 arc-E test-hygiene (2026-07-19) — the tolerated-warning filter is
+            // GONE: the `code!` harness now asserts EXACTLY what loft emits, with NO
+            // silent absorption. A fixture that emits a warning must `.warning(..)`-assert
+            // it (or not emit it). The retired families (÷/%/`v[i]`/`s[i]`/`not null`-hint
+            // "may produce null", the N-Store nudge — all DN1-dead) and the corrected ones
+            // (redundant-`&` dropped, `not null` deleted) are logged in
+            // test-hygiene-buckets.md; end-to-end warning coverage lives in
+            // `tests/runtime_warnings.rs`.
             if expected.contains(&l) {
                 expected.remove(&l);
-            } else if is_runtime_warning {
-                continue;
             } else {
                 if !found.is_empty() {
                     found += "|";
