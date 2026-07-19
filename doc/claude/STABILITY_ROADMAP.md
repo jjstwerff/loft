@@ -82,6 +82,16 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
    these standing corpora keep running over the folded code and that **`tuxedo-cluster-c` merges to
    `main` green**. The invariant is enforced and now broadly gated; this is "keep it enforced," not
    "define it" — gate 1 is **sealed pending that merge**.
+   **⚠ RE-OPENED (2026-07-19): the widened debug-assertions gate did its job and surfaced a NEW
+   store-lifetime UAF the older corpus never hit** — `tests/scripts/35m-mid-slice-repetition.loft`
+   (`get_vector: use-after-free`) + `35c-rest-capture.loft` (POISON null), one root: **reading an
+   element of a match-captured repetition group** (`(x)*`/`(x)+`) frees the group's backing store
+   before the arm body dereferences it (the group is a `frame1(__vdb)` view whose dep-liveness
+   scopes.rs doesn't extend past the collection). Benign on release, caught only under
+   debug-assertions/POISON — so the nightly miri gate stays red until it lands. Root cause PINNED,
+   fix decided, not yet implemented → [plans/captured-group-elem-uaf.md](plans/captured-group-elem-uaf.md)
+   (repro + exact chokepoint + verification matrix). So gate 1's "every *tracked* store-lifetime bug
+   is closed" now carries this one open item.
 
 2. **One coherent null model — and the substrate gate 1 is built on. MODEL LANDED 2026-07-02 (#480);
    the gate is NOT yet cleared.** @PLN25 (nullable sequences / dense-default) is closed as a *plan*:
