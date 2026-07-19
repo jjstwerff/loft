@@ -6,6 +6,7 @@ IndexBag	size=4	struct{items@0:index<Item[ik]>}
 Item	size=17	struct{ik@0:integer, #left_1@8:int<0,false>, #right_1@12:int<0,false>, #color_1@16:boolean}
 Narrow	size=7	struct{a@0:int<-2147483647,false>, b@6:byte, c@4:short_raw<0,false>}
 NotNull	size=12	struct{i@0:integer, t@8:text}
+Nullable	size=16	struct{n@0:integer, f@8:float}
 Rect	size=24	enumvalue[2]{enum@0:byte, width@8:integer, height@16:integer}
 RefHost	size=29	struct{child@0:Scalars}
 Scalars	size=29	struct{b@28:boolean, c@16:character, s@20:single, f@0:float, i@8:integer, t@24:text}
@@ -34,3 +35,5 @@ text	size=4	base
 vector<integer>	size=4	vector<integer>(elem_size=8)
 vector<text>	size=4	vector<text>(elem_size=4)
 vector<vector<integer>>	size=4	vector<vector<integer>>(elem_size=4)
+=== F9 nullability ===
+nn/1;Nullable:f,n

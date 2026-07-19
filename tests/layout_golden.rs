@@ -37,7 +37,8 @@ const CORPUS: &str = r#"
 struct Scalars { b: boolean, c: character, s: single, f: float, i: integer, t: text }
 struct Narrow { a: i32, b: u8, c: u16 }
 struct Wide { s: i16 }
-struct NotNull { i: integer not null, t: text not null }
+struct NotNull { i: integer, t: text }
+struct Nullable { n: integer?, f: float? }
 struct Vec1 { v: vector<integer> }
 struct VecNest { vv: vector<vector<integer>> }
 struct VecText { v: vector<text> }
@@ -58,6 +59,7 @@ const TYPES: &[&str] = &[
     "Narrow",
     "Wide",
     "NotNull",
+    "Nullable",
     "Vec1",
     "VecNest",
     "VecText",
@@ -72,8 +74,10 @@ const TYPES: &[&str] = &[
 ];
 
 /// A layout change flips this. Re-bless (with the golden) on an intentional change.
-/// (@PLN97 F9 2026-07-17 — re-blessed after adding the `@endian` line to the layout dump.)
-const LAYOUT_ALGO_HASH: u64 = 14_478_928_954_060_894_342;
+/// (@PLN97 F9 2026-07-17 — re-blessed after adding the `@endian` line to the layout dump.
+/// @PLN102 arc-E F9 2026-07-19 — re-blessed after adding the `Nullable` corpus type +
+/// folding the DEF-level nullability schema into the golden.)
+const LAYOUT_ALGO_HASH: u64 = 5_366_778_852_810_394_803;
 
 /// @PLN102 arc-E flip-gate (Gate 1 step 3) — the `contract` version at which the
 /// CURRENT layout was frozen. The store layout IS the persistence contract, so
@@ -115,11 +119,17 @@ fn layout_golden() {
 
     let roots = corpus_roots(&p.data);
     let dump = p.database.layout_dump(&roots);
+    // @PLN102 arc-E F9 — fold the DEF-level nullability schema into the golden so a
+    // full-width `τ` → `τ?` flip (byte-identical `dump`, so invisible to the hash) is
+    // ALSO a red diff here + a contract-goldens gate trip. `Nullable` in the corpus
+    // makes the pin non-trivial.
+    let schema = loft::schema_sidecar::nullability_schema(&p.data, &roots);
+    let golden = format!("{dump}=== F9 nullability ===\n{schema}\n");
     let path = golden_path();
 
     if std::env::var("LOFT_BLESS_LAYOUT").is_ok() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &dump).unwrap();
+        std::fs::write(&path, &golden).unwrap();
         eprintln!(
             "blessed {} ; LAYOUT_ALGO_HASH = {}",
             path.display(),
@@ -141,10 +151,11 @@ fn layout_golden() {
         )
     });
     assert_eq!(
-        dump, expected,
-        "\nSTORE LAYOUT CHANGED. If intentional: re-bless (LOFT_BLESS_LAYOUT=1), \
-         hand-verify the diff, and update LAYOUT_ALGO_HASH. If not: a layout \
-         regression (the #477 class) just got caught.\n"
+        golden, expected,
+        "\nSTORE LAYOUT or F9 NULLABILITY CHANGED. If intentional: re-bless \
+         (LOFT_BLESS_LAYOUT=1), hand-verify the diff, and update LAYOUT_ALGO_HASH. If \
+         not: a layout regression (the #477 class) or a silent `τ`↔`τ?` reshape just \
+         got caught.\n"
     );
     assert_eq!(
         p.database.layout_algo_hash(&roots),
