@@ -211,6 +211,20 @@ test('truncate file with f#size', () => {
   assert(r.output.trim() === '8', `Got: ${r.output.trim()}`);
 });
 
+test('@PLN13 — a beginner script (no fn main, no semicolons) runs in the playground', () => {
+  // Loose top-level statements, no `fn main`, `;` omitted between them: the wasm
+  // entry point auto-detects the script and desugars it, exactly like the CLI.
+  const r = runCode(`
+total = 0
+for i in 1..5 {
+  total = total + i;
+}
+println("total={total}")
+`);
+  assert(r.success, `Expected success; diagnostics: ${r.diagnostics}`);
+  assert(r.output.trim() === 'total=10', `Got: ${r.output.trim()}`);
+});
+
 // ── Run ────────────────────────────────────────────────────────────────────────
 
 const failed = await run();
