@@ -2666,10 +2666,7 @@ impl Parser {
             // fallback (there is no checked-shift form) stays the sanctioned escape
             // — mirroring the cast rule below — so skip the check when a `??`
             // follows. A *dynamic* out-of-range amount still reads null (C80/C85).
-            if !self.first_pass
-                && matches!(operator, "<<" | ">>")
-                && !self.lexer.peek_token("??")
-            {
+            if !self.first_pass && matches!(operator, "<<" | ">>") && !self.lexer.peek_token("??") {
                 // Fold the shift amount: `const_int` catches `-1` (a `neg(1)`
                 // node), `2+3`, a named constant — not just a bare `Int` literal.
                 let amt = if let Value::Call(_, args) = code.unspan() {

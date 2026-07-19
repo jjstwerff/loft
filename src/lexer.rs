@@ -931,7 +931,11 @@ impl Lexer {
                 if let Some('}') = self.iter.peek() {
                     res.push(c);
                 } else {
-                    self.err_coded(Level::Error, "format-unescaped-brace", "a literal `}` in a format string must be written `}}`");
+                    self.err_coded(
+                        Level::Error,
+                        "format-unescaped-brace",
+                        "a literal `}` in a format string must be written `}}`",
+                    );
                 }
             } else {
                 // With interpolation off (configs), `{` / `}` fall here as literal
@@ -1091,7 +1095,11 @@ impl Lexer {
                     if let Some('}') = self.iter.peek() {
                         cur.push('}');
                     } else {
-                        self.err_coded(Level::Error, "format-unescaped-brace", "a literal `}` in a format string must be written `}}`");
+                        self.err_coded(
+                            Level::Error,
+                            "format-unescaped-brace",
+                            "a literal `}` in a format string must be written `}}`",
+                        );
                     }
                 }
                 Some(&'\\') => {
@@ -1158,7 +1166,11 @@ impl Lexer {
                     if let Some('}') = self.iter.peek() {
                         cur.push('}');
                     } else {
-                        self.err_coded(Level::Error, "format-unescaped-brace", "a literal `}` in a format string must be written `}}`");
+                        self.err_coded(
+                            Level::Error,
+                            "format-unescaped-brace",
+                            "a literal `}` in a format string must be written `}}`",
+                        );
                     }
                 }
                 Some(&'\\') => {
