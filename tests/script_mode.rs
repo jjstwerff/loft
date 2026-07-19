@@ -48,13 +48,14 @@ fn script_runs_without_fn_main_under_flag() {
 }
 
 #[test]
-fn script_flag_is_the_differentiator() {
+fn script_auto_detected_without_flag() {
     let fixture = workspace_root().join("tests/data/script_hello.loft");
-    // Without `--script` the loose top-level statements are a parse error — the flag is
-    // exactly what turns a rejected source into a runnable one.
-    let (_, plain_ok) = run(&["--interpret"], &fixture);
+    // Step 3 — no flag needed: a loose-top-level-statement source (which loft rejected
+    // before) is auto-detected as a script and desugared, producing the same result as
+    // the explicit `--script` run above.
+    let (out, ok) = run(&["--interpret"], &fixture);
     assert!(
-        !plain_ok,
-        "without --script the loose-statement script must NOT parse/run"
+        ok && out.contains("count=12"),
+        "auto-detect (no flag): {out:?}"
     );
 }

@@ -19,12 +19,28 @@ use crate::parser::Parser;
 
 /// True when `src` is a beginner-style SCRIPT: it has ≥1 loose top-level statement
 /// and defines no `fn main`. False for every all-defs or `fn main`-bearing file.
+///
+/// A file is NOT a script if any non-def item is a MALFORMED definition — a def with a
+/// mistyped keyword (`funcion main() {…}`, `stru Foo {…}`) reads as a loose statement to
+/// the split, but it is a broken program, not a script. Auto-detect must not desugar it
+/// (that would bury the real "unknown keyword" error inside a synthesised `main`), so any
+/// def-shaped item makes the whole file non-script and it parses — and errors — unchanged.
 pub fn is_script(src: &str) -> bool {
     let items = split_top_level(src);
     if items.iter().any(|it| is_fn_main(it)) {
         return false;
     }
-    items.iter().any(|it| !is_def_item(it))
+    let mut has_loose_stmt = false;
+    for it in &items {
+        if is_def_item(it) {
+            continue;
+        }
+        if is_def_shaped(it) {
+            return false; // a mistyped-keyword definition — not a script
+        }
+        has_loose_stmt = true;
+    }
+    has_loose_stmt
 }
 
 /// @PLN13 Step 2 — the script desugar. If `src` is a beginner script, return the
@@ -269,6 +285,41 @@ fn is_top_level_const(core: &str) -> bool {
     after.starts_with('=') || after.starts_with(':')
 }
 
+/// True when the item has the SHAPE of a definition with a mistyped keyword: after
+/// stripping annotations it begins with two identifier tokens — `<ident> <ident>` — where
+/// the first is NOT a loft keyword (`funcion main`, `stru Foo`, `fnn f`). Every real
+/// definition keyword is caught by [`is_def_item`] already, and no valid loose statement
+/// begins with two bare identifiers: an assignment is `ident = …`, a call is `ident(…)`,
+/// a method/index is `ident.` / `ident[`, and a keyword statement (`if x { … }`,
+/// `for i in …`, `return x`, `while c { … }`, `match v { … }`) begins with a KEYWORD,
+/// which the keyword guard below excludes. So this flags exactly the mistyped-keyword
+/// definitions, and nothing a beginner would actually write as a statement.
+fn is_def_shaped(item: &str) -> bool {
+    let core = strip_leading_annotations(item);
+    let b = core.as_bytes();
+    let n = b.len();
+    // first token must be an identifier start
+    if n == 0 || !(b[0].is_ascii_alphabetic() || b[0] == b'_') {
+        return false;
+    }
+    let mut i = 0;
+    while i < n && (b[i].is_ascii_alphanumeric() || b[i] == b'_') {
+        i += 1;
+    }
+    // a keyword-led item (`if`, `for`, `return`, …) is a real statement, not a def shape
+    if crate::lexer::is_keyword(&core[..i]) {
+        return false;
+    }
+    // require whitespace, then a second identifier start
+    if i >= n || !b[i].is_ascii_whitespace() {
+        return false;
+    }
+    while i < n && b[i].is_ascii_whitespace() {
+        i += 1;
+    }
+    i < n && (b[i].is_ascii_alphabetic() || b[i] == b'_')
+}
+
 /// True when the item is `fn main` (after stripping annotations): `fn` then the name
 /// `main` at a word boundary.
 fn is_fn_main(item: &str) -> bool {
@@ -351,6 +402,21 @@ mod tests {
             out,
             "fn helper() { 1 }\nfn main() {\nprint(\"a\");\nprint(\"b\");\n}\n"
         );
+    }
+
+    #[test]
+    fn mistyped_def_keyword_is_not_a_script() {
+        // a typo'd def keyword reads as a loose statement to the split, but it is a
+        // broken program — auto-detect must leave it for the compiler's real error,
+        // not desugar it into a confusing one inside a synthesised `main` (#03 of the
+        // error-message corpus: `funcion main() { … }`).
+        assert!(!is_script("funcion main() {\n  print(\"x\");\n}\n"));
+        assert!(!is_script("stru Point { x: integer }\n"));
+        assert!(!is_script("fnn helper() { 1 }\n"));
+        // but a keyword-led statement is still a real script (the guard must not over-reach)
+        assert!(is_script("if true {\n  print(\"y\");\n}\n"));
+        assert!(is_script("for i in 0..3 {\n  print(\"{i}\");\n}\n"));
+        assert!(is_script("total = 0;\nreturn total;\n"));
     }
 
     #[test]

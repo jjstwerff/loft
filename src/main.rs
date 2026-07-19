@@ -96,8 +96,8 @@ fn print_help() {
         "  --interpret                   run in interpreter/bytecode mode (native is default)"
     );
     println!(
-        "  --script                      run a beginner script (loose top-level statements,\n\
-         \x20                               no `fn main`) — desugars to one run-once `fn main`"
+        "  --script                      force beginner-script mode (loose top-level\n\
+         \x20                               statements, no `fn main`) — auto-detected otherwise"
     );
     println!(
         "  --dump                        compile to bytecode, dump to stderr, and exit (no execution)"
@@ -5581,9 +5581,23 @@ fn main() {
     // the test suite — the dev-safety + test-isolation default).  The narrower
     // stdlib cache (`LOFT_STDLIB_CACHE`, D2b) caches `default/` only and engages
     // just when the program cache is off.
-    // @PLN13 — `--script` parses a DESUGARED source (not the file on disk), so bypass
-    // the whole-program cache (keyed by the file) to avoid a stale warm load.
-    let program_cache_on = loft::cache::program_cache_enabled() && !script_mode;
+    // @PLN13 step 3 — AUTO-DETECT a beginner script (loose top-level statements, no
+    // `fn main`) and desugar it to one run-once `fn main`, once, here; the parse below
+    // uses this transformed source. `is_script` classifies every file the compiler
+    // accepts (all-defs library / `fn main` program) as NOT a script, so this changes
+    // nothing for existing programs — only a source loft rejects today becomes runnable.
+    // `--script` remains an explicit request but is now redundant with auto-detect.
+    // A desugared source (auto or `--script`) bypasses the whole-program cache, which is
+    // keyed by the file on disk, not the transformed source.
+    let script_desugared: Option<String> = if abs_file.is_empty() {
+        None
+    } else {
+        std::fs::read_to_string(&abs_file)
+            .ok()
+            .and_then(|src| loft::script::script_desugar(&src))
+    };
+    let program_cache_on =
+        loft::cache::program_cache_enabled() && script_desugared.is_none() && !script_mode;
     p.track_sources = program_cache_on;
     // @PLN11 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
     // as a SKELETON (def table only) and the mmap'd bundle store is returned
@@ -5656,19 +5670,11 @@ fn main() {
     // policy was loaded above, before the warm-load gate, so designations form
     // during this parse — and a sandboxed program is never warm-loaded.)
     if !program_warm {
-        // @PLN13 step 2 — under `--script`, desugar loose top-level statements into a
-        // run-once `fn main` and parse that; a file that is not a script (all-defs /
-        // already has `fn main`) desugars to `None` and parses unchanged.
-        let desugared = if script_mode {
-            std::fs::read_to_string(&abs_file)
-                .ok()
-                .and_then(|src| loft::script::script_desugar(&src))
-        } else {
-            None
-        };
-        match desugared {
+        // @PLN13 — parse the desugared script (auto-detected above), or for a normal
+        // program parse the file unchanged.
+        match &script_desugared {
             Some(src) => {
-                p.parse_source(&src, &abs_file, false);
+                p.parse_source(src, &abs_file, false);
             }
             None => {
                 p.parse(&abs_file, false);
