@@ -8935,6 +8935,21 @@ impl Parser {
             Value::Block(bl) if bl.name == "scalar_match" => {
                 bl.operators.last().is_some_and(Self::if_tail_yields_text)
             }
+            // A `match v { [slice] => … }` in tail position lowers to
+            // `Block["vector_match"]{ Set(subj), <arg init>, return <nested If> }` —
+            // the same value-yielding branch tail as a scalar match, behind the
+            // slice-binding + rest-materialise scaffolding. Without seeing through it,
+            // `do_if_acc` never fires, so a text arm that VIEWS a captured repetition
+            // group is promoted to a raw `&text` alias of the group's backing store
+            // and freed under it — the captured-group element-access use-after-free
+            // (plans/captured-group-elem-uaf.md). With it, each arm's text is COPIED
+            // into the `__acc` buffer (owned) before the store is freed — the same
+            // proven per-arm delivery the scalar match already takes. Forward-ref-safe
+            // (the block is emitted on both passes); a `return`/guard arm still yields
+            // `false` via `arm_yields_text`, so a non-text arm keeps its reject.
+            Value::Block(bl) if bl.name == "vector_match" => {
+                bl.operators.last().is_some_and(Self::if_tail_yields_text)
+            }
             _ => false,
         }
     }

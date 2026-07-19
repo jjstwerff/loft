@@ -669,3 +669,26 @@ Set `LOFT_LOG=scope_debug` to trace free decisions at compile time:
 
 The orphan check catches variables whose scope was never entered in the current chain —
 a condition that should not occur after the A5.6 block-pre-registration fix.
+
+## Diagnostic: `introspect --show-ownership` + the free-before-dependent-read overlay
+
+`loft introspect --show-ownership <prog>` renders each binding's resolved ownership
+(`Owned` / `Borrowed(base)` / `Join(base)`, with `Owned (backing=…)` for a buffer). This is
+the STATIC half of the @PLN103 lifetime inspector (the runtime half is `LOFT_STORES=timeline`).
+
+The verdicts alone are **temporal-agnostic** — they say *who owns what*, not *when a store is
+freed relative to its reads* — so a correctly-placed free and a use-after-free render
+identically. The overlay closes that gap: `use_analysis::free_before_dependent_read` walks the
+committed IR and, along each straight-line path, flags an `OpFreeRef(S)` followed by a
+DEREFERENCE of any (transitive) view of `S`:
+
+```
+  ⚠ UAF: `arg` is read AFTER `OpFreeRef(__vdb_1)` — `arg` views the freed store
+     (backing=__vdb_1); free-before-dependent-read
+```
+
+Precision rests on two axes: it follows **transitive** view chains (a nested `match arg {…}`
+derefs `arg` through an intermediate that only transitively views the store) and counts only
+**dereference** reads — a bare `Var` in a `return`/move is a safe delivery the retbuf/ownership
+machinery handles, not a UAF. Blind spot: a bug whose root is a *missing* dep (a dropped borrow)
+cannot be seen by a dep-based check. Gate: `tests/introspect.rs`.

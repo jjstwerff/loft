@@ -1,0 +1,66 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression fixture for BOTH captured-group UAF fixes and BOTH `introspect
+// --show-ownership` UAF overlays (plans/captured-group-elem-uaf.md). Every overlay must
+// stay SILENT here; if either fix regresses, its overlay fires and the CLI gate fails.
+//   - `bad`   — 35m: a captured-group element access. Before the materialisation fix the
+//               group's backing `__vdb_1` was freed before the arm dereferenced `arg[0]`;
+//               guarded by the free-before-dependent-read overlay.
+//   - `good`  — the IDENTICAL element access on a normal owned vector (already correct).
+//   - `parse` — 35c: an enum-returning vector match with a captured struct-enum field.
+//               Before the collect_return_sources fix the returned `LetS` record was freed
+//               by a plain OpFreeRef before the return; guarded by the return-source-free
+//               overlay. Each overlay's own FIRING is proved parser-free in
+//               `use_analysis::{uaf_overlay_tests, return_source_tests}`.
+
+enum Token {
+  Punct { #lexeme sym: text },
+  Ident { name: text },
+  Num { value: integer },
+}
+fn id(n: text) -> Token {
+  Ident { name: n }
+}
+fn p(s: text) -> Token {
+  Punct { sym: s }
+}
+
+// UAF: `arg` (a view into the freed `__vdb_1`) is dereferenced after the free.
+fn bad(v: vector<Token>) -> text {
+  match v {
+    [_, "(", (arg: Ident)*(","), ")"] => match arg[0] { Ident { name } => name, _ => "?" },
+    _ => "!",
+  }
+}
+
+// CORRECT: the owned vector's backing store is freed after the element read.
+fn good(a: text, b: text) -> text {
+  ws: vector<Token> = [id(a), id(b)];
+  match ws[0] { Ident { name } => name, _ => "?" }
+}
+
+// 35c: enum return + captured struct-enum field + ..rest. The returned `LetS` record
+// must be freed conditionally (OpFreeRefIfDistinct), not by a plain OpFreeRef.
+enum Stmt {
+  LetS { name: text, count: integer },
+  Other { count: integer },
+}
+fn ntoks(v: vector<Token>) -> integer {
+  len(v)
+}
+fn parse(v: vector<Token>) -> Stmt {
+  match v {
+    [Ident { name }, ..rest] => LetS { name: name, count: ntoks(rest) },
+    whole => Other { count: ntoks(whole) },
+  }
+}
+fn stmt_count(s: Stmt) -> integer {
+  match s { LetS { name, count } => count, Other { count } => -count }
+}
+
+fn main() {
+  print(bad([id("foo"), p("("), id("a"), p(")")]));
+  print(good("x", "y"));
+  print("{stmt_count(parse([id(\"a\"), id(\"b\"), id(\"c\")]))}");
+}

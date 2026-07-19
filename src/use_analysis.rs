@@ -2520,3 +2520,609 @@ pub fn report_copies(data: &Data) {
         }
     }
 }
+
+/// @PLN103 (temporal extension) — static free-before-dependent-read detector.
+///
+/// The `--show-ownership` overlay classifies WHO owns each store, but the verdict is
+/// temporal-agnostic: it renders identically whether a store's `OpFreeRef` lands
+/// before or after the last read of a view into it. The captured-group element-access
+/// UAF (`plans/captured-group-elem-uaf.md`) was invisible to it for exactly that
+/// reason — the correct and the use-after-free lowering share every ownership verdict.
+/// This walk adds the missing temporal check.
+///
+/// Invariant enforced: along each straight-line path of the committed IR, an
+/// `OpFreeRef(S)` must not be followed by a genuine READ of any binding `B` whose
+/// static deps include `S` (`B` is a live view into the freed store), unless `S` is
+/// re-allocated (`OpDatabase(S)`) between the free and the read.
+///
+/// Returns `(store, via)` pairs — the freed store var and the view read after it —
+/// sorted + deduped. Empty = clean. Conservative by construction (branch state is
+/// intersected at joins; only an UNCONDITIONAL `OpFreeRef` frees), so it under-reports
+/// rather than false-positives.
+pub fn free_before_dependent_read(data: &Data, d_nr: u32) -> Vec<(u16, u16)> {
+    let def = data.def(d_nr);
+    let vars = &def.variables;
+    let free_ref = data.def_nr("OpFreeRef");
+    let op_db = data.def_nr("OpDatabase");
+    // Reverse map: store var `S` -> bindings `B` that VIEW `S`, TRANSITIVELY. A view
+    // of a view keeps `S` live through an intermediate local — a nested `match arg {…}`
+    // binds `_match_subj_2 = arg`, and `arg` deps `__vdb_1`, so a deref of
+    // `_match_subj_2` reads `__vdb_1`. A single-hop map misses it (`arg` is only
+    // bare-MOVED into `_match_subj_2`, never deref'd), so walk the dep graph to a
+    // fixpoint — the same closure `scopes::transitive_depers` uses for reclaim.
+    // Skip marker deps (the u16::MAX one-buffer sentinel, the 0x8000 callee-frame tag)
+    // and self-deps (work-refs carry their own var in the dep list).
+    let n = vars.count();
+    let direct = |b: u16| -> Vec<u16> {
+        vars.tp(b)
+            .depend()
+            .into_iter()
+            .filter(|&d| d != u16::MAX && d & 0x8000 == 0 && d != b)
+            .collect::<Vec<u16>>()
+    };
+    let mut reaches: Vec<HashSet<u16>> = (0..n).map(|b| direct(b).into_iter().collect()).collect();
+    loop {
+        let mut changed = false;
+        for b in 0..n as usize {
+            for m in reaches[b].iter().copied().collect::<Vec<u16>>() {
+                if (m as usize) < n as usize {
+                    for a in reaches[m as usize].iter().copied().collect::<Vec<u16>>() {
+                        if reaches[b].insert(a) {
+                            changed = true;
+                        }
+                    }
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+    let mut dependents: HashMap<u16, Vec<u16>> = HashMap::new();
+    for b in 0..n {
+        for &s in &reaches[b as usize] {
+            dependents.entry(s).or_default().push(b);
+        }
+    }
+    if dependents.is_empty() {
+        return Vec::new();
+    }
+    let mut out: Vec<(u16, u16)> = Vec::new();
+    let mut freed: HashSet<u16> = HashSet::new();
+    scan_uaf(
+        &def.code,
+        &mut freed,
+        &dependents,
+        free_ref,
+        op_db,
+        &mut out,
+    );
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+fn scan_uaf(
+    node: &Value,
+    freed: &mut HashSet<u16>,
+    dependents: &HashMap<u16, Vec<u16>>,
+    free_ref: u32,
+    op_db: u32,
+    out: &mut Vec<(u16, u16)>,
+) {
+    match node.unspan() {
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                scan_uaf(op, freed, dependents, free_ref, op_db, out);
+            }
+        }
+        Value::Insert(ops) => {
+            for op in ops {
+                scan_uaf(op, freed, dependents, free_ref, op_db, out);
+            }
+        }
+        Value::If(c, t, e) => {
+            scan_uaf(c, freed, dependents, free_ref, op_db, out);
+            let mut ft = freed.clone();
+            scan_uaf(t, &mut ft, dependents, free_ref, op_db, out);
+            let mut fe = freed.clone();
+            scan_uaf(e, &mut fe, dependents, free_ref, op_db, out);
+            // Definitely-freed after the join = freed on BOTH branches. A store freed
+            // on only one path is live on the other, so it is NOT carried as freed.
+            *freed = ft.intersection(&fe).copied().collect();
+        }
+        Value::Return(inner)
+        | Value::Drop(inner)
+        | Value::Yield(inner)
+        | Value::BreakWith(_, inner) => {
+            scan_uaf(inner, freed, dependents, free_ref, op_db, out);
+        }
+        Value::Call(op, args) if *op == free_ref => {
+            if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
+                freed.insert(*s);
+            }
+        }
+        Value::Call(op, args) if *op == op_db => {
+            if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
+                freed.remove(s); // re-allocated — the store is live again
+            }
+        }
+        // Any other op is a read-leaf for this walk: it neither frees/allocs a store
+        // nor branches, so check whether it DEREFERENCES a view of a freed store.
+        other => check_reads(other, freed, dependents, out),
+    }
+}
+
+fn check_reads(
+    node: &Value,
+    freed: &HashSet<u16>,
+    dependents: &HashMap<u16, Vec<u16>>,
+    out: &mut Vec<(u16, u16)>,
+) {
+    if freed.is_empty() {
+        return;
+    }
+    for &s in freed {
+        if let Some(views) = dependents.get(&s) {
+            for &b in views {
+                if deref_read(node, b, false) {
+                    out.push((s, b));
+                }
+            }
+        }
+    }
+}
+
+/// True when `node` DEREFERENCES var `target` — reads the CONTENTS of its store,
+/// as opposed to merely delivering the reference. The distinction is what separates
+/// a real use-after-free from a benign stale dep:
+///
+///   * A bare `Var(target)` in a DELIVERY position — `return v`, `x = v` (a move),
+///     a block tail — hands the *reference* on. The ownership / retbuf machinery
+///     moves it safely, so a stale dep on an already-freed store there is NOT a UAF
+///     (the return-hoist `__ret_N` false positives, `85-...` / `562-...`).
+///   * `target` consumed inside a `Call` (`OpGetVector(v, …)`, `OpGetText(…v…)`, a
+///     fn arg) reads the store's contents — a genuine deref that IS a UAF once the
+///     store is freed (the captured-group `arg[0]` access).
+///
+/// So a bare `Var` only counts when it is already inside a call (`in_call`); the
+/// inherently-dereferencing slots (`TupleGet` / `CallRef` / `Iter` / `FnRef` /
+/// `ParFor`) always count. Write targets (`Set`/`TuplePut` LHS) never do —
+/// `for_each_child` restricts those to their RHS.
+fn deref_read(node: &Value, target: u16, in_call: bool) -> bool {
+    let n = node.unspan();
+    let hit = match n {
+        Value::Var(x) => in_call && *x == target,
+        Value::TupleGet(x, _) | Value::FnRefDnr(x) => *x == target,
+        Value::CallRef(x, _) | Value::Iter(x, _, _, _) => *x == target,
+        Value::FnRef(_, w, _) => *w == target,
+        Value::ParFor(b) => b.x_var == target || b.r_var == target,
+        _ => false,
+    };
+    if hit {
+        return true;
+    }
+    // A Call / CallRef consumes its arguments, so a bare `Var` beneath one is a read.
+    let child_in_call = in_call || matches!(n, Value::Call(_, _) | Value::CallRef(_, _));
+    let mut found = false;
+    n.for_each_child(&mut |c| {
+        if !found && deref_read(c, target, child_in_call) {
+            found = true;
+        }
+    });
+    found
+}
+
+#[cfg(test)]
+mod uaf_overlay_tests {
+    //! Injected-fault controls for the free-before-dependent-read walk (`scan_uaf`),
+    //! parser-free so the positive control does not depend on the compiler still
+    //! EMITTING the bug (the materialisation fix removed the only real-code trigger).
+    use super::{check_reads, scan_uaf};
+    use crate::data::{Type, Value, v_block};
+    use std::collections::{HashMap, HashSet};
+
+    // Arbitrary op-numbers for the walk; the walk only compares against these.
+    const FREE_REF: u32 = 100;
+    const OP_DB: u32 = 101;
+    const GETTER: u32 = 200; // stands in for OpGetVector / OpGetField / OpGetText
+
+    fn deps(store: u16, view: u16) -> HashMap<u16, Vec<u16>> {
+        let mut d = HashMap::new();
+        d.insert(store, vec![view]);
+        d
+    }
+    fn run(code: &Value, dependents: &HashMap<u16, Vec<u16>>) -> Vec<(u16, u16)> {
+        let mut freed = HashSet::new();
+        let mut out = Vec::new();
+        scan_uaf(code, &mut freed, dependents, FREE_REF, OP_DB, &mut out);
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+    fn free(s: u16) -> Value {
+        Value::Call(FREE_REF, vec![Value::Var(s)])
+    }
+    fn deref(v: u16) -> Value {
+        Value::Call(GETTER, vec![Value::Var(v)])
+    }
+
+    /// POSITIVE control — a deref of view `B` AFTER `OpFreeRef(S)` (S ∈ deps(B)) is flagged.
+    #[test]
+    fn flags_deref_after_free() {
+        let code = v_block(vec![free(10), deref(3)], Type::Void, "body");
+        assert_eq!(run(&code, &deps(10, 3)), vec![(10, 3)]);
+    }
+
+    /// NEGATIVE — a bare `Var` DELIVERY (`return b`) after the free is a safe move, not a deref.
+    #[test]
+    fn silent_on_bare_delivery_after_free() {
+        let code = v_block(
+            vec![free(10), Value::Return(Box::new(Value::Var(3)))],
+            Type::Void,
+            "body",
+        );
+        assert!(run(&code, &deps(10, 3)).is_empty());
+    }
+
+    /// NEGATIVE — a deref BEFORE the free is correctly ordered.
+    #[test]
+    fn silent_when_deref_precedes_free() {
+        let code = v_block(vec![deref(3), free(10)], Type::Void, "body");
+        assert!(run(&code, &deps(10, 3)).is_empty());
+    }
+
+    /// NEGATIVE — re-allocating the store (`OpDatabase(S)`) between free and deref clears it.
+    #[test]
+    fn silent_after_realloc() {
+        let code = v_block(
+            vec![free(10), Value::Call(OP_DB, vec![Value::Var(10)]), deref(3)],
+            Type::Void,
+            "body",
+        );
+        assert!(run(&code, &deps(10, 3)).is_empty());
+    }
+
+    /// NEGATIVE — a store freed on only ONE branch is live on the other; a deref after the
+    /// join is not a definite UAF (branch state is intersected).
+    #[test]
+    fn silent_when_free_on_one_branch_only() {
+        let code = v_block(
+            vec![
+                Value::If(
+                    Box::new(Value::Var(0)),
+                    Box::new(v_block(vec![free(10)], Type::Void, "then")),
+                    Box::new(v_block(vec![], Type::Void, "else")),
+                ),
+                deref(3),
+            ],
+            Type::Void,
+            "body",
+        );
+        assert!(run(&code, &deps(10, 3)).is_empty());
+    }
+
+    /// The `check_reads` leaf helper agrees with the walk on a lone deref.
+    #[test]
+    fn check_reads_matches_walk() {
+        let mut freed = HashSet::new();
+        freed.insert(10);
+        let mut out = Vec::new();
+        check_reads(&deref(3), &freed, &deps(10, 3), &mut out);
+        assert_eq!(out, vec![(10, 3)]);
+    }
+}
+
+/// @PLN35 — static return-source-free detector (sibling of `free_before_dependent_read`).
+///
+/// A record work-ref that the return value ALIASES (is transferred as) must not be freed
+/// with a PLAIN `OpFreeRef` before the return — that hands the caller a freed store (35c
+/// sub-class A: `[Kw { word }, ..] => LetS{…}` froze the returned `LetS` record). The
+/// P4-records safe form is `OpFreeRefIfDistinct(S, ret)`, which is never a plain free and
+/// so is not flagged. This class is invisible to `free_before_dependent_read`: the return
+/// does not DEREFERENCE the store in-frame, it delivers a reference the caller reads.
+///
+/// Returns the freed return-source vars, sorted + deduped. Empty = clean.
+pub fn return_source_freed(data: &Data, d_nr: u32) -> Vec<u16> {
+    let def = data.def(d_nr);
+    let ops = FreeOps {
+        fr: data.def_nr("OpFreeRef"),
+        ft: data.def_nr("OpFreeText"),
+        fif: data.def_nr("OpFreeRefIfDistinct"),
+        db: data.def_nr("OpDatabase"),
+    };
+    let mut out: Vec<u16> = Vec::new();
+    let mut freed: HashSet<u16> = HashSet::new();
+    scan_rsf(&def.code, &def.code, &ops, &mut freed, &mut out);
+    out.sort_unstable();
+    out.dedup();
+    out
+}
+
+/// The scope-free / alloc op numbers the return-source walk keys off.
+struct FreeOps {
+    fr: u32,  // OpFreeRef (plain)
+    ft: u32,  // OpFreeText
+    fif: u32, // OpFreeRefIfDistinct (the SAFE conditional free)
+    db: u32,  // OpDatabase (re-alloc)
+}
+
+/// Path-sensitive walk: track the stores plain-`OpFreeRef`-freed on the current path
+/// (an `OpFreeRefIfDistinct` or a re-`OpDatabase` clears one), and at each `Return R`
+/// flag any record `R` aliases that is currently in the freed set. Path-sensitive so a
+/// plain free on a `return null` path (where the freed record is NOT the return) is not
+/// a false positive — only a free of the store that IS the returned value is a bug.
+fn scan_rsf(
+    node: &Value,
+    code: &Value,
+    ops: &FreeOps,
+    freed: &mut HashSet<u16>,
+    out: &mut Vec<u16>,
+) {
+    match node.unspan() {
+        Value::Block(bl) | Value::Loop(bl) => {
+            for op in &bl.operators {
+                scan_rsf(op, code, ops, freed, out);
+            }
+        }
+        Value::Insert(items) => {
+            for op in items {
+                scan_rsf(op, code, ops, freed, out);
+            }
+        }
+        Value::Set(_, rhs) => scan_rsf(rhs, code, ops, freed, out),
+        Value::If(c, t, e) => {
+            scan_rsf(c, code, ops, freed, out);
+            let mut ft = freed.clone();
+            scan_rsf(t, code, ops, &mut ft, out);
+            let mut fe = freed.clone();
+            scan_rsf(e, code, ops, &mut fe, out);
+            *freed = ft.intersection(&fe).copied().collect();
+        }
+        Value::Call(d, args) if *d == ops.fr => {
+            if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
+                freed.insert(*s);
+            }
+        }
+        Value::Call(d, args) if *d == ops.fif || *d == ops.db => {
+            // IfDistinct is the SAFE free; OpDatabase re-allocates — both clear the store.
+            if let Some(Value::Var(s)) = args.first().map(Value::unspan) {
+                freed.remove(s);
+            }
+        }
+        Value::Return(r) | Value::Drop(r) => {
+            let mut sources: HashSet<u16> = HashSet::new();
+            let mut seen: HashSet<u16> = HashSet::new();
+            ret_alias_sources(r, code, ops.fr, ops.ft, ops.fif, &mut seen, &mut sources);
+            for &s in &sources {
+                if freed.contains(&s) {
+                    out.push(s);
+                }
+            }
+        }
+        Value::Span(b) => scan_rsf(&b.1, code, ops, freed, out),
+        _ => {}
+    }
+}
+
+fn is_free_op(node: &Value, fr: u32, ft: u32, fif: u32) -> bool {
+    matches!(node.unspan(), Value::Call(d, _) if *d == fr || *d == ft || *d == fif)
+}
+
+/// The last op of a sequence that carries the block's VALUE — skipping trailing
+/// scope-exit frees and `Line` markers (the same rule as `scopes::last_non_free_result`).
+fn last_value_op(ops: &[Value], fr: u32, ft: u32, fif: u32) -> Option<&Value> {
+    ops.iter()
+        .rev()
+        .find(|op| !is_free_op(op, fr, ft, fif) && !matches!(op.unspan(), Value::Line(_)))
+}
+
+/// Collect the record work-refs the return value aliases: a returned `Var` is traced
+/// through its last `Set` to the RHS (the arm Objects), a returned `If` unions both arms,
+/// a block yields its last value op. A var with no `Set` assignment is a leaf source
+/// (a directly-built work-ref or a param — harmless if not actually freed).
+fn ret_alias_sources(
+    node: &Value,
+    code: &Value,
+    fr: u32,
+    ft: u32,
+    fif: u32,
+    seen: &mut HashSet<u16>,
+    out: &mut HashSet<u16>,
+) {
+    match node.unspan() {
+        Value::Var(v) => {
+            if seen.insert(*v) {
+                if let Some(rhs) = last_set_rhs(*v, code) {
+                    ret_alias_sources(rhs, code, fr, ft, fif, seen, out);
+                } else {
+                    out.insert(*v);
+                }
+            }
+        }
+        Value::If(_, t, e) => {
+            ret_alias_sources(t, code, fr, ft, fif, seen, out);
+            ret_alias_sources(e, code, fr, ft, fif, seen, out);
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            if let Some(l) = last_value_op(&bl.operators, fr, ft, fif) {
+                ret_alias_sources(l, code, fr, ft, fif, seen, out);
+            }
+        }
+        Value::Insert(ops) => {
+            if let Some(l) = last_value_op(ops, fr, ft, fif) {
+                ret_alias_sources(l, code, fr, ft, fif, seen, out);
+            }
+        }
+        Value::Span(b) => ret_alias_sources(&b.1, code, fr, ft, fif, seen, out),
+        _ => {}
+    }
+}
+
+/// The RHS of the LAST `Set(v, rhs)` for var `v` anywhere in `code` (pre-order; later
+/// wins). Explicit recursion rather than `for_each_child` — the callback form cannot
+/// escape a `&'a` reference to the RHS.
+fn last_set_rhs<'a>(v: u16, code: &'a Value) -> Option<&'a Value> {
+    let mut found: Option<&'a Value> = None;
+    collect_last_set(v, code, &mut found);
+    found
+}
+
+fn collect_last_set<'a>(v: u16, node: &'a Value, found: &mut Option<&'a Value>) {
+    match node {
+        Value::Set(t, rhs) => {
+            // Skip the hoisted null-init `Set(v, Null)`: a record work-ref is BUILT by
+            // `OpDatabase` (a Call, not a Set), and its only `Set` is the declaration
+            // `= null`. Tracing through that loses the build and drops the source (35c).
+            // The last NON-null Set is the real value (`__ret_1 = if{…}`).
+            if *t == v && !matches!(rhs.unspan(), Value::Null) {
+                *found = Some(rhs);
+            }
+            collect_last_set(v, rhs, found);
+        }
+        Value::Block(bl) | Value::Loop(bl) => {
+            for o in &bl.operators {
+                collect_last_set(v, o, found);
+            }
+        }
+        Value::Insert(ops)
+        | Value::Call(_, ops)
+        | Value::CallRef(_, ops)
+        | Value::Tuple(ops)
+        | Value::Parallel(ops) => {
+            for o in ops {
+                collect_last_set(v, o, found);
+            }
+        }
+        Value::If(c, t, e) => {
+            collect_last_set(v, c, found);
+            collect_last_set(v, t, found);
+            collect_last_set(v, e, found);
+        }
+        Value::Return(inner)
+        | Value::Drop(inner)
+        | Value::Yield(inner)
+        | Value::BreakWith(_, inner)
+        | Value::TuplePut(_, _, inner) => collect_last_set(v, inner, found),
+        Value::Iter(_, a, b, c) => {
+            collect_last_set(v, a, found);
+            collect_last_set(v, b, found);
+            collect_last_set(v, c, found);
+        }
+        Value::ParFor(b) => {
+            collect_last_set(v, &b.input, found);
+            collect_last_set(v, &b.worker, found);
+            collect_last_set(v, &b.threads, found);
+            collect_last_set(v, &b.body, found);
+        }
+        Value::Span(b) => collect_last_set(v, &b.1, found),
+        _ => {}
+    }
+}
+
+#[cfg(test)]
+mod return_source_tests {
+    //! Injected-fault controls for the path-sensitive return-source-free walk (`scan_rsf`),
+    //! parser-free — the compiler no longer emits the bug, so the positive control must be
+    //! synthetic. Op-numbers are arbitrary; the walk only compares against them.
+    use super::{FreeOps, scan_rsf};
+    use crate::data::{Type, Value, v_block, v_if, v_set};
+    use std::collections::HashSet;
+
+    const FR: u32 = 100;
+    const FT: u32 = 101;
+    const FIF: u32 = 102;
+    const DB: u32 = 103;
+    fn ops() -> FreeOps {
+        FreeOps {
+            fr: FR,
+            ft: FT,
+            fif: FIF,
+            db: DB,
+        }
+    }
+    fn run(code: &Value) -> Vec<u16> {
+        let mut out = Vec::new();
+        let mut freed = HashSet::new();
+        scan_rsf(code, code, &ops(), &mut freed, &mut out);
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+    fn free(s: u16) -> Value {
+        Value::Call(FR, vec![Value::Var(s)])
+    }
+    fn free_if(s: u16, r: u16) -> Value {
+        Value::Call(FIF, vec![Value::Var(s), Value::Var(r)])
+    }
+    fn ret(v: u16) -> Value {
+        Value::Return(Box::new(Value::Var(v)))
+    }
+    // A record work-ref built into a block that yields it (the arm `Object`).
+    fn obj(v: u16) -> Value {
+        v_block(vec![Value::Var(v)], Type::Void, "Object")
+    }
+
+    /// POSITIVE — `ret` aliases {1,2}; both plain-freed before `return ret` (the 35c bug).
+    #[test]
+    fn flags_plain_free_of_return_source() {
+        let code = v_block(
+            vec![
+                v_set(10, v_if(Value::Var(0), obj(1), obj(2))),
+                free(1),
+                free(2),
+                ret(10),
+            ],
+            Type::Void,
+            "body",
+        );
+        assert_eq!(run(&code), vec![1, 2]);
+    }
+
+    /// NEGATIVE — `OpFreeRefIfDistinct` is the safe conditional free (post-fix shape).
+    #[test]
+    fn silent_on_free_if_distinct() {
+        let code = v_block(
+            vec![
+                v_set(10, v_if(Value::Var(0), obj(1), obj(2))),
+                free_if(1, 10),
+                free_if(2, 10),
+                ret(10),
+            ],
+            Type::Void,
+            "body",
+        );
+        assert!(run(&code).is_empty());
+    }
+
+    /// NEGATIVE — path-sensitive: a plain free on a `return null` path (the freed record is
+    /// NOT the return there) is safe — the 497/98 false-positive shape.
+    #[test]
+    fn silent_when_other_path_returns_it() {
+        let code = v_block(
+            vec![v_if(
+                Value::Var(0),
+                v_block(vec![free_if(2, 1), ret(1)], Type::Void, "then"),
+                v_block(
+                    vec![free(1), free(2), Value::Return(Box::new(Value::Null))],
+                    Type::Void,
+                    "else",
+                ),
+            )],
+            Type::Void,
+            "body",
+        );
+        assert!(run(&code).is_empty());
+    }
+
+    /// NEGATIVE — re-`OpDatabase` between the free and the return clears it.
+    #[test]
+    fn silent_after_realloc_before_return() {
+        let code = v_block(
+            vec![free(1), Value::Call(DB, vec![Value::Var(1)]), ret(1)],
+            Type::Void,
+            "body",
+        );
+        assert!(run(&code).is_empty());
+    }
+}

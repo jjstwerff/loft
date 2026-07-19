@@ -259,6 +259,36 @@ fn section_fn<'a>(stdout: &'a str, fn_name: &str) -> &'a str {
     &stdout[start..end]
 }
 
+/// Regression gate for BOTH captured-group UAF fixes (`plans/captured-group-elem-uaf.md`):
+/// the 35m materialisation fix (vector-match text arm byte-copies into an owned buffer)
+/// and the 35c fix (`collect_return_sources` skips trailing frees, so a returned enum
+/// record is freed with `OpFreeRefIfDistinct`, not a plain `OpFreeRef`). Neither
+/// `--show-ownership` UAF overlay may fire on the fixture (`bad`, `good`, `parse`); if
+/// either fix regresses, its overlay fires and this test catches it. Each overlay's own
+/// firing is proved parser-free in `use_analysis::{uaf_overlay_tests, return_source_tests}`,
+/// so this gate does not need to reproduce the bugs.
+#[test]
+fn ownership_overlay_silent_after_captured_group_fix() {
+    let out = Command::new(loft_bin())
+        .arg("introspect")
+        .arg("--show-ownership")
+        .arg(workspace_root().join("tests/data/uaf_overlay.loft"))
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke loft");
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "introspect failed:\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let count = stdout.matches("⚠ UAF").count();
+    assert_eq!(
+        count, 0,
+        "materialisation fix regressed — free-before-dependent-read overlay fired:\n{stdout}"
+    );
+}
+
 /// CLI error — a missing input file exits non-zero.
 #[test]
 fn missing_file_errors() {

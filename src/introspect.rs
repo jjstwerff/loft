@@ -544,6 +544,34 @@ fn emit_ownership(
             };
             writeln!(w, "  {v:<4} {arg:<4} {:<22} {rendered}", vars.name(v))?;
         }
+        // @PLN103 (temporal extension) — the ownership verdicts above are
+        // temporal-agnostic (identical for a correct free and a use-after-free).
+        // This overlay names a free-before-dependent-read the static ownership
+        // cannot show: a store freed while a live view into it is still read.
+        for (store, via) in crate::use_analysis::free_before_dependent_read(data, d_nr) {
+            writeln!(
+                w,
+                "  ⚠ UAF: `{}` is read AFTER `OpFreeRef({})` — `{}` views the freed \
+                 store (backing={}); free-before-dependent-read",
+                vars.name(via),
+                vars.name(store),
+                vars.name(via),
+                vars.name(store)
+            )?;
+        }
+        // @PLN35 — the return-alias sibling: a record the return value ALIASES, freed
+        // with a plain OpFreeRef before the return (the P4-records safe form is
+        // OpFreeRefIfDistinct). Invisible to the deref overlay above — the store is
+        // delivered, not dereferenced in-frame.
+        for store in crate::use_analysis::return_source_freed(data, d_nr) {
+            writeln!(
+                w,
+                "  ⚠ UAF: `{}` is a RETURN SOURCE freed by a plain `OpFreeRef` before the \
+                 return — the caller reads a freed store (use OpFreeRefIfDistinct); \
+                 return-source-free",
+                vars.name(store)
+            )?;
+        }
         // @PLN103 P1.5 — delivery lens: the delivery OUTCOME for a heap (vector/reference)
         // return, read from `def.returned`'s deps on the COMMITTED IR — `["__retbuf"]` (a
         // synth buffer) = MATERIALISED into the return buffer, `[arg]` = a borrowed VIEW
