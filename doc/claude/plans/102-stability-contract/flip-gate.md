@@ -46,7 +46,7 @@ single reconciled view (supersedes the scattered "open" markers).
 | **Stdlib / libs** | The dedicated unhurried lib pass (owner phase 2 — stdlib + core libs, equally permanent) | 🔶 the second half of the E gate |
 | **Formats** | Layout/persistence identity distinguishes every semantically-distinct layout | ✅ **F9 built 2026-07-19** — `τ` vs `τ?` distinguished ([layout-nullability-identity.md](layout-nullability-identity.md)); deep raw-store gate grandfathered |
 | **Formats** | Format sub-language (interpolation) warts fixed | ✅ E2-A (unescaped `}`) shipped; format-brace is the last known one |
-| **Mechanism** | Drift gates make an omitted bump loud (layout-hash ⇒ bump; golden-corpus ⇒ classify) | ✅ **built + inert 2026-07-19** (Gate 1 + Gate 2 below) |
+| **Mechanism** | Drift gates make an omitted bump loud (layout-hash ⇒ bump; golden-corpus ⇒ classify) | ✅ **built + inert 2026-07-19** (Gate 1 + Gate 2 below). **Residual (coverage survey):** +an E1 **code-set** gate (4th ungated surface) + the Gate-2 **HIGH corpus rows** → [flip-gate-coverage-gaps.md](flip-gate-coverage-gaps.md) |
 | **Test hygiene** | The `code!` harness asserts the diagnostics loft *actually* emits (no tolerated-warnings filter) | ✅ **built 2026-07-19** — filter deleted + meta-lock ([test-hygiene-warnings.md](test-hygiene-warnings.md)) |
 
 **"Syntax-settled" is not a vibe — make it a query.** The gate is "no open plan with
@@ -176,14 +176,21 @@ return and land together in the flip PR.
 
 ## Falsification — how the flip could still be wrong (design-protocol steps 3–4)
 
-- **A frozen surface with no drift gate.** Layout + behavioural-output are covered;
-  the residual is any surface that is neither hashed nor output-observable (e.g. a
-  timing/API-shape change). Mitigation: api-surface (C1, done) covers the API shape;
-  name any *third* mechanical surface here before the flip or accept it as manual-audit.
+- **A frozen surface with no drift gate.** ANSWERED (2026-07-19 survey →
+  [flip-gate-coverage-gaps.md](flip-gate-coverage-gaps.md) Finding 1): the FOURTH ungated
+  surface is the **E1 diagnostic CODE SET** — the `code!` harness strips the tag and no
+  golden pins the codes, so a rename/removal is silent. Mitigation: build a code-set
+  golden (S). Two thin secondary spots (bare-`null`/char rendering, binary-file scalar
+  encoding) noted there. Everything else surveyed is gated or non-contract (JSON parser
+  gated, JSON writer tooling-only, CBOR nonexistent, introspect/show-ownership/gendoc
+  dev tools).
 - **The corpus subset is too small** → a silent break slips through a gap in coverage.
-  Mitigation: gate 2's subset must be curated for *surface coverage*, not size; log
-  what's excluded (no silent truncation — an excluded case reads as "covered" if
-  unlogged).
+  ANSWERED (→ [flip-gate-coverage-gaps.md](flip-gate-coverage-gaps.md) Finding 2): the
+  corpus is honest but THIN — it omits structs, struct-enum payloads, keyed collections,
+  the full rendering surface, the text stdlib, and the null-comparison/propagation
+  keystone. None are *untested* (the both-backend assert suite covers them) but they are
+  absent from the one contract-versioned artifact. Mitigation: the HIGH worklist there
+  (rendering first) lands before the flip; MED/LOW grow the corpus additively post-flip.
 - **"Syntax-settled" judged, not queried** → a moving surface frozen by accident.
   Mitigation: the flip trigger is the label query above, reviewed with the owner, not
   a feeling that "things seem quiet".
@@ -192,6 +199,7 @@ return and land together in the flip PR.
   the *silent-break* class is the default when unsure (fail-closed).
 
 ## See also
+- [flip-gate-coverage-gaps.md](flip-gate-coverage-gaps.md) — the fourth-surface + corpus-completeness survey (the two falsification answers + the pre-flip worklist).
 - [versioning-decision.md](versioning-decision.md) — the pivot; item 4 = these gates.
 - [../../COMPATIBILITY.md](../../COMPATIBILITY.md) — the never-break policy (arc A) + § Before the flip.
 - [formal-audit.md](formal-audit.md) / [lib-audit.md](lib-audit.md) — the surface-by-surface audit worklists (the gate's evidence).
