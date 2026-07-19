@@ -5,8 +5,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Captured-group element access — use-after-free of the group's backing store
 
-**Status: FIXED for 35m (2026-07-19), both backends.** `area:store-lifetime`, `sev:high`.
-The materialisation fix landed: `if_tail_yields_text` now sees through `Block["vector_match"]`
+**Status: FIXED — BOTH 35m and 35c (2026-07-19), both backends.** `area:store-lifetime`, `sev:high`.
+Two independent roots, two fixes (see below). The nightly miri gate's remaining two red scripts are
+both green now.
+
+**35m fix** — the materialisation fix landed: `if_tail_yields_text` now sees through `Block["vector_match"]`
 (`control.rs`), so a text-returning vector-match takes the proven per-arm `__acc` accumulator
 (`do_if_acc` → `push_text_arms_into`) — each arm byte-copies its text into an OWNED buffer
 before the group's backing store is freed, exactly the WORKING reference shape below. One-line
@@ -19,9 +22,18 @@ leak-clean; the `--show-ownership` overlay is now SILENT on the whole corpus; fu
 (the one flake, `wasm_debug_relay`, is pre-existing). Emitted IR now matches the m5 reference
 (owned `_mv_name_1:text` copy → `___acc_1 = _mv_name_1` → free `__vdb_1` AFTER).
 
-**Still open: `35c` is a DIFFERENT root** (dropped-dep / return-alias free — see below) and stays
-`LOFT_POISON`-red; it is NOT fixed by this change and keeps the nightly miri gate red on its own.
-That is a separate bug to file/fix, not part of this plan's captured-group element-access UAF.
+**35c fix** — a DIFFERENT root (return-source freed before return, `parse` sub-class A): a captured
+struct-enum field (`[Kw { word }, ..] => LetS{…}`) binds an owned `_mv_word_1` text whose
+`OpFreeText` is appended AFTER the arm chain in the vector-match block. `scopes::collect_return_sources`
+took the block's `.last()` op — that trailing free — and so never found the record sources
+`__ref_1`/`__ref_2`; unsuppressed, the returned enum store was freed with a plain `OpFreeRef` before
+the `return` (`P4-records` `OpFreeRefIfDistinct` never fired because `ret_var` was also lost). Fix:
+`collect_return_sources` now skips trailing scope-exit frees (new `last_non_free_result`) to reach
+the real block value, so the record sources are found and freed conditionally (`OpFreeRefIfDistinct`,
+the c6 shape). Verified: 35c clean under `LOFT_STORE_GUARD` + `LOFT_POISON` on both backends, correct
+values, full suite green. The overlay does NOT fire on 35c (its free is not a free-before-view-read;
+this root is a return-alias free, which a dep-based static check cannot see — a candidate for a
+future return-source-free static gate).
 
 ## Static gate (2026-07-19) — `introspect --show-ownership` now MAKES THIS VISIBLE
 
@@ -53,10 +65,11 @@ below; the earlier "same root" claim is retracted):
 - `tests/scripts/35m-mid-slice-repetition.loft` — `get_vector: use-after-free on store N`. THIS
   plan's bug: a free-before-dependent-read (the group's `__vdb_1` freed before `arg[0]` deref).
 - `tests/scripts/35c-rest-capture.loft` — `sub-class A (enum + captured field + rest): null`. A
-  DIFFERENT root: `parse`'s `OpFreeRef(__vdb_1)` is correctly placed AFTER the `rhs` read; its UAF
-  is a dropped-dep / return-alias free (a `#Slice materialise` `comp` intermediate freeing a view
-  whose borrow-dep was dropped — the script's own comment). A dep-annotation-based check cannot
-  see it (the dep is missing), so it is out of scope for this plan's fix + gate.
+  DIFFERENT root (return-source freed before return), FIXED separately — see the 35c fix in the
+  status block above. `parse`'s `OpFreeRef(__vdb_1)` was correctly placed; the bug was the RETURNED
+  enum store (`__ref_1`) freed with a plain `OpFreeRef` because `collect_return_sources` was hidden
+  from the record sources by a trailing `OpFreeText`. The overlay does not fire on it (a return-alias
+  free, not a free-before-view-read).
 
 These are why the nightly **miri** workflow's *Debug-assertions gate* and *LOFT_POISON
 arena-UAF gate* have been red (both `#[cfg(debug_assertions)]`-only; the scripts PASS on a

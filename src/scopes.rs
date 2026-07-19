@@ -3271,7 +3271,7 @@ impl Scopes {
         let mut null_arm_record_sources: Vec<u16> = Vec::new();
         let return_sources: HashSet<u16> = if is_return {
             let mut sources = Vec::new();
-            collect_return_sources(expr, &mut sources);
+            collect_return_sources(expr, data, &mut sources);
             // A nullable return (`if b { Struct{} } else { null }`) leaves the
             // present arm's work-ref placeholder orphaned on the null path.  When
             // a null arm is reachable, do NOT SET-suppress a Reference/Enum work-
@@ -4553,7 +4553,7 @@ fn needs_pre_init(tp: &Type) -> bool {
 /// plans/85-store-lifetime-retirement/text-tail-return-leak.md.
 fn free_copied_work_texts(result: &mut Vec<Value>, expr: &Value, function: &Function, data: &Data) {
     let mut srcs = Vec::new();
-    collect_return_sources(expr, &mut srcs);
+    collect_return_sources(expr, data, &mut srcs);
     for w in srcs {
         if function.name(w).starts_with("__work_") && matches!(function.tp(w).base(), Type::Text(_))
         {
@@ -4995,31 +4995,48 @@ fn returned_var_null_unified(expr: &Value, null_nr: u32) -> u16 {
 /// `returned_var` collapses to `u16::MAX` when the arms differ). These are the
 /// function's "return-source" locals — their heap store is transferred to the
 /// caller, so the callee must not free them at scope exit.
-fn collect_return_sources(expr: &Value, out: &mut Vec<u16>) {
+fn collect_return_sources(expr: &Value, data: &Data, out: &mut Vec<u16>) {
     match expr {
         Value::Var(v) => {
             if !out.contains(v) {
                 out.push(*v);
             }
         }
+        // @PLN85 P4-records — a block's VALUE is its last op that is NOT a scope-exit
+        // free. A captured struct-enum field binds an owned `_mv_<f>` text whose
+        // `OpFreeText` is appended AFTER the arm chain (`[Kw { word }, ..] => LetS{…}`),
+        // so `.last()` alone hits that free and hides the record sources — the returned
+        // enum store is then freed unconditionally before the return (35c sub-class A,
+        // plans/captured-group-elem-uaf.md). Skip trailing frees to reach the real value.
         Value::Block(bl) => {
-            if let Some(last) = bl.operators.last() {
-                collect_return_sources(last, out);
+            if let Some(last) = last_non_free_result(&bl.operators, data) {
+                collect_return_sources(last, data, out);
             }
         }
-        Value::Return(inner) | Value::Drop(inner) => collect_return_sources(inner, out),
+        Value::Return(inner) | Value::Drop(inner) => collect_return_sources(inner, data, out),
         Value::Insert(ops) => {
-            if let Some(last) = ops.last() {
-                collect_return_sources(last, out);
+            if let Some(last) = last_non_free_result(ops, data) {
+                collect_return_sources(last, data, out);
             }
         }
         Value::If(_, t, f) => {
-            collect_return_sources(t, out);
-            collect_return_sources(f, out);
+            collect_return_sources(t, data, out);
+            collect_return_sources(f, data, out);
         }
-        Value::Span(b) => collect_return_sources(&b.1, out),
+        Value::Span(b) => collect_return_sources(&b.1, data, out),
         _ => {}
     }
+}
+
+/// The last operator of a sequence that carries the block's VALUE — i.e. skipping
+/// trailing scope-exit frees (`OpFreeRef` / `OpFreeText` / `OpFreeRefIfDistinct`) and
+/// `Line` position markers. A value-returning block can end in a free of a block-local
+/// (a captured `_mv_<f>` text, a `..rest` `__vdb`) appended after the result, so the
+/// naive `.last()` would mistake that free for the value.
+fn last_non_free_result<'a>(ops: &'a [Value], data: &Data) -> Option<&'a Value> {
+    ops.iter()
+        .rev()
+        .find(|op| scope_free_op_var(op, data).is_none() && !matches!(op.unspan(), Value::Line(_)))
 }
 
 /// @PLN85 A.1 part i — does this return expression have a reachable arm whose
