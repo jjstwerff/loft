@@ -582,6 +582,19 @@ impl Lexer {
         );
     }
 
+    /// Emit a diagnostic carrying a stable `code` (kebab-case kind slug).
+    /// @PLN102 arc-E E1 — the code is the frozen identity; prose is free.
+    pub fn diagnostic_coded(&mut self, level: Level, code: &'static str, message: &str) {
+        self.diagnostics.add_at_coded(
+            level,
+            Some(code),
+            message,
+            &self.position.file,
+            self.position.line,
+            self.position.pos,
+        );
+    }
+
     pub fn specific(&mut self, result: &LexResult, level: Level, message: &str) {
         self.diagnostics.add_at(
             level,

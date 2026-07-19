@@ -20,17 +20,28 @@ pub struct DiagEntry {
     pub file: String,
     pub line: u32,
     pub col: u32,
+    /// Stable identity of the diagnostic — a kebab-case kind slug, e.g.
+    /// `text-parse-may-fail`.  @PLN102 arc-E E1: the diagnostic's `code`
+    /// (not its `message` prose) is the contractual, frozen-at-1.0 handle —
+    /// prose stays freely improvable; a tool keys on the code.  `None` for
+    /// sites not yet assigned a code (their prose is still the only handle
+    /// until one is — assignment is additive, never a breaking change).
+    pub code: Option<&'static str>,
 }
 
 impl DiagEntry {
     /// Format as a single-line string: `Level: message at file:line:col`
     #[must_use]
     pub fn to_string_compact(&self) -> String {
+        // @PLN102 arc-E E1 — `[code]` after the level names the precise,
+        // frozen-identity diagnostic (rustc's `error[E0308]` shape); absent
+        // when the site has no code yet.
+        let tag = self.code.map_or(String::new(), |c| format!("[{c}]"));
         if self.file.is_empty() {
-            format!("{:?}: {}", self.level, self.message)
+            format!("{:?}{tag}: {}", self.level, self.message)
         } else {
             format!(
-                "{:?}: {} at {}:{}:{}",
+                "{:?}{tag}: {} at {}:{}:{}",
                 self.level, self.message, self.file, self.line, self.col
             )
         }
@@ -87,6 +98,7 @@ impl Diagnostics {
             file: String::new(),
             line: 0,
             col: 0,
+            code: None,
         });
         if level > self.level {
             self.level = level;
@@ -94,12 +106,27 @@ impl Diagnostics {
     }
 
     pub fn add_at(&mut self, level: Level, message: &str, file: &str, line: u32, col: u32) {
+        self.add_at_coded(level, None, message, file, line, col);
+    }
+
+    /// Like [`add_at`], but carries a stable `code` (kebab-case kind slug).
+    /// @PLN102 arc-E E1 — the code is the frozen identity; prose is free.
+    pub fn add_at_coded(
+        &mut self,
+        level: Level,
+        code: Option<&'static str>,
+        message: &str,
+        file: &str,
+        line: u32,
+        col: u32,
+    ) {
         self.entries.push(DiagEntry {
             level,
             message: message.to_string(),
             file: file.to_string(),
             line,
             col,
+            code,
         });
         if level > self.level {
             self.level = level;
@@ -147,6 +174,12 @@ pub fn diagnostic_format(_level: Level, message: Arguments<'_>) -> String {
 
 #[macro_export]
 macro_rules! diagnostic {
+    // @PLN102 arc-E E1 — coded form: `diagnostic!(lexer, Level::Error, code =
+    // "kebab-slug", "prose {x}")`.  The code is the frozen identity; prose is
+    // freely improvable.  This arm must precede the uncoded one (tried in order).
+    ($lexer:expr, $level:expr, code = $code:expr, $($arg:tt)+) => (
+        $lexer.diagnostic_coded($level.clone(), $code, &diagnostic_format($level, format_args!($($arg)+)))
+    );
     ($lexer:expr, $level:expr, $($arg:tt)+) => (
         $lexer.diagnostic($level.clone(), &diagnostic_format($level, format_args!($($arg)+)))
     )

@@ -207,6 +207,7 @@ impl RuntimeError {
             file,
             line,
             col,
+            code: None,
         }
     }
 }

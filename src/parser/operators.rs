@@ -2183,6 +2183,7 @@ impl Parser {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,
+                                code = "text-parse-may-fail",
                                 "a text parse `as {tps}` may fail — use `{tps}?` for a checked cast \
                                  (value or null), or `?? <default>`",
                             );

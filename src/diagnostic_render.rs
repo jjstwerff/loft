@@ -249,9 +249,12 @@ pub fn render_entry_pretty(
     let reset = if use_color { ANSI_RESET } else { "" };
 
     let mut out = String::with_capacity(128);
-    // Header: `error: message` (with optional bold + colour)
+    // Header: `error[code]: message` (with optional bold + colour).
+    // @PLN102 arc-E E1 — the `[code]` names the frozen-identity diagnostic;
+    // omitted when the site carries no code yet.
+    let code_tag = entry.code.map_or(String::new(), |c| format!("[{c}]"));
     out.push_str(&format!(
-        "{color_open}{bold_open}{label}{reset}{bold_open}: {}{reset}\n",
+        "{color_open}{bold_open}{label}{code_tag}{reset}{bold_open}: {}{reset}\n",
         entry.message
     ));
     if entry.file.is_empty() || entry.line == 0 {
@@ -371,6 +374,7 @@ mod tests {
             file: file.to_string(),
             line,
             col,
+            code: None,
         }
     }
 
