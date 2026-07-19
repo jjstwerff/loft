@@ -33,7 +33,7 @@ the real block value, so the record sources are found and freed conditionally (`
 the c6 shape). Verified: 35c clean under `LOFT_STORE_GUARD` + `LOFT_POISON` on both backends, correct
 values, full suite green. The overlay does NOT fire on 35c (its free is not a free-before-view-read;
 this root is a return-alias free, which a dep-based static check cannot see — a candidate for a
-future return-source-free static gate).
+return-source-free static gate — NOW BUILT, see the Static gate section below).
 
 ## Static gate (2026-07-19) — `introspect --show-ownership` now MAKES THIS VISIBLE
 
@@ -53,8 +53,20 @@ int-return twin, the owned-vector twin, and 511/512 corpus scripts (the one hit 
 were load-bearing to get it precise — **transitive** deps (a nested `match arg{…}` derefs `arg`
 through an intermediate `_match_subj_2` that only transitively views `__vdb_1`) and **deref-only**
 reads (a bare `Var` in a `return`/move is a safe delivery, not a UAF — this is what cleared the
-`__ret_N` return-hoist false positives on `85-…`/`562-…`). Regression gate:
-`tests/introspect.rs::ownership_overlay_flags_free_before_dependent_read` (+ `tests/data/uaf_overlay.loft`).
+`__ret_N` return-hoist false positives on `85-…`/`562-…`).
+
+**Second overlay — return-source-free (the 35c class).** `use_analysis::return_source_freed`, also
+under `--show-ownership`, catches the 35c root the deref overlay cannot see (the return DELIVERS a
+reference, it does not dereference in-frame): a plain `OpFreeRef(S)` where `S` is a record the return
+value ALIASES on the same path (`⚠ UAF: \`__ref_1\` is a RETURN SOURCE freed by a plain OpFreeRef …`;
+the safe form is `OpFreeRefIfDistinct`). It is **path-sensitive** — it tracks the plain-freed set per
+branch and flags only a free of the store that IS the return on that path, so a plain free on a
+`return null` path is not a false positive (the `497`/`98` shapes). Verified: fires on the buggy 35c
+(temp-reverting the `collect_return_sources` fix), SILENT on the fixed tree + the whole corpus/stdlib.
+
+Regression gates: `tests/introspect.rs::ownership_overlay_silent_after_captured_group_fix` guards BOTH
+fixes end-to-end (+ `tests/data/uaf_overlay.loft` carrying `bad`/`good`/`parse`); each overlay's own
+firing is proved parser-free in `use_analysis::{uaf_overlay_tests, return_source_tests}`.
 
 **This overlay is the fix's static gate:** it fires now; after the materialisation fix it must go
 SILENT on 35m (both backends share the verdict), with no new corpus hit. It also proved 35c is a

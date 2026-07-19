@@ -259,14 +259,14 @@ fn section_fn<'a>(stdout: &'a str, fn_name: &str) -> &'a str {
     &stdout[start..end]
 }
 
-/// Regression gate for the captured-group materialisation fix (the vector-match text
-/// arm now byte-copies into an owned buffer before freeing the group's backing store,
-/// `plans/captured-group-elem-uaf.md`). The free-before-dependent-read overlay MUST be
-/// silent on `bad` (the captured-group element access) and `good` (its owned-vector
-/// twin): the emitted IR reads the view before the free on both. If the fix regresses,
-/// `bad` re-emits the premature free and the overlay fires — this test catches it.
-/// (The overlay's own firing is proved parser-free in
-/// `use_analysis::uaf_overlay_tests`, so this gate does not need to reproduce the bug.)
+/// Regression gate for BOTH captured-group UAF fixes (`plans/captured-group-elem-uaf.md`):
+/// the 35m materialisation fix (vector-match text arm byte-copies into an owned buffer)
+/// and the 35c fix (`collect_return_sources` skips trailing frees, so a returned enum
+/// record is freed with `OpFreeRefIfDistinct`, not a plain `OpFreeRef`). Neither
+/// `--show-ownership` UAF overlay may fire on the fixture (`bad`, `good`, `parse`); if
+/// either fix regresses, its overlay fires and this test catches it. Each overlay's own
+/// firing is proved parser-free in `use_analysis::{uaf_overlay_tests, return_source_tests}`,
+/// so this gate does not need to reproduce the bugs.
 #[test]
 fn ownership_overlay_silent_after_captured_group_fix() {
     let out = Command::new(loft_bin())
