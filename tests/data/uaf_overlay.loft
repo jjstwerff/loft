@@ -1,14 +1,16 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
-// Fixture for the `introspect --show-ownership` free-before-dependent-read overlay
-// (the temporal extension of the @PLN103 lifetime inspector). It carries BOTH:
-//   - `bad`  — the captured-group element-access use-after-free (plans/
-//              captured-group-elem-uaf.md): the group's backing store `__vdb_1` is
-//              freed before the arm dereferences `arg[0]`. The overlay MUST flag it.
-//   - `good` — the IDENTICAL element access on a normal owned vector, where the
-//              backing store is freed AFTER the read. The overlay must NOT flag it.
-// So a single fixture is both the positive and the negative control.
+// Regression fixture for the captured-group materialisation fix + the
+// `introspect --show-ownership` free-before-dependent-read overlay (plans/
+// captured-group-elem-uaf.md). It carries BOTH:
+//   - `bad`  — a captured-group element access. BEFORE the fix, the group's backing
+//              store `__vdb_1` was freed before the arm dereferenced `arg[0]` (a UAF);
+//              AFTER the fix the arm byte-copies into an owned buffer first, so the
+//              overlay is silent. If the fix regresses, the overlay fires here.
+//   - `good` — the IDENTICAL element access on a normal owned vector (already correct).
+// The overlay's own firing is proved parser-free in `use_analysis::uaf_overlay_tests`;
+// this fixture is the end-to-end regression gate (overlay must stay SILENT on both).
 
 enum Token {
   Punct { #lexeme sym: text },

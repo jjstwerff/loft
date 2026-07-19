@@ -2712,3 +2712,103 @@ fn deref_read(node: &Value, target: u16, in_call: bool) -> bool {
     });
     found
 }
+
+#[cfg(test)]
+mod uaf_overlay_tests {
+    //! Injected-fault controls for the free-before-dependent-read walk (`scan_uaf`),
+    //! parser-free so the positive control does not depend on the compiler still
+    //! EMITTING the bug (the materialisation fix removed the only real-code trigger).
+    use super::{check_reads, scan_uaf};
+    use crate::data::{Type, Value, v_block};
+    use std::collections::{HashMap, HashSet};
+
+    // Arbitrary op-numbers for the walk; the walk only compares against these.
+    const FREE_REF: u32 = 100;
+    const OP_DB: u32 = 101;
+    const GETTER: u32 = 200; // stands in for OpGetVector / OpGetField / OpGetText
+
+    fn deps(store: u16, view: u16) -> HashMap<u16, Vec<u16>> {
+        let mut d = HashMap::new();
+        d.insert(store, vec![view]);
+        d
+    }
+    fn run(code: &Value, dependents: &HashMap<u16, Vec<u16>>) -> Vec<(u16, u16)> {
+        let mut freed = HashSet::new();
+        let mut out = Vec::new();
+        scan_uaf(code, &mut freed, dependents, FREE_REF, OP_DB, &mut out);
+        out.sort_unstable();
+        out.dedup();
+        out
+    }
+    fn free(s: u16) -> Value {
+        Value::Call(FREE_REF, vec![Value::Var(s)])
+    }
+    fn deref(v: u16) -> Value {
+        Value::Call(GETTER, vec![Value::Var(v)])
+    }
+
+    /// POSITIVE control — a deref of view `B` AFTER `OpFreeRef(S)` (S ∈ deps(B)) is flagged.
+    #[test]
+    fn flags_deref_after_free() {
+        let code = v_block(vec![free(10), deref(3)], Type::Void, "body");
+        assert_eq!(run(&code, &deps(10, 3)), vec![(10, 3)]);
+    }
+
+    /// NEGATIVE — a bare `Var` DELIVERY (`return b`) after the free is a safe move, not a deref.
+    #[test]
+    fn silent_on_bare_delivery_after_free() {
+        let code = v_block(
+            vec![free(10), Value::Return(Box::new(Value::Var(3)))],
+            Type::Void,
+            "body",
+        );
+        assert!(run(&code, &deps(10, 3)).is_empty());
+    }
+
+    /// NEGATIVE — a deref BEFORE the free is correctly ordered.
+    #[test]
+    fn silent_when_deref_precedes_free() {
+        let code = v_block(vec![deref(3), free(10)], Type::Void, "body");
+        assert!(run(&code, &deps(10, 3)).is_empty());
+    }
+
+    /// NEGATIVE — re-allocating the store (`OpDatabase(S)`) between free and deref clears it.
+    #[test]
+    fn silent_after_realloc() {
+        let code = v_block(
+            vec![free(10), Value::Call(OP_DB, vec![Value::Var(10)]), deref(3)],
+            Type::Void,
+            "body",
+        );
+        assert!(run(&code, &deps(10, 3)).is_empty());
+    }
+
+    /// NEGATIVE — a store freed on only ONE branch is live on the other; a deref after the
+    /// join is not a definite UAF (branch state is intersected).
+    #[test]
+    fn silent_when_free_on_one_branch_only() {
+        let code = v_block(
+            vec![
+                Value::If(
+                    Box::new(Value::Var(0)),
+                    Box::new(v_block(vec![free(10)], Type::Void, "then")),
+                    Box::new(v_block(vec![], Type::Void, "else")),
+                ),
+                deref(3),
+            ],
+            Type::Void,
+            "body",
+        );
+        assert!(run(&code, &deps(10, 3)).is_empty());
+    }
+
+    /// The `check_reads` leaf helper agrees with the walk on a lone deref.
+    #[test]
+    fn check_reads_matches_walk() {
+        let mut freed = HashSet::new();
+        freed.insert(10);
+        let mut out = Vec::new();
+        check_reads(&deref(3), &freed, &deps(10, 3), &mut out);
+        assert_eq!(out, vec![(10, 3)]);
+    }
+}

@@ -259,14 +259,16 @@ fn section_fn<'a>(stdout: &'a str, fn_name: &str) -> &'a str {
     &stdout[start..end]
 }
 
-/// The free-before-dependent-read overlay (temporal extension of `--show-ownership`)
-/// flags the captured-group element-access use-after-free and ONLY it. The fixture
-/// carries a correct twin (`good`) — an identical element read on an owned vector
-/// whose backing store is freed AFTER the read — so one run is both the positive and
-/// the negative control. Guards `plans/captured-group-elem-uaf.md`; without the
-/// overlay the ownership verdicts of `bad` and `good` are identical (temporal-agnostic).
+/// Regression gate for the captured-group materialisation fix (the vector-match text
+/// arm now byte-copies into an owned buffer before freeing the group's backing store,
+/// `plans/captured-group-elem-uaf.md`). The free-before-dependent-read overlay MUST be
+/// silent on `bad` (the captured-group element access) and `good` (its owned-vector
+/// twin): the emitted IR reads the view before the free on both. If the fix regresses,
+/// `bad` re-emits the premature free and the overlay fires — this test catches it.
+/// (The overlay's own firing is proved parser-free in
+/// `use_analysis::uaf_overlay_tests`, so this gate does not need to reproduce the bug.)
 #[test]
-fn ownership_overlay_flags_free_before_dependent_read() {
+fn ownership_overlay_silent_after_captured_group_fix() {
     let out = Command::new(loft_bin())
         .arg("introspect")
         .arg("--show-ownership")
@@ -280,23 +282,10 @@ fn ownership_overlay_flags_free_before_dependent_read() {
         "introspect failed:\n{}",
         String::from_utf8_lossy(&out.stderr)
     );
-    // Exactly one overlay across the file: the UAF fn fires, the correct twin does not.
     let count = stdout.matches("⚠ UAF").count();
     assert_eq!(
-        count, 1,
-        "expected exactly 1 UAF overlay (bad fires, good silent), got {count}:\n{stdout}"
-    );
-    // Positive control — `bad` names the freed store and the view read after it.
-    let bad = section_fn(&stdout, "n_bad");
-    assert!(
-        bad.contains("⚠ UAF") && bad.contains("OpFreeRef(__vdb_1)") && bad.contains("`arg`"),
-        "bad fn overlay missing/incomplete:\n{bad}"
-    );
-    // Negative control — the correct twin `good` must be silent.
-    let good = section_fn(&stdout, "n_good");
-    assert!(
-        !good.contains("⚠ UAF"),
-        "correct fn `good` false-positived:\n{good}"
+        count, 0,
+        "materialisation fix regressed — free-before-dependent-read overlay fired:\n{stdout}"
     );
 }
 

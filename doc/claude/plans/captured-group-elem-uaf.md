@@ -5,14 +5,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # Captured-group element access — use-after-free of the group's backing store
 
-**Status: root cause RE-PINNED (2026-07-19), fix direction CORRECTED, NOT yet implemented.**
-`area:store-lifetime`, `sev:high` (UAF; benign-in-practice today but real UB).
-The earlier "decided direction" (a `scopes.rs` free-move) was found INSUFFICIENT during a
-re-investigation this session — see the corrected Root cause + Where-the-fix-goes below. The
-real fix is a text-return **materialisation** (copy the arm's viewed text to owned before
-freeing the group's backing store), matching the WORKING reference captured below. It is a
-delivery change in loft's #1-weakness subsystem, so it needs the full both-backend
-verification matrix, not a one-line patch.
+**Status: FIXED for 35m (2026-07-19), both backends.** `area:store-lifetime`, `sev:high`.
+The materialisation fix landed: `if_tail_yields_text` now sees through `Block["vector_match"]`
+(`control.rs`), so a text-returning vector-match takes the proven per-arm `__acc` accumulator
+(`do_if_acc` → `push_text_arms_into`) — each arm byte-copies its text into an OWNED buffer
+before the group's backing store is freed, exactly the WORKING reference shape below. One-line
+recogniser change reusing the scalar-match delivery; NOT the `scopes.rs` free-move the earlier
+"decided direction" proposed (that was found INSUFFICIENT — the returned `&text` aliased the
+freed store, so a free-move alone leaves a caller-side UAF).
+
+Verified: `35m` clean under `LOFT_STORE_GUARD` + `LOFT_POISON` (both backends), correct values,
+leak-clean; the `--show-ownership` overlay is now SILENT on the whole corpus; full suite green
+(the one flake, `wasm_debug_relay`, is pre-existing). Emitted IR now matches the m5 reference
+(owned `_mv_name_1:text` copy → `___acc_1 = _mv_name_1` → free `__vdb_1` AFTER).
+
+**Still open: `35c` is a DIFFERENT root** (dropped-dep / return-alias free — see below) and stays
+`LOFT_POISON`-red; it is NOT fixed by this change and keeps the nightly miri gate red on its own.
+That is a separate bug to file/fix, not part of this plan's captured-group element-access UAF.
 
 ## Static gate (2026-07-19) — `introspect --show-ownership` now MAKES THIS VISIBLE
 
