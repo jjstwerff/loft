@@ -931,7 +931,7 @@ impl Lexer {
                 if let Some('}') = self.iter.peek() {
                     res.push(c);
                 } else {
-                    self.err(Level::Warning, "Expected two '}' tokens");
+                    self.err_coded(Level::Error, "format-unescaped-brace", "a literal `}` in a format string must be written `}}`");
                 }
             } else {
                 // With interpolation off (configs), `{` / `}` fall here as literal
@@ -1091,7 +1091,7 @@ impl Lexer {
                     if let Some('}') = self.iter.peek() {
                         cur.push('}');
                     } else {
-                        self.err(Level::Warning, "Expected two '}' tokens");
+                        self.err_coded(Level::Error, "format-unescaped-brace", "a literal `}` in a format string must be written `}}`");
                     }
                 }
                 Some(&'\\') => {
@@ -1158,7 +1158,7 @@ impl Lexer {
                     if let Some('}') = self.iter.peek() {
                         cur.push('}');
                     } else {
-                        self.err(Level::Warning, "Expected two '}' tokens");
+                        self.err_coded(Level::Error, "format-unescaped-brace", "a literal `}` in a format string must be written `}}`");
                     }
                 }
                 Some(&'\\') => {
@@ -1492,6 +1492,11 @@ impl Lexer {
 
     fn err(&mut self, level: Level, error: &str) {
         diagnostic!(self, level, "{error}");
+    }
+
+    /// Like [`err`], but carries a stable diagnostic `code` (@PLN102 arc-E E1).
+    fn err_coded(&mut self, level: Level, code: &'static str, error: &str) {
+        diagnostic!(self, level, code = code, "{error}");
     }
 
     /// Debug feature to check the amount of currently in use links
