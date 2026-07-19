@@ -1,19 +1,20 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLN13 Step 1 — script-mode DETECTION (no behaviour change yet).
+//! @PLN13 — beginner scripts: run a `.loft` file with loose top-level statements and
+//! no `fn main`.
 //!
-//! A *script* is a `.loft` file with loose top-level statements (bare statements
-//! not wrapped in a `fn`, and no explicit `fn main`). Beginner scripts desugar to
-//! one run-once `fn main` in a later step; this module only CLASSIFIES a source as
-//! script-or-not. It is deliberately not wired into execution — `is_script` is dead
-//! code until Step 2 gates the desugar on it.
+//! A *script* is a `.loft` file with loose top-level statements (bare statements not
+//! wrapped in a `fn`, and no explicit `fn main`). [`is_script`] CLASSIFIES a source
+//! (step 1); [`script_desugar`] rewrites a script to one run-once `fn main` (step 2),
+//! which `main.rs` parses instead of the file — auto-detected, no flag (step 3). Loose
+//! statements may omit the trailing `;` at the script top level (step 4).
 //!
-//! The classification invariant that makes the later desugar safe: **every file the
-//! current compiler accepts classifies as NOT a script** — an all-defs library or a
-//! program with `fn main`. So the desugar can only change source that is already
-//! rejected today, and the whole existing corpus stays untouched. `is_script` is
-//! swept over `default/*.loft` + `tests/**` in the test below to prove that.
+//! The classification invariant that makes the desugar safe: **every file the current
+//! compiler accepts classifies as NOT a script** — an all-defs library or a program
+//! with `fn main`. So the desugar can only change source that is already rejected today,
+//! and the whole existing corpus stays untouched. `is_script` is swept over
+//! `default/*.loft` + `tests/**` in the test below to prove that.
 
 use crate::parser::Parser;
 
@@ -49,10 +50,11 @@ pub fn is_script(src: &str) -> bool {
 /// state. Returns `None` for a non-script (all-defs / has `fn main`), so the caller
 /// leaves those untouched.
 ///
-/// Loose statements are wrapped verbatim; loft requires `;` between block statements,
-/// so a multi-statement script must terminate them with `;` until Step 4 makes `;`
-/// optional inside a script `main`. (Line numbers shift in the desugared source — an
-/// error-position remap is a later step; this is behind the `--script` flag.)
+/// The top-level loose statements are split at newlines (step 4), so `;` is OPTIONAL
+/// between them — each is terminated with `;` on emission. Statements NESTED inside a
+/// block (`for i in … { a; b }`) still need their `;` for now; universal `;`-optional is
+/// a later slice. (Line numbers shift in the desugared source — an error-position remap
+/// is a later step.)
 pub fn script_desugar(src: &str) -> Option<String> {
     if !is_script(src) {
         return None;
@@ -73,6 +75,15 @@ pub fn script_desugar(src: &str) -> Option<String> {
     out.push_str("fn main() {\n");
     for s in body.drain(..) {
         out.push_str(s);
+        // loft requires `;` between block statements; a `;`-less script split at newlines
+        // (@PLN13 step 4) supplies them here. A statement that already ends with `;` is
+        // left alone; otherwise the `;` goes on a FRESH line so a trailing `// comment` on
+        // `s` cannot swallow it (loft treats the comment + newline as whitespace, so
+        // `x = 5 // c\n;` lexes as `x = 5 ;`). A redundant `;` (empty statement, e.g. after
+        // a `for { … }` block or a comment-after-`;`) is harmless.
+        if !s.trim_end().ends_with(';') {
+            out.push_str("\n;");
+        }
         out.push('\n');
     }
     out.push_str("}\n");
@@ -80,10 +91,15 @@ pub fn script_desugar(src: &str) -> Option<String> {
 }
 
 /// Split `src` into its top-level items (source slices), skipping comments and string
-/// contents. Each item is a def (with any leading `#` annotations) or a loose
-/// statement. An item ends at the first depth-0 `;`, the `}` that closes a top-level
-/// body back to depth 0, or — for a `;`-less loose statement — a newline where what
-/// has been scanned is a complete statement.
+/// contents. Each item is a def (with any leading `#` annotations) or a loose statement.
+///
+/// A DEF/const item is scanned to the `}` that closes its top-level body back to depth 0,
+/// its depth-0 `;`, or EOF — with NO newline boundary, so a brace-less fn body
+/// (`fn f() -> text\n  return x`) stays one item. A loose STATEMENT is scanned the same
+/// way but ALSO ends at the first depth-0 newline where what has been scanned is a
+/// complete statement — so a `;`-less script (`count = 0\nprint(count)`, @PLN13 step 4)
+/// splits into one item per line, while a `;`-less multi-line expression (a trailing
+/// operator, or an open bracket) is held together by [`Parser::statement_incomplete`].
 pub fn split_top_level(src: &str) -> Vec<&str> {
     let b = src.as_bytes();
     let n = b.len();
@@ -99,7 +115,11 @@ pub fn split_top_level(src: &str) -> Vec<&str> {
     i = skip_trivia(b, i);
     while i < n {
         let start = i;
-        i = scan_item_end(b, i);
+        // Decide def-vs-statement at the START (before the end is known) so a loose
+        // statement gets the newline boundary while a def does not — this is what keeps
+        // a brace-less def whole AND lets `;`-less loose statements separate correctly,
+        // even a def sitting between two of them.
+        i = scan_item_end(src, start, !item_at_is_def(src, start));
         if i <= start {
             break; // no-progress guard (should not happen)
         }
@@ -110,6 +130,16 @@ pub fn split_top_level(src: &str) -> Vec<&str> {
         i = skip_trivia(b, i);
     }
     items
+}
+
+/// Peek whether the top-level item beginning at `start` is a DEF or implicit top-level
+/// constant (scanned to a brace/`;`, so a brace-less body survives) rather than a loose
+/// statement (which gets the `;`-less newline boundary). Mirrors [`is_def_item`] but
+/// decides BEFORE the item's end is known: it inspects only the leading keyword/name, so
+/// passing the rest of the source is safe.
+fn item_at_is_def(src: &str, start: usize) -> bool {
+    let core = strip_leading_annotations(&src[start..]);
+    core.is_empty() || Parser::starts_top_level_def(core) || is_top_level_const(core)
 }
 
 /// Whitespace, `//` line comments, and `/* */` block comments (the corpus uses all
@@ -143,12 +173,16 @@ fn skip_trivia(b: &[u8], mut i: usize) -> usize {
 /// just past its end: the first depth-0 `;`, the `}` that closes a top-level body back
 /// to depth 0, or EOF.
 ///
-/// There is deliberately no newline boundary: a `;`/brace-less shape (a brace-less fn
-/// body `fn f() -> text\n  return x`, or — in a real script — consecutive loose
-/// statements) is merged into one item. That is fine for DETECTION — a merged item is
-/// still classified correctly (a def stays a def; a loose statement stays loose).
-/// Precise statement boundaries are a Step-2 concern (the desugar).
-fn scan_item_end(b: &[u8], start: usize) -> usize {
+/// When `stmt_boundary` is true (a loose statement, not a def), the scan ALSO ends at the
+/// first depth-0 newline where `src[start..]` is already a complete statement — the
+/// `;`-less script boundary (@PLN13 step 4). [`Parser::statement_incomplete`] holds a
+/// multi-line expression together (a trailing binary operator, or an unclosed bracket),
+/// so only a genuinely finished line ends the item.
+///
+/// When `stmt_boundary` is false (a def/const), there is deliberately no newline boundary,
+/// so a brace-less fn body (`fn f() -> text\n  return x`) stays one item.
+fn scan_item_end(src: &str, start: usize, stmt_boundary: bool) -> usize {
+    let b = src.as_bytes();
     let n = b.len();
     let mut i = start;
     let mut depth: i32 = 0;
@@ -195,6 +229,16 @@ fn scan_item_end(b: &[u8], start: usize) -> usize {
                 }
             }
             b';' if depth == 0 => return i + 1,
+            // a `;`-less loose statement ends at the first depth-0 newline where it is
+            // already complete; a false guard (incomplete — trailing operator / open
+            // bracket) falls through to `_` and the scan continues onto the next line.
+            b'\n'
+                if stmt_boundary
+                    && depth == 0
+                    && !Parser::statement_incomplete(src[start..i].trim()) =>
+            {
+                return i;
+            }
             _ => {}
         }
         i += 1;
@@ -417,6 +461,43 @@ mod tests {
         assert!(is_script("if true {\n  print(\"y\");\n}\n"));
         assert!(is_script("for i in 0..3 {\n  print(\"{i}\");\n}\n"));
         assert!(is_script("total = 0;\nreturn total;\n"));
+    }
+
+    // ── `;`-optional at the script top level (Step 4) ────────────────────────
+    #[test]
+    fn semicolon_less_statements_split_at_newlines() {
+        // a `;`-less script splits into one loose item per line.
+        let items = split_top_level("count = 0\nprint(count)\n");
+        assert_eq!(items, vec!["count = 0", "print(count)"], "{items:?}");
+        // a def sitting BETWEEN two `;`-less statements is still separated cleanly.
+        let items = split_top_level("print(\"a\")\nfn helper() { 1 }\nprint(\"b\")\n");
+        assert_eq!(
+            items,
+            vec!["print(\"a\")", "fn helper() { 1 }", "print(\"b\")"],
+            "{items:?}"
+        );
+    }
+    #[test]
+    fn semicolon_less_multiline_expression_stays_one_item() {
+        // a trailing binary operator continues the statement onto the next line, so the
+        // newline is NOT a boundary (statement_incomplete holds it together).
+        let items = split_top_level("x = 1 +\n2\nprint(x)\n");
+        assert_eq!(items, vec!["x = 1 +\n2", "print(x)"], "{items:?}");
+        // an unclosed bracket likewise continues across newlines.
+        let items = split_top_level("v = [\n1,\n2,\n]\nprint(v)\n");
+        assert_eq!(items, vec!["v = [\n1,\n2,\n]", "print(v)"], "{items:?}");
+    }
+    #[test]
+    fn desugar_terminates_semicolon_less_body() {
+        // each `;`-less statement is terminated with `;` on a fresh line (comment-safe).
+        let out = super::script_desugar("count = 0\nprint(count)\n").unwrap();
+        assert_eq!(
+            out, "fn main() {\ncount = 0\n;\nprint(count)\n;\n}\n",
+            "{out}"
+        );
+        // an already-`;`-terminated statement is left exactly as written (no extra `;`).
+        let out = super::script_desugar("count = 0;\nprint(count);\n").unwrap();
+        assert_eq!(out, "fn main() {\ncount = 0;\nprint(count);\n}\n", "{out}");
     }
 
     #[test]

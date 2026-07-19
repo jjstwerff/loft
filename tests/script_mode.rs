@@ -1,12 +1,12 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
 
-//! @PLN13 step 2 — the `--script` desugar, end to end. A beginner script (loose
-//! top-level statements, no `fn main`) runs under `--script` on BOTH backends, with the
-//! statements executed once in order sharing state and a top-level def hoisted; without
-//! the flag the same file fails to parse (loose top-level statements are rejected), and
-//! `--script` on a normal `fn main` program is a no-op. The desugar's unit-level shape +
-//! the 0-corpus-classification invariant are covered in `loft::script::tests`.
+//! @PLN13 — beginner scripts, end to end. A script (loose top-level statements, no
+//! `fn main`) runs on BOTH backends — under `--script` (step 2) and AUTO-DETECTED with no
+//! flag (step 3) — with the statements executed once in order sharing state and a
+//! top-level def hoisted. `;` is optional between the top-level statements (step 4). The
+//! desugar's unit-level shape + the 0-corpus-classification invariant are covered in
+//! `loft::script::tests`.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -58,4 +58,15 @@ fn script_auto_detected_without_flag() {
         ok && out.contains("count=12"),
         "auto-detect (no flag): {out:?}"
     );
+}
+
+#[test]
+fn semicolon_less_script_runs_on_both_backends() {
+    let fixture = workspace_root().join("tests/data/script_semicolon_less.loft");
+    // Step 4 — the top-level statements omit their `;`: 0 + triple(2) + triple(3)
+    // = 0 + 6 + 9 = 15, proving the newline split + terminator insertion + shared state.
+    let (out, ok) = run(&["--interpret"], &fixture);
+    assert!(ok && out.contains("total=15"), "interp ;-less: {out:?}");
+    let (nout, nok) = run(&["--native"], &fixture);
+    assert!(nok && nout.contains("total=15"), "native ;-less: {nout:?}");
 }
