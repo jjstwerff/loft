@@ -96,6 +96,10 @@ fn print_help() {
         "  --interpret                   run in interpreter/bytecode mode (native is default)"
     );
     println!(
+        "  --script                      run a beginner script (loose top-level statements,\n\
+         \x20                               no `fn main`) — desugars to one run-once `fn main`"
+    );
+    println!(
         "  --dump                        compile to bytecode, dump to stderr, and exit (no execution)"
     );
     println!("  --native                      compile to native Rust via rustc and run (default)");
@@ -4176,6 +4180,9 @@ fn main() {
     let mut production = false;
     let mut generate_log_config: Option<Option<String>> = None;
     let mut native_mode = true;
+    // @PLN13 step 2 — `--script`: desugar a beginner script (loose top-level statements,
+    // no `fn main`) into one run-once `fn main` before parsing. Opt-in for now.
+    let mut script_mode = false;
     // LibCI: `loft test` / `--tests` default to the interpreter, but honour an
     // EXPLICIT `--native` (matching the `--help` docs for `--tests --native`).
     // Tracked separately because the `test`/`--tests` handlers force interpreter
@@ -4301,6 +4308,8 @@ fn main() {
         // @F48 — the loft CLI (run a program; --interpret / --native, --timeout, --help)
         } else if a == "--interpret" || a == "--bytecode" {
             native_mode = false;
+        } else if a == "--script" {
+            script_mode = true;
         } else if let Some(rest) = a.strip_prefix("--errors=") {
             // Plan-07 phase 2: --errors=compact|pretty selects the
             // diagnostic renderer.  Pretty is default; compact is
@@ -5572,7 +5581,9 @@ fn main() {
     // the test suite — the dev-safety + test-isolation default).  The narrower
     // stdlib cache (`LOFT_STDLIB_CACHE`, D2b) caches `default/` only and engages
     // just when the program cache is off.
-    let program_cache_on = loft::cache::program_cache_enabled();
+    // @PLN13 — `--script` parses a DESUGARED source (not the file on disk), so bypass
+    // the whole-program cache (keyed by the file) to avoid a stale warm load.
+    let program_cache_on = loft::cache::program_cache_enabled() && !script_mode;
     p.track_sources = program_cache_on;
     // @PLN11 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
     // as a SKELETON (def table only) and the mmap'd bundle store is returned
@@ -5645,7 +5656,24 @@ fn main() {
     // policy was loaded above, before the warm-load gate, so designations form
     // during this parse — and a sandboxed program is never warm-loaded.)
     if !program_warm {
-        p.parse(&abs_file, false);
+        // @PLN13 step 2 — under `--script`, desugar loose top-level statements into a
+        // run-once `fn main` and parse that; a file that is not a script (all-defs /
+        // already has `fn main`) desugars to `None` and parses unchanged.
+        let desugared = if script_mode {
+            std::fs::read_to_string(&abs_file)
+                .ok()
+                .and_then(|src| loft::script::script_desugar(&src))
+        } else {
+            None
+        };
+        match desugared {
+            Some(src) => {
+                p.parse_source(&src, &abs_file, false);
+            }
+            None => {
+                p.parse(&abs_file, false);
+            }
+        }
     }
     // @PLN90 W5 — the enforced copy lint: route every Avoidable structure copy
     // through the Warning channel so it surfaces with the other diagnostics.

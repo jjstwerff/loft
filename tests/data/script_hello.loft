@@ -1,0 +1,20 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @SCRIPT — an intentional beginner-script fixture (runs only under `--script`), so the
+// script-detector corpus sweep skips it (it is NOT accepted by the plain compiler).
+//
+// @PLN13 step 2 fixture — a beginner script: NO `fn main`, loose top-level statements
+// that run top-to-bottom sharing state, plus a top-level def that is hoisted. Runs only
+// under `--script` (which desugars it to one run-once `fn main`); parsing it without the
+// flag fails, since loft does not accept loose top-level statements today.
+
+fn double(n: integer) -> integer {
+  n * 2
+}
+
+count = 0;
+for i in 1..4 {
+  count = count + double(i);
+}
+print("count={count}\n");

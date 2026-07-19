@@ -27,6 +27,42 @@ pub fn is_script(src: &str) -> bool {
     items.iter().any(|it| !is_def_item(it))
 }
 
+/// @PLN13 Step 2 — the script desugar. If `src` is a beginner script, return the
+/// equivalent loft source: its top-level defs kept at top level, and its loose
+/// statements collected into ONE `fn main()` that runs them once, in order, sharing
+/// state. Returns `None` for a non-script (all-defs / has `fn main`), so the caller
+/// leaves those untouched.
+///
+/// Loose statements are wrapped verbatim; loft requires `;` between block statements,
+/// so a multi-statement script must terminate them with `;` until Step 4 makes `;`
+/// optional inside a script `main`. (Line numbers shift in the desugared source — an
+/// error-position remap is a later step; this is behind the `--script` flag.)
+pub fn script_desugar(src: &str) -> Option<String> {
+    if !is_script(src) {
+        return None;
+    }
+    let (mut defs, mut body): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
+    for it in split_top_level(src) {
+        if is_def_item(it) {
+            defs.push(it);
+        } else {
+            body.push(it);
+        }
+    }
+    let mut out = String::new();
+    for d in defs.drain(..) {
+        out.push_str(d);
+        out.push('\n');
+    }
+    out.push_str("fn main() {\n");
+    for s in body.drain(..) {
+        out.push_str(s);
+        out.push('\n');
+    }
+    out.push_str("}\n");
+    Some(out)
+}
+
 /// Split `src` into its top-level items (source slices), skipping comments and string
 /// contents. Each item is a def (with any leading `#` annotations) or a loose
 /// statement. An item ends at the first depth-0 `;`, the `}` that closes a top-level
@@ -291,6 +327,32 @@ mod tests {
         // native_crate_pkg.loft: a brace-less fn body.
         assert!(!is_script("pub fn hi() -> text\n    return \"hi\"\n"));
     }
+    // ── the desugar (Step 2) ─────────────────────────────────────────────────
+    #[test]
+    fn desugar_none_for_non_scripts() {
+        assert_eq!(super::script_desugar("fn main() { print(\"hi\") }\n"), None);
+        assert_eq!(
+            super::script_desugar("fn f() {}\nstruct S { x: integer }\n"),
+            None
+        );
+    }
+    #[test]
+    fn desugar_all_loose_into_one_main() {
+        let out = super::script_desugar("print(\"a\");\nprint(\"b\");\n").unwrap();
+        assert_eq!(out, "fn main() {\nprint(\"a\");\nprint(\"b\");\n}\n");
+    }
+    #[test]
+    fn desugar_hoists_defs_and_keeps_statement_order() {
+        // a def BETWEEN two loose statements is hoisted to top level; the loose
+        // statements keep their order in `main`.
+        let out =
+            super::script_desugar("print(\"a\");\nfn helper() { 1 }\nprint(\"b\");\n").unwrap();
+        assert_eq!(
+            out,
+            "fn helper() { 1 }\nfn main() {\nprint(\"a\");\nprint(\"b\");\n}\n"
+        );
+    }
+
     #[test]
     fn shebang_is_skipped() {
         // a shebang program keeps its `fn main` verdict; a shebang script is a script.
@@ -328,7 +390,13 @@ mod tests {
                             continue;
                         }
                         if let Ok(src) = std::fs::read_to_string(&p) {
-                            if src.contains("@EXPECT_ERROR") || src.contains("@EXPECT_FAIL") {
+                            // `@EXPECT_ERROR`/`@EXPECT_FAIL` = deliberately invalid;
+                            // `@SCRIPT` = an intentional `--script`-only fixture (not
+                            // accepted by the plain compiler, so outside the invariant).
+                            if src.contains("@EXPECT_ERROR")
+                                || src.contains("@EXPECT_FAIL")
+                                || src.contains("@SCRIPT")
+                            {
                                 continue;
                             }
                             if is_script(&src) {

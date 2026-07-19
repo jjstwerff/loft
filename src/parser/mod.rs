@@ -1514,7 +1514,15 @@ impl Parser {
     /// prelude name rather than colliding on `(name, 0)`), so an embedded bootstrap
     /// parks the SAME world the fs path does.  Returns `true` when the parse is
     /// diagnostic-clean.
-    pub(crate) fn parse_source(&mut self, content: &str, filename: &str, default: bool) -> bool {
+    pub fn parse_source(&mut self, content: &str, filename: &str, default: bool) -> bool {
+        // @PLN13 — establish `source_dir` from `filename` (like `parse`) so a `--script`
+        // run resolves `use` imports + relative I/O against the script's own directory.
+        if !default && self.database.source_dir.is_empty() {
+            self.database.source_dir = std::path::Path::new(filename)
+                .parent()
+                .map(|p| p.to_string_lossy().into_owned())
+                .unwrap_or_default();
+        }
         self.default = default;
         self.vars.logging = false;
         self.first_pass = true;
