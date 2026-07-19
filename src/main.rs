@@ -3636,7 +3636,9 @@ fn api_surface_of(
     // database — kept OUT of the descriptor so a layout-only edit (a field reorder) does not
     // perturb the API-axis determinism, and compared as its own axis in `--diff`.
     let roots = loft::schema_sidecar::program_roots(&p.data);
-    let identity = loft::schema_sidecar::LayoutIdentity::of(&p.database, &roots);
+    // @PLN102 arc-E F9 — `Data` is live here, so pin full-width nullability too
+    // (`integer` vs `integer?` share a byte layout; the schema axis distinguishes them).
+    let identity = loft::schema_sidecar::LayoutIdentity::of_scoped(&p.database, &roots, &p.data);
     Ok((surface, identity))
 }
 
@@ -3948,7 +3950,8 @@ fn run_layout_command(sub: &str, file: &str) -> i32 {
     p.parse(&abs.to_string_lossy(), false);
 
     let roots = ss::program_roots(&p.data);
-    let identity = ss::LayoutIdentity::of(&p.database, &roots);
+    // @PLN102 arc-E F9 — pin full-width nullability (`Data` is live at the CLI site).
+    let identity = ss::LayoutIdentity::of_scoped(&p.database, &roots, &p.data);
     let project = abs
         .parent()
         .unwrap_or_else(|| std::path::Path::new("."))
