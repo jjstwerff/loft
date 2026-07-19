@@ -528,40 +528,18 @@ impl Test {
             // Stdlib source locations are location-agnostic in assertions
             // (@PLN92): match the normalized form used to build `expected`.
             let l = normalize_loft_loc(l);
-            // Plan-07 phase 4e.2 / 4h — filter the undefended-fault-
-            // site compile-time warning AND the not-null field
-            // reminder hint so the existing diagnostic-comparison
-            // harness doesn't see them as unexpected output.  Tests
-            // that specifically want to assert on these can do so
-            // by including the text in the `Test::warnings` expected
-            // set; the filter only fires when the line was NOT
-            // explicitly expected.  End-to-end coverage lives in
-            // `tests/runtime_warnings.rs` (binary-level via
-            // Command::new).
-            let is_runtime_warning = l.starts_with("Warning: division may produce null")
-                || l.starts_with("Warning: modulus may produce null")
-                || l.starts_with("Warning: `v[i]` may produce null")
-                || l.starts_with("Warning: `s[i]` may produce null")
-                || l.starts_with("Warning: field ")
-                // @PLN87 P3.2 — the redundant-`&` lint is on by default and part
-                // of the `LOFT_NO_WARN_RUNTIME` family (an efficiency advisory,
-                // not an error).  Many `&`-param regression guards keep the `&`
-                // deliberately to exercise the RefVar path; filter it here so it
-                // only fails a test that explicitly expects it via `.warning(..)`.
-                || l.starts_with("Warning: `&` on parameter ")
-                // @PLN25 F2 — `not null` is a deprecated no-op emitting a tree-wide
-                // advisory during the retirement window.  Many `code!` fixtures still
-                // declare fields with it incidentally; filter it so it only fails a
-                // test that explicitly expects it via `.warning(..)`.
-                || l.starts_with("Warning: `not null` is deprecated")
-                // @PLN25 (N-Store) — the "nullable/null stored into a non-null return /
-                // field / argument" nudge is advisory (the store proceeds); like the
-                // sibling "may produce null" warnings above, filter it so it only fails a
-                // test that explicitly asserts it via `.warning(..)`.  The argument-class
-                // (routing-feedback f4) surfaces on the common `f(v[i])` shape, so many
-                // incidental `code!` fixtures trip it.
-                || (l.starts_with("Warning: a nullable `") && l.contains("` is stored into"))
-                || l.starts_with("Warning: `null` is stored into");
+            // @PLN102 arc-E test-hygiene — the tolerated-warning filter is being RETIRED
+            // so the `code!` harness asserts EXACTLY what loft emits (no silent
+            // absorption). Measured 2026-07-19 (test-hygiene-buckets.md): the 5
+            // DN1-retired families (÷/%/`v[i]`/`s[i]` "may produce null", the `not null`
+            // field hint) and the two N-Store nudges had ZERO `code!` fixtures, so their
+            // clauses were dropped with no test delta (step 1). What remains is filtered
+            // only until its fixtures are corrected (assert-or-fix, then the clause goes):
+            //  · redundant-`&` (12 fixtures) — drop the `&`;
+            //  · `not null` deprecation (110) — delete the deprecated no-op.
+            // End-to-end coverage of every family lives in `tests/runtime_warnings.rs`.
+            let is_runtime_warning = l.starts_with("Warning: `&` on parameter ")
+                || l.starts_with("Warning: `not null` is deprecated");
             if expected.contains(&l) {
                 expected.remove(&l);
             } else if is_runtime_warning {
