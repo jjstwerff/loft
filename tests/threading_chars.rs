@@ -561,7 +561,7 @@ fn run() -> integer {
 #[test]
 fn par_sorted_input_t4() {
     code!(
-        "struct Score { value: integer not null }
+        "struct Score { value: integer }
 fn dbl(s: const Score) -> integer { s.value * 2 }
 fn run() -> integer {
     sorted_items: sorted<Score[value]> = [];
@@ -586,7 +586,7 @@ fn run() -> integer {
 #[test]
 fn par_hash_input_t4() {
     code!(
-        "struct Score { name: text not null, value: integer }
+        "struct Score { name: text, value: integer }
 fn dbl(s: const Score) -> integer { s.value * 2 }
 fn run() -> integer {
     h: hash<Score[name]> = [];
@@ -610,7 +610,7 @@ fn run() -> integer {
 #[test]
 fn par_index_input_t4() {
     code!(
-        "struct Score { name: text not null, value: integer }
+        "struct Score { name: text, value: integer }
 fn dbl(s: const Score) -> integer { s.value * 2 }
 fn run() -> integer {
     ix: index<Score[name]> = [];
@@ -690,7 +690,7 @@ fn run() -> integer {
 fn par_struct_to_keyed_collection_t4() {
     code!(
         "struct Score { value: integer }
-struct Tag { id: integer not null, label: text }
+struct Tag { id: integer, label: text }
 fn build_tags(s: const Score) -> sorted<Tag[id]> {
     out: sorted<Tag[id]> = [];
     out += Tag { id: s.value, label: \"v{s.value}\" };

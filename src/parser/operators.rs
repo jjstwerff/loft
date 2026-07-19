@@ -2120,6 +2120,41 @@ impl Parser {
                     // else: in range, or DN4 off — accept as a width-tag (value
                     // stays in the 8-byte slot), the pre-DN4 behaviour.
                 } else {
+                    // @PLN102 arc-E E2 (B) — a float→integer cast of a STATICALLY
+                    // out-of-range constant is a compile error, mirroring the
+                    // narrowing-int DN4 rule above. The bare cast ASSERTS the value
+                    // fits; a constant the developer can see does not fit is a bug,
+                    // not a null. The checked forms (`as τ?`, `?? d`) stay the
+                    // sanctioned escape — they yield the null sentinel / fallback —
+                    // so gate on neither being present. Dynamic floats stay C80-null
+                    // at runtime, unchanged. The range mirrors `cast_int_from_single`
+                    // /`cast_int_from_float` in fill.rs: NaN or outside [-2^63, 2^63).
+                    if !self.first_pass
+                        && !nullable_cast
+                        && matches!(tp.base(), Type::Integer(_))
+                        && !self.lexer.peek_token("??")
+                    {
+                        let cf = match crate::const_eval::const_eval(code.unspan(), &self.data) {
+                            Some(Value::Float(f)) => Some(f),
+                            Some(Value::Single(f)) => Some(f64::from(f)),
+                            _ => None,
+                        };
+                        if let Some(f) = cf
+                            && (f.is_nan()
+                                || !(-9_223_372_036_854_775_808.0_f64
+                                    ..9_223_372_036_854_775_808.0_f64)
+                                    .contains(&f))
+                        {
+                            diagnostic!(
+                                self.lexer,
+                                Level::Error,
+                                code = "cast-constant-out-of-range",
+                                "the constant {f} is out of range for `{tps}` — a bare cast \
+                                 asserts the value fits; use `{tps}?` for a checked cast \
+                                 (value or null), or `?? d` for a fallback",
+                            );
+                        }
+                    }
                     // @PLN99 Arc C — clear the owned-conversion signal, then let `convert`
                     // set it iff it dispatches an allocating user conversion (`fn OpConvTFromS`).
                     self.conv_owned_result = None;
@@ -2183,6 +2218,7 @@ impl Parser {
                             diagnostic!(
                                 self.lexer,
                                 Level::Error,
+                                code = "text-parse-may-fail",
                                 "a text parse `as {tps}` may fail — use `{tps}?` for a checked cast \
                                  (value or null), or `?? <default>`",
                             );
@@ -2620,6 +2656,36 @@ impl Parser {
             // carries a `Value::Span(b)` arm (scopes.rs, intervals.rs,
             // slots.rs, slots_v2.rs, validate.rs, codegen.rs,
             // parser/mod.rs::substitute_type_in_value, generation/*).
+            // @PLN102 arc-E E2 (B) — a shift by a STATICALLY-KNOWN amount
+            // outside [0,63] is a compile error.  A runtime null is the
+            // FALLBACK for a *dynamic* out-of-range shift (C80); it is not a
+            // cover for a constant the developer can see is wrong.  Dynamic
+            // shift amounts still read null at runtime, unchanged.
+            // A bare `<<`/`>>` with a statically-out-of-range amount ASSERTS a
+            // defined result; there is none, so it is a compile error. The `?? d`
+            // fallback (there is no checked-shift form) stays the sanctioned escape
+            // — mirroring the cast rule below — so skip the check when a `??`
+            // follows. A *dynamic* out-of-range amount still reads null (C80/C85).
+            if !self.first_pass && matches!(operator, "<<" | ">>") && !self.lexer.peek_token("??") {
+                // Fold the shift amount: `const_int` catches `-1` (a `neg(1)`
+                // node), `2+3`, a named constant — not just a bare `Int` literal.
+                let amt = if let Value::Call(_, args) = code.unspan() {
+                    args.get(1).and_then(|a| self.const_int(a))
+                } else {
+                    None
+                };
+                if let Some(amt) = amt
+                    && !(0..=63).contains(&amt)
+                {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        code = "shift-amount-out-of-range",
+                        "shift by {amt} is out of the valid range 0..=63 — a constant \
+                         out-of-range shift has no defined result",
+                    );
+                }
+            }
             if !self.first_pass && matches!(operator, "+" | "-" | "*" | "/" | "%" | "<<" | ">>") {
                 let inner = std::mem::replace(code, Value::Null);
                 *code = Value::with_span(op_pos.clone(), inner);

@@ -22,9 +22,31 @@ use std::io::Write;
 /// on) `default/*.loft` line numbers when the stdlib shifts — e.g. when a
 /// catalogue tag is inserted anywhere in a stdlib file.  User code is referenced
 /// by test name, not a `.loft` path, so only stdlib references are affected.
+/// Remove a leading `Level[code]:` tag, collapsing it to `Level:` (E1). Only a
+/// `[...]` sitting between a known level word and the first `:` is stripped, so
+/// brackets elsewhere in a message are untouched.
+fn strip_diag_code(s: &str) -> String {
+    for level in ["Error", "Warning", "Fatal", "Debug"] {
+        if let Some(after) = s.strip_prefix(level)
+            && after.starts_with('[')
+            && let Some(close) = after.find("]:")
+        {
+            return format!("{level}{}", &after[close + 1..]);
+        }
+    }
+    s.to_string()
+}
+
 fn normalize_loft_loc(s: &str) -> String {
-    let mut out = String::with_capacity(s.len());
-    let mut rest = s;
+    // @PLN102 arc-E E1 — a diagnostic may carry a stable `[code]` tag rendered
+    // between the level and the colon (`Error[shift-amount-out-of-range]: …`).
+    // The code is orthogonal to the (improvable) prose these assertions pin, so
+    // collapse a leading `Level[...]:` back to `Level:` — expected strings never
+    // carry a tag, so this only touches the found lines and keeps existing
+    // `.error("<prose>")` assertions matching a now-coded diagnostic.
+    let stripped = strip_diag_code(s);
+    let mut out = String::with_capacity(stripped.len());
+    let mut rest = stripped.as_str();
     while let Some(pos) = rest.find(".loft:") {
         out.push_str(&rest[..pos]);
         out.push_str(".loft");
@@ -506,44 +528,16 @@ impl Test {
             // Stdlib source locations are location-agnostic in assertions
             // (@PLN92): match the normalized form used to build `expected`.
             let l = normalize_loft_loc(l);
-            // Plan-07 phase 4e.2 / 4h — filter the undefended-fault-
-            // site compile-time warning AND the not-null field
-            // reminder hint so the existing diagnostic-comparison
-            // harness doesn't see them as unexpected output.  Tests
-            // that specifically want to assert on these can do so
-            // by including the text in the `Test::warnings` expected
-            // set; the filter only fires when the line was NOT
-            // explicitly expected.  End-to-end coverage lives in
-            // `tests/runtime_warnings.rs` (binary-level via
-            // Command::new).
-            let is_runtime_warning = l.starts_with("Warning: division may produce null")
-                || l.starts_with("Warning: modulus may produce null")
-                || l.starts_with("Warning: `v[i]` may produce null")
-                || l.starts_with("Warning: `s[i]` may produce null")
-                || l.starts_with("Warning: field ")
-                // @PLN87 P3.2 — the redundant-`&` lint is on by default and part
-                // of the `LOFT_NO_WARN_RUNTIME` family (an efficiency advisory,
-                // not an error).  Many `&`-param regression guards keep the `&`
-                // deliberately to exercise the RefVar path; filter it here so it
-                // only fails a test that explicitly expects it via `.warning(..)`.
-                || l.starts_with("Warning: `&` on parameter ")
-                // @PLN25 F2 — `not null` is a deprecated no-op emitting a tree-wide
-                // advisory during the retirement window.  Many `code!` fixtures still
-                // declare fields with it incidentally; filter it so it only fails a
-                // test that explicitly expects it via `.warning(..)`.
-                || l.starts_with("Warning: `not null` is deprecated")
-                // @PLN25 (N-Store) — the "nullable/null stored into a non-null return /
-                // field / argument" nudge is advisory (the store proceeds); like the
-                // sibling "may produce null" warnings above, filter it so it only fails a
-                // test that explicitly asserts it via `.warning(..)`.  The argument-class
-                // (routing-feedback f4) surfaces on the common `f(v[i])` shape, so many
-                // incidental `code!` fixtures trip it.
-                || (l.starts_with("Warning: a nullable `") && l.contains("` is stored into"))
-                || l.starts_with("Warning: `null` is stored into");
+            // @PLN102 arc-E test-hygiene (2026-07-19) — the tolerated-warning filter is
+            // GONE: the `code!` harness now asserts EXACTLY what loft emits, with NO
+            // silent absorption. A fixture that emits a warning must `.warning(..)`-assert
+            // it (or not emit it). The retired families (÷/%/`v[i]`/`s[i]`/`not null`-hint
+            // "may produce null", the N-Store nudge — all DN1-dead) and the corrected ones
+            // (redundant-`&` dropped, `not null` deleted) are logged in
+            // test-hygiene-buckets.md; end-to-end warning coverage lives in
+            // `tests/runtime_warnings.rs`.
             if expected.contains(&l) {
                 expected.remove(&l);
-            } else if is_runtime_warning {
-                continue;
             } else {
                 if !found.is_empty() {
                     found += "|";

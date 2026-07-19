@@ -37,7 +37,8 @@ const CORPUS: &str = r#"
 struct Scalars { b: boolean, c: character, s: single, f: float, i: integer, t: text }
 struct Narrow { a: i32, b: u8, c: u16 }
 struct Wide { s: i16 }
-struct NotNull { i: integer not null, t: text not null }
+struct NotNull { i: integer, t: text }
+struct Nullable { n: integer?, f: float? }
 struct Vec1 { v: vector<integer> }
 struct VecNest { vv: vector<vector<integer>> }
 struct VecText { v: vector<text> }
@@ -58,6 +59,7 @@ const TYPES: &[&str] = &[
     "Narrow",
     "Wide",
     "NotNull",
+    "Nullable",
     "Vec1",
     "VecNest",
     "VecText",
@@ -72,8 +74,21 @@ const TYPES: &[&str] = &[
 ];
 
 /// A layout change flips this. Re-bless (with the golden) on an intentional change.
-/// (@PLN97 F9 2026-07-17 — re-blessed after adding the `@endian` line to the layout dump.)
-const LAYOUT_ALGO_HASH: u64 = 14_478_928_954_060_894_342;
+/// (@PLN97 F9 2026-07-17 — re-blessed after adding the `@endian` line to the layout dump.
+/// @PLN102 arc-E F9 2026-07-19 — re-blessed after adding the `Nullable` corpus type +
+/// folding the DEF-level nullability schema into the golden.)
+const LAYOUT_ALGO_HASH: u64 = 5_366_778_852_810_394_803;
+
+/// @PLN102 arc-E flip-gate (Gate 1 step 3) — the `contract` version at which the
+/// CURRENT layout was frozen. The store layout IS the persistence contract, so
+/// POST-FLIP a change to `LAYOUT_ALGO_HASH` / the golden may land only alongside a
+/// `CONTRACT_VERSION` bump (a declared, epoch-style break) — enforced git-side by
+/// `scripts/check_contract_goldens.sh`. When you re-bless the layout at
+/// `CONTRACT_VERSION > 0`, set this to the new `CONTRACT_VERSION` too. INERT while
+/// `CONTRACT_VERSION == 0` (pre-freeze: the language is still settling, layout
+/// changes are free). Invariant: `LAYOUT_CONTRACT <= CONTRACT_VERSION` always — a
+/// layout cannot be frozen at a contract the runtime has not reached.
+const LAYOUT_CONTRACT: u32 = 0;
 
 /// The corpus roots resolved to known_types (loudly — a parse / syntax drift fails).
 fn corpus_roots(data: &Data) -> Vec<u16> {
@@ -104,15 +119,27 @@ fn layout_golden() {
 
     let roots = corpus_roots(&p.data);
     let dump = p.database.layout_dump(&roots);
+    // @PLN102 arc-E F9 — fold the DEF-level nullability schema into the golden so a
+    // full-width `τ` → `τ?` flip (byte-identical `dump`, so invisible to the hash) is
+    // ALSO a red diff here + a contract-goldens gate trip. `Nullable` in the corpus
+    // makes the pin non-trivial.
+    let schema = loft::schema_sidecar::nullability_schema(&p.data, &roots);
+    let golden = format!("{dump}=== F9 nullability ===\n{schema}\n");
     let path = golden_path();
 
     if std::env::var("LOFT_BLESS_LAYOUT").is_ok() {
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(&path, &dump).unwrap();
+        std::fs::write(&path, &golden).unwrap();
         eprintln!(
             "blessed {} ; LAYOUT_ALGO_HASH = {}",
             path.display(),
             p.database.layout_algo_hash(&roots)
+        );
+        eprintln!(
+            "@PLN102 flip-gate: at CONTRACT_VERSION={}, a layout re-bless is a \
+             persistence-contract change — post-freeze, bump CONTRACT_VERSION and set \
+             LAYOUT_CONTRACT = CONTRACT_VERSION (inert at 0).",
+            loft::manifest::CONTRACT_VERSION,
         );
         return;
     }
@@ -124,15 +151,38 @@ fn layout_golden() {
         )
     });
     assert_eq!(
-        dump, expected,
-        "\nSTORE LAYOUT CHANGED. If intentional: re-bless (LOFT_BLESS_LAYOUT=1), \
-         hand-verify the diff, and update LAYOUT_ALGO_HASH. If not: a layout \
-         regression (the #477 class) just got caught.\n"
+        golden, expected,
+        "\nSTORE LAYOUT or F9 NULLABILITY CHANGED. If intentional: re-bless \
+         (LOFT_BLESS_LAYOUT=1), hand-verify the diff, and update LAYOUT_ALGO_HASH. If \
+         not: a layout regression (the #477 class) or a silent `τ`↔`τ?` reshape just \
+         got caught.\n"
     );
     assert_eq!(
         p.database.layout_algo_hash(&roots),
         LAYOUT_ALGO_HASH,
         "layout-algo hash drifted from the pinned constant"
+    );
+}
+
+/// @PLN102 arc-E flip-gate (Gate 1 step 3) — the layout is frozen at `LAYOUT_CONTRACT`;
+/// the running `CONTRACT_VERSION` can never be BELOW it (a layout cannot be frozen at a
+/// contract the runtime has not reached). This pins the in-tree half of the coupling;
+/// the "a layout change requires a contract bump" half is git-diff-shaped and lives in
+/// `scripts/check_contract_goldens.sh` (also inert while `CONTRACT_VERSION == 0`). When
+/// the two are equal the layout is frozen at the current contract — the normal state.
+#[test]
+fn layout_contract_pin_is_consistent() {
+    // `black_box` so the check reads as the runtime comparison it becomes once the two
+    // diverge (post-flip) — not a const-folded tautology clippy would flag while both
+    // are 0 (inert). The invariant is real: a re-bless at CONTRACT_VERSION>0 must raise
+    // LAYOUT_CONTRACT to match, so LAYOUT_CONTRACT can never exceed the running contract.
+    let frozen_at = std::hint::black_box(LAYOUT_CONTRACT);
+    let running = std::hint::black_box(loft::manifest::CONTRACT_VERSION);
+    assert!(
+        frozen_at <= running,
+        "LAYOUT_CONTRACT ({frozen_at}) exceeds CONTRACT_VERSION ({running}) — a layout \
+         cannot be frozen at a contract the runtime has not reached; re-bless the layout \
+         (LOFT_BLESS_LAYOUT=1) and set LAYOUT_CONTRACT = CONTRACT_VERSION",
     );
 }
 

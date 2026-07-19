@@ -46,6 +46,11 @@ so the scope is not quietly narrowed:
    that used to fail now compiles), never start erroring on a program that used to compile. *(Owner
    decision 2026-07-13: "the error texts are not frozen; we freeze when we throw an error, and can
    only limit the space we error for.")*
+   The **stable machine handle** for a diagnostic is its **code** — a kebab-case kind slug rendered
+   `error[text-parse-may-fail]: …`, not its prose (@PLN102 arc-E E1). A tool that must recognise a
+   specific diagnostic keys on the code; the prose behind it stays freely improvable. Codes are
+   assigned incrementally (a site without one yet renders `error: …` as before) — adding a code is
+   additive, never a breaking change.
 3. **The libs** — the standard library (`default/*.loft`) **and** published libraries: a
    program calling a stdlib function or a `use`d library keeps working.
 

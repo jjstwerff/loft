@@ -1605,11 +1605,11 @@ fn test() { r = Rec { n: 1 }; r.n += 1; }"
 fn pln40_const_reassign_via_ref_rejected() {
     code!(
         "struct Rec { const x: integer }
-fn touch(t: &Rec) { t.x = 9; }
+fn touch(t: Rec) { t.x = 9; }
 fn test() { t = Rec { x: 1 }; touch(t); }"
     )
     .error(
-        "cannot reassign const field 'x' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_reassign_via_ref_rejected:2:29",
+        "cannot reassign const field 'x' of struct 'Rec' — const fields are write-once-at-construction at pln40_const_reassign_via_ref_rejected:2:28",
     );
 }
 
@@ -1971,7 +1971,7 @@ fn test() {
 #[test]
 fn issue_83_hash_value_field_renamed_works() {
     code!(
-        "struct Score { id: integer not null, pts: integer not null }
+        "struct Score { id: integer, pts: integer }
 struct Board { scores: hash<Score[id]> }
 fn test() {
     b = Board { scores: [] };
@@ -3180,7 +3180,7 @@ fn o7_format_string_with_capacity() {
 #[test]
 fn p122_struct_return_in_loop() {
     code!(
-        "struct Pair { px: float not null, py: float not null }
+        "struct Pair { px: float, py: float }
 fn make_pair(mx: float, my: float) -> Pair {
     Pair { px: mx, py: my }
 }
@@ -3204,7 +3204,7 @@ fn p122_struct_nested_loop() {
     // 500 is sufficient as a regression guard. Run --ignored variant for
     // the full stress test.
     code!(
-        "struct Box { bx: float not null, by: float not null, bw: float not null, bh: float not null }
+        "struct Box { bx: float, by: float, bw: float, bh: float }
 fn overlap(a: const Box, b: const Box) -> boolean {
     a.bx < b.bx + b.bw && a.bx + a.bw > b.bx && a.by < b.by + b.bh && a.by + a.bh > b.by
 }
@@ -3403,7 +3403,7 @@ fn p117_text_param_struct_return_loop_no_leak() {
     // 100 iterations is enough to detect a per-call store leak in debug
     // mode without dominating CI time.
     code!(
-        "struct Wrap { name: text not null, count: integer not null }
+        "struct Wrap { name: text, count: integer }
 fn make(t: text) -> Wrap {
   Wrap { name: t, count: t.len() }
 }
@@ -3444,8 +3444,8 @@ fn test() {
 fn p120_vector_field_in_returned_struct_round_trip() {
     code!(
         "struct BigBox {
-  width: integer not null,
-  height: integer not null,
+  width: integer,
+  height: integer,
   data: vector<integer>
 }
 fn make_big() -> BigBox {
@@ -3570,7 +3570,7 @@ fn p122_struct_return_conditional_loop() {
     // Iterations reduced 100*50=5000 → 30*15=450 for CI speed. Still
     // exercises the store-leak pattern with hundreds of allocations.
     code!(
-        "struct Overlap { ox: float not null, oy: float not null }
+        "struct Overlap { ox: float, oy: float }
 fn compute_overlap(ax: float, bx: float) -> Overlap {
     Overlap { ox: ax, oy: bx }
 }
@@ -3594,7 +3594,7 @@ fn test() {
 #[test]
 fn p122_struct_literal_in_loop() {
     code!(
-        "struct Rect { rx: float not null, ry: float not null, rw: float not null, rh: float not null }
+        "struct Rect { rx: float, ry: float, rw: float, rh: float }
 fn test() {
     count = 0;
     for p122d_i in 0..500 {
@@ -3625,7 +3625,7 @@ fn test() {
 )]
 fn p122_long_running_struct_loop() {
     code!(
-        "struct Overlap { ox: float not null, oy: float not null }
+        "struct Overlap { ox: float, oy: float }
 fn depth(ax: float, ay: float, bx: float, by: float) -> Overlap {
     Overlap { ox: ax - bx, oy: ay - by }
 }
@@ -3716,8 +3716,8 @@ fn test() {
 #[test]
 fn p122_gl_collision_struct_api() {
     code!(
-        "struct Rect { rx: float not null, ry: float not null, rw: float not null, rh: float not null }
-struct Overlap { ox: float not null, oy: float not null }
+        "struct Rect { rx: float, ry: float, rw: float, rh: float }
+struct Overlap { ox: float, oy: float }
 
 fn rects_overlap(gc_a: const Rect, gc_b: const Rect) -> boolean {
     gc_a.rx < gc_b.rx + gc_b.rw && gc_a.rx + gc_a.rw > gc_b.rx &&
@@ -3770,7 +3770,7 @@ fn test() {
 #[test]
 fn p120_field_overwrite_once() {
     code!(
-        "struct Inner { ix: float not null, iy: float not null }
+        "struct Inner { ix: float, iy: float }
 struct Outer { pos: Inner }
 
 fn make_inner(p120a_v: float) -> Inner {
@@ -3791,7 +3791,7 @@ fn test() {
 #[test]
 fn p120_field_overwrite_twice() {
     code!(
-        "struct Inner { ix: float not null, iy: float not null }
+        "struct Inner { ix: float, iy: float }
 struct Outer { pos: Inner }
 
 fn make_inner(p120b_v: float) -> Inner {
@@ -3812,7 +3812,7 @@ fn test() {
 #[test]
 fn p120_field_overwrite_short_loop() {
     code!(
-        "struct Inner { ix: float not null, iy: float not null }
+        "struct Inner { ix: float, iy: float }
 struct Outer { pos: Inner }
 
 fn make_inner(p120c_v: float) -> Inner {
@@ -3835,7 +3835,7 @@ fn test() {
 #[test]
 fn p120_local_overwrite_in_loop() {
     code!(
-        "struct Inner { ix: float not null, iy: float not null }
+        "struct Inner { ix: float, iy: float }
 
 fn make_inner(p120d_v: float) -> Inner {
     Inner { ix: p120d_v, iy: p120d_v * 2.0 }
@@ -3888,7 +3888,7 @@ fn test() {
 #[test]
 fn p120_struct_return_in_conditional_in_loop() {
     code!(
-        "struct Transform { tx: float not null, ty: float not null, tz: float not null }
+        "struct Transform { tx: float, ty: float, tz: float }
 struct Node { name: text, xform: Transform }
 
 fn make_transform(gl_t: float) -> Transform {
@@ -3924,8 +3924,8 @@ fn test() {
 #[test]
 fn p120_multi_node_transform_update() {
     code!(
-        "struct Vec3 { vx: float not null, vy: float not null, vz: float not null }
-struct SceneNode { pos: Vec3, scale: float not null }
+        "struct Vec3 { vx: float, vy: float, vz: float }
+struct SceneNode { pos: Vec3, scale: float }
 
 fn make_pos(mn_t: float, mn_i: integer) -> Vec3 {
     Vec3 { vx: sin(mn_t + mn_i as float), vy: cos(mn_t), vz: 0.0 }
@@ -4108,8 +4108,8 @@ fn p123_gl_multi_vector_per_frame() {
 #[test]
 fn gl_combined_game_loop_stress() {
     code!(
-        "struct Ball { bx: float not null, by: float not null }
-struct Brick { brx: float not null, bry: float not null, hp: integer }
+        "struct Ball { bx: float, by: float }
+struct Brick { brx: float, bry: float, hp: integer }
 
 fn make_ball(cb_frame: integer) -> Ball {
     Ball { bx: (cb_frame as float) * 0.3, by: 50.0 }
@@ -4911,7 +4911,7 @@ fn run() -> text {
 #[test]
 fn p54_b3_float_not_null_direct_return() {
     code!(
-        "pub enum JV { A { v: float not null } }
+        "pub enum JV { A { v: float } }
 fn mk() -> JV { A { v: 42.5 } }
 fn run() -> float {
     x = mk();
@@ -4951,7 +4951,7 @@ fn run() -> integer {
 #[test]
 fn p54_b3_float_via_intermediate() {
     code!(
-        "pub enum JV { A { v: float not null } }
+        "pub enum JV { A { v: float } }
 fn mk() -> JV {
     n = A { v: 42.5 };
     n
@@ -5614,7 +5614,7 @@ fn run() -> text {
 #[test]
 fn p22_spatial_without_keys_names_the_bracket_syntax() {
     code!(
-        "struct Point { x: float not null, y: float not null }
+        "struct Point { x: float, y: float }
 struct World { items: spatial<Point> }
 fn test() {
     w = World { items: [] };
@@ -9739,7 +9739,7 @@ fn test() {
 #[test]
 fn p152_struct_field_ref_param_mutation_undetected() {
     code!(
-        "struct Inner { x: integer not null }
+        "struct Inner { x: integer }
 struct Outer { i: Inner }
 fn modify(s: Outer) {
     fresh = Inner { x: 99 };
@@ -9765,7 +9765,7 @@ fn test() {
 #[test]
 fn p153_vec_field_transfer_relocation_from_var() {
     code!(
-        "struct H { h_material: integer not null }
+        "struct H { h_material: integer }
 struct C { ck_hexes: vector<H> }
 fn test() {
     hexes: vector<H> = [];
@@ -9789,7 +9789,7 @@ fn test() {
 #[test]
 fn p153_vec_field_transfer_relocation_from_call() {
     code!(
-        "struct H { h_material: integer not null }
+        "struct H { h_material: integer }
 struct C { ck_hexes: vector<H> }
 fn build() -> vector<H> {
     hexes: vector<H> = [];
@@ -9813,7 +9813,7 @@ fn test() {
 #[test]
 fn p153_vec_field_append_after_transfer() {
     code!(
-        "struct H { x: integer not null }
+        "struct H { x: integer }
 struct C { items: vector<H> }
 fn test() {
     hexes: vector<H> = [];
@@ -9831,7 +9831,7 @@ fn test() {
 #[test]
 fn p153_vec_field_direct_into_field_still_works() {
     code!(
-        "struct H { h_material: integer not null }
+        "struct H { h_material: integer }
 struct C { ck_hexes: vector<H> }
 fn test() {
     c = C { ck_hexes: [] };
@@ -9959,7 +9959,7 @@ fn p157_native_refvar_forwarding_with_preeval() {
     let src_path = std::env::temp_dir().join("loft_p157_test.loft");
     std::fs::write(
         &src_path,
-        "struct Inner { val: integer not null }\n\
+        "struct Inner { val: integer }\n\
          struct Outer { inner: Inner }\n\
          fn helper(o: &Outer, n: integer) { o.inner.val = n; }\n\
          fn caller(o: &Outer) { helper(o, o.inner.val + 1); }\n\
@@ -10022,7 +10022,7 @@ fn enhancement_bitwise_not_clear_bit() {
 #[test]
 fn enhancement_ref_vector_loop_mutation_detected() {
     code!(
-        "struct Item { val: integer not null }
+        "struct Item { val: integer }
 fn double_all(items: &vector<Item>) {
     for it in items { it.val = it.val * 2; }
 }
@@ -10039,7 +10039,7 @@ fn test() {
 #[test]
 fn enhancement_ref_vector_readonly_loop_still_flags() {
     code!(
-        "struct Item { val: integer not null }
+        "struct Item { val: integer }
 fn sum_vals(items: &vector<Item>) -> integer {
     total = 0;
     for it in items { total = total + it.val; }
@@ -10226,7 +10226,7 @@ fn test() {
 #[test]
 fn p161_for_over_ref_vector() {
     code!(
-        "struct Item { val: integer not null }
+        "struct Item { val: integer }
 fn add_item(items: &vector<Item>, v: integer) {
     items += [Item { val: v }];
 }
@@ -10250,8 +10250,8 @@ fn test() {
 #[test]
 fn p160_vec_element_as_ref_param() {
     code!(
-        "struct S { x: integer not null }
-fn modify(s: &S, val: integer) { s.x = val; }
+        "struct S { x: integer }
+fn modify(s: S, val: integer) { s.x = val; }
 fn test() {
     items: vector<S> = [S { x: 0 }, S { x: 10 }];
     modify(items[1], 42);
@@ -10264,9 +10264,9 @@ fn test() {
 #[test]
 fn p160_nested_field_vec_element_as_ref_param() {
     code!(
-        "struct Inner { val: integer not null }
+        "struct Inner { val: integer }
 struct Outer { items: vector<Inner> }
-fn set_val(inner: &Inner, v: integer) { inner.val = v; }
+fn set_val(inner: Inner, v: integer) { inner.val = v; }
 fn test() {
     o = Outer { items: [Inner { val: 0 }, Inner { val: 0 }] };
     set_val(o.items[1], 99);
@@ -10313,8 +10313,8 @@ fn test() {
 fn p158_trailing_comma_enum_variant() {
     code!(
         "enum K {
-    Alpha { x: integer not null, y: integer not null, },
-    Beta { z: integer not null }
+    Alpha { x: integer, y: integer, },
+    Beta { z: integer }
 }
 fn test() {
     a = Alpha { x: 1, y: 2 };
@@ -10337,7 +10337,7 @@ fn test() {
 #[test]
 fn p155_segv_undo_redo_midassert() {
     code!(
-        "struct H { m: integer not null }
+        "struct H { m: integer }
 struct Elm { prev: H }
 struct Ct { items: vector<H> }
 struct Ss { undo: vector<Elm>, redo: vector<Elm> }
@@ -10419,8 +10419,8 @@ fn test() {
 fn p164_trailing_comma_enum_variant_list() {
     code!(
         "enum P164Kind {
-    P164Alpha { x: integer not null },
-    P164Beta { y: integer not null },
+    P164Alpha { x: integer },
+    P164Beta { y: integer },
 }
 fn test() {
     a = P164Alpha { x: 1 };
@@ -10476,7 +10476,7 @@ fn test() {
 fn p170_struct_placeholder_then_vec_elem_reassign() {
     code!(
         "struct P170Bag { items: vector<integer> }
-fn p170_mutate_bag(b: &P170Bag, v: integer) { b.items += [v]; }
+fn p170_mutate_bag(b: P170Bag, v: integer) { b.items += [v]; }
 fn test() {
     p170_bs: vector<P170Bag> = [];
     p170_x = P170Bag {};
@@ -10495,8 +10495,8 @@ fn test() {
 #[test]
 fn p170_placeholder_conditional_then_reassign() {
     code!(
-        "struct P170CBag { val: integer not null }
-fn p170c_bump(b: &P170CBag) { b.val = b.val + 1; }
+        "struct P170CBag { val: integer }
+fn p170c_bump(b: P170CBag) { b.val = b.val + 1; }
 fn test() {
     p170c_v: vector<P170CBag> = [P170CBag { val: 5 }];
     p170c_x = P170CBag { val: 0 };
@@ -10559,8 +10559,8 @@ fn test() {
 fn p165_enum_annotation_with_variant_rhs() {
     code!(
         "enum P165Kind {
-    P165Alpha { x: integer not null },
-    P165Beta { y: integer not null }
+    P165Alpha { x: integer },
+    P165Beta { y: integer }
 }
 fn take_kind(k: P165Kind) -> boolean { k is P165Alpha }
 fn test() {
@@ -10623,10 +10623,10 @@ fn test() {
 #[test]
 fn p178_is_capture_slot_alias() {
     code!(
-        "enum P178Ui { P178UhToolButton { tb_id: integer not null } }
-struct P178Tools { ft_cur: integer not null }
+        "enum P178Ui { P178UhToolButton { tb_id: integer } }
+struct P178Tools { ft_cur: integer }
 fn p178_hit() -> P178Ui { P178UhToolButton { tb_id: 2 } }
-fn p178_router(dummy: integer, tools: &P178Tools) -> P178Ui {
+fn p178_router(dummy: integer, tools: P178Tools) -> P178Ui {
     _ = dummy;
     rc = p178_hit();
     if rc is P178UhToolButton { tb_id } {
@@ -10658,9 +10658,9 @@ fn test() {
 #[test]
 fn p179_ref_field_arg_corrupts_sibling() {
     code!(
-        "struct P179Inner { pin_n: integer not null }
-struct P179Outer { po_x: P179Inner, po_q: integer not null }
-fn p179_int_ref(n: integer, r: &P179Inner) { r.pin_n = n; }
+        "struct P179Inner { pin_n: integer }
+struct P179Outer { po_x: P179Inner, po_q: integer }
+fn p179_int_ref(n: integer, r: P179Inner) { r.pin_n = n; }
 fn test() {
     o = P179Outer { po_x: P179Inner { pin_n: 0 }, po_q: 0 };
     p179_int_ref(42, o.po_x);
@@ -10681,7 +10681,7 @@ fn p176_ref_param_method_style_mutation() {
     code!(
         "struct P176Box { items: vector<integer> }
 fn p176_add(self: P176Box, x: integer) { self.items += [x]; }
-fn p176_caller(b: &P176Box) { p176_add(b, 1); }
+fn p176_caller(b: P176Box) { p176_add(b, 1); }
 fn test() {
     bx = P176Box { items: [] };
     p176_caller(bx);
@@ -10698,10 +10698,10 @@ fn test() {
 #[test]
 fn p176_transitive_forwarding_three_levels() {
     code!(
-        "struct P176Tx { val: integer not null }
+        "struct P176Tx { val: integer }
 fn p176_inner(self: P176Tx)   { self.val = self.val + 1; }
 fn p176_mid(self: P176Tx)     { p176_inner(self); }
-fn p176_outer(b: &P176Tx)     { p176_mid(b); }
+fn p176_outer(b: P176Tx)     { p176_mid(b); }
 fn test() {
     b = P176Tx { val: 0 };
     p176_outer(b);
@@ -10718,8 +10718,8 @@ fn test() {
 #[test]
 fn p176_recursive_self_call_terminates() {
     code!(
-        "struct P176Rec { val: integer not null }
-fn p176_bump(n: &P176Rec, depth: integer) {
+        "struct P176Rec { val: integer }
+fn p176_bump(n: P176Rec, depth: integer) {
     n.val = n.val + 1;
     if depth > 0 { p176_bump(n, depth - 1); }
 }
@@ -10741,7 +10741,7 @@ fn test() {
 #[test]
 fn p180_single_literal_into_float_field() {
     code!(
-        "struct P180Box { a: float not null, b: integer not null }
+        "struct P180Box { a: float, b: integer }
 fn test() {
     p = P180Box { a: 1.0, b: 42 };
     p.a = 1.2f;
@@ -10761,7 +10761,7 @@ fn test() {
 #[test]
 fn p180_int_widens_to_long_field() {
     code!(
-        "struct P180Long { n: integer not null }
+        "struct P180Long { n: integer }
 fn test() {
     p = P180Long { n: 0 };
     p.n = 42;
@@ -10790,9 +10790,9 @@ fn test() {
 #[test]
 fn p181_inline_field_access_format_string() {
     code!(
-        "struct P181Inner { n: integer not null }
+        "struct P181Inner { n: integer }
 struct P181Container { items: vector<P181Inner> }
-struct P181Holder { c: P181Container, sentinel: integer not null }
+struct P181Holder { c: P181Container, sentinel: integer }
 fn p181_first_inner(c: P181Container) -> P181Inner {
     c.items[0]
 }
@@ -10938,7 +10938,7 @@ fn test() {
 #[test]
 fn p184_hash_sorted_narrow_key_field() {
     code!(
-        "struct P184Row { rid: u32 not null, name: text }
+        "struct P184Row { rid: u32, name: text }
 struct P184HashDb { rows: hash<P184Row[rid]> }
 struct P184SortedDb { rows: sorted<P184Row[rid]> }
 fn test() {
@@ -10973,7 +10973,7 @@ fn test() {
 #[test]
 fn p293_narrow_key_hash_lookup() {
     code!(
-        "struct P293Row { rid: i32 not null, name: text }
+        "struct P293Row { rid: i32, name: text }
 struct P293Db { rows: hash<P293Row[rid]> }
 fn test() {
     h = P293Db { rows: [] };
@@ -11043,7 +11043,7 @@ fn p284_vector_float_iteration_terminates() {
 #[test]
 fn p277_local_sorted_pluseq_single_literal() {
     code!(
-        "struct TagSlot { name: text not null, count: integer }
+        "struct TagSlot { name: text, count: integer }
 fn test() {
     s: sorted<TagSlot[name]> = [];
     s += [TagSlot{name: \"alpha\", count: 1}];
@@ -11057,7 +11057,7 @@ fn test() {
 #[test]
 fn p277_local_sorted_pluseq_multi_literal() {
     code!(
-        "struct TagSlot { name: text not null, count: integer }
+        "struct TagSlot { name: text, count: integer }
 fn test() {
     s: sorted<TagSlot[name]> = [];
     s += [TagSlot{name: \"zeta\", count: 1},
@@ -11078,7 +11078,7 @@ fn test() {
 #[test]
 fn p277_local_hash_pluseq_multi_literal() {
     code!(
-        "struct Row { id: integer not null, name: text }
+        "struct Row { id: integer, name: text }
 fn test() {
     h: hash<Row[id]> = [];
     h += [Row{id: 1, name: \"one\"},
@@ -11096,7 +11096,7 @@ fn test() {
 #[test]
 fn p277_local_index_pluseq_multi_literal() {
     code!(
-        "struct Score { player: text not null, value: integer }
+        "struct Score { player: text, value: integer }
 fn test() {
     ix: index<Score[player]> = [];
     ix += [Score{player: \"a\", value: 10},
@@ -11111,7 +11111,7 @@ fn test() {
 #[test]
 fn p277_local_sorted_mixed_scalar_and_literal() {
     code!(
-        "struct TagSlot { name: text not null, count: integer }
+        "struct TagSlot { name: text, count: integer }
 fn test() {
     s: sorted<TagSlot[name]> = [];
     // Scalar `+= elem` (P188 path) — must still work.
@@ -11134,7 +11134,7 @@ fn test() {
 fn p277_local_sorted_pluseq_empty_literal() {
     // Defensive regression — `+= []` is a no-op append.
     code!(
-        "struct TagSlot { name: text not null, count: integer }
+        "struct TagSlot { name: text, count: integer }
 fn test() {
     s: sorted<TagSlot[name]> = [];
     s += [TagSlot{name: \"a\", count: 1}];
@@ -11158,7 +11158,7 @@ fn test() {
 #[test]
 fn p300_hash_return_assign_untyped() {
     code!(
-        "struct R { ck: integer not null, v: integer }
+        "struct R { ck: integer, v: integer }
 fn mk() -> hash<R[ck]> { h: hash<R[ck]> = []; h += [R{ck: 5, v: 9}]; h }
 fn test() {
     x = mk();
@@ -11172,7 +11172,7 @@ fn test() {
 #[test]
 fn p300_hash_return_assign_typed() {
     code!(
-        "struct R { ck: integer not null, v: integer }
+        "struct R { ck: integer, v: integer }
 fn mk() -> hash<R[ck]> { h: hash<R[ck]> = []; h += [R{ck: 5, v: 9}]; h }
 fn test() {
     x: hash<R[ck]> = mk();
@@ -11186,7 +11186,7 @@ fn test() {
 #[test]
 fn p300_sorted_return_assign() {
     code!(
-        "struct Item { k: integer not null }
+        "struct Item { k: integer }
 fn build() -> sorted<Item[k]> { s: sorted<Item[k]> = []; s += [Item{k: 3}]; s += [Item{k: 1}]; s += [Item{k: 2}]; s }
 fn test() {
     x = build();
@@ -11202,7 +11202,7 @@ fn test() {
 #[test]
 fn p300_index_return_assign() {
     code!(
-        "struct IRec { n: integer not null }
+        "struct IRec { n: integer }
 fn build() -> index<IRec[n]> { ix: index<IRec[n]> = []; ix += [IRec{n: 7}]; ix += [IRec{n: 3}]; ix }
 fn test() {
     x = build();
@@ -11218,7 +11218,7 @@ fn test() {
 #[test]
 fn p300_var_rhs_alias_first() {
     code!(
-        "struct R { ck: integer not null, v: integer }
+        "struct R { ck: integer, v: integer }
 fn build() -> hash<R[ck]> { h: hash<R[ck]> = []; h += [R{ck: 1, v: 10}]; h += [R{ck: 2, v: 20}]; h }
 fn test() {
     ns: hash<R[ck]> = build();
@@ -11246,7 +11246,7 @@ fn test() {
 #[test]
 fn p279_forward_text_fn_into_struct_field() {
     code!(
-        "struct R { name: text not null }
+        "struct R { name: text }
 fn test() {
     out: vector<R> = [];
     s = forward_fn(\"hello\");
@@ -11265,7 +11265,7 @@ fn p279_forward_fn_via_intermediate_local() {
     // forward call wrapped in an intermediate local before the
     // struct-field init.
     code!(
-        "struct R { name: text not null }
+        "struct R { name: text }
 fn test() {
     out: vector<R> = [];
     line = \"x#tag\";
@@ -11433,7 +11433,7 @@ fn p292_vector_reassign_from_loop_local() {
 #[test]
 fn p295_sorted_reassign_from_loop_local() {
     code!(
-        "struct Item { k: integer not null }
+        "struct Item { k: integer }
 fn test() {
     s: sorted<Item[k]> = [];
     s += [Item{k: 100}];
@@ -11457,8 +11457,8 @@ fn test() {
 #[test]
 fn p295_hash_index_reassign() {
     code!(
-        "struct H { k: text not null, v: integer not null }
-struct I { n: integer not null }
+        "struct H { k: text, v: integer }
+struct I { n: integer }
 fn test() {
     h: hash<H[k]> = [];
     h += [H{k: \"a\", v: 1}];
@@ -11490,7 +11490,7 @@ fn test() {
 #[test]
 fn p285_hash_lookup_null_no_spurious_warning() {
     code!(
-        "struct P285Ent { name: text not null, v: integer not null }
+        "struct P285Ent { name: text, v: integer }
 struct P285Box { items: hash<P285Ent[name]> }
 fn test() {
     b = P285Box{items: []};
@@ -11511,7 +11511,7 @@ fn test() {
 #[test]
 fn p285_genuine_redundant_check_still_warns() {
     code!(
-        "struct P285G { name: text not null }
+        "struct P285G { name: text }
 fn test() {
     g = P285G{name: \"x\"};
     if g.name == null { assert(false, \"unreachable\"); }
@@ -11529,7 +11529,7 @@ fn test() {
 #[test]
 fn nullable_receiver_field_null_check_no_warning() {
     code!(
-        "struct NRF { name: text not null }
+        "struct NRF { name: text }
 fn test() {
     s: NRF? = null;
     if s.name == null { assert(true, \"reachable\"); }
@@ -11607,7 +11607,7 @@ fn p185_slot_alias_on_late_local_in_nested_for() {
 #[test]
 fn p186_struct_typed_block_expressions() {
     code!(
-        "struct P04Sb { sb_a: integer not null, sb_b: integer not null }
+        "struct P04Sb { sb_a: integer, sb_b: integer }
 fn p04_mkbox(n: integer) -> P04Sb { P04Sb { sb_a: n, sb_b: n * 2 } }
 fn test() {
     b1 = { P04Sb { sb_a: 3, sb_b: 4 } };
@@ -11658,8 +11658,8 @@ fn test() {
 fn p187_struct_scalar_field_corrupted_after_sibling_vector_alloc() {
     code!(
         "struct P187Canvas {
-    width: integer not null,
-    height: integer not null,
+    width: integer,
+    height: integer,
     data: vector<integer>
 }
 fn p187_canvas() -> P187Canvas {
@@ -11703,7 +11703,7 @@ fn test() {
 #[test]
 fn p188_sorted_local_via_plus_equals() {
     code!(
-        "struct P188Tag { id: integer not null, label: text }
+        "struct P188Tag { id: integer, label: text }
 fn build() -> sorted<P188Tag[id]> {
     out: sorted<P188Tag[id]> = [];
     out += P188Tag { id: 2, label: \"v2\" };
@@ -11772,7 +11772,7 @@ fn run() -> integer {
 #[test]
 fn p4d_b_par_over_sorted_via_materialise() {
     code!(
-        "struct P4dScore { value: integer not null }
+        "struct P4dScore { value: integer }
 fn p4d_dbl(s: const P4dScore) -> integer { s.value * 2 }
 fn run() -> integer {
     items: sorted<P4dScore[value]> = [];
@@ -11801,7 +11801,7 @@ fn run() -> integer {
 #[test]
 fn p190_local_var_sorted_iteration() {
     code!(
-        "struct P190Score { value: integer not null }
+        "struct P190Score { value: integer }
 fn test() {
     items: sorted<P190Score[value]> = [];
     items += P190Score { value: 30 };
@@ -11842,7 +11842,7 @@ fn test() {
 #[test]
 fn p188_struct_field_hash_pluseq_struct_literal() {
     code!(
-        "struct P188aScore { name: text not null, value: integer }
+        "struct P188aScore { name: text, value: integer }
 struct P188aDb { items: hash<P188aScore[name]> }
 fn test() {
     db = P188aDb { items: [] };
@@ -11861,7 +11861,7 @@ fn test() {
 #[test]
 fn p188_struct_field_index_pluseq_struct_literal() {
     code!(
-        "struct P188bScore { name: text not null, value: integer }
+        "struct P188bScore { name: text, value: integer }
 struct P188bDb { items: index<P188bScore[name]> }
 fn test() {
     db = P188bDb { items: [] };
@@ -11879,7 +11879,7 @@ fn test() {
 #[test]
 fn p188_local_var_hash_pluseq_struct_literal() {
     code!(
-        "struct P188cScore { name: text not null, value: integer }
+        "struct P188cScore { name: text, value: integer }
 fn test() {
     h: hash<P188cScore[name]> = [];
     h += P188cScore { name: \"a\", value: 10 };
@@ -11897,7 +11897,7 @@ fn test() {
 #[test]
 fn p188_local_var_index_pluseq_struct_literal() {
     code!(
-        "struct P188dScore { name: text not null, value: integer }
+        "struct P188dScore { name: text, value: integer }
 fn test() {
     ix: index<P188dScore[name]> = [];
     ix += P188dScore { name: \"a\", value: 10 };
@@ -12026,7 +12026,7 @@ fn p189b_vector_tuple_for_loop_int_text() {
 #[test]
 fn p193_local_var_index_init_then_loop_add() {
     code!(
-        "struct P193aScore { id: integer not null, value: integer }
+        "struct P193aScore { id: integer, value: integer }
 fn test() {
     ix: index<P193aScore[id]> = [];
     for i in 0..10 { ix += P193aScore { id: i, value: i }; }
@@ -12042,7 +12042,7 @@ fn test() {
 #[test]
 fn p193_local_var_hash_init_then_loop_add() {
     code!(
-        "struct P193bScore { id: integer not null, value: integer }
+        "struct P193bScore { id: integer, value: integer }
 fn test() {
     h: hash<P193bScore[id]> = [];
     for i in 0..10 { h += P193bScore { id: i, value: i }; }
@@ -12061,7 +12061,7 @@ fn p193_local_var_index_read_before_write() {
     // "Incorrect var ix[65535] versus N" because the init never
     // emitted.  With eager init, len() returns 0 immediately.
     code!(
-        "struct P193cScore { id: integer not null, value: integer }
+        "struct P193cScore { id: integer, value: integer }
 fn test() {
     ix: index<P193cScore[id]> = [];
     assert(len(ix) == 0, \"empty len={len(ix)}, expected 0\");
@@ -12079,7 +12079,7 @@ fn test() {
 #[test]
 fn p188_local_var_index_scale_50_elements_unrolled() {
     let mut body = String::from(
-        "struct P188eScore { id: integer not null, value: integer }
+        "struct P188eScore { id: integer, value: integer }
 fn test() {
     ix: index<P188eScore[id]> = [];\n",
     );
@@ -12112,7 +12112,7 @@ fn test() {
 #[test]
 fn p192_len_hash_struct_field() {
     code!(
-        "struct P192aScore { name: text not null, value: integer }
+        "struct P192aScore { name: text, value: integer }
 struct P192aDb { items: hash<P192aScore[name]> }
 fn test() {
     db = P192aDb { items: [
@@ -12130,7 +12130,7 @@ fn test() {
 #[test]
 fn p192_len_index_struct_field() {
     code!(
-        "struct P192bScore { name: text not null, value: integer }
+        "struct P192bScore { name: text, value: integer }
 struct P192bDb { items: index<P192bScore[name]> }
 fn test() {
     db = P192bDb { items: [
@@ -12162,7 +12162,7 @@ fn test() {
 #[test]
 fn p191_struct_field_index_iteration_after_layout_fix() {
     code!(
-        "struct P191Score { name: text not null, value: integer }
+        "struct P191Score { name: text, value: integer }
 struct P191Db { items: index<P191Score[name]> }
 fn test() {
     db = P191Db { items: [
@@ -14737,7 +14737,7 @@ fn run() -> integer {
 #[test]
 fn p326_iterator_of_struct_for_loop() {
     code!(
-        "struct P326Pt { x: integer not null, y: integer not null }
+        "struct P326Pt { x: integer, y: integer }
 fn points() -> iterator<P326Pt> {
     yield P326Pt { x: 1, y: 2 };
     yield P326Pt { x: 3, y: 4 };
@@ -14757,7 +14757,7 @@ fn run() -> integer {
 #[test]
 fn p326_iterator_of_struct_manual_next() {
     code!(
-        "struct P326Pt2 { x: integer not null, y: integer not null }
+        "struct P326Pt2 { x: integer, y: integer }
 fn points() -> iterator<P326Pt2> {
     yield P326Pt2 { x: 10, y: 20 };
     yield P326Pt2 { x: 30, y: 40 };
@@ -15333,7 +15333,7 @@ fn plan53_cluster5_free_text_buffer_dealloc() {
 #[test]
 fn issue_313_closure_field_invoked_cross_fn_invoker_first() {
     code!(
-        "struct Counter { n: integer not null }
+        "struct Counter { n: integer }
 struct K { cb: fn(text) }
 fn fire(k: K, p: text) { c = k.cb; c(p); }
 fn fire_direct(k: K, p: text) { k.cb(p); }
@@ -15405,7 +15405,7 @@ fn run_it() -> integer {
 #[test]
 fn issue_318_returning_closure_carrying_struct_rejected() {
     code!(
-        "struct Counter { n: integer not null }
+        "struct Counter { n: integer }
 struct K { cb: fn() }
 fn make() -> K {
     w = Counter { n: 7 };
@@ -15425,7 +15425,7 @@ fn test_it() { k = make(); c = k.cb; c(); }"
 #[test]
 fn issue_318_closure_into_argument_struct_rejected() {
     code!(
-        "struct Counter { n: integer not null }
+        "struct Counter { n: integer }
 struct K { cb: fn() }
 struct H { k: K }
 fn attach(h: H) {
@@ -15449,7 +15449,7 @@ fn test_it() {
 #[test]
 fn issue_318_vector_of_closure_carrying_struct_rejected() {
     code!(
-        "struct Counter { n: integer not null }
+        "struct Counter { n: integer }
 struct K { cb: fn() }
 fn test_it() {
     w = Counter { n: 7 };
@@ -15477,7 +15477,7 @@ fn test_it() {
 #[test]
 fn issue_318_local_closure_struct_passed_down_still_works() {
     code!(
-        "struct Counter { n: integer not null }
+        "struct Counter { n: integer }
 struct K { cb: fn(text) }
 fn fire(k: K, p: text) { c = k.cb; c(p); }
 fn run() -> integer {
@@ -15504,7 +15504,7 @@ fn run() -> integer {
 #[test]
 fn issue_323_factory_closure_reference_capture_survives_reuse() {
     code!(
-        "struct Counter { n: integer not null }
+        "struct Counter { n: integer }
 fn make() -> fn() -> integer {
     w = Counter { n: 7 };
     fn() -> integer { w.n = w.n + 1; w.n }
@@ -15528,7 +15528,7 @@ fn run() -> integer {
 #[test]
 fn issue_323_in_frame_reference_capture_still_works() {
     code!(
-        "struct Counter { n: integer not null }
+        "struct Counter { n: integer }
 fn run() -> integer {
     w = Counter { n: 7 };
     f = fn() { w.n = w.n + 1; };
@@ -15638,7 +15638,7 @@ fn run() -> integer {
 #[test]
 fn issue_330_degenerate_self_assignment() {
     code!(
-        "struct S { v: integer not null }
+        "struct S { v: integer }
 fn run() -> integer {
     x = S { v: 7 };
     x = x;
@@ -15652,7 +15652,7 @@ fn run() -> integer {
 #[test]
 fn issue_330_self_reading_literal_reassignment() {
     code!(
-        "struct S { v: integer not null }
+        "struct S { v: integer }
 fn run() -> integer {
     x = S { v: 7 };
     x = S { v: x.v + 1 };
@@ -15679,7 +15679,7 @@ fn run() -> integer {
 #[test]
 fn issue_332_nullable_narrow_field_null_roundtrip() {
     code!(
-        "struct N { a: i16?, c: i32?, d: integer?, tail: integer not null }
+        "struct N { a: i16?, c: i32?, d: integer?, tail: integer }
 fn run() -> integer {
     n = N { tail: 1 };
     om = 0;
@@ -15710,7 +15710,7 @@ fn run() -> integer {
 #[test]
 fn issue_334_nullable_byte_field_null_roundtrip() {
     code!(
-        "struct N { b: u8?, tail: integer not null }
+        "struct N { b: u8?, tail: integer }
 fn run() -> integer {
     n = N { tail: 1 };
     n.b = null;
@@ -15749,7 +15749,7 @@ fn issue_333_undefended_div_zero_raises() {
 #[test]
 fn issue_334_not_null_byte_keeps_full_range() {
     code!(
-        "struct M { full: u8 not null, tail: integer not null }
+        "struct M { full: u8, tail: integer }
 fn run() -> integer {
     m = M { full: 255, tail: 1 };
     m.full
@@ -15842,7 +15842,7 @@ fn main() {
 #[test]
 fn pass2_arity_growth_forward_caller() {
     code!(
-        "struct S { v: integer not null }
+        "struct S { v: integer }
 fn use_pick(json: text) -> S { pick(json) }
 fn pick(json: text) -> S {
   if json == \"\" { return mk(71006); }
@@ -15872,7 +15872,7 @@ fn run() -> integer {
 #[test]
 fn pass2_arity_growth_forward_chain() {
     code!(
-        "struct S { v: integer not null }
+        "struct S { v: integer }
 fn outer(json: text) -> S { use_pick(json) }
 fn use_pick(json: text) -> S { pick(json) }
 fn pick(json: text) -> S {
@@ -15901,7 +15901,7 @@ fn run() -> integer {
 #[test]
 fn pass2_arity_growth_self_recursive() {
     code!(
-        "struct S { v: integer not null }
+        "struct S { v: integer }
 fn mk(n: integer) -> S { s = S { v: n }; s }
 fn count_down(n: integer) -> S {
   if n <= 0 { return mk(91000); }
@@ -15922,7 +15922,7 @@ fn run() -> integer { count_down(3).v }"
 #[test]
 fn pass2_arity_growth_mutual_recursion() {
     code!(
-        "struct S { v: integer not null }
+        "struct S { v: integer }
 fn mk(n: integer) -> S { s = S { v: n }; s }
 fn even_pick(n: integer) -> S {
   if n <= 0 { return mk(92000); }
@@ -15972,7 +15972,7 @@ fn run() -> integer {
 #[test]
 fn mid_body_nested_call_return_value() {
     code!(
-        "struct S { v: integer not null }
+        "struct S { v: integer }
 fn mk(n: integer) -> S { s = S { v: n }; s }
 fn wrap(x: S) -> S { s = S { v: x.v + 7 }; s }
 fn nested(json: text) -> S {
@@ -16109,7 +16109,7 @@ fn pln87_link_l6_param_write_through() {
 #[test]
 fn pln87_link_l6_struct_param_field_writes_back() {
     code!(
-        "struct S { x: integer } fn g(obj: &S) { obj.x = 5; } \
+        "struct S { x: integer } fn g(obj: S) { obj.x = 5; } \
          fn check() -> integer { s = S { x: 1 }; g(s); s.x }"
     )
     .expr("check()")

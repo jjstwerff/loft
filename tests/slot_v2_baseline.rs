@@ -274,7 +274,7 @@ fn p122q_sorted_range_comprehension() {
 #[test]
 fn p122r_par_loop_with_inner_for() {
     code!(
-        "struct P04Item { iv: integer not null }
+        "struct P04Item { iv: integer }
 fn p04_double(p: const P04Item) -> integer { p.iv * 2 }
 fn test() {
     items =[P04Item { iv: 1 }, P04Item { iv: 2 }, P04Item { iv: 3 }, P04Item { iv: 4 }];
@@ -302,7 +302,7 @@ fn test() {
 #[test]
 fn parent_refs_plus_child_loop_index() {
     code!(
-        "struct P04Cell { val: integer not null }
+        "struct P04Cell { val: integer }
 fn test() {
     a = P04Cell { val: 1 };
     b = P04Cell { val: 2 };
@@ -380,10 +380,10 @@ fn parent_var_set_inside_child_scope() {
 #[test]
 fn p178_is_capture_body() {
     code!(
-        "enum P04Ui { P04UhButton { tb_id: integer not null } }
-struct P04Tools { ft_cur: integer not null }
+        "enum P04Ui { P04UhButton { tb_id: integer } }
+struct P04Tools { ft_cur: integer }
 fn p04_hit() -> P04Ui { P04UhButton { tb_id: 2 } }
-fn p04_router(dummy: integer, tools: &P04Tools) -> P04Ui {
+fn p04_router(dummy: integer, tools: P04Tools) -> P04Ui {
     _ = dummy;
     rc = p04_hit();
     if rc is P04UhButton { tb_id } {
@@ -566,8 +566,8 @@ fn nested_for_in_for() {
 fn match_with_arm_bindings() {
     code!(
         "enum P04Msg {
-    P04Tag { tag_id: integer not null },
-    P04Pair { pa: integer not null, pb: integer not null },
+    P04Tag { tag_id: integer },
+    P04Pair { pa: integer, pb: integer },
     P04Other
 }
 fn test() {
@@ -597,7 +597,7 @@ fn test() {
 #[test]
 fn struct_block_return_non_text() {
     code!(
-        "struct P04Box { bx_w: integer not null, bx_h: integer not null }
+        "struct P04Box { bx_w: integer, bx_h: integer }
 fn test() {
     b = { n = 3; P04Box { bx_w: n, bx_h: n * 2 } };
     assert(b.bx_w == 3 and b.bx_h == 6, \"got w={b.bx_w} h={b.bx_h}\");

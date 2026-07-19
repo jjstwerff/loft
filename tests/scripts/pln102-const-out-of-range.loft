@@ -1,0 +1,38 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN102 arc-E E2 (B) — a STATICALLY out-of-range constant operation is a
+// COMPILE error, not a silent null. Owner ruling 2026-07-19: "error too,
+// because x = null is a fallback" — the null-return is a fallback the developer
+// can still opt into explicitly (`?? d`, or the checked `as τ?`), so erroring
+// the BARE constant (which the developer can SEE is wrong) removes no
+// capability. This file exercises the VALID (compile-clean) side: the escape
+// hatches and the dynamic operand. The rejected side (bare `1 << 100`,
+// `1e30 as integer`) is a compile error, so it lives in parse_errors, not here.
+
+fn test() {
+  // --- shift: `?? d` fallback is the sanctioned escape (no checked-shift form) ---
+  assert((1 << 100 ?? -1) == -1, "const out-of-range shift + ?? -> fallback");
+  assert((1 << -1 ?? -1) == -1, "negative const shift + ?? -> fallback");
+  assert((1 << 63 ?? -1) == -1, "1<<63 hits the null sentinel (C85) -> fallback");
+  assert(1 << 5 == 32, "in-range const shift computes");
+
+  // a DYNAMIC amount (a variable, even one holding a constant) stays C80-null,
+  // never a compile error — const_eval does not propagate across a binding.
+  n: integer = 100;
+  assert("{1 << n}" == "null", "dynamic out-of-range shift -> null, not error");
+  m: integer = 9;
+  assert(1 << m == 512, "dynamic in-range shift computes");
+
+  // --- cast: the checked `as integer?` and the `?? d` fallback are the escapes ---
+  assert("{1e30 as integer?}" == "null", "checked cast of a big literal -> null");
+  assert((1e30 as integer ?? 0) == 0, "big-literal cast + ?? -> fallback");
+  assert(5.5 as integer == 5, "in-range literal cast truncates");
+  assert(9.0e18 as integer == 9000000000000000000, "just under 2^63 casts");
+
+  // a variable-held out-of-range float stays C80-null (see 559 for the full set)
+  fb: float = 1e30;
+  assert("{fb as integer}" == "null", "variable-held overflow cast -> null, not error");
+
+  print("const-out-of-range ok");
+}
