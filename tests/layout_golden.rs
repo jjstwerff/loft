@@ -75,6 +75,17 @@ const TYPES: &[&str] = &[
 /// (@PLN97 F9 2026-07-17 — re-blessed after adding the `@endian` line to the layout dump.)
 const LAYOUT_ALGO_HASH: u64 = 14_478_928_954_060_894_342;
 
+/// @PLN102 arc-E flip-gate (Gate 1 step 3) — the `contract` version at which the
+/// CURRENT layout was frozen. The store layout IS the persistence contract, so
+/// POST-FLIP a change to `LAYOUT_ALGO_HASH` / the golden may land only alongside a
+/// `CONTRACT_VERSION` bump (a declared, epoch-style break) — enforced git-side by
+/// `scripts/check_layout_contract.sh`. When you re-bless the layout at
+/// `CONTRACT_VERSION > 0`, set this to the new `CONTRACT_VERSION` too. INERT while
+/// `CONTRACT_VERSION == 0` (pre-freeze: the language is still settling, layout
+/// changes are free). Invariant: `LAYOUT_CONTRACT <= CONTRACT_VERSION` always — a
+/// layout cannot be frozen at a contract the runtime has not reached.
+const LAYOUT_CONTRACT: u32 = 0;
+
 /// The corpus roots resolved to known_types (loudly — a parse / syntax drift fails).
 fn corpus_roots(data: &Data) -> Vec<u16> {
     TYPES
@@ -114,6 +125,12 @@ fn layout_golden() {
             path.display(),
             p.database.layout_algo_hash(&roots)
         );
+        eprintln!(
+            "@PLN102 flip-gate: at CONTRACT_VERSION={}, a layout re-bless is a \
+             persistence-contract change — post-freeze, bump CONTRACT_VERSION and set \
+             LAYOUT_CONTRACT = CONTRACT_VERSION (inert at 0).",
+            loft::manifest::CONTRACT_VERSION,
+        );
         return;
     }
 
@@ -133,6 +150,28 @@ fn layout_golden() {
         p.database.layout_algo_hash(&roots),
         LAYOUT_ALGO_HASH,
         "layout-algo hash drifted from the pinned constant"
+    );
+}
+
+/// @PLN102 arc-E flip-gate (Gate 1 step 3) — the layout is frozen at `LAYOUT_CONTRACT`;
+/// the running `CONTRACT_VERSION` can never be BELOW it (a layout cannot be frozen at a
+/// contract the runtime has not reached). This pins the in-tree half of the coupling;
+/// the "a layout change requires a contract bump" half is git-diff-shaped and lives in
+/// `scripts/check_layout_contract.sh` (also inert while `CONTRACT_VERSION == 0`). When
+/// the two are equal the layout is frozen at the current contract — the normal state.
+#[test]
+fn layout_contract_pin_is_consistent() {
+    // `black_box` so the check reads as the runtime comparison it becomes once the two
+    // diverge (post-flip) — not a const-folded tautology clippy would flag while both
+    // are 0 (inert). The invariant is real: a re-bless at CONTRACT_VERSION>0 must raise
+    // LAYOUT_CONTRACT to match, so LAYOUT_CONTRACT can never exceed the running contract.
+    let frozen_at = std::hint::black_box(LAYOUT_CONTRACT);
+    let running = std::hint::black_box(loft::manifest::CONTRACT_VERSION);
+    assert!(
+        frozen_at <= running,
+        "LAYOUT_CONTRACT ({frozen_at}) exceeds CONTRACT_VERSION ({running}) — a layout \
+         cannot be frozen at a contract the runtime has not reached; re-bless the layout \
+         (LOFT_BLESS_LAYOUT=1) and set LAYOUT_CONTRACT = CONTRACT_VERSION",
     );
 }
 

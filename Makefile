@@ -102,7 +102,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat
+.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-layout-contract
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -603,6 +603,10 @@ api-compat:  ## @PLN102 — check bundled api-surface baselines are still a drop
 	    echo "NOT a drop-in. On an INTENTIONAL change, regenerate: loft api-surface <lib> --emit-baseline > <lib>.api-baseline"; \
 	fi; \
 	exit $$rc
+
+check-layout-contract:  ## @PLN102 flip-gate Gate 1 — layout-hash-changed ⇒ CONTRACT_VERSION bump (inert at 0; CI: red, non-blocking)
+	@scripts/check_layout_contract.sh --self-test
+	@scripts/check_layout_contract.sh "$${BASE_REF:-origin/main}"
 
 view: view-refresh
 	@if [ ! -f tools/viewer/src/main.loft ]; then \

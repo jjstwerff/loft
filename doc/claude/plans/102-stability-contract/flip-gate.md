@@ -69,12 +69,25 @@ simply become load-bearing at the flip — the ideal safe-step shape.
 The store/file layout hash (@PLN97) *is* the persistence contract. A change to it is a
 silent data break (open Q1, answered: yes, it bumps `contract`).
 
-| # | Step | Proof | Effort |
+**Steps 1–2 PRE-EXISTED** (@PLN97 Phase B): `tests/layout_golden.rs` already pins the
+layout of a representative corpus against a committed golden (`tests/golden/layout/corpus.txt`)
++ a `LAYOUT_ALGO_HASH` constant, re-blessed with `LOFT_BLESS_LAYOUT=1`, AND a
+`layout_coverage_audit` ratchet that fails if the corpus misses any user-writable
+storage kind (the "no blind spots" guarantee this design's falsification asks for).
+**Step 3 BUILT 2026-07-19** (inert). **Step 4** is procedural (the flip runbook).
+
+| # | Step | Proof | State |
 |---|---|---|---|
-| 1 | **Commit a golden `layout-hash` baseline.** A `make`/CI target dumps the whole-program layout hash (the existing @PLN97 hash + the F9 nullability line once it lands) to a checked-in file, e.g. `tests/golden/layout-hash.txt`. | regenerate = byte-identical on a clean tree; a value-struct field reorder changes it (positive control) | S |
-| 2 | **CI diff, advisory.** A job regenerates the hash and diffs the baseline; on mismatch it prints the moved types (reuse api-surface commit-5's layout axis, C1 is done). NON-blocking first — surface it before it can fail a merge. | an injected reorder → red annotation naming the type; clean tree → green | S |
-| 3 | **Couple to the contract.** The gate passes iff (hash unchanged) **OR** (`CONTRACT_VERSION` incremented in the same diff) **OR** (an explicit `layout-intentional` label + the baseline re-blessed). Encodes "a layout change is allowed only as a declared contract bump". Still inert while `CONTRACT_VERSION = 0`. | hash-change-without-bump → fail; hash-change-with-bump → pass; a re-blessed baseline → pass | S–M |
-| 4 | **Flip-day arm.** No code change — at the flip, `CONTRACT_VERSION` becomes 1 and this gate is live. Documented in RELEASE.md's flip runbook (below). | n/a (procedure) | S |
+| 1 | Golden layout baseline over a coverage-audited corpus | a field reorder / stride change flips the golden + `LAYOUT_ALGO_HASH` (the #477 class) | ✅ pre-existing (`layout_golden.rs`) |
+| 2 | Drift is loud at commit time (re-bless forced on an intentional change) | `layout_golden` fails red on any layout move | ✅ pre-existing |
+| 3 | **Couple to the contract** — a layout change may land only WITH a `CONTRACT_VERSION` bump (else a silent persistence break). `LAYOUT_CONTRACT` pins the contract-at-bless (`layout_golden.rs`); the git-diff rule (`scripts/check_layout_contract.sh`) fails a golden change with no bump. **Inert while `CONTRACT_VERSION == 0`.** | self-test proves the decision table (`--self-test`); both git detectors verified; `layout_contract_pin_is_consistent` guards `LAYOUT_CONTRACT <= CONTRACT_VERSION`; non-blocking CI job in `api-compat.yml` | ✅ **built 2026-07-19** |
+| 4 | **Flip-day arm.** No code change — at the flip the gate arms itself from `CONTRACT_VERSION = 1`. Documented in the flip runbook below. | n/a (procedure) | ⬜ at flip |
+
+**Refinement noted (flip-day sharpening):** step 3's git rule flags ANY `corpus.txt`
+change (a real layout move *or* an additive corpus entry) — conservative/fail-closed,
+which is correct pre-flip. Post-flip, distinguish additive corpus growth from a genuine
+existing-type reshape (reuse api-surface commit-5's layout axis, which already separates
+`superset` from `changed`) so a coverage addition doesn't demand a spurious bump.
 
 ### Gate 2 — golden-corpus-output-changed ⇒ classify + bump
 
