@@ -24,6 +24,16 @@ resolver *cannot today* tell a pre-flip binary from a post-flip one. Publish a f
 Pre-1 carries no *absolute* promise, but "stable base without gaps" means we **build the gate that
 contains this** (and every future loft-version change), not just accept the break.
 
+## Releases are cheap — stage them
+
+loft point releases cost nothing (owner, 2026-07-20): GitHub CI builds every target binary
+automatically, so we make as many as help. **Use that for safety by staging the rollout — ship the
+resolver gate in its own *additive* release (nothing flips, upgrading is risk-free), let gate-aware
+binaries propagate, and only then release the flip.** That shrinks the exposed population from
+"everyone on `2026.7.1`" to "only those who never took the free gate release." Never contort the design
+to avoid a release; a release is the cheap tool, not the constraint. (Point releases are the loft
+*binary* — orthogonal to lib versions, which is the churn we still avoid, per @PLN113 arc D.)
+
 ## The one safety invariant
 
 **No flip-fixed lib is published until the survival gate is built and verified, and libs are published
@@ -52,10 +62,17 @@ pre-flip lib version; new binary → resolves the flipped version.** Land + veri
 is published.** (This is arc D in its version-keyed form; it also serves every future loft-version
 behavior change, not just this flip.)
 
-### Step 2 — Cut the flipped loft release
-Version-bump `2026.7.1 → <next>`, tag, and release the binary that carries **both** the flip and the
-Step-1 gate. Verify on the released artifact: `len("café")` = 4, `size("café")` = 5, both backends; and
-the gate skips a too-new lib. This released binary is the floor every flip-fixed lib will require.
+### Step 2 — Release, staged: gate first, then flip (releases are free)
+Two point releases, in order, so gate-aware binaries exist before any flipped lib is published:
+1. **Gate release** (`2026.7.2`) — carries the Step-1 gate **and no flip**. Pure-additive: every
+   existing program and lib behaves exactly as on `2026.7.1`, so upgrading is risk-free and can be
+   pushed hard. Verify: `len("café")` still = 5 (unflipped), and the gate skips a too-new lib.
+2. **Flip release** (`2026.8.0`) — carries the flip. Verify on the artifact: `len("café")` = 4,
+   `size("café")` = 5, both backends. This is the floor every flip-fixed lib will require
+   (`requires loft-release >= 2026.8.0`).
+
+The window between the two is where gate-aware binaries propagate; the longer users have to take the
+free gate release, the smaller the residual in Step 4.
 
 ### Step 3 — Publish the flip-fixed libs, one at a time, each gated
 Re-verify the held PRs first (state may have moved since they were drafted): docs/markdown, graphics/glb,
@@ -78,9 +95,11 @@ One lib per step. The base stays gap-free throughout: each lib is at all times e
   checked fact, not a hope.
 - **End-to-end matrix:** `{old loft, new loft} × {fresh install, lockfile} × {each lib}` — old never
   pulls a flipped lib, new works, locked is unchanged.
-- **Document the single accepted residual** (only if Step 0 showed `2026.7.1` ignores the gate):
-  fresh-install-on-`2026.7.1` must upgrade loft — a contained, pre-1, no-promise break on exactly one
-  path, logged in DESIGN_DECISIONS.md, never silent.
+- **Document the single accepted residual:** a fresh install on a binary **older than the gate release**
+  (`< 2026.7.2`, which lacks the gate) may pull a flip-fixed lib and break. Staging shrinks this to
+  "never took the free, risk-free gate release"; the fix is a trivial loft upgrade. A contained, pre-1,
+  no-promise break on exactly one path — logged in DESIGN_DECISIONS.md, never silent. (Binaries `>=
+  2026.7.2` are fully protected by the gate.)
 
 ### Step 5 — Hand the stable base to the games
 With a flipped, gapless base, the games — the contract-1 validation gate ([COMPATIBILITY.md § road to
