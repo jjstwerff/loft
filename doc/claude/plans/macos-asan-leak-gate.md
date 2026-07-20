@@ -2,16 +2,21 @@
 Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
-# RESOLVED: macOS ASan interpreter leak gate
+# macOS ASan interpreter leak gate — green LOCALLY, STILL RED on CI (runner divergence)
 
-**Status: fixed on a real macOS box (aarch64-apple-darwin), 2026-07-20.** Kept as the record of
-root cause + fix because the failure is Darwin-only and the original handoff carried a misdiagnosis.
+**Status (2026-07-20): the fix below greens a real macOS box but NOT the CI `macos-latest` runner.**
+The Mac agent verified locally (`0 leaking of 513`; nextest `1629 passed, 0 leaked`), but a
+`workflow_dispatch` miri run (29757356253) on `tuxedo-followups` with that same fix left the macOS
+leg RED — 3 residuals the local box did not hit (see § CI-runner divergence). debug-asserts ✅ and
+ASan-leak **ubuntu** ✅ in that run, so the bare-name suppressions are Linux-safe. The root-cause
+analysis below is correct and load-bearing; only the "0 on CI" claim was over-stated (it was local).
+This blocks the owner's first STABLE RELEASE (they won't ship with a red nightly) — needs a Mac agent
+iterating **against CI**, not just a local box.
 
-## Outcome
+## Outcome (LOCAL — not yet CI)
 
-The macOS `asan-leak-gate` is green with NO real leak masked and NO weakening of the Linux leg.
-Verified locally on macOS: the per-file scan is `0 leaking file(s) of 513`, and the full nextest
-leak gate is `1629 passed, 0 leaked` (incl. `library_suite` + `loft_suite`).
+On the Mac agent's box: per-file scan `0 leaking file(s) of 513`, nextest `1629 passed, 0 leaked`
+(incl. `library_suite` + `loft_suite`), NO real leak masked, Linux leg unweakened.
 
 ## Root cause (two real issues — and one debunked theory)
 
@@ -86,3 +91,38 @@ deliberately declined (@PLN102 fault-path text). See @PLN54.
 - Linux leak gate + ratchet baseline (0) unchanged; bare names are substrings of the demangled Linux
   frames too, and `ThreadLocalVariables` is a macOS-only no-op on Linux.
 - Only benign owners suppressed. `src/ops.rs` shift fix untouched.
+
+## CI-runner divergence — the 3 residuals that block CI (iterate AGAINST CI, not a local box)
+
+Miri run **29757356253** (`workflow_dispatch`, `tuxedo-followups`, with the fix above) —
+`ASan interpreter leak gate (macos-latest)` = **failure**, `3 leaking file(s) of 513` (down from 7):
+
+| Residual | Where | Symptom on CI |
+|---|---|---|
+| `ThreadLocalVariables` ×1 | `library_suite`: `lib/audience_crystal/tests/01-editor-helpers.loft` | `336 byte(s) in 1 allocation`, `ThreadLocalVariables` at frame #2 — the suppression caught 2 of 3 lib tests but not this 336B block on this runner |
+| `http_get_bytes` ×3 | per-file scan: `tests/docs/{14-image,21-random,32-time}.loft` | `owner=<unknown>` — the CI runner's `atos` does NOT symbolize the frame, so `leak:http_get_bytes` cannot match |
+
+**Why local ≠ CI:** the Mac agent's box symbolized these frames (so its suppressions matched → 0
+leaking); the CI `macos-latest` runner symbolizes differently (different macOS/atos/dyld), leaving
+`http_get_bytes` as `<unknown>` and one dyld block uncaught. **So verifying on a local box is NOT
+sufficient — verify by dispatching miri and reading the CI job.** Repro:
+`gh workflow run miri.yml -R loft-lang/loft --ref <branch>` → wait → the `macos-latest` leak-gate job log.
+
+**On the residuals (both provably NOT loft leaks):**
+- `http_get_bytes` — `src/registry_index.rs:730` builds a **per-call** `ureq::AgentBuilder`, so the
+  leak is a `rustls`/ring/system-TLS **global** (a one-time init, reachable-at-exit → Linux never
+  flags it), NOT a cached client to free. It can't be *eliminated* cheaply, and `<unknown>` can't be
+  *suppressed by name*. The 3 files are all network `loft install` tests — the leak is the TLS
+  library, not loft's own surface.
+- `ThreadLocalVariables` 336B — a dyld system TLS block; the enclosing-type suppression missed this
+  one frame on the CI runner. Inspect its CI stack; broaden the match if a stable enclosing frame
+  exists.
+
+**Approaches (owner-acceptable, since these are non-loft and Linux enforces loft-code leaks):**
+1. Iterate the suppression/symbolizer **against CI** until `<unknown>` resolves + the 336B block
+   matches (needs push-and-dispatch loops; a local box won't reveal it).
+2. **Scope out the non-loft noise on macOS:** exclude the 3 network-`loft install` docs tests from the
+   macOS per-file scan (the leak is TLS-library, not loft), and/or the one dyld-residual lib test —
+   documented, macOS-only. Linux keeps the full enforcing scan.
+3. Last resort: mark the macOS *leak* leg non-blocking — but the owner wants it genuinely green
+   (no red before the stable release), NOT hidden, so prefer 1 or 2.
