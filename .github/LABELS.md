@@ -57,7 +57,7 @@ statically-typed language.  Source flows: **text → parser → IR → codegen �
 | `needs-design` | the fix needs a design decision, not a mechanical change — don't just patch it |
 | `bug` / `enhancement` / `documentation` / … | the GitHub defaults; keep `bug` on every bug |
 | `proposal` | a proposed new library or API change/rewrite (the `library_proposal` intake → the @PLN112 provenance view) |
-| `showcase` | a LISTED loft app/demo — rendered in the @PLN112 applications tier (the `refresh-applications.py` source of truth). Internal + accepted-community. |
+| `showcase` | an accepted COMMUNITY app, listed in the @PLN112 applications tier (first-party apps self-describe in their own repo via a `.loft-showcase.toml` + the `loft-showcase` topic, no label) |
 | `showcase:pending` | a submitted `application_showcase` awaiting review — the intake queue; NOT listed until a maintainer relabels it `showcase` |
 
 ## Triage-state (where an investigation got stuck)

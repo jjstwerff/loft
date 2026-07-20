@@ -184,20 +184,21 @@ def applications_section(applications: dict[str, Any]) -> list[str]:
     present = [o for o in ORIGINS if any(a.get("origin") == o for a in apps)]
 
     def entry(a: dict) -> str:
+        demo = a.get("demonstrates", "").strip()
+        dem = f" · demonstrates {demo}" if demo else ""
         home = f" · [demo]({a['homepage']})" if a.get("homepage") else ""
-        pushed = f" (updated {a['pushed']})" if a.get("pushed") else ""
         return (
-            f"- **{a.get('name', '')}** — {a.get('description', '').strip()} · "
-            f"demonstrates {a.get('demonstrates', '').strip()} · [repo]({a.get('url', '')})"
-            f"{home}{pushed}"
+            f"- **{a.get('name', '')}** — {a.get('description', '').strip()}{dem} · "
+            f"[repo]({a.get('url', '')}){home}"
         )
 
     lines = [
         "## Applications (built with loft — examples, not part of the distribution)",
         "",
         "Real apps built with loft — reference examples of HOW to build such things, not "
-        "installable components. Sourced from `showcase` GitHub issues (internal apps + accepted "
-        "community submissions), not a hand-kept list; propose one via the `application_showcase` "
+        "installable components. No hand-kept list: **first-party** apps self-describe in their own "
+        "repo (a `.loft-showcase.toml` + the `loft-showcase` topic; loft's own in-repo demos in its "
+        "`.loft-showcase.toml`), and **community** apps are proposed via the `application_showcase` "
         "issue (see @PLN112).",
         "",
     ]
