@@ -908,6 +908,7 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
 
 Real apps built with loft — reference examples of HOW to build such things, not installable components. The set is curated; each app's info is fetched live. Community showcases may join over time (see @PLN112).
 
+- **crawler** — A clean-room hex roguelike written in the loft language — 2D now, with a renderer-agnostic kernel built to drive a 3D browser version later. · demonstrates a hex roguelike with a renderer-agnostic kernel — the first cross-game consumer of the hex_* world libraries · [repo](https://github.com/jjstwerff/crawler) (updated 2026-07-10)
 - **dryopea** — Sci-fi free-build / tower-defence with scramble-and-salvage runs, built on loft · demonstrates a 3D free-build / tower-defence game on the lavition engine · [repo](https://github.com/jjstwerff/dryopea) (updated 2026-05-27)
 - **moros** — Moros role playing game · demonstrates a full RPG — game systems, world state, rendering · [repo](https://github.com/jjstwerff/moros) (updated 2026-05-01)
 - **routing** — Phone-first route planner — sketch points, instant length, match to real paths (loft→WASM), export GPX. · demonstrates a phone-first WASM app — loft→WASM, interactive canvas, GPX export · [repo](https://github.com/jjstwerff/routing) (updated 2026-07-17)

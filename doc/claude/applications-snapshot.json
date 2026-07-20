@@ -1,6 +1,16 @@
 {
   "applications": [
     {
+      "demonstrates": "a hex roguelike with a renderer-agnostic kernel — the first cross-game consumer of the hex_* world libraries",
+      "description": "A clean-room hex roguelike written in the loft language — 2D now, with a renderer-agnostic kernel built to drive a 3D browser version later.",
+      "homepage": "",
+      "name": "crawler",
+      "origin": "first-party",
+      "pushed": "2026-07-10",
+      "repo": "jjstwerff/crawler",
+      "url": "https://github.com/jjstwerff/crawler"
+    },
+    {
       "demonstrates": "a 3D free-build / tower-defence game on the lavition engine",
       "description": "Sci-fi free-build / tower-defence with scramble-and-salvage runs, built on loft",
       "homepage": "",

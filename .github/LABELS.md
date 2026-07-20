@@ -57,6 +57,7 @@ statically-typed language.  Source flows: **text → parser → IR → codegen �
 | `needs-design` | the fix needs a design decision, not a mechanical change — don't just patch it |
 | `bug` / `enhancement` / `documentation` / … | the GitHub defaults; keep `bug` on every bug |
 | `proposal` | a proposed new library or API change/rewrite (the `library_proposal` intake → the @PLN112 provenance view) |
+| `showcase` | a community open-source app built with loft, proposed as a build example (the `application_showcase` intake → the @PLN112 applications tier) |
 
 ## Triage-state (where an investigation got stuck)
 

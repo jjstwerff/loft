@@ -9,8 +9,9 @@
 # (description, demo link, last activity) is fetched LIVE the same automated way, so it
 # self-maintains.
 #
-# `origin` distinguishes `first-party` (ours) from `community` (contributor showcases — a
-# future tier; add them below, or wire a topic/issue-template intake like `library_proposal`).
+# `origin` distinguishes `first-party` (ours) from `community` (contributor showcases). The
+# community intake is the `application_showcase` GitHub issue (label `showcase`); an ACCEPTED
+# submission is added to the curated list below with origin="community".
 #
 # Usage:  scripts/refresh-applications.py
 from __future__ import annotations
@@ -29,6 +30,7 @@ OUT = REPO / "doc" / "claude" / "applications-snapshot.json"
 APPS: list[tuple[str, str, str]] = [
     ("jjstwerff/moros", "first-party", "a full RPG — game systems, world state, rendering"),
     ("jjstwerff/dryopea", "first-party", "a 3D free-build / tower-defence game on the lavition engine"),
+    ("jjstwerff/crawler", "first-party", "a hex roguelike with a renderer-agnostic kernel — the first cross-game consumer of the hex_* world libraries"),
     ("jjstwerff/routing", "first-party", "a phone-first WASM app — loft→WASM, interactive canvas, GPX export"),
     ("jjstwerff/ssh_home", "first-party", "a native terminal app — SSH + PTY, phone-width tmux, no browser"),
 ]
