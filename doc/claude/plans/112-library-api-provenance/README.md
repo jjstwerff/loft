@@ -151,9 +151,13 @@ see + evaluate it.** This plan adds that intake as the `proposed` source's front
   any), labeled `proposal`. That is the "fill in a gh issue we can see" — visible,
   triageable, one place. The *intended use case* field is load-bearing: it is what lets a
   reviewer judge fit-to-direction (see below), not just "does it run."
-- `loft api <name> --proposal <issue#|PR#|owner/repo@branch|dir>` overlays the proposed API
-  as `🌱 proposed`, diffed against `published` — including the **api-compat verdict** (would
-  adopting it break callers?) and the rewrite-vs-delta layout.
+- `loft api <name> --proposal <issue# | registry-PR# | owner/repo@branch | dir>` overlays
+  the proposed API as `🌱 proposed`, diffed against `published` — with the **api-compat
+  verdict** (would adopting it break callers?) and the rewrite-vs-delta layout. Two intake
+  shapes matter: a `library_proposal` **issue** (lightweight, "is this a fit?", before
+  building) and a **registry PR** (the actual "request for merge" — `REGISTRY_SUBMIT` against
+  `loft-lang/registry`). The registry PR is where a misfit could get MERGED, so the fit check
+  runs on it pre-merge (phase 4).
 - The loop closes end to end: external **proposal issue** → *seen + evaluated in the same
   view* → accepted → the existing REGISTRY_SUBMIT publish flow. One structured intake, and
   the provenance view is where you judge it — no separate evaluation tooling.
@@ -258,8 +262,16 @@ on any dir for local/pinned/proposal source; `gh api …/contents` for a proposa
 3. **Overlay engine (per-context):** `loft api <name>` adds the machine-/context-specific
    sources — `local` (dev working checkout) and `pinned` (lockfile) — via the union +
    adaptive renderer → stdout / gitignored. Each is a valid source, shown when present.
-4. **`--proposal <ref>`:** fetch + overlay an external candidate; detect rewrite →
-   side-by-side blocks.
+4. **`--proposal <ref>` — ingest a contributor's submission in ANY form:** a
+   `library_proposal` **issue#** (the lightweight "is this a fit?" intake), a **registry PR#**
+   (the actual "request for merge" — the `REGISTRY_SUBMIT` PR against `loft-lang/registry`,
+   how a contributor hands us finished code), a `owner/repo@branch`, or a local dir. Fetch →
+   extract (`pkg_api_items`, same as every source) → overlay as `🌱 proposed`, with the
+   api-compat verdict + rewrite-vs-delta layout + side-by-side for a rewrite. **The registry
+   PR is the load-bearing case:** it is where a misfit could actually get MERGED, so the fit
+   check must run on it BEFORE merge — a reviewer (and a CI check on the registry PR) sees
+   the proposed API, its compat verdict, and its fit-to-the-envisioned-design (@PLN23) in the
+   provenance view, so the functional≠fitting judgment happens pre-merge, not after.
 5. **API-compat flags:** run `api_diff::diff` on each source pair (published↔unreleased in
    the committed doc; published↔proposed and pinned↔published in the overlay); render
    `⚠ BREAKING` badges + a per-library `⚠ N breaking change(s)` header. A folded rename is
@@ -355,8 +367,9 @@ cache — valid until some lib's published version or `origin/main` sub-path sha
 - Overlay as a second gitignored file vs a fenced, CI-stripped block in `LIBRARIES.md`?
 - Dev-root discovery: scan `~/workspace` vs a per-lib path config?
 - `proposed` intake — the `library_proposal` issue template's fields; which `--proposal
-  <ref>` forms first (issue# / PR# / `owner/repo@branch` / dir); the N-way compare UX for
-  competing proposals.
+  <ref>` forms first (the lightweight **issue** vs the registry-PR **"request for merge"** is
+  the priority pair, since the PR is where a misfit could get merged); the N-way compare UX
+  for competing proposals; and whether the registry-PR fit check gates the PR in CI.
 
 ## Edge cases (must hold)
 
