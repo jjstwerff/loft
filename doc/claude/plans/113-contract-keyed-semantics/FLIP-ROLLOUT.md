@@ -94,10 +94,21 @@ against the fewer-releases preference; pre-1, the residual is a trivial upgrade,
 usually right.
 
 ### Step 3 — Publish the flip-fixed libs, one at a time, each gated
-Re-verify the held PRs first (state may have moved since they were drafted): docs/markdown, graphics/glb,
-game/time, net/web, **plus cbor**. Then, **for each lib in isolation**:
-1. Set its manifest **`[package] loft = ">=<flip release>"`** — the bound `2026.7.1`'s `check_version`
-   already enforces (Step 0), so an old binary rejects the flipped lib at load instead of running it.
+
+**Progress (2026-07-20):** the four "held" flip PRs are all **MERGED** to their lib mains (not held
+drafts) — flip-fix code on `main`, **not yet published**. Only three changed *shipped source* and so
+need the bound: **markdown** (`src/markdown.loft`), **graphics** (`src/glb.loft`), **time**
+(`src/time.loft`). **web** changed only a *test* (`tests/pack.loft`) → source is flip-agnostic, no bound;
+**cbor** had no flip change → excluded (avoids over-coupling). The bound is **set to `loft = ">=2026.8.0"`
+via HOLD PRs** — [loft-libs-docs#2](https://github.com/loft-lang/loft-libs-docs/pull/2),
+[loft-libs-graphics#20](https://github.com/loft-lang/loft-libs-graphics/pull/20),
+[loft-libs-game#6](https://github.com/loft-lang/loft-libs-game/pull/6) (branch `tuxedo-pln110-loft-bound`).
+Remaining, all release-gated: cut the flip release → merge these three → version-bump + publish.
+
+**For each affected lib (markdown / graphics / time), in isolation:**
+1. **Bound — DONE** for the three above (`[package] loft = ">=2026.8.0"`, the bound `2026.7.1`'s
+   `check_version` already enforces per Step 0, so an old binary rejects the flipped lib at load rather
+   than running it). Adjust the one-line value if the flip ships under a version other than `2026.8.0`.
 2. Un-draft the PR, run the lib's **parity gate** (`--interpret` == `--native` == wasm where claimed;
    the multi-byte test each PR added), merge.
 3. **Touch-sign + publish** via the loft-ship skill — **re-sign `index.json`** (skipping the re-sign
