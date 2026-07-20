@@ -81,6 +81,15 @@ The branch is merged to main via a single PR when all items pass CI.
 - Fewer PRs = less CI wait time and merge churn.
 - Each commit within the branch is still one coherent item (test + code +
   enable), so `git log` stays bisectable.
+- **Owner directive: do not wait ~half an hour of CI *per subject*.** Every PR to
+  `main` is a full ~20–30 min CI round; splitting N subjects into N PRs = N
+  half-hours of waiting, and the per-subject CI wait — not review — is the
+  bottleneck when exploring many subjects. So **bundle multiple subjects (even
+  unrelated ones — a docs/tooling stream + a compiler soundness fix + a language
+  feature can ride together) into ONE PR**, and do NOT default to proposing a
+  split. Only split when the owner explicitly wants a fast independent clock for
+  one item. Run the local gate (`make gate` / `make ci`) once, so the single PR
+  clears in one round instead of bouncing.
 
 ### Stay close to `main` — rebase rigorously (the 2026-06-24 lesson)
 
