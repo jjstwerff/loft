@@ -1,0 +1,104 @@
+name: Application showcase
+description: Propose an open-source app built with loft to feature as a build example.
+title: "[showcase] "
+labels: ["showcase:pending"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Built something real with loft?  Propose it as a **showcase** — a reference
+        example other people learn from.  This issue IS the record: the listed set is
+        sourced from these issues, not a hand-kept file.  A maintainer reviews your
+        submission (labeled `showcase:pending`) and, if accepted, relabels it `showcase`
+        — at which point it appears in the "Applications" tier of the loft distribution
+        overview
+        ([`LIBRARIES.md`](https://github.com/loft-lang/loft/blob/main/doc/claude/LIBRARIES.md)),
+        tagged `community`.  Keep the field headings below intact — they are parsed.
+
+        **What we look for — it is about teaching, not polish.**  A showcase does not
+        have to be finished or beautiful; it has to show *how* to build something with
+        loft that others would want to build too.  So the **what it demonstrates** field
+        is load-bearing: it is the reason someone opens your repo.  Every submission gets
+        a response — accepted, or declined with a reason.
+
+        **Bar:** the app is **open source** (an OSI license), it **builds/runs against a
+        current loft**, and the repo is public.  We do not host your code — we link to
+        your repo; you keep ownership and maintenance.
+
+  - type: input
+    id: name
+    attributes:
+      label: App name
+      placeholder: my-loft-game
+    validations:
+      required: true
+
+  - type: input
+    id: repo
+    attributes:
+      label: Public repository
+      description: The `owner/repo` or full URL. We link here; we do not copy your code.
+      placeholder: yourname/my-loft-game
+    validations:
+      required: true
+
+  - type: input
+    id: summary
+    attributes:
+      label: One-line summary
+      description: What is it?
+      placeholder: A tile-based puzzle game that runs in the browser via loft→WASM.
+    validations:
+      required: true
+
+  - type: textarea
+    id: demonstrates
+    attributes:
+      label: What it demonstrates (required)
+      description: >
+        The build technique / capability another developer would come here to learn —
+        the reason to feature it.  Be concrete.
+      placeholder: |
+        A full loft→WASM game loop with an interactive canvas, save/load to browser
+        storage, and touch input — end to end, in pure loft.
+    validations:
+      required: true
+
+  - type: textarea
+    id: loft_use
+    attributes:
+      label: What loft features / libraries it uses
+      description: Which parts of loft (and which registry libraries) it exercises — so readers know what it shows.
+      placeholder: graphics (canvas), the WASM target, hex_grid; value-struct game state.
+    validations:
+      required: false
+
+  - type: input
+    id: demo
+    attributes:
+      label: Live demo (if any)
+      description: A URL where it runs (a hosted WASM build, a video).
+      placeholder: https://yourname.github.io/my-loft-game
+    validations:
+      required: false
+
+  - type: input
+    id: license
+    attributes:
+      label: License (must be open source)
+      description: The OSI license the repo is under.
+      placeholder: MIT / Apache-2.0 / LGPL-3.0-or-later / …
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: Before submitting
+      options:
+        - label: The repository is public and open source (an OSI license).
+          required: true
+        - label: It builds / runs against a current loft (not an old, incompatible version).
+          required: true
+        - label: I'm happy for it to be listed as a `community` showcase (a link to my repo; I keep ownership + maintenance).
+          required: true

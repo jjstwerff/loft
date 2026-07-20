@@ -280,19 +280,19 @@ select {
     <div class="pane-header">Source</div>
     <div class="editor-wrap">
       <pre id="highlight" aria-hidden="true"></pre>
-      <textarea id="editor" spellcheck="false">fn main() {
-  println("Hello from Loft!");
+      <textarea id="editor" spellcheck="false">// A Loft script: no `fn main`, no boilerplate — just statements, top to bottom.
+// Loft is statically typed and compiles to native + WASM.
+println("Hello from Loft!")
 
-  for i in 1..11 {
-    if i % 3 == 0 and i % 5 == 0 {
-      println("FizzBuzz");
-    } else if i % 3 == 0 {
-      println("Fizz");
-    } else if i % 5 == 0 {
-      println("Buzz");
-    } else {
-      println("{i}");
-    }
+for i in 1..11 {
+  if i % 3 == 0 and i % 5 == 0 {
+    println("FizzBuzz");
+  } else if i % 3 == 0 {
+    println("Fizz");
+  } else if i % 5 == 0 {
+    println("Buzz");
+  } else {
+    println("{i}");
   }
 }</textarea>
     </div>

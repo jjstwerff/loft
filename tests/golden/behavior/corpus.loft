@@ -10,13 +10,24 @@
 // here (E1: prose is improvable; only values + typed-error CODES are frozen) — this
 // corpus prints VALUES only, so a wording change never trips it.
 //
-// Coverage is a starting SURFACE set, grown deliberately (no silent truncation): it
-// covers integer/float arithmetic, the C80/C85 null model (÷0, overflow, OOB, parse),
-// casts, shifts, ?? coalescing, vectors + comprehensions, match (scalar + enum), and
-// text. NOT yet covered here: collections (hash/sorted/spatial), coroutines, files,
-// par — add a labelled line when a surface is frozen.
+// Coverage is a starting SURFACE set, grown deliberately (no silent truncation): int/
+// float arithmetic + C80/C85 null model, casts/shifts/`??`, vectors + comprehensions,
+// match (scalar + plain-enum), text spine, and (2026-07-20, flip-gate-coverage-gaps.md
+// HIGH rows) value→text RENDERING (float precision / pad / null / hex / vector), STRUCTS
+// (nested read + write), STRUCT-ENUM payload match, KEYED COLLECTIONS (hash lookup +
+// sorted order), TEXT STDLIB (split/replace/upper/contains/size-vs-len), the NULL keystone
+// (`== null` / propagation / `!null`), MATH stdlib, and SORT/aggregate. NOT yet covered:
+// coroutines, closures-with-capture, references/writeback, tuples, files, par — MED/LOW
+// rows grow the corpus additively post-flip. (Hash ABSENT-key lookup `h[absent]` is
+// omitted: it currently PANICS — a real bug, not a clean value to freeze.)
 
 enum Shape { Circle, Square, Triangle }
+
+// @PLN102 HIGH-row types (structs, a struct-enum with payload, a keyed-collection row).
+struct Point { x: integer, y: integer }
+struct Seg { a: Point, b: Point }
+enum Tag { Ring { r: integer }, Cell { c: integer } }
+struct Row { k: integer, v: integer }
 
 fn classify(n: integer) -> text {
   match n {
@@ -71,4 +82,62 @@ fn main() {
   print("text.len = {len(greeting)}\n");
   print("text.find = {greeting.find(\"world\") ?? -1}\n");
   print("text.slice = {greeting[0..5]}\n");
+
+  // --- value→text RENDERING (float precision / pad / null / hex / vector) ---
+  print("render.float = {1.0 / 3.0}\n");
+  print("render.pad = {7:03}\n");
+  nn: integer? = null;
+  print("render.null = {nn}\n");
+  print("render.hex = {255:#x}\n");
+  print("render.vec = {[1, 2, 3]}\n");
+
+  // --- structs (nested read + field write) ---
+  ln = Seg { a: Point { x: 1, y: 2 }, b: Point { x: 3, y: 4 } };
+  print("struct.nested = {ln.b.x}\n");
+  ln.a.y = 9;
+  print("struct.write = {ln.a.y}\n");
+
+  // --- struct-enum payload construct + match-destructure ---
+  tg: Tag = Ring { r: 5 };
+  tv = match tg { Ring { r } => r, Cell { c } => c };
+  print("enum.payload = {tv}\n");
+
+  // --- keyed collections (hash present-key lookup + sorted iteration order) ---
+  h: hash<Row[k]> = [];
+  h += Row { k: 1, v: 10 };
+  h += Row { k: 2, v: 20 };
+  print("hash.lookup = {h[2].v}\n");
+  srt: sorted<Row[k]> = [];
+  srt += Row { k: 3, v: 0 };
+  srt += Row { k: 1, v: 0 };
+  srt += Row { k: 2, v: 0 };
+  order = "";
+  for e in srt { order = order + "{e.k}"; }
+  print("sorted.order = {order}\n");
+
+  // --- text stdlib (split / replace / upper / contains / size-vs-len) ---
+  print("text.split = {len(split(\"a,b,c\", ','))}\n");
+  print("text.replace = {replace(\"hello\", \"l\", \"L\")}\n");
+  print("text.upper = {to_uppercase(\"hi\")}\n");
+  print("text.contains = {contains(\"hello\", \"ell\")}\n");
+  print("text.sizelen = {len(\"héllo\")}/{size(\"héllo\")}\n"); // chars/bytes (@PLN110)
+
+  // --- the null keystone (== null / propagation / !null) ---
+  print("null.eq = {nn == null}\n");
+  print("null.prop = {(nn + 3) ?? -1}\n"); // null propagates through arithmetic
+  print("null.not = {!nn}\n");             // !null -> true
+
+  // --- math stdlib ---
+  print("math.abs = {abs(-7)}\n");
+  print("math.clamp = {clamp(15, 0, 10)}\n");
+  print("math.sqrt = {sqrt(16.0)}\n");
+  print("math.pow = {2 ** 3 ** 2}\n"); // right-assoc: 2^(3^2) = 512
+  print("math.floormod = {floor_mod(-1, 3)}\n"); // negative-operand wrap -> 2
+
+  // --- sorting + aggregate honesty ---
+  words = ["cherry", "apple", "banana"];
+  sort(words);
+  print("sort.text = {words[0]}\n");
+  empty: vector<integer> = [];
+  print("agg.minof = {min_of(empty) ?? -1}\n"); // empty -> null -> -1
 }

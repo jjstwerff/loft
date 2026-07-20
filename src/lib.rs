@@ -166,6 +166,7 @@ pub mod live_dispatch;
 pub mod live_reload;
 pub mod repl;
 pub mod rpc;
+pub mod script;
 pub mod serve;
 pub mod startup_cache;
 pub mod wasm_debug;

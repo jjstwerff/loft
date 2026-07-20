@@ -176,6 +176,16 @@ graduate a representative sibling from the same cluster instead.
    close-shipped-plans script to do the `status:finished` + close, with a
    stale-plan audit as the drift safety net.  The manual `gh issue` edit is the
    fallback / out-of-band path.
+   - **A CLOSED plan's status label must be `status:finished` (delivered) or
+     `status:declined` (de-scoped) — NEVER a live status (`active` / `future` /
+     `next` / `closing`).**  The swap is automatic ONLY when the finishing PR used
+     `Closes @PLN<n>`; a **hand-close** (the issue closed directly) or a PR that used
+     **`Refs`** instead of `Closes` closes the issue but leaves the label stale, so
+     you must swap it yourself: `gh issue edit <n> -R loft-lang/plans --remove-label
+     status:<live> --add-label status:finished`.  This drifts silently — plans
+     107-110 were all closed-but-mislabeled (`active`/`future`/`next`) from
+     `Refs`-only or hand closes — so when you touch a closed plan, verify the label
+     matches the state; don't trust the audit to have caught it.
 5. **Grep + rewrite incoming links — THE most-skipped step.**  Reference content
    embedded in a finished plan gets linked to from other docs; those links rot when
    the content moves.  Grep every doc for the plan's path, rewrite the links to the

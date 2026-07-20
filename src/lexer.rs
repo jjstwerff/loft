@@ -186,6 +186,15 @@ static KEYWORDS: &[&str] = &[
     "is",
 ];
 
+/// True when `word` is one of loft's reserved keywords (the `KEYWORDS` table above).
+/// Used by the @PLN13 script detector to tell a real loose statement that begins with
+/// a keyword (`if x { … }`, `for i in …`, `return x`) from a MALFORMED definition whose
+/// keyword was mistyped (`funcion main()`), which must not be treated as a script.
+#[must_use]
+pub fn is_keyword(word: &str) -> bool {
+    KEYWORDS.contains(&word)
+}
+
 /// The lexicon a [`Lexer`] tokenises with: its multi-/single-character
 /// tokens/operators, its keywords, the comment marker that runs to end-of-line,
 /// and whether string literals interpret `{…}` as interpolation.  `Default` is

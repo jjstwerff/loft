@@ -757,7 +757,13 @@ pub fn compile_and_run(files_json: &str) -> String {
         .map(|(n, c)| (n.to_string(), (*c).to_string()))
         .collect();
     for (name, content) in &files {
-        all_files.push((name.clone(), content.clone()));
+        // @PLN13 step 6 — auto-detect a beginner script (loose top-level statements, no
+        // `fn main`) and desugar it to one run-once `fn main`, exactly as the CLI run
+        // path does, so the browser playground runs scripts too. A non-script (a library
+        // or a `fn main` program) desugars to `None` and is pushed unchanged.
+        let desugared = crate::script::script_desugar(content);
+        let content = desugared.as_deref().unwrap_or(content);
+        all_files.push((name.clone(), content.to_string()));
     }
     virt_fs_populate(&all_files);
     // Clear the output buffer.
@@ -839,7 +845,13 @@ pub fn compile_and_start(files_json: &str) -> String {
         .map(|(n, c)| (n.to_string(), (*c).to_string()))
         .collect();
     for (name, content) in &files {
-        all_files.push((name.clone(), content.clone()));
+        // @PLN13 step 6 — auto-detect a beginner script (loose top-level statements, no
+        // `fn main`) and desugar it to one run-once `fn main`, exactly as the CLI run
+        // path does, so the browser playground runs scripts too. A non-script (a library
+        // or a `fn main` program) desugars to `None` and is pushed unchanged.
+        let desugared = crate::script::script_desugar(content);
+        let content = desugared.as_deref().unwrap_or(content);
+        all_files.push((name.clone(), content.to_string()));
     }
     virt_fs_populate(&all_files);
     let _ = output_take();

@@ -1,0 +1,90 @@
+# @PLN112 phase 7 — keep the shared library catalogue current WITHOUT a human running a
+# command. The committed catalogue (doc/claude/LIBRARIES.md + the registry/unreleased
+# snapshots) is a snapshot of two SHARED, DETERMINISTIC sources — `published` (the registry)
+# and `unreleased` (each library's origin/main) — so it only needs a trigger + an idempotent
+# regen. (The on-demand `local`/`pinned`/`proposed` overlay via `loft api` / proposal-review
+# is never stale by construction and needs no trigger.)
+#
+# Triggers:
+#   * `schedule` (nightly)  — the robust FALLBACK floor: catches any library change even if
+#     an event-driven dispatch was missed.
+#   * `repository_dispatch: catalogue-refresh` — event-driven; fired by the registry repo on
+#     a publish and by each loft-libs-* repo on an origin/main API-change merge. Those SENDER
+#     workflows live in those repos (a follow-on) — see
+#     doc/claude/plans/112-library-api-provenance/README.md § Staying current.
+#   * `workflow_dispatch` — manual.
+#
+# The regen is IDEMPOTENT: a library commit that did NOT change the public API produces
+# byte-identical output → no PR, no churn. It respects main-is-PR-only by opening/updating a
+# bot PR (never a direct push); the existing `libcatalogue-check` CI job gates that PR.
+name: catalogue-refresh
+
+on:
+  schedule:
+    - cron: "17 4 * * *"
+  repository_dispatch:
+    types: [catalogue-refresh]
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+  pull-requests: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  refresh:
+    name: Refresh library catalogue
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+      # `.cargo/config.toml` pins `-fuse-ld=mold`, so the runner needs it (as the main CI does).
+      - name: Install mold
+        run: sudo apt-get update && sudo apt-get install -y mold
+      - name: Cache cargo + target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry/index
+            ~/.cargo/registry/cache
+            ~/.cargo/git/db
+            target
+          key: ${{ runner.os }}-catalogue-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-catalogue-
+            ${{ runner.os }}-cargo-
+      - name: Build loft (needed to extract each origin/main API for the unreleased tier)
+        run: cargo build --release --bin loft
+      - name: Refresh the catalogue (published + unreleased)
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: make libcatalogue
+      - name: Open / update the catalogue-refresh PR on change
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          files="doc/claude/LIBRARIES.md doc/claude/registry-index-snapshot.json doc/claude/unreleased-snapshot.json doc/claude/loft-release-snapshot.json doc/claude/applications-snapshot.json"
+          if git diff --quiet -- $files; then
+            echo "Catalogue unchanged — nothing to do (idempotent regen)."
+            exit 0
+          fi
+          git config user.name "loft-catalogue-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="catalogue-refresh"
+          git checkout -B "$branch"
+          git add $files
+          git commit -m "chore(@PLN112): refresh library catalogue (published + unreleased)"
+          git push -f origin "$branch"
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            echo "PR already open — updated by the force-push."
+          else
+            gh pr create --base main --head "$branch" \
+              --title "chore(@PLN112): refresh library catalogue" \
+              --body "Automated refresh of the shared library catalogue (\`doc/claude/LIBRARIES.md\` + the registry/unreleased snapshots) to the current **published + origin/main** state (@PLN112 phase 7, \`make libcatalogue\`). The \`libcatalogue-check\` job gates it. Idempotent — this PR only exists because some library's public API changed."
+            # Auto-merge once the gates pass (the doc is generated + deterministic + CI-checked);
+            # best-effort — leaves the PR open if the repo has auto-merge disabled.
+            gh pr merge "$branch" --auto --squash || echo "auto-merge not enabled — PR left open for review."
+          fi

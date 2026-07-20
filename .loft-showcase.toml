@@ -1,0 +1,25 @@
+# loft's OWN in-repo demos, featured in the "state of the loft distribution" applications tier
+# (doc/claude/LIBRARIES.md, @PLN112). Standalone apps self-describe in their own repos (a
+# `.loft-showcase.toml` + the `loft-showcase` topic); these three live inside this repo, so they
+# are described here. Read by scripts/refresh-applications.py.
+
+[[showcase]]
+name = "Crystal Editor"
+demonstrates = "generative art in the browser — loft→WASM, an interactive editor, real-time GL rendering"
+description = "The audience 'crystal' generative-art editor — a self-contained browser demo (tools/audience-demo/, built on lib/audience_crystal)."
+url = "https://github.com/loft-lang/loft/tree/main/tools/audience-demo"
+demo = "https://loft-lang.org/loft/crystal-editor.html"
+
+[[showcase]]
+name = "Brick Buster"
+demonstrates = "a complete browser game in loft — loft→WASM, a canvas game loop, input, and power-ups"
+description = "A Breakout-style brick-breaker — a self-contained, double-click-to-play browser game demo (tools/brick-buster/)."
+url = "https://github.com/loft-lang/loft/tree/main/tools/brick-buster"
+demo = "https://loft-lang.org/loft/brick-buster.html"
+
+[[showcase]]
+name = "GL demo gallery"
+demonstrates = "the graphics / GL API by example — a browser gallery of short loft programs (2D canvas, 3D, shaders) that run live"
+description = "One page collecting the loft GL/graphics demos — a single entry point to the whole demo collection."
+url = "https://github.com/loft-lang/loft/blob/main/doc/gallery-examples.js"
+demo = "https://loft-lang.org/loft/gallery.html"

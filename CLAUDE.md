@@ -86,6 +86,13 @@ src/main.rs            CLI; loads default/ then user file
   `03_text.loft`.
 - **Before non-trivial functionality, check [LIBRARIES.md](doc/claude/LIBRARIES.md) + `loft install`** — don't reimplement.
   Writing/reviewing `.loft`: **loft-write skill**. Language ref: [LOFT.md](doc/claude/LOFT.md), [STDLIB.md](doc/claude/STDLIB.md).
+- **A library's API: read `LIBRARIES.md`, NEVER a clone or installed copy (@PLN112).** The
+  catalogue is generated + always-current (`published` + each lib's `origin/main`, breakage-
+  flagged); a local clone / `~/.loft/registry/<pkg>-<ver>/` can silently lag `origin/main`
+  (the `find`→`search` failure that motivated @PLN112). For the machine-/context sources run
+  the overlay: `scripts/lib-overlay.py <name>` (local checkout + this project's pin),
+  `scripts/proposal-review.py <name> <ref>` (a proposed candidate). We never auto-delete a
+  copy — each is a legitimate source.
 - **Response shape:** lead with the ONE highest-leverage item in full (decision + minimum to act),
   then a one-line summary of the rest; no long dumps.
 - **Advice vs action:** asked for advice/evaluation → give the recommendation (best option + why),
@@ -205,7 +212,9 @@ strict: [formal/README.md](doc/claude/formal/README.md) (rules + deviations driv
 [ROADMAP.md](doc/claude/ROADMAP.md) by milestone · [BROADENING.md](doc/claude/BROADENING.md) beyond games ·
 [lib_plans/README.md](doc/claude/lib_plans/README.md) (legacy) · [STACKTRACE.md](doc/claude/STACKTRACE.md) · [SANDBOX.md](doc/claude/SANDBOX.md).
 
-**Libraries / registry / packages:** [LIBRARIES.md](doc/claude/LIBRARIES.md) installable catalogue ·
+**Libraries / registry / packages:** [LIBRARIES.md](doc/claude/LIBRARIES.md) state of the loft
+distribution — core (version + binary sha) + libraries + applications built with loft ·
+[LIBRARY_BRANCHES.md](doc/claude/LIBRARY_BRANCHES.md) in-flight (unmerged) lib branches ·
 [PACKAGES.md](doc/claude/PACKAGES.md) format/targets · [PKG_REGISTRY.md](doc/claude/PKG_REGISTRY.md) registry MVP ·
 [LIBRARY_AUTHORING.md](doc/claude/LIBRARY_AUTHORING.md) / [LIBRARY_CHECKLIST.md](doc/claude/LIBRARY_CHECKLIST.md) ·
 [REGISTRY_SUBMIT.md](doc/claude/REGISTRY_SUBMIT.md) / [REGISTRY_BOOTSTRAP.md](doc/claude/REGISTRY_BOOTSTRAP.md) /

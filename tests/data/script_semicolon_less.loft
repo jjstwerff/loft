@@ -1,0 +1,19 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @SCRIPT — an intentional beginner-script fixture (runs auto-detected or under
+// `--script`), so the script-detector corpus sweep skips it (it is NOT accepted by the
+// plain compiler).
+//
+// @PLN13 step 4 fixture — a `;`-LESS beginner script: the top-level loose statements
+// omit their trailing `;` (the desugar splits them at newlines and supplies the `;`).
+// A top-level def is still hoisted; loose statements run top-to-bottom sharing state.
+
+fn triple(n: integer) -> integer {
+  n * 3
+}
+
+total = 0
+total = total + triple(2)
+total = total + triple(3)
+print("total={total}\n")

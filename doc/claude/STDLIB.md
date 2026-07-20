@@ -299,6 +299,24 @@ the implementation.
 | `assert(test: boolean, message: text)` | Panics with `message` if `test` is false. In production mode (`--production` CLI flag), writes an `error` log entry instead of aborting. |
 | `panic(message: text)` | Immediately terminates execution with `message`. In production mode, writes a `fatal` log entry instead of aborting. |
 
+**Printing values — the format-string idiom.** `print`/`println` take `text`, so any
+non-text value is printed through a format string, which interpolates *any* `Printable`
+via its `to_text` (every scalar, and a user type once it defines `fn to_text(self: T) ->
+text`):
+
+```loft
+count = 41
+print("{count + 1}\n")        // 42 — a single value
+print("{a} {b} {c}\n")        // several values, separators written in place
+p = Point { x: 3, y: 4 }
+print("{p}\n")                // a user type via its to_text
+```
+
+This one tool covers printing a value, separating several values, and appending strings
+— loft has no variadic `print(a, b, c)` and no bare `print(42)` (a deliberate decision,
+[DESIGN_DECISIONS.md § C100](DESIGN_DECISIONS.md#c100--print-stays-text-only-no-bare-printvalue-or-variadic-print); @PLN13 step 5). Write the separator you
+want inside the braces (`"{a} {b}"` spaces, `"{a}, {b}"` commas, `"{a}{b}"` appends).
+
 ---
 
 ## Logging

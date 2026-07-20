@@ -1,0 +1,113 @@
+name: Library proposal
+description: Propose a new loft library, or an API change / rewrite of an existing one.
+title: "[library] "
+labels: ["proposal"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Propose a library **before** you build it (or alongside an existing
+        repo/PR) so maintainers can see it, evaluate fit, and steer early — the
+        lightweight front door to the `proposed` source in loft's library
+        provenance view (@PLN112).  You do **not** need finished code to open
+        this; the goal is a shared, evaluable record.
+
+        **What we judge — and it is not only "does it run".**  A proposal can be
+        fully functional and genuinely useful yet still be the wrong *shape* for
+        where the language is heading.  So the **intended use case** field below is
+        load-bearing: it is what lets a reviewer weigh fit-to-direction, not just
+        correctness.  Every proposal gets a response — accepted, redirected, or
+        declined-with-a-pointer to the design it should align with; never a silent
+        drop.
+
+        Finished code ready to publish?  That goes through the registry submit flow
+        (a PR against `loft-lang/registry`), not this issue — see
+        [`REGISTRY_SUBMIT.md`](https://github.com/loft-lang/loft/blob/main/doc/claude/REGISTRY_SUBMIT.md).
+        This issue is the "is this a fit?" conversation that comes first.
+
+  - type: input
+    id: name
+    attributes:
+      label: Library name
+      description: The `use <name>;` name (lowercase, e.g. `mariadb`, `toml`, `zip`).
+      placeholder: mariadb
+    validations:
+      required: true
+
+  - type: input
+    id: purpose
+    attributes:
+      label: Purpose (one line)
+      description: What does it do, in a sentence?
+      placeholder: A simple MariaDB / MySQL connector — connect, run SQL, read a scalar.
+    validations:
+      required: true
+
+  - type: textarea
+    id: use_case
+    attributes:
+      label: Intended use case (the FIT — required)
+      description: >
+        WHO uses this and for WHAT?  This is what lets us judge whether it fits the
+        language's direction, not just whether it works.  Be concrete about the
+        scenario, the scale, and what it deliberately does NOT try to do.
+      placeholder: |
+        Quick CRUD / scripting against an existing MariaDB — one connection, ad-hoc
+        SQL, read a count or a single value.  NOT a pooled, transactional,
+        prepared-statement client for a service.
+    validations:
+      required: true
+
+  - type: textarea
+    id: api
+    attributes:
+      label: Proposed public API
+      description: The `pub fn` signatures you intend to expose (as many as you have).  A sketch is fine.
+      render: rust
+      placeholder: |
+        pub fn connect(host: text, user: text, password: text, database: text) -> integer
+        pub fn execute(conn: integer, sql: text) -> integer
+        pub fn query_scalar(conn: integer, sql: text) -> text
+        pub fn close(conn: integer)
+    validations:
+      required: true
+
+  - type: input
+    id: category
+    attributes:
+      label: Category
+      description: Which catalogue category (e.g. `database`, `text`, `graphics`, `cli`, `net`)?
+      placeholder: database
+    validations:
+      required: false
+
+  - type: input
+    id: deps
+    attributes:
+      label: Dependencies
+      description: Other loft libraries it builds on, and any native backend (a Rust crate, a C library, pure-loft).
+      placeholder: native — the Rust `mysql` crate (no other loft libs)
+    validations:
+      required: false
+
+  - type: input
+    id: existing
+    attributes:
+      label: Existing repo / PR / branch (if any)
+      description: >
+        A link we can overlay directly.  Any of: `owner/repo@branch`, a registry PR,
+        or a repo URL.  We extract its API and diff it against the published version
+        with `scripts/proposal-review.py`.
+      placeholder: youruser/loft-lib-mariadb@main
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: ack
+    attributes:
+      label: Before submitting
+      options:
+        - label: I checked [`LIBRARIES.md`](https://github.com/loft-lang/loft/blob/main/doc/claude/LIBRARIES.md) and this capability is not already covered.
+          required: true
+        - label: I understand a functional library may still be redirected if it does not fit the language's direction — and that the reasoning will be explained.
+          required: true

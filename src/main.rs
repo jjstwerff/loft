@@ -96,6 +96,10 @@ fn print_help() {
         "  --interpret                   run in interpreter/bytecode mode (native is default)"
     );
     println!(
+        "  --script                      force beginner-script mode (loose top-level\n\
+         \x20                               statements, no `fn main`) — auto-detected otherwise"
+    );
+    println!(
         "  --dump                        compile to bytecode, dump to stderr, and exit (no execution)"
     );
     println!("  --native                      compile to native Rust via rustc and run (default)");
@@ -4176,6 +4180,9 @@ fn main() {
     let mut production = false;
     let mut generate_log_config: Option<Option<String>> = None;
     let mut native_mode = true;
+    // @PLN13 step 2 — `--script`: desugar a beginner script (loose top-level statements,
+    // no `fn main`) into one run-once `fn main` before parsing. Opt-in for now.
+    let mut script_mode = false;
     // LibCI: `loft test` / `--tests` default to the interpreter, but honour an
     // EXPLICIT `--native` (matching the `--help` docs for `--tests --native`).
     // Tracked separately because the `test`/`--tests` handlers force interpreter
@@ -4301,6 +4308,8 @@ fn main() {
         // @F48 — the loft CLI (run a program; --interpret / --native, --timeout, --help)
         } else if a == "--interpret" || a == "--bytecode" {
             native_mode = false;
+        } else if a == "--script" {
+            script_mode = true;
         } else if let Some(rest) = a.strip_prefix("--errors=") {
             // Plan-07 phase 2: --errors=compact|pretty selects the
             // diagnostic renderer.  Pretty is default; compact is
@@ -5572,7 +5581,23 @@ fn main() {
     // the test suite — the dev-safety + test-isolation default).  The narrower
     // stdlib cache (`LOFT_STDLIB_CACHE`, D2b) caches `default/` only and engages
     // just when the program cache is off.
-    let program_cache_on = loft::cache::program_cache_enabled();
+    // @PLN13 step 3 — AUTO-DETECT a beginner script (loose top-level statements, no
+    // `fn main`) and desugar it to one run-once `fn main`, once, here; the parse below
+    // uses this transformed source. `is_script` classifies every file the compiler
+    // accepts (all-defs library / `fn main` program) as NOT a script, so this changes
+    // nothing for existing programs — only a source loft rejects today becomes runnable.
+    // `--script` remains an explicit request but is now redundant with auto-detect.
+    // A desugared source (auto or `--script`) bypasses the whole-program cache, which is
+    // keyed by the file on disk, not the transformed source.
+    let script_desugared: Option<String> = if abs_file.is_empty() {
+        None
+    } else {
+        std::fs::read_to_string(&abs_file)
+            .ok()
+            .and_then(|src| loft::script::script_desugar(&src))
+    };
+    let program_cache_on =
+        loft::cache::program_cache_enabled() && script_desugared.is_none() && !script_mode;
     p.track_sources = program_cache_on;
     // @PLN11 G2/M6 — on a warm hit with LOFT_CODEGEN_STORE, the cache is loaded
     // as a SKELETON (def table only) and the mmap'd bundle store is returned
@@ -5645,7 +5670,16 @@ fn main() {
     // policy was loaded above, before the warm-load gate, so designations form
     // during this parse — and a sandboxed program is never warm-loaded.)
     if !program_warm {
-        p.parse(&abs_file, false);
+        // @PLN13 — parse the desugared script (auto-detected above), or for a normal
+        // program parse the file unchanged.
+        match &script_desugared {
+            Some(src) => {
+                p.parse_source(src, &abs_file, false);
+            }
+            None => {
+                p.parse(&abs_file, false);
+            }
+        }
     }
     // @PLN90 W5 — the enforced copy lint: route every Avoidable structure copy
     // through the Warning channel so it surfaces with the other diagnostics.
