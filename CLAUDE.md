@@ -86,6 +86,13 @@ src/main.rs            CLI; loads default/ then user file
   `03_text.loft`.
 - **Before non-trivial functionality, check [LIBRARIES.md](doc/claude/LIBRARIES.md) + `loft install`** — don't reimplement.
   Writing/reviewing `.loft`: **loft-write skill**. Language ref: [LOFT.md](doc/claude/LOFT.md), [STDLIB.md](doc/claude/STDLIB.md).
+- **A library's API: read `LIBRARIES.md`, NEVER a clone or installed copy (@PLN112).** The
+  catalogue is generated + always-current (`published` + each lib's `origin/main`, breakage-
+  flagged); a local clone / `~/.loft/registry/<pkg>-<ver>/` can silently lag `origin/main`
+  (the `find`→`search` failure that motivated @PLN112). For the machine-/context sources run
+  the overlay: `scripts/lib-overlay.py <name>` (local checkout + this project's pin),
+  `scripts/proposal-review.py <name> <ref>` (a proposed candidate). We never auto-delete a
+  copy — each is a legitimate source.
 - **Response shape:** lead with the ONE highest-leverage item in full (decision + minimum to act),
   then a one-line summary of the rest; no long dumps.
 - **Advice vs action:** asked for advice/evaluation → give the recommendation (best option + why),

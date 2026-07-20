@@ -8,6 +8,8 @@ How to use one: `loft install <name>`, then `use <name>;` in your program — or
 
 A package may appear under more than one category (it is listed under each of its categories).
 
+Read a library's API here, not from a clone (a clone can lag `origin/main`). `🟢 unreleased` = merged on `origin/main`, not yet published; `⚠ BREAKING` = an api-compat break. Local/pinned/proposed sources: `scripts/lib-overlay.py <name>` and `scripts/proposal-review.py <name> <ref>` (see @PLN112).
+
 ## asset-format
 
 - **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).  · v0.1.2 · `use glb;` · API from origin/main (registry `api` not recorded)

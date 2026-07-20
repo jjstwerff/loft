@@ -181,67 +181,33 @@ install-artifacts: check-targets all
 	 if [ -n "$$stale" ]; then echo "  pruning stale loft_ffi rlib(s): $$stale"; rm -f $$stale; fi
 
 install:
-	# #398 — preflight: this target writes to root-owned /usr/local/{bin,share}.
-	# Verify we can actually elevate BEFORE the long build + any copying, so a
-	# rights problem fails early and clearly instead of a raw mid-install `sudo`
-	# error (or a half-done install).
 	@sudo true || { \
 		echo "ERROR: 'make install' needs root to write /usr/local/{bin,share}/loft."; \
 		echo "Re-run where you can elevate (e.g. as a sudoer, or 'sudo make install')."; \
 		exit 1; \
 	}
-	$(AS_USER) $(MAKE) --no-print-directory install-artifacts
-	# #398 follow-up — also refresh the source-tree native cdylibs (lib/*/native,
-	# tests/lib/*/native) against the just-built loft, so `make rebuild-native-cdylibs`
-	# is no longer a required SEPARATE step after install (stale cdylibs left from an
-	# older loft would mismatch its ABI at native link).  Runs as the user (no sudo);
-	# the loft + wasm rebuilds it shares with install-artifacts are cargo no-ops here.
-	$(AS_USER) $(MAKE) --no-print-directory rebuild-native-cdylibs
-	sudo install -d /usr/local/share/loft/deps
-	sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
-	# Prune first: `cp -r` MERGES, so a stdlib file removed/renamed upstream would
-	# linger in the installed default/ and collide (e.g. an old 02_images.loft vs a
-	# new 02_files.loft -> "Dual definition"). Replace the dir, like deps below do.
-	sudo rm -rf /usr/local/share/loft/default
-	sudo cp -r default /usr/local/share/loft/
-	sudo install -m 644 target/install-lib/release/libloft.rlib /usr/local/share/loft/
-	sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so
-	sudo cp target/install-lib/release/deps/*.rlib /usr/local/share/loft/deps/
-	# #398 — only copy the optional dep `.so`s when they actually exist, and fail
-	# LOUDLY on a real copy error (the old `2>/dev/null || true` swallowed a
-	# permission-denied along with the harmless no-such-file case).
+	@$(AS_USER) $(MAKE) --no-print-directory install-artifacts
+	@$(AS_USER) $(MAKE) --no-print-directory rebuild-native-cdylibs
+	@sudo install -d /usr/local/share/loft/deps
+	@sudo install -d /usr/local/share/loft/wasm32-wasip2/deps
+	@sudo rm -rf /usr/local/share/loft/default
+	@sudo cp -r default /usr/local/share/loft/
+	@sudo install -m 644 target/install-lib/release/libloft.rlib /usr/local/share/loft/
+	@sudo rm -f /usr/local/share/loft/deps/*.rlib /usr/local/share/loft/deps/*.so
+	@sudo cp target/install-lib/release/deps/*.rlib /usr/local/share/loft/deps/
 	@if ls target/install-lib/release/deps/*.so >/dev/null 2>&1; then \
 		sudo cp target/install-lib/release/deps/*.so /usr/local/share/loft/deps/ || { \
 			echo "ERROR: failed to install dependency .so files (rights?)."; exit 1; }; \
 	fi
-	sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
-	sudo rm -f /usr/local/share/loft/wasm32-wasip2/deps/*.rlib
-	sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
-	# W1.1: install browser WASM rlib
-	sudo install -d /usr/local/share/loft/wasm32-unknown-unknown/deps
-	sudo install -m 644 target/wasm32-unknown-unknown/release/libloft.rlib /usr/local/share/loft/wasm32-unknown-unknown/
-	sudo rm -f /usr/local/share/loft/wasm32-unknown-unknown/deps/*.rlib
-	sudo cp target/wasm32-unknown-unknown/release/deps/*.rlib /usr/local/share/loft/wasm32-unknown-unknown/deps/
-	# Cargo emits the dependency rlibs/.sos with a 0640 (group/other-unreadable)
-	# build-umask mode, and the bare `cp`s above preserve it — so a non-root user
-	# running `loft` native codegen can't read /usr/local/share/loft/deps/*.rlib
-	# (error[E0786]: found invalid metadata files … Permission denied).
-	# `libloft.rlib` is already hardened via `install -m 644`; harden everything
-	# else in one pass.  `a+rX` = read for all + execute only on dirs:
-	# idempotent, source-mode-independent, covers the deps rlibs, the .sos, and
-	# both wasm deps/ trees.
-	sudo chmod -R a+rX /usr/local/share/loft
-	# #398 — install the binary UNCONDITIONALLY (was: skip when byte-identical via
-	# `cmp`).  The stdlib above is replaced on every install, so a conditional
-	# binary copy could pair a NEW stdlib with an OLDER installed binary that can't
-	# parse it (e.g. new `#pure` / `#rust"..."` syntax) — a silently broken install.
-	# Binary + stdlib now land together from this one `make install` (the same `all`
-	# build), as one unit.
-	sudo install -m 755 target/release/loft /usr/local/bin/loft
-	# #398 — post-install smoke gate: the installed binary MUST parse + run the
-	# installed stdlib.  Run a trivial program through the INSTALLED pair; a
-	# parse/load failure (the binary<->stdlib mismatch symptom) fails `make install`
-	# loudly rather than shipping a bricked toolchain the user has to hand-repair.
+	@sudo install -m 644 target/wasm32-wasip2/release/libloft.rlib /usr/local/share/loft/wasm32-wasip2/
+	@sudo rm -f /usr/local/share/loft/wasm32-wasip2/deps/*.rlib
+	@sudo cp target/wasm32-wasip2/release/deps/*.rlib /usr/local/share/loft/wasm32-wasip2/deps/
+	@sudo install -d /usr/local/share/loft/wasm32-unknown-unknown/deps
+	@sudo install -m 644 target/wasm32-unknown-unknown/release/libloft.rlib /usr/local/share/loft/wasm32-unknown-unknown/
+	@sudo rm -f /usr/local/share/loft/wasm32-unknown-unknown/deps/*.rlib
+	@sudo cp target/wasm32-unknown-unknown/release/deps/*.rlib /usr/local/share/loft/wasm32-unknown-unknown/deps/
+	@sudo chmod -R a+rX /usr/local/share/loft
+	@sudo install -m 755 target/release/loft /usr/local/bin/loft
 	@smoke="$${TMPDIR:-/tmp}/loft-install-smoke.loft"; \
 	printf 'fn main() {\n    println("loft install smoke ok")\n}\n' > "$$smoke"; \
 	if ! /usr/local/bin/loft --interpret "$$smoke" >/dev/null 2>"$$smoke.err"; then \

@@ -157,6 +157,13 @@ def render(index: dict[str, Any], unreleased: dict[str, Any] | None = None) -> s
         "of its categories)."
     )
     lines.append("")
+    lines.append(
+        "Read a library's API here, not from a clone (a clone can lag `origin/main`). "
+        "`🟢 unreleased` = merged on `origin/main`, not yet published; `⚠ BREAKING` = an "
+        "api-compat break. Local/pinned/proposed sources: `scripts/lib-overlay.py <name>` and "
+        "`scripts/proposal-review.py <name> <ref>` (see @PLN112)."
+    )
+    lines.append("")
 
     for cat in sorted(by_cat):
         lines.append(f"## {cat}")

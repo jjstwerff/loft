@@ -174,6 +174,21 @@ warning sign is **past tense about the code's own structure** — *removed*,
 `// increment i` above `i += 1`. It adds nothing. See
 [CODE.md § Doc Comments](CODE.md#doc-comments).
 
+### D. Prose in generated output, and narration in build recipes
+
+Two places where a comment reaches the wrong audience and rots:
+
+- **Generated files** (`LIBRARIES.md`, features shadows, …): emit only the terse data the
+  *reader* needs — a tag legend, a pointer. A generator that writes multi-paragraph
+  rationale into its output produces prose no one maintains; it goes stale on the next
+  change. Put the "why" in the hand-maintained source (the plan, `CLAUDE.md`), not the
+  artifact.
+- **Build recipes** (`make install`): make echoes recipe lines, so a `# because …` comment
+  in the recipe *narrates to whoever runs it* — noise they don't want. `make install`
+  should do the work correctly and quietly (`@`-silence the plumbing; surface only real
+  errors + a final status). The rationale for a step lives in git history, not on the
+  installer's terminal.
+
 ---
 
 ## Worked rewrites
