@@ -17,7 +17,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | Phase 5 (api-compat `⚠ BREAKING` flags) | **DONE** — published↔unreleased via the `api_diff` "identical-or-added" rule, compared by **type signature** (param-name changes like `spec`→`_spec` are NOT false breaks; a folded `#superseded` rename is additive, not a break). gridmesh's origin/main `&SegMesh`→`SegMesh` on 6 fns is correctly flagged; regex stays additive. |
 | Phase 4 (`--proposal` overlay) | **DONE** — `scripts/proposal-review.py <lib> <ref>` overlays a proposal (a local **dir** or **`owner/repo@branch`** fetched via `gh`) as `🌱 proposed` vs published, with the api-compat verdict + delta-vs-rewrite + a fit-is-human footer. Verified: the mariadb specimen (new-lib, +4 proposed) and `regex@main` (+2 proposed delta). Registry-**PR#** / **issue#** ref resolution is a follow-on (a registry PR's added entry → repo@tag; an issue → its proposed sigs). |
 | Phase 7 (automation) | **RECEIVER DONE** — `.github/workflows/catalogue-refresh.yml`: nightly cron + `repository_dispatch: catalogue-refresh` + manual → build loft → `make libcatalogue` → **idempotent bot PR** (main stays PR-only; the `libcatalogue-check` job gates it; best-effort auto-merge). The event-driven **SENDER** workflows (registry-publish + each loft-libs-* origin/main push → dispatch) are a per-repo follow-on — snippet in § Staying current. Untested until merged (cron/dispatch fire only on the default branch). |
-| Phases 3, 6 | designed, not built |
+| Phase 3 (`local`/`pinned` overlay) | **DONE** — `scripts/lib-overlay.py <lib>` unions the committed `published`+`unreleased` snapshots with the two machine-/context sources: **`local`** (a dev working checkout, discovered from the registry `homepage`→repo/subpath under `--dev-root`, or `--local DIR`) and **`pinned`** (the version this project's `loft.lock` resolves to → `~/.loft/registry/<lib>-<ver>/`), each extracted the same way (`loft api <dir> --json`). Keyed + diffed by **type signature** (reuses phase 4/5); adaptive renderer (plain when one source or all agree, else tagged interleave); api-compat verdicts on published→unreleased / published→local / pinned→published. stdout only — never committed. Verified: regex (the motivating `search`/`split_on` `unreleased` case), graphics (3-way divergence + the phase-2 data-gap note), time (published=unreleased=pinned → "3 sources agree" plain list), mariadb (local-only plain), not-found + pinned-but-not-installed notes. |
+| Phase 6 | designed, not built |
 
 Motivated by a real failure: an agent read stale local clones + the stale installed copy
 and concluded a merged regex rename (`find`→`search`, PR loft-libs-core#23, `d5e4195` on
@@ -411,7 +412,11 @@ cache — valid until some lib's published version or `origin/main` sub-path sha
 ## See also
 
 - [LIBRARIES.md](../../LIBRARIES.md) — the committed published catalogue (phase 1 target).
-- `scripts/gen-library-catalogue.py` — the generator (phase 1 + overlay engine).
+- `scripts/gen-library-catalogue.py` — the committed-catalogue generator (phases 1/2/5).
+- `scripts/lib-overlay.py` — the per-context overlay engine: `local`+`pinned` union + adaptive
+  render + api-compat (phase 3).
+- `scripts/proposal-review.py` — the `proposed` overlay (phase 4).
+- `scripts/refresh-unreleased.py` — the sha-cached `unreleased` snapshot builder (phase 2).
 - `scripts/lib-branch-audit.sh` — squash-safe ahead/behind content compare (phase 2).
 - `src/documentation.rs` (`pkg_api_items`) + `loft api` (`src/main.rs`) — API extraction.
 - `src/api_diff.rs` (`diff → Verdict::Superset | Break`) + `loft api-surface --check` /
