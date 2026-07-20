@@ -145,9 +145,11 @@ tarball, PR against `loft-lang/registry`) for a *finished* library, but **no lig
 way for an external dev to propose a library or an API change/rewrite and have maintainers
 see + evaluate it.** This plan adds that intake as the `proposed` source's front door:
 
-- A **`library_proposal` GitHub issue template** (structured: name · purpose · proposed
-  public-API sigs · category · deps · existing repo/PR/branch if any), labeled `proposal`.
-  That is the "fill in a gh issue we can see" — visible, triageable, one place.
+- A **`library_proposal` GitHub issue template** (structured: name · purpose · **intended
+  use case (fit)** · proposed public-API sigs · category · deps · existing repo/PR/branch if
+  any), labeled `proposal`. That is the "fill in a gh issue we can see" — visible,
+  triageable, one place. The *intended use case* field is load-bearing: it is what lets a
+  reviewer judge fit-to-direction (see below), not just "does it run."
 - `loft api <name> --proposal <issue#|PR#|owner/repo@branch|dir>` overlays the proposed API
   as `🌱 proposed`, diffed against `published` — including the **api-compat verdict** (would
   adopting it break callers?) and the rewrite-vs-delta layout.
@@ -161,6 +163,19 @@ see + evaluate it.** This plan adds that intake as the `proposed` source's front
   `published`), and `--proposal <ref>` overlays one — or several **side-by-side to compare**
   (published + candidate A + candidate B, an N-column matrix). The view helps you judge
   competing candidates; it **never auto-picks a winner** (provenance, not decision).
+- **Functional ≠ fitting — the dangerous proposal.** The proposal to be careful about is
+  not the broken one; it is the one that WORKS for many common use cases but does not serve
+  the project's ENVISIONED one. A simple MariaDB connector (`~/workspace/loft-lib-mariadb`,
+  the intake example) — one connection, simple SQL, a scalar `-> text` result, no pool — is
+  fully functional and covers a lot of CRUD/scripting, yet it does NOT fit loft's
+  store-integrated, data-structure, high-scale direction (rows should materialise as loft
+  structs/vectors IN THE STORE, at multi-record scale, not a text-scalar client). The view
+  surfaces the API, the api-compat verdict, and the divergence — but **fit-to-direction is
+  human judgment the tool SUPPORTS (full provenance, side-by-side, the proposer's own
+  use-case framing), never replaces.** This is *why* the view never auto-adopts, and why the
+  `library_proposal` template asks for the **intended use case** — so a reviewer judges fit,
+  not just "does it run." The seductive-looking-but-misfit proposal is the whole reason
+  provenance beats automation here.
 
 ### Reconciliation — union, tagged by membership (both directions)
 
