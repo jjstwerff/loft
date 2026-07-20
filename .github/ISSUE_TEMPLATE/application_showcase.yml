@@ -1,16 +1,19 @@
 name: Application showcase
 description: Propose an open-source app built with loft to feature as a build example.
 title: "[showcase] "
-labels: ["showcase"]
+labels: ["showcase:pending"]
 body:
   - type: markdown
     attributes:
       value: |
         Built something real with loft?  Propose it as a **showcase** — a reference
-        example other people learn from.  Accepted showcases are listed in the
-        "Applications" tier of the loft distribution overview
+        example other people learn from.  This issue IS the record: the listed set is
+        sourced from these issues, not a hand-kept file.  A maintainer reviews your
+        submission (labeled `showcase:pending`) and, if accepted, relabels it `showcase`
+        — at which point it appears in the "Applications" tier of the loft distribution
+        overview
         ([`LIBRARIES.md`](https://github.com/loft-lang/loft/blob/main/doc/claude/LIBRARIES.md)),
-        alongside the first-party apps, tagged `community`.
+        tagged `community`.  Keep the field headings below intact — they are parsed.
 
         **What we look for — it is about teaching, not polish.**  A showcase does not
         have to be finished or beautiful; it has to show *how* to build something with
