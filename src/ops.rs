@@ -407,11 +407,12 @@ pub fn op_exclusive_or_long(v1: i64, v2: i64) -> i64 {
 /// In debug builds, panics if `v2` is outside `0..64`.
 pub fn op_shift_left_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
-        #[cfg(debug_assertions)]
-        assert!(
-            (0..64).contains(&v2),
-            "long shift out of range: {v1} << {v2}"
-        );
+        // An out-of-range shift amount is C85-null, NOT an internal invariant violation:
+        // return the sentinel so debug and release AGREE. (Release used to wrap the shift by
+        // coincidence; debug tripped a `#[cfg(debug_assertions)]` assert — the nightly red.)
+        if !(0..64).contains(&v2) {
+            return i64::MIN;
+        }
         sentinel_long!(v1 << v2, "<<", v1, v2)
     } else {
         i64::MIN
@@ -422,6 +423,11 @@ pub fn op_shift_left_long(v1: i64, v2: i64) -> i64 {
 #[must_use]
 pub fn op_shift_right_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
+        // Out-of-range shift amount → C85-null (same as `<<`); a bare `v1 >> v2` would panic
+        // in debug and wrap in release on an out-of-range amount.
+        if !(0..64).contains(&v2) {
+            return i64::MIN;
+        }
         v1 >> v2
     } else {
         i64::MIN
