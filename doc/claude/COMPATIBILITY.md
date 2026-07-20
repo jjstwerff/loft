@@ -425,6 +425,15 @@ forced by the work:
    wrong defaults, the method-vs-free-function asymmetries in
    [INCONSISTENCIES.md](INCONSISTENCIES.md) — all decided while contract 0 still permits it.
 
+   **The freeze scope is everything published — no core-subset carve-out** (owner, 2026-07-20):
+   the whole distribution is frozen at contract 1, not a hand-picked core with the rest left
+   experimental. **The validation gate that earns that freeze is games.** We build real games that
+   work *on* the libraries first; the games dogfood every surface, expose the wrong defaults and
+   coverage gaps while contract 0 still lets us fix them, and only once the games run well on a
+   library is that library proven ready to freeze forever. Games-first ([GOALS.md](GOALS.md)) is
+   therefore the lib-side readiness bar, not a parallel track — a library nobody built a game
+   against is not yet proven, and an unproven surface is not frozen.
+
 Only when both phases are done — the language settled and audited, the lib side deliberately
 gone over — is the `0 → 1` flip earned. This is *why* the freeze is not imminent despite the
 type surface being feature-complete: the language nearing done is phase 1; the libs are phase
