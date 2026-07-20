@@ -16,7 +16,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | Phase 2 (`unreleased` origin/main tier) | **DONE** — `scripts/refresh-unreleased.py` builds the sha-cached `unreleased-snapshot.json`; the catalogue tags `🟢 unreleased` additions (regex `search`/`split_on`, arguments +11, gridmesh +6, time +1). Found a **registry data gap**: 13 of 22 libs record an empty `api` field, so their published API can't be diffed — handled honestly (origin/main shown plain + a note), and filed as follow-up (populate the registry `api` on publish). |
 | Phase 5 (api-compat `⚠ BREAKING` flags) | **DONE** — published↔unreleased via the `api_diff` "identical-or-added" rule, compared by **type signature** (param-name changes like `spec`→`_spec` are NOT false breaks; a folded `#superseded` rename is additive, not a break). gridmesh's origin/main `&SegMesh`→`SegMesh` on 6 fns is correctly flagged; regex stays additive. |
 | Phase 4 (`--proposal` overlay) | **DONE** — `scripts/proposal-review.py <lib> <ref>` overlays a proposal (a local **dir** or **`owner/repo@branch`** fetched via `gh`) as `🌱 proposed` vs published, with the api-compat verdict + delta-vs-rewrite + a fit-is-human footer. Verified: the mariadb specimen (new-lib, +4 proposed) and `regex@main` (+2 proposed delta). Registry-**PR#** / **issue#** ref resolution is a follow-on (a registry PR's added entry → repo@tag; an issue → its proposed sigs). |
-| Phases 3, 6, 7 | designed, not built |
+| Phase 7 (automation) | **RECEIVER DONE** — `.github/workflows/catalogue-refresh.yml`: nightly cron + `repository_dispatch: catalogue-refresh` + manual → build loft → `make libcatalogue` → **idempotent bot PR** (main stays PR-only; the `libcatalogue-check` job gates it; best-effort auto-merge). The event-driven **SENDER** workflows (registry-publish + each loft-libs-* origin/main push → dispatch) are a per-repo follow-on — snippet in § Staying current. Untested until merged (cron/dispatch fire only on the default branch). |
+| Phases 3, 6 | designed, not built |
 
 Motivated by a real failure: an agent read stale local clones + the stale installed copy
 and concluded a merged regex rename (`find`→`search`, PR loft-libs-core#23, `d5e4195` on
@@ -311,6 +312,26 @@ Two properties make this safe and churn-free:
 Event-driven dispatches give minutes-fresh; the nightly is the robust floor; the CI check
 is the gate. So the committed doc self-updates on any publish or API-changing merge, and
 the overlay is always-current because it is recomputed every call.
+
+**Wiring status.** The RECEIVER is built — `.github/workflows/catalogue-refresh.yml`
+(nightly cron + `repository_dispatch: catalogue-refresh` + manual → build loft →
+`make libcatalogue` → idempotent bot PR, gated by `libcatalogue-check`, best-effort
+auto-merge). The event-driven **SENDER** is a one-file add to each library / the registry
+repo (a follow-on; needs a PAT secret, since cross-repo `repository_dispatch` is not allowed
+by the default token):
+
+```yaml
+# in a loft-libs-* repo (or loft-lang/registry): .github/workflows/notify-catalogue.yml
+on: { push: { branches: [main] } }
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - run: gh api repos/loft-lang/loft/dispatches -f event_type=catalogue-refresh
+        env: { GH_TOKEN: ${{ secrets.CATALOGUE_DISPATCH_TOKEN }} }
+```
+
+Until the senders exist, the nightly cron is the floor (fresh within a day of any change).
 
 ## Performance & caching
 
