@@ -500,7 +500,9 @@ does slip it is a bug fixed before other work, per the promise.
    only an error's identity/type — the tighter that surface, the more error *prose* stays
    improvable. Depends on loft's error-handling model; pin it as arc C designs the channel.
 3. **The escape valve's ergonomics.** How a contract-keyed behavior split is written and
-   tested (edition-style) — designed when first genuinely needed, not before.
+   tested (edition-style) — designed when first genuinely needed, not before. **Now in design:**
+   [plans/113-contract-keyed-semantics/README.md](plans/113-contract-keyed-semantics/README.md)
+   (@PLN113), driven by its first genuine need — the @PLN110 `len/size(text)` flip.
 
 ## See also
 
@@ -508,6 +510,8 @@ does slip it is a bug fixed before other work, per the promise.
   plan; this is arc A.
 - [plans/102-stability-contract/versioning-decision.md](plans/102-stability-contract/versioning-decision.md)
   — the `contract` axis (bare = `>=` under this promise).
+- [plans/113-contract-keyed-semantics/README.md](plans/113-contract-keyed-semantics/README.md) —
+  @PLN113, the edition-style escape valve that keys a semantic split on the declared `contract`.
 - [GOALS.md](GOALS.md) — the AS/400 standard and Goal F.
 - [DESIGN_DECISIONS.md § C86](DESIGN_DECISIONS.md) — the archetypal silent regression.
 - [plans/97-layout-contract/](plans/97-layout-contract/) — the layout-identity hash.
