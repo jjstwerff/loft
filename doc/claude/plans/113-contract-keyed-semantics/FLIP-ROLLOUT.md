@@ -81,17 +81,15 @@ downloading a too-new one and hard-failing at load. That upgrades the experience
 post-flip). If built, gate it behind a fixture-registry test (old binary → last compatible version; new
 binary → flipped version). This is arc D in its version-keyed form.
 
-### Step 2 — Release the flip (prefer one; stage only if Step 0 forces it)
-**Default — one monthly release** carrying the flip (and the Step-1 gate, if it was needed): e.g. the
-`2026-08` monthly `2026.8.0`. Verify on the artifact: `len("café")` = 4, `size("café")` = 5, both
-backends; and the gate skips a too-new lib. This release is the floor every flip-fixed lib requires
-(`requires loft-release >= 2026.8.0`).
+### Step 2 — Release the flip (one release)
+**The flip ships as a `2026.7.2` July point release** (owner, 2026-07-20 — not the `2026-08` monthly;
+it's a genuine binary/semantics change, exactly what an off-beat point release is for per
+[RELEASE.md § What forces a release](../../RELEASE.md)). Verify on the artifact: `len("café")` = 4,
+`size("café")` = 5, both backends. This release is the floor every flip-fixed lib requires
+(`[package] loft = ">=2026.7.2"`).
 
-**Stage into two only if** Step 0 showed `2026.7.1` won't gate **and** the residual matters: ship the
-gate in an *earlier monthly* release (additive, no flip, risk-free upgrade), let it propagate, then the
-flip release — so gate-aware binaries exist before any flipped lib is published. Weigh the extra release
-against the fewer-releases preference; pre-1, the residual is a trivial upgrade, so one release is
-usually right.
+(No staged gate is needed — Step 0 showed `2026.7.1` already hard-rejects a too-new lib at load, so one
+release suffices; the residual is a fresh-install on `2026.7.1`, a trivial upgrade, pre-1 no promise.)
 
 ### Step 3 — Publish the flip-fixed libs, one at a time, each gated
 
@@ -99,16 +97,16 @@ usually right.
 drafts) — flip-fix code on `main`, **not yet published**. Only three changed *shipped source* and so
 need the bound: **markdown** (`src/markdown.loft`), **graphics** (`src/glb.loft`), **time**
 (`src/time.loft`). **web** changed only a *test* (`tests/pack.loft`) → source is flip-agnostic, no bound;
-**cbor** had no flip change → excluded (avoids over-coupling). The bound is **set to `loft = ">=2026.8.0"`
-via HOLD PRs** — [loft-libs-docs#2](https://github.com/loft-lang/loft-libs-docs/pull/2),
+**cbor** had no flip change → excluded (avoids over-coupling). The bound is **set to `loft = ">=2026.7.2"`
+(the flip ships as the `2026.7.2` July point release) via HOLD PRs** — [loft-libs-docs#2](https://github.com/loft-lang/loft-libs-docs/pull/2),
 [loft-libs-graphics#20](https://github.com/loft-lang/loft-libs-graphics/pull/20),
 [loft-libs-game#6](https://github.com/loft-lang/loft-libs-game/pull/6) (branch `tuxedo-pln110-loft-bound`).
 Remaining, all release-gated: cut the flip release → merge these three → version-bump + publish.
 
 **For each affected lib (markdown / graphics / time), in isolation:**
-1. **Bound — DONE** for the three above (`[package] loft = ">=2026.8.0"`, the bound `2026.7.1`'s
+1. **Bound — DONE** for the three above (`[package] loft = ">=2026.7.2"`, the bound `2026.7.1`'s
    `check_version` already enforces per Step 0, so an old binary rejects the flipped lib at load rather
-   than running it). Adjust the one-line value if the flip ships under a version other than `2026.8.0`.
+   than running it).
 2. Un-draft the PR, run the lib's **parity gate** (`--interpret` == `--native` == wasm where claimed;
    the multi-byte test each PR added), merge.
 3. **Touch-sign + publish** via the loft-ship skill — **re-sign `index.json`** (skipping the re-sign
