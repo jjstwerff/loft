@@ -1,5 +1,7 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @F48 — the loft CLI (run a program): the beginner-SCRIPT front of it — classify a
+// no-`fn main` file and desugar it to one run-once `fn main` so `loft prog.loft` runs.
 
 //! @PLN13 — beginner scripts: run a `.loft` file with loose top-level statements and
 //! no `fn main`.
