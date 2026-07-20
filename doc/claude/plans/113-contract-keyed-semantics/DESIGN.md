@@ -81,27 +81,32 @@ replays the semantics it was built under.  `DEF_SUPERSEDED` (@PLN102 arc C) adde
 
 ---
 
-## Arc B — Compile-time op selection + the flip as a contract bump
+## Arc B — Compile-time op selection (the mechanism)
 
-Both text ops changed meaning (`phase0-inventory.md`), so **both** get two permanent variants:
-`length_text` (chars) + `length_text_v0` (bytes), and `size_text` (bytes) + `size_text_v0` (chars),
-in `src/fill.rs` **and** `src/generation/` (both-backends rule).  Compiling a `len(text)` call, codegen
-reads the enclosing definition's contract and emits the new op if ≥ flip-contract, else the `_v0` op.
-No runtime cost, no per-call lookup — a compile-time fact, per the loft-codegen method.
+The mechanism, illustrated on `len/size` (both ops changed meaning per `phase0-inventory.md`).  A
+diverged op *would* get two permanent variants — e.g. `length_text` (chars) + `length_text_v0` (bytes),
+and the `size` counterparts — in `src/fill.rs` **and** `src/generation/` (both-backends rule).
+Compiling a `len(text)` call, codegen reads the enclosing definition's contract and emits the new op if
+≥ the change's contract, else the `_v0` op.  No runtime cost, no per-call lookup — a compile-time fact,
+per the loft-codegen method.  (For `len/size` this stays hypothetical: the flip is pre-1, so no `_v0` is
+actually built — see below.)
 
-This makes the @PLN110 flip a **`CONTRACT_VERSION` bump** (0 → the flip contract): contract-0 and
-undeclared source keep `len`=bytes / `size`=chars byte-identically to pre-flip; new-contract source gets
-the flip.  The Stage-A matrix (README) is the acceptance gate.
+For a *post-1* diverged op, this is a **`CONTRACT_VERSION` bump**: old-contract source keeps the old
+meaning, new-contract source gets the new one, one binary carries both.  The `len/size` flip is the
+worked example of the shape — but the **actual** flip is a pre-contract-1 free swap (#587), so it needs
+**no `_v0` variant**: contract 1 simply ships with `len`=chars, and no frozen program ever expected
+byte-`len`.  The Stage-A matrix (README) shows the mechanism on that example, not an acceptance gate for
+the flip itself.
 
-> ### ❓ Q5 (NEEDS ANSWER) — Is the flip *contract 1*, or a later contract?
-> Two coherent framings, user-visibly different:
-> - **Flip = contract 1** (recommended): declaring `contract 1` gets you the new `len` **and** the
->   compatibility freeze in one number — "contract 1" means "the modern, frozen language."  Undeclared/0
->   is the pre-1 legacy world.
-> - **Freeze = contract 1 with *old* `len`; flip = contract 2.**  Keeps the freeze milestone semantically
->   unchanged from what 1.0 tested, and makes the flip an explicit later step.
-> **Why it blocks:** it sets what the very first frozen contract *means*, and every doc/marketing/`loft
-> new` default downstream.  This is a naming decision with a permanent public face.
+> ### ✅ Q5 (RESOLVED — owner, 2026-07-20) — The flip lands *before* contract 1.
+> Neither "flip = contract 1" nor "flip = contract 2": the flip is a **pre-contract-1 free break**
+> (already shipped as a hard swap, #587).  Contract 1 is declared only *after* everything is converted
+> and stable — gated on real-program validation, not the mechanical minimum (COMPATIBILITY.md § *The road
+> to contract 1*) — so it ships with `len`=chars already baked in.  There is therefore **no frozen
+> program that expects byte-`len`**, and `len/size` need **no `_v0` variant**.  Consequence: `len/size`
+> is *not* a customer of this mechanism, only its worked example; the mechanism's first real customer is
+> whatever first *post-1* change turns out genuinely unavoidable.  This is *why* the plan is designed
+> proactively rather than driven by a live trigger.
 
 The stdlib itself contains text-length logic, and the stdlib is compiled at *some* contract.
 
@@ -182,14 +187,18 @@ failing hard.  This is the arc that deletes "forced to make versions."
 | **Q2** | Undeclared / bare-script default contract | undeclared=0; `loft new` scaffolds latest; bare=0 | The default a million programs inherit |
 | **Q3** | Stdlib's own contract; may internals use keyed `len`/`size`? | internals use stable primitives (Q4), not keyed ops | Arc B scope + stdlib refactor |
 | **Q4** | Ship stable `char_count`/`byte_size` primitives + steer to them? | yes | API surface; Q3; arc-C target |
-| **Q5** | Is the flip contract 1, or a later contract? | flip = contract 1 (new `len` + freeze in one) | Public meaning of "contract 1"; defaults |
+| **Q5** | ✅ RESOLVED — is the flip contract 1, or later? | **flip lands pre-contract-1** (free break, #587); no `_v0`; len/size is the example, not a customer | (resolved) |
 | **Q6** | Steer: silent / warn-once / lint-shape-only? | lint-shape-only (reuse strict-index lint) | Default developer experience |
 | **Q7** | Store stride bump with "absent ⇒ contract 0"? | yes, ack'd against @PLN97 | Store format; @PLN97 gate |
 | **Q8** | Contract floor never rises (carry every variant forever)? | yes — accepted permanent cost | Permanent-surface budget |
 | **Q9** | Granularity: package-only, or per-file pragma? | package-only for v1 | Whether to close the door deliberately |
 
-**Critical path:** Q1, Q2, Q5 gate arc A/B (the flip's actual landing).  Q3+Q4 travel together (stdlib
-+ primitives).  Q6 is arc C only; Q7 is a store ack; Q8 is a budget ack; Q9 is a scope door.
+**Critical path:** Q5 is resolved — the flip is pre-1 and needs no keying, so the mechanism has **no
+urgent customer**; that removes the schedule pressure but not the design.  Q1+Q2 still gate arc A
+whenever it is built; note **arcs A + D are the parts contract 1 needs regardless** (a binary must
+advertise its contract and the resolver must refuse a too-new lib), while arc B (dual-variant op
+selection) waits for a real post-1 change.  Q3+Q4 travel together (stdlib + primitives); Q6 is arc C
+only; Q7 a store ack; Q8 a budget ack; Q9 a scope door.
 
 ## See also
 

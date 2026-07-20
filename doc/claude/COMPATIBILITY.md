@@ -430,6 +430,17 @@ gone over — is the `0 → 1` flip earned. This is *why* the freeze is not immi
 type surface being feature-complete: the language nearing done is phase 1; the libs are phase
 2, and they are given their time.
 
+**Clear the blockers first; measurement comes after the freeze.** The path to contract 1 is a bounded
+job — get rid of *everything* that blocks the freeze (the open plans, the language + lib audits) — and
+**new feature development is held off until those blockers are worked through**. This pre-freeze work is
+*convergence to* the standard, not measurement *of* it: with the surface still moving there is nothing
+fixed to measure against, so **until the freeze we measure nothing**. Only *after* contract 1 does real
+development on the now-frozen standard measure its resilience — and any gap it surfaces is handled the
+additive way (fold / host / contract-key — the escape valve above), never by breaking. So the checklist
+minimum (audits green, plans closed, suite passing) is *necessary, not sufficient*: it gets us to the
+door, and the freeze is declared only when the blockers are truly gone and the converted consumers are
+stable again — deliberately weeks away, never on the strength of a passing board alone.
+
 ## Per-surface — additive is the path; here is what a regression looks like
 
 | Surface | Additive (allowed) | Regression (a bug) |
@@ -500,9 +511,11 @@ does slip it is a bug fixed before other work, per the promise.
    only an error's identity/type — the tighter that surface, the more error *prose* stays
    improvable. Depends on loft's error-handling model; pin it as arc C designs the channel.
 3. **The escape valve's ergonomics.** How a contract-keyed behavior split is written and
-   tested (edition-style) — designed when first genuinely needed, not before. **Now in design:**
-   [plans/113-contract-keyed-semantics/README.md](plans/113-contract-keyed-semantics/README.md)
-   (@PLN113), driven by its first genuine need — the @PLN110 `len/size(text)` flip.
+   tested (edition-style) — designed when first genuinely needed, not before. **In design
+   (proactively):** [plans/113-contract-keyed-semantics/README.md](plans/113-contract-keyed-semantics/README.md)
+   (@PLN113), the mechanic for the first *post*-contract-1 semantic change. The @PLN110
+   `len/size(text)` flip is its **worked example, not a customer** — the flip lands *before* contract 1
+   (a free break, #587), so it needs no keying.
 
 ## See also
 

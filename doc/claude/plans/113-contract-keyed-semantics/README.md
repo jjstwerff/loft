@@ -8,14 +8,25 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 Open — design ready, no implementation yet.  Tracks [`@PLN113`](https://github.com/loft-lang/plans/issues/113).
-This builds the **contract-keyed escape valve** that [COMPATIBILITY.md § The escape valve for the
-genuinely unavoidable](../../COMPATIBILITY.md) already declares as policy but leaves unbuilt (§ *Open
-decisions* item 3: "designed when first genuinely needed, not before").  The **@PLN110 `len/size(text)`
-flip** (merged #587) is that first genuine need and the defining instance.  Today the flip is a hard op
-swap that stays compatible only because we are still pre-contract-1 (breaking is free before the
-freeze); this plan turns it into a contract bump so it survives the freeze and never spends a "free
-break."  Should land **by / with the contract-1 point release** — after the freeze, a `len/size`-style
-change is *only* expressible through this mechanic.
+Designs the **contract-keyed escape valve** [COMPATIBILITY.md § The escape valve for the genuinely
+unavoidable](../../COMPATIBILITY.md) declares but leaves unbuilt (§ *Open decisions* item 3).  It is the
+mechanic for the **first genuinely-unavoidable *post*-contract-1 semantic change** — so loft can evolve
+after the freeze without breaking a program or forcing a lib version bump.
+
+**Designed proactively, ahead of a concrete trigger** — the owner's call ("rather introduce a mechanic
+than be forced to make versions later"), a deliberate relaxation of "designed when first genuinely
+needed."  The **@PLN110 `len/size(text)` flip is the *worked example* this reasons against, NOT a
+customer:** the flip is a **pre-contract-1 free break** (already shipped as a hard op swap, #587), so
+contract 1 ships with `len`=chars baked in and needs no legacy variant (see Q5, resolved, in
+[DESIGN.md](DESIGN.md)).  Contract 1 itself is weeks away and reached by
+**clearing its blockers** (open plans + the language/lib audits), with new development held off until
+they are — the mechanical minimum is done, but real consumers are what will prove it stable.
+
+**This is explicitly held — not a contract-1 blocker.** The freeze can be declared without it (it only
+matters for *changing* something post-freeze).  Per the owner, clearing the contract-1 blockers takes
+priority and development is paused until then; this design being *ready* is enough for now, and
+**implementation waits until after the freeze** (its first customer is whatever first post-1 change
+proves genuinely unavoidable).
 
 ## Goal
 
@@ -47,9 +58,11 @@ emits exactly one meaning for `len/size(text)`.  Filling it is the four arcs bel
 
 ## Composition matrix — Stage A
 
-The spec.  This plan is done when **every cell is green on both backends** and the probes graduate to
-`tests/scripts/113-contract-keyed-semantics.loft`.  Axes: **declared contract** × **operation** ×
-**text content** × **backend**.
+The spec — **illustrating the mechanism** on the `len/size` shape (as if such a change had to happen
+*post*-1; the actual flip is pre-1 and ships without keying).  When arc B is built for a real post-1
+change, its analogous matrix is done when **every cell is green on both backends** and the probes
+graduate to `tests/scripts/113-contract-keyed-semantics.loft`.  Axes: **declared contract** ×
+**operation** × **text content** × **backend**.
 
 Both ops changed meaning (`phase0-inventory.md`: pre-flip `len(text)`=bytes / `size(text)`=chars;
 post-flip `len`=chars / `size`=bytes), so **both** carry two variants.  `"café"` = 4 chars, 5 bytes:
@@ -71,15 +84,16 @@ version, never the N one.  Full design + the decisions this blocks on: [DESIGN.m
 | Item | Concern | Status |
 |---|---|---|
 | **A** — Contract propagation + persistence | thread the declaring package's `contract` to each definition at compile; persist per-def (`DEF_CONTRACT` slot, mirroring `DEF_SUPERSEDED`); undeclared defaults to **oldest** (frozen old behavior) | Open |
-| **B** — Compile-time op selection + flip-as-bump | keep both variants (`length_text` + `length_text_v0`, size counterparts) in `src/fill.rs` **and** `src/generation/`; **codegen** picks by caller contract; bump `CONTRACT_VERSION` so new `len`=chars is the contract-N behavior | Open — **critical path** |
+| **B** — Compile-time op selection (the mechanism) | keep both variants of a diverged op (e.g. `length_text` + `length_text_v0`) in `src/fill.rs` **and** `src/generation/`; **codegen** picks by the caller's contract; a *post-1* change bumps `CONTRACT_VERSION`. `len/size` illustrates the shape but is **not** a customer (pre-1 swap, no `_v0` needed) | Design-ready; **no trigger yet** |
 | **C** — Author steering keyed to the bump | owned source on the old variant → optional steer to declare the newer contract, via `steer_enabled()` + owned-source gate; keyed to a `contract` bump, not a bare `#superseded` | Open |
 | **D** — Resolver contract-matching for libs | `loft install` resolves the newest lib version whose `contract` predicate the binary's `CONTRACT_VERSION` satisfies → an old binary never pulls a new-contract lib | Open — closes the version-forcing loop |
 
 ## Phase ordering
 
 1. **A** — propagation + persistence (nothing keys without it).
-2. **B** — op selection + `CONTRACT_VERSION` bump.  **This alone lands the @PLN110 flip safely** — it
-   is the critical path; the Stage-A matrix is its acceptance gate.
+2. **B** — op selection + `CONTRACT_VERSION` bump.  Built when a real *post-1* semantic change arrives;
+   the Stage-A matrix shows the shape using the `len/size` flip as the worked example.  (The actual flip
+   needs none of this — it is a pre-1 free swap, #587.)
 3. **C** — steering (inert until the contract bumps; ergonomics polish).
 4. **D** — resolver matching.  The arc that actually deletes "forced to make versions"; needed before a
    new-contract lib is published so old binaries stay on the compatible line.
@@ -101,8 +115,8 @@ version, never the N one.  Full design + the decisions this blocks on: [DESIGN.m
 
 - **@PLN102** — sits on arc A (COMPATIBILITY.md, this escape-valve section), arc B (the `contract`
   integer + `check_contract`, reused by arcs A/D), arc C (the owned-source steer gate, reused by arc C).
-- **@PLN110** — first customer; this plan is how that flip survives the contract-1 freeze instead of
-  spending loft's last free break.
+- **@PLN110** — the *worked example* (a real, fully-inventoried semantic change to reason against), not
+  a customer: the flip is a pre-contract-1 free break (#587), so it needs no keying.
 
 ## See also
 
