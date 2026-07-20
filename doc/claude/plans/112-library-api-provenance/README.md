@@ -163,11 +163,13 @@ see + evaluate it.** This plan adds that intake as the `proposed` source's front
   `published`), and `--proposal <ref>` overlays one — or several **side-by-side to compare**
   (published + candidate A + candidate B, an N-column matrix). The view helps you judge
   competing candidates; it **never auto-picks a winner** (provenance, not decision).
-- **Functional ≠ fitting — the dangerous proposal.** The proposal to be careful about is
-  not the broken one; it is the one that WORKS for many common use cases but does not serve
-  the project's ENVISIONED one. A simple MariaDB connector (`~/workspace/loft-lib-mariadb`,
-  the intake example) — one connection, simple SQL, a scalar `-> text` result, no pool — is
-  fully functional and covers a lot of CRUD/scripting, yet it is the misfit BY CONSTRUCTION:
+- **Functional ≠ fitting — expect it, document it, handle it.** This is a *class* of
+  proposal to EXPECT from external developers, not a mistake to shame: functional, useful
+  for many common use cases, but not serving the project's ENVISIONED one. The point is to
+  RECOGNISE, DOCUMENT, and HANDLE it — and the KEPT reference specimen is
+  `~/workspace/loft-lib-mariadb`: a simple MariaDB connector (one connection, simple SQL, a
+  scalar `-> text` result, no pool), fully functional and genuinely useful for CRUD/scripting,
+  yet not what the project envisions —
   the envisioned database-client design is **@PLN23** — `mariadb` + `postgres` over a uniform
   `sql` contract (prepared statements, transactions, bulk-edits), binding the C library
   DIRECTLY (libmariadb via the `#c` C-ABI, @PLN24) with **no Rust crate, no rustc**. The
@@ -185,8 +187,18 @@ see + evaluate it.** This plan adds that intake as the `proposed` source's front
   human judgment the tool SUPPORTS (full provenance, side-by-side, the proposer's own
   use-case framing), never replaces.** This is *why* the view never auto-adopts, and why the
   `library_proposal` template asks for the **intended use case** — so a reviewer judges fit,
-  not just "does it run." The seductive-looking-but-misfit proposal is the whole reason
-  provenance beats automation here.
+  not just "does it run." 
+  - **Handling (the documented response, never a bare reject):** evaluate the proposal's
+    intended use case against the envisioned design (here @PLN23) in the view; then respond
+    with GUIDANCE — (a) **decline with a pointer** to the envisioned design + a plain
+    statement of the mismatch (the proposer learns *why*, not just *no*); or (b) **accept as
+    a DISTINCT, clearly-scoped library** if there is a real niche (e.g. a "simple SQL /
+    scripting" lib, explicitly separate from the envisioned uniform-`sql` client), so the
+    work is not wasted and the two do not collide; or (c) **redirect** the proposer toward
+    the envisioned plan. Either way, **keep the specimen** (`loft-lib-mariadb`) as the
+    reference for the next one of its kind. The seductive-looking-but-misfit proposal is the
+    whole reason provenance beats automation — and a *documented* response is how handling it
+    stops being ad-hoc every time.
 
 ### Reconciliation — union, tagged by membership (both directions)
 
