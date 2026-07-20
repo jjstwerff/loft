@@ -66,7 +66,7 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          files="doc/claude/LIBRARIES.md doc/claude/registry-index-snapshot.json doc/claude/unreleased-snapshot.json"
+          files="doc/claude/LIBRARIES.md doc/claude/registry-index-snapshot.json doc/claude/unreleased-snapshot.json doc/claude/loft-release-snapshot.json"
           if git diff --quiet -- $files; then
             echo "Catalogue unchanged — nothing to do (idempotent regen)."
             exit 0

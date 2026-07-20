@@ -1,0 +1,27 @@
+{
+  "published": "2026-07-05T10:49:22Z",
+  "tag": "v2026.7.1",
+  "targets": {
+    "aarch64-apple-darwin": {
+      "sha256": "420f3b5f8d333516191130b78cdf2e33720adf67b9a1a95a6a279b6e39b137a1",
+      "size": 5298032,
+      "url": "https://github.com/loft-lang/loft/releases/download/v2026.7.1/loft-2026.7.1-aarch64-apple-darwin.zip"
+    },
+    "x86_64-apple-darwin": {
+      "sha256": "ce4e5851ffd946445427b51bf19fb286b70c09abdd3db4518f1f66df21041bba",
+      "size": 5643068,
+      "url": "https://github.com/loft-lang/loft/releases/download/v2026.7.1/loft-2026.7.1-x86_64-apple-darwin.zip"
+    },
+    "x86_64-pc-windows-msvc": {
+      "sha256": "8070d5cbb86742a57d27a63bb89c6cdb46480aa92dea2769a6be74936d863b83",
+      "size": 5302422,
+      "url": "https://github.com/loft-lang/loft/releases/download/v2026.7.1/loft-2026.7.1-x86_64-pc-windows-msvc.zip"
+    },
+    "x86_64-unknown-linux-musl": {
+      "sha256": "ecfca4bdffc08254deabfc777778d43db98a650b288b90a74adbc7524b0f6616",
+      "size": 5930925,
+      "url": "https://github.com/loft-lang/loft/releases/download/v2026.7.1/loft-2026.7.1-x86_64-unknown-linux-musl.zip"
+    }
+  },
+  "version": "2026.7.1"
+}

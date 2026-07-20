@@ -1334,6 +1334,7 @@ doc-check-quiet:
 # this writes.
 libcatalogue:
 	@python3 scripts/refresh-unreleased.py   # @PLN112 — origin/main `unreleased` tier (sha-cached)
+	@python3 scripts/refresh-loft-release.py # @PLN112 — loft itself (version + binary sha, tag-cached)
 	@python3 scripts/gen-library-catalogue.py --refresh-snapshot
 
 # QUALITY Tier 4 #12 — the single pre-push gate.

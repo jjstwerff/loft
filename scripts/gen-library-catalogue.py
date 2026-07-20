@@ -50,6 +50,9 @@ SNAPSHOT = REPO_ROOT / "doc" / "claude" / "registry-index-snapshot.json"
 # @PLN112 phase 2 — per-lib `origin/main` API (the `unreleased` tier), committed for
 # determinism; built by scripts/refresh-unreleased.py.
 UNRELEASED = REPO_ROOT / "doc" / "claude" / "unreleased-snapshot.json"
+# @PLN112 — loft ITSELF (version + per-target binary sha256) for the top-level overview;
+# built by scripts/refresh-loft-release.py (from loft's GitHub release until it is a registry entry).
+LOFT_RELEASE = REPO_ROOT / "doc" / "claude" / "loft-release-snapshot.json"
 
 
 def _norm_sig(sig: str) -> str:
@@ -125,8 +128,40 @@ def use_hint(version_entry: dict[str, Any]) -> str:
     return "`use {name};`"  # filled in per-library below
 
 
-def render(index: dict[str, Any], unreleased: dict[str, Any] | None = None) -> str:
+def loft_overview(loft_release: dict[str, Any]) -> list[str]:
+    """The top-level `loft (the language)` entry — version + per-target binary sha256, so the
+    catalogue is one overview of loft AND the libs. NOT per-function (that is LOFT.md/STDLIB.md)."""
+    ver = (loft_release.get("version") or "").strip()
+    if not ver:
+        return []
+    tag = loft_release.get("tag") or f"v{ver}"
+    published = (loft_release.get("published") or "")[:10]
+    lines = [
+        "## loft core (the language)",
+        "",
+        f"The core of the distribution — the loft compiler, interpreter, and bundled stdlib. "
+        f"Current release **{ver}** (`{tag}`{', ' + published if published else ''}); `loft install` / "
+        f"self-update verifies these sha256s. The per-function API is in "
+        f"[LOFT.md](LOFT.md) / [STDLIB.md](STDLIB.md), not here.",
+        "",
+    ]
+    for triple in sorted(loft_release.get("targets", {})):
+        t = loft_release["targets"][triple]
+        mb = f"{(t.get('size') or 0) / (1024 * 1024):.1f} MB"
+        sha = t.get("sha256") or "—"
+        lines.append(f"- `{triple}` — {mb} · sha256 `{sha}`")
+    lines.append(f"  · [release](https://github.com/loft-lang/loft/releases/tag/{tag})")
+    lines.append("")
+    return lines
+
+
+def render(
+    index: dict[str, Any],
+    unreleased: dict[str, Any] | None = None,
+    loft_release: dict[str, Any] | None = None,
+) -> str:
     unreleased = unreleased or {}
+    loft_release = loft_release or {}
     packages: dict[str, Any] = index.get("packages", {})
     n = len(packages)
 
@@ -140,11 +175,15 @@ def render(index: dict[str, Any], unreleased: dict[str, Any] | None = None) -> s
     lines: list[str] = []
     lines.append(HEADER)
     lines.append("")
-    lines.append("# Installable libraries (loft registry)")
+    lines.append("# State of the loft distribution")
     lines.append("")
     lines.append(
-        f"**{n} libraries are installable from the registry — check here BEFORE "
-        f"implementing functionality, so you don't reimplement existing code.**"
+        f"**What state loft is in** — the counterpart to the GitHub issues/plans (which track "
+        f"what is *open*); this is what loft *is* right now. loft ships as a **core** (the "
+        f"compiler + interpreter + stdlib, below) plus its **{n} libraries**: the libraries are "
+        f"part of the distribution, just fetched separately — on demand from the registry — for "
+        f"efficiency, rather than bundled into the binary. Check here BEFORE implementing "
+        f"functionality, so you don't reimplement existing code."
     )
     lines.append("")
     lines.append(
@@ -165,6 +204,9 @@ def render(index: dict[str, Any], unreleased: dict[str, Any] | None = None) -> s
         "[LIBRARY_BRANCHES.md](LIBRARY_BRANCHES.md). (See @PLN112.)"
     )
     lines.append("")
+
+    # loft itself (the foundation) first, then the libraries by category.
+    lines.extend(loft_overview(loft_release))
 
     for cat in sorted(by_cat):
         lines.append(f"## {cat}")
@@ -295,7 +337,12 @@ def main() -> int:
     unreleased = (
         json.loads(UNRELEASED.read_text(encoding="utf-8")) if UNRELEASED.exists() else {}
     )
-    rendered = render(index, unreleased)
+    # loft itself — version + per-target binary sha256 (committed snapshot; built by
+    # scripts/refresh-loft-release.py). Read from disk so --check stays deterministic.
+    loft_release = (
+        json.loads(LOFT_RELEASE.read_text(encoding="utf-8")) if LOFT_RELEASE.exists() else {}
+    )
+    rendered = render(index, unreleased, loft_release)
 
     if args.check:
         if not OUTPUT.exists():
