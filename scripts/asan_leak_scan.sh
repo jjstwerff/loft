@@ -35,6 +35,17 @@ for f in "$@"; do
       | head -1)
     echo "::error file=${f}::interpreter leak — ${roots} root(s); owner: ${owner:-<unknown>}"
     printf 'LEAK  %-52s roots=%s  owner=%s\n' "$f" "$roots" "${owner:-?}"
+    # LOFT_LEAK_DUMP=1 — diagnostic: emit the RAW leak report so we can read what THIS runner's
+    # symbolizer actually produced for the leaking frames (mangled? `<unknown>`? bare `+0x`?), plus
+    # whether the ir_read suppression matched. A name-based suppression can only be validated by
+    # reading the runner's real output — a local box symbolizes differently (macos-asan-leak-gate.md).
+    if [ "${LOFT_LEAK_DUMP:-}" = 1 ]; then
+      echo "::group::RAW ASan leak report (this runner's symbolizer) — ${f}"
+      printf '%s\n' "$out" | awk '/(^Direct leak|LeakSanitizer|Suppressions used|SUMMARY:)/{on=1} on{print}' | head -200
+      echo "--- does 'ir_read' appear in the raw stack? (0 ⇒ unsymbolized → suppression can't match) ---"
+      printf '%s\n' "$out" | grep -c 'ir_read' | sed 's/^/  ir_read occurrences: /'
+      echo "::endgroup::"
+    fi
   fi
 done
 echo "=== leak scan: ${leakers} leaking file(s) of ${scanned} scanned ==="
