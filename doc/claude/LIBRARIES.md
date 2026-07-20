@@ -8,7 +8,7 @@ How to use one: `loft install <name>`, then `use <name>;` in your program — or
 
 A package may appear under more than one category (it is listed under each of its categories).
 
-Read a library's API here, not from a clone (a clone can lag `origin/main`). `🟢 unreleased` = merged on `origin/main`, not yet published; `⚠ BREAKING` = an api-compat break. Local/pinned/proposed sources: `scripts/lib-overlay.py <name>` and `scripts/proposal-review.py <name> <ref>` (see @PLN112).
+Read a library's API here, not from a clone (a clone can lag `origin/main`). `🟢 unreleased` = merged on `origin/main`, not yet published; `⚠ BREAKING` = an api-compat break. Local/pinned/proposed sources: `scripts/lib-overlay.py <name>` and `scripts/proposal-review.py <name> <ref>`. In-flight (unmerged) branches per repo: [LIBRARY_BRANCHES.md](LIBRARY_BRANCHES.md). (See @PLN112.)
 
 ## asset-format
 

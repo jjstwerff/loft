@@ -1,12 +1,12 @@
-# Nightly report of UNMERGED branches across the loft-libs-* repos.
+# Nightly view of UNMERGED branches across the loft-libs-* repos.
 #
 # Branches accumulate on the lib repos because PRs land there, not on loft (whose
-# CI is 20+ min).  This surfaces what is stranded, using the squash-safe CONTENT
+# CI is 20+ min). This surfaces what is stranded, using the squash-safe CONTENT
 # check in scripts/lib-branch-audit.sh (commit ancestry is unreliable under
-# squash-merge).  INFORMATIONAL: it writes a job summary and never fails — it is a
-# daily "here is what is stranded on the libs", not a gate.  Fast: gh API + shallow
-# clones only, no compile.  The default GITHUB_TOKEN suffices (the lib repos are
-# public, so cross-repo PR/branch reads and clones need no extra scope).
+# squash-merge). Two outputs: a job SUMMARY (informational, never fails) and the
+# committed doc/claude/LIBRARY_BRANCHES.md, refreshed via an idempotent bot PR so
+# the library documentation shows in-flight branches without anyone running a
+# command. Fast: gh API + shallow clones, no compile.
 name: Lib branch report
 
 on:
@@ -15,7 +15,8 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
+  pull-requests: write
 
 jobs:
   report:
@@ -23,7 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Audit lib branches
+      - name: Audit lib branches (job summary)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -52,3 +53,33 @@ jobs:
             echo
             echo "</details>"
           } >> "$GITHUB_STEP_SUMMARY"
+      - name: Refresh the committed in-flight-branches doc
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash scripts/lib-branch-audit.sh --markdown doc/claude/LIBRARY_BRANCHES.md
+      - name: Open / update the doc PR on change
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          f=doc/claude/LIBRARY_BRANCHES.md
+          # Idempotent: the doc has no timestamp, so it changes ONLY when the unmerged-branch
+          # set changes -> no diff, no PR, no churn.
+          if git diff --quiet -- "$f"; then
+            echo "In-flight-branches doc unchanged — nothing to do."
+            exit 0
+          fi
+          git config user.name "loft-catalogue-bot"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          branch="lib-branches-refresh"
+          git checkout -B "$branch"
+          git add "$f"
+          git commit -m "chore(@PLN112): refresh in-flight library-branches doc"
+          git push -f origin "$branch"
+          if gh pr view "$branch" --json number >/dev/null 2>&1; then
+            echo "PR already open — updated by the force-push."
+          else
+            gh pr create --base main --head "$branch" \
+              --title "chore(@PLN112): refresh in-flight library-branches doc" \
+              --body "Automated refresh of \`doc/claude/LIBRARY_BRANCHES.md\` (unmerged branches across the loft-libs-* repos, squash-safe). Idempotent — this PR only exists because the in-flight branch set changed."
+            gh pr merge "$branch" --auto --squash || echo "auto-merge not enabled — PR left open for review."
+          fi
