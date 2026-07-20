@@ -61,6 +61,30 @@ began with the `2026-07` cycle) is described in
   and the real HTTP server (@PLN4). Explicitly **not** `2026-07` work. Full
   rationale + critical path: [BROADENING.md § Better PHP](BROADENING.md#better-php--the-2026-08-cycle-theme).
 
+### What forces a release — keep the list bounded
+
+*Producing* a release is cheap — CI builds every target binary automatically — but every **category of
+change that forces one** is a standing tax, so that list must stay **bounded**. An unbounded
+release-coupled list is itself a contract-1 red flag: it means more and more work can only ship on the
+monthly beat. What legitimately forces a loft release is exactly **a change to the loft binary**:
+FFI / `#native` macro changes, opcode / semantics changes (e.g. the @PLN110 `len/size` flip),
+performance fixes, and the occasional language feature. A tree-walker's behavior *is* its binary, so
+these are inherently release-coupled and the set is naturally small.
+
+**Everything else stays off the release axis** and ships on its own cadence — **libraries, the registry,
+and docs are never release-coupled.** Coupling them would balloon the release-tied list and drag all
+work to the monthly beat. The mechanism that keeps *libraries* off the axis is the resolver
+dependency-gate (@PLN113 arc D): a library declares the loft version / contract it needs, the resolver
+matches it, so a library update publishes independently and an older binary falls back — no coordinated
+release. A binary-baked change libraries must adapt to (the flip) creates a **one-time** "libs need this
+release to exist" dependency; after that release the libraries decouple again. Keep such couplings
+one-time, never standing.
+
+**Cadence preference: fewer releases, the monthly rhythm** — for people who want the latest performance
+fixes and the occasional feature (not planned to be many, but not ruled out). Not a proliferation of
+point releases; a point release off the monthly beat is for a genuine binary fix that cannot wait, not
+a routine tool.
+
 ### Closing plans when the release merges
 
 Plans live in [`loft-lang/plans`](https://github.com/loft-lang/plans); GitHub's
