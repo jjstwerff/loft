@@ -119,7 +119,7 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn mouse_button_just_pressed(self: const InputState, button: integer) -> boolean`
     - `pub fn mouse_button_just_released(self: const InputState, button: integer) -> boolean`
     - `pub fn mouse_wheel(self: const InputState) -> integer`
-- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;` · origin/main: +1 unreleased
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;`
   · loft install time · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
   · public API:
     - `pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer`
@@ -201,7 +201,6 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn OpNe(self: Duration, other: Duration) -> boolean`
     - `pub fn to_text(self: DateTime, spec: text) -> text`
     - `pub fn to_text(self: Duration, spec: text) -> text`
-    - `pub fn to_text(self: Duration, _spec: text) -> text`  🟢 unreleased (origin/main, not yet published)
 
 ## geometry
 
@@ -444,7 +443,7 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn render_frame(self: Renderer, sc: const scene::Scene,`
     - `pub fn render_loop(self: Renderer, sc: const scene::Scene, cam: const scene::Camera)`
     - `pub fn destroy(self: Renderer)`
-- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;` · origin/main: +6 unreleased
+- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;` · origin/main: +6 unreleased, ⚠ 6 breaking
   · loft install gridmesh · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
   · public API:
     - `pub struct CellRef`
@@ -458,17 +457,17 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn nbr_count_idx(cidx: hash<CellRef[ck]>, cx: integer, cy: integer) -> integer`
     - `pub struct SegMesh`
     - `pub fn seg_mesh_new() -> SegMesh`
-    - `pub fn emit_segment(m: &SegMesh, kind: integer,`
+    - `pub fn emit_segment(m: &SegMesh, kind: integer,`  ⚠ BREAKING (removed or changed on origin/main vs published)
     - `pub fn seg_len(m: SegMesh) -> integer`
-    - `pub fn seg_mesh_append(dst: &SegMesh, src: SegMesh)`
+    - `pub fn seg_mesh_append(dst: &SegMesh, src: SegMesh)`  ⚠ BREAKING (removed or changed on origin/main vs published)
     - `pub struct ChunkKey`
     - `pub fn chunk_of(x: integer, y: integer, shift: integer) -> ChunkKey`
     - `pub struct ChunkField`
     - `pub fn field_new(layout: integer, xs: vector<integer>, ys: vector<integer>,`
-    - `pub fn field_add_cell(f: &ChunkField, x: integer, y: integer)`
-    - `pub fn field_mark_dirty(f: &ChunkField, x: integer, y: integer)`
-    - `pub fn field_remove_cell(f: &ChunkField, x: integer, y: integer)`
-    - `pub fn clear_dirty(f: &ChunkField)`
+    - `pub fn field_add_cell(f: &ChunkField, x: integer, y: integer)`  ⚠ BREAKING (removed or changed on origin/main vs published)
+    - `pub fn field_mark_dirty(f: &ChunkField, x: integer, y: integer)`  ⚠ BREAKING (removed or changed on origin/main vs published)
+    - `pub fn field_remove_cell(f: &ChunkField, x: integer, y: integer)`  ⚠ BREAKING (removed or changed on origin/main vs published)
+    - `pub fn clear_dirty(f: &ChunkField)`  ⚠ BREAKING (removed or changed on origin/main vs published)
     - `pub fn dirty_count(f: ChunkField) -> integer`
     - `pub fn chunk_is_dirty(f: ChunkField, x: integer, y: integer) -> boolean`
     - `pub struct ChunkInput`
@@ -700,7 +699,7 @@ A package may appear under more than one category (it is listed under each of it
 
 ## time
 
-- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;` · origin/main: +1 unreleased
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;`
   · loft install time · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
   · public API:
     - `pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer`
@@ -782,7 +781,6 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn OpNe(self: Duration, other: Duration) -> boolean`
     - `pub fn to_text(self: DateTime, spec: text) -> text`
     - `pub fn to_text(self: Duration, spec: text) -> text`
-    - `pub fn to_text(self: Duration, _spec: text) -> text`  🟢 unreleased (origin/main, not yet published)
 
 ## uncategorised
 
@@ -803,7 +801,7 @@ A package may appear under more than one category (it is listed under each of it
 
 ## world
 
-- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;` · origin/main: +6 unreleased
+- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;` · origin/main: +6 unreleased, ⚠ 6 breaking
   · loft install gridmesh · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
   · public API:
     - `pub struct CellRef`
@@ -817,17 +815,17 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn nbr_count_idx(cidx: hash<CellRef[ck]>, cx: integer, cy: integer) -> integer`
     - `pub struct SegMesh`
     - `pub fn seg_mesh_new() -> SegMesh`
-    - `pub fn emit_segment(m: &SegMesh, kind: integer,`
+    - `pub fn emit_segment(m: &SegMesh, kind: integer,`  ⚠ BREAKING (removed or changed on origin/main vs published)
     - `pub fn seg_len(m: SegMesh) -> integer`
-    - `pub fn seg_mesh_append(dst: &SegMesh, src: SegMesh)`
+    - `pub fn seg_mesh_append(dst: &SegMesh, src: SegMesh)`  ⚠ BREAKING (removed or changed on origin/main vs published)
     - `pub struct ChunkKey`
     - `pub fn chunk_of(x: integer, y: integer, shift: integer) -> ChunkKey`
     - `pub struct ChunkField`
     - `pub fn field_new(layout: integer, xs: vector<integer>, ys: vector<integer>,`
-    - `pub fn field_add_cell(f: &ChunkField, x: integer, y: integer)`
-    - `pub fn field_mark_dirty(f: &ChunkField, x: integer, y: integer)`
-    - `pub fn field_remove_cell(f: &ChunkField, x: integer, y: integer)`
-    - `pub fn clear_dirty(f: &ChunkField)`
+    - `pub fn field_add_cell(f: &ChunkField, x: integer, y: integer)`  ⚠ BREAKING (removed or changed on origin/main vs published)
+    - `pub fn field_mark_dirty(f: &ChunkField, x: integer, y: integer)`  ⚠ BREAKING (removed or changed on origin/main vs published)
+    - `pub fn field_remove_cell(f: &ChunkField, x: integer, y: integer)`  ⚠ BREAKING (removed or changed on origin/main vs published)
+    - `pub fn clear_dirty(f: &ChunkField)`  ⚠ BREAKING (removed or changed on origin/main vs published)
     - `pub fn dirty_count(f: ChunkField) -> integer`
     - `pub fn chunk_is_dirty(f: ChunkField, x: integer, y: integer) -> boolean`
     - `pub struct ChunkInput`

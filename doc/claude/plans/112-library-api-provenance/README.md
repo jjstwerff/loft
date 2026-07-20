@@ -14,7 +14,8 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | Subject | libs |
 | Phase 1 (published enrichment) | **DONE** — version + API sigs + triggers in `LIBRARIES.md` (published-only plain list), regenerated from live, snapshot-`--check` green |
 | Phase 2 (`unreleased` origin/main tier) | **DONE** — `scripts/refresh-unreleased.py` builds the sha-cached `unreleased-snapshot.json`; the catalogue tags `🟢 unreleased` additions (regex `search`/`split_on`, arguments +11, gridmesh +6, time +1). Found a **registry data gap**: 13 of 22 libs record an empty `api` field, so their published API can't be diffed — handled honestly (origin/main shown plain + a note), and filed as follow-up (populate the registry `api` on publish). |
-| Phases 3–7 | designed, not built |
+| Phase 5 (api-compat `⚠ BREAKING` flags) | **DONE** — published↔unreleased via the `api_diff` "identical-or-added" rule, compared by **type signature** (param-name changes like `spec`→`_spec` are NOT false breaks; a folded `#superseded` rename is additive, not a break). gridmesh's origin/main `&SegMesh`→`SegMesh` on 6 fns is correctly flagged; regex stays additive. |
+| Phases 3, 4, 6, 7 | designed, not built |
 
 Motivated by a real failure: an agent read stale local clones + the stale installed copy
 and concluded a merged regex rename (`find`→`search`, PR loft-libs-core#23, `d5e4195` on
