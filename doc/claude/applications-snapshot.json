@@ -1,6 +1,16 @@
 {
   "applications": [
     {
+      "demonstrates": "a complete browser game in loft — loft→WASM, a canvas game loop, input, and power-ups",
+      "description": "A Breakout-style brick-breaker — a self-contained, double-click-to-play browser game demo (tools/brick-buster/).",
+      "homepage": "https://loft-lang.org/loft/brick-buster.html",
+      "name": "Brick Buster",
+      "origin": "first-party",
+      "pushed": "",
+      "repo": "https://github.com/loft-lang/loft/tree/main/tools/brick-buster",
+      "url": "https://github.com/loft-lang/loft/tree/main/tools/brick-buster"
+    },
+    {
       "demonstrates": "a hex roguelike with a renderer-agnostic kernel — the first cross-game consumer of the hex_* world libraries",
       "description": "A clean-room hex roguelike written in the loft language — 2D now, with a renderer-agnostic kernel built to drive a 3D browser version later.",
       "homepage": "",
@@ -11,6 +21,16 @@
       "url": "https://github.com/jjstwerff/crawler"
     },
     {
+      "demonstrates": "generative art in the browser — loft→WASM, an interactive editor, real-time GL rendering",
+      "description": "The audience 'crystal' generative-art editor — a self-contained browser demo (tools/audience-demo/, built on lib/audience_crystal).",
+      "homepage": "https://loft-lang.org/loft/crystal-editor.html",
+      "name": "Crystal Editor",
+      "origin": "first-party",
+      "pushed": "",
+      "repo": "https://github.com/loft-lang/loft/tree/main/tools/audience-demo",
+      "url": "https://github.com/loft-lang/loft/tree/main/tools/audience-demo"
+    },
+    {
       "demonstrates": "a 3D free-build / tower-defence game on the lavition engine",
       "description": "Sci-fi free-build / tower-defence with scramble-and-salvage runs, built on loft",
       "homepage": "",
@@ -19,6 +39,16 @@
       "pushed": "2026-05-27",
       "repo": "jjstwerff/dryopea",
       "url": "https://github.com/jjstwerff/dryopea"
+    },
+    {
+      "demonstrates": "the graphics / GL API by example — a browser gallery of short loft programs (2D canvas, 3D, shaders) that run live",
+      "description": "The gallery — one page collecting the loft GL/graphics demos, each a short program that runs live in the browser via WASM. A single entry point to the whole demo collection.",
+      "homepage": "https://loft-lang.org/loft/gallery.html",
+      "name": "GL demo gallery",
+      "origin": "first-party",
+      "pushed": "",
+      "repo": "https://github.com/loft-lang/loft/blob/main/doc/gallery-examples.js",
+      "url": "https://github.com/loft-lang/loft/blob/main/doc/gallery-examples.js"
     },
     {
       "demonstrates": "a full RPG — game systems, world state, rendering",

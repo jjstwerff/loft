@@ -181,8 +181,8 @@ def applications_section(applications: dict[str, Any]) -> list[str]:
         "## Applications (built with loft — examples, not part of the distribution)",
         "",
         "Real apps built with loft — reference examples of HOW to build such things, not "
-        "installable components. The set is curated; each app's info is fetched live. Community "
-        "showcases may join over time (see @PLN112).",
+        "installable components. The set is curated; each external app's info is fetched live. "
+        "Community showcases may join over time (see @PLN112).",
         "",
     ]
     if len(present) <= 1:

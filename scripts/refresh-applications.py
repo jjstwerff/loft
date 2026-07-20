@@ -24,15 +24,52 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[1]
 OUT = REPO / "doc" / "claude" / "applications-snapshot.json"
 
-# Curated showcase set: (owner/repo, origin, what it demonstrates). Editorial — a good
-# example of HOW to build something with loft, not every experiment. Add community apps
-# here with origin="community".
-APPS: list[tuple[str, str, str]] = [
-    ("jjstwerff/moros", "first-party", "a full RPG — game systems, world state, rendering"),
-    ("jjstwerff/dryopea", "first-party", "a 3D free-build / tower-defence game on the lavition engine"),
-    ("jjstwerff/crawler", "first-party", "a hex roguelike with a renderer-agnostic kernel — the first cross-game consumer of the hex_* world libraries"),
-    ("jjstwerff/routing", "first-party", "a phone-first WASM app — loft→WASM, interactive canvas, GPX export"),
-    ("jjstwerff/ssh_home", "first-party", "a native terminal app — SSH + PTY, phone-width tmux, no browser"),
+# Curated showcase set. Each entry is either FETCHED (has "fetch": owner/repo — metadata
+# pulled live from GitHub) or EXPLICIT (an in-repo demo with no standalone repo — metadata
+# given here). Editorial: a good example of HOW to build something with loft, not every
+# experiment. `origin`: first-party (ours) / community (accepted `application_showcase`).
+APPS: list[dict] = [
+    {"fetch": "jjstwerff/moros", "origin": "first-party", "demonstrates": "a full RPG — game systems, world state, rendering"},
+    {"fetch": "jjstwerff/dryopea", "origin": "first-party", "demonstrates": "a 3D free-build / tower-defence game on the lavition engine"},
+    {"fetch": "jjstwerff/crawler", "origin": "first-party", "demonstrates": "a hex roguelike with a renderer-agnostic kernel — the first cross-game consumer of the hex_* world libraries"},
+    {"fetch": "jjstwerff/routing", "origin": "first-party", "demonstrates": "a phone-first WASM app — loft→WASM, interactive canvas, GPX export"},
+    {"fetch": "jjstwerff/ssh_home", "origin": "first-party", "demonstrates": "a native terminal app — SSH + PTY, phone-width tmux, no browser"},
+    # In-repo demos (no standalone repo) — explicit metadata + a live GitHub Pages demo.
+    {
+        "name": "Crystal Editor",
+        "origin": "first-party",
+        "demonstrates": "generative art in the browser — loft→WASM, an interactive editor, real-time GL rendering",
+        "description": "The audience 'crystal' generative-art editor — a self-contained browser demo (tools/audience-demo/, built on lib/audience_crystal).",
+        "url": "https://github.com/loft-lang/loft/tree/main/tools/audience-demo",
+        "homepage": "https://loft-lang.org/loft/crystal-editor.html",
+    },
+    {
+        "name": "Brick Buster",
+        "origin": "first-party",
+        "demonstrates": "a complete browser game in loft — loft→WASM, a canvas game loop, input, and power-ups",
+        "description": "A Breakout-style brick-breaker — a self-contained, double-click-to-play browser game demo (tools/brick-buster/).",
+        "url": "https://github.com/loft-lang/loft/tree/main/tools/brick-buster",
+        "homepage": "https://loft-lang.org/loft/brick-buster.html",
+    },
+    {
+        "name": "GL demo gallery",
+        "origin": "first-party",
+        "demonstrates": "the graphics / GL API by example — a browser gallery of short loft programs (2D canvas, 3D, shaders) that run live",
+        "description": "The gallery — one page collecting the loft GL/graphics demos, each a short program that runs live in the browser via WASM. A single entry point to the whole demo collection.",
+        "url": "https://github.com/loft-lang/loft/blob/main/doc/gallery-examples.js",
+        "homepage": "https://loft-lang.org/loft/gallery.html",
+    },
+]
+
+# Documented but NOT rendered — tracked here until they are public / ready to showcase.
+# (Kept in-project per the owner's ask: "a bit of work to go to be made public".)
+PENDING: list[tuple[str, str]] = [
+    (
+        "jjstwerff/zero-trust-shared-files",
+        "zero-trust shared-file system — multi-server federation, signed-plugin collaborative "
+        "editing, end-to-end crypto (crypto/cbor/wasm). Private until further along; then flip "
+        "to a first-party showcase.",
+    ),
 ]
 
 
@@ -49,25 +86,38 @@ def gh_view(repo: str) -> dict:
 
 def main() -> int:
     apps = []
-    for repo, origin, demonstrates in APPS:
-        m = gh_view(repo)
-        if not m:
-            sys.stderr.write(f"refresh-applications: could not read {repo} (gh) — skipped\n")
-            continue
-        apps.append({
-            "repo": repo,
-            "name": m.get("name") or repo.split("/")[-1],
-            "origin": origin,
-            "demonstrates": demonstrates,
-            "description": (m.get("description") or "").strip(),
-            "url": m.get("url") or f"https://github.com/{repo}",
-            "homepage": (m.get("homepageUrl") or "").strip(),
-            "pushed": (m.get("pushedAt") or "")[:10],
-        })
+    for e in APPS:
+        if "fetch" in e:  # external repo — pull metadata live
+            repo = e["fetch"]
+            m = gh_view(repo)
+            if not m:
+                sys.stderr.write(f"refresh-applications: could not read {repo} (gh) — skipped\n")
+                continue
+            apps.append({
+                "repo": repo,
+                "name": m.get("name") or repo.split("/")[-1],
+                "origin": e["origin"],
+                "demonstrates": e["demonstrates"],
+                "description": (m.get("description") or "").strip(),
+                "url": m.get("url") or f"https://github.com/{repo}",
+                "homepage": (m.get("homepageUrl") or "").strip(),
+                "pushed": (m.get("pushedAt") or "")[:10],
+            })
+        else:  # in-repo demo — explicit metadata, no fetch
+            apps.append({
+                "repo": e.get("url", ""),
+                "name": e["name"],
+                "origin": e["origin"],
+                "demonstrates": e["demonstrates"],
+                "description": (e.get("description") or "").strip(),
+                "url": e.get("url", ""),
+                "homepage": (e.get("homepage") or "").strip(),
+                "pushed": "",
+            })
     if not apps:
         sys.stderr.write("refresh-applications: no applications resolved\n")
         return 1
-    apps.sort(key=lambda a: (a["origin"] != "first-party", a["repo"]))  # first-party first, then by repo
+    apps.sort(key=lambda a: (a["origin"] != "first-party", a["name"].lower()))  # first-party first, then by name
     OUT.write_text(
         json.dumps({"applications": apps}, indent=2, sort_keys=True, ensure_ascii=False) + "\n",
         encoding="utf-8",
