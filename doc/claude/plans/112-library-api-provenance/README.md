@@ -167,12 +167,20 @@ see + evaluate it.** This plan adds that intake as the `proposed` source's front
   not the broken one; it is the one that WORKS for many common use cases but does not serve
   the project's ENVISIONED one. A simple MariaDB connector (`~/workspace/loft-lib-mariadb`,
   the intake example) — one connection, simple SQL, a scalar `-> text` result, no pool — is
-  fully functional and covers a lot of CRUD/scripting, yet it does NOT fit loft's envisioned
-  database-support design — **the store IS the database** (persistence and in-memory state
-  share one model: [DATABASE.md](../../DATABASE.md), [BROADENING.md § store-based heap as a
-  language-level database](../../BROADENING.md)). A *fitting* connector materialises rows as
-  loft structs/vectors IN THE STORE, at multi-record scale, backing the durable store — not
-  a text-scalar external SQL client. The view
+  fully functional and covers a lot of CRUD/scripting, yet it is the misfit BY CONSTRUCTION:
+  the envisioned database-client design is **@PLN23** — `mariadb` + `postgres` over a uniform
+  `sql` contract (prepared statements, transactions, bulk-edits), binding the C library
+  DIRECTLY (libmariadb via the `#c` C-ABI, @PLN24) with **no Rust crate, no rustc**. The
+  example was built with the Rust `mysql` crate on purpose — exactly what @PLN23 forbids —
+  and it is scalar/simple where @PLN23 wants a uniform, prepared, transactional, bulk API.
+  (The deeper data-model fit — rows landing as loft structs/vectors IN the durable store —
+  is [DATABASE.md](../../DATABASE.md) / [BROADENING.md](../../BROADENING.md): the store IS
+  the database.) Functional for many; precisely the wrong shape for the envisioned use.
+  **And the decisive part: @PLN23 is not yet built, yet it is ALREADY the better foundation —
+  because it fits.** A reviewer weighs a working proposal not against *nothing* but against
+  the envisioned design, even an incomplete one; adopting the misfit would DIVERT from it (a
+  Rust-crate/rustc dependency, the wrong API shape) rather than advance it. Incomplete-but-
+  fitting beats working-but-misfit — which the view exists to make visible. The view
   surfaces the API, the api-compat verdict, and the divergence — but **fit-to-direction is
   human judgment the tool SUPPORTS (full provenance, side-by-side, the proposer's own
   use-case framing), never replaces.** This is *why* the view never auto-adopts, and why the
@@ -365,8 +373,11 @@ cache — valid until some lib's published version or `origin/main` sub-path sha
 - [COMPATIBILITY.md § Folding](../../COMPATIBILITY.md) + @PLN102 arc C — the `#superseded`
   steering channel (`LOFT_NO_STEER`) this plan integrates into the library docs (one
   channel, two faces: the lint at build time, the catalogue at read time).
-- **The envisioned database-support design** — what a DB-connector proposal is judged for
-  fit against: [DATABASE.md](../../DATABASE.md) (the store IS the database — Store/DbRef +
-  @PLN43 durability + `store_persist_bind`) and [BROADENING.md](../../BROADENING.md)
-  ("store + language co-designed embedded-DB"). `~/workspace/loft-lib-mariadb` is the
-  external-scalar-SQL MISFIT that motivated the functional≠fitting caution above.
+- **The envisioned database-client design** — what a DB-connector proposal is judged for fit
+  against: **@PLN23** (`mariadb` + `postgres` over a uniform `sql` contract — prepared /
+  transactions / bulk — binding the C library directly via the `#c` C-ABI, gated on
+  **@PLN24**; no Rust crate / no rustc; `status:future`, not yet built but already the better
+  foundation because it fits). Deeper data-model fit: the store IS the database —
+  [DATABASE.md](../../DATABASE.md) (Store/DbRef + @PLN43 durability + `store_persist_bind`),
+  [BROADENING.md](../../BROADENING.md). `~/workspace/loft-lib-mariadb` is the
+  Rust-crate/scalar MISFIT that motivated the functional≠fitting caution above.
