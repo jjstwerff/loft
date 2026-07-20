@@ -1367,6 +1367,7 @@ doc-check-quiet:
 # --check mode against the snapshot and fails on drift, so commit both files
 # this writes.
 libcatalogue:
+	@python3 scripts/refresh-unreleased.py   # @PLN112 — origin/main `unreleased` tier (sha-cached)
 	@python3 scripts/gen-library-catalogue.py --refresh-snapshot
 
 # QUALITY Tier 4 #12 — the single pre-push gate.

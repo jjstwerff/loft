@@ -10,12 +10,15 @@ A package may appear under more than one category (it is listed under each of it
 
 ## asset-format
 
-- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).  · v0.1.2 · `use glb;`
+- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).  · v0.1.2 · `use glb;` · API from origin/main (registry `api` not recorded)
   · loft install glb · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/glb)
+  · public API:
+    - `pub fn save_glb(m: Mesh, path: text)`
+    - `pub fn save_scene_glb(sc: Scene, path: text)`
 
 ## cli
 
-- **arguments** — CLI argument parsing — positional args + flags + auto-generated --help.  · v0.1.3 · `use arguments;`
+- **arguments** — CLI argument parsing — positional args + flags + auto-generated --help.  · v0.1.3 · `use arguments;` · origin/main: +11 unreleased
   · loft install arguments · [source](https://github.com/loft-lang/loft-libs-core/tree/main/arguments)
   · public API:
     - `pub fn create(name: text, version: text, description: text) -> Args`
@@ -28,6 +31,17 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn ok(self: Args) -> boolean`
     - `pub fn error_msg(self: Args) -> text`
     - `pub fn help(self: Args) -> text`
+    - `pub fn optional(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn set_usage(self: Args, synopsis: text)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn set_bug_address(self: Args, address: text)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn set_epilog(self: Args, epilog: text)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn enable_help(self: Args)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn get_or(self: Args, name: text, fallback: text) -> text`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn get_int(self: Args, name: text) -> integer?`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn wants_help(self: Args) -> boolean`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn wants_version(self: Args) -> boolean`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn version_text(self: Args) -> text`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn try_help(self: Args) -> text`  🟢 unreleased (origin/main, not yet published)
 
 ## crypto
 
@@ -72,11 +86,40 @@ A package may appear under more than one category (it is listed under each of it
 
 ## game
 
-- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.  · v0.1.2 · `use game_protocol;`
+- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.  · v0.1.2 · `use game_protocol;` · API from origin/main (registry `api` not recorded)
   · loft install game_protocol · [source](https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol)
-- **input** — Game input for loft — action/axis bindings resolved to per-tick input state.  · v0.1.0 · `use input;`
+  · public API:
+    - `pub enum MsgType`
+    - `pub struct WsMessage`
+    - `pub struct GameEnvelope`
+    - `pub fn msg_ping(seq: integer) -> GameEnvelope`
+    - `pub fn msg_pong(seq: integer) -> GameEnvelope`
+    - `pub fn msg_chat(sender: text, content: text) -> GameEnvelope`
+    - `pub fn msg_input(sender: text, input_data: text) -> GameEnvelope`
+    - `pub fn msg_state(state_data: text) -> GameEnvelope`
+    - `pub fn msg_error(error_text: text) -> GameEnvelope`
+- **input** — Game input for loft — action/axis bindings resolved to per-tick input state.  · v0.1.0 · `use input;` · API from origin/main (registry `api` not recorded)
   · loft install input · [source](https://github.com/loft-lang/loft-libs-game/tree/main/input)
-- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;`
+  · public API:
+    - `pub struct ActionBinding`
+    - `pub struct AxisBinding`
+    - `pub struct Bindings`
+    - `pub struct InputState`
+    - `pub fn input_new(b: Bindings) -> InputState`
+    - `pub fn input_set_bindings(self: &InputState, b: Bindings)`
+    - `pub fn input_tick(self: &InputState)`
+    - `pub fn input_tick_from_state(`
+    - `pub fn is_action_pressed(self: const InputState, action: text) -> boolean`
+    - `pub fn is_action_just_pressed(self: const InputState, action: text) -> boolean`
+    - `pub fn is_action_just_released(self: const InputState, action: text) -> boolean`
+    - `pub fn get_axis(self: const InputState, axis: text) -> float`
+    - `pub fn mouse_x(self: const InputState) -> float`
+    - `pub fn mouse_y(self: const InputState) -> float`
+    - `pub fn mouse_button_down(self: const InputState, button: integer) -> boolean`
+    - `pub fn mouse_button_just_pressed(self: const InputState, button: integer) -> boolean`
+    - `pub fn mouse_button_just_released(self: const InputState, button: integer) -> boolean`
+    - `pub fn mouse_wheel(self: const InputState) -> integer`
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;` · origin/main: +1 unreleased
   · loft install time · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
   · public API:
     - `pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer`
@@ -158,13 +201,94 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn OpNe(self: Duration, other: Duration) -> boolean`
     - `pub fn to_text(self: DateTime, spec: text) -> text`
     - `pub fn to_text(self: Duration, spec: text) -> text`
+    - `pub fn to_text(self: Duration, _spec: text) -> text`  🟢 unreleased (origin/main, not yet published)
 
 ## geometry
 
-- **hex_grid** — Hex-grid geometry — axial/pixel conversion, neighbours, distance, and corner offsets.  · v0.1.0 · `use hex_grid;`
+- **hex_grid** — Hex-grid geometry — axial/pixel conversion, neighbours, distance, and corner offsets.  · v0.1.0 · `use hex_grid;` · API from origin/main (registry `api` not recorded)
   · loft install hex_grid · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_grid)
-- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).  · v0.1.1 · `use mesh3d;`
+  · public API:
+    - `pub fn hex_to_px(q: integer, r: integer) -> (float, float)`
+    - `pub fn hex_round(qf: float, rf: float) -> (integer, integer)`
+    - `pub fn px_to_hex(x: float, y: float) -> (integer, integer)`
+    - `pub fn hex_neighbor(q: integer, r: integer, dir: integer) -> (integer, integer)`
+    - `pub fn hex_distance(q1: integer, r1: integer, q2: integer, r2: integer) -> integer`
+    - `pub fn hex_neighbor_dir(q1: integer, r1: integer, q2: integer, r2: integer) -> integer`
+    - `pub fn hex_corner_offset(i: integer) -> (float, float)`
+    - `pub fn hex_corner_px(q: integer, r: integer, i: integer) -> (float, float)`
+    - `pub fn hex_edge_corners(dir: integer) -> (integer, integer)`
+    - `pub fn hex_canon_edge(q: integer, r: integer, dir: integer) -> (integer, integer, integer)`
+    - `pub fn cell_to_px(q: integer, r: integer) -> (float, float)`
+    - `pub fn px_to_cell(x: float, y: float) -> (integer, integer)`
+    - `pub fn cell_neighbor(q: integer, r: integer, dir: integer) -> (integer, integer)`
+    - `pub fn cell_neighbor_dir(q1: integer, r1: integer, q2: integer, r2: integer) -> integer`
+    - `pub fn cell_distance(q1: integer, r1: integer, q2: integer, r2: integer) -> integer`
+    - `pub fn cell_corner_offset(i: integer) -> (float, float)`
+    - `pub fn cell_corner_px(q: integer, r: integer, i: integer) -> (float, float)`
+    - `pub fn cell_edge_corners(dir: integer) -> (integer, integer)`
+    - `pub fn cell_canon_edge(q: integer, r: integer, dir: integer) -> (integer, integer, integer)`
+- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).  · v0.1.1 · `use mesh3d;` · API from origin/main (registry `api` not recorded)
   · loft install mesh3d · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/mesh3d)
+  · public API:
+    - `pub struct Vec2`
+    - `pub fn vec2(vx: float, vy: float) -> Vec2`
+    - `pub struct Vec3`
+    - `pub fn vec3(vx: float, vy: float, vz: float) -> Vec3`
+    - `pub struct Vec4`
+    - `pub fn vec4(vx: float, vy: float, vz: float, vw: float) -> Vec4`
+    - `pub fn add3(va: const Vec3, vb: const Vec3) -> Vec3`
+    - `pub fn sub3(va: const Vec3, vb: const Vec3) -> Vec3`
+    - `pub fn scale3(sv: const Vec3, ss: float) -> Vec3`
+    - `pub fn dot3(da: const Vec3, db: const Vec3) -> float`
+    - `pub fn cross(ca: const Vec3, cb: const Vec3) -> Vec3`
+    - `pub fn length3(lv: const Vec3) -> float`
+    - `pub fn normalize3(nv: const Vec3) -> Vec3`
+    - `pub struct Mat4`
+    - `pub fn mat4_identity() -> Mat4`
+    - `pub fn mat4_translate(tx: float, ty: float, tz: float) -> Mat4`
+    - `pub fn mat4_scale(sx: float, sy: float, sz: float) -> Mat4`
+    - `pub fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4`
+    - `pub fn mat4_transform(tm: const Mat4, tv: const Vec3) -> Vec3`
+    - `pub fn mat4_perspective(fov_y: float, aspect: float, near: float, far: float) -> Mat4`
+    - `pub fn mat4_look_at(eye: const Vec3, target: const Vec3, up: const Vec3) -> Mat4`
+    - `pub fn mat4_rotate_y(angle: float) -> Mat4`
+    - `pub fn mat4_rotate_x(angle: float) -> Mat4`
+    - `pub fn mat4_ortho(left: float, right: float, bottom: float, top: float, near: float, far: float) -> Mat4`
+    - `pub fn mat4_trs(tx: float, ty: float, tz: float, ry: float, sx: float, sy: float, sz: float) -> Mat4`
+    - `pub struct Vertex`
+    - `pub fn vertex(vp: math::Vec3, vn: math::Vec3, vuv: math::Vec2) -> Vertex`
+    - `pub struct Triangle`
+    - `pub struct Mesh`
+    - `pub fn mesh(mn: text) -> Mesh`
+    - `pub fn add_vertex(self: Mesh, av: Vertex) -> integer`
+    - `pub fn add_triangle(self: Mesh, ti0: integer, ti1: integer, ti2: integer)`
+    - `pub fn add_quad(self: Mesh, qi0: integer, qi1: integer, qi2: integer, qi3: integer)`
+    - `pub fn cube() -> Mesh`
+    - `pub fn plane(pn: text, pw: float, pd: float) -> Mesh`
+    - `pub fn sphere(sn: text, sr: float, ss: integer, st: integer) -> Mesh`
+    - `pub fn mesh_to_floats_uv(mu: const Mesh) -> vector<single>`
+    - `pub fn mesh_to_floats(mf: const Mesh) -> vector<single>`
+    - `pub struct Material`
+    - `pub fn material(mname: text) -> Material`
+    - `pub fn material_color(mname: text, mr: float, mg: float, mb: float) -> Material`
+    - `pub fn material_metal(mname: text, mr: float, mg: float, mb: float, mrough: float) -> Material`
+    - `pub fn set_color(self: Material, scr: float, scg: float, scb: float)`
+    - `pub struct Node`
+    - `pub fn node(nn: text, nm: integer, nmat: integer) -> Node`
+    - `pub fn node_at(nn: text, nm: integer, nmat: integer, xf: math::Mat4) -> Node`
+    - `pub struct Camera`
+    - `pub fn camera(cname: text) -> Camera`
+    - `pub enum LightType`
+    - `pub struct Light`
+    - `pub fn directional_light(ln: text, lr: float, lg: float, lb: float, li: float, ldir: math::Vec3) -> Light`
+    - `pub fn point_light(ln: text, lr: float, lg: float, lb: float, li: float, lpos: math::Vec3) -> Light`
+    - `pub struct Scene`
+    - `pub fn scene(sn: text) -> Scene`
+    - `pub fn add_mesh(self: Scene, sm: mesh::Mesh) -> integer`
+    - `pub fn add_material(self: Scene, smat: Material) -> integer`
+    - `pub fn add_node(self: Scene, sn: Node)`
+    - `pub fn add_camera(self: Scene, sc: Camera)`
+    - `pub fn add_light(self: Scene, sl: Light) -> integer`
 - **shapes** — 2D geometry primitives — Rect, Circle, overlap tests, clamp.  Pure-loft, no other deps.  · v0.3.0 · `use shapes;`
   · loft install shapes · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/shapes)
   · public API:
@@ -181,11 +305,146 @@ A package may appear under more than one category (it is listed under each of it
 
 ## graphics
 
-- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).  · v0.1.2 · `use glb;`
+- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).  · v0.1.2 · `use glb;` · API from origin/main (registry `api` not recorded)
   · loft install glb · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/glb)
-- **graphics** — 2D canvas + 3D rendering for loft (Canvas pixel surface, Mesh / Scene / glTF, OpenGL bindings).  · v0.4.3 · `use graphics;`
+  · public API:
+    - `pub fn save_glb(m: Mesh, path: text)`
+    - `pub fn save_scene_glb(sc: Scene, path: text)`
+- **graphics** — 2D canvas + 3D rendering for loft (Canvas pixel surface, Mesh / Scene / glTF, OpenGL bindings).  · v0.4.3 · `use graphics;` · API from origin/main (registry `api` not recorded)
   · loft install graphics · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics)
-- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;`
+  · public API:
+    - `pub fn rgba(cr: integer, cg: integer, cb: integer, ca: integer) -> integer`
+    - `pub fn rgb(cr: integer, cg: integer, cb: integer) -> integer`
+    - `pub fn color_r(color: integer) -> integer`
+    - `pub fn color_g(color: integer) -> integer`
+    - `pub fn color_b(color: integer) -> integer`
+    - `pub fn color_a(color: integer) -> integer`
+    - `pub struct Canvas`
+    - `pub fn canvas(cw: integer, ch: integer, fill_color: integer) -> Canvas`
+    - `pub fn get_pixel(self: const Canvas, gx: integer, gy: integer) -> integer`
+    - `pub fn set_pixel(self: Canvas, sx: integer, sy: integer, color: integer)`
+    - `pub fn clear(self: Canvas, color: integer)`
+    - `pub fn blend(dst: integer, src: integer) -> integer`
+    - `pub fn blend_pixel(self: Canvas, bx: integer, by: integer, color: integer)`
+    - `pub fn fill_rect(self: Canvas, rx: integer, ry: integer, rw: integer, rh: integer, color: integer)`
+    - `pub fn hline(self: Canvas, hx0: integer, hx1: integer, hy: integer, color: integer)`
+    - `pub fn vline(self: Canvas, vx: integer, vy0: integer, vy1: integer, color: integer)`
+    - `pub fn draw_rect(self: Canvas, drx: integer, dry: integer, drw: integer, drh: integer, color: integer)`
+    - `pub fn draw_line(self: Canvas, lx0: integer, ly0: integer, lx1: integer, ly1: integer, color: integer)`
+    - `pub fn draw_circle(self: Canvas, ccx: integer, ccy: integer, radius: integer, color: integer)`
+    - `pub fn fill_circle(self: Canvas, fcx: integer, fcy: integer, radius: integer, color: integer)`
+    - `pub fn fill_ellipse(self: Canvas, fex: integer, fey: integer, ferx: integer, fery: integer, color: integer)`
+    - `pub fn draw_ellipse(self: Canvas, ecx: integer, ecy: integer, erx: integer, ery: integer, color: integer)`
+    - `pub fn draw_bezier(self: Canvas, bx0: integer, by0: integer, bx1: integer, by1: integer, bx2: integer, by2: integer, bx3: integer, by3: integer, color: integer)`
+    - `pub fn draw_aa_line(self: Canvas, ax0: integer, ay0: integer, ax1: integer, ay1: integer, color: integer)`
+    - `pub fn fill_triangle(self: Canvas, tx0: integer, ty0: integer, tx1: integer, ty1: integer, tx2: integer, ty2: integer, color: integer)`
+    - `pub fn save_png(self: const Canvas, path: text) -> boolean`
+    - `pub fn gl_screenshot(width: integer, height: integer, path: text) -> boolean`
+    - `pub fn gl_create_window(width: integer, height: integer, title: text) -> boolean`
+    - `pub fn gl_create_fullscreen_window(title: text) -> boolean`
+    - `pub fn gl_set_fullscreen(on: boolean)`
+    - `pub fn gl_window_width() -> integer`
+    - `pub fn gl_window_height() -> integer`
+    - `pub fn gl_poll_events() -> boolean`
+    - `pub fn gl_swap_buffers()`
+    - `pub fn gl_clear(color: integer)`
+    - `pub fn gl_destroy_window()`
+    - `pub fn gl_create_shader(vertex_source: text, fragment_source: text) -> integer`
+    - `pub fn gl_use_shader(program: integer)`
+    - `pub fn gl_draw(vao: integer, vertex_count: integer)`
+    - `pub fn gl_upload_vertices(data: vector<single>, stride: integer) -> integer`
+    - `pub fn gl_upload_instance_buffer(data: vector<single>) -> integer`
+    - `pub fn gl_instance_attrib(vao: integer, ivbo: integer, location: integer, components: integer, stride_floats: integer, offset_floats: integer)`
+    - `pub fn gl_draw_instanced(vao: integer, vertex_count: integer, instance_count: integer)`
+    - `pub fn gl_update_buffer(vbo: integer, data: vector<single>)`
+    - `pub fn gl_upload_indices(vao: integer, data: vector<integer>) -> integer`
+    - `pub struct GroupVboSet`
+    - `pub fn group_vbos_new(stride: integer, draw_mode: integer) -> GroupVboSet`
+    - `pub fn group_vbos_upsert(set: GroupVboSet, gk: integer, verts: vector<single>,`
+    - `pub fn group_vbos_draw_all(set: GroupVboSet)`
+    - `pub fn group_vbos_destroy(set: GroupVboSet)`
+    - `pub fn gl_set_uniform_mat4(program: integer, name: text, mat: vector<float>)`
+    - `pub fn gl_set_uniform_float(program: integer, name: text, val: float)`
+    - `pub fn gl_set_uniform_int(program: integer, name: text, val: integer)`
+    - `pub fn gl_set_uniform_vec2(program: integer, name: text, x: float, y: float)`
+    - `pub fn gl_set_uniform_vec3(program: integer, name: text, x: float, y: float, z: float)`
+    - `pub fn gl_set_uniform_vec4(program: integer, name: text, x: float, y: float, z: float, w: float)`
+    - `pub fn gl_enable(cap: integer)`
+    - `pub fn gl_disable(cap: integer)`
+    - `pub fn gl_blend_func(src: integer, dst: integer)`
+    - `pub fn gl_cull_face(face: integer)`
+    - `pub fn gl_depth_mask(write: boolean)`
+    - `pub fn gl_viewport(x: integer, y: integer, w: integer, h: integer)`
+    - `pub fn gl_scissor(x: integer, y: integer, w: integer, h: integer)`
+    - `pub fn gl_create_framebuffer() -> integer`
+    - `pub fn gl_bind_framebuffer(fbo: integer)`
+    - `pub fn gl_framebuffer_texture(fbo: integer, attachment: integer, tex: integer)`
+    - `pub fn gl_create_depth_texture(width: integer, height: integer) -> integer`
+    - `pub fn gl_create_color_texture(width: integer, height: integer) -> integer`
+    - `pub fn gl_texture_filter(tex: integer, nearest: boolean)`
+    - `pub fn gl_generate_mipmap(tex: integer)`
+    - `pub fn gl_texture_subimage(tex: integer, x: integer, y: integer, w: integer, h: integer, data: vector<integer>)`
+    - `pub fn gl_draw_fullscreen_quad()`
+    - `pub fn gl_draw_mode(vao: integer, vertex_count: integer, mode: integer)`
+    - `pub fn gl_draw_elements(vao: integer, index_count: integer, mode: integer)`
+    - `pub fn gl_line_width(width: float)`
+    - `pub fn gl_point_size(size: float)`
+    - `pub fn gl_key_pressed(key_code: integer) -> boolean`
+    - `pub fn gl_mouse_x() -> float`
+    - `pub fn gl_mouse_y() -> float`
+    - `pub fn gl_mouse_button() -> integer`
+    - `pub fn gl_mouse_wheel() -> integer`
+    - `pub fn gl_next_event() -> integer`
+    - `pub fn gl_event_key() -> integer`
+    - `pub fn gl_event_mods() -> integer`
+    - `pub fn gl_event_repeat() -> boolean`
+    - `pub fn gl_event_text() -> text`
+    - `pub fn gl_event_x() -> float`
+    - `pub fn gl_event_y() -> float`
+    - `pub fn gl_event_button() -> integer`
+    - `pub fn gl_event_wheel() -> integer`
+    - `pub fn gl_event_touch_id() -> integer`
+    - `pub fn gl_load_font(path: text) -> integer`
+    - `pub fn gl_measure_text(font: integer, content: text, size: float) -> float`
+    - `pub fn gl_text_height(font: integer, size: float) -> integer`
+    - `pub fn gl_font_ascent(font: integer, size: float) -> float`
+    - `pub fn draw_text(self: Canvas, font: integer, content: text, size: float,`
+    - `pub fn gl_load_texture(path: text) -> integer`
+    - `pub fn gl_upload_canvas(data: vector<integer>, width: integer, height: integer) -> integer`
+    - `pub fn gl_bind_texture(texture_id: integer, unit: integer)`
+    - `pub fn gl_delete_texture(texture_id: integer)`
+    - `pub fn gl_delete_shader(program: integer)`
+    - `pub fn gl_delete_vao(vao: integer)`
+    - `pub fn gl_delete_framebuffer(fbo: integer)`
+    - `pub struct SpriteSheet`
+    - `pub fn create_sprite_sheet(atlas: const Canvas, cols: integer, rows: integer, vao: integer) -> SpriteSheet`
+    - `pub fn draw_sprite(sheet: const SpriteSheet, mvp: const vector<float>, sp_idx: integer)`
+    - `pub struct Painter2D`
+    - `pub fn create_painter_2d(screen_w: float, screen_h: float) -> Painter2D`
+    - `pub fn painter_vao(self: const Painter2D) -> integer`
+    - `pub fn draw_rect_at(painter: const Painter2D, x: float, y: float, w: float, h: float,`
+    - `pub fn draw_sprite_at(sheet: const SpriteSheet, painter: const Painter2D,`
+    - `pub fn draw_texture_at(painter: const Painter2D, tex: integer,`
+    - `pub fn create_text_texture(font: integer, content: text, size: float, color: integer) -> integer`
+    - `pub fn audio_load(path: text) -> integer`
+    - `pub fn audio_play(clip: integer, volume: float) -> integer`
+    - `pub fn audio_stop(sink: integer)`
+    - `pub fn audio_set_volume(sink: integer, volume: float)`
+    - `pub fn audio_play_raw(samples: vector<single>, sample_rate: integer, volume: float) -> integer`
+    - `pub fn sfx_beep(sb_freq: single, sb_dur: single, sb_vol: single) -> integer`
+    - `pub fn sfx_descend(sd_f0: single, sd_f1: single, sd_dur: single, sd_vol: single) -> integer`
+    - `pub fn sfx_chirp(sc_f0: single, sc_f1: single, sc_dur: single, sc_vol: single) -> integer`
+    - `pub fn sfx_noise(sn_dur: single, sn_vol: single) -> integer`
+    - `pub fn sfx_bounce(sp_freq: single, sp_vol: single) -> integer`
+    - `pub struct Renderer`
+    - `pub fn create_renderer(rw: integer, rh: integer, title: text) -> Renderer`
+    - `pub fn elapsed(self: const Renderer) -> float`
+    - `pub fn upload_scene(self: Renderer, sc: const scene::Scene)`
+    - `pub fn render_frame_no_swap(self: Renderer, sc: const scene::Scene,`
+    - `pub fn render_frame(self: Renderer, sc: const scene::Scene,`
+    - `pub fn render_loop(self: Renderer, sc: const scene::Scene, cam: const scene::Camera)`
+    - `pub fn destroy(self: Renderer)`
+- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;` · origin/main: +6 unreleased
   · loft install gridmesh · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
   · public API:
     - `pub struct CellRef`
@@ -220,10 +479,82 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn group_of(cx: integer, cy: integer, group_dim: integer) -> GroupKey`
     - `pub fn all_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>`
     - `pub fn collect_dirty_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>`
-- **imaging** — PNG load/save + pixel manipulation for loft (Stage A — interpreter + native; wasm bridge deferred pending loft-host-ffi crate).  · v0.2.0 · `use imaging;`
+    - `pub fn emit_segment(m: SegMesh, kind: integer,`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn seg_mesh_append(dst: SegMesh, src: SegMesh)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn field_add_cell(f: ChunkField, x: integer, y: integer)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn field_mark_dirty(f: ChunkField, x: integer, y: integer)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn field_remove_cell(f: ChunkField, x: integer, y: integer)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn clear_dirty(f: ChunkField)`  🟢 unreleased (origin/main, not yet published)
+- **imaging** — PNG load/save + pixel manipulation for loft (Stage A — interpreter + native; wasm bridge deferred pending loft-host-ffi crate).  · v0.2.0 · `use imaging;` · API from origin/main (registry `api` not recorded)
   · loft install imaging · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/imaging)
-- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).  · v0.1.1 · `use mesh3d;`
+  · public API:
+    - `pub struct Pixel`
+    - `pub fn value(self: Pixel) -> integer`
+    - `pub struct Image`
+    - `pub fn save_png(self: const Image, path: text) -> boolean`
+    - `pub fn png(self: File) -> Image`
+- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).  · v0.1.1 · `use mesh3d;` · API from origin/main (registry `api` not recorded)
   · loft install mesh3d · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/mesh3d)
+  · public API:
+    - `pub struct Vec2`
+    - `pub fn vec2(vx: float, vy: float) -> Vec2`
+    - `pub struct Vec3`
+    - `pub fn vec3(vx: float, vy: float, vz: float) -> Vec3`
+    - `pub struct Vec4`
+    - `pub fn vec4(vx: float, vy: float, vz: float, vw: float) -> Vec4`
+    - `pub fn add3(va: const Vec3, vb: const Vec3) -> Vec3`
+    - `pub fn sub3(va: const Vec3, vb: const Vec3) -> Vec3`
+    - `pub fn scale3(sv: const Vec3, ss: float) -> Vec3`
+    - `pub fn dot3(da: const Vec3, db: const Vec3) -> float`
+    - `pub fn cross(ca: const Vec3, cb: const Vec3) -> Vec3`
+    - `pub fn length3(lv: const Vec3) -> float`
+    - `pub fn normalize3(nv: const Vec3) -> Vec3`
+    - `pub struct Mat4`
+    - `pub fn mat4_identity() -> Mat4`
+    - `pub fn mat4_translate(tx: float, ty: float, tz: float) -> Mat4`
+    - `pub fn mat4_scale(sx: float, sy: float, sz: float) -> Mat4`
+    - `pub fn mat4_mul(ma: const Mat4, mb: const Mat4) -> Mat4`
+    - `pub fn mat4_transform(tm: const Mat4, tv: const Vec3) -> Vec3`
+    - `pub fn mat4_perspective(fov_y: float, aspect: float, near: float, far: float) -> Mat4`
+    - `pub fn mat4_look_at(eye: const Vec3, target: const Vec3, up: const Vec3) -> Mat4`
+    - `pub fn mat4_rotate_y(angle: float) -> Mat4`
+    - `pub fn mat4_rotate_x(angle: float) -> Mat4`
+    - `pub fn mat4_ortho(left: float, right: float, bottom: float, top: float, near: float, far: float) -> Mat4`
+    - `pub fn mat4_trs(tx: float, ty: float, tz: float, ry: float, sx: float, sy: float, sz: float) -> Mat4`
+    - `pub struct Vertex`
+    - `pub fn vertex(vp: math::Vec3, vn: math::Vec3, vuv: math::Vec2) -> Vertex`
+    - `pub struct Triangle`
+    - `pub struct Mesh`
+    - `pub fn mesh(mn: text) -> Mesh`
+    - `pub fn add_vertex(self: Mesh, av: Vertex) -> integer`
+    - `pub fn add_triangle(self: Mesh, ti0: integer, ti1: integer, ti2: integer)`
+    - `pub fn add_quad(self: Mesh, qi0: integer, qi1: integer, qi2: integer, qi3: integer)`
+    - `pub fn cube() -> Mesh`
+    - `pub fn plane(pn: text, pw: float, pd: float) -> Mesh`
+    - `pub fn sphere(sn: text, sr: float, ss: integer, st: integer) -> Mesh`
+    - `pub fn mesh_to_floats_uv(mu: const Mesh) -> vector<single>`
+    - `pub fn mesh_to_floats(mf: const Mesh) -> vector<single>`
+    - `pub struct Material`
+    - `pub fn material(mname: text) -> Material`
+    - `pub fn material_color(mname: text, mr: float, mg: float, mb: float) -> Material`
+    - `pub fn material_metal(mname: text, mr: float, mg: float, mb: float, mrough: float) -> Material`
+    - `pub fn set_color(self: Material, scr: float, scg: float, scb: float)`
+    - `pub struct Node`
+    - `pub fn node(nn: text, nm: integer, nmat: integer) -> Node`
+    - `pub fn node_at(nn: text, nm: integer, nmat: integer, xf: math::Mat4) -> Node`
+    - `pub struct Camera`
+    - `pub fn camera(cname: text) -> Camera`
+    - `pub enum LightType`
+    - `pub struct Light`
+    - `pub fn directional_light(ln: text, lr: float, lg: float, lb: float, li: float, ldir: math::Vec3) -> Light`
+    - `pub fn point_light(ln: text, lr: float, lg: float, lb: float, li: float, lpos: math::Vec3) -> Light`
+    - `pub struct Scene`
+    - `pub fn scene(sn: text) -> Scene`
+    - `pub fn add_mesh(self: Scene, sm: mesh::Mesh) -> integer`
+    - `pub fn add_material(self: Scene, smat: Material) -> integer`
+    - `pub fn add_node(self: Scene, sn: Node)`
+    - `pub fn add_camera(self: Scene, sc: Camera)`
+    - `pub fn add_light(self: Scene, sl: Light) -> integer`
 
 ## math
 
@@ -240,8 +571,18 @@ A package may appear under more than one category (it is listed under each of it
 
 ## net
 
-- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.  · v0.1.2 · `use game_protocol;`
+- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.  · v0.1.2 · `use game_protocol;` · API from origin/main (registry `api` not recorded)
   · loft install game_protocol · [source](https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol)
+  · public API:
+    - `pub enum MsgType`
+    - `pub struct WsMessage`
+    - `pub struct GameEnvelope`
+    - `pub fn msg_ping(seq: integer) -> GameEnvelope`
+    - `pub fn msg_pong(seq: integer) -> GameEnvelope`
+    - `pub fn msg_chat(sender: text, content: text) -> GameEnvelope`
+    - `pub fn msg_input(sender: text, input_data: text) -> GameEnvelope`
+    - `pub fn msg_state(state_data: text) -> GameEnvelope`
+    - `pub fn msg_error(error_text: text) -> GameEnvelope`
 - **server** — HTTP + WebSocket server — TCP sockets + tungstenite via cdylib.  · v0.3.1 · `use server;`
   · loft install server · [source](https://github.com/loft-lang/loft-libs-net/tree/main/server)
   · public API:
@@ -332,11 +673,21 @@ A package may appear under more than one category (it is listed under each of it
 
 ## text
 
-- **html** — HTML escaping helpers for loft.  · v0.1.0 · `use html;`
+- **html** — HTML escaping helpers for loft.  · v0.1.0 · `use html;` · API from origin/main (registry `api` not recorded)
   · loft install html · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/html)
-- **markdown** — Markdown-to-HTML rendering for loft — headings, inline spans, slugify, link rewriting.  · v0.1.0 · `use markdown;`
+  · public API:
+    - `pub fn escape_html(self: text) -> text`
+- **markdown** — Markdown-to-HTML rendering for loft — headings, inline spans, slugify, link rewriting.  · v0.1.0 · `use markdown;` · API from origin/main (registry `api` not recorded)
   · loft install markdown · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/markdown)
-- **regex** — Small-script regex: matches / find / split / match_groups / replace, with a thread-local pattern cache.  · v0.2.1 · auto-use (no `use` needed)
+  · public API:
+    - `pub fn html_escape(s: text) -> text`
+    - `pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_prefix: text) -> text`
+    - `pub fn slugify(heading: text) -> text`
+    - `pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_prefix: text) -> text`
+    - `pub fn rewrite_link(url: text, base_dir: text) -> text`
+    - `pub struct Heading`
+    - `pub fn extract_headings(source: text) -> vector<Heading>`
+- **regex** — Small-script regex: matches / find / split / match_groups / replace, with a thread-local pattern cache.  · v0.2.1 · auto-use (no `use` needed) · origin/main: +2 unreleased
   · loft install regex · [source](https://github.com/loft-lang/loft-libs-core/tree/main/regex)
   · public API:
     - `pub fn find(pattern: text, input: text) -> integer`
@@ -344,10 +695,12 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn matches(both: text, pattern: text) -> boolean`
     - `pub fn regex_find(self: text, pattern: text) -> integer`
     - `pub fn regex_split(self: text, pattern: text) -> iterator<text>`
+    - `pub fn search(self: text, pattern: text) -> integer`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn split_on(self: text, pattern: text) -> iterator<text>`  🟢 unreleased (origin/main, not yet published)
 
 ## time
 
-- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;`
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;` · origin/main: +1 unreleased
   · loft install time · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
   · public API:
     - `pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer`
@@ -429,15 +782,28 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn OpNe(self: Duration, other: Duration) -> boolean`
     - `pub fn to_text(self: DateTime, spec: text) -> text`
     - `pub fn to_text(self: Duration, spec: text) -> text`
+    - `pub fn to_text(self: Duration, _spec: text) -> text`  🟢 unreleased (origin/main, not yet published)
 
 ## uncategorised
 
-- **ssh** — SSH client — drive an interactive remote shell (e.g. attach tmux) over password auth. Native-only.  · v0.1.0 · `use ssh;`
+- **ssh** — SSH client — drive an interactive remote shell (e.g. attach tmux) over password auth. Native-only.  · v0.1.0 · `use ssh;` · API from origin/main (registry `api` not recorded)
   · loft install ssh · [source](https://github.com/loft-lang/loft-libs-net/tree/main/ssh)
+  · public API:
+    - `pub struct Session`
+    - `pub fn byte_at(idx: integer, data: text) -> integer`
+    - `pub fn connect(host: text, port: integer) -> Session`
+    - `pub fn ok(self: Session) -> boolean`
+    - `pub fn login(self: Session, user: text, password: text) -> boolean`
+    - `pub fn open_shell(self: Session, term: text, cols: integer, rows: integer) -> boolean`
+    - `pub fn send(self: Session, data: text)`
+    - `pub fn recv(self: Session) -> text`
+    - `pub fn resize(self: Session, cols: integer, rows: integer)`
+    - `pub fn is_open(self: Session) -> boolean`
+    - `pub fn close(self: Session)`
 
 ## world
 
-- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;`
+- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;` · origin/main: +6 unreleased
   · loft install gridmesh · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
   · public API:
     - `pub struct CellRef`
@@ -472,6 +838,12 @@ A package may appear under more than one category (it is listed under each of it
     - `pub fn group_of(cx: integer, cy: integer, group_dim: integer) -> GroupKey`
     - `pub fn all_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>`
     - `pub fn collect_dirty_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>`
+    - `pub fn emit_segment(m: SegMesh, kind: integer,`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn seg_mesh_append(dst: SegMesh, src: SegMesh)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn field_add_cell(f: ChunkField, x: integer, y: integer)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn field_mark_dirty(f: ChunkField, x: integer, y: integer)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn field_remove_cell(f: ChunkField, x: integer, y: integer)`  🟢 unreleased (origin/main, not yet published)
+    - `pub fn clear_dirty(f: ChunkField)`  🟢 unreleased (origin/main, not yet published)
 - **hex_terrain** — The OVERLAND terrain layer of the `hex_*` family: a coarse overland hex lattice  · v0.1.1 · `use hex_terrain;`
   · loft install hex_terrain · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_terrain)
   · public API:
