@@ -1,0 +1,44 @@
+{
+  "applications": [
+    {
+      "demonstrates": "a 3D free-build / tower-defence game on the lavition engine",
+      "description": "Sci-fi free-build / tower-defence with scramble-and-salvage runs, built on loft",
+      "homepage": "",
+      "name": "dryopea",
+      "origin": "first-party",
+      "pushed": "2026-05-27",
+      "repo": "jjstwerff/dryopea",
+      "url": "https://github.com/jjstwerff/dryopea"
+    },
+    {
+      "demonstrates": "a full RPG — game systems, world state, rendering",
+      "description": "Moros role playing game",
+      "homepage": "",
+      "name": "moros",
+      "origin": "first-party",
+      "pushed": "2026-05-01",
+      "repo": "jjstwerff/moros",
+      "url": "https://github.com/jjstwerff/moros"
+    },
+    {
+      "demonstrates": "a phone-first WASM app — loft→WASM, interactive canvas, GPX export",
+      "description": "Phone-first route planner — sketch points, instant length, match to real paths (loft→WASM), export GPX.",
+      "homepage": "",
+      "name": "routing",
+      "origin": "first-party",
+      "pushed": "2026-07-17",
+      "repo": "jjstwerff/routing",
+      "url": "https://github.com/jjstwerff/routing"
+    },
+    {
+      "demonstrates": "a native terminal app — SSH + PTY, phone-width tmux, no browser",
+      "description": "A pure-loft SSH terminal for your phone: password-auth login to a home laptop, tmux in a phone-width view. No stored keys. Native (Linux now, Android later) — no browser.",
+      "homepage": "",
+      "name": "ssh_home",
+      "origin": "first-party",
+      "pushed": "2026-07-16",
+      "repo": "jjstwerff/ssh_home",
+      "url": "https://github.com/jjstwerff/ssh_home"
+    }
+  ]
+}

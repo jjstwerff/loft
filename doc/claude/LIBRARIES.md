@@ -2,7 +2,7 @@
 
 # State of the loft distribution
 
-**What state loft is in** — the counterpart to the GitHub issues/plans (which track what is *open*); this is what loft *is* right now. loft ships as a **core** (the compiler + interpreter + stdlib, below) plus its **22 libraries**: the libraries are part of the distribution, just fetched separately — on demand from the registry — for efficiency, rather than bundled into the binary. Check here BEFORE implementing functionality, so you don't reimplement existing code.
+**What state loft is in** — the counterpart to the GitHub issues/plans (which track what is *open*); this is what loft *is* right now. Three tiers: the **core** (the compiler + interpreter + stdlib, below), the **22 libraries** — part of the distribution, just fetched separately from the registry for efficiency rather than bundled — and the **applications** built with loft (not distributed; shown as build examples). Check here BEFORE implementing functionality, so you don't reimplement existing code.
 
 How to use one: `loft install <name>`, then `use <name>;` in your program — or, for an auto-use library, just call the method (no `use` needed).
 
@@ -903,3 +903,12 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
     - `pub fn tick_and_decay(self: &World, base_lifetime: integer,`
     - `pub fn world_save(self: World, path: text)`
     - `pub fn world_load(self: &World, path: text) -> integer`
+
+## Applications (built with loft — examples, not part of the distribution)
+
+Real apps built with loft — reference examples of HOW to build such things, not installable components. The set is curated; each app's info is fetched live. Community showcases may join over time (see @PLN112).
+
+- **dryopea** — Sci-fi free-build / tower-defence with scramble-and-salvage runs, built on loft · demonstrates a 3D free-build / tower-defence game on the lavition engine · [repo](https://github.com/jjstwerff/dryopea) (updated 2026-05-27)
+- **moros** — Moros role playing game · demonstrates a full RPG — game systems, world state, rendering · [repo](https://github.com/jjstwerff/moros) (updated 2026-05-01)
+- **routing** — Phone-first route planner — sketch points, instant length, match to real paths (loft→WASM), export GPX. · demonstrates a phone-first WASM app — loft→WASM, interactive canvas, GPX export · [repo](https://github.com/jjstwerff/routing) (updated 2026-07-17)
+- **ssh_home** — A pure-loft SSH terminal for your phone: password-auth login to a home laptop, tmux in a phone-width view. No stored keys. Native (Linux now, Android later) — no browser. · demonstrates a native terminal app — SSH + PTY, phone-width tmux, no browser · [repo](https://github.com/jjstwerff/ssh_home) (updated 2026-07-16)

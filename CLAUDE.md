@@ -213,7 +213,7 @@ strict: [formal/README.md](doc/claude/formal/README.md) (rules + deviations driv
 [lib_plans/README.md](doc/claude/lib_plans/README.md) (legacy) · [STACKTRACE.md](doc/claude/STACKTRACE.md) · [SANDBOX.md](doc/claude/SANDBOX.md).
 
 **Libraries / registry / packages:** [LIBRARIES.md](doc/claude/LIBRARIES.md) state of the loft
-distribution — core (version + binary sha) + the installable libraries ·
+distribution — core (version + binary sha) + libraries + applications built with loft ·
 [LIBRARY_BRANCHES.md](doc/claude/LIBRARY_BRANCHES.md) in-flight (unmerged) lib branches ·
 [PACKAGES.md](doc/claude/PACKAGES.md) format/targets · [PKG_REGISTRY.md](doc/claude/PKG_REGISTRY.md) registry MVP ·
 [LIBRARY_AUTHORING.md](doc/claude/LIBRARY_AUTHORING.md) / [LIBRARY_CHECKLIST.md](doc/claude/LIBRARY_CHECKLIST.md) ·

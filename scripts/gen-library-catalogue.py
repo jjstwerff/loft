@@ -53,6 +53,9 @@ UNRELEASED = REPO_ROOT / "doc" / "claude" / "unreleased-snapshot.json"
 # @PLN112 — loft ITSELF (version + per-target binary sha256) for the top-level overview;
 # built by scripts/refresh-loft-release.py (from loft's GitHub release until it is a registry entry).
 LOFT_RELEASE = REPO_ROOT / "doc" / "claude" / "loft-release-snapshot.json"
+# @PLN112 — major APPLICATIONS built with loft (examples, NOT part of the distribution);
+# built by scripts/refresh-applications.py.
+APPLICATIONS = REPO_ROOT / "doc" / "claude" / "applications-snapshot.json"
 
 
 def _norm_sig(sig: str) -> str:
@@ -155,13 +158,57 @@ def loft_overview(loft_release: dict[str, Any]) -> list[str]:
     return lines
 
 
+def applications_section(applications: dict[str, Any]) -> list[str]:
+    """The `Applications` tier — major apps built with loft, shown as build EXAMPLES (not
+    installable components). Provenance-tagged (`first-party` / `community`); flat when all
+    one origin, grouped when a mix. Community showcases can join later without a redesign."""
+    apps = applications.get("applications") or []
+    if not apps:
+        return []
+    ORIGINS = {"first-party": "First-party", "community": "Community"}
+    present = [o for o in ORIGINS if any(a.get("origin") == o for a in apps)]
+
+    def entry(a: dict) -> str:
+        home = f" · [demo]({a['homepage']})" if a.get("homepage") else ""
+        pushed = f" (updated {a['pushed']})" if a.get("pushed") else ""
+        return (
+            f"- **{a.get('name', '')}** — {a.get('description', '').strip()} · "
+            f"demonstrates {a.get('demonstrates', '').strip()} · [repo]({a.get('url', '')})"
+            f"{home}{pushed}"
+        )
+
+    lines = [
+        "## Applications (built with loft — examples, not part of the distribution)",
+        "",
+        "Real apps built with loft — reference examples of HOW to build such things, not "
+        "installable components. The set is curated; each app's info is fetched live. Community "
+        "showcases may join over time (see @PLN112).",
+        "",
+    ]
+    if len(present) <= 1:
+        for a in apps:
+            lines.append(entry(a))
+    else:
+        for o in present:
+            lines.append(f"### {ORIGINS[o]}")
+            lines.append("")
+            for a in apps:
+                if a.get("origin") == o:
+                    lines.append(entry(a))
+            lines.append("")
+    lines.append("")
+    return lines
+
+
 def render(
     index: dict[str, Any],
     unreleased: dict[str, Any] | None = None,
     loft_release: dict[str, Any] | None = None,
+    applications: dict[str, Any] | None = None,
 ) -> str:
     unreleased = unreleased or {}
     loft_release = loft_release or {}
+    applications = applications or {}
     packages: dict[str, Any] = index.get("packages", {})
     n = len(packages)
 
@@ -179,11 +226,12 @@ def render(
     lines.append("")
     lines.append(
         f"**What state loft is in** — the counterpart to the GitHub issues/plans (which track "
-        f"what is *open*); this is what loft *is* right now. loft ships as a **core** (the "
-        f"compiler + interpreter + stdlib, below) plus its **{n} libraries**: the libraries are "
-        f"part of the distribution, just fetched separately — on demand from the registry — for "
-        f"efficiency, rather than bundled into the binary. Check here BEFORE implementing "
-        f"functionality, so you don't reimplement existing code."
+        f"what is *open*); this is what loft *is* right now. Three tiers: the **core** (the "
+        f"compiler + interpreter + stdlib, below), the **{n} libraries** — part of the "
+        f"distribution, just fetched separately from the registry for efficiency rather than "
+        f"bundled — and the **applications** built with loft (not distributed; shown as build "
+        f"examples). Check here BEFORE implementing functionality, so you don't reimplement "
+        f"existing code."
     )
     lines.append("")
     lines.append(
@@ -287,6 +335,9 @@ def render(
                         lines.append(f"    - `{sig}`{_tag[kind]}")
         lines.append("")
 
+    # Applications tier last — built ON the core + libraries above.
+    lines.extend(applications_section(applications))
+
     return "\n".join(lines).rstrip("\n") + "\n"
 
 
@@ -342,7 +393,12 @@ def main() -> int:
     loft_release = (
         json.loads(LOFT_RELEASE.read_text(encoding="utf-8")) if LOFT_RELEASE.exists() else {}
     )
-    rendered = render(index, unreleased, loft_release)
+    # Applications built with loft (examples, not distributed); committed snapshot from
+    # scripts/refresh-applications.py. Read from disk so --check stays deterministic.
+    applications = (
+        json.loads(APPLICATIONS.read_text(encoding="utf-8")) if APPLICATIONS.exists() else {}
+    )
+    rendered = render(index, unreleased, loft_release, applications)
 
     if args.check:
         if not OUTPUT.exists():
