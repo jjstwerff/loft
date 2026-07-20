@@ -21,6 +21,27 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Patch `2026.7.2` — the `len`/`size` text flip (breaking, pre-1)
+
+**Breaking (contract 0 — before the 1.0 promise):** `len(text)` now returns the
+**character** count and `size(text)` the **byte** count — swapped from earlier
+`2026.7.x`, where `len(text)` was bytes. This aligns `len` with every mainstream
+language (a text's length is how many characters it holds) and gives byte-level work
+an explicit, honest home in `size`. A program that used `len(text)` to mean a **byte**
+length must move those sites to `size(text)`; a default-on lint flags the common
+`for i in 0..len(s) { s[i] }` shape, where a character count was driving a byte index.
+
+Because this changes observable behaviour, published libraries that depend on the new
+meaning now declare `loft = ">=2026.7.2"`, so an **older** loft cleanly refuses to load
+a too-new library at load time rather than silently misreading multi-byte text.
+
+This point release also carries the accumulated stability and type-safety work landed
+since `2026.7.1`: the compatibility-contract groundwork (@PLN102), PEG `match` patterns
+(@PLN35), the state-of-the-distribution catalogue (@PLN112), layout-aware zero-copy FFI
+(@PLN105), and a wide store-lifetime / leak / use-after-free sweep now guarded on every
+night's CI. Full technical history:
+[doc/claude/CHANGELOG_TECHNICAL.md](doc/claude/CHANGELOG_TECHNICAL.md).
+
 ### Patch `2026.7.1` — the downloadable binaries
 
 `2026.7.0` shipped without its pre-built binaries: a release-pipeline bug published
