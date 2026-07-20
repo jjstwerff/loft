@@ -317,13 +317,19 @@ jobs:
       - name: Point the sanitizer at llvm-symbolizer (LSan suppressions need symbols)
         shell: bash
         run: |
-          # Best-effort discovery — never fail the job (macOS symbolizes via atos by
-          # default when ASAN_SYMBOLIZER_PATH is unset, so an empty result is fine).
+          # Best-effort discovery — never fail the job. macOS falls back to `atos` when
+          # ASAN_SYMBOLIZER_PATH is unset, but atos frame names do NOT match the demangled
+          # `leak:<substr>` suppressions, so the already-suppressed classes (append_text /
+          # addTermFunc / ir_read) leaked through and reddened the macOS leg. The rustup
+          # `llvm-tools` component ships a matching llvm-symbolizer on BOTH platforms — the
+          # reliable, light source — so prefer it before the OS-specific paths.
           set +e +o pipefail
-          if [ "$RUNNER_OS" = "Linux" ]; then
+          rustup component add llvm-tools-preview >/dev/null 2>&1 || true
+          SYM=$(ls "$(rustc --print sysroot 2>/dev/null)"/lib/rustlib/*/bin/llvm-symbolizer 2>/dev/null | head -1)
+          if [ -z "$SYM" ] && [ "$RUNNER_OS" = "Linux" ]; then
             SYM=$(command -v llvm-symbolizer || true)
             [ -z "$SYM" ] && SYM=$(ls /usr/lib/llvm-*/bin/llvm-symbolizer /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -1)
-          else
+          elif [ -z "$SYM" ]; then
             SYM=$(command -v llvm-symbolizer || true)
             [ -z "$SYM" ] && SYM=$(ls "$(brew --prefix llvm 2>/dev/null)/bin/llvm-symbolizer" 2>/dev/null | head -1)
             [ -z "$SYM" ] && SYM=$(xcrun --find llvm-symbolizer 2>/dev/null || true)

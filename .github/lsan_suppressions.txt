@@ -32,6 +32,14 @@ leak:ops::format_text
 leak:ops::format_long
 leak:text_tl_fmt
 
+# The registry HTTP layer's fetch buffer / one-time client state (@PLN112 nightly).  The
+# `loft install` / registry-index fetch (`registry_index::http_get_bytes`) sets up a
+# process-lifetime HTTP/TLS client whose state is still REACHABLE at exit — so Linux LSan
+# (reachability-based) never flags it, while macOS ASan's at-exit check does. A one-time
+# client alloc, not a growing leak; the 3 network-doing docs fixtures (14-image / 21-random
+# / 32-time) surface it. macOS-only, so this line is a no-op on the Linux leg.
+leak:registry_index::http_get_bytes
+
 # macOS dyld thread-local storage term-func registration on a spawned thread
 # (the test harness watchdog): `dyld::ThreadLocalVariables::addTermFunc`, reached
 # via `thread_start`. A one-per-thread SYSTEM allocation, not a loft heap leak — and
