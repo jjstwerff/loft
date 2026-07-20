@@ -9,7 +9,7 @@
 > collections, text stdlib, null keystone, math, sort) — interpret==native verified.
 > Building it surfaced a real bug: `h[absent] ?? <mismatched-type>` (e.g. `Row? ?? int`)
 > is not rejected by loft's type checker → the interpreter **SIGSEGVs** while native gives
-> rustc `E0308` (a silent-crash + backend-divergence bug); omitted from the corpus, TO FILE.
+> rustc `E0308` (a silent-crash + backend-divergence bug); omitted from the corpus. Fix design + boundary matrix: qq-type-mismatch-fix.md (still TO FILE as an issue).
 >
 > **Status: ANALYSIS (2026-07-19).** Answers the two falsification questions
 > [flip-gate.md](flip-gate.md) left open before the `0→1` flip: **(1)** is there a
