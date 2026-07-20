@@ -7,11 +7,16 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Status (2026-07-20): the fix below greens a real macOS box but NOT the CI `macos-latest` runner.**
 The Mac agent verified locally (`0 leaking of 513`; nextest `1629 passed, 0 leaked`), but a
 `workflow_dispatch` miri run (29757356253) on `tuxedo-followups` with that same fix left the macOS
-leg RED — 3 residuals the local box did not hit (see § CI-runner divergence). debug-asserts ✅ and
-ASan-leak **ubuntu** ✅ in that run, so the bare-name suppressions are Linux-safe. The root-cause
-analysis below is correct and load-bearing; only the "0 on CI" claim was over-stated (it was local).
-This blocks the owner's first STABLE RELEASE (they won't ship with a red nightly) — needs a Mac agent
-iterating **against CI**, not just a local box.
+leg RED. debug-asserts ✅ and ASan-leak **ubuntu** ✅ in that run, so the bare-name suppressions are
+Linux-safe. The root-cause analysis below is correct and load-bearing; only the "0 on CI" claim was
+over-stated (it was local). This blocks the owner's first STABLE RELEASE (they won't ship with a red
+nightly) — needs a Mac agent iterating **against CI**, not just a local box.
+
+**Reading the ACTUAL CI job log (88403045509) corrects the earlier "3 residuals" framing — see
+§ CI-runner divergence for the ground truth:** only ONE step is red (the per-file scan, 3 files),
+the `library_suite` "residual" was a flake that passed on retry, and the leak owner is the benign
+`ir_read` interner (library-bundle load), NOT `http_get_bytes`. The remaining problem is purely a
+CI-runner *symbolization* gap, which a local box cannot reproduce.
 
 ## Outcome (LOCAL — not yet CI)
 
@@ -92,37 +97,71 @@ deliberately declined (@PLN102 fault-path text). See @PLN54.
   frames too, and `ThreadLocalVariables` is a macOS-only no-op on Linux.
 - Only benign owners suppressed. `src/ops.rs` shift fix untouched.
 
-## CI-runner divergence — the 3 residuals that block CI (iterate AGAINST CI, not a local box)
+## CI-runner divergence — GROUND TRUTH from the job log (iterate AGAINST CI, not a local box)
 
-Miri run **29757356253** (`workflow_dispatch`, `tuxedo-followups`, with the fix above) —
-`ASan interpreter leak gate (macos-latest)` = **failure**, `3 leaking file(s) of 513` (down from 7):
+Miri run **29757356253** (`workflow_dispatch`, `tuxedo-followups`, with the fix above),
+`ASan interpreter leak gate (macos-latest)` = **failure**. Reading the actual job log
+(`gh run view --job 88403045509 -R loft-lang/loft --log`) corrects the earlier speculative
+"3 residuals" table. What the log ACTUALLY shows:
 
-| Residual | Where | Symptom on CI |
-|---|---|---|
-| `ThreadLocalVariables` ×1 | `library_suite`: `lib/audience_crystal/tests/01-editor-helpers.loft` | `336 byte(s) in 1 allocation`, `ThreadLocalVariables` at frame #2 — the suppression caught 2 of 3 lib tests but not this 336B block on this runner |
-| `http_get_bytes` ×3 | per-file scan: `tests/docs/{14-image,21-random,32-time}.loft` | `owner=<unknown>` — the CI runner's `atos` does NOT symbolize the frame, so `leak:http_get_bytes` cannot match |
+- **Only the per-file scan step is red** — `=== leak scan: 3 leaking file(s) of 513 scanned ===`,
+  exit 1. The three files: `tests/docs/{14-image,21-random,32-time}.loft`, each `roots=1  owner=?`.
+- **The nextest "Leak gate" step PASSED.** `library_suite` shows `FLAKY 2/2 … TRY 2 PASS`; the run
+  summary is `1630 passed (1 flaky), 14 skipped`. So the handoff's `ThreadLocalVariables` /
+  `library_suite` "residual" was an intermittent FLAKE that passed on retry — NOT a hard blocker
+  (worth hardening, but the step is green). The `ThreadLocalVariables` suppression is working.
+- The Linux-only symbolizer step correctly shows `-` (skipped) on macOS; the **ubuntu** leak gate is ✅.
 
-**Why local ≠ CI:** the Mac agent's box symbolized these frames (so its suppressions matched → 0
-leaking); the CI `macos-latest` runner symbolizes differently (different macOS/atos/dyld), leaving
-`http_get_bytes` as `<unknown>` and one dyld block uncaught. **So verifying on a local box is NOT
-sufficient — verify by dispatching miri and reading the CI job.** Repro:
-`gh workflow run miri.yml -R loft-lang/loft --ref <branch>` → wait → the `macos-latest` leak-gate job log.
+### The leak owner is `ir_read` (benign interner), NOT `http_get_bytes`
 
-**On the residuals (both provably NOT loft leaks):**
-- `http_get_bytes` — `src/registry_index.rs:730` builds a **per-call** `ureq::AgentBuilder`, so the
-  leak is a `rustls`/ring/system-TLS **global** (a one-time init, reachable-at-exit → Linux never
-  flags it), NOT a cached client to free. It can't be *eliminated* cheaply, and `<unknown>` can't be
-  *suppressed by name*. The 3 files are all network `loft install` tests — the leak is the TLS
-  library, not loft's own surface.
-- `ThreadLocalVariables` 336B — a dyld system TLS block; the enclosing-type suppression missed this
-  one frame on the CI runner. Inspect its CI stack; broaden the match if a stable enclosing frame
-  exists.
+Reproduced locally (atos, no suppressions) on all three files — the stack is unambiguous and identical:
+```
+#1 alloc::raw_vec::RawVecInner::try_allocate_in
+#2 loft::ir_read::read_block
+#3 loft::ir_read::read_value
+#4 loft::ir_read::read_definition   (or read_node_list → spec_from_iter)
+#5 loft::ir_read::read_data_with
+#6 loft::ir_read::open_bundle
+#7 loft::ir_read::open_bundle_into
+#8 loft::startup_cache::warm_load_program
+#9 loft::main
+```
+This is the **intentional bounded `Box::leak` string interner** (`ir_read`), fired when a file loads
+a precompiled **library bundle** (`open_bundle`). It is ALREADY suppressed by `leak:ir_read` — and
+locally that match works (the frames symbolize to `…_4loft7ir_read10read_block`, whose substring is
+`ir_read`), giving `0 leaking of 513`. It is the SAME benign class the ~16 round-trip lib tests hit.
+The handoff's `http_get_bytes` label (and the `src/registry_index.rs` per-call-client theory) was
+WRONG — these frames never appear in the stack.
 
-**Approaches (owner-acceptable, since these are non-loft and Linux enforces loft-code leaks):**
-1. Iterate the suppression/symbolizer **against CI** until `<unknown>` resolves + the 336B block
-   matches (needs push-and-dispatch loops; a local box won't reveal it).
-2. **Scope out the non-loft noise on macOS:** exclude the 3 network-`loft install` docs tests from the
-   macOS per-file scan (the leak is TLS-library, not loft), and/or the one dyld-residual lib test —
-   documented, macOS-only. Linux keeps the full enforcing scan.
-3. Last resort: mark the macOS *leak* leg non-blocking — but the owner wants it genuinely green
-   (no red before the stable release), NOT hidden, so prefer 1 or 2.
+**Why only these 3 files:** the leak needs a library BUNDLE load (`open_bundle`). Plain scripts
+(no `use <installed-lib>`) never enter `open_bundle`, so they don't leak `ir_read` (a plain script
+like `85-ncc…` leaks only `append_text`). The three are exactly the docs tests that `use` an
+installed library (`imaging` / `random` / `time`). `32-time` uses a LOCAL fixture and does NOT even
+leak on the local box — confirming the leak is bundle-load-dependent, hence environment-dependent,
+hence unstable file-to-file (do NOT hard-code "these 3").
+
+### The real blocker: CI-runner symbolization, which a local box cannot reproduce
+
+Locally, atos symbolizes the `ir_read` frames (mangled, substring matches → suppressed → 0/513).
+On the `macos-latest` runner, LSan's frame for this path comes back UNSYMBOLIZED, so `leak:ir_read`
+can't match and the scan counts it. The scan's `owner=<unknown>` is a separate red herring — its
+owner-grep looks for `loft::` (absent from mangled names when `rustfilt` isn't installed) and even
+excludes `ir_read` — so `owner=?` tells us nothing about the true owner or the suppression outcome.
+**No name-based suppression can be validated locally; the runner's symbolizer output must be read
+from a CI run.** Repro: `gh workflow run miri.yml -R loft-lang/loft --ref <branch>` → the
+`macos-latest` leak-gate job log.
+
+### Next step (recommended) + fallback
+
+1. **One diagnostic CI round FIRST.** Add an env-gated full-stack dump to `scripts/asan_leak_scan.sh`
+   (print the raw ASan leak report for each leaking file, macOS-scan only) and dispatch miri once.
+   That reveals what the runner's symbolizer actually emits for the `ir_read`/`open_bundle` frames —
+   mangled, `<unknown>`, or otherwise — which is the only thing that decides the fix (add a
+   symbolization-independent anchor, force symbols on the scan binary, or scope the bundle-loaders
+   out). Blind pushes are what burned the last two rounds.
+2. **Fallback (owner-acceptable, no iteration):** scope the library-bundle-loading docs tests out of
+   the **macOS** per-file scan only (the leak is the intentional `ir_read` interner, not loft-program
+   memory; Linux keeps the full enforcing scan and suppresses it by name). Prefer 1 to keep the gate
+   genuinely green rather than narrowed.
+3. Last resort: mark the macOS *leak* leg non-blocking — the owner wants it genuinely green before
+   the stable release, NOT hidden, so this is truly last.
