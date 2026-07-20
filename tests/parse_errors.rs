@@ -298,6 +298,33 @@ fn pln102_const_cast_over_range() {
         .warning("Variable x is never read at pln102_const_cast_over_range:1:16");
 }
 
+// @PLN102 arc-E — `τ? ?? d` where the default `d` is NOT assignable to `τ` was unsound:
+// the interpreter reinterpreted one representation as the other (SIGSEGV for `ref? ?? int`,
+// silent corruption for `int? ?? float` / `int? ?? text`), while `--native` rejected it at
+// rustc (E0308) — a backend divergence. Now a clean compile error on BOTH backends
+// (qq-type-mismatch-fix.md). Assignability is ONE-directional: `float? ?? int` (int widens)
+// stays valid, exercised by the script suite.
+#[test]
+fn qq_coalesce_ref_default_mismatch() {
+    code!("struct Row { v: integer } fn test() { o: Row? = null; b = o ?? -1; }")
+        .error("`??` default of type `integer` is not assignable to `Row` — a default must be usable where the value's type is expected (cast it, or use a matching type) at qq_coalesce_ref_default_mismatch:1:67")
+        .warning("Variable b is never read at qq_coalesce_ref_default_mismatch:1:58");
+}
+
+#[test]
+fn qq_coalesce_numeric_default_mismatch() {
+    code!("fn test() { n: integer? = null; b = n ?? 2.5; }")
+        .error("`??` default of type `float` is not assignable to `integer` — a default must be usable where the value's type is expected (cast it, or use a matching type) at qq_coalesce_numeric_default_mismatch:1:46")
+        .warning("Variable b is never read at qq_coalesce_numeric_default_mismatch:1:36");
+}
+
+#[test]
+fn qq_coalesce_crosstype_default_mismatch() {
+    code!("fn test() { n: integer? = null; b = n ?? \"x\"; }")
+        .error("`??` default of type `text` is not assignable to `integer` — a default must be usable where the value's type is expected (cast it, or use a matching type) at qq_coalesce_crosstype_default_mismatch:1:46")
+        .warning("Variable b is never read at qq_coalesce_crosstype_default_mismatch:1:36");
+}
+
 #[test]
 fn wrong_if() {
     code!("fn test() {if 1 > 0 { 2 } else {\"a\"}\n}")

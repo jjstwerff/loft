@@ -1741,7 +1741,25 @@ impl Parser {
         // Bring the default to the result type (widen narrow→i64, or the original
         // default→value-type convert); report a genuine mismatch (e.g. `text ?? 0`).
         if !self.convert(&mut rhs, &rhs_type, &result_type) && !self.first_pass {
-            self.can_convert(&rhs_type, lhs_type);
+            // @PLN102 arc-E — `convert` FAILED: the default `d` is not assignable to the
+            // coalesce type, i.e. `τ? ?? d` with `d` not usable where a `τ` is expected.
+            // Left unreported (the old dead `can_convert` call), this built a MISMATCHED
+            // coalesce that the interpreter reinterprets one representation as the other:
+            // SIGSEGV (`ref? ?? int` — int used as a DbRef pointer) or silent corruption
+            // (`int? ?? float` — float bits read as int; `int? ?? text` — pointer as int);
+            // `--native` rejected it at rustc (E0308), a backend divergence. Rejecting it
+            // here in the parser closes ALL of that on BOTH backends. Falsified over the
+            // whole corpus/scripts/libs: zero valid `??` fires this (widen-int, `float?`←int
+            // widening, `?? null`, `?? []`, checked-narrow all `convert` cleanly above).
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                code = "coalesce-default-type-mismatch",
+                "`??` default of type `{}` is not assignable to `{}` — a default must be \
+                 usable where the value's type is expected (cast it, or use a matching type)",
+                rhs_type.name(&self.data),
+                result_type.name(&self.data),
+            );
         }
         // `convert(value → result_type)` widens the value branch when widen_ints,
         // and is a no-op otherwise (result_type == lhs_type).

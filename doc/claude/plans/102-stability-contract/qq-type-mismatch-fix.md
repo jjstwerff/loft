@@ -3,10 +3,16 @@
 
 # Fix design — `??` with a type-incompatible default is unsound (SIGSEGV / silent corruption)
 
-> **Status: DESIGN (2026-07-20).** A pre-freeze soundness bug found while building the
-> Gate-2 behaviour corpus ([flip-gate-coverage-gaps.md](flip-gate-coverage-gaps.md)). Arc-E
-> E2 territory (a MISSING error the type checker should fire — one-way door, add pre-flip).
-> Small-safe-step, inert-first fix below.
+> **Status: ✅ IMPLEMENTED (2026-07-20).** A pre-freeze soundness bug found while building
+> the Gate-2 behaviour corpus ([flip-gate-coverage-gaps.md](flip-gate-coverage-gaps.md)).
+> Arc-E E2 (a MISSING error the type checker should fire). Fix landed exactly per the
+> ladder below: the mismatch was ALREADY detected at `operators.rs:1743` (`!convert(...)`)
+> but DROPPED (a dead `can_convert` call whose comment said "report a genuine mismatch") —
+> the fix makes that branch emit `error[coalesce-default-type-mismatch]`. Falsifier passed
+> (0 hits over the whole corpus/scripts/stdlib); the 3 reject classes now error on BOTH
+> backends (no SIGSEGV/garbage/native-only-E0308); all valid shapes still compute. Guards:
+> `tests/parse_errors.rs::qq_coalesce_*`, the code added to `tests/e1_code_set.rs`. The
+> design below is kept as the record.
 
 ## The bug
 
