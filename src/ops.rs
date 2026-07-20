@@ -403,17 +403,19 @@ pub fn op_exclusive_or_long(v1: i64, v2: i64) -> i64 {
 
 #[inline]
 #[must_use]
-/// # Panics
-/// In debug builds, panics if `v2` is outside `0..64`.
 pub fn op_shift_left_long(v1: i64, v2: i64) -> i64 {
     if v1 != i64::MIN && v2 != i64::MIN {
-        // An out-of-range shift amount is C85-null, NOT an internal invariant violation:
-        // return the sentinel so debug and release AGREE. (Release used to wrap the shift by
-        // coincidence; debug tripped a `#[cfg(debug_assertions)]` assert — the nightly red.)
+        // An out-of-range shift amount is C85-null (not an internal invariant violation), so
+        // return the sentinel — debug and release then AGREE (release used to wrap by coincidence).
         if !(0..64).contains(&v2) {
             return i64::MIN;
         }
-        sentinel_long!(v1 << v2, "<<", v1, v2)
+        // A left shift LEGITIMATELY produces i64::MIN (e.g. `1 << 63`), which IS the null sentinel
+        // — loft treats it as null (C85), exactly what pln102-const-out-of-range expects. So do NOT
+        // wrap in `sentinel_long!`: its `debug_assert!(r != i64::MIN)` is a false positive here
+        // (fires under `-C debug-assertions=on` — the nightly Debug-assertions gate red). The bare
+        // shift is identical in release (the assert compiles out); this only drops the bad assert.
+        v1 << v2
     } else {
         i64::MIN
     }
