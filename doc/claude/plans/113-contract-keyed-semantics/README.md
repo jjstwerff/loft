@@ -22,11 +22,15 @@ contract 1 ships with `len`=chars baked in and needs no legacy variant (see Q5, 
 **clearing its blockers** (open plans + the language/lib audits), with new development held off until
 they are — the mechanical minimum is done, but real consumers are what will prove it stable.
 
-**This is explicitly held — not a contract-1 blocker.** The freeze can be declared without it (it only
-matters for *changing* something post-freeze).  Per the owner, clearing the contract-1 blockers takes
-priority and development is paused until then; this design being *ready* is enough for now, and
-**implementation waits until after the freeze** (its first customer is whatever first post-1 change
-proves genuinely unavoidable).
+**The post-1 semantic-keying (arcs A/B/C) is explicitly held — not a contract-1 blocker.** The freeze
+can be declared without it (it only matters for *changing* something post-freeze); implementation waits
+until after the freeze (first customer = whatever first post-1 change proves genuinely unavoidable).
+
+**One piece is active NOW, pre-1: the `len/size` flip rollout** ([FLIP-ROLLOUT.md](FLIP-ROLLOUT.md)).
+Per the owner (2026-07-20) we complete the flip now — a released flipped loft + every published lib
+surviving it — to give the games a **stable base without gaps**, on which the contract-1 validation is
+then built (freeze targeted early September 2026).  This pulls **arc D** (the resolver dependency-gate,
+in its loft-version-keyed form) forward to now; arcs A/B/C stay held.
 
 ## Goal
 
@@ -86,7 +90,7 @@ version, never the N one.  Full design + the decisions this blocks on: [DESIGN.m
 | **A** — Contract propagation + persistence | thread the declaring package's `contract` to each definition at compile; persist per-def (`DEF_CONTRACT` slot, mirroring `DEF_SUPERSEDED`); undeclared defaults to **oldest** (frozen old behavior) | Open |
 | **B** — Compile-time op selection (the mechanism) | keep both variants of a diverged op (e.g. `length_text` + `length_text_v0`) in `src/fill.rs` **and** `src/generation/`; **codegen** picks by the caller's contract; a *post-1* change bumps `CONTRACT_VERSION`. `len/size` illustrates the shape but is **not** a customer (pre-1 swap, no `_v0` needed) | Design-ready; **no trigger yet** |
 | **C** — Author steering keyed to the bump | owned source on the old variant → optional steer to declare the newer contract, via `steer_enabled()` + owned-source gate; keyed to a `contract` bump, not a bare `#superseded` | Open |
-| **D** — Resolver contract-matching for libs | `loft install` resolves the newest lib version whose `contract` predicate the binary's `CONTRACT_VERSION` satisfies → an old binary never pulls a new-contract lib | Open — closes the version-forcing loop |
+| **D** — Resolver dependency-gate | `loft install` skips lib versions the running binary can't satisfy (contract *or* loft-release bound), picks the newest satisfiable → an old binary never pulls a too-new lib | **Active pre-1** in its loft-release-keyed form ([FLIP-ROLLOUT.md](FLIP-ROLLOUT.md)); contract-keyed form post-1 |
 
 ## Phase ordering
 
