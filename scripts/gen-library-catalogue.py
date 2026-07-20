@@ -139,13 +139,28 @@ def loft_overview(loft_release: dict[str, Any]) -> list[str]:
         return []
     tag = loft_release.get("tag") or f"v{ver}"
     published = (loft_release.get("published") or "")[:10]
+    unrel = loft_release.get("unreleased") or {}
+    dev = ""
+    if unrel.get("ahead_by"):
+        dev = (
+            f" Current development: `{unrel.get('branch', 'main')}` is **{unrel['ahead_by']} "
+            f"commit(s) ahead** of the release (`{unrel.get('sha', '')}`) — the basis of the next "
+            f"release (🟢 unreleased core, the analogue of a library's origin/main tier)."
+        )
     lines = [
         "## loft core (the language)",
         "",
         f"The core of the distribution — the loft compiler, interpreter, and bundled stdlib. "
         f"Current release **{ver}** (`{tag}`{', ' + published if published else ''}); `loft install` / "
-        f"self-update verifies these sha256s. The per-function API is in "
+        f"self-update verifies these sha256s.{dev} The per-function API is in "
         f"[LOFT.md](LOFT.md) / [STDLIB.md](STDLIB.md), not here.",
+        "",
+        "**Maturity:** loft uses calendar versions (`YYYY.M.N`) and is stabilising toward "
+        "**contract 1** — the point at which compatibility becomes *absolute*: no working program "
+        "ever breaks ([COMPATIBILITY.md](COMPATIBILITY.md), @PLN102). At contract 1 `main` (core + "
+        "libraries) is stable; the in-flight **branches** (loft's own and the libraries' — see "
+        "[LIBRARY_BRANCHES.md](LIBRARY_BRANCHES.md)) are the pre-contract frontier: they can carry "
+        "contract-breaking work that must be resolved before it merges in.",
         "",
     ]
     for triple in sorted(loft_release.get("targets", {})):

@@ -58,6 +58,14 @@ def sha_map(tag: str) -> dict[str, str]:
     return out
 
 
+def unreleased_core(tag: str) -> dict:
+    """loft's own `main` vs the last release — the 'unreleased core' tier (the analogue of the
+    libs' origin/main tier). ALWAYS refreshed: `main` moves even when the release tag doesn't."""
+    sha = gh(["api", "repos/loft-lang/loft/commits/main", "--jq", ".sha"]).strip()[:7]
+    ahead = gh(["api", f"repos/loft-lang/loft/compare/{tag}...main", "--jq", ".ahead_by"]).strip()
+    return {"branch": "main", "sha": sha, "ahead_by": int(ahead) if ahead.isdigit() else 0}
+
+
 def main() -> int:
     rel = latest_release()
     tag = (rel.get("tagName") or "").strip()
@@ -65,33 +73,39 @@ def main() -> int:
         sys.stderr.write("refresh-loft-release: could not read the latest loft release (gh)\n")
         return 1
     version = tag.lstrip("v")
+    unreleased = unreleased_core(tag)  # cheap; always current
 
-    # Content-addressed reuse: same tag as the committed snapshot -> nothing to do.
+    # Content-addressed reuse of the expensive per-target sha downloads: same tag -> reuse the
+    # committed targets, but still refresh the (cheap, moving) unreleased-core block.
+    targets: dict[str, dict] = {}
     if OUT.exists():
         try:
-            if json.loads(OUT.read_text(encoding="utf-8")).get("tag") == tag:
-                print(f"refresh-loft-release: {tag} unchanged — reused")
-                return 0
+            prev = json.loads(OUT.read_text(encoding="utf-8"))
+            if prev.get("tag") == tag:
+                targets = prev.get("targets") or {}
         except json.JSONDecodeError:
             pass
 
-    shas = sha_map(tag)
-    targets: dict[str, dict] = {}
-    for a in rel.get("assets", []):
-        name = a.get("name", "")
-        if name.startswith(f"loft-{version}-") and name.endswith(".zip"):
-            targets[target_of(name, version)] = {
-                "url": a.get("url", ""),
-                "sha256": shas.get(name, ""),
-                "size": a.get("size", 0),
-            }
+    if not targets:
+        shas = sha_map(tag)
+        for a in rel.get("assets", []):
+            name = a.get("name", "")
+            if name.startswith(f"loft-{version}-") and name.endswith(".zip"):
+                targets[target_of(name, version)] = {
+                    "url": a.get("url", ""),
+                    "sha256": shas.get(name, ""),
+                    "size": a.get("size", 0),
+                }
     if not targets:
         sys.stderr.write(f"refresh-loft-release: {tag} has no loft-*-*.zip assets\n")
         return 1
 
-    snapshot = {"version": version, "tag": tag, "published": rel.get("publishedAt", ""), "targets": targets}
+    snapshot = {
+        "version": version, "tag": tag, "published": rel.get("publishedAt", ""),
+        "targets": targets, "unreleased": unreleased,
+    }
     OUT.write_text(json.dumps(snapshot, indent=2, sort_keys=True, ensure_ascii=False) + "\n", encoding="utf-8")
-    print(f"refresh-loft-release: wrote {OUT} ({tag}, {len(targets)} targets)")
+    print(f"refresh-loft-release: wrote {OUT} ({tag}, {len(targets)} targets, main +{unreleased['ahead_by']})")
     return 0
 
 

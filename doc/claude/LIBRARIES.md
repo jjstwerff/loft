@@ -12,7 +12,9 @@ Read a library's API here, not from a clone (a clone can lag `origin/main`). `�
 
 ## loft core (the language)
 
-The core of the distribution — the loft compiler, interpreter, and bundled stdlib. Current release **2026.7.1** (`v2026.7.1`, 2026-07-05); `loft install` / self-update verifies these sha256s. The per-function API is in [LOFT.md](LOFT.md) / [STDLIB.md](STDLIB.md), not here.
+The core of the distribution — the loft compiler, interpreter, and bundled stdlib. Current release **2026.7.1** (`v2026.7.1`, 2026-07-05); `loft install` / self-update verifies these sha256s. Current development: `main` is **64 commit(s) ahead** of the release (`ca51c79`) — the basis of the next release (🟢 unreleased core, the analogue of a library's origin/main tier). The per-function API is in [LOFT.md](LOFT.md) / [STDLIB.md](STDLIB.md), not here.
+
+**Maturity:** loft uses calendar versions (`YYYY.M.N`) and is stabilising toward **contract 1** — the point at which compatibility becomes *absolute*: no working program ever breaks ([COMPATIBILITY.md](COMPATIBILITY.md), @PLN102). At contract 1 `main` (core + libraries) is stable; the in-flight **branches** (loft's own and the libraries' — see [LIBRARY_BRANCHES.md](LIBRARY_BRANCHES.md)) are the pre-contract frontier: they can carry contract-breaking work that must be resolved before it merges in.
 
 - `aarch64-apple-darwin` — 5.1 MB · sha256 `420f3b5f8d333516191130b78cdf2e33720adf67b9a1a95a6a279b6e39b137a1`
 - `x86_64-apple-darwin` — 5.4 MB · sha256 `ce4e5851ffd946445427b51bf19fb286b70c09abdd3db4518f1f66df21041bba`

@@ -23,5 +23,10 @@
       "url": "https://github.com/loft-lang/loft/releases/download/v2026.7.1/loft-2026.7.1-x86_64-unknown-linux-musl.zip"
     }
   },
+  "unreleased": {
+    "ahead_by": 64,
+    "branch": "main",
+    "sha": "ca51c79"
+  },
   "version": "2026.7.1"
 }
