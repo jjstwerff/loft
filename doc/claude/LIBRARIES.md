@@ -2,7 +2,7 @@
 
 # Installable libraries (loft registry)
 
-**21 libraries are installable from the registry — check here BEFORE implementing functionality, so you don't reimplement existing code.**
+**22 libraries are installable from the registry — check here BEFORE implementing functionality, so you don't reimplement existing code.**
 
 How to use one: `loft install <name>`, then `use <name>;` in your program — or, for an auto-use library, just call the method (no `use` needed).
 
@@ -10,93 +10,514 @@ A package may appear under more than one category (it is listed under each of it
 
 ## asset-format
 
-- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).
-  · loft install glb · `use glb;` · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/glb)
+- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).  · v0.1.2 · `use glb;`
+  · loft install glb · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/glb)
 
 ## cli
 
-- **arguments** — CLI argument parsing — positional args + flags + auto-generated --help.
-  · loft install arguments · `use arguments;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/arguments)
+- **arguments** — CLI argument parsing — positional args + flags + auto-generated --help.  · v0.1.3 · `use arguments;`
+  · loft install arguments · [source](https://github.com/loft-lang/loft-libs-core/tree/main/arguments)
+  · public API:
+    - `pub fn create(name: text, version: text, description: text) -> Args`
+    - `pub fn flag(self: Args, opt_short: text, opt_long: text, desc: text)`
+    - `pub fn option(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)`
+    - `pub fn required(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)`
+    - `pub fn parse(self: Args, argv: vector<text>) -> boolean`
+    - `pub fn has(self: Args, name: text) -> boolean`
+    - `pub fn get(self: Args, name: text) -> text?`
+    - `pub fn ok(self: Args) -> boolean`
+    - `pub fn error_msg(self: Args) -> text`
+    - `pub fn help(self: Args) -> text`
 
 ## crypto
 
-- **crypto** — Cryptographic primitives — SHA-256, HMAC, base64; Ed25519, X25519, HPKE (RFC 9180), ChaCha20-Poly1305 / XChaCha20-Poly1305 / AES-256-GCM, HKDF, OS CSPRNG.
-  · loft install crypto · `use crypto;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/crypto)
+- **crypto** — Cryptographic primitives — SHA-256, HMAC, base64; Ed25519, X25519, HPKE (RFC 9180), ChaCha20-Poly1305 / XChaCha20-Poly1305 / AES-256-GCM, HKDF, OS CSPRNG.  · v0.3.5 · `use crypto;`
+  · loft install crypto · [source](https://github.com/loft-lang/loft-libs-core/tree/main/crypto)
+  · public API:
+    - `pub fn sha256(data: text) -> text`
+    - `pub fn sha256_b64(data_b64: text) -> text`
+    - `pub fn hmac_sha256(key: text, data: text) -> text`
+    - `pub fn base64_encode(data: text) -> text`
+    - `pub fn base64_decode(data: text) -> text`
+    - `pub fn base64url_encode(data: text) -> text`
+    - `pub fn ed25519_public_key(secret_key_b64: text) -> text`
+    - `pub fn ed25519_sign(secret_key_b64: text, message_b64: text) -> text`
+    - `pub fn ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean`
+    - `pub fn x25519_dh(secret_key_b64: text, public_key_b64: text) -> text`
+    - `pub fn hkdf_sha256(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text`
+    - `pub fn hkdf_extract(salt_b64: text, ikm_b64: text) -> text`
+    - `pub fn hkdf_expand(prk_b64: text, info_b64: text, length: integer) -> text`
+    - `pub fn bytes_to_base64(bytes: vector<u8>) -> text`
+    - `pub fn base64_to_bytes(b64: text) -> vector<u8>`
+    - `pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text`
+    - `pub fn aes256gcm_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text`
+    - `pub fn random_bytes(length: integer) -> text`
+    - `pub struct HpkeSealed`
+    - `pub fn hpke_seal_base(pk_r_b64: text, info_b64: text, aad_b64: text, pt_b64: text) -> HpkeSealed`
+    - `pub fn hpke_seal_base_deterministic(pk_r_b64: text, sk_e_b64: text, info_b64: text, aad_b64: text, pt_b64: text) -> HpkeSealed`
+    - `pub fn hpke_open_base(sk_r_b64: text, enc_b64: text, info_b64: text, aad_b64: text, ct_b64: text) -> text`
+    - `pub fn hpke_key_schedule_base_for_test(shared_secret_b64: text, info_b64: text) -> (text, text)`
+    - `pub fn hpke_encap_deterministic_for_test(pk_r_b64: text, sk_e_b64: text) -> (text, text)`
 
 ## encoding
 
-- **cbor** — Signable canonical CBOR (RFC 8949) - pure loft. Encode with canonical map-key ordering + full decode (int/negint/bytes/text/array/map/bool/null); encode->decode->encode byte-identical, native == wasm.
-  · loft install cbor · `use cbor;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/cbor)
+- **cbor** — Signable canonical CBOR (RFC 8949) - pure loft. Encode with canonical map-key ordering + full decode (int/negint/bytes/text/array/map/bool/null); encode->decode->encode byte-identical, native == wasm.  · v0.1.1 · `use cbor;`
+  · loft install cbor · [source](https://github.com/loft-lang/loft-libs-core/tree/main/cbor)
+  · public API:
+    - `pub enum CborValue`
+    - `pub struct CborEntry`
+    - `pub fn encode(v: CborValue) -> vector<u8>`
+    - `pub struct Decoded`
+    - `pub fn decode(bytes: vector<u8>) -> Decoded`
 
 ## game
 
-- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.
-  · loft install game_protocol · `use game_protocol;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol)
-- **input** — Game input for loft — action/axis bindings resolved to per-tick input state.
-  · loft install input · `use input;` · [source](https://github.com/loft-lang/loft-libs-game/tree/main/input)
-- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.
-  · loft install time · `use time;` · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
+- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.  · v0.1.2 · `use game_protocol;`
+  · loft install game_protocol · [source](https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol)
+- **input** — Game input for loft — action/axis bindings resolved to per-tick input state.  · v0.1.0 · `use input;`
+  · loft install input · [source](https://github.com/loft-lang/loft-libs-game/tree/main/input)
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;`
+  · loft install time · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
+  · public API:
+    - `pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer`
+    - `pub fn from_millis(ms: integer) -> integer`
+    - `pub fn from_unix_seconds(secs: integer) -> integer`
+    - `pub fn to_unix_seconds(uts: integer) -> integer`
+    - `pub fn parse(ps: text) -> integer?`
+    - `pub fn year(yt: integer) -> integer`
+    - `pub fn month(mt: integer) -> integer`
+    - `pub fn day(dt: integer) -> integer`
+    - `pub fn hour(ht: integer)   -> integer`
+    - `pub fn minute(mit: integer) -> integer`
+    - `pub fn second(st: integer)  -> integer`
+    - `pub fn weekday(wt: integer) -> integer`
+    - `pub fn add_days(adt: integer, days: integer)     -> integer`
+    - `pub fn add_weeks(awt: integer, weeks: integer)   -> integer`
+    - `pub fn add_seconds(ast: integer, secs: integer)  -> integer`
+    - `pub fn days_between(da: integer, db: integer) -> integer`
+    - `pub fn seconds_between(sa: integer, sb: integer) -> integer`
+    - `pub fn start_of_day(sdt: integer) -> integer`
+    - `pub fn start_of_week(swt: integer) -> integer`
+    - `pub fn at_time(atd: integer, hh: integer, mm: integer, ss: integer) -> integer`
+    - `pub fn combine(cmd: integer, time_text: text) -> integer?`
+    - `pub fn iso_year(iyt: integer) -> integer`
+    - `pub fn iso_week(iwt: integer) -> integer`
+    - `pub fn to_local(lt: integer, offset_min: integer) -> integer`
+    - `pub fn local_day(ldt: integer, offset_min: integer) -> integer`
+    - `pub fn today(offset_min: integer) -> integer`
+    - `pub fn format_date(fdt: integer) -> text`
+    - `pub fn format_time(ftt: integer) -> text`
+    - `pub fn format_seconds(fst: integer) -> text`
+    - `pub fn format_datetime(fdtt: integer) -> text`
+    - `pub fn format_iso(fit: integer) -> text`
+    - `pub fn weekday_name(wnt: integer) -> text`
+    - `pub fn month_name(mnt: integer) -> text`
+    - `pub fn date(dcy: integer, dcmo: integer, dcd: integer) -> DateTime`
+    - `pub fn datetime(tcy: integer, tcmo: integer, tcd: integer,`
+    - `pub fn milliseconds(nms: integer) -> Duration`
+    - `pub fn seconds(nsec: integer)     -> Duration`
+    - `pub fn minutes(nmin: integer)     -> Duration`
+    - `pub fn hours(nhr: integer)        -> Duration`
+    - `pub fn days(nday: integer)        -> Duration`
+    - `pub fn weeks(nwk: integer)        -> Duration`
+    - `pub fn year(self: DateTime)         -> integer`
+    - `pub fn month(self: DateTime)        -> integer`
+    - `pub fn day(self: DateTime)          -> integer`
+    - `pub fn hour(self: DateTime)         -> integer`
+    - `pub fn minute(self: DateTime)       -> integer`
+    - `pub fn second(self: DateTime)       -> integer`
+    - `pub fn weekday(self: DateTime)      -> integer`
+    - `pub fn iso_year(self: DateTime)     -> integer`
+    - `pub fn iso_week(self: DateTime)     -> integer`
+    - `pub fn weekday_name(self: DateTime) -> text`
+    - `pub fn month_name(self: DateTime)   -> text`
+    - `pub fn to_millis(self: DateTime)    -> integer`
+    - `pub fn total_millis(self: Duration)  -> integer`
+    - `pub fn total_seconds(self: Duration) -> integer`
+    - `pub fn total_minutes(self: Duration) -> integer`
+    - `pub fn total_hours(self: Duration)   -> integer`
+    - `pub fn total_days(self: Duration)    -> integer`
+    - `pub fn OpLt(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpLe(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpGt(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpGe(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpEq(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpNe(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpMin(self: DateTime, other: DateTime) -> Duration`
+    - `pub fn OpAdd(self: DateTime, span: Duration)  -> DateTime`
+    - `pub fn minus(self: DateTime, span: Duration) -> DateTime`
+    - `pub fn negate(self: Duration) -> Duration`
+    - `pub fn OpAdd(self: Duration, other: Duration) -> Duration`
+    - `pub fn OpMin(self: Duration, other: Duration) -> Duration`
+    - `pub fn OpMul(self: Duration, factor: integer) -> Duration`
+    - `pub fn OpLt(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpLe(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpGt(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpGe(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpEq(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpNe(self: Duration, other: Duration) -> boolean`
+    - `pub fn to_text(self: DateTime, spec: text) -> text`
+    - `pub fn to_text(self: Duration, spec: text) -> text`
 
 ## geometry
 
-- **hex_grid** — Hex-grid geometry — axial/pixel conversion, neighbours, distance, and corner offsets.
-  · loft install hex_grid · `use hex_grid;` · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_grid)
-- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).
-  · loft install mesh3d · `use mesh3d;` · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/mesh3d)
-- **shapes** — 2D geometry primitives — Rect, Circle, overlap tests, clamp.  Pure-loft, no other deps.
-  · loft install shapes · `use shapes;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/shapes)
+- **hex_grid** — Hex-grid geometry — axial/pixel conversion, neighbours, distance, and corner offsets.  · v0.1.0 · `use hex_grid;`
+  · loft install hex_grid · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_grid)
+- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).  · v0.1.1 · `use mesh3d;`
+  · loft install mesh3d · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/mesh3d)
+- **shapes** — 2D geometry primitives — Rect, Circle, overlap tests, clamp.  Pure-loft, no other deps.  · v0.3.0 · `use shapes;`
+  · loft install shapes · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/shapes)
+  · public API:
+    - `pub struct Rect`
+    - `pub struct Circle`
+    - `pub fn rects_overlap(a: const Rect, b: const Rect) -> boolean`
+    - `pub fn circles_overlap(a: const Circle, b: const Circle) -> boolean`
+    - `pub fn rect_circle_overlap(r: const Rect, c: const Circle) -> boolean`
+    - `pub struct Overlap`
+    - `pub fn rect_overlap_depth(a: const Rect, b: const Rect) -> Overlap`
+    - `pub fn aabb_overlap(ax: float, ay: float, aw: float, ah: float,`
+    - `pub fn aabb_depth_x(ax: float, ay: float, aw: float, ah: float,`
+    - `pub fn aabb_depth_y(ax: float, ay: float, aw: float, ah: float,`
 
 ## graphics
 
-- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).
-  · loft install glb · `use glb;` · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/glb)
-- **graphics** — 2D canvas + 3D rendering for loft (Canvas pixel surface, Mesh / Scene / glTF, OpenGL bindings).
-  · loft install graphics · `use graphics;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics)
-- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.
-  · loft install gridmesh · `use gridmesh;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
-- **imaging** — PNG load/save + pixel manipulation for loft (Stage A — interpreter + native; wasm bridge deferred pending loft-host-ffi crate).
-  · loft install imaging · `use imaging;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/imaging)
-- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).
-  · loft install mesh3d · `use mesh3d;` · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/mesh3d)
+- **glb** — glTF 2.0 binary (.glb) writer — exports Mesh / Scene as a glb file readable by Blender, three.js, gltf-validator.  Standalone (pure-loft, no GPU).  · v0.1.2 · `use glb;`
+  · loft install glb · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/glb)
+- **graphics** — 2D canvas + 3D rendering for loft (Canvas pixel surface, Mesh / Scene / glTF, OpenGL bindings).  · v0.4.3 · `use graphics;`
+  · loft install graphics · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics)
+- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;`
+  · loft install gridmesh · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
+  · public API:
+    - `pub struct CellRef`
+    - `pub fn enc_coord(x: integer, y: integer) -> integer`
+    - `pub fn build_index(xs: vector<integer>, ys: vector<integer>) -> hash<CellRef[ck]>`
+    - `pub fn axial_dq(d: integer) -> integer`
+    - `pub fn axial_dr(d: integer) -> integer`
+    - `pub fn step_x(x: integer, y: integer, d: integer, k: integer) -> integer`
+    - `pub fn step_y(_x: integer, y: integer, d: integer, k: integer) -> integer`
+    - `pub fn idx_at(cidx: hash<CellRef[ck]>, x: integer, y: integer) -> integer`
+    - `pub fn nbr_count_idx(cidx: hash<CellRef[ck]>, cx: integer, cy: integer) -> integer`
+    - `pub struct SegMesh`
+    - `pub fn seg_mesh_new() -> SegMesh`
+    - `pub fn emit_segment(m: &SegMesh, kind: integer,`
+    - `pub fn seg_len(m: SegMesh) -> integer`
+    - `pub fn seg_mesh_append(dst: &SegMesh, src: SegMesh)`
+    - `pub struct ChunkKey`
+    - `pub fn chunk_of(x: integer, y: integer, shift: integer) -> ChunkKey`
+    - `pub struct ChunkField`
+    - `pub fn field_new(layout: integer, xs: vector<integer>, ys: vector<integer>,`
+    - `pub fn field_add_cell(f: &ChunkField, x: integer, y: integer)`
+    - `pub fn field_mark_dirty(f: &ChunkField, x: integer, y: integer)`
+    - `pub fn field_remove_cell(f: &ChunkField, x: integer, y: integer)`
+    - `pub fn clear_dirty(f: &ChunkField)`
+    - `pub fn dirty_count(f: ChunkField) -> integer`
+    - `pub fn chunk_is_dirty(f: ChunkField, x: integer, y: integer) -> boolean`
+    - `pub struct ChunkInput`
+    - `pub fn all_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput>`
+    - `pub fn collect_dirty_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput>`
+    - `pub struct GroupKey`
+    - `pub struct GroupInput`
+    - `pub fn group_of(cx: integer, cy: integer, group_dim: integer) -> GroupKey`
+    - `pub fn all_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>`
+    - `pub fn collect_dirty_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>`
+- **imaging** — PNG load/save + pixel manipulation for loft (Stage A — interpreter + native; wasm bridge deferred pending loft-host-ffi crate).  · v0.2.0 · `use imaging;`
+  · loft install imaging · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/imaging)
+- **mesh3d** — 3D geometry primitives — Vec/Mat, Mesh, Scene, Camera, Light.  Standalone (pure-loft, no GPU).  · v0.1.1 · `use mesh3d;`
+  · loft install mesh3d · [source](https://github.com/loft-lang/loft-libs-assets/tree/main/mesh3d)
 
 ## math
 
-- **random** — Pseudo-random number generation — PCG-64 thread-local PRNG with rand_seed reproducibility.
-  · loft install random · `use random;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/random)
+- **random** — Pseudo-random number generation — PCG-64 thread-local PRNG with rand_seed reproducibility.  · v0.3.0 · `use random;`
+  · loft install random · [source](https://github.com/loft-lang/loft-libs-core/tree/main/random)
+  · public API:
+    - `pub fn rand(lo: integer, hi: integer) -> integer?`
+    - `pub fn rand_seed(seed: integer)`
+    - `pub fn rand_indices(n: integer) -> vector<integer>`
+    - `pub struct RandStream`
+    - `pub fn seed_stream(seed: integer) -> RandStream`
+    - `pub fn get(self: RandStream, lo: integer, hi: integer) -> integer?`
+    - `pub fn indices(self: RandStream, n: integer) -> vector<integer>`
 
 ## net
 
-- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.
-  · loft install game_protocol · `use game_protocol;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol)
-- **server** — HTTP + WebSocket server — TCP sockets + tungstenite via cdylib.
-  · loft install server · `use server;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/server)
-- **web** — HTTP client + WebSocket client — ureq + tungstenite via cdylib.
-  · loft install web · `use web;` · [source](https://github.com/loft-lang/loft-libs-net/tree/main/web)
+- **game_protocol** — Packet framing + ack/retransmit for loft game-networking demos.  · v0.1.2 · `use game_protocol;`
+  · loft install game_protocol · [source](https://github.com/loft-lang/loft-libs-net/tree/main/game_protocol)
+- **server** — HTTP + WebSocket server — TCP sockets + tungstenite via cdylib.  · v0.3.1 · `use server;`
+  · loft install server · [source](https://github.com/loft-lang/loft-libs-net/tree/main/server)
+  · public API:
+    - `pub struct Server`
+    - `pub struct WebSocket`
+    - `pub struct Request`
+    - `pub fn listen(port: integer) -> Server`
+    - `pub fn next_nonblocking(self: Server) -> Request`
+    - `pub fn next(self: Server) -> Request`
+    - `pub fn respond(self: Request, status: integer, body: text)`
+    - `pub fn respond_typed(self: Request, status: integer, body: text, content_type: text)`
+    - `pub fn header(self: Request, name: text) -> text`
+    - `pub fn respond_with_headers(self: Request, status: integer, body: text, headers: vector<text>)`
+    - `pub fn cors_headers(origin: text) -> vector<text>`
+    - `pub fn serve_range(self: Request, body: text, extra: vector<text>) -> boolean`
+    - `pub fn serve_data(self: Request, body: text, etag: text, origin: text) -> boolean`
+    - `pub fn respond_html(self: Request, body: text)`
+    - `pub fn respond_css(self: Request, body: text)`
+    - `pub fn respond_js(self: Request, body: text)`
+    - `pub fn respond_loft(self: Request, body: text)`
+    - `pub fn respond_404(self: Request)`
+    - `pub fn close(self: Server)`
+    - `pub fn ws_upgrade() -> WebSocket`
+    - `pub fn next(self: WebSocket) -> text?`
+    - `pub fn send(self: WebSocket, msg: text) -> boolean`
+    - `pub fn send_binary(self: WebSocket, msg: text) -> boolean`
+    - `pub fn last_opcode(self: WebSocket) -> integer`
+    - `pub fn close(self: WebSocket)`
+    - `pub struct WsEvent`
+    - `pub fn run(self: Server, on_event: fn(WsEvent))`
+    - `pub fn poll_event(self: Server) -> WsEvent`
+    - `pub fn respond_html(self: Server, body: text)`
+    - `pub fn respond_typed(self: Server, status: integer, body: text, content_type: text)`
+    - `pub fn respond_404(self: Server)`
+    - `pub fn send_to(self: Server, client_id: integer, msg: text) -> boolean`
+    - `pub fn broadcast(self: Server, msg: text) -> integer`
+    - `pub fn disconnect(self: Server, client_id: integer)`
+- **web** — HTTP client + WebSocket client — ureq + tungstenite via cdylib.  · v0.3.0 · `use web;`
+  · loft install web · [source](https://github.com/loft-lang/loft-libs-net/tree/main/web)
+  · public API:
+    - `pub struct HttpResponse`
+    - `pub fn ok(self: HttpResponse) -> boolean`
+    - `pub fn http_get(url: text) -> HttpResponse`
+    - `pub fn http_post(url: text, body: text) -> HttpResponse`
+    - `pub fn http_put(url: text, body: text) -> HttpResponse`
+    - `pub fn http_delete(url: text) -> HttpResponse`
+    - `pub fn http_get_h(url: text, headers: vector<text>) -> HttpResponse`
+    - `pub fn http_post_h(url: text, body: text, headers: vector<text>) -> HttpResponse`
+    - `pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse`
+    - `pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse`
+    - `pub fn http_get_range(url: text, offset: integer, len: integer) -> HttpResponse`
+    - `pub fn http_get_range_h(url: text, offset: integer, len: integer, headers: vector<text>) -> HttpResponse`
+    - `pub fn http_size(url: text) -> integer`
+    - `pub struct WsHandler`
+    - `pub fn ws_handler(url: text) -> WsHandler`
+    - `pub fn send(self: WsHandler, msg: text) -> boolean`
+    - `pub fn send_binary(self: WsHandler, msg: text) -> boolean`
+    - `pub fn last_opcode(self: WsHandler) -> integer`
+    - `pub fn pump(self: WsHandler, on_message: fn(text)) -> integer`
+    - `pub fn try_recv(self: WsHandler) -> text?`
+    - `pub fn close(self: WsHandler)`
+    - `pub fn sleep_ms(ms: integer)`
+    - `pub fn pack_reset()`
+    - `pub fn pack_u8(b: integer)`
+    - `pub fn pack_u16_le(v: integer)`
+    - `pub fn pack_u32_le(v: integer)`
+    - `pub fn pack_take() -> text`
+    - `pub fn byte_at(idx: integer, t: text) -> integer`
+    - `pub struct WsGroupEvent`
+    - `pub struct WsGroup`
+    - `pub fn ws_group() -> WsGroup`
+    - `pub fn add(self: WsGroup, h: WsHandler)`
+    - `pub fn poll(self: WsGroup) -> WsGroupEvent`
+    - `pub fn frame_yield()`
 
 ## random
 
-- **random** — Pseudo-random number generation — PCG-64 thread-local PRNG with rand_seed reproducibility.
-  · loft install random · `use random;` · [source](https://github.com/loft-lang/loft-libs-core/tree/main/random)
+- **random** — Pseudo-random number generation — PCG-64 thread-local PRNG with rand_seed reproducibility.  · v0.3.0 · `use random;`
+  · loft install random · [source](https://github.com/loft-lang/loft-libs-core/tree/main/random)
+  · public API:
+    - `pub fn rand(lo: integer, hi: integer) -> integer?`
+    - `pub fn rand_seed(seed: integer)`
+    - `pub fn rand_indices(n: integer) -> vector<integer>`
+    - `pub struct RandStream`
+    - `pub fn seed_stream(seed: integer) -> RandStream`
+    - `pub fn get(self: RandStream, lo: integer, hi: integer) -> integer?`
+    - `pub fn indices(self: RandStream, n: integer) -> vector<integer>`
 
 ## text
 
-- **html** — HTML escaping helpers for loft.
-  · loft install html · `use html;` · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/html)
-- **markdown** — Markdown-to-HTML rendering for loft — headings, inline spans, slugify, link rewriting.
-  · loft install markdown · `use markdown;` · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/markdown)
-- **regex** — Small-script regex: matches / find / split / match_groups / replace, with a thread-local pattern cache.
-  · loft install regex · auto-use (no `use` needed) · [source](https://github.com/loft-lang/loft-libs-core/tree/main/regex)
+- **html** — HTML escaping helpers for loft.  · v0.1.0 · `use html;`
+  · loft install html · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/html)
+- **markdown** — Markdown-to-HTML rendering for loft — headings, inline spans, slugify, link rewriting.  · v0.1.0 · `use markdown;`
+  · loft install markdown · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/markdown)
+- **regex** — Small-script regex: matches / find / split / match_groups / replace, with a thread-local pattern cache.  · v0.2.1 · auto-use (no `use` needed)
+  · loft install regex · [source](https://github.com/loft-lang/loft-libs-core/tree/main/regex)
+  · public API:
+    - `pub fn find(pattern: text, input: text) -> integer`
+    - `pub fn split(pattern: text, input: text) -> iterator<text>`
+    - `pub fn matches(both: text, pattern: text) -> boolean`
+    - `pub fn regex_find(self: text, pattern: text) -> integer`
+    - `pub fn regex_split(self: text, pattern: text) -> iterator<text>`
 
 ## time
 
-- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.
-  · loft install time · `use time;` · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;`
+  · loft install time · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
+  · public API:
+    - `pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer`
+    - `pub fn from_millis(ms: integer) -> integer`
+    - `pub fn from_unix_seconds(secs: integer) -> integer`
+    - `pub fn to_unix_seconds(uts: integer) -> integer`
+    - `pub fn parse(ps: text) -> integer?`
+    - `pub fn year(yt: integer) -> integer`
+    - `pub fn month(mt: integer) -> integer`
+    - `pub fn day(dt: integer) -> integer`
+    - `pub fn hour(ht: integer)   -> integer`
+    - `pub fn minute(mit: integer) -> integer`
+    - `pub fn second(st: integer)  -> integer`
+    - `pub fn weekday(wt: integer) -> integer`
+    - `pub fn add_days(adt: integer, days: integer)     -> integer`
+    - `pub fn add_weeks(awt: integer, weeks: integer)   -> integer`
+    - `pub fn add_seconds(ast: integer, secs: integer)  -> integer`
+    - `pub fn days_between(da: integer, db: integer) -> integer`
+    - `pub fn seconds_between(sa: integer, sb: integer) -> integer`
+    - `pub fn start_of_day(sdt: integer) -> integer`
+    - `pub fn start_of_week(swt: integer) -> integer`
+    - `pub fn at_time(atd: integer, hh: integer, mm: integer, ss: integer) -> integer`
+    - `pub fn combine(cmd: integer, time_text: text) -> integer?`
+    - `pub fn iso_year(iyt: integer) -> integer`
+    - `pub fn iso_week(iwt: integer) -> integer`
+    - `pub fn to_local(lt: integer, offset_min: integer) -> integer`
+    - `pub fn local_day(ldt: integer, offset_min: integer) -> integer`
+    - `pub fn today(offset_min: integer) -> integer`
+    - `pub fn format_date(fdt: integer) -> text`
+    - `pub fn format_time(ftt: integer) -> text`
+    - `pub fn format_seconds(fst: integer) -> text`
+    - `pub fn format_datetime(fdtt: integer) -> text`
+    - `pub fn format_iso(fit: integer) -> text`
+    - `pub fn weekday_name(wnt: integer) -> text`
+    - `pub fn month_name(mnt: integer) -> text`
+    - `pub fn date(dcy: integer, dcmo: integer, dcd: integer) -> DateTime`
+    - `pub fn datetime(tcy: integer, tcmo: integer, tcd: integer,`
+    - `pub fn milliseconds(nms: integer) -> Duration`
+    - `pub fn seconds(nsec: integer)     -> Duration`
+    - `pub fn minutes(nmin: integer)     -> Duration`
+    - `pub fn hours(nhr: integer)        -> Duration`
+    - `pub fn days(nday: integer)        -> Duration`
+    - `pub fn weeks(nwk: integer)        -> Duration`
+    - `pub fn year(self: DateTime)         -> integer`
+    - `pub fn month(self: DateTime)        -> integer`
+    - `pub fn day(self: DateTime)          -> integer`
+    - `pub fn hour(self: DateTime)         -> integer`
+    - `pub fn minute(self: DateTime)       -> integer`
+    - `pub fn second(self: DateTime)       -> integer`
+    - `pub fn weekday(self: DateTime)      -> integer`
+    - `pub fn iso_year(self: DateTime)     -> integer`
+    - `pub fn iso_week(self: DateTime)     -> integer`
+    - `pub fn weekday_name(self: DateTime) -> text`
+    - `pub fn month_name(self: DateTime)   -> text`
+    - `pub fn to_millis(self: DateTime)    -> integer`
+    - `pub fn total_millis(self: Duration)  -> integer`
+    - `pub fn total_seconds(self: Duration) -> integer`
+    - `pub fn total_minutes(self: Duration) -> integer`
+    - `pub fn total_hours(self: Duration)   -> integer`
+    - `pub fn total_days(self: Duration)    -> integer`
+    - `pub fn OpLt(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpLe(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpGt(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpGe(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpEq(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpNe(self: DateTime, other: DateTime) -> boolean`
+    - `pub fn OpMin(self: DateTime, other: DateTime) -> Duration`
+    - `pub fn OpAdd(self: DateTime, span: Duration)  -> DateTime`
+    - `pub fn minus(self: DateTime, span: Duration) -> DateTime`
+    - `pub fn negate(self: Duration) -> Duration`
+    - `pub fn OpAdd(self: Duration, other: Duration) -> Duration`
+    - `pub fn OpMin(self: Duration, other: Duration) -> Duration`
+    - `pub fn OpMul(self: Duration, factor: integer) -> Duration`
+    - `pub fn OpLt(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpLe(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpGt(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpGe(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpEq(self: Duration, other: Duration) -> boolean`
+    - `pub fn OpNe(self: Duration, other: Duration) -> boolean`
+    - `pub fn to_text(self: DateTime, spec: text) -> text`
+    - `pub fn to_text(self: Duration, spec: text) -> text`
+
+## uncategorised
+
+- **ssh** — SSH client — drive an interactive remote shell (e.g. attach tmux) over password auth. Native-only.  · v0.1.0 · `use ssh;`
+  · loft install ssh · [source](https://github.com/loft-lang/loft-libs-net/tree/main/ssh)
 
 ## world
 
-- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.
-  · loft install gridmesh · `use gridmesh;` · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
-- **hex_terrain** — The OVERLAND terrain layer of the `hex_*` family: a coarse overland hex lattice
-  · loft install hex_terrain · `use hex_terrain;` · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_terrain)
-- **hex_world** — Sparse 32x32-chunk hex-grid world data model — Cell / Chunk / World with binary save/load.
-  · loft install hex_world · `use hex_world;` · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_world)
+- **gridmesh** — Chunk-local mesh-generation primitives for world-building algorithms.  · v0.1.2 · `use gridmesh;`
+  · loft install gridmesh · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/gridmesh)
+  · public API:
+    - `pub struct CellRef`
+    - `pub fn enc_coord(x: integer, y: integer) -> integer`
+    - `pub fn build_index(xs: vector<integer>, ys: vector<integer>) -> hash<CellRef[ck]>`
+    - `pub fn axial_dq(d: integer) -> integer`
+    - `pub fn axial_dr(d: integer) -> integer`
+    - `pub fn step_x(x: integer, y: integer, d: integer, k: integer) -> integer`
+    - `pub fn step_y(_x: integer, y: integer, d: integer, k: integer) -> integer`
+    - `pub fn idx_at(cidx: hash<CellRef[ck]>, x: integer, y: integer) -> integer`
+    - `pub fn nbr_count_idx(cidx: hash<CellRef[ck]>, cx: integer, cy: integer) -> integer`
+    - `pub struct SegMesh`
+    - `pub fn seg_mesh_new() -> SegMesh`
+    - `pub fn emit_segment(m: &SegMesh, kind: integer,`
+    - `pub fn seg_len(m: SegMesh) -> integer`
+    - `pub fn seg_mesh_append(dst: &SegMesh, src: SegMesh)`
+    - `pub struct ChunkKey`
+    - `pub fn chunk_of(x: integer, y: integer, shift: integer) -> ChunkKey`
+    - `pub struct ChunkField`
+    - `pub fn field_new(layout: integer, xs: vector<integer>, ys: vector<integer>,`
+    - `pub fn field_add_cell(f: &ChunkField, x: integer, y: integer)`
+    - `pub fn field_mark_dirty(f: &ChunkField, x: integer, y: integer)`
+    - `pub fn field_remove_cell(f: &ChunkField, x: integer, y: integer)`
+    - `pub fn clear_dirty(f: &ChunkField)`
+    - `pub fn dirty_count(f: ChunkField) -> integer`
+    - `pub fn chunk_is_dirty(f: ChunkField, x: integer, y: integer) -> boolean`
+    - `pub struct ChunkInput`
+    - `pub fn all_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput>`
+    - `pub fn collect_dirty_inputs(f: ChunkField, halo_k: integer) -> vector<ChunkInput>`
+    - `pub struct GroupKey`
+    - `pub struct GroupInput`
+    - `pub fn group_of(cx: integer, cy: integer, group_dim: integer) -> GroupKey`
+    - `pub fn all_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>`
+    - `pub fn collect_dirty_groups(f: ChunkField, group_dim: integer) -> vector<GroupInput>`
+- **hex_terrain** — The OVERLAND terrain layer of the `hex_*` family: a coarse overland hex lattice  · v0.1.1 · `use hex_terrain;`
+  · loft install hex_terrain · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_terrain)
+  · public API:
+    - `pub struct TerrainType`
+    - `pub struct TerrainParams`
+    - `pub fn terrain_params(seed: integer, tile: float) -> TerrainParams`
+    - `pub struct Terrain`
+    - `pub fn terrain_new(nx: integer, ny: integer) -> Terrain`
+    - `pub fn terrain_idx(t: Terrain, c: integer, r: integer) -> integer`
+    - `pub fn terrain_center(p: TerrainParams, c: integer, r: integer) -> (float, float)`
+    - `pub fn terrain_flow_to(t: Terrain, c: integer, r: integer) -> (integer, integer)`
+    - `pub fn terrain_hash01(seed: integer, ix: integer, iy: integer, ch: integer) -> float`
+    - `pub fn terrain_vnoise(seed: integer, x: float, y: float, wl: float, ch: integer) -> float`
+    - `pub fn terrain_fbm(seed: integer, x: float, y: float, wl0: float, octaves: integer, ch: integer) -> float`
+    - `pub fn terrain_detail_at(p: TerrainParams, x: float, y: float) -> float`
+    - `pub fn terrain_ridge_at(p: TerrainParams, x: float, y: float) -> float`
+    - `pub fn terrain_hydrology(t: Terrain, p: TerrainParams, lake_mat: integer)`
+    - `pub fn terrain_relief_pass(t: Terrain, types: vector<TerrainType>, p: TerrainParams)`
+    - `pub struct TerrainSurf`
+    - `pub fn terrain_surface_at(t: Terrain, types: vector<TerrainType>, p: TerrainParams, x: float, y: float) -> TerrainSurf`
+    - `pub fn terrain_blend_h(t: Terrain, p: TerrainParams, x: float, y: float) -> float`
+    - `pub fn terrain_lake_field(p: TerrainParams, x: float, y: float, lakey: float) -> float`
+    - `pub fn terrain_water_at(t: Terrain, types: vector<TerrainType>, p: TerrainParams, x: float, y: float) -> boolean`
+    - `pub struct TerrainRiver`
+    - `pub fn terrain_edge_cross(p: TerrainParams, ca: integer, ra: integer, cb: integer, rb: integer) -> (float, float)`
+    - `pub fn terrain_control_pt(p: TerrainParams, c: integer, r: integer) -> (float, float)`
+    - `pub fn terrain_rivers(t: Terrain, types: vector<TerrainType>, p: TerrainParams) -> vector<TerrainRiver>`
+    - `pub struct TerrainSample`
+    - `pub fn terrain_sample(t: Terrain, types: vector<TerrainType>, p: TerrainParams, rivers: vector<TerrainRiver>, x: float, y: float) -> TerrainSample`
+- **hex_world** — Sparse 32x32-chunk hex-grid world data model — Cell / Chunk / World with binary save/load.  · v0.1.2 · `use hex_world;`
+  · loft install hex_world · [source](https://github.com/loft-lang/loft-libs-world/tree/main/hex_world)
+  · public API:
+    - `pub struct Cell`
+    - `pub struct Chunk`
+    - `pub struct World`
+    - `pub fn chunk_idx_32(v: integer) -> integer`
+    - `pub fn hex_idx_32(v: integer) -> integer`
+    - `pub fn cell_empty() -> Cell`
+    - `pub fn build_chunk(cx: integer, cz: integer) -> Chunk`
+    - `pub fn world_empty() -> World`
+    - `pub fn has_chunk(self: World, q: integer, r: integer) -> boolean`
+    - `pub fn ensure_chunk(self: &World, q: integer, r: integer)`
+    - `pub fn get_cell(self: World, q: integer, r: integer) -> Cell`
+    - `pub fn set_cell(self: &World, q: integer, r: integer, value: Cell)`
+    - `pub fn cell_count(self: World) -> integer`
+    - `pub fn neighbour_count(self: World, q: integer, r: integer) -> integer`
+    - `pub fn tick_and_decay(self: &World, base_lifetime: integer,`
+    - `pub fn world_save(self: World, path: text)`
+    - `pub fn world_load(self: &World, path: text) -> integer`

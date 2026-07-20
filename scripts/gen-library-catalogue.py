@@ -132,16 +132,23 @@ def render(index: dict[str, Any]) -> str:
                 "auto-use (no `use` needed)" if triggers else f"`use {name};`"
             )
 
-            # Version is deliberately NOT shown: an agent needs to know a
-            # capability EXISTS (name + description), not its exact version —
-            # `loft install` resolves the version at use time.  Emitting versions
-            # only created drift + a treadmill (every registry release forced a
-            # regen), so they're dropped.  `latest`/`entry` are still computed
-            # above for the auto-use (`triggers`) hint.
-            lines.append(f"- **{name}** — {description}")
-            lines.append(
-                f"  · loft install {name} · {hint} · [source]({homepage})"
-            )
+            # The entry now carries the LATEST version + its public API surface
+            # (`entry['api']` — the SAME sigs `loft api <name>` prints and the
+            # registry `pkg_api_items` extractor produces).  So an agent finds a
+            # library's exact functions HERE, in one always-regenerated place,
+            # instead of reading a lib clone or the installed copy (both go stale
+            # and lie — a merged rename reads as "never happened").  The cost is a
+            # regen when a library publishes a new API; the CI `--check` drift gate
+            # keeps this file honest so the staleness can't hide.
+            lines.append(f"- **{name}** — {description}  · v{latest} · {hint}")
+            lines.append(f"  · loft install {name} · [source]({homepage})")
+            api = entry.get("api") or []
+            if api:
+                lines.append("  · public API:")
+                for item in api:
+                    sig = (item.get("sig") or "").strip()
+                    if sig:
+                        lines.append(f"    - `{sig}`")
         lines.append("")
 
     return "\n".join(lines).rstrip("\n") + "\n"

@@ -33,6 +33,57 @@
           "size": 4920,
           "subpath": "arguments",
           "url": "https://github.com/loft-lang/loft-libs-core/releases/download/arguments-v0.1.2/arguments-0.1.2.tar.gz"
+        },
+        "0.1.3": {
+          "api": [
+            {
+              "doc": "",
+              "sig": "pub fn create(name: text, version: text, description: text) -> Args"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn flag(self: Args, opt_short: text, opt_long: text, desc: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn option(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn required(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn parse(self: Args, argv: vector<text>) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn has(self: Args, name: text) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn get(self: Args, name: text) -> text?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn ok(self: Args) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn error_msg(self: Args) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn help(self: Args) -> text"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-04T21:53:22Z",
+          "sha256": "eb045f2fb4ed3eb284b66832d3aa3fde99a6243f351aefeb4338c595530e9f0f",
+          "size": 4813,
+          "subpath": "arguments",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/arguments-v0.1.3/arguments-0.1.3.tar.gz"
         }
       },
       "yanked": []
@@ -52,6 +103,38 @@
           "size": 4799,
           "subpath": "cbor",
           "url": "https://github.com/loft-lang/loft-libs-core/releases/download/cbor-v0.1.0/cbor-0.1.0.tar.gz"
+        },
+        "0.1.1": {
+          "api": [
+            {
+              "doc": "A dynamic CBOR value.  Mirrors the stdlib `JsonValue`, with CBOR's extra\n`CBytes` (native byte string) and the integer split that CBOR makes at the\nwire level folded into one signed `CInt`.",
+              "sig": "pub enum CborValue"
+            },
+            {
+              "doc": "One key/value pair of a `CMap`.",
+              "sig": "pub struct CborEntry"
+            },
+            {
+              "doc": "Encode a `CborValue` to canonical CBOR bytes.",
+              "sig": "pub fn encode(v: CborValue) -> vector<u8>"
+            },
+            {
+              "doc": "The result of decoding one CBOR value: the `value`, the byte position just\npast it (`next`), and `ok` — false on any malformed / non-canonical /\ntruncated input.  Decoding never crashes (loft-safe): a bad byte stream\nyields ok=false rather than a trap.",
+              "sig": "pub struct Decoded"
+            },
+            {
+              "doc": "Decode canonical CBOR bytes into a `CborValue`.  Returns `ok=false` on any\nmalformed, non-canonical, or truncated input — and rejects trailing bytes\nafter the top-level value.  Never crashes.",
+              "sig": "pub fn decode(bytes: vector<u8>) -> Decoded"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-04T21:53:24Z",
+          "sha256": "74424936a0079985cb598e40f24b6cdcf876f51e4afc162086836965d748e76c",
+          "size": 4819,
+          "subpath": "cbor",
+          "triggers": [],
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/cbor-v0.1.1/cbor-0.1.1.tar.gz"
         }
       },
       "yanked": []
@@ -116,6 +199,113 @@
           "size": 46506,
           "subpath": "crypto",
           "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.3.4/crypto-0.3.4.tar.gz"
+        },
+        "0.3.5": {
+          "api": [
+            {
+              "doc": "SHA-256 hash of a string. Returns 64-char hex string.",
+              "sig": "pub fn sha256(data: text) -> text"
+            },
+            {
+              "doc": "SHA-256 of the RAW BYTES decoded from base64 `data_b64`. Returns base64 of the\n32-byte digest. Use this to hash arbitrary byte strings (ciphertext, canonical\nCBOR) that are not valid UTF-8 and so cannot be passed to `sha256` as text.",
+              "sig": "pub fn sha256_b64(data_b64: text) -> text"
+            },
+            {
+              "doc": "HMAC-SHA256 of data with key. Returns 64-char hex string.",
+              "sig": "pub fn hmac_sha256(key: text, data: text) -> text"
+            },
+            {
+              "doc": "Base64 encode a string.",
+              "sig": "pub fn base64_encode(data: text) -> text"
+            },
+            {
+              "doc": "Base64 decode a string.",
+              "sig": "pub fn base64_decode(data: text) -> text"
+            },
+            {
+              "doc": "Base64url encode (JWT-safe, no padding).",
+              "sig": "pub fn base64url_encode(data: text) -> text"
+            },
+            {
+              "doc": "Derive the 32-byte public key (base64) from a 32-byte secret seed (base64).",
+              "sig": "pub fn ed25519_public_key(secret_key_b64: text) -> text"
+            },
+            {
+              "doc": "Sign the base64 `message` bytes with the 32-byte secret seed (base64).\nReturns the 64-byte signature, base64.",
+              "sig": "pub fn ed25519_sign(secret_key_b64: text, message_b64: text) -> text"
+            },
+            {
+              "doc": "Verify a signature over the base64 `message` bytes under a public key.\nReturns true iff the signature is valid.",
+              "sig": "pub fn ed25519_verify(public_key_b64: text, message_b64: text, signature_b64: text) -> boolean"
+            },
+            {
+              "doc": "A secret key is a 32-byte X25519 scalar (base64); a public key is the\n32-byte u-coordinate (base64).  Returns the raw 32-byte shared secret\n(base64), or \"\" if either input is the wrong length.  Run the result\nthrough `hkdf_sha256` before using it as a key (RFC 7748 §6.1).",
+              "sig": "pub fn x25519_dh(secret_key_b64: text, public_key_b64: text) -> text"
+            },
+            {
+              "doc": "Derive `length` bytes of output keying material from `ikm`, `salt`, and\n`info` (each base64).  An empty base64 `salt` selects the all-zero salt.\nReturns the base64 OKM, or \"\" if `length` exceeds 255*32 or is <= 0.",
+              "sig": "pub fn hkdf_sha256(salt_b64: text, ikm_b64: text, info_b64: text, length: integer) -> text"
+            },
+            {
+              "doc": "HKDF-Extract (RFC 5869 §2.2): the 32-byte PRK (base64) HMAC-SHA256(salt, ikm).\nAn empty base64 `salt` selects the all-zero salt.  Use the Extract/Expand\nhalves directly (rather than `hkdf_sha256`) when a PRK is reused for several\nExpands or when an Extract output is itself the value you want (e.g. HPKE).",
+              "sig": "pub fn hkdf_extract(salt_b64: text, ikm_b64: text) -> text"
+            },
+            {
+              "doc": "HKDF-Expand (RFC 5869 §2.3) from an existing 32-byte PRK.  Returns `length`\nbytes of OKM (base64), or \"\" on a short PRK, length > 255*32, or length <= 0.",
+              "sig": "pub fn hkdf_expand(prk_b64: text, info_b64: text, length: integer) -> text"
+            },
+            {
+              "doc": "Standard base64 of a raw byte vector.  Empty vector -> \"\".",
+              "sig": "pub fn bytes_to_base64(bytes: vector<u8>) -> text"
+            },
+            {
+              "doc": "Raw bytes from standard base64.  Malformed / empty input -> empty vector.\nSee the CAUTION above: read the result, never `+=` onto it.",
+              "sig": "pub fn base64_to_bytes(b64: text) -> vector<u8>"
+            },
+            {
+              "doc": "Encrypt + authenticate `plaintext` under `key`/`nonce`, binding `aad`.\nReturns base64 of ciphertext WITH the 16-byte tag appended, or \"\" on bad\nkey/nonce length.",
+              "sig": "pub fn aes256gcm_seal(key_b64: text, nonce_b64: text, aad_b64: text, plaintext_b64: text) -> text"
+            },
+            {
+              "doc": "Verify + decrypt `ciphertext` (ciphertext||tag, base64) under `key`/`nonce`,\nbinding `aad`.  Returns the base64 plaintext, or \"\" on ANY authentication\nfailure — an empty result means the ciphertext/tag/aad did not verify.",
+              "sig": "pub fn aes256gcm_open(key_b64: text, nonce_b64: text, aad_b64: text, ciphertext_b64: text) -> text"
+            },
+            {
+              "doc": "Return `length` cryptographically secure random bytes (base64) from the OS\nRNG.  Returns \"\" for length <= 0.  Use for keys (32), nonces (12), salts.",
+              "sig": "pub fn random_bytes(length: integer) -> text"
+            },
+            {
+              "doc": "The result of `hpke_seal_base`: the KEM-encapsulated key `enc` and the AEAD\n`ciphertext` (ciphertext||16-byte-tag), both base64.",
+              "sig": "pub struct HpkeSealed"
+            },
+            {
+              "doc": "HPKE SealBase (RFC 9180 §6.1): encrypt `pt` to recipient public key `pk_r`,\nbinding `info` (key-schedule context) and `aad` (per-message AAD).  Generates\na fresh ephemeral key, so each call's output differs.  All args/fields base64.\nReturns HpkeSealed { enc, ciphertext }; both \"\" on failure.",
+              "sig": "pub fn hpke_seal_base(pk_r_b64: text, info_b64: text, aad_b64: text, pt_b64: text) -> HpkeSealed"
+            },
+            {
+              "doc": "Deterministic SealBase — TEST ONLY.  Uses the caller-supplied ephemeral\nsecret `sk_e_b64` instead of a random one, so the output is reproducible\nagainst an RFC 9180 known-answer vector.  Never use in production.",
+              "sig": "pub fn hpke_seal_base_deterministic(pk_r_b64: text, sk_e_b64: text, info_b64: text, aad_b64: text, pt_b64: text) -> HpkeSealed"
+            },
+            {
+              "doc": "HPKE OpenBase (RFC 9180 §6.1): decrypt `ct` for recipient secret key `sk_r`\nusing the sender's `enc`, binding `info` and `aad`.  All args base64.  Returns\nthe base64 plaintext, or \"\" on ANY failure (bad enc/key or AEAD auth failure).",
+              "sig": "pub fn hpke_open_base(sk_r_b64: text, enc_b64: text, info_b64: text, aad_b64: text, ct_b64: text) -> text"
+            },
+            {
+              "doc": "Expose the key-schedule outputs for KAT assertions — TEST ONLY.  Given a\nshared secret and base64 `info`, returns (key_b64, base_nonce_b64).",
+              "sig": "pub fn hpke_key_schedule_base_for_test(shared_secret_b64: text, info_b64: text) -> (text, text)"
+            },
+            {
+              "doc": "Expose deterministic Encap for KAT assertions — TEST ONLY.  Returns\n(shared_secret_b64, enc_b64).",
+              "sig": "pub fn hpke_encap_deterministic_for_test(pk_r_b64: text, sk_e_b64: text) -> (text, text)"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-04T21:53:27Z",
+          "sha256": "60905f7b842376c9901f0ce70fe847548a835662da098d82c193034e60b85c38",
+          "size": 38766,
+          "subpath": "crypto",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/crypto-v0.3.5/crypto-0.3.5.tar.gz"
         }
       },
       "yanked": []
@@ -185,9 +375,33 @@
           "size": 8437,
           "subpath": "glb",
           "url": "https://github.com/loft-lang/loft-libs-assets/releases/download/glb-v0.1.0/glb-0.1.0.tar.gz"
+        },
+        "0.1.1": {
+          "deps": {
+            "mesh3d": ">=0.1.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-07-18T10:19:34Z",
+          "sha256": "9ad605d4a5c7f5a455188d54a6042dae3ec403e6ce566f9fcd40660faaed8301",
+          "size": 8445,
+          "subpath": "glb",
+          "url": "https://github.com/loft-lang/loft-libs-assets/releases/download/glb-v0.1.1/glb-0.1.1.tar.gz"
+        },
+        "0.1.2": {
+          "deps": {
+            "mesh3d": ">=0.1.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-07-19T00:16:34Z",
+          "sha256": "8a1021c6b4eadd6152d1c9806501514cd8d26ef901ebdc7501f406e3c82de01c",
+          "size": 8712,
+          "subpath": "glb",
+          "url": "https://github.com/loft-lang/loft-libs-assets/releases/download/glb-v0.1.2/glb-0.1.2.tar.gz"
         }
       },
-      "yanked": []
+      "yanked": [
+        "0.1.1"
+      ]
     },
     "graphics": {
       "categories": [
@@ -231,6 +445,45 @@
           "size": 93060,
           "subpath": "graphics",
           "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.3.0/graphics-0.3.0.tar.gz"
+        },
+        "0.4.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-14T13:34:30Z",
+          "sha256": "d523d22121649b53ee011e8d59b8f1d337280e1452a26b2d25014c1172724c94",
+          "size": 98262,
+          "subpath": "graphics",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.4.0/graphics-0.4.0.tar.gz"
+        },
+        "0.4.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-14T16:41:22Z",
+          "sha256": "1d4c38d3ba2d2800031634e516fb2f44712c61f6b3ea7e343147bbc442e67386",
+          "size": 99021,
+          "subpath": "graphics",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.4.1/graphics-0.4.1.tar.gz"
+        },
+        "0.4.2": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-15T18:27:02Z",
+          "sha256": "330edd389c46389b04fb4bae9a537ee121fa6cb5fb3e0e9f9f4b1ec0b75777be",
+          "size": 98781,
+          "subpath": "graphics",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.4.2/graphics-0.4.2.tar.gz"
+        },
+        "0.4.3": {
+          "deps": {
+            "glb": ">=0.1.1",
+            "mesh3d": ">=0.1.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-07-18T10:19:34Z",
+          "sha256": "0f7ad44ac386e3fbfce3c3f87f77e8c41962e2884f7e2460a06234901aeb1bab",
+          "size": 89495,
+          "subpath": "graphics",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.4.3/graphics-0.4.3.tar.gz"
         }
       },
       "yanked": []
@@ -437,6 +690,121 @@
           "size": 14087,
           "subpath": "hex_terrain",
           "url": "https://github.com/loft-lang/loft-libs-world/releases/download/hex_terrain-v0.1.0/hex_terrain-0.1.0.tar.gz"
+        },
+        "0.1.1": {
+          "api": [
+            {
+              "doc": "One terrain type = content (a bundle row in the consuming game).\ntt_rise and tt_steep are INDEPENDENT; tt_wet marks water bodies (sea/lake):\nthey take no relief and no boundary contest.",
+              "sig": "pub struct TerrainType"
+            },
+            {
+              "doc": "Algorithm parameters (engine side).  terrain_params() gives the blueprint's\nuser-tuned defaults; every field is meters unless noted.",
+              "sig": "pub struct TerrainParams"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn terrain_params(seed: integer, tile: float) -> TerrainParams"
+            },
+            {
+              "doc": "Parallel per-cell vectors, index = r * tr_nx + c (odd-r offset coords).",
+              "sig": "pub struct Terrain"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn terrain_new(nx: integer, ny: integer) -> Terrain"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn terrain_idx(t: Terrain, c: integer, r: integer) -> integer"
+            },
+            {
+              "doc": "Cell center in world meters — hex_grid's odd-r lattice scaled so the\nhorizontal pitch equals tp_tile (hex_grid's unit pitch is SQRT3).",
+              "sig": "pub fn terrain_center(p: TerrainParams, c: integer, r: integer) -> (float, float)"
+            },
+            {
+              "doc": "The downstream cell of (c, r) — itself when it has no flow direction.",
+              "sig": "pub fn terrain_flow_to(t: Terrain, c: integer, r: integer) -> (integer, integer)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn terrain_hash01(seed: integer, ix: integer, iy: integer, ch: integer) -> float"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn terrain_vnoise(seed: integer, x: float, y: float, wl: float, ch: integer) -> float"
+            },
+            {
+              "doc": "Fractal sum, roughly in [-1, 1].",
+              "sig": "pub fn terrain_fbm(seed: integer, x: float, y: float, wl0: float, octaves: integer, ch: integer) -> float"
+            },
+            {
+              "doc": "Detail noise with DOMAIN WARP (the sampling space is swirled by a second\nnoise so the value-noise lattice never reads as a repeating pattern).",
+              "sig": "pub fn terrain_detail_at(p: TerrainParams, x: float, y: float) -> float"
+            },
+            {
+              "doc": "LOW-frequency ridged field, crest-sharpened: roughly ONE combined crest per\nsteep zone — peaks consolidate into ridgelines instead of speckling.",
+              "sig": "pub fn terrain_ridge_at(p: TerrainParams, x: float, y: float) -> float"
+            },
+            {
+              "doc": "PRIORITY-FLOOD pit fill + steepest-descent flow + accumulation.  After this\nevery land cell drains to the sea; cells the flood raised by more than\ntp_lake_fill become lakes (material set to lake_mat).  Selection-based\nflood (O(n^2)) — overland grids are small and this runs once at gen time.",
+              "sig": "pub fn terrain_hydrology(t: Terrain, p: TerrainParams, lake_mat: integer)"
+            },
+            {
+              "doc": "Wet flags + the compounded neighbor relief.  Call AFTER the caller has\nclassified land materials (relief reads the final wet set).",
+              "sig": "pub fn terrain_relief_pass(t: Terrain, types: vector<TerrainType>, p: TerrainParams)"
+            },
+            {
+              "doc": "One blended surface record at a fine point.",
+              "sig": "pub struct TerrainSurf"
+            },
+            {
+              "doc": "Smooth kernel blend of the overland cells around (x, y) + the boundary-line\ncontest + the fine height.  Pure function — THE seam invariant lives here.",
+              "sig": "pub fn terrain_surface_at(t: Terrain, types: vector<TerrainType>, p: TerrainParams, x: float, y: float) -> TerrainSurf"
+            },
+            {
+              "doc": "Lightweight coarse-blend height only (for slopes along river courses).",
+              "sig": "pub fn terrain_blend_h(t: Terrain, p: TerrainParams, x: float, y: float) -> float"
+            },
+            {
+              "doc": "The fractally jittered lake contour field (>= 0.5 = lake water).",
+              "sig": "pub fn terrain_lake_field(p: TerrainParams, x: float, y: float, lakey: float) -> float"
+            },
+            {
+              "doc": "Is (x, y) open water (sea by the fine height contour, or lake)?  PRE-carve —\nthis is the shoreline rivers attach to.",
+              "sig": "pub fn terrain_water_at(t: Terrain, types: vector<TerrainType>, p: TerrainParams, x: float, y: float) -> boolean"
+            },
+            {
+              "doc": "One river course PIECE: fine polyline (ends ON the shorelines) with\nper-vertex water width, carve depth and valley falloff width.",
+              "sig": "pub struct TerrainRiver"
+            },
+            {
+              "doc": "THE EDGE BIT (user rule): a river never exits mid-side; each shared edge\ncarries one canonical left/right bit.  Both tiles hash the SORTED cell pair,\nso they derive the same crossing point — seamless.",
+              "sig": "pub fn terrain_edge_cross(p: TerrainParams, ca: integer, ra: integer, cb: integer, rb: integer) -> (float, float)"
+            },
+            {
+              "doc": "The interior routing point of a tile (hash-jittered off-center; the natural\nconfluence spot — tributaries entering the tile share it).",
+              "sig": "pub fn terrain_control_pt(p: TerrainParams, c: integer, r: integer) -> (float, float)"
+            },
+            {
+              "doc": "All river course pieces, fully shaped: anchors (edge bits + control points)\n-> fractal displacement -> corner-cut smoothing -> shoreline trim -> width/\ndepth/valley-width per vertex (slope-shaped + the estuary depth bonus).",
+              "sig": "pub fn terrain_rivers(t: Terrain, types: vector<TerrainType>, p: TerrainParams) -> vector<TerrainRiver>"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct TerrainSample"
+            },
+            {
+              "doc": "The full sample: surface + ADDITIVE valley carving from every course near\nthe point + the water classification (sea floods the carved mouth).  Pure\nfunction of (t, types, p, rivers, x, y) — THE window-independence invariant.",
+              "sig": "pub fn terrain_sample(t: Terrain, types: vector<TerrainType>, p: TerrainParams, rivers: vector<TerrainRiver>, x: float, y: float) -> TerrainSample"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-16T07:11:02Z",
+          "sha256": "0ac6d756c694584954ff9b9d6215ec9738008bd16713b77a01b91ada95f39f49",
+          "size": 14113,
+          "subpath": "hex_terrain",
+          "url": "https://github.com/loft-lang/loft-libs-world/releases/download/hex_terrain-v0.1.1/hex_terrain-0.1.1.tar.gz"
         }
       },
       "yanked": []
@@ -456,6 +824,85 @@
           "size": 18055,
           "subpath": "hex_world",
           "url": "https://github.com/loft-lang/loft-libs-world/releases/download/hex_world-v0.1.1/hex_world-0.1.1.tar.gz"
+        },
+        "0.1.2": {
+          "api": [
+            {
+              "doc": "4-byte cell.  c_color uses the u8 typedef (integer limit(0,255)\nsize(1)); c_age uses u16 (size(2)).  Storage packs to exactly 4\nbytes per cell — the projector ships them through the binary\nsurface in chunk-major order.\n\nc_color = 0 means \"empty\" (no crystal, no TTT mark).  Both clients\ntreat 0 as background; non-zero as live content.",
+              "sig": "pub struct Cell"
+            },
+            {
+              "doc": "32x32 grid at chunk coords (ck_cx, ck_cz).  Index into ck_cells:\nhx * 32 + hz where hx, hz ∈ [0, 31].  Same shape as moros_map's\nChunk minus the cy layer (this world is single-layer).",
+              "sig": "pub struct Chunk"
+            },
+            {
+              "doc": "Top-level container.  Sparse: only chunks with at least one\nnon-empty cell live in `chunks`; empty chunks are removed by the\ntick loop's GC pass.  `tick` is monotonic per server lifetime.",
+              "sig": "pub struct World"
+            },
+            {
+              "doc": "floor(v / 32) — handles negative v correctly (C-style `/` rounds\ntoward zero, which silently maps cell (-1, 0) to chunk 0 instead\nof chunk -1).",
+              "sig": "pub fn chunk_idx_32(v: integer) -> integer"
+            },
+            {
+              "doc": "v mod 32, always in [0, 31].",
+              "sig": "pub fn hex_idx_32(v: integer) -> integer"
+            },
+            {
+              "doc": "Default empty cell.  All fields zero; serialises to four 0x00\nbytes on the wire.",
+              "sig": "pub fn cell_empty() -> Cell"
+            },
+            {
+              "doc": "Build a 32x32 chunk filled with empty cells at chunk coords\n(cx, cz).",
+              "sig": "pub fn build_chunk(cx: integer, cz: integer) -> Chunk"
+            },
+            {
+              "doc": "New empty world, tick 0, no chunks.",
+              "sig": "pub fn world_empty() -> World"
+            },
+            {
+              "doc": "True iff a chunk exists at the global (q, r).",
+              "sig": "pub fn has_chunk(self: World, q: integer, r: integer) -> boolean"
+            },
+            {
+              "doc": "Ensure a chunk exists at the global (q, r); creates a 32x32 of\nempty cells if absent.",
+              "sig": "pub fn ensure_chunk(self: &World, q: integer, r: integer)"
+            },
+            {
+              "doc": "Read the cell at global (q, r).  Returns `cell_empty()` when the\nchunk does not exist (sparse-world convention — empty chunks are\nimplicitly all-empty).",
+              "sig": "pub fn get_cell(self: World, q: integer, r: integer) -> Cell"
+            },
+            {
+              "doc": "Write a cell at global (q, r).  Creates the containing chunk on\ndemand; does NOT GC empty chunks (the tick loop's end-of-tick\npass owns that).",
+              "sig": "pub fn set_cell(self: &World, q: integer, r: integer, value: Cell)"
+            },
+            {
+              "doc": "Total number of non-empty cells across every chunk.",
+              "sig": "pub fn cell_count(self: World) -> integer"
+            },
+            {
+              "doc": "Count filled axial-hex neighbours of the cell at global (q, r).\nReturns 0..=6.  Empty centre cell is fine — neighbours are read\nindependently of the centre's state.",
+              "sig": "pub fn neighbour_count(self: World, q: integer, r: integer) -> integer"
+            },
+            {
+              "doc": "── Tick + decay ───────────────────────────────────────────────────\n\nOne world step: advances `tick`, ages every non-empty cell by 1,\nthen removes any cell whose `c_age` has crossed\n`effective_lifetime + decay_window` where\n`effective_lifetime = base_lifetime + neighbour_lease *\nfilled_neighbour_count`.  Neighbour counts are computed against\nthe PRE-TICK state — a single tick can remove a connected blob\nof cells, but the cascade (centre losing its neighbour support)\nonly fires on the NEXT tick.  This keeps the simulation\ndeterministic per-step and prevents one-tick complete collapse\nof large clusters.",
+              "sig": "pub fn tick_and_decay(self: &World, base_lifetime: integer,"
+            },
+            {
+              "doc": "Save the world to `path`, replacing whatever was there.",
+              "sig": "pub fn world_save(self: World, path: text)"
+            },
+            {
+              "doc": "Load the world from `path`.  Mutates `self` in place; pre-existing\ncells in `self` are left untouched unless the snapshot overwrites\nthe same (q, r).  Returns the number of cells loaded.  Returns 0 if\nthe file does not exist, has the wrong magic, or carries an\nunsupported version — never panics.",
+              "sig": "pub fn world_load(self: &World, path: text) -> integer"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-02T18:52:16Z",
+          "sha256": "894bae52ac73c404e5efdbc0501ace7fe16b4a793cceccf948b9223b448201a1",
+          "size": 18097,
+          "subpath": "hex_world",
+          "url": "https://github.com/loft-lang/loft-libs-world/releases/download/hex_world-v0.1.2/hex_world-0.1.2.tar.gz"
         }
       },
       "yanked": []
@@ -563,6 +1010,15 @@
           "size": 7716,
           "subpath": "mesh3d",
           "url": "https://github.com/loft-lang/loft-libs-assets/releases/download/mesh3d-v0.1.0/mesh3d-0.1.0.tar.gz"
+        },
+        "0.1.1": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-18T10:19:34Z",
+          "sha256": "de8fdb1fedea6521d90634bc40b4acab2c1bb965010d766a177e40b1e8e66cfd",
+          "size": 7699,
+          "subpath": "mesh3d",
+          "url": "https://github.com/loft-lang/loft-libs-assets/releases/download/mesh3d-v0.1.1/mesh3d-0.1.1.tar.gz"
         }
       },
       "yanked": []
@@ -601,6 +1057,45 @@
           "size": 6441,
           "subpath": "random",
           "url": "https://github.com/loft-lang/loft-libs-core/releases/download/random-v0.2.1/random-0.2.1.tar.gz"
+        },
+        "0.3.0": {
+          "api": [
+            {
+              "doc": "Returns a random integer in [lo, hi] (inclusive).\nReturns null when lo > hi or when either argument is null.",
+              "sig": "pub fn rand(lo: integer, hi: integer) -> integer?"
+            },
+            {
+              "doc": "Seeds the thread-local random number generator with the given value.\nCall this before rand() or rand_indices() to get reproducible sequences.",
+              "sig": "pub fn rand_seed(seed: integer)"
+            },
+            {
+              "doc": "Returns a vector of n integers [0, 1, ..., n-1] in a random order.\nUseful for random iteration, shuffling, or sampling without replacement.\nReturns an empty vector when n is 0 or null.",
+              "sig": "pub fn rand_indices(n: integer) -> vector<integer>"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct RandStream"
+            },
+            {
+              "doc": "Seed an independent stream. Any integer seed is valid (negative and zero included);\nequal seeds give equal streams, different seeds give decorrelated streams.",
+              "sig": "pub fn seed_stream(seed: integer) -> RandStream"
+            },
+            {
+              "doc": "A random integer in [lo, hi] (inclusive) from THIS stream, advancing it.\nReturns null when lo > hi (the same contract as the global rand()).",
+              "sig": "pub fn get(self: RandStream, lo: integer, hi: integer) -> integer?"
+            },
+            {
+              "doc": "A random permutation of [0, 1, ..., n-1] from THIS stream (Fisher-Yates), advancing\nit. Empty when n is 0, negative or null (the same contract as rand_indices()).",
+              "sig": "pub fn indices(self: RandStream, n: integer) -> vector<integer>"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-04T21:53:29Z",
+          "sha256": "beb7c5ec9ba5df00725ca776c3fa837e8757cff865589bcfb5ea85cd0fc53386",
+          "size": 9116,
+          "subpath": "random",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/random-v0.3.0/random-0.3.0.tar.gz"
         }
       },
       "yanked": []
@@ -642,6 +1137,42 @@
             "regex_replace_all:text"
           ],
           "url": "https://github.com/loft-lang/loft-libs-core/releases/download/regex-v0.2.0/regex-0.2.0.tar.gz"
+        },
+        "0.2.1": {
+          "api": [
+            {
+              "doc": "Byte offset of the first match of `pattern` in `input`, or null when\nthere is no match (or the pattern is invalid).",
+              "sig": "pub fn find(pattern: text, input: text) -> integer"
+            },
+            {
+              "doc": "Split `input` on matches of `pattern`, yielding each piece lazily through\nan `iterator<text>` (reuses loft's coroutine channel — nothing is\nmaterialised).",
+              "sig": "pub fn split(pattern: text, input: text) -> iterator<text>"
+            },
+            {
+              "doc": "True if `pattern` matches anywhere in the text.  `both` registers this as\nBOTH a method (`line.matches(p)`) and a free function (`matches(line, p)`).\n`matches` keeps the bare name — it is collision-free on `text` (the stdlib\nhas `contains`, not `matches`) and reads as regex on its own.",
+              "sig": "pub fn matches(both: text, pattern: text) -> boolean"
+            },
+            {
+              "doc": "Byte offset of the first match of `pattern` in the text, or null.\nPrefixed because bare `find` collides with stdlib `text.find` (literal\nsubstring search).  Call as  line.regex_find(\"[0-9]+\").",
+              "sig": "pub fn regex_find(self: text, pattern: text) -> integer"
+            },
+            {
+              "doc": "Split the text on matches of `pattern`, yielding pieces lazily.  Prefixed\nbecause bare `split` collides with stdlib `text.split` (character\nseparator).  Call as  for piece in line.regex_split(\"[,;]\") { }.",
+              "sig": "pub fn regex_split(self: text, pattern: text) -> iterator<text>"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-04T21:53:32Z",
+          "sha256": "2072064c1b2e38a243d709bc06813527ba1ab870eccd21fe02cfbb3c2aeda263",
+          "size": 7286,
+          "subpath": "regex",
+          "triggers": [
+            "matches:text",
+            "regex_find:text",
+            "regex_split:text"
+          ],
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/regex-v0.2.1/regex-0.2.1.tar.gz"
         }
       },
       "yanked": []
@@ -825,6 +1356,433 @@
           "size": 19705,
           "subpath": "server",
           "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.2.1/server-0.2.1.tar.gz"
+        },
+        "0.2.2": {
+          "api": [
+            {
+              "doc": "",
+              "sig": "pub struct Server"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WebSocket"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn listen(port: integer) -> Server"
+            },
+            {
+              "doc": "Non-blocking variant of `next()`.  Returns null immediately if no\nconnection is pending.  Use this when the server interleaves HTTP\naccept with multi-client WS polling on a single port (single_port\naudience demo / future TTT-style multi-tab apps).",
+              "sig": "pub fn next_nonblocking(self: Server) -> Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn next(self: Server) -> Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond(self: Request, status: integer, body: text)"
+            },
+            {
+              "doc": "Send an HTTP response with a caller-specified Content-Type and\nclose the connection.  Use for HTML / CSS / JSON / WASM payloads;\n`respond` defaults to `text/plain`.",
+              "sig": "pub fn respond_typed(self: Request, status: integer, body: text, content_type: text)"
+            },
+            {
+              "doc": "Convenience wrappers for the common cases TTT v3 needs.",
+              "sig": "pub fn respond_html(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_css(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_js(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_loft(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_404(self: Request)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn close(self: Server)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn ws_upgrade() -> WebSocket"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn next(self: WebSocket) -> text?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn send(self: WebSocket, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send `msg` as a binary WebSocket frame (opcode 2).  Loft\n`text` is a byte buffer — pack u8/u16/i32/etc. into it via\n`to_bytes` style code, then ship it.",
+              "sig": "pub fn send_binary(self: WebSocket, msg: text) -> boolean"
+            },
+            {
+              "doc": "Opcode of the last frame returned by `next` on this socket.\nUse after `next` to decide whether to interpret the payload\nas utf-8 text or as a binary blob.",
+              "sig": "pub fn last_opcode(self: WebSocket) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn close(self: WebSocket)"
+            },
+            {
+              "doc": "Event delivered to the on_event handler.  `connected` and\n`message` are mutually-exclusive booleans for fast dispatch\nwithout an integer enum.  Wire format `<msg_id>:<payload>`\nis parsed by `run` so msg_id and payload come pre-split.",
+              "sig": "pub struct WsEvent"
+            },
+            {
+              "doc": "Block forever, draining events and calling the handler.\nMalformed message frames are logged at warn level and silently\ndropped — the handler never sees them.",
+              "sig": "pub fn run(self: Server, on_event: fn(WsEvent))"
+            },
+            {
+              "doc": "Non-blocking single-event drain — returns the next WsEvent, or null\nwhen nothing is pending.  Lets a server that also needs a periodic\ntick (timers, decay, snapshots) run its OWN loop while still using the\nefficient Rust-side event pump: drain `poll_event` in a batch, do the\nperiodic work, idle-sleep when a pass produced nothing.  `run` above is\nthe convenience wrapper for servers that only react to events.\n\nDisconnect (kind 2) and malformed message frames are skipped internally\n(the caller never sees them), so a null return always means \"idle\".",
+              "sig": "pub fn poll_event(self: Server) -> WsEvent"
+            },
+            {
+              "doc": "Reply to the HTTP request currently parked by a `http` WsEvent and\nclose it.  Call exactly once from the handler for an `ev.http` event.",
+              "sig": "pub fn respond_html(self: Server, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_typed(self: Server, status: integer, body: text, content_type: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_404(self: Server)"
+            },
+            {
+              "doc": "Send a frame to a specific client.  Returns true on success.",
+              "sig": "pub fn send_to(self: Server, client_id: integer, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send a frame to every active client.  Returns the count of\nsuccessful sends.  Iteration happens entirely in Rust.",
+              "sig": "pub fn broadcast(self: Server, msg: text) -> integer"
+            },
+            {
+              "doc": "Forcefully close one client's connection.  The slot is freed\nfor reuse by future accepts.",
+              "sig": "pub fn disconnect(self: Server, client_id: integer)"
+            }
+          ],
+          "deps": {
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-07-03T06:14:17Z",
+          "sha256": "aaec7e7235469fe44a6226eebc4042597efcba3a5b8266390ab0c5cdb3250a35",
+          "size": 19784,
+          "subpath": "server",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.2.2/server-0.2.2.tar.gz"
+        },
+        "0.3.0": {
+          "api": [
+            {
+              "doc": "",
+              "sig": "pub struct Server"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WebSocket"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn listen(port: integer) -> Server"
+            },
+            {
+              "doc": "Non-blocking variant of `next()`.  Returns null immediately if no\nconnection is pending.  Use this when the server interleaves HTTP\naccept with multi-client WS polling on a single port (single_port\naudience demo / future TTT-style multi-tab apps).",
+              "sig": "pub fn next_nonblocking(self: Server) -> Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn next(self: Server) -> Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond(self: Request, status: integer, body: text)"
+            },
+            {
+              "doc": "Send an HTTP response with a caller-specified Content-Type and\nclose the connection.  Use for HTML / CSS / JSON / WASM payloads;\n`respond` defaults to `text/plain`.",
+              "sig": "pub fn respond_typed(self: Request, status: integer, body: text, content_type: text)"
+            },
+            {
+              "doc": "Look up a request header case-insensitively (e.g. \"Range\", \"Origin\",\n\"If-None-Match\"); returns \"\" if absent. Values containing ':' (an Origin URL,\na date) are rejoined intact.",
+              "sig": "pub fn header(self: Request, name: text) -> text"
+            },
+            {
+              "doc": "Send a response with caller-controlled headers (Content-Range, ETag, the CORS\nheaders, …). `headers` is a vector of \"Key: Value\" lines; Content-Length is\nauto-added from the body unless a header supplies one; the body is written\nverbatim (binary-safe).",
+              "sig": "pub fn respond_with_headers(self: Request, status: integer, body: text, headers: vector<text>)"
+            },
+            {
+              "doc": "Standard CORS headers so a browser client can read Content-Range /\nContent-Length / ETag on a cross-origin byte-range fetch. `origin` is the\nallowed origin (\"*\" for any).",
+              "sig": "pub fn cors_headers(origin: text) -> vector<text>"
+            },
+            {
+              "doc": "Serve a byte range of `body` when the request carries a Range header, adding\n`extra` headers (CORS / ETag) to the 206 or 416. Returns true if a range\nresponse was sent; false when there is no Range header (the caller serves the\nfull body). Single-range \"bytes=off-last\" / open-ended \"bytes=off-\" only.",
+              "sig": "pub fn serve_range(self: Request, body: text, extra: vector<text>) -> boolean"
+            },
+            {
+              "doc": "One-call helper to serve a (possibly binary) resource with full byte-range +\nCORS + HEAD + conditional support — the server counterpart to the web client's\nhttp_get_range / http_size. `etag` \"\" skips conditional; `origin` \"\" skips CORS.",
+              "sig": "pub fn serve_data(self: Request, body: text, etag: text, origin: text) -> boolean"
+            },
+            {
+              "doc": "Convenience wrappers for the common cases TTT v3 needs.",
+              "sig": "pub fn respond_html(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_css(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_js(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_loft(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_404(self: Request)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn close(self: Server)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn ws_upgrade() -> WebSocket"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn next(self: WebSocket) -> text?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn send(self: WebSocket, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send `msg` as a binary WebSocket frame (opcode 2).  Loft\n`text` is a byte buffer — pack u8/u16/i32/etc. into it via\n`to_bytes` style code, then ship it.",
+              "sig": "pub fn send_binary(self: WebSocket, msg: text) -> boolean"
+            },
+            {
+              "doc": "Opcode of the last frame returned by `next` on this socket.\nUse after `next` to decide whether to interpret the payload\nas utf-8 text or as a binary blob.",
+              "sig": "pub fn last_opcode(self: WebSocket) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn close(self: WebSocket)"
+            },
+            {
+              "doc": "Event delivered to the on_event handler.  `connected` and\n`message` are mutually-exclusive booleans for fast dispatch\nwithout an integer enum.  Wire format `<msg_id>:<payload>`\nis parsed by `run` so msg_id and payload come pre-split.",
+              "sig": "pub struct WsEvent"
+            },
+            {
+              "doc": "Block forever, draining events and calling the handler.\nMalformed message frames are logged at warn level and silently\ndropped — the handler never sees them.",
+              "sig": "pub fn run(self: Server, on_event: fn(WsEvent))"
+            },
+            {
+              "doc": "Non-blocking single-event drain — returns the next WsEvent, or null\nwhen nothing is pending.  Lets a server that also needs a periodic\ntick (timers, decay, snapshots) run its OWN loop while still using the\nefficient Rust-side event pump: drain `poll_event` in a batch, do the\nperiodic work, idle-sleep when a pass produced nothing.  `run` above is\nthe convenience wrapper for servers that only react to events.\n\nDisconnect (kind 2) and malformed message frames are skipped internally\n(the caller never sees them), so a null return always means \"idle\".",
+              "sig": "pub fn poll_event(self: Server) -> WsEvent"
+            },
+            {
+              "doc": "Reply to the HTTP request currently parked by a `http` WsEvent and\nclose it.  Call exactly once from the handler for an `ev.http` event.",
+              "sig": "pub fn respond_html(self: Server, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_typed(self: Server, status: integer, body: text, content_type: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_404(self: Server)"
+            },
+            {
+              "doc": "Send a frame to a specific client.  Returns true on success.",
+              "sig": "pub fn send_to(self: Server, client_id: integer, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send a frame to every active client.  Returns the count of\nsuccessful sends.  Iteration happens entirely in Rust.",
+              "sig": "pub fn broadcast(self: Server, msg: text) -> integer"
+            },
+            {
+              "doc": "Forcefully close one client's connection.  The slot is freed\nfor reuse by future accepts.",
+              "sig": "pub fn disconnect(self: Server, client_id: integer)"
+            }
+          ],
+          "deps": {
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-07-07T12:14:17Z",
+          "sha256": "86357ff67899a7c0c18e99c41b0116acffd9e435d45aa0d72807a8160dee5420",
+          "size": 25457,
+          "subpath": "server",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.3.0/server-0.3.0.tar.gz"
+        },
+        "0.3.1": {
+          "api": [
+            {
+              "doc": "",
+              "sig": "pub struct Server"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WebSocket"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn listen(port: integer) -> Server"
+            },
+            {
+              "doc": "Non-blocking variant of `next()`.  Returns null immediately if no\nconnection is pending.  Use this when the server interleaves HTTP\naccept with multi-client WS polling on a single port (single_port\naudience demo / future TTT-style multi-tab apps).",
+              "sig": "pub fn next_nonblocking(self: Server) -> Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn next(self: Server) -> Request"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond(self: Request, status: integer, body: text)"
+            },
+            {
+              "doc": "Send an HTTP response with a caller-specified Content-Type and\nclose the connection.  Use for HTML / CSS / JSON / WASM payloads;\n`respond` defaults to `text/plain`.",
+              "sig": "pub fn respond_typed(self: Request, status: integer, body: text, content_type: text)"
+            },
+            {
+              "doc": "Look up a request header case-insensitively (e.g. \"Range\", \"Origin\",\n\"If-None-Match\"); returns \"\" if absent. Values containing ':' (an Origin URL,\na date) are rejoined intact.",
+              "sig": "pub fn header(self: Request, name: text) -> text"
+            },
+            {
+              "doc": "Send a response with caller-controlled headers (Content-Range, ETag, the CORS\nheaders, …). `headers` is a vector of \"Key: Value\" lines; Content-Length is\nauto-added from the body unless a header supplies one; the body is written\nverbatim (binary-safe).",
+              "sig": "pub fn respond_with_headers(self: Request, status: integer, body: text, headers: vector<text>)"
+            },
+            {
+              "doc": "Standard CORS headers so a browser client can read Content-Range /\nContent-Length / ETag on a cross-origin byte-range fetch. `origin` is the\nallowed origin (\"*\" for any).",
+              "sig": "pub fn cors_headers(origin: text) -> vector<text>"
+            },
+            {
+              "doc": "Serve a byte range of `body` when the request carries a Range header, adding\n`extra` headers (CORS / ETag) to the 206 or 416. Returns true if a range\nresponse was sent; false when there is no Range header (the caller serves the\nfull body). Single-range \"bytes=off-last\" / open-ended \"bytes=off-\" only.",
+              "sig": "pub fn serve_range(self: Request, body: text, extra: vector<text>) -> boolean"
+            },
+            {
+              "doc": "One-call helper to serve a (possibly binary) resource with full byte-range +\nCORS + HEAD + conditional support — the server counterpart to the web client's\nhttp_get_range / http_size. `etag` \"\" skips conditional; `origin` \"\" skips CORS.",
+              "sig": "pub fn serve_data(self: Request, body: text, etag: text, origin: text) -> boolean"
+            },
+            {
+              "doc": "Convenience wrappers for the common cases TTT v3 needs.",
+              "sig": "pub fn respond_html(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_css(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_js(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_loft(self: Request, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_404(self: Request)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn close(self: Server)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn ws_upgrade() -> WebSocket"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn next(self: WebSocket) -> text?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn send(self: WebSocket, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send `msg` as a binary WebSocket frame (opcode 2).  Loft\n`text` is a byte buffer — pack u8/u16/i32/etc. into it via\n`to_bytes` style code, then ship it.",
+              "sig": "pub fn send_binary(self: WebSocket, msg: text) -> boolean"
+            },
+            {
+              "doc": "Opcode of the last frame returned by `next` on this socket.\nUse after `next` to decide whether to interpret the payload\nas utf-8 text or as a binary blob.",
+              "sig": "pub fn last_opcode(self: WebSocket) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn close(self: WebSocket)"
+            },
+            {
+              "doc": "Event delivered to the on_event handler.  `connected` and\n`message` are mutually-exclusive booleans for fast dispatch\nwithout an integer enum.  Wire format `<msg_id>:<payload>`\nis parsed by `run` so msg_id and payload come pre-split.",
+              "sig": "pub struct WsEvent"
+            },
+            {
+              "doc": "Block forever, draining events and calling the handler.\nMalformed message frames are logged at warn level and silently\ndropped — the handler never sees them.",
+              "sig": "pub fn run(self: Server, on_event: fn(WsEvent))"
+            },
+            {
+              "doc": "Non-blocking single-event drain — returns the next WsEvent, or null\nwhen nothing is pending.  Lets a server that also needs a periodic\ntick (timers, decay, snapshots) run its OWN loop while still using the\nefficient Rust-side event pump: drain `poll_event` in a batch, do the\nperiodic work, idle-sleep when a pass produced nothing.  `run` above is\nthe convenience wrapper for servers that only react to events.\n\nDisconnect (kind 2) and malformed message frames are skipped internally\n(the caller never sees them), so a null return always means \"idle\".",
+              "sig": "pub fn poll_event(self: Server) -> WsEvent"
+            },
+            {
+              "doc": "Reply to the HTTP request currently parked by a `http` WsEvent and\nclose it.  Call exactly once from the handler for an `ev.http` event.",
+              "sig": "pub fn respond_html(self: Server, body: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_typed(self: Server, status: integer, body: text, content_type: text)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn respond_404(self: Server)"
+            },
+            {
+              "doc": "Send a frame to a specific client.  Returns true on success.",
+              "sig": "pub fn send_to(self: Server, client_id: integer, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send a frame to every active client.  Returns the count of\nsuccessful sends.  Iteration happens entirely in Rust.",
+              "sig": "pub fn broadcast(self: Server, msg: text) -> integer"
+            },
+            {
+              "doc": "Forcefully close one client's connection.  The slot is freed\nfor reuse by future accepts.",
+              "sig": "pub fn disconnect(self: Server, client_id: integer)"
+            }
+          ],
+          "deps": {
+            "web": ">=0.1"
+          },
+          "loft": ">=0.8",
+          "published": "2026-07-12T20:22:13Z",
+          "sha256": "bed2e9b00b8034bde442bc4c7f71acb72761bbf6abdf4ed8c641bd39a2543d99",
+          "size": 25464,
+          "subpath": "server",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/server-v0.3.1/server-0.3.1.tar.gz"
         }
       },
       "yanked": []
@@ -855,11 +1813,79 @@
           "size": 2510,
           "subpath": "shapes",
           "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.2.0/shapes-0.2.0.tar.gz"
+        },
+        "0.3.0": {
+          "api": [
+            {
+              "doc": "Axis-aligned bounding box for 2D collision.",
+              "sig": "pub struct Rect"
+            },
+            {
+              "doc": "Circle shape for 2D collision.",
+              "sig": "pub struct Circle"
+            },
+            {
+              "doc": "Test whether two axis-aligned rectangles overlap.",
+              "sig": "pub fn rects_overlap(a: const Rect, b: const Rect) -> boolean"
+            },
+            {
+              "doc": "Test whether two circles overlap.",
+              "sig": "pub fn circles_overlap(a: const Circle, b: const Circle) -> boolean"
+            },
+            {
+              "doc": "Test whether a rectangle and a circle overlap.",
+              "sig": "pub fn rect_circle_overlap(r: const Rect, c: const Circle) -> boolean"
+            },
+            {
+              "doc": "Overlap depth between two rectangles on each axis.",
+              "sig": "pub struct Overlap"
+            },
+            {
+              "doc": "Compute the overlap depth between two rectangles on each axis.\nReturns (0.0, 0.0) when they don't overlap.\nUseful for bounce direction: if ox < oy → horizontal bounce.",
+              "sig": "pub fn rect_overlap_depth(a: const Rect, b: const Rect) -> Overlap"
+            },
+            {
+              "doc": "Test AABB overlap using raw coordinates (no struct allocation — safe in loops).",
+              "sig": "pub fn aabb_overlap(ax: float, ay: float, aw: float, ah: float,"
+            },
+            {
+              "doc": "Compute AABB overlap depth on each axis using raw coordinates.\nReturns ox via the first return, oy via the second.\nBoth are 0.0 when no overlap. Safe in loops (no struct allocation).",
+              "sig": "pub fn aabb_depth_x(ax: float, ay: float, aw: float, ah: float,"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn aabb_depth_y(ax: float, ay: float, aw: float, ah: float,"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-15T10:46:10Z",
+          "sha256": "7ad0ec172316fc8a75df9a8ea8d4994b3d75080e59cc2947e35d21759914539b",
+          "size": 2458,
+          "subpath": "shapes",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/shapes-v0.3.0/shapes-0.3.0.tar.gz"
         }
       },
       "yanked": [
         "0.1.0"
       ]
+    },
+    "ssh": {
+      "categories": [],
+      "description": "SSH client — drive an interactive remote shell (e.g. attach tmux) over password auth. Native-only.",
+      "homepage": "https://github.com/loft-lang/loft-libs-net/tree/main/ssh",
+      "versions": {
+        "0.1.0": {
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-14T13:34:30Z",
+          "sha256": "51a9cbe2ee82036be99e44aaeba891112d7e4432129a0d8f678931fd8eedbbf0",
+          "size": 21051,
+          "subpath": "ssh",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/ssh-v0.1.0/ssh-0.1.0.tar.gz"
+        }
+      },
+      "yanked": []
     },
     "time": {
       "categories": [
@@ -877,6 +1903,660 @@
           "size": 5937,
           "subpath": "time",
           "url": "https://github.com/loft-lang/loft-libs-game/releases/download/time-v0.1.0/time-0.1.0.tar.gz"
+        },
+        "0.2.0": {
+          "api": [
+            {
+              "doc": "Epoch-ms at UTC midnight of the given calendar date.",
+              "sig": "pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer"
+            },
+            {
+              "doc": "Identity wrapper — for readability where a raw ms count becomes a time.",
+              "sig": "pub fn from_millis(ms: integer) -> integer"
+            },
+            {
+              "doc": "Epoch-SECONDS boundary.  Garmin / Strava REST APIs speak Unix seconds\n(`.timestamp()`), while loft times are milliseconds — convert at the edge.",
+              "sig": "pub fn from_unix_seconds(secs: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn to_unix_seconds(uts: integer) -> integer"
+            },
+            {
+              "doc": "Parse an ISO date \"YYYY-MM-DD\", optionally followed by \" HH:MM[:SS]\"\nor \"THH:MM[:SS]\" with an optional trailing \"Z\".  Returns null on any\nmalformed input (test with `!result`).",
+              "sig": "pub fn parse(ps: text) -> integer?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn year(yt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month(mt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn day(dt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn hour(ht: integer)   -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn minute(mit: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn second(st: integer)  -> integer"
+            },
+            {
+              "doc": "0 = Monday .. 6 = Sunday.  1970-01-01 was a Thursday (weekday 3).",
+              "sig": "pub fn weekday(wt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn add_days(adt: integer, days: integer)     -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn add_weeks(awt: integer, weeks: integer)   -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn add_seconds(ast: integer, secs: integer)  -> integer"
+            },
+            {
+              "doc": "Whole calendar days from `a` to `b` (b later → positive).",
+              "sig": "pub fn days_between(da: integer, db: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn seconds_between(sa: integer, sb: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn start_of_day(sdt: integer) -> integer"
+            },
+            {
+              "doc": "Monday 00:00 UTC of the week containing `t`.",
+              "sig": "pub fn start_of_week(swt: integer) -> integer"
+            },
+            {
+              "doc": "Combine a date with a time-of-day given as components (datetime.combine).",
+              "sig": "pub fn at_time(atd: integer, hh: integer, mm: integer, ss: integer) -> integer"
+            },
+            {
+              "doc": "Combine a date with an \"HH:MM\" or \"HH:MM:SS\" time string.  Mirrors\n`datetime.combine(date, time.fromisoformat(s))`.  Null on a malformed time.",
+              "sig": "pub fn combine(cmd: integer, time_text: text) -> integer?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_year(iyt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_week(iwt: integer) -> integer"
+            },
+            {
+              "doc": "Shift so that the field accessors / formatters yield local values.",
+              "sig": "pub fn to_local(lt: integer, offset_min: integer) -> integer"
+            },
+            {
+              "doc": "UTC-midnight key of the local calendar day containing `t`.",
+              "sig": "pub fn local_day(ldt: integer, offset_min: integer) -> integer"
+            },
+            {
+              "doc": "The local calendar day for \"now\" at the given offset.",
+              "sig": "pub fn today(offset_min: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_date(fdt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_time(ftt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_seconds(fst: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_datetime(fdtt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_iso(fit: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weekday_name(wnt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month_name(mnt: integer) -> text"
+            },
+            {
+              "doc": "── DateTime construction ──",
+              "sig": "pub fn date(dcy: integer, dcmo: integer, dcd: integer) -> DateTime"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn datetime(tcy: integer, tcmo: integer, tcd: integer,"
+            },
+            {
+              "doc": "── Duration construction ──",
+              "sig": "pub fn milliseconds(nms: integer) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn seconds(nsec: integer)     -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn minutes(nmin: integer)     -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn hours(nhr: integer)        -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn days(nday: integer)        -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weeks(nwk: integer)        -> Duration"
+            },
+            {
+              "doc": "── DateTime field accessors (methods; delegate to the integer API above) ──",
+              "sig": "pub fn year(self: DateTime)         -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month(self: DateTime)        -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn day(self: DateTime)          -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn hour(self: DateTime)         -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn minute(self: DateTime)       -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn second(self: DateTime)       -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weekday(self: DateTime)      -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_year(self: DateTime)     -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_week(self: DateTime)     -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weekday_name(self: DateTime) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month_name(self: DateTime)   -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn to_millis(self: DateTime)    -> integer"
+            },
+            {
+              "doc": "── Duration accessors ──",
+              "sig": "pub fn total_millis(self: Duration)  -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_seconds(self: Duration) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_minutes(self: Duration) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_hours(self: Duration)   -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_days(self: Duration)    -> integer"
+            },
+            {
+              "doc": "── DateTime operators (comparison + typed arithmetic) ──",
+              "sig": "pub fn OpLt(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpLe(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGt(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGe(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpEq(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpNe(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpMin(self: DateTime, other: DateTime) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpAdd(self: DateTime, span: Duration)  -> DateTime"
+            },
+            {
+              "doc": "`-` on a DateTime is the difference `dt - dt` (above); operators key on the\nreceiver type, so subtracting a Duration is the `minus` method (or `dt + (-span)`).",
+              "sig": "pub fn minus(self: DateTime, span: Duration) -> DateTime"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn negate(self: Duration) -> Duration"
+            },
+            {
+              "doc": "── Duration operators ──",
+              "sig": "pub fn OpAdd(self: Duration, other: Duration) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpMin(self: Duration, other: Duration) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpMul(self: Duration, factor: integer) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpLt(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpLe(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGt(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGe(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpEq(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpNe(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "── custom formatting (the per-type to_text hook) ──\n\"\" / \"datetime\" -> YYYY-MM-DD HH:MM · \"date\" -> YYYY-MM-DD · \"time\" -> HH:MM\n\"seconds\" -> HH:MM:SS · \"iso\" -> …THH:MM:SSZ · \"wday\" -> Mon · \"month\" -> May",
+              "sig": "pub fn to_text(self: DateTime, spec: text) -> text"
+            },
+            {
+              "doc": "A Duration renders as [-]H:MM:SS (hours may exceed 24).",
+              "sig": "pub fn to_text(self: Duration, spec: text) -> text"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-08T20:03:22Z",
+          "sha256": "5ddd95cddd9de970c61eefa06109a7f7565a6ae162350f9f39241e17c4203941",
+          "size": 10634,
+          "subpath": "time",
+          "url": "https://github.com/loft-lang/loft-libs-game/releases/download/time-v0.2.0/time-0.2.0.tar.gz"
+        },
+        "0.2.1": {
+          "api": [
+            {
+              "doc": "Epoch-ms at UTC midnight of the given calendar date.",
+              "sig": "pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer"
+            },
+            {
+              "doc": "Identity wrapper — for readability where a raw ms count becomes a time.",
+              "sig": "pub fn from_millis(ms: integer) -> integer"
+            },
+            {
+              "doc": "Epoch-SECONDS boundary.  Garmin / Strava REST APIs speak Unix seconds\n(`.timestamp()`), while loft times are milliseconds — convert at the edge.",
+              "sig": "pub fn from_unix_seconds(secs: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn to_unix_seconds(uts: integer) -> integer"
+            },
+            {
+              "doc": "Parse an ISO date \"YYYY-MM-DD\", optionally followed by \" HH:MM[:SS]\"\nor \"THH:MM[:SS]\" with an optional trailing \"Z\".  Returns null on any\nmalformed input (test with `!result`).",
+              "sig": "pub fn parse(ps: text) -> integer?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn year(yt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month(mt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn day(dt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn hour(ht: integer)   -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn minute(mit: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn second(st: integer)  -> integer"
+            },
+            {
+              "doc": "0 = Monday .. 6 = Sunday.  1970-01-01 was a Thursday (weekday 3).",
+              "sig": "pub fn weekday(wt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn add_days(adt: integer, days: integer)     -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn add_weeks(awt: integer, weeks: integer)   -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn add_seconds(ast: integer, secs: integer)  -> integer"
+            },
+            {
+              "doc": "Whole calendar days from `a` to `b` (b later → positive).",
+              "sig": "pub fn days_between(da: integer, db: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn seconds_between(sa: integer, sb: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn start_of_day(sdt: integer) -> integer"
+            },
+            {
+              "doc": "Monday 00:00 UTC of the week containing `t`.",
+              "sig": "pub fn start_of_week(swt: integer) -> integer"
+            },
+            {
+              "doc": "Combine a date with a time-of-day given as components (datetime.combine).",
+              "sig": "pub fn at_time(atd: integer, hh: integer, mm: integer, ss: integer) -> integer"
+            },
+            {
+              "doc": "Combine a date with an \"HH:MM\" or \"HH:MM:SS\" time string.  Mirrors\n`datetime.combine(date, time.fromisoformat(s))`.  Null on a malformed time.",
+              "sig": "pub fn combine(cmd: integer, time_text: text) -> integer?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_year(iyt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_week(iwt: integer) -> integer"
+            },
+            {
+              "doc": "Shift so that the field accessors / formatters yield local values.",
+              "sig": "pub fn to_local(lt: integer, offset_min: integer) -> integer"
+            },
+            {
+              "doc": "UTC-midnight key of the local calendar day containing `t`.",
+              "sig": "pub fn local_day(ldt: integer, offset_min: integer) -> integer"
+            },
+            {
+              "doc": "The local calendar day for \"now\" at the given offset.",
+              "sig": "pub fn today(offset_min: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_date(fdt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_time(ftt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_seconds(fst: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_datetime(fdtt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_iso(fit: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weekday_name(wnt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month_name(mnt: integer) -> text"
+            },
+            {
+              "doc": "── DateTime construction ──",
+              "sig": "pub fn date(dcy: integer, dcmo: integer, dcd: integer) -> DateTime"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn datetime(tcy: integer, tcmo: integer, tcd: integer,"
+            },
+            {
+              "doc": "── Duration construction ──",
+              "sig": "pub fn milliseconds(nms: integer) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn seconds(nsec: integer)     -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn minutes(nmin: integer)     -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn hours(nhr: integer)        -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn days(nday: integer)        -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weeks(nwk: integer)        -> Duration"
+            },
+            {
+              "doc": "── DateTime field accessors (methods; delegate to the integer API above) ──",
+              "sig": "pub fn year(self: DateTime)         -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month(self: DateTime)        -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn day(self: DateTime)          -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn hour(self: DateTime)         -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn minute(self: DateTime)       -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn second(self: DateTime)       -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weekday(self: DateTime)      -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_year(self: DateTime)     -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_week(self: DateTime)     -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weekday_name(self: DateTime) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month_name(self: DateTime)   -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn to_millis(self: DateTime)    -> integer"
+            },
+            {
+              "doc": "── Duration accessors ──",
+              "sig": "pub fn total_millis(self: Duration)  -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_seconds(self: Duration) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_minutes(self: Duration) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_hours(self: Duration)   -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_days(self: Duration)    -> integer"
+            },
+            {
+              "doc": "── DateTime operators (comparison + typed arithmetic) ──",
+              "sig": "pub fn OpLt(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpLe(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGt(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGe(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpEq(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpNe(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpMin(self: DateTime, other: DateTime) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpAdd(self: DateTime, span: Duration)  -> DateTime"
+            },
+            {
+              "doc": "`-` on a DateTime is the difference `dt - dt` (above); operators key on the\nreceiver type, so subtracting a Duration is the `minus` method (or `dt + (-span)`).",
+              "sig": "pub fn minus(self: DateTime, span: Duration) -> DateTime"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn negate(self: Duration) -> Duration"
+            },
+            {
+              "doc": "── Duration operators ──",
+              "sig": "pub fn OpAdd(self: Duration, other: Duration) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpMin(self: Duration, other: Duration) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpMul(self: Duration, factor: integer) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpLt(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpLe(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGt(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGe(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpEq(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpNe(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "── custom formatting (the per-type to_text hook) ──\n\"\" / \"datetime\" -> YYYY-MM-DD HH:MM · \"date\" -> YYYY-MM-DD · \"time\" -> HH:MM\n\"seconds\" -> HH:MM:SS · \"iso\" -> …THH:MM:SSZ · \"wday\" -> Mon · \"month\" -> May",
+              "sig": "pub fn to_text(self: DateTime, spec: text) -> text"
+            },
+            {
+              "doc": "A Duration renders as [-]H:MM:SS (hours may exceed 24).",
+              "sig": "pub fn to_text(self: Duration, spec: text) -> text"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-15T10:46:13Z",
+          "sha256": "ac20e8d561ebebe6ad5834172836d5fd5e3b5f721eab1fb70a058915810bed3a",
+          "size": 10600,
+          "subpath": "time",
+          "url": "https://github.com/loft-lang/loft-libs-game/releases/download/time-v0.2.1/time-0.2.1.tar.gz"
         }
       },
       "yanked": []
@@ -924,19 +2604,294 @@
           "subpath": "web",
           "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.2.1/web-0.2.1.tar.gz"
         },
-        "0.2.2": {
+        "0.2.3": {
+          "api": [
+            {
+              "doc": "The result of an HTTP request.",
+              "sig": "pub struct HttpResponse"
+            },
+            {
+              "doc": "Returns true when the status code is in the 200-299 range.",
+              "sig": "pub fn ok(self: HttpResponse) -> boolean"
+            },
+            {
+              "doc": "Send a GET request.",
+              "sig": "pub fn http_get(url: text) -> HttpResponse"
+            },
+            {
+              "doc": "Send a POST request with a body.",
+              "sig": "pub fn http_post(url: text, body: text) -> HttpResponse"
+            },
+            {
+              "doc": "Send a PUT request with a body.",
+              "sig": "pub fn http_put(url: text, body: text) -> HttpResponse"
+            },
+            {
+              "doc": "Send a DELETE request.",
+              "sig": "pub fn http_delete(url: text) -> HttpResponse"
+            },
+            {
+              "doc": "GET with custom headers.",
+              "sig": "pub fn http_get_h(url: text, headers: vector<text>) -> HttpResponse"
+            },
+            {
+              "doc": "POST with custom headers.",
+              "sig": "pub fn http_post_h(url: text, body: text, headers: vector<text>) -> HttpResponse"
+            },
+            {
+              "doc": "PUT with custom headers.",
+              "sig": "pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse"
+            },
+            {
+              "doc": "DELETE with custom headers.",
+              "sig": "pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WsHandler"
+            },
+            {
+              "doc": "Open a WebSocket session.  Returns null only if the URL is\nmalformed; transient connection failures (server not yet up,\nnetwork blip) are absorbed by the auto-reconnect loop in the Rust\nlayer, so this call always returns a usable handle for any\nwell-formed `ws://...` URL.",
+              "sig": "pub fn ws_handler(url: text) -> WsHandler"
+            },
+            {
+              "doc": "Send a text message to the server.  Returns true on success; false\nmeans the connection is currently in backoff / reconnecting and the\ncaller may retry after the next `pump()`.",
+              "sig": "pub fn send(self: WsHandler, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send `msg` as a binary WebSocket frame (opcode 2).  Loft `text`\nis a byte buffer — pack u8/u16/i32/etc. into it via `to_bytes`\nstyle code, then ship it.  Returns true on success; false means\nthe connection is currently in backoff / reconnecting.",
+              "sig": "pub fn send_binary(self: WsHandler, msg: text) -> boolean"
+            },
+            {
+              "doc": "Opcode of the last frame surfaced by `try_recv` / `pump` on this\nhandler.  Use after a successful read to decide whether to\ninterpret the payload as utf-8 text or as a binary blob.",
+              "sig": "pub fn last_opcode(self: WsHandler) -> integer"
+            },
+            {
+              "doc": "Drain any pending received messages, firing `on_message` for each.\nReturns the count of messages delivered this call.  Call this from\na main loop (and yield to the host between iterations on the browser\ntarget) to drive event delivery without async.",
+              "sig": "pub fn pump(self: WsHandler, on_message: fn(text)) -> integer"
+            },
+            {
+              "doc": "Non-blocking single-message receive.  Returns the next pending\nmessage text if one is available, null otherwise.  Equivalent to a\nsingle iteration of pump without the callback — useful when the\nreceiver wants to drive its own loop and accumulate messages\nlocally without capturing state inside a closure.",
+              "sig": "pub fn try_recv(self: WsHandler) -> text?"
+            },
+            {
+              "doc": "Permanently close the session (no further reconnect attempts).",
+              "sig": "pub fn close(self: WsHandler)"
+            },
+            {
+              "doc": "Block the calling thread for `ms` milliseconds.  Convenience for\ntests and pacing loops; non-positive values are a no-op.  Not\navailable on the WASM target — the host event loop is the\nequivalent.",
+              "sig": "pub fn sleep_ms(ms: integer)"
+            },
+            {
+              "doc": "Empty the per-thread pack buffer.  Call before each blob.",
+              "sig": "pub fn pack_reset()"
+            },
+            {
+              "doc": "Append a single byte to the pack buffer.  `b` is masked to 8 bits.",
+              "sig": "pub fn pack_u8(b: integer)"
+            },
+            {
+              "doc": "Append a 2-byte little-endian unsigned value.",
+              "sig": "pub fn pack_u16_le(v: integer)"
+            },
+            {
+              "doc": "Append a 4-byte little-endian unsigned value.  Loft `integer` is\ni32 — bit-cast to u32 to preserve the LE byte pattern across the\nsign boundary.",
+              "sig": "pub fn pack_u32_le(v: integer)"
+            },
+            {
+              "doc": "Take the contents of the pack buffer and return them as a `text`\nwhose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.",
+              "sig": "pub fn pack_take() -> text"
+            },
+            {
+              "doc": "Read the byte at `idx` of the text payload.  Out-of-range (negative\nor past the end) returns -1.  Use to decode binary frames received\nvia `try_recv` / `pump`.  Argument order is (idx, t) — the C-ABI\nauto-marshal in src/extensions.rs supports (I32, Text) -> I32 but\nnot (Text, I32) -> I32.",
+              "sig": "pub fn byte_at(idx: integer, t: text) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WsGroupEvent"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WsGroup"
+            },
+            {
+              "doc": "Create a new (empty) group.",
+              "sig": "pub fn ws_group() -> WsGroup"
+            },
+            {
+              "doc": "Add a handler to the group.",
+              "sig": "pub fn add(self: WsGroup, h: WsHandler)"
+            },
+            {
+              "doc": "Poll all handles round-robin.  Returns a WsGroupEvent with\nhandle >= 0 and the message if one is ready; handle == -1\nmeans nothing is available right now.",
+              "sig": "pub fn poll(self: WsGroup) -> WsGroupEvent"
+            },
+            {
+              "doc": "Yield one frame to the host event loop (@PLN84 ZT-C); native no-op,\nbrowser asyncify suspend (loft_web.ws_yield).  Call once per WS poll\niteration so the browser event loop can deliver WebSocket messages.",
+              "sig": "pub fn frame_yield()"
+            }
+          ],
           "deps": {},
           "loft": ">=0.8",
-          "published": "2026-06-24T22:03:05Z",
-          "sha256": "59518a562b865dac388b017651701a36f9160d1c2de987b4d410a0675222085c",
-          "size": 29571,
+          "published": "2026-07-03T06:14:17Z",
+          "sha256": "328a8d43155c756430bd669a5df2dc3475f8a028466840190b6548ea41df860d",
+          "size": 29278,
           "subpath": "web",
-          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.2.2/web-0.2.2.tar.gz"
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.2.3/web-0.2.3.tar.gz"
+        },
+        "0.3.0": {
+          "api": [
+            {
+              "doc": "The result of an HTTP request.",
+              "sig": "pub struct HttpResponse"
+            },
+            {
+              "doc": "Returns true when the status code is in the 200-299 range.",
+              "sig": "pub fn ok(self: HttpResponse) -> boolean"
+            },
+            {
+              "doc": "Send a GET request.",
+              "sig": "pub fn http_get(url: text) -> HttpResponse"
+            },
+            {
+              "doc": "Send a POST request with a body.",
+              "sig": "pub fn http_post(url: text, body: text) -> HttpResponse"
+            },
+            {
+              "doc": "Send a PUT request with a body.",
+              "sig": "pub fn http_put(url: text, body: text) -> HttpResponse"
+            },
+            {
+              "doc": "Send a DELETE request.",
+              "sig": "pub fn http_delete(url: text) -> HttpResponse"
+            },
+            {
+              "doc": "GET with custom headers.",
+              "sig": "pub fn http_get_h(url: text, headers: vector<text>) -> HttpResponse"
+            },
+            {
+              "doc": "POST with custom headers.",
+              "sig": "pub fn http_post_h(url: text, body: text, headers: vector<text>) -> HttpResponse"
+            },
+            {
+              "doc": "PUT with custom headers.",
+              "sig": "pub fn http_put_h(url: text, body: text, headers: vector<text>) -> HttpResponse"
+            },
+            {
+              "doc": "DELETE with custom headers.",
+              "sig": "pub fn http_delete_h(url: text, headers: vector<text>) -> HttpResponse"
+            },
+            {
+              "doc": "Read the byte range [offset, offset+len) of a remote file via a Range\nrequest. Returns status 206 (Partial Content) with the raw bytes in `body`\nwhen the server honours ranges; a server that ignores Range returns 200 with\nthe full body. Read the bytes with `byte_at(response.body, i)`.",
+              "sig": "pub fn http_get_range(url: text, offset: integer, len: integer) -> HttpResponse"
+            },
+            {
+              "doc": "Byte-range read with extra custom headers (e.g. If-Range / If-None-Match).",
+              "sig": "pub fn http_get_range_h(url: text, offset: integer, len: integer, headers: vector<text>) -> HttpResponse"
+            },
+            {
+              "doc": "Resolve a URL's total byte size without downloading it. Tries a HEAD request\n(Content-Length); if the server omits the length on HEAD (some CDNs — e.g.\ngithub-raw — only report it on GET), falls back to a 1-byte range read and\ntakes the total from the Content-Range header. Returns -1 if size is\nunavailable.",
+              "sig": "pub fn http_size(url: text) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WsHandler"
+            },
+            {
+              "doc": "Open a WebSocket session.  Returns null only if the URL is\nmalformed; transient connection failures (server not yet up,\nnetwork blip) are absorbed by the auto-reconnect loop in the Rust\nlayer, so this call always returns a usable handle for any\nwell-formed `ws://...` URL.",
+              "sig": "pub fn ws_handler(url: text) -> WsHandler"
+            },
+            {
+              "doc": "Send a text message to the server.  Returns true on success; false\nmeans the connection is currently in backoff / reconnecting and the\ncaller may retry after the next `pump()`.",
+              "sig": "pub fn send(self: WsHandler, msg: text) -> boolean"
+            },
+            {
+              "doc": "Send `msg` as a binary WebSocket frame (opcode 2).  Loft `text`\nis a byte buffer — pack u8/u16/i32/etc. into it via `to_bytes`\nstyle code, then ship it.  Returns true on success; false means\nthe connection is currently in backoff / reconnecting.",
+              "sig": "pub fn send_binary(self: WsHandler, msg: text) -> boolean"
+            },
+            {
+              "doc": "Opcode of the last frame surfaced by `try_recv` / `pump` on this\nhandler.  Use after a successful read to decide whether to\ninterpret the payload as utf-8 text or as a binary blob.",
+              "sig": "pub fn last_opcode(self: WsHandler) -> integer"
+            },
+            {
+              "doc": "Drain any pending received messages, firing `on_message` for each.\nReturns the count of messages delivered this call.  Call this from\na main loop (and yield to the host between iterations on the browser\ntarget) to drive event delivery without async.",
+              "sig": "pub fn pump(self: WsHandler, on_message: fn(text)) -> integer"
+            },
+            {
+              "doc": "Non-blocking single-message receive.  Returns the next pending\nmessage text if one is available, null otherwise.  Equivalent to a\nsingle iteration of pump without the callback — useful when the\nreceiver wants to drive its own loop and accumulate messages\nlocally without capturing state inside a closure.",
+              "sig": "pub fn try_recv(self: WsHandler) -> text?"
+            },
+            {
+              "doc": "Permanently close the session (no further reconnect attempts).",
+              "sig": "pub fn close(self: WsHandler)"
+            },
+            {
+              "doc": "Block the calling thread for `ms` milliseconds.  Convenience for\ntests and pacing loops; non-positive values are a no-op.  Not\navailable on the WASM target — the host event loop is the\nequivalent.",
+              "sig": "pub fn sleep_ms(ms: integer)"
+            },
+            {
+              "doc": "Empty the per-thread pack buffer.  Call before each blob.",
+              "sig": "pub fn pack_reset()"
+            },
+            {
+              "doc": "Append a single byte to the pack buffer.  `b` is masked to 8 bits.",
+              "sig": "pub fn pack_u8(b: integer)"
+            },
+            {
+              "doc": "Append a 2-byte little-endian unsigned value.",
+              "sig": "pub fn pack_u16_le(v: integer)"
+            },
+            {
+              "doc": "Append a 4-byte little-endian unsigned value.  Loft `integer` is\ni32 — bit-cast to u32 to preserve the LE byte pattern across the\nsign boundary.",
+              "sig": "pub fn pack_u32_le(v: integer)"
+            },
+            {
+              "doc": "Take the contents of the pack buffer and return them as a `text`\nwhose UTF-8 bytes are exactly the buffer bytes.  Resets the buffer.",
+              "sig": "pub fn pack_take() -> text"
+            },
+            {
+              "doc": "Read the byte at `idx` of the text payload.  Out-of-range (negative\nor past the end) returns -1.  Use to decode binary frames received\nvia `try_recv` / `pump`.  Argument order is (idx, t) — the C-ABI\nauto-marshal in src/extensions.rs supports (I32, Text) -> I32 but\nnot (Text, I32) -> I32.",
+              "sig": "pub fn byte_at(idx: integer, t: text) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WsGroupEvent"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct WsGroup"
+            },
+            {
+              "doc": "Create a new (empty) group.",
+              "sig": "pub fn ws_group() -> WsGroup"
+            },
+            {
+              "doc": "Add a handler to the group.",
+              "sig": "pub fn add(self: WsGroup, h: WsHandler)"
+            },
+            {
+              "doc": "Poll all handles round-robin.  Returns a WsGroupEvent with\nhandle >= 0 and the message if one is ready; handle == -1\nmeans nothing is available right now.",
+              "sig": "pub fn poll(self: WsGroup) -> WsGroupEvent"
+            },
+            {
+              "doc": "Yield one frame to the host event loop (@PLN84 ZT-C); native no-op,\nbrowser asyncify suspend (loft_web.ws_yield).  Call once per WS poll\niteration so the browser event loop can deliver WebSocket messages.",
+              "sig": "pub fn frame_yield()"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-07T12:14:20Z",
+          "sha256": "d8f09ebe9d831ee180a29123fef401d8402ac3829415cb4941cccf7a54a13c7f",
+          "size": 33689,
+          "subpath": "web",
+          "url": "https://github.com/loft-lang/loft-libs-net/releases/download/web-v0.3.0/web-0.3.0.tar.gz"
         }
       },
-      "yanked": []
+      "yanked": [
+        "0.2.2"
+      ]
     }
   },
   "schema_version": 1,
-  "updated": "2026-07-02T11:59:45Z"
+  "updated": "2026-07-19T15:38:53Z"
 }

@@ -12,7 +12,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | Plan id | [@PLN112](https://github.com/loft-lang/plans/issues/112) |
 | Status | `active` |
 | Subject | libs |
-| Phase 1 (published enrichment) | prototyped (uncommitted) |
+| Phase 1 (published enrichment) | **DONE** — version + API sigs + triggers in `LIBRARIES.md` (published-only plain list), regenerated from live, snapshot-`--check` green |
 | Phases 2–7 | designed, not built |
 
 Motivated by a real failure: an agent read stale local clones + the stale installed copy
