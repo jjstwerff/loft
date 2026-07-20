@@ -10,7 +10,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | Field | Value |
 |---|---|
 | Plan id | [@PLN112](https://github.com/loft-lang/plans/issues/112) |
-| Status | `active` |
+| Status | **CLOSED — all 7 phases shipped (2026-07-20)** |
 | Subject | libs |
 | Phase 1 (published enrichment) | **DONE** — version + API sigs + triggers in `LIBRARIES.md` (published-only plain list), regenerated from live, snapshot-`--check` green |
 | Phase 2 (`unreleased` origin/main tier) | **DONE** — `scripts/refresh-unreleased.py` builds the sha-cached `unreleased-snapshot.json`; the catalogue tags `🟢 unreleased` additions (regex `search`/`split_on`, arguments +11, gridmesh +6, time +1). Found a **registry data gap**: 13 of 22 libs record an empty `api` field, so their published API can't be diffed — handled honestly (origin/main shown plain + a note), and filed as follow-up (populate the registry `api` on publish). |
@@ -19,7 +19,30 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 | Phase 7 (automation) | **RECEIVER DONE** — `.github/workflows/catalogue-refresh.yml`: nightly cron + `repository_dispatch: catalogue-refresh` + manual → build loft → `make libcatalogue` → **idempotent bot PR** (main stays PR-only; the `libcatalogue-check` job gates it; best-effort auto-merge). The event-driven **SENDER** workflows (registry-publish + each loft-libs-* origin/main push → dispatch) are a per-repo follow-on — snippet in § Staying current. Untested until merged (cron/dispatch fire only on the default branch). |
 | Phase 3 (`local`/`pinned` overlay) | **DONE** — `scripts/lib-overlay.py <lib>` unions the committed `published`+`unreleased` snapshots with the two machine-/context sources: **`local`** (a dev working checkout, discovered from the registry `homepage`→repo/subpath under `--dev-root`, or `--local DIR`) and **`pinned`** (the version this project's `loft.lock` resolves to → `~/.loft/registry/<lib>-<ver>/`), each extracted the same way (`loft api <dir> --json`). Keyed + diffed by **type signature** (reuses phase 4/5); adaptive renderer (plain when one source or all agree, else tagged interleave); api-compat verdicts on published→unreleased / published→local / pinned→published. stdout only — never committed. Verified: regex (the motivating `search`/`split_on` `unreleased` case), graphics (3-way divergence + the phase-2 data-gap note), time (published=unreleased=pinned → "3 sources agree" plain list), mariadb (local-only plain), not-found + pinned-but-not-installed notes. |
 | Phase 6 (docs + proposal intake) | **DONE** — the generated `LIBRARIES.md` carries a one-line provenance header (read the API here not from a clone; the `🟢 unreleased`/`⚠ BREAKING` legend; the overlay tools); `CLAUDE.md` steers agents to it and away from stale clones/installed copies; the **`library_proposal`** GitHub issue form (`.github/ISSUE_TEMPLATE/library_proposal.yml`, labeled `proposal`) is the external `proposed` front door — name · purpose · **intended use case (fit)** · proposed API · category · deps · existing repo/PR/branch — with a `proposal` label registered + documented in `LABELS.md`. Generated-doc prose is kept terse on purpose (it goes stale); the rationale lives here in the plan. |
-| **All 7 phases shipped** | ready to close (pending the lifecycle close-out: trim/relocate reference content + swap `status:active`→`status:finished`). |
+| **All 7 phases shipped** | CLOSED 2026-07-20. The living reference is the tooling + generated docs (below); the design sections that follow are the HISTORICAL design record. |
+
+## Closed — where the system lives now
+
+The plan is delivered; nothing here is a to-do. The **living** reference is the tooling and
+the generated docs, which self-maintain — not this README (kept as the design record):
+
+| Concern | Lives in (the current, self-maintaining home) |
+|---|---|
+| The committed catalogue — `published` + `unreleased`, breakage-flagged | `doc/claude/LIBRARIES.md` (generated) + `scripts/gen-library-catalogue.py` |
+| Its freshness | `.github/workflows/catalogue-refresh.yml` + `scripts/refresh-unreleased.py` |
+| The per-context overlay — `local` + `pinned` | `scripts/lib-overlay.py <name>` |
+| A `proposed` candidate — review vs published | `scripts/proposal-review.py <name> <ref>` |
+| External proposal intake | `.github/ISSUE_TEMPLATE/library_proposal.yml` (label `proposal`) |
+| The agent-facing rule ("read the API here, never a clone") | `CLAUDE.md` § Conventions + the `LIBRARIES.md` header |
+| Generated-output / recipe-narration discipline | `DOC_QUALITY.md § Trim` D |
+
+**Deferred follow-ons (optional — file as issues if pursued, not blocking):**
+- Populate the registry `api` field at publish (13 libs record an empty one → their published
+  API can't be diffed; handled honestly today with an origin/main-plain note).
+- The event-driven **SENDER** workflows in the registry + each loft-libs-* repo (needs a PAT;
+  the nightly cron is the floor until then).
+- `--proposal` resolution of a registry-PR# / issue# ref; the N-way compare UX for competing
+  proposals; a registry-PR fit-check CI gate.
 
 Motivated by a real failure: an agent read stale local clones + the stale installed copy
 and concluded a merged regex rename (`find`→`search`, PR loft-libs-core#23, `d5e4195` on
