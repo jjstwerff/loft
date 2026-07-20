@@ -392,9 +392,10 @@ jobs:
         if: always()
         env:
           LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
-          # DIAGNOSTIC (macos-asan-leak-gate.md): dump the raw ASan report for each leaking file so we
-          # can read what the runner's symbolizer emits for the ir_read/open_bundle frames. Only fires
-          # ON a leak, so it's inert on the green Linux leg; remove once the macOS gap is understood.
+          # Standing aid (macos-asan-leak-gate.md): on a REAL leak, dump the raw ASan report for each
+          # leaking file inline, so the next debugger reads the runner's own symbolized stack straight
+          # from the log instead of paying a ~40-min re-dispatch to instrument it (that cost settled the
+          # nw_context macOS case). Gated on roots>0, so it's completely inert on a green run.
           LOFT_LEAK_DUMP: '1'
         run: >
           ABIN=target/${{ matrix.target }}/release/loft
