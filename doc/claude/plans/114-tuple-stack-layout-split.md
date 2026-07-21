@@ -687,6 +687,26 @@ integer does not) instead of inferring it from size/align/Parts.
 **3. Storage read via stack offsets** — convert `parallel.rs:1568` and
 `generation/ops/parallel.rs:208` to the storage view. Both backends, one commit each.
 
+### DECISION — the fn-ref width (2026-07-21, CORRECTED by evidence)
+
+**Storage is 8 bytes, not 4.** The first version of this decision said 4 (the `d_nr`)
+on the strength of `read_tuple_at_wide`'s comment. `parser/mod.rs`'s `get_val`
+documents the real shape:
+
+> "storage is **two database fields** per loft attribute: `<attr>` — 4B i32 holding
+> the lambda's d_nr, `<attr>__closure_rec` — 4B vector header **at pos+4**"
+
+So a stored fn-ref is `d_nr` + `closure_rec` = **8 bytes**, and `get_val` already
+reconstructs the 20-byte stack slot from those two halves. Reserving 4 truncates the
+closure half. `element_storage_size(Function) = 8` — landed.
+
+Neither the stack (20) nor the database (8, two fields) changes; that constraint held.
+
+**With this, full tight packing takes the oracle to 0 of 148.** The layout question is
+settled and correct.
+
+<details><summary>the superseded 4-byte version of this decision</summary>
+
 ### DECISION — the fn-ref width (2026-07-21)
 
 **Storage stays 4. The stack stays 20. Only the write/read projection narrows.**
@@ -701,6 +721,8 @@ Neither the database format nor the stack slot changes.
 So a fn-ref is 20 bytes on the stack and 4 in a record, and codegen converts at the
 boundary — exactly as `read_tuple_at_wide` already does on the way in
 (`u32` → `i64::from`). Nothing else moves.
+
+</details>
 
 **The decision is validated, not assumed.** With `element_storage_size(Function) = 4`
 and tuple groups packed FULLY tight, the oracle reports **0 divergent shapes of 148** —

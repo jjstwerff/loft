@@ -2083,10 +2083,13 @@ pub fn element_storage_size(t: &Type) -> usize {
         // `read_tuple_at_wide` says the same ("text: 4-byte heap-pointer") and
         // inflates it to a `Str` for the worker slot.
         Type::Text(_) => 4,
-        // Likewise a stored fn-ref is the 4-byte d_nr; the 20-byte figure is the
-        // STACK slot (8B d_nr + 12B closure DbRef).  @PLN114: the write projection
-        // still emits 8 bytes here — see § The last 19 shapes.
-        Type::Function(_, _, _) => 4,
+        // A stored fn-ref is EIGHT bytes: `parser/mod.rs`'s `get_val` documents the
+        // shape — "storage is two database fields per loft attribute: `<attr>` 4B
+        // i32 d_nr, `<attr>__closure_rec` 4B vector header at pos+4".  The 20-byte
+        // figure is the STACK slot (8B d_nr + 12B closure DbRef), which `get_val`
+        // reconstructs from these two halves.  Reserving only 4 truncates the
+        // closure half and the fn-ref reads back wrong.
+        Type::Function(_, _, _) => 8,
         other => element_stack_size(other),
     }
 }
