@@ -1266,7 +1266,7 @@ pub fn complete(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) -
     let p = parse_lsp_buffer(text, name, stdlib_dir);
     let data = &p.data;
     match receiver {
-        Some(recv) => member_completions(data, &recv),
+        Some(recv) => member_completions(data, &recv, line),
         None => identifier_completions(data, &prefix),
     }
 }
@@ -1341,8 +1341,8 @@ fn identifier_completions(data: &Data, prefix: &str) -> Vec<Completion> {
     out
 }
 
-fn member_completions(data: &Data, receiver: &str) -> Vec<Completion> {
-    let Some(type_nr) = resolve_receiver_type(data, receiver) else {
+fn member_completions(data: &Data, receiver: &str, cursor_line: u32) -> Vec<Completion> {
+    let Some(type_nr) = resolve_receiver_type(data, receiver, cursor_line) else {
         return Vec::new();
     };
     let type_name = data.def(type_nr).name().to_string();
@@ -1401,8 +1401,9 @@ fn member_completions(data: &Data, receiver: &str) -> Vec<Completion> {
 }
 
 /// Resolve a receiver identifier to a struct/enum def_nr: a TYPE name directly,
-/// else a variable's type via a function's table (best-effort).
-fn resolve_receiver_type(data: &Data, receiver: &str) -> Option<u32> {
+/// else a variable's type — resolved SCOPE-PRECISELY in the function enclosing the
+/// cursor (@PLN115), falling back to any function's table.
+fn resolve_receiver_type(data: &Data, receiver: &str, cursor_line: u32) -> Option<u32> {
     let is_type = |d: u32| {
         d != u32::MAX
             && matches!(
@@ -1414,19 +1415,50 @@ fn resolve_receiver_type(data: &Data, receiver: &str) -> Option<u32> {
     if is_type(named) {
         return Some(named);
     }
+    let var_type_in = |f: u32| {
+        let vars = data.def(f).variables();
+        if vars.name_exists(receiver) {
+            let tn = data.type_def_nr(vars.var_type(vars.var(receiver)));
+            if is_type(tn) {
+                return Some(tn);
+            }
+        }
+        None
+    };
+    // The ENCLOSING function first — a top-level fn whose body contains the cursor
+    // is the one with the greatest declaration line at or before it — so a receiver
+    // `x` resolves to THIS function's `x`, not a same-named `x` in another.
+    if let Some(f) = enclosing_fn(data, cursor_line)
+        && let Some(tn) = var_type_in(f)
+    {
+        return Some(tn);
+    }
+    // Fallback: any user function with a var of that name (an out-of-scope guess is
+    // better than no members when the enclosing-fn heuristic misses).
     for f in 0..data.definitions() {
         let def = data.def(f);
-        if def.source == MAIN_SOURCE && matches!(def.def_type, crate::data::DefType::Function) {
-            let vars = def.variables();
-            if vars.name_exists(receiver) {
-                let tn = data.type_def_nr(vars.var_type(vars.var(receiver)));
-                if is_type(tn) {
-                    return Some(tn);
-                }
-            }
+        if def.source == MAIN_SOURCE
+            && matches!(def.def_type, crate::data::DefType::Function)
+            && let Some(tn) = var_type_in(f)
+        {
+            return Some(tn);
         }
     }
     None
+}
+
+/// The top-level user function enclosing `cursor_line` — the one with the greatest
+/// declaration line at or before it (functions don't nest at top level, so the last
+/// one opened before the cursor owns it).
+fn enclosing_fn(data: &Data, cursor_line: u32) -> Option<u32> {
+    (0..data.definitions())
+        .filter(|&d| {
+            let def = data.def(d);
+            def.source == MAIN_SOURCE
+                && matches!(def.def_type, crate::data::DefType::Function)
+                && def.position.line <= cursor_line
+        })
+        .max_by_key(|&d| data.def(d).position.line)
 }
 
 /// `classify` label → LSP `CompletionItemKind`.
@@ -1462,7 +1494,7 @@ pub struct SemanticToken {
 
 /// The token-type legend the LSP `semanticTokensProvider` declares; a token's
 /// `kind` indexes into it.  (0 keyword, 1 function, 2 method, 3 struct, 4 enum,
-/// 5 type, 6 variable, 7 interface.)
+/// 5 type, 6 variable, 7 interface, 8 property.)
 #[must_use]
 pub fn semantic_token_types() -> &'static [&'static str] {
     &[
@@ -1474,16 +1506,36 @@ pub fn semantic_token_types() -> &'static [&'static str] {
         "type",
         "variable",
         "interface",
+        "property",
     ]
 }
 
 /// Classify every identifier token in `text` by its resolved kind.  Fresh parse
 /// per call (same rule as [`diagnose`]).
+///
+/// @PLN115: each token is first matched against the parse-time resolution index by
+/// position — so LOCALS (variable), METHODS (method, keyed on the receiver type),
+/// and FIELDS (property) are classified, which the name-based classifier cannot do —
+/// then falls back to the name lookup for globals / types / keywords the index does
+/// not record (a type in a declaration, a keyword).
 #[must_use]
 pub fn semantic_tokens(text: &str, name: &str, stdlib_dir: &str) -> Vec<SemanticToken> {
     use crate::lexer::{LexItem, Lexer};
     let p = parse_lsp_buffer(text, name, stdlib_dir);
     let data = &p.data;
+    // A `(line, col)` → legend-kind map from the index (same position convention as
+    // the lexer, so a token's start matches its occurrence exactly).
+    let mut resolved: HashMap<(u32, u32), u32> = HashMap::new();
+    for o in p.resolutions() {
+        let kind = match o.res {
+            crate::resolution::Resolution::Local { .. } => 6,  // variable
+            crate::resolution::Resolution::Method { .. } => 2, // method
+            crate::resolution::Resolution::Field { .. } => 8,  // property
+            crate::resolution::Resolution::Global(_) => 1,     // function
+            crate::resolution::Resolution::Unresolved => continue,
+        };
+        resolved.insert((o.line, o.col), kind);
+    }
     let mut lexer = Lexer::default();
     lexer.parse_string(text, name);
     let mut out = Vec::new();
@@ -1492,7 +1544,11 @@ pub fn semantic_tokens(text: &str, name: &str, stdlib_dir: &str) -> Vec<Semantic
         match r.has {
             LexItem::None => break,
             LexItem::Identifier(id) => {
-                if let Some(kind) = token_kind(data, &id) {
+                let kind = resolved
+                    .get(&(r.position.line, r.position.pos))
+                    .copied()
+                    .or_else(|| token_kind(data, &id));
+                if let Some(kind) = kind {
                     out.push(SemanticToken {
                         line: r.position.line,
                         col: r.position.pos,

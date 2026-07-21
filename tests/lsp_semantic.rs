@@ -38,3 +38,31 @@ fn classifies_structs_functions_and_types() {
         "tokens are sorted for delta-encoding"
     );
 }
+
+#[test]
+fn index_classifies_locals_methods_and_fields() {
+    // @PLN115: the resolution index types LOCALS (variable), METHODS (method), and
+    // FIELDS (property) — the name-based cut could not.
+    let src = "struct P { x: integer }\nfn main() {\n  p = P { x: 1 };\n  q = p.x;\n  s = \"hi\";\n  z = s.len();\n}\n";
+    let toks = semantic_tokens(src, "b.loft", "default");
+    let legend = semantic_token_types();
+    let named: Vec<(u32, u32, &str)> = toks
+        .iter()
+        .map(|t| (t.line, t.col, legend[t.kind as usize]))
+        .collect();
+    // local `p` (L3 col 3) → variable
+    assert!(
+        named.iter().any(|(l, c, k)| *l == 3 && *c == 3 && *k == "variable"),
+        "local p is a variable: {named:?}"
+    );
+    // field `p.x` (the `x` at L4 col 9) → property
+    assert!(
+        named.iter().any(|(l, c, k)| *l == 4 && *c == 9 && *k == "property"),
+        "field x is a property: {named:?}"
+    );
+    // method `s.len` (the `len` at L6 col 9) → method
+    assert!(
+        named.iter().any(|(l, c, k)| *l == 6 && *c == 9 && *k == "method"),
+        "method len is a method: {named:?}"
+    );
+}

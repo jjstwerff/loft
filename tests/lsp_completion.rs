@@ -63,3 +63,26 @@ fn member_completion_lists_enum_variants() {
         "Square variant: {m:?}"
     );
 }
+
+#[test]
+fn member_completion_is_scope_precise_to_the_enclosing_function() {
+    // @PLN115: the same receiver name `v` has type A in `f` and type B in `g`;
+    // completion after `v.` must offer THIS function's members, not the first `v`.
+    let src = "struct A { a: integer }\nstruct B { b: text }\n\
+               fn f() {\n  v = A { a: 1 };\n  v.\n}\n\
+               fn g() {\n  v = B { b: \"x\" };\n  v.\n}\n";
+    // In `f` (L5, `v.` cursor after the dot at col 5) → A's field `a`.
+    let in_f = items(src, 5, 5);
+    assert!(
+        in_f.iter().any(|(k, l)| *k == 5 && l == "a"),
+        "f sees A.a: {in_f:?}"
+    );
+    assert!(!in_f.iter().any(|(_, l)| l == "b"), "f does NOT see B.b: {in_f:?}");
+    // In `g` (L9) → B's field `b`.
+    let in_g = items(src, 9, 5);
+    assert!(
+        in_g.iter().any(|(k, l)| *k == 5 && l == "b"),
+        "g sees B.b: {in_g:?}"
+    );
+    assert!(!in_g.iter().any(|(_, l)| l == "a"), "g does NOT see A.a: {in_g:?}");
+}
