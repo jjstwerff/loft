@@ -140,9 +140,14 @@ includes a byte-identical-IR check** (§ below). No step changes a parse decisio
   byte-identical to S3. **Follow-up:** record the missing declarations (param sig,
   `for`/lambda binder) to make ALL locals precise and retire the fallback — deferred
   as it touches the definition parser.
-- **S5 — hook globals + calls.** Record `Global`/`Method` at `mod.rs::call` (the
-  `find_fn` result) and constants at `objects.rs:191`. *Gate:* byte-identical off;
-  method references (`text.len`) now exclude other types' `len`.
+- **S5 — hook globals + calls. ✅ DONE (`f24cd1c3`).** Record `Global(def_nr)` for a
+  user free-function CALL (`n_<name>`) at `mod.rs::call`, after `find_fn` + generic-skip.
+  *Reality-check vs the sketch:* methods resolve in `fields.rs` (not `call`) and
+  constants in `parse_constant_value` (tangled with enum-variant/qualifier logic) — so
+  `Method` + constants MOVED to S6 (member/field access) rather than force an unclean
+  chokepoint here. *Gate met:* byte-identical off on a call-containing corpus;
+  Global(n_helper) recorded with locals alongside. The method-reference win
+  (`text.len` excludes other `len`) lands with the S6 method hook.
 - **S6 — hook field/method access** (`parser/fields.rs`). *Gate:* completion's `expr.`
   receiver + hover resolve via the index.
 - **S7 — unblock E (inlayHint).** With reliable binding positions from the index, emit

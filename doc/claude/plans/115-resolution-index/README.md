@@ -13,7 +13,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Phase 0 (design) DONE — see [design.md](design.md)** (concrete code points + the
 S1–S7 small-safe-step spine + the byte-identical-IR gate).
 
-**Execution: S1 + S2 + S3 + S4 DONE.**
+**Execution: S1 + S2 + S3 + S4 + S5 DONE.**
 - **S1** (`34c428c0`) — `pub mod resolution` (`Occurrence` + `Resolution`), the
   `record_resolutions`/`resolutions` fields (default off/empty), the gated `record`
   helper, `Parser::resolutions()`, and `resolutions.clear()` paired with every
@@ -55,9 +55,21 @@ on `Argument` + a pass-2 hook in `definitions.rs`), a `for i` / lambda binder
 and the F-v1 fallback retires. Deferred from S4 as it touches the delicate definition
 parser and each site needs its own byte-identical gate.
 
-**Next: S5** — hook globals + calls (`mod.rs::call` / `find_fn`), constants
-(`objects.rs`). Byte-identical off; method references (`text.len`) then exclude other
-types' `len`.
+- **S5** (`f24cd1c3`) — record free-function CALLS as `Global(def_nr)` at the
+  `mod.rs::call` chokepoint (after `find_fn` + generic-skip), for user free functions
+  (`n_<name>`). Gated on `record_resolutions` first (zero-cost off) + pass 2.
+  **Scope note:** the design sketched "Global/Method at call + constants at
+  objects.rs", but methods actually resolve in `fields.rs` and constants in
+  `parse_constant_value` (tangled with enum-variant/qualifier resolution) — neither is
+  a clean single chokepoint here, so both move to **S6** (member/field access) where
+  they group naturally. **Gate met:** `loft introspect` byte-identical off on a corpus
+  that contains free-fn calls (so the branch is traversed + no-ops); test records
+  Global(n_helper) with locals still recorded alongside; all LSP suites green.
+
+**Next: S6** — hook field + method access (`parser/fields.rs`): `Field { type_def,
+attr }` and `Method { recv_type, method_def }`, plus constants. Enables method
+find-references (`text.len` excludes other types' `len`) and completion's `expr.`
+receiver / hover to resolve via the index.
 
 This is the deferred FOUNDATION under @PLN63 (loft-lsp): every LSP feature that needs to
 know *what an identifier occurrence refers to* — not just its spelling — depends on it.
