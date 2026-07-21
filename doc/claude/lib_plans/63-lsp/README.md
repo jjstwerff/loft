@@ -151,11 +151,19 @@ editor) so nothing silently regresses.
   `textDocumentSync=full`) → `initialized` → `shutdown`/`exit`. *Gate:* harness completes the
   handshake + clean exit; VS Code connects. Framing/encoding bugs live here — nail it before
   any feature touches it.
-- **S2 — structured diagnostics (prereq #1, done additively).** `Parser::parse_text →
-  (Data, Vec<Diagnostic>)`: collect errors with the lexer's already-tracked `line`/`col`
-  stamped in, instead of `eprintln`+exit. Convert the ~60 `error(...)` sites **in batches**,
-  un-converted sites falling back to a whole-line range, so the sweep is safe at every commit.
-  *Gate:* Rust unit tests — a known error → right range/message/code; a clean buffer → none.
+- **S2 — structured diagnostics — DONE, lighter than planned.** The plan assumed a ~60-site
+  sweep to add positions; in fact loft ALREADY carries positioned, coded diagnostics (@I75;
+  @PLN102 arc-E) — every `diagnostic!` site records `DiagEntry { level, line, col, message,
+  code }`. So S2 was just the *recipe*: a fresh stdlib-loaded parser (`parse_dir("default")`)
+  → `parse_source(buf)` → `diagnostics.entries()`. Gate: `tests/lsp_diagnostics.rs` (clean →
+  none; syntax error correctly positioned; unknown symbol reported with its message). Two
+  dogfood findings from building the consumer: **(a)** `parse_source` doesn't clear a reused
+  parser's diagnostics (parser + lexer both accumulate) → a *fresh* parser per parse for now
+  (~80 ms, within budget); warm-reuse is a later perf step needing a diagnostics reset.
+  **(b)** deferred/semantic errors (e.g. "Unknown function") report at the *resolution point*
+  (end of the enclosing item), not the reference site — so they land on the wrong line. Syntax
+  errors are exact. Fixing (b) = stamp the reference's own position into the deferred-unknown
+  record; it's the next diagnostic-quality step before the LSP ships.
 - **S3 — publish diagnostics (SHIP HERE).** `didOpen`/`didChange` → `parse_text` →
   `publishDiagnostics`. *Gate:* harness asserts the notification + range; VS Code shows the
   squiggle live as you type. Diagnostics-only is real value across every LSP editor — release it.
