@@ -22,6 +22,7 @@ use crate::parser::Parser;
 use crate::scopes;
 use crate::state::State;
 use crate::variables;
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::{BufWriter, Write};
 
@@ -539,6 +540,147 @@ fn emit_slots(w: &mut dyn Write, data: &Data, end_def: u32, opts: &Options) -> s
 /// render it with the P0.2 rule (`render_own`): an owned backing buffer reads
 /// `Owned (backing=…)`, a genuine alias reads `Borrowed(base=…)`, a runtime split
 /// reads `Join(base=…)`.  The function header shows `return_ownership`.
+/// @PLN103 / crawler-H2 — report a temp that FREES a store it does not own.
+///
+/// A struct-returning call writes its result into a caller-allocated NRVO buffer
+/// (`fn n_mk(d: D, __retbuf: E) -> E`), so the value it hands back IS that buffer.
+/// When the result is bound to a temp inside a LOOP and the temp gets a scope-exit
+/// `OpFreeRef`, the buffer — allocated ONCE outside the loop — is freed once per
+/// iteration. Later iterations then write through freed memory that has since been
+/// reallocated, silently corrupting data appended earlier. No crash, and the leak
+/// counter reports only the downstream EFFECT (`Def×4 not freed`); this names the
+/// CAUSE, which crawler's H2 needed three theories to reach.
+///
+/// The check: bind a var from `Call(f, [.., Var(buf)])` where `f` takes an
+/// `__retbuf` parameter and `buf` was allocated at a shallower loop depth, then flag
+/// any `OpFreeRef` of that var deeper than `buf`'s allocation.
+fn per_iteration_frees(data: &Data, def: &crate::data::Definition) -> Vec<(String, String)> {
+    let free_nr = data.def_nr("OpFreeRef");
+    let db_nr = data.def_nr("OpDatabase");
+    // var -> loop depth at which its store was allocated
+    let mut alloc_depth: HashMap<u16, u32> = HashMap::new();
+    // var -> (buffer var it aliases, that buffer's alloc depth)
+    let mut aliases: HashMap<u16, (u16, u32)> = HashMap::new();
+    let mut found: Vec<(String, String)> = Vec::new();
+
+    /// Does `d` take a trailing `__retbuf` parameter (the NRVO shape)?
+    fn takes_retbuf(data: &Data, d: u32) -> bool {
+        let f = data.def(d);
+        f.attributes()
+            .last()
+            .is_some_and(|a| a.name.starts_with("__retbuf"))
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn walk(
+        node: &Value,
+        depth: u32,
+        data: &Data,
+        free_nr: u32,
+        db_nr: u32,
+        vars: &crate::variables::Function,
+        alloc: &mut HashMap<u16, u32>,
+        aliases: &mut HashMap<u16, (u16, u32)>,
+        out: &mut Vec<(String, String)>,
+    ) {
+        match node.unspan() {
+            // A `for` lowers to `Iter`, a `while`/`loop` to `Loop` — both repeat
+            // their body, so both raise the depth.  Missing `Iter` made an earlier
+            // version of this check silently see no loops at all.
+            Value::Loop(bl) => {
+                for op in &bl.operators {
+                    walk(
+                        op,
+                        depth + 1,
+                        data,
+                        free_nr,
+                        db_nr,
+                        vars,
+                        alloc,
+                        aliases,
+                        out,
+                    );
+                }
+            }
+            Value::Iter(_, create, next, extra) => {
+                walk(
+                    create, depth, data, free_nr, db_nr, vars, alloc, aliases, out,
+                );
+                for part in [next, extra] {
+                    walk(
+                        part,
+                        depth + 1,
+                        data,
+                        free_nr,
+                        db_nr,
+                        vars,
+                        alloc,
+                        aliases,
+                        out,
+                    );
+                }
+            }
+            Value::Set(v, rhs) => {
+                // The BINDING depth, for every var — an NRVO return buffer is declared
+                // `__ref_N = null` at function top and filled by the callee, so keying
+                // only on an explicit `OpDatabase` never saw the buffer at all.
+                alloc.entry(*v).or_insert(depth);
+                match rhs.unspan() {
+                    Value::Call(d, args) if takes_retbuf(data, *d) => {
+                        if let Some(Value::Var(buf)) = args.last().map(Value::unspan)
+                            && let Some(&bd) = alloc.get(buf)
+                        {
+                            aliases.insert(*v, (*buf, bd));
+                        }
+                    }
+                    _ => {}
+                }
+                walk(rhs, depth, data, free_nr, db_nr, vars, alloc, aliases, out);
+            }
+            // `OpDatabase(Var(v), …)` mints a store INTO v in place — it is not a
+            // `Set`, which an earlier version of this check assumed and so never saw
+            // the buffer's allocation at all.
+            Value::Call(d, args) if *d == db_nr && !args.is_empty() => {
+                if let Value::Var(v) = args[0].unspan() {
+                    alloc.entry(*v).or_insert(depth);
+                }
+            }
+            Value::Call(d, args) if *d == free_nr && args.len() == 1 => {
+                if let Value::Var(v) = args[0].unspan()
+                    && let Some(&(buf, bd)) = aliases.get(v)
+                    && depth > bd
+                {
+                    out.push((
+                        vars.name(*v).to_string(),
+                        format!(
+                            "frees `{}` — the NRVO return buffer it ALIASES, allocated at loop \
+                             depth {bd} and freed here at depth {depth}: once per iteration, \
+                             while the enclosing scope still owns it",
+                            vars.name(buf)
+                        ),
+                    ));
+                }
+            }
+            other => other.for_each_child(&mut |c| {
+                walk(c, depth, data, free_nr, db_nr, vars, alloc, aliases, out);
+            }),
+        }
+    }
+
+    walk(
+        def.code(),
+        0,
+        data,
+        free_nr,
+        db_nr,
+        &def.variables,
+        &mut alloc_depth,
+        &mut aliases,
+        &mut found,
+    );
+    found
+}
+
 fn emit_ownership(
     w: &mut dyn Write,
     data: &Data,
@@ -560,6 +702,9 @@ fn emit_ownership(
         }
         if !def.name.starts_with("n_") || def.name.starts_with("n___lambda_") {
             continue;
+        }
+        for (var, why) in per_iteration_frees(data, def) {
+            writeln!(w, "!! {}: `{var}` {why}", def.name)?;
         }
         if !opts.all_fns && crate::compile::is_default_file(&def.position.file) {
             continue;

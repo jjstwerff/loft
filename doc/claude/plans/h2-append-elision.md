@@ -1,6 +1,7 @@
 # H2 — `vec += [f(temp)]` in a loop drops every element but the first
 
-> **Status: diagnosed, not fixed.** Interpreter only; `--native` is correct, so it is
+> **Status: root cause NARROWED, not fixed — theory 3 falsified by measurement
+> (§ FALSIFIED). The lifetimes-tool attribution upgrade that did it is LANDED.** Interpreter only; `--native` is correct, so it is
 > also a backend divergence. Silent — exit 0, no diagnostic, wrong data.
 > Reported by the crawler consumer (`LOFT-HANDOFF` H2) on toolchain 2026.7.2 as the
 > wider form of **loft#496**, which is CLOSED — so either that fix was too narrow or
@@ -89,6 +90,38 @@ owner is the enclosing scope.
 skip the scope free (or bind without taking ownership). Neither fix option in the
 previous section survives: copying more does not help, because the corruption is the
 buffer free, not the copy.
+
+## FALSIFIED — the per-iteration free is NOT the defect
+
+The § Refined theory above (theory 3) said the bug is the per-iteration free of the
+NRVO buffer. **The lifetimes-tool upgrade below falsifies it.** The check flags exactly
+that shape, and it fires on **four** cells — `p1` and `p5` (broken) but also
+`p4_literal_tmp` and `p8_no_tmp`, which **produce `1 2 3` on both backends**. Identical
+IR shape, opposite outcomes, so the free alone cannot be the cause.
+
+Captured beside its working sibling (`probes/`, loop bodies only), the real
+discriminator is visible in one line:
+
+| | free emitted at scope exit |
+|---|---|
+| `p6_via_local` (works) | `OpFreeRefIfDistinct(e, __ref_3)` — **guarded** |
+| `p1`/`p4`/`p5`/`p8` | `OpFreeRef(__lift_N)` — **bare** |
+
+So the guard mechanism **already exists** and the named-local spelling gets it; the
+compiler-generated `__lift_N` path does not. `p4`/`p8` share the bare free and are
+**latent** — nothing recycles the freed slot there — which is why they pass today.
+
+**Corrected invariant:** a binding that may alias a caller-provided `__retbuf` must
+free through the distinct-guard, never unconditionally. `p6` is the proof it is the
+intended protocol.
+
+**Not the fix site (measured, both reverted):** the two witness-pairing arms in
+`scopes.rs::scan_set` (@P378(a) `witness_buffer`, ~:2846, and the @PLN85
+`paired_witness` arm, ~:2918). Routing lifts into either moved **no IR at all** —
+both sit inside `if adopts_fresh_store`, which is false for this callee, and the
+@PLN85 arm additionally requires `function.is_argument(ov)` while `__lift_N` is a
+local. The emission site for a lift's scope-exit free is upstream of both and is where
+the next session should start.
 
 ## The lifetimes tool should have caught this
 
