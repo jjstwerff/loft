@@ -206,9 +206,26 @@ editor) so nothing silently regresses.
   *Gate:* `tests/lsp_outline.rs` (3 — kinds+order, excludes stdlib/variants/synthetics, empty) on
   the lib accessor, and `tests/lsp_transport.rs::document_symbol_lists_the_outline` drives the real
   binary and asserts the reply list + the `selectionRange` landing on `Point` (line 0, chars 7..12).
-- **S5 — hover.** `Data::symbol_at` (prereq #2 — a per-file position index built during
-  parse) → `textDocument/hover` (type + signature + `///` doc). *Gate:* unit test on
-  `symbol_at`; hovering a name shows its type.
+- **S5 — hover — DONE (name-resolution scope).** `textDocument/hover` shows the resolved
+  symbol's signature + its `///` doc as markdown. Shipped as `loft::lsp::symbol_at(text, name,
+  stdlib_dir, line, col) -> Option<Hover>`. Two findings drove the design:
+  - **Resolution.** Prereq #2 envisioned a per-file position index. S5 ships the lighter
+    *name-based* resolver instead: the identifier under the cursor is looked up as `n_<word>`
+    (free fn) then `<word>` (type/struct/enum/typedef/constant), each falling back to the stdlib
+    — so hovering a call site (`area(2,3)`) resolves to the definition, and hovering `print`
+    resolves into the stdlib. Not resolved: **methods** (`t_<LEN><Type>_…` need the receiver
+    type) and **locals** (need scope) — those still want the position index, deferred to when
+    S6/precise-resolution demands it.
+  - **Docs (the "other way to get definition info").** loft keeps NO doc field — the lexer
+    discards comments — but docs live as `///` lines in the `.loft` *source*, and every
+    `Definition` carries `position.{file,line}` into real source (a stdlib symbol → e.g.
+    `default/04_stacktrace.loft:41`). So hover reads the `///` block above the declaration from
+    the definition's own source — the open buffer for local defs, the file on disk for
+    stdlib/library ones (`stdlib_dir`-relative). This is the convention `gendoc` already relies
+    on; the signature itself reuses `api_surface::signature_of` (made `pub`) for one type
+    spelling. *Gates:* `tests/lsp_hover.rs` (5 — user-fn-at-call-site + doc, stdlib type + doc
+    read cross-file from source, struct sig, off-word → None, unknown → None) and
+    `tests/lsp_transport.rs::hover_shows_signature_and_doc` on the real binary.
 - **S6 — go-to-definition.** reuse `symbol_at` → the definition span →
   `textDocument/definition`. *Gate:* unit test; ctrl-click jumps.
 

@@ -86,6 +86,15 @@ fn main() {
                     .unwrap_or_default();
                 send(&stdout, &response(id, Parsed::Array(symbols)));
             }
+            ("textDocument/hover", Some(id)) => {
+                let hover = hover_params(&msg)
+                    .and_then(|(uri, line, ch)| {
+                        let text = documents.get(&uri)?;
+                        hover_result(text, &stdlib_dir, line, ch)
+                    })
+                    .unwrap_or(Parsed::Null); // no symbol under the cursor → null
+                send(&stdout, &response(id, hover));
+            }
             ("shutdown", Some(id)) => {
                 shutdown_requested = true;
                 send(&stdout, &response(id, Parsed::Null));
@@ -256,6 +265,44 @@ fn document_symbol_uri(msg: &Parsed) -> Option<String> {
     obj_str(obj_get(obj_get(msg, "params")?, "textDocument")?, "uri")
 }
 
+// ── hover (S5) ───────────────────────────────────────────────────────────────
+/// Resolve the symbol under the cursor and render it as an LSP `Hover`, or `None`
+/// when nothing resolves (the caller sends `null`).  LSP positions are 0-based;
+/// `symbol_at` is loft-native 1-based, so both bump by one at this boundary.
+fn hover_result(text: &str, stdlib_dir: &str, line0: u32, char0: u32) -> Option<Parsed> {
+    let h = loft::lsp::symbol_at(text, "buf.loft", stdlib_dir, line0 + 1, char0 + 1)?;
+    let contents = markup(&hover_markdown(&h));
+    Some(obj(vec![("contents", contents)]))
+}
+
+/// The hover body: the signature in a `loft` code fence, then the `///` doc.
+fn hover_markdown(h: &loft::lsp::Hover) -> String {
+    let mut s = format!("```loft\n{}\n```", h.signature);
+    if !h.doc.is_empty() {
+        s.push_str("\n\n");
+        s.push_str(&h.doc.join("\n"));
+    }
+    s
+}
+
+/// An LSP `MarkupContent` (markdown).
+fn markup(value: &str) -> Parsed {
+    obj(vec![
+        ("kind", Parsed::Str("markdown".into())),
+        ("value", Parsed::Str(value.into())),
+    ])
+}
+
+/// `params.textDocument.uri` + `params.position.{line, character}` (0-based).
+fn hover_params(msg: &Parsed) -> Option<(String, u32, u32)> {
+    let params = obj_get(msg, "params")?;
+    let uri = obj_str(obj_get(params, "textDocument")?, "uri")?;
+    let pos = obj_get(params, "position")?;
+    let line = u32::try_from(obj_get(pos, "line")?.as_i64()?).ok()?;
+    let ch = u32::try_from(obj_get(pos, "character")?.as_i64()?).ok()?;
+    Some((uri, line, ch))
+}
+
 // ── document-lifecycle param extraction ──────────────────────────────────────
 /// `didOpen`: `params.textDocument.{uri, text}`.
 fn did_open_params(msg: &Parsed) -> Option<(String, String)> {
@@ -409,6 +456,7 @@ fn initialize_result() -> Parsed {
     let capabilities = obj(vec![
         ("textDocumentSync", sync),
         ("documentSymbolProvider", Parsed::Bool(true)),
+        ("hoverProvider", Parsed::Bool(true)),
     ]);
     let server_info = obj(vec![
         ("name", Parsed::Str(SERVER_NAME.into())),

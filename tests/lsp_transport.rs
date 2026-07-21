@@ -256,6 +256,65 @@ fn document_symbol_lists_the_outline() {
     let _ = s.child.wait();
 }
 
+// S5 — the hover path.  Open a buffer, hover a call site, assert the reply
+// carries the resolved definition's signature + `///` doc as markdown; hover a
+// blank spot and assert a null result.
+#[test]
+fn hover_shows_signature_and_doc() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        matches!(field(caps, "hoverProvider"), Some(Parsed::Bool(true))),
+        "advertises hoverProvider: {init:?}"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///h.loft";
+    let prog = "/// Area of a rectangle.\nfn area(w: integer, h: integer) -> integer {\n  w * h\n}\nfn main() {\n  print(area(2, 3))\n}\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let _ = s.recv(); // consume the publishDiagnostics push
+
+    // Hover `area` inside the call on 0-based line 5, char 8 — resolves to the def.
+    s.request(
+        2,
+        "textDocument/hover",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":5,"character":8}}}}"#),
+    );
+    let reply = s.recv();
+    let contents = field(
+        field(&reply, "result").expect("hover returns a result"),
+        "contents",
+    )
+    .expect("hover has MarkupContent");
+    assert_eq!(field_str(contents, "kind").as_deref(), Some("markdown"));
+    let value = field_str(contents, "value").unwrap_or_default();
+    assert!(
+        value.contains("fn area(w: integer, h: integer) -> integer"),
+        "shows the signature: {value}"
+    );
+    assert!(
+        value.contains("Area of a rectangle."),
+        "shows the /// doc: {value}"
+    );
+
+    // Hover a blank spot (line 2, char 0 — indentation) → a null hover result.
+    s.request(
+        3,
+        "textDocument/hover",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":0}}}}"#),
+    );
+    let none = s.recv();
+    assert!(
+        matches!(field(&none, "result"), Some(Parsed::Null)),
+        "no symbol under the cursor → null: {none:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();

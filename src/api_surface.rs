@@ -206,7 +206,11 @@ fn method_name(raw: &str) -> String {
 /// (`Data::type_name_str` — nullability as `?`, no internal deps). Hidden
 /// return-mechanism params are skipped; order follows declaration order (canonical
 /// ordering is commit 3).
-fn signature_of(data: &Data, d: u32, kind: &str) -> String {
+///
+/// Public alongside [`classify`] because the LSP hover (`loft::lsp::symbol_at`)
+/// renders the same clean signature the API surface does — one spelling, one home.
+#[must_use]
+pub fn signature_of(data: &Data, d: u32, kind: &str) -> String {
     let def = data.def(d);
     let ty = |t: &Type| data.type_name_str(t);
     // Render a field/parameter list. Skip hidden return-mechanism params and the synthetic
