@@ -394,7 +394,41 @@ test starts RED on exactly the two defects and goes green as the rewrite lands.
 Gate: fails only on tuple stride + mixed-width values; passes every record and scalar
 case; a deliberately wrong expectation must make it fail (prove the harness can).
 
-### A2 — pin the `+1` to read-side or write-side
+### A2 — pin the `+1` to read-side or write-side — **DONE: BOTH, crossed**
+
+**Verdict: the tuple's write and read ops are a crossed pair, and each deviates from
+the record in the opposite direction.** Not a layout fault at all.
+
+For `(u8, u16)` versus `struct P { a: u8, b: u16 }`:
+
+| | write | read |
+|---|---|---|
+| **tuple** | `OpSetShort` → `set_short_nullable` | `OpGetShortRaw` — returns stored bits, no decode |
+| **record** | `OpSetShortRaw` — stores raw | `OpGetShortFull` — decodes |
+
+The encoding is at `store.rs:2097`:
+
+```rust
+*self.addr_mut(rec, fld) = (val - min + 1) as u16;   // 0 reserved for the null sentinel
+```
+
+So the tuple writes `val − min + 1` and reads the bits back undecoded → exactly `+1`,
+for every value and every narrow width. A clean constant shift rather than garbage is
+the signature of an encode/decode mismatch, not a misread offset.
+
+**Consequence for phase C:** this is NOT fixed by moving offsets. The element access
+must select the record's op pair for the field type — which is what routing through
+the synthetic struct gets, since that is where the record's own selection happens.
+
+**Persisted-data assessment** (the stop condition): the write side IS deviant, so
+tuple bytes on disk differ from record bytes for the same value. But the read has
+never decoded them, so **no user has ever read a correct value out of a narrow tuple
+element** — there is no correct prior behaviour to stay compatible with, and no
+migration to design. Fix both ends onto the record's pair. This is the one case where
+"the write is wrong" does not stop the plan, and the reason is written here so the
+stop condition is not silently waived.
+
+<details><summary>original A2 text</summary>
 
 Store a known mixed-width tuple; read the same bytes through element access and
 through the record view. Diagnosis only, no edit.
@@ -527,6 +561,8 @@ Gate: three consecutive green nightlies on all three OSes before dropping adviso
 - A step needs the DB page format changed → stop and re-plan; the record layout is
   the oracle *because* it is already right.
 - A2 says the WRITE is wrong → stop and assess persisted data before changing layout.
+
+</details>
 - A phase-C site resists conversion and the fix wants a special case → that is the
   old bug returning under a new name; write the reason down and re-plan instead.
 

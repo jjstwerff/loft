@@ -1,0 +1,2 @@
+fn f(t: (character, character)) { print("{t.0},{t.1}\n"); }
+fn main() { f(('A', 'B')); }

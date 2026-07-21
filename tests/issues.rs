@@ -16408,3 +16408,78 @@ fn pln102_boolean_integer_comparison_rejected() {
         );
     }
 }
+
+// ─── @PLN114 — tuple layout must match the record layout ─────────────────────
+//
+// These assert the TARGET, not today's behaviour, so they stay `#[ignore]`d
+// (tracked in `tests/ignored_tests.baseline`) until the rewrite lands.  Both
+// measure a tuple against the `struct` of identical fields, because that record is
+// the oracle the tuple layout is being moved onto.
+
+/// Instrument 3 — record-vs-tuple stride parity.
+///
+/// `(u8, u32, u16)` must occupy what `struct { a: u8, b: u32, c: u16 }` occupies.
+/// Today the record packs to 7 bytes and the tuple reserves 24, because
+/// `data::element_size` reports STACK widths (`Integer` is 8B regardless of
+/// `forced_size`) where storage needs database widths.
+#[test]
+#[ignore = "@PLN114: tuple stride uses stack widths (24B) where the record packs to 7B"]
+fn pln114_tuple_stride_matches_record() {
+    code!(
+        "struct M { a: u8, b: u32, c: u16 }
+fn test() {
+    vs: vector<M> = [M{a:1,b:2,c:3}, M{a:4,b:5,c:6}];
+    vt: vector<(u8, u32, u16)> = [(1,2,3), (4,5,6)];
+    assert(size(vt) == size(vs), \"tuple stride must equal record stride\");
+}"
+    );
+}
+
+/// Instrument 4 — a mixed-width tuple must round-trip every element.
+///
+/// Today the narrow trailing element reads back `+1`: `(1,2,3)` returns `(1,2,4)`,
+/// reproducible in `vector<(u8,u16)>` and `vector<(u32,u16)>` too.  Silent
+/// corruption — exit 0, no diagnostic.
+#[test]
+#[ignore = "@PLN114: mixed-width tuple elements read back +1 (silent corruption)"]
+fn pln114_mixed_width_tuple_round_trip() {
+    code!(
+        "fn test() {
+    v: vector<(u8, u32, u16)> = [(1,2,3), (4,5,6)];
+    assert(v[0].0 == 1 && v[0].1 == 2 && v[0].2 == 3, \"element 0 round-trips\");
+    assert(v[1].0 == 4 && v[1].1 == 5 && v[1].2 == 6, \"element 1 round-trips\");
+    w: vector<(u8, u16)> = [(1,2)];
+    assert(w[0].1 == 2, \"u16 after u8 round-trips\");
+}"
+    );
+}
+
+/// A3 — the two alignment tables must agree.
+///
+/// `data::element_align` and the inline table in `Data::tuple_def` encode the same
+/// rule twice.  They ALREADY disagree about `Function` (8 vs 4), and nothing detects
+/// it because nothing compares them — the drift this plan exists to remove.  Delete
+/// this test when the inline copy is gone (A4) and there is nothing to compare.
+#[test]
+fn pln114_alignment_tables_agree() {
+    use loft::data::{IntegerSpec, Type, element_align};
+    let int = Type::Integer(IntegerSpec {
+        min: i32::MIN + 1,
+        max: i32::MAX as u32,
+        not_null: false,
+        forced_size: None,
+    });
+    for (name, tp, expect) in [
+        ("boolean", Type::Boolean, 1u8),
+        ("character", Type::Character, 4),
+        ("single", Type::Single, 4),
+        ("integer", int, 8),
+        ("float", Type::Float, 8),
+    ] {
+        assert_eq!(
+            element_align(&tp),
+            expect,
+            "element_align({name}) — the tuple_def inline table must agree"
+        );
+    }
+}

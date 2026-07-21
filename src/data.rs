@@ -4390,25 +4390,12 @@ impl Data {
             // stack-slot inflation (to 20B) happens at read-back, not
             // here — the GROUP's storage view is what matters.
             let sz = element_size(t) as u16;
-            // @PLN25: peel `Optional(τ)` to its base so the inline align matches the
-            // peeled `element_size` above — an `Optional(Integer)` tuple element is sz=8
-            // and must be align=8, not the `_ => 1` that corrupts LinkedFieldGroup offsets.
-            let align = match t.base() {
-                Type::Boolean | Type::Enum(_, false, _) => 1,
-                Type::Single | Type::Character | Type::Function(_, _, _) => 4,
-                Type::Integer(_) | Type::Float => 8,
-                Type::Text(_) => 4, // heap pointer
-                Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::RefVar(_)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Enum(_, true, _) => 4, // DbRef alignment
-                Type::Tuple(_) => 8, // conservative max
-                _ => 1,
-            };
+            // @PLN114 A4 — one alignment table.  This used to carry an inline copy
+            // of `element_align`'s rules, which had already drifted: it said
+            // `Function => 4` where `element_align` says 8 (P249: the fn-ref slot's
+            // 8-byte d_nr dictates the slot alignment).  Nothing compared them, so
+            // nothing caught it.  `element_align` peels `Optional(τ)` itself.
+            let align = element_align(t);
             sizes_aligns.push((sz, align));
         }
         let alignment = LinkedFieldGroup::group_alignment(
