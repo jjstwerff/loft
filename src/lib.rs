@@ -118,6 +118,7 @@ pub mod ir_store;
 pub mod json;
 pub mod keys;
 mod lexer;
+pub mod lsp;
 pub mod native;
 // `net::fetch_bytes` (behind `store_load_url*`) exists exactly where `load_url`
 // does: a native `registry` build, or the browser (`--html`) target.
@@ -130,6 +131,7 @@ pub(crate) mod net;
 pub mod ownership_cfg;
 #[cfg(feature = "remote-store")]
 pub mod paged_reader;
+pub mod resolution;
 pub mod scopes;
 pub mod use_analysis;
 mod variables;

@@ -88,7 +88,7 @@ fn p07_suggest_unknown_function() {
 fn test() { doublet(5); }"
     )
     .error(
-        "Unknown function doublet — did you mean 'double'? at p07_suggest_unknown_function:2:24",
+        "Unknown function doublet — did you mean 'double'? at p07_suggest_unknown_function:2:13",
     );
 }
 
@@ -1683,7 +1683,7 @@ fn p376_undefined_var_rhs_no_cascade() {
 #[test]
 fn p376_undefined_fn_rhs_no_cascade() {
     code!("fn test() { p = nofn(1); print(\"{p.name}\"); }")
-        .error("Unknown function nofn at p376_undefined_fn_rhs_no_cascade:1:25");
+        .error("Unknown function nofn at p376_undefined_fn_rhs_no_cascade:1:17");
 }
 
 /// @P376 (sibling) — a directly interpolated undefined variable.  Returning

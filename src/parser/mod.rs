@@ -187,6 +187,12 @@ pub struct Parser {
     /// `param_locks` once the function's def_nr is known (parameters parse BEFORE the def
     /// is created).  Cleared at the start of each parameter list; consumed per function.
     pub(crate) pending_param_locks: Vec<(usize, String)>,
+    /// @PLN115 tail — a parameter's `(arg_index, name_pos, name_len)` captured while
+    /// reading the signature (positions there, but the def_nr / var_nr are not yet
+    /// established), ferried to `parse_function` to record each param's DECLARATION
+    /// occurrence once `self.context` is known.  Populated only when recording;
+    /// cleared per parameter list, like `pending_param_locks`.
+    pub(crate) pending_param_positions: Vec<(u16, Position, u16)>,
     /// @PLN87 — transient one-shot: set while parsing a `&<lvalue>` binding (the prefix
     /// `&` in `b = &a`, or the `&` in a `b: &T = a` type annotation), consumed by
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
@@ -336,6 +342,13 @@ pub struct Parser {
     /// `resolve_deferred_unknowns` after all files in the recursion have
     /// had their pass-1 / pass-2 definitions registered.
     deferred_unknown: Vec<(u16, u32, Position)>,
+    /// @PLN115 — record each resolved identifier occurrence during parse.  DEFAULT
+    /// OFF (only the LSP parse sets it, S3); zero-cost when off.  See
+    /// `doc/claude/plans/115-resolution-index/`.
+    record_resolutions: bool,
+    /// @PLN115 — the recorded occurrences (empty unless `record_resolutions`),
+    /// cleared per parse alongside `deferred_unknown`.
+    resolutions: Vec<crate::resolution::Occurrence>,
     /// Whether the most recently parsed expression is from a `not null` field access.
     /// Set by `get_field`; consumed by `handle_operator` to warn on redundant null checks.
     expr_not_null: bool,
@@ -663,6 +676,7 @@ impl Parser {
             param_locks: HashMap::new(),
             sandbox_param_overrides: HashMap::new(),
             pending_param_locks: Vec::new(),
+            pending_param_positions: Vec::new(),
             amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
@@ -696,6 +710,8 @@ impl Parser {
             pending_imports: Vec::new(),
             applied_imports: Vec::new(),
             deferred_unknown: Vec::new(),
+            record_resolutions: false,
+            resolutions: Vec::new(),
             expr_not_null: false,
             expr_not_null_name: String::new(),
             lambda_counter: 0,
@@ -1103,6 +1119,7 @@ impl Parser {
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         // @PLN86 1.2 — the def→profile side-map is keyed by def_nr, which
         // `data.reset()` reassigns; clear it so a re-parse re-derives the
         // designation rather than reading a stale entry.
@@ -1149,6 +1166,7 @@ impl Parser {
             self.iterable_context = false;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
+            self.resolutions.clear();
             self.data.reset();
             if !default {
                 self.data.source = crate::data::MAIN_SOURCE;
@@ -1529,6 +1547,7 @@ impl Parser {
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.data.reset();
         // @PLN22 — the main program parses under MAIN_SOURCE (not the prelude's
         // source 0), matching `parse`; `reset()` left source at STD_SOURCE.
@@ -1545,6 +1564,7 @@ impl Parser {
             self.first_pass = false;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
+            self.resolutions.clear();
             self.data.reset();
             if !default {
                 self.data.source = crate::data::MAIN_SOURCE;
@@ -1573,6 +1593,7 @@ impl Parser {
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
@@ -1584,6 +1605,7 @@ impl Parser {
             self.first_pass = false;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
+            self.resolutions.clear();
             self.data.reset();
             self.lambda_counter = 0;
             self.fn_lambdas.clear();
@@ -1674,6 +1696,7 @@ impl Parser {
         self.lexer.parse_string(text, filename);
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
@@ -1695,6 +1718,7 @@ impl Parser {
         }
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
@@ -1724,6 +1748,7 @@ impl Parser {
         self.vars.logging = false;
         self.lexer.parse_string(text, filename);
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
         self.data.source = source;
@@ -1735,6 +1760,7 @@ impl Parser {
             return;
         }
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
         self.lexer.parse_string(text, filename);
@@ -2652,7 +2678,15 @@ impl Parser {
             // `process_call_args` needs the real type to wire the argument.  A Null result
             // means the arg couldn't be wired; leave `code` untouched and report no match.
             let src = code.clone();
-            let rtp = self.call_nr(code, dnr, &[src], std::slice::from_ref(is_type), false, &[]);
+            let rtp = self.call_nr(
+                code,
+                dnr,
+                &[src],
+                std::slice::from_ref(is_type),
+                false,
+                &[],
+                None,
+            );
             if rtp == Type::Null {
                 return false;
             }
@@ -2915,6 +2949,7 @@ impl Parser {
         types: &[Type],
         named_args: &[(String, Value, Type)],
         arg_pos: &[Position],
+        name_pos: &Position,
     ) -> Type {
         // Create a new list of parameters based on the current ones
         // We still need to know the types.
@@ -2958,6 +2993,22 @@ impl Parser {
         if d_nr != u32::MAX && self.data.def(d_nr).def_type() == DefType::Generic {
             d_nr = u32::MAX;
         }
+        // @PLN115 S5 — record a free-function CALL as a Global reference at its
+        // name.  Gated on the recording flag (so it is a single predictable bool
+        // check on every normal compile) and pass 2 (the name has resolved).  Only
+        // user free functions (`n_<name>`) are Globals here; operators (`Op…`) are
+        // not user-navigable names and methods (`t_…`) resolve in fields.rs (S6).
+        if self.record_resolutions
+            && !self.first_pass
+            && d_nr != u32::MAX
+            && self.data.def(d_nr).name().starts_with("n_")
+        {
+            self.record(
+                name_pos,
+                name.chars().count() as u16,
+                crate::resolution::Resolution::Global(d_nr),
+            );
+        }
         // Plan-17 phase 01 (A) — propagate the substituted return type
         // on first pass so receiving variables (`t = min_max(7, 3)`)
         // get a correctly-typed `Type::Tuple([…])` slot, enabling
@@ -2997,7 +3048,16 @@ impl Parser {
             }
         }
         if d_nr != u32::MAX {
-            let ret = self.call_with_named(code, d_nr, list, types, named_args, true, arg_pos);
+            let ret = self.call_with_named(
+                code,
+                d_nr,
+                list,
+                types,
+                named_args,
+                true,
+                arg_pos,
+                Some(name_pos),
+            );
             // @PLN102 Phase 3.5 — constant-in-domain elision ("PI blocks it"): a domain-partial
             // math fn with a provably in-domain CONSTANT argument cannot be null (`sqrt(4.0)`,
             // `pow(2.0, 3.0)`, `ln(2.0)`), so peel the `τ?` its decl carries. Only under
@@ -3060,13 +3120,20 @@ impl Parser {
             // adds a "did you mean" suffix when a similarly-named
             // user function exists.
             if let Some(s) = self.suggest_function_name(name) {
-                diagnostic!(
+                diagnostic_at!(
                     self.lexer,
+                    name_pos,
                     Level::Error,
                     "Unknown function {name} — did you mean '{s}'?"
                 );
+                self.lexer.suggest_last(&s);
             } else {
-                diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                diagnostic_at!(
+                    self.lexer,
+                    name_pos,
+                    Level::Error,
+                    "Unknown function {name}"
+                );
             }
             Type::Unknown(0)
         } else if name == "size"
@@ -3123,7 +3190,12 @@ impl Parser {
                 *code = Value::Call(op_d_nr, args);
                 return crate::data::I64.clone();
             }
-            diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            diagnostic_at!(
+                self.lexer,
+                name_pos,
+                Level::Error,
+                "Unknown function {name}"
+            );
             Type::Unknown(0)
         } else if name == "size"
             && types.len() == 1
@@ -3230,8 +3302,9 @@ impl Parser {
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {
-                diagnostic!(
+                diagnostic_at!(
                     self.lexer,
+                    name_pos,
                     Level::Error,
                     "generic type {tv_name}: method call requires a concrete type",
                 );
@@ -3245,18 +3318,26 @@ impl Parser {
                 let method_types = self.find_method_receivers(name);
                 if method_types.is_empty() {
                     if let Some(s) = self.suggest_function_name(name) {
-                        diagnostic!(
+                        diagnostic_at!(
                             self.lexer,
+                            name_pos,
                             Level::Error,
                             "Unknown function {name} — did you mean '{s}'?"
                         );
+                        self.lexer.suggest_last(&s);
                     } else {
-                        diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                        diagnostic_at!(
+                            self.lexer,
+                            name_pos,
+                            Level::Error,
+                            "Unknown function {name}"
+                        );
                     }
                 } else {
                     let receivers = method_types.join(" / ");
-                    diagnostic!(
+                    diagnostic_at!(
                         self.lexer,
+                        name_pos,
                         Level::Error,
                         "Unknown function {name} — did you mean the method `x.{name}(…)` on {receivers}? (stdlib declared `{name}` as a method; see LOFT.md § Methods and function calls)"
                     );
@@ -4936,9 +5017,13 @@ impl Parser {
         named: &[(String, Value, Type)],
         is_method: bool,
         arg_pos: &[Position],
+        // The call NAME's position, forwarded to `call_nr` for the arc-C steer caret.
+        name_pos: Option<&Position>,
     ) -> Type {
         if named.is_empty() {
-            return self.call_nr(code, d_nr, positional, pos_types, is_method, arg_pos);
+            return self.call_nr(
+                code, d_nr, positional, pos_types, is_method, arg_pos, name_pos,
+            );
         }
         // Build full argument vector with named args placed at the correct indices.
         let n_params = self.data.attributes(d_nr);
@@ -4994,7 +5079,7 @@ impl Parser {
         // Named args are reordered into parameter slots, so the parse-order
         // `arg_pos` no longer aligns; fall back to the cursor for the rare
         // named-mismatch case.
-        self.call_nr(code, d_nr, &args, &arg_types, is_method, &[])
+        self.call_nr(code, d_nr, &args, &arg_types, is_method, &[], name_pos)
     }
 
     fn single_op(&mut self, op: &str, f: Value, t: Type) -> Value {
@@ -6058,7 +6143,7 @@ impl Parser {
                 && self.context != u32::MAX
                 && self.has_bound_for_method(&op_method)
             {
-                let tp = self.call_nr(code, stub_nr, list, types, false, &[]);
+                let tp = self.call_nr(code, stub_nr, list, types, false, &[], None);
                 if tp != Type::Null {
                     return tp;
                 }
@@ -6077,7 +6162,7 @@ impl Parser {
                     .data
                     .find_op_method(u16::MAX, &format!("Op{}", rename(op)), first);
                 if m != u32::MAX {
-                    let tp = self.call_nr(code, m, list, types, false, &[]);
+                    let tp = self.call_nr(code, m, list, types, false, &[], None);
                     if tp != Type::Null {
                         return tp;
                     }
@@ -6093,7 +6178,7 @@ impl Parser {
             for pos in possible {
                 // `OpEqBool` truthiness-fallback guard lives in `call_nr` (the single
                 // chokepoint all three resolution sub-paths share) — see there.
-                let tp = self.call_nr(code, pos, list, types, false, &[]);
+                let tp = self.call_nr(code, pos, list, types, false, &[], None);
                 if tp != Type::Null {
                     // We cannot compare two different types of enums, both will be integers in the same range
                     if let (Some(Type::Enum(f, _, _)), Some(Type::Enum(s, _, _))) =
@@ -6117,7 +6202,7 @@ impl Parser {
                     .data
                     .find_fn(u16::MAX, &format!("Op{}", rename(op)), first);
                 if user_op != u32::MAX {
-                    let tp = self.call_nr(code, user_op, list, types, false, &[]);
+                    let tp = self.call_nr(code, user_op, list, types, false, &[], None);
                     if tp != Type::Null {
                         return tp;
                     }
@@ -6169,6 +6254,7 @@ impl Parser {
     }
 
     /// Call a specific definition
+    #[allow(clippy::too_many_arguments)]
     fn call_nr(
         &mut self,
         code: &mut Value,
@@ -6177,6 +6263,11 @@ impl Parser {
         types: &[Type],
         report: bool,
         arg_pos: &[Position],
+        // The call NAME's position, when the caller knows it (a free-function call
+        // via `call()`).  The @PLN102 arc-C steer points its caret here and carries a
+        // `codeAction` suggestion, so the quick-fix replaces the right token; `None`
+        // (a method / operator path) keeps the cursor caret and offers no quick-fix.
+        name_pos: Option<&Position>,
     ) -> Type {
         // @PLN102 pre-freeze — `OpEqBool`/`OpNeBool` are BOOLEAN (in)equality; they must
         // not be the implicit truthiness fallback for mismatched types.  Without this,
@@ -6251,7 +6342,7 @@ impl Parser {
                     return Type::Void;
                 };
                 if self.data.attr_type(r_nr, 0).is_equal(&types[0]) {
-                    return self.call_nr(code, r_nr, list, types, report, arg_pos);
+                    return self.call_nr(code, r_nr, list, types, report, arg_pos, name_pos);
                 }
             }
             diagnostic!(
@@ -6300,11 +6391,26 @@ impl Parser {
             let succ = self.data.def(d_nr).superseded().to_string();
             if !succ.is_empty() {
                 let shown = self.data.def(d_nr).display_name().to_string();
-                diagnostic!(
-                    self.lexer,
-                    Level::Warning,
-                    "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
-                );
+                // Position on the call NAME when the caller supplied it, and carry the
+                // successor as a structured suggestion so a `codeAction` can offer a
+                // "Change to `Y`" quick-fix (step B).  Without a name position (method /
+                // operator path) keep the cursor caret and no suggestion — a quick-fix
+                // there could replace the wrong token.
+                if let Some(pos) = name_pos {
+                    diagnostic_at!(
+                        self.lexer,
+                        pos,
+                        Level::Warning,
+                        "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
+                    );
+                    self.lexer.suggest_last(&succ);
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
+                    );
+                }
             }
         }
         tp
@@ -8667,6 +8773,55 @@ impl Parser {
     ///
     /// Uses the same `suggest_similar` primitive as the existing
     /// variable-suggestion path at `parser/objects.rs::known_var_or_type`.
+    /// @PLN115 — the resolved identifier occurrences recorded during the last
+    /// parse (empty unless `record_resolutions` was set).  Drives the LSP's
+    /// precise, non-lexical navigation.
+    #[must_use]
+    pub fn resolutions(&self) -> &[crate::resolution::Occurrence] {
+        &self.resolutions
+    }
+
+    /// @PLN115 — turn occurrence recording on (default off).  The LSP parse path
+    /// (S3) flips this before `parse_source` so navigation can resolve by binding
+    /// identity; every normal compile leaves it off, keeping `record` a dead branch.
+    pub fn set_record_resolutions(&mut self, on: bool) {
+        self.record_resolutions = on;
+    }
+
+    /// @PLN115 — record one resolved occurrence, gated: a single predictable
+    /// branch when `record_resolutions` is off (every normal compile), so it is
+    /// zero-cost there.  A pure side-append — it changes no parse decision.  Wired
+    /// to the resolution chokepoints starting in S2 (`parse_var` locals).
+    fn record(&mut self, pos: &Position, len: u16, res: crate::resolution::Resolution) {
+        self.record_occurrence(pos, len, res, false);
+    }
+
+    /// @PLN115 tail — record a binding's DECLARATION occurrence (a parameter's
+    /// signature name, a `for` / lambda binder).  Same gate as [`Self::record`],
+    /// but flagged `declaration` so a consumer knows the binding's declaration is
+    /// captured and a precise rename is complete.
+    fn record_decl(&mut self, pos: &Position, len: u16, res: crate::resolution::Resolution) {
+        self.record_occurrence(pos, len, res, true);
+    }
+
+    fn record_occurrence(
+        &mut self,
+        pos: &Position,
+        len: u16,
+        res: crate::resolution::Resolution,
+        declaration: bool,
+    ) {
+        if self.record_resolutions {
+            self.resolutions.push(crate::resolution::Occurrence {
+                line: pos.line,
+                col: pos.pos,
+                len,
+                res,
+                declaration,
+            });
+        }
+    }
+
     pub fn suggest_function_name(&self, name: &str) -> Option<String> {
         let candidates_owned: Vec<String> = self
             .data

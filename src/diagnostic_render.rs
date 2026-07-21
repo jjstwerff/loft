@@ -375,6 +375,7 @@ mod tests {
             line,
             col,
             code: None,
+            suggestion: None,
         }
     }
 

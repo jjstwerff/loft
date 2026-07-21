@@ -6458,6 +6458,7 @@ impl Parser {
             &[cursor_tp],
             false,
             &[],
+            None,
         );
         // Hoist `name = rule(cursor)` above the if-chain: the call runs ONCE (a miss leaves `pos`
         // unchanged, so unconditional evaluation is safe), and `name` is a match-level binding
@@ -11187,7 +11188,13 @@ impl Parser {
     }
 
     #[allow(clippy::too_many_lines)] // pre-existing length; A5.6b.2 added ~9 lines
-    pub(crate) fn parse_call(&mut self, val: &mut Value, source: u16, name: &str) -> Type {
+    pub(crate) fn parse_call(
+        &mut self,
+        val: &mut Value,
+        source: u16,
+        name: &str,
+        name_pos: &Position,
+    ) -> Type {
         let call_pos = self.lexer.pos().clone();
         let mut list = Vec::new();
         let mut types = Vec::new();
@@ -11245,7 +11252,7 @@ impl Parser {
                     return *ret_type;
                 }
             }
-            return self.call(val, source, name, &list, &Vec::new(), &[], &[]);
+            return self.call(val, source, name, &list, &Vec::new(), &[], &[], name_pos);
         }
         let fn_def_nr = if self.first_pass {
             None
@@ -11383,6 +11390,7 @@ impl Parser {
             &named_args,
             &call_pos,
             &arg_pos,
+            name_pos,
         );
         // Plan-07 phase 1, step 1.13 — wrap user-typed Call / CallRef
         // at the `(` token position so runtime errors inside the call
@@ -11409,6 +11417,7 @@ impl Parser {
         named_args: &[(String, Value, Type)],
         call_pos: &Position,
         arg_pos: &[Position],
+        name_pos: &Position,
     ) -> Type {
         if matches!(
             name,
@@ -11523,7 +11532,9 @@ impl Parser {
         if let Some(tp) = self.try_fn_ref_call(val, name, list, types) {
             return tp;
         }
-        self.call(val, source, name, list, types, named_args, arg_pos)
+        self.call(
+            val, source, name, list, types, named_args, arg_pos, name_pos,
+        )
     }
 
     /// Try to dispatch as a call through a function-reference variable.
@@ -11991,7 +12002,7 @@ impl Parser {
         // position is the method-name token, the best available caret).
         let mut arg_pos: Vec<Position> = vec![self.lexer.peek_pos().clone()];
         if self.lexer.has_token(")") {
-            return self.call_nr(val, md_nr, &list, &types, true, &arg_pos);
+            return self.call_nr(val, md_nr, &list, &types, true, &arg_pos, None);
         }
         loop {
             // #432 — `list[0]` is the receiver (attribute 0), so `list.len()` is the
@@ -12015,7 +12026,7 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        self.call_nr(val, md_nr, &list, &types, true, &arg_pos)
+        self.call_nr(val, md_nr, &list, &types, true, &arg_pos, None)
     }
 
     pub(crate) fn parse_parameters(&mut self) -> (Vec<Type>, Vec<Value>) {

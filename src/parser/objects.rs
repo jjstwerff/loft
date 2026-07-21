@@ -211,7 +211,7 @@ impl Parser {
                 });
                 *code = Value::Int(i32::from(tp));
             } else {
-                t = self.parse_call(code, source, &nm);
+                t = self.parse_call(code, source, &nm, name_pos);
             }
         } else if self.closure_param != u16::MAX
             && !self.first_pass
@@ -262,6 +262,20 @@ impl Parser {
                         crate::data::Deps::none(),
                     );
                 }
+            }
+            // @PLN115 S2 — record this occurrence as a read of the local
+            // `index_var` in the enclosing function.  Pass 2 only (the var exists
+            // from pass 1, types are resolved, and pass-1 records are cleared at
+            // the boundary); gated + zero-cost when recording is off.
+            if !self.first_pass {
+                self.record(
+                    name_pos,
+                    name.chars().count() as u16,
+                    crate::resolution::Resolution::Local {
+                        fn_def: self.context,
+                        var_nr: index_var,
+                    },
+                );
             }
             if self.lexer.has_token("#") {
                 self.var_usages(index_var, true);
@@ -1415,6 +1429,7 @@ impl Parser {
                         name,
                         s
                     );
+                    self.lexer.suggest_last(s);
                 } else {
                     diagnostic_at!(self.lexer, pos, Level::Error, "Unknown variable '{}'", name);
                 }

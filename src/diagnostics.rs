@@ -27,6 +27,12 @@ pub struct DiagEntry {
     /// sites not yet assigned a code (their prose is still the only handle
     /// until one is — assignment is additive, never a breaking change).
     pub code: Option<&'static str>,
+    /// A machine-readable REPLACEMENT for the offending token when the
+    /// diagnostic already knows one (a "did you mean 'X'?" — the same `X` a tool
+    /// applies as a quick-fix).  The prose still carries it for humans; this is
+    /// its structured form, so `codeAction` doesn't parse the message.  Set via
+    /// [`Diagnostics::suggest_last`] right after the diagnostic is emitted.
+    pub suggestion: Option<String>,
 }
 
 impl DiagEntry {
@@ -99,6 +105,7 @@ impl Diagnostics {
             line: 0,
             col: 0,
             code: None,
+            suggestion: None,
         });
         if level > self.level {
             self.level = level;
@@ -127,9 +134,19 @@ impl Diagnostics {
             line,
             col,
             code,
+            suggestion: None,
         });
         if level > self.level {
             self.level = level;
+        }
+    }
+
+    /// Attach a machine-readable `suggestion` (a replacement token) to the
+    /// most-recently-added diagnostic — call right after emitting a "did you
+    /// mean 'X'?" so `codeAction` can offer the fix without parsing prose.
+    pub fn suggest_last(&mut self, suggestion: &str) {
+        if let Some(last) = self.entries.last_mut() {
+            last.suggestion = Some(suggestion.to_string());
         }
     }
 

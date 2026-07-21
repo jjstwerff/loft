@@ -9444,7 +9444,7 @@ fn quality_6c_free_call_on_wrong_type_suggests_method() {
     starts_with(5, \"he\")
 }"
     )
-    .error("Unknown function starts_with — did you mean the method `x.starts_with(…)` on text? (stdlib declared `starts_with` as a method; see LOFT.md § Methods and function calls) at quality_6c_free_call_on_wrong_type_suggests_method:3:2");
+    .error("Unknown function starts_with — did you mean the method `x.starts_with(…)` on text? (stdlib declared `starts_with` as a method; see LOFT.md § Methods and function calls) at quality_6c_free_call_on_wrong_type_suggests_method:2:5");
 }
 
 /// QUALITY 6c follow-on — methods declared on several receiver types
@@ -9457,7 +9457,7 @@ fn quality_6c_free_call_lists_all_method_receivers() {
     is_numeric(5)
 }"
     )
-    .error("Unknown function is_numeric — did you mean the method `x.is_numeric(…)` on text / character? (stdlib declared `is_numeric` as a method; see LOFT.md § Methods and function calls) at quality_6c_free_call_lists_all_method_receivers:3:2");
+    .error("Unknown function is_numeric — did you mean the method `x.is_numeric(…)` on text / character? (stdlib declared `is_numeric` as a method; see LOFT.md § Methods and function calls) at quality_6c_free_call_lists_all_method_receivers:2:5");
 }
 
 /// QUALITY 6c follow-on — the hint must stay silent when no method
@@ -9471,7 +9471,7 @@ fn quality_6c_free_call_unknown_fn_has_no_method_hint() {
     xyzzy_never_defined(5)
 }"
     )
-    .error("Unknown function xyzzy_never_defined at quality_6c_free_call_unknown_fn_has_no_method_hint:3:2");
+    .error("Unknown function xyzzy_never_defined at quality_6c_free_call_unknown_fn_has_no_method_hint:2:5");
 }
 
 /// `len` is declared `both: vector` — it works equally as method

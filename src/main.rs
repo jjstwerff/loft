@@ -181,6 +181,13 @@ fn print_help() {
     println!(
         "                                exits non-zero if unformatted (CI gate); `-` = stdin"
     );
+    println!("  symbols <file> [--json]       list a file's top-level definitions (outline)");
+    println!("  def <name> [file] [--json]    signature + doc + location of a symbol by name");
+    println!("                                (free fn / type / const + every `Type.name` method)");
+    println!("  hover <file> <ln> <col>       the symbol under a cursor (1-based); add --json");
+    println!("  tag <@TAG> [--json]           what the tracker index knows about a tag");
+    println!("                                (@F/@I feature, @P problem, @PLN/@GH issue)");
+    println!("  refs <name> [root] [--json]   every occurrence of an identifier in the .loft tree");
     println!(
         "  sandbox-check <file>          report the @PLN86 sandbox admission verdict and STOP"
     );
@@ -4132,6 +4139,280 @@ fn run_fmt_command(args: &[String]) -> i32 {
     exit
 }
 
+// ── agent-facing code-intelligence queries (@PLN63) ──────────────────────────
+// One-shot CLI over the `loft::lsp` accessors — the same code intelligence the
+// LSP server gives editors, reachable from the shell for scripts and agents.
+// Human-readable by default; `--json` for structured output (mirrors `loft api`).
+
+/// Resolve the stdlib `default/` dir (binary-relative, else the source tree —
+/// the resolution `run_fmt_command` uses) AND enable the startup cache, so a
+/// query warm-loads the precompiled stdlib `Data` (~10×) instead of cold-parsing.
+fn lsp_default_dir() -> String {
+    if std::env::var_os("LOFT_STDLIB_CACHE").is_none() {
+        // SAFETY: single-threaded CLI startup, before any program runs.
+        unsafe { std::env::set_var("LOFT_STDLIB_CACHE", "1") };
+    }
+    let exe_dir = std::env::current_exe()
+        .ok()
+        .and_then(|e| e.parent().map(std::path::Path::to_path_buf))
+        .unwrap_or_default();
+    let default_dir = exe_dir.join("../default");
+    let dir = if default_dir.exists() {
+        default_dir
+    } else {
+        std::path::PathBuf::from(project_dir()).join("default")
+    };
+    // Canonicalize so recorded def paths are clean (no `..`, no `//`) — those
+    // paths are shown to the user and pasted into `file:line` references.
+    std::fs::canonicalize(&dir)
+        .unwrap_or(dir)
+        .to_string_lossy()
+        .to_string()
+}
+
+/// JSON object from `(key, value)` pairs (the byte-offset slot is unused on emit).
+fn jobj(entries: Vec<(&str, loft::json::Parsed)>) -> loft::json::Parsed {
+    loft::json::Parsed::Object(
+        entries
+            .into_iter()
+            .map(|(k, v)| (k.to_string(), 0, v))
+            .collect(),
+    )
+}
+
+fn hover_json(h: &loft::lsp::Hover) -> loft::json::Parsed {
+    use loft::json::Parsed;
+    jobj(vec![
+        ("name", Parsed::Str(h.name.clone())),
+        ("signature", Parsed::Str(h.signature.clone())),
+        (
+            "doc",
+            Parsed::Array(h.doc.iter().map(|l| Parsed::Str(l.clone())).collect()),
+        ),
+        ("file", Parsed::Str(h.def_file.clone())),
+        ("line", Parsed::Int(i64::from(h.def_line))),
+        ("col", Parsed::Int(i64::from(h.def_col))),
+    ])
+}
+
+fn print_hover_human(h: &loft::lsp::Hover) {
+    println!("{}", h.signature);
+    for line in &h.doc {
+        println!("    {line}");
+    }
+    println!("  \u{2192} {}:{}", h.def_file, h.def_line);
+}
+
+/// `loft symbols <file> [--json]` — the file's top-level definitions (outline).
+fn run_symbols_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let Some(file) = args.iter().find(|a| !a.starts_with('-')) else {
+        eprintln!("loft symbols: usage: loft symbols <file.loft> [--json]");
+        return 2;
+    };
+    let text = match std::fs::read_to_string(file) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("loft symbols: cannot read {file}: {e}");
+            return 1;
+        }
+    };
+    let dir = lsp_default_dir();
+    let syms = loft::lsp::outline(&text, file, &dir);
+    if json {
+        use loft::json::Parsed;
+        let arr = Parsed::Array(
+            syms.iter()
+                .map(|s| {
+                    jobj(vec![
+                        ("name", Parsed::Str(s.name.clone())),
+                        ("kind", Parsed::Str(s.kind.to_string())),
+                        ("line", Parsed::Int(i64::from(s.line))),
+                        ("col", Parsed::Int(i64::from(s.col))),
+                    ])
+                })
+                .collect(),
+        );
+        println!("{}", loft::json::to_json_string(&arr));
+    } else {
+        for s in &syms {
+            println!("{:>5}:{:<3} {:<9} {}", s.line, s.col, s.kind, s.name);
+        }
+    }
+    0
+}
+
+/// `loft def <name> [file] [--json]` — resolve a symbol by NAME to its
+/// signature + doc + location: a free fn / type / const, PLUS every `Type.name`
+/// method.  `file` optionally folds the buffer's own defs into the search.
+fn run_def_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    let Some(symbol) = positional.first() else {
+        eprintln!("loft def: usage: loft def <name> [file.loft] [--json]");
+        return 2;
+    };
+    let (text, name) = match positional.get(1) {
+        Some(file) => match std::fs::read_to_string(file.as_str()) {
+            Ok(t) => (t, (*file).clone()),
+            Err(e) => {
+                eprintln!("loft def: cannot read {file}: {e}");
+                return 1;
+            }
+        },
+        None => (String::new(), "query.loft".to_string()),
+    };
+    let dir = lsp_default_dir();
+    let hits = loft::lsp::lookup(symbol, &text, &name, &dir);
+    if json {
+        let arr = loft::json::Parsed::Array(hits.iter().map(hover_json).collect());
+        println!("{}", loft::json::to_json_string(&arr));
+    } else if hits.is_empty() {
+        eprintln!("loft def: '{symbol}' not found");
+        return 1;
+    } else {
+        for (n, h) in hits.iter().enumerate() {
+            if n > 0 {
+                println!();
+            }
+            print_hover_human(h);
+        }
+    }
+    0
+}
+
+/// `loft hover <file> <line> <col> [--json]` — the symbol under a cursor
+/// (1-based line/col, matching editor gutters).
+fn run_hover_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let pos: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    let (Some(file), Some(line_s), Some(col_s)) = (pos.first(), pos.get(1), pos.get(2)) else {
+        eprintln!("loft hover: usage: loft hover <file.loft> <line> <col> [--json]  (1-based)");
+        return 2;
+    };
+    let (Ok(line), Ok(col)) = (line_s.parse::<u32>(), col_s.parse::<u32>()) else {
+        eprintln!("loft hover: line and col must be positive integers");
+        return 2;
+    };
+    let text = match std::fs::read_to_string(file.as_str()) {
+        Ok(t) => t,
+        Err(e) => {
+            eprintln!("loft hover: cannot read {file}: {e}");
+            return 1;
+        }
+    };
+    let dir = lsp_default_dir();
+    match loft::lsp::symbol_at(&text, file, &dir, line, col) {
+        Some(h) if json => println!("{}", loft::json::to_json_string(&hover_json(&h))),
+        Some(h) => print_hover_human(&h),
+        None if json => println!("null"),
+        None => {
+            eprintln!("loft hover: no symbol at {file}:{line}:{col}");
+            return 1;
+        }
+    }
+    0
+}
+
+/// Walk up from the CWD to the nearest `index/` holding `tags.json`.
+fn find_index_dir() -> Option<String> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let cand = dir.join("index");
+        if cand.join("tags.json").is_file() {
+            return Some(cand.to_string_lossy().into_owned());
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+fn tag_json(info: &loft::lsp::TagInfo) -> loft::json::Parsed {
+    use loft::json::Parsed;
+    let opt = |o: &Option<String>| o.as_ref().map_or(Parsed::Null, |s| Parsed::Str(s.clone()));
+    jobj(vec![
+        ("tag", Parsed::Str(info.tag.clone())),
+        ("kind", Parsed::Str(info.kind.to_string())),
+        ("title", opt(&info.title)),
+        ("summary", opt(&info.summary)),
+        ("url", opt(&info.url)),
+        ("references", Parsed::Int(info.references as i64)),
+    ])
+}
+
+/// `loft refs <name> [root] [--json]` — every occurrence of an identifier across
+/// the `.loft` files under `root` (default: CWD), via the workspace reverse index.
+fn run_refs_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    let Some(name) = positional.first() else {
+        eprintln!("loft refs: usage: loft refs <name> [root] [--json]");
+        return 2;
+    };
+    let root = positional.get(1).map_or_else(
+        || {
+            std::env::current_dir()
+                .map_or_else(|_| ".".to_string(), |d| d.to_string_lossy().into_owned())
+        },
+        |s| (*s).clone(),
+    );
+    let wi = loft::lsp::WorkspaceIndex::build(&root);
+    let refs = wi.references(name);
+    if json {
+        use loft::json::Parsed;
+        let arr = Parsed::Array(
+            refs.iter()
+                .map(|r| {
+                    jobj(vec![
+                        ("file", Parsed::Str(r.file.clone())),
+                        ("line", Parsed::Int(i64::from(r.line))),
+                        ("col", Parsed::Int(i64::from(r.col))),
+                    ])
+                })
+                .collect(),
+        );
+        println!("{}", loft::json::to_json_string(&arr));
+    } else if refs.is_empty() {
+        eprintln!("loft refs: no references to '{name}' under {root}");
+        return 1;
+    } else {
+        for r in refs {
+            println!("{}:{}:{}", r.file, r.line, r.col);
+        }
+    }
+    0
+}
+
+/// `loft tag <@TAG> [--json]` — what the tracker index knows about a tag
+/// (issue / feature / plan): title + summary + issue URL + reference count,
+/// from `index/tags.json` + `index/features.json` (`make index`).
+fn run_tag_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let Some(tag) = args.iter().find(|a| !a.starts_with('-')) else {
+        eprintln!("loft tag: usage: loft tag <@TAG> [--json]   (e.g. loft tag @F7)");
+        return 2;
+    };
+    let Some(index_dir) = find_index_dir() else {
+        eprintln!("loft tag: no index/tags.json found (run `make index` at the repo root)");
+        return 1;
+    };
+    let Some(idx) = loft::lsp::TagIndex::load(&index_dir) else {
+        eprintln!("loft tag: could not read {index_dir}/tags.json");
+        return 1;
+    };
+    match idx.lookup(tag) {
+        Some(info) if json => println!("{}", loft::json::to_json_string(&tag_json(&info))),
+        Some(info) => println!("{}", loft::lsp::render_tag_markdown(&info)),
+        None if json => println!("null"),
+        None => {
+            eprintln!("loft tag: '{tag}' — unknown or not indexed");
+            return 1;
+        }
+    }
+    0
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
@@ -4231,6 +4512,7 @@ fn main() {
     let mut introspect_slots_out: Option<String> = None;
     let mut introspect_types_out: Option<String> = None;
     let mut introspect_diff_against: Option<String> = None;
+    let mut introspect_json = false;
     let mut introspect_trace = false;
     let mut introspect_fn_filter: Vec<String> = Vec::new();
     let mut introspect_all_fns = false;
@@ -4348,6 +4630,10 @@ fn main() {
             introspect_sections.push(loft::introspect::Section::Types);
         } else if a == "--show-ownership" {
             introspect_sections.push(loft::introspect::Section::Ownership);
+        } else if a == "--json" {
+            // INSP.J — emit the introspection sections as one machine-readable
+            // JSON object instead of the text dump (an editor / agent consumer).
+            introspect_json = true;
         } else if a == "--bytecode-out" {
             introspect_bytecode_out = argv.get(i).cloned();
             i += 1;
@@ -5060,6 +5346,17 @@ fn main() {
         } else if a == "fmt" {
             // Parser-driven formatter (loft-written, via the host-call API).
             std::process::exit(run_fmt_command(&argv[i..]));
+        } else if a == "symbols" {
+            // @PLN63 — code-intelligence queries over the loft::lsp accessors.
+            std::process::exit(run_symbols_command(&argv[i..]));
+        } else if a == "def" {
+            std::process::exit(run_def_command(&argv[i..]));
+        } else if a == "hover" {
+            std::process::exit(run_hover_command(&argv[i..]));
+        } else if a == "tag" {
+            std::process::exit(run_tag_command(&argv[i..]));
+        } else if a == "refs" {
+            std::process::exit(run_refs_command(&argv[i..]));
         } else if a == "publish" {
             // @PLAN12 Phase 6.16 — author-side publish helper.
             // Repackages locally (deterministic), verifies the
@@ -7620,6 +7917,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             types_out: introspect_types_out.clone(),
             diff_against: introspect_diff_against.clone(),
             trace_lines,
+            json: introspect_json,
             fn_filter: introspect_fn_filter.clone(),
             all_fns: introspect_all_fns,
             lib_dirs: Vec::new(),

@@ -190,6 +190,13 @@ static KEYWORDS: &[&str] = &[
 /// Used by the @PLN13 script detector to tell a real loose statement that begins with
 /// a keyword (`if x { … }`, `for i in …`, `return x`) from a MALFORMED definition whose
 /// keyword was mistyped (`funcion main()`), which must not be treated as a script.
+/// loft's reserved keywords — the completion provider offers them alongside
+/// in-scope names.
+#[must_use]
+pub fn keywords() -> &'static [&'static str] {
+    KEYWORDS
+}
+
 #[must_use]
 pub fn is_keyword(word: &str) -> bool {
     KEYWORDS.contains(&word)
@@ -589,6 +596,13 @@ impl Lexer {
             self.position.line,
             self.position.pos,
         );
+    }
+
+    /// Attach a machine-readable `suggestion` (a replacement token) to the
+    /// diagnostic just emitted — call right after a "did you mean 'X'?" so a
+    /// tool (`codeAction`) can apply `X` without parsing the prose.
+    pub fn suggest_last(&mut self, suggestion: &str) {
+        self.diagnostics.suggest_last(suggestion);
     }
 
     /// Emit a diagnostic carrying a stable `code` (kebab-case kind slug).
