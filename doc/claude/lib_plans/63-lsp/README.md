@@ -443,8 +443,9 @@ Steps, in dependency order:
   type after a local `x = …`) needs each binding's precise position; the parser's variable-table
   positions (`Variable.source` / `write_source`) are NOT reliably populated in the fresh-parse
   path the LSP uses (only the first local per fn gets one), so an inlay hint would fire
-  inconsistently — worse UX than none.  Deferred until step F, which builds proper position/scope
-  resolution; then this is a thin read of `var_type` → `type_name_str` at the binding site.
+  inconsistently — worse UX than none.  Deferred to [@PLN115 (the resolution index)](../../plans/115-resolution-index/README.md),
+  which records reliable binding positions; then this is a thin read of `var_type` →
+  `type_name_str` at the binding site.
 - **F — type/scope-aware precision — v1 DONE (local scoping).** The first, highest-value slice:
   distinguish a GLOBAL symbol (a top-level def or method — workspace-wide) from a LOCAL (a
   variable / parameter — confined to its enclosing function block), and scope find-references /
@@ -457,11 +458,12 @@ Steps, in dependency order:
   SOURCE-scan, no parser instrumentation.  *Gates:* `tests/lsp_scope.rs` (locals→their function,
   globals/stdlib→Global; `scoped_refs` file+range filter) +
   `tests/lsp_transport.rs::rename_a_local_scopes_to_its_function` (real binary).
-  **Remaining F (v2+, needs a parse-time resolution index):** shadowing / block scope (v1 is
-  function-granular); per-occurrence resolution so `references("len")` returns only the intended
-  `text.len` (methods are still name-lexical); completion's variable-member resolution made
-  scope-precise; and the reliable binding positions that unblock **E (inlayHint)**.  These want the
-  parser to RECORD `(position → resolved binding)` during parse — the invasive piece deferred here.
+  **Remaining F (v2+) → its own plan [@PLN115 parse-time resolution index](../../plans/115-resolution-index/README.md):**
+  shadowing / block scope (v1 is function-granular); per-occurrence resolution so
+  `references("len")` returns only the intended `text.len` (methods are still name-lexical);
+  completion's variable-member resolution made scope-precise; and the reliable binding positions
+  that unblock **E (inlayHint)**.  These all want the parser to RECORD `(position → resolved
+  binding)` during parse — the invasive parser piece, deferred to @PLN115.
 
 Smaller follow-ups already noted: workspace-index invalidation on `didSave`; `TagIndex` mtime
 refresh; **T4** tag completion (fold into C).  **Extract-function** (`refactor.extract`, the table
