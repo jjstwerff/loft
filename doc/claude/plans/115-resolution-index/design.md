@@ -148,8 +148,14 @@ includes a byte-identical-IR check** (§ below). No step changes a parse decisio
   chokepoint here. *Gate met:* byte-identical off on a call-containing corpus;
   Global(n_helper) recorded with locals alongside. The method-reference win
   (`text.len` excludes other `len`) lands with the S6 method hook.
-- **S6 — hook field/method access** (`parser/fields.rs`). *Gate:* completion's `expr.`
-  receiver + hover resolve via the index.
+- **S6 — hook field/method access. ✅ DONE (`f4a66242`).** At the `fields.rs` member
+  chokepoint, a Routine attribute records `Method{recv_type, method_def}`, any other
+  `Field{type_def, attr}` — `p.x`→Field{P,x}, `s.len()`→Method{text,len}, keyed on the
+  receiver type. Member position captured only when recording. *Gate met:* byte-identical
+  off on a field+method corpus; exact-key tests. Common struct-field + attribute-method
+  dispatch covered; exotic paths (poly-enum, nullable, bounded-T stub, vector methods)
+  deferred. The `expr.`-receiver/hover + method-references CONSUMERS build on this (the
+  latter needs a resolution-aware WorkspaceIndex — its own step).
 - **S7 — unblock E (inlayHint).** With reliable binding positions from the index, emit
   inferred-type hints at local bindings (`var_type` → `type_name_str`). *Gate:* the
   E gate that couldn't be met before now passes for every local, not just the first.
