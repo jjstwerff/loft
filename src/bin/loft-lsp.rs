@@ -60,7 +60,9 @@ fn main() {
     // outside the loft repo, so the tag features are simply inert there.
     let mut workspace_root: Option<String> = None;
     let mut tag_index: Option<loft::lsp::TagIndex> = None;
-    let mut tag_index_tried = false;
+    // The mtime of `index/tags.json` the cached `tag_index` was loaded from — used
+    // to reload it after a mid-session `make index` (None = never loaded / absent).
+    let mut tag_index_mtime: Option<std::time::SystemTime> = None;
     // The workspace reverse index (identifier occurrences across the tree),
     // built lazily on the first find-references request; open buffers are
     // overlaid at query time so unsaved edits are reflected.
@@ -88,7 +90,7 @@ fn main() {
             ("textDocument/didOpen", None) => {
                 if let Some((uri, text)) = did_open_params(&msg) {
                     let mut diags = diagnose_text(&text, &uri, &stdlib_dir);
-                    ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                    ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_mtime);
                     diags.extend(tag_diagnostics(&text, tag_index.as_ref())); // T3
                     documents.insert(uri.clone(), text);
                     send(&stdout, &publish_diagnostics(&uri, diags));
@@ -97,7 +99,7 @@ fn main() {
             ("textDocument/didChange", None) => {
                 if let Some((uri, text)) = did_change_params(&msg) {
                     let mut diags = diagnose_text(&text, &uri, &stdlib_dir);
-                    ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                    ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_mtime);
                     diags.extend(tag_diagnostics(&text, tag_index.as_ref())); // T3
                     documents.insert(uri.clone(), text);
                     send(&stdout, &publish_diagnostics(&uri, diags));
@@ -110,6 +112,15 @@ fn main() {
                     // empty list (LSP has no separate "clear" message).
                     send(&stdout, &publish_diagnostics(&uri, Vec::new()));
                 }
+            }
+            ("textDocument/didSave", None) => {
+                // The saved file's on-disk content changed, so the cached workspace
+                // reverse index is stale.  Drop it: the next find-references rebuilds
+                // from disk.  (Open buffers are overlaid at query time, so unsaved
+                // edits already count — this catches a saved-then-closed file, whose
+                // overlay is gone but whose new disk content the index must reflect.)
+                workspace_index = None;
+                workspace_index_tried = false;
             }
             ("textDocument/documentSymbol", Some(id)) => {
                 // Outline the CURRENTLY-OPEN buffer (never re-read from disk — the
@@ -169,7 +180,7 @@ fn main() {
                         if let Some(prefix) =
                             loft::lsp::tag_completion_prefix(&text, line + 1, ch + 1)
                         {
-                            ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                            ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_mtime);
                             tag_index
                                 .as_ref()
                                 .map(|idx| {
@@ -221,7 +232,7 @@ fn main() {
                             .into_iter()
                             .find(|(_, l, s, e)| *l == line + 1 && *s <= ch && ch < *e);
                         let tag_hover = tag_hit.and_then(|(tag, l, s, e)| {
-                            ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                            ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_mtime);
                             let info = tag_index.as_ref()?.lookup(&tag)?;
                             let contents = markup(&loft::lsp::render_tag_markdown(&info));
                             Some(obj(vec![
@@ -338,7 +349,7 @@ fn main() {
                 let links = text_document_uri(&msg)
                     .and_then(|uri| documents.get(&uri).cloned())
                     .map(|text| {
-                        ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                        ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_mtime);
                         document_links(&text, tag_index.as_ref())
                     })
                     .unwrap_or_default();
@@ -891,21 +902,29 @@ fn build_workspace_edit(refs: &[loft::lsp::Reference], old_len: u32, new: &str) 
     obj(vec![("changes", changes)])
 }
 
-/// Load the tracker index once (from `<root>/index/`), caching the result.
-/// `tried` distinguishes "not yet loaded" from "loaded and absent" so a missing
-/// index isn't re-read every request.
+/// Ensure the cached tracker index (from `<root>/index/`) is current: (re)load it
+/// whenever `index/tags.json`'s mtime differs from `mtime` — the first request, and
+/// again after a mid-session `make index` regenerates the index.  A cheap `stat`
+/// per call; the parse only reruns on a real change.  `mtime` = None means never
+/// loaded OR the file is absent (outside the loft repo), in which case the index
+/// stays `None` and no work repeats until the file appears.
 fn ensure_tag_index(
     root: &Option<String>,
     index: &mut Option<loft::lsp::TagIndex>,
-    tried: &mut bool,
+    mtime: &mut Option<std::time::SystemTime>,
 ) {
-    if *tried {
-        return;
+    let Some(r) = root else { return };
+    let current = std::fs::metadata(format!("{r}/index/tags.json"))
+        .and_then(|m| m.modified())
+        .ok();
+    if current == *mtime {
+        return; // unchanged (including still-absent) — keep the cache
     }
-    *tried = true;
-    if let Some(r) = root {
-        *index = loft::lsp::TagIndex::load(&format!("{r}/index"));
-    }
+    *mtime = current;
+    *index = current
+        .is_some()
+        .then(|| loft::lsp::TagIndex::load(&format!("{r}/index")))
+        .flatten();
 }
 
 /// T3 — Warnings for buffer tags the scanner flagged as broken (a `@P`/`@PLAN`
@@ -1096,11 +1115,13 @@ fn notification(method: &str, params: Parsed) -> Parsed {
 fn initialize_result() -> Parsed {
     // `textDocumentSync` as an object: `openClose` so the client sends
     // didOpen/didClose, `change: 1` for full-document sync on each edit — the S3
-    // diagnostics contract.  Later providers (hover, definition, …) add their
-    // own capability flags as they land, so an editor never asks for what isn't wired.
+    // diagnostics contract — and `save` so the client notifies on save (the signal
+    // to invalidate the workspace reverse index).  Later providers (hover,
+    // definition, …) add their own capability flags as they land.
     let sync = obj(vec![
         ("openClose", Parsed::Bool(true)),
         ("change", Parsed::Int(1)),
+        ("save", Parsed::Bool(true)),
     ]);
     let capabilities = obj(vec![
         ("textDocumentSync", sync),

@@ -661,6 +661,146 @@ fn find_references_spans_the_workspace() {
     let _ = s.child.wait();
 }
 
+// didSave invalidates the cached workspace reverse index, so a file added to disk
+// after the first find-references is picked up on the next query.
+#[test]
+fn did_save_refreshes_the_workspace_index() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("savews");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("a.loft"),
+        "fn area(w: integer) -> integer {\n  w * w\n}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("b.loft"), "fn main() {\n  print(area(3))\n}\n").unwrap();
+
+    let mut s = Session::start();
+    s.request(
+        1,
+        "initialize",
+        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+    );
+    let init = s.recv();
+    let sync = field(
+        field(field(&init, "result").unwrap(), "capabilities").unwrap(),
+        "textDocumentSync",
+    )
+    .unwrap();
+    assert!(
+        matches!(field(sync, "save"), Some(Parsed::Bool(true))),
+        "advertises save so the client notifies didSave: {init:?}"
+    );
+    s.notify("initialized", "{}");
+
+    let a_uri = format!("file://{}/a.loft", root.display());
+    let a_text = "fn area(w: integer) -> integer {\n  w * w\n}\n";
+    s.notify("textDocument/didOpen", &open_params(&a_uri, a_text));
+    let _ = s.recv();
+
+    let refs_query = format!(
+        r#"{{"textDocument":{{"uri":"{a_uri}"}},"position":{{"line":0,"character":3}},"context":{{"includeDeclaration":true}}}}"#
+    );
+    let count_refs = |s: &mut Session, id: i64| -> usize {
+        s.request(id, "textDocument/references", &refs_query);
+        match field(&s.recv(), "result") {
+            Some(Parsed::Array(a)) => a.len(),
+            other => panic!("references result is an array, got {other:?}"),
+        }
+    };
+
+    // First query builds the index over a.loft + b.loft → the def + one call.
+    assert_eq!(count_refs(&mut s, 2), 2, "def in a.loft + call in b.loft");
+
+    // A NEW file appears on disk; without invalidation the cached index misses it.
+    std::fs::write(root.join("c.loft"), "fn other() {\n  print(area(4))\n}\n").unwrap();
+    assert_eq!(
+        count_refs(&mut s, 3),
+        2,
+        "stale cache does not yet see c.loft"
+    );
+
+    // didSave drops the cache → the next query rebuilds and finds c.loft's call.
+    s.notify(
+        "textDocument/didSave",
+        &format!(r#"{{"textDocument":{{"uri":"{a_uri}"}}}}"#),
+    );
+    assert_eq!(
+        count_refs(&mut s, 4),
+        3,
+        "after didSave the rebuild sees c.loft"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
+// The tag index reloads when index/tags.json changes mid-session (a `make index`):
+// a tag absent at startup resolves once it is added to the index.
+#[test]
+fn tag_index_reloads_when_the_index_changes() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tagws-mtime");
+    let idx = root.join("index");
+    std::fs::create_dir_all(&idx).unwrap();
+    // Start with an index that does NOT know @P321. <!--noindex-->
+    std::fs::write(
+        idx.join("tags.json"),
+        r#"{"@F1":[{"file":"a.md","line":1,"context":"@F1"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        idx.join("features.json"),
+        r#"[{"number":1,"title":"Keyed collections","kind":"feature","body":"x\n"}]"#,
+    )
+    .unwrap();
+
+    let mut s = Session::start();
+    s.request(
+        1,
+        "initialize",
+        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+    );
+    let _ = s.recv();
+    s.notify("initialized", "{}");
+
+    let uri = "file:///t.loft";
+    let prog = "// @P321 here\nfn main() {\n}\n"; // <!--noindex-->
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let _ = s.recv();
+
+    let hover =
+        format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":0,"character":5}}}}"#);
+
+    // @P321 is not in the index yet → hover resolves nothing. <!--noindex-->
+    s.request(2, "textDocument/hover", &hover);
+    assert!(
+        matches!(field(&s.recv(), "result"), Some(Parsed::Null)),
+        "unknown tag hovers to null before the index knows it"
+    );
+
+    // Regenerate the index (a mid-session `make index`); sleep first so the mtime
+    // is guaranteed to differ from the loaded one.
+    std::thread::sleep(std::time::Duration::from_millis(10));
+    std::fs::write(
+        idx.join("tags.json"),
+        r#"{"@F1":[{"file":"a.md","line":1,"context":"@F1"}],"@P321":[{"file":"P.md","line":3,"context":"@P321 a bug"}]}"#, // <!--noindex-->
+    )
+    .unwrap();
+
+    // The next hover re-stats tags.json, sees the new mtime, reloads → @P321 resolves.
+    s.request(3, "textDocument/hover", &hover);
+    let h = s.recv();
+    let val = field(field(&h, "result").expect("hover result"), "contents")
+        .and_then(|c| field_str(c, "value"))
+        .unwrap_or_default();
+    assert!(
+        val.contains("@P321"), // <!--noindex-->
+        "after the index reload the tag resolves: {val}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 // @PLN115 — method find-references spans the workspace, keyed on the receiver TYPE:
 // every `text.len` call across files, and NOT a same-spelled `vector.len`.
 #[test]
