@@ -106,3 +106,8 @@ test_loft_*.bin
 # CARGO_TARGET_DIR=target-guard) — a second target dir, never committed.
 target-guard/
 target-da/
+
+# H3 width-corpus introspect captures — regenerate with
+# `loft introspect width-corpus.loft`; they carry absolute paths and shift with
+# every stdlib def_nr change, so committing them only churns the repo.
+doc/claude/plans/h3-narrow-vector/bytecode-comparisons/*-full.txt

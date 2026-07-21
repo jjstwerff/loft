@@ -316,6 +316,20 @@ impl IntegerSpec {
     pub fn is_wide_template(&self) -> bool {
         self.min == i32::MIN + 1 && self.max == u32::MAX
     }
+
+    /// True when the declared range is non-negative AND runs past `i32::MAX` — a value
+    /// no *signed* 4-byte slot can hold.  Such a type needs the unsigned 4-byte op pair
+    /// (`OpGetInt4Raw` / `OpGetInt4Full`); the signed `OpGetInt4` sign-extends it on load
+    /// and, worse, its `i32::MIN` sentinel is the legal value 2147483648.
+    ///
+    /// Both halves are load-bearing.  The `min >= 0` half is what excludes the WIDE
+    /// (8-byte) template, which sets `max == u32::MAX` purely as a "wider than i32"
+    /// marker while keeping a negative `min` — an `max > i32::MAX` test alone would
+    /// misroute every plain `integer`.
+    #[must_use]
+    pub fn unsigned_wide(&self) -> bool {
+        self.min >= 0 && self.max > i32::MAX as u32
+    }
 }
 
 /// The narrow-integer storage op KIND a field of a resolved storage width uses —
@@ -341,8 +355,17 @@ pub enum NarrowIntKind {
     /// `u16::MAX` both swallow the max as null).  Read via `OpGetShortFull`; the
     /// write reuses `OpSetShortRaw` (same `(val - min)` store).
     ShortFull,
-    /// 4-byte raw.
+    /// 4-byte raw, SIGNED — `i32` and any `size(4)` range inside `i32`'s bounds.
+    /// `i32::MIN` is the null sentinel.
     Int4,
+    /// 4-byte UNSIGNED with the reserved `u32::MAX` null sentinel — a nullable slot, or
+    /// a narrow-vector element, of a type whose range runs past `i32::MAX` (`u32`).  The
+    /// 4-byte twin of `ShortRaw`.
+    Int4Raw,
+    /// 4-byte UNSIGNED, NO sentinel — a NOT-NULL field of such a type, so the full 2^32
+    /// round-trips.  Read via `OpGetInt4Full`; the write reuses `OpSetInt4Raw` (same
+    /// unsigned store).  The 4-byte twin of `ShortFull`.
+    Int4Full,
     /// 8-byte raw — the wide default.
     Int,
 }
@@ -356,13 +379,19 @@ impl NarrowIntKind {
     /// but only when the slot is NOT nullable; a nullable slot always reserves a
     /// sentinel regardless of field-vs-vector.
     #[must_use]
-    pub fn of(width: u8, nullable: bool, narrow_vec: bool) -> Self {
+    pub fn of(width: u8, nullable: bool, narrow_vec: bool, unsigned_wide: bool) -> Self {
         match width {
             1 if nullable => NarrowIntKind::ByteNullable,
             1 => NarrowIntKind::Byte,
             2 if nullable => NarrowIntKind::Short,
             2 if narrow_vec => NarrowIntKind::ShortRaw,
             2 => NarrowIntKind::ShortFull,
+            // The 4-byte split mirrors the 2-byte one directly above, but applies ONLY
+            // to a range that runs past `i32::MAX` (`unsigned_wide`).  Everything else
+            // 4-byte — `i32` above all — stays on the signed `Int4` pair, whose stored
+            // bytes are two's complement and are relied on beyond this module.
+            4 if unsigned_wide && (nullable || narrow_vec) => NarrowIntKind::Int4Raw,
+            4 if unsigned_wide => NarrowIntKind::Int4Full,
             4 => NarrowIntKind::Int4,
             _ => NarrowIntKind::Int,
         }
@@ -388,6 +417,8 @@ impl NarrowIntKind {
             NarrowIntKind::Short => "OpGetShort",
             NarrowIntKind::ShortFull => "OpGetShortFull",
             NarrowIntKind::Int4 => "OpGetInt4",
+            NarrowIntKind::Int4Raw => "OpGetInt4Raw",
+            NarrowIntKind::Int4Full => "OpGetInt4Full",
             NarrowIntKind::Int => "OpGetInt",
         }
     }
@@ -404,6 +435,9 @@ impl NarrowIntKind {
             // differs (`OpGetShortFull`, no sentinel decode).
             NarrowIntKind::ShortFull => "OpSetShortRaw",
             NarrowIntKind::Int4 => "OpSetInt4",
+            // not-null 4-byte reuses the raw unsigned store; only the READ differs
+            // (`OpGetInt4Full`, no sentinel decode) — as `ShortFull` does one width down.
+            NarrowIntKind::Int4Raw | NarrowIntKind::Int4Full => "OpSetInt4Raw",
             NarrowIntKind::Int => "OpSetInt",
         }
     }

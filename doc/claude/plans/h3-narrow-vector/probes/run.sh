@@ -42,19 +42,26 @@ done
 echo
 echo "$fail cell/backend combinations differ from the hand-computed expectation."
 cat <<'EOF'
-Baseline on a CLEAN tree (2026-07-21), 8 failing combinations — 4 cells × both backends,
-so every one of these is a SHARED defect, not a backend divergence:
+Expected NOW: 0 differing.  All three defects are fixed, so this matrix is a REGRESSION
+guard, and a fresh failure here is a real one.
+
+Where it started (2026-07-21), 8 failing combinations — 4 cells × both backends, so every
+one was a SHARED defect, never a backend divergence:
 
   c_u16_direct   compile error "Cannot assign to attribute on type 'OpGetShortRaw'"
-  c_i16_direct   same — the 2-byte raw accessor has no assignable counterpart
-  c_u32_viafn    SILENT: the write through the struct parameter is discarded, reads 0
-  c_u32_read     SILENT: 4000000000 reads back -294967296 — the 4-byte load sign-extends
+  c_i16_direct   same — the 2-byte raw reader was missing from the read→write op map
+  c_u32_viafn    SILENT: `x as u32?` returned null for every value, so `?? 0` wrote a zero
+  c_u32_read     SILENT: 4000000000 read back -294967296 — no unsigned 4-byte op existed
 
-The u32 read defect is NOT vector-specific: a struct FIELD of type u32 loses the same
-value (see c_u32_field, which fails identically).  Keep it in this matrix anyway — it is
-what proves the width, not the container, is the axis.
+The u32 read defect was never vector-specific: `c_u32_field` failed identically, which is
+what proved the WIDTH and not the container was the axis.  Keep both cells.
 
-Green cells to protect: u8 and i32 on every path, and `integer`/`single` as the control
-that the harness itself is not simply broken.  A run reporting 0 on a clean tree means
-the instrument went blind, not that the tree is fixed.
+To prove this harness can still fail, break one thing on purpose — e.g. drop the
+`"OpGetInt4Raw" | "OpGetInt4Full"` arm from `parse_assign`'s read→write map
+(`src/parser/operators.rs`) and `c_u32_direct`/`c_u32_viafn` must go red again.  That
+omission is how this fix first landed, so it is a live failure mode, not a hypothetical.
+
+Green cells to protect: u8 and i32 on every path — `i32` in particular must keep the
+SIGNED 4-byte ops, since its stored bytes are two's complement and are read outside the
+narrow-int family.  `integer`/`single` are the control that the harness itself works.
 EOF

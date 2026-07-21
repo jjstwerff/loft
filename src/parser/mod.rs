@@ -5330,7 +5330,8 @@ impl Parser {
                 // a narrow-vector element keeps the raw direct encoding (its
                 // stride/value contract is the narrow-vector one, not the
                 // field-sentinel one) — `narrow_vec` selects that.
-                let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
+                let kind =
+                    crate::data::NarrowIntKind::of(s, nullable, narrow_vec, spec.unsigned_wide());
                 if kind.takes_min() {
                     // H6: a sentinel-reserving kind (`ByteNullable`/`Short` — a
                     // nullable narrow FIELD *or* vector element) shrinks its usable
@@ -5844,7 +5845,8 @@ impl Parser {
                 // sentinel); `not null` fields and narrow-vector elements keep the
                 // raw op.
                 let nullable = f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr);
-                let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
+                let kind =
+                    crate::data::NarrowIntKind::of(s, nullable, narrow_vec, spec.unsigned_wide());
                 // H6: the WRITE op encodes against the same `usable_min` the READ
                 // op (`get_val`) decodes against — derived from the KIND so a
                 // sentinel-reserving kind (`ByteNullable`/`Short`) shrinks the

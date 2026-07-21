@@ -12,7 +12,17 @@
 //    attribute on type 'OpGetShortRaw'"): the narrow-vector 2-byte reader was missing from
 //    the read→write op mapping, though its write twin `OpSetShortRaw` already existed.
 //    A u16 STRUCT FIELD always worked, so the vector spelling is the one to guard.
+//
+// 3. There was no UNSIGNED 4-byte accessor at all, in any container: `OpGetInt4` is a
+//    signed `get_i32_raw`, so a `u32` above `i32::MAX` sign-extended on load, and its
+//    `i32::MIN` null sentinel was the perfectly legal `u32` value 2147483648 — a value
+//    that therefore read back as null.  `OpGetInt4Raw`/`OpGetInt4Full`/`OpSetInt4Raw`
+//    supply it, storing a plain native `u32` (a decode change, not a layout change) and
+//    moving the reserved code to `u32::MAX`, which `u32`'s declared range excludes.
+//    `i32` deliberately keeps the signed pair — its bytes are read outside this family.
 struct Grid { cells: vector<u32>, flags: vector<u16>, deltas: vector<i16> }
+struct Wide { f: u32, g: u32 }
+struct Cell { v: u32? }
 
 // Defeats const-folding, so the checked cast is emitted rather than evaluated.
 fn opaque(x: integer) -> integer { x + 0 }
@@ -51,6 +61,32 @@ fn main() {
   assert((g.cells[1] ?? 0) == 70000, "u32 vector element, write via a struct param");
   assert((g.flags[1] ?? 0) == 600,   "u16 vector element, write via a struct param");
   assert((g.deltas[1] ?? 0) == -600, "i16 vector element, write via a struct param");
+
+  // --- 3. a u32 above i32::MAX round-trips (the unsigned 4-byte ops) ---
+  // No SIGNED 4-byte slot can hold these, and before `OpGetInt4Raw`/`OpGetInt4Full` there
+  // was no unsigned one: the load sign-extended, so 4000000000 read back -294967296.
+  wide: vector<u32> = [4000000000, 3000000000];
+  assert((wide[0] ?? 0) == 4000000000, "u32 vector element above i32::MAX");
+  assert((wide[1] ?? 0) == 3000000000, "u32 vector element, second slot");
+  w = Wide{ f: 4000000000, g: 4294967294 };
+  assert(w.f == 4000000000, "u32 struct field above i32::MAX");
+  assert(w.g == 4294967294, "u32 struct field at the top of its declared range");
+  // 2147483648 is a legal u32 AND is exactly the i32::MIN bit pattern the signed accessor
+  // used as its null sentinel — so this value used to READ BACK AS NULL.  The unsigned
+  // sentinel is u32::MAX, which u32's declared range (0..4294967294) already excludes, so
+  // no legal value collides with null any more.
+  c = Cell{ v: 2147483648 };
+  assert((c.v ?? -1) == 2147483648, "a u32 value no longer collides with the null sentinel");
+  n0 = Cell{ v: null };
+  assert((n0.v ?? -7) == -7, "null still round-trips through a nullable u32");
+  assert(size(wide) == 8, "u32 elements are still 4 bytes — a decode change, not a layout one");
+
+  // i32 keeps the SIGNED ops: its stored bytes are two's complement and are read outside
+  // the narrow-int family, so routing it through the unsigned pair would be a layout change.
+  neg: vector<i32> = [-2000000000, 2000000000];
+  assert((neg[0] ?? 0) == -2000000000, "i32 vector element stays signed");
+  assert((neg[1] ?? 0) == 2000000000, "i32 vector element, positive half");
+  assert(size(neg) == 8, "i32 elements are 4 bytes");
 
   // The untouched neighbours are intact — a wrong element stride shows up here.
   assert((g.cells[0] ?? 0) == 1,  "u32 neighbour untouched");

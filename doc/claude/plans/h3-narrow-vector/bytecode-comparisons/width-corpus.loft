@@ -1,0 +1,43 @@
+// One function per 4-byte storage path, beside its WORKING 2-byte analogue.  The 2-byte
+// trio already round-trips its full declared range, so its emitted ops are the reference
+// shape the 4-byte paths must acquire.  `main` runs them all, so this file is also an
+// end-to-end check.  Hand-computed expectations are in main's format strings.
+struct Plain32 { f: u32 }
+struct Opt32   { f: u32? }
+struct Plain16 { f: u16 }
+struct Opt16   { f: u16? }
+
+// --- 4-byte unsigned: the broken paths ---
+fn vec_u32() -> integer { v: vector<u32> = [4000000000]; v[0] ?? -1 }
+fn field_u32() -> integer { s = Plain32{ f: 4000000000 }; s.f }
+fn field_u32_top() -> integer { s = Plain32{ f: 4294967294 }; s.f }
+fn field_u32_opt() -> integer { s = Opt32{ f: 4000000000 }; s.f ?? -1 }
+// 2147483648 is a legal u32 AND is exactly the `i32::MIN` bit pattern the signed
+// 4-byte accessor uses as its null sentinel — so a value collides with null here.
+fn field_u32_sentinel() -> integer { s = Opt32{ f: 2147483648 }; s.f ?? -7 }
+fn field_u32_null() -> integer { s = Opt32{ f: null }; s.f ?? -7 }
+
+// --- 2-byte unsigned: the working reference shape ---
+fn vec_u16() -> integer { v: vector<u16> = [65535]; v[0] ?? -1 }
+fn field_u16() -> integer { s = Plain16{ f: 65535 }; s.f }
+fn field_u16_opt() -> integer { s = Opt16{ f: 65534 }; s.f ?? -1 }
+fn field_u16_null() -> integer { s = Opt16{ f: null }; s.f ?? -7 }
+
+// --- 4-byte signed: must NOT change — i32 bytes are load-bearing ---
+fn vec_i32() -> integer { v: vector<i32> = [-2000000000]; v[0] ?? -1 }
+fn field_i32() -> integer { t: i32 = -2000000000; t }
+
+fn main() {
+  print("vec_u32    {vec_u32()} | 4000000000\n");
+  print("fld_u32    {field_u32()} | 4000000000\n");
+  print("fld_u32top {field_u32_top()} | 4294967294\n");
+  print("fld_u32opt {field_u32_opt()} | 4000000000\n");
+  print("fld_u32nul {field_u32_null()} | -7\n");
+  print("fld_u32sen {field_u32_sentinel()} | 2147483648\n");
+  print("vec_u16    {vec_u16()} | 65535\n");
+  print("fld_u16    {field_u16()} | 65535\n");
+  print("fld_u16opt {field_u16_opt()} | 65534\n");
+  print("fld_u16nul {field_u16_null()} | -7\n");
+  print("vec_i32    {vec_i32()} | -2000000000\n");
+  print("fld_i32    {field_i32()} | -2000000000\n");
+}

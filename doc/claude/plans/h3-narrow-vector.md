@@ -1,20 +1,23 @@
 # H3 — narrow-width integers: three defects behind one symptom
 
-> **Status: 2 of 3 FIXED.** Reported by the crawler consumer (`LOFT-HANDOFF` H3) as
+> **Status: ALL THREE FIXED.** Reported by the crawler consumer (`LOFT-HANDOFF` H3) as
 > *"`vector<u32>` element write through a struct parameter is silently discarded;
-> `vector<u16>`/`<i16>` reject index assignment"*. Both backends, both defects — this was
-> never a backend divergence. The third (a `u32` value above `i32::MAX` reading back
-> sign-extended) is a **structural gap, not a bug in a line**, and is still open.
-> Probes: `h3-narrow-vector/probes/run.sh` — type × write-path × read-back, both backends.
+> `vector<u16>`/`<i16>` reject index assignment"*. Every defect reproduced on both
+> backends — this was never a backend divergence. Probes:
+> `h3-narrow-vector/probes/run.sh` (type × write-path × read-back) and
+> `h3-narrow-vector/bytecode-comparisons/width-corpus.loft` (one function per 4-byte
+> storage path beside its working 2-byte analogue).
 
 ## RESUME — start here
 
-**One-line state:** the two defects the crawler could see are fixed at their root causes;
-the one it could not see (it only ever used small `u32` values) needs a design decision
-before it can be fixed — see § Open.
+**One-line state:** done. Two defects were wrong lines; the third was a missing
+representation — loft had no unsigned 4-byte accessor at all — now supplied by the
+`OpGetInt4Raw` / `OpGetInt4Full` / `OpSetInt4Raw` trio.
 
 ```bash
-./doc/claude/plans/h3-narrow-vector/probes/run.sh    # expect 4 differing: c_u32_read + c_u32_field, both backends
+P=./doc/claude/plans/h3-narrow-vector
+$P/probes/run.sh                                    # expect 0 differing
+loft --interpret $P/bytecode-comparisons/width-corpus.loft   # every line must echo its `|` half
 ```
 
 ## The reported scope was wrong in both directions
@@ -65,7 +68,7 @@ struct FIELD worked throughout, because fields read through the other two.
 
 Fix: fold `OpGetShortRaw` into the existing `OpGetShortFull` arm.
 
-## Open — a `u32` above `i32::MAX` reads back sign-extended
+## Defect 3 — there was no unsigned 4-byte representation at all (FIXED)
 
 ```loft
 v: vector<u32> = [4000000000];   // reads back -294967296
@@ -86,21 +89,49 @@ The `min` offset is exactly how `u8` and `u16` represent an unsigned range: they
 `get_i32_raw` with `i32::MIN` as its null sentinel — so **there is no representation for
 an unsigned 4-byte value at all**, and every `u32` above `i32::MAX` is unreachable.
 
-That makes this a missing feature rather than a wrong line, and it needs a decision before
-implementation, because `u32`'s declared range (`limit(0, 4_294_967_294)`) already reserves
-its top code as a sentinel:
+That makes it a missing feature rather than a wrong line: no encoding existed for the
+values, so nothing could be "corrected" in place.
 
-- add `Int4Raw`/`Int4Full` twins mirroring the 2-byte trio (a `min`-carrying
-  `(val - min)` store) — consistent with the existing design, and the byte/short
-  precedent says it works; costs a new op pair and a `takes_min()` widening; or
-- store `u32` unsigned with `u32::MAX` as the sentinel and widen on load, which is
-  cheaper but makes the 4-byte kind's encoding differ in kind from the 1/2-byte ones.
+**The fix — `OpGetInt4Raw` / `OpGetInt4Full` / `OpSetInt4Raw`,** the 4-byte twins of the
+2-byte trio, selected by one new fact on the type (`IntegerSpec::unsigned_wide()` — the
+declared range is non-negative AND runs past `i32::MAX`):
 
-**Recommendation: the first.** It keeps one encoding rule across all narrow widths, and
-the 2-byte trio is a working template to copy rather than a new design to validate.
+| kind | reserves a sentinel? | used for |
+|---|---|---|
+| `Int4Raw` | yes, `u32::MAX` | a nullable slot, or a narrow-vector element |
+| `Int4Full` | no — full 2³² | a non-null field |
+| `Int4` (unchanged) | yes, `i32::MIN` | everything else 4-byte, `i32` above all |
 
-Until it lands, `u32` is safe only below 2^31 — worth a diagnostic, since it is silent
-today. Note the crawler's own workaround (use `i32`) is unaffected by this.
+Two decisions worth keeping:
+
+- **Storage is a plain native `u32`, not the 2-byte trio's `(val - min)` bias.** The bias
+  is what lets 1- and 2-byte slots express an unsigned range, but at 4 bytes the value
+  already fills the slot, so a bias buys nothing and would change the stored bytes. Native
+  layout is what a binary format expects, so this stays a *decode* change.
+- **`i32` deliberately does NOT move.** Mirroring the trio literally would have given it
+  `min = -2147483647` and a biased encoding, rewriting the bytes of every `i32` field —
+  read by raw copies, FFI and codegen outside the narrow-int family. `unsigned_wide()`'s
+  `min >= 0` half is what holds that line (it also excludes the WIDE 8-byte template,
+  which sets `max == u32::MAX` purely as a "wider than i32" marker while keeping a
+  negative `min`).
+
+It also closes a defect nobody had reported: **2147483648 is a legal `u32` and is exactly
+the `i32::MIN` sentinel bit pattern**, so that one value used to read back as *null*. The
+unsigned sentinel is `u32::MAX`, which `u32`'s declared range (`limit(0, 4294967294)`)
+already excludes — so no legal value collides with null, at any width. That matches what
+LOFT.md § nullable narrow fields already promised: *"`u32` covers 0..=4_294_967_294 — one
+32-bit code reserved."*
+
+**Proof it changed only what it meant to.** `bytecode-comparisons/width-corpus.loft` holds
+one function per storage path; comparing `loft introspect` before and after (normalising
+the def_nr/address shift that adding three stdlib ops causes), the only functions whose
+emitted ops move are the `u32` ones. Every `i32` and `u16` path — IR *and* generated Rust
+— is unchanged.
+
+**A note on the chokepoint.** Adding the readers immediately reproduced defect 2 for the
+new ops: `v[i] = x` stopped compiling with *"Cannot assign to attribute on type
+'OpGetInt4Raw'"* until they were added to the same read→write map. That map is a real
+chokepoint and an easy one to miss — the probe matrix caught it in one run.
 
 ## Instrument
 

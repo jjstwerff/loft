@@ -498,6 +498,14 @@ impl Parser {
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
             ),
             "OpGetInt4" => self.cl("OpSetInt4", &[args[0].clone(), args[1].clone(), code]),
+            // The unsigned 4-byte pair, one width up from the `OpGetShortRaw` arm above:
+            // both readers share `OpSetInt4Raw`'s store and neither takes a `min`, so the
+            // shape is `OpGetInt4`'s (ref, fld, val).  Omitting either here reproduces
+            // exactly the defect that arm documents — the write side reports "Cannot
+            // assign to attribute on type 'OpGetInt4Raw'" and `v[i] = x` stops compiling.
+            "OpGetInt4Raw" | "OpGetInt4Full" => {
+                self.cl("OpSetInt4Raw", &[args[0].clone(), args[1].clone(), code])
+            }
             "OpGetFloat" => self.cl("OpSetFloat", &[args[0].clone(), args[1].clone(), code]),
             "OpGetSingle" => self.cl("OpSetSingle", &[args[0].clone(), args[1].clone(), code]),
             // Plan-22 phase 02d-iv — character / text cell writes
