@@ -336,6 +336,13 @@ pub struct Parser {
     /// `resolve_deferred_unknowns` after all files in the recursion have
     /// had their pass-1 / pass-2 definitions registered.
     deferred_unknown: Vec<(u16, u32, Position)>,
+    /// @PLN115 — record each resolved identifier occurrence during parse.  DEFAULT
+    /// OFF (only the LSP parse sets it, S3); zero-cost when off.  See
+    /// `doc/claude/plans/115-resolution-index/`.
+    record_resolutions: bool,
+    /// @PLN115 — the recorded occurrences (empty unless `record_resolutions`),
+    /// cleared per parse alongside `deferred_unknown`.
+    resolutions: Vec<crate::resolution::Occurrence>,
     /// Whether the most recently parsed expression is from a `not null` field access.
     /// Set by `get_field`; consumed by `handle_operator` to warn on redundant null checks.
     expr_not_null: bool,
@@ -696,6 +703,8 @@ impl Parser {
             pending_imports: Vec::new(),
             applied_imports: Vec::new(),
             deferred_unknown: Vec::new(),
+            record_resolutions: false,
+            resolutions: Vec::new(),
             expr_not_null: false,
             expr_not_null_name: String::new(),
             lambda_counter: 0,
@@ -1103,6 +1112,7 @@ impl Parser {
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         // @PLN86 1.2 — the def→profile side-map is keyed by def_nr, which
         // `data.reset()` reassigns; clear it so a re-parse re-derives the
         // designation rather than reading a stale entry.
@@ -1149,6 +1159,7 @@ impl Parser {
             self.iterable_context = false;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
+            self.resolutions.clear();
             self.data.reset();
             if !default {
                 self.data.source = crate::data::MAIN_SOURCE;
@@ -1529,6 +1540,7 @@ impl Parser {
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.data.reset();
         // @PLN22 — the main program parses under MAIN_SOURCE (not the prelude's
         // source 0), matching `parse`; `reset()` left source at STD_SOURCE.
@@ -1545,6 +1557,7 @@ impl Parser {
             self.first_pass = false;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
+            self.resolutions.clear();
             self.data.reset();
             if !default {
                 self.data.source = crate::data::MAIN_SOURCE;
@@ -1573,6 +1586,7 @@ impl Parser {
         self.pending_imports.clear();
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
@@ -1584,6 +1598,7 @@ impl Parser {
             self.first_pass = false;
             self.applied_imports.clear();
             self.deferred_unknown.clear();
+            self.resolutions.clear();
             self.data.reset();
             self.lambda_counter = 0;
             self.fn_lambdas.clear();
@@ -1674,6 +1689,7 @@ impl Parser {
         self.lexer.parse_string(text, filename);
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
@@ -1695,6 +1711,7 @@ impl Parser {
         }
         self.applied_imports.clear();
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.data.reset();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
@@ -1724,6 +1741,7 @@ impl Parser {
         self.vars.logging = false;
         self.lexer.parse_string(text, filename);
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
         self.data.source = source;
@@ -1735,6 +1753,7 @@ impl Parser {
             return;
         }
         self.deferred_unknown.clear();
+        self.resolutions.clear();
         self.lambda_counter = 0;
         self.fn_lambdas.clear();
         self.lexer.parse_string(text, filename);
@@ -8689,6 +8708,30 @@ impl Parser {
     ///
     /// Uses the same `suggest_similar` primitive as the existing
     /// variable-suggestion path at `parser/objects.rs::known_var_or_type`.
+    /// @PLN115 — the resolved identifier occurrences recorded during the last
+    /// parse (empty unless `record_resolutions` was set).  Drives the LSP's
+    /// precise, non-lexical navigation.
+    #[must_use]
+    pub fn resolutions(&self) -> &[crate::resolution::Occurrence] {
+        &self.resolutions
+    }
+
+    /// @PLN115 — record one resolved occurrence, gated: a single predictable
+    /// branch when `record_resolutions` is off (every normal compile), so it is
+    /// zero-cost there.  A pure side-append — it changes no parse decision.  Wired
+    /// to the resolution chokepoints starting in S2; unused in S1.
+    #[allow(dead_code)]
+    fn record(&mut self, pos: &Position, len: u16, res: crate::resolution::Resolution) {
+        if self.record_resolutions {
+            self.resolutions.push(crate::resolution::Occurrence {
+                line: pos.line,
+                col: pos.pos,
+                len,
+                res,
+            });
+        }
+    }
+
     pub fn suggest_function_name(&self, name: &str) -> Option<String> {
         let candidates_owned: Vec<String> = self
             .data
