@@ -186,6 +186,76 @@ fn diagnostics_publish_on_open_then_clear_on_fix() {
     let _ = s.child.wait();
 }
 
+// S4 — the outline path.  Open a buffer, request `documentSymbol`, assert the
+// server replies with the top-level defs (kind + name in source order) and a
+// selectionRange that lands on the NAME.
+#[test]
+fn document_symbol_lists_the_outline() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        matches!(
+            field(caps, "documentSymbolProvider"),
+            Some(Parsed::Bool(true))
+        ),
+        "advertises documentSymbolProvider: {init:?}"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///o.loft";
+    let prog = "struct Point {\n  x: integer,\n}\nfn main() {\n  print(\"hi\")\n}\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let _ = s.recv(); // consume the publishDiagnostics push from didOpen
+
+    s.request(
+        2,
+        "textDocument/documentSymbol",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}}}}"#),
+    );
+    let reply = s.recv();
+    assert_eq!(field(&reply, "id").and_then(Parsed::as_i64), Some(2));
+    let syms = match field(&reply, "result") {
+        Some(Parsed::Array(a)) => a,
+        other => panic!("documentSymbol result is an array, got {other:?}"),
+    };
+    let got: Vec<(i64, String)> = syms
+        .iter()
+        .map(|x| {
+            (
+                field(x, "kind").and_then(Parsed::as_i64).unwrap(),
+                field_str(x, "name").unwrap(),
+            )
+        })
+        .collect();
+    // SymbolKind: Struct 23, Function 12 — in source order.
+    assert_eq!(
+        got,
+        vec![(23, "Point".to_string()), (12, "main".to_string())],
+        "outline lists `struct Point` then `fn main`: {got:?}"
+    );
+
+    // The struct's selectionRange underlines the NAME `Point` (line 0, chars 7..12),
+    // not the parser's body-start position.
+    let sel = field(&syms[0], "selectionRange").unwrap();
+    let start = field(sel, "start").unwrap();
+    let end = field(sel, "end").unwrap();
+    assert_eq!(
+        (
+            field(start, "line").and_then(Parsed::as_i64),
+            field(start, "character").and_then(Parsed::as_i64),
+            field(end, "character").and_then(Parsed::as_i64),
+        ),
+        (Some(0), Some(7), Some(12)),
+        "selectionRange covers `Point`: {:?}",
+        &syms[0]
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();

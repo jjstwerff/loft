@@ -159,7 +159,11 @@ pub fn surface(data: &Data, lib_file: &str) -> Vec<Member> {
 /// surface member (an enum VARIANT — part of its enum's shape — or an internal / unresolved
 /// def). Strips loft's internal name encodings — a global fn is `n_<name>`, a method is
 /// `t_<LEN><Type>_<method>`, an operator is `Op<Name>` — to the name a reader would write.
-fn classify(data: &Data, d: u32) -> Option<(&'static str, String)> {
+///
+/// Public because it is the canonical "definition → (display kind, user name)" mapper: the
+/// LSP outline (`loft::lsp::outline`) reuses it so the name-decoding lives in exactly one place.
+#[must_use]
+pub fn classify(data: &Data, d: u32) -> Option<(&'static str, String)> {
     let def = data.def(d);
     let name = def.name.as_str();
     match def.def_type {

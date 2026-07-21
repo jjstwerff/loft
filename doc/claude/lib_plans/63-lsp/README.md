@@ -193,8 +193,19 @@ editor) so nothing silently regresses.
   range (`start (1,2) → end (1,6)` on `nope`), then edits clean and asserts the empty clear. The
   clean-buffer-clears assertion doubles as proof the stdlib resolved from the spawned binary.
   **Diagnostics-only is real value across every LSP editor — this is the shippable milestone.**
-- **S4 — outline.** `Data::file_symbols` (prereq #3) → `textDocument/documentSymbol`.
-  *Gate:* unit test on the symbol list; VS Code Outline shows the file's fn/struct/enum tree.
+- **S4 — outline — DONE.** `textDocument/documentSymbol` lists the buffer's top-level defs
+  (fn / method / struct / enum / typedef / constant / interface) in source order. The prereq #3
+  accessor shipped as `loft::lsp::outline(text, name, stdlib_dir) -> Vec<Symbol>` (not a `Data`
+  method — the fresh-parse recipe belongs with `diagnose`): enumerate `0..data.definitions()`,
+  keep `def.source == MAIN_SOURCE` and non-`synthetic`, and read the kind + decoded name from the
+  shared `api_surface::classify` (made `pub` — one home for the `n_`/`t_<LEN><Type>_`/`Op` name
+  decoding) plus `def.position`. Finding: the parser records a def's `position` at the BODY start
+  (past the name), so the LSP maps `range`/`selectionRange` to the name located on its declaration
+  line (`name_range`, from the buffer) — the Outline entry jumps to the name, not the `{`. Kind →
+  LSP `SymbolKind` (Struct 23, Function 12, Enum 10, …); advertises `documentSymbolProvider`.
+  *Gate:* `tests/lsp_outline.rs` (3 — kinds+order, excludes stdlib/variants/synthetics, empty) on
+  the lib accessor, and `tests/lsp_transport.rs::document_symbol_lists_the_outline` drives the real
+  binary and asserts the reply list + the `selectionRange` landing on `Point` (line 0, chars 7..12).
 - **S5 — hover.** `Data::symbol_at` (prereq #2 — a per-file position index built during
   parse) → `textDocument/hover` (type + signature + `///` doc). *Gate:* unit test on
   `symbol_at`; hovering a name shows its type.

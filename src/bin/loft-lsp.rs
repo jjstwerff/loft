@@ -77,6 +77,15 @@ fn main() {
                     send(&stdout, &publish_diagnostics(&uri, Vec::new()));
                 }
             }
+            ("textDocument/documentSymbol", Some(id)) => {
+                // Outline the CURRENTLY-OPEN buffer (never re-read from disk — the
+                // editor's copy is the source of truth).  Unknown doc → empty list.
+                let symbols = document_symbol_uri(&msg)
+                    .and_then(|uri| documents.get(&uri))
+                    .map(|text| document_symbols(text, &stdlib_dir))
+                    .unwrap_or_default();
+                send(&stdout, &response(id, Parsed::Array(symbols)));
+            }
             ("shutdown", Some(id)) => {
                 shutdown_requested = true;
                 send(&stdout, &response(id, Parsed::Null));
@@ -119,10 +128,7 @@ fn lsp_diagnostic(e: &DiagEntry, text: &str) -> Parsed {
     let line0 = e.line.saturating_sub(1);
     let col0 = e.col.saturating_sub(1);
     let end_col = col0 + token_len_at(text, line0, col0);
-    let range = obj(vec![
-        ("start", position(line0, col0)),
-        ("end", position(line0, end_col)),
-    ]);
+    let range = range_of(line0, col0, end_col);
     let mut fields = vec![
         ("range", range),
         ("severity", Parsed::Int(lsp_severity(e.level))),
@@ -171,12 +177,83 @@ fn position(line: u32, character: u32) -> Parsed {
     ])
 }
 
+/// An LSP `Range` on one line from `start_char` to `end_char` (all 0-based).
+fn range_of(line: u32, start_char: u32, end_char: u32) -> Parsed {
+    obj(vec![
+        ("start", position(line, start_char)),
+        ("end", position(line, end_char)),
+    ])
+}
+
 fn publish_diagnostics(uri: &str, diagnostics: Vec<Parsed>) -> Parsed {
     let params = obj(vec![
         ("uri", Parsed::Str(uri.into())),
         ("diagnostics", Parsed::Array(diagnostics)),
     ]);
     notification("textDocument/publishDiagnostics", params)
+}
+
+// ── outline / document symbols (S4) ──────────────────────────────────────────
+/// Outline the buffer `text`: map each top-level `loft::lsp::Symbol` to an LSP
+/// `DocumentSymbol`.  The parser labels the source with a fixed name (it only
+/// tags the internal filename; positions come from the buffer itself).
+fn document_symbols(text: &str, stdlib_dir: &str) -> Vec<Parsed> {
+    loft::lsp::outline(text, "buf.loft", stdlib_dir)
+        .iter()
+        .map(|s| lsp_document_symbol(s, text))
+        .collect()
+}
+
+/// One `Symbol` -> one LSP `DocumentSymbol`.  `range` and `selectionRange` both
+/// point at the NAME on its declaration line: the parser records a def's
+/// position at the body start (past the name), so — to make the Outline jump to
+/// the name — the name is located in the source line (`name_range`), with the
+/// recorded position as a fallback.
+fn lsp_document_symbol(sym: &loft::lsp::Symbol, text: &str) -> Parsed {
+    let range = name_range(text, sym);
+    obj(vec![
+        ("name", Parsed::Str(sym.name.clone())),
+        ("kind", Parsed::Int(symbol_kind(sym.kind))),
+        ("range", range.clone()),
+        ("selectionRange", range),
+    ])
+}
+
+/// LSP `SymbolKind` for a `classify` label.  Unknown labels fall back to
+/// Function (12) rather than dropping the symbol.
+fn symbol_kind(kind: &str) -> i64 {
+    match kind {
+        "struct" => 23,
+        "enum" => 10,
+        "method" => 6,
+        "constant" => 14,
+        "interface" => 11,
+        "operator" => 25,
+        "typedef" => 5, // no dedicated typedef kind; Class is the conventional fallback
+        _ => 12,        // "fn" and anything unrecognized
+    }
+}
+
+/// A `Range` covering the symbol's NAME on its declaration line.  The display
+/// name may be a method `Type.method`; the source token is the last dotted
+/// segment, so search for that.  Falls back to the parser's recorded position
+/// (never zero-width) when the name isn't found on the line.
+fn name_range(text: &str, sym: &loft::lsp::Symbol) -> Parsed {
+    let line0 = sym.line.saturating_sub(1);
+    let needle = sym.name.rsplit('.').next().unwrap_or(&sym.name);
+    if let Some(line) = text.lines().nth(line0 as usize)
+        && let Some(byte_idx) = line.find(needle)
+    {
+        let start = line[..byte_idx].chars().count() as u32;
+        let end = start + needle.chars().count() as u32;
+        return range_of(line0, start, end);
+    }
+    let col0 = sym.col.saturating_sub(1);
+    range_of(line0, col0, col0 + 1)
+}
+
+fn document_symbol_uri(msg: &Parsed) -> Option<String> {
+    obj_str(obj_get(obj_get(msg, "params")?, "textDocument")?, "uri")
 }
 
 // ── document-lifecycle param extraction ──────────────────────────────────────
@@ -329,7 +406,10 @@ fn initialize_result() -> Parsed {
         ("openClose", Parsed::Bool(true)),
         ("change", Parsed::Int(1)),
     ]);
-    let capabilities = obj(vec![("textDocumentSync", sync)]);
+    let capabilities = obj(vec![
+        ("textDocumentSync", sync),
+        ("documentSymbolProvider", Parsed::Bool(true)),
+    ]);
     let server_info = obj(vec![
         ("name", Parsed::Str(SERVER_NAME.into())),
         ("version", Parsed::Str(SERVER_VERSION.into())),
