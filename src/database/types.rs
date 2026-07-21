@@ -431,7 +431,7 @@ impl Stores {
                         // members the record packs tight.  The remaining 19 shapes
                         // need the fn-ref's READER converted off the stack-view
                         // offsets, not a better discriminator here.
-                        (sz, if tight && al < 8 { 1 } else { al })
+                        (sz, if tight { 1 } else { al })
                     })
                     .collect();
                 let offsets = crate::data::LinkedFieldGroup::group_member_offsets(&member_sa);

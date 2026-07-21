@@ -35,11 +35,10 @@ Measured today: `(u8,u32,u16)` strides at **7 bytes**, equal to the identical re
 
 ### Open
 
-1. **fn-ref width: DECIDED** — storage 4, stack 20, codegen narrows at the boundary;
-   no database or stack change (§ DECISION). Validated: with it, full tight packing
-   takes the oracle to **0 of 148**. Blocked only on the remaining 8-byte assumptions
-   in the fn-ref store/load path — narrowing the `RefTupleGet` read alone is not
-   enough. Bounded codegen work, no format change.
+1. ~~fn-ref width / full tightness~~ **DONE** — tuple layout matches the record on
+   **all 148 shapes**, and the oracle asserts it. The blocker was a reader looking for
+   a closure_rec field that tuple elements never have; the layout choosing the reader
+   fixed it without touching stack, database or schema.
 2. **Two par-worker readers still read storage bytes with stack offsets** —
    `parallel.rs:1568` (`read_tuple_at_wide`) and `generation/ops/parallel.rs:208`.
    Isolated, both backends, one commit each.
@@ -705,7 +704,36 @@ Neither the stack (20) nor the database (8, two fields) changes; that constraint
 **With this, full tight packing takes the oracle to 0 of 148.** The layout question is
 settled and correct.
 
-### Why full tightness is still OFF — the fn-ref needs a SECOND field
+### Full tightness is ON — the fn-ref reader was looking for a field that isn't there
+
+**Resolved, and NOT by registering the companion field.** `typedef.rs`'s
+`Type::Function` arm deliberately keeps tuple elements on the single-field layout —
+its comment says a closure_rec "would be wasted space and breaks layouts of containers
+(tuples) that pre-computed positions assuming 4B per fn-ref slot". So the schema was
+right; the READER was wrong.
+
+`parser/mod.rs` already had the correct guard, with a comment naming this exact
+failure — "the database has no `<attr>__closure_rec` half — reading at pos+4 would
+corrupt the next attribute" — but it required `f_nr != usize::MAX`, a real struct
+field. A tuple element reaches `get_val` directly (`u32::MAX`) and sailed past it into
+the split-layout read, fetching a closure_rec at `pos+4` that does not exist. Harmless
+while padding sat there; a collision with the next element once tuples pack tight.
+
+Fixed by making the layout choose the reader, with both answers explicit:
+
+- `get_val`'s `Function` arm is now the LEGACY read (4B `d_nr` + synthesised NULL
+  closure) — correct for tuple and vector elements, which is all that reaches it;
+- `read_fn_ref_split` is the SPLIT read, called only from the field site that knows
+  the attribute is split.
+
+Neither the stack (20B), the database (single 4B field for tuple elements), nor the
+schema changed — only which reader runs.
+
+**Result: oracle 0 of 148, and it is now an ASSERTION rather than an inventory.**
+
+<details><summary>the superseded "register the companion field" diagnosis</summary>
+
+### Why full tightness was OFF — the fn-ref needs a SECOND field
 
 Diagnosed by reading the emitted ops with tightness on:
 
@@ -732,6 +760,8 @@ narrower fix failed: the width was never the problem, the missing companion fiel
 its true 8 bytes by construction, full tightness is safe, and the oracle goes to 0.
 No stack change, no format change — the format already HAS two fields; the synthetic
 struct just isn't declaring the second.
+
+</details>
 
 
 <details><summary>the superseded 4-byte version of this decision</summary>
