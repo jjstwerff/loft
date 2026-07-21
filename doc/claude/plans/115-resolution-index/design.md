@@ -137,9 +137,13 @@ includes a byte-identical-IR check** (§ below). No step changes a parse decisio
   SOUND only for an assignment-local whose decl is captured (not a param; earliest
   occurrence is a `name =` write); params/loop/lambda binders fall back to F-v1.
   *Gate met:* unit + transport tests (field excluded; param/loop fall back); CLI
-  byte-identical to S3. **Follow-up:** record the missing declarations (param sig,
-  `for`/lambda binder) to make ALL locals precise and retire the fallback — deferred
-  as it touches the definition parser.
+  byte-identical to S3. **Follow-up (tail) DONE** for params, `for` binders, and
+  `fn(e: T)` lambdas: their declarations are now recorded (`Occurrence.declaration` +
+  a `pending_param_positions` side-table; the `for` binder's `var_nr` from
+  `parse_for_iter_setup`), so S4 takes the precise path for them — the param bailout
+  is gone. Byte-identical-off gate held at every site. Remaining (safe F-v1 fallback):
+  short `|x|` lambdas, `for` destructure / `#fields`, a param with a lambda default,
+  constants.
 - **S5 — hook globals + calls. ✅ DONE (`f24cd1c3`).** Record `Global(def_nr)` for a
   user free-function CALL (`n_<name>`) at `mod.rs::call`, after `find_fn` + generic-skip.
   *Reality-check vs the sketch:* methods resolve in `fields.rs` (not `call`) and

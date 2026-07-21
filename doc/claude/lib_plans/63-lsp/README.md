@@ -493,9 +493,14 @@ Steps, in dependency order:
   - **inlayHint (E)** — the originally-blocked feature, now shipping.
 
   loft is flat-scoped per function, so "shadowing / block scope" folded to per-occurrence
-  binding identity (no intra-fn shadowing exists). Remaining @PLN115 follow-ups (optional):
-  recording declarations made outside `parse_var` (param signatures, `for`/lambda binders) to
-  retire the S4 F-v1 fallback for those; and S6's exotic member paths.
+  binding identity (no intra-fn shadowing exists). **@PLN115 tail DONE:** declarations made
+  outside `parse_var` are now recorded for **parameters**, **`for` binders**, and **`fn(e: T)`
+  lambdas** (an `Occurrence.declaration` flag + a `pending_param_positions` side-table; the
+  `for` binder's `var_nr` from `parse_for_iter_setup`), so their references/rename take S4's
+  precise path — a same-named field is excluded, and a rename edits the signature/binder. The
+  byte-identical-off gate held at every site. Remaining (safe F-v1 fallback): short `|x|`
+  lambdas, `for` destructure / `#fields`, a param with a lambda default, constants; and S6's
+  exotic member paths.
 
 Smaller follow-ups (all DONE): workspace-index invalidation on `didSave`; `TagIndex` mtime refresh;
 **T4** tag completion; step-C in-scope locals + fuzzy ranking; the `#superseded`-steer codeAction

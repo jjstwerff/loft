@@ -118,13 +118,32 @@ S4 (precise local references/rename), S7 (inlayHint), and index-driven navigatio
 **Every resolution kind — Local, Global, Field, Method — now has a live LSP consumer:
 references, rename, inlayHint, go-to-definition, hover, semantic tokens, completion.**
 
-**Remaining follow-ups (optional, each its own step — the plan's goal is met):**
-- **Record the missing DECLARATIONS** (param signature, `for`/lambda binder,
-  constants) so params/loop-vars take S4's precise path and constants resolve —
-  retiring the S4 F-v1 fallback. Touches the definition parser (each site its own
-  byte-identical gate).
-- **Exotic member paths** in S6 (poly-enum, nullable-unwrap, bounded-T stub, vector
-  methods) — hook for full Field/Method coverage.
+**Tail — record the missing DECLARATIONS — DONE (params, `for`, long-lambda).** So
+that params / loop-vars / lambda params take S4's precise path (excluding a same-named
+field) instead of the F-v1 name-scan:
+- **`Occurrence.declaration` flag + `record_decl`** mark a binding's declaration, so
+  S4 confirms the declaration is captured (a complete rename) without the `name =`
+  text heuristic assignment-locals use.
+- **Parameters** — the signature name is recorded via a `pending_param_positions`
+  side-table (mirroring `pending_param_locks`): captured during `parse_arguments`,
+  recorded in `parse_function` once `self.context` is known. Param arg-index == var_nr
+  (pass 2 re-types params by index), so no `Argument` struct change.
+- **`for` binder** — `parse_for_iter_setup` returns the binder's `var_nr`; the simple
+  `for i in …` binder is recorded right after (destructure / `#fields` iteration stay
+  on F-v1).
+- **`fn(e: T)` lambda** — parses params through the same `parse_arguments`, so
+  `parse_lambda` consumes the same side-table.
+- **S4** takes the precise path when the binding has a recorded declaration (removing
+  the param bailout). Byte-identical-off gate held at every site
+  (`bytecode-comparisons/tail-corpus.loft`, empty diff both backends).
+
+Remaining tail gaps (each safe — no declaration → F-v1 fallback): **short `|x|`
+lambdas** (inline param parse, not via `parse_arguments`), **`for` destructure /
+`#fields`** binders, a **param with a lambda default** (the nested `parse_arguments`
+clears the side-table), and **constants**. Optional follow-ups.
+
+**Remaining (optional): exotic member paths** in S6 (poly-enum, nullable-unwrap,
+bounded-T stub, vector methods) — hook for full Field/Method coverage.
 
 This is the deferred FOUNDATION under @PLN63 (loft-lsp): every LSP feature that needs to
 know *what an identifier occurrence refers to* — not just its spelling — depends on it.
