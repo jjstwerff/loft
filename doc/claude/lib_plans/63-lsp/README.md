@@ -556,24 +556,106 @@ inspect locals, step.
 | `evaluate` | Evaluate a small loft expression in the current frame's scope (LSP.3 v1 only supports identifier / field-access / call). |
 | `disconnect` | Tear down the debuggee. |
 
-### Loft-side prerequisites
+### What is already built — loft-dap is a TRANSLATION, not a new debugger
 
-1. **In-process pause API.**  Today the interpreter runs to completion
-   (or panics).  Add a global `PauseFlag` checked at every opcode
-   dispatch in `src/state/mod.rs::execute`.  Set it from a separate
-   thread that owns the DAP socket.
-2. **Source-line breakpoint resolution.**  The codegen already records
-   `(opcode → loft_line)` mappings for crash reports.  Expose this as
-   a `Data::breakpoint_for(file, line) -> Vec<(d_nr, code_pos)>`
-   accessor.  Set the pause flag at the matching opcodes.
-3. **Variable formatter.**  Loft's `ShowDb::write` already produces
-   user-readable output for any `DbRef`.  Reuse it for the `variables`
-   reply, with a depth limit to avoid descending into cyclic
-   `vector<Reference>` graphs.
-4. **Conditional-breakpoint expression evaluator.**  Reuse the parser
-   on a single expression, lift it onto a synthetic frame with the
-   current locals as inputs.  ~M effort; v1 can refuse complex
-   expressions.
+The @PLN16 debug **engine** AND its wire protocol are shipped, so loft-dap adds almost
+no debug logic — it translates DAP ⇆ the existing loft-debug protocol:
+
+- **The engine** — breakpoints, conditions, stepping (in/over/out/continue), frame
+  capture + `eval` / `setValue`, watchpoints, undo/redo — is a host-agnostic
+  `ReplSession` / `State` API ([@PLN16](../../plans/16-debugger/README.md) A–F, M1–M5).
+- **The wire protocol** — a complete NDJSON request/response + event stream that is the
+  *sole* serialization of every debug capability — is LANDED (`loft debug --rpc`,
+  `src/rpc.rs`; [16.P PROTOCOL.md](../../plans/16-debugger/PROTOCOL.md)), with
+  `rpc::handle(session, line) -> (responses, disconnect)` as the one dispatch chokepoint
+  and `tests/rpc.rs` proving launch → setBreakpoints → run → stopped → eval → continue →
+  output → terminated end-to-end. The protocol was *designed as the DAP shape on
+  purpose* (request/response + async `stopped`/`output`/`terminated` events), so DAP is a
+  translation of it, never a redesign.
+
+**The DAP ⇆ loft-debug map is nearly 1:1:** DAP `setBreakpoints`/`stackTrace`/
+`evaluate`/`continue`/`disconnect` are the same-named RPC requests; DAP `next`/`stepIn`/
+`stepOut` → RPC `stepOver`/`stepIn`/`stepOut`; DAP `setVariable` → RPC `setValue`; the
+RPC `stopped`/`output`/`terminated` events → the DAP events of the same names. loft-dap
+holds a `ReplSession` in-process (like `run_rpc` does) and reuses `rpc::handle` — so **no
+child interpreter process and no port** (correcting the `launch` sketch below): the
+debuggee runs in the adapter, exactly as `loft debug --rpc` runs it.
+
+The DAP-specific work loft-dap actually adds: the `Content-Length` wire framing (reuse
+loft-lsp's), the DAP handshake (`initialize`/`initialized`/`configurationDone`), the DAP
+envelope (`seq` / `request_seq` / `type`), and synthesizing DAP's `threads → stackTrace →
+scopes → variables` drill-down (with `variablesReference`s) from the RPC's flat frame.
+
+### Build order — small, safe, incremental (mirrors the LSP.1 spine)
+
+Each step is independently landable, has its own protocol-level verify gate (a scripted
+harness, not a live editor), and grows the DAP surface as a thin translation over
+`rpc::handle`. loft-dap is a new binary in this repo (`src/bin/loft-dap.rs`) that links
+the `loft` rlib — the loft-lsp shape.
+
+- **D0 — DAP protocol harness (the instrument, first).** A driver that pipes
+  `Content-Length`-framed DAP JSON into `loft-dap`'s stdin and asserts its stdout /
+  events, so every step is CI-tested without an editor (mirror `tests/lsp_transport.rs`'s
+  `Session`). *Gate:* it drives an `initialize` handshake **and can fail** (feed a bad
+  reply, see it caught) — a harness that can't fail proves nothing.
+- **D1 — transport skeleton + handshake, no engine.** `initialize` (advertise
+  `supportsConfigurationDoneRequest`, `supportsConditionalBreakpoints`,
+  `supportsEvaluateForHovers`; NOT `supportsStepBack`) → `initialized` event →
+  `configurationDone` → `disconnect`. Reuse loft-lsp's framing; `seq`/`request_seq`
+  bookkeeping lives here. *Gate:* harness completes the handshake + clean exit; the DAP
+  envelope round-trips. Framing / seq bugs die here before any feature touches them.
+- **D2 — launch + run + terminated + output.** `launch {program, stopOnEntry?}` →
+  `ReplSession` launch + `run` (via `rpc::handle`) → a `stopped{reason:"entry"}` when
+  `stopOnEntry`, else run to end → `terminated` + `exited`. The program's `print` output
+  (RPC `output` events, captured off the protocol channel) → DAP `output` events. *Gate:*
+  launch a trivial program → `terminated`; with `stopOnEntry` → `stopped`. **First
+  end-to-end slice: a real program under the adapter.**
+- **D3 — breakpoints + stopped.** `setBreakpoints {source, breakpoints:[{line,
+  condition?}]}` → RPC `setBreakpoints` → `{breakpoints:[{verified, line}]}`; a hit →
+  `stopped{reason:"breakpoint", threadId:1}`. *Gate:* set a line breakpoint, run, assert
+  the stop fires at the right line (harness + real binary). **Breakpoint-stop is real
+  value across every DAP editor — the shippable milestone.**
+- **D4 — the inspection drill-down (threads / stackTrace / scopes / variables).**
+  `threads` → the single synthesized thread; `stackTrace` → RPC `stackTrace` frames → DAP
+  `StackFrame[]` (frameId); `scopes {frameId}` → `Locals` (+ `Arguments`) with a
+  `variablesReference`; `variables {variablesReference}` → the frame's locals
+  (name/value/type, already in the stopped frame). *Gate:* at a breakpoint, walk
+  threads→stackTrace→scopes→variables and assert the locals-panel content.
+- **D5 — stepping + continue.** `next`/`stepIn`/`stepOut` → RPC
+  `stepOver`/`stepIn`/`stepOut` → `stopped{reason:"step"}`; `continue` → RPC `continue`.
+  (`pause`: the RPC v1 has no async interrupt — advertise `supportsTerminateRequest`
+  instead and honour the `--max-steps` budget.) *Gate:* step over/in/out and assert each
+  stop lands on the expected line.
+- **D6 — evaluate + setVariable.** `evaluate {expression, frameId, context}` → RPC
+  `eval` → `{result, type}` (identifier / field-access / call, per the RPC); `setVariable`
+  / `setExpression` → RPC `setValue` → the updated frame. Conditional breakpoints already
+  ride D3's `condition`. *Gate:* evaluate at a breakpoint; set a variable and assert the
+  change is reflected.
+
+D0–D6 complete the loft-dap MVP (LSP.3). The Neovim / VS Code launch config
+(`dap.adapters.loft = { command = 'loft-dap' }`) then lights it up with zero adapter code
+(below). Every step ships behind the same three checks as LSP.1: a unit test (the RPC
+driver is already unit-tested), a harness test (DAP protocol side), and a real-editor smoke.
+
+### Loft-side prerequisites — MET by @PLN16 (the reason loft-dap is thin)
+
+All four are already shipped in the debug engine; loft-dap consumes them via
+`rpc::handle`, adding none of them itself:
+
+1. **Pause / step API — DONE.**  Not a global per-opcode `PauseFlag`: the engine uses
+   [`interpret_set`](../../plans/16-debugger/README.md) — only the functions on the path
+   to a breakpoint run interpreted (where the loop's breakpoint check lives), the rest
+   stay native/full-speed — so the cost is scoped to a debug session, not the whole
+   interpreter. `State::debug_step(Into/Over/Out/Continue)` drives it.
+2. **Source-line breakpoint resolution — DONE.**  `set_breakpoint_file_line` maps
+   `(file, line)` to the bytecode offsets and registers the pause; the RPC
+   `setBreakpoints` request already exposes it (idempotent per-file, DAP semantics).
+3. **Variable formatter — DONE.**  The stopped-frame `locals` are rendered to own-format
+   `value` strings (a bare heap local read live/in-place via `show_json`, D2), carried in
+   the `stopped` event and `stackTrace` — loft-dap forwards them.
+4. **Conditional-breakpoint evaluator — DONE.**  `setBreakpoints`'s `condition` runs
+   through the engine's driver-side resolve loop (@PLN16 rich-breakpoints, LANDED); DAP
+   passes the condition straight through.
 
 ### Multi-worker support
 
@@ -584,12 +666,11 @@ all (synchronous-stop semantics) so the user sees a consistent picture.
 
 ### Risks
 
-- **Pause-flag overhead.**  Checking a flag at every opcode dispatch
-  costs ~1 ns × 10^9 ops = 1 s of overhead in a tight loop.  Acceptable
-  during a debug session; needs a way to disable cleanly when no
-  debugger is attached.  Solution: feature-gate the check behind a
-  `#[cfg(feature = "dap")]` and ship two interpreter binaries (the
-  default release build has DAP support disabled).
+- **Pause-flag overhead — already solved (no new gate).**  The original worry — a global
+  per-opcode flag costing ~1 s in a tight loop — does not apply: the shipped engine scopes
+  the breakpoint check to the `interpret_set` (only the functions needed to reach the
+  breakpoint run interpreted; everything else stays native), so a non-debug run pays
+  nothing and no `#[cfg(feature = "dap")]` split is needed.
 - **Breakpoint timing.**  A breakpoint set "before" the function is
   parsed (e.g. on a library file the program hasn't reached yet) needs
   to be applied retroactively.  Solution: keep a `pending_breakpoints`
