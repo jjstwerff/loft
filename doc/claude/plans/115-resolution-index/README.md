@@ -99,11 +99,19 @@ S4 (precise local references/rename), S7 (inlayHint), and index-driven navigatio
   unresolvable by name lookup), globals position-precise. Pure consumer — CLI
   byte-identical. Tested unit + end-to-end (local use → its decl; method → stdlib).
 
-**Remaining follow-ups (optional enhancements, each its own step — the plan's goal is
-already met):**
-- **Method find-references** (`text.len` excludes `vector.len`). Needs a
-  resolution-aware WorkspaceIndex (methods are workspace-wide across files), so it is
-  its own step, not an unsound single-file cut.
+- **Method find-references** (`925349e2`) — `lsp::method_refs` resolves the method
+  under the cursor and returns every occurrence of THAT method across the workspace,
+  keyed on the mangled method name (`t_<len><Type>_<method>`, stable across parses); so
+  `text.len` references exclude a same-spelled `vector.len`. Each `.loft` file is parsed
+  with the index (open buffers overlaid); the references handler tries it after the
+  local path, before the global name-scan. On-demand cost (parse per file), not
+  per-keystroke. Limitation: a cross-file USER method the calling file doesn't import
+  isn't found (under-match, never over-match). Tested unit + cross-file transport.
+
+**Every resolution kind — Local, Global, Field, Method — now has a live LSP consumer:
+references, rename, inlayHint, go-to-definition, hover.**
+
+**Remaining follow-ups (optional, each its own step — the plan's goal is met):**
 - **Record the missing DECLARATIONS** (param signature, `for`/lambda binder,
   constants) so params/loop-vars take S4's precise path and constants resolve —
   retiring the S4 F-v1 fallback. Touches the definition parser (each site its own
