@@ -84,6 +84,101 @@
           "size": 4813,
           "subpath": "arguments",
           "url": "https://github.com/loft-lang/loft-libs-core/releases/download/arguments-v0.1.3/arguments-0.1.3.tar.gz"
+        },
+        "0.2.0": {
+          "api": [
+            {
+              "doc": "",
+              "sig": "pub fn create(name: text, version: text, description: text) -> Args"
+            },
+            {
+              "doc": "A boolean flag (`--verbose` / `-v`).",
+              "sig": "pub fn flag(self: Args, opt_short: text, opt_long: text, desc: text)"
+            },
+            {
+              "doc": "An optional value option (`--output FILE`).  `arg_name` is the metavar shown in help.",
+              "sig": "pub fn option(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)"
+            },
+            {
+              "doc": "A required value option: `parse` fails if it is absent.",
+              "sig": "pub fn required(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)"
+            },
+            {
+              "doc": "An optional-argument option: its value attaches only via `=` / glued form\n(`--color=auto`, `-cauto`); given bare (`--color`) it is present with value \"\".",
+              "sig": "pub fn optional(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)"
+            },
+            {
+              "doc": "Set the positional synopsis for the usage line (e.g. \"[FILE...]\").",
+              "sig": "pub fn set_usage(self: Args, synopsis: text)"
+            },
+            {
+              "doc": "Set the \"Report bugs to <addr>.\" help footer.",
+              "sig": "pub fn set_bug_address(self: Args, address: text)"
+            },
+            {
+              "doc": "Set free text printed after the option list in help.",
+              "sig": "pub fn set_epilog(self: Args, epilog: text)"
+            },
+            {
+              "doc": "Opt-in: register `--help`/`-h` and `--version`/`-V` (short forms only when free),\nso `parse` records `--help`/`--version` and `help()` lists them.  Nothing is\nauto-printed — the caller checks `wants_help()` / `wants_version()`.",
+              "sig": "pub fn enable_help(self: Args)"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn parse(self: Args, argv: vector<text>) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn has(self: Args, name: text) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn get(self: Args, name: text) -> text?"
+            },
+            {
+              "doc": "The option's value, or `fallback` when unset.",
+              "sig": "pub fn get_or(self: Args, name: text, fallback: text) -> text"
+            },
+            {
+              "doc": "The option's value parsed as an integer, or null when unset or non-numeric.",
+              "sig": "pub fn get_int(self: Args, name: text) -> integer?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn ok(self: Args) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn error_msg(self: Args) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn wants_help(self: Args) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn wants_version(self: Args) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn version_text(self: Args) -> text"
+            },
+            {
+              "doc": "The GNU \"Try '<prog> --help' …\" hint to print alongside a parse error.",
+              "sig": "pub fn try_help(self: Args) -> text"
+            },
+            {
+              "doc": "Render a GNU-format help screen from the declared options.",
+              "sig": "pub fn help(self: Args) -> text"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-21T06:35:48Z",
+          "sha256": "48e630689af512c7f7cabc47a93d590ab00a96cb119a54af760c6bb09ff7ad39",
+          "size": 9319,
+          "subpath": "arguments",
+          "url": "https://github.com/loft-lang/loft-libs-core/releases/download/arguments-v0.2.0/arguments-0.2.0.tar.gz"
         }
       },
       "yanked": []
@@ -484,6 +579,544 @@
           "size": 89495,
           "subpath": "graphics",
           "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.4.3/graphics-0.4.3.tar.gz"
+        },
+        "0.5.0": {
+          "api": [
+            {
+              "doc": "Pack RGBA channels into a single integer using bitwise ops.\nLayout: bits 24..31 = alpha, 16..23 = red, 8..15 = green, 0..7 = blue.\nLoft integers are 64-bit signed post-2c, so the packed value fits\ndirectly — no widening cast needed.",
+              "sig": "pub fn rgba(cr: integer, cg: integer, cb: integer, ca: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn rgb(cr: integer, cg: integer, cb: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn color_r(color: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn color_g(color: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn color_b(color: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn color_a(color: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct Canvas"
+            },
+            {
+              "doc": "Create a canvas filled with a solid color.",
+              "sig": "pub fn canvas(cw: integer, ch: integer, fill_color: integer) -> Canvas"
+            },
+            {
+              "doc": "Get pixel color at (x, y). Returns 0 if out of bounds.",
+              "sig": "pub fn get_pixel(self: const Canvas, gx: integer, gy: integer) -> integer"
+            },
+            {
+              "doc": "Set pixel color at (x, y). No-op if out of bounds.",
+              "sig": "pub fn set_pixel(self: Canvas, sx: integer, sy: integer, color: integer)"
+            },
+            {
+              "doc": "Fill the entire canvas with a solid color.",
+              "sig": "pub fn clear(self: Canvas, color: integer)"
+            },
+            {
+              "doc": "Alpha-blend src over dst. Both are 0xAARRGGBB packed integers.\nUses standard \"src over\" compositing: out = src * alpha + dst * (1 - alpha).",
+              "sig": "pub fn blend(dst: integer, src: integer) -> integer"
+            },
+            {
+              "doc": "Draw a pixel with alpha blending at (x, y).",
+              "sig": "pub fn blend_pixel(self: Canvas, bx: integer, by: integer, color: integer)"
+            },
+            {
+              "doc": "Fill a rectangle with a solid color. Clipped to canvas bounds.",
+              "sig": "pub fn fill_rect(self: Canvas, rx: integer, ry: integer, rw: integer, rh: integer, color: integer)"
+            },
+            {
+              "doc": "Draw a horizontal line from (x0, y) to (x1, y). Clipped.",
+              "sig": "pub fn hline(self: Canvas, hx0: integer, hx1: integer, hy: integer, color: integer)"
+            },
+            {
+              "doc": "Draw a vertical line from (x, y0) to (x, y1). Clipped.",
+              "sig": "pub fn vline(self: Canvas, vx: integer, vy0: integer, vy1: integer, color: integer)"
+            },
+            {
+              "doc": "Draw a rectangle outline (1px border). Clipped.",
+              "sig": "pub fn draw_rect(self: Canvas, drx: integer, dry: integer, drw: integer, drh: integer, color: integer)"
+            },
+            {
+              "doc": "Draw a line from (x0, y0) to (x1, y1) using Bresenham's algorithm.\nHandles all octants. Each pixel is set (no blending).",
+              "sig": "pub fn draw_line(self: Canvas, lx0: integer, ly0: integer, lx1: integer, ly1: integer, color: integer)"
+            },
+            {
+              "doc": "Draw a circle outline using the midpoint algorithm.\nCenter at (cx, cy) with the given radius. Clipped via set_pixel.",
+              "sig": "pub fn draw_circle(self: Canvas, ccx: integer, ccy: integer, radius: integer, color: integer)"
+            },
+            {
+              "doc": "Fill a circle (solid disk). Center at (cx, cy), given radius.",
+              "sig": "pub fn fill_circle(self: Canvas, fcx: integer, fcy: integer, radius: integer, color: integer)"
+            },
+            {
+              "doc": "Fill an axis-aligned ellipse (solid). Center (cx, cy), radii (rx, ry).",
+              "sig": "pub fn fill_ellipse(self: Canvas, fex: integer, fey: integer, ferx: integer, fery: integer, color: integer)"
+            },
+            {
+              "doc": "Draw an axis-aligned ellipse outline. Center (cx, cy), radii (rx, ry).",
+              "sig": "pub fn draw_ellipse(self: Canvas, ecx: integer, ecy: integer, erx: integer, ery: integer, color: integer)"
+            },
+            {
+              "doc": "Draw a cubic Bezier curve from (bx0,by0) to (bx3,by3) with control points\n(bx1,by1) and (bx2,by2). Uses adaptive subdivision — splits until segments\nare flat enough, then draws with Bresenham lines.\nFlatness threshold: max deviation of control points from the chord.",
+              "sig": "pub fn draw_bezier(self: Canvas, bx0: integer, by0: integer, bx1: integer, by1: integer, bx2: integer, by2: integer, bx3: integer, by3: integer, color: integer)"
+            },
+            {
+              "doc": "Draw an anti-aliased line using Xiaolin Wu's algorithm.\nUses blend_pixel for sub-pixel coverage.",
+              "sig": "pub fn draw_aa_line(self: Canvas, ax0: integer, ay0: integer, ax1: integer, ay1: integer, color: integer)"
+            },
+            {
+              "doc": "Fill a triangle with vertices (tx0,ty0), (tx1,ty1), (tx2,ty2).\nUses flat-top/flat-bottom decomposition with scanline fill.",
+              "sig": "pub fn fill_triangle(self: Canvas, tx0: integer, ty0: integer, tx1: integer, ty1: integer, tx2: integer, ty2: integer, color: integer)"
+            },
+            {
+              "doc": "Save canvas as a PNG file. Automatically uses RGBA if any pixel has alpha < 255,\notherwise uses RGB. Returns true on success.",
+              "sig": "pub fn save_png(self: const Canvas, path: text) -> boolean"
+            },
+            {
+              "doc": "Capture the current GL back-buffer to an RGB PNG.  Call after a frame's\ndraw calls and BEFORE gl_swap_buffers (reads GL_BACK).  Works on a\nheadless / Wayland desktop where the window itself can't be grabbed.",
+              "sig": "pub fn gl_screenshot(width: integer, height: integer, path: text) -> boolean"
+            },
+            {
+              "doc": "Create a window with an OpenGL 3.3 context. Returns true on success.",
+              "sig": "pub fn gl_create_window(width: integer, height: integer, title: text) -> boolean"
+            },
+            {
+              "doc": "Open a borderless fullscreen window at the primary monitor's native\nresolution. Returns true on success. Read the actual viewport size\nafterwards with `gl_window_width` / `gl_window_height` if you need\nto set up an aspect-aware camera.",
+              "sig": "pub fn gl_create_fullscreen_window(title: text) -> boolean"
+            },
+            {
+              "doc": "Toggle fullscreen on the existing window (runtime flip, cheaper\nthan recreating the GL context — textures / VAOs / shaders\nsurvive).  Pass `true` for borderless fullscreen, `false` for\nwindowed.  Browsers (WASM) require a user gesture to enter\nfullscreen; calling outside one is non-fatal.",
+              "sig": "pub fn gl_set_fullscreen(on: boolean)"
+            },
+            {
+              "doc": "Current window inner size in physical pixels.  Query after creating a\n(especially fullscreen) window so projection / 2D ortho / overlays use\nthe real resolution rather than a windowed hint.",
+              "sig": "pub fn gl_window_width() -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn gl_window_height() -> integer"
+            },
+            {
+              "doc": "Poll window events. Returns false when the window should close.",
+              "sig": "pub fn gl_poll_events() -> boolean"
+            },
+            {
+              "doc": "Swap buffers (present the frame).",
+              "sig": "pub fn gl_swap_buffers()"
+            },
+            {
+              "doc": "Clear the screen with an RGBA color (packed as 0xRRGGBBAA).",
+              "sig": "pub fn gl_clear(color: integer)"
+            },
+            {
+              "doc": "Destroy the window and OpenGL context.",
+              "sig": "pub fn gl_destroy_window()"
+            },
+            {
+              "doc": "Compile and link a shader program. Returns the program ID (0 on failure).",
+              "sig": "pub fn gl_create_shader(vertex_source: text, fragment_source: text) -> integer"
+            },
+            {
+              "doc": "Use a shader program for subsequent draw calls.",
+              "sig": "pub fn gl_use_shader(program: integer)"
+            },
+            {
+              "doc": "Draw a VAO with vertex_count vertices as triangles.",
+              "sig": "pub fn gl_draw(vao: integer, vertex_count: integer)"
+            },
+            {
+              "doc": "Upload a vector<single> as a vertex buffer. Returns VAO handle.\nstride = floats per vertex (3=pos, 6=pos+normal, 10=pos+normal+color).\nNative codegen: loft_gl_upload_vertices(data_ptr: *const f32, count: u32, stride: i32) -> i32",
+              "sig": "pub fn gl_upload_vertices(data: vector<single>, stride: integer) -> integer"
+            },
+            {
+              "doc": "Upload per-instance data to a DYNAMIC_DRAW buffer. Returns the VBO handle\n(pass it to gl_instance_attrib). DYNAMIC because instances change per frame.",
+              "sig": "pub fn gl_upload_instance_buffer(data: vector<single>) -> integer"
+            },
+            {
+              "doc": "Bind instance VBO `ivbo`'s field to attribute `location` on `vao`, advancing\nonce per INSTANCE (VertexAttribDivisor=1). components = floats in the field\n(2=vec2, 4=vec4); stride_floats = floats per instance record; offset_floats =\nthis field's start within the record. Use locations >=5 to clear the vertex attrs.",
+              "sig": "pub fn gl_instance_attrib(vao: integer, ivbo: integer, location: integer, components: integer, stride_floats: integer, offset_floats: integer)"
+            },
+            {
+              "doc": "Draw vertex_count vertices of `vao` as triangles, instance_count times.",
+              "sig": "pub fn gl_draw_instanced(vao: integer, vertex_count: integer, instance_count: integer)"
+            },
+            {
+              "doc": "Orphan + re-upload an existing VBO (returned by gl_upload_vertices /\ngl_upload_instance_buffer) with new data, DYNAMIC_DRAW — per-frame updates\nwithout recreating the buffer.",
+              "sig": "pub fn gl_update_buffer(vbo: integer, data: vector<single>)"
+            },
+            {
+              "doc": "Upload triangle indices as an element (index) buffer bound to `vao`, so\ngl_draw_elements(vao, index_count, mode) draws indexed. Returns the EBO handle.",
+              "sig": "pub fn gl_upload_indices(vao: integer, data: vector<integer>) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct GroupVboSet"
+            },
+            {
+              "doc": "Create an empty set for a fixed vertex stride + draw mode.",
+              "sig": "pub fn group_vbos_new(stride: integer, draw_mode: integer) -> GroupVboSet"
+            },
+            {
+              "doc": "Upload (or RE-upload) one group's baked vertices: delete the group's old VAO\nif present, upload the new data, and record the handle + vertex count + world\nbounds.  Call this only for the DIRTY groups each edit; untouched groups keep\ntheir cached VBOs.",
+              "sig": "pub fn group_vbos_upsert(set: GroupVboSet, gk: integer, verts: vector<single>,"
+            },
+            {
+              "doc": "Draw every group's cached VBO with the set's draw mode.  (Per-group frustum\nculling — skip groups whose world bounds fall outside the view — is a future\naddition; the bounds are already stored.)",
+              "sig": "pub fn group_vbos_draw_all(set: GroupVboSet)"
+            },
+            {
+              "doc": "Free every group's VAO and clear the set (call on teardown / world reset).",
+              "sig": "pub fn group_vbos_destroy(set: GroupVboSet)"
+            },
+            {
+              "doc": "Set a mat4 uniform on a shader program. mat is a Mat4.m vector (16 floats).\nNative codegen: loft_gl_set_mat4(program: i32, name_ptr, name_len, mat_ptr: *const f64, count: u32)",
+              "sig": "pub fn gl_set_uniform_mat4(program: integer, name: text, mat: vector<float>)"
+            },
+            {
+              "doc": "Set a float uniform.",
+              "sig": "pub fn gl_set_uniform_float(program: integer, name: text, val: float)"
+            },
+            {
+              "doc": "Set an integer uniform (also used for sampler2D texture unit bindings).",
+              "sig": "pub fn gl_set_uniform_int(program: integer, name: text, val: integer)"
+            },
+            {
+              "doc": "Set a vec2 uniform (e.g. screen size, texel size, a 2D offset).",
+              "sig": "pub fn gl_set_uniform_vec2(program: integer, name: text, x: float, y: float)"
+            },
+            {
+              "doc": "Set a vec3 uniform (e.g. light position, color).",
+              "sig": "pub fn gl_set_uniform_vec3(program: integer, name: text, x: float, y: float, z: float)"
+            },
+            {
+              "doc": "Set a vec4 uniform (e.g. an RGBA color, a rect x/y/w/h).",
+              "sig": "pub fn gl_set_uniform_vec4(program: integer, name: text, x: float, y: float, z: float, w: float)"
+            },
+            {
+              "doc": "Enable a GL capability (GL_DEPTH_TEST, GL_BLEND, GL_CULL_FACE, GL_SCISSOR_TEST).",
+              "sig": "pub fn gl_enable(cap: integer)"
+            },
+            {
+              "doc": "Disable a GL capability.",
+              "sig": "pub fn gl_disable(cap: integer)"
+            },
+            {
+              "doc": "Set blend function (e.g. gl_blend_func(BLEND_SRC_ALPHA, BLEND_ONE_MINUS_SRC_ALPHA)).",
+              "sig": "pub fn gl_blend_func(src: integer, dst: integer)"
+            },
+            {
+              "doc": "Set which face to cull (0=back, 1=front).",
+              "sig": "pub fn gl_cull_face(face: integer)"
+            },
+            {
+              "doc": "Enable/disable depth buffer writing.",
+              "sig": "pub fn gl_depth_mask(write: boolean)"
+            },
+            {
+              "doc": "Set the viewport rectangle (used for FBO render passes).",
+              "sig": "pub fn gl_viewport(x: integer, y: integer, w: integer, h: integer)"
+            },
+            {
+              "doc": "Set the scissor box — clips rendering to this rect (origin bottom-left, like\nthe viewport). Takes effect only while gl_enable(GL_SCISSOR_TEST) is set; use\nit for partial-damage redraw (re-render just a changed region).",
+              "sig": "pub fn gl_scissor(x: integer, y: integer, w: integer, h: integer)"
+            },
+            {
+              "doc": "Create a framebuffer object. Returns FBO handle.",
+              "sig": "pub fn gl_create_framebuffer() -> integer"
+            },
+            {
+              "doc": "Bind a framebuffer (0 = default screen framebuffer).",
+              "sig": "pub fn gl_bind_framebuffer(fbo: integer)"
+            },
+            {
+              "doc": "Attach a texture to an FBO (attachment: 0=color, 1=depth).",
+              "sig": "pub fn gl_framebuffer_texture(fbo: integer, attachment: integer, tex: integer)"
+            },
+            {
+              "doc": "Create a depth-only texture for shadow mapping.",
+              "sig": "pub fn gl_create_depth_texture(width: integer, height: integer) -> integer"
+            },
+            {
+              "doc": "Create an empty RGBA texture for render-to-texture.",
+              "sig": "pub fn gl_create_color_texture(width: integer, height: integer) -> integer"
+            },
+            {
+              "doc": "Set a texture's filtering: nearest = crisp pixel-art, else linear/smooth.",
+              "sig": "pub fn gl_texture_filter(tex: integer, nearest: boolean)"
+            },
+            {
+              "doc": "Generate mipmaps + trilinear minification for `tex` (after its pixels are\nuploaded) — keeps minified sprites / atlas pages clean.",
+              "sig": "pub fn gl_generate_mipmap(tex: integer)"
+            },
+            {
+              "doc": "Upload a sub-region of RGBA pixels (Canvas data, 0xAARRGGBB) into an existing\ntexture at (x,y) sized w*h — incremental atlas packing without re-uploading.",
+              "sig": "pub fn gl_texture_subimage(tex: integer, x: integer, y: integer, w: integer, h: integer, data: vector<integer>)"
+            },
+            {
+              "doc": "Draw a fullscreen quad (for post-processing). Uses built-in VAO with UV coords.\nVertex shader receives: layout(location=0) vec2 aPos, layout(location=1) vec2 aUV.",
+              "sig": "pub fn gl_draw_fullscreen_quad()"
+            },
+            {
+              "doc": "Draw a VAO with explicit mode (DRAW_TRIANGLES, DRAW_LINES, DRAW_POINTS).",
+              "sig": "pub fn gl_draw_mode(vao: integer, vertex_count: integer, mode: integer)"
+            },
+            {
+              "doc": "Draw using an index buffer (EBO). mode: DRAW_TRIANGLES, DRAW_LINES, DRAW_POINTS.",
+              "sig": "pub fn gl_draw_elements(vao: integer, index_count: integer, mode: integer)"
+            },
+            {
+              "doc": "Set line width for DRAW_LINES rendering.",
+              "sig": "pub fn gl_line_width(width: float)"
+            },
+            {
+              "doc": "Set point size for DRAW_POINTS rendering.",
+              "sig": "pub fn gl_point_size(size: float)"
+            },
+            {
+              "doc": "Returns true if the key is currently pressed (use KEY_* constants).",
+              "sig": "pub fn gl_key_pressed(key_code: integer) -> boolean"
+            },
+            {
+              "doc": "Mouse position X (pixels from left edge of window).",
+              "sig": "pub fn gl_mouse_x() -> float"
+            },
+            {
+              "doc": "Mouse position Y (pixels from top edge of window).",
+              "sig": "pub fn gl_mouse_y() -> float"
+            },
+            {
+              "doc": "Mouse button bitmask: 1=left, 2=right, 4=middle.",
+              "sig": "pub fn gl_mouse_button() -> integer"
+            },
+            {
+              "doc": "Scroll-wheel delta accumulated since the last call (positive = up).\nReset on read.  Use per-frame to drive the editor's `InputState.in_wheel`\nor any other scroll-driven UI.  Pixel-delta trackpad scrolling is\nquantised at 20 px/line.",
+              "sig": "pub fn gl_mouse_wheel() -> integer"
+            },
+            {
+              "doc": "Pop the next queued input event and latch it; returns its EV_* tag, or\nEV_NONE when the queue is drained.  Call after gl_poll_events().",
+              "sig": "pub fn gl_next_event() -> integer"
+            },
+            {
+              "doc": "Named/keycode of the latched key event (the KEY_* constants).",
+              "sig": "pub fn gl_event_key() -> integer"
+            },
+            {
+              "doc": "Modifier bitmask of the latched event (MOD_SHIFT | MOD_CTRL | MOD_ALT | MOD_SUPER).",
+              "sig": "pub fn gl_event_mods() -> integer"
+            },
+            {
+              "doc": "True if the latched key-down is an auto-repeat.",
+              "sig": "pub fn gl_event_repeat() -> boolean"
+            },
+            {
+              "doc": "UTF-8 text of the latched EV_TEXT event (\"\" otherwise).",
+              "sig": "pub fn gl_event_text() -> text"
+            },
+            {
+              "doc": "X position (pixels) of the latched mouse/touch event; width for EV_RESIZE.",
+              "sig": "pub fn gl_event_x() -> float"
+            },
+            {
+              "doc": "Y position (pixels) of the latched mouse/touch event; height for EV_RESIZE.",
+              "sig": "pub fn gl_event_y() -> float"
+            },
+            {
+              "doc": "Button of the latched mouse event (1=left, 2=right, 4=middle).",
+              "sig": "pub fn gl_event_button() -> integer"
+            },
+            {
+              "doc": "Wheel delta of the latched EV_WHEEL event (positive = up).",
+              "sig": "pub fn gl_event_wheel() -> integer"
+            },
+            {
+              "doc": "Stable finger id of the latched EV_TOUCH_* event.",
+              "sig": "pub fn gl_event_touch_id() -> integer"
+            },
+            {
+              "doc": "Load a font from a file path. Returns a font handle (>= 0) or null on error.",
+              "sig": "pub fn gl_load_font(path: text) -> integer"
+            },
+            {
+              "doc": "Measure text width in pixels at the given font size.",
+              "sig": "pub fn gl_measure_text(font: integer, content: text, size: float) -> float"
+            },
+            {
+              "doc": "Return the line height in pixels for a font at the given size.",
+              "sig": "pub fn gl_text_height(font: integer, size: float) -> integer"
+            },
+            {
+              "doc": "@P340: return the font ASCENT in pixels (baseline -> top of glyphs) from the\nfont's real metrics.  gl_draw_text(x, y) anchors by the TOP, placing the\nbaseline at y + gl_font_ascent(font, size); to baseline-align mixed sizes,\ndraw each at y = baseline - gl_font_ascent(font, size_i).",
+              "sig": "pub fn gl_font_ascent(font: integer, size: float) -> float"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn draw_text(self: Canvas, font: integer, content: text, size: float,"
+            },
+            {
+              "doc": "Load an image file (PNG, JPG) and upload it as a GL texture.\nReturns the texture ID (0 on failure).",
+              "sig": "pub fn gl_load_texture(path: text) -> integer"
+            },
+            {
+              "doc": "Upload Canvas pixel data as a GL texture. Returns the texture ID.\nConverts 0xAARRGGBB packed integers to RGBA bytes for OpenGL.",
+              "sig": "pub fn gl_upload_canvas(data: vector<integer>, width: integer, height: integer) -> integer"
+            },
+            {
+              "doc": "Bind a texture to a texture unit (0-based) for rendering.",
+              "sig": "pub fn gl_bind_texture(texture_id: integer, unit: integer)"
+            },
+            {
+              "doc": "Delete a texture.",
+              "sig": "pub fn gl_delete_texture(texture_id: integer)"
+            },
+            {
+              "doc": "Delete a shader program.",
+              "sig": "pub fn gl_delete_shader(program: integer)"
+            },
+            {
+              "doc": "Delete a vertex array object.",
+              "sig": "pub fn gl_delete_vao(vao: integer)"
+            },
+            {
+              "doc": "Delete a framebuffer object.",
+              "sig": "pub fn gl_delete_framebuffer(fbo: integer)"
+            },
+            {
+              "doc": "A sprite sheet backed by a Canvas atlas uploaded as a GL texture.\nSprites are arranged in a grid of `ss_cols` x `ss_rows` cells.",
+              "sig": "pub struct SpriteSheet"
+            },
+            {
+              "doc": "Create a sprite sheet from a Canvas atlas.\nThe canvas is divided into a grid of `cols` x `rows` cells.\nSprite index 0 is top-left, incrementing left-to-right then top-to-bottom.",
+              "sig": "pub fn create_sprite_sheet(atlas: const Canvas, cols: integer, rows: integer, vao: integer) -> SpriteSheet"
+            },
+            {
+              "doc": "Draw sprite at `index` (0-based, row-major).\n`mvp` is the pre-multiplied projection * model matrix (16 singles).\nThe caller builds the MVP for the desired screen position and size.",
+              "sig": "pub fn draw_sprite(sheet: const SpriteSheet, mvp: const vector<float>, sp_idx: integer)"
+            },
+            {
+              "doc": "A 2D painter bundling shaders, a unit-quad VAO, and an orthographic\nprojection. Create once per window with `create_painter_2d`, then use\n`draw_rect_at`, `draw_sprite_at`, and `draw_texture_at` to render.",
+              "sig": "pub struct Painter2D"
+            },
+            {
+              "doc": "Create a Painter2D for a window of size `screen_w` x `screen_h`.\nCompiles the flat and textured shaders, uploads the unit-quad VAO, and\nbuilds an orthographic projection with the origin at the top-left.\nCall once after `gl_create_window`.",
+              "sig": "pub fn create_painter_2d(screen_w: float, screen_h: float) -> Painter2D"
+            },
+            {
+              "doc": "Return the unit-quad VAO owned by the painter, so it can be shared with\n`create_sprite_sheet` instead of uploading a second copy.",
+              "sig": "pub fn painter_vao(self: const Painter2D) -> integer"
+            },
+            {
+              "doc": "Draw a filled rectangle at screen position (x, y) with size (w, h).\nColour channels are in 0.0..1.0. Uses the painter's flat-color shader.",
+              "sig": "pub fn draw_rect_at(painter: const Painter2D, x: float, y: float, w: float, h: float,"
+            },
+            {
+              "doc": "Draw a sprite from `sheet` at screen position (x, y) with size (w, h).\n`sp_idx` is the 0-based sprite index (row-major) in the sheet.\nThis is a one-liner replacement for `make_mvp` + `draw_sprite`.",
+              "sig": "pub fn draw_sprite_at(sheet: const SpriteSheet, painter: const Painter2D,"
+            },
+            {
+              "doc": "Draw an arbitrary GL texture as a screen-space quad at (x, y, w, h).\nUses the painter's textured shader, which flips V to match canvas origin.\nSuitable for textures created with `create_text_texture` or `gl_upload_canvas`.",
+              "sig": "pub fn draw_texture_at(painter: const Painter2D, tex: integer,"
+            },
+            {
+              "doc": "Rasterize `content` with `font` at `size` pixels, upload the glyph bitmap\nas a GL texture, and return the texture ID. The texture is sized to fit\nthe measured text plus a small padding; pair with `draw_texture_at` to\nrender. Caller owns the texture — call `gl_delete_texture` when done.\nReturns 0 if the text cannot be measured.",
+              "sig": "pub fn create_text_texture(font: integer, content: text, size: float, color: integer) -> integer"
+            },
+            {
+              "doc": "Load an audio clip (WAV or OGG). Returns handle (>= 0) or null on failure.",
+              "sig": "pub fn audio_load(path: text) -> integer"
+            },
+            {
+              "doc": "Play a loaded clip at the given volume (0.0-1.0). Returns playback handle.",
+              "sig": "pub fn audio_play(clip: integer, volume: float) -> integer"
+            },
+            {
+              "doc": "Stop a playing clip by its playback handle.",
+              "sig": "pub fn audio_stop(sink: integer)"
+            },
+            {
+              "doc": "Set volume of a playing clip (0.0-1.0).",
+              "sig": "pub fn audio_set_volume(sink: integer, volume: float)"
+            },
+            {
+              "doc": "Play raw PCM samples (mono, values -1.0 to 1.0) at the given sample rate.\nReturns playback handle, or null on failure.",
+              "sig": "pub fn audio_play_raw(samples: vector<single>, sample_rate: integer, volume: float) -> integer"
+            },
+            {
+              "doc": "Short percussive beep — brick hit, UI click.",
+              "sig": "pub fn sfx_beep(sb_freq: single, sb_dur: single, sb_vol: single) -> integer"
+            },
+            {
+              "doc": "Descending tone — life lost, negative event.",
+              "sig": "pub fn sfx_descend(sd_f0: single, sd_f1: single, sd_dur: single, sd_vol: single) -> integer"
+            },
+            {
+              "doc": "Rising chirp — pickup collected, positive event.",
+              "sig": "pub fn sfx_chirp(sc_f0: single, sc_f1: single, sc_dur: single, sc_vol: single) -> integer"
+            },
+            {
+              "doc": "White noise burst — percussion, explosion, brick break.",
+              "sig": "pub fn sfx_noise(sn_dur: single, sn_vol: single) -> integer"
+            },
+            {
+              "doc": "Paddle bounce — low square wave thud with pitch drop.",
+              "sig": "pub fn sfx_bounce(sp_freq: single, sp_vol: single) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct Renderer"
+            },
+            {
+              "doc": "Create a renderer with a window.  Compiles built-in shaders, allocates\nshadow map FBO.  Returns null on failure (no display).",
+              "sig": "pub fn create_renderer(rw: integer, rh: integer, title: text) -> Renderer"
+            },
+            {
+              "doc": "Seconds since the renderer was created.",
+              "sig": "pub fn elapsed(self: const Renderer) -> float"
+            },
+            {
+              "doc": "Upload all meshes in the scene to GPU VAOs.",
+              "sig": "pub fn upload_scene(self: Renderer, sc: const scene::Scene)"
+            },
+            {
+              "doc": "Render one frame's 3D passes WITHOUT swapping buffers.  Callers\nthat want to draw a 2D overlay between the 3D pass and the swap\n(e.g. the native Moros editor's panel) use this variant and\ninvoke `graphics::gl_swap_buffers()` themselves after their\noverlay renders.  Returns false when close requested.\n\nIntroduced by Initiative 03 Phase 3b (native moros editor\npanel overlay).  The existing `render_frame` wrapper below\npreserves backward compatibility with every current caller.",
+              "sig": "pub fn render_frame_no_swap(self: Renderer, sc: const scene::Scene,"
+            },
+            {
+              "doc": "Render one frame (3D passes + buffer swap).  Convenience wrapper\nfor callers that don't need a 2D overlay between the 3D pass and\nthe swap — brick-buster, 24-renderer-demo, and every other current\nconsumer.  Returns false when close requested.",
+              "sig": "pub fn render_frame(self: Renderer, sc: const scene::Scene,"
+            },
+            {
+              "doc": "Convenience: render loop until close.",
+              "sig": "pub fn render_loop(self: Renderer, sc: const scene::Scene, cam: const scene::Camera)"
+            },
+            {
+              "doc": "Destroy GPU resources and close the window.",
+              "sig": "pub fn destroy(self: Renderer)"
+            }
+          ],
+          "deps": {
+            "glb": ">=0.1.1",
+            "mesh3d": ">=0.1.1"
+          },
+          "loft": ">=2026.7.2",
+          "published": "2026-07-21T06:35:51Z",
+          "sha256": "398d1e1fcb272a1da21a49e3eeaadf93ab49f711876dfc6d9c0fcbaac94fcabe",
+          "size": 89604,
+          "subpath": "graphics",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/graphics-v0.5.0/graphics-0.5.0.tar.gz"
         }
       },
       "yanked": []
@@ -950,6 +1583,37 @@
           "size": 12489,
           "subpath": "imaging",
           "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/imaging-v0.2.0/imaging-0.2.0.tar.gz"
+        },
+        "0.2.1": {
+          "api": [
+            {
+              "doc": "Data per pixel of a PNG image.\nFields r, g, b hold red, green and blue intensity, each 0–255.",
+              "sig": "pub struct Pixel"
+            },
+            {
+              "doc": "Returns the pixel colour as a packed 24-bit integer (0xRRGGBB).\nUse for fast colour comparison or storage.",
+              "sig": "pub fn value(self: Pixel) -> integer"
+            },
+            {
+              "doc": "Database structure with image data.\nThe actual data is in height rows of width length.",
+              "sig": "pub struct Image"
+            },
+            {
+              "doc": "Write this image to a PNG file. Returns true on success.",
+              "sig": "pub fn save_png(self: const Image, path: text) -> boolean"
+            },
+            {
+              "doc": "Decodes a PNG file and returns an Image.\nReturns null if the file is not in text format.\nUse to load sprite sheets or textures.",
+              "sig": "pub fn png(self: File) -> Image"
+            }
+          ],
+          "deps": {},
+          "loft": ">=0.8",
+          "published": "2026-07-21T06:35:53Z",
+          "sha256": "4c5c494c0efd262a87ee74cb597c8f3ecdbaf48a48debd13553d9578dd8106bb",
+          "size": 20616,
+          "subpath": "imaging",
+          "url": "https://github.com/loft-lang/loft-libs-graphics/releases/download/imaging-v0.2.1/imaging-0.2.1.tar.gz"
         }
       },
       "yanked": []
@@ -990,6 +1654,45 @@
           "size": 11789,
           "subpath": "markdown",
           "url": "https://github.com/loft-lang/loft-libs-docs/releases/download/markdown-v0.1.0/markdown-0.1.0.tar.gz"
+        },
+        "0.2.0": {
+          "api": [
+            {
+              "doc": "",
+              "sig": "pub fn html_escape(s: text) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn render(source: text, base_dir: text, tag_url_prefix: text, image_url_prefix: text) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn slugify(heading: text) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn render_inline(src: text, base_dir: text, tag_url_prefix: text, image_url_prefix: text) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn rewrite_link(url: text, base_dir: text) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub struct Heading"
+            },
+            {
+              "doc": "Extract every heading from `source` in source order — both\nATX (`# Title`) and setext (`Title\\n===` / `Title\\n---`).\nEach entry carries the level (1..6), the heading's plain\ntext (BEFORE inline rendering — the caller can pass it\nthrough render_inline if needed), and a GitHub-compatible\nslug (the same one the rendered headings get as `id=`).\n\nUseful for building an in-page table of contents: walk the\nreturned vector, indent by `level`, link each entry to\n`#<slug>`.",
+              "sig": "pub fn extract_headings(source: text) -> vector<Heading>"
+            }
+          ],
+          "deps": {},
+          "loft": ">=2026.7.2",
+          "published": "2026-07-21T06:35:56Z",
+          "sha256": "c1217fef276dbf45b0e88504bd5f430560b8fa68f1a3d5aeff69696f72f8f19d",
+          "size": 12118,
+          "subpath": "markdown",
+          "url": "https://github.com/loft-lang/loft-libs-docs/releases/download/markdown-v0.2.0/markdown-0.2.0.tar.gz"
         }
       },
       "yanked": []
@@ -2557,6 +3260,333 @@
           "size": 10600,
           "subpath": "time",
           "url": "https://github.com/loft-lang/loft-libs-game/releases/download/time-v0.2.1/time-0.2.1.tar.gz"
+        },
+        "0.3.0": {
+          "api": [
+            {
+              "doc": "Epoch-ms at UTC midnight of the given calendar date.",
+              "sig": "pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer"
+            },
+            {
+              "doc": "Identity wrapper — for readability where a raw ms count becomes a time.",
+              "sig": "pub fn from_millis(ms: integer) -> integer"
+            },
+            {
+              "doc": "Epoch-SECONDS boundary.  Garmin / Strava REST APIs speak Unix seconds\n(`.timestamp()`), while loft times are milliseconds — convert at the edge.",
+              "sig": "pub fn from_unix_seconds(secs: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn to_unix_seconds(uts: integer) -> integer"
+            },
+            {
+              "doc": "Parse an ISO date \"YYYY-MM-DD\", optionally followed by \" HH:MM[:SS]\"\nor \"THH:MM[:SS]\" with an optional trailing \"Z\".  Returns null on any\nmalformed input (test with `!result`).",
+              "sig": "pub fn parse(ps: text) -> integer?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn year(yt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month(mt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn day(dt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn hour(ht: integer)   -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn minute(mit: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn second(st: integer)  -> integer"
+            },
+            {
+              "doc": "0 = Monday .. 6 = Sunday.  1970-01-01 was a Thursday (weekday 3).",
+              "sig": "pub fn weekday(wt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn add_days(adt: integer, days: integer)     -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn add_weeks(awt: integer, weeks: integer)   -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn add_seconds(ast: integer, secs: integer)  -> integer"
+            },
+            {
+              "doc": "Whole calendar days from `a` to `b` (b later → positive).",
+              "sig": "pub fn days_between(da: integer, db: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn seconds_between(sa: integer, sb: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn start_of_day(sdt: integer) -> integer"
+            },
+            {
+              "doc": "Monday 00:00 UTC of the week containing `t`.",
+              "sig": "pub fn start_of_week(swt: integer) -> integer"
+            },
+            {
+              "doc": "Combine a date with a time-of-day given as components (datetime.combine).",
+              "sig": "pub fn at_time(atd: integer, hh: integer, mm: integer, ss: integer) -> integer"
+            },
+            {
+              "doc": "Combine a date with an \"HH:MM\" or \"HH:MM:SS\" time string.  Mirrors\n`datetime.combine(date, time.fromisoformat(s))`.  Null on a malformed time.",
+              "sig": "pub fn combine(cmd: integer, time_text: text) -> integer?"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_year(iyt: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_week(iwt: integer) -> integer"
+            },
+            {
+              "doc": "Shift so that the field accessors / formatters yield local values.",
+              "sig": "pub fn to_local(lt: integer, offset_min: integer) -> integer"
+            },
+            {
+              "doc": "UTC-midnight key of the local calendar day containing `t`.",
+              "sig": "pub fn local_day(ldt: integer, offset_min: integer) -> integer"
+            },
+            {
+              "doc": "The local calendar day for \"now\" at the given offset.",
+              "sig": "pub fn today(offset_min: integer) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_date(fdt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_time(ftt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_seconds(fst: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_datetime(fdtt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn format_iso(fit: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weekday_name(wnt: integer) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month_name(mnt: integer) -> text"
+            },
+            {
+              "doc": "── DateTime construction ──",
+              "sig": "pub fn date(dcy: integer, dcmo: integer, dcd: integer) -> DateTime"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn datetime(tcy: integer, tcmo: integer, tcd: integer,"
+            },
+            {
+              "doc": "── Duration construction ──",
+              "sig": "pub fn milliseconds(nms: integer) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn seconds(nsec: integer)     -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn minutes(nmin: integer)     -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn hours(nhr: integer)        -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn days(nday: integer)        -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weeks(nwk: integer)        -> Duration"
+            },
+            {
+              "doc": "── DateTime field accessors (methods; delegate to the integer API above) ──",
+              "sig": "pub fn year(self: DateTime)         -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month(self: DateTime)        -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn day(self: DateTime)          -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn hour(self: DateTime)         -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn minute(self: DateTime)       -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn second(self: DateTime)       -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weekday(self: DateTime)      -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_year(self: DateTime)     -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn iso_week(self: DateTime)     -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn weekday_name(self: DateTime) -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn month_name(self: DateTime)   -> text"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn to_millis(self: DateTime)    -> integer"
+            },
+            {
+              "doc": "── Duration accessors ──",
+              "sig": "pub fn total_millis(self: Duration)  -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_seconds(self: Duration) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_minutes(self: Duration) -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_hours(self: Duration)   -> integer"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn total_days(self: Duration)    -> integer"
+            },
+            {
+              "doc": "── DateTime operators (comparison + typed arithmetic) ──",
+              "sig": "pub fn OpLt(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpLe(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGt(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGe(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpEq(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpNe(self: DateTime, other: DateTime) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpMin(self: DateTime, other: DateTime) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpAdd(self: DateTime, span: Duration)  -> DateTime"
+            },
+            {
+              "doc": "`-` on a DateTime is the difference `dt - dt` (above); operators key on the\nreceiver type, so subtracting a Duration is the `minus` method (or `dt + (-span)`).",
+              "sig": "pub fn minus(self: DateTime, span: Duration) -> DateTime"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn negate(self: Duration) -> Duration"
+            },
+            {
+              "doc": "── Duration operators ──",
+              "sig": "pub fn OpAdd(self: Duration, other: Duration) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpMin(self: Duration, other: Duration) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpMul(self: Duration, factor: integer) -> Duration"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpLt(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpLe(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGt(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpGe(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpEq(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "",
+              "sig": "pub fn OpNe(self: Duration, other: Duration) -> boolean"
+            },
+            {
+              "doc": "── custom formatting (the per-type to_text hook) ──\n\"\" / \"datetime\" -> YYYY-MM-DD HH:MM · \"date\" -> YYYY-MM-DD · \"time\" -> HH:MM\n\"seconds\" -> HH:MM:SS · \"iso\" -> …THH:MM:SSZ · \"wday\" -> Mon · \"month\" -> May",
+              "sig": "pub fn to_text(self: DateTime, spec: text) -> text"
+            },
+            {
+              "doc": "A Duration renders as [-]H:MM:SS (hours may exceed 24).",
+              "sig": "pub fn to_text(self: Duration, _spec: text) -> text"
+            }
+          ],
+          "deps": {},
+          "loft": ">=2026.7.2",
+          "published": "2026-07-21T06:35:59Z",
+          "sha256": "29968e0460f393e6b647d69fb06d8f244768155fef63ea0d77ca3a8e4ab87eb2",
+          "size": 10635,
+          "subpath": "time",
+          "url": "https://github.com/loft-lang/loft-libs-game/releases/download/time-v0.3.0/time-0.3.0.tar.gz"
         }
       },
       "yanked": []
@@ -2893,5 +3923,5 @@
     }
   },
   "schema_version": 1,
-  "updated": "2026-07-19T15:38:53Z"
+  "updated": "2026-07-21T06:35:59Z"
 }
