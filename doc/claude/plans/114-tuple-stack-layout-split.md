@@ -476,37 +476,59 @@ code, so hand-verify what moved rather than accepting a non-empty diff.
 
 ---
 
-## Phase B — make every divergence loud (no behaviour change)
+## Phase B — DONE, and it falsified its own premise
 
-**This is the load-bearing phase.** It converts "26 callers to triage" into an
-enumerated worklist of the sites that actually differ.
+**Result: offsets are NOT the divergence.** Phase B was built to enumerate sites
+whose element offsets disagree with the canonical layout. Instrumented and run, the
+cross-check fired **nowhere** — and this time that silence is trustworthy, because
+the reason is visible in the code: `stored_tuple_field_offset` (codegen.rs:38) is
+already the canonical function, and both parser sites
+(`fields.rs:1128`, `mod.rs:5310`) already call `stored_tuple_offsets_for_def`, using
+`element_offsets` only as a defensive fallback for un-registered shapes.
 
-### B1 — one named canonical-layout function
+So B1 was already in the tree, the B2 cross-check was deleted rather than kept (a
+check that cannot fire is false comfort), and B3's inventory is empty. The
+instrument's job was to tell us where to look; it told us *not here*.
 
-Add it; delegate to `stored_tuple_offsets` (with the existing early-parse fallback).
-No caller changes. Pure addition.
+### What the divergence actually is
 
-Gate: `introspect` byte-identical on all 27 corpus cells.
+Two things, both upstream of any offset arithmetic:
 
-### B2 — cross-check every tuple-access site against it
+**1. The element's declared width is lost.** A tuple element keeps the alias's
+*range* but drops its `size(N)`:
 
-At each site that computes a tuple element offset, a debug-only assert: *the offset I
-am about to use == the canonical one*. Behaviour-identical by construction.
+| | bytes per element |
+|---|---|
+| `struct M { a: u8, b: u16 }` | **3** (1+2) |
+| `struct N { a: integer, b: integer }` | **16** (8+8) |
+| `(u8, u16)` | **16** — identical to the plain-integer struct |
 
-Gate: `introspect` byte-identical; the DA build compiles (`#[cfg(debug_assertions)]`
-code is NOT compiled by `cargo build --release` — a gate that skips the DA build has
-verified nothing). **Positive control required:** a known-divergent site must fire.
-A cross-check that fires nowhere is a dead path, not a clean bill of health.
+The synthetic struct is therefore built from `integer(0,255)` / `integer(0,65535)`
+rather than from `u8` / `u16`, so it packs like `N`, not like `M`. The record oracle
+is right because it keeps the alias; the tuple is wrong because it doesn't.
 
-### B3 — record the inventory
+**2. The narrow op pair is crossed** (the A2 verdict), and it only bites the elements
+that stayed range-limited:
 
-Run corpus + 201 matrix + full suite under debug-assertions; write down every site
-that fires, with its type shape. That list *is* phase C.
+| tuple | round-trip |
+|---|---|
+| `(integer, integer)` | correct — plain 8-byte int ops, correctly paired |
+| `(u8, integer)` | correct |
+| `(u8, u16)` | `+1` on the `u16` |
 
-Gate: the inventory is in this file, and its size is stated. If nothing fires, B2 is
-broken — go back.
+A narrow field is written with the sentinel encoding (`val − min + 1`) and read raw.
+`(integer, integer)` escapes because 8-byte ints never take the narrow path.
 
----
+### What this means for phase C
+
+The target moves upstream and gets much smaller: **preserve the element's declared
+type — including `forced_size` — when a tuple type is formed**, so the synthetic
+struct is built from `u8`/`u16` and packs like `struct M`. That one change should
+cover both defects, because the narrow op selection follows the field's type; a
+field carrying its real width has no reason to pick a mismatched pair.
+
+This is a *type-preservation* fix, not a layout rewrite — which is why every layout
+theory in this plan kept almost-explaining the evidence without ever predicting it.
 
 ## Phase C — convert, one site per commit
 
