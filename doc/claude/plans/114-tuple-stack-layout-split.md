@@ -10,8 +10,8 @@
 > design. The steps below are sized for that.
 
 > **@PLN114** — [loft-lang/plans#114](https://github.com/loft-lang/plans/issues/114).
-> **Step 0 and step 1 are DONE**; steps 2-7 open. No behaviour has changed yet —
-> step 1 is diagnostic only, and the emitted code is byte-identical. Probe corpus:
+> **Steps 0-3 DONE** (step 3 except `text`); steps 4-7 open. One of the two
+> original SIGSEGVs is fixed; the matrix is 200/201. Probe corpus:
 > `114-tuple-stack-layout-split/probes/` (`./run.sh`), baselines in
 > `bytecode-comparisons/`.
 
@@ -329,7 +329,40 @@ include it. Different root → file it separately with its own matrix, and this 
 explicitly does **not** claim it. Do not proceed to step 3 with this unanswered —
 it decides what "fixed" means.
 
-### Step 3 — lay the argument push down packed
+### Step 3 — lay the argument push down packed — **DONE except `text`**
+
+Implemented in codegen's `ValueType::Tuple` arm. The layout is taken from the
+**declared parameter type** at the call site (`generate_call` computes
+`element_offsets` + the frame total and hands them down via
+`State::arg_tuple_offsets`) — the callee's own view, not the inferred element types.
+After each element the step padding is reclaimed with `OpFreeStack(0, n)` so the next
+lands where the callee reads it, and the block total is matched to the frame.
+
+The total misses in **both** directions, which the first attempt got wrong: a
+trailing step pad overshoots (`(P,P)` ends at 28 for a 24B frame) *and* packing
+sub-8 elements can undershoot (`(P,text)` ends at 28 for a 32B frame). `(P,P,P)`
+happens to land exactly on 40 and passed even while `(P,P)` failed — a coincidence
+that briefly made the fix look right. Both directions are now corrected, trimming
+with `OpFreeStack` and padding with `OpReserveFrame`.
+
+**Result:** `e5_d2_struct_ref_arg` — one of the two original SIGSEGVs — is fixed.
+The 201-cell matrix is 200/201; corpus is 23/27 with the 4 remaining being the
+text-carrying cells. Fixed cells are value-correct and leak-clean under
+`--interpret`.
+
+**Deferred: tuples carrying `text`.** Applying the relocation to them turns a clean
+SIGSEGV into *heap corruption* — "refused to free the stack store (#306)", invalid
+`free()`, out-of-bounds index. A stack `text` element's ownership is tracked by its
+stack POSITION (`State::text_positions`; `free_stack` prunes that range), so moving
+the element desyncs the bookkeeping. Placement and ownership have to move together,
+and that is a design step, not an increment. The fix therefore skips any tuple with
+a `text` element — those cells stay broken exactly as before, loud and no worse —
+and `e4_d2_closure_arg` (`(fn, text)`) remains the one failing matrix cell.
+
+That deferral is the honest boundary of this step: the mechanism is proven for 6 of
+the 9 broken corpus cells and demonstrably wrong for the other 3.
+
+<details><summary>original step 3 plan (superseded by the above)</summary>
 
 Per § Scope, this is the whole defect. In the tuple element-push path used for call
 arguments (`codegen.rs:3316`'s `Type::Tuple` arm, reached via `generate_call`), stop
@@ -355,6 +388,8 @@ destinations (`ref2_local`, `ref2_field`, `ref2_return`, `tupleput_ref`) show a
 **byte-identical** introspect diff — they are not supposed to move; full 201-cell
 matrix green on `--interpret`; leak-clean under `--interpret` (`check_store_leaks`
 needs `--interpret` — bare `loft` is native and skips it).
+
+</details>
 
 ### Step 4 — only what step 3 proves is still broken
 

@@ -460,20 +460,60 @@ impl State {
                 // `(P,P)` as a call argument segfaults, `(P,P,P,P)` returns
                 // `2,null,0,360287970323857408`.  Record where each element actually
                 // lands and check it against the layout the readers assume.
-                #[cfg(debug_assertions)]
                 let push_base = stack.position;
+                // Take it: a NESTED tuple element must not inherit the outer
+                // tuple's layout, and a tuple bound to a local has none at all.
+                let want_offsets = self.arg_tuple_offsets.take();
                 #[cfg(debug_assertions)]
                 let mut landed: Vec<u16> = Vec::new();
-                for e in node.tuple_items().iter() {
+                let items = node.tuple_items();
+                for (i, e) in items.iter().enumerate() {
                     #[cfg(debug_assertions)]
                     landed.push(stack.position.saturating_sub(push_base));
                     types.push(self.generate_node(e, stack, false));
+                    // Reclaim this element's step padding so the NEXT one starts
+                    // where the callee will look for it.  Stepping only ever rounds
+                    // UP, so the cursor is never short — this trims, never extends.
+                    if let Some((want, _)) = &want_offsets
+                        && i + 1 < items.len()
+                        && let Some(&next) = want.get(i + 1)
+                    {
+                        let cur = stack.position.saturating_sub(push_base);
+                        if cur > next {
+                            stack.add_op("OpFreeStack", self);
+                            self.code_add(0u8);
+                            self.code_add(cur - next);
+                            stack.position = push_base + next;
+                        }
+                    }
                 }
+                // Match the block's TOTAL to what the callee's frame reserves.  It
+                // can miss in either direction: a trailing step pad overshoots
+                // (`(P,P)` ends at 28 for a 24B frame), while packing sub-8 elements
+                // can undershoot (`(P,text)` ends at 28 for a 32B frame).  Both
+                // shift everything above the block, so correct both.
+                if let Some((_, total)) = &want_offsets {
+                    let cur = stack.position.saturating_sub(push_base);
+                    match cur.cmp(total) {
+                        std::cmp::Ordering::Greater => {
+                            stack.add_op("OpFreeStack", self);
+                            self.code_add(0u8);
+                            self.code_add(cur - *total);
+                        }
+                        std::cmp::Ordering::Less => {
+                            stack.add_op("OpReserveFrame", self);
+                            self.code_add(*total - cur);
+                        }
+                        std::cmp::Ordering::Equal => {}
+                    }
+                    stack.position = push_base + *total;
+                }
+                self.arg_tuple_offsets = want_offsets;
                 // Only a tuple consumed DIRECTLY as a callee frame block has to be
                 // packed.  One bound to a local is relocated element-by-element by
                 // `emit_tuple_put_ops`, so its eval-stack placement is scratch.
                 #[cfg(debug_assertions)]
-                if self.in_call_arg {
+                if want_offsets.is_some() {
                     let want = crate::data::element_offsets(&types);
                     for (i, got) in landed.iter().enumerate() {
                         debug_assert_eq!(
@@ -2843,15 +2883,33 @@ impl State {
                     self.code_add(var_pos);
                     tps.push(crate::data::I64.clone());
                 } else {
-                    // @PLN114 — this argument's value is pushed straight into the
-                    // callee's frame block, so a tuple built here must land packed.
-                    #[cfg(debug_assertions)]
-                    let outer_in_call_arg = std::mem::replace(&mut self.in_call_arg, true);
-                    tps.push(self.generate(&parameters[a_nr], stack, false));
-                    #[cfg(debug_assertions)]
+                    // @PLN114 — this argument is pushed straight into the callee's
+                    // frame block, so a tuple built here must land at the offsets
+                    // the callee reads.  Those come from the DECLARED parameter
+                    // type, which is the callee's own view of the layout.
+                    let outer_offsets = self.arg_tuple_offsets.take();
+                    // @PLN114 step 3 — NOT applied to a tuple carrying `text`.  A
+                    // stack `text` element's ownership is tracked by its stack
+                    // POSITION (`State::text_positions`, and `free_stack` prunes
+                    // that range), so relocating the element desyncs the
+                    // bookkeeping: the clean SIGSEGV becomes heap corruption
+                    // ("refused to free the stack store", invalid free).  Those
+                    // cells stay broken exactly as they were — loud, not worse —
+                    // until the ownership move is designed alongside the placement
+                    // one.  See the plan's § step 3.
+                    if let Type::Tuple(elems) = a.typedef.base()
+                        && !elems.iter().any(|e| matches!(e.base(), Type::Text(_)))
                     {
-                        self.in_call_arg = outer_in_call_arg;
+                        let offs: Vec<u16> = crate::data::element_offsets(elems)
+                            .into_iter()
+                            .map(|o| o as u16)
+                            .collect();
+                        let total = stack
+                            .step(crate::data::element_size(&Type::Tuple(elems.clone())) as u16);
+                        self.arg_tuple_offsets = Some((offs, total));
                     }
+                    tps.push(self.generate(&parameters[a_nr], stack, false));
+                    self.arg_tuple_offsets = outer_offsets;
                     // When a Value::Null is passed as a typed argument, generate()
                     // pushes 0 bytes.  Emit the correct null sentinel for the
                     // expected type so the stack size matches.
