@@ -574,6 +574,90 @@ experiments demonstrated from opposite sides:
 and E — is a *precondition* for it, not a follow-up. The plan's phase order is
 therefore wrong: D/E must precede C.
 
+## The working design — two views, one home each, and the exact code points
+
+Written after the oracle made the target measurable (108 -> 19 divergent shapes) and
+after four candidate edits were tried and judged by it. Every claim below is backed
+by a measurement or a read, not by inference.
+
+### The two views (both are legitimate — the bug is that they share a name)
+
+| view | rule | one home | who needs it |
+|---|---|---|---|
+| **STORAGE** | record packing: `IntegerSpec::byte_width` per element (`forced_size` first), packed TIGHT | `stored_tuple_offsets` / `element_storage_size` | tuple in a record, a vector row, a DB page, a worker message |
+| **STACK** | one `aligned_stack_step` slot per element — a push occupies a whole slot whatever the alias says | `element_offsets` / `element_size` | tuple in a frame slot or on the eval stack |
+
+They must differ: `(u8,u16)` is **3 bytes** stored and **16** on the stack. The defect
+was never that two views exist — it is that both were called `element_offsets`, so a
+site could consult the wrong one silently. **Rename them** (`tuple_storage_offsets` /
+`tuple_stack_offsets`) as the first act, so every remaining site declares which it
+means and a wrong choice reads wrong.
+
+### Code points, classified
+
+Enumerated by reading every call site, not by grep-and-guess.
+
+**Legitimately STACK-side — address a tuple in a frame slot; leave alone:**
+
+| site | what |
+|---|---|
+| `codegen.rs:604` | `TupleGet` from a stack tuple variable |
+| `codegen.rs:705` | `TuplePut` into one |
+| `codegen.rs:1272` | `emit_tuple_var_push_recursive` |
+| `codegen.rs:1323` | `emit_tuple_var_pop_put` |
+| `codegen.rs:1363` | `emit_tuple_null_init` |
+| `codegen.rs:2188` | `emit_tuple_put_ops` |
+| `codegen.rs:2839` | the `#493` fn-ref `d_nr` projection (`stack.function.stack(tvar) + …`) |
+| `codegen.rs:3374` | `generate_var` whole-tuple read |
+
+**Already STORAGE-correct — prefer `stored_tuple_offsets_for_def`, fall back only for
+un-registered shapes:** `collections.rs:1920/2576/2585`, `mod.rs:5317/5398`,
+`expressions.rs:2814/2902`, `fields.rs:1134`, `codegen.rs:46`.
+
+**WRONG — read STORAGE bytes with STACK offsets:**
+
+| site | what |
+|---|---|
+| `parallel.rs:1568` | `read_tuple_at_wide` walks an in-vector row using `element_offsets` |
+| `generation/ops/parallel.rs:208` | the native par-worker twin of the same read |
+
+Those two are the only outright misclassified consumers, and they explain the
+par-worker "smearing" note at `state/mod.rs:4797` as the same family.
+
+### The three remaining defects and where each is fixed
+
+**1. `+1` on narrow elements — the crossed op pair.** `typedef.rs:710-730` picks the
+schema Part by NULLABILITY (`Short` = `+1` sentinel write, `ShortRaw` = direct), and
+its own comment records an identical off-by-one already fixed once for `u16 not null`.
+The tuple element READ selects `OpGetShortRaw` (the narrow-vector split in
+`collections.rs:367`), so a nullable element is written shifted and read raw.
+**Fix at the pair, not either end:** the read-op choice must be derived from the
+schema Part the write used, so the twin table in `operators.rs:475-484` stays the
+single source of pairing.
+
+**2. The last 19 shapes — fn-ref alignment.** Full tight packing is correct for every
+shape except those carrying a fn-ref, whose 8-byte `d_nr` truncates to 4 without its
+boundary (#493, P249). `Parts` cannot separate it: `(u8,integer)` and the fn-ref case
+are both `Parts::Base`, size 8, align 8, with opposite requirements — measured, and
+Parts-keying scored 29 vs 19. **Fix by making the requirement explicit:** carry a
+per-element "needs its own alignment" flag from the type (a fn-ref does; a plain
+integer does not) instead of inferring it from size/align/Parts.
+
+**3. Storage read via stack offsets** — convert `parallel.rs:1568` and
+`generation/ops/parallel.rs:208` to the storage view. Both backends, one commit each.
+
+### Order, and why
+
+1. **Rename the two views** — no behaviour change, makes every later diff self-explaining.
+2. **Fix the op pair** (defect 1) — the `+1` is silent corruption and independent of layout; it needs no other step.
+3. **Convert the two par-worker readers** (defect 3) — isolated, and the guard/matrix cover them.
+4. **Add the explicit fn-ref alignment flag, then tighten fully** (defect 2) — oracle to 0.
+5. **Delete what is then unreachable**, and flip the oracle to `assert_eq!(defects, 0)`.
+
+Each step is judged by: the oracle count, the four instruments, corpus + 201 matrix,
+the `stack_align_guard` build, and `loft_suite`. A step that moves no instrument is
+reverted — that rule has already saved this plan four times.
+
 ## The oracle — stop guessing, compare (2026-07-21)
 
 Three attempts to fix this by editing a plausible site each returned "no measurable
