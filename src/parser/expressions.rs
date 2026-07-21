@@ -2811,7 +2811,7 @@ use a separate collection or add after the loop"
                     elems_vec.len(),
                 )
                 .unwrap_or_else(|| {
-                    crate::data::element_offsets(&elems_vec)
+                    crate::data::element_stack_offsets(&elems_vec)
                         .into_iter()
                         .map(|x| x as u16)
                         .collect()
@@ -2899,7 +2899,7 @@ use a separate collection or add after the loop"
                             ) {
                             u32::from(offs[i])
                         } else {
-                            crate::data::element_offsets(&rhs_elems)[i] as u32
+                            crate::data::element_stack_offsets(&rhs_elems)[i] as u32
                         };
                         // P250 fix (2026-05-11): when destructuring a synthetic
                         // `__tuple<...>` struct (the wider-than-8B tuple-return

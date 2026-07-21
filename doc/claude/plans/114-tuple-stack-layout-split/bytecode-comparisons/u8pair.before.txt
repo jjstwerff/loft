@@ -275,7 +275,7 @@ fn init(cell: &std::cell::UnsafeCell<Stores>) {
     let short__1 = db.short(0, true);
     db.field(t65, "_1", short__1);
     db.add_tuple_group(t65, &[0, 1]);
-    let t66 = db.short(0, true);
+    let t66 = db.byte(0, true);
     let _ = t66; // may be unused
     db.value(t7, "FvBool", t12);
     db.value(t7, "FvInt", t14);

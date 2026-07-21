@@ -3218,7 +3218,7 @@ impl Parser {
             let sz: u16 = if matches!(types[0], Type::Integer(_)) && known != u16::MAX {
                 self.database.size(known)
             } else {
-                crate::data::element_size(&types[0]) as u16
+                crate::data::element_stack_size(&types[0]) as u16
             };
             let op_d_nr = self.data.def_nr("OpSizeScalar");
             if op_d_nr != u32::MAX {
@@ -5399,7 +5399,7 @@ impl Parser {
                     elems_vec.len(),
                 )
                 .unwrap_or_else(|| {
-                    crate::data::element_offsets(&elems_vec)
+                    crate::data::element_stack_offsets(&elems_vec)
                         .into_iter()
                         .map(|x| x as u16)
                         .collect()
@@ -5480,7 +5480,7 @@ impl Parser {
             elems_vec.len(),
         )
         .unwrap_or_else(|| {
-            crate::data::element_offsets(&elems_vec)
+            crate::data::element_stack_offsets(&elems_vec)
                 .into_iter()
                 .map(|x| x as u16)
                 .collect()

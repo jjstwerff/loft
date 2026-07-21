@@ -16462,7 +16462,7 @@ fn pln114_mixed_width_tuple_round_trip() {
 /// this test when the inline copy is gone (A4) and there is nothing to compare.
 #[test]
 fn pln114_alignment_tables_agree() {
-    use loft::data::{IntegerSpec, Type, element_align};
+    use loft::data::{IntegerSpec, Type, element_stack_align};
     let int = Type::Integer(IntegerSpec {
         min: i32::MIN + 1,
         max: i32::MAX as u32,
@@ -16477,9 +16477,9 @@ fn pln114_alignment_tables_agree() {
         ("float", Type::Float, 8),
     ] {
         assert_eq!(
-            element_align(&tp),
+            element_stack_align(&tp),
             expect,
-            "element_align({name}) — the tuple_def inline table must agree"
+            "element_stack_align({name}) — the tuple_def inline table must agree"
         );
     }
 }

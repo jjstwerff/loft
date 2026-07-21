@@ -1565,11 +1565,11 @@ pub(crate) fn read_tuple_at_wide(
     let mut buf = [0u8; 64];
     let store = &stores.allocations[row_ref.store_nr as usize];
     let base = store.base_ptr();
-    let in_vec_offsets = crate::data::element_offsets(elem_types);
+    let in_vec_offsets = crate::data::element_stack_offsets(elem_types);
     let mut arg_offset: usize = 0;
     for (i, t) in elem_types.iter().enumerate() {
         let in_off = in_vec_offsets[i];
-        let in_sz = crate::data::element_size(t);
+        let in_sz = crate::data::element_stack_size(t);
         let arg_sz = crate::variables::size(t, &crate::data::Context::Argument) as usize;
         debug_assert!(
             arg_offset + arg_sz <= 64,

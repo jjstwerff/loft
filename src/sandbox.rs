@@ -1201,7 +1201,7 @@ fn appended_record_size(vars: &crate::variables::Function, var_nr: u16) -> u32 {
         | Type::Radix(nr, _, _) => Type::Reference(*nr, crate::data::Deps::none()),
         _ => return 0,
     };
-    crate::data::element_size(&elem) as u32
+    crate::data::element_stack_size(&elem) as u32
 }
 
 /// @PLN86 space budget — one def's intrinsic SPACE complexity: the deepest loop

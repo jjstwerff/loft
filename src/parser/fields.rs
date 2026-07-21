@@ -1165,7 +1165,7 @@ impl Parser {
             elems_vec.len(),
         )
         .unwrap_or_else(|| {
-            crate::data::element_offsets(&elems_vec)
+            crate::data::element_stack_offsets(&elems_vec)
                 .into_iter()
                 .map(|x| x as u16)
                 .collect()

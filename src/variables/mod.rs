@@ -2124,7 +2124,7 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
         | Type::Enum(_, true, _)
         | Type::Radix(_, _, _)
         | Type::Iterator(_, _) => size_of::<DbRef>() as u16,
-        Type::Tuple(elems) => crate::data::element_size(&Type::Tuple(elems.clone())) as u16,
+        Type::Tuple(elems) => crate::data::element_stack_size(&Type::Tuple(elems.clone())) as u16,
         _ => 0,
     }
 }
@@ -2162,7 +2162,7 @@ pub fn align(tp: &Type) -> u8 {
         | Type::Enum(_, true, _)
         | Type::Radix(_, _, _)
         | Type::Iterator(_, _) => 4, // DbRef = u16 + u32 + u32 → align 4
-        Type::Tuple(elems) => crate::data::element_align(&Type::Tuple(elems.clone())),
+        Type::Tuple(elems) => crate::data::element_stack_align(&Type::Tuple(elems.clone())),
         _ => 1,
     }
 }

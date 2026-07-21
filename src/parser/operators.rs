@@ -968,7 +968,7 @@ impl Parser {
                                 ) {
                                 u32::from(v[idx])
                             } else {
-                                crate::data::element_offsets(&elems)[idx] as u32
+                                crate::data::element_stack_offsets(&elems)[idx] as u32
                             };
                             let elem_tp = elems[idx].clone();
                             *code =

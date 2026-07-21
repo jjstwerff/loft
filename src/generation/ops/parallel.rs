@@ -205,7 +205,7 @@ fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32, elem_size: i32) -> (Strin
         return (String::new(), "elm");
     };
     if let Type::Tuple(elems) = &elem_attr.typedef {
-        let offsets = crate::data::element_offsets(elems);
+        let offsets = crate::data::element_stack_offsets(elems);
         let reads: Vec<String> = elems
             .iter()
             .zip(offsets.iter())

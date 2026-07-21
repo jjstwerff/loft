@@ -43,7 +43,7 @@ fn stored_tuple_field_offset(data: &Data, database: &Stores, elems: &[Type], idx
     // 2026-04-28 element_offsets update).  Reaches this branch only
     // when the synthetic struct hasn't been registered or finish()
     // hasn't run — rare paths during early parse / partial state.
-    crate::data::element_offsets(elems)[idx] as u16
+    crate::data::element_stack_offsets(elems)[idx] as u16
 }
 
 /// Text-returning natives that accept a destination buffer instead of allocating one.
@@ -474,7 +474,7 @@ impl State {
                 // `emit_tuple_put_ops`, so its eval-stack placement is scratch.
                 #[cfg(debug_assertions)]
                 if self.in_call_arg {
-                    let want = crate::data::element_offsets(&types);
+                    let want = crate::data::element_stack_offsets(&types);
                     for (i, got) in landed.iter().enumerate() {
                         debug_assert_eq!(
                             usize::from(*got),
@@ -490,9 +490,10 @@ impl State {
                     // The frame reserves the STEPPED size, so compare against that —
                     // an over-reserve of the trailing pad is not a defect.
                     let total = usize::from(stack.position.saturating_sub(push_base));
-                    let reserved = usize::from(
-                        stack.step(crate::data::element_size(&Type::Tuple(types.clone())) as u16),
-                    );
+                    let reserved =
+                        usize::from(stack.step(crate::data::element_stack_size(&Type::Tuple(
+                            types.clone(),
+                        )) as u16));
                     debug_assert_eq!(
                         total,
                         reserved,
@@ -601,7 +602,7 @@ impl State {
                 };
                 let idx = elem_idx as usize;
                 let elem_tp = elems[idx].clone();
-                let offsets = crate::data::element_offsets(elems);
+                let offsets = crate::data::element_stack_offsets(elems);
                 let elem_offset = offsets[idx] as u16;
                 // The element is at tuple_var_stack_pos + elem_offset.
                 // Compute distance from current stack top to that position.
@@ -702,7 +703,7 @@ impl State {
                 };
                 let idx = elem_idx as usize;
                 let elem_tp = elems[idx].clone();
-                let offsets = crate::data::element_offsets(elems);
+                let offsets = crate::data::element_stack_offsets(elems);
                 let elem_offset = offsets[idx] as u16;
                 // Generate the value to write.
                 self.generate_node(value, stack, false);
@@ -1269,7 +1270,7 @@ impl State {
     /// pushes the inner tuple's leaves from the outer variable's slot
     /// at the inner offsets.  Recurses for nested-nested tuples.
     fn emit_tuple_var_push_recursive(&mut self, stack: &mut Stack, elems: &[Type], base: u16) {
-        let offsets = crate::data::element_offsets(elems);
+        let offsets = crate::data::element_stack_offsets(elems);
         for (i, elem) in elems.iter().enumerate() {
             let elem_abs = base + offsets[i] as u16;
             if let Type::Tuple(inner_elems) = elem {
@@ -1320,7 +1321,7 @@ impl State {
     /// slot offset within the variable.  For nested `Type::Tuple`
     /// elements, recurses with the inner offsets added to `base`.
     fn emit_tuple_var_pop_put(&mut self, stack: &mut Stack, elems: &[Type], base: u16) {
-        let offsets = crate::data::element_offsets(elems);
+        let offsets = crate::data::element_stack_offsets(elems);
         for i in (0..elems.len()).rev() {
             let elem_abs = base + offsets[i] as u16;
             if let Type::Tuple(inner_elems) = &elems[i] {
@@ -1360,7 +1361,7 @@ impl State {
     /// absolute stack slot.  For nested `Type::Tuple` elements,
     /// recurses with the inner offsets added to `base`.
     fn emit_tuple_null_init(&mut self, stack: &mut Stack, elems: &[Type], base: u16) {
-        let offsets = crate::data::element_offsets(elems);
+        let offsets = crate::data::element_stack_offsets(elems);
         for (i, elem) in elems.iter().enumerate() {
             let elem_abs = base + offsets[i] as u16;
             if let Type::Tuple(inner_elems) = elem {
@@ -2185,7 +2186,7 @@ impl State {
     // emit_tuple_var_push_recursive, emit_tuple_null_init, and the generate_node/generate_var
     // TupleGet/TuplePut element matches.
     fn emit_tuple_put_ops(&mut self, stack: &mut Stack, elems: &[Type], tuple_base: u16) {
-        let offsets = crate::data::element_offsets(elems);
+        let offsets = crate::data::element_stack_offsets(elems);
         for i in (0..elems.len()).rev() {
             let elem_abs = tuple_base + offsets[i] as u16;
             if let Type::Tuple(inner) = &elems[i] {
@@ -2836,7 +2837,7 @@ impl State {
                     // fn-ref-element projection (`generation/calls.rs`) and the
                     // TupleGet Integer arm; the d_nr is the first 8 bytes of the
                     // element slot, so `OpVarInt` at its offset reads exactly it.
-                    let offsets = crate::data::element_offsets(&elems);
+                    let offsets = crate::data::element_stack_offsets(&elems);
                     let elem_abs = stack.function.stack(*tvar) + offsets[*tidx as usize] as u16;
                     let var_pos = stack.position - elem_abs;
                     stack.add_op("OpVarInt", self);
@@ -3371,7 +3372,7 @@ impl State {
                 // T1.4: read whole tuple by reading each element.
                 let elems = elems.clone();
                 let tuple_base = stack.function.stack(variable);
-                let offsets = crate::data::element_offsets(&elems);
+                let offsets = crate::data::element_stack_offsets(&elems);
                 for (i, elem_tp) in elems.iter().enumerate() {
                     let elem_pos = stack.position - (tuple_base + offsets[i] as u16);
                     match elem_tp.base() {
