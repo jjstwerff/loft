@@ -1630,6 +1630,18 @@ pub fn extract_range(
     let crate::data::Value::Block(b) = data.def(f).code().unspan() else {
         return None;
     };
+    let (first_op, last_op) = statement_slice(b, start_line, end_line)?;
+    Some((f, first_op, last_op))
+}
+
+/// The top-level operator index range `[first_op, last_op]` in `b` covering the
+/// statements on lines `[start_line, end_line]`, via the `Value::Line` markers.
+/// `None` when the start is not a top-level statement boundary or nothing maps.
+fn statement_slice(
+    b: &crate::data::Block,
+    start_line: u32,
+    end_line: u32,
+) -> Option<(usize, usize)> {
     // Top-level source-line markers, in order: (line, operator index).
     let marks: Vec<(u32, usize)> = b
         .operators
@@ -1647,14 +1659,109 @@ pub fn extract_range(
     if last < first {
         return None;
     }
-    let first_op = marks[first].1;
     // Include everything up to the operator before the NEXT top-level statement (or
     // the block end) — the last selected statement's whole body.
     let last_op = marks
         .get(last + 1)
         .map_or(b.operators.len(), |&(_, i)| i)
         .saturating_sub(1);
-    Some((f, first_op, last_op))
+    Some((marks[first].1, last_op))
+}
+
+/// @PLN63 E2 — the INPUT variables (→ parameters) for extracting a statement slice:
+/// the upward-exposed uses — a var READ before it is (definitely) WRITTEN within the
+/// slice, in first-use order.  `None` when the selection does not map (see
+/// [`extract_range`]).
+///
+/// Conservatism (safety over minimality): a write inside a conditional (`if`) branch
+/// or a loop body is NOT counted as a definite write, so a var read after such a
+/// write is still an input.  This can add an unnecessary parameter but never MISSES
+/// one (a missed input reads an undefined var in the extracted function).
+#[must_use]
+pub fn extract_inputs(
+    text: &str,
+    name: &str,
+    stdlib_dir: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Option<Vec<String>> {
+    if end_line < start_line {
+        return None;
+    }
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
+    let data = &p.data;
+    let f = enclosing_fn(data, start_line)?;
+    let crate::data::Value::Block(b) = data.def(f).code().unspan() else {
+        return None;
+    };
+    let (first_op, last_op) = statement_slice(b, start_line, end_line)?;
+    let inputs = slice_inputs(&b.operators[first_op..=last_op]);
+    let vars = data.def(f).variables();
+    Some(inputs.iter().map(|&v| vars.name(v).to_string()).collect())
+}
+
+/// The upward-exposed uses (input var_nrs) of a statement slice, in first-use order.
+fn slice_inputs(ops: &[crate::data::Value]) -> Vec<u16> {
+    let mut written: Vec<u16> = Vec::new();
+    let mut inputs: Vec<u16> = Vec::new();
+    for op in ops {
+        scan_input(op, &mut written, &mut inputs, true);
+    }
+    inputs
+}
+
+/// Record a READ of `v`: an input iff not yet definitely written and not already noted.
+fn note_read(v: u16, written: &[u16], inputs: &mut Vec<u16>) {
+    if !written.contains(&v) && !inputs.contains(&v) {
+        inputs.push(v);
+    }
+}
+
+/// Ordered upward-exposed-use walk.  `definite` is false inside a conditional branch
+/// or loop body (writes there are not guaranteed, so they do not mask a later read).
+fn scan_input(
+    node: &crate::data::Value,
+    written: &mut Vec<u16>,
+    inputs: &mut Vec<u16>,
+    definite: bool,
+) {
+    use crate::data::Value;
+    match node.unspan() {
+        // Var-READ fields `for_each_child` does not surface — handle explicitly.
+        Value::Var(v) => note_read(*v, written, inputs),
+        Value::TupleGet(v, _) => note_read(*v, written, inputs),
+        Value::CallRef(v, args) => {
+            note_read(*v, written, inputs);
+            for a in args {
+                scan_input(a, written, inputs, definite);
+            }
+        }
+        Value::TuplePut(v, _, inner) => {
+            note_read(*v, written, inputs);
+            scan_input(inner, written, inputs, definite);
+        }
+        // A write: read the RHS FIRST (so `x += 1` reads `x` before the write), then
+        // mark `x` written — only when the write is unconditional.
+        Value::Set(v, rhs) => {
+            scan_input(rhs, written, inputs, definite);
+            if definite && !written.contains(v) {
+                written.push(*v);
+            }
+        }
+        Value::If(c, t, e) => {
+            scan_input(c, written, inputs, definite);
+            scan_input(t, written, inputs, false);
+            scan_input(e, written, inputs, false);
+        }
+        Value::Loop(b) => {
+            for o in &b.operators {
+                scan_input(o, written, inputs, false);
+            }
+        }
+        // Every other variant: recurse into child expressions in order (covers Call,
+        // Block, Return, Iter, Tuple, … safely — none carry a bare var-read field).
+        other => other.for_each_child(&mut |c| scan_input(c, written, inputs, definite)),
+    }
 }
 
 /// `classify` label → LSP `CompletionItemKind`.

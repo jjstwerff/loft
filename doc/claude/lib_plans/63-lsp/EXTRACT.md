@@ -120,10 +120,15 @@ proven correct.
   interior. *Gate met:* `tests/extract.rs` (a slice maps + widens with more
   statements; the signature line / closing brace / reversed range / past-EOF refuse;
   a line inside a `for` body refuses while the whole `for` maps).
-- **E2 — inputs (parameters).** The upward-exposed-use scan over the slice →
-  `Vec<var_nr>` inputs (order = first-use order), each with `name` + `type_name_str`.
-  *Gate:* unit — `{ y = x + 1; z = y * 2 }` selecting both statements, with `x` from
-  before → inputs = `[x]` (y, z are written-first).
+- **E2 — inputs (parameters) — DONE.** `lsp::extract_inputs(…)` runs the ordered
+  upward-exposed-use scan over the slice → the input names in first-use order. The
+  walk special-cases the var-READ variants `for_each_child` does not surface (`Var`,
+  `TupleGet`, `CallRef`, `TuplePut`), reads a `Set`'s RHS BEFORE marking its target
+  written (so `x += 1` reads-before-writes), and treats writes inside an `if` branch /
+  loop body as NOT definite (conservative — an unnecessary param, never a missed one);
+  every other variant recurses via `for_each_child` (safe on all variants). *Gate met:*
+  `tests/extract.rs` — `{ y = x + 1; z = y * 2 }` → `[x]`; narrowing to `z = y * 2` →
+  `[y]`; `x = x + 1` → `[x]`; two write-first locals → `[]`.
 - **E3 — outputs (returns).** Writes-in-slice ∩ live-out-over-tail → `Vec<var_nr>`
   outputs; compute in-out = inputs ∩ outputs. *Gate:* unit — `for` body
   `{ total = total + i }` where `total` is read after the loop → outputs = `[total]`,

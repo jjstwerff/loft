@@ -4,7 +4,7 @@
 //! E1: map a line selection to the enclosing function's contiguous TOP-LEVEL
 //! statement slice, refusing anything that does not map to whole statements.
 
-use loft::lsp::extract_range;
+use loft::lsp::{extract_inputs, extract_range};
 
 // 1  fn f() -> integer {
 // 2    a = 1;
@@ -49,6 +49,56 @@ fn e1_refuses_non_statement_boundaries() {
     assert!(
         extract_range(F, "buf.loft", "default", 99, 99).is_none(),
         "a line past EOF"
+    );
+}
+
+// ── E2 — inputs (parameters): the upward-exposed uses of the slice ────────────
+
+#[test]
+fn e2_inputs_are_upward_exposed_uses() {
+    // 1 fn f(x: integer) -> integer {
+    // 2   y = x + 1;
+    // 3   z = y * 2;
+    // 4   return z;
+    // 5 }
+    // Selecting lines 2-3: `x` is read before any write in the slice (and is a
+    // parameter → live-in) → an input; `y` is written then read → not an input;
+    // `z` is written, never read → not an input.
+    let f = "fn f(x: integer) -> integer {\n  y = x + 1;\n  z = y * 2;\n  return z;\n}\n";
+    assert_eq!(
+        extract_inputs(f, "buf.loft", "default", 2, 3),
+        Some(vec!["x".to_string()]),
+        "the only upward-exposed use is `x`"
+    );
+    // Selecting just line 3 (`z = y * 2`): now `y` is read before written → an input.
+    assert_eq!(
+        extract_inputs(f, "buf.loft", "default", 3, 3),
+        Some(vec!["y".to_string()]),
+        "narrowing to `z = y * 2` makes `y` the input"
+    );
+}
+
+#[test]
+fn e2_compound_assignment_reads_before_it_writes() {
+    // `x = x + 1` is Set(x, Add(Var(x), 1)) — the RHS reads `x` BEFORE the write, so
+    // `x` is upward-exposed (an input), even though it is also written in the slice.
+    let f = "fn f(x: integer) -> integer {\n  x = x + 1;\n  return x;\n}\n";
+    assert_eq!(
+        extract_inputs(f, "buf.loft", "default", 2, 2),
+        Some(vec!["x".to_string()]),
+        "a compound write reads its target first → an input"
+    );
+}
+
+#[test]
+fn e2_a_slice_local_is_not_an_input() {
+    // Selecting lines 2-3 where both `a` and `b` are written-first in the slice →
+    // no inputs (nothing is read before being written).
+    let f = "fn f() -> integer {\n  a = 1;\n  b = a + 2;\n  return b;\n}\n";
+    assert_eq!(
+        extract_inputs(f, "buf.loft", "default", 2, 3),
+        Some(vec![]),
+        "a, b are both produced in the slice → no inputs"
     );
 }
 
