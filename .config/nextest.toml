@@ -31,7 +31,13 @@ final-status-level = "slow"
 slow-timeout     = { period = "600s", terminate-after = 1 }
 
 [profile.ci.junit]
-path = "target/nextest/junit.xml"
+# RELATIVE TO THE PROFILE STORE DIR (`target/nextest/<profile>/`), not to the
+# repo root — so this writes `target/nextest/ci/junit.xml`.  It previously read
+# `target/nextest/junit.xml`, which looks repo-rooted and is not: the report
+# landed at `target/nextest/ci/target/nextest/junit.xml` while every consumer
+# looked at the repo-rooted spelling, found nothing, and said nothing.  Keep
+# this a bare filename so the two can't drift apart again.
+path = "junit.xml"
 
 # P137 / html_wasm test serialisation.
 #

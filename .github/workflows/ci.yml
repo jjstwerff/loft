@@ -504,8 +504,19 @@ jobs:
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             FILTER="$FILTER and not binary(html_render) and not binary(html_asyncify)"
           fi
-          echo "nextest filter: $FILTER"
-          cargo nextest run --profile ci -E "$FILTER"
+          # A PR run is FEEDBACK — stop at the first failure, the author fixes it
+          # and pushes again, and the runner minutes go to the next PR.  The
+          # nightly and push-to-main runs are REPORTS: they are nobody's inner
+          # loop, and fail-fast makes them surface at most ONE break per run.
+          # Windows pays for that worst of all — it runs on these events only, so
+          # every Windows bug costs a whole night, and the 2026-07-21 nightly
+          # stopped with 875 of 3029 tests unrun.  Drain the whole set instead.
+          FAILFAST=""
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            FAILFAST="--no-fail-fast"
+          fi
+          echo "nextest filter: $FILTER${FAILFAST:+ (}${FAILFAST}${FAILFAST:+)}"
+          cargo nextest run --profile ci $FAILFAST -E "$FILTER"
 
       # Browser-render cross-check (Chrome + SwiftShader): the GPU/headless-browser
       # tests demoted off the per-PR path just above.  Runs on the DAILY schedule +
@@ -558,8 +569,17 @@ jobs:
           python3 - <<'EOF'
           import pathlib
           import xml.etree.ElementTree as ET
-          p = pathlib.Path("target/nextest/junit.xml")
-          if not p.exists():
+          # nextest resolves the junit `path` relative to the profile's STORE dir
+          # (`target/nextest/<profile>/`), so glob for it rather than spelling a
+          # path that looks repo-rooted but isn't — the previous
+          # `target/nextest/junit.xml` never matched, and the silent exit below
+          # meant this step reported nothing for its entire life.
+          p = next(iter(sorted(pathlib.Path("target/nextest").glob("*/junit.xml"))), None)
+          if p is None:
+              # NEVER silent: a detector that cannot find its input must say so,
+              # or "no flaky tests" and "no report" look identical.
+              print("::warning title=Flaky detection did not run::no nextest JUnit report "
+                    "under target/nextest/*/junit.xml — flaky passes were NOT checked")
               raise SystemExit(0)
           root = ET.fromstring(p.read_text())
           for tc in root.iter("testcase"):
