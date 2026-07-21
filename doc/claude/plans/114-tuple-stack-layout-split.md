@@ -10,52 +10,67 @@
 > design. The steps below are sized for that.
 
 > **@PLN114** — [loft-lang/plans#114](https://github.com/loft-lang/plans/issues/114).
-> **Read § STATUS first.** The design is § The working design; everything above it is
-> the investigation that produced it, and the phase lists below it (`A-E`, `R0-R7`,
-> `0-7`) are superseded history kept for their reasoning, not for their steps.
-> Probe corpus:
+> **The defect work is COMPLETE — read § STATUS.** A tuple is now byte-identical to
+> the record of the same fields on all 148 oracle shapes, and the oracle asserts it.
+> Remaining items are cleanup and coverage.
+>
+> The design is § The working design; everything above it is the investigation that
+> produced it, and the phase lists below it (`A-E`, `R0-R7`, `0-7`) are superseded
+> history kept for their reasoning, not their steps. Probe corpus:
 > `114-tuple-stack-layout-split/probes/` (`./run.sh`), baselines in
 > `bytecode-comparisons/`.
 
 
-## STATUS (2026-07-21) — what is done, what is left
+## STATUS (2026-07-21) — the defect work is COMPLETE; follow-ups remain
 
-### Fixed and verified
+Every defect this plan opened with, and every one it uncovered on the way, is fixed
+and guarded. What remains is cleanup and coverage, not correctness.
 
-| defect | state | evidence |
-|---|---|---|
-| tuple element widths ignored the alias (`u8` in a tuple ≠ `u8` in a record) | **FIXED** | `typedef.rs` resolver falls back to `IntegerSpec.forced_size`; oracle 108 → 47 |
-| tuple groups padded where records pack tight | **FIXED** | Tuple-kind groups pack tight in `types.rs`; oracle 47 → 19 |
-| `+1` silent corruption on narrow elements | **FIXED** | `tuple_def` sets attribute nullability from the element type, so `NarrowIntKind` gives both sides the same answer; both tracked specs pass and are un-ignored |
-| the two layout views shared a name | **FIXED** | renamed `element_stack_*` vs `element_storage_*`; every site now declares its view |
-| the duplicate alignment table (`Function` 8 vs 4) | **FIXED** | `tuple_def` calls `element_stack_align`; drift was latent, 0 cells changed |
+### Done
 
-Measured today: `(u8,u32,u16)` strides at **7 bytes**, equal to the identical record
-(was 24), and round-trips **1,2,3 → 1,2,3** (was 1,2,4).
+| defect | evidence |
+|---|---|
+| the two original SIGSEGVs (`e4_d2_closure_arg`, `e5_d2_struct_ref_arg`) | matrix **201/201**; corpus 0/62 both backends; `stack_align_guard` 0 fires |
+| `+1` silent corruption on narrow tuple elements | `tuple_def` sets attribute nullability from the element type, so `NarrowIntKind` gives write and read the same answer; both tracked specs pass, un-ignored |
+| tuple elements ignored the alias width (`(u8,u16)` = 16B where the record is 3B) | `typedef.rs` resolver falls back to `IntegerSpec.forced_size` |
+| tuple groups padded where records pack tight | Tuple-kind groups pack tight in `types.rs` |
+| a stored fn-ref reserved the wrong width | `element_storage_size(Function) = 8` (d_nr + closure_rec) |
+| the fn-ref reader fetched a closure_rec tuple elements never have | the LAYOUT chooses the reader: `get_val` = legacy, `read_fn_ref_split` = split |
+| both par-worker readers read storage bytes with stack offsets | `read_tuple_at_wide` + its native twin use the storage view; native also reads at the STORED width |
+| the two layout views shared a name | `element_stack_*` vs `element_storage_*`; every site declares its view |
+| the duplicate alignment table (`Function` 8 vs 4) | `tuple_def` calls the shared one; the drift was latent |
 
-### Open
+**Measured end state:** a tuple is byte-identical to the record of the same fields on
+**all 148 oracle shapes**, `(u8,u32,u16)` strides at **7 bytes** (was 24) and
+round-trips `1,2,3` (was `1,2,4`), and the oracle now **asserts** it rather than
+reporting.
 
-1. ~~fn-ref width / full tightness~~ **DONE** — tuple layout matches the record on
-   **all 148 shapes**, and the oracle asserts it. The blocker was a reader looking for
-   a closure_rec field that tuple elements never have; the layout choosing the reader
-   fixed it without touching stack, database or schema.
-2. **Two par-worker readers still read storage bytes with stack offsets** —
-   `parallel.rs:1568` (`read_tuple_at_wide`) and `generation/ops/parallel.rs:208`.
-   Isolated, both backends, one commit each.
-3. **`element_storage_size`'s `Function` arm is knowingly wrong** (returns the stack
-   20) and the oracle has no fn-ref coverage; fix both with item 1.
-4. ~~The two original SIGSEGVs~~ **FIXED** — matrix 201/201, corpus 0/62 on both
-   backends, `stack_align_guard` zero fires.
+### Remaining — cleanup and coverage, no known defect
 
-### The instruments (run all of these on any change)
+1. **The 201 matrix cells are still `#[ignore]`d.** They found everything here and run
+   in ~10s; un-ignore them and add them to the nightly (advisory for the first few
+   nights, since they have never run on Windows or macOS).
+2. **`stack_align_guard`'s CI job does not cover `tuple_matrix`.** The gate existed
+   and was blind to this entire class — its suite list is fixed and excludes the
+   matrices.
+3. **Candidate dead code, now that one layout decides placement:** `codegen.rs`'s
+   P249 step fixup and the `#493` `OpSetInt4` projection may both be unreachable.
+   Delete one at a time; the corpus, matrix and guard say whether each is still load-
+   bearing.
+4. **Flaky under parallel load** (pre-existing, unrelated): `alias_link_baseline` and
+   `html_asyncify` each failed once in two full-suite runs and pass alone.
 
-`cargo test --test pln114_layout_oracle -- --nocapture` (the ratchet: 19 → 0) ·
-`tests/scripts/pln114-layout-widths.loft` · the two `pln114_*` specs in
-`tests/issues.rs` · the 32-cell probe corpus on both backends · the 201 matrix cells ·
-the `stack_align_guard` build · `loft_suite`.
+### The instruments — run all of these on any change here
 
-**The rule that has saved this plan five times: a change that moves no instrument is
-reverted, not kept.**
+`cargo test --test pln114_layout_oracle` (asserts 0/148) ·
+`tests/scripts/pln114-layout-widths.loft` · `pln114-par-tuple-storage-read.loft` ·
+the three `pln114_*` specs in `tests/issues.rs` · the 32-cell probe corpus on both
+backends (`probes/run.sh`) · the 201 matrix cells · the `stack_align_guard` build ·
+`loft_suite`.
+
+**The rule that saved this plan repeatedly: a change that moves no instrument is
+reverted, not kept.** Five candidate fixes were reverted under it, and each revert
+narrowed the search — the reverted experiments are what located the real faults.
 
 ## Symptom
 
