@@ -1490,6 +1490,12 @@ struct Ownership<'a> {
     projections: HashSet<u32>,
     ret_memo: HashMap<u32, Own>,
     visiting: HashSet<u32>,
+    /// Vars currently being classified — the var-level twin of [`Self::visiting`].
+    /// A self-referential default (`c = t[k] ?? c`) makes a var's RHS mention the var
+    /// itself, so `classify` recursed forever and overflowed the stack: a SIGSEGV
+    /// during COMPILATION, reproducible with `--check` on two lines of valid-looking
+    /// source (crawler LOFT-HANDOFF H1).
+    visiting_vars: HashSet<u16>,
 }
 
 /// The tail (value) expression of a function body, or `None` for a native/`#rust`
@@ -1580,6 +1586,7 @@ impl<'a> Ownership<'a> {
             projections: projection_ops(data),
             ret_memo: HashMap::new(),
             visiting: HashSet::new(),
+            visiting_vars: HashSet::new(),
         }
     }
 
@@ -1632,22 +1639,36 @@ impl<'a> Ownership<'a> {
             // A var `OpDatabase` minted a fresh store into is Owned regardless of
             // any other def (the retbuf a `materialized_view_return` fills).
             Value::Var(v) if defs.db_vars.contains(v) => Own::Owned,
-            Value::Var(v) => match defs.rhs.get(v) {
-                Some(rhss) if !rhss.is_empty() => rhss
-                    .iter()
-                    .map(|r| self.classify(r, func, defs))
-                    .reduce(Own::join)
-                    .unwrap_or(Own::Owned),
-                // No local def: a parameter (the caller owns it ⇒ Borrowed of itself)
-                // or an uninitialised local (Owned — nothing to mis-free).
-                _ => {
-                    if func.is_argument(*v) {
-                        Own::Borrowed { base: *v }
-                    } else {
-                        Own::Owned
+            Value::Var(v) if !self.visiting_vars.insert(*v) => {
+                // Recursion back-edge: this var appears in its OWN definition, as in
+                // `c = t[k] ?? c`.  Mirrors the function-level guard below — return
+                // conservatively rather than recursing.  `Borrowed { base: MAX }`
+                // (never "freshly owned") joins with the real arm to `Join`, the
+                // owned-vs-borrowed split the reassign check already treats as the
+                // risky shape; the alternative was an unbounded recursion that took
+                // the compiler down with it.
+                Own::Borrowed { base: u16::MAX }
+            }
+            Value::Var(v) => {
+                let class = match defs.rhs.get(v) {
+                    Some(rhss) if !rhss.is_empty() => rhss
+                        .iter()
+                        .map(|r| self.classify(r, func, defs))
+                        .reduce(Own::join)
+                        .unwrap_or(Own::Owned),
+                    // No local def: a parameter (the caller owns it ⇒ Borrowed of
+                    // itself) or an uninitialised local (Owned — nothing to mis-free).
+                    _ => {
+                        if func.is_argument(*v) {
+                            Own::Borrowed { base: *v }
+                        } else {
+                            Own::Owned
+                        }
                     }
-                }
-            },
+                };
+                self.visiting_vars.remove(v);
+                class
+            }
             Value::Call(d, args) => {
                 if *d == self.op_database || *d == self.op_new_record {
                     Own::Owned
