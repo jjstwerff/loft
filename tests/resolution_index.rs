@@ -76,3 +76,48 @@ fn s3_lsp_parse_carries_buffer_occurrences() {
     assert_eq!(totals.len(), 3, "three `total` occurrences: {totals:?}");
     assert!(totals.iter().all(|r| *r == totals[0]), "one binding: {totals:?}");
 }
+
+#[test]
+fn s4_assignment_local_refs_exclude_field_access() {
+    // Local `x` is assigned then read alongside a field `p.x` of the SAME name.
+    // The precise path must return the local's decl + read, and NOT the `p.x` field.
+    // Layout (1-based):  L3 `  x = 5;`   L4 `  print("{p.x} {x}");`
+    let src = "struct P { x: integer }\nfn h(p: P) {\n  x = 5;\n  print(\"{p.x} {x}\");\n}\n";
+    // Cursor on the local `x` at its declaration (L3, col 3).
+    let refs = loft::lsp::local_binding_refs(src, "default", "/buf.loft", 3, 3)
+        .expect("assignment-local takes the precise path");
+    let positions: Vec<(u32, u32)> = refs.iter().map(|r| (r.line, r.col)).collect();
+    // Decl `x` at L3:3 and read `x` at L4 (inside the interpolation) — 2 refs.
+    assert_eq!(refs.len(), 2, "local x: decl + one read, field p.x excluded: {positions:?}");
+    assert!(positions.contains(&(3, 3)), "includes the declaration: {positions:?}");
+    // The `p.x` field's `x` sits at L4 col 11; it must NOT be in the set.
+    assert!(!positions.contains(&(4, 11)), "field p.x is excluded: {positions:?}");
+}
+
+#[test]
+fn s4_parameter_falls_back_to_fv1() {
+    // A parameter's signature declaration is not in the index, so the precise
+    // path is unsound → None (the caller uses the F-v1 name-scan).
+    let src = "fn f(w: integer) -> integer {\n  return w + w;\n}\n";
+    // Cursor on a body use of `w` (L2, col 10).
+    assert!(
+        loft::lsp::local_binding_refs(src, "default", "/buf.loft", 2, 10).is_none(),
+        "a parameter must fall back to F-v1"
+    );
+}
+
+#[test]
+fn s4_loop_binder_falls_back_to_fv1() {
+    // A `for i` binder's declaration is not recorded → the earliest occurrence is
+    // a use, not a `name =` write → None (fall back).
+    let src = "fn g() {\n  total = 0;\n  for i in 0..3 {\n    total = total + i;\n  }\n}\n";
+    // Cursor on the body use of `i` (L4, col 21).
+    assert!(
+        loft::lsp::local_binding_refs(src, "default", "/buf.loft", 4, 21).is_none(),
+        "a loop binder must fall back to F-v1"
+    );
+    // The assignment-local `total` in the SAME function still takes the precise path.
+    let refs = loft::lsp::local_binding_refs(src, "default", "/buf.loft", 2, 3)
+        .expect("total is an assignment-local");
+    assert_eq!(refs.len(), 3, "total: decl + two writes/reads");
+}

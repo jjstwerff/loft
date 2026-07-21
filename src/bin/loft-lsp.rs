@@ -216,25 +216,42 @@ fn main() {
                 });
                 let locations = match req {
                     Some((uri, text, line, ch)) => {
-                        match loft::lsp::identifier_at(&text, line + 1, ch + 1) {
-                            Some(name) => {
-                                ensure_workspace_index(
-                                    &workspace_root,
-                                    &mut workspace_index,
-                                    &mut workspace_index_tried,
-                                );
-                                // F: a LOCAL scopes to its function; a global stays workspace-wide.
-                                let scope =
-                                    loft::lsp::reference_scope(&text, &name, &stdlib_dir, line + 1);
-                                references_of(
-                                    &name,
-                                    workspace_index.as_ref(),
-                                    &documents,
-                                    &scope,
-                                    &uri_to_path(&uri),
-                                )
+                        let file = uri_to_path(&uri);
+                        // S4 (@PLN115): an assignment-local resolves to its EXACT binding
+                        // occurrences via the resolution index — a same-named field access
+                        // (`p.x` vs local `x`) is excluded, which the name-scan can't do.
+                        // Params / loop binders / globals return None → the F-v1 path.
+                        if let Some(refs) =
+                            loft::lsp::local_binding_refs(&text, &stdlib_dir, &file, line + 1, ch + 1)
+                        {
+                            let len = loft::lsp::identifier_at(&text, line + 1, ch + 1)
+                                .map_or(0, |n| n.chars().count() as u32);
+                            refs.iter().map(|r| location_of(r, len)).collect()
+                        } else {
+                            match loft::lsp::identifier_at(&text, line + 1, ch + 1) {
+                                Some(name) => {
+                                    ensure_workspace_index(
+                                        &workspace_root,
+                                        &mut workspace_index,
+                                        &mut workspace_index_tried,
+                                    );
+                                    // F: a LOCAL scopes to its function; a global stays workspace-wide.
+                                    let scope = loft::lsp::reference_scope(
+                                        &text,
+                                        &name,
+                                        &stdlib_dir,
+                                        line + 1,
+                                    );
+                                    references_of(
+                                        &name,
+                                        workspace_index.as_ref(),
+                                        &documents,
+                                        &scope,
+                                        &file,
+                                    )
+                                }
+                                None => Vec::new(),
                             }
-                            None => Vec::new(),
                         }
                     }
                     None => Vec::new(),
@@ -692,15 +709,18 @@ fn references_of(
     let all = wi.references_overlaid(name, &overlays);
     loft::lsp::scoped_refs(all, scope, current_file)
         .iter()
-        .map(|r| {
-            let line0 = r.line.saturating_sub(1);
-            let col0 = r.col.saturating_sub(1);
-            obj(vec![
-                ("uri", Parsed::Str(format!("file://{}", r.file))),
-                ("range", range_of(line0, col0, col0 + len)),
-            ])
-        })
+        .map(|r| location_of(r, len))
         .collect()
+}
+
+/// An LSP `Location` JSON object for a reference `r`, highlighting `len` chars.
+fn location_of(r: &loft::lsp::Reference, len: u32) -> Parsed {
+    let line0 = r.line.saturating_sub(1);
+    let col0 = r.col.saturating_sub(1);
+    obj(vec![
+        ("uri", Parsed::Str(format!("file://{}", r.file))),
+        ("range", range_of(line0, col0, col0 + len)),
+    ])
 }
 
 /// A `file://` document uri → its filesystem path.
@@ -723,6 +743,24 @@ fn rename_edit(
     let text = documents.get(&uri).ok_or("document is not open")?;
     let old = loft::lsp::identifier_at(text, line + 1, ch + 1)
         .ok_or("the cursor is not on an identifier")?;
+    // S4 (@PLN115): an assignment-local renames its EXACT binding occurrences (a
+    // same-named field / method / global excluded) — no workspace index needed, as
+    // a local lives in this buffer alone.  Params / loop binders / globals fall
+    // through to the workspace name-based plan below.
+    let file = uri_to_path(&uri);
+    if let Some(refs) = loft::lsp::local_binding_refs(text, stdlib_dir, &file, line + 1, ch + 1) {
+        if !loft::lsp::is_valid_identifier(&new_name) {
+            return Err(format!("`{new_name}` is not a valid identifier"));
+        }
+        if new_name == old {
+            return Ok(Parsed::Null);
+        }
+        return Ok(build_workspace_edit(
+            &refs,
+            old.chars().count() as u32,
+            &new_name,
+        ));
+    }
     let wi = index.ok_or("no workspace to rename across")?;
     let overlays: Vec<(String, String)> = documents
         .iter()
@@ -731,7 +769,7 @@ fn rename_edit(
     let refs = loft::lsp::plan_rename(&old, &new_name, wi, &overlays, stdlib_dir)?;
     // F: a LOCAL rename touches only its own function; a global stays workspace-wide.
     let scope = loft::lsp::reference_scope(text, &old, stdlib_dir, line + 1);
-    let refs = loft::lsp::scoped_refs(refs, &scope, &uri_to_path(&uri));
+    let refs = loft::lsp::scoped_refs(refs, &scope, &file);
     if refs.is_empty() {
         return Err(format!("no references to `{old}` in scope"));
     }

@@ -917,6 +917,96 @@ pub fn plan_rename(
     Ok(refs)
 }
 
+/// True when the identifier occurrence `o` is the target of a plain `=` assignment
+/// — for an assignment-local, its DECLARATION (loft creates the local at its first
+/// write).  The next non-space char after the name is `=` and not `==`.  Used to
+/// confirm a binding's declaration is captured before trusting the index for rename.
+fn occurrence_is_assignment(text: &str, line_no: u32, col: u32, len: u16) -> bool {
+    let Some(line) = text.lines().nth(line_no.saturating_sub(1) as usize) else {
+        return false;
+    };
+    let chars: Vec<char> = line.chars().collect();
+    let mut i = (col.saturating_sub(1) + u32::from(len)) as usize; // just past the name
+    while chars.get(i) == Some(&' ') || chars.get(i) == Some(&'\t') {
+        i += 1;
+    }
+    chars.get(i) == Some(&'=') && chars.get(i + 1) != Some(&'=')
+}
+
+/// @PLN115 S4 — the exact occurrences of the LOCAL binding under a 1-based
+/// `(line, col)` cursor, resolved by binding IDENTITY from the parse-time
+/// resolution index — or `None` when the precise path is not SOUND for this
+/// binding, telling the caller to fall back to the F-v1 name-scan.
+///
+/// Precise because it keys on `(fn_def, var_nr)`, so a same-spelled FIELD access
+/// (`p.x` vs local `x`), method, or global is excluded — the name-scan can't do
+/// that.  loft is flat-scoped per function, so a binding's occurrences are all in
+/// the current buffer; the result needs no workspace index.
+///
+/// SOUNDNESS: the index records `parse_var` occurrences (uses + assignment
+/// targets) but NOT declarations made by the definition / loop / lambda parser (a
+/// parameter's signature name, a `for i` / lambda binder).  Renaming via the index
+/// alone would leave such a declaration untouched — a broken edit — so the precise
+/// path is taken ONLY for an assignment-local whose declaration IS captured: the
+/// name is not a parameter of its function, and the binding's earliest occurrence
+/// is a declaring `name =` write.  Params, loop / lambda binders, and a cursor
+/// sitting on a non-recorded declaration return `None`.
+#[must_use]
+pub fn local_binding_refs(
+    text: &str,
+    stdlib_dir: &str,
+    file: &str,
+    line: u32,
+    col: u32,
+) -> Option<Vec<Reference>> {
+    let p = parse_lsp_buffer(text, "buf.loft", stdlib_dir);
+    let occ = p.resolutions();
+    // The occurrence whose 1-based span [col, col+len] covers the cursor (a cursor
+    // one past the last char still selects it, mirroring `identifier_span_at`).
+    let target = occ
+        .iter()
+        .find(|o| o.line == line && col >= o.col && col <= o.col + u32::from(o.len))?;
+    let crate::resolution::Resolution::Local { fn_def, var_nr } = target.res else {
+        return None;
+    };
+    let name = identifier_span_at(text, line, col).map(|(n, ..)| n)?;
+    // A parameter (or lambda param) — its declaration lives in the signature, which
+    // the index does not record.  Params are the function's attributes.
+    if fn_def < p.data.definitions()
+        && p.data
+            .def(fn_def)
+            .attributes()
+            .iter()
+            .any(|a| a.name == name)
+    {
+        return None;
+    }
+    let mut mine: Vec<&crate::resolution::Occurrence> = occ
+        .iter()
+        .filter(|o| {
+            matches!(o.res, crate::resolution::Resolution::Local { fn_def: f, var_nr: v }
+                if f == fn_def && v == var_nr)
+        })
+        .collect();
+    mine.sort_by(|a, b| a.line.cmp(&b.line).then(a.col.cmp(&b.col)));
+    // The earliest occurrence must be the declaring `name =` write; if it isn't,
+    // the binding is declared elsewhere (a loop / comprehension binder) and the
+    // index set is incomplete → fall back.
+    let first = mine.first()?;
+    if !occurrence_is_assignment(text, first.line, first.col, first.len) {
+        return None;
+    }
+    Some(
+        mine.iter()
+            .map(|o| Reference {
+                file: file.to_string(),
+                line: o.line,
+                col: o.col,
+            })
+            .collect(),
+    )
+}
+
 // ── completion (step C) ──────────────────────────────────────────────────────
 // Reuses what loft already computes: `Data.definitions` + `classify` for the
 // candidate names/kinds, the per-fn variable tables for `expr.` member types,

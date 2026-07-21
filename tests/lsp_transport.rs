@@ -951,6 +951,68 @@ fn rename_a_local_scopes_to_its_function() {
     let _ = s.child.wait();
 }
 
+// S4 (@PLN115) — renaming an assignment-local resolves by binding identity, so a
+// same-named FIELD access (`p.x`) is EXCLUDED — the F-v1 name-scan could not do this.
+#[test]
+fn rename_a_local_excludes_a_same_named_field() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fieldexclws");
+    std::fs::create_dir_all(&root).unwrap();
+    // Local `x` (decl L3, read in `{x}` L4) alongside field `p.x` (also L4, spelled `x`).
+    let prog = "struct P { x: integer }\nfn h(p: P) {\n  x = 5;\n  print(\"{p.x} {x}\");\n}\n";
+    std::fs::write(root.join("m.loft"), prog).unwrap();
+
+    let mut s = Session::start();
+    s.request(
+        1,
+        "initialize",
+        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+    );
+    let _ = s.recv();
+    s.notify("initialized", "{}");
+    let uri = format!("file://{}/m.loft", root.display());
+    s.notify("textDocument/didOpen", &open_params(&uri, prog));
+    let _ = s.recv();
+
+    // Rename the local `x` at its declaration (0-based line 2, char 2) → `y`.
+    s.request(
+        2,
+        "textDocument/rename",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":2}},"newName":"y"}}"#),
+    );
+    let reply = s.recv();
+    let changes = field(field(&reply, "result").expect("rename result"), "changes").unwrap();
+    let starts: Vec<(i64, i64)> = match changes {
+        Parsed::Object(e) => e
+            .iter()
+            .flat_map(|(_, _, v)| match v {
+                Parsed::Array(edits) => edits
+                    .iter()
+                    .filter_map(|ed| {
+                        let st = field(field(ed, "range")?, "start")?;
+                        Some((
+                            field(st, "line").and_then(Parsed::as_i64)?,
+                            field(st, "character").and_then(Parsed::as_i64)?,
+                        ))
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    // Exactly the two local occurrences (decl + the `{x}` read); the field `p.x`'s
+    // `x` (0-based line 3, char 12) must NOT be edited.
+    assert_eq!(starts.len(), 2, "only the local's 2 occurrences: {starts:?}");
+    assert!(starts.contains(&(2, 2)), "the declaration is renamed: {starts:?}");
+    assert!(
+        !starts.contains(&(3, 12)),
+        "the field p.x is NOT renamed: {starts:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();
