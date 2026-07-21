@@ -391,6 +391,11 @@ pub struct TagInfo {
 pub struct TagIndex {
     tags: Parsed,
     features: Parsed,
+    /// Tags the scanner deemed BROKEN (its `broken` array — `@P`/`@PLAN` that
+    /// resolve to no valid PID/plan).  The scanner is the authority (it reads
+    /// PROBLEMS.md + the plan dirs + the freeze-banner map); we consume its
+    /// verdict rather than re-deriving it.
+    broken: Vec<String>,
 }
 
 impl TagIndex {
@@ -403,7 +408,26 @@ impl TagIndex {
             .ok()
             .and_then(|s| crate::json::parse(&s).ok())
             .unwrap_or(Parsed::Array(Vec::new()));
-        Some(TagIndex { tags, features })
+        // The `broken` array is `[{"tag":"@P999","refs":[…]}, …]`.
+        let broken = match pj_get(&tags, "broken") {
+            Some(Parsed::Array(items)) => items.iter().filter_map(|it| pj_str(it, "tag")).collect(),
+            _ => Vec::new(),
+        };
+        Some(TagIndex {
+            tags,
+            features,
+            broken,
+        })
+    }
+
+    /// Whether the scanner flagged `tag` as broken — a `@P`/`@PLAN` reference to
+    /// no valid issue/plan.  From the index's `broken` array, so it inherits ALL
+    /// the scanner's validation (PROBLEMS.md, plan dirs, the freeze-banner map)
+    /// with no re-derivation.  NOTE: a freshly-typed broken tag not yet indexed
+    /// won't show until the next `make index` — the index is the source of truth.
+    #[must_use]
+    pub fn is_broken(&self, tag: &str) -> bool {
+        self.broken.iter().any(|t| t == tag)
     }
 
     /// Everything the index knows about `tag`, or `None` if it is neither

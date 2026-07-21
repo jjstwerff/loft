@@ -541,6 +541,61 @@ fn tag_hover_and_document_link() {
     let _ = s.child.wait();
 }
 
+// T3 — broken-tag diagnostics.  A synthetic index marks `@P99` broken; opening a
+// buffer that references it publishes a Warning at the tag; a NON-broken tag does
+// not.
+#[test]
+fn broken_tag_publishes_a_warning() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("t3ws");
+    let idx = root.join("index");
+    std::fs::create_dir_all(&idx).unwrap();
+    std::fs::write(
+        idx.join("tags.json"),
+        r#"{"@P99":[{"file":"z","line":1,"context":"@P99"}],"broken":[{"tag":"@P99","refs":["z:1"]}]}"#,
+    )
+    .unwrap();
+    std::fs::write(idx.join("features.json"), "[]").unwrap();
+
+    let mut s = Session::start();
+    s.request(
+        1,
+        "initialize",
+        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+    );
+    let _ = s.recv();
+    s.notify("initialized", "{}");
+
+    let uri = "file:///a.loft";
+    // `@P99` is broken; `@P42` is unknown to the index → NOT flagged (no false positive).
+    let prog = "// tracks @P99 and @P42\nfn main() {\n  print(\"hi\")\n}\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let note = s.recv();
+    let diags =
+        field_arr(field(&note, "params").unwrap(), "diagnostics").expect("diagnostics array");
+    let tag_warnings: Vec<&Parsed> = diags
+        .iter()
+        .filter(|d| field_str(d, "source").as_deref() == Some("loft-tag"))
+        .collect();
+    assert_eq!(
+        tag_warnings.len(),
+        1,
+        "exactly one broken-tag warning: {diags:?}"
+    );
+    let w = tag_warnings[0];
+    assert_eq!(
+        field(w, "severity").and_then(Parsed::as_i64),
+        Some(2),
+        "Warning"
+    );
+    assert!(
+        field_str(w, "message").unwrap_or_default().contains("@P99"),
+        "names the broken tag: {w:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();

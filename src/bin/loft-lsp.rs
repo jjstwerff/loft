@@ -82,14 +82,18 @@ fn main() {
             ("initialized", None) => {} // notification — no reply
             ("textDocument/didOpen", None) => {
                 if let Some((uri, text)) = did_open_params(&msg) {
-                    let diags = diagnose_text(&text, &uri, &stdlib_dir);
+                    let mut diags = diagnose_text(&text, &uri, &stdlib_dir);
+                    ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                    diags.extend(tag_diagnostics(&text, tag_index.as_ref())); // T3
                     documents.insert(uri.clone(), text);
                     send(&stdout, &publish_diagnostics(&uri, diags));
                 }
             }
             ("textDocument/didChange", None) => {
                 if let Some((uri, text)) = did_change_params(&msg) {
-                    let diags = diagnose_text(&text, &uri, &stdlib_dir);
+                    let mut diags = diagnose_text(&text, &uri, &stdlib_dir);
+                    ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                    diags.extend(tag_diagnostics(&text, tag_index.as_ref())); // T3
                     documents.insert(uri.clone(), text);
                     send(&stdout, &publish_diagnostics(&uri, diags));
                 }
@@ -480,6 +484,32 @@ fn ensure_tag_index(
     if let Some(r) = root {
         *index = loft::lsp::TagIndex::load(&format!("{r}/index"));
     }
+}
+
+/// T3 — Warnings for buffer tags the scanner flagged as broken (a `@P`/`@PLAN`
+/// reference to no valid issue/plan, per the index's `broken` array).  Empty when
+/// the index is absent.  Folded into the diagnostics push on open/change.
+fn tag_diagnostics(text: &str, index: Option<&loft::lsp::TagIndex>) -> Vec<Parsed> {
+    let Some(idx) = index else {
+        return Vec::new();
+    };
+    loft::lsp::tags_in(text)
+        .into_iter()
+        .filter(|(tag, ..)| idx.is_broken(tag))
+        .map(|(tag, line, s, e)| {
+            obj(vec![
+                ("range", range_of(line - 1, s, e)),
+                ("severity", Parsed::Int(2)), // Warning
+                ("source", Parsed::Str("loft-tag".into())),
+                (
+                    "message",
+                    Parsed::Str(format!(
+                        "broken tracker reference {tag} — no matching issue/plan (per the index)"
+                    )),
+                ),
+            ])
+        })
+        .collect()
 }
 
 /// Every tracker tag with an issue URL, as an LSP `DocumentLink`.  Empty when the

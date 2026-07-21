@@ -297,10 +297,16 @@ consumes the tracker index the repo already builds (`make index`). *Gates:* `tes
 
 Remaining tag steps:
 
-- **T3 — broken-tag diagnostics.** Reuse `idx broken`'s validation (a tag resolving to no valid
-  PID/plan) → publish a Warning on the offending tag, folded into the existing diagnostics push.
-  *Gate:* a buffer with `@P999` yields one warning. (`TagIndex::lookup` already returns `None` for
-  an unindexed local tag — the hook exists.)
+- **T3 — broken-tag diagnostics — DONE.** A buffer tag the scanner flagged as broken (a
+  `@P`/`@PLAN` reference to no valid issue/plan) publishes a Warning at the tag, folded into the
+  diagnostics push on open/change. **Consumes the index's `broken` array verbatim** rather than
+  re-deriving validity: the scanner (`scan.loft::tag_is_broken`) reads PROBLEMS.md + the plan dirs
+  + the freeze-banner `@P→#` map, so re-implementing it offline would duplicate it and risk false
+  positives — the LSP inherits the scanner's exact verdict (`TagIndex::is_broken`). Zero false
+  positives; the trade-off is that a freshly-typed broken tag not yet indexed only shows after the
+  next `make index` (the index is the source of truth, consistent with `idx broken`). *Gates:*
+  `tests/lsp_tags.rs::broken_tags_come_from_the_index_verdict` +
+  `tests/lsp_transport.rs::broken_tag_publishes_a_warning` (a NON-broken tag draws no warning).
 - **T4 — tag completion.** `@P…` / `@PLN…` → valid tags from the index (low priority).
 
 Follow-up: the `TagIndex` is loaded once per session, so it can lag a mid-session `make index` —
