@@ -2057,6 +2057,42 @@ pub fn element_size(t: &Type) -> usize {
     }
 }
 
+/// @PLN114 D1 — the STORAGE width of one tuple element, in the record's terms.
+///
+/// [`element_size`] reports the **eval-stack** width: `Integer` is 8 bytes flat,
+/// because that is what a push occupies regardless of the alias's `size(N)`.  A
+/// tuple element stored in a record or a vector is a *field*, so it must be sized
+/// the way a field is — `IntegerSpec::byte_width`, the one home for the storage
+/// width (`forced_size` first, else the range).  Using the stack width for storage
+/// is what makes `(u8, u16)` occupy 16 bytes where `struct { a: u8, b: u16 }`
+/// occupies 3.
+///
+/// Records pack TIGHTLY — `struct { a: u8, b: u32, c: u16 }` is 1+4+2 = 7 bytes with
+/// no padding, because store access is unaligned-tolerant — so there is no alignment
+/// term here.
+#[must_use]
+pub fn element_storage_size(t: &Type) -> usize {
+    match t.base() {
+        Type::Integer(spec) => spec.byte_width(true) as usize,
+        Type::Tuple(elems) => elems.iter().map(element_storage_size).sum(),
+        other => element_size(&other),
+    }
+}
+
+/// @PLN114 D1 — element offsets in the STORAGE (record) layout: cumulative
+/// [`element_storage_size`], packed tight.  The sibling of [`element_offsets`],
+/// which is the eval-stack view; see that function for which belongs where.
+#[must_use]
+pub fn element_storage_offsets(types: &[Type]) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(types.len());
+    let mut pos = 0usize;
+    for t in types {
+        offsets.push(pos);
+        pos += element_storage_size(t);
+    }
+    offsets
+}
+
 /// Byte offset of each element in a tuple-like layout.
 /// Element *i* starts at `offsets[i]`; total size is `element_size(&Type::Tuple(types))`.
 ///
@@ -2265,6 +2301,70 @@ mod tuple_stack_layout_tests {
         let elems = vec![boolean(), boolean(), boolean()];
         assert_eq!(element_offsets(&elems), vec![0, 1, 2]);
         assert_eq!(element_size(&Type::Tuple(elems)), 3);
+    }
+
+    fn narrow(bits: u8) -> Type {
+        // u8 / u16 / u32 shaped: a range-limited integer carrying `size(N)`.
+        Type::Integer(IntegerSpec {
+            min: 0,
+            max: match bits {
+                1 => 255,
+                2 => 65535,
+                _ => 4_294_967_294,
+            },
+            not_null: false,
+            forced_size: std::num::NonZeroU8::new(bits),
+        })
+    }
+
+    /// @PLN114 D1 — the storage view sizes elements as record FIELDS.
+    ///
+    /// Hand-computed against the record oracle: `struct { a: u8, b: u32, c: u16 }`
+    /// measures 7 bytes per record on this build, so the tuple of the same three
+    /// element types must compute 7 too.
+    #[test]
+    fn storage_view_packs_like_a_record() {
+        use super::{element_storage_offsets, element_storage_size};
+        let elems = vec![narrow(1), narrow(4), narrow(2)];
+        assert_eq!(element_storage_offsets(&elems), vec![0, 1, 5]);
+        assert_eq!(
+            element_storage_size(&Type::Tuple(elems)),
+            7,
+            "u8 + u32 + u16 packs to 7 bytes, as `struct M` does"
+        );
+
+        let pair = vec![narrow(1), narrow(2)];
+        assert_eq!(element_storage_offsets(&pair), vec![0, 1]);
+        assert_eq!(element_storage_size(&Type::Tuple(pair)), 3);
+    }
+
+    /// The stack view is unchanged and deliberately WIDER — a push occupies a whole
+    /// slot whatever the alias says.  The two views must not be confused, so pin the
+    /// difference rather than leaving it implicit.
+    #[test]
+    fn stack_view_stays_wide_where_storage_narrows() {
+        use super::{element_size, element_storage_size};
+        let elems = vec![narrow(1), narrow(4), narrow(2)];
+        assert_eq!(
+            element_size(&Type::Tuple(elems.clone())),
+            24,
+            "stack: three 8-byte integer slots"
+        );
+        assert_eq!(
+            element_storage_size(&Type::Tuple(elems)),
+            7,
+            "storage: 1 + 4 + 2"
+        );
+    }
+
+    /// Plain `integer` has no `forced_size`, so both views agree at 8 — which is why
+    /// `(integer, integer)` tuples have never shown either defect.
+    #[test]
+    fn storage_and_stack_agree_for_plain_integers() {
+        use super::{element_size, element_storage_size};
+        let elems = vec![integer(), integer()];
+        assert_eq!(element_size(&Type::Tuple(elems.clone())), 16);
+        assert_eq!(element_storage_size(&Type::Tuple(elems)), 16);
     }
 
     #[test]

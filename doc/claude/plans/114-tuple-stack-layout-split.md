@@ -574,34 +574,55 @@ experiments demonstrated from opposite sides:
 and E — is a *precondition* for it, not a follow-up. The plan's phase order is
 therefore wrong: D/E must precede C.
 
-## Phase D — the stack boundary
+## Phase D — D1 landed; D2 attempted twice with no effect
 
-### D1 — add the derived stack view
+### D1 — the storage view exists and is tested — **DONE**
 
-One named inflate/deflate (generalising `read_tuple_at_wide`), computed **from** the
-canonical layout. Unused by anything yet.
+`data::element_storage_size` / `element_storage_offsets`: a tuple element sized as a
+record FIELD (`IntegerSpec::byte_width` — `forced_size` first, else the range),
+packed **tight**, because records have no alignment padding (`struct M` measures
+1+4+2 = 7) and store access is unaligned-tolerant.
 
-Gate: unit-tested against hand-computed slot positions for every element kind
-(`boolean`, `character`, `single`, `u8`, `u16`, `u32`, `integer`, `float`, `text`,
-reference, function, nested tuple); `introspect` byte-identical.
+Additive and unused by production code. Unit-tested against hand-computed values,
+including a test that pins the two views apart so they cannot be confused later:
 
-### D2 — derive caller and callee from it
+| tuple | storage view | stack view |
+|---|---|---|
+| `(u8, u32, u16)` | offsets `[0,1,5]`, size **7** | size **24** |
+| `(u8, u16)` | offsets `[0,1]`, size **3** | size 16 |
+| `(integer, integer)` | 16 | 16 — they agree, which is why this shape never broke |
 
-The pushed block and the callee's frame both come from D1, so they cannot disagree.
+### D2 — two attempts, both no-change
 
-Gate: corpus **27/27** on both backends; matrix **201/201**; `stack_align_guard`
-build reports **zero** fires — the check that retired the previous attempt. This is
-the commit that fixes the two original SIGSEGVs.
+Both were reverted; neither moved a single instrument.
 
-### D3 — delete the per-shape corrections
+1. **`tuple_def` sizes elements by `byte_width`** (this was C1). No change — the
+   registered group size is inert.
+2. **`db_type` honours `forced_size` itself** rather than requiring callers to
+   pre-check the alias. `Type::size`'s own doc says "forced_size is handled by the
+   callers", which is exactly the split responsibility this plan removes — so this
+   looked like the unification fix. No change either.
 
-`codegen.rs:3336` (P249 step fixup) and the `#493` `OpSetInt4` branch, one commit
-each. With one layout they have nothing to correct.
+What the traces DID establish, by instrumenting `tuple_def` rather than guessing:
 
-Gate per deletion: corpus, matrix and guard unchanged. If a deletion breaks
-something, the layout is still not unified — stop, do not re-add a fixup.
+```
+@PLN114 tuple_def element 0: Integer(0, 255, false, size(1)) -> element_size=8 storage=1
+@PLN114 tuple_def element 1: Integer(0, 65535, false, size(2)) -> element_size=8 storage=2
+```
 
----
+**`forced_size` survives all the way to `tuple_def`.** The information is present and
+correct at the point the synthetic struct is built; something downstream discards it.
+`element_storage_size` reads it correctly (1 and 2) — so D1's function is right and
+the remaining question is purely *who consumes it*.
+
+### Next — instrument, do not guess
+
+Two consecutive no-change edits mean the altitude is wrong. The synthetic struct's
+field sizes are decided somewhere between `add_attribute` and `finish_type`, and the
+vector stride reads `self.database.size(db_tp)` for that struct
+(`parser/collections.rs:219`, the `else` arm). The next step is to trace where that
+size becomes 8 per element **before** changing anything else — a third guess is not
+warranted, and the instruments have been reliable at saying so.
 
 ## Phase E — deletion and reach
 
