@@ -2671,7 +2671,15 @@ impl Parser {
             // `process_call_args` needs the real type to wire the argument.  A Null result
             // means the arg couldn't be wired; leave `code` untouched and report no match.
             let src = code.clone();
-            let rtp = self.call_nr(code, dnr, &[src], std::slice::from_ref(is_type), false, &[]);
+            let rtp = self.call_nr(
+                code,
+                dnr,
+                &[src],
+                std::slice::from_ref(is_type),
+                false,
+                &[],
+                None,
+            );
             if rtp == Type::Null {
                 return false;
             }
@@ -3033,7 +3041,16 @@ impl Parser {
             }
         }
         if d_nr != u32::MAX {
-            let ret = self.call_with_named(code, d_nr, list, types, named_args, true, arg_pos);
+            let ret = self.call_with_named(
+                code,
+                d_nr,
+                list,
+                types,
+                named_args,
+                true,
+                arg_pos,
+                Some(name_pos),
+            );
             // @PLN102 Phase 3.5 — constant-in-domain elision ("PI blocks it"): a domain-partial
             // math fn with a provably in-domain CONSTANT argument cannot be null (`sqrt(4.0)`,
             // `pow(2.0, 3.0)`, `ln(2.0)`), so peel the `τ?` its decl carries. Only under
@@ -4993,9 +5010,13 @@ impl Parser {
         named: &[(String, Value, Type)],
         is_method: bool,
         arg_pos: &[Position],
+        // The call NAME's position, forwarded to `call_nr` for the arc-C steer caret.
+        name_pos: Option<&Position>,
     ) -> Type {
         if named.is_empty() {
-            return self.call_nr(code, d_nr, positional, pos_types, is_method, arg_pos);
+            return self.call_nr(
+                code, d_nr, positional, pos_types, is_method, arg_pos, name_pos,
+            );
         }
         // Build full argument vector with named args placed at the correct indices.
         let n_params = self.data.attributes(d_nr);
@@ -5051,7 +5072,7 @@ impl Parser {
         // Named args are reordered into parameter slots, so the parse-order
         // `arg_pos` no longer aligns; fall back to the cursor for the rare
         // named-mismatch case.
-        self.call_nr(code, d_nr, &args, &arg_types, is_method, &[])
+        self.call_nr(code, d_nr, &args, &arg_types, is_method, &[], name_pos)
     }
 
     fn single_op(&mut self, op: &str, f: Value, t: Type) -> Value {
@@ -6115,7 +6136,7 @@ impl Parser {
                 && self.context != u32::MAX
                 && self.has_bound_for_method(&op_method)
             {
-                let tp = self.call_nr(code, stub_nr, list, types, false, &[]);
+                let tp = self.call_nr(code, stub_nr, list, types, false, &[], None);
                 if tp != Type::Null {
                     return tp;
                 }
@@ -6134,7 +6155,7 @@ impl Parser {
                     .data
                     .find_op_method(u16::MAX, &format!("Op{}", rename(op)), first);
                 if m != u32::MAX {
-                    let tp = self.call_nr(code, m, list, types, false, &[]);
+                    let tp = self.call_nr(code, m, list, types, false, &[], None);
                     if tp != Type::Null {
                         return tp;
                     }
@@ -6150,7 +6171,7 @@ impl Parser {
             for pos in possible {
                 // `OpEqBool` truthiness-fallback guard lives in `call_nr` (the single
                 // chokepoint all three resolution sub-paths share) — see there.
-                let tp = self.call_nr(code, pos, list, types, false, &[]);
+                let tp = self.call_nr(code, pos, list, types, false, &[], None);
                 if tp != Type::Null {
                     // We cannot compare two different types of enums, both will be integers in the same range
                     if let (Some(Type::Enum(f, _, _)), Some(Type::Enum(s, _, _))) =
@@ -6174,7 +6195,7 @@ impl Parser {
                     .data
                     .find_fn(u16::MAX, &format!("Op{}", rename(op)), first);
                 if user_op != u32::MAX {
-                    let tp = self.call_nr(code, user_op, list, types, false, &[]);
+                    let tp = self.call_nr(code, user_op, list, types, false, &[], None);
                     if tp != Type::Null {
                         return tp;
                     }
@@ -6226,6 +6247,7 @@ impl Parser {
     }
 
     /// Call a specific definition
+    #[allow(clippy::too_many_arguments)]
     fn call_nr(
         &mut self,
         code: &mut Value,
@@ -6234,6 +6256,11 @@ impl Parser {
         types: &[Type],
         report: bool,
         arg_pos: &[Position],
+        // The call NAME's position, when the caller knows it (a free-function call
+        // via `call()`).  The @PLN102 arc-C steer points its caret here and carries a
+        // `codeAction` suggestion, so the quick-fix replaces the right token; `None`
+        // (a method / operator path) keeps the cursor caret and offers no quick-fix.
+        name_pos: Option<&Position>,
     ) -> Type {
         // @PLN102 pre-freeze — `OpEqBool`/`OpNeBool` are BOOLEAN (in)equality; they must
         // not be the implicit truthiness fallback for mismatched types.  Without this,
@@ -6308,7 +6335,7 @@ impl Parser {
                     return Type::Void;
                 };
                 if self.data.attr_type(r_nr, 0).is_equal(&types[0]) {
-                    return self.call_nr(code, r_nr, list, types, report, arg_pos);
+                    return self.call_nr(code, r_nr, list, types, report, arg_pos, name_pos);
                 }
             }
             diagnostic!(
@@ -6357,11 +6384,26 @@ impl Parser {
             let succ = self.data.def(d_nr).superseded().to_string();
             if !succ.is_empty() {
                 let shown = self.data.def(d_nr).display_name().to_string();
-                diagnostic!(
-                    self.lexer,
-                    Level::Warning,
-                    "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
-                );
+                // Position on the call NAME when the caller supplied it, and carry the
+                // successor as a structured suggestion so a `codeAction` can offer a
+                // "Change to `Y`" quick-fix (step B).  Without a name position (method /
+                // operator path) keep the cursor caret and no suggestion — a quick-fix
+                // there could replace the wrong token.
+                if let Some(pos) = name_pos {
+                    diagnostic_at!(
+                        self.lexer,
+                        pos,
+                        Level::Warning,
+                        "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
+                    );
+                    self.lexer.suggest_last(&succ);
+                } else {
+                    diagnostic!(
+                        self.lexer,
+                        Level::Warning,
+                        "`{shown}` is superseded — use `{succ}` (the old form keeps working)"
+                    );
+                }
             }
         }
         tp

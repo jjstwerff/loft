@@ -666,6 +666,9 @@ fn find_references_spans_the_workspace() {
 #[test]
 fn did_save_refreshes_the_workspace_index() {
     let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("savews");
+    // Clean slate — the test ADDS c.loft mid-run, so a leftover copy from a prior
+    // run would poison the first (pre-c.loft) reference count.
+    let _ = std::fs::remove_dir_all(&root);
     std::fs::create_dir_all(&root).unwrap();
     std::fs::write(
         root.join("a.loft"),
@@ -1010,6 +1013,84 @@ fn code_action_offers_the_did_you_mean_fix() {
     assert_eq!(
         new_text, "move",
         "the edit replaces the token with `move`: {a:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
+// codeAction step-B follow-up — the @PLN102 arc-C #superseded steer offers a
+// "Change to `Y`" quick-fix that replaces the call name with the successor.
+#[test]
+fn code_action_offers_the_superseded_steer_fix() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let _ = s.recv();
+    s.notify("initialized", "{}");
+
+    let uri = "file:///s.loft";
+    // `#superseded` marks the PRECEDING def (old_add); main's call to it steers to new_add.
+    let prog = "fn old_add(a: integer, b: integer) -> integer { new_add(a, b) }\n\
+                #superseded \"new_add\"\n\
+                fn new_add(a: integer, b: integer) -> integer { a + b }\n\
+                fn main() -> integer { old_add(1, 2) }\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let note = s.recv();
+    let diags = field_arr(field(&note, "params").unwrap(), "diagnostics").unwrap();
+    let diag = diags
+        .iter()
+        .find(|d| {
+            field_str(d, "message")
+                .unwrap_or_default()
+                .contains("superseded")
+        })
+        .expect("the steer warning is published");
+    // The published diagnostic round-trips the successor as a structured suggestion.
+    assert_eq!(
+        field(diag, "data")
+            .and_then(|d| field_str(d, "suggestion"))
+            .as_deref(),
+        Some("new_add"),
+        "steer diagnostic carries the successor: {diag:?}"
+    );
+
+    // Echo it back in a codeAction → a quick-fix that rewrites the call name.
+    let range = field(diag, "range").unwrap();
+    s.request(
+        2,
+        "textDocument/codeAction",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{uri}"}},"range":{},"context":{{"diagnostics":[{}]}}}}"#,
+            json::to_json_string(range),
+            json::to_json_string(diag),
+        ),
+    );
+    let reply = s.recv();
+    let actions = match field(&reply, "result") {
+        Some(Parsed::Array(a)) => a,
+        other => panic!("codeAction result is an array, got {other:?}"),
+    };
+    let a = actions.first().expect("one quick-fix");
+    assert!(
+        field_str(a, "title")
+            .unwrap_or_default()
+            .contains("new_add"),
+        "title names the successor: {a:?}"
+    );
+    let changes = field(field(a, "edit").unwrap(), "changes").unwrap();
+    let new_text = match changes {
+        Parsed::Object(e) => e
+            .iter()
+            .find_map(|(_, _, v)| match v {
+                Parsed::Array(edits) => edits.first().and_then(|ed| field_str(ed, "newText")),
+                _ => None,
+            })
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    assert_eq!(
+        new_text, "new_add",
+        "the edit replaces the call name with `new_add`: {a:?}"
     );
 
     s.notify("exit", "null");

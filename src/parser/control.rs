@@ -6458,6 +6458,7 @@ impl Parser {
             &[cursor_tp],
             false,
             &[],
+            None,
         );
         // Hoist `name = rule(cursor)` above the if-chain: the call runs ONCE (a miss leaves `pos`
         // unchanged, so unconditional evaluation is safe), and `name` is a match-level binding
@@ -12001,7 +12002,7 @@ impl Parser {
         // position is the method-name token, the best available caret).
         let mut arg_pos: Vec<Position> = vec![self.lexer.peek_pos().clone()];
         if self.lexer.has_token(")") {
-            return self.call_nr(val, md_nr, &list, &types, true, &arg_pos);
+            return self.call_nr(val, md_nr, &list, &types, true, &arg_pos, None);
         }
         loop {
             // #432 — `list[0]` is the receiver (attribute 0), so `list.len()` is the
@@ -12025,7 +12026,7 @@ impl Parser {
             }
         }
         self.lexer.token(")");
-        self.call_nr(val, md_nr, &list, &types, true, &arg_pos)
+        self.call_nr(val, md_nr, &list, &types, true, &arg_pos, None)
     }
 
     pub(crate) fn parse_parameters(&mut self) -> (Vec<Type>, Vec<Value>) {

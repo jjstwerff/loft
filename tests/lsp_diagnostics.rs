@@ -88,3 +88,37 @@ fn unknown_call_carries_a_structured_suggestion() {
         e.suggestion
     );
 }
+
+#[test]
+fn superseded_steer_carries_a_structured_suggestion_on_the_call_name() {
+    // @PLN102 arc C + step B: a call to a `#superseded "Y"` symbol from owned source
+    // steers toward Y, positioned on the call NAME and carrying Y as a structured
+    // suggestion — so a codeAction can offer "Change to `new_add`" that replaces the
+    // right token (the LSP diagnose path the server pushes).
+    // `#superseded` marks the PRECEDING def, so `old_add` is the superseded one.
+    let src = "fn old_add(a: integer, b: integer) -> integer { new_add(a, b) }\n\
+               #superseded \"new_add\"\n\
+               fn new_add(a: integer, b: integer) -> integer { a + b }\n\
+               fn main() -> integer { old_add(1, 2) }\n";
+    let diags = loft::lsp::diagnose(src, "buf.loft", "default");
+    let e = diags
+        .entries()
+        .iter()
+        .find(|e| e.message.contains("is superseded"))
+        .expect("the steer warning fires from owned source");
+    assert_eq!(e.level, Level::Warning, "the steer is a Warning");
+    assert_eq!(
+        e.suggestion.as_deref(),
+        Some("new_add"),
+        "the successor is a structured suggestion: {:?}",
+        e.suggestion
+    );
+    // The caret is on the call name `old_add` (line 4), not the drifted statement end.
+    assert_eq!(e.line, 4, "steer sits on the call line");
+    let line4 = src.lines().nth(3).unwrap();
+    assert!(
+        line4[e.col as usize - 1..].starts_with("old_add"),
+        "the caret is on `old_add`: col {} in {line4:?}",
+        e.col
+    );
+}
