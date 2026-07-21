@@ -1081,14 +1081,13 @@ fn occurrence_is_assignment(text: &str, line_no: u32, col: u32, len: u16) -> boo
 /// that.  loft is flat-scoped per function, so a binding's occurrences are all in
 /// the current buffer; the result needs no workspace index.
 ///
-/// SOUNDNESS: the index records `parse_var` occurrences (uses + assignment
-/// targets) but NOT declarations made by the definition / loop / lambda parser (a
-/// parameter's signature name, a `for i` / lambda binder).  Renaming via the index
-/// alone would leave such a declaration untouched — a broken edit — so the precise
-/// path is taken ONLY for an assignment-local whose declaration IS captured: the
-/// name is not a parameter of its function, and the binding's earliest occurrence
-/// is a declaring `name =` write.  Params, loop / lambda binders, and a cursor
-/// sitting on a non-recorded declaration return `None`.
+/// SOUNDNESS: a rename must edit the binding's DECLARATION, so the precise path is
+/// taken only when the recorded occurrence set INCLUDES it.  That holds for an
+/// assignment-local (its earliest occurrence is a declaring `name =` write) and —
+/// via the @PLN115 tail — for a PARAMETER (its signature name is recorded with the
+/// `declaration` flag).  A binder the parser does not yet record a declaration for
+/// (a `for i` / lambda binder) still returns `None`, so the caller falls back to
+/// the F-v1 name-scan.
 #[must_use]
 pub fn local_binding_refs(
     text: &str,
@@ -1107,18 +1106,6 @@ pub fn local_binding_refs(
     let crate::resolution::Resolution::Local { fn_def, var_nr } = target.res else {
         return None;
     };
-    let name = identifier_span_at(text, line, col).map(|(n, ..)| n)?;
-    // A parameter (or lambda param) — its declaration lives in the signature, which
-    // the index does not record.  Params are the function's attributes.
-    if fn_def < p.data.definitions()
-        && p.data
-            .def(fn_def)
-            .attributes()
-            .iter()
-            .any(|a| a.name == name)
-    {
-        return None;
-    }
     let mut mine: Vec<&crate::resolution::Occurrence> = occ
         .iter()
         .filter(|o| {
@@ -1127,11 +1114,16 @@ pub fn local_binding_refs(
         })
         .collect();
     mine.sort_by(|a, b| a.line.cmp(&b.line).then(a.col.cmp(&b.col)));
-    // The earliest occurrence must be the declaring `name =` write; if it isn't,
-    // the binding is declared elsewhere (a loop / comprehension binder) and the
-    // index set is incomplete → fall back.
+    // SOUNDNESS: the precise path is complete only when the binding's DECLARATION is
+    // in the set, so a rename edits it too.  That holds when the index recorded the
+    // declaration (a parameter signature or `for` / lambda binder — `declaration`),
+    // or the earliest occurrence is a declaring `name =` write (an assignment-local).
+    // A binder whose declaration the parser does not yet record → incomplete set →
+    // `None`, and the caller uses the F-v1 name-scan.
     let first = mine.first()?;
-    if !occurrence_is_assignment(text, first.line, first.col, first.len) {
+    let has_declaration = mine.iter().any(|o| o.declaration)
+        || occurrence_is_assignment(text, first.line, first.col, first.len);
+    if !has_declaration {
         return None;
     }
     Some(

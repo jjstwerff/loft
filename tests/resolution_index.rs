@@ -294,6 +294,40 @@ fn resolve_at_navigates_local_global_field_method() {
 }
 
 #[test]
+fn tail_parameter_declaration_is_recorded_and_shares_the_binding() {
+    // @PLN115 tail — a parameter's signature name records a DECLARATION occurrence
+    // that shares the binding identity `(fn_def, var_nr)` of its body uses.
+    let p = parse_with_resolutions("fn f(w: integer) -> integer {\n  return w + w;\n}\n");
+    let decls: Vec<_> = p.resolutions().iter().filter(|o| o.declaration).collect();
+    assert_eq!(decls.len(), 1, "one param declaration recorded: {decls:?}");
+    let decl = decls[0];
+    assert_eq!(decl.line, 1, "the param decl is on the signature line");
+    assert!(
+        matches!(decl.res, Resolution::Local { var_nr: 0, .. }),
+        "param decl is a Local, first param = var_nr 0: {:?}",
+        decl.res
+    );
+    // decl + two body uses = 3 occurrences, all ONE binding.
+    let bindings: Vec<_> = p
+        .resolutions()
+        .iter()
+        .filter_map(|o| match o.res {
+            Resolution::Local { fn_def, var_nr } => Some((fn_def, var_nr)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        bindings.len(),
+        3,
+        "param w: decl + two body uses: {bindings:?}"
+    );
+    assert!(
+        bindings.iter().all(|b| *b == bindings[0]),
+        "the declaration and uses share one binding: {bindings:?}"
+    );
+}
+
+#[test]
 fn s4_assignment_local_refs_exclude_field_access() {
     // Local `x` is assigned then read alongside a field `p.x` of the SAME name.
     // The precise path must return the local's decl + read, and NOT the `p.x` field.
@@ -321,14 +355,46 @@ fn s4_assignment_local_refs_exclude_field_access() {
 }
 
 #[test]
-fn s4_parameter_falls_back_to_fv1() {
-    // A parameter's signature declaration is not in the index, so the precise
-    // path is unsound → None (the caller uses the F-v1 name-scan).
+fn s4_parameter_takes_the_precise_path() {
+    // @PLN115 tail — a parameter's signature declaration is now recorded, so the
+    // precise path is SOUND: it returns the signature decl + the body uses, keyed
+    // on the binding identity (a same-named field would be excluded).
     let src = "fn f(w: integer) -> integer {\n  return w + w;\n}\n";
     // Cursor on a body use of `w` (L2, col 10).
+    let refs = loft::lsp::local_binding_refs(src, "default", "/buf.loft", 2, 10)
+        .expect("a parameter now takes the precise path");
+    let positions: Vec<(u32, u32)> = refs.iter().map(|r| (r.line, r.col)).collect();
+    // The signature decl (`w` at L1 col 6) + two body uses (L2) = 3 references.
+    assert_eq!(
+        refs.len(),
+        3,
+        "param w: signature decl + two uses: {positions:?}"
+    );
     assert!(
-        loft::lsp::local_binding_refs(src, "default", "/buf.loft", 2, 10).is_none(),
-        "a parameter must fall back to F-v1"
+        positions.contains(&(1, 6)),
+        "includes the signature declaration so a rename edits it: {positions:?}"
+    );
+}
+
+#[test]
+fn s4_parameter_refs_exclude_a_same_named_field() {
+    // The precision win for a parameter: a same-named FIELD access (`p.w`) is
+    // excluded from the parameter's references — which the F-v1 name-scan can't do.
+    let src =
+        "struct Q { w: integer }\nfn f(w: integer, q: Q) -> integer {\n  return w + q.w;\n}\n";
+    // Cursor on the param `w` use (L3, col 10).
+    let refs = loft::lsp::local_binding_refs(src, "default", "/buf.loft", 3, 10)
+        .expect("param takes the precise path");
+    let positions: Vec<(u32, u32)> = refs.iter().map(|r| (r.line, r.col)).collect();
+    // Decl `w` (L2 col 6) + the body use `w` (L3) — NOT the field `q.w` (L3 col 16).
+    assert_eq!(
+        refs.len(),
+        2,
+        "param decl + use, field q.w excluded: {positions:?}"
+    );
+    assert!(
+        !positions.iter().any(|(l, c)| *l == 3 && *c > 13),
+        "the field q.w is excluded: {positions:?}"
     );
 }
 

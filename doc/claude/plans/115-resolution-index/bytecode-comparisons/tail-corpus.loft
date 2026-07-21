@@ -1,0 +1,40 @@
+// @PLN115 tail — byte-identical gate corpus.  One fn per param/binder path the
+// declaration-recording hooks touch; `main` runs them all for a clean e2e check.
+struct P { x: integer, y: integer }
+
+fn plain(a: integer, b: integer) -> integer { a + b }
+
+fn defaulted(a: integer, b: integer = 3) -> integer { a + b }
+
+fn constref(p: const P) -> integer { p.x + p.y }
+
+fn takesvec(v: vector<integer>) -> integer { v.len() }
+
+fn method_recv(self: P) -> integer { self.x * self.y }
+
+fn with_locals(w: integer) -> integer {
+  n = w + 1;
+  s = "hi";
+  total = 0;
+  for i in 0..n {
+    total = total + i;
+  }
+  return total + n + s.len();
+}
+
+fn with_lambda(w: integer) -> integer {
+  f = fn(e: integer) -> integer { e * 2 };
+  return f(w);
+}
+
+fn main() {
+  print("{plain(2, 3)}");
+  print("{defaulted(5)}");
+  p = P { x: 4, y: 6 };
+  print("{constref(p)}");
+  print("{method_recv(p)}");
+  v = [1, 2, 3];
+  print("{takesvec(v)}");
+  print("{with_locals(4)}");
+  print("{with_lambda(4)}");
+}

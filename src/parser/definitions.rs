@@ -865,6 +865,23 @@ impl Parser {
                 self.param_locks.insert((self.context, idx as u32), token);
             }
         }
+        // @PLN115 tail — now `self.context` (the fn's def_nr) is known, record each
+        // parameter's DECLARATION occurrence: `Local{fn_def, var_nr}` at the signature
+        // name.  The param arg-index IS its var_nr (pass 2 re-types params by index —
+        // `change_var_type(a_nr, …)`), so no var-table lookup is needed.  Pass 2 only
+        // (the recording pass); populated only when recording (else the vec is empty).
+        if !self.first_pass {
+            for (idx, pos, len) in std::mem::take(&mut self.pending_param_positions) {
+                self.record_decl(
+                    &pos,
+                    len,
+                    crate::resolution::Resolution::Local {
+                        fn_def: self.context,
+                        var_nr: idx,
+                    },
+                );
+            }
+        }
         // @PLN86 step 1.2 — record the sandbox profile for a host-designated
         // function so the admission walk (and the nesting guard, 0.1) know this
         // def is restricted.  Designation is host-controlled (`fn:<name>` here;
@@ -1534,14 +1551,30 @@ impl Parser {
         // @PLN86 §7.2 (F7) — collect this list's `…#default` parameter locks fresh; the
         // caller (`parse_function`) records them once the function's def_nr exists.
         self.pending_param_locks.clear();
+        // @PLN115 tail — likewise collect each parameter's name position; the def_nr /
+        // var_nr are not established until after this list, so the DECLARATION
+        // occurrence is recorded in `parse_function` (param arg-index == var_nr).
+        self.pending_param_positions.clear();
         loop {
             if self.lexer.peek_token(")") {
                 break;
             }
+            // Capture the parameter name's position before it is consumed (only when
+            // recording — `Position` holds a `String`, so no clone on a normal compile).
+            let attr_pos = self
+                .record_resolutions
+                .then(|| self.lexer.peek_pos().clone());
             let Some(attr_name) = self.lexer.has_identifier() else {
                 diagnostic!(self.lexer, Level::Error, "Expect attribute");
                 return false;
             };
+            if let Some(pos) = attr_pos {
+                self.pending_param_positions.push((
+                    arguments.len() as u16,
+                    pos,
+                    attr_name.chars().count() as u16,
+                ));
+            }
             if !is_lower(&attr_name) {
                 diagnostic!(
                     self.lexer,

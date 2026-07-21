@@ -187,6 +187,12 @@ pub struct Parser {
     /// `param_locks` once the function's def_nr is known (parameters parse BEFORE the def
     /// is created).  Cleared at the start of each parameter list; consumed per function.
     pub(crate) pending_param_locks: Vec<(usize, String)>,
+    /// @PLN115 tail — a parameter's `(arg_index, name_pos, name_len)` captured while
+    /// reading the signature (positions there, but the def_nr / var_nr are not yet
+    /// established), ferried to `parse_function` to record each param's DECLARATION
+    /// occurrence once `self.context` is known.  Populated only when recording;
+    /// cleared per parameter list, like `pending_param_locks`.
+    pub(crate) pending_param_positions: Vec<(u16, Position, u16)>,
     /// @PLN87 — transient one-shot: set while parsing a `&<lvalue>` binding (the prefix
     /// `&` in `b = &a`, or the `&` in a `b: &T = a` type annotation), consumed by
     /// `parse_assign_op` to lower a SCALAR reference to `OpCreateStack`. Cleared per
@@ -670,6 +676,7 @@ impl Parser {
             param_locks: HashMap::new(),
             sandbox_param_overrides: HashMap::new(),
             pending_param_locks: Vec::new(),
+            pending_param_positions: Vec::new(),
             amp_pending: false,
             in_sandbox: false,
             parse_depth: 0,
@@ -8786,12 +8793,31 @@ impl Parser {
     /// zero-cost there.  A pure side-append — it changes no parse decision.  Wired
     /// to the resolution chokepoints starting in S2 (`parse_var` locals).
     fn record(&mut self, pos: &Position, len: u16, res: crate::resolution::Resolution) {
+        self.record_occurrence(pos, len, res, false);
+    }
+
+    /// @PLN115 tail — record a binding's DECLARATION occurrence (a parameter's
+    /// signature name, a `for` / lambda binder).  Same gate as [`Self::record`],
+    /// but flagged `declaration` so a consumer knows the binding's declaration is
+    /// captured and a precise rename is complete.
+    fn record_decl(&mut self, pos: &Position, len: u16, res: crate::resolution::Resolution) {
+        self.record_occurrence(pos, len, res, true);
+    }
+
+    fn record_occurrence(
+        &mut self,
+        pos: &Position,
+        len: u16,
+        res: crate::resolution::Resolution,
+        declaration: bool,
+    ) {
         if self.record_resolutions {
             self.resolutions.push(crate::resolution::Occurrence {
                 line: pos.line,
                 col: pos.pos,
                 len,
                 res,
+                declaration,
             });
         }
     }

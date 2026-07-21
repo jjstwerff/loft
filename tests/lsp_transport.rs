@@ -1414,6 +1414,73 @@ fn rename_a_local_scopes_to_its_function() {
     let _ = s.child.wait();
 }
 
+// @PLN115 tail — renaming a PARAMETER edits its signature declaration + body uses
+// and, keyed on the binding identity, excludes a same-named FIELD (`q.w`).
+#[test]
+fn rename_a_parameter_edits_the_signature_and_excludes_a_field() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("paramrename");
+    let _ = std::fs::remove_dir_all(&root);
+    std::fs::create_dir_all(&root).unwrap();
+    // `w` is a param AND the name of a field of Q; `q.w` must NOT be renamed.
+    let prog =
+        "struct Q { w: integer }\nfn f(w: integer, q: Q) -> integer {\n  return w + q.w\n}\n";
+    std::fs::write(root.join("m.loft"), prog).unwrap();
+
+    let mut s = Session::start();
+    s.request(
+        1,
+        "initialize",
+        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+    );
+    let _ = s.recv();
+    s.notify("initialized", "{}");
+    let uri = format!("file://{}/m.loft", root.display());
+    s.notify("textDocument/didOpen", &open_params(&uri, prog));
+    let _ = s.recv();
+
+    // Rename the param `w` — cursor on the body use (0-based line 2, char 9).
+    s.request(
+        2,
+        "textDocument/rename",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":9}},"newName":"width"}}"#),
+    );
+    let reply = s.recv();
+    let changes = field(field(&reply, "result").expect("rename result"), "changes").unwrap();
+    let edits: Vec<(i64, i64)> = match changes {
+        Parsed::Object(e) => e
+            .iter()
+            .flat_map(|(_, _, v)| match v {
+                Parsed::Array(a) => a
+                    .iter()
+                    .filter_map(|ed| {
+                        let st = field(field(ed, "range")?, "start")?;
+                        Some((
+                            field(st, "line").and_then(Parsed::as_i64)?,
+                            field(st, "character").and_then(Parsed::as_i64)?,
+                        ))
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    // The signature `w` (line 1, char 5) + the body use (line 2, char 9) = 2 edits.
+    assert_eq!(edits.len(), 2, "signature decl + one body use: {edits:?}");
+    assert!(
+        edits.contains(&(1, 5)),
+        "edits the signature declaration so the rename is complete: {edits:?}"
+    );
+    // The field `q.w`'s `w` sits at line 2 char 13; it must NOT be edited.
+    assert!(
+        !edits.iter().any(|(l, c)| *l == 2 && *c > 10),
+        "the same-named field q.w is excluded: {edits:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 // S4 (@PLN115) — renaming an assignment-local resolves by binding identity, so a
 // same-named FIELD access (`p.x`) is EXCLUDED — the F-v1 name-scan could not do this.
 #[test]

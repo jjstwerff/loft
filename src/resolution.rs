@@ -19,6 +19,11 @@ pub struct Occurrence {
     pub col: u32,
     pub len: u16,
     pub res: Resolution,
+    /// True when this occurrence is the binding's DECLARATION (a parameter's
+    /// signature name, a `for` / lambda binder) rather than a use.  Lets a
+    /// consumer confirm the declaration is captured — the soundness gate for a
+    /// precise rename — without the `name =` text heuristic assignment-locals use.
+    pub declaration: bool,
 }
 
 /// What an identifier occurrence binds to.  A `Local` is keyed on its binding
