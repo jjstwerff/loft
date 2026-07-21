@@ -2075,7 +2075,7 @@ pub fn element_storage_size(t: &Type) -> usize {
     match t.base() {
         Type::Integer(spec) => spec.byte_width(true) as usize,
         Type::Tuple(elems) => elems.iter().map(element_storage_size).sum(),
-        other => element_size(&other),
+        other => element_size(other),
     }
 }
 
