@@ -530,24 +530,49 @@ field carrying its real width has no reason to pick a mismatched pair.
 This is a *type-preservation* fix, not a layout rewrite — which is why every layout
 theory in this plan kept almost-explaining the evidence without ever predicting it.
 
-## Phase C — convert, one site per commit
+## Phase C — C1 attempted, measured, REVERTED; the target is now exact
 
-### C1…Cn — one firing site each
+### C1 — size tuple elements as record fields in `tuple_def` (reverted)
 
-Switch the site to the canonical layout. Its cross-check goes green; every other
-site stays green.
+Hypothesis: `tuple_def` sizes elements with `element_size` (`Integer` => 8 flat,
+discarding the alias's `size(N)`), so making it use `IntegerSpec::byte_width` — the
+documented one home for storage width, "honours `forced_size` first, falls back to
+the bounds-range heuristic" — would pack `(u8,u16)` like `struct M`.
 
-Gate per commit: all four instruments green or improving, corpus and matrix no worse,
-and the converted site's assert silent while the others still fire as expected. A
-site that cannot convert gets a **written reason** in this file — never a silent
-exception.
+**Result: no measurable change.** Stride still 32, `+1` still present, corpus
+unchanged at 21, record-vs-tuple still 24 v 7. Reverted rather than kept: a change
+that moves no instrument is a speculative special case, and this plan has been
+punished for those three times.
 
-Expected: record-vs-tuple parity (instrument 3) and the mixed-width round-trip
-(instrument 4) go green somewhere in this phase. That is the 24B→7B and the `+1`
-fix, and it should land as a *consequence* of removing a divergence, not as a
-separate patch.
+**The negative result is the value.** `tuple_def`'s pre-registered size/alignment is
+**inert** for every path these instruments touch — consistent with
+`database/types.rs:399-407` ("for STORAGE layout we re-compute from `sizes[]`"), and
+now measured rather than inferred.
 
----
+### Where the two defects actually come from
+
+- **Stride** — `parser/collections.rs:219` computes a vector's element stride as
+  `element_size(inner).max(4)`. For a tuple element type that is
+  `element_size(Type::Tuple)`, the sum of per-element **stack** widths (8 per
+  integer) — 16 for `(u8,u16)`, hence 32 for two.
+- **`+1`** — narrow op selection follows the element `Type`'s spec, which stays
+  range-limited; `(integer,integer)` never takes the narrow path and round-trips
+  correctly.
+
+So both trace to `element_size(Type::Tuple)` serving two masters: the **vector /
+storage stride** and the **stack slot** (`variables::size(Tuple)`). Changing it in
+either direction breaks the other view — which is exactly what the two reverted
+experiments demonstrated from opposite sides:
+
+| attempt | direction | broke |
+|---|---|---|
+| stepped layout (reverted) | wider | storage — inflated vector strides |
+| C1 / record widths (reverted) | narrower | nothing measurable, but would desync the 8-stepped stack pushes if it had |
+
+**Conclusion: phase C cannot be done as a local edit.** The split of
+`element_size(Type::Tuple)` into a storage view and a derived stack view — phases D
+and E — is a *precondition* for it, not a follow-up. The plan's phase order is
+therefore wrong: D/E must precede C.
 
 ## Phase D — the stack boundary
 
