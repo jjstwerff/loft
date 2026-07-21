@@ -691,6 +691,21 @@ impl Parser {
                 self.change_var_type(a_nr as u16, &a.typedef);
             }
         }
+        // @PLN115 tail — record each `fn(e: T)` lambda parameter's DECLARATION (pass 2,
+        // recording on), consuming the positions `parse_arguments` captured, now that
+        // the lambda's def_nr is known.  Same arg-index == var_nr as a plain fn param.
+        if !self.first_pass {
+            for (idx, pos, len) in std::mem::take(&mut self.pending_param_positions) {
+                self.record_decl(
+                    &pos,
+                    len,
+                    crate::resolution::Resolution::Local {
+                        fn_def: d_nr,
+                        var_nr: idx,
+                    },
+                );
+            }
+        }
 
         // The codegen (line 40-46) reads definition attributes to assign argument positions.
         let outer_closure_param = self.closure_param;

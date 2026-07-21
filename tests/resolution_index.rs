@@ -328,6 +328,47 @@ fn tail_parameter_declaration_is_recorded_and_shares_the_binding() {
 }
 
 #[test]
+fn tail_lambda_parameter_declaration_is_recorded_and_precise() {
+    // @PLN115 tail — a `fn(e: T)` lambda parameter's name records a DECLARATION keyed
+    // on the LAMBDA's def, shared with its body uses, so its references are precise.
+    let src =
+        "fn g() -> integer {\n  f = fn(e: integer) -> integer { e + e };\n  return f(3);\n}\n";
+    let p = parse_with_resolutions(src);
+    let lambda_def = (0..p.data.definitions())
+        .find(|&d| p.data.def(d).name().contains("lambda"))
+        .expect("a lambda def exists");
+    // decl (declaration) + two body uses of `e`, all on the lambda def, one binding.
+    let on_lambda: Vec<_> = p
+        .resolutions()
+        .iter()
+        .filter_map(|o| match o.res {
+            Resolution::Local { fn_def, var_nr } if fn_def == lambda_def => {
+                Some((var_nr, o.declaration))
+            }
+            _ => None,
+        })
+        .collect();
+    assert_eq!(
+        on_lambda.iter().filter(|(_, decl)| *decl).count(),
+        1,
+        "one lambda-param declaration: {on_lambda:?}"
+    );
+    assert_eq!(
+        on_lambda.len(),
+        3,
+        "lambda param e: decl + two uses: {on_lambda:?}"
+    );
+    assert!(
+        on_lambda.iter().all(|(v, _)| *v == on_lambda[0].0),
+        "one binding: {on_lambda:?}"
+    );
+    // S4 precise path: cursor on the param decl `e` (L2 col 10) → its 3 occurrences.
+    let refs = loft::lsp::local_binding_refs(src, "default", "/buf.loft", 2, 10)
+        .expect("lambda param takes the precise path");
+    assert_eq!(refs.len(), 3, "decl + two body uses");
+}
+
+#[test]
 fn s4_assignment_local_refs_exclude_field_access() {
     // Local `x` is assigned then read alongside a field `p.x` of the SAME name.
     // The precise path must return the local's decl + read, and NOT the `p.x` field.
