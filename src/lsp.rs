@@ -304,16 +304,18 @@ fn name_col_on_line(src: &str, decl_line: u32, name: &str) -> Option<u32> {
 }
 
 /// The identifier under a 1-based (`line`, `col`) cursor — the token that
-/// find-references / rename resolve.  Public wrapper over the internal `word_at`.
+/// find-references / rename resolve.  Public wrapper over `identifier_span_at`.
 #[must_use]
 pub fn identifier_at(text: &str, line: u32, col: u32) -> Option<String> {
-    word_at(text, line, col)
+    identifier_span_at(text, line, col).map(|(name, ..)| name)
 }
 
-/// The identifier token under a 1-based (`line`, `col`) cursor in `text`, or
-/// `None` if the cursor is not on a word.  A cursor at a token's right edge still
-/// anchors on it.
-fn word_at(text: &str, line: u32, col: u32) -> Option<String> {
+/// The identifier under a 1-based (`line`, `col`) cursor as `(name, start_col,
+/// end_col)` — the cols 0-based — or `None` if not on a word.  Right-edge
+/// anchoring: a cursor just past a token still selects it.  `prepareRename` uses
+/// the span for the highlight range.
+#[must_use]
+pub fn identifier_span_at(text: &str, line: u32, col: u32) -> Option<(String, u32, u32)> {
     let line_str = text.lines().nth(line.saturating_sub(1) as usize)?;
     let chars: Vec<char> = line_str.chars().collect();
     if chars.is_empty() {
@@ -335,7 +337,11 @@ fn word_at(text: &str, line: u32, col: u32) -> Option<String> {
     while end < chars.len() && is_word(chars[end]) {
         end += 1;
     }
-    Some(chars[start..end].iter().collect())
+    Some((chars[start..end].iter().collect(), start as u32, end as u32))
+}
+
+fn word_at(text: &str, line: u32, col: u32) -> Option<String> {
+    identifier_at(text, line, col)
 }
 
 /// The loft source formatter (`tools/fmt/whole.loft`) compiled to a runnable
@@ -802,4 +808,83 @@ fn loft_files(root: &Path) -> Vec<PathBuf> {
         }
     }
     out
+}
+
+// ── rename (on top of the reverse index) ─────────────────────────────────────
+
+/// Whether `name` is a syntactically valid loft identifier (and not a keyword) —
+/// the guard on a rename's NEW name.
+#[must_use]
+pub fn is_valid_identifier(name: &str) -> bool {
+    let mut cs = name.chars();
+    if !matches!(cs.next(), Some(c) if c.is_ascii_alphabetic() || c == '_') {
+        return false;
+    }
+    name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') && !crate::lexer::is_keyword(name)
+}
+
+/// A stdlib source path (under a `default/` dir) — files a rename must never edit.
+fn is_stdlib_path(file: &str) -> bool {
+    file.contains("/default/") || file.ends_with("/default")
+}
+
+/// For `prepareRename`: the identifier's span at the cursor IF it is renamable —
+/// on an identifier that is NOT a standard-library symbol.  `None` otherwise, so
+/// the editor won't offer to rename a stdlib name.
+#[must_use]
+pub fn prepare_rename(
+    text: &str,
+    line: u32,
+    col: u32,
+    stdlib_dir: &str,
+) -> Option<(String, u32, u32)> {
+    let span = identifier_span_at(text, line, col)?;
+    if !lookup(&span.0, "", "query.loft", stdlib_dir).is_empty() {
+        return None; // a stdlib symbol — not renamable
+    }
+    Some(span)
+}
+
+/// Plan a workspace-wide rename of `old` → `new`: the reference locations to
+/// rewrite, or an error message explaining why the rename is refused.
+///
+/// Guards (SAFE by default): the new name must be a valid identifier; the old
+/// name must not resolve to a **standard-library** symbol (`print`, `len`, …);
+/// and no reference may live in a stdlib file — renaming those would corrupt the
+/// shared library.  NOTE: lexical / name-keyed (like find-references), so it best
+/// fits GLOBAL user symbols whose name is unique across the workspace; a local
+/// variable or a name reused across scopes is renamed everywhere it appears.
+///
+/// # Errors
+/// Returns a human-readable message when the rename is refused: the new name is
+/// not a valid identifier, `old` is a stdlib symbol or is referenced by stdlib
+/// files, or there are no references to `old`.
+pub fn plan_rename(
+    old: &str,
+    new: &str,
+    index: &WorkspaceIndex,
+    overlays: &[(String, String)],
+    stdlib_dir: &str,
+) -> Result<Vec<Reference>, String> {
+    if !is_valid_identifier(new) {
+        return Err(format!("`{new}` is not a valid identifier"));
+    }
+    if new == old {
+        return Ok(Vec::new());
+    }
+    if !lookup(old, "", "query.loft", stdlib_dir).is_empty() {
+        return Err(format!(
+            "`{old}` is a standard-library symbol — refusing to rename it"
+        ));
+    }
+    let refs = index.references_overlaid(old, overlays);
+    if refs.iter().any(|r| is_stdlib_path(&r.file)) {
+        return Err(format!(
+            "`{old}` is used by the standard library — refusing to rename it"
+        ));
+    }
+    if refs.is_empty() {
+        return Err(format!("no references to `{old}` in the workspace"));
+    }
+    Ok(refs)
 }

@@ -278,9 +278,21 @@ Two LSP.2-surface items already landed on the S-spine, plus a cross-cutting perf
   type-resolved — `references("len")` returns every `len` token across types (a precise,
   comment-aware finder, not scope-aware). *Gates:* `tests/lsp_refs.rs` (cross-file + comment
   exclusion + overlay) and `tests/lsp_transport.rs::find_references_spans_the_workspace`.
-  **Rename** builds directly on this (references → `WorkspaceEdit`, with guards refusing
-  `#native`/stdlib and cross-`#rust` renames) — the natural next step. Follow-ups: type/scope-aware
-  precision (resolve each occurrence to confirm the binding), and index invalidation on `didSave`.
+  Follow-ups: type/scope-aware precision (resolve each occurrence to confirm the binding), and
+  index invalidation on `didSave`.
+- **Rename — DONE.** `textDocument/rename` turns the references into a `WorkspaceEdit`
+  (`{uri: [TextEdit]}`), and `textDocument/prepareRename` returns the identifier's span +
+  placeholder (or null on a non-renamable target). **SAFE by default** (`loft::lsp::plan_rename`):
+  refuses a new name that isn't a valid identifier; refuses when the old name resolves to a
+  **standard-library** symbol (`lookup(old)` non-empty → `print`/`len`/… are un-renamable); and
+  refuses when any reference lives in a stdlib file — so a rename can never corrupt `default/`.
+  `prepare_rename` applies the stdlib gate too, so the editor won't even offer a rename box on a
+  stdlib name. Advertises `renameProvider {prepareProvider}`. Scope inherits find-references'
+  lexical nature — best for GLOBAL user symbols with a workspace-unique name; a local/reused name
+  is renamed everywhere it appears (the type/scope-precision follow-up addresses this). *Gates:*
+  `tests/lsp_rename.rs` (valid-identifier guard, rename-user + refuse-stdlib/invalid/no-refs,
+  prepareRename gates stdlib) and `tests/lsp_transport.rs::rename_produces_a_cross_file_workspace_edit`
+  (real binary: prepareRename span, cross-file WorkspaceEdit, invalid-name → error).
 
 ### Tag integration — tracker knowledge in the IDE (loft dogfood)
 

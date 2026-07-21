@@ -192,6 +192,34 @@ fn main() {
                 };
                 send(&stdout, &response(id, Parsed::Array(locations)));
             }
+            ("textDocument/prepareRename", Some(id)) => {
+                // The identifier's range + placeholder IF renamable (not stdlib),
+                // else null so the editor won't offer a rename box.
+                let result = text_document_position(&msg)
+                    .and_then(|(uri, line, ch)| {
+                        let text = documents.get(&uri)?;
+                        let (name, s, e) =
+                            loft::lsp::prepare_rename(text, line + 1, ch + 1, &stdlib_dir)?;
+                        Some(obj(vec![
+                            ("range", range_of(line, s, e)),
+                            ("placeholder", Parsed::Str(name)),
+                        ]))
+                    })
+                    .unwrap_or(Parsed::Null);
+                send(&stdout, &response(id, result));
+            }
+            ("textDocument/rename", Some(id)) => {
+                ensure_workspace_index(
+                    &workspace_root,
+                    &mut workspace_index,
+                    &mut workspace_index_tried,
+                );
+                match rename_edit(&msg, &documents, workspace_index.as_ref(), &stdlib_dir) {
+                    Ok(edit) => send(&stdout, &response(id, edit)),
+                    // A refused/invalid rename → a JSON-RPC error the editor surfaces.
+                    Err(reason) => send(&stdout, &error_response(id, -32803, &reason)),
+                }
+            }
             ("textDocument/documentLink", Some(id)) => {
                 // T2: every tracker tag with an issue URL becomes a clickable link.
                 let links = text_document_uri(&msg)
@@ -545,6 +573,63 @@ fn uri_to_path(uri: &str) -> String {
     uri.strip_prefix("file://").unwrap_or(uri).to_string()
 }
 
+/// Plan a rename and return an LSP `WorkspaceEdit`, or an error message (the
+/// server sends it as a JSON-RPC error, which the editor shows to the user).
+fn rename_edit(
+    msg: &Parsed,
+    documents: &HashMap<String, String>,
+    index: Option<&loft::lsp::WorkspaceIndex>,
+    stdlib_dir: &str,
+) -> Result<Parsed, String> {
+    let (uri, line, ch) = text_document_position(msg).ok_or("bad rename params")?;
+    let new_name = obj_get(msg, "params")
+        .and_then(|p| obj_str(p, "newName"))
+        .ok_or("missing newName")?;
+    let text = documents.get(&uri).ok_or("document is not open")?;
+    let old = loft::lsp::identifier_at(text, line + 1, ch + 1)
+        .ok_or("the cursor is not on an identifier")?;
+    let wi = index.ok_or("no workspace to rename across")?;
+    let overlays: Vec<(String, String)> = documents
+        .iter()
+        .map(|(u, t)| (uri_to_path(u), t.clone()))
+        .collect();
+    let refs = loft::lsp::plan_rename(&old, &new_name, wi, &overlays, stdlib_dir)?;
+    Ok(build_workspace_edit(
+        &refs,
+        old.chars().count() as u32,
+        &new_name,
+    ))
+}
+
+/// An LSP `WorkspaceEdit` — a `{uri: [TextEdit]}` map — replacing each reference's
+/// old-name range with `new`.
+fn build_workspace_edit(refs: &[loft::lsp::Reference], old_len: u32, new: &str) -> Parsed {
+    let mut by_uri: Vec<(String, Vec<Parsed>)> = Vec::new();
+    for r in refs {
+        let uri = format!("file://{}", r.file);
+        let col0 = r.col.saturating_sub(1);
+        let edit = obj(vec![
+            (
+                "range",
+                range_of(r.line.saturating_sub(1), col0, col0 + old_len),
+            ),
+            ("newText", Parsed::Str(new.to_string())),
+        ]);
+        if let Some((_, edits)) = by_uri.iter_mut().find(|(u, _)| u == &uri) {
+            edits.push(edit);
+        } else {
+            by_uri.push((uri, vec![edit]));
+        }
+    }
+    let changes = Parsed::Object(
+        by_uri
+            .into_iter()
+            .map(|(u, e)| (u, 0, Parsed::Array(e)))
+            .collect(),
+    );
+    obj(vec![("changes", changes)])
+}
+
 /// Load the tracker index once (from `<root>/index/`), caching the result.
 /// `tried` distinguishes "not yet loaded" from "loaded and absent" so a missing
 /// index isn't re-read every request.
@@ -762,6 +847,10 @@ fn initialize_result() -> Parsed {
         ("hoverProvider", Parsed::Bool(true)),
         ("definitionProvider", Parsed::Bool(true)),
         ("referencesProvider", Parsed::Bool(true)),
+        (
+            "renameProvider",
+            obj(vec![("prepareProvider", Parsed::Bool(true))]),
+        ),
         ("documentFormattingProvider", Parsed::Bool(true)),
         (
             "documentLinkProvider",

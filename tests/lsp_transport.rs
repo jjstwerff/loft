@@ -660,6 +660,87 @@ fn find_references_spans_the_workspace() {
     let _ = s.child.wait();
 }
 
+// rename — prepareRename returns the identifier's span; rename produces a
+// cross-file WorkspaceEdit; an invalid new name is refused with an error.
+#[test]
+fn rename_produces_a_cross_file_workspace_edit() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("renws3");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("a.loft"),
+        "fn area(w: integer) -> integer {\n  w * w\n}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("b.loft"), "fn main() {\n  print(area(3))\n}\n").unwrap();
+
+    let mut s = Session::start();
+    s.request(
+        1,
+        "initialize",
+        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+    );
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        field(caps, "renameProvider").is_some(),
+        "advertises renameProvider"
+    );
+    s.notify("initialized", "{}");
+
+    let a_uri = format!("file://{}/a.loft", root.display());
+    s.notify(
+        "textDocument/didOpen",
+        &open_params(&a_uri, "fn area(w: integer) -> integer {\n  w * w\n}\n"),
+    );
+    let _ = s.recv();
+
+    // prepareRename on `area` → its span (0-based cols 3..7) + placeholder.
+    s.request(
+        2,
+        "textDocument/prepareRename",
+        &format!(r#"{{"textDocument":{{"uri":"{a_uri}"}},"position":{{"line":0,"character":3}}}}"#),
+    );
+    let prep = s.recv();
+    let pr = field(&prep, "result").expect("prepareRename result");
+    assert_eq!(field_str(pr, "placeholder").as_deref(), Some("area"));
+
+    // rename area → zone → a WorkspaceEdit touching BOTH files.
+    s.request(
+        3,
+        "textDocument/rename",
+        &format!(r#"{{"textDocument":{{"uri":"{a_uri}"}},"position":{{"line":0,"character":3}},"newName":"zone"}}"#),
+    );
+    let ren = s.recv();
+    let changes = field(field(&ren, "result").expect("rename result"), "changes")
+        .expect("WorkspaceEdit has changes");
+    let files: Vec<String> = match changes {
+        Parsed::Object(e) => e
+            .iter()
+            .map(|(uri, _, _)| uri.rsplit('/').next().unwrap_or("").to_string())
+            .collect(),
+        other => panic!("changes is an object, got {other:?}"),
+    };
+    assert!(
+        files.iter().any(|f| f == "a.loft") && files.iter().any(|f| f == "b.loft"),
+        "the edit spans both files: {files:?}"
+    );
+
+    // An invalid new name is refused with a JSON-RPC error.
+    s.request(
+        4,
+        "textDocument/rename",
+        &format!(r#"{{"textDocument":{{"uri":"{a_uri}"}},"position":{{"line":0,"character":3}},"newName":"fn"}}"#),
+    );
+    let bad = s.recv();
+    assert!(
+        field(&bad, "error").is_some() && field(&bad, "result").is_none(),
+        "an invalid rename returns an error, not a result: {bad:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();
