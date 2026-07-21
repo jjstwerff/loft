@@ -242,6 +242,48 @@ S0–S6 complete **LSP.1**. LSP.2 (below) and `loft-dap` (a DAP adapter over the
 layer on the same spine. Every step ships behind three checks: a unit test (compiler side),
 a harness test (protocol side), and a real-editor smoke.
 
+### Shipped ahead of LSP.2
+
+Two LSP.2-surface items already landed on the S-spine, plus a cross-cutting perf win:
+
+- **`textDocument/formatting` — DONE.** Wraps the same `loft fmt` formatter
+  (`tools/fmt/whole.loft`) via `loft::lsp::Formatter` (compiled once, cached); returns one
+  whole-document `TextEdit`, none when already tidy. Advertises `documentFormattingProvider`.
+  Gate: `tests/lsp_transport.rs::formatting_returns_a_whole_document_edit_and_noops_when_tidy`.
+- **Stdlib startup-cache warm-load — DONE (perf).** The parse accessors (`diagnose` / `outline` /
+  `symbol_at`) re-parsed `default/` on every request — ~50 ms, the dominant per-edit cost. They
+  now route through `load_stdlib()`, which `startup_cache::warm_load_stdlib`es the precompiled
+  `Data` bundle (~4.8 ms, **~10×**) when present, else cold-parses + `save_stdlib_cache`. Verified
+  the bundle round-trips `Definition.position`, so stdlib hover / go-to-def are unaffected. The
+  binary defaults `LOFT_STDLIB_CACHE` on (honors an explicit override). This is the "integrate
+  with the data we already keep" win — the CLI's stdlib cache, now shared by the LSP.
+
+### Tag integration — tracker knowledge in the IDE (loft dogfood)
+
+Surface loft's own `@`-tracker system (issues / features / plans) inline, reading the
+ALREADY-generated `index/tags.json` + `index/features.json` (`make index`; queried by
+`scripts/idx`). Lights up when the workspace is the loft repo (or any tree using the tag
+convention + `make index`); **inert elsewhere** (the index files are absent) — which fits the
+audience exactly: agents/devs working ON loft. The index is generated so it can lag until the
+next `make index` — advisory, like any index-backed feature. Steps:
+
+- **T1 — hover on a tag.** Extend the hover handler: a cursor on an `@`-tag token (`@P259` /
+  `@PLN63` / `@F7` / `@I81` / `@GH247`) → look it up in the index and render it. `@F`/`@I` pull
+  the title + description from `features.json`; `@P` the PROBLEMS.md entry + ref count; `@GH` the
+  github URL; `@PLN` the plan id + local plan dir. *Gate:* unit test on the tag→markdown lookup +
+  a harness test hovering a tag in a comment.
+- **T2 — document links.** `textDocument/documentLink` over the buffer: each tag token → a target
+  (`@GH` → github URL, `@PLN` → the plan, `@F` → `doc/features/<slug>.md`, `@P` → PROBLEMS.md), so
+  tags are ctrl-clickable. *Gate:* harness asserts the link ranges + targets.
+- **T3 — broken-tag diagnostics.** Reuse `idx broken`'s validation (a tag resolving to no valid
+  PID/plan) → publish a Warning on the offending tag, folded into the existing diagnostics push.
+  *Gate:* a buffer with `@P999` yields one warning.
+- **T4 — tag completion.** `@P…` / `@PLN…` → valid tags from the index (low priority).
+
+Prereq: a small index reader in `loft::lsp` (reads `index/tags.json` + `features.json` from the
+workspace root, cached, refreshed lazily on mtime). No new index — this consumes the tracker
+index the repo already builds.
+
 ---
 
 ## LSP.2 — full editing surface (0.9.0)
