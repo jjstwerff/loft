@@ -210,10 +210,12 @@ fn main() {
             }
             ("textDocument/references", Some(id)) => {
                 // Clone the buffer out first so the `documents` borrow is dropped.
-                let req = text_document_position(&msg)
-                    .and_then(|(uri, line, ch)| Some((documents.get(&uri)?.clone(), line, ch)));
+                let req = text_document_position(&msg).and_then(|(uri, line, ch)| {
+                    let text = documents.get(&uri)?.clone();
+                    Some((uri, text, line, ch))
+                });
                 let locations = match req {
-                    Some((text, line, ch)) => {
+                    Some((uri, text, line, ch)) => {
                         match loft::lsp::identifier_at(&text, line + 1, ch + 1) {
                             Some(name) => {
                                 ensure_workspace_index(
@@ -221,7 +223,16 @@ fn main() {
                                     &mut workspace_index,
                                     &mut workspace_index_tried,
                                 );
-                                references_of(&name, workspace_index.as_ref(), &documents)
+                                // F: a LOCAL scopes to its function; a global stays workspace-wide.
+                                let scope =
+                                    loft::lsp::reference_scope(&text, &name, &stdlib_dir, line + 1);
+                                references_of(
+                                    &name,
+                                    workspace_index.as_ref(),
+                                    &documents,
+                                    &scope,
+                                    &uri_to_path(&uri),
+                                )
                             }
                             None => Vec::new(),
                         }
@@ -661,11 +672,14 @@ fn ensure_workspace_index(
 }
 
 /// LSP `Location[]` for every reference to `name`, with open buffers overlaid so
-/// unsaved edits count.  Empty when there is no workspace index.
+/// unsaved edits count, then narrowed by `scope` (a local → its function only).
+/// Empty when there is no workspace index.
 fn references_of(
     name: &str,
     index: Option<&loft::lsp::WorkspaceIndex>,
     documents: &HashMap<String, String>,
+    scope: &loft::lsp::RefScope,
+    current_file: &str,
 ) -> Vec<Parsed> {
     let Some(wi) = index else {
         return Vec::new();
@@ -675,7 +689,8 @@ fn references_of(
         .map(|(uri, text)| (uri_to_path(uri), text.clone()))
         .collect();
     let len = name.chars().count() as u32;
-    wi.references_overlaid(name, &overlays)
+    let all = wi.references_overlaid(name, &overlays);
+    loft::lsp::scoped_refs(all, scope, current_file)
         .iter()
         .map(|r| {
             let line0 = r.line.saturating_sub(1);
@@ -714,6 +729,12 @@ fn rename_edit(
         .map(|(u, t)| (uri_to_path(u), t.clone()))
         .collect();
     let refs = loft::lsp::plan_rename(&old, &new_name, wi, &overlays, stdlib_dir)?;
+    // F: a LOCAL rename touches only its own function; a global stays workspace-wide.
+    let scope = loft::lsp::reference_scope(text, &old, stdlib_dir, line + 1);
+    let refs = loft::lsp::scoped_refs(refs, &scope, &uri_to_path(&uri));
+    if refs.is_empty() {
+        return Err(format!("no references to `{old}` in scope"));
+    }
     Ok(build_workspace_edit(
         &refs,
         old.chars().count() as u32,

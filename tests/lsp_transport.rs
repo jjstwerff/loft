@@ -893,6 +893,63 @@ fn semantic_tokens_full_returns_encoded_tokens() {
     let _ = s.child.wait();
 }
 
+// F (v1) — renaming a LOCAL touches only its own function, not a same-named
+// local in another function.
+#[test]
+fn rename_a_local_scopes_to_its_function() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("fscopews");
+    std::fs::create_dir_all(&root).unwrap();
+    // fn a (lines 0..3) has three `x`; fn b (lines 4..6) has its own `x`.
+    let prog = "fn a() {\n  x = 1\n  x = x + 1\n}\nfn b() {\n  x = 9\n}\n";
+    std::fs::write(root.join("m.loft"), prog).unwrap();
+
+    let mut s = Session::start();
+    s.request(
+        1,
+        "initialize",
+        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+    );
+    let _ = s.recv();
+    s.notify("initialized", "{}");
+    let uri = format!("file://{}/m.loft", root.display());
+    s.notify("textDocument/didOpen", &open_params(&uri, prog));
+    let _ = s.recv();
+
+    // Rename `a`'s `x` (0-based line 1, char 2).
+    s.request(
+        2,
+        "textDocument/rename",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":2}},"newName":"total"}}"#),
+    );
+    let reply = s.recv();
+    let changes = field(field(&reply, "result").expect("rename result"), "changes").unwrap();
+    let lines: Vec<i64> = match changes {
+        Parsed::Object(e) => e
+            .iter()
+            .flat_map(|(_, _, v)| match v {
+                Parsed::Array(edits) => edits
+                    .iter()
+                    .filter_map(|ed| {
+                        field(field(ed, "range")?, "start")
+                            .and_then(|st| field(st, "line"))
+                            .and_then(Parsed::as_i64)
+                    })
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    assert!(!lines.is_empty(), "some edits: {reply:?}");
+    assert!(
+        lines.iter().all(|&l| l < 4),
+        "only fn a's block (lines <4) is edited, not fn b's `x` on line 5: {lines:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();

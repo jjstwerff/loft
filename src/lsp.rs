@@ -1194,3 +1194,121 @@ fn token_kind(data: &Data, name: &str) -> Option<u32> {
         _ => None,
     }
 }
+
+// ── scope-aware resolution (step F v1) ───────────────────────────────────────
+// Distinguish a GLOBAL symbol (a top-level def / method — workspace-wide) from a
+// LOCAL (a variable / parameter — scoped to its enclosing block).  Sharpens
+// find-references and rename: a local is renamed only within its own function,
+// not every same-named local elsewhere.  A source-scan foundation (no parser
+// instrumentation); the type/scope work that later features build on.
+
+/// Where an identifier's references live.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RefScope {
+    /// A top-level definition or method — references are workspace-wide.
+    Global,
+    /// A local / parameter — references are confined to the enclosing top-level
+    /// `{ … }` block in the SAME file (1-based inclusive line range).
+    Local { start_line: u32, end_line: u32 },
+}
+
+/// The scope of the identifier `name` sitting on `line`: GLOBAL if it resolves to
+/// a top-level def or a method name, else LOCAL (the enclosing top-level block).
+/// Fresh parse per call (same rule as [`diagnose`]).
+#[must_use]
+pub fn reference_scope(text: &str, name: &str, stdlib_dir: &str, line: u32) -> RefScope {
+    let mut p = Parser::new();
+    load_stdlib(&mut p, stdlib_dir);
+    p.parse_source(text, "buf.loft", false);
+    if is_global_symbol(&p.data, name) {
+        return RefScope::Global;
+    }
+    // A local: confine to the enclosing block; if the cursor is not inside one
+    // (e.g. a top-level position), fall back to global (nothing to over-narrow).
+    match enclosing_block(text, line) {
+        Some((start_line, end_line)) => RefScope::Local {
+            start_line,
+            end_line,
+        },
+        None => RefScope::Global,
+    }
+}
+
+/// Filter workspace references by a [`RefScope`]: a global keeps them all; a local
+/// keeps only those in `current_file` within its line range.
+#[must_use]
+pub fn scoped_refs(all: Vec<Reference>, scope: &RefScope, current_file: &str) -> Vec<Reference> {
+    match scope {
+        RefScope::Global => all,
+        RefScope::Local {
+            start_line,
+            end_line,
+        } => {
+            let here = canonical(Path::new(current_file));
+            all.into_iter()
+                .filter(|r| r.file == here && r.line >= *start_line && r.line <= *end_line)
+                .collect()
+        }
+    }
+}
+
+/// A name is a GLOBAL symbol if it is a free function (`n_<name>`), a type-like
+/// def (`<name>`), or a method (`Type.<name>`, cross-file).  Anything else the
+/// buffer names is a local / parameter.
+fn is_global_symbol(data: &Data, name: &str) -> bool {
+    if data.def_nr(&format!("n_{name}")) != u32::MAX {
+        return true;
+    }
+    let d = data.def_nr(name);
+    if d != u32::MAX
+        && matches!(
+            data.def(d).def_type,
+            crate::data::DefType::Struct
+                | crate::data::DefType::Enum
+                | crate::data::DefType::Type
+                | crate::data::DefType::Constant
+                | crate::data::DefType::Interface
+                | crate::data::DefType::Function
+        )
+    {
+        return true;
+    }
+    // A method name — the trailing segment of some `Type.method`.
+    let dotted = format!(".{name}");
+    (0..data.definitions()).any(|d| {
+        crate::api_surface::classify(data, d)
+            .is_some_and(|(kind, cname)| kind == "method" && cname.ends_with(&dotted))
+    })
+}
+
+/// The top-level `{ … }` block (1-based inclusive line range) whose body contains
+/// `line`, found by lexing (so braces in strings / comments don't miscount).
+fn enclosing_block(text: &str, line: u32) -> Option<(u32, u32)> {
+    use crate::lexer::{LexItem, Lexer};
+    let mut lexer = Lexer::default();
+    lexer.parse_string(text, "buf.loft");
+    let mut depth = 0i32;
+    let mut block_start = 0u32;
+    let mut best = None;
+    loop {
+        let r = lexer.peek();
+        match &r.has {
+            LexItem::None => break,
+            LexItem::Token(t) if t == "{" => {
+                if depth == 0 {
+                    block_start = r.position.line;
+                }
+                depth += 1;
+            }
+            LexItem::Token(t) if t == "}" => {
+                depth -= 1;
+                if depth == 0 && line >= block_start && line <= r.position.line {
+                    best = Some((block_start, r.position.line));
+                }
+            }
+            _ => {}
+        }
+        lexer.cont();
+    }
+    best
+}

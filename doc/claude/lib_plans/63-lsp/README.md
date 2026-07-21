@@ -445,11 +445,23 @@ Steps, in dependency order:
   path the LSP uses (only the first local per fn gets one), so an inlay hint would fire
   inconsistently — worse UX than none.  Deferred until step F, which builds proper position/scope
   resolution; then this is a thin read of `var_type` → `type_name_str` at the binding site.
-- **F — type/scope-aware precision (the FOUNDATION upgrade).** Replace the lexical name-match in
-  find-references / rename with resolution: for each occurrence, resolve to its binding via the
-  parser's scope tables + `member_access`, so `references("len")` returns only the intended
-  `text.len`, and rename is safe for locals/methods.  Lifts references, rename, semanticTokens
-  (D), and completion (C) at once.  M-L — the one genuinely-larger piece; do after A-E ship value.
+- **F — type/scope-aware precision — v1 DONE (local scoping).** The first, highest-value slice:
+  distinguish a GLOBAL symbol (a top-level def or method — workspace-wide) from a LOCAL (a
+  variable / parameter — confined to its enclosing function block), and scope find-references /
+  rename accordingly.  `loft::lsp::reference_scope` classifies via `is_global_symbol` (a
+  free-fn / type / const / **method** name) — anything else the buffer names is a local; the
+  enclosing block comes from `enclosing_block` (a lexer brace-depth scan, so braces in strings /
+  comments don't miscount).  `scoped_refs` then narrows a local's references to that block in the
+  same file.  Result: renaming a local `x` in one function no longer touches a same-named `x` in
+  another — the precision win.  Globals/methods keep the workspace-wide behavior.  Achieved by
+  SOURCE-scan, no parser instrumentation.  *Gates:* `tests/lsp_scope.rs` (locals→their function,
+  globals/stdlib→Global; `scoped_refs` file+range filter) +
+  `tests/lsp_transport.rs::rename_a_local_scopes_to_its_function` (real binary).
+  **Remaining F (v2+, needs a parse-time resolution index):** shadowing / block scope (v1 is
+  function-granular); per-occurrence resolution so `references("len")` returns only the intended
+  `text.len` (methods are still name-lexical); completion's variable-member resolution made
+  scope-precise; and the reliable binding positions that unblock **E (inlayHint)**.  These want the
+  parser to RECORD `(position → resolved binding)` during parse — the invasive piece deferred here.
 
 Smaller follow-ups already noted: workspace-index invalidation on `didSave`; `TagIndex` mtime
 refresh; **T4** tag completion (fold into C).  **Extract-function** (`refactor.extract`, the table
