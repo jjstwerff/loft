@@ -419,9 +419,16 @@ Steps, in dependency order:
   the token's range with the suggestion — no re-parse (the editor supplies the diagnostic).
   Advertises `codeActionProvider`.  *Gate:*
   `tests/lsp_transport.rs::code_action_offers_the_did_you_mean_fix` (real binary — `data.suggestion`
-  published, then the quick-fix edit).  Follow-up: fold the advisory lints that carry a concrete
-  rewrite (strict-index → `for c in text`, `#superseded` steer → the replacement symbol) by giving
-  them a `suggestion` too.
+  published, then the quick-fix edit).  **Follow-up (`#superseded` steer) DONE:** the @PLN102 arc-C
+  steer now carries the successor `Y` as a `suggestion` and — for FREE-FUNCTION calls — emits ON the
+  call name (threaded the name position into `call_nr`/`call_with_named`, `diagnostic_at!` instead of
+  the drifted cursor: `steer.loft:5:21`→`5:7`), so the quick-fix replaces `old_add` with `new_add`.
+  Method / operator paths keep the cursor caret + no suggestion (a quick-fix there could replace the
+  wrong token); method-name precision (via the fields.rs member position) is a follow-up.  *Gates:*
+  `lsp_diagnostics::superseded_steer_carries_a_structured_suggestion_on_the_call_name` +
+  `lsp_transport::code_action_offers_the_superseded_steer_fix`.  **Remaining:** the strict-index lint
+  (`for i in 0..len(s){s[i]}` → `for c in s`) is a STRUCTURAL rewrite (a wider range + synthesized
+  edit, not a token swap), so it stays a separate follow-up.
 - **C — `textDocument/completion` — DONE (first cut).** `loft::lsp::complete` resolves context
   from the buffer at the cursor: after `expr.` → the receiver type's members (struct fields / enum
   variants / methods, deduped so a virtual-field-method shows once as a method); otherwise the
@@ -491,11 +498,11 @@ Steps, in dependency order:
   retire the S4 F-v1 fallback for those; and S6's exotic member paths.
 
 Smaller follow-ups (all DONE): workspace-index invalidation on `didSave`; `TagIndex` mtime refresh;
-**T4** tag completion; step-C in-scope locals + fuzzy ranking.  Remaining follow-ups: fold the
-advisory lints that carry a concrete rewrite (strict-index → `for c in text`, `#superseded` steer →
-the replacement symbol) into codeAction quick-fixes (step B follow-up).  **Extract-function**
-(`refactor.extract`, the table row above) stays L-effort and separate — it needs the data-flow
-engine, not just wiring.
+**T4** tag completion; step-C in-scope locals + fuzzy ranking; the `#superseded`-steer codeAction
+quick-fix (step B).  Remaining follow-up: the strict-index lint's codeAction — a STRUCTURAL rewrite
+(`for i in 0..len(s){s[i]}` → `for c in s`), not a token swap, so it needs a wider range + synthesized
+edit.  **Extract-function** (`refactor.extract`, the table row above) stays L-effort and separate —
+it needs the data-flow engine, not just wiring.
 
 ### Incremental parsing
 
