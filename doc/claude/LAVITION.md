@@ -778,7 +778,7 @@ remember a library's name browses the registry by category.
 
 - `loft-lang.org/libraries/` (catalog HTML, planned) — human-facing
   index.
-- [`doc/claude/LIBRARIES.md`](LIBRARIES.md) — the single in-repo catalogue of
+- `doc/claude/LIBRARIES.md` — the single in-repo catalogue of
   every installable registry library (the separate `doc/library-catalog.md` +
   `gen_library_catalog.py` were retired 2026-07-02 as a stale duplicate).
 - `loft search <term>` (planned, on the registry MVP roadmap) —

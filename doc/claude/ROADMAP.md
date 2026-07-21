@@ -73,7 +73,7 @@ The methodology behind this file (categories, no-time-projections, features-need
 > libraries migrated to `#[loft_native]` generated bridges + re-published to the registry (signed,
 > merged); the legacy ~98-arm interpreter marshaller is deleted (bridge-only dispatch); the `#306`
 > bridge ref-return bug is fixed.  Libraries are **discoverable in-repo** — auto-generated
-> [LIBRARIES.md](LIBRARIES.md) + CLAUDE.md hooks + a CI staleness gate + a registry `validate.py` docs
+> `LIBRARIES.md` + CLAUDE.md hooks + a CI staleness gate + a registry `validate.py` docs
 > gate.  **Tracker mismatch:** the issue `@PLN74` ("[libs] FFI dispatch") is still OPEN /
 > `status:future` — it is a migration stub pointing at `lib_plans/future/25-ffi-dispatch/`.  Either
 > close `@PLN74` or stop calling the work complete; do not read the two numbers as the same plan.

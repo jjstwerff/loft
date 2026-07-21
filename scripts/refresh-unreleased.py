@@ -25,12 +25,16 @@ import os
 import subprocess
 import sys
 import tempfile
+import urllib.request
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 INDEX = REPO / "doc" / "claude" / "registry-index-snapshot.json"
 OUT = REPO / "doc" / "claude" / "unreleased-snapshot.json"
 LOFT = REPO / "target" / "release" / "loft"
+# The catalogue is a LOCAL build (not committed), so the registry index snapshot may
+# not exist yet — fetch it live in that case (self-bootstrapping, no committed seed).
+LIVE_INDEX_URL = "https://raw.githubusercontent.com/loft-lang/registry/main/index.json"
 
 
 def gh(args: list[str]) -> str:
@@ -72,7 +76,11 @@ def extract_api(owner_repo: str, subpath: str) -> list[dict]:
 
 def main() -> int:
     only = set(sys.argv[1:])
-    index = json.loads(INDEX.read_text(encoding="utf-8"))
+    if INDEX.exists():
+        index = json.loads(INDEX.read_text(encoding="utf-8"))
+    else:  # local build with no committed seed — fetch the live registry index
+        with urllib.request.urlopen(LIVE_INDEX_URL, timeout=30) as resp:
+            index = json.loads(resp.read().decode("utf-8"))
     prior = json.loads(OUT.read_text(encoding="utf-8")) if OUT.exists() else {}
     result: dict[str, dict] = {}
     for name, pkg in sorted(index.get("packages", {}).items()):
