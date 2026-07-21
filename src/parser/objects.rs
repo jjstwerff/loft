@@ -211,7 +211,7 @@ impl Parser {
                 });
                 *code = Value::Int(i32::from(tp));
             } else {
-                t = self.parse_call(code, source, &nm);
+                t = self.parse_call(code, source, &nm, name_pos);
             }
         } else if self.closure_param != u16::MAX
             && !self.first_pass

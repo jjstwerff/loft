@@ -208,7 +208,17 @@ impl Parser {
             let mut call_types = vec![self_type];
             call_types.extend_from_slice(extra_types);
             let mut code = Value::Null;
-            self.call(&mut code, u16::MAX, name, &call_args, &call_types, &[], &[]);
+            let name_pos = self.lexer.pos().clone();
+            self.call(
+                &mut code,
+                u16::MAX,
+                name,
+                &call_args,
+                &call_types,
+                &[],
+                &[],
+                &name_pos,
+            );
             let ret_call = v_block(
                 vec![Value::Return(Box::new(code.clone()))],
                 Type::Void,

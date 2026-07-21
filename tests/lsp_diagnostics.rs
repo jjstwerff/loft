@@ -35,7 +35,10 @@ fn diagnose(buf: &str) -> Vec<(Level, u32, u32, String)> {
 #[test]
 fn clean_buffer_has_no_diagnostics() {
     let e = diagnose("fn main() {\n  print(\"hi\")\n}\n");
-    assert!(e.is_empty(), "a valid program yields no error diagnostics, got {e:?}");
+    assert!(
+        e.is_empty(),
+        "a valid program yields no error diagnostics, got {e:?}"
+    );
 }
 
 #[test]
@@ -50,15 +53,17 @@ fn syntax_error_is_correctly_positioned() {
 }
 
 #[test]
-fn unknown_symbol_is_reported_with_a_message() {
+fn unknown_symbol_is_reported_at_the_reference_site() {
     let e = diagnose("fn main() {\n  nope(3)\n}\n");
     assert!(!e.is_empty(), "calling an undefined fn must error");
-    let (lvl, line, _col, msg) = &e[0];
+    let (lvl, line, col, msg) = &e[0];
     assert!(*lvl >= Level::Error);
-    assert!(*line > 0, "carries a source line");
     assert!(msg.contains("nope"), "names the offending symbol: {msg}");
-    // KNOWN GAP (dogfood finding (b), S2): deferred/semantic errors report at the
-    // resolution point (end of the enclosing item), not the reference site — so
-    // this lands on line 3 (`}`), not line 2.  Syntax errors are exact.  The fix
-    // is the next diagnostic-quality step: stamp the reference's own position.
+    // Dogfood finding (b), S2 — FIXED: a deferred/semantic error (an unknown
+    // call is type-checked AFTER its arguments are parsed) now reports at the
+    // offending identifier's own position, not the cursor's drifted resting
+    // place at the enclosing item's terminator.  `nope` is at line 2, col 3
+    // (two-space indent) — not line 3 (`}`).  `call()` stamps the identifier's
+    // `name_pos` into every "Unknown function" diagnostic via `diagnostic_at!`.
+    assert_eq!((*line, *col), (2, 3), "caret sits on `nope`, got {e:?}");
 }

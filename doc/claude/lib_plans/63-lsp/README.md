@@ -164,10 +164,19 @@ editor) so nothing silently regresses.
   budget). Incremental re-parse / warm-reuse is incompatible with the source model, not a perf
   step to chase. (An initial attempt to "reset" diagnostics for reuse was the wrong tree — the
   redefine conflict is upstream of diagnostics.)
-  **(b)** deferred/semantic errors (e.g. "Unknown function") report at the *resolution point*
-  (end of the enclosing item), not the reference site — so they land on the wrong line. Syntax
-  errors are exact. Fixing (b) = stamp the reference's own position into the deferred-unknown
-  record; it's the next diagnostic-quality step before the LSP ships.
+  **(b) — FIXED.** Deferred/semantic errors (e.g. "Unknown function") used to report at the
+  *resolution point* (the cursor's drifted resting place at the enclosing item's terminator),
+  not the reference site — so they landed on the wrong line. Root cause: a call is
+  type-checked in `parser::call()` *after* its arguments are fully parsed, by which time
+  `self.lexer` has advanced past the statement; the seven `diagnostic!(self.lexer, …)` "Unknown
+  function" sites read that drifted cursor. Fix: thread the identifier's own `name_pos`
+  (already captured by `parse_var`) through `parse_call` → `dispatch_call` → `call()` and emit
+  via `diagnostic_at!(self.lexer, name_pos, …)`. The caret now sits on the offending name
+  itself (`nope` at line 2 col 3), not the paren or the `}`. Chokepoint fix — the whole
+  "Unknown function" family (plain, `len`/`size` arity, method-hint, generic-type) moved at
+  once. Regression: `tests/lsp_diagnostics.rs::unknown_symbol_is_reported_at_the_reference_site`
+  pins `(2, 3)`; four existing `parse_errors`/`issues` position assertions were corrected from
+  the old drifted columns to the name columns. Syntax errors were already exact.
 - **S3 — publish diagnostics (SHIP HERE).** `didOpen`/`didChange` → `parse_text` →
   `publishDiagnostics`. *Gate:* harness asserts the notification + range; VS Code shows the
   squiggle live as you type. Diagnostics-only is real value across every LSP editor — release it.

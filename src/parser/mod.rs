@@ -2915,6 +2915,7 @@ impl Parser {
         types: &[Type],
         named_args: &[(String, Value, Type)],
         arg_pos: &[Position],
+        name_pos: &Position,
     ) -> Type {
         // Create a new list of parameters based on the current ones
         // We still need to know the types.
@@ -3060,13 +3061,19 @@ impl Parser {
             // adds a "did you mean" suffix when a similarly-named
             // user function exists.
             if let Some(s) = self.suggest_function_name(name) {
-                diagnostic!(
+                diagnostic_at!(
                     self.lexer,
+                    name_pos,
                     Level::Error,
                     "Unknown function {name} — did you mean '{s}'?"
                 );
             } else {
-                diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                diagnostic_at!(
+                    self.lexer,
+                    name_pos,
+                    Level::Error,
+                    "Unknown function {name}"
+                );
             }
             Type::Unknown(0)
         } else if name == "size"
@@ -3123,7 +3130,12 @@ impl Parser {
                 *code = Value::Call(op_d_nr, args);
                 return crate::data::I64.clone();
             }
-            diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+            diagnostic_at!(
+                self.lexer,
+                name_pos,
+                Level::Error,
+                "Unknown function {name}"
+            );
             Type::Unknown(0)
         } else if name == "size"
             && types.len() == 1
@@ -3230,8 +3242,9 @@ impl Parser {
         } else {
             // generic-specific error for method calls on T.
             if let Some(tv_name) = types.first().and_then(|t| self.generic_type_name(t)) {
-                diagnostic!(
+                diagnostic_at!(
                     self.lexer,
+                    name_pos,
                     Level::Error,
                     "generic type {tv_name}: method call requires a concrete type",
                 );
@@ -3245,18 +3258,25 @@ impl Parser {
                 let method_types = self.find_method_receivers(name);
                 if method_types.is_empty() {
                     if let Some(s) = self.suggest_function_name(name) {
-                        diagnostic!(
+                        diagnostic_at!(
                             self.lexer,
+                            name_pos,
                             Level::Error,
                             "Unknown function {name} — did you mean '{s}'?"
                         );
                     } else {
-                        diagnostic!(self.lexer, Level::Error, "Unknown function {name}");
+                        diagnostic_at!(
+                            self.lexer,
+                            name_pos,
+                            Level::Error,
+                            "Unknown function {name}"
+                        );
                     }
                 } else {
                     let receivers = method_types.join(" / ");
-                    diagnostic!(
+                    diagnostic_at!(
                         self.lexer,
+                        name_pos,
                         Level::Error,
                         "Unknown function {name} — did you mean the method `x.{name}(…)` on {receivers}? (stdlib declared `{name}` as a method; see LOFT.md § Methods and function calls)"
                     );
