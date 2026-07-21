@@ -1,7 +1,8 @@
 # H2 — `vec += [f(temp)]` in a loop drops every element but the first
 
-> **Status: root cause NARROWED, not fixed — theory 3 falsified by measurement
-> (§ FALSIFIED). The lifetimes-tool attribution upgrade that did it is LANDED.** Interpreter only; `--native` is correct, so it is
+> **Status: ROOT CAUSE FOUND and a proven fix exists (all 8 cells green, both
+> backends) but is NOT LANDABLE — it introduces a leak in another shape. Patch kept
+> at `h2-append-elision/value-before-slot.patch`; see § ROOT CAUSE FOUND.** Interpreter only; `--native` is correct, so it is
 > also a backend divergence. Silent — exit 0, no diagnostic, wrong data.
 > Reported by the crawler consumer (`LOFT-HANDOFF` H2) on toolchain 2026.7.2 as the
 > wider form of **loft#496**, which is CLOSED — so either that fix was too narrow or
@@ -122,6 +123,47 @@ both sit inside `if adopts_fresh_store`, which is false for this callee, and the
 @PLN85 arm additionally requires `function.is_argument(ov)` while `__lift_N` is a
 local. The emission site for a lift's scope-exit free is upstream of both and is where
 the next session should start.
+
+## ROOT CAUSE FOUND — the element slot is reserved BEFORE the value is computed
+
+With the free ruled out (§ FALSIFIED), the last difference between the broken form and
+its working sibling is **ordering**:
+
+```
+p1 (fails):  PreAllocVector; _elm_1 = OpNewRecord(out,…);  __lift_1 = n_mk(…);  Copy → _elm_1
+p6 (works):  e = n_mk(…);  PreAllocVector;  _elm_1 = OpNewRecord(out,…);        Copy → _elm_1
+```
+
+`OpNewRecord` hands back `_elm_1`, a `DbRef` **into the vector's store**. The direct-append
+form runs the call *after* taking that reference, so the callee's allocations recycle
+stores behind it and the copy writes through a slot that is no longer the element. The
+named-local spelling evaluates the call as its own statement and so has always emitted
+the safe order. **Value first, then slot.**
+
+Proven: hoisting the call into a temp before `OpNewRecord` turns **all 8 cells green on
+both backends**, with no leak — and the resulting IR is identical to `p6`'s, including
+`OpFreeRefIfDistinct`, which the EXISTING @P378(a) machinery supplies for free once the
+source is a real local. No new special case.
+
+### But the fix is NOT landable yet — blast radius
+
+Kept as `h2-append-elision/value-before-slot.patch` (not committed to `src/`). Against
+the full suite it regresses **4** tests that pass without it:
+
+| test | why |
+|---|---|
+| `join_own_fixes_elem_accumulate_both_backends` | **a real leak I introduce** — `1 stores not freed: M×18`. The hoisted temp is REASSIGNED each iteration; when the callee returns a FRESH store (not the retbuf) the displaced store is never freed. |
+| `ownership_surfaces_free_sites`, `ownership_resolves_the_borrow_base` | the `AppendSource` ownership classification keys on the append source BEING a call; hoisting changes that shape |
+| `fuzz_gate_positive_control_pairs` | *"harness is VACUOUS (crash channel fires=False)"* — the fix repairs the very crash the gate uses as its positive control, so the control must be re-based |
+
+Narrowing the hoist to calls handed a `__ref_N`/`__rref_N` work-ref (the only shape whose
+result can alias a reused buffer) cleared one regression but not these four.
+
+**The blocking item is the leak, not the pinned shapes.** The hoisted temp must
+participate in displaced-owned-store freeing on reassignment — i.e. reuse the existing
+lift/`join_own` machinery rather than a bare `create_unique` temp. Do that first; the two
+`AppendSource` expectations and the fuzz-gate control are then legitimate re-bases, but
+they must NOT be edited before the leak is closed, since they are what caught it.
 
 ## The lifetimes tool should have caught this
 

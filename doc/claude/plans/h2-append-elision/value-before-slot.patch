@@ -1,0 +1,72 @@
+diff --git a/src/parser/vectors.rs b/src/parser/vectors.rs
+index ca572ddb..79d3f5d2 100644
+--- a/src/parser/vectors.rs
++++ b/src/parser/vectors.rs
+@@ -10,6 +10,36 @@ use crate::data::Deps;
+ // Lambda and vector expression parsing.
+ 
+ impl Parser {
++    /// H2 — is this call handed a caller-owned `__ref_N` / `__rref_N` work-ref?
++    ///
++    /// That is the ONLY shape whose result can alias a buffer the caller still owns and
++    /// REUSES: an NRVO callee writes into the passed buffer and returns the same `DbRef`.
++    /// Appending it directly is what makes the element slot outlive its store across
++    /// iterations.  A call that allocates fresh has no such arg and keeps the existing
++    /// lowering — which matters, because the append-of-a-CALL shape is load-bearing for
++    /// the ownership analysis (`AppendSource`), so widening the hoist to every
++    /// struct-returning call rewrites far more producers than the defect touches.
++    fn call_takes_work_ref(val: &Value, vars: &crate::variables::Function) -> bool {
++        let inner = match val.unspan() {
++            Value::Insert(ops) => match ops.last() {
++                Some(last) => last.unspan(),
++                None => return false,
++            },
++            other => other,
++        };
++        let Value::Call(_, args) = inner else {
++            return false;
++        };
++        args.iter().any(|a| {
++            let v = match a.unspan() {
++                Value::Var(v) | Value::Set(v, _) => *v,
++                _ => return false,
++            };
++            let n = vars.name(v);
++            n.starts_with("__ref_") || n.starts_with("__rref_")
++        })
++    }
++
+     pub(crate) fn parse_append_vector(
+         &mut self,
+         code: &mut Value,
+@@ -2564,6 +2594,30 @@ impl Parser {
+                     &[Value::Var(vec), known.clone(), fld.clone()],
+                 )
+             };
++            // H2 — compute a struct-returning CALL element into an owned temp BEFORE
++            // the element slot is reserved.  `OpNewRecord` hands back `_elm_1`, a
++            // DbRef INTO the vector's store; running the call afterwards lets the
++            // callee's allocations recycle stores behind that reference, so the copy
++            // writes through a slot that is no longer the element (`out += [mk(d)]`
++            // in a loop reads back `1 null null`, first element only).  The
++            // named-local spelling (`e = mk(d); out += [e]`) evaluates the call as its
++            // own statement and so has always emitted this order; this makes the
++            // direct-append form emit it too.  Value first, then slot.
++            let hoisted;
++            let p = if !self.first_pass
++                && self.is_struct_returning_call(p)
++                && Self::call_takes_work_ref(p, &self.vars)
++                && matches!(
++                    in_t,
++                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
++                ) {
++                let tmp = self.create_unique("aelm", &in_t.clone());
++                ls.push(v_set(tmp, p.clone()));
++                hoisted = Value::Var(tmp);
++                &hoisted
++            } else {
++                p
++            };
+             ls.push(v_set(elm, app_v));
+             // @P380 (generalized, plan-58 cluster II): a freshly-created
+             // vector-of-vectors element is a VECTOR HANDLE (rec-id at offset 0),
