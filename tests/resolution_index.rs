@@ -49,3 +49,30 @@ fn s2_recording_off_by_default() {
     p.parse_source("fn cc() -> integer {\n  q = 5;\n  return q;\n}\n", "buf.loft", false);
     assert!(p.resolutions().is_empty(), "recording must be off by default");
 }
+
+#[test]
+fn s3_lsp_parse_carries_buffer_occurrences() {
+    // The LSP parse path enables recording and exposes the occurrences; every one
+    // is a LOCAL positioned in the user buffer (recording is on only after the
+    // stdlib load, so no stdlib occurrences leak in).
+    let src = "fn dd() -> integer {\n  total = 5;\n  return total + total;\n}\n";
+    let occ = loft::lsp::resolutions(src, "buf.loft", "default");
+    assert!(!occ.is_empty(), "the LSP parse must carry occurrences");
+    for o in &occ {
+        assert!(
+            matches!(o.res, Resolution::Local { .. }),
+            "S2 records locals only: {:?}",
+            o.res
+        );
+        // Positioned in the 4-line user buffer, never in the stdlib.
+        assert!(o.line >= 1 && o.line <= 4, "occurrence in-buffer: line {}", o.line);
+    }
+    // `total` appears 3× (write + two reads); all share one binding.
+    let totals: Vec<_> = occ
+        .iter()
+        .filter(|o| o.len == 5)
+        .map(|o| o.res.clone())
+        .collect();
+    assert_eq!(totals.len(), 3, "three `total` occurrences: {totals:?}");
+    assert!(totals.iter().all(|r| *r == totals[0]), "one binding: {totals:?}");
+}

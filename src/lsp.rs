@@ -36,15 +36,48 @@ fn load_stdlib(p: &mut Parser, stdlib_dir: &str) {
     }
 }
 
+/// The one parse every LSP accessor shares: a FRESH parser (the per-source rule
+/// above), the stdlib loaded, then the user buffer parsed — with @PLN115
+/// occurrence recording ON, so navigation can resolve an identifier by its
+/// binding IDENTITY (which local / which method) rather than by name.
+///
+/// Recording is enabled *after* `load_stdlib`, so only the user buffer's
+/// occurrences are captured: the warm-cache path doesn't re-parse the stdlib, and
+/// the cold fallback (`parse_dir`) shouldn't pay to record thousands of stdlib
+/// locals no editor query asks about.  The CLI / compiler parse never routes
+/// through here, so its gate stays off and its IR is byte-identical (the @PLN115
+/// S2 gate).  `p.resolutions()` on the returned parser is the query surface.
+fn parse_lsp_buffer(text: &str, name: &str, stdlib_dir: &str) -> Parser {
+    let mut p = Parser::new();
+    load_stdlib(&mut p, stdlib_dir);
+    p.set_record_resolutions(true);
+    p.parse_source(text, name, false);
+    p
+}
+
 /// Parse `text` as a standalone loft source — with the stdlib in `stdlib_dir`
 /// loaded first — and return its diagnostics (positioned, coded; @I75).  The
 /// caller resolves `stdlib_dir` (a deployment concern the binary owns, exactly
 /// as the `loft` CLI does), so this stays a pure function of its inputs.
 pub fn diagnose(text: &str, name: &str, stdlib_dir: &str) -> Diagnostics {
-    let mut p = Parser::new();
-    load_stdlib(&mut p, stdlib_dir);
-    p.parse_source(text, name, false);
+    let mut p = parse_lsp_buffer(text, name, stdlib_dir);
     std::mem::take(&mut p.diagnostics)
+}
+
+/// @PLN115 S3 — the parse-time resolution index for a buffer: every identifier
+/// occurrence the parser recorded, resolved to its binding IDENTITY.  Because
+/// recording is enabled only for the user-buffer parse (see [`parse_lsp_buffer`]),
+/// every occurrence here is in `text`, positioned in `text`'s coordinates.
+///
+/// This is the position-precise substrate that replaces @PLN63's lexical,
+/// name-based navigation: S4 (references/rename of a LOCAL) filters these by the
+/// binding under the cursor; S7 (inlayHint) reads each `Local`'s binding to type
+/// it.  Currently the parser records LOCALS (S2); S5/S6 add globals/fields/methods.
+#[must_use]
+pub fn resolutions(text: &str, name: &str, stdlib_dir: &str) -> Vec<crate::resolution::Occurrence> {
+    parse_lsp_buffer(text, name, stdlib_dir)
+        .resolutions()
+        .to_vec()
 }
 
 /// One top-level definition in a buffer, for the editor Outline / breadcrumb.
@@ -72,9 +105,7 @@ pub struct Symbol {
 /// decoded name come from the shared [`crate::api_surface::classify`], so an
 /// enum VARIANT (part of its enum's shape) is folded out, not listed top-level.
 pub fn outline(text: &str, name: &str, stdlib_dir: &str) -> Vec<Symbol> {
-    let mut p = Parser::new();
-    load_stdlib(&mut p, stdlib_dir);
-    p.parse_source(text, name, false);
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
     let data = &p.data;
     let mut symbols: Vec<Symbol> = (0..data.definitions())
         .filter(|&d| {
@@ -131,9 +162,7 @@ pub struct Hover {
 #[must_use]
 pub fn symbol_at(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) -> Option<Hover> {
     let word = word_at(text, line, col)?;
-    let mut p = Parser::new();
-    load_stdlib(&mut p, stdlib_dir);
-    p.parse_source(text, name, false);
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
     let data = &p.data;
     // A free function first, then a type-like def; `def_nr` checks the user source
     // then falls back to the stdlib (STD_SOURCE), so both user and stdlib resolve.
@@ -156,9 +185,7 @@ pub fn symbol_at(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) 
 /// call (same rule as [`diagnose`]); `text` may be empty to search the stdlib alone.
 #[must_use]
 pub fn lookup(symbol: &str, text: &str, name: &str, stdlib_dir: &str) -> Vec<Hover> {
-    let mut p = Parser::new();
-    load_stdlib(&mut p, stdlib_dir);
-    p.parse_source(text, name, false);
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
     let data = &p.data;
     let mut out: Vec<Hover> = Vec::new();
     let mut seen: Vec<u32> = Vec::new();
@@ -923,9 +950,7 @@ pub fn complete(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) -
         .nth(line.saturating_sub(1) as usize)
         .unwrap_or("");
     let (prefix, receiver) = completion_context(line_text, col.saturating_sub(1) as usize);
-    let mut p = Parser::new();
-    load_stdlib(&mut p, stdlib_dir);
-    p.parse_source(text, name, false);
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
     let data = &p.data;
     match receiver {
         Some(recv) => member_completions(data, &recv),
@@ -1144,9 +1169,7 @@ pub fn semantic_token_types() -> &'static [&'static str] {
 #[must_use]
 pub fn semantic_tokens(text: &str, name: &str, stdlib_dir: &str) -> Vec<SemanticToken> {
     use crate::lexer::{LexItem, Lexer};
-    let mut p = Parser::new();
-    load_stdlib(&mut p, stdlib_dir);
-    p.parse_source(text, name, false);
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
     let data = &p.data;
     let mut lexer = Lexer::default();
     lexer.parse_string(text, name);
@@ -1218,9 +1241,7 @@ pub enum RefScope {
 /// Fresh parse per call (same rule as [`diagnose`]).
 #[must_use]
 pub fn reference_scope(text: &str, name: &str, stdlib_dir: &str, line: u32) -> RefScope {
-    let mut p = Parser::new();
-    load_stdlib(&mut p, stdlib_dir);
-    p.parse_source(text, "buf.loft", false);
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
     if is_global_symbol(&p.data, name) {
         return RefScope::Global;
     }
