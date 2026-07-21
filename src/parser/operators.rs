@@ -8,6 +8,14 @@ use super::{
 
 // Operator parsing and type dispatch.
 
+/// An integer literal at the width the value needs: `Value::Int` carries an `i32`, so a
+/// bound outside that range (a `u32` maximum, say) must be emitted as `Value::Long` or it
+/// wraps into a nonsensical guard.  Both are `Type::Integer` at rest, so the choice is
+/// invisible downstream.
+fn int_literal(n: i64) -> Value {
+    i32::try_from(n).map_or(Value::Long(n), Value::Int)
+}
+
 impl Parser {
     /// Whether a DIRECT write (`nr = …` / `nr += …`) with operator `op` to binding
     /// `nr` must be rejected.  The two const axes reject opposite operations:
@@ -478,7 +486,14 @@ impl Parser {
             ),
             // not-null 2-byte field write — reuses the raw `(val - min)` store
             // (the read twin `OpGetShortFull` decodes without a sentinel).
-            "OpGetShortFull" => self.cl(
+            //
+            // All three 2-byte readers share `OpSetShortRaw`'s `(val - min)` store; only
+            // their sentinel decode differs.  `OpGetShortRaw` is the narrow-VECTOR
+            // element reader, and its absence here is why `v[i] = x` on a
+            // `vector<u16>`/`vector<i16>` failed to compile ("Cannot assign to attribute
+            // on type 'OpGetShortRaw'") while the same write to a `u16` struct FIELD —
+            // which reads through `OpGetShort`/`OpGetShortFull` — compiled fine.
+            "OpGetShortFull" | "OpGetShortRaw" => self.cl(
                 "OpSetShortRaw",
                 &[args[0].clone(), args[1].clone(), args[2].clone(), code],
             ),
@@ -1950,7 +1965,15 @@ impl Parser {
         let Type::Integer(spec) = tp else {
             return tp.clone();
         };
-        let (min, max) = (spec.min, spec.max as i32);
+        // `spec.max` is a u32 and the bound is compared at `integer` (i64) width, so it
+        // must be widened, never truncated: `u32`'s max is 4_294_967_294, and `as i32`
+        // wrapped that to -2.  The emitted guard became `v <= -2`, which no legal value
+        // satisfies, so EVERY `x as u32?` on a runtime operand returned null — silently,
+        // because the idiomatic `?? 0` then supplied a plausible zero.  A constant operand
+        // hid it by const-folding before this runs.  u8/u16/i8/i16/i32 were unaffected:
+        // their maxima are the only ones that fit i32.
+        let min = spec.min;
+        let max = i64::from(spec.max);
         // Result type is `Optional(τ)` — the narrow target τ, marked nullable. As a Rust
         // VALUE this is carried full-width (`rust_type(Optional(Integer))` is `i64`, so the
         // else-branch's integer null sentinel fits and the value is not truncated); the
@@ -1964,7 +1987,7 @@ impl Parser {
         let tmp = self.create_unique("_dn4", src_tp);
         let set = v_set(tmp, code.clone());
         let cond_lo = self.cl("OpLeInt", &[Value::Int(min), Value::Var(tmp)]);
-        let cond_hi = self.cl("OpLeInt", &[Value::Var(tmp), Value::Int(max)]);
+        let cond_hi = self.cl("OpLeInt", &[Value::Var(tmp), int_literal(max)]);
         let null_lo = self.cl("OpConvIntFromNull", &[]);
         let null_hi = self.cl("OpConvIntFromNull", &[]);
         let inner = v_if(cond_hi, Value::Var(tmp), null_hi);

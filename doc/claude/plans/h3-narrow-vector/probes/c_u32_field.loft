@@ -1,0 +1,7 @@
+// H3 read path, STRUCT FIELD — the same value in the reference container.  This cell is
+// what proves the defect is the WIDTH and not the vector: it fails identically.
+struct S { f: u32 }
+fn main() {
+  s = S { f: 4000000000 };
+  print("got {s.f} | 4000000000\n");
+}
