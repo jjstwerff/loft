@@ -35,18 +35,18 @@ Measured today: `(u8,u32,u16)` strides at **7 bytes**, equal to the identical re
 
 ### Open
 
-1. **fn-ref storage width must be decided** — 4 (DB member / `tuple_def`), 8 (the
-   `#493` write), or 20 (`element_stack_size`). Today's padding masks an 8-into-4
-   overrun, so this blocks the last 19 oracle shapes. Needs a language-level answer,
-   not a layout choice — see § The last 19 shapes.
+1. **fn-ref width: DECIDED** — storage 4, stack 20, codegen narrows at the boundary;
+   no database or stack change (§ DECISION). Validated: with it, full tight packing
+   takes the oracle to **0 of 148**. Blocked only on the remaining 8-byte assumptions
+   in the fn-ref store/load path — narrowing the `RefTupleGet` read alone is not
+   enough. Bounded codegen work, no format change.
 2. **Two par-worker readers still read storage bytes with stack offsets** —
    `parallel.rs:1568` (`read_tuple_at_wide`) and `generation/ops/parallel.rs:208`.
    Isolated, both backends, one commit each.
 3. **`element_storage_size`'s `Function` arm is knowingly wrong** (returns the stack
    20) and the oracle has no fn-ref coverage; fix both with item 1.
-4. **The two original SIGSEGVs are still open** (`e4_d2_closure_arg`,
-   `e5_d2_struct_ref_arg`) — matrix 199/201. They are the STACK-side defect this plan
-   started from; the storage work above did not touch them.
+4. ~~The two original SIGSEGVs~~ **FIXED** — matrix 201/201, corpus 0/62 on both
+   backends, `stack_align_guard` zero fires.
 
 ### The instruments (run all of these on any change)
 
@@ -687,6 +687,39 @@ integer does not) instead of inferring it from size/align/Parts.
 **3. Storage read via stack offsets** — convert `parallel.rs:1568` and
 `generation/ops/parallel.rs:208` to the storage view. Both backends, one commit each.
 
+### DECISION — the fn-ref width (2026-07-21)
+
+**Storage stays 4. The stack stays 20. Only the write/read projection narrows.**
+Neither the database format nor the stack slot changes.
+
+| width | owner | verdict |
+|---|---|---|
+| **20 B** — eval-stack slot (8B `d_nr` + 12B closure `DbRef`) | the stack | **unchanged** — a stack fn-ref must carry its closure |
+| **4 B** — stored element (DB member `Int`; `read_tuple_at_wide` reads `u32` and widens) | the database | **unchanged** — this is the on-disk format |
+| **8 B** — the `#493` projection and the stored-element read | codegen | **narrows to 4** — the only free variable |
+
+So a fn-ref is 20 bytes on the stack and 4 in a record, and codegen converts at the
+boundary — exactly as `read_tuple_at_wide` already does on the way in
+(`u32` → `i64::from`). Nothing else moves.
+
+**The decision is validated, not assumed.** With `element_storage_size(Function) = 4`
+and tuple groups packed FULLY tight, the oracle reports **0 divergent shapes of 148** —
+the decision closes the entire remaining layout gap in one step.
+
+**What still blocks turning it on.** Narrowing the stored-element read
+(`codegen.rs` `RefTupleGet`: `OpGetInt` → `OpGetInt4`) is necessary but NOT
+sufficient — `452-issue-493-struct-tuple-fnref-dnr` still fails
+("expected 8, got 4"), so at least one more site on the fn-ref store/load path assumes
+8 bytes. Both experiments were reverted; the tree is green at 21/148 with the padding
+still masking the over-read.
+
+Bounded next step, no format change: trace the fn-ref element's WRITE (the `#493`
+`OpSetInt4` path and its native twin in `generation/calls.rs`) and narrow every
+8-byte assumption to the stored 4, then re-enable full tightness. The oracle proves
+the end state in one command.
+
+<details><summary>how the contradiction was found (superseded by the decision above)</summary>
+
 ### The last 19 shapes are NOT an alignment problem — a fn-ref width contradiction
 
 Attempted per the design ("carry an explicit needs-its-own-alignment flag") and
@@ -728,6 +761,8 @@ coverage with the fix.
 
 Until then the current padding stays, and the 19 shapes remain over-sized but
 CORRECT — a memory cost, not corruption.
+
+</details>
 
 ### Order — 1 and 2 DONE, revised for what was learned
 
