@@ -11,7 +11,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 ## Status
 
 **Phase 0 (design) DONE — see [design.md](design.md)** (concrete code points + the
-S1–S7 small-safe-step spine + the byte-identical-IR gate). Execution not yet started.
+S1–S7 small-safe-step spine + the byte-identical-IR gate).
+
+**Execution: S1 + S2 DONE.**
+- **S1** (`34c428c0`) — `pub mod resolution` (`Occurrence` + `Resolution`), the
+  `record_resolutions`/`resolutions` fields (default off/empty), the gated `record`
+  helper, `Parser::resolutions()`, and `resolutions.clear()` paired with every
+  `deferred_unknown.clear()`. Inert — nothing calls `record`.
+- **S2** (`da8bcca2`) — first hook: LOCAL occurrences in `parse_var`. At the pass-2
+  `name_exists` chokepoint (where every local read/write/return flows, since the var
+  was created on pass 1), records `Local { fn_def: self.context, var_nr }` at
+  `name_pos`. Keyed on binding IDENTITY — two same-named locals in different fns get
+  distinct `(fn_def, var_nr)`. Public `set_record_resolutions` setter added for S3.
+  **Gate met:** `loft introspect` byte-identical with the gate off (S1 vs S2 binary,
+  empty diff); `tests/resolution_index.rs` proves distinct bindings on + off-by-default.
+
+**Next: S3** — enable the gate on the LSP fresh parse (`loft::lsp`) and expose the
+occurrences to the lsp module; the CLI/compiler parse stays gate-off/unchanged.
 
 This is the deferred FOUNDATION under @PLN63 (loft-lsp): every LSP feature that needs to
 know *what an identifier occurrence refers to* — not just its spelling — depends on it.

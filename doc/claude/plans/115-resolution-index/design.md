@@ -106,19 +106,21 @@ impl Parser { pub fn resolutions(&self) -> &[Occurrence] { &self.resolutions } }
 Each step is individually landable, gated OFF by default, and its **acceptance gate
 includes a byte-identical-IR check** (§ below). No step changes a parse decision.
 
-- **S1 — scaffold, inert.** Add `pub mod resolution` (the enum + `Occurrence`), the
+- **S1 — scaffold, inert. ✅ DONE (`34c428c0`).** Add `pub mod resolution` (the enum + `Occurrence`), the
   `record_resolutions` + `resolutions` fields (default false / empty), the `record`
   helper, `Parser::resolutions()`, and clear `resolutions` where `deferred_unknown`
   is cleared (`parser/mod.rs` `parse_str`). No hook yet — nothing calls `record`.
   *Gate:* builds; full suite green; `loft introspect` corpus byte-identical (trivially,
   no call sites).
-- **S2 — one hook: locals in `parse_var`.** Introduce
-  `fn resolve_var(&mut self, name, pos) -> u16` = `let v = self.vars.var(name);
-  self.record(pos, name.len, Local{fn_def: self.context, var_nr: v}); v`, and route the
-  `self.vars.var(name)` calls in `parse_var` through it. *Gate:* with the gate OFF,
-  byte-identical IR (the recording is skipped); with the gate ON (a probe), a local's
-  occurrences are recorded, and two same-named locals in different fns get distinct
-  `(fn_def, var_nr)`.
+- **S2 — one hook: locals in `parse_var`. ✅ DONE (`da8bcca2`).** *Implemented at the
+  pass-2 `name_exists` chokepoint* rather than a `resolve_var` wrapper: on pass 2 every
+  local occurrence (write target, read, `return`) flows through `name_exists` because
+  the var was created on pass 1, so a single `record(name_pos, name.chars().count(),
+  Local{fn_def: self.context, var_nr: index_var})` there — gated on `!self.first_pass` +
+  `record_resolutions` — captures the full occurrence set. *Gate met:* with the gate OFF,
+  byte-identical IR (S1 vs S2 binary, empty `loft introspect` diff); with the gate ON,
+  a local's occurrences are recorded and two same-named locals in different fns get
+  distinct `(fn_def, var_nr)` (`tests/resolution_index.rs`).
 - **S3 — enable the gate for the LSP parse only.** `load_stdlib`/`parse_source` in
   `loft::lsp` sets `record_resolutions = true` on its fresh parser. Expose the
   occurrences to the lsp module. *Gate:* the LSP parse carries occurrences; the CLI /
