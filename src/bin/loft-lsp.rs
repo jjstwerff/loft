@@ -55,6 +55,12 @@ fn main() {
     // from "built and failed" so a failed build isn't retried every request.
     let mut formatter: Option<loft::lsp::Formatter> = None;
     let mut formatter_tried = false;
+    // The workspace root (from `initialize`) and the tracker index under it —
+    // `index/tags.json` + `features.json` (`make index`).  Lazy + cached; absent
+    // outside the loft repo, so the tag features are simply inert there.
+    let mut workspace_root: Option<String> = None;
+    let mut tag_index: Option<loft::lsp::TagIndex> = None;
+    let mut tag_index_tried = false;
 
     while let Some(body) = read_message(&mut stdin) {
         // A frame that isn't valid JSON is skipped, not fatal — a robust server
@@ -69,7 +75,10 @@ fn main() {
         let id = obj_get(&msg, "id").cloned();
 
         match (method.as_str(), id) {
-            ("initialize", Some(id)) => send(&stdout, &response(id, initialize_result())),
+            ("initialize", Some(id)) => {
+                workspace_root = initialize_root(&msg);
+                send(&stdout, &response(id, initialize_result()));
+            }
             ("initialized", None) => {} // notification — no reply
             ("textDocument/didOpen", None) => {
                 if let Some((uri, text)) = did_open_params(&msg) {
@@ -125,13 +134,43 @@ fn main() {
                 send(&stdout, &response(id, Parsed::Array(edits)));
             }
             ("textDocument/hover", Some(id)) => {
-                let hover = text_document_position(&msg)
-                    .and_then(|(uri, line, ch)| {
-                        let text = documents.get(&uri)?;
-                        hover_result(text, &stdlib_dir, line, ch)
-                    })
-                    .unwrap_or(Parsed::Null); // no symbol under the cursor → null
+                // Clone the buffer out so the `documents` borrow is dropped before
+                // the mutable `tag_index` access below.
+                let at = text_document_position(&msg)
+                    .and_then(|(uri, line, ch)| Some((documents.get(&uri)?.clone(), line, ch)));
+                let hover = match at {
+                    Some((text, line, ch)) => {
+                        // T1: a tracker tag under the cursor wins over symbol hover.
+                        let tag_hit = loft::lsp::tags_in(&text)
+                            .into_iter()
+                            .find(|(_, l, s, e)| *l == line + 1 && *s <= ch && ch < *e);
+                        let tag_hover = tag_hit.and_then(|(tag, l, s, e)| {
+                            ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                            let info = tag_index.as_ref()?.lookup(&tag)?;
+                            let contents = markup(&loft::lsp::render_tag_markdown(&info));
+                            Some(obj(vec![
+                                ("contents", contents),
+                                ("range", range_of(l - 1, s, e)),
+                            ]))
+                        });
+                        tag_hover
+                            .or_else(|| hover_result(&text, &stdlib_dir, line, ch))
+                            .unwrap_or(Parsed::Null)
+                    }
+                    None => Parsed::Null,
+                };
                 send(&stdout, &response(id, hover));
+            }
+            ("textDocument/documentLink", Some(id)) => {
+                // T2: every tracker tag with an issue URL becomes a clickable link.
+                let links = text_document_uri(&msg)
+                    .and_then(|uri| documents.get(&uri).cloned())
+                    .map(|text| {
+                        ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                        document_links(&text, tag_index.as_ref())
+                    })
+                    .unwrap_or_default();
+                send(&stdout, &response(id, Parsed::Array(links)));
             }
             ("textDocument/definition", Some(id)) => {
                 let location = text_document_position(&msg)
@@ -415,6 +454,52 @@ fn stdlib_file_uri(stdlib_dir: &str, rel_file: &str) -> String {
     format!("file://{}", abs.display())
 }
 
+// ── tracker-tag integration (T1 hover / T2 documentLink) ─────────────────────
+/// The workspace root path from `initialize` params — `rootUri` (a `file://`
+/// uri) or the legacy `rootPath`.  Used to locate `<root>/index/`.
+fn initialize_root(msg: &Parsed) -> Option<String> {
+    let params = obj_get(msg, "params")?;
+    if let Some(uri) = obj_str(params, "rootUri") {
+        return Some(uri.strip_prefix("file://").unwrap_or(&uri).to_string());
+    }
+    obj_str(params, "rootPath")
+}
+
+/// Load the tracker index once (from `<root>/index/`), caching the result.
+/// `tried` distinguishes "not yet loaded" from "loaded and absent" so a missing
+/// index isn't re-read every request.
+fn ensure_tag_index(
+    root: &Option<String>,
+    index: &mut Option<loft::lsp::TagIndex>,
+    tried: &mut bool,
+) {
+    if *tried {
+        return;
+    }
+    *tried = true;
+    if let Some(r) = root {
+        *index = loft::lsp::TagIndex::load(&format!("{r}/index"));
+    }
+}
+
+/// Every tracker tag with an issue URL, as an LSP `DocumentLink`.  Empty when the
+/// index is absent (outside the loft repo) — tags then carry no links.
+fn document_links(text: &str, index: Option<&loft::lsp::TagIndex>) -> Vec<Parsed> {
+    let Some(idx) = index else {
+        return Vec::new();
+    };
+    loft::lsp::tags_in(text)
+        .into_iter()
+        .filter_map(|(tag, line, s, e)| {
+            let url = idx.lookup(&tag)?.url?;
+            Some(obj(vec![
+                ("range", range_of(line - 1, s, e)),
+                ("target", Parsed::Str(url)),
+            ]))
+        })
+        .collect()
+}
+
 // ── document-lifecycle param extraction ──────────────────────────────────────
 /// `didOpen`: `params.textDocument.{uri, text}`.
 fn did_open_params(msg: &Parsed) -> Option<(String, String)> {
@@ -571,6 +656,10 @@ fn initialize_result() -> Parsed {
         ("hoverProvider", Parsed::Bool(true)),
         ("definitionProvider", Parsed::Bool(true)),
         ("documentFormattingProvider", Parsed::Bool(true)),
+        (
+            "documentLinkProvider",
+            obj(vec![("resolveProvider", Parsed::Bool(false))]),
+        ),
     ]);
     let server_info = obj(vec![
         ("name", Parsed::Str(SERVER_NAME.into())),

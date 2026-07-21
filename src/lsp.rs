@@ -14,6 +14,7 @@ use std::path::Path;
 use crate::data::{Data, MAIN_SOURCE};
 use crate::diagnostics::Diagnostics;
 use crate::host::{Program, Value};
+use crate::json::Parsed;
 use crate::lexer::Position;
 use crate::parser::Parser;
 
@@ -359,4 +360,256 @@ impl Formatter {
             .into_text()
             .ok()
     }
+}
+
+// ── tracker-tag integration (@PLN63 T1/T2) ───────────────────────────────────
+// Surface loft's own `@`-tracker system (issues / features / plans) inline,
+// reading the ALREADY-generated `index/tags.json` + `index/features.json`
+// (`make index`).  Lights up in the loft repo; inert elsewhere (files absent).
+
+/// One tracker tag's information, gathered from the generated index.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct TagInfo {
+    /// The tag as written, e.g. `@F7`.
+    pub tag: String,
+    /// Display kind: `feature` `infra` `problem` `plan` `github` `plan-legacy` `tag`.
+    pub kind: &'static str,
+    /// The feature/infra title (`@F`/`@I` only), from `features.json`.
+    pub title: Option<String>,
+    /// A short description — the feature body's first paragraph, else the first
+    /// indexed reference's source line.
+    pub summary: Option<String>,
+    /// The canonical issue URL (`@GH`/`@PLN`/`@F`/`@I`).
+    pub url: Option<String>,
+    /// How many references the index has for this tag.
+    pub references: usize,
+}
+
+/// The generated tracker index (`index/tags.json` + `index/features.json`),
+/// parsed once and queried per tag.  `load` returns `None` outside the loft repo
+/// (the files are absent) — the caller treats that as "no tag info", not an error.
+pub struct TagIndex {
+    tags: Parsed,
+    features: Parsed,
+}
+
+impl TagIndex {
+    /// Parse `<index_dir>/tags.json` (required) + `features.json` (optional).
+    #[must_use]
+    pub fn load(index_dir: &str) -> Option<TagIndex> {
+        let tags_txt = std::fs::read_to_string(Path::new(index_dir).join("tags.json")).ok()?;
+        let tags = crate::json::parse(&tags_txt).ok()?;
+        let features = std::fs::read_to_string(Path::new(index_dir).join("features.json"))
+            .ok()
+            .and_then(|s| crate::json::parse(&s).ok())
+            .unwrap_or(Parsed::Array(Vec::new()));
+        Some(TagIndex { tags, features })
+    }
+
+    /// Everything the index knows about `tag`, or `None` if it is neither
+    /// referenced nor a well-formed issue tag (a probable typo → T3 territory).
+    #[must_use]
+    pub fn lookup(&self, tag: &str) -> Option<TagInfo> {
+        let (fam, num) = split_tag(tag)?;
+        let refs = pj_get(&self.tags, tag);
+        let references = match refs {
+            Some(Parsed::Array(a)) => a.len(),
+            _ => 0,
+        };
+        // Deterministic issue URLs per tag family (the repos in CLAUDE.md).
+        let (kind, url) = match fam {
+            "GH" => (
+                "github",
+                Some(format!("https://github.com/loft-lang/loft/issues/{num}")),
+            ),
+            "PLN" => (
+                "plan",
+                Some(format!("https://github.com/loft-lang/plans/issues/{num}")),
+            ),
+            "F" => (
+                "feature",
+                Some(format!(
+                    "https://github.com/loft-lang/features/issues/{num}"
+                )),
+            ),
+            "I" => (
+                "infra",
+                Some(format!(
+                    "https://github.com/loft-lang/features/issues/{num}"
+                )),
+            ),
+            "P" => ("problem", None),
+            "PLAN" => ("plan-legacy", None),
+            _ => ("tag", None),
+        };
+        let (title, summary) = if fam == "F" || fam == "I" {
+            match self.feature(num) {
+                Some(f) => (
+                    pj_str(f, "title"),
+                    pj_str(f, "body").map(|b| first_para(&b)),
+                ),
+                None => (None, first_ref_context(refs)),
+            }
+        } else {
+            (None, first_ref_context(refs))
+        };
+        // A local tag (`@P`/`@PLAN`) with no references and no title is unknown.
+        if references == 0 && title.is_none() && url.is_none() {
+            return None;
+        }
+        Some(TagInfo {
+            tag: tag.to_string(),
+            kind,
+            title,
+            summary,
+            url,
+            references,
+        })
+    }
+
+    fn feature(&self, num: i64) -> Option<&Parsed> {
+        match &self.features {
+            Parsed::Array(items) => items.iter().find(|it| pj_i64(it, "number") == Some(num)),
+            _ => None,
+        }
+    }
+}
+
+/// A [`TagInfo`] as a markdown block — the LSP hover body and `loft tag` output.
+#[must_use]
+pub fn render_tag_markdown(info: &TagInfo) -> String {
+    use std::fmt::Write;
+    let mut s = format!("**{}** · {}", info.tag, info.kind);
+    if let Some(url) = &info.url {
+        let _ = write!(s, "  ·  [issue]({url})");
+    }
+    if let Some(title) = &info.title {
+        let _ = write!(s, "\n\n**{title}**");
+    }
+    if let Some(summary) = &info.summary {
+        let _ = write!(s, "\n\n{summary}");
+    }
+    let plural = if info.references == 1 {
+        "reference"
+    } else {
+        "references"
+    };
+    let _ = write!(s, "\n\n_{} {plural} indexed_", info.references);
+    s
+}
+
+/// Split `@F7` → `("F", 7)`; `None` if not a well-formed `@<UPPER>+<digits>` tag.
+fn split_tag(tag: &str) -> Option<(&str, i64)> {
+    let body = tag.strip_prefix('@')?;
+    let split = body.find(|c: char| c.is_ascii_digit())?;
+    let (fam, rest) = body.split_at(split);
+    if fam.is_empty() || !fam.chars().all(|c| c.is_ascii_uppercase()) {
+        return None;
+    }
+    let digits: String = rest.chars().take_while(char::is_ascii_digit).collect();
+    let num = digits.parse::<i64>().ok()?;
+    Some((fam, num))
+}
+
+/// The first real paragraph of a feature body — skip headings / code fences.
+fn first_para(body: &str) -> String {
+    for para in body.split("\n\n") {
+        let t = para.trim();
+        if !t.is_empty() && !t.starts_with('#') && !t.starts_with("```") {
+            return t.replace('\n', " ");
+        }
+    }
+    String::new()
+}
+
+fn first_ref_context(refs: Option<&Parsed>) -> Option<String> {
+    match refs {
+        Some(Parsed::Array(a)) => a.first().and_then(|r| pj_str(r, "context")).map(|c| {
+            let t = c.trim();
+            t.chars().take(200).collect()
+        }),
+        _ => None,
+    }
+}
+
+/// Tracker tags in one line as `(tag, start_col, end_col)` — 0-based char cols.
+/// A tag is `@` + uppercase letters + digits, with an optional single lowercase
+/// suffix (`@P259a`).  Deep segment forms (`@PLAN22-2d`) resolve to their base.
+fn tags_in_line(line: &str) -> Vec<(String, usize, usize)> {
+    let chars: Vec<char> = line.chars().collect();
+    let mut out = Vec::new();
+    let mut i = 0;
+    while i < chars.len() {
+        if chars[i] != '@' {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        let mut j = i + 1;
+        let alpha0 = j;
+        while j < chars.len() && chars[j].is_ascii_uppercase() {
+            j += 1;
+        }
+        let digit0 = j;
+        while j < chars.len() && chars[j].is_ascii_digit() {
+            j += 1;
+        }
+        if j > digit0 && digit0 > alpha0 {
+            // A single trailing lowercase (e.g. `@P259a`) when word-bounded.
+            if j < chars.len()
+                && chars[j].is_ascii_lowercase()
+                && (j + 1 >= chars.len() || !chars[j + 1].is_ascii_alphanumeric())
+            {
+                j += 1;
+            }
+            out.push((chars[start..j].iter().collect(), start, j));
+            i = j;
+        } else {
+            i += 1;
+        }
+    }
+    out
+}
+
+/// The tracker tag under a 1-based (`line`, `col`) cursor, or `None`.
+#[must_use]
+pub fn tag_at(text: &str, line: u32, col: u32) -> Option<String> {
+    let line_str = text.lines().nth(line.saturating_sub(1) as usize)?;
+    let c = col.saturating_sub(1) as usize;
+    tags_in_line(line_str)
+        .into_iter()
+        .find(|(_, s, e)| *s <= c && c < *e)
+        .map(|(t, _, _)| t)
+}
+
+/// Every tag occurrence in `text` as `(tag, line, start_col, end_col)` — 1-based
+/// line, 0-based cols — for `documentLink`.
+#[must_use]
+pub fn tags_in(text: &str) -> Vec<(String, u32, u32, u32)> {
+    let mut out = Vec::new();
+    for (i, line) in text.lines().enumerate() {
+        for (tag, s, e) in tags_in_line(line) {
+            out.push((tag, i as u32 + 1, s as u32, e as u32));
+        }
+    }
+    out
+}
+
+// ── Parsed accessors (over loft::json) ───────────────────────────────────────
+fn pj_get<'a>(v: &'a Parsed, key: &str) -> Option<&'a Parsed> {
+    match v {
+        Parsed::Object(e) => e.iter().find(|(k, _, _)| k == key).map(|(_, _, val)| val),
+        _ => None,
+    }
+}
+
+fn pj_str(v: &Parsed, key: &str) -> Option<String> {
+    match pj_get(v, key) {
+        Some(Parsed::Str(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+
+fn pj_i64(v: &Parsed, key: &str) -> Option<i64> {
+    pj_get(v, key).and_then(Parsed::as_i64)
 }

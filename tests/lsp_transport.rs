@@ -470,6 +470,77 @@ fn formatting_returns_a_whole_document_edit_and_noops_when_tidy() {
     let _ = s.child.wait();
 }
 
+// T1/T2 — the tracker-tag integration.  A synthetic workspace with an index;
+// hover over a tag shows the feature, and the tag becomes a document link.
+#[test]
+fn tag_hover_and_document_link() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tagws");
+    let idx = root.join("index");
+    std::fs::create_dir_all(&idx).unwrap();
+    std::fs::write(
+        idx.join("tags.json"),
+        r#"{"@F1":[{"file":"a.md","line":1,"context":"@F1"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        idx.join("features.json"),
+        r#"[{"number":1,"title":"Keyed collections","kind":"feature","body":"Look up records by key.\n"}]"#,
+    )
+    .unwrap();
+
+    let mut s = Session::start();
+    let root_uri = format!("file://{}", root.display());
+    s.request(1, "initialize", &format!(r#"{{"rootUri":"{root_uri}"}}"#));
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        field(caps, "documentLinkProvider").is_some(),
+        "advertises documentLinkProvider: {init:?}"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///t.loft";
+    // `// @F1 tracked` — `@F1` at chars 3..6.
+    let prog = "// @F1 tracked\nfn main() {\n  print(\"hi\")\n}\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let _ = s.recv(); // consume the publishDiagnostics push
+
+    // Hover on `@F1` (0-based line 0, char 4) → the feature, not a symbol.
+    s.request(
+        2,
+        "textDocument/hover",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":0,"character":4}}}}"#),
+    );
+    let h = s.recv();
+    let contents = field(field(&h, "result").expect("hover result"), "contents").unwrap();
+    let val = field_str(contents, "value").unwrap_or_default();
+    assert!(
+        val.contains("@F1") && val.contains("Keyed collections"),
+        "tag hover shows the feature: {val}"
+    );
+
+    // documentLink → one link for `@F1` at its range, targeting the issue.
+    s.request(
+        3,
+        "textDocument/documentLink",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}}}}"#),
+    );
+    let l = s.recv();
+    let links = match field(&l, "result") {
+        Some(Parsed::Array(a)) => a,
+        other => panic!("documentLink result is an array, got {other:?}"),
+    };
+    assert_eq!(links.len(), 1, "one tag link: {links:?}");
+    assert_eq!(
+        field_str(&links[0], "target").as_deref(),
+        Some("https://github.com/loft-lang/features/issues/1"),
+        "links to the features issue: {links:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();

@@ -277,22 +277,34 @@ convention + `make index`); **inert elsewhere** (the index files are absent) —
 audience exactly: agents/devs working ON loft. The index is generated so it can lag until the
 next `make index` — advisory, like any index-backed feature. Steps:
 
-- **T1 — hover on a tag.** Extend the hover handler: a cursor on an `@`-tag token (`@P259` /
-  `@PLN63` / `@F7` / `@I81` / `@GH247`) → look it up in the index and render it. `@F`/`@I` pull
-  the title + description from `features.json`; `@P` the PROBLEMS.md entry + ref count; `@GH` the
-  github URL; `@PLN` the plan id + local plan dir. *Gate:* unit test on the tag→markdown lookup +
-  a harness test hovering a tag in a comment.
-- **T2 — document links.** `textDocument/documentLink` over the buffer: each tag token → a target
-  (`@GH` → github URL, `@PLN` → the plan, `@F` → `doc/features/<slug>.md`, `@P` → PROBLEMS.md), so
-  tags are ctrl-clickable. *Gate:* harness asserts the link ranges + targets.
+- **T1 — hover on a tag — DONE.** A cursor on an `@`-tag token (`@P259` / `@PLN63` / `@F7` /
+  `@I81` / `@GH247`) hovers its tracker info instead of a symbol. `@F`/`@I` pull the title +
+  first-paragraph description from `features.json`; `@P`/`@GH`/`@PLN` show the first indexed
+  reference's context; a deterministic issue URL per family (`@GH`→loft, `@PLN`→plans,
+  `@F`/`@I`→features). Rendered as markdown with a clickable `[issue]` link.
+- **T2 — document links — DONE.** `textDocument/documentLink` returns a link per tag that has an
+  issue URL (`@GH`/`@PLN`/`@F`/`@I`), at the tag's range → ctrl-clickable. Advertises
+  `documentLinkProvider`.
+
+Prereq (DONE): `loft::lsp::TagIndex` reads `index/tags.json` (required) + `features.json`
+(optional) from `<workspace_root>/index` (captured from `initialize`'s `rootUri`), parsed once +
+cached; `tag_at` / `tags_in` detect tokens; `render_tag_markdown` formats. Also a **`loft tag
+<@TAG>`** CLI (dogfood — the same lookup from the shell; walks up to `index/`). No new index — it
+consumes the tracker index the repo already builds (`make index`). *Gates:* `tests/lsp_tags.rs`
+(synthetic index — CI has no generated `tags.json`: feature/URL/summary lookup + token detection),
+`tests/lsp_transport.rs::tag_hover_and_document_link` (temp workspace, real binary),
+`tests/lsp_cli.rs`-adjacent CLI dogfood.
+
+Remaining tag steps:
+
 - **T3 — broken-tag diagnostics.** Reuse `idx broken`'s validation (a tag resolving to no valid
   PID/plan) → publish a Warning on the offending tag, folded into the existing diagnostics push.
-  *Gate:* a buffer with `@P999` yields one warning.
+  *Gate:* a buffer with `@P999` yields one warning. (`TagIndex::lookup` already returns `None` for
+  an unindexed local tag — the hook exists.)
 - **T4 — tag completion.** `@P…` / `@PLN…` → valid tags from the index (low priority).
 
-Prereq: a small index reader in `loft::lsp` (reads `index/tags.json` + `features.json` from the
-workspace root, cached, refreshed lazily on mtime). No new index — this consumes the tracker
-index the repo already builds.
+Follow-up: the `TagIndex` is loaded once per session, so it can lag a mid-session `make index` —
+add an mtime refresh when that friction shows up.
 
 ---
 

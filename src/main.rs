@@ -185,6 +185,8 @@ fn print_help() {
     println!("  def <name> [file] [--json]    signature + doc + location of a symbol by name");
     println!("                                (free fn / type / const + every `Type.name` method)");
     println!("  hover <file> <ln> <col>       the symbol under a cursor (1-based); add --json");
+    println!("  tag <@TAG> [--json]           what the tracker index knows about a tag");
+    println!("                                (@F/@I feature, @P problem, @PLN/@GH issue)");
     println!(
         "  sandbox-check <file>          report the @PLN86 sandbox admission verdict and STOP"
     );
@@ -4311,6 +4313,62 @@ fn run_hover_command(args: &[String]) -> i32 {
     0
 }
 
+/// Walk up from the CWD to the nearest `index/` holding `tags.json`.
+fn find_index_dir() -> Option<String> {
+    let mut dir = std::env::current_dir().ok()?;
+    loop {
+        let cand = dir.join("index");
+        if cand.join("tags.json").is_file() {
+            return Some(cand.to_string_lossy().into_owned());
+        }
+        if !dir.pop() {
+            return None;
+        }
+    }
+}
+
+fn tag_json(info: &loft::lsp::TagInfo) -> loft::json::Parsed {
+    use loft::json::Parsed;
+    let opt = |o: &Option<String>| o.as_ref().map_or(Parsed::Null, |s| Parsed::Str(s.clone()));
+    jobj(vec![
+        ("tag", Parsed::Str(info.tag.clone())),
+        ("kind", Parsed::Str(info.kind.to_string())),
+        ("title", opt(&info.title)),
+        ("summary", opt(&info.summary)),
+        ("url", opt(&info.url)),
+        ("references", Parsed::Int(info.references as i64)),
+    ])
+}
+
+/// `loft tag <@TAG> [--json]` — what the tracker index knows about a tag
+/// (issue / feature / plan): title + summary + issue URL + reference count,
+/// from `index/tags.json` + `index/features.json` (`make index`).
+fn run_tag_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let Some(tag) = args.iter().find(|a| !a.starts_with('-')) else {
+        eprintln!("loft tag: usage: loft tag <@TAG> [--json]   (e.g. loft tag @F7)");
+        return 2;
+    };
+    let Some(index_dir) = find_index_dir() else {
+        eprintln!("loft tag: no index/tags.json found (run `make index` at the repo root)");
+        return 1;
+    };
+    let Some(idx) = loft::lsp::TagIndex::load(&index_dir) else {
+        eprintln!("loft tag: could not read {index_dir}/tags.json");
+        return 1;
+    };
+    match idx.lookup(tag) {
+        Some(info) if json => println!("{}", loft::json::to_json_string(&tag_json(&info))),
+        Some(info) => println!("{}", loft::lsp::render_tag_markdown(&info)),
+        None if json => println!("null"),
+        None => {
+            eprintln!("loft tag: '{tag}' — unknown or not indexed");
+            return 1;
+        }
+    }
+    0
+}
+
 #[allow(clippy::too_many_lines)]
 fn main() {
     // Install SIGSEGV/SIGABRT/SIGBUS handler so crashes print the
@@ -5246,6 +5304,8 @@ fn main() {
             std::process::exit(run_def_command(&argv[i..]));
         } else if a == "hover" {
             std::process::exit(run_hover_command(&argv[i..]));
+        } else if a == "tag" {
+            std::process::exit(run_tag_command(&argv[i..]));
         } else if a == "publish" {
             // @PLAN12 Phase 6.16 — author-side publish helper.
             // Repackages locally (deterministic), verifies the
