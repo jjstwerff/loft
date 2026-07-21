@@ -706,12 +706,35 @@ boundary — exactly as `read_tuple_at_wide` already does on the way in
 and tuple groups packed FULLY tight, the oracle reports **0 divergent shapes of 148** —
 the decision closes the entire remaining layout gap in one step.
 
-**What still blocks turning it on.** Narrowing the stored-element read
-(`codegen.rs` `RefTupleGet`: `OpGetInt` → `OpGetInt4`) is necessary but NOT
-sufficient — `452-issue-493-struct-tuple-fnref-dnr` still fails
-("expected 8, got 4"), so at least one more site on the fn-ref store/load path assumes
-8 bytes. Both experiments were reverted; the tree is green at 21/148 with the padding
-still masking the over-read.
+**What still blocks turning it on — traced, three attempts, all reverted.**
+
+The stored-element read in `codegen.rs`'s `RefTupleGet` branch serves **two contexts
+with different needs**, and that is the real obstacle:
+
+| context | wants | example |
+|---|---|---|
+| **call** a fn-ref read back from storage | the 20-byte STACK form (8B d_nr + 12B closure) | `got_fn(4)` |
+| **store** it into another record | the 8-byte d_nr operand for `OpSetInt4` | `p = Pair { v: pp }` where `pp` is a stored tuple |
+
+Attempts, in order, each reverted:
+
+1. `OpGetInt` → `OpGetInt4` (read the stored 4 bytes). Correct width, still fails —
+   the call context needs the closure half too.
+2. `OpGetInt4` + `emit_push_sentinel` (inflate to the 20-byte stack form, mirroring
+   `read_tuple_at_wide`). Fixes the call context and BREAKS the store context, which
+   now receives 24 bytes where `OpSetInt4` expects 8.
+
+**Why the old code appeared to work:** the 8-byte `OpGetInt` read the 4-byte d_nr
+plus the 4 bytes of alignment padding that followed it, and those zero bytes supplied
+the widening. **The padding was performing the 4→8 conversion.** Pack tight and those
+bytes become the next element, so the d_nr comes back with a neighbour in its top
+half.
+
+So the remaining work is not a width swap: the read must know its consumer, which
+means either two ops (a `d_nr`-only projection for the store path, an inflating read
+for the call path) or the same split `generate_call`'s `#493` branch already makes on
+the WRITE side. That is a real codegen design step, and it is the last thing between
+`21/148` and `0/148`.
 
 Bounded next step, no format change: trace the fn-ref element's WRITE (the `#493`
 `OpSetInt4` path and its native twin in `generation/calls.rs`) and narrow every
