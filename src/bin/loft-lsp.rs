@@ -39,6 +39,12 @@ fn main() {
     // uri -> current full text.  Sets up S4-S6 (outline/hover/definition need
     // the live buffer); S3 also parses straight from it on each edit.
     let mut documents: HashMap<String, String> = HashMap::new();
+    // The source formatter, compiled LAZILY on the first formatting request
+    // (compiling it loads the stdlib + the formatter program — heavy — and many
+    // sessions never format).  `formatter_tried` distinguishes "not yet built"
+    // from "built and failed" so a failed build isn't retried every request.
+    let mut formatter: Option<loft::lsp::Formatter> = None;
+    let mut formatter_tried = false;
 
     while let Some(body) = read_message(&mut stdin) {
         // A frame that isn't valid JSON is skipped, not fatal — a robust server
@@ -80,11 +86,33 @@ fn main() {
             ("textDocument/documentSymbol", Some(id)) => {
                 // Outline the CURRENTLY-OPEN buffer (never re-read from disk — the
                 // editor's copy is the source of truth).  Unknown doc → empty list.
-                let symbols = document_symbol_uri(&msg)
+                let symbols = text_document_uri(&msg)
                     .and_then(|uri| documents.get(&uri))
                     .map(|text| document_symbols(text, &stdlib_dir))
                     .unwrap_or_default();
                 send(&stdout, &response(id, Parsed::Array(symbols)));
+            }
+            ("textDocument/formatting", Some(id)) => {
+                // Run the same formatter the `loft fmt` CLI uses on the open buffer;
+                // reply with ONE whole-document edit (or none when already tidy).
+                let edits =
+                    match text_document_uri(&msg).and_then(|uri| documents.get(&uri).cloned()) {
+                        Some(text) => {
+                            if !formatter_tried {
+                                formatter_tried = true;
+                                formatter = loft::lsp::Formatter::new(&stdlib_dir);
+                            }
+                            match formatter.as_mut().and_then(|f| f.format(&text)) {
+                                // A no-op edit is noise; only send one when it changes the text.
+                                Some(formatted) if formatted != text => {
+                                    vec![full_document_edit(&text, &formatted)]
+                                }
+                                _ => Vec::new(),
+                            }
+                        }
+                        None => Vec::new(),
+                    };
+                send(&stdout, &response(id, Parsed::Array(edits)));
             }
             ("textDocument/hover", Some(id)) => {
                 let hover = text_document_position(&msg)
@@ -272,8 +300,40 @@ fn name_range(text: &str, sym: &loft::lsp::Symbol) -> Parsed {
     range_of(line0, col0, col0 + 1)
 }
 
-fn document_symbol_uri(msg: &Parsed) -> Option<String> {
+/// `params.textDocument.uri` — shared by documentSymbol + formatting.
+fn text_document_uri(msg: &Parsed) -> Option<String> {
     obj_str(obj_get(obj_get(msg, "params")?, "textDocument")?, "uri")
+}
+
+// ── formatting ───────────────────────────────────────────────────────────────
+/// A single LSP `TextEdit` replacing the WHOLE document with `formatted`.  The
+/// range spans from the start to the true end of `original` (past the last
+/// character), so it covers the buffer regardless of a trailing newline.
+fn full_document_edit(original: &str, formatted: &str) -> Parsed {
+    let (end_line, end_char) = doc_end(original);
+    let range = obj(vec![
+        ("start", position(0, 0)),
+        ("end", position(end_line, end_char)),
+    ]);
+    obj(vec![
+        ("range", range),
+        ("newText", Parsed::Str(formatted.into())),
+    ])
+}
+
+/// The 0-based position just past the last character of `text` (its end).
+fn doc_end(text: &str) -> (u32, u32) {
+    let mut line = 0u32;
+    let mut col = 0u32;
+    for ch in text.chars() {
+        if ch == '\n' {
+            line += 1;
+            col = 0;
+        } else {
+            col += 1;
+        }
+    }
+    (line, col)
 }
 
 // ── hover (S5) ───────────────────────────────────────────────────────────────
@@ -500,6 +560,7 @@ fn initialize_result() -> Parsed {
         ("documentSymbolProvider", Parsed::Bool(true)),
         ("hoverProvider", Parsed::Bool(true)),
         ("definitionProvider", Parsed::Bool(true)),
+        ("documentFormattingProvider", Parsed::Bool(true)),
     ]);
     let server_info = obj(vec![
         ("name", Parsed::Str(SERVER_NAME.into())),

@@ -259,8 +259,9 @@ operation a working developer expects from a "real language" IDE.
 | `textDocument/rename` | Rename in-place across the workspace; `prepareRename` first to validate the target is a renamable identifier (not a keyword / native fn). |
 | `textDocument/semanticTokens` | Type-aware token classification: function vs. method vs. constant vs. field, mutable vs. const, locals vs. parameters.  Supersedes the SH.1 TextMate grammar's structural-only highlighting. |
 | `textDocument/codeAction` | Quick-fixes: "add missing field", "rename to camelCase", "import `bar`".  Each diagnostic with a known fix produces an action. |
+| `textDocument/codeAction` (`refactor.extract` — **extract function**) | Turn a SELECTION of statements into a new function: data-flow over the selection computes which locals are read-before-write (→ parameters) and which are written-then-used-after (→ return value(s); loft tuples cover multiple outputs), synthesize the fn (name + signature + body) and replace the selection with a call. **Protocol side is trivial** (a `CodeAction` carrying a `WorkspaceEdit`); the cost is the intra-function data-flow ENGINE, which reads the parser's per-fn variable/scope tables (`Definition.variables: Function`). loft specifics: honor the deps/ownership model on extracted params; handle `self` when inside a method; refuse across `#rust`/`#native` bodies. **L effort — not started; the most involved item.** |
 | `textDocument/inlayHint` | Inline type annotations: parameter names at call sites, inferred types of `let`-style locals. |
-| `textDocument/formatting` | Run `loft --format` on the buffer (T2-0 prerequisite). |
+| `textDocument/formatting` | **DONE** (shipped ahead of the rest of LSP.2) — runs the SAME formatter the `loft fmt` CLI uses (`tools/fmt/whole.loft`, compiled once via `loft::lsp::Formatter`), returns one whole-document `TextEdit` (none when already tidy). Gate: `tests/lsp_transport.rs::formatting_returns_a_whole_document_edit_and_noops_when_tidy`. (The old `loft --format` Rust formatter was removed; `loft fmt` is the entry point.) |
 
 ### Loft-side prerequisites
 

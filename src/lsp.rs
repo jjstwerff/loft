@@ -13,6 +13,7 @@ use std::path::Path;
 
 use crate::data::{Data, MAIN_SOURCE};
 use crate::diagnostics::Diagnostics;
+use crate::host::{Program, Value};
 use crate::lexer::Position;
 use crate::parser::Parser;
 
@@ -244,4 +245,36 @@ fn word_at(text: &str, line: u32, col: u32) -> Option<String> {
         end += 1;
     }
     Some(chars[start..end].iter().collect())
+}
+
+/// The loft source formatter (`tools/fmt/whole.loft`) compiled to a runnable
+/// program — the SAME formatter the `loft fmt` CLI runs, so the LSP and the CLI
+/// produce identical output.  Compiling loads the stdlib + the formatter program
+/// and is heavy (~hundreds of ms), so build ONE and reuse it across requests.
+pub struct Formatter {
+    prog: Program,
+}
+
+impl Formatter {
+    /// Compile the formatter with the stdlib in `stdlib_dir`.  `None` if it can't
+    /// be built (e.g. the stdlib can't be found or loaded).
+    #[must_use]
+    pub fn new(stdlib_dir: &str) -> Option<Formatter> {
+        // Relative to THIS file (`src/lsp.rs`); the same `include_str!` target the
+        // CLI's `run_fmt_command` uses, so there is one formatter source of truth.
+        const FMT_SRC: &str = include_str!("../tools/fmt/whole.loft");
+        Program::from_source_with_stdlib(FMT_SRC, stdlib_dir)
+            .ok()
+            .map(|prog| Formatter { prog })
+    }
+
+    /// Format `text`, or `None` if the formatter itself errors (never on a
+    /// no-op — a well-formatted buffer returns itself unchanged).
+    pub fn format(&mut self, text: &str) -> Option<String> {
+        self.prog
+            .call("format", &[Value::Text(text.to_string())])
+            .ok()?
+            .into_text()
+            .ok()
+    }
 }

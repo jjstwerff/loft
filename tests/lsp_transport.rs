@@ -392,6 +392,84 @@ fn go_to_definition_jumps_to_local_and_stdlib_defs() {
     let _ = s.child.wait();
 }
 
+// Formatting — a full-document `TextEdit` from the same formatter the `loft fmt`
+// CLI uses; an already-tidy buffer yields no edits.
+#[test]
+fn formatting_returns_a_whole_document_edit_and_noops_when_tidy() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        matches!(
+            field(caps, "documentFormattingProvider"),
+            Some(Parsed::Bool(true))
+        ),
+        "advertises documentFormattingProvider: {init:?}"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///f.loft";
+    let opts = r#"{"tabSize":2,"insertSpaces":true}"#;
+    s.notify(
+        "textDocument/didOpen",
+        &open_params(uri, "fn main(){\n  x=1+2\n}\n"),
+    );
+    let _ = s.recv(); // consume the publishDiagnostics push
+
+    // An unformatted buffer → exactly one whole-document edit with tidy text.
+    s.request(
+        2,
+        "textDocument/formatting",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"options":{opts}}}"#),
+    );
+    let reply = s.recv();
+    let edits = match field(&reply, "result") {
+        Some(Parsed::Array(a)) => a,
+        other => panic!("formatting result is an array, got {other:?}"),
+    };
+    assert_eq!(edits.len(), 1, "one whole-document edit: {edits:?}");
+    let e = &edits[0];
+    let new_text = field_str(e, "newText").unwrap_or_default();
+    assert!(
+        new_text.contains("fn main() {"),
+        "tidies spacing: {new_text}"
+    );
+    assert!(
+        new_text.contains("x = 1 + 2"),
+        "tidies operators: {new_text}"
+    );
+    let start = field(field(e, "range").unwrap(), "start").unwrap();
+    assert_eq!(
+        (
+            field(start, "line").and_then(Parsed::as_i64),
+            field(start, "character").and_then(Parsed::as_i64),
+        ),
+        (Some(0), Some(0)),
+        "the edit range starts at the document start: {e:?}"
+    );
+
+    // Replace the buffer with the ALREADY-tidy text → no edits.
+    s.notify(
+        "textDocument/didChange",
+        &change_params(uri, "fn main() {\n  x = 1 + 2\n}\n"),
+    );
+    let _ = s.recv(); // diagnostics push
+    s.request(
+        3,
+        "textDocument/formatting",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"options":{opts}}}"#),
+    );
+    let tidy = s.recv();
+    assert!(
+        matches!(field(&tidy, "result"), Some(Parsed::Array(a)) if a.is_empty()),
+        "an already-tidy buffer yields no edits: {tidy:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();
