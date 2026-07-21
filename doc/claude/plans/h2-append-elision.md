@@ -8,6 +8,54 @@
 > wider form of **loft#496**, which is CLOSED — so either that fix was too narrow or
 > this is a regression of it. Probes: `h2-append-elision/probes/` — TWO matrices, `run.sh` (call-site axis) and `run-callee.sh` (callee-return axis); run both.
 
+## RESUME — start here
+
+**One-line state:** the root cause is FOUND and a fix exists that turns every probe cell
+green, but it is blocked by a **pre-existing, unrelated interpreter leak** it inherits —
+so the next task is that leak, NOT the fix.
+
+**Do first (the whole blocker):** the interpreter has no counterpart to native's @PLN85
+displaced-store free on an adopting reassign (`src/generation/dispatch.rs:500-510`; its
+comment names the shape, *"one store leaked per adopting bind (`d = choose(..)`)"*).
+Start reading at `src/state/codegen.rs::gen_set_first_ref_call_copy` (:2580). The exact
+mechanism is **not pinned** — treat that as the site, not the root cause, and build the
+boundary matrix before editing.
+
+Proof it is pre-existing and not the fix's fault (re-verify in 30 s before trusting this):
+
+```bash
+# named-local sibling LEAKS on a clean tree; direct append does not
+LOFT_STORES=warn ./target/release/loft --interpret <sibling>.loft   # sibling = r10 with
+#   `e = pick(t, i+100); out += [e]`   → "1 stores not freed: kt=65 M×3"
+```
+
+**Then:** apply `h2-append-elision/value-before-slot.patch`, confirm `r10` green and `r1`
+stays green, run the full suite, and only afterwards re-base the two `AppendSource`
+expectations (`tests/use_analysis.rs`) and the fuzz-gate positive control
+(`tests/ownership_fuzz_gate.rs`) — they are what caught the leak, so never edit them first.
+
+**Validate with BOTH matrices** (`probes/`), never one:
+
+```bash
+./doc/claude/plans/h2-append-elision/probes/run.sh          # call-site axis  (p1-p8)
+./doc/claude/plans/h2-append-elision/probes/run-callee.sh   # callee axis     (r1-r12)
+```
+
+Clean-tree baseline = 3 failing combinations in EACH; the harnesses print their own
+baseline and warn that a 0 may mean the instrument went blind. Both assert value AND
+length AND leak on BOTH backends (H2 is interpreter-only).
+
+**Open, not filed:** `r5`/`r6` leak 2 stores on a clean tree (interpreter only, no loop
+needed, native clean) — an independent defect. **Not yet reproduced on `main`**, which
+the bug-filing policy requires before filing.
+
+**Branch:** `tuxedo-win-oracle`, 44 commits ahead of `origin/main`, stacked on PR #609,
+**no PR of its own**. Working tree clean, everything pushed.
+
+**Environmental suite failures here** (not regressions): `index_hygiene_clean` (a link to
+the git-ignored, locally-built `doc/claude/LIBRARIES.md` — run `make libcatalogue`) and
+`wasm_debug_relay`.
+
 ## Symptom
 
 ```loft
