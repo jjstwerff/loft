@@ -108,8 +108,15 @@ S4 (precise local references/rename), S7 (inlayHint), and index-driven navigatio
   per-keystroke. Limitation: a cross-file USER method the calling file doesn't import
   isn't found (under-match, never over-match). Tested unit + cross-file transport.
 
+- **Semantic tokens + completion consumers** (`e3551d7f`) — `semantic_tokens` matches each
+  identifier against the index by position, classifying LOCALS (`variable`), METHODS
+  (`method`), and FIELDS (a new `property` legend entry), falling back to the name lookup for
+  globals/types. `complete`'s `expr.` receiver resolves scope-precisely in the function
+  enclosing the cursor (a same-named `v` typed differently in two fns offers the right members
+  in each). Both pure consumers — CLI byte-identical. Tested in `lsp_semantic` + `lsp_completion`.
+
 **Every resolution kind — Local, Global, Field, Method — now has a live LSP consumer:
-references, rename, inlayHint, go-to-definition, hover.**
+references, rename, inlayHint, go-to-definition, hover, semantic tokens, completion.**
 
 **Remaining follow-ups (optional, each its own step — the plan's goal is met):**
 - **Record the missing DECLARATIONS** (param signature, `for`/lambda binder,

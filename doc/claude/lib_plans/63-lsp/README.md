@@ -422,12 +422,14 @@ Steps, in dependency order:
   (`lexer::keywords()`, now `pub`), filtered by the typed prefix (an empty prefix restricts to the
   user's own defs so the stdlib isn't dumped).  Receiver resolution: a TYPE name directly, or a
   VARIABLE's type via a function's `variables()` table (`name_exists`/`var`/`var_type` +
-  `type_def_nr`) — best-effort until step F.  `classify`→LSP `CompletionItemKind`.  Advertises
+  `type_def_nr`).  **Scope-precise via @PLN115:** the receiver variable resolves in the function
+  ENCLOSING the cursor (the top-level fn with the greatest declaration line at or before it), so a
+  same-named `v` typed differently in two functions offers the right members in each; falls back to
+  the any-function scan.  `classify`→LSP `CompletionItemKind`.  Advertises
   `completionProvider {triggerCharacters: ["."]}`.  *Gates:* `tests/lsp_completion.rs` (prefix→
-  globals+keywords, `p.`→fields+method no-dup, `Shape.`→variants) +
+  globals+keywords, `p.`→fields+method no-dup, `Shape.`→variants, scope-precise receiver) +
   `tests/lsp_transport.rs::completion_offers_members_after_a_dot`.  The S0 positive control moved
-  to `textDocument/signatureHelp`.  Follow-ups (with F): scope-precise variable resolution across
-  ambiguous names; call-arg context; fuzzy ranking via `suggest_similar`.
+  to `textDocument/signatureHelp`.  Follow-ups: call-arg context; fuzzy ranking via `suggest_similar`.
 - **D — `textDocument/semanticTokens/full` — DONE.** `loft::lsp::semantic_tokens` lexes the
   buffer and classifies each identifier by `token_kind` (`n_<name>`→function, `<name>`→struct/
   enum/type/constant/interface, keyword) — the same name-lookup references/completion use.  The
@@ -437,15 +439,17 @@ Steps, in dependency order:
   is correct: semantic tokens add the TYPE-aware layer (is `Point` a struct? is `area` a
   function?) the grammar can't.  Advertises `semanticTokensProvider {legend, full}`.  *Gates:*
   `tests/lsp_semantic.rs` (Point→struct, area→function, integer→type, sorted) +
-  `tests/lsp_transport.rs::semantic_tokens_full_returns_encoded_tokens`.  Lexical cut; F sharpens
-  (methods/locals).
-- **E — `textDocument/inlayHint` — DEFERRED to F (substrate not ready).** The intent (inferred
-  type after a local `x = …`) needs each binding's precise position; the parser's variable-table
-  positions (`Variable.source` / `write_source`) are NOT reliably populated in the fresh-parse
-  path the LSP uses (only the first local per fn gets one), so an inlay hint would fire
-  inconsistently — worse UX than none.  Deferred to [@PLN115 (the resolution index)](../../plans/115-resolution-index/README.md),
-  which records reliable binding positions; then this is a thin read of `var_type` →
-  `type_name_str` at the binding site.
+  `tests/lsp_transport.rs::semantic_tokens_full_returns_encoded_tokens`.  **Sharpened via
+  @PLN115:** each token is matched against the resolution index by position first, so LOCALS
+  (`variable`), METHODS (`method`), and FIELDS (a new `property` legend entry) are now classified,
+  then falls back to the name lookup for globals/types/keywords.
+- **E — `textDocument/inlayHint` — DONE (via [@PLN115](../../plans/115-resolution-index/README.md) S7).**
+  Was deferred because the parser's variable-table positions (`Variable.source`) were not
+  reliably populated in the fresh-parse path (only the first local per fn got one).
+  The resolution index fixed that: a local binding's declaration is its earliest recorded
+  occurrence (a `name =` write), so `lsp::inlay_hints` reads `var_type` → `type_name_str`
+  there and emits `: <type>` for EVERY assignment-local (params + loop/lambda binders skipped).
+  Server advertises `inlayHintProvider`.
 - **F — type/scope-aware precision — v1 DONE (local scoping).** The first, highest-value slice:
   distinguish a GLOBAL symbol (a top-level def or method — workspace-wide) from a LOCAL (a
   variable / parameter — confined to its enclosing function block), and scope find-references /
@@ -458,12 +462,21 @@ Steps, in dependency order:
   SOURCE-scan, no parser instrumentation.  *Gates:* `tests/lsp_scope.rs` (locals→their function,
   globals/stdlib→Global; `scoped_refs` file+range filter) +
   `tests/lsp_transport.rs::rename_a_local_scopes_to_its_function` (real binary).
-  **Remaining F (v2+) → its own plan [@PLN115 parse-time resolution index](../../plans/115-resolution-index/README.md):**
-  shadowing / block scope (v1 is function-granular); per-occurrence resolution so
-  `references("len")` returns only the intended `text.len` (methods are still name-lexical);
-  completion's variable-member resolution made scope-precise; and the reliable binding positions
-  that unblock **E (inlayHint)**.  These all want the parser to RECORD `(position → resolved
-  binding)` during parse — the invasive parser piece, deferred to @PLN115.
+  **F (v2+) — DONE via [@PLN115 parse-time resolution index](../../plans/115-resolution-index/README.md)
+  (S1–S7 + consumers, all shipped).** The parser now RECORDS `(position → resolved binding)` —
+  `Local`/`Global`/`Field`/`Method` — gated (byte-identical off), and every LSP feature reads it:
+  - **references/rename of a LOCAL** — exact binding, a same-named field (`p.x`) excluded (S4).
+  - **method find-references** — `text.len` across the workspace, excluding `vector.len` (keyed
+    on the receiver type) — the per-occurrence resolution v1 lacked.
+  - **completion `expr.` receiver** — scope-precise to the enclosing function.
+  - **semanticTokens** — locals (`variable`), methods (`method`), fields (`property`) classified.
+  - **go-to-definition + hover** — resolve locals + methods (into the stdlib) + fields, precisely.
+  - **inlayHint (E)** — the originally-blocked feature, now shipping.
+
+  loft is flat-scoped per function, so "shadowing / block scope" folded to per-occurrence
+  binding identity (no intra-fn shadowing exists). Remaining @PLN115 follow-ups (optional):
+  recording declarations made outside `parse_var` (param signatures, `for`/lambda binders) to
+  retire the S4 F-v1 fallback for those; and S6's exotic member paths.
 
 Smaller follow-ups already noted: workspace-index invalidation on `didSave`; `TagIndex` mtime
 refresh; **T4** tag completion (fold into C).  **Extract-function** (`refactor.extract`, the table
