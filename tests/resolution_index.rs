@@ -34,11 +34,28 @@ fn s2_local_occurrences_resolve_to_distinct_bindings() {
         }
     }
     // aa: `s=1`, `s=…`, `…s…`, `return s` = 4 occurrences of one binding.
-    assert_eq!(aa.len(), 4, "expected 4 occurrences of aa's `s`, got {aa:?}");
-    assert_eq!(bb.len(), 2, "expected 2 occurrences of bb's `s`, got {bb:?}");
-    assert!(aa.iter().all(|b| *b == aa[0]), "aa's `s` occurrences must share one binding: {aa:?}");
-    assert!(bb.iter().all(|b| *b == bb[0]), "bb's `s` occurrences must share one binding: {bb:?}");
-    assert_ne!(aa[0], bb[0], "same-named locals in different fns must be distinct bindings");
+    assert_eq!(
+        aa.len(),
+        4,
+        "expected 4 occurrences of aa's `s`, got {aa:?}"
+    );
+    assert_eq!(
+        bb.len(),
+        2,
+        "expected 2 occurrences of bb's `s`, got {bb:?}"
+    );
+    assert!(
+        aa.iter().all(|b| *b == aa[0]),
+        "aa's `s` occurrences must share one binding: {aa:?}"
+    );
+    assert!(
+        bb.iter().all(|b| *b == bb[0]),
+        "bb's `s` occurrences must share one binding: {bb:?}"
+    );
+    assert_ne!(
+        aa[0], bb[0],
+        "same-named locals in different fns must be distinct bindings"
+    );
 }
 
 #[test]
@@ -46,8 +63,15 @@ fn s2_recording_off_by_default() {
     // The gate must be off unless explicitly enabled (the zero-cost compile path).
     let mut p = Parser::new();
     p.parse_dir("default", true, false).expect("stdlib");
-    p.parse_source("fn cc() -> integer {\n  q = 5;\n  return q;\n}\n", "buf.loft", false);
-    assert!(p.resolutions().is_empty(), "recording must be off by default");
+    p.parse_source(
+        "fn cc() -> integer {\n  q = 5;\n  return q;\n}\n",
+        "buf.loft",
+        false,
+    );
+    assert!(
+        p.resolutions().is_empty(),
+        "recording must be off by default"
+    );
 }
 
 #[test]
@@ -65,7 +89,11 @@ fn s3_lsp_parse_carries_buffer_occurrences() {
             o.res
         );
         // Positioned in the 4-line user buffer, never in the stdlib.
-        assert!(o.line >= 1 && o.line <= 4, "occurrence in-buffer: line {}", o.line);
+        assert!(
+            o.line >= 1 && o.line <= 4,
+            "occurrence in-buffer: line {}",
+            o.line
+        );
     }
     // `total` appears 3× (write + two reads); all share one binding.
     let totals: Vec<_> = occ
@@ -74,7 +102,10 @@ fn s3_lsp_parse_carries_buffer_occurrences() {
         .map(|o| o.res.clone())
         .collect();
     assert_eq!(totals.len(), 3, "three `total` occurrences: {totals:?}");
-    assert!(totals.iter().all(|r| *r == totals[0]), "one binding: {totals:?}");
+    assert!(
+        totals.iter().all(|r| *r == totals[0]),
+        "one binding: {totals:?}"
+    );
 }
 
 #[test]
@@ -167,11 +198,21 @@ fn s7_inlay_hints_type_assignment_locals_only() {
     let hints = loft::lsp::inlay_hints(src, "buf.loft", "default");
     let by_line: Vec<(u32, &str)> = hints.iter().map(|h| (h.line, h.label.as_str())).collect();
     // `n` (L2) : integer, `s` (L3) : text.
-    assert!(by_line.contains(&(2, ": integer")), "n: integer hint: {by_line:?}");
-    assert!(by_line.contains(&(3, ": text")), "s: text hint: {by_line:?}");
+    assert!(
+        by_line.contains(&(2, ": integer")),
+        "n: integer hint: {by_line:?}"
+    );
+    assert!(
+        by_line.contains(&(3, ": text")),
+        "s: text hint: {by_line:?}"
+    );
     // Exactly two hints — the param `w` and the loop binder `i` produce none, and a
     // binding is hinted only at its declaration (not at the reassignment `n = n + i`).
-    assert_eq!(hints.len(), 2, "only the two assignment-local decls: {by_line:?}");
+    assert_eq!(
+        hints.len(),
+        2,
+        "only the two assignment-local decls: {by_line:?}"
+    );
     // The hint sits AFTER the name: `  n = 5;` → `n` at col 3, hint col 4.
     let n_hint = hints.iter().find(|h| h.line == 2).unwrap();
     assert_eq!(n_hint.col, 4, "hint is positioned after the name");
@@ -184,16 +225,14 @@ fn method_refs_keyed_on_receiver_type_exclude_other_types() {
                v = [1, 2, 3];\n  w = v.len();\n  y = s.len();\n}\n";
     let overlays = vec![("/buf.loft".to_string(), src.to_string())];
     // From a `text.len` call (L3, `len` at col 9) → BOTH text sites, NOT vector.len.
-    let text_refs =
-        loft::lsp::method_refs(src, 3, 9, "", &overlays, "default").expect("a method");
+    let text_refs = loft::lsp::method_refs(src, 3, 9, "", &overlays, "default").expect("a method");
     assert_eq!(
         text_refs.iter().map(|r| r.line).collect::<Vec<_>>(),
         vec![3, 6],
         "only text.len sites (vector.len on L5 excluded): {text_refs:?}"
     );
     // From the `vector.len` call (L5) → only that site, not the text.len sites.
-    let vec_refs =
-        loft::lsp::method_refs(src, 5, 9, "", &overlays, "default").expect("a method");
+    let vec_refs = loft::lsp::method_refs(src, 5, 9, "", &overlays, "default").expect("a method");
     assert_eq!(
         vec_refs.iter().map(|r| r.line).collect::<Vec<_>>(),
         vec![5],
@@ -231,14 +270,22 @@ fn resolve_at_navigates_local_global_field_method() {
 
     // GLOBAL `helper()` call (L9 col 7) → the free fn's real signature at L2.
     let h = loft::lsp::resolve_at(src, "default", 9, 7).expect("global helper resolves");
-    assert!(h.signature.starts_with("fn helper("), "sig: {}", h.signature);
+    assert!(
+        h.signature.starts_with("fn helper("),
+        "sig: {}",
+        h.signature
+    );
     assert_eq!(h.def_line, 2, "jumps to the fn definition");
 
     // METHOD `s.len()` (L6, `len` at col 12) → text.len, jumping into the stdlib —
     // impossible with name lookup, and keyed on the receiver TYPE (not vector.len).
     let h = loft::lsp::resolve_at(src, "default", 6, 12).expect("method len resolves");
     assert!(h.signature.contains("text.len"), "sig: {}", h.signature);
-    assert!(h.def_file.contains("01_code.loft"), "def in stdlib: {}", h.def_file);
+    assert!(
+        h.def_file.contains("01_code.loft"),
+        "def in stdlib: {}",
+        h.def_file
+    );
 
     // FIELD `p.x` (L11, `x` at col 9) → the struct's field, shown as `P.x: integer`.
     let h = loft::lsp::resolve_at(src, "default", 11, 9).expect("field p.x resolves");
@@ -257,10 +304,20 @@ fn s4_assignment_local_refs_exclude_field_access() {
         .expect("assignment-local takes the precise path");
     let positions: Vec<(u32, u32)> = refs.iter().map(|r| (r.line, r.col)).collect();
     // Decl `x` at L3:3 and read `x` at L4 (inside the interpolation) — 2 refs.
-    assert_eq!(refs.len(), 2, "local x: decl + one read, field p.x excluded: {positions:?}");
-    assert!(positions.contains(&(3, 3)), "includes the declaration: {positions:?}");
+    assert_eq!(
+        refs.len(),
+        2,
+        "local x: decl + one read, field p.x excluded: {positions:?}"
+    );
+    assert!(
+        positions.contains(&(3, 3)),
+        "includes the declaration: {positions:?}"
+    );
     // The `p.x` field's `x` sits at L4 col 11; it must NOT be in the set.
-    assert!(!positions.contains(&(4, 11)), "field p.x is excluded: {positions:?}");
+    assert!(
+        !positions.contains(&(4, 11)),
+        "field p.x is excluded: {positions:?}"
+    );
 }
 
 #[test]

@@ -436,7 +436,9 @@ impl Parser {
         // Routine attribute is a METHOD, any other attribute a FIELD.  So `text.len`
         // records Method{text, len} and `p.x` records Field{P, x} — a same-spelled
         // member of another type, or a local of the same name, is thereby excluded.
-        if !self.first_pass && let Some(fp) = &field_pos {
+        if !self.first_pass
+            && let Some(fp) = &field_pos
+        {
             let len = field.chars().count() as u16;
             match self.data.attr_type(dnr, fnr) {
                 Type::Routine(r_nr) => self.record(

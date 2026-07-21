@@ -78,7 +78,6 @@ fn tag_lookup_renders_feature_title_url_and_summary() {
 
     // An unindexed local tag → None (T3 territory).
     assert!(idx.lookup("@P999").is_none(), "unindexed @P → None"); // <!--noindex-->
-
 }
 
 #[test]

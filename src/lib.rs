@@ -129,9 +129,9 @@ pub mod host;
 ))]
 pub(crate) mod net;
 pub mod ownership_cfg;
-pub mod resolution;
 #[cfg(feature = "remote-store")]
 pub mod paged_reader;
+pub mod resolution;
 pub mod scopes;
 pub mod use_analysis;
 mod variables;

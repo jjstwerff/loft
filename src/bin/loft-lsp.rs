@@ -235,9 +235,13 @@ fn main() {
                         // occurrences via the resolution index — a same-named field access
                         // (`p.x` vs local `x`) is excluded, which the name-scan can't do.
                         // Params / loop binders / globals return None → the F-v1 path.
-                        if let Some(refs) =
-                            loft::lsp::local_binding_refs(&text, &stdlib_dir, &file, line + 1, ch + 1)
-                        {
+                        if let Some(refs) = loft::lsp::local_binding_refs(
+                            &text,
+                            &stdlib_dir,
+                            &file,
+                            line + 1,
+                            ch + 1,
+                        ) {
                             let len = loft::lsp::identifier_at(&text, line + 1, ch + 1)
                                 .map_or(0, |n| n.chars().count() as u32);
                             refs.iter().map(|r| location_of(r, len)).collect()
@@ -333,7 +337,13 @@ fn main() {
                         // by position), then the name-based fallback.
                         let h = loft::lsp::resolve_at(text, &stdlib_dir, line + 1, ch + 1)
                             .or_else(|| {
-                                loft::lsp::symbol_at(text, "buf.loft", &stdlib_dir, line + 1, ch + 1)
+                                loft::lsp::symbol_at(
+                                    text,
+                                    "buf.loft",
+                                    &stdlib_dir,
+                                    line + 1,
+                                    ch + 1,
+                                )
                             })?;
                         Some(definition_location(&uri, &h, &stdlib_dir))
                     })

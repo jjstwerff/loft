@@ -668,7 +668,8 @@ fn method_references_span_the_workspace_by_receiver_type() {
     let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("methrefws");
     std::fs::create_dir_all(&root).unwrap();
     // a.loft: a text.len call AND a vector.len call (same spelling, other type).
-    let a_text = "fn main() {\n  s = \"hi\";\n  x = s.len();\n  v = [1, 2, 3];\n  w = v.len();\n}\n";
+    let a_text =
+        "fn main() {\n  s = \"hi\";\n  x = s.len();\n  v = [1, 2, 3];\n  w = v.len();\n}\n";
     std::fs::write(root.join("a.loft"), a_text).unwrap();
     // b.loft: another text.len call, in a different file.
     std::fs::write(
@@ -976,7 +977,11 @@ fn definition_and_hover_resolve_locals_and_methods_via_index() {
         &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":10}}}}"#),
     );
     let loc = field(&s.recv(), "result").cloned().expect("local Location");
-    assert_eq!(field_str(&loc, "uri").as_deref(), Some(uri), "stays in buffer");
+    assert_eq!(
+        field_str(&loc, "uri").as_deref(),
+        Some(uri),
+        "stays in buffer"
+    );
     let start = field(field(&loc, "range").unwrap(), "start").unwrap();
     assert_eq!(
         (
@@ -993,7 +998,9 @@ fn definition_and_hover_resolve_locals_and_methods_via_index() {
         "textDocument/definition",
         &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":4,"character":18}}}}"#),
     );
-    let loc = field(&s.recv(), "result").cloned().expect("method Location");
+    let loc = field(&s.recv(), "result")
+        .cloned()
+        .expect("method Location");
     let target = field_str(&loc, "uri").unwrap_or_default();
     assert!(
         target.starts_with("file://") && target.contains("default/"),
@@ -1051,12 +1058,15 @@ fn inlay_hints_annotate_local_declaration_types() {
         Parsed::Array(a) => a.clone(),
         other => panic!("expected an array, got {other:?}"),
     };
-    let labels: Vec<String> = hints
-        .iter()
-        .filter_map(|h| field_str(h, "label"))
-        .collect();
-    assert!(labels.iter().any(|l| l == ": integer"), "n : integer: {labels:?}");
-    assert!(labels.iter().any(|l| l == ": text"), "greeting : text: {labels:?}");
+    let labels: Vec<String> = hints.iter().filter_map(|h| field_str(h, "label")).collect();
+    assert!(
+        labels.iter().any(|l| l == ": integer"),
+        "n : integer: {labels:?}"
+    );
+    assert!(
+        labels.iter().any(|l| l == ": text"),
+        "greeting : text: {labels:?}"
+    );
     // Each hint carries a 0-based position (kind 1 = Type).
     let first = &hints[0];
     assert!(
@@ -1176,8 +1186,15 @@ fn rename_a_local_excludes_a_same_named_field() {
     };
     // Exactly the two local occurrences (decl + the `{x}` read); the field `p.x`'s
     // `x` (0-based line 3, char 12) must NOT be edited.
-    assert_eq!(starts.len(), 2, "only the local's 2 occurrences: {starts:?}");
-    assert!(starts.contains(&(2, 2)), "the declaration is renamed: {starts:?}");
+    assert_eq!(
+        starts.len(),
+        2,
+        "only the local's 2 occurrences: {starts:?}"
+    );
+    assert!(
+        starts.contains(&(2, 2)),
+        "the declaration is renamed: {starts:?}"
+    );
     assert!(
         !starts.contains(&(3, 12)),
         "the field p.x is NOT renamed: {starts:?}"

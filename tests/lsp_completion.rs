@@ -131,12 +131,18 @@ fn member_completion_is_scope_precise_to_the_enclosing_function() {
         in_f.iter().any(|(k, l)| *k == 5 && l == "a"),
         "f sees A.a: {in_f:?}"
     );
-    assert!(!in_f.iter().any(|(_, l)| l == "b"), "f does NOT see B.b: {in_f:?}");
+    assert!(
+        !in_f.iter().any(|(_, l)| l == "b"),
+        "f does NOT see B.b: {in_f:?}"
+    );
     // In `g` (L9) → B's field `b`.
     let in_g = items(src, 9, 5);
     assert!(
         in_g.iter().any(|(k, l)| *k == 5 && l == "b"),
         "g sees B.b: {in_g:?}"
     );
-    assert!(!in_g.iter().any(|(_, l)| l == "a"), "g does NOT see A.a: {in_g:?}");
+    assert!(
+        !in_g.iter().any(|(_, l)| l == "a"),
+        "g does NOT see A.a: {in_g:?}"
+    );
 }

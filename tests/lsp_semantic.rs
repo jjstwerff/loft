@@ -52,17 +52,23 @@ fn index_classifies_locals_methods_and_fields() {
         .collect();
     // local `p` (L3 col 3) → variable
     assert!(
-        named.iter().any(|(l, c, k)| *l == 3 && *c == 3 && *k == "variable"),
+        named
+            .iter()
+            .any(|(l, c, k)| *l == 3 && *c == 3 && *k == "variable"),
         "local p is a variable: {named:?}"
     );
     // field `p.x` (the `x` at L4 col 9) → property
     assert!(
-        named.iter().any(|(l, c, k)| *l == 4 && *c == 9 && *k == "property"),
+        named
+            .iter()
+            .any(|(l, c, k)| *l == 4 && *c == 9 && *k == "property"),
         "field x is a property: {named:?}"
     );
     // method `s.len` (the `len` at L6 col 9) → method
     assert!(
-        named.iter().any(|(l, c, k)| *l == 6 && *c == 9 && *k == "method"),
+        named
+            .iter()
+            .any(|(l, c, k)| *l == 6 && *c == 9 && *k == "method"),
         "method len is a method: {named:?}"
     );
 }
