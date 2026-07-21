@@ -249,7 +249,7 @@ fn document_symbol_lists_the_outline() {
         ),
         (Some(0), Some(7), Some(12)),
         "selectionRange covers `Point`: {:?}",
-        &syms[0]
+        syms[0]
     );
 
     s.notify("exit", "null");
@@ -909,6 +909,64 @@ fn completion_offers_members_after_a_dot() {
     assert!(
         labels.iter().any(|l| l == "x"),
         "the struct's field is offered: {labels:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
+// T4 — completion of a partial `@`-tag offers tracker tags from the workspace index.
+#[test]
+fn tag_completion_offers_tracker_tags() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tagws-complete");
+    let idx = root.join("index");
+    std::fs::create_dir_all(&idx).unwrap();
+    std::fs::write(
+        idx.join("tags.json"),
+        r#"{"@F1":[{"file":"a.md","line":1,"context":"@F1"}]}"#,
+    )
+    .unwrap();
+    std::fs::write(
+        idx.join("features.json"),
+        r#"[{"number":1,"title":"Keyed collections","kind":"feature","body":"Look up records by key.\n"}]"#,
+    )
+    .unwrap();
+
+    let mut s = Session::start();
+    let root_uri = format!("file://{}", root.display());
+    s.request(1, "initialize", &format!(r#"{{"rootUri":"{root_uri}"}}"#));
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    let triggers = field(
+        field(caps, "completionProvider").unwrap(),
+        "triggerCharacters",
+    );
+    assert!(
+        matches!(triggers, Some(Parsed::Array(a)) if a.iter().any(|c| matches!(c, Parsed::Str(s) if s == "@"))),
+        "advertises `@` as a completion trigger: {init:?}"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///t.loft";
+    // A comment line ending in the partial tag `@F` (chars 0..5 → cursor at char 5).
+    let prog = "// @F\nfn main() {\n}\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let _ = s.recv();
+
+    s.request(
+        2,
+        "textDocument/completion",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":0,"character":5}}}}"#),
+    );
+    let reply = s.recv();
+    let items = match field(&reply, "result") {
+        Some(Parsed::Array(a)) => a,
+        other => panic!("completion result is an array, got {other:?}"),
+    };
+    let labels: Vec<String> = items.iter().filter_map(|i| field_str(i, "label")).collect();
+    assert!(
+        labels.iter().any(|l| l == "@F1"),
+        "the `@F1` tracker tag is offered: {labels:?}"
     );
 
     s.notify("exit", "null");

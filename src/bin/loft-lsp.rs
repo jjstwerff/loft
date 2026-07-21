@@ -158,18 +158,33 @@ fn main() {
                 send(&stdout, &response(id, Parsed::Array(hints)));
             }
             ("textDocument/completion", Some(id)) => {
-                // Step C: members after `expr.`, else in-scope names + keywords.
-                let items = text_document_position(&msg)
-                    .and_then(|(uri, line, ch)| {
-                        let text = documents.get(&uri)?;
-                        Some(
-                            loft::lsp::complete(text, "buf.loft", &stdlib_dir, line + 1, ch + 1)
+                // T4: a partial `@`-tag → tracker-tag candidates from the index;
+                // else step C — members after `expr.`, or in-scope names + keywords.
+                // Clone the buffer out so the `documents` borrow drops before the
+                // mutable `tag_index` access.
+                let at = text_document_position(&msg)
+                    .and_then(|(uri, line, ch)| Some((documents.get(&uri)?.clone(), line, ch)));
+                let items = match at {
+                    Some((text, line, ch)) => {
+                        if let Some(prefix) =
+                            loft::lsp::tag_completion_prefix(&text, line + 1, ch + 1)
+                        {
+                            ensure_tag_index(&workspace_root, &mut tag_index, &mut tag_index_tried);
+                            tag_index
+                                .as_ref()
+                                .map(|idx| {
+                                    idx.complete(&prefix).iter().map(completion_item).collect()
+                                })
+                                .unwrap_or_default()
+                        } else {
+                            loft::lsp::complete(&text, "buf.loft", &stdlib_dir, line + 1, ch + 1)
                                 .iter()
                                 .map(completion_item)
-                                .collect::<Vec<_>>(),
-                        )
-                    })
-                    .unwrap_or_default();
+                                .collect()
+                        }
+                    }
+                    None => Vec::new(),
+                };
                 send(&stdout, &response(id, Parsed::Array(items)));
             }
             ("textDocument/formatting", Some(id)) => {
@@ -1098,8 +1113,9 @@ fn initialize_result() -> Parsed {
         (
             "completionProvider",
             obj(vec![(
+                // `.` → member completion; `@` → tracker-tag completion (T4).
                 "triggerCharacters",
-                Parsed::Array(vec![Parsed::Str(".".into())]),
+                Parsed::Array(vec![Parsed::Str(".".into()), Parsed::Str("@".into())]),
             )]),
         ),
         (

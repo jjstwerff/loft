@@ -612,6 +612,54 @@ impl TagIndex {
             _ => None,
         }
     }
+
+    /// T4 — completion candidates for a partial tracker tag (`@`, `@P`, `@PLN6`):
+    /// every known tag whose text starts with `prefix`, as `Completion`s (kind
+    /// Reference).  Known tags are the referenced tags in `tags.json` (never a
+    /// broken-only one — those live in the `broken` array, not as keys) plus the
+    /// `@F<n>` / `@I<n>` feature / infra tags synthesized from `features.json`.
+    /// The detail is the feature title, else the tag's kind label.  Capped at 200.
+    #[must_use]
+    pub fn complete(&self, prefix: &str) -> Vec<Completion> {
+        let mut tags: Vec<String> = Vec::new();
+        // Referenced tags from tags.json (skip the `broken` meta key).
+        if let Parsed::Object(entries) = &self.tags {
+            for (k, _, _) in entries {
+                if k != "broken" && k.starts_with('@') {
+                    tags.push(k.clone());
+                }
+            }
+        }
+        // Feature / infra tags synthesized from features.json (`kind` → family).
+        if let Parsed::Array(items) = &self.features {
+            for it in items {
+                if let (Some(num), Some(kind)) = (pj_i64(it, "number"), pj_str(it, "kind")) {
+                    let fam = match kind.as_str() {
+                        "feature" => "F",
+                        "infra" => "I",
+                        _ => continue,
+                    };
+                    tags.push(format!("@{fam}{num}"));
+                }
+            }
+        }
+        tags.sort();
+        tags.dedup();
+        let mut out: Vec<Completion> = tags
+            .into_iter()
+            .filter(|t| t.starts_with(prefix))
+            .filter_map(|t| {
+                let info = self.lookup(&t)?;
+                Some(Completion {
+                    kind: 18, // Reference
+                    detail: info.title.unwrap_or_else(|| info.kind.to_string()),
+                    label: t,
+                })
+            })
+            .collect();
+        out.truncate(200);
+        out
+    }
 }
 
 /// A [`TagInfo`] as a markdown block — the LSP hover body and `loft tag` output.
@@ -719,6 +767,23 @@ pub fn tag_at(text: &str, line: u32, col: u32) -> Option<String> {
         .into_iter()
         .find(|(_, s, e)| *s <= c && c < *e)
         .map(|(t, _, _)| t)
+}
+
+/// T4 — the partial tracker tag being typed at a 1-based (`line`, `col`) cursor:
+/// an `@` followed by the uppercase-letter + digit run up to the cursor (`@`,
+/// `@P`, `@PLN6`), or `None` when the cursor is not in a tag.  `@` never starts a
+/// loft identifier, so a `Some` here means the completion handler should offer
+/// tracker-tag candidates ([`TagIndex::complete`]) instead of symbols.
+#[must_use]
+pub fn tag_completion_prefix(text: &str, line: u32, col: u32) -> Option<String> {
+    let line_str = text.lines().nth(line.saturating_sub(1) as usize)?;
+    let chars: Vec<char> = line_str.chars().collect();
+    let cursor = (col.saturating_sub(1) as usize).min(chars.len());
+    let mut i = cursor;
+    while i > 0 && (chars[i - 1].is_ascii_uppercase() || chars[i - 1].is_ascii_digit()) {
+        i -= 1;
+    }
+    (i > 0 && chars[i - 1] == '@').then(|| chars[i - 1..cursor].iter().collect())
 }
 
 /// Every tag occurrence in `text` as `(tag, line, start_col, end_col)` — 1-based

@@ -9,11 +9,15 @@
 use std::fs;
 use std::path::PathBuf;
 
-use loft::lsp::{TagIndex, render_tag_markdown, tag_at, tags_in};
+use loft::lsp::{TagIndex, render_tag_markdown, tag_at, tag_completion_prefix, tags_in};
 
-/// Write a minimal `<tmp>/index/{tags,features}.json` and return the index dir.
-fn synthetic_index() -> PathBuf {
-    let idx = PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("tagidx/index");
+/// Write a minimal `<tmp>/<slot>/index/{tags,features}.json` and return the index
+/// dir.  Each test passes a UNIQUE `slot` so the shared temp dir isn't a
+/// parallel-write race (all tests run concurrently against their own copy).
+fn synthetic_index(slot: &str) -> PathBuf {
+    let idx = PathBuf::from(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("tagidx-{slot}"))
+        .join("index");
     fs::create_dir_all(&idx).unwrap();
     fs::write(
         idx.join("tags.json"),
@@ -36,7 +40,7 @@ fn synthetic_index() -> PathBuf {
 
 #[test]
 fn tag_lookup_renders_feature_title_url_and_summary() {
-    let idx = TagIndex::load(synthetic_index().to_str().unwrap()).expect("loads the index");
+    let idx = TagIndex::load(synthetic_index("lookup").to_str().unwrap()).expect("loads the index");
 
     // @F1 — a feature: title + first-paragraph summary from features.json, and
     // the features-repo issue URL.
@@ -82,7 +86,7 @@ fn tag_lookup_renders_feature_title_url_and_summary() {
 
 #[test]
 fn broken_tags_come_from_the_index_verdict() {
-    let idx = TagIndex::load(synthetic_index().to_str().unwrap()).unwrap();
+    let idx = TagIndex::load(synthetic_index("broken").to_str().unwrap()).unwrap();
     // T3 consumes the scanner's `broken` array verbatim.
     assert!(idx.is_broken("@P99"), "@P99 is listed in the broken array"); // <!--noindex-->
     assert!(!idx.is_broken("@P9"), "@P9 is a valid, referenced tag"); // <!--noindex-->
@@ -95,6 +99,42 @@ fn broken_tags_come_from_the_index_verdict() {
         !idx.is_broken("@P123"), // <!--noindex-->  (intentional example tag, not a real ref)
         "an unindexed tag is not (yet) known-broken"
     );
+}
+
+#[test]
+fn tag_completion_offers_known_tags_from_the_index() {
+    let idx = TagIndex::load(synthetic_index("complete").to_str().unwrap()).unwrap();
+    // `@F` → the feature tag synthesized from features.json (kind Reference = 18).
+    let f = idx.complete("@F");
+    assert!(
+        f.iter().any(|c| c.label == "@F1" && c.kind == 18),
+        "@F1 offered: {f:?}"
+    );
+    // `@P` → the referenced problem tag, but never the broken-only `@P99` (it
+    // lives in the `broken` array, not as a top-level key). <!--noindex-->
+    let p = idx.complete("@P");
+    assert!(p.iter().any(|c| c.label == "@P9"), "@P9 offered: {p:?}"); // <!--noindex-->
+    assert!(
+        !p.iter().any(|c| c.label == "@P99"), // <!--noindex-->
+        "broken @P99 not offered: {p:?}"
+    );
+    // An empty family prefix `@` offers everything indexed.
+    assert!(idx.complete("@").len() >= 3, "@ offers all known tags");
+}
+
+#[test]
+fn tag_completion_prefix_detects_a_partial_tag() {
+    // Cursor right after a partial tag on a comment line → the `@`-prefixed run.
+    assert_eq!(
+        tag_completion_prefix("// see @P", 1, 10).as_deref(), // <!--noindex-->
+        Some("@P")
+    );
+    assert_eq!(
+        tag_completion_prefix("// see @PLN6", 1, 13).as_deref(),
+        Some("@PLN6")
+    );
+    // Not on a tag → None (the handler falls back to symbol completion).
+    assert_eq!(tag_completion_prefix("fn main", 1, 4), None);
 }
 
 #[test]
