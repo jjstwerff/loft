@@ -142,6 +142,63 @@ pub fn symbol_at(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) 
     if d == u32::MAX {
         return None;
     }
+    hover_of_def(data, d, text, name, stdlib_dir)
+}
+
+/// Resolve a symbol BY NAME (not by cursor) to every definition that name spells:
+/// a free function (`n_<symbol>`), a type / struct / enum / typedef / constant
+/// (`<symbol>`), AND every method `Type.<symbol>` — so `lookup("len", …)` returns
+/// a free `len` plus `text.len`, `vector.len`, … each with its own signature +
+/// doc + location.  The agent-facing counterpart to [`symbol_at`]: you know the
+/// NAME, not a `(line, col)`.  Empty when nothing spells it.  Fresh parse per
+/// call (same rule as [`diagnose`]); `text` may be empty to search the stdlib alone.
+#[must_use]
+pub fn lookup(symbol: &str, text: &str, name: &str, stdlib_dir: &str) -> Vec<Hover> {
+    let mut p = Parser::new();
+    load_stdlib(&mut p, stdlib_dir);
+    p.parse_source(text, name, false);
+    let data = &p.data;
+    let mut out: Vec<Hover> = Vec::new();
+    let mut seen: Vec<u32> = Vec::new();
+    let take = |d: u32, out: &mut Vec<Hover>, seen: &mut Vec<u32>| {
+        if d == u32::MAX || seen.contains(&d) {
+            return;
+        }
+        let def = data.def(d);
+        // Skip machinery: compiler-`synthetic` defs, and the `Dynamic`
+        // multi-receiver DISPATCHER (bare `len` → `fn len(text: fn, character:
+        // fn, …) -> unknown`) — a degenerate umbrella signature.  The concrete
+        // `text.len` / `vector.len` (each a `Function`) carry the real info and
+        // come through the method scan below.
+        if def.synthetic.is_some() || matches!(def.def_type(), crate::data::DefType::Dynamic) {
+            return;
+        }
+        seen.push(d);
+        if let Some(h) = hover_of_def(data, d, text, name, stdlib_dir) {
+            out.push(h);
+        }
+    };
+    // Direct: a free function, then a type-like def.
+    take(data.def_nr(&format!("n_{symbol}")), &mut out, &mut seen);
+    take(data.def_nr(symbol), &mut out, &mut seen);
+    // Methods: `t_<LEN><Type>_<symbol>` decode to `Type.<symbol>` — scan and match
+    // the trailing segment so `lookup("len")` also surfaces `text.len` etc.
+    for d in 0..data.definitions() {
+        if let Some((kind, cname)) = crate::api_surface::classify(data, d)
+            && kind == "method"
+            && cname.rsplit('.').next() == Some(symbol)
+        {
+            take(d, &mut out, &mut seen);
+        }
+    }
+    out
+}
+
+/// Build a [`Hover`] for a resolved definition `d`: signature (via
+/// `api_surface::signature_of`) + the `///` doc and name-precise location read
+/// from the def's own source (the buffer for a local def, the file on disk for
+/// stdlib/library ones).  Shared by [`symbol_at`] and [`lookup`].
+fn hover_of_def(data: &Data, d: u32, text: &str, name: &str, stdlib_dir: &str) -> Option<Hover> {
     let (kind, cname) = crate::api_surface::classify(data, d)?;
     let pos = data.def(d).position.clone();
     // Read the definition's own source ONCE — for the `///` doc AND to locate the
@@ -158,10 +215,26 @@ pub fn symbol_at(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) 
         signature: render_signature(data, d, kind, &cname),
         name: cname,
         doc,
-        def_file: pos.file,
+        def_file: collapse_slashes(&pos.file),
         def_line: pos.line,
         def_col,
     })
+}
+
+/// Collapse repeated `/` in a path.  The stdlib startup-cache can bake a `//`
+/// into a def's recorded file (a trailing-separator base dir joined with a
+/// name), and a doubled slash in a `file:line` reference reads as unpolished.
+fn collapse_slashes(p: &str) -> String {
+    let mut out = String::with_capacity(p.len());
+    let mut prev_slash = false;
+    for c in p.chars() {
+        if c == '/' && prev_slash {
+            continue;
+        }
+        prev_slash = c == '/';
+        out.push(c);
+    }
+    out
 }
 
 /// `<keyword> <name><body>` — the signature body from `api_surface::signature_of`
