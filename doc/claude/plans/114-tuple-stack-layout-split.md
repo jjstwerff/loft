@@ -10,14 +10,53 @@
 > design. The steps below are sized for that.
 
 > **@PLN114** — [loft-lang/plans#114](https://github.com/loft-lang/plans/issues/114).
-> **RE-SCOPED to a rewrite** (2026-07-21): tuples adopt the RECORD field format.
-> Steps 0-2 done (corpus, diagnostic assert, alignment model); step 3's push-site
-> workaround is REVERTED. Open work is phases **A-E** (§ Steps), sized so every
-> commit leaves the tree green and either preserves behaviour or flips one named
-> instrument. Success criterion is § Unification: one place left that can be wrong.
+> **Read § STATUS first.** The design is § The working design; everything above it is
+> the investigation that produced it, and the phase lists below it (`A-E`, `R0-R7`,
+> `0-7`) are superseded history kept for their reasoning, not for their steps.
 > Probe corpus:
 > `114-tuple-stack-layout-split/probes/` (`./run.sh`), baselines in
 > `bytecode-comparisons/`.
+
+
+## STATUS (2026-07-21) — what is done, what is left
+
+### Fixed and verified
+
+| defect | state | evidence |
+|---|---|---|
+| tuple element widths ignored the alias (`u8` in a tuple ≠ `u8` in a record) | **FIXED** | `typedef.rs` resolver falls back to `IntegerSpec.forced_size`; oracle 108 → 47 |
+| tuple groups padded where records pack tight | **FIXED** | Tuple-kind groups pack tight in `types.rs`; oracle 47 → 19 |
+| `+1` silent corruption on narrow elements | **FIXED** | `tuple_def` sets attribute nullability from the element type, so `NarrowIntKind` gives both sides the same answer; both tracked specs pass and are un-ignored |
+| the two layout views shared a name | **FIXED** | renamed `element_stack_*` vs `element_storage_*`; every site now declares its view |
+| the duplicate alignment table (`Function` 8 vs 4) | **FIXED** | `tuple_def` calls `element_stack_align`; drift was latent, 0 cells changed |
+
+Measured today: `(u8,u32,u16)` strides at **7 bytes**, equal to the identical record
+(was 24), and round-trips **1,2,3 → 1,2,3** (was 1,2,4).
+
+### Open
+
+1. **fn-ref storage width must be decided** — 4 (DB member / `tuple_def`), 8 (the
+   `#493` write), or 20 (`element_stack_size`). Today's padding masks an 8-into-4
+   overrun, so this blocks the last 19 oracle shapes. Needs a language-level answer,
+   not a layout choice — see § The last 19 shapes.
+2. **Two par-worker readers still read storage bytes with stack offsets** —
+   `parallel.rs:1568` (`read_tuple_at_wide`) and `generation/ops/parallel.rs:208`.
+   Isolated, both backends, one commit each.
+3. **`element_storage_size`'s `Function` arm is knowingly wrong** (returns the stack
+   20) and the oracle has no fn-ref coverage; fix both with item 1.
+4. **The two original SIGSEGVs are still open** (`e4_d2_closure_arg`,
+   `e5_d2_struct_ref_arg`) — matrix 199/201. They are the STACK-side defect this plan
+   started from; the storage work above did not touch them.
+
+### The instruments (run all of these on any change)
+
+`cargo test --test pln114_layout_oracle -- --nocapture` (the ratchet: 19 → 0) ·
+`tests/scripts/pln114-layout-widths.loft` · the two `pln114_*` specs in
+`tests/issues.rs` · the 32-cell probe corpus on both backends · the 201 matrix cells ·
+the `stack_align_guard` build · `loft_suite`.
+
+**The rule that has saved this plan five times: a change that moves no instrument is
+reverted, not kept.**
 
 ## Symptom
 
@@ -624,9 +663,11 @@ un-registered shapes:** `collections.rs:1920/2576/2585`, `mod.rs:5317/5398`,
 Those two are the only outright misclassified consumers, and they explain the
 par-worker "smearing" note at `state/mod.rs:4797` as the same family.
 
-### The three remaining defects and where each is fixed
+### The three defects and where each is fixed — 1 DONE, 2 reframed, 3 open
 
-**1. `+1` on narrow elements — the crossed op pair.** `typedef.rs:710-730` picks the
+**1. `+1` on narrow elements — the crossed op pair. FIXED** (the fix landed where
+this predicted: at the pair, by making both sides derive from one fact — `tuple_def`
+now sets attribute nullability from the element type). `typedef.rs:710-730` picks the
 schema Part by NULLABILITY (`Short` = `+1` sentinel write, `ShortRaw` = direct), and
 its own comment records an identical off-by-one already fixed once for `u16 not null`.
 The tuple element READ selects `OpGetShortRaw` (the narrow-vector split in
@@ -635,7 +676,7 @@ The tuple element READ selects `OpGetShortRaw` (the narrow-vector split in
 schema Part the write used, so the twin table in `operators.rs:475-484` stays the
 single source of pairing.
 
-**2. The last 19 shapes — fn-ref alignment.** Full tight packing is correct for every
+**2. The last 19 shapes — REFRAMED: not alignment, a fn-ref width contradiction.** Full tight packing is correct for every
 shape except those carrying a fn-ref, whose 8-byte `d_nr` truncates to 4 without its
 boundary (#493, P249). `Parts` cannot separate it: `(u8,integer)` and the fn-ref case
 are both `Parts::Base`, size 8, align 8, with opposite requirements — measured, and
@@ -688,13 +729,17 @@ coverage with the fix.
 Until then the current padding stays, and the 19 shapes remain over-sized but
 CORRECT — a memory cost, not corruption.
 
-### Order, and why
+### Order — 1 and 2 DONE, revised for what was learned
 
-1. **Rename the two views** — no behaviour change, makes every later diff self-explaining.
-2. **Fix the op pair** (defect 1) — the `+1` is silent corruption and independent of layout; it needs no other step.
-3. **Convert the two par-worker readers** (defect 3) — isolated, and the guard/matrix cover them.
-4. **Add the explicit fn-ref alignment flag, then tighten fully** (defect 2) — oracle to 0.
-5. **Delete what is then unreachable**, and flip the oracle to `assert_eq!(defects, 0)`.
+1. ~~Rename the two views~~ **DONE**.
+2. ~~Fix the op pair~~ **DONE** — landed exactly where this design said it would.
+3. **Convert the two par-worker readers** — isolated; the guard and matrix cover them.
+4. **Decide the fn-ref storage width**, make the DB member / write projection /
+   `element_storage_size` agree, add fn-ref coverage to the oracle, THEN tighten
+   fully — oracle to 0. (Was "add an alignment flag"; that would have preserved the
+   mask over an 8-into-4 overrun.)
+5. **Then the stack-side SIGSEGVs** — untouched by the storage work.
+6. **Delete what is unreachable**, flip the oracle to `assert_eq!(defects, 0)`.
 
 Each step is judged by: the oracle count, the four instruments, corpus + 201 matrix,
 the `stack_align_guard` build, and `loft_suite`. A step that moves no instrument is
