@@ -753,12 +753,20 @@ jobs:
       # suites (graphics/moros_*/shapes FFI), which need the GL/ALSA +
       # graphics-cdylib build-prep this lean job omits — and the guard can't see
       # those spawned native builds anyway; the full lib suite runs in `test`.
+      # @PLN114 — the cross-mode matrices join the sweep.  They are the suites most
+      # likely to trip an alignment fault (every cell builds a tuple and passes it
+      # across a call on both backends), and the guard was blind to them because this
+      # list is fixed and they were `#[ignore]`d.  Two SIGSEGVs, a silent `+1`
+      # corruption and a par-worker corruption lived behind that gap.  ~10s for all
+      # 201 cells.
       - name: Guard sweep (interpreter suites, zero fires expected)
         run: >
           cargo nextest run --profile ci --features stack_align_guard
           --lib --test issues --test wrap --test strings --test frame_vars
           --test expressions --test expressions_auto_convert --test slots
           --test slot_v2_baseline --test value_struct_alloc --test dispatch_reentry
+          --test tuple_matrix --test closure_matrix --test mut_closure_matrix
+          --test template_matrix --test coroutine_matrix --test binary_io_matrix
           -E 'not test(library_suite)'
 
   # Doc-index hygiene (plan-37) — `make index` + broken `@`-tag / markdown-link

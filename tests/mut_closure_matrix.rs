@@ -11,10 +11,11 @@
 //! `tests/template_matrix.rs`, and `tests/closure_matrix.rs`) asserts
 //! byte-identical stdout.
 //!
-//! **Every cell is `#[ignore]` by default** — the harness shells out
-//! to `loft --interpret` and `loft --native` per cell, the latter
-//! invoking `rustc`.  Too heavy for the default `cargo test` path.
-//! Run the matrix explicitly:
+//! **These cells RUN by default** (@PLN114).  They were `#[ignore]`d as too heavy;
+//! measured, the whole 201-cell matrix takes ~10 seconds.  The cost was never the
+//! issue — the silence was: two SIGSEGVs, a silent `+1` corruption of every narrow
+//! tuple element, a 3.4x memory overhead and a cross-backend par-worker corruption
+//! all sat behind that attribute until the set was run by hand.
 //!
 //! ```bash
 //! cargo test --release --test mut_closure_matrix -- --ignored
@@ -703,7 +704,6 @@ cross_mode!(
 // (probe e4b in #318; cross-mode equality cannot see both backends dangling
 // identically).  The cell now locks the REJECTION on both backends.
 #[test]
-#[ignore = "mut_closure_matrix — run with --test mut_closure_matrix -- --ignored"]
 fn c_d3_factory_into_struct_field_rejected() {
     crate::common::cross_mode::run_cross_mode_rejected(
         "c_d3_factory_into_struct_field_rejected",

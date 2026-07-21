@@ -47,12 +47,16 @@ reporting.
 
 ### Remaining — cleanup and coverage, no known defect
 
-1. **The 201 matrix cells are still `#[ignore]`d.** They found everything here and run
-   in ~10s; un-ignore them and add them to the nightly (advisory for the first few
-   nights, since they have never run on Windows or macOS).
-2. **`stack_align_guard`'s CI job does not cover `tuple_matrix`.** The gate existed
-   and was blind to this entire class — its suite list is fixed and excludes the
-   matrices.
+1. ~~The 201 matrix cells are `#[ignore]`d~~ **DONE** — they run by default now
+   (suite 3062 → 3263 tests, skipped 224 → 23) and are in the `stack_align_guard` CI
+   sweep. Adding them found a further real defect immediately: `variables::align`'s
+   Tuple arm took the RECORD alignment table, where `Text` is 4, so a `(P, text)`
+   local was 4-aligned and its `Str` landed on a 4-mod-8 address — genuine UB the
+   guard reported the moment it could see these suites. Fixed by recursing through
+   the stack `align`.
+2. **Windows/macOS have never run these cells.** They are in the default suite now, so
+   the next nightly is the first time — expect platform fallout and treat it as new
+   coverage rather than regression.
 3. **Candidate dead code, now that one layout decides placement:** `codegen.rs`'s
    P249 step fixup and the `#493` `OpSetInt4` projection may both be unreachable.
    Delete one at a time; the corpus, matrix and guard say whether each is still load-
