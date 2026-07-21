@@ -10,10 +10,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Not started. This is the deferred FOUNDATION under @PLN63 (loft-lsp): every LSP feature
-that needs to know *what an identifier occurrence refers to* — not just its spelling —
-depends on it. It is filed as its own plan because it touches loft's most delicate
-subsystem (the parser) and needs design + rigor before any code.
+**Phase 0 (design) DONE — see [design.md](design.md)** (concrete code points + the
+S1–S7 small-safe-step spine + the byte-identical-IR gate). Execution not yet started.
+
+This is the deferred FOUNDATION under @PLN63 (loft-lsp): every LSP feature that needs to
+know *what an identifier occurrence refers to* — not just its spelling — depends on it.
+It is filed as its own plan because it touches loft's most delicate subsystem (the
+parser) and needs design + rigor before any code.
 
 ## Goal
 
@@ -69,12 +72,12 @@ with a byte-identical-IR gate (below) before committing.
 
 ## Sub-arcs / Phases
 
-- **Phase 0 — design (no code).** Choose §1 vs §2. Define the `Resolution` enum and the
-  query API (`resolution_at(pos) -> Resolution`; `occurrences_of(binding) -> [span]`).
-  Decide granularity (record ALL identifiers, or only the ambiguous kinds — locals /
-  fields / methods — since globals are already precise by name) and storage lifetime
-  (on the `Parser`, cleared per parse; or persisted in `Data`). Written to
-  `design.md` here.
+- **Phase 0 — design — DONE ([design.md](design.md)).** Decided: gated instrumentation
+  (not a separate pass); the `Resolution` enum + `Occurrence`; storage on the `Parser`
+  behind a `record_resolutions` gate (default off, zero-cost); the query API; and the
+  **S1–S7 small-safe-step spine** with a byte-identical-IR gate on every step. The
+  chokepoints are named to `file:line` — and the identifier positions are already in
+  scope there (`parse_var`'s `name_pos`, threaded in @PLN63's fix-b).
 - **Phase 1 — recording infra + one hook.** A `record_resolutions` gate on the parser,
   a `Vec<(Span, Resolution)>` store, and ONE hook — variable resolution. Prove on a probe
   that hovering / referencing a local resolves via the index. **Gate the gate:** with
