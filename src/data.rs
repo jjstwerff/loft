@@ -4487,6 +4487,17 @@ impl Data {
         for (i, t) in types.iter().enumerate() {
             let aname = format!("_{i}");
             let attr_idx = self.add_attribute(lexer, d, &aname, t.clone());
+            // @PLN114 — a tuple element is nullable only if its TYPE says so, exactly
+            // like a declared struct field.  `add_attribute` defaults `nullable:
+            // true`, and a declared field overrides it from the declaration (`a: u8`
+            // is not-null, `a: u8?` is not); the synthetic tuple attributes never
+            // did, so every element resolved as nullable.  That split the op pair:
+            // `NarrowIntKind::of` gave the WRITE `Short`/`ByteNullable` (the `+1`
+            // sentinel encodings) while the READ resolved `ShortRaw`/`Byte`, so a
+            // narrow element was written shifted and read raw — `(1,2)` read back
+            // `(1,3)`.  The record picks the not-null pair on both sides; now so does
+            // the tuple.
+            self.set_attr_nullable(d, attr_idx, matches!(t, Type::Optional(_)));
             indices.push(attr_idx as u16);
             // For tuple element-size we use `data::element_size` (the
             // vector-storage width).  Natural alignment of an integer-

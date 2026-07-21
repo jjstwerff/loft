@@ -16411,10 +16411,9 @@ fn pln102_boolean_integer_comparison_rejected() {
 
 // ─── @PLN114 — tuple layout must match the record layout ─────────────────────
 //
-// These assert the TARGET, not today's behaviour, so they stay `#[ignore]`d
-// (tracked in `tests/ignored_tests.baseline`) until the rewrite lands.  Both
-// measure a tuple against the `struct` of identical fields, because that record is
-// the oracle the tuple layout is being moved onto.
+// Both measure a tuple against the `struct` of identical fields, because that record
+// is the oracle the tuple layout was moved onto.  They landed `#[ignore]`d — asserting
+// a target that failed — and were un-ignored when the fix made them pass.
 
 /// Instrument 3 — record-vs-tuple stride parity.
 ///
@@ -16423,7 +16422,6 @@ fn pln102_boolean_integer_comparison_rejected() {
 /// `data::element_size` reports STACK widths (`Integer` is 8B regardless of
 /// `forced_size`) where storage needs database widths.
 #[test]
-#[ignore = "@PLN114: tuple stride uses stack widths (24B) where the record packs to 7B"]
 fn pln114_tuple_stride_matches_record() {
     code!(
         "struct M { a: u8, b: u32, c: u16 }
@@ -16441,7 +16439,6 @@ fn test() {
 /// reproducible in `vector<(u8,u16)>` and `vector<(u32,u16)>` too.  Silent
 /// corruption — exit 0, no diagnostic.
 #[test]
-#[ignore = "@PLN114: mixed-width tuple elements read back +1 (silent corruption)"]
 fn pln114_mixed_width_tuple_round_trip() {
     code!(
         "fn test() {
