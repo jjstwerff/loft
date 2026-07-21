@@ -178,6 +178,46 @@ fn s7_inlay_hints_type_assignment_locals_only() {
 }
 
 #[test]
+fn resolve_at_navigates_local_global_field_method() {
+    // L1  struct P { x: integer }
+    // L2  fn helper() -> integer {
+    // L3    return 7;
+    // L4  }
+    // L5  fn m(s: text) -> integer {
+    // L6    return s.len();
+    // L7  }
+    // L8  fn main() {
+    // L9    n = helper();
+    // L10   q = p.x;   (p declared L11-shape below)
+    let src = "struct P { x: integer }\n\
+               fn helper() -> integer {\n  return 7;\n}\n\
+               fn m(s: text) -> integer {\n  return s.len();\n}\n\
+               fn main() {\n  n = helper();\n  p = P { x: 1 };\n  q = p.x;\n}\n";
+
+    // LOCAL `n` — its declaration is L9, resolving to a synthesized `name: type`.
+    let h = loft::lsp::resolve_at(src, "default", 9, 3).expect("local n resolves");
+    assert_eq!(h.signature, "n: integer");
+    assert_eq!(h.def_file, "buf.loft");
+    assert_eq!(h.def_line, 9, "jumps to the local's declaration");
+
+    // GLOBAL `helper()` call (L9 col 7) → the free fn's real signature at L2.
+    let h = loft::lsp::resolve_at(src, "default", 9, 7).expect("global helper resolves");
+    assert!(h.signature.starts_with("fn helper("), "sig: {}", h.signature);
+    assert_eq!(h.def_line, 2, "jumps to the fn definition");
+
+    // METHOD `s.len()` (L6, `len` at col 12) → text.len, jumping into the stdlib —
+    // impossible with name lookup, and keyed on the receiver TYPE (not vector.len).
+    let h = loft::lsp::resolve_at(src, "default", 6, 12).expect("method len resolves");
+    assert!(h.signature.contains("text.len"), "sig: {}", h.signature);
+    assert!(h.def_file.contains("01_code.loft"), "def in stdlib: {}", h.def_file);
+
+    // FIELD `p.x` (L11, `x` at col 9) → the struct's field, shown as `P.x: integer`.
+    let h = loft::lsp::resolve_at(src, "default", 11, 9).expect("field p.x resolves");
+    assert!(h.signature.starts_with("P.x:"), "sig: {}", h.signature);
+    assert_eq!(h.def_line, 1, "jumps to the containing struct P");
+}
+
+#[test]
 fn s4_assignment_local_refs_exclude_field_access() {
     // Local `x` is assigned then read alongside a field `p.x` of the SAME name.
     // The precise path must return the local's decl + read, and NOT the `p.x` field.

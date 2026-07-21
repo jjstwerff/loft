@@ -315,8 +315,12 @@ fn main() {
                 let location = text_document_position(&msg)
                     .and_then(|(uri, line, ch)| {
                         let text = documents.get(&uri)?;
-                        let h =
-                            loft::lsp::symbol_at(text, "buf.loft", &stdlib_dir, line + 1, ch + 1)?;
+                        // @PLN115: index-first (resolves locals / methods / fields
+                        // by position), then the name-based fallback.
+                        let h = loft::lsp::resolve_at(text, &stdlib_dir, line + 1, ch + 1)
+                            .or_else(|| {
+                                loft::lsp::symbol_at(text, "buf.loft", &stdlib_dir, line + 1, ch + 1)
+                            })?;
                         Some(definition_location(&uri, &h, &stdlib_dir))
                     })
                     .unwrap_or(Parsed::Null); // unresolved → null
@@ -624,7 +628,10 @@ fn doc_end(text: &str) -> (u32, u32) {
 /// when nothing resolves (the caller sends `null`).  LSP positions are 0-based;
 /// `symbol_at` is loft-native 1-based, so both bump by one at this boundary.
 fn hover_result(text: &str, stdlib_dir: &str, line0: u32, char0: u32) -> Option<Parsed> {
-    let h = loft::lsp::symbol_at(text, "buf.loft", stdlib_dir, line0 + 1, char0 + 1)?;
+    // @PLN115: the resolution index resolves LOCALS / METHODS / FIELDS position-
+    // precisely; fall back to the name-based lookup on a definition's own name.
+    let h = loft::lsp::resolve_at(text, stdlib_dir, line0 + 1, char0 + 1)
+        .or_else(|| loft::lsp::symbol_at(text, "buf.loft", stdlib_dir, line0 + 1, char0 + 1))?;
     let contents = markup(&hover_markdown(&h));
     Some(obj(vec![("contents", contents)]))
 }

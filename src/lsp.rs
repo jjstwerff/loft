@@ -250,6 +250,79 @@ fn hover_of_def(data: &Data, d: u32, text: &str, name: &str, stdlib_dir: &str) -
     })
 }
 
+/// @PLN115 — resolve the identifier under a 1-based `(line, col)` cursor via the
+/// PARSE-TIME resolution index, returning a [`Hover`] (signature + location).
+///
+/// Position-precise, unlike the name-based [`symbol_at`]: it resolves LOCALS and
+/// METHODS (which `symbol_at` documents it cannot) and distinguishes a local `x`
+/// from a field `x`, and `text.len` from `vector.len` — because the parser recorded
+/// exactly what each occurrence binds to.  `Global`/`Method` reuse [`hover_of_def`]
+/// (the target's real signature + `///` doc); a `Local` synthesizes `name: type`
+/// at its declaration; a `Field` shows `Type.field: type` at the containing struct.
+/// `None` when the cursor is not on a recorded occurrence (e.g. sitting on a
+/// definition's OWN name) — the caller then falls back to `symbol_at`.
+#[must_use]
+pub fn resolve_at(text: &str, stdlib_dir: &str, line: u32, col: u32) -> Option<Hover> {
+    let p = parse_lsp_buffer(text, "buf.loft", stdlib_dir);
+    let occ = p
+        .resolutions()
+        .iter()
+        .find(|o| o.line == line && col >= o.col && col <= o.col + u32::from(o.len))?;
+    match occ.res {
+        crate::resolution::Resolution::Global(d)
+        | crate::resolution::Resolution::Method { method_def: d, .. } => {
+            hover_of_def(&p.data, d, text, "buf.loft", stdlib_dir)
+        }
+        crate::resolution::Resolution::Local { fn_def, var_nr } => {
+            if fn_def >= p.data.definitions() {
+                return None;
+            }
+            let vars = p.data.def(fn_def).variables();
+            let vname = vars.name(var_nr).to_string();
+            let sig = format!("{vname}: {}", p.data.type_name_str(vars.tp(var_nr)));
+            // The declaration is the binding's earliest occurrence in the buffer.
+            let decl = p
+                .resolutions()
+                .iter()
+                .filter(|o| {
+                    matches!(o.res, crate::resolution::Resolution::Local { fn_def: f, var_nr: v }
+                        if f == fn_def && v == var_nr)
+                })
+                .min_by(|a, b| a.line.cmp(&b.line).then(a.col.cmp(&b.col)))?;
+            Some(Hover {
+                name: vname,
+                signature: sig,
+                doc: Vec::new(),
+                def_file: "buf.loft".to_string(),
+                def_line: decl.line,
+                def_col: decl.col,
+            })
+        }
+        crate::resolution::Resolution::Field { type_def, attr } => {
+            if type_def >= p.data.definitions() {
+                return None;
+            }
+            let attr = attr as usize;
+            let fname = p.data.attr_name(type_def, attr);
+            let tname = p.data.def(type_def).name().to_string();
+            let sig = format!(
+                "{tname}.{fname}: {}",
+                p.data.type_name_str(&p.data.attr_type(type_def, attr))
+            );
+            let pos = p.data.def(type_def).position.clone();
+            Some(Hover {
+                name: fname,
+                signature: sig,
+                doc: Vec::new(),
+                def_file: collapse_slashes(&pos.file),
+                def_line: pos.line,
+                def_col: pos.pos,
+            })
+        }
+        crate::resolution::Resolution::Unresolved => None,
+    }
+}
+
 /// Collapse repeated `/` in a path.  The stdlib startup-cache can bake a `//`
 /// into a def's recorded file (a trailing-separator base dir joined with a
 /// name), and a doubled slash in a `file:line` reference reads as unpolished.

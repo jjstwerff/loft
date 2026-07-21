@@ -894,6 +894,72 @@ fn semantic_tokens_full_returns_encoded_tokens() {
     let _ = s.child.wait();
 }
 
+// @PLN115 integration — the resolution index drives go-to-definition + hover for
+// LOCALS and METHODS, which name-based lookup could not resolve at all.
+#[test]
+fn definition_and_hover_resolve_locals_and_methods_via_index() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let _ = s.recv();
+    s.notify("initialized", "{}");
+
+    let uri = "file:///idx.loft";
+    // L1 count decl · L2 count USE · L4 greeting.len() method call.
+    let prog = "fn main() {\n  count = 5;\n  total = count + 1;\n  \
+                greeting = \"hi\";\n  size = greeting.len();\n}\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let _ = s.recv();
+
+    // Go-to-def on the LOCAL `count` USE (0-based line 2, char 10) → its declaration
+    // (line 1, char 2) in the same buffer.  Impossible before the index.
+    s.request(
+        2,
+        "textDocument/definition",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":10}}}}"#),
+    );
+    let loc = field(&s.recv(), "result").cloned().expect("local Location");
+    assert_eq!(field_str(&loc, "uri").as_deref(), Some(uri), "stays in buffer");
+    let start = field(field(&loc, "range").unwrap(), "start").unwrap();
+    assert_eq!(
+        (
+            field(start, "line").and_then(Parsed::as_i64),
+            field(start, "character").and_then(Parsed::as_i64),
+        ),
+        (Some(1), Some(2)),
+        "jumps to the `count` declaration: {loc:?}"
+    );
+
+    // Go-to-def on the METHOD `.len` (0-based line 4, char 18) → into the stdlib.
+    s.request(
+        3,
+        "textDocument/definition",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":4,"character":18}}}}"#),
+    );
+    let loc = field(&s.recv(), "result").cloned().expect("method Location");
+    let target = field_str(&loc, "uri").unwrap_or_default();
+    assert!(
+        target.starts_with("file://") && target.contains("default/"),
+        "method jumps into its stdlib source: {target}"
+    );
+
+    // Hover on the LOCAL `total` (0-based line 2, char 2) → its inferred type.
+    s.request(
+        4,
+        "textDocument/hover",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":2,"character":2}}}}"#),
+    );
+    let hv = s.recv();
+    let contents = field(field(&hv, "result").expect("hover result"), "contents").unwrap();
+    let value = field_str(contents, "value").unwrap_or_default();
+    assert!(
+        value.contains("total: integer"),
+        "hover shows the local's type: {value}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 // S7 (@PLN115) — inferred-type inlay hints at assignment-local declarations (the
 // feature E, unblocked by the resolution index).
 #[test]
