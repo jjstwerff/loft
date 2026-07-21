@@ -177,9 +177,22 @@ editor) so nothing silently regresses.
   once. Regression: `tests/lsp_diagnostics.rs::unknown_symbol_is_reported_at_the_reference_site`
   pins `(2, 3)`; four existing `parse_errors`/`issues` position assertions were corrected from
   the old drifted columns to the name columns. Syntax errors were already exact.
-- **S3 — publish diagnostics (SHIP HERE).** `didOpen`/`didChange` → `parse_text` →
-  `publishDiagnostics`. *Gate:* harness asserts the notification + range; VS Code shows the
-  squiggle live as you type. Diagnostics-only is real value across every LSP editor — release it.
+- **S3 — publish diagnostics — DONE.** The document lifecycle (`didOpen` / `didChange` /
+  `didClose`) drives a fresh-parse per edit and pushes `textDocument/publishDiagnostics`; the
+  editor shows squiggles live and clears them when the buffer goes valid (empty list on a clean
+  parse, and on close). The compiler coupling is a pure library accessor —
+  `loft::lsp::diagnose(text, name, stdlib_dir)` (new `src/lsp.rs`): fresh stdlib-loaded parser →
+  buffer → `Diagnostics`, encapsulating the parser-cannot-be-reparsed rule. The binary owns only
+  the wire protocol + stdlib-path resolution (`resolve_stdlib_dir()`, exe-relative like the
+  `loft` CLI, so it works from any editor CWD). Mapping: loft's 1-based `DiagEntry` → LSP 0-based
+  `Diagnostic`; the single-point position is widened to underline the whole identifier
+  (`token_len_at`, read from the buffer) so the squiggle covers the token, not a zero-width caret;
+  `Level` → severity (Error/Fatal 1, Warning 2). Advertises `textDocumentSync {openClose, change:1}`.
+  *Gate:* `tests/lsp_transport.rs::diagnostics_publish_on_open_then_clear_on_fix` drives the real
+  spawned binary — asserts the pushed notification, uri, count, severity, message, and the exact
+  range (`start (1,2) → end (1,6)` on `nope`), then edits clean and asserts the empty clear. The
+  clean-buffer-clears assertion doubles as proof the stdlib resolved from the spawned binary.
+  **Diagnostics-only is real value across every LSP editor — this is the shippable milestone.**
 - **S4 — outline.** `Data::file_symbols` (prereq #3) → `textDocument/documentSymbol`.
   *Gate:* unit test on the symbol list; VS Code Outline shows the file's fn/struct/enum tree.
 - **S5 — hover.** `Data::symbol_at` (prereq #2 — a per-file position index built during

@@ -91,6 +91,101 @@ fn field_str(v: &Parsed, key: &str) -> Option<String> {
     }
 }
 
+fn field_arr<'a>(v: &'a Parsed, key: &str) -> Option<&'a Vec<Parsed>> {
+    match field(v, key) {
+        Some(Parsed::Array(a)) => Some(a),
+        _ => None,
+    }
+}
+
+/// Build a `didOpen`/`didChange`-shaped params string, with `program` correctly
+/// JSON-escaped via loft's own serializer (so embedded `\n`/`"` survive).
+fn open_params(uri: &str, program: &str) -> String {
+    let text = json::to_json_string(&Parsed::Str(program.to_string()));
+    format!(r#"{{"textDocument":{{"uri":"{uri}","languageId":"loft","version":1,"text":{text}}}}}"#)
+}
+
+fn change_params(uri: &str, program: &str) -> String {
+    let text = json::to_json_string(&Parsed::Str(program.to_string()));
+    format!(
+        r#"{{"textDocument":{{"uri":"{uri}","version":2}},"contentChanges":[{{"text":{text}}}]}}"#
+    )
+}
+
+// S3 — the diagnostics push path.  Open a buffer with an error, assert the
+// server pushes `publishDiagnostics` with the fault at the right RANGE; then
+// edit it clean and assert the squiggle clears (an empty diagnostics list).
+#[test]
+fn diagnostics_publish_on_open_then_clear_on_fix() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let _ = s.recv();
+    s.notify("initialized", "{}");
+
+    let uri = "file:///buf.loft";
+    // `nope` is undefined; it sits on line 2 (1-based), col 3 — so LSP 0-based
+    // range start is line 1, character 2, and the token is 4 chars wide.
+    s.notify(
+        "textDocument/didOpen",
+        &open_params(uri, "fn main() {\n  nope(3)\n}\n"),
+    );
+    let note = s.recv();
+    assert_eq!(
+        field_str(&note, "method").as_deref(),
+        Some("textDocument/publishDiagnostics"),
+        "server pushes a publishDiagnostics notification on open"
+    );
+    let params = field(&note, "params").expect("notification carries params");
+    assert_eq!(
+        field_str(params, "uri").as_deref(),
+        Some(uri),
+        "echoes the document uri"
+    );
+    let diags = field_arr(params, "diagnostics").expect("diagnostics is an array");
+    assert_eq!(diags.len(), 1, "exactly one error, got {diags:?}");
+
+    let d = &diags[0];
+    assert_eq!(
+        field(d, "severity").and_then(Parsed::as_i64),
+        Some(1),
+        "an Error maps to LSP severity 1"
+    );
+    assert!(
+        field_str(d, "message").unwrap_or_default().contains("nope"),
+        "message names the offending symbol: {d:?}"
+    );
+    let start = field(field(d, "range").unwrap(), "start").unwrap();
+    assert_eq!(
+        (
+            field(start, "line").and_then(Parsed::as_i64),
+            field(start, "character").and_then(Parsed::as_i64)
+        ),
+        (Some(1), Some(2)),
+        "0-based range start sits on `nope` (line 1, char 2): {d:?}"
+    );
+    let end = field(field(d, "range").unwrap(), "end").unwrap();
+    assert_eq!(
+        field(end, "character").and_then(Parsed::as_i64),
+        Some(6),
+        "range underlines the whole 4-char token `nope`: {d:?}"
+    );
+
+    // Edit the buffer to a valid program — the squiggle must clear.
+    s.notify(
+        "textDocument/didChange",
+        &change_params(uri, "fn main() {\n  print(\"hi\")\n}\n"),
+    );
+    let cleared = s.recv();
+    let params = field(&cleared, "params").expect("clear carries params");
+    assert!(
+        field_arr(params, "diagnostics").is_some_and(Vec::is_empty),
+        "a valid buffer publishes an empty diagnostics list (clears squiggles): {cleared:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();
