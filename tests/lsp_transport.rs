@@ -954,8 +954,8 @@ fn code_action_offers_the_did_you_mean_fix() {
     let init = s.recv();
     let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
     assert!(
-        matches!(field(caps, "codeActionProvider"), Some(Parsed::Bool(true))),
-        "advertises codeActionProvider"
+        field(caps, "codeActionProvider").is_some(),
+        "advertises codeActionProvider (an object with codeActionKinds)"
     );
     s.notify("initialized", "{}");
 
@@ -1091,6 +1091,69 @@ fn code_action_offers_the_superseded_steer_fix() {
     assert_eq!(
         new_text, "new_add",
         "the edit replaces the call name with `new_add`: {a:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
+// E0 (extract-function) — `refactor.extract` is advertised and offered on a
+// MULTI-LINE selection, absent on a bare cursor (EXTRACT.md E0).
+#[test]
+fn extract_function_offered_on_a_multiline_selection() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    let kinds = field(
+        field(caps, "codeActionProvider").unwrap(),
+        "codeActionKinds",
+    );
+    assert!(
+        matches!(kinds, Some(Parsed::Array(a)) if a.iter().any(|k| matches!(k, Parsed::Str(s) if s == "refactor.extract"))),
+        "advertises the refactor.extract kind: {init:?}"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///x.loft";
+    let prog = "fn f() -> integer {\n  a = 1\n  b = a + 2\n  return b\n}\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let _ = s.recv();
+
+    let action_kinds = |s: &mut Session, id: i64, range: &str| -> Vec<String> {
+        s.request(
+            id,
+            "textDocument/codeAction",
+            &format!(
+                r#"{{"textDocument":{{"uri":"{uri}"}},"range":{range},"context":{{"diagnostics":[]}}}}"#
+            ),
+        );
+        match field(&s.recv(), "result") {
+            Some(Parsed::Array(a)) => a.iter().filter_map(|x| field_str(x, "kind")).collect(),
+            other => panic!("codeAction result is an array, got {other:?}"),
+        }
+    };
+
+    // A MULTI-LINE selection (the two assignment lines) → an extract action.
+    let sel = action_kinds(
+        &mut s,
+        2,
+        r#"{"start":{"line":1,"character":2},"end":{"line":2,"character":11}}"#,
+    );
+    assert!(
+        sel.iter().any(|k| k == "refactor.extract"),
+        "extract offered on a multi-line selection: {sel:?}"
+    );
+
+    // A bare cursor (zero-width, single line) → no extract action.
+    let cursor = action_kinds(
+        &mut s,
+        3,
+        r#"{"start":{"line":1,"character":2},"end":{"line":1,"character":2}}"#,
+    );
+    assert!(
+        !cursor.iter().any(|k| k == "refactor.extract"),
+        "no extract on a bare cursor: {cursor:?}"
     );
 
     s.notify("exit", "null");

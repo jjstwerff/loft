@@ -100,11 +100,14 @@ Each step is independently landable behind a protocol-level + unit gate. The eng
 grows analysis-first; nothing emits an edit until the signature it computes is
 proven correct.
 
-- **E0 — protocol stub.** `initialize` advertises `codeActionProvider` with
-  `refactor.extract` (a `CodeActionKind`); a `codeAction` over a selection returns a
-  single `CodeAction{kind:"refactor.extract"}` with a NO-OP edit. *Gate:*
-  `lsp_transport` — the action is offered on a multi-line selection, absent on a
-  zero-width cursor.
+- **E0 — protocol stub — DONE.** `codeActionProvider` now advertises
+  `codeActionKinds: ["quickfix", "refactor.extract"]` (was a bare `true`); the
+  `code_actions` handler offers a `CodeAction{kind:"refactor.extract", title:"Extract
+  to function"}` with a NO-OP edit on a MULTI-LINE selection (the discriminator that
+  leaves single-line quick-fix requests untouched). Refactored the quickfix path into
+  `quickfix_from_diagnostic` so the two action sources compose. *Gate met:*
+  `lsp_transport::extract_function_offered_on_a_multiline_selection` (real binary — the
+  kind is advertised; offered on a 2-line selection, absent on a bare cursor).
 - **E1 — selection → statement slice.** `lsp::extract_range(text, sel) ->
   Option<(fn_def, a, b)>`: resolve the enclosing fn, map the selection's line range
   to a contiguous `operators[a..=b]` via `Span` positions. Refuse a selection that

@@ -544,30 +544,71 @@ fn code_actions(msg: &Parsed) -> Vec<Parsed> {
     let Some(uri) = obj_get(params, "textDocument").and_then(|d| obj_str(d, "uri")) else {
         return Vec::new();
     };
-    let diags = match obj_get(params, "context").and_then(|c| obj_get(c, "diagnostics")) {
-        Some(Parsed::Array(a)) => a,
-        _ => return Vec::new(),
+    let mut actions: Vec<Parsed> = Vec::new();
+    // Step B — quick-fixes from each diagnostic that carries a structured suggestion.
+    if let Some(Parsed::Array(diags)) =
+        obj_get(params, "context").and_then(|c| obj_get(c, "diagnostics"))
+    {
+        actions.extend(
+            diags
+                .iter()
+                .filter_map(|d| quickfix_from_diagnostic(d, &uri)),
+        );
+    }
+    // E0 (extract-function stub) — offer `refactor.extract` on a MULTI-LINE
+    // selection (a real statement selection, never a bare cursor or a single-line
+    // diagnostic range, so a quick-fix request is unaffected).  The edit is a no-op
+    // until the data-flow engine (E1–E4, EXTRACT.md) computes the extracted
+    // signature; single-line-statement extraction is a follow-on.
+    if let Some(range) = obj_get(params, "range").filter(|r| range_is_multiline(r)) {
+        actions.push(extract_function_action(&uri, range));
+    }
+    actions
+}
+
+/// One "Change to `X`" quick-fix from a diagnostic carrying `data.suggestion`.
+fn quickfix_from_diagnostic(d: &Parsed, uri: &str) -> Option<Parsed> {
+    let suggestion = obj_str(obj_get(d, "data")?, "suggestion")?;
+    let range = obj_get(d, "range")?.clone();
+    let edit = obj(vec![
+        ("range", range),
+        ("newText", Parsed::Str(suggestion.clone())),
+    ]);
+    // `{ uri: [TextEdit] }` — uri is a runtime String, so build the object directly.
+    let changes = Parsed::Object(vec![(uri.to_string(), 0, Parsed::Array(vec![edit]))]);
+    Some(obj(vec![
+        ("title", Parsed::Str(format!("Change to `{suggestion}`"))),
+        ("kind", Parsed::Str("quickfix".into())),
+        ("diagnostics", Parsed::Array(vec![d.clone()])),
+        ("isPreferred", Parsed::Bool(true)),
+        ("edit", obj(vec![("changes", changes)])),
+    ]))
+}
+
+/// True when a `Range` spans more than one line — the E0 discriminator for a real
+/// statement selection (a bare cursor and a single-line diagnostic range are not).
+fn range_is_multiline(range: &Parsed) -> bool {
+    let line = |end: &str| {
+        obj_get(range, end)
+            .and_then(|p| obj_get(p, "line"))
+            .and_then(Parsed::as_i64)
     };
-    diags
-        .iter()
-        .filter_map(|d| {
-            let suggestion = obj_str(obj_get(d, "data")?, "suggestion")?;
-            let range = obj_get(d, "range")?.clone();
-            let edit = obj(vec![
-                ("range", range),
-                ("newText", Parsed::Str(suggestion.clone())),
-            ]);
-            // `{ uri: [TextEdit] }` — uri is a runtime String, so build the object directly.
-            let changes = Parsed::Object(vec![(uri.clone(), 0, Parsed::Array(vec![edit]))]);
-            Some(obj(vec![
-                ("title", Parsed::Str(format!("Change to `{suggestion}`"))),
-                ("kind", Parsed::Str("quickfix".into())),
-                ("diagnostics", Parsed::Array(vec![d.clone()])),
-                ("isPreferred", Parsed::Bool(true)),
-                ("edit", obj(vec![("changes", changes)])),
-            ]))
-        })
-        .collect()
+    match (line("start"), line("end")) {
+        (Some(s), Some(e)) => s != e,
+        _ => false,
+    }
+}
+
+/// E0 — the `refactor.extract` stub action.  Offered on a selection so editors show
+/// the refactoring and the transport gate can assert it; its edit is a no-op until
+/// E1–E4 (EXTRACT.md) wire the data-flow engine that computes the real edit.
+fn extract_function_action(uri: &str, _range: &Parsed) -> Parsed {
+    let changes = Parsed::Object(vec![(uri.to_string(), 0, Parsed::Array(Vec::new()))]);
+    obj(vec![
+        ("title", Parsed::Str("Extract to function".into())),
+        ("kind", Parsed::Str("refactor.extract".into())),
+        ("edit", obj(vec![("changes", changes)])),
+    ])
 }
 
 fn publish_diagnostics(uri: &str, diagnostics: Vec<Parsed>) -> Parsed {
@@ -1129,7 +1170,18 @@ fn initialize_result() -> Parsed {
         ("hoverProvider", Parsed::Bool(true)),
         ("definitionProvider", Parsed::Bool(true)),
         ("referencesProvider", Parsed::Bool(true)),
-        ("codeActionProvider", Parsed::Bool(true)),
+        (
+            // Advertise the kinds the server produces: quick-fixes (step B) and the
+            // extract-function refactoring (E0+, EXTRACT.md).
+            "codeActionProvider",
+            obj(vec![(
+                "codeActionKinds",
+                Parsed::Array(vec![
+                    Parsed::Str("quickfix".into()),
+                    Parsed::Str("refactor.extract".into()),
+                ]),
+            )]),
+        ),
         ("inlayHintProvider", Parsed::Bool(true)),
         (
             "completionProvider",
