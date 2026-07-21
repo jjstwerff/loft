@@ -424,6 +424,13 @@ impl Stores {
                         // Narrow members pack tight (the record does); an 8-aligned
                         // member keeps its boundary — a fn-ref's 8-byte `d_nr` is
                         // read as an i64 and truncates to 4 without it (#493).
+                        //
+                        // Keying on the member's `Parts` kind was tried and is WORSE
+                        // (29 divergent shapes vs 19): `Parts::Base` covers plain
+                        // `integer` AND `character` / `single` / `float`, so it pads
+                        // members the record packs tight.  The remaining 19 shapes
+                        // need the fn-ref's READER converted off the stack-view
+                        // offsets, not a better discriminator here.
                         (sz, if tight && al < 8 { 1 } else { al })
                     })
                     .collect();
