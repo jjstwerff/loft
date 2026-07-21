@@ -10,8 +10,10 @@
 > design. The steps below are sized for that.
 
 > **@PLN114** — [loft-lang/plans#114](https://github.com/loft-lang/plans/issues/114).
-> **Steps 0-3 DONE** (step 3 except `text`); steps 4-7 open. One of the two
-> original SIGSEGVs is fixed; the matrix is 200/201. Probe corpus:
+> **RE-SCOPED to a rewrite** (2026-07-21): tuples adopt the RECORD field format.
+> Steps 0-2 done (corpus, diagnostic assert, alignment model); step 3's push-site
+> workaround is REVERTED; steps R0-R7 open, with R7 (unification) as the success
+> criterion: one place left that can be wrong. Probe corpus:
 > `114-tuple-stack-layout-split/probes/` (`./run.sh`), baselines in
 > `bytecode-comparisons/`.
 
@@ -241,6 +243,201 @@ the width evidence, not on a backend split.
 Absorbing these into the layout story because they are in the same test file is
 precisely the over-unification this design must avoid. Step 2 decides it with a
 probe, and if the root differs they get their own plan.
+
+## Unification — there must be no second opinion about a tuple's layout
+
+Every symptom in this plan is one shape: **two pieces of code independently computing
+where a tuple's elements go, and drifting.** Fixing the values without removing the
+duplication just resets the clock. So the rewrite's success criterion is not "the
+tests pass" but **"there is only one place left that can be wrong."**
+
+### The duplicates, as found (2026-07-21)
+
+| # | Site | What it computes | Mismatch |
+|---|---|---|---|
+| 1 | `data::element_align` (data.rs:1977) | per-type alignment for tuple offsets | `Function => 8` |
+| 2 | `tuple_def`'s **inline** align table (data.rs:~4396) | the same thing, hand-copied | `Function => 4` — **they disagree today** |
+| 3 | `data::element_size` / `element_offsets` Tuple arms | stack-width layout | `Integer` always 8B, so storage over-reserves 3.4× |
+| 4 | `stored_tuple_offsets` / `stored_tuple_field_offset` | record layout via the synthetic struct | the correct one |
+| 5 | `LinkedFieldGroup::group_size` / `group_member_offsets` | storage re-computation from DB widths | a third packer |
+| 6 | `variables::size(Tuple)` / `variables::align(Tuple)` | stack slot size/align | delegate to 3, inheriting its errors |
+| 7 | `read_tuple_at_wide` (parallel.rs) | packed → stack inflation | the only honest conversion, but private to the par worker |
+
+Item 2 is not hypothetical: the two tables **already disagree** about `Function`
+(8 vs 4). Nothing detects it, because nothing compares them. That is the whole bug
+class in miniature — a copied rule that silently rots.
+
+Per-shape patches that exist only because the rules disagree, and which must die with
+them: `codegen.rs:3336` (`stack.position += stack.step(20) - stack.step(16)`, P249)
+and `codegen.rs:2776` (the `#493` fn-ref `OpSetInt4` projection).
+
+### The target shape
+
+- **One canonical layout: the record.** The synthetic `__tuple<…>` struct is the
+  single source of truth for element widths and offsets. Nothing re-derives them.
+- **The stack view is DERIVED, never computed in parallel.** One named
+  inflate/deflate (generalising `read_tuple_at_wide`) converts record layout → stack
+  slots. If the stack view is a *function of* the record view, the two cannot drift —
+  which is stronger than keeping them equal by discipline.
+- **One width/alignment table.** Delete the inline copy in `tuple_def`; every caller
+  reads the same function.
+- **No per-shape corrections** anywhere in codegen: with one layout, the fn-ref and
+  `OpSetInt4` special cases have nothing left to correct.
+- **A drift guard, not a convention.** While any duplication survives a step, a test
+  asserts the two agree for a matrix of element types — so the *next* copy to rot
+  fails a build instead of a user's data.
+
+### Step R7 — unify (runs alongside R2-R4, not after)
+
+Each removal is its own commit with the four instruments green:
+
+1. Delete `tuple_def`'s inline align table; call the shared function. Fixes the
+   `Function` 8-vs-4 disagreement as a side effect — expect it to move emitted code,
+   so check `introspect` diffs and hand-verify what changed.
+2. Make the stack view a derivation of the record view; give it one public name and
+   one home.
+3. Collapse `variables::size(Tuple)` / `align(Tuple)` onto that derivation.
+4. Delete `codegen.rs:3336` and the `#493` branch; each deletion must leave the
+   corpus, matrix and guard green.
+5. Add the drift-guard test for whatever duplication genuinely cannot be removed, and
+   record WHY it cannot — an accepted duplicate needs a reason on the page.
+
+**Done means:** searching for a second tuple-layout computation finds nothing, and a
+reader asking "which function decides where element *i* lives?" has exactly one
+answer.
+
+## Steps — the rewrite: tuples use the record field format
+
+> **Re-scoped 2026-07-21.** Steps 0-2 stand (they produced the corpus, the
+> diagnostic assert, and the alignment model). Step 3's push-site workaround is
+> **reverted** — see the § below. What replaces it is not a bigger patch but a
+> smaller system: tuples stop having a layout of their own.
+
+### The target
+
+**A tuple is laid out exactly like a record of the same fields.** Element widths and
+offsets come from the synthetic `__tuple<…>` struct that `tuple_def` already
+registers, resolved through `stored_tuple_offsets` — the path whose own doc comment
+says "storage reads / writes for tuple elements MUST use the same field offsets that
+ordinary struct fields use … rather than recomputing via `element_offsets`".
+
+The eval stack keeps its 8-stepped slots, because every push advances a whole slot.
+That difference becomes an **explicit conversion at the boundary**, not a second
+layout: the codebase already names the operation — `read_tuple_at_wide` is described
+as "the par worker's tuple-arg **inflation**".
+
+So: **one canonical layout (record) + an explicit inflate/deflate at the stack
+boundary.** Today there are two layouts that silently disagree, which is the root of
+every symptom in this plan.
+
+### What this fixes, measured
+
+Same three fields, `u8` / `u32` / `u16`, on `main` today:
+
+| | stride | round-trip |
+|---|---|---|
+| `struct M { a: u8, b: u32, c: u16 }` | **7 B** | `1,2,3` → `1,2,3` ✔ |
+| `(u8, u32, u16)` | **24 B** | `1,2,3` → `1,2,`**`4`** ✘ |
+
+- **3.4× memory** — `element_size` reports STACK widths for storage (`Integer` is 8B
+  regardless of `forced_size`), so a tuple reserves 8+8+8 where the record packs
+  1+4+2.
+- **Silent corruption** — the narrow trailing element reads back **+1**, reproducible
+  in `vector<(u8,u16)>` and `vector<(u32,u16)>` as well. Read and write already
+  disagree today; expect latent compensation elsewhere.
+- **The two SIGSEGVs** (`e4_d2_closure_arg`, `e5_d2_struct_ref_arg`) and the
+  `(character,character)` / `(boolean,·)` crashes, because caller and callee stop
+  deriving placement from different functions.
+
+### Validation instruments (every step re-runs all four)
+
+1. **`sizeof(T)` per scalar** — `u8=1 i8=1 u16=2 i16=2 i32=4 u32=4 character=4
+   single=4`. Correct today; must stay correct. Catches width inflation at the type
+   level.
+2. **`size(vector<T>)`** — the fully allocated size, `length × stride`. Correct today
+   for every scalar (`u8×4=4`, `char×4=16`, `bool×4=4`); **wrong for tuples**
+   (`(u8,u32,u16)×2 = 48`, should be ~14). This is the space regression detector.
+3. **Record-vs-tuple parity** — the same fields as a `struct` and as a tuple must
+   agree on BOTH stride and values. The record is the oracle; the tuple must match
+   it. This is the single most important check, and it is what the whole rewrite is
+   aiming at.
+4. **Mixed-width round-trip** — `(u8,u32,u16)`, `(u16,u8,u32,character)` etc. stored
+   and read back element-by-element, hand-computed. Catches the `+1` class.
+
+Plus the existing gates: the 27-cell probe corpus on **both backends**, the 201
+ignored matrix cells, the `stack_align_guard` build (which retired step 3), and
+`loft introspect` diffs for anything claiming to be behaviour-preserving.
+
+### Step R0 — land the validation tests FIRST
+
+Turn instruments 1-4 into a permanent test (a `.loft` script plus a Rust harness
+entry), asserting the **target** state. On `main` today the record cases pass and the
+tuple cases fail, so the test starts RED on exactly the defects being fixed and goes
+green as the rewrite lands. Nothing else in this plan is safe without it.
+
+Gate: the test fails only on tuple stride + mixed-width values, passes everything
+else; a deliberately wrong expectation must make it fail (prove it can).
+
+### Step R1 — pin the `+1` bug to read or write
+
+Store a known mixed-width tuple, then read it through both paths (element access and
+the record view of the same bytes). Determine whether the WRITE lays the bytes down
+correctly and the READ misinterprets, or the write is already wrong.
+
+Gate: a written verdict naming the side. R2's shape depends on it: a read-only fault
+is a reroute; a write fault means the stored bytes are wrong and any existing data is
+suspect.
+
+### Step R2 — route tuple ELEMENT ACCESS through the synthetic struct
+
+Replace `element_offsets`-based element addressing with
+`stored_tuple_offsets` / `stored_tuple_field_offset` wherever the tuple lives in a
+record, vector or DB page. That is the reroute onto the already-correct path; no new
+layout code.
+
+Gate: instrument 3 (record-vs-tuple parity) goes green for stride AND values;
+instruments 1, 2, 4 green; matrix and corpus no worse than the recorded baseline.
+
+### Step R3 — make the stack boundary an explicit inflate/deflate
+
+Give the stack view an honest name and one home (extend `read_tuple_at_wide`'s
+concept to both directions). Caller and callee both derive the frame block from the
+record layout plus that conversion, so they cannot disagree.
+
+Gate: the corpus goes 27/27 on both backends, the matrix 201/201, and the
+`stack_align_guard` build reports **zero** fires — the check that retired step 3.
+
+### Step R4 — delete the second layout
+
+Remove the `Tuple` arms of `element_size` / `element_offsets` (or rename them to the
+stack-inflated view they actually are), so no caller can pick the wrong one. Triage
+the 26 non-`data.rs` `element_offsets` callers as storage or stack while doing it.
+See § Unification for the full duplicate inventory this must clear — R4 and R7 are
+the same work seen from two angles (deleting the wrong layout / leaving one home).
+
+Gate: all four instruments green; full suite; `loft introspect` diffs reviewed for
+every corpus cell — non-empty only where a layout was genuinely wrong before.
+
+### Step R5 — extend the guard's reach
+
+Add `tuple_matrix` and the sibling matrix suites to the `stack_align_guard` CI job.
+The gate existed and was blind to this class because its suite list excludes them.
+
+### Step R6 — un-ignore
+
+As the old step 7: drop `#[ignore]` from the 201 matrix cells and wire them into the
+nightly, advisory for the first few nights.
+
+### Stop conditions
+
+- Any instrument regresses → stop; the rewrite is not allowed to trade space for
+  correctness or vice versa.
+- A step needs the DB page format changed → stop and re-plan; the record layout is
+  the oracle precisely because it is already right.
+- The `+1` verdict says the WRITE is wrong → stop and assess existing persisted data
+  before changing anything.
+
+<details><summary>the original steps 0-7 (superseded by the rewrite; 0-2 still describe what was done)</summary>
 
 ## Steps
 
@@ -484,6 +681,9 @@ and should be corrected in the same commit), and add them to the nightly. Land a
 Windows or macOS and platform fallout should not red the nightly before triage.
 
 Gate: three consecutive green nightlies on all three OSes, then drop advisory.
+
+
+</details>
 
 ## Validation that applies to every step
 
