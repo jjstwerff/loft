@@ -2978,6 +2978,22 @@ impl Parser {
         if d_nr != u32::MAX && self.data.def(d_nr).def_type() == DefType::Generic {
             d_nr = u32::MAX;
         }
+        // @PLN115 S5 — record a free-function CALL as a Global reference at its
+        // name.  Gated on the recording flag (so it is a single predictable bool
+        // check on every normal compile) and pass 2 (the name has resolved).  Only
+        // user free functions (`n_<name>`) are Globals here; operators (`Op…`) are
+        // not user-navigable names and methods (`t_…`) resolve in fields.rs (S6).
+        if self.record_resolutions
+            && !self.first_pass
+            && d_nr != u32::MAX
+            && self.data.def(d_nr).name().starts_with("n_")
+        {
+            self.record(
+                name_pos,
+                name.chars().count() as u16,
+                crate::resolution::Resolution::Global(d_nr),
+            );
+        }
         // Plan-17 phase 01 (A) — propagate the substituted return type
         // on first pass so receiving variables (`t = min_max(7, 3)`)
         // get a correctly-typed `Type::Tuple([…])` slot, enabling

@@ -78,6 +78,40 @@ fn s3_lsp_parse_carries_buffer_occurrences() {
 }
 
 #[test]
+fn s5_free_function_call_records_global() {
+    // A free-function call resolves to a Global reference at its name; a param/local
+    // in the same buffer stays a Local (the two resolution kinds coexist).
+    let p = parse_with_resolutions(
+        "fn helper(k: integer) -> integer {\n  return k + 1;\n}\n\
+         fn main() {\n  n = helper(3);\n  print(\"{n}\");\n}\n",
+    );
+    let helper_def = p.data.def_nr("n_helper");
+    assert_ne!(helper_def, u32::MAX, "helper must exist");
+    let globals: Vec<_> = p
+        .resolutions()
+        .iter()
+        .filter_map(|o| match o.res {
+            Resolution::Global(d) => Some((o.line, o.col, o.len, d)),
+            _ => None,
+        })
+        .collect();
+    // The `helper(3)` call in main records Global(n_helper), name length 6.
+    assert!(
+        globals
+            .iter()
+            .any(|(_, _, len, d)| *len == 6 && *d == helper_def),
+        "helper() call records Global(n_helper): {globals:?}"
+    );
+    // The param `k` inside helper is still a Local — Global recording is additive.
+    assert!(
+        p.resolutions()
+            .iter()
+            .any(|o| matches!(o.res, Resolution::Local { .. })),
+        "locals still recorded alongside globals"
+    );
+}
+
+#[test]
 fn s4_assignment_local_refs_exclude_field_access() {
     // Local `x` is assigned then read alongside a field `p.x` of the SAME name.
     // The precise path must return the local's decl + read, and NOT the `p.x` field.
