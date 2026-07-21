@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
-use crate::data::{Data, MAIN_SOURCE};
+use crate::data::{Data, MAIN_SOURCE, Type};
 use crate::diagnostics::Diagnostics;
 use crate::host::{Program, Value};
 use crate::json::Parsed;
@@ -1005,6 +1005,71 @@ pub fn local_binding_refs(
             })
             .collect(),
     )
+}
+
+/// One inlay hint — an inferred-type annotation shown inline after a local
+/// variable's declaration.  `(line, col)` are 1-based; `col` is the position AFTER
+/// the name, where `: <type>` renders.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InlayHint {
+    pub line: u32,
+    pub col: u32,
+    pub label: String,
+}
+
+/// @PLN115 S7 — inferred-type inlay hints for a buffer's ASSIGNMENT-locals.  This is
+/// the feature @PLN63 E could not ship: it needs each local binding's DECLARATION
+/// position, and `Variable.source` was unreliable in the fresh-parse path (only the
+/// first local per fn carried one).  The resolution index makes the position exact —
+/// a binding's declaration is its earliest occurrence when that is a `name =` write.
+///
+/// The type is `def(fn_def).variables().tp(var_nr)`, rendered by `type_name_str`.
+/// Parameters (explicit types in the signature) and loop / comprehension binders
+/// (declared outside `parse_var`, so their earliest recorded occurrence is a use, not
+/// a `name =` write) are skipped, as are unresolved types.  Reads `: <type>`.
+#[must_use]
+pub fn inlay_hints(text: &str, name: &str, stdlib_dir: &str) -> Vec<InlayHint> {
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
+    let mut locals: Vec<&crate::resolution::Occurrence> = p
+        .resolutions()
+        .iter()
+        .filter(|o| matches!(o.res, crate::resolution::Resolution::Local { .. }))
+        .collect();
+    locals.sort_by(|a, b| a.line.cmp(&b.line).then(a.col.cmp(&b.col)));
+    let mut seen: Vec<(u32, u16)> = Vec::new();
+    let mut hints = Vec::new();
+    for o in locals {
+        let crate::resolution::Resolution::Local { fn_def, var_nr } = o.res else {
+            continue;
+        };
+        if seen.contains(&(fn_def, var_nr)) {
+            continue; // only the declaration (earliest occurrence) gets a hint
+        }
+        seen.push((fn_def, var_nr));
+        if fn_def >= p.data.definitions() {
+            continue;
+        }
+        let vars = p.data.def(fn_def).variables();
+        // Skip parameters (explicit types) and loop / comprehension binders (their
+        // earliest recorded occurrence is a use, not the `name =` declaration).
+        if vars.is_argument(var_nr) || !occurrence_is_assignment(text, o.line, o.col, o.len) {
+            continue;
+        }
+        let tp = vars.tp(var_nr);
+        if matches!(tp, Type::Unknown(_) | Type::Never | Type::Null | Type::Void) {
+            continue;
+        }
+        let label = p.data.type_name_str(tp);
+        if label.is_empty() {
+            continue;
+        }
+        hints.push(InlayHint {
+            line: o.line,
+            col: o.col + u32::from(o.len),
+            label: format!(": {label}"),
+        });
+    }
+    hints
 }
 
 // ── completion (step C) ──────────────────────────────────────────────────────

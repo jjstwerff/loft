@@ -159,6 +159,25 @@ fn s6_method_call_records_method_keyed_on_receiver() {
 }
 
 #[test]
+fn s7_inlay_hints_type_assignment_locals_only() {
+    // Assignment-locals get an inferred-type hint after the name; a parameter
+    // (explicit type) and a `for` binder (no `name =` decl) get none.
+    let src = "fn f(w: integer) -> integer {\n  n = 5;\n  s = \"hi\";\n  \
+               for i in 0..3 {\n    n = n + i;\n  }\n  return w + n;\n}\n";
+    let hints = loft::lsp::inlay_hints(src, "buf.loft", "default");
+    let by_line: Vec<(u32, &str)> = hints.iter().map(|h| (h.line, h.label.as_str())).collect();
+    // `n` (L2) : integer, `s` (L3) : text.
+    assert!(by_line.contains(&(2, ": integer")), "n: integer hint: {by_line:?}");
+    assert!(by_line.contains(&(3, ": text")), "s: text hint: {by_line:?}");
+    // Exactly two hints — the param `w` and the loop binder `i` produce none, and a
+    // binding is hinted only at its declaration (not at the reassignment `n = n + i`).
+    assert_eq!(hints.len(), 2, "only the two assignment-local decls: {by_line:?}");
+    // The hint sits AFTER the name: `  n = 5;` → `n` at col 3, hint col 4.
+    let n_hint = hints.iter().find(|h| h.line == 2).unwrap();
+    assert_eq!(n_hint.col, 4, "hint is positioned after the name");
+}
+
+#[test]
 fn s4_assignment_local_refs_exclude_field_access() {
     // Local `x` is assigned then read alongside a field `p.x` of the SAME name.
     // The precise path must return the local's decl + read, and NOT the `p.x` field.

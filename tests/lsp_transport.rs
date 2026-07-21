@@ -894,6 +894,56 @@ fn semantic_tokens_full_returns_encoded_tokens() {
     let _ = s.child.wait();
 }
 
+// S7 (@PLN115) — inferred-type inlay hints at assignment-local declarations (the
+// feature E, unblocked by the resolution index).
+#[test]
+fn inlay_hints_annotate_local_declaration_types() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        field(caps, "inlayHintProvider").is_some(),
+        "advertises inlayHintProvider"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///h.loft";
+    s.notify(
+        "textDocument/didOpen",
+        &open_params(uri, "fn main() {\n  n = 5;\n  greeting = \"hi\";\n}\n"),
+    );
+    let _ = s.recv();
+
+    s.request(
+        2,
+        "textDocument/inlayHint",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{uri}"}},"range":{{"start":{{"line":0,"character":0}},"end":{{"line":4,"character":0}}}}}}"#
+        ),
+    );
+    let reply = s.recv();
+    let hints = match field(&reply, "result").expect("inlayHint result") {
+        Parsed::Array(a) => a.clone(),
+        other => panic!("expected an array, got {other:?}"),
+    };
+    let labels: Vec<String> = hints
+        .iter()
+        .filter_map(|h| field_str(h, "label"))
+        .collect();
+    assert!(labels.iter().any(|l| l == ": integer"), "n : integer: {labels:?}");
+    assert!(labels.iter().any(|l| l == ": text"), "greeting : text: {labels:?}");
+    // Each hint carries a 0-based position (kind 1 = Type).
+    let first = &hints[0];
+    assert!(
+        field(field(first, "position").unwrap(), "line").is_some(),
+        "hint carries a position: {first:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 // F (v1) — renaming a LOCAL touches only its own function, not a same-named
 // local in another function.
 #[test]

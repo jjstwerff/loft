@@ -143,6 +143,20 @@ fn main() {
                     &response(id, obj(vec![("data", Parsed::Array(data))])),
                 );
             }
+            ("textDocument/inlayHint", Some(id)) => {
+                // S7 (@PLN115): inferred-type hints at assignment-local declarations,
+                // positioned via the resolution index (the substrate E was blocked on).
+                let hints = text_document_uri(&msg)
+                    .and_then(|uri| documents.get(&uri))
+                    .map(|text| {
+                        loft::lsp::inlay_hints(text, "buf.loft", &stdlib_dir)
+                            .iter()
+                            .map(inlay_hint_json)
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                send(&stdout, &response(id, Parsed::Array(hints)));
+            }
             ("textDocument/completion", Some(id)) => {
                 // Step C: members after `expr.`, else in-scope names + keywords.
                 let items = text_document_position(&msg)
@@ -413,6 +427,19 @@ fn range_of(line: u32, start_char: u32, end_char: u32) -> Parsed {
     obj(vec![
         ("start", position(line, start_char)),
         ("end", position(line, end_char)),
+    ])
+}
+
+/// An LSP `InlayHint` JSON object (kind 1 = Type) for a resolved hint.  The `line`
+/// and `col` are 1-based; LSP positions are 0-based.
+fn inlay_hint_json(h: &loft::lsp::InlayHint) -> Parsed {
+    obj(vec![
+        (
+            "position",
+            position(h.line.saturating_sub(1), h.col.saturating_sub(1)),
+        ),
+        ("label", Parsed::Str(h.label.clone())),
+        ("kind", Parsed::Int(1)),
     ])
 }
 
@@ -1027,6 +1054,7 @@ fn initialize_result() -> Parsed {
         ("definitionProvider", Parsed::Bool(true)),
         ("referencesProvider", Parsed::Bool(true)),
         ("codeActionProvider", Parsed::Bool(true)),
+        ("inlayHintProvider", Parsed::Bool(true)),
         (
             "completionProvider",
             obj(vec![(
