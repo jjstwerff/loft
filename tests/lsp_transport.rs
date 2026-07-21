@@ -315,6 +315,83 @@ fn hover_shows_signature_and_doc() {
     let _ = s.child.wait();
 }
 
+// S6 — go-to-definition.  A LOCAL symbol jumps within the open document to its
+// name; a STDLIB symbol jumps into the stdlib source file (a `file://` uri); a
+// blank spot yields null.
+#[test]
+fn go_to_definition_jumps_to_local_and_stdlib_defs() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        matches!(field(caps, "definitionProvider"), Some(Parsed::Bool(true))),
+        "advertises definitionProvider: {init:?}"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///d.loft";
+    let prog = "fn area(w: integer, h: integer) -> integer {\n  w * h\n}\nfn main() {\n  print(area(2, 3))\n}\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let _ = s.recv(); // consume the publishDiagnostics push
+
+    // `area` in the call (0-based line 4, char 8) → the local definition, at its
+    // NAME (line 0, chars 3..7), in the SAME document.
+    s.request(
+        2,
+        "textDocument/definition",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":4,"character":8}}}}"#),
+    );
+    let loc = field(&s.recv(), "result")
+        .cloned()
+        .expect("definition returns a Location");
+    assert_eq!(
+        field_str(&loc, "uri").as_deref(),
+        Some(uri),
+        "a local def stays in the open document: {loc:?}"
+    );
+    let start = field(field(&loc, "range").unwrap(), "start").unwrap();
+    assert_eq!(
+        (
+            field(start, "line").and_then(Parsed::as_i64),
+            field(start, "character").and_then(Parsed::as_i64),
+        ),
+        (Some(0), Some(3)),
+        "jumps to `area` (line 0, char 3): {loc:?}"
+    );
+
+    // `print` (0-based line 4, char 4) → the stdlib definition in a `file://`
+    // source under `default/`.
+    s.request(
+        3,
+        "textDocument/definition",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":4,"character":4}}}}"#),
+    );
+    let loc = field(&s.recv(), "result")
+        .cloned()
+        .expect("stdlib Location");
+    let target = field_str(&loc, "uri").unwrap_or_default();
+    assert!(
+        target.starts_with("file://") && target.contains("default/"),
+        "a stdlib def jumps into its source file: {target}"
+    );
+
+    // A blank spot → null.
+    s.request(
+        4,
+        "textDocument/definition",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":1,"character":0}}}}"#),
+    );
+    let none = s.recv();
+    assert!(
+        matches!(field(&none, "result"), Some(Parsed::Null)),
+        "no symbol under the cursor → null: {none:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();
@@ -358,7 +435,7 @@ fn unknown_request_is_an_error_not_a_result() {
     s.request(1, "initialize", "{}");
     let _ = s.recv();
 
-    s.request(7, "textDocument/definition", "{}"); // not wired until S6
+    s.request(7, "textDocument/completion", "{}"); // deliberately unimplemented
     let reply = s.recv();
     assert_eq!(field(&reply, "id").and_then(Parsed::as_i64), Some(7));
     assert!(

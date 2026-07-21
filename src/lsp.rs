@@ -88,17 +88,21 @@ pub fn outline(text: &str, name: &str, stdlib_dir: &str) -> Vec<Symbol> {
 /// and where it is defined (the location also drives S6 go-to-definition).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Hover {
+    /// The resolved user-facing name (`area`, `Point`, `print`).
+    pub name: String,
     /// A one-line signature: `fn area(p: Point) -> integer`, `struct Point { … }`,
     /// `const PI: float`.  The clean user-facing type spelling (`type_name_str`).
     pub signature: String,
     /// The `///` doc block immediately above the declaration, in reading order —
     /// empty when the definition has none (or its source can't be read).
     pub doc: Vec<String>,
-    /// The resolved definition's source file (as the parser recorded it).
+    /// The resolved definition's source file (as the parser recorded it —
+    /// the buffer's parse-name for a local def, else a repo-root-relative path).
     pub def_file: String,
-    /// 1-based line of the definition.
+    /// 1-based line of the definition's NAME.
     pub def_line: u32,
-    /// 1-based column of the definition.
+    /// 1-based column of the definition's NAME (located in the source, so a jump
+    /// lands on the name — not the parser's body-start position).
     pub def_col: u32,
 }
 
@@ -130,12 +134,23 @@ pub fn symbol_at(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) 
     }
     let (kind, cname) = crate::api_surface::classify(data, d)?;
     let pos = data.def(d).position.clone();
+    // Read the definition's own source ONCE — for the `///` doc AND to locate the
+    // name (the parser records `pos` at the body start, past the name).
+    let src = read_def_source(text, name, stdlib_dir, &pos);
+    let doc = src
+        .as_deref()
+        .map_or_else(Vec::new, |s| doc_block_above(s, pos.line));
+    let def_col = src
+        .as_deref()
+        .and_then(|s| name_col_on_line(s, pos.line, &cname))
+        .unwrap_or(pos.pos);
     Some(Hover {
         signature: render_signature(data, d, kind, &cname),
-        doc: doc_above(text, name, stdlib_dir, &pos),
+        name: cname,
+        doc,
         def_file: pos.file,
         def_line: pos.line,
-        def_col: pos.pos,
+        def_col,
     })
 }
 
@@ -159,32 +174,27 @@ fn render_signature(data: &Data, d: u32, kind: &str, name: &str) -> String {
     }
 }
 
-/// The contiguous `///` doc block directly above the declaration at `pos`, in
-/// reading order.  Reads from the open buffer when `pos` points into it, else
-/// from the definition's source file on disk (stdlib / imported libs), resolved
-/// relative to the stdlib root.  Empty on no doc or an unreadable source.
-fn doc_above(buf: &str, buf_name: &str, stdlib_dir: &str, pos: &Position) -> Vec<String> {
-    let disk;
-    let src: &str = if pos.file == buf_name {
-        buf
-    } else {
-        // `pos.file` is repo-root-relative (e.g. `default/01_code.loft`); the
-        // stdlib root is the parent of `stdlib_dir` (`…/default`).
-        let root = Path::new(stdlib_dir)
-            .parent()
-            .map_or_else(|| Path::new("").to_path_buf(), Path::to_path_buf);
-        match std::fs::read_to_string(root.join(&pos.file)) {
-            Ok(s) => {
-                disk = s;
-                disk.as_str()
-            }
-            Err(_) => return Vec::new(),
-        }
-    };
+/// The definition's own source text: the open buffer when `pos` points into it,
+/// else the file on disk (stdlib / imported libs).  `pos.file` is repo-root
+/// relative (e.g. `default/01_code.loft`); the stdlib root is the parent of
+/// `stdlib_dir` (`…/default`).  `None` when the source can't be read.
+fn read_def_source(buf: &str, buf_name: &str, stdlib_dir: &str, pos: &Position) -> Option<String> {
+    if pos.file == buf_name {
+        return Some(buf.to_string());
+    }
+    let root = Path::new(stdlib_dir)
+        .parent()
+        .map_or_else(|| Path::new("").to_path_buf(), Path::to_path_buf);
+    std::fs::read_to_string(root.join(&pos.file)).ok()
+}
+
+/// The contiguous `///` doc block directly above the declaration on `decl_line`
+/// (1-based), in reading order.  Empty when there is none.
+fn doc_block_above(src: &str, decl_line: u32) -> Vec<String> {
     let lines: Vec<&str> = src.lines().collect();
     let mut doc: Vec<String> = Vec::new();
-    // `pos.line` is 1-based; the line above the declaration is index `line - 2`.
-    let mut i = pos.line as isize - 2;
+    // The line above the declaration is index `decl_line - 2`.
+    let mut i = decl_line as isize - 2;
     while i >= 0 {
         let trimmed = lines[i as usize].trim_start();
         let Some(rest) = trimmed.strip_prefix("///") else {
@@ -195,6 +205,17 @@ fn doc_above(buf: &str, buf_name: &str, stdlib_dir: &str, pos: &Position) -> Vec
     }
     doc.reverse();
     doc
+}
+
+/// The 1-based column of `name` on `decl_line` (1-based) in `src`, so a jump
+/// lands on the name rather than the parser's body-start position.  A method
+/// name (`Type.method`) is searched by its last segment.  `None` if not found
+/// on that line (e.g. a multi-line signature) — the caller keeps `pos.pos`.
+fn name_col_on_line(src: &str, decl_line: u32, name: &str) -> Option<u32> {
+    let needle = name.rsplit('.').next().unwrap_or(name);
+    let line = src.lines().nth(decl_line.saturating_sub(1) as usize)?;
+    let byte_idx = line.find(needle)?;
+    Some(line[..byte_idx].chars().count() as u32 + 1)
 }
 
 /// The identifier token under a 1-based (`line`, `col`) cursor in `text`, or

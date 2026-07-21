@@ -87,13 +87,24 @@ fn main() {
                 send(&stdout, &response(id, Parsed::Array(symbols)));
             }
             ("textDocument/hover", Some(id)) => {
-                let hover = hover_params(&msg)
+                let hover = text_document_position(&msg)
                     .and_then(|(uri, line, ch)| {
                         let text = documents.get(&uri)?;
                         hover_result(text, &stdlib_dir, line, ch)
                     })
                     .unwrap_or(Parsed::Null); // no symbol under the cursor → null
                 send(&stdout, &response(id, hover));
+            }
+            ("textDocument/definition", Some(id)) => {
+                let location = text_document_position(&msg)
+                    .and_then(|(uri, line, ch)| {
+                        let text = documents.get(&uri)?;
+                        let h =
+                            loft::lsp::symbol_at(text, "buf.loft", &stdlib_dir, line + 1, ch + 1)?;
+                        Some(definition_location(&uri, &h, &stdlib_dir))
+                    })
+                    .unwrap_or(Parsed::Null); // unresolved → null
+                send(&stdout, &response(id, location));
             }
             ("shutdown", Some(id)) => {
                 shutdown_requested = true;
@@ -293,14 +304,45 @@ fn markup(value: &str) -> Parsed {
     ])
 }
 
-/// `params.textDocument.uri` + `params.position.{line, character}` (0-based).
-fn hover_params(msg: &Parsed) -> Option<(String, u32, u32)> {
+/// An LSP `TextDocumentPositionParams`: `params.textDocument.uri` +
+/// `params.position.{line, character}` (0-based).  Shared by hover + definition.
+fn text_document_position(msg: &Parsed) -> Option<(String, u32, u32)> {
     let params = obj_get(msg, "params")?;
     let uri = obj_str(obj_get(params, "textDocument")?, "uri")?;
     let pos = obj_get(params, "position")?;
     let line = u32::try_from(obj_get(pos, "line")?.as_i64()?).ok()?;
     let ch = u32::try_from(obj_get(pos, "character")?.as_i64()?).ok()?;
     Some((uri, line, ch))
+}
+
+// ── go-to-definition (S6) ────────────────────────────────────────────────────
+/// An LSP `Location` for the resolved definition.  A LOCAL def lives in the open
+/// document, so its uri is the request's; a stdlib / library def lives in a file
+/// on disk, so its uri is a `file://` path there.  The range underlines the name.
+fn definition_location(request_uri: &str, h: &loft::lsp::Hover, stdlib_dir: &str) -> Parsed {
+    let uri = if h.def_file == "buf.loft" {
+        request_uri.to_string()
+    } else {
+        stdlib_file_uri(stdlib_dir, &h.def_file)
+    };
+    let line0 = h.def_line.saturating_sub(1);
+    let col0 = h.def_col.saturating_sub(1);
+    let name_len = h.name.rsplit('.').next().unwrap_or(&h.name).chars().count() as u32;
+    obj(vec![
+        ("uri", Parsed::Str(uri)),
+        ("range", range_of(line0, col0, col0 + name_len)),
+    ])
+}
+
+/// `file://` URI for a stdlib/library source file, `pos.file` being repo-root
+/// relative and the stdlib root the parent of `stdlib_dir` (`…/default`).
+fn stdlib_file_uri(stdlib_dir: &str, rel_file: &str) -> String {
+    let path = Path::new(stdlib_dir)
+        .parent()
+        .unwrap_or_else(|| Path::new(""))
+        .join(rel_file);
+    let abs = std::fs::canonicalize(&path).unwrap_or(path);
+    format!("file://{}", abs.display())
 }
 
 // ── document-lifecycle param extraction ──────────────────────────────────────
@@ -457,6 +499,7 @@ fn initialize_result() -> Parsed {
         ("textDocumentSync", sync),
         ("documentSymbolProvider", Parsed::Bool(true)),
         ("hoverProvider", Parsed::Bool(true)),
+        ("definitionProvider", Parsed::Bool(true)),
     ]);
     let server_info = obj(vec![
         ("name", Parsed::Str(SERVER_NAME.into())),

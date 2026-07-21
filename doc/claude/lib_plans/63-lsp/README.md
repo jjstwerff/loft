@@ -226,8 +226,16 @@ editor) so nothing silently regresses.
     spelling. *Gates:* `tests/lsp_hover.rs` (5 — user-fn-at-call-site + doc, stdlib type + doc
     read cross-file from source, struct sig, off-word → None, unknown → None) and
     `tests/lsp_transport.rs::hover_shows_signature_and_doc` on the real binary.
-- **S6 — go-to-definition.** reuse `symbol_at` → the definition span →
-  `textDocument/definition`. *Gate:* unit test; ctrl-click jumps.
+- **S6 — go-to-definition — DONE.** `textDocument/definition` reuses `symbol_at` and emits an
+  LSP `Location`: a LOCAL symbol jumps within the open document, a STDLIB / library symbol jumps
+  into its source file (a `file://` uri under `default/`, canonicalized). To make the jump land on
+  the NAME (matching the outline), `symbol_at` was extended to return the name-precise position +
+  the resolved name — it already reads the def's source for docs, so it now also locates the name
+  on the declaration line (`name_col_on_line`, shared with the `///` extraction as `read_def_source`
+  / `doc_block_above`). Advertises `definitionProvider`. *Gate:*
+  `tests/lsp_transport.rs::go_to_definition_jumps_to_local_and_stdlib_defs` on the real binary —
+  local jump (same uri, name range), stdlib jump (`file://…/default/…`), blank → null. The S0
+  positive control moved off `textDocument/definition` (now implemented) to `textDocument/completion`.
 
 S0–S6 complete **LSP.1**. LSP.2 (below) and `loft-dap` (a DAP adapter over the **existing**
 @PLN16 debugger engine — the engine is done, this is a protocol shim, not a new debugger)
