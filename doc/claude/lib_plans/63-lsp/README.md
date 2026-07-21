@@ -134,6 +134,44 @@ introduces incremental sync to mitigate.
   `Mutex<ParserState>`, with the latest `didChange` superseding any
   in-flight one.
 
+### Build order — small, safe, incremental
+
+Each step is independently landable, has its own verify gate, and the server is a
+**usable, shippable LSP the moment S3 lands** (diagnostics alone earns its keep on every
+editor). The safety spine: build the transport *in isolation* first; grow the compiler
+surface only as **additive accessors** returning structured data — never a rewrite of the
+parse path; and test each step at the **protocol level** (a scripted harness, not a live
+editor) so nothing silently regresses.
+
+- **S0 — protocol harness (the instrument, first).** A driver that pipes
+  `Content-Length`-framed JSON-RPC into `loft-lsp`'s stdin and asserts its stdout, so every
+  step is CI-tested without an editor. *Gate:* it drives a handshake **and can fail** (feed a
+  bad reply, see it caught) — a harness that can't fail proves nothing.
+- **S1 — transport skeleton, no compiler.** `initialize` (advertise only
+  `textDocumentSync=full`) → `initialized` → `shutdown`/`exit`. *Gate:* harness completes the
+  handshake + clean exit; VS Code connects. Framing/encoding bugs live here — nail it before
+  any feature touches it.
+- **S2 — structured diagnostics (prereq #1, done additively).** `Parser::parse_text →
+  (Data, Vec<Diagnostic>)`: collect errors with the lexer's already-tracked `line`/`col`
+  stamped in, instead of `eprintln`+exit. Convert the ~60 `error(...)` sites **in batches**,
+  un-converted sites falling back to a whole-line range, so the sweep is safe at every commit.
+  *Gate:* Rust unit tests — a known error → right range/message/code; a clean buffer → none.
+- **S3 — publish diagnostics (SHIP HERE).** `didOpen`/`didChange` → `parse_text` →
+  `publishDiagnostics`. *Gate:* harness asserts the notification + range; VS Code shows the
+  squiggle live as you type. Diagnostics-only is real value across every LSP editor — release it.
+- **S4 — outline.** `Data::file_symbols` (prereq #3) → `textDocument/documentSymbol`.
+  *Gate:* unit test on the symbol list; VS Code Outline shows the file's fn/struct/enum tree.
+- **S5 — hover.** `Data::symbol_at` (prereq #2 — a per-file position index built during
+  parse) → `textDocument/hover` (type + signature + `///` doc). *Gate:* unit test on
+  `symbol_at`; hovering a name shows its type.
+- **S6 — go-to-definition.** reuse `symbol_at` → the definition span →
+  `textDocument/definition`. *Gate:* unit test; ctrl-click jumps.
+
+S0–S6 complete **LSP.1**. LSP.2 (below) and `loft-dap` (a DAP adapter over the **existing**
+@PLN16 debugger engine — the engine is done, this is a protocol shim, not a new debugger)
+layer on the same spine. Every step ships behind three checks: a unit test (compiler side),
+a harness test (protocol side), and a real-editor smoke.
+
 ---
 
 ## LSP.2 — full editing surface (0.9.0)
