@@ -88,7 +88,16 @@ parser and each site needs its own byte-identical gate.
   name); CLI byte-identical (pure consumer, parser untouched).
 
 **Recording spine (S2–S6): Local, Global, Field, Method all resolved. Consumers:
-S4 (precise local references/rename) + S7 (inlayHint).**
+S4 (precise local references/rename), S7 (inlayHint), and index-driven navigation.**
+
+- **Navigation integration** (`22622fc4`) — go-to-definition + hover now resolve
+  through the index via `lsp::resolve_at`: `Global`/`Method` reuse `hover_of_def`
+  (real signature + `///` doc — a method jumps INTO the stdlib), a `Local` synthesizes
+  `name: type` at its declaration, a `Field` shows `Type.field: type`. Both handlers
+  try the index first, falling back to name-based `symbol_at` on a definition's own
+  name. NEW live capabilities: definition + hover on LOCALS and METHODS (previously
+  unresolvable by name lookup), globals position-precise. Pure consumer — CLI
+  byte-identical. Tested unit + end-to-end (local use → its decl; method → stdlib).
 
 **Remaining follow-ups (optional enhancements, each its own step — the plan's goal is
 already met):**
