@@ -172,21 +172,14 @@ pub struct State {
     pub active_coroutines: Vec<usize>,
     /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
     pub(crate) generate_depth: usize,
-    /// @PLN114 — the packed element offsets the callee expects, set while generating
-    /// a tuple call ARGUMENT.
-    ///
-    /// A tuple argument is pushed element-by-element, and each push advances by the
-    /// 8-rounded stack step; the callee reads its fields at `data::element_offsets`,
-    /// which packs a `DbRef` into 12B.  Whenever those disagree the callee reads the
-    /// wrong address — `(P,P)` segfaults, `(P,P,P,P)` returns garbage.  The layout
-    /// that must win is the callee's, so it is taken from the DECLARED parameter
-    /// type here and the element pushes are trimmed to match it.
-    ///
-    /// `None` outside a tuple argument: a tuple bound to a local is relocated into
-    /// its slots by `emit_tuple_put_ops`, so its eval-stack placement is scratch and
-    /// must be left alone.
-    /// `(packed element offsets, the total the callee's frame reserves)`.
-    pub(crate) arg_tuple_offsets: Option<(Vec<u16>, u16)>,
+    /// @PLN114 — set while generating a call ARGUMENT, so the tuple-placement check
+    /// in `ValueType::Tuple` knows the block it is building will be consumed
+    /// directly as the callee's frame.  A tuple bound to a local instead flows
+    /// through `emit_tuple_put_ops`, which relocates every element into the
+    /// variable's slots, so its intermediate eval-stack placement is free and must
+    /// NOT be checked.  Diagnostic only — absent from release builds.
+    #[cfg(debug_assertions)]
+    pub(crate) in_call_arg: bool,
     /// Runtime call depth counter. Panics at MAX_CALL_DEPTH.
     pub(crate) call_depth: u32,
     /// Number of arms in the current `parallel {}` block.
@@ -420,7 +413,8 @@ impl State {
             coroutines: vec![None], // index 0 = null sentinel
             active_coroutines: Vec::new(),
             generate_depth: 0,
-            arg_tuple_offsets: None,
+            #[cfg(debug_assertions)]
+            in_call_arg: false,
             call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
@@ -4552,7 +4546,8 @@ impl State {
             coroutines: vec![None],
             active_coroutines: Vec::new(),
             generate_depth: 0,
-            arg_tuple_offsets: None,
+            #[cfg(debug_assertions)]
+            in_call_arg: false,
             call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
