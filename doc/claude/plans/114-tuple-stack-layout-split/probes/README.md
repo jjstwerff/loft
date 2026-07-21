@@ -34,11 +34,14 @@ Every cell passes the tuple as a **call argument** unless noted.
 | `ref3` | `(P, P, P)` | `1,2,3` | **FAIL(w) 40 v 48** |
 | `ref4` | `(P, P, P, P)` | `1,2,3,4` | **FAIL(w) 48 v 64** |
 | `vec2` | `(vector, vector)` | `7,9` | **FAIL(w) 24 v 32** |
+| `ref_float` | `(P, float)` — next elem aligns **8** | `10,2.5` | pass |
+| `ref_bool` | `(P, boolean)` — next elem aligns **1** | `10,true` | **SEGV** |
+| `ref_char` | `(P, character)` — next elem aligns **4** | `10,A` | **broken** |
 | `ref_text` | `(P, text)` | `10,x` | **SEGV (interpret only)** |
 | `fn_text_read` | `(fn, text)`, reads `t.1` only | `tag` | **SEGV (interpret only)** |
 | `fn_text_call` | `(fn, text)`, reads `t.1` + calls `t.0` | `tag` then `49` | **SEGV (interpret only)** |
 
-**Every failure here is `--interpret` only; `--native` is correct for all 24 cells.**
+**Every failure here is `--interpret` only; `--native` is correct for all 27 cells.**
 Beware a trap this corpus already sprang once: under the debug-assertions build the
 width mismatch is reported for `--native` too, because the assert lives in
 `generate_call` (codegen), which runs before either backend executes. That is *not*
@@ -67,14 +70,34 @@ errors cancelling: `(P,integer)` declares 12+8 = 20 → padded to 24, and pushes
 are the canaries** — any layout change moves them, and they must stay green with
 hand-checked values, never via a compensating adjustment.
 
-**Text family** (`ref_text`, `fn_text_read`, `fn_text_call`) — *probably a different
-bug*. The widths already agree (`(P,text)`: packed 12 → text aligns 8 → offset 16,
+**Text family — RESOLVED (step 2): the same bug, and `text` was never the axis.**
+What decides a cell is the **packed alignment of the element following a sub-8-byte
+one**. `element_align` (`data.rs:1977`) gives `Str` 4, `boolean` 1, `character` 4,
+while `integer`/`float`/`Function` are 8. After a `Reference` (12B, align 4):
+
+| next element | packed offset of element 1 | push lands at | cell | outcome |
+|---|---|---|---|---|
+| `float` (align 8) | 12 → **16** | 16 | `ref_float` | pass |
+| `integer` (align 8) | 12 → **16** | 16 | `ref_int` | pass |
+| `boolean` (align 1) | **12** | 16 | `ref_bool` | **SIGSEGV** |
+| `character` (align 4) | **12** | 16 | `ref_char` | **broken** |
+| `text` (align 4) | **12** | 16 | `ref_text` | **SIGSEGV** |
+| `P` (align 4) | **12** | 16 | `ref2` | **broken** |
+
+`ref_bool` is the decisive cell: no `text` anywhere and it fails identically. The
+lifetime hypothesis is dead — `(text,text)` and `(integer,text)` both pass, so text
+elements are not inherently unsafe.
+
+<details><summary>the earlier "probably a different bug" reasoning (superseded)</summary>
+ The widths already agree (`(P,text)`: packed 12 → text aligns 8 → offset 16,
 total 32; pushed 16+16 = 32) and it still segfaults, and no assert fires.
 `Str { *const u8, u32 }` is a raw pointer, so interpreter-side element lifetime (a
 dangling `ptr` after the source is freed) is the likely mechanism. Plan step 2
 confirms with `LOFT_LOG=ref_debug` + `--show-ownership`; expect a separate plan. Do
 not fold them in because they share a test file — and do not use "it's
 interpret-only" as the argument, because so is everything else here.
+
+</details>
 
 `fn2` is worth keeping for a different reason: my first hand-computed expectation for
 it was wrong (13; the answer is `3*3 + 4+1` = 14) and loft was right. The cell earns
@@ -91,8 +114,8 @@ That is the strongest argument for plan step 1 (make the mismatch loud) and step
 (un-ignore these suites): the crashing cells were merely the loud members of a family
 whose quiet members return wrong answers.
 
-Note the counts differ by build — `run.sh` reports 9 differing rows on the release
-binary and 14 on the @PLN85 debug-assertions build. The release number is the
+Note the counts differ by build — `run.sh` reports 11 differing rows on the release
+binary (of 54 cell/backend combinations) and more on the @PLN85 debug-assertions build. The release number is the
 **under**-report: without the asserts, a width mismatch either segfaults or silently
 corrupts, and the corrupting cells look like ordinary wrong answers.
 

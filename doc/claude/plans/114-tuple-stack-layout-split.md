@@ -167,7 +167,39 @@ Note the seam already exists: `variables::size(tp, context)` takes
 contexts. It is *already* the stack-side sizing function; its `Tuple` arm reaching
 into `data::element_size` is the single cross-regime leak.
 
-## Open question — is the `text` family the same bug?
+## RESOLVED (step 2) — the `text` family is the SAME bug, and `text` was a red herring
+
+Verdict: **same root, no separate plan.** The distinguishing axis was never `text`;
+it is the **packed alignment of the element that follows a sub-8-byte element**.
+
+`element_align` (`data.rs:1977`) gives record-stored `Str` **4**, `boolean` 1,
+`character` 4, while `integer`/`float`/`Function` are 8. So after a `Reference`
+(12B, align 4) the packed offset of element 1 is:
+
+- **16** when the next element aligns 8 → coincides with the 8-stepped push → passes
+- **12** when it aligns ≤4 → the push lands at 16 → **broken**
+
+Predicted, then measured (`probes/ref_float`, `ref_bool`, `ref_char`):
+
+| cell | next element | predicted | measured |
+|---|---|---|---|
+| `ref_float` | `float` (align 8) | pass | pass — `10,2.5` |
+| `ref_bool` | `boolean` (align 1) | fail | **SIGSEGV**, assert `+16 vs +12` |
+| `ref_char` | `character` (align 4) | fail | assert `+16 vs +12` |
+
+`ref_bool` is the decisive one: **no `text` anywhere** and it crashes identically.
+Two earlier readings were wrong — "widths match at 32" (computed with stack
+alignment 8 for text instead of the record's 4) and "a backend split proves they
+differ". The lifetime hypothesis is also falsified by cells already in the corpus:
+`(text,text)` and `(integer,text)` both pass, so text elements are not inherently
+unsafe.
+
+The model now predicts every cell: a tuple argument breaks exactly when an
+element's packed offset differs from the 8-stepped cumulative push position. It
+also explains `fn2` passing (`Function` is 20B/align 8 → packed `[0,24]`, push
+`step(20)=24`) while `fn_text_*` fails (`[0,20]` vs push 24).
+
+<details><summary>the original open question (superseded)</summary>
 
 **Almost certainly not — the corpus now says so.** Three cells crash with *no*
 assert: `(P,text)`, `(fn,text)` read-only, `(fn,text)` with a call. By the width
@@ -203,6 +235,8 @@ arithmetic model confirmed at n = 2, 3, 4 plus a codegen assert that names it, w
 the text cells' widths already agree (32 both ways) and nothing fires. Step 2 still
 decides it by probe, and the expectation is "different root, separate plan" — but on
 the width evidence, not on a backend split.
+
+</details>
 
 Absorbing these into the layout story because they are in the same test file is
 precisely the over-unification this design must avoid. Step 2 decides it with a
@@ -284,7 +318,7 @@ new asserts fire nowhere, they are on a dead path, not proof of health.
 
 </details>
 
-### Step 2 — decide the `text` family
+### Step 2 — decide the `text` family — **DONE: same bug, no separate plan**
 
 Probe, do not reason: run `(P,text)` under `LOFT_LOG=ref_debug` and the lifetime
 inspector (`--show-ownership`, `LOFT_STORES=timeline`) and read whether the `Str`

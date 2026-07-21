@@ -25,6 +25,8 @@ declare -A EXP=(
   # step-0 additions: arity, middle-slot position, and the destination axis
   [ref4]="1,2,3,4"        [int_ref_int]="1,5,9"  [ref_int_ref]="5,9,7"
   [ref2_field]="10,20"    [ref2_return]="10,20"  [tupleput_ref]="30,20"
+  # step-2 alignment axis: what follows a 12-byte Reference decides it
+  [ref_float]="10,2.5"    [ref_bool]="10,true"   [ref_char]="10,A"
 )
 
 fail=0
