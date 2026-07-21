@@ -420,6 +420,29 @@ the signature of an encode/decode mismatch, not a misread offset.
 must select the record's op pair for the field type — which is what routing through
 the synthetic struct gets, since that is where the record's own selection happens.
 
+**But moving offsets is what found it.** Both reverted attempts earned their keep as
+instruments, and the record should say so rather than file them as pure error:
+
+1. Step 3 trimmed the push offsets. Reference and vector cells went green — and the
+   `text` cells failed *differently*, in a new way. A fix that changes which cells
+   break is a probe: the residue after it named the alignment axis, which is how
+   `element_align(Text) = 4` and its stale "4 bytes via interned heap pointer"
+   comment came to light.
+2. The stepped-layout change made all 27 cells pass, which looked like success and
+   was challenged on space grounds. Chasing *whether* it cost memory is what walked
+   the code: `element_size` callers → the vector element stride → `size(vector<T>)`
+   as a user-visible number → the mixed-width test → the 24B-vs-7B gap and the `+1`.
+   None of that was reachable from the crash alone.
+3. Only then did the record become an obvious oracle to diff against, and the
+   `introspect` comparison of tuple vs record bytecode showed the crossed op pair in
+   one read.
+
+The lesson to carry, not just the conclusion: **a wrong fix that changes behaviour is
+a legitimate diagnostic, and its value is in what still breaks afterwards.** What
+made these safe to use that way was that each was cheap to revert and gated by
+instruments that said plainly when the change was wrong — not that either was
+correct. Revert the change; keep the map it drew.
+
 **Persisted-data assessment** (the stop condition): the write side IS deviant, so
 tuple bytes on disk differ from record bytes for the same value. But the read has
 never decoded them, so **no user has ever read a correct value out of a narrow tuple
