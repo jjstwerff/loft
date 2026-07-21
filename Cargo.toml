@@ -28,6 +28,12 @@ name = "loft-keygen"
 path = "src/bin/loft-keygen.rs"
 required-features = ["registry"]
 
+# @PLN63 — the loft Language Server (LSP over JSON-RPC/stdio).  Links the loft
+# rlib for parser/typecheck; no extra features (wire JSON is loft's own json mod).
+[[bin]]
+name = "loft-lsp"
+path = "src/bin/loft-lsp.rs"
+
 [features]
 default      = ["mmap", "random", "threading", "registry", "native-extensions", "remote-store"]
 threading    = ["dep:rayon"]
