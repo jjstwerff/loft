@@ -695,6 +695,7 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                 Type::Integer(IntegerSpec {
                     min: minimum,
                     not_null,
+                    forced_size: spec_forced,
                     ..
                 }) => {
                     let field_nullable = nullable && !not_null;
@@ -703,8 +704,20 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     // The alias def_nr was captured in parse_field because
                     // Type::Integer collapses alias names.
                     let alias = data.def(d_nr).attributes[a_nr].alias_d_nr;
+                    // @PLN114 — fall back to the width the TYPE carries when the
+                    // attribute has no alias to consult.  `parse_field` captures
+                    // `alias_d_nr` for a declared struct field, but the synthetic
+                    // `__tuple<…>` struct's attributes are built by `tuple_def` from
+                    // element Types alone, so `forced_size(alias)` finds nothing and
+                    // the range heuristic silently widens: `u8` became a 2-byte
+                    // `short` and `u16` an 8-byte `integer`, which is why a tuple
+                    // packed to 16 bytes where the identical record packs to 3.
+                    // `IntegerSpec.forced_size` is already stamped by `parse_type`
+                    // (definitions.rs:1869), so the fact is present — it just was
+                    // not being read on this path.
                     let s = data
                         .forced_size(alias)
+                        .or_else(|| spec_forced.map(std::num::NonZeroU8::get))
                         .unwrap_or_else(|| a_type.size(field_nullable));
                     if s == 1 {
                         database.byte(minimum, field_nullable)

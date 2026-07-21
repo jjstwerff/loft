@@ -409,8 +409,24 @@ impl Stores {
             .field_groups
             .iter()
             .map(|g| {
-                let member_sa: Vec<(u16, u8)> =
-                    g.field_indices.iter().map(|&i| sizes[i as usize]).collect();
+                // @PLN114 — a TUPLE group is a record of its elements, and records
+                // pack TIGHT: `struct { a: u8, b: u32, c: u16 }` is 1+4+2 = 7 bytes,
+                // no padding, because store access is unaligned-tolerant.  Honouring
+                // each DB type's natural alignment here padded `(u8, u16)` to 4 where
+                // the identical record is 3.  Index groups keep their alignment —
+                // only the tuple kind mirrors the record.
+                let tight = matches!(g.kind, crate::data::LinkedFieldKind::Tuple);
+                let member_sa: Vec<(u16, u8)> = g
+                    .field_indices
+                    .iter()
+                    .map(|&i| {
+                        let (sz, al) = sizes[i as usize];
+                        // Narrow members pack tight (the record does); an 8-aligned
+                        // member keeps its boundary — a fn-ref's 8-byte `d_nr` is
+                        // read as an i64 and truncates to 4 without it (#493).
+                        (sz, if tight && al < 8 { 1 } else { al })
+                    })
+                    .collect();
                 let offsets = crate::data::LinkedFieldGroup::group_member_offsets(&member_sa);
                 let storage_alignment = crate::data::LinkedFieldGroup::group_alignment(
                     &member_sa.iter().map(|&(_, a)| a).collect::<Vec<_>>(),
