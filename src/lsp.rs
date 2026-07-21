@@ -1764,6 +1764,102 @@ fn scan_input(
     }
 }
 
+/// @PLN63 E3 — the OUTPUT variables (→ return values) for extracting a statement
+/// slice: vars WRITTEN in the slice (on any path) that are LIVE-OUT — read in the
+/// function tail after the slice — in write order.  A var that is both an input and
+/// an output is an IN-OUT (a parameter the function also returns).  `None` when the
+/// selection does not map (see [`extract_range`]).
+///
+/// Conservatism flips from E2: outputs are a SUPERSET (all writes ∩ any tail read),
+/// so a var whose new value the caller might need is always returned — never a stale
+/// value left behind (a missed output would silently drop a modification).
+#[must_use]
+pub fn extract_outputs(
+    text: &str,
+    name: &str,
+    stdlib_dir: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Option<Vec<String>> {
+    if end_line < start_line {
+        return None;
+    }
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
+    let data = &p.data;
+    let f = enclosing_fn(data, start_line)?;
+    let crate::data::Value::Block(b) = data.def(f).code().unspan() else {
+        return None;
+    };
+    let (first_op, last_op) = statement_slice(b, start_line, end_line)?;
+    // All writes in the slice (any path).
+    let mut writes: Vec<u16> = Vec::new();
+    for op in &b.operators[first_op..=last_op] {
+        collect_writes(op, &mut writes);
+    }
+    // Vars read anywhere in the tail after the slice → live-out.
+    let mut tail_reads: Vec<u16> = Vec::new();
+    for op in &b.operators[last_op + 1..] {
+        collect_reads(op, &mut tail_reads);
+    }
+    let vars = data.def(f).variables();
+    Some(
+        writes
+            .iter()
+            .filter(|v| tail_reads.contains(v))
+            .map(|&v| vars.name(v).to_string())
+            .collect(),
+    )
+}
+
+/// Every var WRITTEN anywhere in `node` (any path), in first-write order — a `Set`
+/// or `TuplePut` target.  `for_each_child` covers the rest safely.
+fn collect_writes(node: &crate::data::Value, out: &mut Vec<u16>) {
+    use crate::data::Value;
+    match node.unspan() {
+        Value::Set(v, rhs) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+            collect_writes(rhs, out);
+        }
+        Value::TuplePut(v, _, inner) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+            collect_writes(inner, out);
+        }
+        other => other.for_each_child(&mut |c| collect_writes(c, out)),
+    }
+}
+
+/// Every var READ anywhere in `node` (any path) — the var-read variants
+/// `for_each_child` does not surface, plus recursion for the rest.
+fn collect_reads(node: &crate::data::Value, out: &mut Vec<u16>) {
+    use crate::data::Value;
+    match node.unspan() {
+        Value::Var(v) | Value::TupleGet(v, _) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+        }
+        Value::CallRef(v, args) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+            for a in args {
+                collect_reads(a, out);
+            }
+        }
+        Value::TuplePut(v, _, inner) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+            collect_reads(inner, out);
+        }
+        other => other.for_each_child(&mut |c| collect_reads(c, out)),
+    }
+}
+
 /// `classify` label → LSP `CompletionItemKind`.
 fn completion_kind(kind: &str) -> u32 {
     match kind {

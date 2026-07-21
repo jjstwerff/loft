@@ -129,10 +129,15 @@ proven correct.
   every other variant recurses via `for_each_child` (safe on all variants). *Gate met:*
   `tests/extract.rs` — `{ y = x + 1; z = y * 2 }` → `[x]`; narrowing to `z = y * 2` →
   `[y]`; `x = x + 1` → `[x]`; two write-first locals → `[]`.
-- **E3 — outputs (returns).** Writes-in-slice ∩ live-out-over-tail → `Vec<var_nr>`
-  outputs; compute in-out = inputs ∩ outputs. *Gate:* unit — `for` body
-  `{ total = total + i }` where `total` is read after the loop → outputs = `[total]`,
-  and `total` ∈ inputs too (in-out); a var written-and-dead → not an output.
+- **E3 — outputs (returns) — DONE.** `lsp::extract_outputs(…)` = writes-in-slice
+  (all paths, `collect_writes`) ∩ live-out-over-tail (`collect_reads` on
+  `operators[last_op+1..]`), in write order; a var in both inputs and outputs is
+  in-out. Conservatism flips from E2 — outputs are a SUPERSET (any write ∩ any tail
+  read), so a modification the caller might need is never dropped. Both collectors
+  special-case the same var-read/write variants and delegate the rest to
+  `for_each_child`. *Gate met:* `tests/extract.rs` — extracting the `for` where
+  `total` is read after → `total` is an output AND an in-out param; a dead write is
+  excluded; two live-out writes → two outputs (a tuple return).
 - **E4 — synthesize + edit.** Build `fn <name>(ins) -> outs { <selected text>
   return (outs) }` (single output → `-> U` / `return o`; none → `-> void`, no return;
   tuple for ≥2), and the call `(outs) = <name>(ins)`; emit a `WorkspaceEdit` (insert

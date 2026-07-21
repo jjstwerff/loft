@@ -4,7 +4,7 @@
 //! E1: map a line selection to the enclosing function's contiguous TOP-LEVEL
 //! statement slice, refusing anything that does not map to whole statements.
 
-use loft::lsp::{extract_inputs, extract_range};
+use loft::lsp::{extract_inputs, extract_outputs, extract_range};
 
 // 1  fn f() -> integer {
 // 2    a = 1;
@@ -99,6 +99,67 @@ fn e2_a_slice_local_is_not_an_input() {
         extract_inputs(f, "buf.loft", "default", 2, 3),
         Some(vec![]),
         "a, b are both produced in the slice → no inputs"
+    );
+}
+
+// ── E3 — outputs (returns): writes in the slice that are live-out ─────────────
+
+#[test]
+fn e3_outputs_are_writes_that_are_live_out() {
+    // 1 fn g(n: integer) -> integer {
+    // 2   total = 0;
+    // 3   for i in 0..n {
+    // 4     total = total + i;
+    // 5   }
+    // 6   return total;
+    // 7 }
+    // Extracting the loop (lines 3-5): `total` is written in the slice and read
+    // after it (`return total`) → an output; and it is also an input (read in the
+    // body) → an IN-OUT parameter.
+    let g = "fn g(n: integer) -> integer {\n  total = 0;\n  for i in 0..n {\n    total = total + i;\n  }\n  return total;\n}\n";
+    let outs = extract_outputs(g, "buf.loft", "default", 3, 5).expect("the loop maps");
+    assert!(
+        outs.contains(&"total".to_string()),
+        "total is live-out: {outs:?}"
+    );
+    // `total` is both an input and an output → in-out.
+    let ins = extract_inputs(g, "buf.loft", "default", 3, 5).expect("the loop maps");
+    assert!(
+        ins.contains(&"total".to_string()) && outs.contains(&"total".to_string()),
+        "total is an in-out param: ins={ins:?} outs={outs:?}"
+    );
+}
+
+#[test]
+fn e3_a_dead_write_is_not_an_output() {
+    // 1 fn f(x: integer) -> integer {
+    // 2   y = x + 1;    <- written in the slice, NEVER read after → not an output
+    // 3   z = x + 2;    <- written and read after (return z) → an output
+    // 4   return z;
+    // 5 }
+    let f = "fn f(x: integer) -> integer {\n  y = x + 1;\n  z = x + 2;\n  return z;\n}\n";
+    let outs = extract_outputs(f, "buf.loft", "default", 2, 3).expect("the slice maps");
+    assert_eq!(
+        outs,
+        vec!["z".to_string()],
+        "only z is live-out (y is dead): {outs:?}"
+    );
+}
+
+#[test]
+fn e3_multiple_live_out_writes_become_multiple_outputs() {
+    // Both `a` and `b` are written in the slice and read after it → two outputs.
+    // 1 fn f() -> integer {
+    // 2   a = 1;
+    // 3   b = 2;
+    // 4   return a + b;
+    // 5 }
+    let f = "fn f() -> integer {\n  a = 1;\n  b = 2;\n  return a + b;\n}\n";
+    let outs = extract_outputs(f, "buf.loft", "default", 2, 3).expect("the slice maps");
+    assert_eq!(outs.len(), 2, "a and b are both live-out: {outs:?}");
+    assert!(
+        outs.contains(&"a".to_string()) && outs.contains(&"b".to_string()),
+        "{outs:?}"
     );
 }
 
