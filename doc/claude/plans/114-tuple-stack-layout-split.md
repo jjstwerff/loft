@@ -12,8 +12,10 @@
 > **@PLN114** — [loft-lang/plans#114](https://github.com/loft-lang/plans/issues/114).
 > **RE-SCOPED to a rewrite** (2026-07-21): tuples adopt the RECORD field format.
 > Steps 0-2 done (corpus, diagnostic assert, alignment model); step 3's push-site
-> workaround is REVERTED; steps R0-R7 open, with R7 (unification) as the success
-> criterion: one place left that can be wrong. Probe corpus:
+> workaround is REVERTED. Open work is phases **A-E** (§ Steps), sized so every
+> commit leaves the tree green and either preserves behaviour or flips one named
+> instrument. Success criterion is § Unification: one place left that can be wrong.
+> Probe corpus:
 > `114-tuple-stack-layout-split/probes/` (`./run.sh`), baselines in
 > `bytecode-comparisons/`.
 
@@ -287,9 +289,10 @@ and `codegen.rs:2776` (the `#493` fn-ref `OpSetInt4` projection).
   asserts the two agree for a matrix of element types — so the *next* copy to rot
   fails a build instead of a user's data.
 
-### Step R7 — unify (runs alongside R2-R4, not after)
+### Unification is phases A4 + C + D3 + E1, not a separate pass
 
-Each removal is its own commit with the four instruments green:
+The removals below are distributed through § Steps rather than saved for the end —
+each is its own commit with the four instruments green:
 
 1. Delete `tuple_def`'s inline align table; call the shared function. Fixes the
    `Function` 8-vs-4 disagreement as a side effect — expect it to move emitted code,
@@ -368,6 +371,167 @@ Plus the existing gates: the 27-cell probe corpus on **both backends**, the 201
 ignored matrix cells, the `stack_align_guard` build (which retired step 3), and
 `loft introspect` diffs for anything claiming to be behaviour-preserving.
 
+### The safety property
+
+Every commit below leaves the tree **green**, and each one either **preserves
+behaviour** (provable: byte-identical `loft introspect`) or **fixes exactly one
+measurable thing** (provable: one named instrument flips). No commit does both, and
+none leaves an intermediate state that only works once the next lands.
+
+Steps are lettered by phase. Within a phase they are ordered; phases A and B must
+complete before C.
+
+---
+
+## Phase A — nets and facts (no behaviour change)
+
+### A1 — land the four instruments as a permanent test
+
+`sizeof(T)` per scalar · `size(vector<T>)` per scalar · record-vs-tuple parity for
+the same fields · mixed-width round-trip values. Assert the **target** state, so the
+test starts RED on exactly the two defects and goes green as the rewrite lands.
+
+Gate: fails only on tuple stride + mixed-width values; passes every record and scalar
+case; a deliberately wrong expectation must make it fail (prove the harness can).
+
+### A2 — pin the `+1` to read-side or write-side
+
+Store a known mixed-width tuple; read the same bytes through element access and
+through the record view. Diagnosis only, no edit.
+
+Gate: a written verdict. A read fault means C is a reroute; a **write** fault means
+stored bytes are already wrong and any persisted data is suspect — stop and assess
+before touching layout.
+
+### A3 — drift guard for the two alignment tables
+
+A test asserting `data::element_align` and `tuple_def`'s inline table agree for every
+element kind. **It fails today** (`Function`: 8 vs 4).
+
+Gate: the test fails for exactly that one type, naming both values.
+
+### A4 — delete the inline table
+
+Route `tuple_def` at the shared function, removing the copy. A3 turns green.
+
+Gate: A3 green; `introspect` diff reviewed — the `Function` change WILL move emitted
+code, so hand-verify what moved rather than accepting a non-empty diff.
+
+---
+
+## Phase B — make every divergence loud (no behaviour change)
+
+**This is the load-bearing phase.** It converts "26 callers to triage" into an
+enumerated worklist of the sites that actually differ.
+
+### B1 — one named canonical-layout function
+
+Add it; delegate to `stored_tuple_offsets` (with the existing early-parse fallback).
+No caller changes. Pure addition.
+
+Gate: `introspect` byte-identical on all 27 corpus cells.
+
+### B2 — cross-check every tuple-access site against it
+
+At each site that computes a tuple element offset, a debug-only assert: *the offset I
+am about to use == the canonical one*. Behaviour-identical by construction.
+
+Gate: `introspect` byte-identical; the DA build compiles (`#[cfg(debug_assertions)]`
+code is NOT compiled by `cargo build --release` — a gate that skips the DA build has
+verified nothing). **Positive control required:** a known-divergent site must fire.
+A cross-check that fires nowhere is a dead path, not a clean bill of health.
+
+### B3 — record the inventory
+
+Run corpus + 201 matrix + full suite under debug-assertions; write down every site
+that fires, with its type shape. That list *is* phase C.
+
+Gate: the inventory is in this file, and its size is stated. If nothing fires, B2 is
+broken — go back.
+
+---
+
+## Phase C — convert, one site per commit
+
+### C1…Cn — one firing site each
+
+Switch the site to the canonical layout. Its cross-check goes green; every other
+site stays green.
+
+Gate per commit: all four instruments green or improving, corpus and matrix no worse,
+and the converted site's assert silent while the others still fire as expected. A
+site that cannot convert gets a **written reason** in this file — never a silent
+exception.
+
+Expected: record-vs-tuple parity (instrument 3) and the mixed-width round-trip
+(instrument 4) go green somewhere in this phase. That is the 24B→7B and the `+1`
+fix, and it should land as a *consequence* of removing a divergence, not as a
+separate patch.
+
+---
+
+## Phase D — the stack boundary
+
+### D1 — add the derived stack view
+
+One named inflate/deflate (generalising `read_tuple_at_wide`), computed **from** the
+canonical layout. Unused by anything yet.
+
+Gate: unit-tested against hand-computed slot positions for every element kind
+(`boolean`, `character`, `single`, `u8`, `u16`, `u32`, `integer`, `float`, `text`,
+reference, function, nested tuple); `introspect` byte-identical.
+
+### D2 — derive caller and callee from it
+
+The pushed block and the callee's frame both come from D1, so they cannot disagree.
+
+Gate: corpus **27/27** on both backends; matrix **201/201**; `stack_align_guard`
+build reports **zero** fires — the check that retired the previous attempt. This is
+the commit that fixes the two original SIGSEGVs.
+
+### D3 — delete the per-shape corrections
+
+`codegen.rs:3336` (P249 step fixup) and the `#493` `OpSetInt4` branch, one commit
+each. With one layout they have nothing to correct.
+
+Gate per deletion: corpus, matrix and guard unchanged. If a deletion breaks
+something, the layout is still not unified — stop, do not re-add a fixup.
+
+---
+
+## Phase E — deletion and reach
+
+### E1 — remove the dead Tuple arms
+
+`element_size` / `element_offsets` Tuple arms go (or are renamed to the stack view
+they actually are). The A3 drift guard becomes trivially true.
+
+Gate: all four instruments green; full suite; `introspect` diffs non-empty only where
+a layout was genuinely wrong before. Searching the tree for a second tuple-layout
+computation finds nothing — the § Unification success criterion.
+
+### E2 — extend the guard's reach, then un-ignore
+
+Add `tuple_matrix` and the sibling matrix suites to the `stack_align_guard` CI job
+(it was blind to this whole class). Then drop `#[ignore]` from the 201 cells and wire
+them into the nightly, advisory for the first few nights.
+
+Gate: three consecutive green nightlies on all three OSes before dropping advisory.
+
+---
+
+### Stop conditions
+
+- Any instrument regresses → stop. The rewrite may not trade space for correctness or
+  the reverse.
+- A step needs the DB page format changed → stop and re-plan; the record layout is
+  the oracle *because* it is already right.
+- A2 says the WRITE is wrong → stop and assess persisted data before changing layout.
+- A phase-C site resists conversion and the fix wants a special case → that is the
+  old bug returning under a new name; write the reason down and re-plan instead.
+
+<details><summary>the R0-R7 sketch these replaced (same intent, phase-sized rather than step-sized)</summary>
+
 ### Step R0 — land the validation tests FIRST
 
 Turn instruments 1-4 into a permanent test (a `.loft` script plus a Rust harness
@@ -436,6 +600,9 @@ nightly, advisory for the first few nights.
   the oracle precisely because it is already right.
 - The `+1` verdict says the WRITE is wrong → stop and assess existing persisted data
   before changing anything.
+
+
+</details>
 
 <details><summary>the original steps 0-7 (superseded by the rewrite; 0-2 still describe what was done)</summary>
 
