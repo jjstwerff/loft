@@ -12,15 +12,15 @@ Read a library's API here, not from a clone (a clone can lag `origin/main`). `�
 
 ## loft core (the language)
 
-The core of the distribution — the loft compiler, interpreter, and bundled stdlib. Current release **2026.7.1** (`v2026.7.1`, 2026-07-05); `loft install` / self-update verifies these sha256s. Current development: `main` is **64 commit(s) ahead** of the release (`ca51c79`) — the basis of the next release (🟢 unreleased core, the analogue of a library's origin/main tier). The per-function API is in [LOFT.md](LOFT.md) / [STDLIB.md](STDLIB.md), not here.
+The core of the distribution — the loft compiler, interpreter, and bundled stdlib. Current release **2026.7.2** (`v2026.7.2`, 2026-07-21); `loft install` / self-update verifies these sha256s. Current development: `main` is **1 commit(s) ahead** of the release (`1fd5d6a`) — the basis of the next release (🟢 unreleased core, the analogue of a library's origin/main tier). The per-function API is in [LOFT.md](LOFT.md) / [STDLIB.md](STDLIB.md), not here.
 
 **Maturity:** loft uses calendar versions (`YYYY.M.N`) and is stabilising toward **contract 1** — the point at which compatibility becomes *absolute*: no working program ever breaks ([COMPATIBILITY.md](COMPATIBILITY.md), @PLN102). At contract 1 `main` (core + libraries) is stable; the in-flight **branches** (loft's own and the libraries' — see [LIBRARY_BRANCHES.md](LIBRARY_BRANCHES.md)) are the pre-contract frontier: they can carry contract-breaking work that must be resolved before it merges in.
 
-- `aarch64-apple-darwin` — 5.1 MB · sha256 `420f3b5f8d333516191130b78cdf2e33720adf67b9a1a95a6a279b6e39b137a1`
-- `x86_64-apple-darwin` — 5.4 MB · sha256 `ce4e5851ffd946445427b51bf19fb286b70c09abdd3db4518f1f66df21041bba`
-- `x86_64-pc-windows-msvc` — 5.1 MB · sha256 `8070d5cbb86742a57d27a63bb89c6cdb46480aa92dea2769a6be74936d863b83`
-- `x86_64-unknown-linux-musl` — 5.7 MB · sha256 `ecfca4bdffc08254deabfc777778d43db98a650b288b90a74adbc7524b0f6616`
-  · [release](https://github.com/loft-lang/loft/releases/tag/v2026.7.1)
+- `aarch64-apple-darwin` — 5.4 MB · sha256 `4f9f7ba635810e6ac3278d4c206aa689462fc969989fccc711bad14e6460bd31`
+- `x86_64-apple-darwin` — 5.7 MB · sha256 `2c58d5853102c9b4b035917573bf760ebe06dfd0e0903dccf4d446d41aea1eea`
+- `x86_64-pc-windows-msvc` — 5.5 MB · sha256 `48f59140aaaad530fc4514d34061a8930bde8c16e5fe393a46bb68237575f4c6`
+- `x86_64-unknown-linux-musl` — 6.1 MB · sha256 `30379d47548e9f3d870cc067a9a12cf0b77a16b9d532f9f8c767cebe81601d86`
+  · [release](https://github.com/loft-lang/loft/releases/tag/v2026.7.2)
 
 ## asset-format
 
@@ -32,30 +32,30 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
 
 ## cli
 
-- **arguments** — CLI argument parsing — positional args + flags + auto-generated --help.  · v0.1.3 · `use arguments;` · origin/main: +11 unreleased
+- **arguments** — CLI argument parsing — positional args + flags + auto-generated --help.  · v0.2.0 · `use arguments;`
   · loft install arguments · [source](https://github.com/loft-lang/loft-libs-core/tree/main/arguments)
   · public API:
     - `pub fn create(name: text, version: text, description: text) -> Args`
     - `pub fn flag(self: Args, opt_short: text, opt_long: text, desc: text)`
     - `pub fn option(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)`
     - `pub fn required(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)`
+    - `pub fn optional(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)`
+    - `pub fn set_usage(self: Args, synopsis: text)`
+    - `pub fn set_bug_address(self: Args, address: text)`
+    - `pub fn set_epilog(self: Args, epilog: text)`
+    - `pub fn enable_help(self: Args)`
     - `pub fn parse(self: Args, argv: vector<text>) -> boolean`
     - `pub fn has(self: Args, name: text) -> boolean`
     - `pub fn get(self: Args, name: text) -> text?`
+    - `pub fn get_or(self: Args, name: text, fallback: text) -> text`
+    - `pub fn get_int(self: Args, name: text) -> integer?`
     - `pub fn ok(self: Args) -> boolean`
     - `pub fn error_msg(self: Args) -> text`
+    - `pub fn wants_help(self: Args) -> boolean`
+    - `pub fn wants_version(self: Args) -> boolean`
+    - `pub fn version_text(self: Args) -> text`
+    - `pub fn try_help(self: Args) -> text`
     - `pub fn help(self: Args) -> text`
-    - `pub fn optional(self: Args, opt_short: text, opt_long: text, arg_name: text, desc: text)`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn set_usage(self: Args, synopsis: text)`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn set_bug_address(self: Args, address: text)`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn set_epilog(self: Args, epilog: text)`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn enable_help(self: Args)`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn get_or(self: Args, name: text, fallback: text) -> text`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn get_int(self: Args, name: text) -> integer?`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn wants_help(self: Args) -> boolean`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn wants_version(self: Args) -> boolean`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn version_text(self: Args) -> text`  🟢 unreleased (origin/main, not yet published)
-    - `pub fn try_help(self: Args) -> text`  🟢 unreleased (origin/main, not yet published)
 
 ## crypto
 
@@ -133,7 +133,7 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
     - `pub fn mouse_button_just_pressed(self: const InputState, button: integer) -> boolean`
     - `pub fn mouse_button_just_released(self: const InputState, button: integer) -> boolean`
     - `pub fn mouse_wheel(self: const InputState) -> integer`
-- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;`
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.3.0 · `use time;`
   · loft install time · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
   · public API:
     - `pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer`
@@ -214,7 +214,7 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
     - `pub fn OpEq(self: Duration, other: Duration) -> boolean`
     - `pub fn OpNe(self: Duration, other: Duration) -> boolean`
     - `pub fn to_text(self: DateTime, spec: text) -> text`
-    - `pub fn to_text(self: Duration, spec: text) -> text`
+    - `pub fn to_text(self: Duration, _spec: text) -> text`
 
 ## geometry
 
@@ -323,7 +323,7 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
   · public API:
     - `pub fn save_glb(m: Mesh, path: text)`
     - `pub fn save_scene_glb(sc: Scene, path: text)`
-- **graphics** — 2D canvas + 3D rendering for loft (Canvas pixel surface, Mesh / Scene / glTF, OpenGL bindings).  · v0.4.3 · `use graphics;` · API from origin/main (registry `api` not recorded)
+- **graphics** — 2D canvas + 3D rendering for loft (Canvas pixel surface, Mesh / Scene / glTF, OpenGL bindings).  · v0.5.0 · `use graphics;`
   · loft install graphics · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics)
   · public API:
     - `pub fn rgba(cr: integer, cg: integer, cb: integer, ca: integer) -> integer`
@@ -498,7 +498,7 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
     - `pub fn field_mark_dirty(f: ChunkField, x: integer, y: integer)`  🟢 unreleased (origin/main, not yet published)
     - `pub fn field_remove_cell(f: ChunkField, x: integer, y: integer)`  🟢 unreleased (origin/main, not yet published)
     - `pub fn clear_dirty(f: ChunkField)`  🟢 unreleased (origin/main, not yet published)
-- **imaging** — PNG load/save + pixel manipulation for loft (Stage A — interpreter + native; wasm bridge deferred pending loft-host-ffi crate).  · v0.2.0 · `use imaging;` · API from origin/main (registry `api` not recorded)
+- **imaging** — PNG load/save + pixel manipulation for loft (Stage A — interpreter + native; wasm bridge deferred pending loft-host-ffi crate).  · v0.2.1 · `use imaging;`
   · loft install imaging · [source](https://github.com/loft-lang/loft-libs-graphics/tree/main/imaging)
   · public API:
     - `pub struct Pixel`
@@ -690,7 +690,7 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
   · loft install html · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/html)
   · public API:
     - `pub fn escape_html(self: text) -> text`
-- **markdown** — Markdown-to-HTML rendering for loft — headings, inline spans, slugify, link rewriting.  · v0.1.0 · `use markdown;` · API from origin/main (registry `api` not recorded)
+- **markdown** — Markdown-to-HTML rendering for loft — headings, inline spans, slugify, link rewriting.  · v0.2.0 · `use markdown;`
   · loft install markdown · [source](https://github.com/loft-lang/loft-libs-docs/tree/main/markdown)
   · public API:
     - `pub fn html_escape(s: text) -> text`
@@ -713,7 +713,7 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
 
 ## time
 
-- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.2.1 · `use time;`
+- **time** — Date/time arithmetic on millisecond-since-epoch integers — proleptic Gregorian, same model as JavaScript Date.  Pure-loft; identical results on interp, --native, WASM.  · v0.3.0 · `use time;`
   · loft install time · [source](https://github.com/loft-lang/loft-libs-game/tree/main/time)
   · public API:
     - `pub fn from_ymd(fy: integer, fmo: integer, fd: integer) -> integer`
@@ -794,7 +794,7 @@ The core of the distribution — the loft compiler, interpreter, and bundled std
     - `pub fn OpEq(self: Duration, other: Duration) -> boolean`
     - `pub fn OpNe(self: Duration, other: Duration) -> boolean`
     - `pub fn to_text(self: DateTime, spec: text) -> text`
-    - `pub fn to_text(self: Duration, spec: text) -> text`
+    - `pub fn to_text(self: Duration, _spec: text) -> text`
 
 ## uncategorised
 

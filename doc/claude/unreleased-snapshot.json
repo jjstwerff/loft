@@ -795,7 +795,7 @@
         "sig": "pub fn destroy(self: Renderer)"
       }
     ],
-    "sha": "429d86d5b5ddc58f70c5c99d7fe36709d73b5e27"
+    "sha": "baee9615040d97096e0846fb3baf585e0390c9c9"
   },
   "gridmesh": {
     "api": [
@@ -1335,7 +1335,7 @@
         "sig": "pub fn extract_headings(source: text) -> vector<Heading>"
       }
     ],
-    "sha": "daf092791a0ea63ce3e07d0d86ca206b224d855a"
+    "sha": "f15667a4a84f125d4af81b8e2abe40856327c462"
   },
   "mesh3d": {
     "api": [
@@ -2198,7 +2198,7 @@
         "sig": "pub fn to_text(self: Duration, _spec: text) -> text"
       }
     ],
-    "sha": "e0e6256e3a6024d5178c4daf0aabe7ec536207df"
+    "sha": "a686abfb710d1a5e98a092e0bc4b274c65a017dd"
   },
   "web": {
     "api": [
