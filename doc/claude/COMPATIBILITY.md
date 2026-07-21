@@ -425,10 +425,30 @@ forced by the work:
    wrong defaults, the method-vs-free-function asymmetries in
    [INCONSISTENCIES.md](INCONSISTENCIES.md) — all decided while contract 0 still permits it.
 
+   **The freeze scope is everything published — no core-subset carve-out** (owner, 2026-07-20):
+   the whole distribution is frozen at contract 1, not a hand-picked core with the rest left
+   experimental. **The validation gate that earns that freeze is games.** We build real games that
+   work *on* the libraries first; the games dogfood every surface, expose the wrong defaults and
+   coverage gaps while contract 0 still lets us fix them, and only once the games run well on a
+   library is that library proven ready to freeze forever. Games-first ([GOALS.md](GOALS.md)) is
+   therefore the lib-side readiness bar, not a parallel track — a library nobody built a game
+   against is not yet proven, and an unproven surface is not frozen.
+
 Only when both phases are done — the language settled and audited, the lib side deliberately
 gone over — is the `0 → 1` flip earned. This is *why* the freeze is not imminent despite the
 type surface being feature-complete: the language nearing done is phase 1; the libs are phase
 2, and they are given their time.
+
+**Clear the blockers first; measurement comes after the freeze.** The path to contract 1 is a bounded
+job — get rid of *everything* that blocks the freeze (the open plans, the language + lib audits) — and
+**new feature development is held off until those blockers are worked through**. This pre-freeze work is
+*convergence to* the standard, not measurement *of* it: with the surface still moving there is nothing
+fixed to measure against, so **until the freeze we measure nothing**. Only *after* contract 1 does real
+development on the now-frozen standard measure its resilience — and any gap it surfaces is handled the
+additive way (fold / host / contract-key — the escape valve above), never by breaking. So the checklist
+minimum (audits green, plans closed, suite passing) is *necessary, not sufficient*: it gets us to the
+door, and the freeze is declared only when the blockers are truly gone and the converted consumers are
+stable again — deliberately weeks away, never on the strength of a passing board alone.
 
 ## Per-surface — additive is the path; here is what a regression looks like
 
@@ -500,7 +520,11 @@ does slip it is a bug fixed before other work, per the promise.
    only an error's identity/type — the tighter that surface, the more error *prose* stays
    improvable. Depends on loft's error-handling model; pin it as arc C designs the channel.
 3. **The escape valve's ergonomics.** How a contract-keyed behavior split is written and
-   tested (edition-style) — designed when first genuinely needed, not before.
+   tested (edition-style) — designed when first genuinely needed, not before. **In design
+   (proactively):** [plans/113-contract-keyed-semantics/README.md](plans/113-contract-keyed-semantics/README.md)
+   (@PLN113), the mechanic for the first *post*-contract-1 semantic change. The @PLN110
+   `len/size(text)` flip is its **worked example, not a customer** — the flip lands *before* contract 1
+   (a free break, #587), so it needs no keying.
 
 ## See also
 
@@ -508,6 +532,8 @@ does slip it is a bug fixed before other work, per the promise.
   plan; this is arc A.
 - [plans/102-stability-contract/versioning-decision.md](plans/102-stability-contract/versioning-decision.md)
   — the `contract` axis (bare = `>=` under this promise).
+- [plans/113-contract-keyed-semantics/README.md](plans/113-contract-keyed-semantics/README.md) —
+  @PLN113, the edition-style escape valve that keys a semantic split on the declared `contract`.
 - [GOALS.md](GOALS.md) — the AS/400 standard and Goal F.
 - [DESIGN_DECISIONS.md § C86](DESIGN_DECISIONS.md) — the archetypal silent regression.
 - [plans/97-layout-contract/](plans/97-layout-contract/) — the layout-identity hash.

@@ -1,21 +1,31 @@
 # LeakSanitizer suppressions for the loft interpreter ASan leak gate (@PLN85).
 # Syntax: `leak:<substr>` suppresses any leak whose stack contains a frame whose
-# demangled name contains <substr>.
+# symbolized name contains <substr>.
+#
+# CROSS-SYMBOLIZER RULE: the two CI legs symbolize differently, so every entry
+# below is a BARE function/type name chosen to be a substring of BOTH forms:
+#   - Linux uses llvm-symbolizer  → DEMANGLED Rust: `loft::fill::append_text`.
+#   - macOS uses the system `atos` → MANGLED   Rust: `..._4loft4fill11append_text`
+#     (llvm-symbolizer is NOT forced on macOS: it leaves the dyld system frames
+#     unsymbolized, so the thread-TLS class below could never match — atos resolves
+#     them). A bare leaf/module name (`append_text`, `ir_read`) is a substring of
+#     both the mangled (length-prefixed `11append_text`) and demangled forms, so
+#     one file works on both legs. NEVER write a `module::fn` form here — the `::`
+#     is absent from the mangled name and the macOS leg would leak through.
 #
 # The interpreter interns IR node/schema/store names (and reconstructed string
 # content) as `&'static str` via an intentional, bounded `Box::leak` (interner-style,
 # not a growing leak) when loading IR back from a store. The SAME class lives in three
-# sibling modules — the demangled allocating frame names the module, so each needs its
-# own line: `loft::ir_read::{read_db_content,read_block,read_definition}`,
-# `loft::ir_schema::{block_from_parsed,definition_from_parsed}`, and
-# `loft::database::snapshot::content_from`. ~16 ir_read/ir_schema/store round-trip lib
-# tests report it. Documented in miri.yml. These are the ONLY classes suppressed; every
-# real interpreter leak stays visible and is gated by the shrinking count baseline
-# (scripts/asan_leak_ratchet.sh). NOTE: matching requires SYMBOLIZED stacks — the leak
-# gate sets ASAN_SYMBOLIZER_PATH so these frame names resolve.
+# sibling modules — the allocating frame names the module, so each needs its own line:
+# `ir_read::{read_db_content,read_block,read_definition}`,
+# `ir_schema::{block_from_parsed,definition_from_parsed}`, and
+# `database::snapshot::content_from` (matched by the bare `snapshot`). ~16
+# ir_read/ir_schema/store round-trip lib tests report it. Documented in miri.yml.
+# Every real interpreter leak stays visible and is gated by the shrinking count
+# baseline (scripts/asan_leak_ratchet.sh).
 leak:ir_read
 leak:ir_schema
-leak:database::snapshot
+leak:snapshot
 
 # The fault-path text class (@PLN102).  When a loft program raises a fault (a failed
 # `assert`, `panic`, a `raise`d OOB/DivByZero) WHILE a text is mid-construction, the
@@ -26,15 +36,41 @@ leak:database::snapshot
 # `raise(...)` scripts).  Freeing in-flight text on the abort path would need the
 # coroutine-style zeroing/double-drop discipline on the hot call path — a risky change out
 # of proportion to a non-production leak.  Non-faulting execution frees text normally, so
-# these frames only ever fire on the fault path.  The four text-construction entry points:
-leak:fill::append_text
-leak:ops::format_text
-leak:ops::format_long
+# these frames only ever fire on the fault path.  The four text-construction entry points
+# (bare names — `fill::append_text` etc. mangle to `...11append_text` on the macOS leg):
+leak:append_text
+leak:format_text
+leak:format_long
 leak:text_tl_fmt
 
-# macOS dyld thread-local storage term-func registration on a spawned thread
-# (the test harness watchdog): `dyld::ThreadLocalVariables::addTermFunc`, reached
-# via `thread_start`. A one-per-thread SYSTEM allocation, not a loft heap leak — and
-# absent on the Linux CI leg (different TLS impl), so this line is a macOS-only no-op
-# there. Specific to the dyld frame so it never masks a real loft leak.
-leak:addTermFunc
+# The registry HTTP layer's fetch buffer / one-time client state (@PLN112 nightly).  The
+# `loft install` / registry-index fetch (`registry_index::http_get_bytes`) sets up a
+# process-lifetime HTTP/TLS client whose state is still REACHABLE at exit — so Linux LSan
+# (reachability-based) never flags it, while macOS ASan's at-exit check does. A one-time
+# client alloc, not a growing leak; the 3 network-doing docs fixtures (14-image / 21-random
+# / 32-time) surface it. macOS-only, so this line is a no-op on the Linux leg.
+leak:http_get_bytes
+
+# macOS `Network.framework` one-time DNS/network context (@PLN112 nightly, confirmed from the
+# CI runner's raw ASan stack). The FIRST `getaddrinfo` on macOS (reached via `ureq` →
+# `std::net::lookup_host` during a registry fetch) triggers Apple's NAT64 synthesis, which
+# `dispatch_once`-allocates a `nw_context` hash table (`nw_context_activate` →
+# `nw_hash_table_create_internal`) inside `Network.framework`. It is a process-lifetime
+# singleton, reachable at exit → Linux's reachability LSan never flags it, and `getaddrinfo`
+# on Linux doesn't use Network.framework at all, so this is a macOS-only no-op there. Not a
+# loft (or even a ureq) heap leak — Apple's, not ours to free. The 336-byte leak on the 3
+# network-doing docs fixtures whose deeper `http_get_bytes` frame sits beyond ASan's context
+# limit (so the http_get_bytes line above can't reach it); `nw_context` is the in-range,
+# reliably-atos-symbolized anchor.
+leak:nw_context
+
+# macOS dyld thread-local storage on a spawned thread (the test harness watchdog + `par`
+# workers): `dyld::ThreadLocalVariables::addTermFunc` (term-func registration, direct) AND
+# `dyld::ThreadLocalVariables::instantiateVariable` via `_tlv_get_addr` (the TLS block
+# itself, indirect). BOTH are allocated INSIDE libdyld.dylib and torn down by dyld AFTER
+# LSan's at-exit scan — a known LeakSanitizer-on-macOS false positive, not a loft heap
+# leak, and there is no loft-side allocation to free. Matching the enclosing dyld type
+# `ThreadLocalVariables` covers both frames in one line (atos resolves it; the earlier
+# `addTermFunc`-only line missed the 6984-byte indirect `instantiateVariable`). Absent on
+# the Linux leg (different TLS impl), so this line is a macOS-only no-op there.
+leak:ThreadLocalVariables

@@ -308,26 +308,27 @@ jobs:
         run: sudo apt-get install -y libgl1-mesa-dev libasound2-dev pkg-config
       - name: Install cargo-nextest
         uses: taiki-e/install-action@nextest
-      # LeakSanitizer suppressions match by DEMANGLED FRAME NAME, so the leak stacks
-      # MUST be symbolized — otherwise `leak:ir_read` (etc.) cannot match the intentional
-      # bounded Box::leak interner and the gate reds on a benign leak (raw `loft+0x…`
-      # frames).  GitHub runners ship llvm-symbolizer only under a VERSIONED name that the
-      # sanitizer's default PATH lookup (`llvm-symbolizer`) misses, so resolve it and point
-      # the runtime at it explicitly.  Persists via $GITHUB_ENV to every later step.
-      - name: Point the sanitizer at llvm-symbolizer (LSan suppressions need symbols)
+      # LSan suppressions match by a SYMBOLIZED frame-name substring, and the two legs need
+      # DIFFERENT symbolizers — proven on a real macOS box, see doc/claude/plans/macos-asan-leak-gate.md:
+      #   * Linux → force llvm-symbolizer.  It DEMANGLES Rust (`loft::fill::append_text`),
+      #     which the bare-name suppressions (`leak:append_text`) match.  Runners ship it
+      #     only under a versioned name the default PATH lookup misses, so resolve it here.
+      #   * macOS → do NOT set ASAN_SYMBOLIZER_PATH; let the runtime fall back to the system
+      #     `atos`.  atos leaves Rust MANGLED (`..._4loft4fill11append_text` — still matched
+      #     by the bare `append_text` substring) BUT, crucially, it RESOLVES the dyld system
+      #     frames (`dyld::ThreadLocalVariables::…`).  llvm-symbolizer leaves those dyld
+      #     frames UNSYMBOLIZED, so forcing it on macOS makes the benign thread-TLS class
+      #     unsuppressable and reds the gate — the exact failure this replaces.
+      # Persists via $GITHUB_ENV to every later step (Linux only; macOS leaves it unset).
+      - name: Point the sanitizer at llvm-symbolizer (Linux only; macOS uses atos)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          # Best-effort discovery — never fail the job (macOS symbolizes via atos by
-          # default when ASAN_SYMBOLIZER_PATH is unset, so an empty result is fine).
           set +e +o pipefail
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            SYM=$(command -v llvm-symbolizer || true)
-            [ -z "$SYM" ] && SYM=$(ls /usr/lib/llvm-*/bin/llvm-symbolizer /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -1)
-          else
-            SYM=$(command -v llvm-symbolizer || true)
-            [ -z "$SYM" ] && SYM=$(ls "$(brew --prefix llvm 2>/dev/null)/bin/llvm-symbolizer" 2>/dev/null | head -1)
-            [ -z "$SYM" ] && SYM=$(xcrun --find llvm-symbolizer 2>/dev/null || true)
-          fi
+          rustup component add llvm-tools-preview >/dev/null 2>&1 || true
+          SYM=$(ls "$(rustc --print sysroot 2>/dev/null)"/lib/rustlib/*/bin/llvm-symbolizer 2>/dev/null | head -1)
+          [ -z "$SYM" ] && SYM=$(command -v llvm-symbolizer || true)
+          [ -z "$SYM" ] && SYM=$(ls /usr/lib/llvm-*/bin/llvm-symbolizer /usr/bin/llvm-symbolizer-* 2>/dev/null | sort -V | tail -1)
           echo "llvm-symbolizer resolved to: ${SYM:-NONE}"
           if [ -n "$SYM" ]; then
             "$SYM" --version | head -1 || true
@@ -341,8 +342,8 @@ jobs:
       # baseline 0.  Includes `library_suite` (dropped from the fast sweep) so a leak in
       # ANY library's interpreted test suite (its spawned `loft test` child inherits
       # detect_leaks=1 and exits non-zero) reds this gate.  Suppressions cover only the
-      # intentional `ir_read`/`ir_schema`/`database::snapshot` Box::leak interner + the
-      # macOS dyld thread-TLS frame.  `-Cforce-frame-pointers=yes` is REQUIRED: without it
+      # intentional `ir_read`/`ir_schema`/`snapshot` Box::leak interner + the macOS dyld
+      # thread-TLS class (`ThreadLocalVariables`).  `-Cforce-frame-pointers=yes` is REQUIRED: without it
       # the optimized release build truncates the leak stack at `RawVec::…finish_grow`
       # (frame-pointer unwind stops there), so the interner frame never appears and the
       # name-based suppression cannot match — the benign leak then reds the gate.
@@ -391,6 +392,11 @@ jobs:
         if: always()
         env:
           LSAN_OPTIONS: 'suppressions=${{ github.workspace }}/.github/lsan_suppressions.txt'
+          # Standing aid (macos-asan-leak-gate.md): on a REAL leak, dump the raw ASan report for each
+          # leaking file inline, so the next debugger reads the runner's own symbolized stack straight
+          # from the log instead of paying a ~40-min re-dispatch to instrument it (that cost settled the
+          # nw_context macOS case). Gated on roots>0, so it's completely inert on a green run.
+          LOFT_LEAK_DUMP: '1'
         run: >
           ABIN=target/${{ matrix.target }}/release/loft
           bash scripts/asan_leak_scan.sh tests/scripts/*.loft tests/docs/*.loft
