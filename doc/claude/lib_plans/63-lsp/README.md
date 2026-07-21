@@ -157,9 +157,13 @@ editor) so nothing silently regresses.
   code }`. So S2 was just the *recipe*: a fresh stdlib-loaded parser (`parse_dir("default")`)
   → `parse_source(buf)` → `diagnostics.entries()`. Gate: `tests/lsp_diagnostics.rs` (clean →
   none; syntax error correctly positioned; unknown symbol reported with its message). Two
-  dogfood findings from building the consumer: **(a)** `parse_source` doesn't clear a reused
-  parser's diagnostics (parser + lexer both accumulate) → a *fresh* parser per parse for now
-  (~80 ms, within budget); warm-reuse is a later perf step needing a diagnostics reset.
+  dogfood findings from building the consumer: **(a)** a parser **cannot be re-parsed** on a
+  warm base — loft registers every definition *per source* (that is how files read each other on
+  `use`), so a second `parse_source` re-registers and conflicts (*"Cannot redefine 'main'"*). So
+  loft-lsp uses a **fresh parser per parse** — the correct model, not a stopgap (~80 ms, within
+  budget). Incremental re-parse / warm-reuse is incompatible with the source model, not a perf
+  step to chase. (An initial attempt to "reset" diagnostics for reuse was the wrong tree — the
+  redefine conflict is upstream of diagnostics.)
   **(b)** deferred/semantic errors (e.g. "Unknown function") report at the *resolution point*
   (end of the enclosing item), not the reference site — so they land on the wrong line. Syntax
   errors are exact. Fixing (b) = stamp the reference's own position into the deferred-unknown

@@ -8,12 +8,12 @@
 // as a `DiagEntry { level, line, col, message, code }` into `p.diagnostics` — no
 // stderr, no exit.  The LSP maps `DiagEntry` -> LSP `Diagnostic` at S3.
 //
-// Recipe (pinned here): a FRESH stdlib-loaded parser per parse.  `parse_source`
-// does NOT clear a reused parser's prior diagnostics (parser + lexer both
-// accumulate), so re-parsing on one warm parser leaks errors forward — a
-// warm-reuse optimisation is a later step that needs a diagnostics reset.  A
-// fresh `parse_dir("default") + parse_source(buf)` is ~80 ms (within the LSP
-// budget) and cannot leak.
+// Recipe: a FRESH stdlib-loaded parser per parse.  A parser cannot be re-parsed:
+// loft registers every definition per source (that is how files read each other
+// on `use`), so a second `parse_source` on the same parser re-registers and
+// conflicts ("Cannot redefine 'main'").  A fresh `parse_dir("default") +
+// parse_source(buf)` is the correct model — ~80 ms, within the LSP budget, and it
+// cannot carry state across edits.
 
 use loft::diagnostics::Level;
 use loft::parser::Parser;
@@ -57,9 +57,8 @@ fn unknown_symbol_is_reported_with_a_message() {
     assert!(*lvl >= Level::Error);
     assert!(*line > 0, "carries a source line");
     assert!(msg.contains("nope"), "names the offending symbol: {msg}");
-    // KNOWN GAP (dogfood finding, S2): deferred/semantic errors report at the
-    // resolution point (end of the enclosing item), not the call site — so this
-    // one lands on line 3 (`}`), not line 2 (`nope`).  Syntax errors are exact.
-    // Fixing it = stamp the reference's own position into the deferred-unknown
-    // record.  Tracked as the next diagnostic-quality step before the LSP ships.
+    // KNOWN GAP (dogfood finding (b), S2): deferred/semantic errors report at the
+    // resolution point (end of the enclosing item), not the reference site — so
+    // this lands on line 3 (`}`), not line 2.  Syntax errors are exact.  The fix
+    // is the next diagnostic-quality step: stamp the reference's own position.
 }
