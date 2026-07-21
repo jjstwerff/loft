@@ -646,6 +646,48 @@ integer does not) instead of inferring it from size/align/Parts.
 **3. Storage read via stack offsets** — convert `parallel.rs:1568` and
 `generation/ops/parallel.rs:208` to the storage view. Both backends, one commit each.
 
+### The last 19 shapes are NOT an alignment problem — a fn-ref width contradiction
+
+Attempted per the design ("carry an explicit needs-its-own-alignment flag") and
+stopped, because the investigation found the flag would be papering over something
+worse. A fn-ref element has **four** widths depending on who asks:
+
+| source | width |
+|---|---|
+| `tuple_def`'s comment | "Functions are **4** bytes (i32 d_nr)" |
+| the DB member type (measured via `finish_type` trace) | `Int(0,false)` = **4** |
+| the `#493` codegen fix | "projecting only the **8**-byte d_nr via `OpVarInt`" |
+| `element_stack_size(Function)` | **20** (8B d_nr + 12B closure DbRef) |
+| `element_storage_size` (D1) — falls through to the stack arm | **20** (wrong for storage) |
+
+So an 8-byte `d_nr` is written into a 4-byte storage slot. It does not corrupt today
+**only because the alignment padding leaves 4 spare bytes** — the padding is
+accidentally load-bearing. Tightening removes the pad and the overrun lands on the
+neighbouring element, which is exactly what `452-issue-493-struct-tuple-fnref-dnr`
+caught: `(fn(integer)->integer, integer)` read its fn-ref back as the wrong function
+(`result` 4 instead of 8).
+
+That reframes the remaining 19: they are not "shapes we cannot pack tight", they are
+"shapes whose padding is hiding a latent overrun". Adding an alignment flag would
+**preserve the mask**, which is the opposite of this plan's purpose.
+
+**Resolve the width first.** Pick ONE storage width for a fn-ref element and make the
+DB member, the write projection and `element_storage_size` agree on it:
+
+- if the stored d_nr is 4 bytes, the `#493` write must project 4, not 8;
+- if it is 8, the DB member must be 8 (`Int` → a wide kind) and `tuple_def`'s comment
+  is stale.
+
+Deciding needs the answer to "can a d_nr exceed 4 bytes in practice", which is a
+language-level question, not a layout one — so it is recorded here rather than
+guessed. `element_storage_size`'s `Function` arm is knowingly wrong (20) and must be
+set as part of that decision; the oracle does not cover fn-ref shapes yet (the
+synthetic type name for a fn element did not resolve on a first attempt), so add that
+coverage with the fix.
+
+Until then the current padding stays, and the 19 shapes remain over-sized but
+CORRECT — a memory cost, not corruption.
+
 ### Order, and why
 
 1. **Rename the two views** — no behaviour change, makes every later diff self-explaining.
