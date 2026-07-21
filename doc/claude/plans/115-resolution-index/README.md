@@ -13,7 +13,9 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Phase 0 (design) DONE — see [design.md](design.md)** (concrete code points + the
 S1–S7 small-safe-step spine + the byte-identical-IR gate).
 
-**Execution: S1 + S2 + S3 + S4 + S5 + S6 DONE.**
+**Execution: S1–S7 spine COMPLETE.** The plan delivered its goal — the parse-time
+resolution index (Local/Global/Field/Method) plus its first consumers, including
+inlayHint (E), the feature this plan was created to unblock.
 - **S1** (`34c428c0`) — `pub mod resolution` (`Occurrence` + `Resolution`), the
   `record_resolutions`/`resolutions` fields (default off/empty), the gated `record`
   helper, `Parser::resolutions()`, and `resolutions.clear()` paired with every
@@ -76,18 +78,29 @@ parser and each site needs its own byte-identical gate.
   Field/Method keys. Covers the common struct-field + attribute-method dispatch; exotic
   paths (poly-enum, nullable-unwrap, bounded-T stub, vector methods) not yet hooked.
 
-**Recording spine (S2–S6) is done: Local, Global, Field, Method all resolved.**
+- **S7** (`35a1c4c3`) — inlayHint (feature E, the reason this plan exists).
+  `lsp::inlay_hints` emits `: <type>` after each assignment-local's declaration —
+  position from the index (the earliest `name =` occurrence), type from
+  `def(fn_def).variables().tp(var_nr)` via `type_name_str`. Params (explicit types) +
+  loop/lambda binders + unresolved types skipped. The server advertises
+  `inlayHintProvider`. **Gate met:** unit + end-to-end transport tests
+  (`n: integer`, `s: text`; param/loop/reassignment skipped; positioned after the
+  name); CLI byte-identical (pure consumer, parser untouched).
 
-**Next — the remaining CONSUMERS (each its own step):**
-- **S7 — inlayHint (E, the originally-blocked feature).** With reliable local binding
-  positions from the index, emit inferred-type hints at local bindings
-  (`var_type` → type name). The E gate that couldn't be met before now can.
-- **Method find-references** (the `text.len`-excludes-`vector.len` consumer). Needs a
+**Recording spine (S2–S6): Local, Global, Field, Method all resolved. Consumers:
+S4 (precise local references/rename) + S7 (inlayHint).**
+
+**Remaining follow-ups (optional enhancements, each its own step — the plan's goal is
+already met):**
+- **Method find-references** (`text.len` excludes `vector.len`). Needs a
   resolution-aware WorkspaceIndex (methods are workspace-wide across files), so it is
   its own step, not an unsound single-file cut.
-- **Follow-up (from S4/S5):** record the missing DECLARATIONS (param signature, `for`/
-  lambda binder, constants) so params/loop-vars take the precise path and constants
-  resolve — retiring the S4 F-v1 fallback.
+- **Record the missing DECLARATIONS** (param signature, `for`/lambda binder,
+  constants) so params/loop-vars take S4's precise path and constants resolve —
+  retiring the S4 F-v1 fallback. Touches the definition parser (each site its own
+  byte-identical gate).
+- **Exotic member paths** in S6 (poly-enum, nullable-unwrap, bounded-T stub, vector
+  methods) — hook for full Field/Method coverage.
 
 This is the deferred FOUNDATION under @PLN63 (loft-lsp): every LSP feature that needs to
 know *what an identifier occurrence refers to* — not just its spelling — depends on it.

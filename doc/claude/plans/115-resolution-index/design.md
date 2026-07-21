@@ -156,9 +156,13 @@ includes a byte-identical-IR check** (§ below). No step changes a parse decisio
   dispatch covered; exotic paths (poly-enum, nullable, bounded-T stub, vector methods)
   deferred. The `expr.`-receiver/hover + method-references CONSUMERS build on this (the
   latter needs a resolution-aware WorkspaceIndex — its own step).
-- **S7 — unblock E (inlayHint).** With reliable binding positions from the index, emit
-  inferred-type hints at local bindings (`var_type` → `type_name_str`). *Gate:* the
-  E gate that couldn't be met before now passes for every local, not just the first.
+- **S7 — unblock E (inlayHint). ✅ DONE (`35a1c4c3`).** `lsp::inlay_hints` emits
+  `: <type>` after each assignment-local's declaration — position from the index (the
+  earliest `name =` occurrence, so EVERY local, not just the first as the old
+  `Variable.source` path managed), type via `def(fn_def).variables().tp(var_nr)` +
+  `type_name_str`. Params + loop/lambda binders + unresolved types skipped. Server
+  advertises `inlayHintProvider`. *Gate met:* unit + transport tests; CLI byte-identical
+  (pure consumer). **The S1–S7 spine is complete — the plan's goal is met.**
 
 S1–S4 are the minimal spine that proves the mechanism + delivers the first precision
 win. S5–S7 extend coverage. Stop after any step with value banked.
