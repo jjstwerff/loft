@@ -110,13 +110,13 @@ fn tag_completion_offers_known_tags_from_the_index() {
         f.iter().any(|c| c.label == "@F1" && c.kind == 18),
         "@F1 offered: {f:?}"
     );
-    // `@P` → the referenced problem tag, but never the broken-only `@P99` (it
+    // `@P` → the referenced problem tag, but never the broken-only `@P99` (it <!--noindex-->
     // lives in the `broken` array, not as a top-level key). <!--noindex-->
     let p = idx.complete("@P");
     assert!(p.iter().any(|c| c.label == "@P9"), "@P9 offered: {p:?}"); // <!--noindex-->
     assert!(
         !p.iter().any(|c| c.label == "@P99"), // <!--noindex-->
-        "broken @P99 not offered: {p:?}"
+        "broken @P99 not offered: {p:?}" // <!--noindex-->
     );
     // An empty family prefix `@` offers everything indexed.
     assert!(idx.complete("@").len() >= 3, "@ offers all known tags");

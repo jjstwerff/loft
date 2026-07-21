@@ -338,7 +338,7 @@ Remaining tag steps:
   one) plus the `@F<n>`/`@I<n>` feature/infra tags from `features.json`, as Reference-kind items;
   `lsp::tag_completion_prefix` detects the `@`-token at the cursor (routing to tags, not symbols),
   and `@` is a completion trigger char. Inert outside a loft repo. *Gates:* `lsp_tags`
-  (`complete` offers `@F1`/`@P9`, excludes broken; prefix detection) +
+  (`complete` offers `@F1` + a referenced problem tag, excludes broken; prefix detection) +
   `lsp_transport::tag_completion_offers_tracker_tags`.
 
 Follow-up (DONE): the `TagIndex` reloads when `index/tags.json`'s mtime changes, so a mid-session
