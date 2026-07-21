@@ -1,0 +1,2 @@
+fn f(t: ((integer, integer), integer)) { print("{t.0.0},{t.0.1},{t.1}\n"); }
+fn main() { f(((1, 2), 3)); }

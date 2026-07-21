@@ -1,0 +1,10 @@
+struct P { v: integer }
+fn show(t: (P, P)) {
+    print("{t.0.v},{t.1.v}\n");
+    assert(t.0.v == 10 && t.1.v == 20, "structref_arg");
+}
+fn main() {
+    a = P { v: 10 };
+    b = P { v: 20 };
+    show((a, b));
+}

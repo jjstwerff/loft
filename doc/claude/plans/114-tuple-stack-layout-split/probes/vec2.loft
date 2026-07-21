@@ -1,0 +1,2 @@
+fn f(t: (vector<integer>, vector<integer>)) { print("{t.0[0]},{t.1[0]}\n"); }
+fn main() { v = [7, 8]; u = [9, 10]; f((v, u)); }

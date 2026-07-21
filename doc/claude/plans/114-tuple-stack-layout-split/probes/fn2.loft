@@ -1,0 +1,2 @@
+fn f(t: (fn(integer) -> integer, fn(integer) -> integer)) -> integer { t.0(3) + t.1(4) }
+fn main() { a = fn(n: integer) -> integer { n * n }; b = fn(n: integer) -> integer { n + 1 }; print("{f((a, b))}\n"); }
