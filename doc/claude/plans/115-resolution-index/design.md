@@ -121,10 +121,13 @@ includes a byte-identical-IR check** (§ below). No step changes a parse decisio
   byte-identical IR (S1 vs S2 binary, empty `loft introspect` diff); with the gate ON,
   a local's occurrences are recorded and two same-named locals in different fns get
   distinct `(fn_def, var_nr)` (`tests/resolution_index.rs`).
-- **S3 — enable the gate for the LSP parse only.** `load_stdlib`/`parse_source` in
-  `loft::lsp` sets `record_resolutions = true` on its fresh parser. Expose the
-  occurrences to the lsp module. *Gate:* the LSP parse carries occurrences; the CLI /
-  compiler parse (gate off) is unchanged.
+- **S3 — enable the gate for the LSP parse only. ✅ DONE (`b85e84da`).** Factored the
+  7 duplicated `Parser::new()+load_stdlib+parse_source` blocks into `parse_lsp_buffer`,
+  which sets `record_resolutions = true` *after* `load_stdlib` (only the user buffer
+  records — the warm-cache path doesn't re-parse the stdlib). Exposed via
+  `lsp::resolutions(text, name, stdlib_dir)`. *Gate met:* the LSP parse carries
+  occurrences; the CLI/compiler parse never routes through here → `loft introspect`
+  byte-identical to S2; all LSP suites green (behavior-preserving refactor).
 - **S4 — first consumer: precise LOCAL references/rename.** Replace F-v1's block-scan
   for a local with `occurrences_of(Local{…})`. *Gate:* renaming a local touches exactly
   its binding's occurrences, shadowing-correct; `tests/lsp_scope.rs` extended.

@@ -13,7 +13,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Phase 0 (design) DONE — see [design.md](design.md)** (concrete code points + the
 S1–S7 small-safe-step spine + the byte-identical-IR gate).
 
-**Execution: S1 + S2 DONE.**
+**Execution: S1 + S2 + S3 DONE.**
 - **S1** (`34c428c0`) — `pub mod resolution` (`Occurrence` + `Resolution`), the
   `record_resolutions`/`resolutions` fields (default off/empty), the gated `record`
   helper, `Parser::resolutions()`, and `resolutions.clear()` paired with every
@@ -25,9 +25,18 @@ S1–S7 small-safe-step spine + the byte-identical-IR gate).
   distinct `(fn_def, var_nr)`. Public `set_record_resolutions` setter added for S3.
   **Gate met:** `loft introspect` byte-identical with the gate off (S1 vs S2 binary,
   empty diff); `tests/resolution_index.rs` proves distinct bindings on + off-by-default.
+- **S3** (`b85e84da`) — enable the gate on the LSP parse + expose the index. Factored
+  the 7 duplicated `Parser::new()+load_stdlib+parse_source` blocks in `loft::lsp` into
+  one `parse_lsp_buffer` helper that flips `set_record_resolutions(true)` *after* the
+  stdlib load (only the user buffer records). New `lsp::resolutions(text, name,
+  stdlib_dir)` returns the buffer's occurrences — the substrate S4/S7 build on.
+  **Gate met:** the LSP parse carries occurrences (s3 test); the CLI parse never
+  routes through here → `loft introspect` byte-identical to S2; all LSP suites green
+  (refactor behavior-preserving).
 
-**Next: S3** — enable the gate on the LSP fresh parse (`loft::lsp`) and expose the
-occurrences to the lsp module; the CLI/compiler parse stays gate-off/unchanged.
+**Next: S4** — first consumer: precise LOCAL references/rename. Replace F-v1's
+block-scan with a query over the index (the binding under the cursor → its exact
+occurrences), shadowing-correct; extend `tests/lsp_scope.rs`.
 
 This is the deferred FOUNDATION under @PLN63 (loft-lsp): every LSP feature that needs to
 know *what an identifier occurrence refers to* — not just its spelling — depends on it.
