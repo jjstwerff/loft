@@ -20,8 +20,8 @@ fn synthetic_index() -> PathBuf {
         r#"{
           "@F1":  [{"file":"a.md","line":1,"context":"see @F1 here"}],
           "@GH5": [{"file":"b.md","line":2,"context":"@GH5 tracked"}],
-          "@P9":  [{"file":"PROBLEMS.md","line":3,"context":"@P9 the bug"}],
-          "broken": [{"tag":"@P99","refs":["z.md:1"]}]
+          "@P9":  [{"file":"PROBLEMS.md","line":3,"context":"@P9 the bug <!--noindex-->"}],
+          "broken": [{"tag":"@P99","refs":["z.md:1 <!--noindex-->"]}]
         }"#,
     )
     .unwrap();
@@ -69,28 +69,31 @@ fn tag_lookup_renders_feature_title_url_and_summary() {
         Some("https://github.com/loft-lang/loft/issues/5")
     );
 
-    // @P9 — a problem: no issue URL, summary from the reference context.
-    let p = idx.lookup("@P9").expect("@P9 resolves");
+    // @P9 — a problem: no issue URL, summary from the reference context. <!--noindex-->
+    let p = idx.lookup("@P9").expect("@P9 resolves"); // <!--noindex-->
+
     assert_eq!(p.kind, "problem");
     assert!(p.url.is_none(), "P-issues have no issue URL");
     assert_eq!(p.references, 1);
 
     // An unindexed local tag → None (T3 territory).
-    assert!(idx.lookup("@P999").is_none(), "unindexed @P → None");
+    assert!(idx.lookup("@P999").is_none(), "unindexed @P → None"); // <!--noindex-->
+
 }
 
 #[test]
 fn broken_tags_come_from_the_index_verdict() {
     let idx = TagIndex::load(synthetic_index().to_str().unwrap()).unwrap();
     // T3 consumes the scanner's `broken` array verbatim.
-    assert!(idx.is_broken("@P99"), "@P99 is listed in the broken array");
-    assert!(!idx.is_broken("@P9"), "@P9 is a valid, referenced tag");
+    assert!(idx.is_broken("@P99"), "@P99 is listed in the broken array"); // <!--noindex-->
+    assert!(!idx.is_broken("@P9"), "@P9 is a valid, referenced tag"); // <!--noindex-->
+
     assert!(
         !idx.is_broken("@F1"),
         "features are never broken-validated by the scanner"
     );
     assert!(
-        !idx.is_broken("@P123"),
+        !idx.is_broken("@P123"), // <!--noindex-->  (intentional example tag, not a real ref)
         "an unindexed tag is not (yet) known-broken"
     );
 }

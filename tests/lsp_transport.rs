@@ -541,7 +541,7 @@ fn tag_hover_and_document_link() {
     let _ = s.child.wait();
 }
 
-// T3 — broken-tag diagnostics.  A synthetic index marks `@P99` broken; opening a
+// T3 — broken-tag diagnostics.  A synthetic index marks `@P99` broken; opening a <!--noindex-->
 // buffer that references it publishes a Warning at the tag; a NON-broken tag does
 // not.
 #[test]
@@ -551,7 +551,7 @@ fn broken_tag_publishes_a_warning() {
     std::fs::create_dir_all(&idx).unwrap();
     std::fs::write(
         idx.join("tags.json"),
-        r#"{"@P99":[{"file":"z","line":1,"context":"@P99"}],"broken":[{"tag":"@P99","refs":["z:1"]}]}"#,
+        r#"{"@P99":[{"file":"z","line":1,"context":"@P99 <!--noindex-->"}],"broken":[{"tag":"@P99","refs":["z:1"]}]}"#,
     )
     .unwrap();
     std::fs::write(idx.join("features.json"), "[]").unwrap();
@@ -566,8 +566,9 @@ fn broken_tag_publishes_a_warning() {
     s.notify("initialized", "{}");
 
     let uri = "file:///a.loft";
-    // `@P99` is broken; `@P42` is unknown to the index → NOT flagged (no false positive).
-    let prog = "// tracks @P99 and @P42\nfn main() {\n  print(\"hi\")\n}\n";
+    // `@P99` is broken; `@P42` is unknown to the index → NOT flagged (no false positive). <!--noindex-->
+    let prog = "// tracks @P99 and @P42\nfn main() {\n  print(\"hi\")\n}\n"; // <!--noindex-->
+
     s.notify("textDocument/didOpen", &open_params(uri, prog));
     let note = s.recv();
     let diags =
@@ -588,7 +589,7 @@ fn broken_tag_publishes_a_warning() {
         "Warning"
     );
     assert!(
-        field_str(w, "message").unwrap_or_default().contains("@P99"),
+        field_str(w, "message").unwrap_or_default().contains("@P99"), // <!--noindex-->
         "names the broken tag: {w:?}"
     );
 

@@ -422,7 +422,8 @@ impl TagIndex {
             .ok()
             .and_then(|s| crate::json::parse(&s).ok())
             .unwrap_or(Parsed::Array(Vec::new()));
-        // The `broken` array is `[{"tag":"@P999","refs":[…]}, …]`.
+        // The `broken` array is `[{"tag":"@P999","refs":[…]}, …]`. <!--noindex-->
+
         let broken = match pj_get(&tags, "broken") {
             Some(Parsed::Array(items)) => items.iter().filter_map(|it| pj_str(it, "tag")).collect(),
             _ => Vec::new(),
