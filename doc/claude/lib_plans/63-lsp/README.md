@@ -257,6 +257,16 @@ Two LSP.2-surface items already landed on the S-spine, plus a cross-cutting perf
   the bundle round-trips `Definition.position`, so stdlib hover / go-to-def are unaffected. The
   binary defaults `LOFT_STDLIB_CACHE` on (honors an explicit override). This is the "integrate
   with the data we already keep" win — the CLI's stdlib cache, now shared by the LSP.
+- **Agent/shell frontend — DONE.** The SAME `loft::lsp` accessors, exposed as one-shot `loft` CLI
+  subcommands so scripts and coding agents reach the code intelligence without a live editor (a
+  THIRD frontend beside the LSP server and the future browser IDE): `loft symbols <file>`
+  (outline), `loft def <name> [file]` (signature + `///` doc + location by NAME — a free fn / type
+  / const PLUS every `Type.name` method, so `def len` lists `text.len` / `vector.len` / …, the
+  method resolution the cursor-based hover can't do), `loft hover <file> <ln> <col>`.
+  Human-readable by default, `--json` for structure (mirrors `loft api`). New lib pieces:
+  `loft::lsp::lookup()` + a shared `hover_of_def()`. Gate: `tests/lsp_cli.rs` drives the real
+  binary. This is dogfood: it replaces the `grep default/*.loft` + read loop for "what's the
+  signature of X".
 
 ### Tag integration — tracker knowledge in the IDE (loft dogfood)
 
