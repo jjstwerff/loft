@@ -38,6 +38,7 @@ const KINDS: &[(&str, &str)] = &[
     ("single", "single"),
     ("character", "char"),
     ("boolean", "bool"),
+    ("text", "text"),
 ];
 
 /// The shapes to compare — every pair of kinds, plus a few triples/quads that
@@ -111,6 +112,7 @@ fn loft_type_name(kind: &str) -> String {
         "u16" => "integer(0, 65535)".into(),
         "i16" => "integer(-32768, 32767)".into(),
         "i32" | "integer" => "integer".into(),
+        "text" => "text".into(),
         "u32" => "integer(0, 4294967294)".into(),
         other => other.into(),
     }
@@ -121,6 +123,7 @@ fn sample_value(kind: &str) -> &'static str {
         "float" => "1.0",
         "single" => "1.0f",
         "character" => "'a'",
+        "text" => "\"x\"",
         "boolean" => "true",
         _ => "1",
     }
@@ -160,6 +163,7 @@ fn kind_type(kind: &str) -> Type {
         "single" => Type::Single,
         "character" => Type::Character,
         "boolean" => Type::Boolean,
+        "text" => Type::Text(loft::data::Deps::none()),
         other => panic!("unmapped kind {other}"),
     }
 }

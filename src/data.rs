@@ -2080,6 +2080,15 @@ pub fn element_storage_size(t: &Type) -> usize {
     match t.base() {
         Type::Integer(spec) => spec.byte_width(true) as usize,
         Type::Tuple(elems) => elems.iter().map(element_storage_size).sum(),
+        // Measured against the record oracle: `(u8, text)` is 5 bytes, so a stored
+        // `text` element is the 4-byte heap pointer, NOT the 16-byte stack `Str`.
+        // `read_tuple_at_wide` says the same ("text: 4-byte heap-pointer") and
+        // inflates it to a `Str` for the worker slot.
+        Type::Text(_) => 4,
+        // Likewise a stored fn-ref is the 4-byte d_nr; the 20-byte figure is the
+        // STACK slot (8B d_nr + 12B closure DbRef).  @PLN114: the write projection
+        // still emits 8 bytes here — see § The last 19 shapes.
+        Type::Function(_, _, _) => 4,
         other => element_stack_size(other),
     }
 }
