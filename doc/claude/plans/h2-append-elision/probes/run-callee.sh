@@ -31,7 +31,10 @@ printf "%-20s %-9s %-7s %-7s %-5s %s\n" CELL BACKEND VALUE LENGTH LEAK VERDICT
 for f in r*.loft; do
   c=${f%.loft}
   for b in --interpret --native; do
-    out=$(LOFT_STORES=warn LOFT_TIMEOUT=120 "$LOFT" "$b" "$f" 2>/tmp/h2_cell_err)
+    # The native leak report is gated on LOFT_NATIVE_LEAK_CHECK, NOT on LOFT_STORES.
+    # With only the latter set the native LEAK column never fires and reads green on a
+    # leaking cell — which is how j8/j6's native leaks stayed invisible here.
+    out=$(LOFT_STORES=warn LOFT_NATIVE_LEAK_CHECK=1 LOFT_TIMEOUT=120 "$LOFT" "$b" "$f" 2>/tmp/h2_cell_err)
     val=$(printf '%s' "$out" | sed -n '1p' | sed 's/ *$//')
     len=$(printf '%s' "$out" | sed -n '2p' | sed 's/ *$//')
     leak=$(grep -c "not freed" /tmp/h2_cell_err)

@@ -1,60 +1,89 @@
 # H2 — `vec += [f(temp)]` in a loop drops every element but the first
 
-> **Status: ROOT CAUSE FOUND and a proven fix exists (all 8 cells green, both
-> backends) but is NOT LANDABLE — it introduces a leak in another shape. Patch kept
-> at `h2-append-elision/value-before-slot.patch`; see § ROOT CAUSE FOUND.** Interpreter only; `--native` is correct, so it is
-> also a backend divergence. Silent — exit 0, no diagnostic, wrong data.
-> Reported by the crawler consumer (`LOFT-HANDOFF` H2) on toolchain 2026.7.2 as the
-> wider form of **loft#496**, which is CLOSED — so either that fix was too narrow or
-> this is a regression of it. Probes: `h2-append-elision/probes/` — TWO matrices, `run.sh` (call-site axis) and `run-callee.sh` (callee-return axis); run both.
+> **Status: FIXED — root cause was a missing runtime ownership guard on FIRST
+> assignment; see § THE FIX.** One arm in `src/state/codegen.rs`. Interpreter only;
+> `--native` was already correct, so it was also a backend divergence. Silent — exit 0,
+> no diagnostic, wrong data. Reported by the crawler consumer (`LOFT-HANDOFF` H2) on
+> toolchain 2026.7.2 as the wider form of **loft#496**, which is CLOSED — so either that
+> fix was too narrow or this is a regression of it. Probes: `h2-append-elision/probes/` —
+> THREE matrices, `run.sh` (call-site axis), `run-callee.sh` (callee-return axis) and
+> `run-join.sh` (first-Set-vs-reassign axis, the one that found the cause); run all three.
 
 ## RESUME — start here
 
-**One-line state:** the root cause is FOUND and a fix exists that turns every probe cell
-green, but it is blocked by a **pre-existing, unrelated interpreter leak** it inherits —
-so the next task is that leak, NOT the fix.
+**One-line state:** H2 is fixed at its real root cause and every cell of all three
+matrices is green except two INDEPENDENT, pre-existing leaks (`j6`, `j8`-native) that the
+fix neither causes nor addresses. The `value-before-slot.patch` is **abandoned** — it
+treated a symptom, and with the real fix in place none of its four regressions exist.
 
-**Do first (the whole blocker):** the interpreter has no counterpart to native's @PLN85
-displaced-store free on an adopting reassign (`src/generation/dispatch.rs:500-510`; its
-comment names the shape, *"one store leaked per adopting bind (`d = choose(..)`)"*).
-Start reading at `src/state/codegen.rs::gen_set_first_ref_call_copy` (:2580). The exact
-mechanism is **not pinned** — treat that as the site, not the root cause, and build the
-boundary matrix before editing.
-
-Proof it is pre-existing and not the fix's fault (re-verify in 30 s before trusting this):
+**Validate with all three matrices, never one:**
 
 ```bash
-# named-local sibling LEAKS on a clean tree; direct append does not
-LOFT_STORES=warn ./target/release/loft --interpret <sibling>.loft   # sibling = r10 with
-#   `e = pick(t, i+100); out += [e]`   → "1 stores not freed: kt=65 M×3"
+P=./doc/claude/plans/h2-append-elision/probes
+$P/run.sh          # call-site axis      (p1-p8)   → expect 0 differing
+$P/run-callee.sh   # callee-return axis  (r1-r12)  → expect 2 (r5/r6, § Still open)
+$P/run-join.sh     # first-Set axis      (j1-j8)   → expect 3 (j6 ×2, j8-native)
 ```
 
-**Then:** apply `h2-append-elision/value-before-slot.patch`, confirm `r10` green and `r1`
-stays green, run the full suite, and only afterwards re-base the two `AppendSource`
-expectations (`tests/use_analysis.rs`) and the fuzz-gate positive control
-(`tests/ownership_fuzz_gate.rs`) — they are what caught the leak, so never edit them first.
+Each harness prints its own baseline and warns that a 0 may mean the instrument went
+blind. All three assert value AND length AND leak on BOTH backends.
 
-**Validate with BOTH matrices** (`probes/`), never one:
+**Still open, all independent of H2** — none reproduces without a `??` join, none is
+caused by this fix, and **each needs checking against `main` before filing**, per the
+bug-filing policy:
 
-```bash
-./doc/claude/plans/h2-append-elision/probes/run.sh          # call-site axis  (p1-p8)
-./doc/claude/plans/h2-append-elision/probes/run-callee.sh   # callee axis     (r1-r12)
-```
+| cell | backends | shape | note |
+|---|---|---|---|
+| `j6_base_not_var` | **both** | `pick(b.items, i)` — the join's borrow base reaches the callee as a FIELD expression | no local names the base, so `ownership_of` answers `base == u16::MAX` and neither backend can witness the guard. A structural blind spot, not a missed case. |
+| `j8_reassign_join` | native | the store displaced by the FIRST reassignment | the interpreter frees it; native does not — the exact mirror of what this plan previously assumed the polarity to be |
+| `r5`/`r6` | interpret | callee returns its retbuf on one path, another call's store on the other | 2 stores, no loop needed |
 
-Clean-tree baseline = 3 failing combinations in EACH; the harnesses print their own
-baseline and warn that a 0 may mean the instrument went blind. Both assert value AND
-length AND leak on BOTH backends (H2 is interpreter-only).
-
-**Open, not filed:** `r5`/`r6` leak 2 stores on a clean tree (interpreter only, no loop
-needed, native clean) — an independent defect. **Not yet reproduced on `main`**, which
-the bug-filing policy requires before filing.
-
-**Branch:** `tuxedo-win-oracle`, 44 commits ahead of `origin/main`, stacked on PR #609,
-**no PR of its own**. Working tree clean, everything pushed.
+**Branch:** `tuxedo-win-oracle`, stacked on PR #609, **no PR of its own**.
 
 **Environmental suite failures here** (not regressions): `index_hygiene_clean` (a link to
 the git-ignored, locally-built `doc/claude/LIBRARIES.md` — run `make libcatalogue`) and
 `wasm_debug_relay`.
+
+## THE FIX — a first assignment never got the runtime ownership guard
+
+`OpBindOrCopy` (@PLN85) is the interpreter's per-execution adopt-vs-copy guard: given the
+call result and a *witness* (the variable the return may borrow), it adopts the store when
+the two differ (the callee minted it) and deep-copies when they match (the callee handed
+back a view). It was emitted **only on the reassignment path**. A FIRST assignment chose
+adopt-vs-copy statically from `returns_borrowed_view()`.
+
+For a callee whose return is a runtime join — `fn pick(t, i) -> M { t[i] ?? m_none() }` —
+no static answer is right for both arms. The verdict came back "borrowed view", so
+`gen_set_first_ref_call_copy` suppressed the `0x8000` source-free, and **every execution
+that took the fresh arm orphaned the store the callee had just minted.**
+
+A loop body re-declares its local every iteration, so the binding is a first Set every
+time and the leak scales with the trip count. That is the whole four-way boundary below:
+no loop → one orphan instead of N; a literal temp → no call to join; an intermediate local
+→ a distinct store; no temp → nothing bound.
+
+**The orphaned stores are also what corrupted the values.** Freed-then-recycled store slots
+were handed back out and written through while a vector element still pointed at them — so
+fixing the leak fixed H2's `1 null null` directly. The corruption and the leak were one
+defect, not two.
+
+**Fix:** `src/state/codegen.rs::gen_set_first_ref_join` — when `ownership_of` classifies
+the call's return as `Own::Join { base }` with a resolvable base, bind through
+`OpBindOrCopy` exactly as the reassignment path does. `v`'s ordinary scope-exit `OpFreeRef`
+is then correct on both arms. One subtlety worth keeping: the slot preamble must use
+`OpInitRefSentinel`, not `OpInitRef` — the latter writes `Stores::null()`, which
+*allocates* an empty store, and the adopt arm overwrites the slot, so `OpInitRef` traded
+the old leak for a new one of the same size (measured: `M×3` became `?×2, M×1`).
+
+### Why the earlier "value-before-slot" fix looked right and was not
+
+That patch reordered the append so the call ran before `OpNewRecord` took a `DbRef` into
+the vector's store. It turned all 8 `p`-cells green because it removed the *window* in
+which a recycled store could clobber the element — but the recycling itself, the actual
+defect, was untouched. Hence its four suite regressions and the `r10` leak it "introduced":
+it was inheriting the orphan, not creating it. With the guard in place the reordering buys
+nothing, so the patch is abandoned and the two `AppendSource` expectations and the
+fuzz-gate control need no re-basing.
 
 ## Symptom
 
@@ -89,7 +118,7 @@ assigned from a **call** (`p4` literal is fine) · passed **by value into anothe
 `p3` passing while `p1` fails is the key cell: the difference is the loop's
 per-iteration scope exit, not the reassignment.
 
-## Localised — the append adopts a store the loop then frees
+## Localised (superseded — the copy/adopt difference is real, the reading of it was not)
 
 `loft introspect` on the failing shape beside its working sibling (`p1` vs `p6`),
 loop body only:
@@ -104,7 +133,7 @@ append instead **adopts** the callee's returned store — and the loop's scope e
 still frees it, so every element but the last-appended points at freed memory. The
 extra `FreeRef` is that free; the leak warning is its mirror image.
 
-## Refined — it is the NRVO return buffer, freed once per iteration
+## Theory 3, FALSIFIED — the NRVO return buffer freed once per iteration
 
 The first theory (a double free from the copy's `0x8000` source-free bit plus the
 lift's scope free) was **tested and wrong**: clearing the bit leaves the IR with a
@@ -172,7 +201,7 @@ both sit inside `if adopts_fresh_store`, which is false for this callee, and the
 local. The emission site for a lift's scope-exit free is upstream of both and is where
 the next session should start.
 
-## ROOT CAUSE FOUND — the element slot is reserved BEFORE the value is computed
+## Theory 4, SUPERSEDED — the element slot is reserved BEFORE the value is computed
 
 With the free ruled out (§ FALSIFIED), the last difference between the broken form and
 its working sibling is **ordering**:
@@ -193,7 +222,7 @@ both backends**, with no leak — and the resulting IR is identical to `p6`'s, i
 `OpFreeRefIfDistinct`, which the EXISTING @P378(a) machinery supplies for free once the
 source is a real local. No new special case.
 
-### But the fix is NOT landable yet — blast radius
+### Why it was not landable — blast radius (moot; see § THE FIX)
 
 Kept as `h2-append-elision/value-before-slot.patch` (not committed to `src/`). Against
 the full suite it regresses **4** tests that pass without it:
@@ -263,7 +292,7 @@ from.
 behind it. The two `AppendSource` expectations and the fuzz-gate control remain
 legitimate re-bases AFTER that, never before.
 
-## The lifetimes tool should have caught this — three named gaps
+## The lifetimes tool should have caught this — four named gaps
 
 `--show-ownership` reported none of the three leaks found today, and it prints a header
 that this session falsified:
@@ -272,22 +301,32 @@ that this session falsified:
 # store ownership is backend-shared (interp + native lower the same verdict)
 ```
 
-Native emits @PLN85's displaced-free guard and the interpreter does not, so for this
-shape the two backends do NOT lower the same verdict. Ranked enhancements:
+The two backends emitted different guards for the same binding, so they did NOT lower the
+same verdict. Ranked enhancements:
 
 1. **The backend-shared claim is wrong** — a correctness bug in the tool's own output,
-   not a missing feature. Either verify the claim or stop printing it.
+   not a missing feature. Either verify the claim or stop printing it. The `j` matrix
+   makes the correction sharper than the original wording: it is not "native is right and
+   interp is wrong" but *the two backends have different holes* — `j8` leaks on native and
+   not on interp, `j1` did the reverse, and `j6` leaks on both.
 2. **No notion of runtime-conditional ownership** — a var bound from `t[i] ?? m_none()`
-   OWNS its store on one arm and BORROWS on the other. Both remaining leaks live exactly
+   OWNS its store on one arm and BORROWS on the other. Every leak found here lives exactly
    there, and it is the one thing the tool cannot express: a single static verdict where
-   the truth is per-execution.
+   the truth is per-execution. The runtime HAS the concept (`Own::Join`, `OpBindOrCopy`);
+   the inspector does not surface it.
 3. **Verdict granularity** — `r1`-`r6` all read `Owned` yet behave differently, so the
    classification does not separate the axis that matters.
+4. **An unwitnessable `Join` is invisible** — when the base cannot be resolved to a local
+   (`j6`: it arrives as `b.items`), `ownership_of` answers `base == u16::MAX` and BOTH
+   backends silently fall back to a static split that leaks. That is a knowable-at-compile-
+   time hazard the tool could name outright: *"this binding needs a runtime witness and no
+   local provides one."* It is the highest-value of the four, because it is the only one
+   that would have flagged a defect nothing else here catches.
 
 The `per_iteration_frees` check added this session is what falsified theory 3, so the tool
 is not dead weight — it is under-powered specifically on conditional ownership.
 
-## The lifetimes tool should have caught this
+## The lifetimes tool — the original wish-list (kept; folded into the four gaps above)
 
 `--show-ownership` reported nothing useful for this program, and `LOFT_STORES=warn`
 reported only the downstream leak. The shape is exactly what the inspector exists
@@ -317,14 +356,14 @@ and the codebase already reasons about it (`returns_borrowed_view()`,
 `body_adopts_call` in `parser/operators.rs`). The bug is the missing half of the
 transfer, and only in a loop, where the per-iteration free fires.
 
-## Candidate sites
+## Candidate sites (superseded — the site was neither)
 
 1. The element-append path that chooses adopt-vs-copy for a **call-result** element —
    `p6`/`p7` reach the copy, `p1` does not.
 2. Loop scope-exit free emission (`scopes.rs`): the adopted store's free should be
    suppressed once ownership moves into the container.
 
-## Fix options, in preference order
+## Fix options as first ranked (superseded — none of the three was the answer)
 
 1. **Suppress the scope free when the append adopts.** Correct and allocation-free,
    but it must be exact — suppressing one free too many turns silent corruption into

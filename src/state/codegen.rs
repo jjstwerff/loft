@@ -2290,7 +2290,18 @@ impl State {
             // record copy (`OpDatabase` + `OpCopyRecord`, keyed on the enum's
             // `known_type`) is identical for an enum d_nr, mirroring
             // `materialize_return_into`'s `Type::Enum(td, true, _)` leg.
-            if stack.data.def(*fn_nr).return_adopts_fresh_store() {
+            // @PLN85 join delivery, first-Set half: when the callee's return is a
+            // runtime `??` JOIN — owned on one arm, a borrow of `base` on the other —
+            // neither static answer below is right for both arms, so bind through the
+            // same `OpBindOrCopy` store-identity guard the REASSIGNMENT path uses.
+            if crate::keys::join_own_enabled()
+                && let Type::Reference(join_d_nr, _) = stack.function.tp(v).clone()
+                && let crate::use_analysis::Own::Join { base } =
+                    crate::use_analysis::ownership_of(stack.data, stack.def_nr, value)
+                && base != u16::MAX
+            {
+                self.gen_set_first_ref_join(stack, v, value, join_d_nr, base);
+            } else if stack.data.def(*fn_nr).return_adopts_fresh_store() {
                 // runtime tolerates double-free as a no-op so leaving
                 // __ref_N to be freed by scopes.rs's is_work_ref gate at
                 // scope exit is safe in both adoption and orphan cases.
@@ -2562,6 +2573,69 @@ impl State {
             vec![value.clone(), Value::Var(v), Value::Int(i32::from(tp_nr))],
         );
         self.generate(&copy_val, stack, false);
+    }
+
+    /// First-assignment reference from a call whose return is a runtime `??` JOIN —
+    /// owned on one arm, a borrow of `base` on the other.  Binds it through @PLN85's
+    /// `OpBindOrCopy` store-identity guard, which adopts the fresh arm and deep-copies
+    /// the borrow arm, so `v`'s ordinary scope-exit `OpFreeRef` is correct either way.
+    ///
+    /// The reassignment path (`generate_set`) has resolved this per execution since
+    /// @PLN85; a first Set had only the STATIC verdict, and a static verdict is wrong on
+    /// one of the two arms by construction.  `returns_borrowed_view()` answered "borrow",
+    /// so [`gen_set_first_ref_call_copy`] suppressed the source-free — and every
+    /// execution taking the FRESH arm orphaned the store the callee had just minted.  A
+    /// loop body re-declares its local every iteration, which made that a first Set every
+    /// time and scaled the leak with the trip count (the `j1`/`j3` probe cells).
+    ///
+    /// The guard needs a live local to witness `base` against.  When none exists — the
+    /// base reaches the callee as a field expression, `f(b.items, i)` — `ownership_of`
+    /// answers `base == u16::MAX` and the caller falls through to the static split, where
+    /// the fresh arm still leaks (`j6`, which leaks on the native backend too).
+    fn gen_set_first_ref_join(
+        &mut self,
+        stack: &mut Stack,
+        v: u16,
+        value: &Value,
+        d_nr: u32,
+        base: u16,
+    ) {
+        let tp_nr = stack.data.def(d_nr).known_type();
+        // The slot must exist and hold a sentinel before `OpBindOrCopy` writes it: the
+        // borrow arm allocates INTO the slot and the owned arm overwrites the DbRef
+        // there.  Same preamble as `gen_set_first_ref_call_copy`, minus its `OpDatabase`
+        // — the record is the guard's to allocate, and only on the borrow arm.
+        //
+        // `OpInitRefSentinel`, NOT `OpInitRef`: the latter writes `Stores::null()`,
+        // which ALLOCATES an empty store.  `gen_set_first_ref_call_copy` gets away with
+        // that because its `OpDatabase` immediately reuses the store in place, but the
+        // owned arm here overwrites the slot with the callee's DbRef, so that store
+        // would be orphaned once per binding.  The sentinel costs nothing, and
+        // `alloc_record_at` already turns a `u16::MAX` slot into a real store for the
+        // borrow arm.
+        let ref_size = size_of::<crate::keys::DbRef>() as u16;
+        let slot_end = stack.function.stack(v).saturating_add(ref_size);
+        if stack.position < slot_end {
+            let bump = stack.step(slot_end) - stack.position;
+            stack.add_op("OpReserveFrame", self);
+            self.code_add(bump);
+            stack.position += bump;
+        }
+        let slot_offset = stack.var_pos(v);
+        stack.add_op("OpInitRefSentinel", self);
+        self.code_add(slot_offset);
+        // The call result (`src`) FIRST, then the witness on top — so the witness's
+        // frame-relative `var_pos` accounts for `src` already sitting on the eval stack.
+        // `OpBindOrCopy` pops witness, then src.  A PUSH op reads at the PRE-push
+        // position, so `var_pos(base)` is taken BEFORE `add_op`; the POP op's
+        // `var_pos(v)` is taken AFTER it.  (Mirrors the reassignment site exactly.)
+        self.generate(value, stack, false);
+        let witness_pos = stack.var_pos(base);
+        stack.add_op("OpVarRef", self);
+        self.code_add(witness_pos);
+        stack.add_op("OpBindOrCopy", self);
+        self.code_add(stack.var_pos(v));
+        self.code_add(tp_nr);
     }
 
     /// First-assignment reference from a function call — deep copy to prevent aliasing.

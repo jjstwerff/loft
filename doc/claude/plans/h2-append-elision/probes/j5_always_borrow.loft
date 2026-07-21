@@ -1,0 +1,11 @@
+// @H2 blocker — first-assignment join-binding axis.  See run-join.sh for the axis and
+// the hand-computed expectation; every cell is a FIRST Set of an owned ref from a call.
+// Control: both arms BORROW t, so the store is never the callee's to give away.  The
+// static borrow verdict is right here.  Expect `1 2 3`, no leak, t intact.
+struct M { hp: integer, name: text }
+fn m_none() -> M { M{ hp: -1, name: "none" } }
+fn seed() -> vector<M> { t: vector<M> = []; t += [M{hp:1, name:"a"}]; t += [M{hp:2, name:"b"}]; t += [M{hp:3, name:"c"}]; t }
+fn show(out: vector<M>) { for j in 0..len(out) { e = out[j] ?? m_none(); print("{e.hp} "); } print("\n"); n = len(out); print("len={n}\n"); }
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? m_none() }
+fn pick5(t: vector<M>, i: integer) -> M { t[i] ?? t[0] }
+fn main() { t = seed(); out: vector<M> = []; for i in 0..3 { e = pick5(t, i); out += [e]; } show(out); }
