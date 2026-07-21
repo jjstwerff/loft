@@ -17,21 +17,30 @@ use crate::host::{Program, Value};
 use crate::lexer::Position;
 use crate::parser::Parser;
 
+/// Load the stdlib into a fresh parser: warm-load the precompiled `Data` bundle
+/// when it's available (`startup_cache` — the same bundle the `loft` CLI keeps —
+/// ~12× faster than re-parsing `default/`), else cold-parse and save the bundle
+/// so the next call is warm.  Both paths are gated on `LOFT_STDLIB_CACHE`; with
+/// it unset (the test harness) this degrades to a plain cold parse.  A fresh
+/// parser per call is still mandatory — loft registers every definition *per
+/// source*, so reusing a warm parser re-registers and conflicts (`"Cannot
+/// redefine 'main'"`); the cache short-circuits the stdlib *work*, not the rule.
+fn load_stdlib(p: &mut Parser, stdlib_dir: &str) {
+    // The stdlib prelude (STD_SOURCE) must be registered before the user buffer,
+    // or every stdlib symbol reads as undefined — both paths do that first.
+    if !crate::startup_cache::warm_load_stdlib(p, stdlib_dir) {
+        let _ = p.parse_dir(stdlib_dir, true, false);
+        crate::startup_cache::save_stdlib_cache(p, stdlib_dir);
+    }
+}
+
 /// Parse `text` as a standalone loft source — with the stdlib in `stdlib_dir`
-/// loaded first — and return its diagnostics (positioned, coded; @I75).
-///
-/// A **fresh** parser per call is mandatory, not an optimization gap: loft
-/// registers every definition *per source* (that is how files read each other
-/// on `use`), so a second parse on the same parser re-registers and conflicts
-/// (`"Cannot redefine 'main'"`).  Re-parsing the stdlib each call is the ~80 ms
-/// cost of that rule — within the per-edit LSP budget.  The caller resolves
-/// `stdlib_dir` (a deployment concern the binary owns, exactly as the `loft`
-/// CLI does), so this stays a pure function of its inputs.
+/// loaded first — and return its diagnostics (positioned, coded; @I75).  The
+/// caller resolves `stdlib_dir` (a deployment concern the binary owns, exactly
+/// as the `loft` CLI does), so this stays a pure function of its inputs.
 pub fn diagnose(text: &str, name: &str, stdlib_dir: &str) -> Diagnostics {
     let mut p = Parser::new();
-    // Load order matters: the stdlib prelude (STD_SOURCE) must be registered
-    // before the user buffer, or every stdlib symbol reads as undefined.
-    let _ = p.parse_dir(stdlib_dir, true, false);
+    load_stdlib(&mut p, stdlib_dir);
     p.parse_source(text, name, false);
     std::mem::take(&mut p.diagnostics)
 }
@@ -62,7 +71,7 @@ pub struct Symbol {
 /// enum VARIANT (part of its enum's shape) is folded out, not listed top-level.
 pub fn outline(text: &str, name: &str, stdlib_dir: &str) -> Vec<Symbol> {
     let mut p = Parser::new();
-    let _ = p.parse_dir(stdlib_dir, true, false);
+    load_stdlib(&mut p, stdlib_dir);
     p.parse_source(text, name, false);
     let data = &p.data;
     let mut symbols: Vec<Symbol> = (0..data.definitions())
@@ -121,7 +130,7 @@ pub struct Hover {
 pub fn symbol_at(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) -> Option<Hover> {
     let word = word_at(text, line, col)?;
     let mut p = Parser::new();
-    let _ = p.parse_dir(stdlib_dir, true, false);
+    load_stdlib(&mut p, stdlib_dir);
     p.parse_source(text, name, false);
     let data = &p.data;
     // A free function first, then a type-like def; `def_nr` checks the user source

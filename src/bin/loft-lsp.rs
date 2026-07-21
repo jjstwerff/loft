@@ -30,6 +30,16 @@ const SERVER_NAME: &str = "loft-lsp";
 const SERVER_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 fn main() {
+    // Opt this server into the stdlib startup cache: the parse accessors then
+    // warm-load the precompiled stdlib `Data` bundle (~12× faster than
+    // re-parsing `default/` on every edit) instead of cold-parsing each request.
+    // Only default it on — an explicit override (the var set to empty = off) is
+    // respected.  SAFETY: set before any thread is spawned (single-threaded
+    // startup), the one point Rust 2024 requires for `set_var`.
+    if std::env::var_os("LOFT_STDLIB_CACHE").is_none() {
+        unsafe { std::env::set_var("LOFT_STDLIB_CACHE", "1") };
+    }
+
     let mut stdin = io::stdin().lock();
     let stdout = io::stdout();
     let mut shutdown_requested = false;
