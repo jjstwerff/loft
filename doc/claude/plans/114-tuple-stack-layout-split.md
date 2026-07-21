@@ -730,6 +730,27 @@ the widening. **The padding was performing the 4→8 conversion.** Pack tight an
 bytes become the next element, so the d_nr comes back with a neighbour in its top
 half.
 
+**Attempt 3 — split the read like the write side. Also reverted, but it LOCATED the
+site.** Extending the `#493` projection to stored tuples and inflating the generic
+read still failed, so I instrumented instead of guessing a fourth time:
+
+```
+121[272]: VarFnRef(var[168]) -> ... var=pp[168]:(function(...), integer)
+141[296]: SetInt4(v1: ref(reference), fld=0, val: integer)
+```
+
+`pp` is a **stack** tuple, and storing it WHOLE into a struct field (`p = Pair { v: pp }`)
+emits `OpVarFnRef` — the full 20-byte push — straight into `OpSetInt4`, which takes 8.
+
+**The `#493` branch never fires here**, because its guard requires the argument to be
+a `Value::TupleGet`; a whole-tuple store is not one. So the projection that exists for
+`t.0` stored into a field does not exist for `t` stored into a field, and the 12-byte
+overrun was absorbed by the alignment padding that used to follow the element.
+
+That is the site: the whole-tuple store path must project each fn-ref element to its
+stored width, the same way the `TupleGet` path already does. It is one more consumer
+of the "a fn-ref is 20 on the stack and 4 in a record" rule — not a new rule.
+
 So the remaining work is not a width swap: the read must know its consumer, which
 means either two ops (a `d_nr`-only projection for the store path, an inflating read
 for the call path) or the same split `generate_call`'s `#493` branch already makes on
