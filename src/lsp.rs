@@ -1103,3 +1103,94 @@ fn completion_kind(kind: &str) -> u32 {
         _ => 3, // fn
     }
 }
+
+// ── semantic tokens (step D) ─────────────────────────────────────────────────
+// Lex the buffer and classify each identifier by its resolved def kind (reusing
+// the same name-lookup as references/completion) + keywords.  A lexical first
+// cut: global fns / types / structs / enums / consts + keywords are typed; locals
+// and methods (need the receiver type) fall through to the editor's grammar until
+// step F.
+
+/// One classified token — absolute 1-based `line`/`col`, char `len`, and a `kind`
+/// index into [`semantic_token_types`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SemanticToken {
+    pub line: u32,
+    pub col: u32,
+    pub len: u32,
+    pub kind: u32,
+}
+
+/// The token-type legend the LSP `semanticTokensProvider` declares; a token's
+/// `kind` indexes into it.  (0 keyword, 1 function, 2 method, 3 struct, 4 enum,
+/// 5 type, 6 variable, 7 interface.)
+#[must_use]
+pub fn semantic_token_types() -> &'static [&'static str] {
+    &[
+        "keyword",
+        "function",
+        "method",
+        "struct",
+        "enum",
+        "type",
+        "variable",
+        "interface",
+    ]
+}
+
+/// Classify every identifier token in `text` by its resolved kind.  Fresh parse
+/// per call (same rule as [`diagnose`]).
+#[must_use]
+pub fn semantic_tokens(text: &str, name: &str, stdlib_dir: &str) -> Vec<SemanticToken> {
+    use crate::lexer::{LexItem, Lexer};
+    let mut p = Parser::new();
+    load_stdlib(&mut p, stdlib_dir);
+    p.parse_source(text, name, false);
+    let data = &p.data;
+    let mut lexer = Lexer::default();
+    lexer.parse_string(text, name);
+    let mut out = Vec::new();
+    loop {
+        let r = lexer.peek();
+        match r.has {
+            LexItem::None => break,
+            LexItem::Identifier(id) => {
+                if let Some(kind) = token_kind(data, &id) {
+                    out.push(SemanticToken {
+                        line: r.position.line,
+                        col: r.position.pos,
+                        len: id.chars().count() as u32,
+                        kind,
+                    });
+                }
+            }
+            _ => {}
+        }
+        lexer.cont();
+    }
+    out.sort_by_key(|t| (t.line, t.col));
+    out
+}
+
+/// The legend index for an identifier `name`, or `None` when it isn't a token we
+/// classify (a local / parameter / method-by-bare-name — the grammar handles it).
+fn token_kind(data: &Data, name: &str) -> Option<u32> {
+    if crate::lexer::is_keyword(name) {
+        return Some(0); // keyword
+    }
+    if data.def_nr(&format!("n_{name}")) != u32::MAX {
+        return Some(1); // function
+    }
+    let d = data.def_nr(name);
+    if d == u32::MAX {
+        return None;
+    }
+    match data.def(d).def_type {
+        crate::data::DefType::Struct => Some(3),
+        crate::data::DefType::Enum => Some(4),
+        crate::data::DefType::Type => Some(5),
+        crate::data::DefType::Constant => Some(6),
+        crate::data::DefType::Interface => Some(7),
+        _ => None,
+    }
+}

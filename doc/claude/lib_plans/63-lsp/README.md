@@ -428,13 +428,23 @@ Steps, in dependency order:
   `tests/lsp_transport.rs::completion_offers_members_after_a_dot`.  The S0 positive control moved
   to `textDocument/signatureHelp`.  Follow-ups (with F): scope-precise variable resolution across
   ambiguous names; call-arg context; fuzzy ranking via `suggest_similar`.
-- **D — `textDocument/semanticTokens`.** Lex the buffer (`scan_identifiers`); classify each
-  identifier by `classify` of its resolved def (lexical first cut = by name, like references) →
-  the token type array.  Advertise `semanticTokensProvider` with a legend.  *Gate:* a fn name
-  tokenizes as `function`, a struct as `struct`.  S-M lexical; sharpens with F.
-- **E — `textDocument/inlayHint`.** Parse; for each `let`-style local binding, read its
-  `Function::var_type` → `type_name_str` and emit an inlay hint after the name.  Advertise
-  `inlayHintProvider`.  *Gate:* `x = 1` shows `: integer`.  S-M.
+- **D — `textDocument/semanticTokens/full` — DONE.** `loft::lsp::semantic_tokens` lexes the
+  buffer and classifies each identifier by `token_kind` (`n_<name>`→function, `<name>`→struct/
+  enum/type/constant/interface, keyword) — the same name-lookup references/completion use.  The
+  binary delta-encodes to the LSP flat int array; `semantic_token_types()` is the declared legend
+  (keyword/function/method/struct/enum/type/variable/interface).  Note: loft's structural keywords
+  (`fn`/`struct`/`if`/…) lex as *tokens*, not identifiers, so they stay the grammar's job — which
+  is correct: semantic tokens add the TYPE-aware layer (is `Point` a struct? is `area` a
+  function?) the grammar can't.  Advertises `semanticTokensProvider {legend, full}`.  *Gates:*
+  `tests/lsp_semantic.rs` (Point→struct, area→function, integer→type, sorted) +
+  `tests/lsp_transport.rs::semantic_tokens_full_returns_encoded_tokens`.  Lexical cut; F sharpens
+  (methods/locals).
+- **E — `textDocument/inlayHint` — DEFERRED to F (substrate not ready).** The intent (inferred
+  type after a local `x = …`) needs each binding's precise position; the parser's variable-table
+  positions (`Variable.source` / `write_source`) are NOT reliably populated in the fresh-parse
+  path the LSP uses (only the first local per fn gets one), so an inlay hint would fire
+  inconsistently — worse UX than none.  Deferred until step F, which builds proper position/scope
+  resolution; then this is a thin read of `var_type` → `type_name_str` at the binding site.
 - **F — type/scope-aware precision (the FOUNDATION upgrade).** Replace the lexical name-match in
   find-references / rename with resolution: for each occurrence, resolve to its binding via the
   parser's scope tables + `member_access`, so `references("len")` returns only the intended

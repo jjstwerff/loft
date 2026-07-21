@@ -126,6 +126,23 @@ fn main() {
                 let actions = code_actions(&msg);
                 send(&stdout, &response(id, Parsed::Array(actions)));
             }
+            ("textDocument/semanticTokens/full", Some(id)) => {
+                // Step D: classify the buffer's identifier tokens, delta-encoded.
+                let data = text_document_uri(&msg)
+                    .and_then(|uri| documents.get(&uri))
+                    .map(|text| {
+                        encode_semantic_tokens(&loft::lsp::semantic_tokens(
+                            text,
+                            "buf.loft",
+                            &stdlib_dir,
+                        ))
+                    })
+                    .unwrap_or_default();
+                send(
+                    &stdout,
+                    &response(id, obj(vec![("data", Parsed::Array(data))])),
+                );
+            }
             ("textDocument/completion", Some(id)) => {
                 // Step C: members after `expr.`, else in-scope names + keywords.
                 let items = text_document_position(&msg)
@@ -369,6 +386,32 @@ fn range_of(line: u32, start_char: u32, end_char: u32) -> Parsed {
         ("start", position(line, start_char)),
         ("end", position(line, end_char)),
     ])
+}
+
+/// Delta-encode classified tokens into the LSP semantic-tokens flat int array:
+/// five ints per token `[Δline, Δcol, len, tokenType, tokenModifiers]`, each
+/// position relative to the previous token.  Tokens must arrive sorted.
+fn encode_semantic_tokens(tokens: &[loft::lsp::SemanticToken]) -> Vec<Parsed> {
+    let mut out = Vec::with_capacity(tokens.len() * 5);
+    let (mut prev_line, mut prev_col) = (0u32, 0u32);
+    for t in tokens {
+        let line0 = t.line.saturating_sub(1);
+        let col0 = t.col.saturating_sub(1);
+        let delta_line = line0.saturating_sub(prev_line);
+        let delta_col = if delta_line == 0 {
+            col0.saturating_sub(prev_col)
+        } else {
+            col0
+        };
+        out.push(Parsed::Int(i64::from(delta_line)));
+        out.push(Parsed::Int(i64::from(delta_col)));
+        out.push(Parsed::Int(i64::from(t.len)));
+        out.push(Parsed::Int(i64::from(t.kind)));
+        out.push(Parsed::Int(0)); // no modifiers
+        prev_line = line0;
+        prev_col = col0;
+    }
+    out
 }
 
 /// One `loft::lsp::Completion` → an LSP `CompletionItem`.
@@ -931,6 +974,27 @@ fn initialize_result() -> Parsed {
                 "triggerCharacters",
                 Parsed::Array(vec![Parsed::Str(".".into())]),
             )]),
+        ),
+        (
+            "semanticTokensProvider",
+            obj(vec![
+                (
+                    "legend",
+                    obj(vec![
+                        (
+                            "tokenTypes",
+                            Parsed::Array(
+                                loft::lsp::semantic_token_types()
+                                    .iter()
+                                    .map(|t| Parsed::Str((*t).into()))
+                                    .collect(),
+                            ),
+                        ),
+                        ("tokenModifiers", Parsed::Array(Vec::new())),
+                    ]),
+                ),
+                ("full", Parsed::Bool(true)),
+            ]),
         ),
         (
             "renameProvider",

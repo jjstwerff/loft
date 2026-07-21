@@ -855,6 +855,44 @@ fn completion_offers_members_after_a_dot() {
     let _ = s.child.wait();
 }
 
+// semanticTokens (step D) — the full-document token stream is advertised and
+// returns a valid delta-encoded int array.
+#[test]
+fn semantic_tokens_full_returns_encoded_tokens() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        field(caps, "semanticTokensProvider").is_some(),
+        "advertises semanticTokensProvider"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///s.loft";
+    s.notify(
+        "textDocument/didOpen",
+        &open_params(
+            uri,
+            "struct Point {\n  x: integer,\n}\nfn main() {\n  print(\"hi\")\n}\n",
+        ),
+    );
+    let _ = s.recv();
+
+    s.request(
+        2,
+        "textDocument/semanticTokens/full",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}}}}"#),
+    );
+    let reply = s.recv();
+    let data = field_arr(field(&reply, "result").unwrap(), "data").expect("a data array");
+    assert!(!data.is_empty(), "a non-empty token stream");
+    assert_eq!(data.len() % 5, 0, "five ints per token, got {}", data.len());
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();
