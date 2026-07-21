@@ -54,7 +54,61 @@ append instead **adopts** the callee's returned store — and the loop's scope e
 still frees it, so every element but the last-appended points at freed memory. The
 extra `FreeRef` is that free; the leak warning is its mirror image.
 
-## The invariant
+## Refined — it is the NRVO return buffer, freed once per iteration
+
+The first theory (a double free from the copy's `0x8000` source-free bit plus the
+lift's scope free) was **tested and wrong**: clearing the bit leaves the IR with a
+single free and the bug unchanged. Reverted.
+
+The IR names the real shape:
+
+```
+fn n_mk(d: D, __retbuf: E) -> E          // the result is written into a CALLER buffer
+185[136]: Database(var[112], db_tp=65)   // that buffer is allocated ONCE, outside the loop
+  __lift_1 = n_mk(d, __ref_3);           // __lift_1 ALIASES the buffer
+  OpCopyRecord(__lift_1, _elm_1, 66);
+  OpFreeRef(__lift_1);                   // ... and frees it EVERY iteration
+```
+
+`scopes.rs`'s `scan_args` lifts the call result into `__lift_N` so scope exit frees
+it — correct when the temp owns a fresh store, wrong here, because the store is the
+enclosing scope's NRVO return buffer. After iteration 1 the buffer is freed; later
+iterations write into freed memory, which by then has been reallocated as a vector
+element record — so each iteration corrupts what the previous one appended. That is
+exactly why every element **but the last-appended** reads null.
+
+It also explains the four-way boundary: no loop → no reuse (`p3`); a literal temp →
+no NRVO call (`p4`); an intermediate local → the result lands in a distinct store
+(`p6`); no temp → nothing to lift (`p8`).
+
+**Corrected invariant:** a `__lift_N` temp may free its store only if it OWNS it. A
+lift that aliases a caller-provided return buffer must not emit a free — the buffer's
+owner is the enclosing scope.
+
+**Fix site:** `scopes.rs` — the lift must recognise an NRVO-buffer-aliasing result and
+skip the scope free (or bind without taking ownership). Neither fix option in the
+previous section survives: copying more does not help, because the corruption is the
+buffer free, not the copy.
+
+## The lifetimes tool should have caught this
+
+`--show-ownership` reported nothing useful for this program, and `LOFT_STORES=warn`
+reported only the downstream leak. The shape is exactly what the inspector exists
+for — **a store with two owners, freed by the inner one while the outer still uses
+it** — so it belongs in the tool:
+
+- flag a `__lift_N` (or any temp) whose store is also reachable from an enclosing
+  owner, i.e. an alias of a caller-provided `__retbuf`;
+- report frees inside a loop body of a store allocated OUTSIDE it — a per-iteration
+  free of a once-allocated store is almost always this bug;
+- surface it in `--show-ownership` output rather than only as a downstream leak
+  warning, which names the symptom (`Def×4 not freed`) and not the cause.
+
+That is the attribution upgrade the engineering-rigor skill calls for: the diagnostic
+reported an effect with no cause, and three theories were needed to get from the
+symptom to the buffer. With the above, the tool would have said it directly.
+
+## The invariant (superseded — see § Refined)
 
 > **A value appended to a container must be owned by that container when the
 > appending scope exits.** Either the append copies, or it takes ownership AND the
