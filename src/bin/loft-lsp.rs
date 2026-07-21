@@ -120,6 +120,12 @@ fn main() {
                     .unwrap_or_default();
                 send(&stdout, &response(id, Parsed::Array(symbols)));
             }
+            ("textDocument/codeAction", Some(id)) => {
+                // Step B: turn each diagnostic that carries a structured
+                // `suggestion` into a "Change to `X`" quick-fix (a WorkspaceEdit).
+                let actions = code_actions(&msg);
+                send(&stdout, &response(id, Parsed::Array(actions)));
+            }
             ("textDocument/formatting", Some(id)) => {
                 // Run the same formatter the `loft fmt` CLI uses on the open buffer;
                 // reply with ONE whole-document edit (or none when already tidy).
@@ -294,6 +300,15 @@ fn lsp_diagnostic(e: &DiagEntry, text: &str) -> Parsed {
     if let Some(code) = e.code {
         fields.push(("code", Parsed::Str(code.into())));
     }
+    // Round-trip the structured suggestion on the diagnostic's `data` — the
+    // editor echoes it back in a `codeAction` request, so the quick-fix needs no
+    // re-parse (step A→B).
+    if let Some(suggestion) = &e.suggestion {
+        fields.push((
+            "data",
+            obj(vec![("suggestion", Parsed::Str(suggestion.clone()))]),
+        ));
+    }
     obj(fields)
 }
 
@@ -339,6 +354,44 @@ fn range_of(line: u32, start_char: u32, end_char: u32) -> Parsed {
         ("start", position(line, start_char)),
         ("end", position(line, end_char)),
     ])
+}
+
+// ── codeAction (quick-fixes from diagnostic suggestions, step B) ─────────────
+/// For each diagnostic the editor sends back that carries a `data.suggestion`
+/// (round-tripped from step A), a `CodeAction` quick-fix whose `WorkspaceEdit`
+/// replaces the diagnostic's range with the suggestion.  loft already COMPUTED
+/// the fix ("did you mean 'X'") — this just applies it.
+fn code_actions(msg: &Parsed) -> Vec<Parsed> {
+    let Some(params) = obj_get(msg, "params") else {
+        return Vec::new();
+    };
+    let Some(uri) = obj_get(params, "textDocument").and_then(|d| obj_str(d, "uri")) else {
+        return Vec::new();
+    };
+    let diags = match obj_get(params, "context").and_then(|c| obj_get(c, "diagnostics")) {
+        Some(Parsed::Array(a)) => a,
+        _ => return Vec::new(),
+    };
+    diags
+        .iter()
+        .filter_map(|d| {
+            let suggestion = obj_str(obj_get(d, "data")?, "suggestion")?;
+            let range = obj_get(d, "range")?.clone();
+            let edit = obj(vec![
+                ("range", range),
+                ("newText", Parsed::Str(suggestion.clone())),
+            ]);
+            // `{ uri: [TextEdit] }` — uri is a runtime String, so build the object directly.
+            let changes = Parsed::Object(vec![(uri.clone(), 0, Parsed::Array(vec![edit]))]);
+            Some(obj(vec![
+                ("title", Parsed::Str(format!("Change to `{suggestion}`"))),
+                ("kind", Parsed::Str("quickfix".into())),
+                ("diagnostics", Parsed::Array(vec![d.clone()])),
+                ("isPreferred", Parsed::Bool(true)),
+                ("edit", obj(vec![("changes", changes)])),
+            ]))
+        })
+        .collect()
 }
 
 fn publish_diagnostics(uri: &str, diagnostics: Vec<Parsed>) -> Parsed {
@@ -847,6 +900,7 @@ fn initialize_result() -> Parsed {
         ("hoverProvider", Parsed::Bool(true)),
         ("definitionProvider", Parsed::Bool(true)),
         ("referencesProvider", Parsed::Bool(true)),
+        ("codeActionProvider", Parsed::Bool(true)),
         (
             "renameProvider",
             obj(vec![("prepareProvider", Parsed::Bool(true))]),

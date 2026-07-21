@@ -409,6 +409,7 @@ impl Parser {
                             "Unknown field {}.{field} — did you mean '{s}'?",
                             self.data.def(dnr).name()
                         );
+                        self.lexer.suggest_last(&s);
                     } else {
                         diagnostic!(
                             self.lexer,

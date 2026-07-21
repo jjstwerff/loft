@@ -741,6 +741,81 @@ fn rename_produces_a_cross_file_workspace_edit() {
     let _ = s.child.wait();
 }
 
+// codeAction (A→B) — an unknown call publishes a diagnostic carrying a
+// structured suggestion; echoing it back in a codeAction yields a "Change to
+// `X`" quick-fix whose edit replaces the token.
+#[test]
+fn code_action_offers_the_did_you_mean_fix() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        matches!(field(caps, "codeActionProvider"), Some(Parsed::Bool(true))),
+        "advertises codeActionProvider"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///a.loft";
+    s.notify(
+        "textDocument/didOpen",
+        &open_params(uri, "fn main() {\n  nope(3)\n}\n"),
+    );
+    let note = s.recv();
+    let diags = field_arr(field(&note, "params").unwrap(), "diagnostics").unwrap();
+    let diag = &diags[0];
+    // Step A: the published diagnostic carries the structured suggestion.
+    assert_eq!(
+        field(diag, "data")
+            .and_then(|d| field_str(d, "suggestion"))
+            .as_deref(),
+        Some("move"),
+        "the diagnostic round-trips a structured suggestion: {diag:?}"
+    );
+
+    // Step B: echo the diagnostic back in a codeAction → a quick-fix edit.
+    let range = field(diag, "range").unwrap();
+    s.request(
+        2,
+        "textDocument/codeAction",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{uri}"}},"range":{},"context":{{"diagnostics":[{}]}}}}"#,
+            json::to_json_string(range),
+            json::to_json_string(diag),
+        ),
+    );
+    let reply = s.recv();
+    let actions = match field(&reply, "result") {
+        Some(Parsed::Array(a)) => a,
+        other => panic!("codeAction result is an array, got {other:?}"),
+    };
+    assert_eq!(actions.len(), 1, "one quick-fix: {actions:?}");
+    let a = &actions[0];
+    assert_eq!(field_str(a, "kind").as_deref(), Some("quickfix"));
+    assert!(
+        field_str(a, "title").unwrap_or_default().contains("move"),
+        "title names the fix: {a:?}"
+    );
+    let changes = field(field(a, "edit").unwrap(), "changes").unwrap();
+    let new_text = match changes {
+        Parsed::Object(e) => e
+            .iter()
+            .find_map(|(_, _, v)| match v {
+                Parsed::Array(edits) => edits.first().and_then(|ed| field_str(ed, "newText")),
+                _ => None,
+            })
+            .unwrap_or_default(),
+        _ => String::new(),
+    };
+    assert_eq!(
+        new_text, "move",
+        "the edit replaces the token with `move`: {a:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();

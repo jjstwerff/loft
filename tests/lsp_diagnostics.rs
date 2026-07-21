@@ -67,3 +67,24 @@ fn unknown_symbol_is_reported_at_the_reference_site() {
     // `name_pos` into every "Unknown function" diagnostic via `diagnostic_at!`.
     assert_eq!((*line, *col), (2, 3), "caret sits on `nope`, got {e:?}");
 }
+
+#[test]
+fn unknown_call_carries_a_structured_suggestion() {
+    // Step A: the "did you mean 'X'" fix is machine-readable on the DiagEntry
+    // (`suggestion`), not only in the prose — so codeAction needs no parsing.
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).expect("load stdlib");
+    p.parse_source("fn main() {\n  nope(3)\n}\n", "buf.loft", false);
+    let e = p
+        .diagnostics
+        .entries()
+        .iter()
+        .find(|e| e.message.contains("nope"))
+        .expect("an unknown-fn diagnostic");
+    assert_eq!(
+        e.suggestion.as_deref(),
+        Some("move"),
+        "the suggested replacement is structured: {:?}",
+        e.suggestion
+    );
+}

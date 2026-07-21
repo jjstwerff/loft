@@ -398,17 +398,23 @@ machinery from rename.  The reusable substrate, cited once:
 
 Steps, in dependency order:
 
-- **A — structured suggestion on `DiagEntry` (the shared enabler).** Add an additive
-  `suggestion: Option<String>` (or `replacement`) field to `DiagEntry`; populate it at the
-  ~handful of "did you mean 'X'" sites (`parser/mod.rs::call` unknown-fn, `parser/fields.rs`
-  unknown-field/type, `parser/objects.rs` unknown-variant/variable) alongside the prose.  The
-  `code` stays the frozen handle; the suggestion is machine-readable. XS-S; unlocks B and sharpens C.
-- **B — `textDocument/codeAction` (quick-fixes).** For each published diagnostic with a
-  `suggestion`, emit a `CodeAction {title, kind: "quickfix", edit}` whose `WorkspaceEdit`
-  replaces the offending token's range with the suggestion (reuse rename's `build_workspace_edit`).
-  Also fold the advisory lints that carry a concrete rewrite (strict-index → `for c in text`,
-  `#superseded` steer → the replacement symbol).  Advertise `codeActionProvider`.  *Gate:* a
-  buffer with `nope()` offers "Change to `move`"; applying it yields the edit.  S-M.
+- **A — structured suggestion on `DiagEntry` — DONE.** Added an additive
+  `suggestion: Option<String>` to `DiagEntry`, set via `Diagnostics::suggest_last` (a one-line
+  follow-up after the diagnostic — no new macro).  Wired at the unknown-fn (`parser/mod.rs::call`,
+  both sites), unknown-variable (`parser/objects.rs`), and unknown-field (`parser/fields.rs`)
+  "did you mean 'X'" sites; the prose is unchanged (purely additive, 0 regressions across
+  parse_errors/issues).  The `code` stays the frozen handle; the suggestion is now machine-readable.
+  *Gate:* `tests/lsp_diagnostics.rs::unknown_call_carries_a_structured_suggestion`.  (Remaining
+  "did you mean" sites — type/variant/vector — are additive, wire as needed.)
+- **B — `textDocument/codeAction` — DONE.** The published LSP `Diagnostic` round-trips the
+  suggestion on its `data` field; a `codeAction` echoing that diagnostic back yields a
+  `CodeAction {title: "Change to \`X\`", kind: "quickfix", edit}` whose `WorkspaceEdit` replaces
+  the token's range with the suggestion — no re-parse (the editor supplies the diagnostic).
+  Advertises `codeActionProvider`.  *Gate:*
+  `tests/lsp_transport.rs::code_action_offers_the_did_you_mean_fix` (real binary — `data.suggestion`
+  published, then the quick-fix edit).  Follow-up: fold the advisory lints that carry a concrete
+  rewrite (strict-index → `for c in text`, `#superseded` steer → the replacement symbol) by giving
+  them a `suggestion` too.
 - **C — `textDocument/completion`.** At the cursor, resolve context from the buffer text +
   a fresh parse: after `expr.` → members from `member_access` for the receiver type; otherwise
   in-scope names from `Data.definitions` (`classify` → item kind) + keywords.  Rank by

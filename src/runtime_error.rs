@@ -208,6 +208,7 @@ impl RuntimeError {
             line,
             col,
             code: None,
+            suggestion: None,
         }
     }
 }

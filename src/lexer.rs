@@ -591,6 +591,13 @@ impl Lexer {
         );
     }
 
+    /// Attach a machine-readable `suggestion` (a replacement token) to the
+    /// diagnostic just emitted — call right after a "did you mean 'X'?" so a
+    /// tool (`codeAction`) can apply `X` without parsing the prose.
+    pub fn suggest_last(&mut self, suggestion: &str) {
+        self.diagnostics.suggest_last(suggestion);
+    }
+
     /// Emit a diagnostic carrying a stable `code` (kebab-case kind slug).
     /// @PLN102 arc-E E1 — the code is the frozen identity; prose is free.
     pub fn diagnostic_coded(&mut self, level: Level, code: &'static str, message: &str) {

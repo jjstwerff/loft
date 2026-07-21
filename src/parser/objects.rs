@@ -1415,6 +1415,7 @@ impl Parser {
                         name,
                         s
                     );
+                    self.lexer.suggest_last(s);
                 } else {
                     diagnostic_at!(self.lexer, pos, Level::Error, "Unknown variable '{}'", name);
                 }

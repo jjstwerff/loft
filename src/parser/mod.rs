@@ -3067,6 +3067,7 @@ impl Parser {
                     Level::Error,
                     "Unknown function {name} — did you mean '{s}'?"
                 );
+                self.lexer.suggest_last(&s);
             } else {
                 diagnostic_at!(
                     self.lexer,
@@ -3264,6 +3265,7 @@ impl Parser {
                             Level::Error,
                             "Unknown function {name} — did you mean '{s}'?"
                         );
+                        self.lexer.suggest_last(&s);
                     } else {
                         diagnostic_at!(
                             self.lexer,
