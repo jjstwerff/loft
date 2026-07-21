@@ -1172,24 +1172,6 @@ jobs:
       - name: Hygiene — no dangling @F/@I tag
         run: scripts/feature_hygiene.sh --check
 
-  # Library catalogue staleness guard.  doc/claude/LIBRARIES.md is the in-repo,
-  # agent-facing list of every installable registry library — its whole value is
-  # being CURRENT, so a registry change must force a regen + commit.  Generate
-  # from the COMMITTED snapshot (doc/claude/registry-index-snapshot.json), not
-  # the live network: CI live-fetch is unreliable and the registry-coverage job
-  # already treats network trouble as a skip, so a blocking gate cannot depend on
-  # it.  `make libcatalogue` (live) refreshes both the snapshot and the doc; this
-  # job re-renders from the snapshot and fails on any diff — so a stale catalogue
-  # (snapshot bumped without regen, or doc hand-edited) is caught at PR time.
-  # python3-stdlib only, so no toolchain/build needed — a fast (<10s) gate.
-  libcatalogue-check:
-    name: Library catalogue up to date
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - name: Regenerate from snapshot and fail on drift
-        run: python3 scripts/gen-library-catalogue.py --index doc/claude/registry-index-snapshot.json --check
-
   # @PLAN53 — surface the latest nightly health as a sticky PR comment, from
   # BOTH nightly sources: miri.yml (Miri / ASan / toolchain-matrix) and the
   # scheduled daily full-matrix CI run (the only place Windows runs — a red

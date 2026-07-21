@@ -92,3 +92,12 @@ native-auto/
 /target-da/
 /*.bin
 test_loft_*.bin
+
+# @PLN112 revised — the library catalogue is a LOCAL build, not committed data.
+# `make libcatalogue` regenerates these on demand (they mirror the live registry
+# + origin/main, so committing them only churned the repo nightly for no benefit).
+/doc/claude/LIBRARIES.md
+/doc/claude/registry-index-snapshot.json
+/doc/claude/unreleased-snapshot.json
+/doc/claude/loft-release-snapshot.json
+/doc/claude/applications-snapshot.json

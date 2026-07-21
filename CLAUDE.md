@@ -84,11 +84,13 @@ src/main.rs            CLI; loads default/ then user file
   rules: [CODE.md](doc/claude/CODE.md).
 - stdlib load order: `01_code.loft` (operators/math/text/collections) → `02_files.loft` (I/O) →
   `03_text.loft`.
-- **Before non-trivial functionality, check [LIBRARIES.md](doc/claude/LIBRARIES.md) + `loft install`** — don't reimplement.
+- **Before non-trivial functionality, check the library catalogue (`make libcatalogue`) + `loft install`** — don't reimplement.
   Writing/reviewing `.loft`: **loft-write skill**. Language ref: [LOFT.md](doc/claude/LOFT.md), [STDLIB.md](doc/claude/STDLIB.md).
-- **A library's API: read `LIBRARIES.md`, NEVER a clone or installed copy (@PLN112).** The
-  catalogue is generated + always-current (`published` + each lib's `origin/main`, breakage-
-  flagged); a local clone / `~/.loft/registry/<pkg>-<ver>/` can silently lag `origin/main`
+- **A library's API: build the catalogue with `make libcatalogue`, then read the (local, git-ignored)
+  `doc/claude/LIBRARIES.md` — NEVER a clone or installed copy (@PLN112).** The catalogue is a **local
+  build, not committed data** — a generated view of `published` + each lib's `origin/main` (breakage-
+  flagged), rebuilt on demand so it can't go stale (committing it only churned the repo for no benefit);
+  a local clone / `~/.loft/registry/<pkg>-<ver>/` can silently lag `origin/main`
   (the `find`→`search` failure that motivated @PLN112). For the machine-/context sources run
   the overlay: `scripts/lib-overlay.py <name>` (local checkout + this project's pin),
   `scripts/proposal-review.py <name> <ref>` (a proposed candidate). We never auto-delete a
@@ -212,8 +214,8 @@ strict: [formal/README.md](doc/claude/formal/README.md) (rules + deviations driv
 [ROADMAP.md](doc/claude/ROADMAP.md) by milestone · [BROADENING.md](doc/claude/BROADENING.md) beyond games ·
 [lib_plans/README.md](doc/claude/lib_plans/README.md) (legacy) · [STACKTRACE.md](doc/claude/STACKTRACE.md) · [SANDBOX.md](doc/claude/SANDBOX.md).
 
-**Libraries / registry / packages:** [LIBRARIES.md](doc/claude/LIBRARIES.md) state of the loft
-distribution — core (version + binary sha) + libraries + applications built with loft ·
+**Libraries / registry / packages:** `LIBRARIES.md` (generated on demand — `make libcatalogue`, not
+committed) state of the loft distribution — core (version + binary sha) + libraries + applications built with loft ·
 [LIBRARY_BRANCHES.md](doc/claude/LIBRARY_BRANCHES.md) in-flight (unmerged) lib branches ·
 [PACKAGES.md](doc/claude/PACKAGES.md) format/targets · [PKG_REGISTRY.md](doc/claude/PKG_REGISTRY.md) registry MVP ·
 [LIBRARY_AUTHORING.md](doc/claude/LIBRARY_AUTHORING.md) / [LIBRARY_CHECKLIST.md](doc/claude/LIBRARY_CHECKLIST.md) ·

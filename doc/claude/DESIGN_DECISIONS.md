@@ -1795,7 +1795,7 @@ non-uniform.
 ## C84 — `server` ships as minimal TCP/WS primitives, not a fully-featured HTTP framework
 
 **Catalogue:** the `server` library (`loft-lang/loft-libs-net`); see
-[LIBRARIES.md](LIBRARIES.md). Supersedes the declined design once held by
+`LIBRARIES.md`. Supersedes the declined design once held by
 `lib_plans/future/08-server/`.
 
 ### Question

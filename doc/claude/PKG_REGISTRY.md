@@ -1029,7 +1029,7 @@ These need decisions before implementation starts.
 verifies the index, filters case-insensitively over name / description / categories, and
 prints one `name <latest> — description` line per hit, sorted alphabetically.  That ships
 the *discovery loop everywhere* goal — from any loft project, not just the loft-repo
-in-repo catalogue ([LIBRARIES.md](LIBRARIES.md)) — but it is the minimal cut.
+in-repo catalogue (`LIBRARIES.md`) — but it is the minimal cut.
 
 **Shipped 2026-06-19 (commit `1a129a92`):** steps S0–S5 below brought it to the advertised
 surface — shared loader, ranking, `⚡auto-use` marker, `--json` (through loft's own JSON
