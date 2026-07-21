@@ -71,6 +71,37 @@ Two more standing fixups are the same pressure, already in the tree:
 
 Per-shape fixups accreting around one missing rule is the tell.
 
+## Scope: the call-argument push is the ONLY broken destination
+
+Step 0's destination axis (2026-07-21, `probes/run.sh`, both backends) narrows this
+a long way. With two `Reference` elements:
+
+| destination | cell | result |
+|---|---|---|
+| local | `ref2_local` | pass |
+| struct field | `ref2_field` | pass |
+| function return | `ref2_return` | pass |
+| element mutation (`TuplePut`) | `tupleput_ref` | pass |
+| **call argument** | `ref2`, `ref3`, `ref4`, `vec2` | **mismatch** |
+
+So the packed layout is not merely *declared* — every other destination already
+**lays tuples down packed and reads them back correctly**. Only the argument push
+walks the elements through ops whose natural step is 8-rounded. The callee agrees
+with the packed side: `bytecode-comparisons/ref2.before.txt` shows `n_f` doing
+`ReserveFrame(size=24)` and reading `var[0]` / `var[12]`, while the call site's two
+`VarRef` pushes advance `[32]` → `[48]`, i.e. 16 apart.
+
+The arity model is confirmed linear at n = 2, 3, 4 (24v32, 40v48, 48v64) — 4B lost
+per reference, no fixed header term.
+
+**This is the over-broad check from the design protocol.** The universal rule
+("everything reads `element_offsets`") is *true*, but rewriting every producer to
+enforce it would be blast radius far past the defect, which sits in a single
+consumer. The special circumstance is that the consumers already hold the right
+information — the callee's frame is already packed-shaped. So the fix is to make the
+**argument push** lay elements down at `element_offsets`, like the four destinations
+that already work; the 26 `element_offsets` sites stay untouched.
+
 ## The invariant
 
 > **A tuple is ONE packed buffer. Its element offsets are `data::element_offsets`
@@ -118,18 +149,32 @@ width fix may not touch them. `Str { *const u8, u32 }` is a raw pointer into a
 buffer, so the likely mechanism is ownership/lifetime of a text element inside a
 tuple (a dangling `ptr` after the source is freed), not placement.
 
-**The decisive evidence is a backend split.** Running the corpus on both backends
-(`probes/run.sh`, 2026-07-21):
+**A backend split was claimed here and it was wrong — do not reuse that argument.**
+An earlier draft said the width family failed on *both* backends while the text
+family failed only on `--interpret`, and used that contrast to separate them. The
+contrast was an artifact: the width `debug_assert` lives in `generate_call`, i.e. in
+**codegen**, which runs before either backend executes — so it fires under
+`--native` too while the native *runtime* is perfectly correct.
 
-- width family (`ref2`, `ref3`, `vec2`) — mismatch on **both** `--interpret` and
-  `--native`;
-- text family (`ref_text`, `fn_text_read`, `fn_text_call`) — SIGSEGV on
-  `--interpret`, **correct output on `--native`**.
+Measured at runtime with the release binary (2026-07-21):
 
-Shared layout *metadata* would hit both generators equally, because they read the
-same IR and the same `element_offsets`. A fault only one backend shows is in that
-backend's value delivery, not in the layout the two share. Treat the text family as
-a separate defect unless step 2 proves otherwise.
+| cell | `--interpret` | `--native` |
+|---|---|---|
+| `ref2` | SIGSEGV | `10,20` ✔ |
+| `ref4` | `2,null,0,360287970323857408` (silent garbage) | `1,2,3,4` ✔ |
+| `vec2` | SIGSEGV | `7,9` ✔ |
+| `ref_text`, `fn_text_*` | SIGSEGV | correct ✔ |
+
+**Every** failure in this corpus is interpreter-runtime only; `--native` is correct
+throughout. That further localizes the defect to the interpreter's bytecode
+argument-push (which is what step 3 targets) and makes step 6 cheap — native already
+works and only has to be kept that way.
+
+What still separates the two families is weaker but real: the width family has an
+arithmetic model confirmed at n = 2, 3, 4 plus a codegen assert that names it, while
+the text cells' widths already agree (32 both ways) and nothing fires. Step 2 still
+decides it by probe, and the expectation is "different root, separate plan" — but on
+the width evidence, not on a backend split.
 
 Absorbing these into the layout story because they are in the same test file is
 precisely the over-unification this design must avoid. Step 2 decides it with a
@@ -191,26 +236,37 @@ include it. Different root → file it separately with its own matrix, and this 
 explicitly does **not** claim it. Do not proceed to step 3 with this unanswered —
 it decides what "fixed" means.
 
-### Step 3 — one owner for the element advance (interpreter read path only)
+### Step 3 — lay the argument push down packed
 
-Narrowest real change: in `codegen.rs:3316` (`Type::Tuple` read-by-element), stop
-letting each op's natural step decide, and advance to the next
-`element_offsets[i+1]` instead. One helper, one place; the ad-hoc fn-ref correction
-at `3336` should become redundant — leave it in place for now and assert it is a
-no-op rather than deleting it (deletion is step 5).
+Per § Scope, this is the whole defect. In the tuple element-push path used for call
+arguments (`codegen.rs:3316`'s `Type::Tuple` arm, reached via `generate_call`), stop
+letting each op's natural step set the next element's position and advance to
+`element_offsets[i+1]` instead — the layout the callee's frame already expects.
 
-Gate: `(P,P)`, `(P,P,P)`, `(vector,vector)` now match; the coincidence cells
-`(P,integer)`/`(integer,P)` still pass with *correct hand-computed values*; the full
-201-cell matrix green on `--interpret`; leak-clean under `--interpret`
-(`check_store_leaks` needs `--interpret` — bare `loft` is native and skips it).
+One helper, one place. The ad-hoc fn-ref correction at `codegen.rs:3336` should
+become redundant; leave it and assert it is a no-op rather than deleting it
+(deletion is step 5).
 
-### Step 4 — remaining stack-side sites
+Gate: `ref2`/`ref3`/`ref4`/`vec2` match; the four coincidence cells
+(`ref_int`, `int_ref`, `int_ref_int`, `ref_int_ref`) still pass with *correct
+hand-computed values*, not via a compensating adjustment; the four already-working
+destinations (`ref2_local`, `ref2_field`, `ref2_return`, `tupleput_ref`) show a
+**byte-identical** introspect diff — they are not supposed to move; full 201-cell
+matrix green on `--interpret`; leak-clean under `--interpret` (`check_store_leaks`
+needs `--interpret` — bare `loft` is native and skips it).
 
-Route the other stack-side element pushes/reads through the same helper, one commit
-per site group (codegen tuple-get/put; the `#493` `OpSetInt4` branch; parser paths
-that compute a stack offset). `parallel.rs` and `database/format.rs` are **record**
-consumers — they must not change; if a change there is ever needed, the invariant is
-wrong and the plan stops.
+### Step 4 — only what step 3 proves is still broken
+
+**Do not pre-emptively route the other sites.** The destination axis says they are
+already correct, so touching them is blast radius without a defect. Re-run the full
+corpus after step 3 and extend *only* to a site the corpus still shows failing —
+candidates in likelihood order: the `#493` `OpSetInt4` branch, then par-worker input
+(`state/mod.rs:4797`'s path, which shares the regime but was fixed toward packed
+already).
+
+`parallel.rs`, `database/format.rs` and the DB format are **record** consumers and
+must not change. If a change is ever needed there, the invariant is wrong and the
+plan stops.
 
 Gate per commit: the corpus stays green on both backends, and the introspect diff is
 non-empty **only** for the site touched.

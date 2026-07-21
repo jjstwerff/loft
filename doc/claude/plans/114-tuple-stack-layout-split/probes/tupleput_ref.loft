@@ -1,0 +1,2 @@
+struct P { v: integer }
+fn main() { a = P { v: 10 }; b = P { v: 20 }; c = P { v: 30 }; t = (a, b); t.0 = c; print("{t.0.v},{t.1.v}\n"); }

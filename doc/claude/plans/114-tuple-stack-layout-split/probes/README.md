@@ -25,16 +25,24 @@ Every cell passes the tuple as a **call argument** unless noted.
 | `fn_int_call` | `(fn, integer)`, calls `t.0(7)` | `5` then `49` | pass |
 | `fn2` | `(fn, fn)`, calls both | `14` | pass |
 | `ref2_local` | `(P, P)` as a **local**, not an arg | `10,20` | pass |
+| `int_ref_int` | `(integer, P, integer)` — ref in the **middle** | `1,5,9` | pass — **by coincidence** |
+| `ref_int_ref` | `(P, integer, P)` | `5,9,7` | pass — **by coincidence** |
+| `ref2_field` | `(P,P)` into a **struct field** | `10,20` | pass |
+| `ref2_return` | `(P,P)` **returned** from a fn | `10,20` | pass |
+| `tupleput_ref` | `(P,P)` then `t.0 = c` (**TuplePut**) | `30,20` | pass |
 | `ref2` | `(P, P)` | `10,20` | **FAIL(w) 24 v 32** |
 | `ref3` | `(P, P, P)` | `1,2,3` | **FAIL(w) 40 v 48** |
+| `ref4` | `(P, P, P, P)` | `1,2,3,4` | **FAIL(w) 48 v 64** |
 | `vec2` | `(vector, vector)` | `7,9` | **FAIL(w) 24 v 32** |
 | `ref_text` | `(P, text)` | `10,x` | **SEGV (interpret only)** |
 | `fn_text_read` | `(fn, text)`, reads `t.1` only | `tag` | **SEGV (interpret only)** |
 | `fn_text_call` | `(fn, text)`, reads `t.1` + calls `t.0` | `tag` then `49` | **SEGV (interpret only)** |
 
-The width family mismatches on **both** backends; the text family crashes on
-`--interpret` and produces the **correct** output on `--native`. That split is the
-main reason the plan treats them as separate defects — see below.
+**Every failure here is `--interpret` only; `--native` is correct for all 24 cells.**
+Beware a trap this corpus already sprang once: under the debug-assertions build the
+width mismatch is reported for `--native` too, because the assert lives in
+`generate_call` (codegen), which runs before either backend executes. That is *not*
+a native runtime failure. Check runtime behaviour with the release binary.
 
 `ref2_min` / `fn_text_call_min` are the two originals reduced from
 `tests/tuple_matrix.rs::e5_d2_struct_ref_arg` and `::e4_d2_closure_arg` — keep them
@@ -42,33 +50,57 @@ byte-stable so the plan's fix can be checked against the exact shapes CI runs.
 
 ## How to read the two failure families
 
-**Width family** (`ref2`, `ref3`, `vec2`) — packed vs stepped element advance.
-Packed `DbRef` is 12B, stepped is 16B, so the deficit is 4B per reference and scales
-with arity (24 v 32 at n=2, 40 v 48 at n=3). The passing mixed cells are two errors
-cancelling: `(P,integer)` declares 12+8 = 20 → stepped to 24, and pushes 16+8 = 24.
-**Those three "pass" rows are the canaries** — any layout change moves them, and they
-must stay green with hand-checked values, not by a compensating adjustment.
+**Width family** (`ref2`, `ref3`, `ref4`, `vec2`) — packed vs stepped element
+advance. Packed `DbRef` is 12B, stepped is 16B, so the deficit is 4B per reference
+and scales linearly with arity: 24 v 32 at n=2, 40 v 48 at n=3, 48 v 64 at n=4. No
+fixed header term.
 
-**Text family** (`ref_text`, `fn_text_read`, `fn_text_call`) — *a different bug*.
-The widths already agree (`(P,text)`: packed 12 → text aligns 8 → offset 16, total
-32; pushed 16+16 = 32) and it still segfaults. Decisively, it segfaults on
-`--interpret` and returns the **correct** value on `--native`: both generators read
-the same IR and the same `element_offsets`, so a fault only one of them shows cannot
-be in the layout they share. `Str { *const u8, u32 }` is a raw pointer, so
-interpreter-side element lifetime (a dangling `ptr` after the source is freed) is
-the likely mechanism. Plan step 2 confirms with `LOFT_LOG=ref_debug` +
-`--show-ownership`; expect a separate plan. Do not fold them in because they share a
-test file.
+**Only the call-argument destination is broken.** `ref2_local`, `ref2_field`,
+`ref2_return` and `tupleput_ref` all place two references correctly — so the packed
+layout is not just *declared*, it is what every other destination already writes and
+reads. That is why @PLN114 fixes the argument push instead of rewriting the 26
+`element_offsets` sites.
+
+The coincidence cells (`ref_int`, `int_ref`, `int_ref_int`, `ref_int_ref`) are two
+errors cancelling: `(P,integer)` declares 12+8 = 20 → padded to 24, and pushes
+16+8 = 24; `(P,integer,P)` declares 36 → 40 and pushes 16+8+16 = 40. **Those rows
+are the canaries** — any layout change moves them, and they must stay green with
+hand-checked values, never via a compensating adjustment.
+
+**Text family** (`ref_text`, `fn_text_read`, `fn_text_call`) — *probably a different
+bug*. The widths already agree (`(P,text)`: packed 12 → text aligns 8 → offset 16,
+total 32; pushed 16+16 = 32) and it still segfaults, and no assert fires.
+`Str { *const u8, u32 }` is a raw pointer, so interpreter-side element lifetime (a
+dangling `ptr` after the source is freed) is the likely mechanism. Plan step 2
+confirms with `LOFT_LOG=ref_debug` + `--show-ownership`; expect a separate plan. Do
+not fold them in because they share a test file — and do not use "it's
+interpret-only" as the argument, because so is everything else here.
 
 `fn2` is worth keeping for a different reason: my first hand-computed expectation for
 it was wrong (13; the answer is `3*3 + 4+1` = 14) and loft was right. The cell earns
 its place by having caught the *reviewer*.
 
+## Silent corruption, not just crashes
+
+`ref4` on `--interpret` with a **release** binary prints
+`2,null,0,360287970323857408` instead of `1,2,3,4`. It does not crash. A 4-element
+tuple of references passed as an argument silently returns garbage — including a
+`null` where a live reference should be.
+
+That is the strongest argument for plan step 1 (make the mismatch loud) and step 7
+(un-ignore these suites): the crashing cells were merely the loud members of a family
+whose quiet members return wrong answers.
+
+Note the counts differ by build — `run.sh` reports 9 differing rows on the release
+binary and 14 on the @PLN85 debug-assertions build. The release number is the
+**under**-report: without the asserts, a width mismatch either segfaults or silently
+corrupts, and the corrupting cells look like ordinary wrong answers.
+
 ## Running
 
 ```bash
-./run.sh                          # release build, both backends
-./run.sh ../../../../target-da/release/loft   # debug-assertions build: widths attribute themselves
+./run.sh        # release build, both backends
+./run.sh ../../../../../target-da/release/loft   # @PLN85 build: widths attribute themselves
 ```
 
 A plain build compiles every lib-side `debug_assert!` out

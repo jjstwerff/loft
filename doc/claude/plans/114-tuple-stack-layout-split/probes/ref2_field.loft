@@ -1,0 +1,3 @@
+struct P { v: integer }
+struct Pair { t: (P, P) }
+fn main() { a = P { v: 10 }; b = P { v: 20 }; pair = Pair { t: (a, b) }; print("{pair.t.0.v},{pair.t.1.v}\n"); }

@@ -11,7 +11,7 @@
 set -uo pipefail
 cd "$(dirname "$0")"
 
-LOFT=${1:-../../../../target/release/loft}
+LOFT=${1:-../../../../../target/release/loft}
 [ -x "$LOFT" ] || { echo "no loft binary at $LOFT" >&2; exit 2; }
 
 # Hand-computed expectations.  Keep in sync with README.md's table.
@@ -22,6 +22,9 @@ declare -A EXP=(
   [ref2_local]="10,20"    [ref2]="10,20"         [ref3]="1,2,3"
   [vec2]="7,9"            [ref_text]="10,x"      [fn_text_read]="tag"
   [fn_text_call]="tag 49" [ref2_min]="10,20"     [fn_text_call_min]="sq-tag 49"
+  # step-0 additions: arity, middle-slot position, and the destination axis
+  [ref4]="1,2,3,4"        [int_ref_int]="1,5,9"  [ref_int_ref]="5,9,7"
+  [ref2_field]="10,20"    [ref2_return]="10,20"  [tupleput_ref]="30,20"
 )
 
 fail=0
