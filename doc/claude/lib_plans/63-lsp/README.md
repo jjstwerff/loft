@@ -365,14 +365,72 @@ operation a working developer expects from a "real language" IDE.
    LSP.2 needs a `Workspace` aggregate with cross-file resolution and
    incremental update on `didChange`.  Naturally a HashMap keyed by
    `(file, def_nr)` plus reverse indices keyed by name and by
-   `Symbol → Vec<Reference>`.
+   `Symbol → Vec<Reference>`.  **First cut DONE** — `loft::lsp::WorkspaceIndex`
+   (name-keyed reverse index of identifier occurrences).  Remaining: the
+   type/scope-resolved layer (step F) + `didSave` incremental update.
 2. **Completion engine.**  At cursor `(file, line, col)` resolve the
    syntactic context (after `expr.`, inside fn-call args, top-level)
    and return a ranked candidate list.  ~MH effort — the first
-   completion that's *helpful* not *noisy* takes work.
+   completion that's *helpful* not *noisy* takes work.  (Step C; the
+   ranking primitive `suggest_similar` + `member_access` already exist.)
 3. **Fix-it catalogue.**  Most diagnostics already know the fix
    ("add `&` here", "type was `text`, expected `integer`").  Surface
-   each as a `WorkspaceEdit` the IDE can apply.
+   each as a `WorkspaceEdit` the IDE can apply.  (Steps A+B; the fixes
+   are computed today, only emitted as message prose — step A structures them.)
+
+### Build order — remaining features (REUSE-first)
+
+The inspection (2026-07) confirmed loft already does the analysis these features
+need — they are mostly WIRING existing outputs to LSP, reusing the `WorkspaceEdit`
+machinery from rename.  The reusable substrate, cited once:
+
+- **`diagnostics::suggest_similar(name, &candidates)`** (pub, Levenshtein ≤2) — the
+  nearest-name primitive behind every "did you mean 'X'"; plus `Parser::suggest_function_name`
+  / `suggest_field_name` (pub) and `find_method_receivers`.  Feeds completion + codeAction.
+- **`api_surface::classify(data, d) -> (kind, name)`** (pub) — the fn/method/struct/enum/…
+  classification = semantic-token kinds + completion-item kinds.
+- **`Data::variables() -> &Function`, `Function::var_type(var_nr) -> &Type`, `Data::type_name_str`**
+  — per-local resolved types for inlayHint (the same spelling hover uses).
+- **`Parser.member_access: HashMap<(type_def, member), Vec<String>>`** — the parser already
+  records member accesses → `expr.` completion + scope/type resolution.
+- **`DiagEntry { level, message, file, line, col, code }`** — `code` is the stable handle; the
+  suggestion is currently only in the message PROSE (the one real gap).
+
+Steps, in dependency order:
+
+- **A — structured suggestion on `DiagEntry` (the shared enabler).** Add an additive
+  `suggestion: Option<String>` (or `replacement`) field to `DiagEntry`; populate it at the
+  ~handful of "did you mean 'X'" sites (`parser/mod.rs::call` unknown-fn, `parser/fields.rs`
+  unknown-field/type, `parser/objects.rs` unknown-variant/variable) alongside the prose.  The
+  `code` stays the frozen handle; the suggestion is machine-readable. XS-S; unlocks B and sharpens C.
+- **B — `textDocument/codeAction` (quick-fixes).** For each published diagnostic with a
+  `suggestion`, emit a `CodeAction {title, kind: "quickfix", edit}` whose `WorkspaceEdit`
+  replaces the offending token's range with the suggestion (reuse rename's `build_workspace_edit`).
+  Also fold the advisory lints that carry a concrete rewrite (strict-index → `for c in text`,
+  `#superseded` steer → the replacement symbol).  Advertise `codeActionProvider`.  *Gate:* a
+  buffer with `nope()` offers "Change to `move`"; applying it yields the edit.  S-M.
+- **C — `textDocument/completion`.** At the cursor, resolve context from the buffer text +
+  a fresh parse: after `expr.` → members from `member_access` for the receiver type; otherwise
+  in-scope names from `Data.definitions` (`classify` → item kind) + keywords.  Rank by
+  `suggest_similar` distance to the typed prefix (in-scope first, then stdlib).  Advertise
+  `completionProvider {triggerCharacters: ["."]}`.  *Gate:* `foo.` after a `struct Foo` lists its
+  fields/methods; a prefix lists matching top-level defs.  M (the "helpful not noisy" cut).
+- **D — `textDocument/semanticTokens`.** Lex the buffer (`scan_identifiers`); classify each
+  identifier by `classify` of its resolved def (lexical first cut = by name, like references) →
+  the token type array.  Advertise `semanticTokensProvider` with a legend.  *Gate:* a fn name
+  tokenizes as `function`, a struct as `struct`.  S-M lexical; sharpens with F.
+- **E — `textDocument/inlayHint`.** Parse; for each `let`-style local binding, read its
+  `Function::var_type` → `type_name_str` and emit an inlay hint after the name.  Advertise
+  `inlayHintProvider`.  *Gate:* `x = 1` shows `: integer`.  S-M.
+- **F — type/scope-aware precision (the FOUNDATION upgrade).** Replace the lexical name-match in
+  find-references / rename with resolution: for each occurrence, resolve to its binding via the
+  parser's scope tables + `member_access`, so `references("len")` returns only the intended
+  `text.len`, and rename is safe for locals/methods.  Lifts references, rename, semanticTokens
+  (D), and completion (C) at once.  M-L — the one genuinely-larger piece; do after A-E ship value.
+
+Smaller follow-ups already noted: workspace-index invalidation on `didSave`; `TagIndex` mtime
+refresh; **T4** tag completion (fold into C).  **Extract-function** (`refactor.extract`, the table
+row above) stays L-effort and separate — it needs the data-flow engine, not just wiring.
 
 ### Incremental parsing
 
