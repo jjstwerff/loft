@@ -1597,6 +1597,66 @@ fn enclosing_fn(data: &Data, cursor_line: u32) -> Option<u32> {
         .max_by_key(|&d| data.def(d).position.line)
 }
 
+// ── extract-function (E1+, EXTRACT.md) ───────────────────────────────────────
+// A function body is a `Value::Block` whose `operators` interleave `Value::Line(n)`
+// markers before each statement; a nested block (`for`/`if` body) carries its OWN
+// `Line` markers INSIDE the nested `Block`, so those lines are not top-level markers
+// — a selection inside one maps to no top-level statement and is refused.
+
+/// @PLN63 E1 — resolve a 1-based line selection `[start_line, end_line]` to the
+/// enclosing top-level function and the contiguous TOP-LEVEL statement operators it
+/// covers: `(fn_def, first_op, last_op)`, i.e. `body.operators[first_op..=last_op]`
+/// (including the `Line` markers) are the selected statements — the slice the E2/E3
+/// data-flow then analyses.
+///
+/// `None` when the selection does not map to WHOLE top-level statements: no
+/// enclosing function, a non-block body (e.g. a `#rust` fn), an empty/reversed
+/// range, a start that is not a statement boundary (a `Line` marker at
+/// `start_line`), or a range whose lines are inside a nested block.
+#[must_use]
+pub fn extract_range(
+    text: &str,
+    name: &str,
+    stdlib_dir: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Option<(u32, usize, usize)> {
+    if end_line < start_line {
+        return None;
+    }
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
+    let data = &p.data;
+    let f = enclosing_fn(data, start_line)?;
+    let crate::data::Value::Block(b) = data.def(f).code().unspan() else {
+        return None;
+    };
+    // Top-level source-line markers, in order: (line, operator index).
+    let marks: Vec<(u32, usize)> = b
+        .operators
+        .iter()
+        .enumerate()
+        .filter_map(|(i, op)| match op {
+            crate::data::Value::Line(n) => Some((*n, i)),
+            _ => None,
+        })
+        .collect();
+    // The selection must START at a top-level statement boundary (a `Line == start_line`).
+    let first = marks.iter().position(|(l, _)| *l == start_line)?;
+    // The last top-level statement whose line is within the selection.
+    let last = marks.iter().rposition(|(l, _)| *l <= end_line)?;
+    if last < first {
+        return None;
+    }
+    let first_op = marks[first].1;
+    // Include everything up to the operator before the NEXT top-level statement (or
+    // the block end) — the last selected statement's whole body.
+    let last_op = marks
+        .get(last + 1)
+        .map_or(b.operators.len(), |&(_, i)| i)
+        .saturating_sub(1);
+    Some((f, first_op, last_op))
+}
+
 /// `classify` label → LSP `CompletionItemKind`.
 fn completion_kind(kind: &str) -> u32 {
     match kind {

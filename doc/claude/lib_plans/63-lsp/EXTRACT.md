@@ -108,12 +108,18 @@ proven correct.
   `quickfix_from_diagnostic` so the two action sources compose. *Gate met:*
   `lsp_transport::extract_function_offered_on_a_multiline_selection` (real binary — the
   kind is advertised; offered on a 2-line selection, absent on a bare cursor).
-- **E1 — selection → statement slice.** `lsp::extract_range(text, sel) ->
-  Option<(fn_def, a, b)>`: resolve the enclosing fn, map the selection's line range
-  to a contiguous `operators[a..=b]` via `Span` positions. Refuse a selection that
-  splits a statement or crosses a block boundary (returns `None` → no action). *Gate:*
-  unit — a 2-statement selection yields the right `(a,b)`; a mid-statement selection
-  yields `None`.
+- **E1 — selection → statement slice — DONE.** `lsp::extract_range(text, name,
+  stdlib_dir, start_line, end_line) -> Option<(fn_def, first_op, last_op)>`: resolves
+  the enclosing top-level fn (`enclosing_fn`), then maps the line range to the
+  contiguous TOP-LEVEL statement operators via the body block's **`Value::Line(n)`
+  markers** (NOT `Span` — a plain `a = 1` carries no Span; only fault-prone
+  expressions do. `Line` markers precede every statement, and a nested block's
+  markers live INSIDE its nested `Block`, so a selection inside one maps to no
+  top-level statement and is refused). Refuses a start that is not a statement
+  boundary, a reversed/empty range, a non-block (`#rust`) body, and a nested-block
+  interior. *Gate met:* `tests/extract.rs` (a slice maps + widens with more
+  statements; the signature line / closing brace / reversed range / past-EOF refuse;
+  a line inside a `for` body refuses while the whole `for` maps).
 - **E2 — inputs (parameters).** The upward-exposed-use scan over the slice →
   `Vec<var_nr>` inputs (order = first-use order), each with `name` + `type_name_str`.
   *Gate:* unit — `{ y = x + 1; z = y * 2 }` selecting both statements, with `x` from
