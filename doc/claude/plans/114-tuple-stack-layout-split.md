@@ -1,4 +1,13 @@
-# Tuple layout: one owner for element placement
+# Tuple layout: the call-argument push violates the packed layout
+
+> **Reframed after step 0.** This started as "split two competing layout regimes and
+> give tuples one owner". The probe corpus showed there is no competition to
+> resolve: **packed already wins at every destination** — local, struct field,
+> return, `TuplePut` — and the `Call` op's own `args_size` and the callee's
+> `ReserveFrame` agree with it. Exactly one path disagrees: the call-argument push,
+> which derives element placement implicitly from each op's 8-rounded step instead
+> of reading `element_offsets`. So this is a **repair of a lone violator**, not a
+> design. The steps below are sized for that.
 
 > **@PLN114** — [loft-lang/plans#114](https://github.com/loft-lang/plans/issues/114).
 > Status: design. Nothing here is implemented — the investigation below stopped at
@@ -120,19 +129,25 @@ More mechanism, more sites, against the precedent.
 
 ## Re-assertion sites (the prospective tell)
 
-The invariant is only safe if **one** place decides how far a tuple element push
-advances. Today that decision is spread across every op that can push an element,
-and omitting it is **silent** — a wrong offset, not a compile error. Counted:
+**An earlier draft of this section was wrong and the correction matters.** It counted
+`element_offsets` (39 sites, 26 outside `data.rs`) and `element_size` (`parallel.rs`
+30, `native.rs` 16, …) and called that count the brittleness — "N is large, so the
+design must not rely on remembering it at each site."
 
-- `element_offsets`: 39 sites, 26 outside `data.rs` (codegen 12, parser 12,
-  `parallel.rs` 1, `generation/ops/parallel.rs` 1, `state/mod.rs` 1).
-- `element_size`: `parallel.rs` (30), `native.rs` (16), `data.rs` (13),
-  parser (11), `sandbox.rs` (2), `database/format.rs` (1), `variables/mod.rs` (1).
+Step 0 falsified that. Those sites are **already consistent with each other**; not
+one of them is a violator. `N` is not the risk here, and a fix that "routes all N
+through a helper" would be churn against working code.
 
-`N` is large, so the design must **not** rely on remembering it at each site. Two
-cures, both used below: collapse the *advance* decision to one helper (step 3), and
-make omission **loud** before changing anything (step 1) so any site that forgets
-trips an assert instead of corrupting a frame.
+The real brittleness is a different shape, and `N = 1`: exactly one path
+**derives** element placement (implicitly, from each op's 8-rounded stack step)
+where every other path **reads** it (`element_offsets`). A derived fact that must
+coincide with a stored one, with nothing checking the two agree, is the defect —
+and when they disagree the failure is **silent** (`ref4` returns
+`2,null,0,360287970323857408`, no crash) or a SIGSEGV, never a compile error.
+
+So the cure is not "collapse N sites" but: make the derived path *read* the stored
+fact (step 3), and make any future divergence **loud** (step 1) — still worth doing,
+now justified by the silent corruption rather than by a site count.
 
 Note the seam already exists: `variables::size(tp, context)` takes
 `Context {Argument, Reference, Result, Constant, Variable}` — all stack/frame
@@ -247,6 +262,14 @@ One helper, one place. The ad-hoc fn-ref correction at `codegen.rs:3336` should
 become redundant; leave it and assert it is a no-op rather than deleting it
 (deletion is step 5).
 
+**The target bytecode is already captured** — the codegen gate is satisfied before
+the edit, from a real runnable artifact rather than a guess. `ref2_local` (working)
+stores the tuple's elements **12 apart** (`var[56]`, `var[68]`); `ref2` (broken)
+pushes them **16 apart** (`[32]` → `[48]`) while its own
+`Call(args_size=24, fn=n_f)` and the callee's `ReserveFrame(size=24)` both say 24.
+Two of the three parties already agree; step 3 makes the third agree. Diff
+`bytecode-comparisons/ref2.before.txt` against `ref2_local.before.txt` while working.
+
 Gate: `ref2`/`ref3`/`ref4`/`vec2` match; the four coincidence cells
 (`ref_int`, `int_ref`, `int_ref_int`, `ref_int_ref`) still pass with *correct
 hand-computed values*, not via a compensating adjustment; the four already-working
@@ -280,13 +303,18 @@ now in one place.
 Gate: byte-identical introspect against the end of step 4 for every corpus cell
 where the fixup was already a no-op, and hand-checked values where it was not.
 
-### Step 6 — native backend parity
+### Step 6 — native must not regress (it is already correct)
 
-`src/generation/` is a separate generator reading the same IR; an interpreter fix
-that leaves native diverging is not landable. Re-run the whole corpus and the
-201-cell matrix on `--native` with `LOFT_NATIVE_LEAK_CHECK`.
+Cheaper than first written: `--native` produces the right answer for all 24 corpus
+cells today, so there is no parity to *achieve*, only to keep. `src/generation/` is
+a separate generator reading the same IR, and an interpreter fix that breaks it is
+not landable.
 
-Gate: both backends emit the proven layout and pass value + length + leak.
+Gate: re-run the whole corpus and the 201-cell matrix on `--native` with
+`LOFT_NATIVE_LEAK_CHECK`; every cell that passes today still passes, value + length
++ leak. Watch for the codegen-time width assert specifically — it fires in *both*
+backends' runs because it lives in `generate_call`, so "the assert stopped firing
+under `--native`" is part of this gate, not evidence about native's runtime.
 
 ### Step 7 — un-ignore and wire in
 
