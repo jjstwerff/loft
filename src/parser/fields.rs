@@ -71,6 +71,12 @@ impl Parser {
             return tp;
         }
         let mut t = tp;
+        // @PLN115 S6 — capture the member name's position for the resolution index,
+        // but only when recording: `Position` holds a `String`, so an unconditional
+        // clone would tax every field access on a normal compile.
+        let field_pos = self
+            .record_resolutions
+            .then(|| self.lexer.peek_pos().clone());
         let Some(field) = self.lexer.has_identifier() else {
             diagnostic!(self.lexer, Level::Error, "Expect a field name");
             return t;
@@ -425,6 +431,31 @@ impl Parser {
                 }
             }
             return Type::Unknown(0);
+        }
+        // @PLN115 S6 — record the resolved member reference at the member name: a
+        // Routine attribute is a METHOD, any other attribute a FIELD.  So `text.len`
+        // records Method{text, len} and `p.x` records Field{P, x} — a same-spelled
+        // member of another type, or a local of the same name, is thereby excluded.
+        if !self.first_pass && let Some(fp) = &field_pos {
+            let len = field.chars().count() as u16;
+            match self.data.attr_type(dnr, fnr) {
+                Type::Routine(r_nr) => self.record(
+                    fp,
+                    len,
+                    crate::resolution::Resolution::Method {
+                        recv_type: dnr,
+                        method_def: r_nr,
+                    },
+                ),
+                _ => self.record(
+                    fp,
+                    len,
+                    crate::resolution::Resolution::Field {
+                        type_def: dnr,
+                        attr: fnr as u16,
+                    },
+                ),
+            }
         }
         if let Type::Routine(r_nr) = self.data.attr_type(dnr, fnr) {
             if self.lexer.has_token("(") {

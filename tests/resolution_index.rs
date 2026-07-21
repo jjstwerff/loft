@@ -112,6 +112,53 @@ fn s5_free_function_call_records_global() {
 }
 
 #[test]
+fn s6_field_access_records_field() {
+    // `p.x` records Field{P, attr} at the member name — distinct from a local `x`.
+    let p = parse_with_resolutions(
+        "struct P { x: integer, y: integer }\nfn h(p: P) -> integer {\n  return p.x + p.y;\n}\n",
+    );
+    let p_def = p.data.def_nr("P");
+    let fields: Vec<_> = p
+        .resolutions()
+        .iter()
+        .filter_map(|o| match o.res {
+            Resolution::Field { type_def, attr } => Some((type_def, attr)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        fields.contains(&(p_def, 0)),
+        "p.x records Field{{P, attr 0}}: {fields:?}"
+    );
+    assert!(
+        fields.contains(&(p_def, 1)),
+        "p.y records Field{{P, attr 1}}: {fields:?}"
+    );
+}
+
+#[test]
+fn s6_method_call_records_method_keyed_on_receiver() {
+    // `s.len()` records Method{text, len} — keyed on the receiver TYPE, so it is
+    // distinct from a same-named `len` method of another type (the design's win).
+    let p = parse_with_resolutions("fn m(s: text) -> integer {\n  return s.len();\n}\n");
+    let text_def = p.data.def_nr("text");
+    let method = p.resolutions().iter().find_map(|o| match o.res {
+        Resolution::Method {
+            recv_type,
+            method_def,
+        } => Some((recv_type, method_def)),
+        _ => None,
+    });
+    let (recv, mdef) = method.expect("s.len() records a Method");
+    assert_eq!(recv, text_def, "receiver is `text`");
+    assert!(
+        p.data.def(mdef).name().contains("text_len"),
+        "method is text.len: {}",
+        p.data.def(mdef).name()
+    );
+}
+
+#[test]
 fn s4_assignment_local_refs_exclude_field_access() {
     // Local `x` is assigned then read alongside a field `p.x` of the SAME name.
     // The precise path must return the local's decl + read, and NOT the `p.x` field.
