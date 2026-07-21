@@ -65,6 +65,60 @@ fn member_completion_lists_enum_variants() {
 }
 
 #[test]
+fn in_scope_locals_are_offered_as_variables() {
+    // A local `count` (declared by `count = 5`) completes as a Variable (kind 6)
+    // when typing its prefix inside the same function — the global scan can't see it.
+    let src = "fn main() {\n  count = 5\n  co\n}\n";
+    let m = items(src, 3, 5); // `  co`, cursor after the prefix
+    assert!(
+        m.iter().any(|(k, l)| *k == 6 && l == "count"),
+        "local count (variable): {m:?}"
+    );
+}
+
+#[test]
+fn in_scope_locals_are_scope_precise() {
+    // `total` lives in `f`, `amount` in `g`; each completes only inside its own
+    // function (loft is flat-scoped per fn — the enclosing-fn resolution).
+    let src = "fn f() {\n  total = 1\n  to\n}\nfn g() {\n  amount = 2\n  am\n}\n";
+    let in_f = items(src, 3, 5); // `  to` in f
+    assert!(
+        in_f.iter().any(|(k, l)| *k == 6 && l == "total"),
+        "f sees total: {in_f:?}"
+    );
+    assert!(
+        !in_f.iter().any(|(_, l)| l == "amount"),
+        "f does NOT see amount: {in_f:?}"
+    );
+    let in_g = items(src, 6, 5); // `  am` in g
+    assert!(
+        in_g.iter().any(|(k, l)| *k == 6 && l == "amount"),
+        "g sees amount: {in_g:?}"
+    );
+    assert!(
+        !in_g.iter().any(|(_, l)| l == "total"),
+        "g does NOT see total: {in_g:?}"
+    );
+}
+
+#[test]
+fn a_typoed_prefix_fuzzy_matches() {
+    // `prnt` (4 chars, no prefix match) is within edit distance 2 of `print`, so
+    // the fuzzy fallback still offers it.  A short typo (< 4 chars) does not, to
+    // avoid noise.
+    let hit = items("fn main() {\n  prnt\n}\n", 2, 7);
+    assert!(
+        hit.iter().any(|(k, l)| *k == 3 && l == "print"),
+        "prnt fuzzy-matches print: {hit:?}"
+    );
+    let miss = items("fn main() {\n  pn\n}\n", 2, 5);
+    assert!(
+        !miss.iter().any(|(_, l)| l == "print"),
+        "a 2-char prefix does NOT fuzzy-match: {miss:?}"
+    );
+}
+
+#[test]
 fn member_completion_is_scope_precise_to_the_enclosing_function() {
     // @PLN115: the same receiver name `v` has type A in `f` and type B in `g`;
     // completion after `v.` must offer THIS function's members, not the first `v`.

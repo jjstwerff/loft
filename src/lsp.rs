@@ -1240,22 +1240,24 @@ pub fn inlay_hints(text: &str, name: &str, stdlib_dir: &str) -> Vec<InlayHint> {
 pub struct Completion {
     /// The text to insert.
     pub label: String,
-    /// LSP `CompletionItemKind` (Function 3, Method 2, Struct 22, Enum 13,
-    /// Field 5, EnumMember 20, Constant 21, Interface 8, Class 7, Keyword 14).
+    /// LSP `CompletionItemKind` (Function 3, Method 2, Variable 6, Struct 22,
+    /// Enum 13, Field 5, EnumMember 20, Constant 21, Interface 8, Class 7,
+    /// Keyword 14).
     pub kind: u32,
     /// A short detail (kind label or a member's type).
     pub detail: String,
 }
 
 /// Completions at a 1-based (`line`, `col`) cursor: after `expr.` → the members
-/// (fields / variants / methods) of the receiver's type; otherwise the in-scope
-/// GLOBAL names (fn / struct / enum / typedef / constant / interface, methods
-/// excluded) + keywords, filtered by the typed prefix.  Fresh parse per call.
+/// (fields / variants / methods) of the receiver's type; otherwise the enclosing
+/// function's in-scope LOCALS + PARAMETERS, then the in-scope GLOBAL names (fn /
+/// struct / enum / typedef / constant / interface, methods excluded), then
+/// keywords — ranked by the typed prefix (a 4+-char prefix also surfaces
+/// typo'd near-misses).  Fresh parse per call.
 ///
 /// Scope: member completion resolves the receiver as a TYPE name, or as a
-/// variable via the enclosing-ish function's table (best-effort until the
-/// type/scope-precision step); variable-member across ambiguous scopes is not
-/// yet resolved.
+/// variable via the enclosing function's table (@PLN115 scope-precise); the
+/// in-scope locals come from that same enclosing function.
 #[must_use]
 pub fn complete(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) -> Vec<Completion> {
     let line_text = text
@@ -1267,7 +1269,7 @@ pub fn complete(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) -
     let data = &p.data;
     match receiver {
         Some(recv) => member_completions(data, &recv, line),
-        None => identifier_completions(data, &prefix),
+        None => identifier_completions(data, &prefix, line),
     }
 }
 
@@ -1294,10 +1296,73 @@ fn completion_context(line: &str, col0: usize) -> (String, Option<String>) {
     (prefix, None)
 }
 
-fn identifier_completions(data: &Data, prefix: &str) -> Vec<Completion> {
+/// In-scope identifier completions at `cursor_line`: the enclosing function's
+/// LOCALS + PARAMETERS first (the names you reach for when filling a call
+/// argument — @PLN115 scope-precise, and invisible to a global scan), then the
+/// in-scope GLOBAL defs, then keywords.
+///
+/// Matching ranks a case-exact prefix above a case-insensitive one; a 4+-char
+/// prefix additionally surfaces near-misses within edit distance 2 (a typo'd
+/// `prnt` still offers `print`), ranked strictly after every prefix match so the
+/// exact ones lead.  An empty prefix keeps the enclosing locals + the user's own
+/// globals + keywords, never the whole stdlib.
+fn identifier_completions(data: &Data, prefix: &str, cursor_line: u32) -> Vec<Completion> {
     let lower = prefix.to_lowercase();
-    let mut out: Vec<Completion> = Vec::new();
+    // Match rank for a candidate label — lower is better, `None` excludes it.  An
+    // empty prefix keeps everything (rank 0); short prefixes never fuzzy-match (too
+    // noisy, cf. `suggest_similar_capped`); a 4+-char prefix falls back to a
+    // Levenshtein-≤2 match ranked strictly after all prefix matches.
+    let rank = |label: &str| -> Option<u32> {
+        if prefix.is_empty() {
+            return Some(0);
+        }
+        if label.starts_with(prefix) {
+            return Some(0); // exact-case prefix
+        }
+        let ll = label.to_lowercase();
+        if ll.starts_with(&lower) {
+            return Some(1); // case-insensitive prefix
+        }
+        if lower.chars().count() < 4 {
+            return None;
+        }
+        let d = crate::diagnostics::levenshtein(&lower, &ll);
+        (d <= 2).then_some(10 + d as u32)
+    };
+
+    // (rank, source priority, item) — locals (0) sort above globals (1) above
+    // keywords (2) at an equal rank, so the most-relevant names lead.
+    let mut scored: Vec<(u32, u8, Completion)> = Vec::new();
     let mut seen: Vec<String> = Vec::new();
+
+    // The enclosing function's locals + parameters (loft is flat-scoped per fn, so
+    // every one of its variables is in scope at the cursor).
+    if let Some(f) = enclosing_fn(data, cursor_line) {
+        let vars = data.def(f).variables();
+        for v in 0..vars.count() {
+            let vname = vars.name(v);
+            // Skip compiler temporaries (`__acc`, …) and unnamed slots.
+            if vname.is_empty() || vname == "??" || vname.starts_with("__") {
+                continue;
+            }
+            let Some(r) = rank(vname) else { continue };
+            if seen.iter().any(|s| s == vname) {
+                continue;
+            }
+            seen.push(vname.to_string());
+            scored.push((
+                r,
+                0,
+                Completion {
+                    label: vname.to_string(),
+                    kind: 6, // Variable
+                    detail: data.type_name_str(vars.tp(v)),
+                },
+            ));
+        }
+    }
+
+    // Global defs (fn / struct / enum / typedef / constant / interface).
     for d in 0..data.definitions() {
         let def = data.def(d);
         if def.synthetic.is_some() {
@@ -1310,33 +1375,47 @@ fn identifier_completions(data: &Data, prefix: &str) -> Vec<Completion> {
             continue; // not typed as a bare identifier
         }
         // An empty prefix would dump the whole stdlib — restrict it to the user's
-        // own defs; a real prefix filters case-insensitively by start.
-        if prefix.is_empty() {
-            if def.source != MAIN_SOURCE {
-                continue;
-            }
-        } else if !cname.to_lowercase().starts_with(&lower) {
+        // own defs (a real prefix may still reach the stdlib by prefix or fuzzy).
+        if prefix.is_empty() && def.source != MAIN_SOURCE {
             continue;
         }
-        if !seen.contains(&cname) {
-            seen.push(cname.clone());
-            out.push(Completion {
-                label: cname,
+        let Some(r) = rank(&cname) else { continue };
+        if seen.contains(&cname) {
+            continue;
+        }
+        seen.push(cname.clone());
+        scored.push((
+            r,
+            1,
+            Completion {
                 kind: completion_kind(kind),
                 detail: kind.to_string(),
-            });
-        }
+                label: cname,
+            },
+        ));
     }
+
+    // Keywords.
     for kw in crate::lexer::keywords() {
-        if prefix.is_empty() || kw.to_lowercase().starts_with(&lower) {
-            out.push(Completion {
-                label: (*kw).to_string(),
-                kind: 14, // Keyword
-                detail: "keyword".to_string(),
-            });
+        if let Some(r) = rank(kw) {
+            scored.push((
+                r,
+                2,
+                Completion {
+                    label: (*kw).to_string(),
+                    kind: 14, // Keyword
+                    detail: "keyword".to_string(),
+                },
+            ));
         }
     }
-    out.sort_by(|a, b| a.label.cmp(&b.label));
+
+    scored.sort_by(|a, b| {
+        a.0.cmp(&b.0)
+            .then(a.1.cmp(&b.1))
+            .then_with(|| a.2.label.cmp(&b.2.label))
+    });
+    let mut out: Vec<Completion> = scored.into_iter().map(|(_, _, c)| c).collect();
     out.truncate(200);
     out
 }
@@ -1528,10 +1607,10 @@ pub fn semantic_tokens(text: &str, name: &str, stdlib_dir: &str) -> Vec<Semantic
     let mut resolved: HashMap<(u32, u32), u32> = HashMap::new();
     for o in p.resolutions() {
         let kind = match o.res {
-            crate::resolution::Resolution::Local { .. } => 6,  // variable
+            crate::resolution::Resolution::Local { .. } => 6, // variable
             crate::resolution::Resolution::Method { .. } => 2, // method
-            crate::resolution::Resolution::Field { .. } => 8,  // property
-            crate::resolution::Resolution::Global(_) => 1,     // function
+            crate::resolution::Resolution::Field { .. } => 8, // property
+            crate::resolution::Resolution::Global(_) => 1,    // function
             crate::resolution::Resolution::Unresolved => continue,
         };
         resolved.insert((o.line, o.col), kind);
