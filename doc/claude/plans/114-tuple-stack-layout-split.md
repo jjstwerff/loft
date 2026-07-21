@@ -574,6 +574,58 @@ experiments demonstrated from opposite sides:
 and E — is a *precondition* for it, not a follow-up. The plan's phase order is
 therefore wrong: D/E must precede C.
 
+## The oracle — stop guessing, compare (2026-07-21)
+
+Three attempts to fix this by editing a plausible site each returned "no measurable
+change".  That is not three unlucky guesses; it is the search being at the wrong
+altitude.  `tests/pln114_layout_oracle.rs` replaces guessing with a comparison: for a
+matrix of element-type shapes it computes three answers side by side —
+
+| column | meaning |
+|---|---|
+| **record** | size of `struct { f0: T0, f1: T1, … }` — GROUND TRUTH, records already pack and round-trip correctly |
+| **tuple** | what the running system gives `(T0, T1, …)` |
+| **D1-new** | what `data::element_storage_size` computes |
+
+Run: `cargo test --test pln114_layout_oracle -- --nocapture`.
+
+### First run
+
+```
+125 shapes compared · 108 where tuple != record · 0 where D1 != record · 0 skipped
+```
+
+**1. The defect is far wider than the crashes suggested.** 108 of 125 shapes, not the
+handful the probe corpus found:
+
+| shape | record | tuple |
+|---|---|---|
+| `(u8, u8)` | 2 | **4** |
+| `(u8, u16)` | 3 | **16** |
+| `(u16, u8)` | 3 | **10** |
+| `(u8, boolean)` | 2 | **3** |
+| `(u8, u32, u16)` | 7 | **24** |
+| `(u8, u8, u8, u8)` | 4 | **8** |
+
+The 17 agreeing shapes are exactly those where the stack width already equals the
+storage width (`character`/`single`/`boolean` pairs, plain `integer`).
+
+**2. The replacement routine is already correct — everywhere.** `D1-new` matches the
+record for **all 125 shapes**, including all 108 defective ones. So
+`element_storage_size` is validated as the target layout *before* being wired to
+anything, which is what the previous three attempts lacked: each changed a site
+without an independent statement of what the right answer was.
+
+### What this changes about the remaining work
+
+The question is no longer "what is the correct layout" — that is settled and tested.
+It is only **which consumers still read the wrong one**, and the oracle turns each
+conversion into a measurable step: the `tuple` column must move to the `record`
+column, shape by shape, with the count in the summary line as the ratchet.
+
+Flip the test from inventory to assertion (`assert_eq!(defects, 0)`) when the count
+reaches zero.
+
 ## Phase D — D1 landed; D2 attempted twice with no effect
 
 ### D1 — the storage view exists and is tested — **DONE**
