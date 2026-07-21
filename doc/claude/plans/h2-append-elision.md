@@ -188,6 +188,57 @@ Also worth recording: `r1`–`r6` all carry the same static verdict (`Owned` fro
 `--show-ownership`) yet behave differently, so the ownership classification does not
 separate this axis — only running the cells does.
 
+## The hoist is NOT the cause of the r10 leak — it inherits a pre-existing one
+
+Measured, and it overturns the "blast radius" reading in the section above:
+
+| shape | clean tree | with the patch |
+|---|---|---|
+| `out += [pick(t, i+100)]` (direct append, `r10`) | no leak | **leaks `M×3`** |
+| `e = pick(t, i+100); out += [e]` (named local) | **leaks `M×3`** | leaks `M×3` (patch does not touch it — its append source is a `Var`, so the hoist never fires) |
+
+So the named-local form ALREADY leaks on `main`-as-branched, and the hoist simply makes
+the direct-append form emit that same IR — trading H2's corruption for a leak that was
+sitting there unexercised. **Fixing "the hoist" is the wrong target.** The blocker is an
+independent interpreter defect in the borrow-or-fresh reassignment shape.
+
+**It is also a BACKEND DIVERGENCE.** `src/generation/dispatch.rs:500-510` (@PLN85) makes
+NATIVE free the displaced store on an adopting reassign — its comment names this exact
+shape, *"a displaced prior store on reassignment: one store leaked per adopting bind
+(`d = choose(..)`)"*. Native is clean on all three leaks found today; the interpreter has
+no counterpart. The interp path is `state/codegen.rs::gen_set_first_ref_call_copy`
+(:2580), which `OpInitRef` + `OpDatabase`-allocates into the var's slot. Exact mechanism
+NOT yet pinned — do not treat this paragraph as a root cause, only as the site to start
+from.
+
+**Order of work:** fix that interp gap first; `r10` then goes green and the hoist lands
+behind it. The two `AppendSource` expectations and the fuzz-gate control remain
+legitimate re-bases AFTER that, never before.
+
+## The lifetimes tool should have caught this — three named gaps
+
+`--show-ownership` reported none of the three leaks found today, and it prints a header
+that this session falsified:
+
+```
+# store ownership is backend-shared (interp + native lower the same verdict)
+```
+
+Native emits @PLN85's displaced-free guard and the interpreter does not, so for this
+shape the two backends do NOT lower the same verdict. Ranked enhancements:
+
+1. **The backend-shared claim is wrong** — a correctness bug in the tool's own output,
+   not a missing feature. Either verify the claim or stop printing it.
+2. **No notion of runtime-conditional ownership** — a var bound from `t[i] ?? m_none()`
+   OWNS its store on one arm and BORROWS on the other. Both remaining leaks live exactly
+   there, and it is the one thing the tool cannot express: a single static verdict where
+   the truth is per-execution.
+3. **Verdict granularity** — `r1`-`r6` all read `Owned` yet behave differently, so the
+   classification does not separate the axis that matters.
+
+The `per_iteration_frees` check added this session is what falsified theory 3, so the tool
+is not dead weight — it is under-powered specifically on conditional ownership.
+
 ## The lifetimes tool should have caught this
 
 `--show-ownership` reported nothing useful for this program, and `LOFT_STORES=warn`
