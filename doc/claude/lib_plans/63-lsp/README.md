@@ -333,10 +333,17 @@ Remaining tag steps:
   next `make index` (the index is the source of truth, consistent with `idx broken`). *Gates:*
   `tests/lsp_tags.rs::broken_tags_come_from_the_index_verdict` +
   `tests/lsp_transport.rs::broken_tag_publishes_a_warning` (a NON-broken tag draws no warning).
-- **T4 — tag completion.** `@P…` / `@PLN…` → valid tags from the index (low priority).
+- **T4 — tag completion — DONE.** Typing a partial `@`-tag completes to known tracker tags:
+  `TagIndex::complete(prefix)` enumerates the referenced tags in `tags.json` (never a broken-only
+  one) plus the `@F<n>`/`@I<n>` feature/infra tags from `features.json`, as Reference-kind items;
+  `lsp::tag_completion_prefix` detects the `@`-token at the cursor (routing to tags, not symbols),
+  and `@` is a completion trigger char. Inert outside a loft repo. *Gates:* `lsp_tags`
+  (`complete` offers `@F1`/`@P9`, excludes broken; prefix detection) +
+  `lsp_transport::tag_completion_offers_tracker_tags`.
 
-Follow-up: the `TagIndex` is loaded once per session, so it can lag a mid-session `make index` —
-add an mtime refresh when that friction shows up.
+Follow-up (DONE): the `TagIndex` reloads when `index/tags.json`'s mtime changes, so a mid-session
+`make index` is picked up — `ensure_tag_index` re-stats per request and re-parses only on a change
+(*Gate:* `lsp_transport::tag_index_reloads_when_the_index_changes`).
 
 ---
 
@@ -429,7 +436,12 @@ Steps, in dependency order:
   `completionProvider {triggerCharacters: ["."]}`.  *Gates:* `tests/lsp_completion.rs` (prefix→
   globals+keywords, `p.`→fields+method no-dup, `Shape.`→variants, scope-precise receiver) +
   `tests/lsp_transport.rs::completion_offers_members_after_a_dot`.  The S0 positive control moved
-  to `textDocument/signatureHelp`.  Follow-ups: call-arg context; fuzzy ranking via `suggest_similar`.
+  to `textDocument/signatureHelp`.  **Follow-ups DONE:** the enclosing function's in-scope LOCALS +
+  PARAMETERS are offered too (kind Variable, @PLN115 scope-precise — the call-argument names the
+  global scan can't see), and prefix matching gained fuzzy ranking (a case-exact prefix ranks above
+  a case-insensitive one; a 4+-char prefix falls back to a Levenshtein-≤2 match, so a typo'd `prnt`
+  still offers `print`). *Gates:* `lsp_completion` (in-scope locals offered + scope-precise; fuzzy
+  typo match + short-prefix miss).
 - **D — `textDocument/semanticTokens/full` — DONE.** `loft::lsp::semantic_tokens` lexes the
   buffer and classifies each identifier by `token_kind` (`n_<name>`→function, `<name>`→struct/
   enum/type/constant/interface, keyword) — the same name-lookup references/completion use.  The
@@ -478,9 +490,12 @@ Steps, in dependency order:
   recording declarations made outside `parse_var` (param signatures, `for`/lambda binders) to
   retire the S4 F-v1 fallback for those; and S6's exotic member paths.
 
-Smaller follow-ups already noted: workspace-index invalidation on `didSave`; `TagIndex` mtime
-refresh; **T4** tag completion (fold into C).  **Extract-function** (`refactor.extract`, the table
-row above) stays L-effort and separate — it needs the data-flow engine, not just wiring.
+Smaller follow-ups (all DONE): workspace-index invalidation on `didSave`; `TagIndex` mtime refresh;
+**T4** tag completion; step-C in-scope locals + fuzzy ranking.  Remaining follow-ups: fold the
+advisory lints that carry a concrete rewrite (strict-index → `for c in text`, `#superseded` steer →
+the replacement symbol) into codeAction quick-fixes (step B follow-up).  **Extract-function**
+(`refactor.extract`, the table row above) stays L-effort and separate — it needs the data-flow
+engine, not just wiring.
 
 ### Incremental parsing
 
