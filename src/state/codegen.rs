@@ -2888,15 +2888,16 @@ impl State {
                     // the callee reads.  Those come from the DECLARED parameter
                     // type, which is the callee's own view of the layout.
                     let outer_offsets = self.arg_tuple_offsets.take();
-                    // @PLN114 step 3 — NOT applied to a tuple carrying `text`.  A
-                    // stack `text` element's ownership is tracked by its stack
-                    // POSITION (`State::text_positions`, and `free_stack` prunes
-                    // that range), so relocating the element desyncs the
-                    // bookkeeping: the clean SIGSEGV becomes heap corruption
-                    // ("refused to free the stack store", invalid free).  Those
-                    // cells stay broken exactly as they were — loud, not worse —
-                    // until the ownership move is designed alongside the placement
-                    // one.  See the plan's § step 3.
+                    // @PLN114 step 3 — NOT applied to a tuple carrying `text`.
+                    // `element_offsets` is the RECORD layout, where `Str` aligns to
+                    // 4; on the stack a `Str`'s raw pointer needs align 8 (see
+                    // `variables::align`, "deliberately STRONGER than
+                    // `data::element_align`").  Packing `(P,text)` puts the text at
+                    // +12 and misaligns its pointer, turning the existing SIGSEGV
+                    // into heap corruption.  That is a defect in the layout
+                    // CONVENTION for stack tuples holding pointer-bearing elements,
+                    // not in this push — those cells stay broken exactly as they
+                    // were, loud and no worse.  See the plan's § step 4.
                     if let Type::Tuple(elems) = a.typedef.base()
                         && !elems.iter().any(|e| matches!(e.base(), Type::Text(_)))
                     {

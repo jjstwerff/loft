@@ -350,14 +350,11 @@ The 201-cell matrix is 200/201; corpus is 23/27 with the 4 remaining being the
 text-carrying cells. Fixed cells are value-correct and leak-clean under
 `--interpret`.
 
-**Deferred: tuples carrying `text`.** Applying the relocation to them turns a clean
-SIGSEGV into *heap corruption* — "refused to free the stack store (#306)", invalid
-`free()`, out-of-bounds index. A stack `text` element's ownership is tracked by its
-stack POSITION (`State::text_positions`; `free_stack` prunes that range), so moving
-the element desyncs the bookkeeping. Placement and ownership have to move together,
-and that is a design step, not an increment. The fix therefore skips any tuple with
-a `text` element — those cells stay broken exactly as before, loud and no worse —
-and `e4_d2_closure_arg` (`(fn, text)`) remains the one failing matrix cell.
+**Deferred: tuples carrying `text`** — diagnosed in step 4 below. Applying the
+relocation to them turns a clean SIGSEGV into *heap corruption*. The fix therefore
+skips any tuple with a `text` element — those cells stay broken exactly as before,
+loud and no worse — and `e4_d2_closure_arg` (`(fn, text)`) remains the one failing
+matrix cell.
 
 That deferral is the honest boundary of this step: the mechanism is proven for 6 of
 the 9 broken corpus cells and demonstrably wrong for the other 3.
@@ -391,7 +388,54 @@ needs `--interpret` — bare `loft` is native and skips it).
 
 </details>
 
-### Step 4 — only what step 3 proves is still broken
+### Step 4 — what step 3 left broken: `text` at a non-8-aligned offset
+
+**Diagnosed; needs its own design. It is NOT a defect in the argument push.**
+
+The bytecode step 3 emits for `(P,text)` is exactly what was intended — `P` at block
+offset 0, `FreeStack(0,4)` to trim, text at +12, `ReserveFrame(4)` to pad, and
+`Call(args_size=32)`. The placement is right and it still corrupts, because **+12 is
+not a legal address for a `text`**.
+
+`data::element_offsets` is the RECORD layout, where `element_align(Text) = 4`. On
+the stack a `text` is a `Str { *const u8, u32 }` whose raw pointer needs 8-byte
+alignment — `variables::align` says so explicitly, and calls itself "deliberately
+STRONGER than `data::element_align` (which aligns the record-stored `Str` to 4);
+records keep their own weaker layout on the `element_align` path." Placing a text
+element at a 4-mod-8 offset misaligns its pointer; freeing it then hits
+"refused to free the stack store (#306)" / invalid `free()`.
+
+The rule predicts every cell, and it is **independent of step 3** — these cells
+failed the same way before it:
+
+| cell | text's packed offset | 8-aligned? | result |
+|---|---|---|---|
+| `int_text` | 8 | yes | pass |
+| `text2` | 16 | yes | pass |
+| `ref_text` | 12 | **no** | fail |
+| `fn_text_read` / `fn_text_call` | 20 | **no** | fail |
+
+So the defect is in the **layout convention for stack-resident tuples holding
+pointer-bearing elements**: the packed record layout is not sound there, whoever
+writes it. That is why step 3's guard is the right boundary rather than a hack —
+correcting the push cannot fix a position that is illegal for the type.
+
+Fixing it means choosing one of:
+
+1. **Align tuple elements by `variables::align` on the stack** — correct, but that
+   is the "second offsets function" this plan rejected in § The invariant, and it
+   desyncs stack tuples from record tuples.
+2. **Raise `element_align(Text)` to 8 everywhere** — one rule, but it changes the
+   RECORD and DB-page layout, i.e. the on-disk format. Almost certainly too wide.
+3. **Forbid the shape** — reject a tuple that would place a pointer element at a
+   non-8-aligned offset, at parse time, until 1 or 2 is designed. Turns silent
+   corruption into a clear error and is cheap.
+
+This wants its own plan (or an explicit phase here) with its own matrix over
+pointer-bearing element kinds — `text`, and anything else whose stack alignment
+exceeds its record alignment. Not started.
+
+<details><summary>original step 4 text (superseded — it assumed the remaining work was more push sites)</summary>
 
 **Do not pre-emptively route the other sites.** The destination axis says they are
 already correct, so touching them is blast radius without a defect. Re-run the full
@@ -406,6 +450,8 @@ plan stops.
 
 Gate per commit: the corpus stays green on both backends, and the introspect diff is
 non-empty **only** for the site touched.
+
+</details>
 
 ### Step 5 — delete the fixups
 
