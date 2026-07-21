@@ -126,6 +126,21 @@ fn main() {
                 let actions = code_actions(&msg);
                 send(&stdout, &response(id, Parsed::Array(actions)));
             }
+            ("textDocument/completion", Some(id)) => {
+                // Step C: members after `expr.`, else in-scope names + keywords.
+                let items = text_document_position(&msg)
+                    .and_then(|(uri, line, ch)| {
+                        let text = documents.get(&uri)?;
+                        Some(
+                            loft::lsp::complete(text, "buf.loft", &stdlib_dir, line + 1, ch + 1)
+                                .iter()
+                                .map(completion_item)
+                                .collect::<Vec<_>>(),
+                        )
+                    })
+                    .unwrap_or_default();
+                send(&stdout, &response(id, Parsed::Array(items)));
+            }
             ("textDocument/formatting", Some(id)) => {
                 // Run the same formatter the `loft fmt` CLI uses on the open buffer;
                 // reply with ONE whole-document edit (or none when already tidy).
@@ -353,6 +368,15 @@ fn range_of(line: u32, start_char: u32, end_char: u32) -> Parsed {
     obj(vec![
         ("start", position(line, start_char)),
         ("end", position(line, end_char)),
+    ])
+}
+
+/// One `loft::lsp::Completion` → an LSP `CompletionItem`.
+fn completion_item(c: &loft::lsp::Completion) -> Parsed {
+    obj(vec![
+        ("label", Parsed::Str(c.label.clone())),
+        ("kind", Parsed::Int(i64::from(c.kind))),
+        ("detail", Parsed::Str(c.detail.clone())),
     ])
 }
 
@@ -901,6 +925,13 @@ fn initialize_result() -> Parsed {
         ("definitionProvider", Parsed::Bool(true)),
         ("referencesProvider", Parsed::Bool(true)),
         ("codeActionProvider", Parsed::Bool(true)),
+        (
+            "completionProvider",
+            obj(vec![(
+                "triggerCharacters",
+                Parsed::Array(vec![Parsed::Str(".".into())]),
+            )]),
+        ),
         (
             "renameProvider",
             obj(vec![("prepareProvider", Parsed::Bool(true))]),

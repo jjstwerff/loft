@@ -816,6 +816,45 @@ fn code_action_offers_the_did_you_mean_fix() {
     let _ = s.child.wait();
 }
 
+// completion (step C) — `expr.` offers the type's members over the wire.
+#[test]
+fn completion_offers_members_after_a_dot() {
+    let mut s = Session::start();
+    s.request(1, "initialize", "{}");
+    let init = s.recv();
+    let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
+    assert!(
+        field(caps, "completionProvider").is_some(),
+        "advertises completionProvider"
+    );
+    s.notify("initialized", "{}");
+
+    let uri = "file:///c.loft";
+    let prog = "struct Point {\n  x: integer,\n}\nfn main() {\n  p = Point { x: 1 };\n  p.\n}\n";
+    s.notify("textDocument/didOpen", &open_params(uri, prog));
+    let _ = s.recv();
+
+    // `p.` on 0-based line 5, char 4 (after the dot).
+    s.request(
+        2,
+        "textDocument/completion",
+        &format!(r#"{{"textDocument":{{"uri":"{uri}"}},"position":{{"line":5,"character":4}}}}"#),
+    );
+    let reply = s.recv();
+    let items = match field(&reply, "result") {
+        Some(Parsed::Array(a)) => a,
+        other => panic!("completion result is an array, got {other:?}"),
+    };
+    let labels: Vec<String> = items.iter().filter_map(|i| field_str(i, "label")).collect();
+    assert!(
+        labels.iter().any(|l| l == "x"),
+        "the struct's field is offered: {labels:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();
@@ -859,7 +898,7 @@ fn unknown_request_is_an_error_not_a_result() {
     s.request(1, "initialize", "{}");
     let _ = s.recv();
 
-    s.request(7, "textDocument/completion", "{}"); // deliberately unimplemented
+    s.request(7, "textDocument/signatureHelp", "{}"); // deliberately unimplemented
     let reply = s.recv();
     assert_eq!(field(&reply, "id").and_then(Parsed::as_i64), Some(7));
     assert!(

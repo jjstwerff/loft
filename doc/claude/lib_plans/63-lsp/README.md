@@ -415,12 +415,19 @@ Steps, in dependency order:
   published, then the quick-fix edit).  Follow-up: fold the advisory lints that carry a concrete
   rewrite (strict-index → `for c in text`, `#superseded` steer → the replacement symbol) by giving
   them a `suggestion` too.
-- **C — `textDocument/completion`.** At the cursor, resolve context from the buffer text +
-  a fresh parse: after `expr.` → members from `member_access` for the receiver type; otherwise
-  in-scope names from `Data.definitions` (`classify` → item kind) + keywords.  Rank by
-  `suggest_similar` distance to the typed prefix (in-scope first, then stdlib).  Advertise
-  `completionProvider {triggerCharacters: ["."]}`.  *Gate:* `foo.` after a `struct Foo` lists its
-  fields/methods; a prefix lists matching top-level defs.  M (the "helpful not noisy" cut).
+- **C — `textDocument/completion` — DONE (first cut).** `loft::lsp::complete` resolves context
+  from the buffer at the cursor: after `expr.` → the receiver type's members (struct fields / enum
+  variants / methods, deduped so a virtual-field-method shows once as a method); otherwise the
+  in-scope GLOBAL names (`Data.definitions` via `classify`, methods excluded) + keywords
+  (`lexer::keywords()`, now `pub`), filtered by the typed prefix (an empty prefix restricts to the
+  user's own defs so the stdlib isn't dumped).  Receiver resolution: a TYPE name directly, or a
+  VARIABLE's type via a function's `variables()` table (`name_exists`/`var`/`var_type` +
+  `type_def_nr`) — best-effort until step F.  `classify`→LSP `CompletionItemKind`.  Advertises
+  `completionProvider {triggerCharacters: ["."]}`.  *Gates:* `tests/lsp_completion.rs` (prefix→
+  globals+keywords, `p.`→fields+method no-dup, `Shape.`→variants) +
+  `tests/lsp_transport.rs::completion_offers_members_after_a_dot`.  The S0 positive control moved
+  to `textDocument/signatureHelp`.  Follow-ups (with F): scope-precise variable resolution across
+  ambiguous names; call-arg context; fuzzy ranking via `suggest_similar`.
 - **D — `textDocument/semanticTokens`.** Lex the buffer (`scan_identifiers`); classify each
   identifier by `classify` of its resolved def (lexical first cut = by name, like references) →
   the token type array.  Advertise `semanticTokensProvider` with a legend.  *Gate:* a fn name

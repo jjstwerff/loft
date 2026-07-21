@@ -190,6 +190,13 @@ static KEYWORDS: &[&str] = &[
 /// Used by the @PLN13 script detector to tell a real loose statement that begins with
 /// a keyword (`if x { … }`, `for i in …`, `return x`) from a MALFORMED definition whose
 /// keyword was mistyped (`funcion main()`), which must not be treated as a script.
+/// loft's reserved keywords — the completion provider offers them alongside
+/// in-scope names.
+#[must_use]
+pub fn keywords() -> &'static [&'static str] {
+    KEYWORDS
+}
+
 #[must_use]
 pub fn is_keyword(word: &str) -> bool {
     KEYWORDS.contains(&word)

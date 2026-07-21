@@ -888,3 +888,218 @@ pub fn plan_rename(
     }
     Ok(refs)
 }
+
+// ── completion (step C) ──────────────────────────────────────────────────────
+// Reuses what loft already computes: `Data.definitions` + `classify` for the
+// candidate names/kinds, the per-fn variable tables for `expr.` member types,
+// and `lexer::keywords()`.  No new analysis — enumerate + filter.
+
+/// One completion candidate.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Completion {
+    /// The text to insert.
+    pub label: String,
+    /// LSP `CompletionItemKind` (Function 3, Method 2, Struct 22, Enum 13,
+    /// Field 5, EnumMember 20, Constant 21, Interface 8, Class 7, Keyword 14).
+    pub kind: u32,
+    /// A short detail (kind label or a member's type).
+    pub detail: String,
+}
+
+/// Completions at a 1-based (`line`, `col`) cursor: after `expr.` → the members
+/// (fields / variants / methods) of the receiver's type; otherwise the in-scope
+/// GLOBAL names (fn / struct / enum / typedef / constant / interface, methods
+/// excluded) + keywords, filtered by the typed prefix.  Fresh parse per call.
+///
+/// Scope: member completion resolves the receiver as a TYPE name, or as a
+/// variable via the enclosing-ish function's table (best-effort until the
+/// type/scope-precision step); variable-member across ambiguous scopes is not
+/// yet resolved.
+#[must_use]
+pub fn complete(text: &str, name: &str, stdlib_dir: &str, line: u32, col: u32) -> Vec<Completion> {
+    let line_text = text
+        .lines()
+        .nth(line.saturating_sub(1) as usize)
+        .unwrap_or("");
+    let (prefix, receiver) = completion_context(line_text, col.saturating_sub(1) as usize);
+    let mut p = Parser::new();
+    load_stdlib(&mut p, stdlib_dir);
+    p.parse_source(text, name, false);
+    let data = &p.data;
+    match receiver {
+        Some(recv) => member_completions(data, &recv),
+        None => identifier_completions(data, &prefix),
+    }
+}
+
+/// The typed prefix at the cursor, and the receiver identifier if a `.` precedes it.
+fn completion_context(line: &str, col0: usize) -> (String, Option<String>) {
+    let chars: Vec<char> = line.chars().collect();
+    let is_word = |c: char| c.is_alphanumeric() || c == '_';
+    let end = col0.min(chars.len());
+    let mut start = end;
+    while start > 0 && is_word(chars[start - 1]) {
+        start -= 1;
+    }
+    let prefix: String = chars[start..end].iter().collect();
+    if start > 0 && chars[start - 1] == '.' {
+        let mut rs = start - 1;
+        while rs > 0 && is_word(chars[rs - 1]) {
+            rs -= 1;
+        }
+        let receiver: String = chars[rs..start - 1].iter().collect();
+        if !receiver.is_empty() {
+            return (prefix, Some(receiver));
+        }
+    }
+    (prefix, None)
+}
+
+fn identifier_completions(data: &Data, prefix: &str) -> Vec<Completion> {
+    let lower = prefix.to_lowercase();
+    let mut out: Vec<Completion> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    for d in 0..data.definitions() {
+        let def = data.def(d);
+        if def.synthetic.is_some() {
+            continue;
+        }
+        let Some((kind, cname)) = crate::api_surface::classify(data, d) else {
+            continue;
+        };
+        if kind == "method" || kind == "operator" {
+            continue; // not typed as a bare identifier
+        }
+        // An empty prefix would dump the whole stdlib — restrict it to the user's
+        // own defs; a real prefix filters case-insensitively by start.
+        if prefix.is_empty() {
+            if def.source != MAIN_SOURCE {
+                continue;
+            }
+        } else if !cname.to_lowercase().starts_with(&lower) {
+            continue;
+        }
+        if !seen.contains(&cname) {
+            seen.push(cname.clone());
+            out.push(Completion {
+                label: cname,
+                kind: completion_kind(kind),
+                detail: kind.to_string(),
+            });
+        }
+    }
+    for kw in crate::lexer::keywords() {
+        if prefix.is_empty() || kw.to_lowercase().starts_with(&lower) {
+            out.push(Completion {
+                label: (*kw).to_string(),
+                kind: 14, // Keyword
+                detail: "keyword".to_string(),
+            });
+        }
+    }
+    out.sort_by(|a, b| a.label.cmp(&b.label));
+    out.truncate(200);
+    out
+}
+
+fn member_completions(data: &Data, receiver: &str) -> Vec<Completion> {
+    let Some(type_nr) = resolve_receiver_type(data, receiver) else {
+        return Vec::new();
+    };
+    let type_name = data.def(type_nr).name().to_string();
+    let is_enum = matches!(data.def(type_nr).def_type, crate::data::DefType::Enum);
+    let mut out: Vec<Completion> = Vec::new();
+    let mut seen: Vec<String> = Vec::new();
+    // Methods FIRST (`Type.method`) — so a name that is both a method and a
+    // struct virtual-field shows once, as a method.
+    let dotted = format!("{type_name}.");
+    for d in 0..data.definitions() {
+        if let Some((kind, cname)) = crate::api_surface::classify(data, d)
+            && kind == "method"
+            && let Some(method) = cname.strip_prefix(&dotted)
+            && !seen.iter().any(|s| s == method)
+        {
+            seen.push(method.to_string());
+            out.push(Completion {
+                label: method.to_string(),
+                kind: 2, // Method
+                detail: cname.clone(),
+            });
+        }
+    }
+    if is_enum {
+        // An enum's `attributes()` ARE its variants; enumerate the EnumValue defs.
+        for v in 0..data.definitions() {
+            let vd = data.def(v);
+            if vd.parent == type_nr
+                && matches!(vd.def_type, crate::data::DefType::EnumValue)
+                && !seen.contains(&vd.name)
+            {
+                seen.push(vd.name.clone());
+                out.push(Completion {
+                    label: vd.name.clone(),
+                    kind: 20, // EnumMember
+                    detail: "variant".to_string(),
+                });
+            }
+        }
+    } else {
+        // A struct's fields — skip hidden, the synthetic `enum` tag, and names
+        // already surfaced as methods (virtual fields).
+        for a in data.def(type_nr).attributes() {
+            if a.hidden || a.name == "enum" || seen.contains(&a.name) {
+                continue;
+            }
+            seen.push(a.name.clone());
+            out.push(Completion {
+                label: a.name.clone(),
+                kind: 5, // Field
+                detail: data.type_name_str(&a.typedef),
+            });
+        }
+    }
+    out
+}
+
+/// Resolve a receiver identifier to a struct/enum def_nr: a TYPE name directly,
+/// else a variable's type via a function's table (best-effort).
+fn resolve_receiver_type(data: &Data, receiver: &str) -> Option<u32> {
+    let is_type = |d: u32| {
+        d != u32::MAX
+            && matches!(
+                data.def(d).def_type,
+                crate::data::DefType::Struct | crate::data::DefType::Enum
+            )
+    };
+    let named = data.def_nr(receiver);
+    if is_type(named) {
+        return Some(named);
+    }
+    for f in 0..data.definitions() {
+        let def = data.def(f);
+        if def.source == MAIN_SOURCE && matches!(def.def_type, crate::data::DefType::Function) {
+            let vars = def.variables();
+            if vars.name_exists(receiver) {
+                let tn = data.type_def_nr(vars.var_type(vars.var(receiver)));
+                if is_type(tn) {
+                    return Some(tn);
+                }
+            }
+        }
+    }
+    None
+}
+
+/// `classify` label → LSP `CompletionItemKind`.
+fn completion_kind(kind: &str) -> u32 {
+    match kind {
+        "struct" => 22,
+        "enum" => 13,
+        "method" => 2,
+        "constant" => 21,
+        "interface" => 8,
+        "typedef" => 7,
+        "operator" => 24,
+        _ => 3, // fn
+    }
+}
