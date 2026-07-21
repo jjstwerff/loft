@@ -172,6 +172,14 @@ pub struct State {
     pub active_coroutines: Vec<usize>,
     /// Recursion depth counter for `generate`; reset to 0 when code generation starts.
     pub(crate) generate_depth: usize,
+    /// @PLN114 — set while generating a call ARGUMENT, so the tuple-placement check
+    /// in `ValueType::Tuple` knows the block it is building will be consumed
+    /// directly as the callee's frame.  A tuple bound to a local instead flows
+    /// through `emit_tuple_put_ops`, which relocates every element into the
+    /// variable's slots, so its intermediate eval-stack placement is free and must
+    /// NOT be checked.  Diagnostic only — absent from release builds.
+    #[cfg(debug_assertions)]
+    pub(crate) in_call_arg: bool,
     /// Runtime call depth counter. Panics at MAX_CALL_DEPTH.
     pub(crate) call_depth: u32,
     /// Number of arms in the current `parallel {}` block.
@@ -405,6 +413,8 @@ impl State {
             coroutines: vec![None], // index 0 = null sentinel
             active_coroutines: Vec::new(),
             generate_depth: 0,
+            #[cfg(debug_assertions)]
+            in_call_arg: false,
             call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
@@ -4536,6 +4546,8 @@ impl State {
             coroutines: vec![None],
             active_coroutines: Vec::new(),
             generate_depth: 0,
+            #[cfg(debug_assertions)]
+            in_call_arg: false,
             call_depth: 0,
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),

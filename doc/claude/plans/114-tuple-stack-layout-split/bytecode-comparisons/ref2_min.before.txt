@@ -1,17 +1,17 @@
 === bytecode ===
 fn n_show(t:(ref(P), ref(P))) {#block(1):void
-  __work_1(1):text = "";
+  __work_1(65535):text = "";
   [3] n_print({#Formatted string(2):text["__work_1"]
-    __work_1(1):text = "";
-    OpFormatInt(__work_1(1), OpGetInt(t.0, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), ",");
-    OpFormatInt(__work_1(1), OpGetInt(t.1, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), "
+    __work_1(65535):text = "";
+    OpFormatInt(__work_1(65535), OpGetInt(t.0, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), ",");
+    OpFormatInt(__work_1(65535), OpGetInt(t.1, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(2):text["__work_1"]);
   [4] n_assert(if OpEqInt(OpGetInt(t.0, 0i32), 10i32) OpEqInt(OpGetInt(t.1, 0i32), 20i32) else false, "structref_arg", "/home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/ref2_min.loft", 4i32);
-  OpFreeText(__work_1(1));
+  OpFreeText(__work_1(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/ref2_min.loft:n_show(t: (ref(P), ref(P))[0])
@@ -56,15 +56,15 @@ byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-lay
  262[56]: Return(ret=24, value=0, discard=56)
 
 fn n_main() {#block(1):void
-  [7] a(1):ref(P) = null;
-  OpDatabase(a(1), 65i32);
-  OpSetInt(a(1), 0i32, 10i32);
-  [8] b(1):ref(P) = null;
-  OpDatabase(b(1), 65i32);
-  OpSetInt(b(1), 0i32, 20i32);
-  [9] n_show((a(1), b(1)));
-  OpFreeRef(b(1));
-  OpFreeRef(a(1));
+  [7] a(65535):ref(P) = null;
+  OpDatabase(a(65535), 65i32);
+  OpSetInt(a(65535), 0i32, 10i32);
+  [8] b(65535):ref(P) = null;
+  OpDatabase(b(65535), 65i32);
+  OpSetInt(b(65535), 0i32, 20i32);
+  [9] n_show((a(65535), b(65535)));
+  OpFreeRef(b(65535));
+  OpFreeRef(a(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/ref2_min.loft:n_main()
@@ -2552,15 +2552,15 @@ fn main() {
 fn n_show:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0    arg  t                    (ref(640),ref(640)) 0      [0, 24)      -
-  1         __work_1             text           1      [32, 56)     [0, 50]
+  0    arg  t                    (ref(640),ref(640)) -      [0, 24)      -
+  1         __work_1             text           -      [32, 56)     -
 
 
 fn n_main:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0         a                    ref(640)       1      [8, 20)      [0, 23]
-  1         b                    ref(640)       1      [20, 32)     [9, 22]
+  0         a                    ref(640)       -      [8, 20)      -
+  1         b                    ref(640)       -      [20, 32)     -
 
 
 

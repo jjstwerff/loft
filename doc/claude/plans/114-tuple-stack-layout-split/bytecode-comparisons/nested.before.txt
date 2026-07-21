@@ -1,26 +1,26 @@
 === bytecode ===
 fn n_f(t:((integer, integer), integer)) {#block(1):void
-  __ref_2(1):(integer, integer) = null;
-  __ref_1(1):(integer, integer) = null;
-  __work_1(1):text = "";
+  __ref_2(65535):(integer, integer) = null;
+  __ref_1(65535):(integer, integer) = null;
+  __work_1(65535):text = "";
   [1] n_print({#Formatted string(2):text["__work_1"]
-    __work_1(1):text = "";
-    OpFormatInt(__work_1(1), {#tuple_tmp(3):integer
-      __ref_1(1):(integer, integer) = t.0;
+    __work_1(65535):text = "";
+    OpFormatInt(__work_1(65535), {#tuple_tmp(3):integer
+      __ref_1(65535):(integer, integer) = t.0;
       __ref_1.0;
     }#tuple_tmp(3):integer, 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), ",");
-    OpFormatInt(__work_1(1), {#tuple_tmp(4):integer
-      __ref_2(1):(integer, integer) = t.0;
+    OpAppendText(__work_1(65535), ",");
+    OpFormatInt(__work_1(65535), {#tuple_tmp(4):integer
+      __ref_2(65535):(integer, integer) = t.0;
       __ref_2.1;
     }#tuple_tmp(4):integer, 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), ",");
-    OpFormatInt(__work_1(1), t.1, 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), "
+    OpAppendText(__work_1(65535), ",");
+    OpFormatInt(__work_1(65535), t.1, 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(2):text["__work_1"]);
-  OpFreeText(__work_1(1));
+  OpFreeText(__work_1(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/nested.loft:n_f(t: ((integer, integer), integer)[0])
@@ -2541,10 +2541,10 @@ fn main() {
 fn n_f:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0    arg  t                    ((int,int),int) 0      [0, 24)      -
-  1         __work_1             text           1      [64, 88)     [2, 49]
-  2         __ref_1              (int,int)      1      [48, 64)     [1, 10]
-  3         __ref_2              (int,int)      1      [32, 48)     [0, 24]
+  0    arg  t                    ((int,int),int) -      [0, 24)      -
+  1         __work_1             text           -      [64, 88)     -
+  2         __ref_1              (int,int)      -      [48, 64)     -
+  3         __ref_2              (int,int)      -      [32, 48)     -
 
 
 

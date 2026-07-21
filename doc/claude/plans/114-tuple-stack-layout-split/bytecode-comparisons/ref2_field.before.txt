@@ -1,31 +1,31 @@
 === bytecode ===
 fn n_main() {#block(1):void
-  __work_1(1):text = "";
-  [3] a(1):ref(P) = null;
-  OpDatabase(a(1), 65i32);
-  OpSetInt(a(1), 0i32, 10i32);
-  b(1):ref(P) = null;
-  OpDatabase(b(1), 65i32);
-  OpSetInt(b(1), 0i32, 20i32);
-  pair(1):ref(Pair) = null;
-  OpDatabase(pair(1), 66i32);
+  __work_1(65535):text = "";
+  [3] a(65535):ref(P) = null;
+  OpDatabase(a(65535), 65i32);
+  OpSetInt(a(65535), 0i32, 10i32);
+  b(65535):ref(P) = null;
+  OpDatabase(b(65535), 65i32);
+  OpSetInt(b(65535), 0i32, 20i32);
+  pair(65535):ref(Pair) = null;
+  OpDatabase(pair(65535), 66i32);
   {#tuple_field_set(2):void
-    OpCopyRecord(a(1), OpGetField(pair(1), 0i32, 65i32), 65i32);
-    OpCopyRecord(b(1), OpGetField(pair(1), 8i32, 65i32), 65i32);
+    OpCopyRecord(a(65535), OpGetField(pair(65535), 0i32, 65i32), 65i32);
+    OpCopyRecord(b(65535), OpGetField(pair(65535), 8i32, 65i32), 65i32);
   }#tuple_field_set(2):void;
     n_print({#Formatted string(3):text["__work_1"]
-    __work_1(1):text = "";
-    OpFormatInt(__work_1(1), OpGetInt(OpGetField(pair(1), 0i32, 65i32), 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), ",");
-    OpFormatInt(__work_1(1), OpGetInt(OpGetField(pair(1), 8i32, 65i32), 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), "
+    __work_1(65535):text = "";
+    OpFormatInt(__work_1(65535), OpGetInt(OpGetField(pair(65535), 0i32, 65i32), 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), ",");
+    OpFormatInt(__work_1(65535), OpGetInt(OpGetField(pair(65535), 8i32, 65i32), 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(3):text["__work_1"]);
-  OpFreeRef(pair(1));
-  OpFreeRef(b(1));
-  OpFreeRef(a(1));
-  OpFreeText(__work_1(1));
+  OpFreeRef(pair(65535));
+  OpFreeRef(b(65535));
+  OpFreeRef(a(65535));
+  OpFreeText(__work_1(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/ref2_field.loft:n_main()
@@ -2539,10 +2539,10 @@ fn main() {
 fn n_main:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0         a                    ref(640)       1      [32, 44)     [3, 80]
-  1         b                    ref(640)       1      [44, 56)     [12, 79]
-  2         pair                 ref(641)       1      [56, 68)     [21, 78]
-  3         __work_1             text           1      [8, 32)      [0, 81]
+  0         a                    ref(640)       -      [32, 44)     -
+  1         b                    ref(640)       -      [44, 56)     -
+  2         pair                 ref(641)       -      [56, 68)     -
+  3         __work_1             text           -      [8, 32)      -
 
 
 

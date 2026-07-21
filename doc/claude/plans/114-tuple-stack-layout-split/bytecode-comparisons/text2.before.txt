@@ -1,16 +1,16 @@
 === bytecode ===
 fn n_f(t:(text, text)) {#block(1):void
-  __work_1(1):text = "";
+  __work_1(65535):text = "";
   [1] n_print({#Formatted string(2):text["__work_1"]
-    __work_1(1):text = "";
-    OpFormatText(__work_1(1), t.0, 0i32, 2i32, 32i32);
-    OpAppendText(__work_1(1), ",");
-    OpFormatText(__work_1(1), t.1, 0i32, 2i32, 32i32);
-    OpAppendText(__work_1(1), "
+    __work_1(65535):text = "";
+    OpFormatText(__work_1(65535), t.0, 0i32, 2i32, 32i32);
+    OpAppendText(__work_1(65535), ",");
+    OpFormatText(__work_1(65535), t.1, 0i32, 2i32, 32i32);
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(2):text["__work_1"]);
-  OpFreeText(__work_1(1));
+  OpFreeText(__work_1(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/text2.loft:n_f(t: (text, text)[0])
@@ -2495,8 +2495,8 @@ fn main() {
 fn n_f:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0    arg  t                    (text,text)    0      [0, 32)      -
-  1         __work_1             text           1      [40, 64)     [0, 25]
+  0    arg  t                    (text,text)    -      [0, 32)      -
+  1         __work_1             text           -      [40, 64)     -
 
 
 

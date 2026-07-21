@@ -1,14 +1,14 @@
 === bytecode ===
 fn n_f(t:(function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }), text)) {#block(1):void
-  __work_1(1):text = "";
+  __work_1(65535):text = "";
   [1] n_print({#Formatted string(2):text["__work_1"]
-    __work_1(1):text = "";
-    OpFormatText(__work_1(1), t.1, 0i32, 2i32, 32i32);
-    OpAppendText(__work_1(1), "
+    __work_1(65535):text = "";
+    OpFormatText(__work_1(65535), t.1, 0i32, 2i32, 32i32);
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(2):text["__work_1"]);
-  OpFreeText(__work_1(1));
+  OpFreeText(__work_1(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/fn_text_read.loft:n_f(t: (function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }), text)[0])
@@ -29,9 +29,9 @@ byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-lay
   63[72]: Return(ret=40, value=0, discard=72)
 
 fn n_main() {#block(1):void
-  [2] sq(1):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = 643i32;
-    n_f((sq(1), "tag"));
-  OpFreeRef(sq(1));
+  [2] sq(65535):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = 643i32;
+    n_f((sq(65535), "tag"));
+  OpFreeRef(sq(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/fn_text_read.loft:n_main()
@@ -2509,14 +2509,14 @@ fn main() {
 fn n_f:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0    arg  t                    (fn,text)      0      [0, 36)      -
-  1         __work_1             text           1      [48, 72)     [0, 16]
+  0    arg  t                    (fn,text)      -      [0, 36)      -
+  1         __work_1             text           -      [48, 72)     -
 
 
 fn n_main:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0         sq                   fn             1      [8, 28)      [1, 6]
+  0         sq                   fn             -      [8, 28)      -
 
 
 

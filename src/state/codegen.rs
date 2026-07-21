@@ -452,8 +452,54 @@ impl State {
             ValueType::Tuple => {
                 // T1.4: generate each element onto contiguous stack slots.
                 let mut types = Vec::new();
+                // @PLN114 — "contiguous" here means the PACKED layout every reader
+                // uses (`element_offsets`: a `DbRef` element occupies 12B), but each
+                // element is pushed by an op whose own stack step is 8-rounded (16B
+                // for a `DbRef`).  Nothing reconciles the two, so a tuple built here
+                // and read by a callee silently disagrees about where element i is:
+                // `(P,P)` as a call argument segfaults, `(P,P,P,P)` returns
+                // `2,null,0,360287970323857408`.  Record where each element actually
+                // lands and check it against the layout the readers assume.
+                #[cfg(debug_assertions)]
+                let push_base = stack.position;
+                #[cfg(debug_assertions)]
+                let mut landed: Vec<u16> = Vec::new();
                 for e in node.tuple_items().iter() {
+                    #[cfg(debug_assertions)]
+                    landed.push(stack.position.saturating_sub(push_base));
                     types.push(self.generate_node(e, stack, false));
+                }
+                // Only a tuple consumed DIRECTLY as a callee frame block has to be
+                // packed.  One bound to a local is relocated element-by-element by
+                // `emit_tuple_put_ops`, so its eval-stack placement is scratch.
+                #[cfg(debug_assertions)]
+                if self.in_call_arg {
+                    let want = crate::data::element_offsets(&types);
+                    for (i, got) in landed.iter().enumerate() {
+                        debug_assert_eq!(
+                            usize::from(*got),
+                            want[i],
+                            "@PLN114 [{caller}]: tuple element {i} lands at +{got}B but \
+                             every reader expects +{expect}B (element_offsets for \
+                             {types:?}) — the element push advances by the 8-rounded \
+                             stack step while the layout is packed",
+                            caller = stack.data.def(stack.def_nr).name(),
+                            expect = want[i],
+                        );
+                    }
+                    // The frame reserves the STEPPED size, so compare against that —
+                    // an over-reserve of the trailing pad is not a defect.
+                    let total = usize::from(stack.position.saturating_sub(push_base));
+                    let reserved = usize::from(
+                        stack.step(crate::data::element_size(&Type::Tuple(types.clone())) as u16),
+                    );
+                    debug_assert_eq!(
+                        total,
+                        reserved,
+                        "@PLN114 [{caller}]: tuple {types:?} occupies {total}B on the \
+                         stack but its readers reserve {reserved}B",
+                        caller = stack.data.def(stack.def_nr).name(),
+                    );
                 }
                 Type::Tuple(types)
             }
@@ -2797,7 +2843,15 @@ impl State {
                     self.code_add(var_pos);
                     tps.push(crate::data::I64.clone());
                 } else {
+                    // @PLN114 — this argument's value is pushed straight into the
+                    // callee's frame block, so a tuple built here must land packed.
+                    #[cfg(debug_assertions)]
+                    let outer_in_call_arg = std::mem::replace(&mut self.in_call_arg, true);
                     tps.push(self.generate(&parameters[a_nr], stack, false));
+                    #[cfg(debug_assertions)]
+                    {
+                        self.in_call_arg = outer_in_call_arg;
+                    }
                     // When a Value::Null is passed as a typed argument, generate()
                     // pushes 0 bytes.  Emit the correct null sentinel for the
                     // expected type so the stack size matches.

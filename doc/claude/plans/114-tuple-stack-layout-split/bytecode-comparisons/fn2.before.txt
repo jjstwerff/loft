@@ -1,10 +1,10 @@
 === bytecode ===
 fn n_f(t:(function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }), function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }))) -> integer {#block(1):integer
   [1] return OpAddInt({#fn_call_tmp(2):integer
-    ___fn_ref_tmp_1(2):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = t.0;
+    ___fn_ref_tmp_1(65535):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = t.0;
     fn_ref[1](3i32);
   }#fn_call_tmp(2):integer, {#fn_call_tmp(3):integer
-    ___fn_ref_tmp_2(3):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = t.1;
+    ___fn_ref_tmp_2(65535):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = t.1;
     fn_ref[2](4i32);
   }#fn_call_tmp(3):integer);
 }#block(1):integer
@@ -24,19 +24,19 @@ byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-lay
   50[88]: Return(ret=48, value=8, discard=88)
 
 fn n_main() {#block(1):void
-  __work_1(1):text = "";
-  [2] a(1):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = 643i32;
-  b(1):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = 644i32;
+  __work_1(65535):text = "";
+  [2] a(65535):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = 643i32;
+  b(65535):function([integer(-2147483647, 2147483647, false)], integer(-2147483647, 2147483647, false), deps { items: [] }) = 644i32;
     n_print({#Formatted string(2):text["__work_1"]
-    __work_1(1):text = "";
-    OpFormatInt(__work_1(1), n_f((a(1), b(1))), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), "
+    __work_1(65535):text = "";
+    OpFormatInt(__work_1(65535), n_f((a(65535), b(65535))), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(2):text["__work_1"]);
-  OpFreeRef(b(1));
-  OpFreeRef(a(1));
-  OpFreeText(__work_1(1));
+  OpFreeRef(b(65535));
+  OpFreeRef(a(65535));
+  OpFreeText(__work_1(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/fn2.loft:n_main()
@@ -2551,17 +2551,17 @@ fn main() {
 fn n_f:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0    arg  t                    (fn,fn)        0      [0, 44)      -
-  1         ___fn_ref_tmp_1      fn             2      [56, 76)     [1, 3]
-  2         ___fn_ref_tmp_2      fn             3      [56, 76)     [5, 7]
+  0    arg  t                    (fn,fn)        -      [0, 44)      -
+  1         ___fn_ref_tmp_1      fn             -      [56, 76)     -
+  2         ___fn_ref_tmp_2      fn             -      [56, 76)     -
 
 
 fn n_main:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0         a                    fn             1      [32, 52)     [4, 27]
-  1         b                    fn             1      [56, 76)     [6, 26]
-  2         __work_1             text           1      [8, 32)      [0, 28]
+  0         a                    fn             -      [32, 52)     -
+  1         b                    fn             -      [56, 76)     -
+  2         __work_1             text           -      [8, 32)      -
 
 
 

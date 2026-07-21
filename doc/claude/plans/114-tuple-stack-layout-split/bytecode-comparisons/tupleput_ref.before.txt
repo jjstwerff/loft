@@ -1,30 +1,30 @@
 === bytecode ===
 fn n_main() {#block(1):void
-  __work_1(1):text = "";
-  [2] a(1):ref(P) = null;
-  OpDatabase(a(1), 65i32);
-  OpSetInt(a(1), 0i32, 10i32);
-  b(1):ref(P) = null;
-  OpDatabase(b(1), 65i32);
-  OpSetInt(b(1), 0i32, 20i32);
-  c(1):ref(P) = null;
-  OpDatabase(c(1), 65i32);
-  OpSetInt(c(1), 0i32, 30i32);
-  t(1):(ref(P)["b"], ref(P)["b"]) = (a(1), b(1));
-  t.0 = c(1);
+  __work_1(65535):text = "";
+  [2] a(65535):ref(P) = null;
+  OpDatabase(a(65535), 65i32);
+  OpSetInt(a(65535), 0i32, 10i32);
+  b(65535):ref(P) = null;
+  OpDatabase(b(65535), 65i32);
+  OpSetInt(b(65535), 0i32, 20i32);
+  c(65535):ref(P) = null;
+  OpDatabase(c(65535), 65i32);
+  OpSetInt(c(65535), 0i32, 30i32);
+  t(65535):(ref(P)["b"], ref(P)["b"]) = (a(65535), b(65535));
+  t.0 = c(65535);
     n_print({#Formatted string(2):text["__work_1"]
-    __work_1(1):text = "";
-    OpFormatInt(__work_1(1), OpGetInt(t.0, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), ",");
-    OpFormatInt(__work_1(1), OpGetInt(t.1, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), "
+    __work_1(65535):text = "";
+    OpFormatInt(__work_1(65535), OpGetInt(t.0, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), ",");
+    OpFormatInt(__work_1(65535), OpGetInt(t.1, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(2):text["__work_1"]);
-  OpFreeRef(c(1));
-  OpFreeRef(b(1));
-  OpFreeRef(a(1));
-  OpFreeText(__work_1(1));
+  OpFreeRef(c(65535));
+  OpFreeRef(b(65535));
+  OpFreeRef(a(65535));
+  OpFreeText(__work_1(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/tupleput_ref.loft:n_main()
@@ -2530,11 +2530,11 @@ fn main() {
 fn n_main:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0         a                    ref(640)       1      [32, 44)     [3, 70]
-  1         b                    ref(640)       1      [44, 56)     [12, 69]
-  2         c                    ref(640)       1      [56, 68)     [21, 68]
-  3         t                    (ref(640),ref(640)) 1      [68, 92)     [33, 53]
-  4         __work_1             text           1      [8, 32)      [0, 71]
+  0         a                    ref(640)       -      [32, 44)     -
+  1         b                    ref(640)       -      [44, 56)     -
+  2         c                    ref(640)       -      [56, 68)     -
+  3         t                    (ref(640),ref(640)) -      [68, 92)     -
+  4         __work_1             text           -      [8, 32)      -
 
 
 

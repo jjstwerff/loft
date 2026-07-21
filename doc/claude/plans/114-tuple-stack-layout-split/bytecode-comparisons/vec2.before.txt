@@ -1,18 +1,18 @@
 === bytecode ===
 fn n_f(t:(vector<integer>, vector<integer>)) {#block(1):void
-  __work_1(1):text = "";
+  __work_1(65535):text = "";
   [1] n_print({#Formatted string(2):text["__work_1"]
-    __work_1(1):text = "";
+    __work_1(65535):text = "";
     OpTagFault(3i32);
-    OpFormatInt(__work_1(1), OpGetInt(OpGetVectorNullable(t.0, 8i32, 0i32), 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), ",");
+    OpFormatInt(__work_1(65535), OpGetInt(OpGetVectorNullable(t.0, 8i32, 0i32), 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), ",");
     OpTagFault(3i32);
-    OpFormatInt(__work_1(1), OpGetInt(OpGetVectorNullable(t.1, 8i32, 0i32), 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), "
+    OpFormatInt(__work_1(65535), OpGetInt(OpGetVectorNullable(t.1, 8i32, 0i32), 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(2):text["__work_1"]);
-  OpFreeText(__work_1(1));
+  OpFreeText(__work_1(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/vec2.loft:n_f(t: (vector<integer>, vector<integer>)[0])
@@ -46,31 +46,31 @@ byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-lay
  126[56]: Return(ret=24, value=0, discard=56)
 
 fn n_main() {#block(1):void
-  __vdb_2(1):ref(main_vector<integer>) = null;
-  __vdb_1(1):ref(main_vector<integer>) = null;
-  [2] OpDatabase(__vdb_1(1), 22i32);
-  v(1):vector<integer>["__vdb_1"] = OpGetField(__vdb_1(1), 0i32, 21i32);
-  OpSetInt4(__vdb_1(1), 0i32, 0i32);
-  OpPreAllocVector(v(1), 2i32, 8i32);
-  _elm_1(1):ref(i_parse_errors)["v"] = OpNewRecord(v(1), 21i32, 65535i32);
-  OpSetInt(_elm_1(1), 0i32, 7i32);
-  OpFinishRecord(v(1), _elm_1(1), 21i32, 65535i32);
-  _elm_1(1):ref(i_parse_errors)["v"] = OpNewRecord(v(1), 21i32, 65535i32);
-  OpSetInt(_elm_1(1), 0i32, 8i32);
-  OpFinishRecord(v(1), _elm_1(1), 21i32, 65535i32);
-  OpDatabase(__vdb_2(1), 22i32);
-  u(1):vector<integer>["__vdb_2"] = OpGetField(__vdb_2(1), 0i32, 21i32);
-  OpSetInt4(__vdb_2(1), 0i32, 0i32);
-  OpPreAllocVector(u(1), 2i32, 8i32);
-  _elm_2(1):ref(i_parse_errors)["u"] = OpNewRecord(u(1), 21i32, 65535i32);
-  OpSetInt(_elm_2(1), 0i32, 9i32);
-  OpFinishRecord(u(1), _elm_2(1), 21i32, 65535i32);
-  _elm_2(1):ref(i_parse_errors)["u"] = OpNewRecord(u(1), 21i32, 65535i32);
-  OpSetInt(_elm_2(1), 0i32, 10i32);
-  OpFinishRecord(u(1), _elm_2(1), 21i32, 65535i32);
-    n_f((v(1), u(1)));
-  OpFreeRef(__vdb_1(1));
-  OpFreeRef(__vdb_2(1));
+  __vdb_2(65535):ref(main_vector<integer>) = null;
+  __vdb_1(65535):ref(main_vector<integer>) = null;
+  [2] OpDatabase(__vdb_1(65535), 22i32);
+  v(65535):vector<integer>["__vdb_1"] = OpGetField(__vdb_1(65535), 0i32, 21i32);
+  OpSetInt4(__vdb_1(65535), 0i32, 0i32);
+  OpPreAllocVector(v(65535), 2i32, 8i32);
+  _elm_1(65535):ref(i_parse_errors)["v"] = OpNewRecord(v(65535), 21i32, 65535i32);
+  OpSetInt(_elm_1(65535), 0i32, 7i32);
+  OpFinishRecord(v(65535), _elm_1(65535), 21i32, 65535i32);
+  _elm_1(65535):ref(i_parse_errors)["v"] = OpNewRecord(v(65535), 21i32, 65535i32);
+  OpSetInt(_elm_1(65535), 0i32, 8i32);
+  OpFinishRecord(v(65535), _elm_1(65535), 21i32, 65535i32);
+  OpDatabase(__vdb_2(65535), 22i32);
+  u(65535):vector<integer>["__vdb_2"] = OpGetField(__vdb_2(65535), 0i32, 21i32);
+  OpSetInt4(__vdb_2(65535), 0i32, 0i32);
+  OpPreAllocVector(u(65535), 2i32, 8i32);
+  _elm_2(65535):ref(i_parse_errors)["u"] = OpNewRecord(u(65535), 21i32, 65535i32);
+  OpSetInt(_elm_2(65535), 0i32, 9i32);
+  OpFinishRecord(u(65535), _elm_2(65535), 21i32, 65535i32);
+  _elm_2(65535):ref(i_parse_errors)["u"] = OpNewRecord(u(65535), 21i32, 65535i32);
+  OpSetInt(_elm_2(65535), 0i32, 10i32);
+  OpFinishRecord(u(65535), _elm_2(65535), 21i32, 65535i32);
+    n_f((v(65535), u(65535)));
+  OpFreeRef(__vdb_1(65535));
+  OpFreeRef(__vdb_2(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/vec2.loft:n_main()
@@ -2624,19 +2624,19 @@ fn main() {
 fn n_f:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0    arg  t                    (vec<int>,vec<int>) 0      [0, 24)      -
-  1         __work_1             text           1      [32, 56)     [0, 45]
+  0    arg  t                    (vec<int>,vec<int>) -      [0, 24)      -
+  1         __work_1             text           -      [32, 56)     -
 
 
 fn n_main:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0         v                    vec<int>       1      [32, 44)     [11, 94]
-  1         _elm_1               ref(0)         1      [44, 56)     [20, 45]
-  2         u                    vec<int>       1      [44, 56)     [56, 95]
-  3         _elm_2               ref(0)         1      [56, 68)     [65, 90]
-  4         __vdb_1              ref(443)       1      [20, 32)     [2, 98]
-  5         __vdb_2              ref(443)       1      [8, 20)      [0, 99]
+  0         v                    vec<int>       -      [32, 44)     -
+  1         _elm_1               ref(0)         -      [44, 56)     -
+  2         u                    vec<int>       -      [44, 56)     -
+  3         _elm_2               ref(0)         -      [56, 68)     -
+  4         __vdb_1              ref(443)       -      [20, 32)     -
+  5         __vdb_2              ref(443)       -      [8, 20)      -
 
 
 

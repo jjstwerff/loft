@@ -1,18 +1,18 @@
 === bytecode ===
 fn n_f(t:(integer, ref(P), integer)) {#block(1):void
-  __work_1(1):text = "";
+  __work_1(65535):text = "";
   [2] n_print({#Formatted string(2):text["__work_1"]
-    __work_1(1):text = "";
-    OpFormatInt(__work_1(1), t.0, 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), ",");
-    OpFormatInt(__work_1(1), OpGetInt(t.1, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), ",");
-    OpFormatInt(__work_1(1), t.2, 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), "
+    __work_1(65535):text = "";
+    OpFormatInt(__work_1(65535), t.0, 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), ",");
+    OpFormatInt(__work_1(65535), OpGetInt(t.1, 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), ",");
+    OpFormatInt(__work_1(65535), t.2, 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(2):text["__work_1"]);
-  OpFreeText(__work_1(1));
+  OpFreeText(__work_1(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/int_ref_int.loft:n_f(t: (integer, ref(P), integer)[0])
@@ -44,11 +44,11 @@ byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-lay
  121[64]: Return(ret=32, value=0, discard=64)
 
 fn n_main() {#block(1):void
-  [3] a(1):ref(P) = null;
-  OpDatabase(a(1), 65i32);
-  OpSetInt(a(1), 0i32, 5i32);
-    n_f((1i32, a(1), 9i32));
-  OpFreeRef(a(1));
+  [3] a(65535):ref(P) = null;
+  OpDatabase(a(65535), 65i32);
+  OpSetInt(a(65535), 0i32, 5i32);
+    n_f((1i32, a(65535), 9i32));
+  OpFreeRef(a(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/int_ref_int.loft:n_main()
@@ -2525,14 +2525,14 @@ fn main() {
 fn n_f:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0    arg  t                    (int,ref(640),int) 0      [0, 32)      -
-  1         __work_1             text           1      [40, 64)     [0, 45]
+  0    arg  t                    (int,ref(640),int) -      [0, 32)      -
+  1         __work_1             text           -      [40, 64)     -
 
 
 fn n_main:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0         a                    ref(640)       1      [8, 20)      [0, 14]
+  0         a                    ref(640)       -      [8, 20)      -
 
 
 

@@ -1,19 +1,19 @@
 === bytecode ===
 fn n_mk(__retbuf:__tuple<P,P>) -> __tuple<P,P> {#block(1):ref(__tuple<P,P>)
-  __ref_1(1):ref(__tuple<P,P>) = null;
-  [2] a(1):ref(P) = null;
-  OpDatabase(a(1), 65i32);
-  OpSetInt(a(1), 0i32, 10i32);
-  b(1):ref(P) = null;
-  OpDatabase(b(1), 65i32);
-  OpSetInt(b(1), 0i32, 20i32);
+  __ref_1(65535):ref(__tuple<P,P>) = null;
+  [2] a(65535):ref(P) = null;
+  OpDatabase(a(65535), 65i32);
+  OpSetInt(a(65535), 0i32, 10i32);
+  b(65535):ref(P) = null;
+  OpDatabase(b(65535), 65i32);
+  OpSetInt(b(65535), 0i32, 20i32);
   {#synthetic_tuple_return(2):ref(__tuple<P,P>)["__ref_1"]
-    OpDatabase(__ref_1(1), 66i32);
-    OpCopyRecord(a(1), OpGetField(__ref_1(1), 0i32, 65i32), 65i32);
-    OpCopyRecord(b(1), OpGetField(__ref_1(1), 8i32, 65i32), 65i32);
-    OpFreeRefIfDistinct(b(1), __ref_1(1));
-    OpFreeRefIfDistinct(a(1), __ref_1(1));
-    return __ref_1(1);
+    OpDatabase(__ref_1(65535), 66i32);
+    OpCopyRecord(a(65535), OpGetField(__ref_1(65535), 0i32, 65i32), 65i32);
+    OpCopyRecord(b(65535), OpGetField(__ref_1(65535), 8i32, 65i32), 65i32);
+    OpFreeRefIfDistinct(b(65535), __ref_1(65535));
+    OpFreeRefIfDistinct(a(65535), __ref_1(65535));
+    return __ref_1(65535);
   }#synthetic_tuple_return(2):ref(__tuple<P,P>)["__ref_1"];
 }#block(1):ref(__tuple<P,P>)
 
@@ -51,33 +51,33 @@ byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-lay
  104[80]: Return(ret=16, value=12, discard=80) type=__tuple<P,P> 66
 
 fn n_main() {#block(1):void
-  __ref_1(1):ref(__tuple<P,P>) = null;
-  __work_1(1):text = "";
-  [3] t(1):ref(__tuple<P,P>) = n_mk(__ref_1(1));
-  __ref_2(1):ref(P) = null;
-  __ref_3(1):ref(P) = null;
+  __ref_1(65535):ref(__tuple<P,P>) = null;
+  __work_1(65535):text = "";
+  [3] t(65535):ref(__tuple<P,P>) = n_mk(__ref_1(65535));
+  __ref_2(65535):ref(P) = null;
+  __ref_3(65535):ref(P) = null;
     n_print({#Formatted string(2):text["__work_1"]
-    __work_1(1):text = "";
-    OpFormatInt(__work_1(1), OpGetInt({#inline ref copy(3):ref(P)["__ref_2"]
-      OpDatabase(__ref_2(1), 65i32);
-      OpCopyRecord(OpGetField(t(1), 0i32, 65i32), __ref_2(1), 65i32);
-      __ref_2(1);
+    __work_1(65535):text = "";
+    OpFormatInt(__work_1(65535), OpGetInt({#inline ref copy(3):ref(P)["__ref_2"]
+      OpDatabase(__ref_2(65535), 65i32);
+      OpCopyRecord(OpGetField(t(65535), 0i32, 65i32), __ref_2(65535), 65i32);
+      __ref_2(65535);
     }#inline ref copy(3):ref(P)["__ref_2"], 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), ",");
-    OpFormatInt(__work_1(1), OpGetInt({#inline ref copy(4):ref(P)["__ref_3"]
-      OpDatabase(__ref_3(1), 65i32);
-      OpCopyRecord(OpGetField(t(1), 8i32, 65i32), __ref_3(1), 65i32);
-      __ref_3(1);
+    OpAppendText(__work_1(65535), ",");
+    OpFormatInt(__work_1(65535), OpGetInt({#inline ref copy(4):ref(P)["__ref_3"]
+      OpDatabase(__ref_3(65535), 65i32);
+      OpCopyRecord(OpGetField(t(65535), 8i32, 65i32), __ref_3(65535), 65i32);
+      __ref_3(65535);
     }#inline ref copy(4):ref(P)["__ref_3"], 0i32), 10i32, 0i32, 32i32, false, false, 2i32);
-    OpAppendText(__work_1(1), "
+    OpAppendText(__work_1(65535), "
 ");
-    __work_1(1);
+    __work_1(65535);
   }#Formatted string(2):text["__work_1"]);
-  OpFreeRef(__ref_3(1));
-  OpFreeRef(__ref_2(1));
-  OpFreeRef(t(1));
-  OpFreeText(__work_1(1));
-  OpFreeRefIfDistinct(__ref_1(1), t(1));
+  OpFreeRef(__ref_3(65535));
+  OpFreeRef(__ref_2(65535));
+  OpFreeRef(t(65535));
+  OpFreeText(__work_1(65535));
+  OpFreeRefIfDistinct(__ref_1(65535), t(65535));
 }#block(1):void
 
 byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/ref2_return.loft:n_main()
@@ -2612,20 +2612,20 @@ fn main() {
 fn n_mk:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0    arg  __retbuf             ref(642)       0      [0, 12)      -
-  1         a                    ref(640)       1      [36, 48)     [2, 40]
-  2         b                    ref(640)       1      [48, 60)     [11, 37]
-  3         __ref_1              ref(642)       1      [24, 36)     [0, 43]
+  0    arg  __retbuf             ref(642)       -      [0, 12)      -
+  1         a                    ref(640)       -      [36, 48)     -
+  2         b                    ref(640)       -      [48, 60)     -
+  3         __ref_1              ref(642)       -      [24, 36)     -
 
 
 fn n_main:
   #    arg  name                 type           scope  slot         live
   ----------------------------------------------------------------------
-  0         t                    ref(642)       1      [48, 60)     [5, 70]
-  1         __ref_1              ref(642)       1      [8, 20)      [0, 69]
-  2         __work_1             text           1      [24, 48)     [2, 68]
-  3         __ref_2              ref(640)       1      [60, 72)     [9, 66]
-  4         __ref_3              ref(640)       1      [72, 84)     [11, 65]
+  0         t                    ref(642)       -      [48, 60)     -
+  1         __ref_1              ref(642)       -      [8, 20)      -
+  2         __work_1             text           -      [24, 48)     -
+  3         __ref_2              ref(640)       -      [60, 72)     -
+  4         __ref_3              ref(640)       -      [72, 84)     -
 
 
 

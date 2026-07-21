@@ -10,9 +10,10 @@
 > design. The steps below are sized for that.
 
 > **@PLN114** — [loft-lang/plans#114](https://github.com/loft-lang/plans/issues/114).
-> Status: design. Nothing here is implemented — the investigation below stopped at
-> the design gate deliberately (see § What the first attempt got wrong). The probe
-> corpus is live: `114-tuple-stack-layout-split/probes/` (`./run.sh`).
+> **Step 0 and step 1 are DONE**; steps 2-7 open. No behaviour has changed yet —
+> step 1 is diagnostic only, and the emitted code is byte-identical. Probe corpus:
+> `114-tuple-stack-layout-split/probes/` (`./run.sh`), baselines in
+> `bytecode-comparisons/`.
 
 ## Symptom
 
@@ -113,10 +114,22 @@ that already work; the 26 `element_offsets` sites stay untouched.
 
 ## The invariant
 
-> **A tuple is ONE packed buffer. Its element offsets are `data::element_offsets`
-> in every location a tuple can live — record, DB page, stack frame, eval stack,
-> par-worker message. The stack's uniform-8 step applies to the tuple as a whole,
-> never to its elements.**
+> **A tuple that is consumed DIRECTLY as a memory block — a record, a DB page, a
+> callee's frame, a par-worker message — must have its elements at
+> `data::element_offsets`. The stack's uniform-8 step applies to such a block as a
+> whole, never to its elements.**
+
+**Amended at step 1, after the first form was falsified.** The original wording said
+"in every location a tuple can live", which sounds cleaner and is wrong: a tuple
+*bound to a local* is relocated element-by-element into the variable's slots by
+`emit_tuple_put_ops` (`codegen.rs:2346` → `2141`, which reads `element_offsets`
+itself). Its intermediate eval-stack placement is scratch and legitimately does not
+match. A check written to the wide form fires on `ref2_local` and `tupleput_ref`,
+both of which are correct at runtime.
+
+What separates the two is the **consumer**: a block read directly as memory must be
+packed; a block that gets relocated on the way to its home need not be. That is why
+step 1's assert is conditioned on `in_call_arg` rather than applied to every tuple.
 
 An untested cell is then correct for the same reason a tested one is: nobody
 computes element placement, everybody reads it from one function.
@@ -224,7 +237,36 @@ cells crash identically under the release and DA builds; `loft introspect` captu
 for each cell into `bytecode-comparisons/` (it carries IR + bytecode + native Rust,
 so one capture covers both backends).
 
-### Step 1 — make the mismatch loud (no emitted-code change)
+### Step 1 — make the mismatch loud (no emitted-code change) — **DONE**
+
+Landed as a per-element check in `codegen.rs`'s `ValueType::Tuple` arm, conditioned
+on a debug-only `State::in_call_arg` flag set around argument generation in
+`generate_call`. Absent from release builds entirely — no field, no flag, no cost.
+
+Two premises in the original text were wrong and are corrected here:
+
+- *"widen the assert past `a.mutable`-only"* — the `generate_call` width assert was
+  never the gap. It stayed silent on the text cells because their totals genuinely
+  agree; it compares only the aggregate, so a tuple can push the right total with
+  every element misplaced. The gap was per-element, not per-argument.
+- *"put it at the tuple read path"* — the first attempt instrumented
+  `generate_var`'s `Type::Tuple` arm and fired on **nothing**, including `ref2`.
+  These cells pass tuple *literals*, which are built by `ValueType::Tuple`
+  (`codegen.rs:452`, "generate each element onto contiguous stack slots" — with no
+  offset control at all). A dead-path sentinel reads exactly like a healthy one;
+  only a known-failing cell that *must* fire distinguishes them.
+
+Calibration (the reason to trust it): fires on all 9 runtime-broken corpus cells,
+silent on all 15 runtime-OK ones, and across the **201 ignored matrix cells** under
+a debug-assertions build — 199 passed, and the only 2 failures are the 2 already
+known broken. Zero false positives on the whole population. Byte-identical
+`introspect` on all 24 corpus cells confirms nothing emitted changed.
+
+Gate note learned the hard way: `#[cfg(debug_assertions)]` code is **not compiled**
+by `cargo build --release`, so the byte-identical gate passed once on an assert that
+did not compile. Always build the DA binary too.
+
+<details><summary>original step 1 text (superseded)</summary>
 
 The width assert at `codegen.rs:2820` only guards `a.mutable` args, which is why
 two of the three crash families reach a SIGSEGV instead of a message. Widen it:
@@ -239,6 +281,8 @@ asserts are debug-only, so an empty diff is the proof nothing emitted changed. T
 the DA build must report a width mismatch for `(P,P)`, `(P,P,P)`, `(vector,vector)`
 and stay silent for the 199 passing cells. A positive control is required: if the
 new asserts fire nowhere, they are on a dead path, not proof of health.
+
+</details>
 
 ### Step 2 — decide the `text` family
 
