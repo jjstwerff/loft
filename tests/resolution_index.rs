@@ -399,14 +399,19 @@ fn s4_parameter_refs_exclude_a_same_named_field() {
 }
 
 #[test]
-fn s4_loop_binder_falls_back_to_fv1() {
-    // A `for i` binder's declaration is not recorded → the earliest occurrence is
-    // a use, not a `name =` write → None (fall back).
+fn s4_loop_binder_takes_the_precise_path() {
+    // @PLN115 tail — a simple `for i` binder's declaration is now recorded, so its
+    // references take S4's precise path: the binder decl + its body use.
     let src = "fn g() {\n  total = 0;\n  for i in 0..3 {\n    total = total + i;\n  }\n}\n";
     // Cursor on the body use of `i` (L4, col 21).
+    let refs = loft::lsp::local_binding_refs(src, "default", "/buf.loft", 4, 21)
+        .expect("a loop binder now takes the precise path");
+    let positions: Vec<(u32, u32)> = refs.iter().map(|r| (r.line, r.col)).collect();
+    // The binder decl (`i` at L3 col 7) + the body use (L4 col 21) = 2 references.
+    assert_eq!(refs.len(), 2, "loop binder: decl + one use: {positions:?}");
     assert!(
-        loft::lsp::local_binding_refs(src, "default", "/buf.loft", 4, 21).is_none(),
-        "a loop binder must fall back to F-v1"
+        positions.contains(&(3, 7)),
+        "includes the `for i` binder declaration: {positions:?}"
     );
     // The assignment-local `total` in the SAME function still takes the precise path.
     let refs = loft::lsp::local_binding_refs(src, "default", "/buf.loft", 2, 3)

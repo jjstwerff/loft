@@ -1609,6 +1609,11 @@ use #count instead"
             None
         };
 
+        // @PLN115 tail — capture the simple `for id` binder's position before it is
+        // consumed, to record its DECLARATION once the loop var exists (only when
+        // recording; destructure binders are synthesized, so they are excluded).
+        let binder_pos = (destructure_names.is_none() && self.record_resolutions)
+            .then(|| self.lexer.peek_pos().clone());
         // P235: when destructuring, synthesize a loop var name from
         // the source line/column; the user-named binders are defined
         // later as proper variables and prepended to the body.
@@ -1823,6 +1828,22 @@ use #count instead"
                 && matches!(expr.unspan(), Value::Call(d, _) if matches!(self.data.def(*d).returned(), Type::Iterator(_, _)));
             let (iter_var, pre_var, for_var, if_step, create_iter, iter_next) =
                 self.parse_for_iter_setup(&id, &in_type, expr);
+            // @PLN115 tail — record the loop binder's DECLARATION (pass 2, recording
+            // on): `Local{fn_def, for_var}` at the binder name, so a `for i` binder's
+            // references/rename take S4's precise path instead of the F-v1 fallback.
+            if let Some(pos) = &binder_pos
+                && !self.first_pass
+                && for_var != u16::MAX
+            {
+                self.record_decl(
+                    pos,
+                    id.chars().count() as u16,
+                    crate::resolution::Resolution::Local {
+                        fn_def: self.context,
+                        var_nr: for_var,
+                    },
+                );
+            }
             let var_tp = self.for_type(&in_type);
             // For vector loops: set_loop stores the temp-copy var; override with the
             // original so that `orig += elem` is correctly identified as a mutation.
