@@ -187,6 +187,7 @@ fn print_help() {
     println!("  hover <file> <ln> <col>       the symbol under a cursor (1-based); add --json");
     println!("  tag <@TAG> [--json]           what the tracker index knows about a tag");
     println!("                                (@F/@I feature, @P problem, @PLN/@GH issue)");
+    println!("  refs <name> [root] [--json]   every occurrence of an identifier in the .loft tree");
     println!(
         "  sandbox-check <file>          report the @PLN86 sandbox admission verdict and STOP"
     );
@@ -4340,6 +4341,49 @@ fn tag_json(info: &loft::lsp::TagInfo) -> loft::json::Parsed {
     ])
 }
 
+/// `loft refs <name> [root] [--json]` — every occurrence of an identifier across
+/// the `.loft` files under `root` (default: CWD), via the workspace reverse index.
+fn run_refs_command(args: &[String]) -> i32 {
+    let json = args.iter().any(|a| a == "--json");
+    let positional: Vec<&String> = args.iter().filter(|a| !a.starts_with('-')).collect();
+    let Some(name) = positional.first() else {
+        eprintln!("loft refs: usage: loft refs <name> [root] [--json]");
+        return 2;
+    };
+    let root = positional.get(1).map_or_else(
+        || {
+            std::env::current_dir()
+                .map_or_else(|_| ".".to_string(), |d| d.to_string_lossy().into_owned())
+        },
+        |s| (*s).clone(),
+    );
+    let wi = loft::lsp::WorkspaceIndex::build(&root);
+    let refs = wi.references(name);
+    if json {
+        use loft::json::Parsed;
+        let arr = Parsed::Array(
+            refs.iter()
+                .map(|r| {
+                    jobj(vec![
+                        ("file", Parsed::Str(r.file.clone())),
+                        ("line", Parsed::Int(i64::from(r.line))),
+                        ("col", Parsed::Int(i64::from(r.col))),
+                    ])
+                })
+                .collect(),
+        );
+        println!("{}", loft::json::to_json_string(&arr));
+    } else if refs.is_empty() {
+        eprintln!("loft refs: no references to '{name}' under {root}");
+        return 1;
+    } else {
+        for r in refs {
+            println!("{}:{}:{}", r.file, r.line, r.col);
+        }
+    }
+    0
+}
+
 /// `loft tag <@TAG> [--json]` — what the tracker index knows about a tag
 /// (issue / feature / plan): title + summary + issue URL + reference count,
 /// from `index/tags.json` + `index/features.json` (`make index`).
@@ -5306,6 +5350,8 @@ fn main() {
             std::process::exit(run_hover_command(&argv[i..]));
         } else if a == "tag" {
             std::process::exit(run_tag_command(&argv[i..]));
+        } else if a == "refs" {
+            std::process::exit(run_refs_command(&argv[i..]));
         } else if a == "publish" {
             // @PLAN12 Phase 6.16 — author-side publish helper.
             // Repackages locally (deterministic), verifies the

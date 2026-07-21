@@ -9,7 +9,8 @@
 // Feature providers land here step by step: S3 diagnostics (this file), then
 // S4 outline / S5 hover / S6 go-to-definition reuse the same fresh-parse.
 
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use crate::data::{Data, MAIN_SOURCE};
 use crate::diagnostics::Diagnostics;
@@ -300,6 +301,13 @@ fn name_col_on_line(src: &str, decl_line: u32, name: &str) -> Option<u32> {
     let line = src.lines().nth(decl_line.saturating_sub(1) as usize)?;
     let byte_idx = line.find(needle)?;
     Some(line[..byte_idx].chars().count() as u32 + 1)
+}
+
+/// The identifier under a 1-based (`line`, `col`) cursor — the token that
+/// find-references / rename resolve.  Public wrapper over the internal `word_at`.
+#[must_use]
+pub fn identifier_at(text: &str, line: u32, col: u32) -> Option<String> {
+    word_at(text, line, col)
 }
 
 /// The identifier token under a 1-based (`line`, `col`) cursor in `text`, or
@@ -636,4 +644,162 @@ fn pj_str(v: &Parsed, key: &str) -> Option<String> {
 
 fn pj_i64(v: &Parsed, key: &str) -> Option<i64> {
     pj_get(v, key).and_then(Parsed::as_i64)
+}
+
+// ── workspace reverse index (@PLN63 — find-references / rename) ───────────────
+// A workspace-wide reverse index: every identifier's occurrences across the
+// `.loft` files under a root, keyed by name.  Built by LEXING each file (loft's
+// own lexer), so comments / strings / keywords are excluded and `x.len` yields a
+// `len` identifier — a precise-but-unscoped finder (name-keyed, not type-resolved:
+// `references("len")` returns every `len` token across all types).
+
+/// One occurrence of an identifier in the workspace — a use site or a definition.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Reference {
+    /// Absolute file path (canonicalized).
+    pub file: String,
+    /// 1-based line.
+    pub line: u32,
+    /// 1-based column.
+    pub col: u32,
+}
+
+/// A reverse index of identifier occurrences across a workspace's `.loft` files.
+pub struct WorkspaceIndex {
+    by_name: HashMap<String, Vec<Reference>>,
+}
+
+impl WorkspaceIndex {
+    /// Build by lexing every `.loft` file under `root` (skipping build / VCS /
+    /// dependency dirs).  Reflects the SAVED files; the caller overlays open,
+    /// edited buffers at query time (`identifier_refs`).
+    #[must_use]
+    pub fn build(root: &str) -> WorkspaceIndex {
+        let mut by_name: HashMap<String, Vec<Reference>> = HashMap::new();
+        for path in loft_files(Path::new(root)) {
+            let Ok(text) = std::fs::read_to_string(&path) else {
+                continue;
+            };
+            let file = canonical(&path);
+            for (name, r) in scan_identifiers(&text, &file) {
+                by_name.entry(name).or_default().push(r);
+            }
+        }
+        WorkspaceIndex { by_name }
+    }
+
+    /// Every recorded occurrence of `name` (the SAVED-file view).
+    #[must_use]
+    pub fn references(&self, name: &str) -> &[Reference] {
+        self.by_name.get(name).map_or(&[][..], Vec::as_slice)
+    }
+
+    /// References to `name` with open buffers overlaid: for each open document,
+    /// its live refs replace its stale disk refs (matched by canonical path), so
+    /// find-references reflects unsaved edits.  `overlays` is `(file_path, text)`
+    /// per open document.  Sorted by (file, line, col).
+    #[must_use]
+    pub fn references_overlaid(&self, name: &str, overlays: &[(String, String)]) -> Vec<Reference> {
+        let open: Vec<(String, &str)> = overlays
+            .iter()
+            .map(|(p, t)| (canonical(Path::new(p)), t.as_str()))
+            .collect();
+        let mut refs: Vec<Reference> = self
+            .references(name)
+            .iter()
+            .filter(|r| !open.iter().any(|(p, _)| *p == r.file))
+            .cloned()
+            .collect();
+        for (path, text) in &open {
+            refs.extend(identifier_refs(text, path, name));
+        }
+        refs.sort_by(|a, b| {
+            a.file
+                .cmp(&b.file)
+                .then(a.line.cmp(&b.line))
+                .then(a.col.cmp(&b.col))
+        });
+        refs
+    }
+}
+
+/// Every occurrence of the identifier `name` in `text`, tagged with `file`.  A
+/// fresh lex — the overlay for an open, edited buffer (its live refs replace the
+/// stale disk ones).
+#[must_use]
+pub fn identifier_refs(text: &str, file: &str, name: &str) -> Vec<Reference> {
+    scan_identifiers(text, file)
+        .into_iter()
+        .filter(|(n, _)| n == name)
+        .map(|(_, r)| r)
+        .collect()
+}
+
+/// Lex `text` and collect every non-keyword identifier as `(name, Reference)`.
+fn scan_identifiers(text: &str, file: &str) -> Vec<(String, Reference)> {
+    use crate::lexer::{LexItem, Lexer};
+    let mut lexer = Lexer::default();
+    lexer.parse_string(text, file);
+    let mut out = Vec::new();
+    // `restart()` (inside `parse_string`) already advanced to the first token,
+    // so peek FIRST, then `cont()`.
+    loop {
+        let r = lexer.peek();
+        match r.has {
+            LexItem::None => break,
+            LexItem::Identifier(name) if !crate::lexer::is_keyword(&name) => {
+                out.push((
+                    name,
+                    Reference {
+                        file: file.to_string(),
+                        line: r.position.line,
+                        col: r.position.pos,
+                    },
+                ));
+            }
+            _ => {}
+        }
+        lexer.cont();
+    }
+    out
+}
+
+/// Canonical absolute path string (falls back to the lossy path on error).
+fn canonical(p: &Path) -> String {
+    std::fs::canonicalize(p)
+        .unwrap_or_else(|_| p.to_path_buf())
+        .to_string_lossy()
+        .into_owned()
+}
+
+/// Every `.loft` file under `root`, skipping build / VCS / dependency dirs.
+fn loft_files(root: &Path) -> Vec<PathBuf> {
+    const SKIP: &[&str] = &[
+        "target",
+        ".git",
+        ".loft",
+        "node_modules",
+        ".claude",
+        ".cache",
+    ];
+    let mut out = Vec::new();
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if path.is_dir() {
+                if !SKIP.contains(&name.as_ref()) && !name.starts_with('.') {
+                    stack.push(path);
+                }
+            } else if name.ends_with(".loft") {
+                out.push(path);
+            }
+        }
+    }
+    out
 }

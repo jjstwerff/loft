@@ -596,6 +596,70 @@ fn broken_tag_publishes_a_warning() {
     let _ = s.child.wait();
 }
 
+// find-references — a workspace with two files; references to a symbol span both,
+// and the open file's live buffer is overlaid.
+#[test]
+fn find_references_spans_the_workspace() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("refws2");
+    std::fs::create_dir_all(&root).unwrap();
+    std::fs::write(
+        root.join("a.loft"),
+        "fn area(w: integer) -> integer {\n  w * w\n}\n",
+    )
+    .unwrap();
+    std::fs::write(root.join("b.loft"), "fn main() {\n  print(area(3))\n}\n").unwrap();
+
+    let mut s = Session::start();
+    let caps = {
+        s.request(
+            1,
+            "initialize",
+            &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+        );
+        let init = s.recv();
+        field(field(&init, "result").unwrap(), "capabilities")
+            .unwrap()
+            .clone()
+    };
+    assert!(
+        matches!(field(&caps, "referencesProvider"), Some(Parsed::Bool(true))),
+        "advertises referencesProvider"
+    );
+    s.notify("initialized", "{}");
+
+    let a_uri = format!("file://{}/a.loft", root.display());
+    let a_text = "fn area(w: integer) -> integer {\n  w * w\n}\n";
+    s.notify("textDocument/didOpen", &open_params(&a_uri, a_text));
+    let _ = s.recv(); // publishDiagnostics
+
+    // References to `area` — cursor on its definition (0-based line 0, char 3).
+    s.request(
+        2,
+        "textDocument/references",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{a_uri}"}},"position":{{"line":0,"character":3}},"context":{{"includeDeclaration":true}}}}"#
+        ),
+    );
+    let reply = s.recv();
+    let locs = match field(&reply, "result") {
+        Some(Parsed::Array(a)) => a,
+        other => panic!("references result is an array, got {other:?}"),
+    };
+    let files: Vec<String> = locs
+        .iter()
+        .filter_map(|l| field_str(l, "uri"))
+        .map(|u| u.rsplit('/').next().unwrap_or("").to_string())
+        .collect();
+    assert!(
+        files.iter().any(|f| f == "a.loft") && files.iter().any(|f| f == "b.loft"),
+        "references span both files: {files:?}"
+    );
+    assert_eq!(locs.len(), 2, "the def + the one call: {locs:?}");
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 #[test]
 fn initialize_handshake_and_clean_shutdown() {
     let mut s = Session::start();

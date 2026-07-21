@@ -267,6 +267,20 @@ Two LSP.2-surface items already landed on the S-spine, plus a cross-cutting perf
   `loft::lsp::lookup()` + a shared `hover_of_def()`. Gate: `tests/lsp_cli.rs` drives the real
   binary. This is dogfood: it replaces the `grep default/*.loft` + read loop for "what's the
   signature of X".
+- **Workspace reverse index + find-references — DONE** (LSP.2 prereq #1, first cut).
+  `textDocument/references` returns every occurrence of the symbol under the cursor across the
+  workspace. `loft::lsp::WorkspaceIndex::build(root)` LEXES every `.loft` file (loft's own lexer,
+  so comments / strings / keywords are excluded and `x.len` yields a `len` token) into a
+  `name → [Reference]` reverse index; `references_overlaid` overlays open buffers (a file's live
+  refs replace its stale disk refs) so unsaved edits count. The binary builds it lazily from the
+  `initialize` root, caches it, advertises `referencesProvider`. Also `loft refs <name> [root]`
+  (dogfood — workspace-wide occurrences from the shell). **Scope:** name-keyed / lexical, not
+  type-resolved — `references("len")` returns every `len` token across types (a precise,
+  comment-aware finder, not scope-aware). *Gates:* `tests/lsp_refs.rs` (cross-file + comment
+  exclusion + overlay) and `tests/lsp_transport.rs::find_references_spans_the_workspace`.
+  **Rename** builds directly on this (references → `WorkspaceEdit`, with guards refusing
+  `#native`/stdlib and cross-`#rust` renames) — the natural next step. Follow-ups: type/scope-aware
+  precision (resolve each occurrence to confirm the binding), and index invalidation on `didSave`.
 
 ### Tag integration — tracker knowledge in the IDE (loft dogfood)
 

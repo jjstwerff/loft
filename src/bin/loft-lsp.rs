@@ -61,6 +61,11 @@ fn main() {
     let mut workspace_root: Option<String> = None;
     let mut tag_index: Option<loft::lsp::TagIndex> = None;
     let mut tag_index_tried = false;
+    // The workspace reverse index (identifier occurrences across the tree),
+    // built lazily on the first find-references request; open buffers are
+    // overlaid at query time so unsaved edits are reflected.
+    let mut workspace_index: Option<loft::lsp::WorkspaceIndex> = None;
+    let mut workspace_index_tried = false;
 
     while let Some(body) = read_message(&mut stdin) {
         // A frame that isn't valid JSON is skipped, not fatal — a robust server
@@ -164,6 +169,28 @@ fn main() {
                     None => Parsed::Null,
                 };
                 send(&stdout, &response(id, hover));
+            }
+            ("textDocument/references", Some(id)) => {
+                // Clone the buffer out first so the `documents` borrow is dropped.
+                let req = text_document_position(&msg)
+                    .and_then(|(uri, line, ch)| Some((documents.get(&uri)?.clone(), line, ch)));
+                let locations = match req {
+                    Some((text, line, ch)) => {
+                        match loft::lsp::identifier_at(&text, line + 1, ch + 1) {
+                            Some(name) => {
+                                ensure_workspace_index(
+                                    &workspace_root,
+                                    &mut workspace_index,
+                                    &mut workspace_index_tried,
+                                );
+                                references_of(&name, workspace_index.as_ref(), &documents)
+                            }
+                            None => Vec::new(),
+                        }
+                    }
+                    None => Vec::new(),
+                };
+                send(&stdout, &response(id, Parsed::Array(locations)));
             }
             ("textDocument/documentLink", Some(id)) => {
                 // T2: every tracker tag with an issue URL becomes a clickable link.
@@ -469,6 +496,55 @@ fn initialize_root(msg: &Parsed) -> Option<String> {
     obj_str(params, "rootPath")
 }
 
+// ── find-references (workspace reverse index) ────────────────────────────────
+/// Build the workspace reverse index once (from `workspace_root`), caching it.
+fn ensure_workspace_index(
+    root: &Option<String>,
+    index: &mut Option<loft::lsp::WorkspaceIndex>,
+    tried: &mut bool,
+) {
+    if *tried {
+        return;
+    }
+    *tried = true;
+    if let Some(r) = root {
+        *index = Some(loft::lsp::WorkspaceIndex::build(r));
+    }
+}
+
+/// LSP `Location[]` for every reference to `name`, with open buffers overlaid so
+/// unsaved edits count.  Empty when there is no workspace index.
+fn references_of(
+    name: &str,
+    index: Option<&loft::lsp::WorkspaceIndex>,
+    documents: &HashMap<String, String>,
+) -> Vec<Parsed> {
+    let Some(wi) = index else {
+        return Vec::new();
+    };
+    let overlays: Vec<(String, String)> = documents
+        .iter()
+        .map(|(uri, text)| (uri_to_path(uri), text.clone()))
+        .collect();
+    let len = name.chars().count() as u32;
+    wi.references_overlaid(name, &overlays)
+        .iter()
+        .map(|r| {
+            let line0 = r.line.saturating_sub(1);
+            let col0 = r.col.saturating_sub(1);
+            obj(vec![
+                ("uri", Parsed::Str(format!("file://{}", r.file))),
+                ("range", range_of(line0, col0, col0 + len)),
+            ])
+        })
+        .collect()
+}
+
+/// A `file://` document uri → its filesystem path.
+fn uri_to_path(uri: &str) -> String {
+    uri.strip_prefix("file://").unwrap_or(uri).to_string()
+}
+
 /// Load the tracker index once (from `<root>/index/`), caching the result.
 /// `tried` distinguishes "not yet loaded" from "loaded and absent" so a missing
 /// index isn't re-read every request.
@@ -685,6 +761,7 @@ fn initialize_result() -> Parsed {
         ("documentSymbolProvider", Parsed::Bool(true)),
         ("hoverProvider", Parsed::Bool(true)),
         ("definitionProvider", Parsed::Bool(true)),
+        ("referencesProvider", Parsed::Bool(true)),
         ("documentFormattingProvider", Parsed::Bool(true)),
         (
             "documentLinkProvider",
