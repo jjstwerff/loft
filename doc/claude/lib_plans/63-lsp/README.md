@@ -792,39 +792,33 @@ shape as the Eclipse path.
 
 ---
 
-## Neovim (1.0.0 — IDE.NEOVIM)
+## Neovim (IDE.NEOVIM) — SHIPPED (LSP)
 
-No plugin.  Just a snippet that the user drops into their
-`init.lua`:
+Lives in **`editors/nvim/`** (a runtimepath plugin, alongside `editors/vscode` /
+`editors/intellij`): `lua/loft.lua` (the module), `ftdetect/loft.lua` (the `.loft`
+filetype), `syntax/loft.vim` (structural highlighting — keywords lex as tokens, so
+semantic tokens can't colour them), and a setup `README.md`.
+
+**The LSP side is dependency-free** — it uses Neovim's built-in `vim.lsp` (0.8+),
+so `require('loft').setup()` is all it takes; no `nvim-lspconfig`. It registers the
+filetype, starts `loft-lsp` on each `.loft` buffer (root = nearest `loft.toml` /
+`.git`), and sets buffer-local maps (`gd`/`K`/`grn`/`grr`/`gra`/`gO`/`<leader>f`),
+inlay hints (0.10+), and omni-completion. Smoke-tested headless on Neovim 0.9.5:
+the server attaches and a `textDocument/hover` round-trips (`fn area(p: Point) ->
+integer`).
+
+The debug adapter is auto-registered when `nvim-dap` AND `loft-dap` are both
+present — inert until [loft-dap](#lsp3--loft-dap-debug-adapter-090) lands, at which
+point `setup()` wires `dap.adapters.loft` + a "Run current file" config with no
+extra work.
 
 ```lua
--- ~/.config/nvim/lua/loft.lua
-require('lspconfig').configs.loft = {
-  default_config = {
-    cmd = { 'loft-lsp' },
-    filetypes = { 'loft' },
-    root_dir = require('lspconfig.util').root_pattern('loft.toml', '.git'),
-  },
-}
-require('lspconfig').loft.setup{}
-
--- nvim-dap configuration for native + interpreter debug
-local dap = require('dap')
-dap.adapters.loft = {
-  type = 'executable',
-  command = 'loft-dap',
-}
-dap.configurations.loft = {
-  {
-    type = 'loft',
-    request = 'launch',
-    name = 'Run current file',
-    program = '${file}',
-  },
-}
+-- init.lua — point Neovim at the plugin, then:
+vim.opt.runtimepath:append("/abs/path/to/loft/editors/nvim")
+require("loft").setup()   -- { loft_lsp = "…" } if loft-lsp isn't on $PATH
 ```
 
-Loft ships this in `doc/` as `nvim-loft.lua`.  No Vimscript.
+Full setup / keymaps / troubleshooting: **[editors/nvim/README.md](../../../../editors/nvim/README.md)**.
 
 ---
 
