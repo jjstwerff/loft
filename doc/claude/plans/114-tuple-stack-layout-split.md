@@ -705,6 +705,35 @@ Neither the stack (20) nor the database (8, two fields) changes; that constraint
 **With this, full tight packing takes the oracle to 0 of 148.** The layout question is
 settled and correct.
 
+### Why full tightness is still OFF — the fn-ref needs a SECOND field
+
+Diagnosed by reading the emitted ops with tightness on:
+
+```
+OpSetInt4(p, 0, __ref_1.0)                 // d_nr            at offset 0
+OpSetInt(p, 4, __ref_1.1)                  // the NEXT element at offset 4
+OpRefFromChildRec(OpGetField(p, 4, 0))     // the closure_rec  at offset 4  <-- collision
+```
+
+A stored fn-ref is **two database fields** — `<attr>` (4B `d_nr`) at `pos` and
+`<attr>__closure_rec` (4B vector header) at `pos+4` — which `typedef.rs`'s
+`Type::Function` arm registers for a real struct field. **The synthetic `__tuple<…>`
+struct registers only the first.** So the tuple's next element is placed at `pos+4`,
+exactly where the reader looks for the closure record, and the fn-ref comes back
+wrong.
+
+The alignment padding was reserving that second field **by accident** — the fourth
+time in this plan that padding turned out to be load-bearing, and the reason each
+narrower fix failed: the width was never the problem, the missing companion field was.
+
+**The remaining work, stated precisely:** `tuple_def` must register the
+`__closure_rec` companion field for a `Function` element, the way `fill_database`'s
+`Type::Function` arm does for a declared struct field. Then a fn-ref element occupies
+its true 8 bytes by construction, full tightness is safe, and the oracle goes to 0.
+No stack change, no format change — the format already HAS two fields; the synthetic
+struct just isn't declaring the second.
+
+
 <details><summary>the superseded 4-byte version of this decision</summary>
 
 ### DECISION — the fn-ref width (2026-07-21)
