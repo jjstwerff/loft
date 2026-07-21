@@ -128,9 +128,18 @@ includes a byte-identical-IR check** (§ below). No step changes a parse decisio
   `lsp::resolutions(text, name, stdlib_dir)`. *Gate met:* the LSP parse carries
   occurrences; the CLI/compiler parse never routes through here → `loft introspect`
   byte-identical to S2; all LSP suites green (behavior-preserving refactor).
-- **S4 — first consumer: precise LOCAL references/rename.** Replace F-v1's block-scan
-  for a local with `occurrences_of(Local{…})`. *Gate:* renaming a local touches exactly
-  its binding's occurrences, shadowing-correct; `tests/lsp_scope.rs` extended.
+- **S4 — first consumer: precise LOCAL references/rename. ✅ DONE (`24cbe7a6`).**
+  `lsp::local_binding_refs` resolves the binding under the cursor by identity and
+  returns its exact occurrences; the server references/rename handlers try it first,
+  else F-v1. *Refined by probes:* loft is flat-scoped per function (so the win is
+  excluding same-named FIELD accesses `p.x`, not intra-fn shadowing), and the index
+  lacks declarations the definition/loop/lambda parser makes — so the precise path is
+  SOUND only for an assignment-local whose decl is captured (not a param; earliest
+  occurrence is a `name =` write); params/loop/lambda binders fall back to F-v1.
+  *Gate met:* unit + transport tests (field excluded; param/loop fall back); CLI
+  byte-identical to S3. **Follow-up:** record the missing declarations (param sig,
+  `for`/lambda binder) to make ALL locals precise and retire the fallback — deferred
+  as it touches the definition parser.
 - **S5 — hook globals + calls.** Record `Global`/`Method` at `mod.rs::call` (the
   `find_fn` result) and constants at `objects.rs:191`. *Gate:* byte-identical off;
   method references (`text.len`) now exclude other types' `len`.

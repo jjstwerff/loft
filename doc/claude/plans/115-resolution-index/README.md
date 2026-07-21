@@ -13,7 +13,7 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 **Phase 0 (design) DONE — see [design.md](design.md)** (concrete code points + the
 S1–S7 small-safe-step spine + the byte-identical-IR gate).
 
-**Execution: S1 + S2 + S3 DONE.**
+**Execution: S1 + S2 + S3 + S4 DONE.**
 - **S1** (`34c428c0`) — `pub mod resolution` (`Occurrence` + `Resolution`), the
   `record_resolutions`/`resolutions` fields (default off/empty), the gated `record`
   helper, `Parser::resolutions()`, and `resolutions.clear()` paired with every
@@ -34,9 +34,30 @@ S1–S7 small-safe-step spine + the byte-identical-IR gate).
   routes through here → `loft introspect` byte-identical to S2; all LSP suites green
   (refactor behavior-preserving).
 
-**Next: S4** — first consumer: precise LOCAL references/rename. Replace F-v1's
-block-scan with a query over the index (the binding under the cursor → its exact
-occurrences), shadowing-correct; extend `tests/lsp_scope.rs`.
+- **S4** (`24cbe7a6`) — first CONSUMER: precise local references/rename.
+  `lsp::local_binding_refs` resolves the binding under the cursor by identity
+  `(fn_def, var_nr)` and returns its exact occurrences, so a same-spelled FIELD
+  (`p.x` vs local `x`), method, or global is excluded — which the name-scan can't do.
+  The server's references + rename handlers try it first, else fall back to F-v1.
+  **Soundness:** the index records `parse_var` occurrences (uses + assignment targets)
+  but not declarations the definition/loop/lambda parser makes, so the precise path
+  is taken ONLY for an assignment-local whose decl IS captured (not a parameter of its
+  fn; earliest occurrence is a declaring `name =` write). Params / loop / lambda
+  binders fall back to F-v1 (which catches their decls). Grounded in probes: loft is
+  flat-scoped per function; `p.x`'s field is not a recorded local. **Gate met:** unit
+  + end-to-end transport tests (field excluded; param/loop fall back); CLI byte-
+  identical to S3; all LSP suites green.
+
+**Follow-up worth doing (would make S4 fully precise for ALL locals):** record the
+missing DECLARATIONS in the index — a parameter's signature name (needs a `name_pos`
+on `Argument` + a pass-2 hook in `definitions.rs`), a `for i` / lambda binder
+(`collections.rs` / lambda parse). Then params/loop-vars take the precise path too
+and the F-v1 fallback retires. Deferred from S4 as it touches the delicate definition
+parser and each site needs its own byte-identical gate.
+
+**Next: S5** — hook globals + calls (`mod.rs::call` / `find_fn`), constants
+(`objects.rs`). Byte-identical off; method references (`text.len`) then exclude other
+types' `len`.
 
 This is the deferred FOUNDATION under @PLN63 (loft-lsp): every LSP feature that needs to
 know *what an identifier occurrence refers to* — not just its spelling — depends on it.
