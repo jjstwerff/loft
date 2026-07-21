@@ -1,7 +1,0 @@
-error: expected (single, single), got (float, float) on argument 1 of call to f
-  --> /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/single2.loft:2:15
-  |
-2 | fn main() { f((1.5, 2.5)); }
-  |               ^
-
-error: aborting due to 1 previous error

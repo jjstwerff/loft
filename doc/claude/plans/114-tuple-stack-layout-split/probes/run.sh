@@ -27,6 +27,9 @@ declare -A EXP=(
   [ref2_field]="10,20"    [ref2_return]="10,20"  [tupleput_ref]="30,20"
   # step-2 alignment axis: what follows a 12-byte Reference decides it
   [ref_float]="10,2.5"    [ref_bool]="10,true"   [ref_char]="10,A"
+  # small-type pairs (the alias-width axis)
+  [bool3]="true,false,true" [char2]="A,B"        [u8pair]="7,9"
+  [u16pair]="300,400"
 )
 
 fail=0

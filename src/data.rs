@@ -2037,21 +2037,19 @@ pub fn element_stack_size(t: &Type) -> usize {
         | Type::Radix(_, _, _)
         | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
         Type::Tuple(elems) => {
-            // Atomic-group size: each element padded to its natural-
-            // alignment boundary inside the tuple block.  Identical
-            // to `LinkedFieldGroup::group_size` so storage layout
-            // (via `calculate_positions_with_groups`) and runtime
-            // reads (via `element_offsets`) line up byte-for-byte.
-            let mut pos: usize = 0;
-            for t in elems {
-                let align = element_stack_align(t).max(1) as usize;
-                let rem = pos % align;
-                if rem != 0 {
-                    pos += align - rem;
-                }
-                pos += element_stack_size(t);
-            }
-            pos
+            // @PLN114 — the STACK view: one `aligned_stack_step` slot per element,
+            // because that is what a push actually advances.  The natural-alignment
+            // packing this used to do described neither side — the callee's frame was
+            // sized from it while the caller's pushes stepped by 8, so `(P,P)`
+            // reserved 24 bytes for a 32-byte push and the callee read its second
+            // element 4 bytes early.  Storage is `element_storage_size`'s job now, so
+            // widening here no longer costs a byte on the heap.
+            elems
+                .iter()
+                .map(|t| {
+                    crate::variables::aligned_stack_step(element_stack_size(t) as u32) as usize
+                })
+                .sum()
         }
         _ => 0,
     }
@@ -2123,13 +2121,9 @@ pub fn element_stack_offsets(types: &[Type]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(types.len());
     let mut pos: usize = 0;
     for t in types {
-        let align = element_stack_align(t).max(1) as usize;
-        let rem = pos % align;
-        if rem != 0 {
-            pos += align - rem;
-        }
         offsets.push(pos);
-        pos += element_stack_size(t);
+        // @PLN114 — one stepped slot per element; see `element_stack_size`.
+        pos += crate::variables::aligned_stack_step(element_stack_size(t) as u32) as usize;
     }
     offsets
 }
@@ -2312,10 +2306,18 @@ mod tuple_stack_layout_tests {
 
     #[test]
     fn stack_offsets_three_bools() {
-        // (bool, bool, bool): all 1B align 1.  Tightly packed.
+        // (bool, bool, bool) on the STACK: one stepped slot each, so [0, 8, 16] and
+        // 24 bytes — NOT the packed [0, 1, 2] this asserted before @PLN114.
+        //
+        // The old expectation described the storage layout while naming itself a
+        // stack test, and it was wrong about the stack in a way that mattered: a
+        // bool push advances `aligned_stack_step(1)` = 8, so a callee reading the
+        // second element at +1 read the first element's padding.  `probes/bool3`
+        // (a `(boolean,boolean,boolean)` argument) is the runtime witness.
+        // Storage still packs these into 3 bytes — see `storage_view_packs_like_a_record`.
         let elems = vec![boolean(), boolean(), boolean()];
-        assert_eq!(element_stack_offsets(&elems), vec![0, 1, 2]);
-        assert_eq!(element_stack_size(&Type::Tuple(elems)), 3);
+        assert_eq!(element_stack_offsets(&elems), vec![0, 8, 16]);
+        assert_eq!(element_stack_size(&Type::Tuple(elems)), 24);
     }
 
     fn narrow(bits: u8) -> Type {
