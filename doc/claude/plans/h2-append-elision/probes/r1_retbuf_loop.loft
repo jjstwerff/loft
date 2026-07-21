@@ -1,0 +1,25 @@
+// @H2 callee-return axis — cell r1_retbuf_loop: callee returns its NRVO return buffer (struct literal), appended in a LOOP.
+// The existing p1-p8 corpus varies the CALL-SITE shape and holds the callee fixed
+// (every cell calls the same struct-literal `mk`), so it could not see the axis the
+// value-before-slot fix actually depends on: WHAT STORE the callee hands back.
+// Hand-computed expectation: values `1 2 3`, len=3, no leaked store.
+struct D { v: integer }
+struct E { v: integer }
+
+fn seed() -> vector<D> { t: vector<D> = []; t += [D{v:1}]; t += [D{v:2}]; t += [D{v:3}]; t }
+fn seed_e() -> vector<E> { t: vector<E> = []; t += [E{v:1}]; t += [E{v:2}]; t += [E{v:3}]; t }
+fn pick(t: vector<D>, i: integer) -> D { c = D { v: 0 }; for k in 0..len(t) { if k == i { c = t[k] ?? D{v:0}; } } c }
+fn show(out: vector<E>) { for j in 0..len(out) { e = out[j] ?? E{v:-1}; print("{e.v} "); } print("\n"); n = len(out); print("len={n}\n"); }
+
+// -- the four return kinds -----------------------------------------------------
+// retbuf: a struct literal, written straight into the caller's hidden return buffer.
+fn mk_lit(d: D) -> E { E { v: d.v } }
+// via: hands back ANOTHER call's result rather than building one itself.
+fn mk_via(d: D) -> E { mk_lit(d) }
+// branch: retbuf on one path, another call's store on the other — the shape
+// `scopes.rs` says cannot be resolved statically (its `map_from_json` example).
+fn mk_branch(d: D, q: integer) -> E { if q > 0 { E { v: d.v } } else { mk_lit(d) } }
+// borrow: a view INTO an argument's store; the caller must not free it.
+fn borrow_e(es: vector<E>, i: integer) -> E { c = E { v: 0 }; for k in 0..len(es) { if k == i { c = es[k] ?? E{v:0}; } } c }
+
+fn main() { t = seed(); out: vector<E> = []; for i in 0..3 { d = pick(t, i); out += [mk_lit(d)]; } show(out); }

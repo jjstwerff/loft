@@ -6,7 +6,7 @@
 > also a backend divergence. Silent — exit 0, no diagnostic, wrong data.
 > Reported by the crawler consumer (`LOFT-HANDOFF` H2) on toolchain 2026.7.2 as the
 > wider form of **loft#496**, which is CLOSED — so either that fix was too narrow or
-> this is a regression of it. Probes: `h2-append-elision/probes/`.
+> this is a regression of it. Probes: `h2-append-elision/probes/` — TWO matrices, `run.sh` (call-site axis) and `run-callee.sh` (callee-return axis); run both.
 
 ## Symptom
 
@@ -164,6 +164,29 @@ participate in displaced-owned-store freeing on reassignment — i.e. reuse the 
 lift/`join_own` machinery rather than a bare `create_unique` temp. Do that first; the two
 `AppendSource` expectations and the fuzz-gate control are then legitimate re-bases, but
 they must NOT be edited before the leak is closed, since they are what caught it.
+
+## The callee-return matrix (`probes/run-callee.sh`) — the axis the p-cells could not see
+
+The `p1`–`p8` corpus varies the CALL-SITE shape and holds the callee fixed (every cell
+calls the same struct-literal `mk`).  That is the wrong axis for validating this fix,
+whose correctness depends on WHAT STORE the callee returns — which is why the patch read
+green on all 8 p-cells while leaking, and the leak only surfaced 224 s later in the full
+suite.  `r1`–`r12` vary the callee and hold the call site fixed; see `probes/README.md`.
+
+Two results it produced immediately:
+
+1. **The blocker is now a 3-second cell.** `r10_orelse_fresh_loop` passes on a clean tree
+   and leaks `M×3` with the patch — the same defect the suite reported as `M×18`. The
+   decisive kind is a callee that returns **borrow OR fresh, decided at runtime**
+   (`t[i] ?? m_none()`): the `r5`/`r6` "retbuf or other-call" branch does NOT reproduce
+   it. A fix for the hoist is done only when `r10` is green and `r1` stays green.
+2. **An independent pre-existing leak.** `r5`/`r6` leak 2 stores on the CLEAN tree,
+   interpreter only, with correct values — and need no loop, so it is not H2. The patch
+   neither causes nor fixes it. **Not yet checked against `main`**; do that before filing.
+
+Also worth recording: `r1`–`r6` all carry the same static verdict (`Owned` from
+`--show-ownership`) yet behave differently, so the ownership classification does not
+separate this axis — only running the cells does.
 
 ## The lifetimes tool should have caught this
 
