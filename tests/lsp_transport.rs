@@ -661,6 +661,64 @@ fn find_references_spans_the_workspace() {
     let _ = s.child.wait();
 }
 
+// @PLN115 — method find-references spans the workspace, keyed on the receiver TYPE:
+// every `text.len` call across files, and NOT a same-spelled `vector.len`.
+#[test]
+fn method_references_span_the_workspace_by_receiver_type() {
+    let root = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR")).join("methrefws");
+    std::fs::create_dir_all(&root).unwrap();
+    // a.loft: a text.len call AND a vector.len call (same spelling, other type).
+    let a_text = "fn main() {\n  s = \"hi\";\n  x = s.len();\n  v = [1, 2, 3];\n  w = v.len();\n}\n";
+    std::fs::write(root.join("a.loft"), a_text).unwrap();
+    // b.loft: another text.len call, in a different file.
+    std::fs::write(
+        root.join("b.loft"),
+        "fn other() {\n  t = \"yo\";\n  y = t.len();\n}\n",
+    )
+    .unwrap();
+
+    let mut s = Session::start();
+    s.request(
+        1,
+        "initialize",
+        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+    );
+    let _ = s.recv();
+    s.notify("initialized", "{}");
+
+    let a_uri = format!("file://{}/a.loft", root.display());
+    s.notify("textDocument/didOpen", &open_params(&a_uri, a_text));
+    let _ = s.recv();
+
+    // Cursor on a.loft's `s.len()` method name (0-based line 2, char 8).
+    s.request(
+        2,
+        "textDocument/references",
+        &format!(
+            r#"{{"textDocument":{{"uri":"{a_uri}"}},"position":{{"line":2,"character":8}},"context":{{"includeDeclaration":true}}}}"#
+        ),
+    );
+    let reply = s.recv();
+    let locs = match field(&reply, "result") {
+        Some(Parsed::Array(a)) => a,
+        other => panic!("references result is an array, got {other:?}"),
+    };
+    let files: Vec<String> = locs
+        .iter()
+        .filter_map(|l| field_str(l, "uri"))
+        .map(|u| u.rsplit('/').next().unwrap_or("").to_string())
+        .collect();
+    // The two text.len calls (a.loft L3 + b.loft L3) — NOT a.loft's vector.len (L5).
+    assert_eq!(locs.len(), 2, "exactly the two text.len calls: {files:?}");
+    assert!(
+        files.iter().any(|f| f == "a.loft") && files.iter().any(|f| f == "b.loft"),
+        "text.len references span both files: {files:?}"
+    );
+
+    s.notify("exit", "null");
+    let _ = s.child.wait();
+}
+
 // rename — prepareRename returns the identifier's span; rename produces a
 // cross-file WorkspaceEdit; an invalid new name is refused with an error.
 #[test]

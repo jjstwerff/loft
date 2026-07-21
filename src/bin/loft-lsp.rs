@@ -241,6 +241,20 @@ fn main() {
                             let len = loft::lsp::identifier_at(&text, line + 1, ch + 1)
                                 .map_or(0, |n| n.chars().count() as u32);
                             refs.iter().map(|r| location_of(r, len)).collect()
+                        } else if let Some(refs) = loft::lsp::method_refs(
+                            &text,
+                            line + 1,
+                            ch + 1,
+                            workspace_root.as_deref().unwrap_or(""),
+                            &open_overlays(&documents),
+                            &stdlib_dir,
+                        ) {
+                            // @PLN115: a METHOD resolves to its exact receiver-typed
+                            // occurrences across the workspace (`text.len`, not every
+                            // `len`) — keyed on the stable mangled method name.
+                            let len = loft::lsp::identifier_at(&text, line + 1, ch + 1)
+                                .map_or(0, |n| n.chars().count() as u32);
+                            refs.iter().map(|r| location_of(r, len)).collect()
                         } else {
                             match loft::lsp::identifier_at(&text, line + 1, ch + 1) {
                                 Some(name) => {
@@ -760,6 +774,15 @@ fn location_of(r: &loft::lsp::Reference, len: u32) -> Parsed {
 /// A `file://` document uri → its filesystem path.
 fn uri_to_path(uri: &str) -> String {
     uri.strip_prefix("file://").unwrap_or(uri).to_string()
+}
+
+/// The open documents as `(path, content)` overlays — the unsaved editor view that
+/// replaces the on-disk copy during a workspace query.
+fn open_overlays(documents: &HashMap<String, String>) -> Vec<(String, String)> {
+    documents
+        .iter()
+        .map(|(uri, text)| (uri_to_path(uri), text.clone()))
+        .collect()
 }
 
 /// Plan a rename and return an LSP `WorkspaceEdit`, or an error message (the

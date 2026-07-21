@@ -1080,6 +1080,91 @@ pub fn local_binding_refs(
     )
 }
 
+/// @PLN115 — every workspace occurrence of the METHOD under a 1-based `(line, col)`
+/// cursor, resolved through the index so a same-named method of another receiver
+/// type (`vector.len` vs `text.len`) is EXCLUDED — which the name-scan cannot do.
+///
+/// The cross-file key is the method's mangled def NAME (`t_<len><Type>_<method>`),
+/// which encodes (receiver type, method) and is stable across separate parses (a
+/// per-parse def_nr is not).  Every workspace `.loft` file is parsed with the index
+/// (open buffers overlaid by path); a matching `Method` occurrence becomes a
+/// `Reference`.  `None` when the cursor is not on a method (the caller falls back).
+///
+/// NOTE: each file is parsed with only the stdlib + itself, so a stdlib method
+/// resolves everywhere and a user method resolves where its type is visible; a
+/// cross-file user method whose definition the calling file does not import is not
+/// found (under-match, never over-match).  Parsing every file makes this an
+/// on-demand cost (find-references), not a per-keystroke one.
+#[must_use]
+pub fn method_refs(
+    text: &str,
+    line: u32,
+    col: u32,
+    root: &str,
+    overlays: &[(String, String)],
+    stdlib_dir: &str,
+) -> Option<Vec<Reference>> {
+    // 1. Resolve the method under the cursor → its stable mangled name.
+    let p = parse_lsp_buffer(text, "buf.loft", stdlib_dir);
+    let target = p
+        .resolutions()
+        .iter()
+        .find(|o| o.line == line && col >= o.col && col <= o.col + u32::from(o.len))?;
+    let crate::resolution::Resolution::Method { method_def, .. } = target.res else {
+        return None;
+    };
+    if method_def >= p.data.definitions() {
+        return None;
+    }
+    let key = p.data.def(method_def).name().to_string();
+
+    // 2. Gather every workspace file's content, overlaying open buffers by path.
+    let open: Vec<(String, &str)> = overlays
+        .iter()
+        .map(|(pth, t)| (canonical(Path::new(pth)), t.as_str()))
+        .collect();
+    let mut files: Vec<(String, String)> = Vec::new();
+    for path in loft_files(Path::new(root)) {
+        let cpath = canonical(&path);
+        if let Some((_, t)) = open.iter().find(|(op, _)| *op == cpath) {
+            files.push((cpath, (*t).to_string()));
+        } else if let Ok(t) = std::fs::read_to_string(&path) {
+            files.push((cpath, t));
+        }
+    }
+    // Include an open buffer that is not on disk (an unsaved / new file).
+    for (cpath, t) in &open {
+        if !files.iter().any(|(fp, _)| fp == cpath) {
+            files.push((cpath.clone(), (*t).to_string()));
+        }
+    }
+
+    // 3. Collect the matching Method occurrences across all files.
+    let mut refs = Vec::new();
+    for (cpath, content) in &files {
+        let fp = parse_lsp_buffer(content, "buf.loft", stdlib_dir);
+        for o in fp.resolutions() {
+            if let crate::resolution::Resolution::Method { method_def: md, .. } = o.res
+                && md < fp.data.definitions()
+                && fp.data.def(md).name() == key
+            {
+                refs.push(Reference {
+                    file: cpath.clone(),
+                    line: o.line,
+                    col: o.col,
+                });
+            }
+        }
+    }
+    refs.sort_by(|a, b| {
+        a.file
+            .cmp(&b.file)
+            .then(a.line.cmp(&b.line))
+            .then(a.col.cmp(&b.col))
+    });
+    Some(refs)
+}
+
 /// One inlay hint — an inferred-type annotation shown inline after a local
 /// variable's declaration.  `(line, col)` are 1-based; `col` is the position AFTER
 /// the name, where `: <type>` renders.

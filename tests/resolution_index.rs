@@ -178,6 +178,35 @@ fn s7_inlay_hints_type_assignment_locals_only() {
 }
 
 #[test]
+fn method_refs_keyed_on_receiver_type_exclude_other_types() {
+    // text.len at L3 + L6; vector.len at L5 — same spelling, different receiver.
+    let src = "fn main() {\n  s = \"hi\";\n  x = s.len();\n  \
+               v = [1, 2, 3];\n  w = v.len();\n  y = s.len();\n}\n";
+    let overlays = vec![("/buf.loft".to_string(), src.to_string())];
+    // From a `text.len` call (L3, `len` at col 9) → BOTH text sites, NOT vector.len.
+    let text_refs =
+        loft::lsp::method_refs(src, 3, 9, "", &overlays, "default").expect("a method");
+    assert_eq!(
+        text_refs.iter().map(|r| r.line).collect::<Vec<_>>(),
+        vec![3, 6],
+        "only text.len sites (vector.len on L5 excluded): {text_refs:?}"
+    );
+    // From the `vector.len` call (L5) → only that site, not the text.len sites.
+    let vec_refs =
+        loft::lsp::method_refs(src, 5, 9, "", &overlays, "default").expect("a method");
+    assert_eq!(
+        vec_refs.iter().map(|r| r.line).collect::<Vec<_>>(),
+        vec![5],
+        "only vector.len: {vec_refs:?}"
+    );
+    // A cursor on a non-method (the local `s` decl at L2) → None → caller falls back.
+    assert!(
+        loft::lsp::method_refs(src, 2, 3, "", &overlays, "default").is_none(),
+        "a non-method returns None"
+    );
+}
+
+#[test]
 fn resolve_at_navigates_local_global_field_method() {
     // L1  struct P { x: integer }
     // L2  fn helper() -> integer {
