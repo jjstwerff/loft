@@ -263,6 +263,20 @@ impl Parser {
                     );
                 }
             }
+            // @PLN115 S2 — record this occurrence as a read of the local
+            // `index_var` in the enclosing function.  Pass 2 only (the var exists
+            // from pass 1, types are resolved, and pass-1 records are cleared at
+            // the boundary); gated + zero-cost when recording is off.
+            if !self.first_pass {
+                self.record(
+                    name_pos,
+                    name.chars().count() as u16,
+                    crate::resolution::Resolution::Local {
+                        fn_def: self.context,
+                        var_nr: index_var,
+                    },
+                );
+            }
             if self.lexer.has_token("#") {
                 self.var_usages(index_var, true);
                 if self.lexer.has_keyword("errors") {

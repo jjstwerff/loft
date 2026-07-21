@@ -8716,11 +8716,17 @@ impl Parser {
         &self.resolutions
     }
 
+    /// @PLN115 — turn occurrence recording on (default off).  The LSP parse path
+    /// (S3) flips this before `parse_source` so navigation can resolve by binding
+    /// identity; every normal compile leaves it off, keeping `record` a dead branch.
+    pub fn set_record_resolutions(&mut self, on: bool) {
+        self.record_resolutions = on;
+    }
+
     /// @PLN115 — record one resolved occurrence, gated: a single predictable
     /// branch when `record_resolutions` is off (every normal compile), so it is
     /// zero-cost there.  A pure side-append — it changes no parse decision.  Wired
-    /// to the resolution chokepoints starting in S2; unused in S1.
-    #[allow(dead_code)]
+    /// to the resolution chokepoints starting in S2 (`parse_var` locals).
     fn record(&mut self, pos: &Position, len: u16, res: crate::resolution::Resolution) {
         if self.record_resolutions {
             self.resolutions.push(crate::resolution::Occurrence {
