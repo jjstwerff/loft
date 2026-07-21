@@ -116,7 +116,7 @@ fn tag_completion_offers_known_tags_from_the_index() {
     assert!(p.iter().any(|c| c.label == "@P9"), "@P9 offered: {p:?}"); // <!--noindex-->
     assert!(
         !p.iter().any(|c| c.label == "@P99"), // <!--noindex-->
-        "broken @P99 not offered: {p:?}" // <!--noindex-->
+        "broken @P99 not offered: {p:?}"      // <!--noindex-->
     );
     // An empty family prefix `@` offers everything indexed.
     assert!(idx.complete("@").len() >= 3, "@ offers all known tags");
