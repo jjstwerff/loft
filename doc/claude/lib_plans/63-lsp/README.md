@@ -756,12 +756,18 @@ Loft ships this in `doc/` as `nvim-loft.lua`.  No Vimscript.
 
 ## Open work (routed in)
 
-- **INSP.J — JSON output mode for `loft introspect`** (machine-readable
-  bytecode / Rust / slot-table / type dumps).  Routed here from **@PLN12**
-  (REPL + introspection) on its close: machine-readable introspection is an
-  editor / IDE concern, and the LSP server is its natural consumer.  Small (S) —
-  a JSON serializer over the existing `introspect::emit_all` structures; no new
-  analysis.
+- **INSP.J — JSON output mode for `loft introspect` — DONE.** `loft introspect
+  --json <file>` emits ONE machine-readable JSON object over the included sections
+  (a string field per section — `bytecode`/`rust`/`slots`/`types`, `ownership` if
+  requested — in canonical order), via loft's OWN `json` serializer (own-your-
+  dependencies).  A tool / the LSP reads a section by key instead of splitting on
+  `=== header ===` boundaries; `--json` short-circuits the text/`*-out`/`--diff`
+  paths.  Faithful envelope over `emit_all`'s existing emitters — no new analysis
+  (the tabular slots/types stay text for now; per-function structured arrays are a
+  later step).  *Gates:* `tests/introspect.rs::{json_mode_emits_a_parseable_section_object,
+  json_mode_respects_section_selection}` (parsed back with loft's own `json::parse`).
+  Routed here from **@PLN12** on its close (machine-readable introspection is an
+  editor/IDE concern; the LSP is its natural consumer).
 
 ---
 

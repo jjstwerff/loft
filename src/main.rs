@@ -4512,6 +4512,7 @@ fn main() {
     let mut introspect_slots_out: Option<String> = None;
     let mut introspect_types_out: Option<String> = None;
     let mut introspect_diff_against: Option<String> = None;
+    let mut introspect_json = false;
     let mut introspect_trace = false;
     let mut introspect_fn_filter: Vec<String> = Vec::new();
     let mut introspect_all_fns = false;
@@ -4629,6 +4630,10 @@ fn main() {
             introspect_sections.push(loft::introspect::Section::Types);
         } else if a == "--show-ownership" {
             introspect_sections.push(loft::introspect::Section::Ownership);
+        } else if a == "--json" {
+            // INSP.J — emit the introspection sections as one machine-readable
+            // JSON object instead of the text dump (an editor / agent consumer).
+            introspect_json = true;
         } else if a == "--bytecode-out" {
             introspect_bytecode_out = argv.get(i).cloned();
             i += 1;
@@ -7912,6 +7917,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
             types_out: introspect_types_out.clone(),
             diff_against: introspect_diff_against.clone(),
             trace_lines,
+            json: introspect_json,
             fn_filter: introspect_fn_filter.clone(),
             all_fns: introspect_all_fns,
             lib_dirs: Vec::new(),

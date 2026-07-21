@@ -70,6 +70,12 @@ pub struct Options {
     /// recorded by the parser.  Emitted after each variable table.
     /// Lines are tab-separated `<fn>\t<line>:<col>\t<type>`.
     pub trace_lines: Vec<String>,
+    /// Emit a single machine-readable JSON object instead of the text
+    /// sections — one string field per included section (`bytecode`,
+    /// `rust`, `slots`, `types`, …), so a tool / the LSP reads a section
+    /// by key rather than splitting on `=== header ===` lines.  Takes
+    /// precedence over the per-section `*_out` files and `--diff`.
+    pub json: bool,
     /// Restrict every section to functions whose name matches one of
     /// these strings (substring match, like `LOFT_LOG=fn:<name>`).
     /// Empty = include all user functions (filtered further by
@@ -98,6 +104,7 @@ impl Options {
             types_out: None,
             diff_against: None,
             trace_lines: Vec::new(),
+            json: false,
             fn_filter: Vec::new(),
             all_fns: false,
             lib_dirs: Vec::new(),
@@ -189,6 +196,11 @@ pub fn emit_all(
     end_def: u32,
     opts: &Options,
 ) -> std::io::Result<()> {
+    // JSON mode is a distinct, machine-readable rendering — one object over the
+    // same section outputs — so it short-circuits the text/redirect/diff paths.
+    if opts.json {
+        return emit_json(data, state, end_def, opts);
+    }
     let stdout = std::io::stdout();
     // When diffing, accumulate all stdout-bound output into one
     // buffer so we can `diff -u baseline buffer` afterwards.
@@ -279,6 +291,57 @@ pub fn emit_all(
         run_diff_against_baseline(baseline, &buffer)?;
     }
     Ok(())
+}
+
+/// Emit every requested section as ONE JSON object — `{"<section>": "<text>", …}`
+/// — via loft's own serializer (the "own your dependencies" rule).  Each value is
+/// the SAME text the human-readable mode prints, captured into a buffer, so this
+/// is a faithful machine-readable envelope over the existing emitters with no new
+/// analysis: a tool / the LSP reads a section by key instead of splitting on the
+/// `=== header ===` boundaries.  (Structuring the tabular sections — slots / types
+/// — into per-function arrays is a later step; the byte-for-byte text is stable
+/// today.)  Object key order is the canonical section order.
+fn emit_json(
+    data: &mut Data,
+    state: &mut State,
+    end_def: u32,
+    opts: &Options,
+) -> std::io::Result<()> {
+    use crate::json::Parsed;
+    let as_str = |buf: Vec<u8>| Parsed::Str(String::from_utf8_lossy(&buf).into_owned());
+    let mut fields: Vec<(String, usize, Parsed)> = Vec::new();
+    if opts.includes(Section::Bytecode) {
+        let mut buf = Vec::new();
+        emit_bytecode(&mut buf, state, data, opts)?;
+        fields.push(("bytecode".to_string(), 0, as_str(buf)));
+    }
+    if opts.includes(Section::Rust) {
+        let mut buf = Vec::new();
+        emit_rust(&mut buf, data, &state.database, end_def)?;
+        fields.push(("rust".to_string(), 0, as_str(buf)));
+    }
+    if opts.includes(Section::Slots) {
+        let mut buf = Vec::new();
+        emit_slots(&mut buf, data, end_def, opts)?;
+        fields.push(("slots".to_string(), 0, as_str(buf)));
+    }
+    if opts.includes(Section::Types) {
+        let mut buf = Vec::new();
+        emit_types(&mut buf, data, end_def, opts)?;
+        fields.push(("types".to_string(), 0, as_str(buf)));
+    }
+    // Opt-in only, matching the text path (never in the no-flags default).
+    if opts.sections.contains(&Section::Ownership) {
+        let mut buf = Vec::new();
+        emit_ownership(&mut buf, data, end_def, opts)?;
+        fields.push(("ownership".to_string(), 0, as_str(buf)));
+    }
+    let mut w = std::io::stdout().lock();
+    writeln!(
+        w,
+        "{}",
+        crate::json::to_json_string(&Parsed::Object(fields))
+    )
 }
 
 /// Dump each user function's bytecode, re-assemble it from that text via

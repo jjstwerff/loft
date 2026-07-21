@@ -138,6 +138,52 @@ fn fn_filter_restricts_to_one() {
     );
 }
 
+/// INSP.J — `--json` emits ONE machine-readable object over the sections,
+/// parseable by loft's OWN JSON reader (dogfood), one string field per included
+/// section, in canonical order.
+#[test]
+fn json_mode_emits_a_parseable_section_object() {
+    use loft::json::Parsed;
+    let (out, ok) = introspect(&["--json"]);
+    assert!(ok, "introspect --json should exit 0; stdout:\n{out}");
+    let doc = loft::json::parse(&out).expect("--json output is valid JSON (loft's own reader)");
+    let Parsed::Object(fields) = &doc else {
+        panic!("--json output is a JSON object, got: {doc:?}");
+    };
+    let keys: Vec<&str> = fields.iter().map(|(k, _, _)| k.as_str()).collect();
+    assert_eq!(
+        keys,
+        vec!["bytecode", "rust", "slots", "types"],
+        "the four default sections, in canonical order"
+    );
+    // Each section value is a string carrying the same dump as the text mode.
+    let types = fields
+        .iter()
+        .find_map(|(k, _, v)| (k == "types").then_some(v))
+        .unwrap();
+    let Parsed::Str(types_text) = types else {
+        panic!("a section value is a JSON string, got {types:?}");
+    };
+    assert!(
+        types_text.contains("n_dbl"),
+        "the types section carries the user fn:\n{types_text}"
+    );
+}
+
+/// `--json --show-bytecode` restricts the object to the one requested section.
+#[test]
+fn json_mode_respects_section_selection() {
+    use loft::json::Parsed;
+    let (out, ok) = introspect(&["--json", "--show-bytecode"]);
+    assert!(ok);
+    let doc = loft::json::parse(&out).expect("valid JSON");
+    let Parsed::Object(fields) = &doc else {
+        panic!("object, got {doc:?}");
+    };
+    let keys: Vec<&str> = fields.iter().map(|(k, _, _)| k.as_str()).collect();
+    assert_eq!(keys, vec!["bytecode"], "only the requested section");
+}
+
 // ---------------------------------------------------------------------------
 // @PLN103 — the `--show-ownership` overlay + `LOFT_STORES=timeline` summary.
 // Assertion-based (not byte-golden): each check pins one SEMANTIC invariant per

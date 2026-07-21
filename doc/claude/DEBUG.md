@@ -318,12 +318,15 @@ running the program.
 | `--show-types` | Per-fn variable type + dep table | **Dep-tracking bugs** — see below |
 | `--show-ownership` | Per-binding store ownership (@PLN103): `Owned` / `Borrowed(base=X)` (a live alias of X — the dangerous case) / `Owned (backing=…)` (owns via a delivery buffer) / `Join(base=X)` (a runtime owned-or-borrow split) / `Borrowed(caller-arg)` / `— (scalar)`, plus a per-return `delivery:` line (materialised / owned / borrows). **Also flags the loft#568 interpreter-orphan class STATICALLY** — `⚠ loft#568: owned text returned by value (…) — no &text retbuf` on a text return backed frame-locally with no delivery buffer (the interpreter orphans the `String`; native RAII drops it). Opt-in. | **Store-lifetime / owned-vs-borrowed bugs AND suspected text-return leaks** — reach for this before ASan: it names the leaker class without a sanitizer run. Verdict is backend-shared. |
 | `--bc-roundtrip` | Re-assemble each fn's bytecode from its own dump and compare (`ok`/`DIFFERS`) | Verify the dump is a faithful, editable bytecode representation — see [Bytecode round-trip](#bytecode-round-trip---bc-roundtrip) |
+| `--json` (INSP.J) | One machine-readable JSON object over the included sections — a string field per section (`bytecode`/`rust`/`slots`/`types`, `ownership` if requested), in canonical order | An editor / agent / the LSP that wants a section by key instead of splitting on `=== header ===` lines; takes precedence over `*-out` / `--diff` |
 
 Combine the four dump flags freely; they emit in fixed order, and
 no flags = all four.  `--bc-roundtrip` is **opt-in only** (a
 verification check, not a dump — it never runs in the no-flags
 default).  `--all-fns` includes the default/* stdlib.  `--fn
-<name>` filters to one function.
+<name>` filters to one function.  `--json` renders whichever
+sections are selected as one JSON object (parseable by loft's own
+`json` reader) instead of the text dump.
 
 ### `--show-types` for dep-tracking bugs
 
