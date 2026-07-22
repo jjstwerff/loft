@@ -293,7 +293,7 @@ pub fn uaf_src_enabled() -> bool {
 /// Either UAF instrument is on (gates the `uaf_freed_this_op` recording in `free_named`).
 #[must_use]
 pub fn uaf_any_enabled() -> bool {
-    uaf_check_enabled() || uaf_src_enabled()
+    uaf_check_enabled() || uaf_src_enabled() || uaf_gen_enabled()
 }
 
 /// `LOFT_POISON=1` (@PLN54 S3) — the arena poison-on-free keystone. When on, `free_named`
@@ -704,21 +704,41 @@ thread_local! {
     /// the premature-free op without a full operand-stack scan.
     static FREED_AT: std::cell::RefCell<std::collections::HashMap<u16, (u32, u32, u16)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    /// @PLN118 arc B — the free site keyed by `(slot, post-free generation)`. For a slot
+    /// freed-and-reused many times, `FREED_AT` (last free only) names the LAST occupant's
+    /// free, not the free that made a specific stale ref stale. Keyed by generation, the
+    /// gen-detector can name the CAUSAL free (the one at the ref's stamped gen + 1).
+    static FREED_AT_GEN: std::cell::RefCell<std::collections::HashMap<(u16, u32), (u32, u32, u16)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Record (under `LOFT_UAF`) that store `slot` was freed while executing `pc` in
-/// function `d_nr`, by the op whose opcode is `op` (names the freeing op category:
-/// a scope-exit `OpFreeRef`, an `OpFreeRefIfDistinct`, or a `copy_record` free-bit).
+/// Record (under `LOFT_UAF`/`LOFT_UAF_GEN`) that store `slot` was freed while executing
+/// `pc` in function `d_nr`, by the op whose opcode is `op` (names the freeing op category:
+/// a scope-exit `OpFreeRef`, an `OpFreeRefIfDistinct`, or a `copy_record` free-bit). Also
+/// stamps it against the slot's now-current (post-free) generation for causal attribution.
 pub fn uaf_record_free(slot: u16, pc: u32, d_nr: u32, op: u16) {
     FREED_AT.with(|m| {
         m.borrow_mut().insert(slot, (pc, d_nr, op));
     });
+    if uaf_gen_enabled() {
+        let slot_gen = uaf_slot_gen(slot);
+        FREED_AT_GEN.with(|m| {
+            m.borrow_mut().insert((slot, slot_gen), (pc, d_nr, op));
+        });
+    }
 }
 
 /// The `(code_pos, d_nr, op_code)` of `slot`'s most-recent recorded free, if any.
 #[must_use]
 pub fn uaf_freed_pc(slot: u16) -> Option<(u32, u32, u16)> {
     FREED_AT.with(|m| m.borrow().get(&slot).copied())
+}
+
+/// The free that took `slot` to generation `gen` (the CAUSAL free for a DbRef stamped at
+/// `gen - 1`), if recorded. Falls back to `uaf_freed_pc` at the call site when absent.
+#[must_use]
+pub fn uaf_freed_pc_at_gen(slot: u16, want_gen: u32) -> Option<(u32, u32, u16)> {
+    FREED_AT_GEN.with(|m| m.borrow().get(&(slot, want_gen)).copied())
 }
 
 #[must_use]

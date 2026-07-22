@@ -98,10 +98,10 @@ The load-bearing cell: **reference-into-relocated-vector reads the null sentinel
 | Item | Concern | Status |
 |---|---|---|
 | **A** — reproduce + attribute | **DONE** (interp). Mechanism class VERIFIED: an **interpreter store-slot-reuse UAF** in `emit_hex_surface`'s corner loop (a live `Vec3` freed early, slot reused → null pos); native-clean, producer-side, layout-fragile. Remaining: pin the exact freed slot (needs arc-B non-perturbing tracer) + a standalone probe | Mostly done |
-| **B** — enhance the lifetime tool | close the @PLN103 inspector's **missing-dep blind spot** (LIFETIME.md:677): a runtime check that flags a **deref of a store whose backing record was relocated/freed** and ATTRIBUTES the null to that store edge (extend `LOFT_STORES=timeline`/the store `read_only`/relocation path; and a static `free-before-dependent-read` sibling for the *dropped-dep* case) | Open |
+| **B** — enhance the lifetime tool | **DONE.** The existing sound `LOFT_UAF_GEN` (per-slot gen + operand-stack shadow) catches H4 non-perturbingly where `LOFT_UAF` (variable-based) misses it. Added **free-site attribution keyed per-generation** (`keys.rs` `FREED_AT_GEN`, `state/mod.rs`) so it names the CAUSAL free, not the last occupant's — read+free both pinned (cluster doc) | **Done** |
 | **C** — oracle | make B **non-vacuous**: a known-GOOD probe (must stay silent) + a known-BAD probe (must fire) — a positive control, per "a fooleable oracle is a liability" (plans/README.md). Graduate to a gate | Open |
 | **D** — second implementation + switch | a conservative store-handling variant behind an env switch (e.g. **copy-on-held-reference** / no-relocate-under-live-borrow), run **differentially** (@PLN89 pattern) against the current path: identical output ⇒ same; divergence localises the bug. The safe variant is a flip-on **stopgap** while the real fix lands | Open |
-| **E** — fix at the chokepoint | enforce exactly the violated invariant (the missing borrow-dep / the relocation-under-live-reference), no narrower/wider; verify the full matrix both backends; graduate probes to `tests/scripts/` | Open |
+| **E** — fix at the chokepoint | **chokepoint located:** the vertex-append copy `m.vertices += [vertex(V, up, …)]` (emit_hex_surface:95,102) prematurely frees a `Vec3` (the shared `up` normal / vertex temp) a still-live operand-stack ref reads; interpreter store path (native clean). Fix the dropped dep at that append/copy free | Located, not fixed |
 
 ## Phase ordering
 

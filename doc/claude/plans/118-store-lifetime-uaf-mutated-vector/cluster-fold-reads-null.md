@@ -147,7 +147,37 @@ An **interpreter store-slot reuse** frees a live `Vec3` (`centre` / a corner tem
 later corners reads null. Persistent (both folds see it), producer-side, native-clean,
 layout-fragile — and the co-occurring `Vec3` leak is the same broken lifetime's other end.
 
+## Arc B — the tool caught it (existing sound detector) + the free-site enhancement
+
+Rather than build a tracer, the repo already had one: **`LOFT_UAF_GEN`** (@PLN54 S3 / cluster-462) —
+a per-slot generation bumped on free + an operand-stack shadow stamping each DbRef's gen at push;
+a shadow-vs-current mismatch at consume is a freed-then-reused stale read. It is **Rust-level,
+non-perturbing** (the null stays 3/32 under it) — exactly what `println`-probing could not be.
+
+- **It catches H4:** `store #50 (Vec3) was gen 5 at push, gen 14 at read — read at line 102`
+  (`emit_hex_surface`'s `m.vertices += [vertex(pos, up, …)]`). `LOFT_UAF` (the heuristic,
+  variable-based sibling) MISSES `emit_hex_surface` entirely — the stale ref is on the operand
+  stack (a shared temp), which only the gen-detector's shadow sees.
+- **The gap → the arc-B enhancement (implemented):** the gen-detector reported the *read* site but
+  not the *free* site. Added free-site attribution (`src/keys.rs` `FREED_AT_GEN`, `src/state/mod.rs`
+  dispatch + report), keyed **per-generation** so a heavily-reused slot names the **causal** free
+  (the one at `stamped+1`) not the last occupant's — for #50 that corrected line 476 → **line 102**.
+  All behind the existing opt-in env gate; zero cost when off.
+
+### The chokepoint (for arc E)
+
+The causal frees land IN the vertex-append copy:
+- `store #52`: **read at line 95** (`vertex(centre, …)` centre-vertex append) → **freed at line 102**
+  (the corner append).
+- `store #50`: **read at line 102** → **freed at line 102**.
+
+So `m.vertices += [vertex(V, up, vec2(…))]` (emit_hex_surface:95,102) **prematurely frees a `Vec3`
+that a still-live operand-stack ref reads** — the shared `up` normal (passed to every one of the 7
+`vertex()` calls) and/or the vertex temp: a dropped dep on a value the append copy still needs. The
+fix (arc E) is at that append/copy free, in the interpreter's store path (native is clean).
+
 ## Artifacts
 
 - Null/real pattern (84 rows): `/tmp/h4pat.txt`; full timeline (275k lines): `/tmp/h4_timeline.txt`.
 - Repro worktree: moros `5e677b7`. Native repro attempt: `/tmp/h4_native.glb` (clean, 0/32).
+- Detector: `LOFT_UAF_GEN=1` on the repro (non-perturbing) — read + causal-free attribution.

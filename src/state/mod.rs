@@ -1879,10 +1879,24 @@ impl State {
                         .range(..=self.code_pos)
                         .next_back()
                         .map_or(0, |(_, &v)| v);
+                    // @PLN118 arc B — attribute the FREE site. Prefer the CAUSAL free (the one
+                    // that took the slot to `stamped + 1`, making THIS ref stale) over the
+                    // last free — a heavily-reused slot's last free is a different occupant's.
+                    // Names the chokepoint (the dropped dep) rather than only the read symptom.
+                    let free_str = crate::keys::uaf_freed_pc_at_gen(db.store_nr, stamped + 1)
+                        .or_else(|| crate::keys::uaf_freed_pc(db.store_nr))
+                        .map_or_else(String::new, |(fpc, _d, _op)| {
+                            let fline = self
+                                .line_numbers
+                                .range(..=fpc)
+                                .next_back()
+                                .map_or(0, |(_, &v)| v);
+                            format!(" — prematurely freed at code_pos={fpc} (line {fline})")
+                        });
                     eprintln!(
                         "[uaf-gen] stale DbRef popped: store #{} (rec={}, pos={}) was gen {stamped} \
                          at push but is now gen {} (freed+reused since) — read at code_pos={} \
-                         (line {line})",
+                         (line {line}){free_str}",
                         db.store_nr,
                         db.rec,
                         db.pos,
@@ -4112,6 +4126,7 @@ impl State {
         let mut bytecode_len = self.bytecode.len() as u32;
         let uaf_on = crate::keys::uaf_check_enabled();
         let uaf_src_on = crate::keys::uaf_src_enabled();
+        let uaf_gen_on = crate::keys::uaf_gen_enabled();
         // @PLN18 phase 02 — tier-0 live reload: a counter-gated poll so a file
         // save can swap one fn's dispatch targets mid-run (append-only code, so
         // the cached length refreshes after a swap).  One decrement + one
@@ -4174,7 +4189,10 @@ impl State {
             if !self.database.uaf_freed_this_op.is_empty() {
                 if uaf_on {
                     self.uaf_scan_freed(data);
-                } else if uaf_src_on {
+                } else if uaf_src_on || uaf_gen_on {
+                    // Stamp each freed slot's site so the gen-detector's stale-read report
+                    // (@PLN118 arc B) can name WHERE the store was prematurely freed, not
+                    // just where the stale ref is read.
                     let freed = std::mem::take(&mut self.database.uaf_freed_this_op);
                     let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
                     for &slot in &freed {
