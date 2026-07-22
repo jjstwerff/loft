@@ -1104,6 +1104,28 @@ impl Stores {
     /// hash record in the same store.  No new on=4 mode, no bytecode protocol
     /// change — hash iteration reuses the existing Ordered (on=3) path.
     fn build_rec_scratch(&mut self, hash_ref: &DbRef, recs: &[u32]) -> DbRef {
+        // Step 2 (expose-iteration-scratch) — the scratch is claimed in the
+        // collection's own store; a pinned (exposed) store rejects the claim
+        // (`Store::claim` asserts `!read_only`), which surfaced as a deep panic —
+        // a *silent trap / hang* under wasm.  Raise a clear, actionable error at
+        // the boundary instead.  (Step 4 will build the scratch in a writable
+        // store so the exposed collection iterates; this guard then narrows to the
+        // cases that step cannot serve.)
+        if self.store(hash_ref).read_only {
+            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::UserPanic {
+                message: "cannot iterate an exposed collection — call \
+                          `release(tag, value)` first, then re-`expose` (reads and \
+                          lookups are fine while a collection is exposed)"
+                    .to_string(),
+            });
+            // A rec-0 scratch yields nothing; the `had_fatal` halt fires before the
+            // (empty) loop body would run.
+            return DbRef {
+                store_nr: hash_ref.store_nr,
+                rec: 0,
+                pos: 4,
+            };
+        }
         let n = recs.len();
         // 8-byte header + n * 4 bytes of u32 rec-nrs, rounded up to 8-byte
         // words (store claim granularity).
