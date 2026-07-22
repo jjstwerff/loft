@@ -585,6 +585,34 @@ into a non-null slot with a real default (`x ?? 0`), or keep the slot `τ?`.
 materialises the result into a temporary variable so the expression is evaluated exactly once.
 Simple variable reads skip the temporary since they have no side effects.
 
+### The `x?` operator (default-fallback) — @PLN116
+
+Postfix `x?` discharges a nullable `x: T?` to `T` by falling back to `T`'s **default** when
+`x` is null — pure sugar for `x ?? construct_default(T)`. Where `??` supplies *the default you
+give*, `?` supplies *the default the type gives*; that pairing is the mnemonic (`??` = my
+default, `?` = the type's). It relieves the `?? 0` / `?? ""` / `?? 0.0` boilerplate that loft's
+own null-flow manufactures (DN3 makes float ops yield `float?`; index/map/field reads are
+nullable by the C80 model).
+
+```loft
+x = (a / b)?                 // integer? → 0 on divide-by-zero
+name = row.label?            // text?    → "" when the field is null
+first = points[i]?          // Point?   → Point{} (every field defaulted) on out-of-bounds
+colour = pixel.tint?         // Colour?  → the first-defined enum variant
+```
+
+Precedence: `?` binds **tightest** (like `.`/`[]`), tighter than `as` and every binary operator,
+so `a.b?` is `(a.b)?`, `x? as T` is `(x?) as T`, and — because `??` lexes greedily over `?` —
+`a ?? b?` is `a ?? (b?)`. Chaining works: `points[i]?.x` discharges then reads the field.
+
+The **default** is the one `has_default(T)` / `construct_default(T)` predicate that also backs the
+`S{}` zero value (one home per fact, [Goal E](GOALS.md)): scalar → `0`/`0.0`/`false`/`'\0'`,
+`text` → `""`, collection → empty, enum → the marked-else-first-defined variant, record → `S{}`
+with every field defaulted, nullable `U?` → `null`. A **bare reference / non-null `DbRef`** has no
+default, so `x?` on one is a **compile** error (a static well-definedness check, fully consistent
+with "no *runtime* errors ever" — C80). `x?` on an already-non-null operand is an identity plus a
+redundant-`?` warning (mirrors the redundant-`??` lint).
+
 ### The `as` operator
 
 Used for explicit type casts and conversions:
@@ -1775,8 +1803,8 @@ match_expr   ::= 'match' expr '{' match_arm { ',' match_arm } '}'
 match_arm    ::= pattern { '|' pattern } [ 'if' expr ] '=>' expr
 pattern      ::= '_' | 'null' | literal | range | CamelIdent [ '{' field_bind '}' ]
 assignment   ::= operators [ ( '=' | '+=' | '-=' | '*=' | '/=' | '%=' ) operators ]
-operators    ::= single { '.' ident [ '(' args ')' ] | '[' index ']' | '#' ident }
-               { binary_op operators }   // grouping by precedence + associativity: see § Operators
+operators    ::= single { '.' ident [ '(' args ')' ] | '[' index ']' | '#' ident | '?' }
+               { binary_op operators }   // '?' is the @PLN116 postfix default-fallback (tightest)
 binary_op    ::= '??' | '||' | 'or' | '&&' | 'and'
                | '==' | '!=' | '<' | '<=' | '>' | '>='
                | '|' | '^' | '&' | '<<' | '>>'

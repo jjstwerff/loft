@@ -434,6 +434,19 @@ pub struct Parser {
     /// `build_null_coalesce_default`).  Set in the `as` handler, consumed by the
     /// next `??`, and cleared by any other intervening operator.
     pub(crate) dn4_checked_narrow: Option<Type>,
+    /// @PLN116 `x?` — a pre-built default RHS for the postfix default-fallback
+    /// operator.  `x?` desugars to `x ?? construct_default(T)`; rather than parse a
+    /// `??` right operand from source, the postfix-`?` site builds the type's default
+    /// value here and `build_null_coalesce_default` consumes it INSTEAD of parsing —
+    /// so `x?` reuses the whole `??` emission path and is bytecode-identical to a
+    /// hand-written `x ?? <default>`.  Set at the `?` site, taken exactly once.
+    pub(crate) pending_default_rhs: Option<(Value, Type)>,
+    /// @PLN116 `x?` — a synthetic default-value SOURCE for the postfix operator, used
+    /// when the default must be parsed IN the `??` right-operand context rather than
+    /// pre-built (an empty collection `[]`, whose ownership view-model depends on that
+    /// context — parsing it standalone leaks).  `build_null_coalesce_default` swaps the
+    /// lexer to this source at its own parse site, so `x?` matches `x ?? []` exactly.
+    pub(crate) pending_default_src: Option<String>,
     /// @PLN99 Arc C — set by `convert` when it dispatches a struct/reference-returning
     /// USER conversion (`x as T` via `fn OpConvTFromS`).  Such a conversion ALLOCATES a
     /// fresh owned store, so its result must NOT inherit the source's deps (the reinterpret-
@@ -733,6 +746,8 @@ impl Parser {
             is_capture_bindings: Vec::new(),
             last_cast_alias: u32::MAX,
             dn4_checked_narrow: None,
+            pending_default_rhs: None,
+            pending_default_src: None,
             conv_owned_result: None,
             trace_types: false,
             trace_types_lines: Vec::new(),

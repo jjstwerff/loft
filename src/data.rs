@@ -1003,6 +1003,13 @@ pub fn to_default(tp: &Type, data: &Data) -> Value {
         | Type::Radix(_, _, _) => Value::Int(0),
         Type::Single => Value::Single(0.0),
         Type::Float => Value::Float(0.0),
+        // @PLN116 — `character`'s zero is the NUL codepoint `'\0'`, stored (like every
+        // character value) as a 4-byte `Value::Int(0)`.  Previously `character` fell to
+        // the `_ => Value::Null` arm, so an omitted `character` field defaulted to `null`
+        // (interpret) / `()` (native `() as u32` E0605) instead of `'\0'` — the runtime
+        // `set_default_value` (content-type 6 → codepoint 0) already produced `'\0'`, so
+        // this aligns the compile-time builder with the store-init path.
+        Type::Character => Value::Int(0),
         Type::Text(_) => Value::Text(String::new()),
         // Plan-06 phase 4d (P193): null fn-ref defaults are needed
         // when a struct with a fn-ref field is default-initialised.
@@ -4103,6 +4110,88 @@ impl Data {
     #[must_use]
     pub fn attr_value(&self, d_nr: u32, a_nr: usize) -> Value {
         self.def(d_nr).attributes[a_nr].value.clone()
+    }
+
+    /// @PLN116 — does `tp` have a well-defined default value?  This is the single
+    /// predicate that both the `x?` default-fallback operator and (the `S{}` zero
+    /// value, in time) consult — there must be exactly one notion of "T's default".
+    ///
+    /// `Ok(())` when a default exists; `Err(reason)` names the first field / reason a
+    /// record has none, ready to drop into the compile error.  Scalars, text,
+    /// collections, enums (first/marked variant), nullables (`null`), tuples of
+    /// defaulted elements, and fn-refs all have a default.  A **bare reference /
+    /// non-null pointer** has none.  A **record** has one iff every field declares
+    /// `= expr`, is nullable, or its own type has a default — recursively.  Cycles
+    /// self-resolve: value-recursion is illegal (infinite size) and ref-recursion
+    /// bottoms out at a reference, which has no default.
+    ///
+    /// # Errors
+    /// Returns `Err(reason)` — a message naming the culprit field/type — when `tp`
+    /// has no well-defined default (a bare reference, or a record with a non-null
+    /// field whose type has none).
+    pub fn has_default(&self, tp: &Type) -> std::result::Result<(), String> {
+        match tp {
+            Type::Integer(_)
+            | Type::Float
+            | Type::Single
+            | Type::Boolean
+            | Type::Character
+            | Type::Text(_)
+            | Type::Vector(_, _)
+            | Type::Hash(_, _, _)
+            | Type::Sorted(_, _, _)
+            | Type::Index(_, _, _)
+            | Type::Radix(_, _, _)
+            | Type::Optional(_)
+            | Type::Null
+            | Type::Function(_, _, _)
+            | Type::Enum(_, _, _) => Ok(()),
+            Type::Tuple(elems) => {
+                for e in elems {
+                    self.has_default(e)?;
+                }
+                Ok(())
+            }
+            Type::Reference(d_nr, deps) => {
+                // A shared POINTER field (`&T`, the u16::MAX share marker) is a bare
+                // reference — it has no default value of its own.
+                if deps.is_pointer_marker() {
+                    return Err(format!(
+                        "a `&{}` reference has no default",
+                        self.def(*d_nr).name()
+                    ));
+                }
+                if self.def_type(*d_nr) != DefType::Struct {
+                    // An enum-value reference and other non-struct refs default fine.
+                    return Ok(());
+                }
+                let rec = self.def(*d_nr).name().to_string();
+                for a in 0..self.attributes(*d_nr) {
+                    let at = &self.def(*d_nr).attributes()[a];
+                    // A `= expr` default, a nullable field (defaults null), a computed /
+                    // routine field (not stored), and a const-default field all supply
+                    // their own value — only a plain non-null field can lack one.
+                    if at.value != Value::Null || at.nullable || at.constant || at.hidden {
+                        continue;
+                    }
+                    let ftp = self.attr_type(*d_nr, a);
+                    if matches!(ftp, Type::Routine(_)) {
+                        continue;
+                    }
+                    if self.has_default(&ftp).is_err() {
+                        let fname = self.attr_name(*d_nr, a);
+                        let tn = ftp.name(self);
+                        return Err(format!(
+                            "record `{rec}` has no default: field `{fname}: {tn}` has none — add \
+                             `{fname}: {tn} = <expr>`, make it `{tn}?` (defaults null), or give \
+                             `{tn}` a default"
+                        ));
+                    }
+                }
+                Ok(())
+            }
+            _ => Err(format!("`{}` has no default", tp.name(self))),
+        }
     }
 
     /**

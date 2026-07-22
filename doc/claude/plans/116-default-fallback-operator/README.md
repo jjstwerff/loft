@@ -9,12 +9,35 @@ Tracks [`loft-lang/plans#116`](https://github.com/loft-lang/plans/issues/116) (`
 
 ## Status
 
-Open — **design converged, no implementation yet.** A postfix `?` operator that
-discharges a nullable `x: T?` to `T` by falling back to the type's default when `x` is
-null. The default machinery it needs largely **already exists** (field `= expr` defaults,
-the `S{}` zero value); the work is a single `has_default`/`construct_default` predicate,
-the enum default rule, the parse + desugar, and the compile-error path — both backends in
-lockstep. This README is the single source of truth for phase status.
+**Landed (both backends).** The postfix `x?` operator ships as sugar for
+`x ?? construct_default(T)`: it parses in the `parse_part` postfix loop (tightest
+precedence, `parse_part` → `handle_default_fallback`), and reuses the whole `??` emission
+path (`build_null_coalesce_default`) by handing it a pre-built default value
+(`pending_default_rhs`) or, for the token-driven empty collection / record, a synthetic
+default SOURCE parsed in-context (`pending_default_src` / `subparse_default`). No new
+opcode — like `??`, it desugars to `if`/`block`/`set`/`call`, so both backends come free.
+Proven **bytecode-identical to the hand-written `x ?? <default>`** for scalar, text,
+enum, record and collection; the Stage-A matrix is graduated to
+`tests/scripts/116-default-fallback-operator.loft` (green both backends + leak gate).
+
+The single predicate is `Data::has_default` (`src/data.rs`) + `Parser::build_default`
+(`src/parser/operators.rs`); `to_default`'s `character` gap (`Value::Null` →
+`Value::Int(0)` = `'\0'`) was fixed on the way.
+
+**Residuals (deferred, low risk):**
+- **`S{}` enum-field unification (arc B/D, open-Q 1/2).** `x?` on a bare enum yields the
+  first-defined variant; an *omitted enum field* in `S{}` still gets discriminant 0
+  (`object_init`/`to_default`). Unifying them means flipping `to_default`'s enum arm
+  (0 → first variant), which changes every existing `S{}`-with-enum-field — a
+  compatibility-sensitive flip the plan itself flags as "verify + measure the suite"
+  before choosing. `x?` on a *record* already agrees with `S{}` by construction (it
+  sub-parses `S {}`), so the load-bearing "S{} vs x? agreement" cell passes; only the
+  bare-enum-vs-enum-field default diverges. Deferred pending owner sign-off.
+- **Inherited `??` gaps (not `x?`-specific — `x?` desugars faithfully).** `??` (hence
+  `x?`) does not discharge a nullable *struct field* (`p.field?` on a `Point?` field — the
+  `__nullable<S>` representation), and a *parenthesised float division* `(a/b)?` keeps
+  `inf` (the div→nullable rewrite doesn't reach a paren-wrapped op). Scalar/enum/text
+  nullable fields, vector-OOB, and integer division all discharge correctly.
 
 ## Goal
 
@@ -84,12 +107,12 @@ for the same type — the proof that the predicate has one home.
 
 | Item | Concern | Status |
 |---|---|---|
-| **A** — `has_default` / `construct_default` | the single recursive predicate + value builder; unify with the existing `S{}` / field-default machinery | Open |
-| **B** — enum default | first-defined variant + optional marked default; wired **through** `construct_default` (so `S{}` of an enum field agrees) | Open |
-| **C** — parse + desugar | lexer greedy `??` over `?`; postfix `?` (tightest precedence); desugar `x?` → `x ?? construct_default(T)`; typing rule `x?: T` requires `has_default` | Open |
-| **D** — the compile error + `S{}` consistency | error naming the culprit field with the three remedies; decide/record whether this **tightens** today's `S{}` (verify current zero-fill behavior) | Open |
-| **E** — diagnostics | redundant-`?` warning on a non-null operand (mirrors redundant-`??`) | Open |
-| **F** — both backends + tests | interpreter + `--native` lockstep; graduate the Stage-A matrix to `tests/scripts/` | Open |
+| **A** — `has_default` / `construct_default` | the single recursive predicate + value builder; `Data::has_default` + `Parser::build_default`, reusing `to_default` (char gap fixed) / `object_init` | **Done** |
+| **B** — enum default | first-defined variant via `emit_variant_value`. Marked-default marker + the `S{}` enum-field flip **deferred** (see Residuals) | Partial |
+| **C** — parse + desugar | postfix `?` in `parse_part` (tightest); lexer greedy `??` over `?` confirmed (2-char match); desugars via the `??` path; typing = `has_default` | **Done** |
+| **D** — the compile error + `S{}` consistency | error names the culprit field + the three remedies (a safety net — current loft can't declare a no-default field). `S{}` NOT tightened; `x?`-on-record agrees via sub-parse | **Done** |
+| **E** — diagnostics | redundant-`?` warning (same authority as redundant-`??`: `expr_not_null` + type) | **Done** |
+| **F** — both backends + tests | bytecode-identical to `x ?? <default>` on both; matrix graduated to `tests/scripts/116-default-fallback-operator.loft` | **Done** |
 
 ## Phase ordering
 
