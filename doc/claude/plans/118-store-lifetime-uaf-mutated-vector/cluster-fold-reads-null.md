@@ -312,10 +312,41 @@ session on the interpret↔native-library return path. It is a *resource* bug (c
 the export consumer, but per-frame for a long-running game), strictly less severe than the *correctness*
 corruption it replaces.
 
+## Method retrospective — the information problem (build the ORACLE first next time)
+
+**Honest post-mortem of the arc-F session.** The arc-F investigation *flailed*: a run of ad-hoc traces
+(`LOFT_TRACE_FREESRC`, the `LOFT_WATCH_PC` slot tracer, a free-by-type trace) kept giving **contradictory
+readings** ("all copies FREED" vs "299 leak"; "ALLOC then REUSED, never FREED"), and each time the
+response was to *re-theorize* the store topology rather than recognize the tell. That is the textbook
+**blind-instrument / no-functioning-oracle** failure (the `engineering-rigor` skill § "The blind-
+instrument tell" and § "when iterating stalls, change altitude"): **not enough probes and no positive-
+control oracle**, so every hypothesis was a guess on insufficient information that the next trace
+contradicted. The root eventually fell out only from a **differential** observation (local `Call` clean
+vs shared `StaticCall` leaks) — which is exactly what an oracle would have given in ONE run.
+
+**What should have been built FIRST — this IS arc C (never done), and it is the *prerequisite* for the
+arc-F fix, not an afterthought:**
+
+1. **A differential leak oracle** (the @PLN89 pattern, arc D's other half). Run the SAME program on
+   `--interpret` and `--native`; native is the correct reference (clean). The **interp-only** leaked-store
+   set (interp minus native), attributed by allocation site AND the producing call, IS the bug — zero
+   inference. This isolates arc F to the shared-`StaticCall` return in one run, not a dozen contradictory
+   traces.
+2. **Positive + negative controls so the oracle can't lie:** F1 (`probes/arcF-min-leak-hex_to_world.loft`)
+   MUST fire; F2 (the local control) and `--native` MUST stay silent.
+3. **A probe matrix over the real composition axes** — shared-vs-local callee · retbuf-vs-adopt return ·
+   nesting depth · call op (`Call` vs `StaticCall`) — each cell hand-computed, each run through the
+   oracle. The boundary (local clean / shared leaks) then falls straight out of the matrix.
+
+**Rule for the next session: do NOT theorize past the first contradictory reading. Build the oracle +
+the matrix, then read the boundary off them.** (Arc C was the un-built oracle the whole time.)
+
 ## Artifacts
 
 - Null/real pattern (84 rows): `/tmp/h4pat.txt`; full timeline (275k lines): `/tmp/h4_timeline.txt`.
 - Repro worktree: moros `5e677b7`. Native repro: clean, 0/32, no leak.
+- Arc-F minimal repro + control: `probes/arcF-min-leak-hex_to_world.loft` (leaks 299×, interp-only) +
+  `probes/arcF-control-local-nested-noleak.loft` (byte-identical local, no leak).
 - Detector: `LOFT_UAF_GEN=1` on the repro (non-perturbing) — read + causal-free attribution + reading/
   freeing op names + copy-vs-deref verdict (H4 = all `PREMATURE FREE`).
 - Corruption-vs-reuse proof: `LOFT_NO_SLOT_REUSE=1` (3/32 → 0/32). Leak provenance: `LOFT_LEAK_SITES=1`.
