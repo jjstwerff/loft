@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// @I91 — Language server (LSP) + parse-time resolution index
+// @I91 — Editor tooling: language server (LSP), debug adapter (DAP), resolution index
 //
 // loft-lsp — the loft Language Server (LSP over JSON-RPC / stdio).
 //

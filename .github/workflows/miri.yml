@@ -796,6 +796,17 @@ jobs:
       - name: Open / update / close the deduped failure issue
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job has no `actions/checkout` — it only talks to the API — so `gh` has no
+          # git remote to infer the repo from and every call below died with
+          # `fatal: not a git repository`.  The job then failed INSTEAD of filing, so
+          # nightly failures went unrecorded (verified: no open `nightly-failure` issue
+          # despite red nightlies on 07-18, 07-19 and 07-20).  `GH_REPO` gives every `gh`
+          # call the context in one line, without paying for a checkout.
+          #
+          # Note what the failure mode was: this job is the one that NOTICES a gate going
+          # red, and it was the thing silently not working — the same shape the comment
+          # above warns about for the gates themselves.
+          GH_REPO: ${{ github.repository }}
           RESULTS: ${{ toJSON(needs) }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |

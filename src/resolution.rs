@@ -1,6 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
-// @I91 — Language server (LSP) + parse-time resolution index
+// @I91 — Editor tooling: language server (LSP), debug adapter (DAP), resolution index
 //! @PLN115 — the parse-time resolution index (position → resolved binding).
 //!
 //! The parser records, during parse, what each identifier occurrence resolves to,
