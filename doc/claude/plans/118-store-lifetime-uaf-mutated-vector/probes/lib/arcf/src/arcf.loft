@@ -1,0 +1,14 @@
+// @PLN118 arc F — minimal shared-store-bridge fixture (self-contained: no moros,
+// no graphics).  `make_v3` returns a struct LITERAL (writes its own fresh store,
+// ignores the retbuf).  `wrap_v3` returns the RESULT OF A NESTED CALL — the shape
+// that drives the interpreted caller to forward a null retbuf every iteration, so
+// the bridge allocates a fallback dest that `make_v3` then orphans (the arc-F leak).
+pub struct V3 { x: float, y: float, z: float }
+
+pub fn make_v3(a: float, b: float, c: float) -> V3 {
+  V3 { x: a, y: b, z: c }
+}
+
+pub fn wrap_v3(a: integer) -> V3 {
+  make_v3(a as float, 0.0, 0.0)
+}

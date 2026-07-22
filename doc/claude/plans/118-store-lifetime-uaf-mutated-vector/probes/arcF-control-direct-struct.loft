@@ -1,0 +1,11 @@
+// @PLN118 arc F — NEGATIVE control: a DIRECT struct-literal return through the same
+// shared bridge.  The interpreted caller forwards a stable (non-null) retbuf every
+// iteration, so the bridge never allocates a fallback — clean before AND after the fix.
+// The contrast with arcF-min-nested-struct.loft isolates the trigger to the NESTED return.
+use arcf;
+fn main() {
+  total = 0.0;
+  n = 0;
+  while n < 300 { c = make_v3(n as float, 0.0, 0.0); total = total + c.x; n = n + 1; }
+  println("total={total}");   // 44850
+}

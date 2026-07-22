@@ -1,0 +1,12 @@
+// @PLN118 arc F — minimal SELF-CONTAINED leak repro (replaces the moros-dependent
+// arcF-min-leak-hex_to_world.loft).  Run: loft --interpret --lib <plan>/probes/lib/ this.loft
+// A shared/cdylib fn (`wrap_v3`) that returns the result of a NESTED call leaks its
+// bridge's fallback dest — 299× V3 pre-fix, 0 with the fix.  `LOFT_NO_BRIDGE_ORPHAN_FREE=1`
+// reproduces the pre-fix leak (the differential positive control).
+use arcf;
+fn main() {
+  total = 0.0;
+  n = 0;
+  while n < 300 { c = wrap_v3(n); total = total + c.x; n = n + 1; }
+  println("total={total}");   // 44850
+}

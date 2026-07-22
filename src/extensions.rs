@@ -293,6 +293,10 @@ struct SharedSig {
     pops: Vec<ArgT>,
     forward: Vec<bool>,
     text_workbuf: Option<usize>,
+    /// The `pops` index of the hidden `ref_return` destination (the retbuf the
+    /// caller pre-allocates and forwards).  Used by the `LOFT_TRACE_SHARED_RET`
+    /// attribution instrument to check the retbuf-vs-return orphan (@PLN118 arc F).
+    hidden_dest: Option<usize>,
     ret: Option<ArgT>,
 }
 
@@ -406,6 +410,7 @@ fn compute_shared_sig(data: &crate::data::Data, d_nr: u32) -> Option<SharedSig> 
     let mut pops = Vec::new();
     let mut forward = Vec::new();
     let mut text_workbuf = None;
+    let mut hidden_dest = None;
     for attr in &def.attributes {
         match classify_bridge_attr(attr, ret_text)? {
             BridgeAttrKind::Marshal => {
@@ -429,6 +434,9 @@ fn compute_shared_sig(data: &crate::data::Data, d_nr: u32) -> Option<SharedSig> 
                 // vector-returning call (#311).  The wrapper still allocates as
                 // a fallback when no slot arrives (a no-body `#native` decl
                 // caller has no hidden attrs) or the incoming ref is null.
+                if hidden_dest.is_none() {
+                    hidden_dest = Some(pops.len());
+                }
                 pops.push(ArgT::Vec);
                 forward.push(true);
             }
@@ -442,6 +450,7 @@ fn compute_shared_sig(data: &crate::data::Data, d_nr: u32) -> Option<SharedSig> 
         pops,
         forward,
         text_workbuf,
+        hidden_dest,
         ret,
     })
 }
@@ -837,6 +846,35 @@ fn shared_store_dispatch(stores: &mut crate::database::Stores, stack: &mut crate
             std::ptr::from_mut(&mut ret),
         )
     };
+
+    // @PLN118 arc F — non-perturbing attribution of the shared-return orphan.
+    // For a struct/vector return the caller pre-allocates a retbuf and forwards
+    // it as `popped[hidden_dest]`; the bridge writes into it and returns it.  If
+    // the callee IGNORES the retbuf and returns a fresh store (e.g. a struct
+    // literal that allocates a fresh record), the returned ref differs from the
+    // forwarded retbuf and the retbuf is orphaned — one leaked store per call.
+    // Gated, zero cost off.
+    if std::env::var_os("LOFT_TRACE_SHARED_RET").is_some()
+        && let Some(hd) = sig.hidden_dest
+        && matches!(sig.ret, Some(ArgT::Ref | ArgT::Vec))
+    {
+        let rb = popped[hd].dbref;
+        let rf = ret.dbref;
+        let rb_free = (rb.store_nr as usize) < stores.allocations.len()
+            && stores.allocations[rb.store_nr as usize].free;
+        eprintln!(
+            "[shared-ret] lib_idx={lib_idx} retbuf=({},{},{}) return=({},{},{}) \
+             same={} retbuf_freed={}",
+            rb.store_nr,
+            rb.rec,
+            rb.pos,
+            rf.store_nr,
+            rf.rec,
+            rf.pos,
+            rb.store_nr == rf.store_nr && rb.rec == rf.rec && rb.pos == rf.pos,
+            rb_free,
+        );
+    }
 
     match sig.ret {
         None => {}

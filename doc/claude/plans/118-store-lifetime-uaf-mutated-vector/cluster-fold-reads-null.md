@@ -341,6 +341,47 @@ arc-F fix, not an afterthought:**
 **Rule for the next session: do NOT theorize past the first contradictory reading. Build the oracle +
 the matrix, then read the boundary off them.** (Arc C was the un-built oracle the whole time.)
 
+## Arc F — RESOLVED (oracle-first, this session): the bridge orphaned its own fallback dest
+
+The next session followed the rule above — built arc C (`oracle/leak-oracle.sh`) + a self-contained
+synthetic probe matrix (`probes/lib/arcf/` + `probes/arcF-*-struct.loft`) FIRST — and the root fell
+straight out. Two corrections to the prior localization, both from the matrix:
+
+1. **NOT "cross-lib".** The prior session's "local `Call` clean vs cross-lib `StaticCall` leaks" was a
+   **stale-cdylib confound** (the classic build-artifact trap — the engineering-rigor skill's
+   "a surprising cell is a stale-artifact suspect before it is a bug"). After forcing a fresh cdylib,
+   a **same-lib** nested return leaks identically to a cross-lib one. The real axis is
+   **nested-call return vs direct struct-literal return**: `wrap_v3()` returning `make_v3(...)` leaks;
+   `make_v3()` returning `V3 { … }` does not.
+2. **The leaked store is the BRIDGE'S FALLBACK DEST, not the caller's retbuf.** A non-perturbing
+   attribution instrument (`LOFT_TRACE_SHARED_RET`, added to `extensions.rs::shared_store_dispatch`)
+   plus a copy-source-free trace showed: the callee's return store IS freed (copy-source-free fires),
+   yet 299 stores still leak and their numbers grow — a different store leaks. That store is the
+   **fallback destination the bridge allocates** (`native_lib.rs::shared_bridge_wrapper`, the
+   `if p1.rec == 0 && p1.pos == 0` branch) when the interpreted caller forwards a **null** hidden-dest
+   retbuf.
+
+**The mechanism (VERIFIED, generated-code + oracle):**
+- A struct-literal-returning fn (`make_v3`/`vec3`) allocates a **fresh** store for its result and
+  **ignores** its `__retbuf` param (`var___ref_1 = OpDatabase(...)`, returns `var___ref_1`).
+- For a **direct** call the caller forwards a stable, non-null retbuf every iteration — the bridge
+  uses it (no fallback), the callee ignores it and returns fresh, and the caller's
+  `FreeRefIfDistinct` reclaims the return: no leak.
+- For a **nested-call return** the caller's codegen re-sentinels its retbuf var each iteration
+  (`Database` + `protect_store_frees` + `CopyRefOrNull(0x8000)` + `FreeRef` + `InitRefSentinel` — the
+  arc-E path), so from iteration 2 on it forwards the **null sentinel**. The bridge then allocates a
+  **fallback dest**; the inner callee ignores it and returns its own fresh store, so the fallback is
+  **orphaned — one leaked store per call**. Interp-only: whole-`--native` has no bridge.
+
+**The fix (`native_lib.rs::shared_bridge_wrapper`).** After the inner call, free every bridge-allocated
+fallback dest the callee did NOT return (`(*ret).dbref` differs). A hidden dest only exists for an
+aggregate (dbref) return, so `(*ret).dbref` holds the result; when the callee wrote into and returned
+the dest they match and it is kept (the caller adopts + frees it), when the callee ignored it they
+differ and the orphan is freed. Gated by `LOFT_NO_BRIDGE_ORPHAN_FREE` (keys.rs) as the **arc-D switch
++ the oracle's positive control**. Verified: all matrix cells + the real moros F1 clean; full suite
+**3385/3385**; regression `tests/n3_parity.rs::shared_bridge_nested_return_no_orphan_leak` (with the
+flip as a non-vacuous positive control).
+
 ## Artifacts
 
 - Null/real pattern (84 rows): `/tmp/h4pat.txt`; full timeline (275k lines): `/tmp/h4_timeline.txt`.

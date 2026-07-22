@@ -506,3 +506,100 @@ fn interdependent_libraries_are_fully_native() {
 
     let _ = std::fs::remove_dir_all(&root);
 }
+
+/// @PLN118 arc F — the shared-store bridge must not ORPHAN the fallback destination
+/// it allocates when the interpreted caller forwards a null retbuf.
+///
+/// A struct-returning library fn whose body is a NESTED call (`wrap_v3` returns
+/// `make_v3(...)`) makes the caller re-sentinel its retbuf variable each iteration,
+/// so every call after the first forwards a null hidden-dest ref.  The bridge then
+/// allocates a fallback record (`null_named` + `OpDatabase`), but the inner
+/// struct-literal `make_v3` ignores its retbuf and returns a fresh store — orphaning
+/// the fallback, one leaked store per call, ONLY across the interp↔cdylib boundary
+/// (whole-native has no bridge and never leaked).  The fix frees the orphaned
+/// fallback after the call; `LOFT_NO_BRIDGE_ORPHAN_FREE=1` reproduces the pre-fix
+/// leak, which is the differential POSITIVE CONTROL here (proves the assertion is
+/// not vacuous and that the fix is load-bearing).
+#[test]
+fn shared_bridge_nested_return_no_orphan_leak() {
+    if Command::new("rustc").arg("--version").output().is_err() {
+        eprintln!("skip: rustc unavailable (mixed mode needs it)");
+        return;
+    }
+    let pid = std::process::id();
+    let root = std::env::temp_dir().join(format!("loft_arcf_orphan_{pid}"));
+    let _ = std::fs::remove_dir_all(&root);
+    let libdir = root.join("libs");
+    std::fs::create_dir_all(&libdir).unwrap();
+
+    let native_auto = write_lib(
+        &libdir,
+        "arcf",
+        None,
+        "pub struct V3 { x: float, y: float, z: float }\n\
+         pub fn make_v3(a: float, b: float, c: float) -> V3 { V3 { x: a, y: b, z: c } }\n\
+         pub fn wrap_v3(a: integer) -> V3 { make_v3(a as float, 0.0, 0.0) }\n",
+    );
+    let prog = root.join("main.loft");
+    std::fs::write(
+        &prog,
+        "use arcf;\nfn main() {\n\
+         \x20   total = 0.0;\n\
+         \x20   n = 0;\n\
+         \x20   while n < 50 { c = wrap_v3(n); total = total + c.x; n = n + 1; }\n\
+         \x20   println(\"{total}\");\n}\n",
+    )
+    .unwrap();
+
+    const LEAK_MARK: &str = "not freed at program exit";
+
+    // The leak is interp↔cdylib-boundary-specific: the SCRIPT must interpret while
+    // the library auto-compiles to a cdylib (so `wrap_v3` dispatches through the
+    // shared bridge).  Force `--interpret` explicitly — whole-`--native` (this box's
+    // default backend) has no bridge and could never surface the leak, making the
+    // test vacuous.  Each run rebuilds the cdylib fresh so neither races a concurrent
+    // suite's shared target artifacts.
+    let run_interp = |env: &[(&str, &str)]| -> Run {
+        let _ = std::fs::remove_dir_all(&native_auto);
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_loft"));
+        cmd.arg("--interpret")
+            .arg("--lib")
+            .arg(&libdir)
+            .arg(&prog)
+            .env("LOFT_NO_CACHE", "1");
+        for (k, v) in env {
+            cmd.env(k, v);
+        }
+        let out = cmd.output().expect("spawn loft binary");
+        Run {
+            success: out.status.success(),
+            stdout: String::from_utf8_lossy(&out.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&out.stderr).into_owned(),
+        }
+    };
+
+    // Fix ON (default): the nested-return call must be leak-free AND correct
+    // (sum of 0..49 = 1225).
+    let fixed = run_interp(&[]);
+    assert!(fixed.success, "fixed run failed:\n{}", fixed.stderr);
+    assert_eq!(fixed.stdout.trim(), "1225", "reference output (sum 0..49)");
+    assert!(
+        !fixed.stderr.contains(LEAK_MARK),
+        "@PLN118 arc F REGRESSION: the shared bridge orphaned its fallback dest — \
+         leak with the fix active.\nstderr:\n{}",
+        fixed.stderr
+    );
+
+    // Positive control: with the orphan-free disabled the pre-fix leak MUST return —
+    // otherwise the assertion above is vacuous (it would pass even if nothing leaked).
+    let control = run_interp(&[("LOFT_NO_BRIDGE_ORPHAN_FREE", "1")]);
+    assert!(control.success, "control run failed:\n{}", control.stderr);
+    assert!(
+        control.stderr.contains(LEAK_MARK),
+        "positive control did NOT reproduce the leak with LOFT_NO_BRIDGE_ORPHAN_FREE=1 — \
+         the regression guard is vacuous (the bridge path may have changed).\nstderr:\n{}",
+        control.stderr
+    );
+
+    let _ = std::fs::remove_dir_all(&root);
+}

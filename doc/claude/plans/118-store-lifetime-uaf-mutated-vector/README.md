@@ -11,27 +11,34 @@ Tracks [`loft-lang/plans#118`](https://github.com/loft-lang/plans/issues/118) (`
 
 ## Status
 
-> **CORRUPTION FIXED (arc E) — the leak (arc F) is the open follow-up.** The null export is
-> **resolved on both backends (0/32)**; full suite **3385/3385 green**. Root: the interpreter's
-> `OpFreeRef` of a variable did **not** reset it to the null sentinel (native's does), so a loop
-> temp freed at the block-exit sweep was **re-freed** by the next iteration's pre-build free — and if
-> the allocator had reclaimed that slot, the re-free destroyed a live value → stored `pos` reads null
-> on 4-of-7 verts. Fix: `src/state/codegen.rs::generate_call` emits `OpInitRefSentinel` after the
-> block-exit free of the owned-reassigned vars (tracked in `src/stack.rs::owned_reassigned`), mirroring
-> native, interpreter-only. Proven by `LOFT_NO_SLOT_REUSE` (3/32→0/32) + op-named `LOFT_UAF_GEN`.
+> **BOTH ENDS FIXED — corruption (arc E) AND leak (arc F) resolved; full suite 3385/3385 green.**
 >
-> **Open — arc F (the "other end"), now LOCALIZED:** the corruption fix **unmasked a pre-existing,
-> interpreter-only leak**. Root (2nd investigation): the **interpret↔shared-library `StaticCall`
-> boundary** — interpreted code calling an installed/shared function that returns a struct via retbuf
-> orphans the returned store. **Minimal repro:** `c = hex_to_world(n,0,0)` in a loop (`use moros_render`)
-> leaks 299× Vec3; a byte-identical LOCAL callee (`Call`, not `StaticCall`) does NOT leak; `--native`
-> clean. It is NOT the @P290 protect it superficially resembles. Not blind-fixed: substrate-level
-> `static_call` retbuf-return contract, routed to its own session. **NEXT-SESSION FIRST STEP: build arc C
-> — a differential interp-vs-native leak oracle with F1/F2 controls — BEFORE touching the fix.** The
-> arc-F session flailed (contradictory ad-hoc traces, repeated re-theorizing) precisely because that
-> oracle was never built; see [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md) § Method
-> retrospective. A *resource* bug (correct output; interp-only), strictly less severe than the
-> *correctness* corruption E replaces. Arc D delivered the `LOFT_NO_SLOT_REUSE` stopgap.
+> **Arc E (corruption).** The interpreter's `OpFreeRef` of a variable did **not** reset it to the null
+> sentinel (native's does), so a loop temp freed at the block-exit sweep was **re-freed** by the next
+> iteration's pre-build free — and if the allocator had reclaimed that slot, the re-free destroyed a
+> live value → stored `pos` reads null on 4-of-7 verts. Fix: `src/state/codegen.rs::generate_call`
+> emits `OpInitRefSentinel` after the block-exit free of the owned-reassigned vars
+> (`src/stack.rs::owned_reassigned`), mirroring native, interpreter-only. Proven by `LOFT_NO_SLOT_REUSE`
+> (3/32→0/32) + op-named `LOFT_UAF_GEN`.
+>
+> **Arc F (the unmasked leak) — FIXED (oracle-first).** Fixing E unmasked a pre-existing interp-only
+> leak. Following the retrospective's rule this time, arc C (the differential oracle,
+> [`oracle/`](oracle/)) + a self-contained synthetic probe matrix ([`probes/`](probes/)) were built
+> FIRST, and the root fell straight out — correcting the prior localization on two points (both
+> stale-cdylib / attribution artifacts):
+> - It is **not "cross-lib `StaticCall`"** (a stale-cdylib confound); the real axis is a **nested-call
+>   return vs a direct struct-literal return** — same-lib nested leaks identically to cross-lib.
+> - The leaked store is **the bridge's own FALLBACK destination**, not the caller's retbuf. When the
+>   interpreted caller forwards a null hidden-dest retbuf (the nested-return codegen re-sentinels it
+>   each iteration), `native_lib.rs::shared_bridge_wrapper` allocates a fallback record; the inner
+>   struct-literal callee ignores its retbuf and returns a fresh store, **orphaning the fallback —
+>   one leaked store per call**. Interp-only: whole-`--native` has no bridge.
+>
+> **Fix:** the bridge frees the fallback dest after the call when the callee returned a different store
+> (`(*ret).dbref` differs). Gated by `LOFT_NO_BRIDGE_ORPHAN_FREE` (the **arc-D switch + the oracle's
+> positive control**). Verified on the whole matrix + the real moros F1, both backends; regression
+> `tests/n3_parity.rs::shared_bridge_nested_return_no_orphan_leak`. Full trail:
+> [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md) § Arc F — RESOLVED.
 
 **Open — Stage A in progress; the null is ATTRIBUTED.** A loft program silently exports
 `"min": [null, null, null]` into a glTF (moros H4). Stage A reproduced it (moros `5e677b7` → 3/32
@@ -121,10 +128,10 @@ The load-bearing cell: **reference-into-relocated-vector reads the null sentinel
 |---|---|---|
 | **A** — reproduce + attribute | **DONE** (interp). Mechanism class VERIFIED: an **interpreter store-slot-reuse UAF** in `emit_hex_surface`'s corner loop (a live `Vec3` freed early, slot reused → null pos); native-clean, producer-side, layout-fragile. Remaining: pin the exact freed slot (needs arc-B non-perturbing tracer) + a standalone probe | Mostly done |
 | **B** — enhance the lifetime tool | **DONE + refined.** The existing sound `LOFT_UAF_GEN` (per-slot gen + operand-stack shadow) catches H4 non-perturbingly where `LOFT_UAF` (variable-based) misses it. Added **free-site attribution keyed per-generation** (`keys.rs` `FREED_AT_GEN`, `state/mod.rs`) so it names the CAUSAL free. **Refinement:** a **copy-vs-deref verdict** (`keys.rs` `COPY_DEPTH`/`uaf_in_copy`, marked around `copy_record`/`finish_record` in `state/io.rs`) — a stale read *during* a record deep-copy is `INCOMPLETE RECORD-COPY` (fix the copy), one *outside* is `PREMATURE FREE` (fix the free). This turns "prematurely freed" (which pointed at a correctly-placed temp free) into a decisive root. **H4 verdict: all 23 reads = `PREMATURE FREE`, none copy** — which CORRECTS arc E (below) | **Done** |
-| **C** — oracle | **DO THIS FIRST for arc F (it was the missing piece — see cluster doc § Method retrospective).** A **differential interp-vs-native leak oracle** (@PLN89 pattern): native is the clean reference, so the interp-minus-native leaked-store set, attributed by alloc site + producing call, IS the bug with zero inference. Lock it behind positive/negative controls — F1 (`probes/arcF-min-leak-*.loft`) MUST fire, F2 (local control) + `--native` MUST stay silent — so it can't be fooled. The arc-F session flailed precisely because this was never built | Open (do first) |
-| **D** — second implementation + switch | **Delivered as `LOFT_NO_SLOT_REUSE`** (`allocation.rs::find_free_slot`): never reclaim a freed slot. Off by default; run differentially it turned 3/32→0/32, the decisive proof the corruption is slot-reuse-while-referenced. Kept as a gated diagnostic/stopgap | Done (stopgap) |
-| **E** — fix at the chokepoint | **DONE — both backends 0/32, suite 3385/3385 green.** Op-named `LOFT_UAF_GEN` (read op `OpPutRef`, free op `OpFreeRef`) + `LOFT_NO_SLOT_REUSE` (3/32→0/32) pinned it: the interpreter's `OpFreeRef` of a variable did **not** reset it to the sentinel (native does), so a loop temp freed at the block-exit sweep was **re-freed** by the next iteration's pre-build free of a possibly-reclaimed slot. Fix: `generate_call` emits `OpInitRefSentinel` after the block-exit free of `owned_reassigned` vars (`src/stack.rs`), mirroring native, interpreter-only | **Done** |
-| **F** — the unmasked leak (other end) | **OPEN — localized to a minimal repro.** Fixing E unmasked a pre-existing, interpreter-only leak. Root: the **interpret↔shared-library `StaticCall` boundary** — when interpreted code calls an installed/shared function returning a struct via retbuf, the returned store is orphaned. Minimal repro `c = hex_to_world(n,0,0)` in a loop (`use moros_render`) leaks 299× Vec3; a byte-identical LOCAL `Call` (not `StaticCall`) does NOT leak; `--native` clean. NOT the @P290 protect it resembles. Substrate-level `static_call` retbuf-return fix — route to its own session, no blind patch | Open (localized) |
+| **C** — oracle | **DONE (this session, arc-F fix built on it).** [`oracle/leak-oracle.sh`](oracle/) — a **differential interp-vs-native leak oracle** (@PLN89 pattern): native is the clean reference (no bridge), so the interp-minus-native leaked-store set IS the bug. [`oracle/run-matrix.sh`](oracle/run-matrix.sh) drives the matrix; the FLIP (`--flip` = `LOFT_NO_BRIDGE_ORPHAN_FREE=1`) is the positive control that MUST fire, the direct-return probe is the negative control that MUST stay clean. One run gave the boundary a dozen ad-hoc traces did not | **Done** |
+| **D** — second implementation + switch | **Two, both kept.** Arc E: `LOFT_NO_SLOT_REUSE` (`allocation.rs::find_free_slot`, 3/32→0/32). Arc F: **`LOFT_NO_BRIDGE_ORPHAN_FREE`** (`keys.rs`) — disables the bridge orphan-free; run differentially it resurrects the leak, the decisive proof + the oracle's positive control | **Done** |
+| **E** — fix at the chokepoint | **DONE — both backends 0/32, suite 3385/3385 green.** The interpreter's `OpFreeRef` of a variable did **not** reset it to the sentinel (native does), so a loop temp freed at the block-exit sweep was **re-freed** by the next iteration's pre-build free of a possibly-reclaimed slot. Fix: `generate_call` emits `OpInitRefSentinel` after the block-exit free of `owned_reassigned` vars (`src/stack.rs`), mirroring native, interpreter-only | **Done** |
+| **F** — the unmasked leak (other end) | **DONE — fixed at the bridge chokepoint.** Oracle-first this time. Root (corrected): a **nested-call return** (not "cross-lib") drives the interpreted caller to forward a null hidden-dest retbuf, so `native_lib.rs::shared_bridge_wrapper` allocates a **fallback dest** that the inner struct-literal callee ignores and orphans — one leaked store per call, interp-only (whole-`--native` has no bridge). Fix: the bridge frees the fallback dest when the callee returned a different store; gated by `LOFT_NO_BRIDGE_ORPHAN_FREE`. Regression `tests/n3_parity.rs::shared_bridge_nested_return_no_orphan_leak` | **Done** |
 
 ## Phase ordering
 

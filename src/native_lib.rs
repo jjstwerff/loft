@@ -430,6 +430,11 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
     let mut body = String::new();
     let mut fwd = String::new();
     let mut slot = 0usize; // next public-arg LibArg slot
+    // @PLN118 arc F — hidden dests the bridge allocated as a FALLBACK (caller
+    // forwarded a null/empty ref).  If the inner fn ignores its retbuf and returns
+    // a fresh store (a struct-literal return does), that fallback record is orphaned
+    // — one leaked store per call.  Freed after the call when the return differs.
+    let mut fresh_dests: Vec<String> = Vec::new();
     let ret_text = matches!(def.returned().base(), Type::Text(_));
     for (i, a) in def.attributes().iter().enumerate() {
         let var = format!("p{i}");
@@ -467,6 +472,7 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
                     body,
                     "    let mut {var}: DbRef = if {slot} < n {{ a[{slot}].dbref }} else {{ DbRef {{ store_nr: 0, rec: 0, pos: 0 }} }};"
                 );
+                let _ = writeln!(body, "    let mut {var}_fresh = false;");
                 let _ = writeln!(body, "    if {var}.rec == 0 && {var}.pos == 0 {{");
                 let _ = writeln!(
                     body,
@@ -484,7 +490,9 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
                     body,
                     "        {var} = OpDatabase(cell, {var}, i32::from(_tid{slot}));"
                 );
+                let _ = writeln!(body, "        {var}_fresh = true;");
                 let _ = writeln!(body, "    }}");
+                fresh_dests.push(var.clone());
                 slot += 1;
                 let _ = write!(fwd, ", {var}");
             }
@@ -509,6 +517,27 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
     let call = format!("{inner}(cell{fwd})");
     let ret_stmt = bridge_write_ret(def.returned(), &call, returns_owned_string(def));
 
+    // @PLN118 arc F — after writing the return, free every bridge-allocated
+    // FALLBACK dest the callee did not return (`(*ret).dbref` differs).  A hidden
+    // dest only exists for an aggregate (dbref) return, so `(*ret).dbref` holds the
+    // result here.  When the inner fn wrote into and returned the dest, the
+    // identity matches and it is kept (the caller adopts + frees it); when the inner
+    // fn ignored the retbuf and allocated its own store, the fallback is orphaned —
+    // free it so it does not leak (one store per call across the interp↔cdylib
+    // boundary; native whole-program has no bridge and is unaffected).
+    let mut free_orphans = String::new();
+    for var in &fresh_dests {
+        let _ = write!(
+            free_orphans,
+            "    if {var}_fresh && !loft::keys::bridge_orphan_free_disabled() {{\n    \
+                 let __r = unsafe {{ (*ret).dbref }};\n    \
+                 if !(__r.store_nr == {var}.store_nr && __r.rec == {var}.rec && __r.pos == {var}.pos) {{\n    \
+                     unsafe {{ (&mut *cell.get()).free_named(&{var}, \"__shared_dest_orphan\"); }}\n    \
+                 }}\n    \
+             }}\n",
+        );
+    }
+
     format!(
         "#[unsafe(no_mangle)]\n\
          pub extern \"C\" fn loft_shared_{inner}(\n    \
@@ -522,6 +551,7 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
          let _ = ({slot}, a);\n\
          {body}    \
          {ret_stmt}\n\
+         {free_orphans}\
          }}\n",
     )
 }
