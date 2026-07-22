@@ -1192,3 +1192,76 @@ fn cooperative_pause_yields_control_then_resumes_to_completion() {
         "resume completed cleanly (no fault)"
     );
 }
+
+/// The bytes a per-step heap snapshot would copy — `clone_locked` copies `len * 8` bytes per
+/// store, so the whole-heap cost is that summed over every allocation (@PLN63 RX0 sizing).
+fn rx0_snapshot_bytes(state: &State) -> usize {
+    state
+        .database
+        .allocations
+        .iter()
+        .map(|s| s.len() as usize * 8)
+        .sum()
+}
+
+/// @PLN63 RX0 — the falsification + sizing probe for reverse execution (DAP_ADVANCED § RX).
+///
+/// (a) FALSIFICATION: reverse execution is ABSENT today.  After a forward step, `debug_undo`
+///     (the only reverse API) cannot get back — it reverts an interactive-EDIT journal, which
+///     a step leaves empty.  This stays true after RX lands (RX adds a *separate* `step_back`
+///     ring; `debug_undo` remains edit-scoped), so the probe is permanent, not throwaway.
+/// (b) SIZING: prints the bytes a per-step heap snapshot (the RX ring's checkpoint) would
+///     copy — the number that gates whether the full-heap-snapshot ring ships as-is or needs
+///     the copy-on-write refinement.  Run with `--nocapture` to read it.
+#[test]
+fn rx0_reverse_execution_absent_and_snapshot_size() {
+    let mut p = repl();
+    // A step that MUTATES existing heap in place (`v[0] = 99`) — the case the RX invariant
+    // cares about (a store write, not just an allocation).  Pause at line 3, v already built.
+    let mut state = run_to_pause(
+        &mut p,
+        &["fn build() -> integer {\n  v = [10, 20, 30];\n  v[0] = 99;\n  v[0]\n}"],
+        "build()",
+        "build",
+        3,
+    );
+    let line_before = state.paused_line();
+    let heap_before = rx0_snapshot_bytes(&state);
+
+    // Step over the mutating line — it advances and writes the heap.
+    assert!(
+        state.debug_step(StepMode::Over, &p.data),
+        "the step re-pauses on a new line"
+    );
+    let line_after = state.paused_line();
+    let heap_after = rx0_snapshot_bytes(&state);
+    assert_ne!(line_before, line_after, "the step advanced the line");
+
+    // (a) Reverse execution is absent: undo after a step is a no-op, and the state stays put.
+    assert!(
+        !state.debug_undo(),
+        "no reverse execution today — undo cannot reverse a step (it is edit-scoped)"
+    );
+    assert_eq!(
+        state.paused_line(),
+        line_after,
+        "the state did NOT move back — confirming the gap RX fills"
+    );
+
+    // (b) The per-step heap-snapshot cost, for the record (read with --nocapture).
+    eprintln!(
+        "RX0 heap-snapshot bytes: before-step={heap_before}, after-step={heap_after} \
+         (allocations={})",
+        state.database.allocations.len()
+    );
+    assert!(
+        heap_before > 0 && heap_after > 0,
+        "there is heap to snapshot"
+    );
+    // A tiny program's whole heap is far under a megabyte — the snapshot ring is cheap here;
+    // the bound is a canary, not a target (a large-heap program is measured separately).
+    assert!(
+        heap_after < 4 * 1024 * 1024,
+        "the snapshot is bounded: {heap_after} bytes"
+    );
+}

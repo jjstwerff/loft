@@ -286,12 +286,17 @@ reverts too.
 
 ### Small, safe steps
 
-- **RX0 — falsification + sizing probe FIRST.** A `tests/` probe that (a) **fails** today —
-  step forward, `undo` → `"nothing to do"`, proving reverse execution is absent — and (b)
-  deep-copies `allocations` before/after a representative step and prints the total bytes, to
-  size the ring N and confirm the snapshot cost is acceptable. (The @PLN16 matrix-first rule:
-  earn the fix; the number decides whether the ring approach ships as-is or needs the
-  copy-on-write refinement below.)
+- **RX0 — falsification + sizing probe FIRST. ✅ DONE** (`tests/debugger.rs::rx0_reverse_execution_absent_and_snapshot_size`).
+  (a) Confirmed reverse execution is **absent**: after a forward step, `debug_undo` is a no-op
+  and the state does not move back (it is edit-scoped — this stays true after RX, which adds a
+  *separate* `step_back`, so the probe is permanent, not throwaway). (b) **Sizing:** a
+  full-heap snapshot (`Σ len·8` over `allocations`, the `clone_locked` cost) is **≈ 10.7 KB**
+  for a trivial program (3 stores, stack-store-dominated), unchanged across an in-place
+  `v[0]=99` step. The copy is a full byte-copy of every store buffer, so it scales **linearly**
+  with total heap. **Decision → PROCEED with the full-snapshot ring:** cheap for typical debug
+  sessions (small heaps), and a bounded ring (RX3) caps depth; the linear heap-scaling is the
+  documented caveat, with copy-on-write-per-record as the fallback only if a heap-heavy session
+  proves it necessary.
 - **RX1 — engine: the checkpoint primitive.** `Stores::snapshot_heap() -> HeapSnapshot`
   (each allocation deep-copied à la `clone_locked`) + `restore_heap(&HeapSnapshot)` (copy the
   bytes back / swap the buffers); a `StepCheckpoint { heap, code_pos, call_stack, … }` capturing
