@@ -3252,6 +3252,31 @@ extern crate loft;"
             writeln!(w, "}}\n")?;
             return Ok(());
         }
+        // `n_panic` needs a real body for the same reason `n_assert` does: it has no
+        // `#rust` template, so the generic path below would emit `fn n_panic(..) {}` — an
+        // empty stub.  That is exactly what shipped, and it made `panic("msg")` a
+        // COMPLETE no-op on the default backend: no message, no halt, exit 0, while
+        // `--interpret` printed the error and exited 1.
+        //
+        // It reports and exits at the CALL SITE rather than setting `had_fatal` the way
+        // the interpreter's `native.rs::n_panic` does, because there is no bytecode loop
+        // here to notice the flag — the generated `main` checks it only after `n_main`
+        // returns, by which point the whole program has run on past the panic.
+        //
+        // Generic `Display` params mirror `n_assert`: the message reaches this as a
+        // `Str` or a `&str` depending on whether it is a literal or a formatted string.
+        if def.name() == "n_panic" && *def.code() == Value::Null {
+            writeln!(
+                w,
+                "fn n_panic<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {{"
+            )?;
+            writeln!(
+                w,
+                "  loft::runtime_error::RuntimeError::user_panic(msg.to_string(), file.to_string(), line as u32).report_and_exit();"
+            )?;
+            writeln!(w, "}}\n")?;
+            return Ok(());
+        }
         // DX-source-map: emit a `// loft:<file>:<line>` comment
         // above each function so rustc errors at the function header
         // (e.g. wrong arg type, missing trait impl) map directly to

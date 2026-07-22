@@ -173,6 +173,33 @@ impl RuntimeError {
         }
     }
 
+    /// Render a user `panic("msg")` the way the interpreter does, then halt.
+    ///
+    /// The `--native` backend has no bytecode loop to notice `had_fatal` between
+    /// statements — the generated `main` only checks it after `n_main` RETURNS — so a
+    /// native `panic` has to report and exit at the call site or it does not halt at all.
+    /// Before this existed the generator emitted `fn n_panic(..) {}`, an empty body: on
+    /// the DEFAULT backend `panic` printed nothing, halted nothing, and exited 0, while
+    /// `--interpret` printed the error and exited 1.  (`assert` was unaffected — it is
+    /// special-cased in the generator with a real body.)
+    ///
+    /// Shared with the interpreter's reporting path (`main.rs`) through the same
+    /// `to_diag_entry` + `render_entry_pretty` pair, so both backends emit byte-identical
+    /// text for the same panic.  There is no production-mode branch here, unlike
+    /// `native.rs::n_panic`: a generated binary boots a plain `Stores` with no logger, so
+    /// the log-and-continue mode is not reachable on this path.
+    pub fn report_and_exit(&self) -> ! {
+        let entry = self.to_diag_entry();
+        let loader = crate::diagnostic_render::FileSourceLoader::new();
+        let rendered = crate::diagnostic_render::render_entry_pretty(
+            &entry,
+            &loader,
+            crate::diagnostic_render::ColorMode::Auto,
+        );
+        eprint!("{rendered}");
+        std::process::exit(1);
+    }
+
     /// Construct an `AssertionFailed` error at the loft surface call site.
     #[must_use]
     pub fn assertion_failed(message: String, file: String, line: u32) -> Self {
