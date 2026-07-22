@@ -341,6 +341,20 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
             let halted = session.debug_step(mode);
             report(session, "step", halted, &mut out);
         }
+        "setReverse" => {
+            // @PLN63 RX4 — arm reverse stepping so forward steps checkpoint (the client sends
+            // this when it will offer `stepBack`); default `on:true`.
+            session.set_reverse(bp_bool(&parsed, "on").unwrap_or(true));
+            out.push(resp_ok(id, ""));
+        }
+        "stepBack" => {
+            // @PLN63 RX4 — reverse one step (distinct from the edit-scoped `undo`/`redo`).
+            // Reverse never terminates the program: we stay paused whether it moved or hit
+            // the ring floor, so report the current frame as a `step` stop.
+            out.push(resp_ok(id, ""));
+            let _ = session.debug_step_back();
+            report(session, "step", session.is_debugging(), &mut out);
+        }
         "eval" => {
             let v = session.debug_eval_json(text(&parsed, "expr").unwrap_or(""));
             out.push(resp_ok(

@@ -324,10 +324,16 @@ reverts too.
   `tests/debugger.rs::rx3_ring_is_bounded_to_the_depth` — cap 2, three steps → exactly two
   `step_back`s succeed, the third is a clean floor, and the dropped (oldest) step's line is
   unreachable (the cap held; no unbounded growth, no corruption).
-- **RX4 — RPC: a `stepBack` verb.** Add `{"req":"stepBack"}` → `State::step_back` →
-  `report(..., "step", ...)` (the refreshed frame + a `stopped{reason:"step"}`), mirroring
-  `stepOver`. Leave `undo`/`redo` as the edit-scoped verbs. *Gate:* `tests/rpc.rs` — step
-  forward then `stepBack` returns the prior frame (was `"nothing to do"`).
+- **RX4 — RPC: a `stepBack` verb. ✅ DONE.** Two RPC verbs (`rpc.rs`): `setReverse {on}` arms
+  the session (the client sends it before offering reverse), and `stepBack` reverses one step
+  → `report(..., "step", session.is_debugging())` (the refreshed frame + `stopped{reason:
+  "step"}`; reverse never terminates, so it always reports the current — moved or floor —
+  frame). `ReplSession::set_reverse` stores the pref + applies it to the paused frame;
+  `resume_continue_with` re-arms the running `State` before each step so the ring fills;
+  `debug_step_back` wraps `State::step_back`.  `undo`/`redo` stay the edit-scoped verbs. *Gate:*
+  `tests/rpc.rs::rpc_step_back_reverses_a_step` — arm reverse, run to a breakpoint, `stepOver`
+  (line 3→4, `a` 1→2), `stepBack` → back at line 3 with `a` reverted to 1 (was a no-op via
+  `undo`), no termination.
 - **RX5 — DAP: `stepBack` / `reverseContinue`.** Advertise `supportsStepBack`; `stepBack` →
   RPC `stepBack` → `stopped{reason:"step"}`; `reverseContinue` → `stepBack` to the ring floor
   → `stopped`. *Gate:* `tests/dap_transport.rs` — step forward, `stepBack`, assert the line +

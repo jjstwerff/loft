@@ -317,6 +317,58 @@ fn rpc_eval_bare_vector_live() {
     let _ = std::fs::remove_file(&path);
 }
 
+// @PLN63 RX4 — `stepBack` REVERSES a forward step over the RPC (distinct from the edit-scoped
+// `undo`, which was a no-op after a step).  Arm reverse, run to a breakpoint, step over a
+// mutating line, then step back — the frame returns to the exact prior stop (line + value).
+#[test]
+fn rpc_step_back_reverses_a_step() {
+    // `main` (the default `run` entry); each line reads `a`, so none is a dead store elided
+    // by codegen — every line steps.
+    let path = tmp_program(
+        "rxback",
+        "fn main() {\n  a = 1;\n  a = a + 1;\n  a = a + 2;\n  print(\"a={a}\")\n}\n",
+    );
+    let file = json_path(&path);
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":3}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"setReverse\",\"on\":true}".to_string(),
+        "{\"id\":4,\"req\":\"run\"}".to_string(), // stop at line 3, a == 1
+        "{\"id\":5,\"req\":\"stepOver\"}".to_string(), // → line 4, a == 2
+        "{\"id\":6,\"req\":\"stepBack\"}".to_string(), // → line 3, a == 1 again
+        "{\"id\":7,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    let stops: Vec<&str> = out
+        .lines()
+        .filter(|l| l.contains("\"event\":\"stopped\""))
+        .collect();
+    // The forward step advanced to line 4 with a == 2.
+    assert!(
+        stops
+            .iter()
+            .any(|s| s.contains("\"line\":4") && s.contains("\"value\":\"2\"")),
+        "stepOver advanced to line 4, a == 2: {out}"
+    );
+    // The LAST stop is stepBack's: back at line 3 with a reverted to 1, reason `step`.
+    let last = stops.last().expect("a stopped event");
+    assert!(
+        last.contains("\"reason\":\"step\"") && last.contains("\"line\":3"),
+        "stepBack reverted to line 3 as a step stop: {last}"
+    );
+    assert!(
+        last.contains("\"name\":\"a\",\"value\":\"1\""),
+        "stepBack reverted a to its pre-step value 1: {last}"
+    );
+    // Reverse never terminates the program.
+    assert!(
+        !out.contains("\"event\":\"terminated\""),
+        "no termination: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 // @PLN63 SF — `stackTrace` returns the FULL runtime call stack (a `frames` array),
 // innermost first, each frame with its function + call-site line + locals, alongside the
 // legacy single `frame` (additive).  A breakpoint three calls deep surfaces all three
