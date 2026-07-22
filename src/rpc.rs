@@ -61,6 +61,53 @@ fn capture_take() -> String {
     })
 }
 
+/// An in-process debug session driven one wire-protocol line at a time — the seam both
+/// [`run_rpc`] (NDJSON on stdio) and the `loft-dap` DAP adapter drive the engine through,
+/// with no child interpreter process and no port.  Construction mirrors `run_rpc`'s
+/// preamble: a stepping-enabled [`ReplSession`] over `stdlib_dir` + `lib_dirs`, with the
+/// program's `print` output routed to the capture sink (drained into `output` events);
+/// `Drop` ends the capture.
+///
+/// `loft-dap` links the `loft` rlib as a separate binary — the same shape as `loft-lsp` —
+/// and translates DAP JSON to/from the [`handle`] chokepoint via [`drive`](Self::drive),
+/// so it inherits the engine coverage of `tests/rpc.rs` for free and adds only the
+/// protocol translation.
+pub struct DebugDriver {
+    session: ReplSession,
+}
+
+impl DebugDriver {
+    /// Build a stepping-enabled debug session and arm output capture.
+    ///
+    /// # Errors
+    /// Returns an I/O error if the stdlib cannot be loaded.
+    pub fn new(stdlib_dir: &str, lib_dirs: &[String]) -> std::io::Result<Self> {
+        let mut session = ReplSession::new_with_libs(stdlib_dir, lib_dirs)?;
+        session.debug_stepping(true);
+        capture_begin();
+        Ok(Self { session })
+    }
+
+    /// Handle one NDJSON request line: the messages to emit (response first, then any
+    /// events) and whether the client asked to disconnect.  The one dispatch chokepoint.
+    pub fn drive(&mut self, line: &str) -> (Vec<String>, bool) {
+        handle(&mut self.session, line)
+    }
+
+    /// Set a **function-scoped** breakpoint at `func`'s entry — the engine capability the
+    /// file:line `setBreakpoints` verb does not surface — so the DAP adapter can honour
+    /// `stopOnEntry` by pausing at the program's first statement.
+    pub fn set_function_breakpoint(&mut self, func: &str) {
+        self.session.add_breakpoint(func);
+    }
+}
+
+impl Drop for DebugDriver {
+    fn drop(&mut self) {
+        capture_end();
+    }
+}
+
 /// Run the file-run debugger over the wire protocol: read NDJSON requests from `input`,
 /// write NDJSON responses + events to `out`, until EOF or a `disconnect` request.
 ///
@@ -72,19 +119,17 @@ pub fn run_rpc<R: BufRead, W: Write>(
     input: R,
     out: &mut W,
 ) -> std::io::Result<()> {
-    let mut session = ReplSession::new_with_libs(stdlib_dir, lib_dirs)?;
-    session.debug_stepping(true);
+    let mut driver = DebugDriver::new(stdlib_dir, lib_dirs)?;
     // Silence the raw panic handler — a fault in the debugged program is caught and
     // reported as `terminated`, not printed.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
-    capture_begin();
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        let (messages, disconnect) = handle(&mut session, &line);
+        let (messages, disconnect) = driver.drive(&line);
         for m in messages {
             writeln!(out, "{m}")?;
         }
@@ -93,7 +138,6 @@ pub fn run_rpc<R: BufRead, W: Write>(
             break;
         }
     }
-    capture_end();
     std::panic::set_hook(prev_hook);
     Ok(())
 }
@@ -297,6 +341,22 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
             let halted = session.debug_step(mode);
             report(session, "step", halted, &mut out);
         }
+        "setReverse" => {
+            // @PLN63 RX4 — arm reverse stepping so forward steps checkpoint (the client sends
+            // this when it will offer `stepBack`); default `on:true`.
+            session.set_reverse(bp_bool(&parsed, "on").unwrap_or(true));
+            out.push(resp_ok(id, ""));
+        }
+        "stepBack" => {
+            // @PLN63 RX4 — reverse one step (distinct from the edit-scoped `undo`/`redo`).
+            // Reverse never terminates the program: we stay paused whether it moved or hit
+            // the ring floor, so report the current frame as a `step` stop.  `moved` says
+            // whether a checkpoint was restored (false = the ring floor) — the driver uses it
+            // to end a `reverseContinue`.
+            let moved = session.debug_step_back();
+            out.push(resp_ok(id, &format!("\"moved\":{moved}")));
+            report(session, "step", session.is_debugging(), &mut out);
+        }
         "eval" => {
             let v = session.debug_eval_json(text(&parsed, "expr").unwrap_or(""));
             out.push(resp_ok(
@@ -317,7 +377,7 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
         }
         "undo" => out.push(step_resp(id, session.debug_undo(), session)),
         "redo" => out.push(step_resp(id, session.debug_redo(), session)),
-        "stackTrace" => out.push(resp_ok(id, &frame_field(session))),
+        "stackTrace" => out.push(resp_ok(id, &stack_field(session))),
         "disconnect" => {
             out.push(resp_ok(id, ""));
             return (out, true);
@@ -426,6 +486,30 @@ fn frame_field(session: &ReplSession) -> String {
         }
         None => "\"frame\":null".to_string(),
     }
+}
+
+/// A `stackTrace` body: the legacy single `frame` (the top frame, kept additively for
+/// compatibility) plus a `frames` array — one `{function, line, locals}` per runtime call
+/// frame, innermost first (@PLN63 SF, the multi-frame stack).
+fn stack_field(session: &ReplSession) -> String {
+    let frames: Vec<String> = session
+        .paused_stack()
+        .iter()
+        .map(|f| {
+            let locals: Vec<String> = f
+                .locals
+                .iter()
+                .map(|(n, v)| format!("{{\"name\":{},\"value\":{}}}", esc(n), esc(v)))
+                .collect();
+            format!(
+                "{{\"function\":{},\"line\":{},\"locals\":[{}]}}",
+                esc(&f.function),
+                f.line,
+                locals.join(",")
+            )
+        })
+        .collect();
+    format!("{},\"frames\":[{}]", frame_field(session), frames.join(","))
 }
 
 /// An `ok` response carrying the refreshed frame (for `undo`/`redo`).

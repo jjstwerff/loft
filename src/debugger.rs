@@ -40,16 +40,21 @@ pub struct BreakHit {
     /// (`("n", "42")`).  The slice captures arguments (live at fn entry); a later
     /// slice that breaks mid-body adds the locals assigned so far.
     pub locals: Vec<(String, String)>,
+    /// The source line this frame is parked on — the breakpoint line for the top
+    /// frame, the call-site line for a caller (the multi-frame `stackTrace`, @PLN63
+    /// SF).  0 when unknown.
+    pub line: u32,
 }
 
 /// @PLN16 M3 — a **watchpoint** (data breakpoint): a fixed heap region whose bytes are
 /// re-read after each op of a resumed run; when they differ from `last`, execution
 /// pauses.  `content` is the scalar primitive type number (the `ShowDb` map) for
-/// rendering old → new.  The region is heap-resident (a struct field / vector element),
-/// so it survives stepping and frame exit — unlike a stack local.
+/// rendering old → new.  A heap region (a struct field / vector element) survives frame
+/// exit; a **stack** region (a bare scalar local — @PLN63 DB) is bound to the frame it was
+/// set in (`frame`) and dropped the moment that frame returns, so a reused slot never fires.
 #[derive(Debug, Clone)]
 pub struct Watchpoint {
-    /// The source expression the user watched (`pt.x`, `v[0]`), for display.
+    /// The source expression the user watched (`pt.x`, `v[0]`, `n`), for display.
     pub label: String,
     pub store_nr: u16,
     pub rec: u32,
@@ -60,6 +65,22 @@ pub struct Watchpoint {
     pub content: u16,
     /// The region's bytes at the last poll; a change from these is what fires.
     pub last: Box<[u8]>,
+    /// The call frame a **stack**-local watch is bound to; `None` for a heap watch (which
+    /// survives frame exit).  A stack watch is dropped once its frame is no longer live.
+    pub frame: Option<StackWatchFrame>,
+}
+
+/// @PLN63 DB — the identity of the call frame a stack-local watch belongs to.  A watch is
+/// live only while `call_stack[depth]` is still this exact frame; once it returns (the entry
+/// shrinks away or is a different `(d_nr, args_base)`), the slot is dead and the watch drops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StackWatchFrame {
+    /// The watched frame's function.
+    pub d_nr: u32,
+    /// The frame's argument-region base (its stack identity at a given depth).
+    pub args_base: u32,
+    /// The frame's index in the `call_stack` when the watch was set.
+    pub depth: u32,
 }
 
 /// @PLN16 M3 — a watchpoint that just fired: the label and the rendered old → new value.
@@ -112,6 +133,18 @@ pub struct Debugger {
     /// @PLN16 M3 — the watchpoint that fired during the most recent resume (for the
     /// driver to report), cleared at the start of each resume.
     pub last_watch: Option<WatchHit>,
+    /// @PLN63 RX — reverse-stepping armed.  When set, each `debug_step` checkpoints the
+    /// pre-step state into `reverse_ring` before executing, so `step_back` can restore it.
+    /// Off by default (normal debug sessions pay no snapshot cost).
+    pub reverse: bool,
+    /// @PLN63 RX — the reverse-step checkpoint ring, newest at the back.  Distinct from the M2
+    /// `undo_stack` (which a step self-clears): a `debug_step` PUSHES the back, `step_back`
+    /// POPS the back + restores.  **Bounded** to `reverse_cap` (RX3): a push past the cap drops
+    /// the oldest (front), so only the last N steps are reversible.
+    pub reverse_ring: std::collections::VecDeque<crate::state::StepCheckpoint>,
+    /// @PLN63 RX3 — the ring's capacity (the reversible depth), set when reverse is armed from
+    /// `LOFT_REVERSE_DEPTH` (default 200).  0 = unset (never, while armed).
+    pub reverse_cap: usize,
 }
 
 /// @PLN16 B1 — collect the **static** call targets in an IR body into `out`.

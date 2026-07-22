@@ -317,6 +317,176 @@ fn rpc_eval_bare_vector_live() {
     let _ = std::fs::remove_file(&path);
 }
 
+// @PLN63 RX4 — `stepBack` REVERSES a forward step over the RPC (distinct from the edit-scoped
+// `undo`, which was a no-op after a step).  Arm reverse, run to a breakpoint, step over a
+// mutating line, then step back — the frame returns to the exact prior stop (line + value).
+#[test]
+fn rpc_step_back_reverses_a_step() {
+    // `main` (the default `run` entry); each line reads `a`, so none is a dead store elided
+    // by codegen — every line steps.
+    let path = tmp_program(
+        "rxback",
+        "fn main() {\n  a = 1;\n  a = a + 1;\n  a = a + 2;\n  print(\"a={a}\")\n}\n",
+    );
+    let file = json_path(&path);
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":3}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"setReverse\",\"on\":true}".to_string(),
+        "{\"id\":4,\"req\":\"run\"}".to_string(), // stop at line 3, a == 1
+        "{\"id\":5,\"req\":\"stepOver\"}".to_string(), // → line 4, a == 2
+        "{\"id\":6,\"req\":\"stepBack\"}".to_string(), // → line 3, a == 1 again
+        "{\"id\":7,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    let stops: Vec<&str> = out
+        .lines()
+        .filter(|l| l.contains("\"event\":\"stopped\""))
+        .collect();
+    // The forward step advanced to line 4 with a == 2.
+    assert!(
+        stops
+            .iter()
+            .any(|s| s.contains("\"line\":4") && s.contains("\"value\":\"2\"")),
+        "stepOver advanced to line 4, a == 2: {out}"
+    );
+    // The LAST stop is stepBack's: back at line 3 with a reverted to 1, reason `step`.
+    let last = stops.last().expect("a stopped event");
+    assert!(
+        last.contains("\"reason\":\"step\"") && last.contains("\"line\":3"),
+        "stepBack reverted to line 3 as a step stop: {last}"
+    );
+    assert!(
+        last.contains("\"name\":\"a\",\"value\":\"1\""),
+        "stepBack reverted a to its pre-step value 1: {last}"
+    );
+    // Reverse never terminates the program.
+    assert!(
+        !out.contains("\"event\":\"terminated\""),
+        "no termination: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+// @PLN63 SF — `stackTrace` returns the FULL runtime call stack (a `frames` array),
+// innermost first, each frame with its function + call-site line + locals, alongside the
+// legacy single `frame` (additive).  A breakpoint three calls deep surfaces all three
+// user frames.
+#[test]
+fn rpc_stack_trace_returns_full_call_stack() {
+    let path = tmp_program(
+        "sfstack",
+        "fn inner(z: integer) -> integer {\n  z * 2\n}\n\
+         fn middle(y: integer) -> integer {\n  inner(y + 1)\n}\n\
+         fn main() {\n  r = middle(10);\n  print(\"r={r}\")\n}\n",
+    );
+    let file = json_path(&path);
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":2}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"run\"}".to_string(),
+        "{\"id\":4,\"req\":\"stackTrace\"}".to_string(),
+        "{\"id\":5,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    // The legacy single frame (top) is still present (additive compatibility).
+    assert!(
+        out.contains("\"frame\":{\"function\":\"inner\""),
+        "legacy single frame retained: {out}"
+    );
+    // The new multi-frame array: inner (top, line 2) → middle (call site line 5) → main.
+    let stack_line = out
+        .lines()
+        .find(|l| l.contains("\"id\":4"))
+        .expect("stackTrace response");
+    assert!(
+        stack_line.contains("\"frames\":[{\"function\":\"inner\",\"line\":2"),
+        "top frame inner at line 2: {stack_line}"
+    );
+    assert!(
+        stack_line.contains("{\"function\":\"middle\",\"line\":5"),
+        "caller middle at its call site line 5: {stack_line}"
+    );
+    assert!(
+        stack_line.contains("{\"function\":\"main\","),
+        "caller main is on the stack: {stack_line}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+// @PLN63 DB — a `setWatch` on a BARE SCALAR LOCAL (a stack slot, previously "not a
+// watchable scalar region") is accepted, and a later mutation fires `stopped{reason:
+// "watch"}` with the old → new value.
+#[test]
+fn rpc_watch_stack_local_fires_on_change() {
+    let path = tmp_program(
+        "dblocal",
+        "fn main() {\n  x = 1;\n  x = 2;\n  x = 3;\n  print(\"x={x}\")\n}\n",
+    );
+    let file = json_path(&path);
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":3}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"run\"}".to_string(),
+        "{\"id\":4,\"req\":\"setWatch\",\"expr\":\"x\"}".to_string(),
+        "{\"id\":5,\"req\":\"continue\"}".to_string(),
+        "{\"id\":6,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(
+        out.contains("\"id\":4,\"ok\":true"),
+        "a bare local is now watchable: {out}"
+    );
+    assert!(
+        out.contains("\"event\":\"stopped\",\"reason\":\"watch\""),
+        "the watch fires on the change: {out}"
+    );
+    assert!(
+        out.contains("\"watch\":{\"label\":\"x\",\"old\":\"1\",\"new\":\"2\"}"),
+        "old → new value reported: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+// @PLN63 DB1 — a stack-local watch is bound to its frame: once that frame RETURNS the slot
+// is dead, so the watch is dropped and never fires a spurious hit on the reused slot.
+#[test]
+fn rpc_watch_stack_local_drops_on_frame_exit() {
+    let path = tmp_program(
+        "dbexit",
+        "fn helper() -> integer {\n  h = 5;\n  h + 0\n}\n\
+         fn main() {\n  a = helper();\n  b = a + 10;\n  print(\"a={a} b={b}\")\n}\n",
+    );
+    let file = json_path(&path);
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":3}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"run\"}".to_string(),
+        "{\"id\":4,\"req\":\"setWatch\",\"expr\":\"h\"}".to_string(),
+        "{\"id\":5,\"req\":\"continue\"}".to_string(),
+        "{\"id\":6,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    assert!(
+        out.contains("\"id\":4,\"ok\":true"),
+        "watch set in helper: {out}"
+    );
+    // helper returns → the watch drops → the run completes with no watch stop.
+    assert!(
+        !out.contains("\"reason\":\"watch\""),
+        "no spurious hit after the frame returns: {out}"
+    );
+    assert!(
+        out.contains("\"event\":\"terminated\""),
+        "runs to termination: {out}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 // `setBreakpoints` answers with a per-breakpoint `verified` flag: `true` for a line
 // carrying breakable code, `false` for a line that can never fire (no code on it, or
 // a file the program doesn't use) — so a client sees a dead breakpoint immediately

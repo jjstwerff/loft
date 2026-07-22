@@ -715,6 +715,22 @@ impl WorkerStores {
     }
 }
 
+/// @PLN63 RX1 — a snapshot of the execution heap for the reverse-step ring: a writable deep
+/// byte-copy of every store allocation, plus the store-table registers a step can move.  Built
+/// by [`Stores::snapshot_heap`] and re-applied by [`Stores::restore_heap`]; correct by
+/// construction (a byte copy, restored by copying back).
+pub struct HeapSnapshot {
+    allocations: Vec<Store>,
+    stack_store_at_zero: bool,
+    max: u16,
+}
+
+impl std::fmt::Debug for HeapSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HeapSnapshot({} stores)", self.allocations.len())
+    }
+}
+
 impl Stores {
     /// H8 — grow `allocations` to `high_water` slots (the `par` dispenser's
     /// one-past-last index) so every worker-allocated slot has a parent slot to
@@ -779,6 +795,35 @@ impl Stores {
             }
         }
         Ok(journal)
+    }
+
+    /// @PLN63 RX1 — snapshot the execution heap for the reverse-step ring: a writable deep
+    /// byte-copy of every store allocation plus the store-table registers execution mutates
+    /// (`max`, `stack_store_at_zero`).  Returns `None` when a durable (file-backed) store is
+    /// live — its on-disk state cannot be reversed, so RX refuses to snapshot it (an honest
+    /// boundary; a normal debug session has only in-memory stores).  Compile-time schema
+    /// (`types`, `names`) and cosmetic counters (`peak`, `records_created`) are execution-
+    /// invariant / non-value, so they are not captured.
+    #[must_use]
+    pub fn snapshot_heap(&self) -> Option<HeapSnapshot> {
+        if self.allocations.iter().any(Store::is_file_backed) {
+            return None;
+        }
+        Some(HeapSnapshot {
+            allocations: self.allocations.iter().map(Store::snapshot_copy).collect(),
+            stack_store_at_zero: self.stack_store_at_zero,
+            max: self.max,
+        })
+    }
+
+    /// @PLN63 RX1 — restore a [`snapshot_heap`](Self::snapshot_heap): replace the live
+    /// allocations with fresh writable copies of the snapshot's bytes (the old ones drop +
+    /// free), so the heap is byte-identical to when the snapshot was taken.  The snapshot is
+    /// left intact (copied, not moved) so the ring entry survives.
+    pub fn restore_heap(&mut self, snap: &HeapSnapshot) {
+        self.allocations = snap.allocations.iter().map(Store::snapshot_copy).collect();
+        self.stack_store_at_zero = snap.stack_store_at_zero;
+        self.max = snap.max;
     }
 
     /// Install an externally-allocated `Store` into this `Stores`'

@@ -1597,6 +1597,431 @@ fn enclosing_fn(data: &Data, cursor_line: u32) -> Option<u32> {
         .max_by_key(|&d| data.def(d).position.line)
 }
 
+// ── extract-function (E1+, EXTRACT.md) ───────────────────────────────────────
+// A function body is a `Value::Block` whose `operators` interleave `Value::Line(n)`
+// markers before each statement; a nested block (`for`/`if` body) carries its OWN
+// `Line` markers INSIDE the nested `Block`, so those lines are not top-level markers
+// — a selection inside one maps to no top-level statement and is refused.
+
+/// @PLN63 E1 — resolve a 1-based line selection `[start_line, end_line]` to the
+/// enclosing top-level function and the contiguous TOP-LEVEL statement operators it
+/// covers: `(fn_def, first_op, last_op)`, i.e. `body.operators[first_op..=last_op]`
+/// (including the `Line` markers) are the selected statements — the slice the E2/E3
+/// data-flow then analyses.
+///
+/// `None` when the selection does not map to WHOLE top-level statements: no
+/// enclosing function, a non-block body (e.g. a `#rust` fn), an empty/reversed
+/// range, a start that is not a statement boundary (a `Line` marker at
+/// `start_line`), or a range whose lines are inside a nested block.
+#[must_use]
+pub fn extract_range(
+    text: &str,
+    name: &str,
+    stdlib_dir: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Option<(u32, usize, usize)> {
+    if end_line < start_line {
+        return None;
+    }
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
+    let data = &p.data;
+    let f = enclosing_fn(data, start_line)?;
+    let crate::data::Value::Block(b) = data.def(f).code().unspan() else {
+        return None;
+    };
+    let (first_op, last_op) = statement_slice(b, start_line, end_line)?;
+    Some((f, first_op, last_op))
+}
+
+/// The top-level operator index range `[first_op, last_op]` in `b` covering the
+/// statements on lines `[start_line, end_line]`, via the `Value::Line` markers.
+/// `None` when the start is not a top-level statement boundary or nothing maps.
+fn statement_slice(
+    b: &crate::data::Block,
+    start_line: u32,
+    end_line: u32,
+) -> Option<(usize, usize)> {
+    // Top-level source-line markers, in order: (line, operator index).
+    let marks: Vec<(u32, usize)> = b
+        .operators
+        .iter()
+        .enumerate()
+        .filter_map(|(i, op)| match op {
+            crate::data::Value::Line(n) => Some((*n, i)),
+            _ => None,
+        })
+        .collect();
+    // The selection must START at a top-level statement boundary (a `Line == start_line`).
+    let first = marks.iter().position(|(l, _)| *l == start_line)?;
+    // The last top-level statement whose line is within the selection.
+    let last = marks.iter().rposition(|(l, _)| *l <= end_line)?;
+    if last < first {
+        return None;
+    }
+    // Include everything up to the operator before the NEXT top-level statement (or
+    // the block end) — the last selected statement's whole body.
+    let last_op = marks
+        .get(last + 1)
+        .map_or(b.operators.len(), |&(_, i)| i)
+        .saturating_sub(1);
+    Some((marks[first].1, last_op))
+}
+
+/// The extract-function signature of a slice: `(inputs, outputs)` var_nrs.
+///
+/// - **inputs** = the upward-exposed uses ∩ LIVE-IN (a parameter of the function, or
+///   a var written BEFORE the slice).  The live-in filter is load-bearing: it
+///   excludes a `for`/lambda BINDER (read in the slice but declared there, so it must
+///   not become a parameter — a param colliding with the binder is invalid) and any
+///   var first produced inside the slice.
+/// - **outputs** = writes-in-slice ∩ live-out (read in the tail).  A var in both is
+///   in-out.
+fn slice_signature(
+    data: &Data,
+    f: u32,
+    b: &crate::data::Block,
+    first_op: usize,
+    last_op: usize,
+) -> (Vec<u16>, Vec<u16>) {
+    let vars = data.def(f).variables();
+    let slice = &b.operators[first_op..=last_op];
+    // Live-in: written before the slice, or a parameter.
+    let mut written_before: Vec<u16> = Vec::new();
+    for op in &b.operators[..first_op] {
+        collect_writes(op, &mut written_before);
+    }
+    let live_in = |v: u16| vars.is_argument(v) || written_before.contains(&v);
+    let inputs: Vec<u16> = slice_inputs(slice)
+        .into_iter()
+        .filter(|&v| live_in(v))
+        .collect();
+    // Outputs: written in the slice AND read in the tail.
+    let mut writes: Vec<u16> = Vec::new();
+    for op in slice {
+        collect_writes(op, &mut writes);
+    }
+    let mut tail_reads: Vec<u16> = Vec::new();
+    for op in &b.operators[last_op + 1..] {
+        collect_reads(op, &mut tail_reads);
+    }
+    let outputs: Vec<u16> = writes
+        .into_iter()
+        .filter(|v| tail_reads.contains(v))
+        .collect();
+    (inputs, outputs)
+}
+
+/// @PLN63 E2 — the INPUT variables (→ parameters) for extracting a statement slice:
+/// the upward-exposed uses ∩ live-in (see [`slice_signature`]), in first-use order.
+/// `None` when the selection does not map (see [`extract_range`]).
+#[must_use]
+pub fn extract_inputs(
+    text: &str,
+    name: &str,
+    stdlib_dir: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Option<Vec<String>> {
+    if end_line < start_line {
+        return None;
+    }
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
+    let data = &p.data;
+    let f = enclosing_fn(data, start_line)?;
+    let crate::data::Value::Block(b) = data.def(f).code().unspan() else {
+        return None;
+    };
+    let (first_op, last_op) = statement_slice(b, start_line, end_line)?;
+    let (inputs, _outputs) = slice_signature(data, f, b, first_op, last_op);
+    let vars = data.def(f).variables();
+    Some(inputs.iter().map(|&v| vars.name(v).to_string()).collect())
+}
+
+/// The upward-exposed uses (input var_nrs) of a statement slice, in first-use order.
+fn slice_inputs(ops: &[crate::data::Value]) -> Vec<u16> {
+    let mut written: Vec<u16> = Vec::new();
+    let mut inputs: Vec<u16> = Vec::new();
+    for op in ops {
+        scan_input(op, &mut written, &mut inputs, true);
+    }
+    inputs
+}
+
+/// Record a READ of `v`: an input iff not yet definitely written and not already noted.
+fn note_read(v: u16, written: &[u16], inputs: &mut Vec<u16>) {
+    if !written.contains(&v) && !inputs.contains(&v) {
+        inputs.push(v);
+    }
+}
+
+/// Ordered upward-exposed-use walk.  `definite` is false inside a conditional branch
+/// or loop body (writes there are not guaranteed, so they do not mask a later read).
+fn scan_input(
+    node: &crate::data::Value,
+    written: &mut Vec<u16>,
+    inputs: &mut Vec<u16>,
+    definite: bool,
+) {
+    use crate::data::Value;
+    match node.unspan() {
+        // Var-READ fields `for_each_child` does not surface — handle explicitly.
+        Value::Var(v) => note_read(*v, written, inputs),
+        Value::TupleGet(v, _) => note_read(*v, written, inputs),
+        Value::CallRef(v, args) => {
+            note_read(*v, written, inputs);
+            for a in args {
+                scan_input(a, written, inputs, definite);
+            }
+        }
+        Value::TuplePut(v, _, inner) => {
+            note_read(*v, written, inputs);
+            scan_input(inner, written, inputs, definite);
+        }
+        // A write: read the RHS FIRST (so `x += 1` reads `x` before the write), then
+        // mark `x` written — only when the write is unconditional.
+        Value::Set(v, rhs) => {
+            scan_input(rhs, written, inputs, definite);
+            if definite && !written.contains(v) {
+                written.push(*v);
+            }
+        }
+        Value::If(c, t, e) => {
+            scan_input(c, written, inputs, definite);
+            scan_input(t, written, inputs, false);
+            scan_input(e, written, inputs, false);
+        }
+        Value::Loop(b) => {
+            for o in &b.operators {
+                scan_input(o, written, inputs, false);
+            }
+        }
+        // Every other variant: recurse into child expressions in order (covers Call,
+        // Block, Return, Iter, Tuple, … safely — none carry a bare var-read field).
+        other => other.for_each_child(&mut |c| scan_input(c, written, inputs, definite)),
+    }
+}
+
+/// @PLN63 E3 — the OUTPUT variables (→ return values) for extracting a statement
+/// slice: vars WRITTEN in the slice (on any path) that are LIVE-OUT — read in the
+/// function tail after the slice — in write order.  A var that is both an input and
+/// an output is an IN-OUT (a parameter the function also returns).  `None` when the
+/// selection does not map (see [`extract_range`]).
+///
+/// Conservatism flips from E2: outputs are a SUPERSET (all writes ∩ any tail read),
+/// so a var whose new value the caller might need is always returned — never a stale
+/// value left behind (a missed output would silently drop a modification).
+#[must_use]
+pub fn extract_outputs(
+    text: &str,
+    name: &str,
+    stdlib_dir: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Option<Vec<String>> {
+    if end_line < start_line {
+        return None;
+    }
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
+    let data = &p.data;
+    let f = enclosing_fn(data, start_line)?;
+    let crate::data::Value::Block(b) = data.def(f).code().unspan() else {
+        return None;
+    };
+    let (first_op, last_op) = statement_slice(b, start_line, end_line)?;
+    let (_inputs, outputs) = slice_signature(data, f, b, first_op, last_op);
+    let vars = data.def(f).variables();
+    Some(outputs.iter().map(|&v| vars.name(v).to_string()).collect())
+}
+
+/// Every var WRITTEN anywhere in `node` (any path), in first-write order — a `Set`
+/// or `TuplePut` target.  `for_each_child` covers the rest safely.
+fn collect_writes(node: &crate::data::Value, out: &mut Vec<u16>) {
+    use crate::data::Value;
+    match node.unspan() {
+        Value::Set(v, rhs) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+            collect_writes(rhs, out);
+        }
+        Value::TuplePut(v, _, inner) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+            collect_writes(inner, out);
+        }
+        other => other.for_each_child(&mut |c| collect_writes(c, out)),
+    }
+}
+
+/// Every var READ anywhere in `node` (any path) — the var-read variants
+/// `for_each_child` does not surface, plus recursion for the rest.
+fn collect_reads(node: &crate::data::Value, out: &mut Vec<u16>) {
+    use crate::data::Value;
+    match node.unspan() {
+        Value::Var(v) | Value::TupleGet(v, _) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+        }
+        Value::CallRef(v, args) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+            for a in args {
+                collect_reads(a, out);
+            }
+        }
+        Value::TuplePut(v, _, inner) => {
+            if !out.contains(v) {
+                out.push(*v);
+            }
+            collect_reads(inner, out);
+        }
+        other => other.for_each_child(&mut |c| collect_reads(c, out)),
+    }
+}
+
+/// @PLN63 E6 — whether `node` contains control flow that would ESCAPE the extracted
+/// slice: a `return` / `yield` (always leaves the function), or a `break` / `continue`
+/// whose target loop is not itself inside the slice (`loop_depth` counts loops entered
+/// WITHIN the slice; at depth 0 a break/continue targets an outer loop).
+fn control_flow_escapes(node: &crate::data::Value, loop_depth: u32) -> bool {
+    use crate::data::Value;
+    match node.unspan() {
+        Value::Return(_) | Value::Yield(_) => true,
+        Value::Break(_) | Value::Continue(_) | Value::BreakWith(_, _) => loop_depth == 0,
+        Value::Loop(b) => b
+            .operators
+            .iter()
+            .any(|o| control_flow_escapes(o, loop_depth + 1)),
+        other => {
+            let mut escapes = false;
+            other.for_each_child(&mut |c| {
+                escapes = escapes || control_flow_escapes(c, loop_depth);
+            });
+            escapes
+        }
+    }
+}
+
+/// @PLN63 E4 — the concrete edit for extracting a statement slice: the new function
+/// to insert and the call that replaces the selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractEdit {
+    /// The full source of the new function (`fn extracted(…) -> … { … }`) — inserted
+    /// after the buffer end.  The name is a placeholder the user renames.
+    pub new_function: String,
+    /// The replacement for the selected statement lines, indented at the call site
+    /// (`(a, b) = extracted(x, y);`).
+    pub call: String,
+    /// 1-based inclusive line range of the selection the `call` replaces.
+    pub start_line: u32,
+    pub end_line: u32,
+}
+
+/// @PLN63 E4 — synthesise the extract-function edit for `[start_line, end_line]`:
+/// combines the E1 slice, E2 inputs (→ parameters), and E3 outputs (→ return
+/// values, a tuple for ≥2) with the selected SOURCE TEXT into a new function and its
+/// call.  Variable names are preserved, so the selected body resolves unchanged
+/// (inputs are same-named params, outputs are locals or in-out params).  `None` when
+/// the selection does not map (see [`extract_range`]).
+#[must_use]
+pub fn extract_function(
+    text: &str,
+    name: &str,
+    stdlib_dir: &str,
+    start_line: u32,
+    end_line: u32,
+) -> Option<ExtractEdit> {
+    if end_line < start_line {
+        return None;
+    }
+    let p = parse_lsp_buffer(text, name, stdlib_dir);
+    let data = &p.data;
+    let f = enclosing_fn(data, start_line)?;
+    let crate::data::Value::Block(b) = data.def(f).code().unspan() else {
+        return None;
+    };
+    let (first_op, last_op) = statement_slice(b, start_line, end_line)?;
+    // E6 — REFUSE control flow that escapes the slice: a `return` / `yield` (always
+    // leaves the function), or a `break` / `continue` targeting a loop OUTSIDE the
+    // slice.  Extracting it would change control flow (the `return` would leave the
+    // NEW function, not the caller), so offer nothing rather than a broken edit.
+    if b.operators[first_op..=last_op]
+        .iter()
+        .any(|op| control_flow_escapes(op, 0))
+    {
+        return None;
+    }
+    // Inputs (E2, live-in-filtered) and outputs (E3) from this one parse.
+    let (inputs, outputs) = slice_signature(data, f, b, first_op, last_op);
+    let vars = data.def(f).variables();
+    // E5 — REFUSE a `&`-reference input/output.  A borrow's aliasing can't be safely
+    // re-expressed as a by-value parameter/return (the extracted call might copy where
+    // the original aliased), so rather than emit a subtly-wrong edit we offer nothing.
+    // Owned heap values (`vector`/`struct`/`text` by value) ARE safe: loft copies them
+    // into the parameter and delivers an in-out via the return.
+    if inputs
+        .iter()
+        .chain(outputs.iter())
+        .any(|&v| matches!(vars.tp(v), crate::data::Type::RefVar(_)))
+    {
+        return None;
+    }
+    let ty = |v: u16| data.type_name_str(vars.tp(v));
+    let params: Vec<String> = inputs
+        .iter()
+        .map(|&v| format!("{}: {}", vars.name(v), ty(v)))
+        .collect();
+    let out_names: Vec<String> = outputs.iter().map(|&v| vars.name(v).to_string()).collect();
+    let out_types: Vec<String> = outputs.iter().map(|&v| ty(v)).collect();
+    let args: Vec<String> = inputs.iter().map(|&v| vars.name(v).to_string()).collect();
+
+    // The selected source lines (verbatim) + the call-site indentation.
+    let lines: Vec<&str> = text.lines().collect();
+    let (lo, hi) = ((start_line - 1) as usize, (end_line - 1) as usize);
+    if hi >= lines.len() {
+        return None;
+    }
+    let body = lines[lo..=hi].join("\n");
+    let indent: String = lines[lo]
+        .chars()
+        .take_while(|c| c.is_whitespace())
+        .collect();
+
+    let ret_type = match out_types.len() {
+        0 => String::new(),
+        1 => format!(" -> {}", out_types[0]),
+        _ => format!(" -> ({})", out_types.join(", ")),
+    };
+    let ret_stmt = match out_names.len() {
+        0 => String::new(),
+        1 => format!("\n{indent}return {};", out_names[0]),
+        _ => format!("\n{indent}return ({});", out_names.join(", ")),
+    };
+    let new_function = format!(
+        "fn extracted({}){ret_type} {{\n{body}{ret_stmt}\n}}",
+        params.join(", ")
+    );
+    let call = match out_names.len() {
+        0 => format!("{indent}extracted({});", args.join(", ")),
+        1 => format!("{indent}{} = extracted({});", out_names[0], args.join(", ")),
+        _ => format!(
+            "{indent}({}) = extracted({});",
+            out_names.join(", "),
+            args.join(", ")
+        ),
+    };
+    Some(ExtractEdit {
+        new_function,
+        call,
+        start_line,
+        end_line,
+    })
+}
+
 /// `classify` label → LSP `CompletionItemKind`.
 fn completion_kind(kind: &str) -> u32 {
     match kind {

@@ -74,6 +74,47 @@ pub enum CoroutineStatus {
     Exhausted,
 }
 
+/// @PLN63 RX1 — a checkpoint of the execution-mutable [`State`] for the reverse-step ring: the
+/// heap ([`HeapSnapshot`](crate::database::HeapSnapshot)) plus every register a step moves.  The
+/// compile-time maps (`bytecode`, `vars`, `calls`, `line_numbers`, `const_refs`, …) are
+/// execution-invariant, so they are NOT captured.  Restoring one (`State::restore_checkpoint`)
+/// makes the state byte-identical to when it was taken — the basis for `step_back` (RX2).
+pub struct StepCheckpoint {
+    heap: crate::database::HeapSnapshot,
+    code_pos: u32,
+    call_stack: Vec<CallFrame>,
+    call_depth: u32,
+    stack_cur: DbRef,
+    stack_high: u32,
+    stack_pos: u32,
+    stack_cap_bytes: u32,
+    arguments: u16,
+    coroutines: Vec<Option<Box<CoroutineFrame>>>,
+    active_coroutines: Vec<usize>,
+}
+
+impl std::fmt::Debug for StepCheckpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "StepCheckpoint(pc={}, frames={})",
+            self.code_pos,
+            self.call_stack.len()
+        )
+    }
+}
+
+/// @PLN63 RX3 — the reverse-step ring depth (how many steps back are retained), from
+/// `LOFT_REVERSE_DEPTH`, defaulting to 200.  A non-positive / unparseable value → the default.
+fn reverse_depth_from_env() -> usize {
+    const DEFAULT_REVERSE_DEPTH: usize = 200;
+    std::env::var("LOFT_REVERSE_DEPTH")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_REVERSE_DEPTH)
+}
+
 /// Runtime state of a single coroutine instance (CO1.1).
 /// Holds the serialised stack and metadata needed to suspend and resume.
 #[derive(Clone, Debug)]
@@ -3221,7 +3262,14 @@ impl State {
         &self,
         expr: &str,
         data: &crate::data::Data,
-    ) -> Option<(u16, u32, u32, u32, u16)> {
+    ) -> Option<(
+        u16,
+        u32,
+        u32,
+        u32,
+        u16,
+        Option<crate::debugger::StackWatchFrame>,
+    )> {
         let (store_nr, rec, off, content) = if let Some(open) = expr.find('[') {
             let base = expr[..open].trim();
             if base.contains('.') {
@@ -3239,10 +3287,43 @@ impl State {
             let path: Vec<&str> = segs.collect();
             self.path_region(base, &path, data)?
         } else {
-            return None; // a bare local lives in a stack slot — not a stable watch target
+            // @PLN63 DB0 — a bare scalar local: watch its **stack** slot, bound to the
+            // current frame (dropped when that frame returns).  Unlike a heap region this
+            // isn't a stable target across frame exit, so it carries a `StackWatchFrame`.
+            let (rec, at, tp, _is_arg) = self.frame_slot(expr.trim(), data)?;
+            let content = Self::scalar_content(&tp)?;
+            let len = Self::scalar_len(content)?;
+            let frame = self.call_stack.last()?;
+            let watch_frame = crate::debugger::StackWatchFrame {
+                d_nr: frame.d_nr,
+                args_base: frame.args_base,
+                depth: u32::try_from(self.call_stack.len() - 1).ok()?,
+            };
+            return Some((
+                self.stack_cur.store_nr,
+                rec,
+                at,
+                len,
+                content,
+                Some(watch_frame),
+            ));
         };
         let len = Self::scalar_len(content)?;
-        Some((store_nr, rec, off, len, content))
+        Some((store_nr, rec, off, len, content, None))
+    }
+
+    /// The scalar primitive type number (the `Watchpoint.content` / `ShowDb` code) for a
+    /// watchable scalar `Type`, or `None` for a non-scalar (struct / vector / text / enum).
+    fn scalar_content(tp: &crate::data::Type) -> Option<u16> {
+        use crate::data::Type;
+        Some(match tp {
+            Type::Integer(_) => 0,
+            Type::Single => 2,
+            Type::Float => 3,
+            Type::Boolean => 4,
+            Type::Character => 6,
+            _ => return None,
+        })
     }
 
     /// @PLN16 M3 — set a **watchpoint** on the scalar heap region named by `expr`
@@ -3250,7 +3331,8 @@ impl State {
     /// pauses when a later write changes it.  Returns `false` for an unwatchable
     /// expression (a bare local, a non-scalar / null / out-of-range target).
     pub fn add_watchpoint(&mut self, expr: &str, data: &crate::data::Data) -> bool {
-        let Some((store_nr, rec, off, len, content)) = self.resolve_watch_region(expr, data) else {
+        let Some((store_nr, rec, off, len, content, frame)) = self.resolve_watch_region(expr, data)
+        else {
             return false;
         };
         let last = self.database.allocations[store_nr as usize].read_span(rec, off, len);
@@ -3262,6 +3344,7 @@ impl State {
             len,
             content,
             last,
+            frame,
         };
         self.enable_debug();
         if let Some(d) = self.debug.as_deref_mut() {
@@ -3275,6 +3358,20 @@ impl State {
     /// of a resumed run ([`debug_step`](Self::debug_step)).  Skips a watch whose store
     /// was freed (the value was deallocated) rather than reading stale memory.
     fn poll_watchpoints(&mut self) -> Option<crate::debugger::WatchHit> {
+        // @PLN63 DB1 — drop stack-local watches whose frame has returned (the slot is now
+        // dead / reused), BEFORE reading — so a popped local never fires a spurious hit.  A
+        // heap watch (`frame: None`) survives frame exit and is kept.
+        {
+            let call_stack = &self.call_stack;
+            if let Some(d) = self.debug.as_deref_mut() {
+                d.watchpoints.retain(|w| match w.frame {
+                    None => true,
+                    Some(f) => call_stack
+                        .get(f.depth as usize)
+                        .is_some_and(|c| c.d_nr == f.d_nr && c.args_base == f.args_base),
+                });
+            }
+        }
         let count = self.debug.as_deref().map_or(0, |d| d.watchpoints.len());
         for i in 0..count {
             let (store_nr, rec, off, len, content) = {
@@ -3336,6 +3433,87 @@ impl State {
         if let Some(d) = self.debug.as_mut() {
             d.paused = Some(hit);
         }
+    }
+
+    /// @PLN63 RX1 — capture the execution-mutable state (heap + registers) for the reverse-step
+    /// ring.  `None` when a durable (file-backed) store is live — its file cannot be reversed,
+    /// so reverse-stepping is refused for that session (a normal debug session is all
+    /// in-memory).  Read-only; take it at a step boundary.
+    #[must_use]
+    pub fn snapshot_checkpoint(&self) -> Option<StepCheckpoint> {
+        Some(StepCheckpoint {
+            heap: self.database.snapshot_heap()?,
+            code_pos: self.code_pos,
+            call_stack: self.call_stack.clone(),
+            call_depth: self.call_depth,
+            stack_cur: self.stack_cur,
+            stack_high: self.stack_high,
+            stack_pos: self.stack_pos,
+            stack_cap_bytes: self.stack_cap_bytes,
+            arguments: self.arguments,
+            coroutines: self.coroutines.clone(),
+            active_coroutines: self.active_coroutines.clone(),
+        })
+    }
+
+    /// @PLN63 RX1 — restore a [`StepCheckpoint`]: the heap bytes + every execution register, so
+    /// the state is byte-identical to when the checkpoint was taken.  The checkpoint is left
+    /// intact (copied, not consumed).  Refresh the paused frame after, so the drill-down
+    /// reflects the restored values.
+    pub fn restore_checkpoint(&mut self, cp: &StepCheckpoint) {
+        self.database.restore_heap(&cp.heap);
+        self.code_pos = cp.code_pos;
+        self.call_stack.clone_from(&cp.call_stack);
+        self.call_depth = cp.call_depth;
+        self.stack_cur = cp.stack_cur;
+        self.stack_high = cp.stack_high;
+        self.stack_pos = cp.stack_pos;
+        self.stack_cap_bytes = cp.stack_cap_bytes;
+        self.arguments = cp.arguments;
+        self.coroutines.clone_from(&cp.coroutines);
+        self.active_coroutines.clone_from(&cp.active_coroutines);
+    }
+
+    /// @PLN63 RX2 — arm (or disarm) reverse stepping: while on, each `debug_step` checkpoints
+    /// the pre-step state so `step_back` can return to it.  Off costs nothing.
+    pub fn set_reverse(&mut self, on: bool) {
+        self.enable_debug();
+        if let Some(d) = self.debug.as_mut() {
+            d.reverse = on;
+            if on {
+                if d.reverse_cap == 0 {
+                    d.reverse_cap = reverse_depth_from_env();
+                }
+            } else {
+                d.reverse_ring.clear();
+            }
+        }
+    }
+
+    /// @PLN63 RX3 — set the reverse ring's capacity (the reversible depth, ≥ 1), trimming the
+    /// oldest steps if it shrinks below the current length.  The DAP layer / tests use this to
+    /// override `LOFT_REVERSE_DEPTH`.
+    pub fn set_reverse_depth(&mut self, depth: usize) {
+        self.enable_debug();
+        if let Some(d) = self.debug.as_mut() {
+            d.reverse_cap = depth.max(1);
+            while d.reverse_ring.len() > d.reverse_cap {
+                d.reverse_ring.pop_front();
+            }
+        }
+    }
+
+    /// @PLN63 RX2 — step **backward**: pop the most recent checkpoint and restore it (heap +
+    /// registers), landing on exactly the state before the last forward step; refresh the
+    /// paused frame so the drill-down reflects it.  Returns `false` when the ring is empty
+    /// (no earlier state retained) — a clean floor, never a wrong state.
+    pub fn step_back(&mut self, data: &crate::data::Data) -> bool {
+        let Some(cp) = self.debug.as_mut().and_then(|d| d.reverse_ring.pop_back()) else {
+            return false;
+        };
+        self.restore_checkpoint(&cp);
+        self.refresh_paused_frame(data);
+        true
     }
 
     /// Execute-loop hook: if `pc` is a registered breakpoint, capture the live
@@ -3418,6 +3596,7 @@ impl State {
             return crate::debugger::BreakHit {
                 function: "?".to_string(),
                 locals: Vec::new(),
+                line: self.line_at(pc),
             };
         }
         let raw = data.def(d_nr).name();
@@ -3472,7 +3651,11 @@ impl State {
                 )
             })
             .collect();
-        crate::debugger::BreakHit { function, locals }
+        crate::debugger::BreakHit {
+            function,
+            locals,
+            line: self.line_at(pc),
+        }
     }
 
     /// Render a frame variable at frame offset `off` (its `vars.stack(i)`) of type
@@ -4410,6 +4593,19 @@ impl State {
         data: &crate::data::Data,
     ) -> bool {
         use crate::debugger::StepMode;
+        // @PLN63 RX2 — when reverse-stepping is armed, checkpoint the pre-step state before
+        // executing anything, so `step_back` can restore it.  Skipped (nothing to reverse to)
+        // when a durable store makes the heap non-snapshotable.
+        if self.debug.as_ref().is_some_and(|d| d.reverse)
+            && let Some(cp) = self.snapshot_checkpoint()
+            && let Some(d) = self.debug.as_mut()
+        {
+            // RX3 — bounded ring: a push past the cap drops the oldest step.
+            if d.reverse_cap > 0 && d.reverse_ring.len() >= d.reverse_cap {
+                d.reverse_ring.pop_front();
+            }
+            d.reverse_ring.push_back(cp);
+        }
         self.database.frame_yield = false;
         let start_line = self.line_at(self.code_pos);
         let start_depth = self.call_stack.len();

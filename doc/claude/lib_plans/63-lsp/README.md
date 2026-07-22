@@ -362,7 +362,7 @@ operation a working developer expects from a "real language" IDE.
 | `textDocument/rename` | Rename in-place across the workspace; `prepareRename` first to validate the target is a renamable identifier (not a keyword / native fn). |
 | `textDocument/semanticTokens` | Type-aware token classification: function vs. method vs. constant vs. field, mutable vs. const, locals vs. parameters.  Supersedes the SH.1 TextMate grammar's structural-only highlighting. |
 | `textDocument/codeAction` | Quick-fixes: "add missing field", "rename to camelCase", "import `bar`".  Each diagnostic with a known fix produces an action. |
-| `textDocument/codeAction` (`refactor.extract` — **extract function**) | Turn a SELECTION of statements into a new function: data-flow over the selection computes which locals are read-before-write (→ parameters) and which are written-then-used-after (→ return value(s); loft tuples cover multiple outputs), synthesize the fn (name + signature + body) and replace the selection with a call. **Protocol side is trivial** (a `CodeAction` carrying a `WorkspaceEdit`); the cost is the intra-function data-flow ENGINE, which reads the parser's per-fn variable/scope tables (`Definition.variables: Function`). loft specifics: honor the deps/ownership model on extracted params; handle `self` when inside a method; refuse across `#rust`/`#native` bodies. **L effort — not started; the most involved item.** |
+| `textDocument/codeAction` (`refactor.extract` — **extract function**) | Turn a SELECTION of statements into a new function: data-flow over the selection computes which locals are read-before-write (→ parameters) and which are written-then-used-after (→ return value(s); loft tuples cover multiple outputs), synthesize the fn (name + signature + body) and replace the selection with a call. **Protocol side is trivial** (a `CodeAction` carrying a `WorkspaceEdit`); the cost is the intra-function data-flow ENGINE, which reads the parser's per-fn variable/scope tables (`Definition.variables: Function`). loft specifics: honor the deps/ownership model on extracted params; handle `self` when inside a method; refuse across `#rust`/`#native` bodies. **DONE — the E0–E6 spine shipped ([EXTRACT.md](EXTRACT.md)): `lsp::extract_function` + the codeAction, behaviour-preserving (apply → re-parse → run-identical gates) for straight-line + single-loop over scalars/owned-heap incl. methods; refuses `&`-refs (E5) + escaping control flow (E6). Follow-ups: expression extraction, read-only refs, unique naming.** |
 | `textDocument/inlayHint` | Inline type annotations: parameter names at call sites, inferred types of `let`-style locals. |
 | `textDocument/formatting` | **DONE** (shipped ahead of the rest of LSP.2) — runs the SAME formatter the `loft fmt` CLI uses (`tools/fmt/whole.loft`, compiled once via `loft::lsp::Formatter`), returns one whole-document `TextEdit` (none when already tidy). Gate: `tests/lsp_transport.rs::formatting_returns_a_whole_document_edit_and_noops_when_tidy`. (The old `loft --format` Rust formatter was removed; `loft fmt` is the entry point.) |
 
@@ -507,7 +507,8 @@ Smaller follow-ups (all DONE): workspace-index invalidation on `didSave`; `TagIn
 quick-fix (step B).  Remaining follow-up: the strict-index lint's codeAction — a STRUCTURAL rewrite
 (`for i in 0..len(s){s[i]}` → `for c in s`), not a token swap, so it needs a wider range + synthesized
 edit.  **Extract-function** (`refactor.extract`, the table row above) stays L-effort and separate —
-it needs the data-flow engine, not just wiring.
+it needs the data-flow engine, not just wiring; its **design is [EXTRACT.md](EXTRACT.md)** (the
+E0–E6 spine + the parser code points the engine reads).
 
 ### Incremental parsing
 
@@ -539,22 +540,40 @@ Skip until LSP.1 measurements show real users hitting the 10k-line wall.
 editor.  Set a breakpoint in `.loft` source, run, hit the breakpoint,
 inspect locals, step.
 
+**Full design: [DAP.md](DAP.md)** — the DAP⇆RPC map, envelope mechanics
+(`seq`/`request_seq`, handshake ordering, `variablesReference`), worked message
+translations, the code-point table over `rpc::handle`, and the D0–D6 gates. The
+surface table + spine below are its summary.
+
 ### Surface
 
-| Request | Behaviour |
+This table is the **as-built** v1 surface (D0–D6, [DAP.md](DAP.md)). The debuggee runs
+**in-process** inside the adapter — no child process, no port (Decision 1); every request
+is a translation over the `--rpc` engine's one dispatch chokepoint.
+
+| Request | Behaviour (as built) |
 |---|---|
-| `initialize` | Capabilities: `supportsConfigurationDoneRequest = true`, `supportsConditionalBreakpoints = true`, `supportsHitConditionalBreakpoints = true`, `supportsExceptionInfoRequest = true`. |
-| `launch` | Spawn a child loft interpreter process with `LOFT_DAP_PORT=$port` env var; the interpreter connects back and registers as the debuggee. |
-| `setBreakpoints` | Translate `.loft` `(file, line)` to a bytecode position; install a breakpoint flag on that opcode. |
-| `configurationDone` | Resume the debuggee from its initial pause. |
-| `threads` | Return the single thread (or one per parallel worker). |
-| `stackTrace` | Return the `vector<StackFrame>` from TR1.3. |
-| `scopes` | Per frame: `Locals`, `Arguments`, `Globals`. |
-| `variables` | Walk the named slots in the requested scope; format using `Data` types. |
-| `next` / `stepIn` / `stepOut` | Single-step at the source-line granularity. |
-| `continue` / `pause` | Run / interrupt. |
-| `evaluate` | Evaluate a small loft expression in the current frame's scope (LSP.3 v1 only supports identifier / field-access / call). |
-| `disconnect` | Tear down the debuggee. |
+| `initialize` | Capabilities: `supportsConfigurationDoneRequest`, `supportsConditionalBreakpoints`, `supportsEvaluateForHovers`, `supportsTerminateRequest`, `supportsSetVariable`. **NOT** `supportsHitConditionalBreakpoints` (no engine hit-count) nor `supportsStepBack` (see [DAP_ADVANCED.md](DAP_ADVANCED.md)). |
+| `launch {program, stopOnEntry?}` | Load the program in-process (RPC `launch`, no run); the run is deferred to `configurationDone`. `stopOnEntry` installs a function breakpoint at `main`'s entry. |
+| `setBreakpoints {source, breakpoints:[{line, condition?}]}` | RPC `setBreakpoints`; each line comes back `verified` (breakable in the loaded program) or not. Conditions pass straight through to the engine's resolve loop. |
+| `configurationDone` | The deferred launch — RPC `run` (entry `main`); a hit → `stopped`, else `terminated`. |
+| `threads` | The single synthetic thread `{id:1, name:"main"}` (one-per-worker `par` is a follow-up). |
+| `stackTrace` | **The full runtime call stack** ([DAP_ADVANCED.md](DAP_ADVANCED.md) SF, built), innermost first, each frame at its parked / call-site line (the `replmain_*` wrapper filtered). |
+| `scopes` | A `Locals` scope for the requested frame; the top frame's is VE-expandable, a caller frame's locals are leaves (eval is top-frame-scoped). |
+| `variables` | The frame's locals from the last stop (a stale reference → empty), **with structured expansion** ([DAP_ADVANCED.md](DAP_ADVANCED.md) VE, built): a struct/vector value drills into its children; a scalar is a leaf. |
+| `next` / `stepIn` / `stepOut` | RPC `stepOver`/`stepIn`/`stepOut` → `stopped{reason:"step"}`. |
+| `continue` | RPC `continue` → the next stop or `terminated`. `pause` is refused (no async interrupt). |
+| `dataBreakpointInfo` / `setDataBreakpoints` | **Data breakpoints** ([DAP_ADVANCED.md](DAP_ADVANCED.md) DB, built): watch a scalar local (or a nested field/element) via the engine's watchpoints; a change stops with `reason:"data breakpoint"`. Set at a stop only. |
+| `stepBack` / `reverseContinue` | **Reverse execution** ([DAP_ADVANCED.md](DAP_ADVANCED.md) RX, built): a bounded snapshot ring restores the prior state byte-identically. Interpreter-only; I/O not reversed; depth `LOFT_REVERSE_DEPTH` (default 200). |
+| `evaluate {expression, frameId, context}` | RPC `eval` in the frame's scope (identifier / field-access / call). |
+| `setVariable` / `setExpression` | RPC `setValue` → the refreshed frame value. |
+| `disconnect` / `terminate` | RPC `disconnect`; `terminated`, loop ends. |
+
+**Advanced tools** ([DAP_ADVANCED.md](DAP_ADVANCED.md), each a small-step spine grounded in
+probe findings) — **all built**: structured **v**ariable **e**xpansion (VE), multi-**f**rame
+**s**tack (SF), **d**ata **b**reakpoints via watchpoints (DB), and **r**everse e**x**ecution
+(RX, a bounded snapshot ring). Only `pause` (async interrupt) and multi-worker `par` threads
+remain honest refusals.
 
 ### What is already built — loft-dap is a TRANSLATION, not a new debugger
 

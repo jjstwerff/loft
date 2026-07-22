@@ -1183,6 +1183,10 @@ pub struct ReplSession {
     /// user can inspect the frame, edit a value, and step.  `None` unless paused.
     /// Boxed because `State` is large and the paused case is rare.
     paused: Option<Box<State>>,
+    /// @PLN63 RX — whether reverse stepping is armed for this session.  Applied to the
+    /// paused `State` before each step (so its ring fills), so a later `step_back` can
+    /// reverse it.  Off by default (a normal debug session pays no snapshot cost).
+    reverse_armed: bool,
     /// @PLN16 M5e slice 3 — the editor's **write sandbox**: the canonical path of the one
     /// file the browser may save back to (the `--serve` target).  `None` (e.g. `--rpc`)
     /// rejects every `writeFile`.  Single-file for now; a workspace-root form lands with
@@ -1226,6 +1230,7 @@ impl ReplSession {
             paused: None,
             workspace_file: None,
             game: None,
+            reverse_armed: false,
         })
     }
 
@@ -1267,6 +1272,7 @@ impl ReplSession {
             paused: None,
             workspace_file: None,
             game: None,
+            reverse_armed: false,
         }
     }
 
@@ -1938,6 +1944,17 @@ impl ReplSession {
         self.paused.as_deref().and_then(State::paused_frame)
     }
 
+    /// The full runtime call stack at the current suspension (innermost frame first), each
+    /// frame carrying its function, source line, and live locals — the multi-frame
+    /// `stackTrace` source (@PLN63 SF).  Empty when not paused.
+    #[must_use]
+    pub fn paused_stack(&self) -> Vec<crate::debugger::BreakHit> {
+        self.paused
+            .as_deref()
+            .map(|s| s.break_stack(&self.parser.data))
+            .unwrap_or_default()
+    }
+
     /// The source line the current suspension is stopped on, or `None` if not paused —
     /// drives the browser debugger's current-line marker (it moves as you step).
     #[must_use]
@@ -2172,14 +2189,40 @@ impl ReplSession {
     /// resolution — that is [`resolve_pause`](Self::resolve_pause)'s job).  Returns
     /// whether still paused.
     fn resume_continue_with(&mut self, mode: crate::debugger::StepMode) -> bool {
+        let armed = self.reverse_armed;
         let Some(state) = self.paused.as_deref_mut() else {
             return false;
         };
+        // @PLN63 RX — keep the running frame's reverse ring armed per the session pref, so a
+        // forward step checkpoints its pre-step state (a no-op cost when reverse is off).
+        state.set_reverse(armed);
         let still = state.debug_step(mode, &self.parser.data);
         if !still {
             self.paused = None;
         }
         still
+    }
+
+    /// @PLN63 RX — arm (or disarm) reverse stepping for this session.  Stored as a pref and
+    /// applied to the live paused frame + every subsequent step, so [`debug_step_back`] can
+    /// reverse them.  Off by default (a normal debug session pays no snapshot cost).
+    pub fn set_reverse(&mut self, on: bool) {
+        self.reverse_armed = on;
+        if let Some(s) = self.paused.as_deref_mut() {
+            s.set_reverse(on);
+        }
+    }
+
+    /// @PLN63 RX — step **backward** one step: restore the most recent checkpoint (heap +
+    /// registers) so the paused frame returns to the state before the last forward step.
+    /// Returns `false` at the ring floor (nothing earlier retained); the frame stays paused
+    /// and unchanged either way.
+    pub fn debug_step_back(&mut self) -> bool {
+        self.trace_output.clear();
+        match self.paused.as_deref_mut() {
+            Some(s) => s.step_back(&self.parser.data),
+            None => false,
+        }
     }
 
     /// @PLN16 rich-bp — after a pause, honour the breakpoint's facets: a conditional

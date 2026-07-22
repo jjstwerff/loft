@@ -1192,3 +1192,266 @@ fn cooperative_pause_yields_control_then_resumes_to_completion() {
         "resume completed cleanly (no fault)"
     );
 }
+
+/// The bytes a per-step heap snapshot would copy — `clone_locked` copies `len * 8` bytes per
+/// store, so the whole-heap cost is that summed over every allocation (@PLN63 RX0 sizing).
+fn rx0_snapshot_bytes(state: &State) -> usize {
+    state
+        .database
+        .allocations
+        .iter()
+        .map(|s| s.len() as usize * 8)
+        .sum()
+}
+
+/// @PLN63 RX0 — the falsification + sizing probe for reverse execution (DAP_ADVANCED § RX).
+///
+/// (a) FALSIFICATION: reverse execution is ABSENT today.  After a forward step, `debug_undo`
+///     (the only reverse API) cannot get back — it reverts an interactive-EDIT journal, which
+///     a step leaves empty.  This stays true after RX lands (RX adds a *separate* `step_back`
+///     ring; `debug_undo` remains edit-scoped), so the probe is permanent, not throwaway.
+/// (b) SIZING: prints the bytes a per-step heap snapshot (the RX ring's checkpoint) would
+///     copy — the number that gates whether the full-heap-snapshot ring ships as-is or needs
+///     the copy-on-write refinement.  Run with `--nocapture` to read it.
+#[test]
+fn rx0_reverse_execution_absent_and_snapshot_size() {
+    let mut p = repl();
+    // A step that MUTATES existing heap in place (`v[0] = 99`) — the case the RX invariant
+    // cares about (a store write, not just an allocation).  Pause at line 3, v already built.
+    let mut state = run_to_pause(
+        &mut p,
+        &["fn build() -> integer {\n  v = [10, 20, 30];\n  v[0] = 99;\n  v[0]\n}"],
+        "build()",
+        "build",
+        3,
+    );
+    let line_before = state.paused_line();
+    let heap_before = rx0_snapshot_bytes(&state);
+
+    // Step over the mutating line — it advances and writes the heap.
+    assert!(
+        state.debug_step(StepMode::Over, &p.data),
+        "the step re-pauses on a new line"
+    );
+    let line_after = state.paused_line();
+    let heap_after = rx0_snapshot_bytes(&state);
+    assert_ne!(line_before, line_after, "the step advanced the line");
+
+    // (a) Reverse execution is absent: undo after a step is a no-op, and the state stays put.
+    assert!(
+        !state.debug_undo(),
+        "no reverse execution today — undo cannot reverse a step (it is edit-scoped)"
+    );
+    assert_eq!(
+        state.paused_line(),
+        line_after,
+        "the state did NOT move back — confirming the gap RX fills"
+    );
+
+    // (b) The per-step heap-snapshot cost, for the record (read with --nocapture).
+    eprintln!(
+        "RX0 heap-snapshot bytes: before-step={heap_before}, after-step={heap_after} \
+         (allocations={})",
+        state.database.allocations.len()
+    );
+    assert!(
+        heap_before > 0 && heap_after > 0,
+        "there is heap to snapshot"
+    );
+    // A tiny program's whole heap is far under a megabyte — the snapshot ring is cheap here;
+    // the bound is a canary, not a target (a large-heap program is measured separately).
+    assert!(
+        heap_after < 4 * 1024 * 1024,
+        "the snapshot is bounded: {heap_after} bytes"
+    );
+}
+
+/// @PLN63 RX1 — the checkpoint primitive: a snapshot captures the heap + execution registers,
+/// and a restore makes the state byte-identical to when it was taken.  Mutate a heap value AND
+/// registers after the snapshot, restore, and assert BOTH reverted; the checkpoint is reusable.
+#[test]
+fn rx1_checkpoint_restores_heap_and_registers() {
+    let mut p = repl();
+    // Pause with the arg `n` and a heap vector `v` both live (line 3, `n + v[0]`).
+    let mut state = run_to_pause(
+        &mut p,
+        &["fn f(n: integer) -> integer {\n  v = [1, 2, 3];\n  n + v[0]\n}"],
+        "f(42)",
+        "f",
+        3,
+    );
+    let cp = state
+        .snapshot_checkpoint()
+        .expect("an all-in-memory heap snapshots");
+    let code_pos_at_snapshot = state.code_pos;
+    let frames_at_snapshot = state.call_stack.len();
+
+    // MUTATE the heap: edit the stack-local `n` (writes the stack store).
+    assert!(state.set_frame_value("n", 999, &p.data), "edit n = 999");
+    state.refresh_paused_frame(&p.data);
+    assert!(
+        n_is(&state, "999"),
+        "the edit took: {:?}",
+        state.paused_frame()
+    );
+    // MUTATE registers: advance the PC and push a synthetic frame.
+    state.code_pos += 8;
+    let dup = state.call_stack.last().cloned().expect("a live frame");
+    state.call_stack.push(dup);
+
+    // RESTORE — heap + registers revert to the snapshot.
+    state.restore_checkpoint(&cp);
+    state.refresh_paused_frame(&p.data);
+    assert!(
+        n_is(&state, "42"),
+        "heap restored — n back to 42: {:?}",
+        state.paused_frame()
+    );
+    assert_eq!(state.code_pos, code_pos_at_snapshot, "code_pos restored");
+    assert_eq!(
+        state.call_stack.len(),
+        frames_at_snapshot,
+        "call_stack restored"
+    );
+
+    // The checkpoint is left intact (copied, not consumed) — a second restore also works.
+    state.code_pos += 16;
+    state.restore_checkpoint(&cp);
+    assert_eq!(
+        state.code_pos, code_pos_at_snapshot,
+        "checkpoint is reusable"
+    );
+}
+
+/// Whether the paused frame's local `n` currently renders as `val`.
+fn n_is(state: &State, val: &str) -> bool {
+    state
+        .paused_frame()
+        .is_some_and(|f| f.locals.iter().any(|(k, v)| k == "n" && v == val))
+}
+
+/// @PLN63 RX2 — `step_back` reverses a forward step: with reverse armed, stepping over a
+/// heap-mutating line then stepping back returns to the exact prior state — line + local value
+/// restored (byte-level).  This is the RX0 falsification FLIPPED: what `debug_undo` could not
+/// do, the snapshot ring does.  A step_back past the floor is a clean no-op.
+#[test]
+fn rx2_step_back_reverses_a_step() {
+    let mut p = repl();
+    // `a` is a scalar local mutated by the step; it is read on lines 3 AND 5, so its liveness
+    // range spans the mutation and it stays visible at both stops (avoiding the read-dominated
+    // under-show).  `b` keeps the frame non-trivial.
+    let mut state = run_to_pause(
+        &mut p,
+        &["fn build() -> integer {\n  a = 5;\n  b = a;\n  a = 99;\n  a + b\n}"],
+        "build()",
+        "build",
+        4, // pause at `a = 99;` — a == 5, not yet mutated
+    );
+    state.set_reverse(true);
+    let read_a = |s: &State| {
+        s.paused_frame().and_then(|f| {
+            f.locals
+                .iter()
+                .find(|(k, _)| k == "a")
+                .map(|(_, v)| v.clone())
+        })
+    };
+    let line_before = state.paused_line();
+    assert_eq!(
+        read_a(&state).as_deref(),
+        Some("5"),
+        "a == 5 before the step"
+    );
+
+    // Step over the mutating line → a becomes 99, the line advances.
+    assert!(
+        state.debug_step(StepMode::Over, &p.data),
+        "the step re-pauses"
+    );
+    assert_ne!(
+        state.paused_line(),
+        line_before,
+        "the step advanced the line"
+    );
+    assert_eq!(
+        read_a(&state).as_deref(),
+        Some("99"),
+        "the step mutated a to 99"
+    );
+
+    // STEP BACK — line + local value return to exactly the pre-step state.
+    assert!(state.step_back(&p.data), "step_back succeeds");
+    assert_eq!(state.paused_line(), line_before, "the line reverted");
+    assert_eq!(
+        read_a(&state).as_deref(),
+        Some("5"),
+        "a reverted to its pre-step value (byte-level heap restore)"
+    );
+
+    // The ring floor: nothing earlier retained → a clean no-op, state unchanged.
+    assert!(
+        !state.step_back(&p.data),
+        "no earlier state → clean floor, no corruption"
+    );
+    assert_eq!(
+        state.paused_line(),
+        line_before,
+        "state unchanged at the floor"
+    );
+}
+
+/// @PLN63 RX3 — the reverse ring is BOUNDED to its depth: with a cap of 2, three forward steps
+/// drop the oldest, so exactly two step_backs succeed and the third hits a clean floor — and
+/// the dropped (oldest) step is NOT reachable, proving the cap held (no unbounded growth, no
+/// corruption).
+#[test]
+fn rx3_ring_is_bounded_to_the_depth() {
+    let mut p = repl();
+    // Each line READS `a`, so none is a dead store elided by codegen — every line is a step.
+    let mut state = run_to_pause(
+        &mut p,
+        &[
+            "fn build() -> integer {\n  a = 1;\n  a = a + 1;\n  a = a + 2;\n  a = a + 4;\n  a + 0\n}",
+        ],
+        "build()",
+        "build",
+        2, // pause at `a = 1;`
+    );
+    state.set_reverse(true);
+    state.set_reverse_depth(2); // retain only the last 2 steps
+    let origin_line = state.paused_line();
+
+    // Three forward steps → the ring keeps only the most recent 2 (the oldest is dropped).
+    for _ in 0..3 {
+        assert!(
+            state.debug_step(StepMode::Over, &p.data),
+            "each step re-pauses"
+        );
+    }
+
+    // Exactly two step_backs succeed (the retained window); the third hits the bounded floor.
+    assert!(
+        state.step_back(&p.data),
+        "step back 1 of 2 (within the cap)"
+    );
+    assert!(
+        state.step_back(&p.data),
+        "step back 2 of 2 (within the cap)"
+    );
+    let floor_line = state.paused_line();
+    assert!(
+        !state.step_back(&p.data),
+        "the 3rd step_back hits the bounded floor — a clean no-op"
+    );
+    assert_eq!(
+        state.paused_line(),
+        floor_line,
+        "state unchanged at the floor"
+    );
+
+    // The oldest step was dropped by the cap, so the origin line is NOT reachable.
+    assert_ne!(
+        floor_line, origin_line,
+        "the dropped step (the origin line) is unreachable — the cap held"
+    );
+}
