@@ -1185,9 +1185,41 @@ candidates for `==`:
   Full design + decision history: [`plans/17-three-state-boolean/`](plans/17-three-state-boolean/README.md).
 
 **Revisit when.** Never, barring a fundamental change to the in-band-sentinel memory
-model.  (Open, non-boolean-specific tail: the construction-vs-parse default for an
-*omitted* field — `S{}` gives the zero value, `parse` gives null — affects integer too;
-tracked separately, not part of this decision.)
+model.  (The non-boolean tail — the construction-vs-parse default for an *omitted* field —
+is resolved for enums by @PLN116 below: a bare enum field has no zero value, so it is a
+compile error rather than a silent zero-fill.  A scalar's zero-fill stays valid: `0` is a
+real integer, unlike an enum's `0` which is null.)
+
+---
+
+## @PLN116 — the `x?` default-fallback operator + enum-field non-null soundness
+
+**Decision.** (1) **Notation:** the default-fallback is postfix `?` (`x?`), tightest
+precedence — not `?? _` or a named form.  loft has no exceptions / early-return-on-null, so
+`x?` carries no hidden control flow (local, total, value-in-value-out), and `.` already
+null-propagates (C80), so both neighbouring `?`-slots are vacant.  `??` lexes greedily over
+`?`, so `a ?? b?` is `a ?? (b?)`.
+
+(2) **One default predicate** (`has_default`) feeds BOTH `x?` and the `S{}` zero value —
+there is never a second notion of "T's default".
+
+(3) **A bare enum field in a record has no default.**  An enum's 0 is its null/undefined
+value (variants are 1-based), so zero-filling a *non-null* enum field puts null into a
+non-null slot — the very unsoundness the null model forbids elsewhere (a scalar's `0` is a
+valid value; an enum's `0` is the *absence* of one).  So a bare (non-`Optional`) enum field
+with no `= expr` leaves the record with **no default**: `x?` on it and `S{}` omitting it are
+BOTH compile errors.  A *bare* enum still discharges to its first variant (`x?` on `E?`); a
+genuinely `Optional` enum field (`Color?`) defaults `null`.
+
+**Why now (pre-1).** This is a contract-1 soundness fix: after =1, compatibility freezes it
+forever.  Blast radius was tiny — three in-repo defaults where the old zero-fill was relied
+on (`File.format = NotExists`, `Lexer.scanned = Unknown`, `Definition.structure =
+Function`), each overwritten before any read.
+
+**Revisit when.** The marked-default-variant marker (let an enum nominate its own default
+so a bare field may default to it) lands — an additive extension, not a change to this rule.
+
+Full design + closure record: [`plans/116-default-fallback-operator/`](plans/116-default-fallback-operator/README.md).
 
 ---
 

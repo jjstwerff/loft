@@ -9,6 +9,11 @@ Tracks [`loft-lang/plans#116`](https://github.com/loft-lang/plans/issues/116) (`
 
 ## Status
 
+**DONE 2026-07-22 (both backends).** Reference for the operator itself now lives in
+[`LOFT.md` § `x?`](../../LOFT.md); the enum-field non-null-soundness decision in
+[`DESIGN_DECISIONS.md` § @PLN116](../../DESIGN_DECISIONS.md). The rest of this file is the
+closure record.
+
 **Landed (both backends).** The postfix `x?` operator ships as sugar for
 `x ?? construct_default(T)`: it parses in the `parse_part` postfix loop (tightest
 precedence, `parse_part` → `handle_default_fallback`), and reuses the whole `??` emission
@@ -24,20 +29,25 @@ The single predicate is `Data::has_default` (`src/data.rs`) + `Parser::build_def
 (`src/parser/operators.rs`); `to_default`'s `character` gap (`Value::Null` →
 `Value::Int(0)` = `'\0'`) was fixed on the way.
 
-**Residuals (deferred, low risk):**
-- **`S{}` enum-field unification (arc B/D, open-Q 1/2).** `x?` on a bare enum yields the
-  first-defined variant; an *omitted enum field* in `S{}` still gets discriminant 0
-  (`object_init`/`to_default`). Unifying them means flipping `to_default`'s enum arm
-  (0 → first variant), which changes every existing `S{}`-with-enum-field — a
-  compatibility-sensitive flip the plan itself flags as "verify + measure the suite"
-  before choosing. `x?` on a *record* already agrees with `S{}` by construction (it
-  sub-parses `S {}`), so the load-bearing "S{} vs x? agreement" cell passes; only the
-  bare-enum-vs-enum-field default diverges. Deferred pending owner sign-off.
-- **Inherited `??` gaps (not `x?`-specific — `x?` desugars faithfully).** `??` (hence
-  `x?`) does not discharge a nullable *struct field* (`p.field?` on a `Point?` field — the
-  `__nullable<S>` representation), and a *parenthesised float division* `(a/b)?` keeps
-  `inf` (the div→nullable rewrite doesn't reach a paren-wrapped op). Scalar/enum/text
-  nullable fields, vector-OOB, and integer division all discharge correctly.
+**Enum-field non-null soundness (arc B/D — RESOLVED, a contract-1 fix).** The open
+question "may a record silently default an enum field?" is answered **no**. An enum's 0 is
+its null/undefined value (variants are 1-based), so zero-filling a *non-null* enum field
+put null into a non-null slot — a soundness bug the null model otherwise forbids, and one
+that would freeze forever at =1. The one `has_default` rule now rejects a bare
+(non-`Optional`) enum field with no `= expr`: **both** `x?` on such a record **and** `S{}`
+omitting the field are compile errors (`object_init` enforces the `S{}` half). A *bare*
+enum still discharges to its first variant (`x?` on `E?`); a genuinely `Optional` enum
+field (`Color?`) still defaults `null`. This makes `S{}` and `x?` genuinely share one
+predicate (the invariant the plan protects). In-repo defaults added where the old zero-fill
+was relied on (all overwritten before read): `File.format = NotExists`, `Lexer.scanned =
+Unknown`, `Definition.structure = Function`. Blast radius was tiny (1 stdlib field + 2
+libs); full suite green.
+
+**Inherited `??` gaps (not `x?`-specific — `x?` desugars faithfully).** `??` (hence
+`x?`) does not discharge a nullable *struct field* (`p.field?` on a `Point?` field — the
+`__nullable<S>` representation), and a *parenthesised float division* `(a/b)?` keeps
+`inf` (the div→nullable rewrite doesn't reach a paren-wrapped op). Scalar/enum/text
+nullable fields, vector-OOB, and integer division all discharge correctly.
 
 ## Goal
 
@@ -108,9 +118,9 @@ for the same type — the proof that the predicate has one home.
 | Item | Concern | Status |
 |---|---|---|
 | **A** — `has_default` / `construct_default` | the single recursive predicate + value builder; `Data::has_default` + `Parser::build_default`, reusing `to_default` (char gap fixed) / `object_init` | **Done** |
-| **B** — enum default | first-defined variant via `emit_variant_value`. Marked-default marker + the `S{}` enum-field flip **deferred** (see Residuals) | Partial |
+| **B** — enum default | bare enum → first-defined variant via `emit_variant_value`; a bare enum FIELD in a record needs an explicit choice (non-null soundness). Marked-default-variant marker still open | **Done** |
 | **C** — parse + desugar | postfix `?` in `parse_part` (tightest); lexer greedy `??` over `?` confirmed (2-char match); desugars via the `??` path; typing = `has_default` | **Done** |
-| **D** — the compile error + `S{}` consistency | error names the culprit field + the three remedies (a safety net — current loft can't declare a no-default field). `S{}` NOT tightened; `x?`-on-record agrees via sub-parse | **Done** |
+| **D** — the compile error + `S{}` consistency | `x?` AND `S{}` share the one `has_default` rule — both reject a bare-enum-field record; error names the culprit + remedies | **Done** |
 | **E** — diagnostics | redundant-`?` warning (same authority as redundant-`??`: `expr_not_null` + type) | **Done** |
 | **F** — both backends + tests | bytecode-identical to `x ?? <default>` on both; matrix graduated to `tests/scripts/116-default-fallback-operator.loft` | **Done** |
 

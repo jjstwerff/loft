@@ -146,6 +146,21 @@ graduate a representative sibling from the same cluster instead.
 
 ## Closing or deferring a plan
 
+**Close the moment the work is FINISHED — do NOT gate on merging to main.**  "Finished"
+means design + build + tests + docs are all done (on the branch); at *that* moment the plan
+closes.  A plan issue is a claim about the DESIGN being settled and delivered, not about the
+commit having reached the trunk — the code lands on main later, on its own clock, usually
+**batched** with other work.  So:
+
+- The doc-side closing below (trim the README, move reference content, rewrite links, swap
+  the label + close the issue) is **doc-only work that does not need the code on main** —
+  do it when the work is finished.
+- **Close plans in a batch, never a PR-per-plan.**  A ~30-min PR/CI cycle to close a single
+  plan is waste; bundle the closing doc-changes (across several plans, even unrelated) into
+  the next substantive push (`CLAUDE.md` § no-cycle-for-trivial-docs / bundle-subjects).
+- Because the close is a **hand-close** (issue closed before/independent of a `Closes
+  @PLN<n>` PR merge), you MUST swap the status label yourself — see step 4's hand-close note.
+
 **Pick the outcome first:**
 
 - All phases shipped → **close**.
