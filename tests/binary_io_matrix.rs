@@ -15,9 +15,11 @@
 //! value type W0–W11 × format F1 LittleEndian / F2 BigEndian / F3 TextFile
 //! × access pattern A1 append / A2 offset / A3 truncate / A4 sync.
 //!
-//! **Every cell is `#[ignore]` by default** — each shells out to
-//! `loft --interpret` and `loft --native` (the latter invokes `rustc`),
-//! too heavy for the default `cargo test`.  Run the matrix explicitly:
+//! **These cells RUN by default** (@PLN114).  They were `#[ignore]`d as too heavy;
+//! measured, the whole 201-cell matrix takes ~10 seconds.  The cost was never the
+//! issue — the silence was: two SIGSEGVs, a silent `+1` corruption of every narrow
+//! tuple element, a 3.4x memory overhead and a cross-backend par-worker corruption
+//! all sat behind that attribute until the set was run by hand.
 //!
 //! ```bash
 //! cargo test --release --test binary_io_matrix -- --ignored
@@ -537,7 +539,6 @@ cross_mode!(
 /// `f#read as S` walk cannot round-trip it — reject at compile time on both
 /// backends rather than crash at runtime (the pre-fix behaviour).
 #[test]
-#[ignore = "binary_io_matrix — run with --test binary_io_matrix -- --ignored"]
 fn w10_struct_text_field_rejected() {
     run_cross_mode_rejected(
         "w10_struct_text_field_rejected",
@@ -554,7 +555,6 @@ fn w10_struct_text_field_rejected() {
 
 /// A `vector` field is likewise variable-width — same rejection.
 #[test]
-#[ignore = "binary_io_matrix — run with --test binary_io_matrix -- --ignored"]
 fn w10_struct_vector_field_rejected() {
     run_cross_mode_rejected(
         "w10_struct_vector_field_rejected",
@@ -576,7 +576,6 @@ fn w10_struct_vector_field_rejected() {
 // by the cross-mode cells above.
 
 #[test]
-#[ignore = "binary_io_matrix — run with --test binary_io_matrix -- --ignored"]
 fn leak_free_scalar_roundtrip() {
     run_cross_mode_leak_free(
         "leak_free_scalar_roundtrip",
@@ -597,7 +596,6 @@ fn leak_free_scalar_roundtrip() {
 }
 
 #[test]
-#[ignore = "binary_io_matrix — run with --test binary_io_matrix -- --ignored"]
 fn leak_free_vector_roundtrip() {
     run_cross_mode_leak_free(
         "leak_free_vector_roundtrip",

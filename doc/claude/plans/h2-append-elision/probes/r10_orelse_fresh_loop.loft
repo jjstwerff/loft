@@ -1,0 +1,14 @@
+// @H2 callee-return axis — cell r10_orelse_fresh_loop: callee returns t[i] ?? fresh — the FRESH arm always taken (out of range).
+// Closes the gap the r1-r8 cells left: they branch between a retbuf and another
+// call's store, but never between a BORROW and a FRESH store, which is the choice
+// `scopes.rs` says cannot be resolved statically (its `map_from_json` example) and
+// the shape `tests/use_analysis.rs::ELEM_SRC` uses (`pick = t[i] ?? m_none()`).
+// Hand-computed expectation: values `1 2 3`, len=3, no leaked store.
+struct M { hp: integer, name: text }
+fn m_none() -> M { M{ hp: -1, name: "none" } }
+fn seed() -> vector<M> { t: vector<M> = []; t += [M{hp:1, name:"a"}]; t += [M{hp:2, name:"b"}]; t += [M{hp:3, name:"c"}]; t }
+// borrow-or-fresh: in range it hands back a VIEW into `t`; out of range a FRESH store.
+fn pick(t: vector<M>, i: integer) -> M { t[i] ?? m_none() }
+fn show(out: vector<M>) { for j in 0..len(out) { e = out[j] ?? m_none(); print("{e.hp} "); } print("\n"); n = len(out); print("len={n}\n"); }
+
+fn main() { t = seed(); out: vector<M> = []; for i in 0..3 { out += [pick(t, i + 100)]; } show(out); }

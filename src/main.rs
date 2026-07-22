@@ -32,8 +32,6 @@
 use loft::base64;
 use loft::compile;
 use loft::data;
-use loft::diagnostics;
-pub mod diagnostic_render;
 use loft::extensions;
 use loft::generation;
 use loft::log_config;
@@ -6003,19 +6001,19 @@ fn main() {
         let has_errors = p.diagnostics.level() >= Level::Error;
         if print_warnings || has_errors {
             let mode =
-                crate::diagnostic_render::ErrorMode::from_cli_and_env(error_mode_arg.as_deref());
+                loft::diagnostic_render::ErrorMode::from_cli_and_env(error_mode_arg.as_deref());
             match mode {
-                crate::diagnostic_render::ErrorMode::Pretty => {
+                loft::diagnostic_render::ErrorMode::Pretty => {
                     // @P282 — diagnostics (warnings + errors) go to STDERR,
                     // matching the rustc / clang convention.  This keeps the
                     // program's STDOUT free for piped consumers (the loft
                     // scanner, viewer state, any machine-readable output).
-                    let loader = crate::diagnostic_render::FileSourceLoader::new();
+                    let loader = loft::diagnostic_render::FileSourceLoader::new();
                     if print_warnings {
-                        let out = crate::diagnostic_render::render_pretty_all(
+                        let out = loft::diagnostic_render::render_pretty_all(
                             &p.diagnostics,
                             &loader,
-                            crate::diagnostic_render::ColorMode::Auto,
+                            loft::diagnostic_render::ColorMode::Auto,
                         );
                         eprint!("{out}");
                     } else {
@@ -6025,10 +6023,10 @@ fn main() {
                         // moot when no warnings are emitted).
                         for entry in p.diagnostics.entries() {
                             if entry.level >= Level::Error {
-                                let s = crate::diagnostic_render::render_entry_pretty(
+                                let s = loft::diagnostic_render::render_entry_pretty(
                                     entry,
                                     &loader,
-                                    crate::diagnostic_render::ColorMode::Auto,
+                                    loft::diagnostic_render::ColorMode::Auto,
                                 );
                                 eprint!("{s}");
                                 eprintln!();
@@ -6036,7 +6034,7 @@ fn main() {
                         }
                     }
                 }
-                crate::diagnostic_render::ErrorMode::Compact => {
+                loft::diagnostic_render::ErrorMode::Compact => {
                     for entry in p.diagnostics.entries() {
                         if entry.level == Level::Debug {
                             continue;
@@ -7884,20 +7882,10 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
     }
 
     // Initialize the runtime logger
-    let conf_path = if let Some(ref cp) = log_conf {
-        std::path::PathBuf::from(cp)
-    } else {
-        // Prefer .loft/log.conf beside the script; fall back to log.conf beside the script.
-        let script_dir = std::path::Path::new(&abs_file)
-            .parent()
-            .unwrap_or(std::path::Path::new("."));
-        let loft_conf = script_dir.join(".loft").join("log.conf");
-        if loft_conf.exists() {
-            loft_conf
-        } else {
-            script_dir.join("log.conf")
-        }
-    };
+    // Resolved through the SHARED helper so the interpreter and a compiled `--native`
+    // binary look in the same places (`.loft/log.conf`, then `log.conf`, beside the
+    // program).  They diverging here is how native ended up with no logger at all.
+    let conf_path = logger::Logger::resolve_config_path(log_conf.as_deref(), &abs_file);
     let mut lg = logger::Logger::from_config_file(&conf_path, &abs_file);
     if production {
         lg.config.production = true;
@@ -8066,9 +8054,9 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
     }
     if let Some(err) = runtime_err {
         let entry = err.to_diag_entry();
-        let loader = crate::diagnostic_render::FileSourceLoader::new();
-        let color = crate::diagnostic_render::ColorMode::Auto;
-        let rendered = crate::diagnostic_render::render_entry_pretty(&entry, &loader, color);
+        let loader = loft::diagnostic_render::FileSourceLoader::new();
+        let color = loft::diagnostic_render::ColorMode::Auto;
+        let rendered = loft::diagnostic_render::render_entry_pretty(&entry, &loader, color);
         eprint!("{rendered}");
         // Plan-07 phase 4g.1 / 4g.2 slice 1 — render the
         // call-chain captured at raise time after the typed-

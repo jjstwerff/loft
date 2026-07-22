@@ -75,7 +75,7 @@ fn if_typing() {
 
 #[test]
 fn tuple_element_offsets() {
-    use loft::data::{Type, element_offsets, element_size};
+    use loft::data::{Type, element_stack_offsets, element_stack_size};
     let types = [
         Type::Integer(IntegerSpec {
             min: i32::MIN,
@@ -86,9 +86,9 @@ fn tuple_element_offsets() {
         Type::Text(loft::data::Deps::none()),
         Type::Float,
     ];
-    let offsets = element_offsets(&types);
+    let offsets = element_stack_offsets(&types);
     // integer=8 at 0 (post-2c), text=Str size at 8, float=8 after text
-    let text_sz = element_size(&Type::Text(loft::data::Deps::none()));
+    let text_sz = element_stack_size(&Type::Text(loft::data::Deps::none()));
     assert_eq!(offsets, vec![0, 8, 8 + text_sz]);
 }
 

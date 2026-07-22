@@ -897,6 +897,25 @@ fn OpGetInt4(v1: reference, fld: const u16) -> integer;
 #rust"{{let db = @v1; if db.rec == 0 {{ i64::MIN }} else {{ let r = stores.store(&db).get_i32_raw(db.rec, db.pos + u32::from(@fld)); if r == i32::MIN {{ i64::MIN }} else {{ i64::from(r) }} }}}}"
 fn OpSetInt4(v1: reference, fld: const u16, val: integer);
 #rust"{{let db = @v1; let v = if @val == i64::MIN {{ i32::MIN }} else {{ @val as i32 }}; if db.rec != 0 {{ stores.store_mut(&db).set_i32_raw(db.rec, db.pos + u32::from(@fld), v); }}}}"
+// 4-byte UNSIGNED read/write, for a `size(4)` type whose range runs past `i32::MAX`
+// (`u32`, or any `integer limit(0, N) size(4)` with N > 2147483647).  The signed pair
+// above cannot express those at all: it sign-extends on load, so a `u32` of 4000000000
+// read back as -294967296, and its `i32::MIN` sentinel is the perfectly legal `u32`
+// value 2147483648, which therefore read back as null.  Storage is a plain native
+// `u32` — the same bytes a binary format expects — so this is a decode change, not a
+// layout change, and `i32`/`vector<i32>` keep the signed pair untouched.
+//
+// `Raw` reserves the TOP code (`u32::MAX`) as the null sentinel, which is exactly the
+// range `u32` already declares (`limit(0, 4294967294)` — LOFT.md § nullable narrow
+// fields, "one 32-bit code reserved").  `Full` reserves nothing, so a non-null slot
+// covers the whole 2^32.  The Raw/Full split, and Full reusing the Raw write op,
+// mirror `OpGetShortRaw` / `OpGetShortFull` / `OpSetShortRaw` one width up.
+fn OpGetInt4Raw(v1: reference, fld: const u16) -> integer;
+#rust"{{let db = @v1; if db.rec == 0 {{ i64::MIN }} else {{ let r = stores.store(&db).get_u32_raw(db.rec, db.pos + u32::from(@fld)); if r == u32::MAX {{ i64::MIN }} else {{ i64::from(r) }} }}}}"
+fn OpSetInt4Raw(v1: reference, fld: const u16, val: integer);
+#rust"{{let db = @v1; let v = if @val == i64::MIN {{ u32::MAX }} else {{ @val as u32 }}; if db.rec != 0 {{ stores.store_mut(&db).set_u32_raw(db.rec, db.pos + u32::from(@fld), v); }}}}"
+fn OpGetInt4Full(v1: reference, fld: const u16) -> integer;
+#rust"{{let db = @v1; if db.rec == 0 {{ i64::MIN }} else {{ i64::from(stores.store(&db).get_u32_raw(db.rec, db.pos + u32::from(@fld))) }} }}"
 // 2-byte narrow-vector-element read/write for `vector<u16>` /
 // `vector<i16>` / `vector<integer limit(...) size(2)>`.  Direct
 // `(val - min)` encoding parallel to `OpGetByte` / `OpSetByte`, so

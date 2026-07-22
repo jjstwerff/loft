@@ -12,6 +12,8 @@
 
 use std::process::Command;
 
+mod common;
+
 fn loft_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft"))
 }
@@ -20,8 +22,10 @@ fn workspace_root() -> std::path::PathBuf {
 }
 
 /// `(success, stdout, warning_count)`.  `tag` keeps the temp script unique across parallel tests.
+/// The count is loft's OWN warnings — see `common::loft_warnings` for why rustc's must not count.
 fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, usize) {
-    let script = std::env::temp_dir().join(format!("loft_nf2_{}_{tag}.loft", std::process::id()));
+    let name = format!("loft_nf2_{}_{tag}.loft", std::process::id());
+    let script = std::env::temp_dir().join(&name);
     std::fs::write(&script, body).expect("write script");
     let mut cmd = Command::new(loft_bin());
     cmd.arg(backend)
@@ -38,7 +42,7 @@ fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, u
     let script_removed = std::fs::remove_file(&script).is_ok();
     let _ = script_removed;
     let stderr = String::from_utf8_lossy(&out.stderr);
-    let warns = stderr.lines().filter(|l| l.starts_with("warning:")).count();
+    let warns = common::loft_warnings(&stderr, &name);
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
@@ -102,6 +106,45 @@ fn prop_float_on_right_operand_propagates() {
         "ON: 1.0 - float? is float? (N-Prop on the right operand)"
     );
     assert!(out.contains("g=null"), "the null flows through: {out}");
+}
+
+/// The counting oracle itself, against the transcript shape that broke it.
+///
+/// Every warning assertion in this suite is only as good as its attribution: a `--native` run
+/// relays rustc's stderr verbatim, so a host whose toolchain warns inflates the count and fails
+/// a test about loft's type system.  That is exactly what `windows-latest` hit — an MSVC linker
+/// warning plus rustc's summary line made a 1-warning program report 3.  Feed the oracle both
+/// renderings of a loft warning surrounded by rustc's, and prove it can report zero.
+#[test]
+fn oracle_counts_loft_warnings_not_the_toolchains() {
+    let script = "loft_nf2_1234_probe.loft";
+    let rustc_noise = "warning: linker stderr: LINK : warning LNK4044: unrecognized option \
+                       '/Wl,--allow-multiple-definition'; ignored\n\
+                       warning: 1 warning emitted\n\
+                       warning: unused variable: `x`\n \
+                       --> /tmp/loft_native_1234.rs:9:5\n";
+    let pretty = format!(
+        "{rustc_noise}warning: a nullable `integer?` is stored into the assignment target of \
+         the non-null type `integer`\n  \
+         --> /tmp/{script}:7:11\n  |\n7 |   s.f = x;\n  |           ^\n"
+    );
+    assert_eq!(
+        common::loft_warnings(&pretty, script),
+        1,
+        "pretty: only the warning whose `-->` names the script counts"
+    );
+    let compact =
+        format!("{rustc_noise}Warning: a nullable `integer?` is stored at /tmp/{script}:7:11\n");
+    assert_eq!(
+        common::loft_warnings(&compact, script),
+        1,
+        "compact (LOFT_ERRORS=compact): the location rides on the header line"
+    );
+    assert_eq!(
+        common::loft_warnings(rustc_noise, script),
+        0,
+        "the oracle must be able to report zero — rustc's warnings are never loft's"
+    );
 }
 
 #[test]

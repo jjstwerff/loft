@@ -214,6 +214,9 @@ pub const OPERATORS: &[fn(&mut State)] = &[
     set_short,
     get_int4,
     set_int4,
+    get_int4_raw,
+    set_int4_raw,
+    get_int4_full,
     get_short_raw,
     set_short_raw,
     get_short_full,
@@ -1864,6 +1867,65 @@ fn set_int4(s: &mut State) {
                 .set_i32_raw(db.rec, db.pos + u32::from(v_fld), v);
         }
     }
+}
+
+fn get_int4_raw(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        if db.rec == 0 {
+            i64::MIN
+        } else {
+            let r = s
+                .database
+                .store(&db)
+                .get_u32_raw(db.rec, db.pos + u32::from(v_fld));
+            if r == u32::MAX {
+                i64::MIN
+            } else {
+                i64::from(r)
+            }
+        }
+    };
+    s.put_stack(new_value);
+}
+
+fn set_int4_raw(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_val = *s.get_stack::<i64>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    {
+        let db = v_v1;
+        let v = if v_val == i64::MIN {
+            u32::MAX
+        } else {
+            v_val as u32
+        };
+        if db.rec != 0 {
+            s.database
+                .store_mut(&db)
+                .set_u32_raw(db.rec, db.pos + u32::from(v_fld), v);
+        }
+    }
+}
+
+fn get_int4_full(s: &mut State) {
+    let v_fld = s.code::<u16>();
+    let v_v1 = *s.get_stack::<DbRef>();
+    let new_value = {
+        let db = v_v1;
+        if db.rec == 0 {
+            i64::MIN
+        } else {
+            i64::from(
+                s.database
+                    .store(&db)
+                    .get_u32_raw(db.rec, db.pos + u32::from(v_fld)),
+            )
+        }
+    };
+    s.put_stack(new_value);
 }
 
 fn get_short_raw(s: &mut State) {

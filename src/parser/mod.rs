@@ -3218,7 +3218,7 @@ impl Parser {
             let sz: u16 = if matches!(types[0], Type::Integer(_)) && known != u16::MAX {
                 self.database.size(known)
             } else {
-                crate::data::element_size(&types[0]) as u16
+                crate::data::element_stack_size(&types[0]) as u16
             };
             let op_d_nr = self.data.def_nr("OpSizeScalar");
             if op_d_nr != u32::MAX {
@@ -5142,15 +5142,19 @@ impl Parser {
         // earlier would wrongly see the legacy layout (#313).
         if let Type::Function(_, _, _) = &tp
             && f_nr != usize::MAX
-            && !self.fn_ref_field_is_split(d_nr, f_nr)
         {
-            let read_dnr = self.cl("OpGetInt4", &[code, Value::Int(i32::from(pos))]);
-            let read_clos = self.cl("OpNullRefSentinel", &[]);
-            return crate::data::v_block(
-                vec![read_dnr, read_clos],
-                tp.clone(),
-                "fn_ref_field_read",
-            );
+            // @PLN114 — the layout decides the reader, and BOTH answers are now
+            // explicit: a split field reads its closure_rec child, a legacy one
+            // synthesises a NULL closure.  `get_val`'s Function arm is the legacy
+            // read (tuple / vector elements), so a split field must not fall
+            // through to it.
+            return if self.fn_ref_field_is_split(d_nr, f_nr) {
+                self.read_fn_ref_split(&tp, u32::from(pos), code)
+            } else {
+                let read_dnr = self.cl("OpGetInt4", &[code, Value::Int(i32::from(pos))]);
+                let read_clos = self.cl("OpNullRefSentinel", &[]);
+                crate::data::v_block(vec![read_dnr, read_clos], tp.clone(), "fn_ref_field_read")
+            };
         }
         self.get_val(&tp, nullable, u32::from(pos), code, alias)
     }
@@ -5256,6 +5260,22 @@ impl Parser {
         )
     }
 
+    /// @PLN114 — read a fn-ref struct field stored in the SPLIT layout: 4B `d_nr`
+    /// at `pos` plus the `<attr>__closure_rec` child-record at `pos + 4`, which
+    /// `typedef.rs` registers only when a capturing lambda was assigned to the
+    /// attribute.  Tuple and vector elements never have that second field — they
+    /// read through [`Self::get_val`]'s legacy arm instead.
+    fn read_fn_ref_split(&mut self, tp: &Type, pos: u32, code: Value) -> Value {
+        let p = Value::Int(pos as i32);
+        let read_dnr = self.cl("OpGetInt4", &[code.clone(), p]);
+        let crec_field = self.cl(
+            "OpGetField",
+            &[code, Value::Int(pos as i32 + 4), Value::Int(0)],
+        );
+        let read_clos = self.cl("OpRefFromChildRec", &[crec_field]);
+        crate::data::v_block(vec![read_dnr, read_clos], tp.clone(), "fn_ref_field_read")
+    }
+
     fn get_val(&mut self, tp: &Type, nullable: bool, pos: u32, code: Value, alias: u32) -> Value {
         let p = Value::Int(pos as i32);
         match tp {
@@ -5310,7 +5330,8 @@ impl Parser {
                 // a narrow-vector element keeps the raw direct encoding (its
                 // stride/value contract is the narrow-vector one, not the
                 // field-sentinel one) — `narrow_vec` selects that.
-                let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
+                let kind =
+                    crate::data::NarrowIntKind::of(s, nullable, narrow_vec, spec.unsigned_wide());
                 if kind.takes_min() {
                     // H6: a sentinel-reserving kind (`ByteNullable`/`Short` — a
                     // nullable narrow FIELD *or* vector element) shrinks its usable
@@ -5375,13 +5396,21 @@ impl Parser {
                 // (or the null sentinel when the vector is empty).
                 // Together they form the 20B stack-side fn-ref slot
                 // shape `fn_call_ref` already consumes unchanged.
-                let read_dnr = self.cl("OpGetInt4", &[code.clone(), p.clone()]);
-                let crec_pos = match &p {
-                    Value::Int(pi) => Value::Int(pi + 4),
-                    _ => Value::Int(0),
-                };
-                let crec_field = self.cl("OpGetField", &[code, crec_pos, Value::Int(0)]);
-                let read_clos = self.cl("OpRefFromChildRec", &[crec_field]);
+                // @PLN114 — this is the LEGACY single-field read: 4B d_nr at `pos`
+                // and a synthesised NULL closure.  `get_val` is reached for TUPLE and
+                // VECTOR elements, which `typedef.rs`'s `Type::Function` arm keeps on
+                // the legacy layout by design ("closure_rec field would be wasted
+                // space and breaks layouts of containers (tuples) that pre-computed
+                // positions assuming 4B per fn-ref slot").
+                //
+                // Reading a closure_rec at `pos + 4` here read a field that does not
+                // exist for those elements — harmless only while alignment padding
+                // sat there, and a collision with the NEXT element once tuples pack
+                // tight like records.  The SPLIT layout (a capturing lambda assigned
+                // to a struct field) has its own reader, `read_fn_ref_split`, called
+                // from the site that knows the field is split.
+                let read_dnr = self.cl("OpGetInt4", &[code, p.clone()]);
+                let read_clos = self.cl("OpNullRefSentinel", &[]);
                 crate::data::v_block(vec![read_dnr, read_clos], tp.clone(), "fn_ref_field_read")
             }
             Type::Tuple(elems) => {
@@ -5399,7 +5428,7 @@ impl Parser {
                     elems_vec.len(),
                 )
                 .unwrap_or_else(|| {
-                    crate::data::element_offsets(&elems_vec)
+                    crate::data::element_stack_offsets(&elems_vec)
                         .into_iter()
                         .map(|x| x as u16)
                         .collect()
@@ -5480,7 +5509,7 @@ impl Parser {
             elems_vec.len(),
         )
         .unwrap_or_else(|| {
-            crate::data::element_offsets(&elems_vec)
+            crate::data::element_stack_offsets(&elems_vec)
                 .into_iter()
                 .map(|x| x as u16)
                 .collect()
@@ -5816,7 +5845,8 @@ impl Parser {
                 // sentinel); `not null` fields and narrow-vector elements keep the
                 // raw op.
                 let nullable = f_nr != usize::MAX && self.data.attr_nullable(d_nr, f_nr);
-                let kind = crate::data::NarrowIntKind::of(s, nullable, narrow_vec);
+                let kind =
+                    crate::data::NarrowIntKind::of(s, nullable, narrow_vec, spec.unsigned_wide());
                 // H6: the WRITE op encodes against the same `usable_min` the READ
                 // op (`get_val`) decodes against — derived from the KIND so a
                 // sentinel-reserving kind (`ByteNullable`/`Short`) shrinks the

@@ -178,7 +178,20 @@ fn is_narrow_int_return(ret: &Type) -> bool {
 fn tuple_elem_read(t: &Type, off: usize) -> String {
     let off = off as u32;
     match t {
-        Type::Integer(_) => format!("_ts.get_int(elm.rec, elm.pos + {off})"),
+        // @PLN114 — read the element at its STORED width.  `get_int` reads 8 bytes,
+        // which is right only for a full-width integer; a `u8` element occupies one
+        // byte and a `u16` two, so a blanket `get_int` reads its neighbours too.
+        // Width and encoding come from the same home the field ops use.
+        Type::Integer(spec) => {
+            let width = spec.byte_width(false);
+            let min = spec.min;
+            match width {
+                1 => format!("(_ts.get_byte(elm.rec, elm.pos + {off}, {min}) as i64)"),
+                2 => format!("(_ts.get_short_full(elm.rec, elm.pos + {off}, {min}) as i64)"),
+                4 => format!("(_ts.get_i32_raw(elm.rec, elm.pos + {off}) as i64)"),
+                _ => format!("_ts.get_int(elm.rec, elm.pos + {off})"),
+            }
+        }
         Type::Character | Type::Null => format!("_ts.get_i32_raw(elm.rec, elm.pos + {off})"),
         // @PLN17: boolean tuple slot is u8 (storage form); get_boolean returns bool.
         Type::Boolean => format!("(_ts.get_boolean(elm.rec, elm.pos + {off}, 1) as u8)"),
@@ -205,7 +218,10 @@ fn tuple_arg_prep(ctx: &EmitCtx<'_, '_>, fn_d_nr: u32, elem_size: i32) -> (Strin
         return (String::new(), "elm");
     };
     if let Type::Tuple(elems) = &elem_attr.typedef {
-        let offsets = crate::data::element_offsets(elems);
+        // @PLN114 — the element rows are STORAGE, so offsets come from the storage
+        // view.  Using the stack view made a `par` over `vector<(u8,u16)>` read the
+        // row at the wrong stride (the interpreter twin had the same defect).
+        let offsets = crate::data::element_storage_offsets(elems);
         let reads: Vec<String> = elems
             .iter()
             .zip(offsets.iter())

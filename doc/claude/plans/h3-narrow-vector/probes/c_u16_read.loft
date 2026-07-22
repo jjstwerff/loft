@@ -1,0 +1,5 @@
+// H3 read path — the top of u16's range, for contrast: 2-byte loads are fine.
+fn main() {
+  v: vector<u16> = [65535, 40000];
+  print("got {v[0]},{v[1]} | 65535,40000\n");
+}

@@ -21,6 +21,32 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — `u32` finally holds every `u32`
+
+Three fixes to narrow-width integers, all found by the crawler consumer building a
+collision grid, all affecting the interpreter and `--native` alike.
+
+**`x as u32?` used to return null for every value.** The checked-cast range guard was
+built at 32-bit width, and `u32`'s maximum wraps there — so the test became "is the value
+at most -2?", which nothing satisfies. This was silent rather than loud: the cast handed
+back null, the idiomatic `?? 0` supplied a plausible-looking zero, and a grid of zeroes
+reads as *not filled in yet* rather than *corrupt*. A constant like `70000 as u32?` worked,
+which is why it only ever showed up through a helper function.
+
+**`v[i] = x` now works on a `vector<u16>` and a `vector<i16>`.** It used to fail to
+compile outright ("Cannot assign to attribute on type 'OpGetShortRaw'"), even though the
+same write to a `u16` *struct field* was fine.
+
+**A `u32` above 2 147 483 647 now round-trips.** Storage for 4-byte integers was
+signed-only, so `4000000000` read back as `-294967296` — in vectors and in struct fields.
+Worse, `2147483648` collided with the internal null marker and read back as `null`. Both
+are fixed: `u32` now covers its full documented range, and the reserved code sits at the
+top (`4294967295`), where no legal `u32` value can reach it. The stored bytes are a plain
+native `u32`, so binary formats see exactly what they expect. `i32` is untouched.
+
+If you worked around any of this by using `i32` where you wanted `u32`, or `integer` where
+you wanted `u16`, you can now use the narrow type — and get the smaller footprint with it.
+
 ### Patch `2026.7.2` — the `len`/`size` text flip (breaking, pre-1)
 
 **Breaking (contract 0 — before the 1.0 promise):** `len(text)` now returns the

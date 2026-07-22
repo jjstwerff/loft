@@ -1,0 +1,6 @@
+// H3 direct path — `v[i] = x` on a local vector<u32>.  Hand-computed: 1, 70000, 3.
+fn main() {
+  v: vector<u32> = [1, 2, 3];
+  v[1] = 70000 as u32? ?? 0;
+  print("got {v[0]},{v[1]},{v[2]} | 1,70000,3\n");
+}

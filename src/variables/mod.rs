@@ -2124,7 +2124,7 @@ pub fn size(tp: &Type, context: &Context) -> u16 {
         | Type::Enum(_, true, _)
         | Type::Radix(_, _, _)
         | Type::Iterator(_, _) => size_of::<DbRef>() as u16,
-        Type::Tuple(elems) => crate::data::element_size(&Type::Tuple(elems.clone())) as u16,
+        Type::Tuple(elems) => crate::data::element_stack_size(&Type::Tuple(elems.clone())) as u16,
         _ => 0,
     }
 }
@@ -2162,7 +2162,14 @@ pub fn align(tp: &Type) -> u8 {
         | Type::Enum(_, true, _)
         | Type::Radix(_, _, _)
         | Type::Iterator(_, _) => 4, // DbRef = u16 + u32 + u32 → align 4
-        Type::Tuple(elems) => crate::data::element_align(&Type::Tuple(elems.clone())),
+        // @PLN114 — a stack tuple's alignment is the strongest alignment ITS OWN
+        // elements need on the stack, so recurse through THIS function rather than
+        // the record table.  `data::element_stack_align` gives `Text` 4 (the record's
+        // weaker `Str` rule); on the stack a `Str` holds a raw pointer and needs 8, as
+        // the doc above says.  Taking the record answer left `(P, text)` locals
+        // 4-aligned and landed the `Str` on a 4-mod-8 address — real UB, caught by
+        // `stack_align_guard` once the matrices joined its sweep.
+        Type::Tuple(elems) => elems.iter().map(align).max().unwrap_or(1),
         _ => 1,
     }
 }

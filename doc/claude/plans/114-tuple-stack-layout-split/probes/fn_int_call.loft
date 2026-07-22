@@ -1,0 +1,2 @@
+fn f(t: (fn(integer) -> integer, integer)) -> integer { print("{t.1}\n"); t.0(7) }
+fn main() { sq = fn(n: integer) -> integer { n * n }; print("{f((sq, 5))}\n"); }

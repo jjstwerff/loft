@@ -1540,7 +1540,7 @@ pub(crate) fn read_primitive_at_wide(
 /// where one or more elements need representation inflation between
 /// in-vector storage and the worker's argument slot.
 ///
-/// In-vector layout (`data::element_size`):
+/// In-vector layout (`data::element_storage_size` — the STORAGE view):
 ///   - `text`: 4-byte heap-pointer (interns into the input store).
 ///   - `reference`: 12-byte `DbRef`.
 ///   - others: same as their `Context::Argument` width.
@@ -1565,11 +1565,16 @@ pub(crate) fn read_tuple_at_wide(
     let mut buf = [0u8; 64];
     let store = &stores.allocations[row_ref.store_nr as usize];
     let base = store.base_ptr();
-    let in_vec_offsets = crate::data::element_offsets(elem_types);
+    // @PLN114 — the row is STORAGE, so its offsets and widths are the storage view.
+    // This read used the STACK view, which was indistinguishable while the two
+    // coincided (every integer 8 bytes); once narrow elements got their declared
+    // width (`u8` = 1) the reader walked the row at the wrong stride and returned
+    // garbage — a `par` over `vector<(u8,u16)>` summed to 1012184093813119760.
+    let in_vec_offsets = crate::data::element_storage_offsets(elem_types);
     let mut arg_offset: usize = 0;
     for (i, t) in elem_types.iter().enumerate() {
         let in_off = in_vec_offsets[i];
-        let in_sz = crate::data::element_size(t);
+        let in_sz = crate::data::element_storage_size(t);
         let arg_sz = crate::variables::size(t, &crate::data::Context::Argument) as usize;
         debug_assert!(
             arg_offset + arg_sz <= 64,

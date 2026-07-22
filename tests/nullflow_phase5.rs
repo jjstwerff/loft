@@ -12,6 +12,8 @@
 
 use std::process::Command;
 
+mod common;
+
 fn loft_bin() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_BIN_EXE_loft"))
 }
@@ -19,8 +21,11 @@ fn workspace_root() -> std::path::PathBuf {
     std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
 }
 
+/// `(success, stdout, warning_count)`.  The count is loft's OWN warnings — see
+/// `common::loft_warnings` for why rustc's must not count.
 fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, usize) {
-    let script = std::env::temp_dir().join(format!("loft_nf5_{}_{tag}.loft", std::process::id()));
+    let name = format!("loft_nf5_{}_{tag}.loft", std::process::id());
+    let script = std::env::temp_dir().join(&name);
     std::fs::write(&script, body).expect("write script");
     let mut cmd = Command::new(loft_bin());
     cmd.arg(backend)
@@ -39,7 +44,7 @@ fn run(body: &str, backend: &str, nullflow: bool, tag: &str) -> (bool, String, u
     (
         out.status.success(),
         String::from_utf8_lossy(&out.stdout).into_owned(),
-        stderr.lines().filter(|l| l.starts_with("warning:")).count(),
+        common::loft_warnings(&stderr, &name),
     )
 }
 

@@ -260,19 +260,18 @@ pub fn run_cross_mode_leak_free(test_name: &str, body: &str) {
 /// Define a test that runs `body` under both interp and `--native`
 /// and asserts byte-identical stdout.
 ///
-/// **Marked `#[ignore]` by default** — each cell shells out to the
-/// `loft` binary twice (once for `--interpret`, once for `--native`),
-/// and `--native` invokes `rustc` per cell.  That is too heavy for the
-/// default `cargo test` path.  Run the matrix explicitly with:
+/// **Runs by default** (@PLN114).  These cells were `#[ignore]`d as "too heavy for
+/// the default `cargo test` path" — each shells out to the `loft` binary twice and
+/// `--native` invokes `rustc`.  Measured, the whole 201-cell set takes ~10 seconds,
+/// so the cost was never the issue; the silence was.  Two SIGSEGVs, a silent `+1`
+/// corruption of every narrow tuple element, a 3.4x memory overhead and a
+/// cross-backend par-worker corruption all sat behind that `#[ignore]` until the set
+/// was run by hand.  A guarantee nothing executes is not a guarantee.
+///
+/// Run one cell:
 ///
 /// ```bash
-/// cargo test --release --test tuple_matrix -- --ignored
-/// ```
-///
-/// or invoke a single cell:
-///
-/// ```bash
-/// cargo test --release --test tuple_matrix -- --ignored e1_d1_int_int_local
+/// cargo test --release --test tuple_matrix e1_d1_int_int_local
 /// ```
 ///
 /// ```ignore
@@ -286,7 +285,6 @@ pub fn run_cross_mode_leak_free(test_name: &str, body: &str) {
 macro_rules! cross_mode {
     ($name:ident, $body:expr) => {
         #[test]
-        #[ignore = "tuple_matrix — run with --test tuple_matrix -- --ignored"]
         fn $name() {
             $crate::common::cross_mode::run_cross_mode(stringify!($name), $body);
         }

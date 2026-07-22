@@ -253,6 +253,19 @@ rebuild_native_cdylibs() {
       "cd '$repo_root' && cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random -q"
   fi
 
+  # 3b. The wasm32-wasip2 rlib that `--native-wasm` links (html_wasm's wasip2 cells).
+  #     A DIFFERENT triple from 3, and it was missing here: any change to the loft lib
+  #     left this rlib stale, so the first suite run after one failed with a compile
+  #     error inside the generated wasm program ("no method named <the new fn>") that
+  #     looks like a real regression and disappears on a re-run.  Same guard as above:
+  #     only rebuild when the target dir already exists, so a developer who never
+  #     touches the wasm gate is not made to install the target.
+  if [[ -d "$repo_root/target/wasm32-wasip2" ]]; then
+    echo "== rebuild wasm32-wasip2 rlib ==" >> "$log"
+    schedule "wasip2 rlib" "$repo_root" \
+      "cd '$repo_root' && cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random -q"
+  fi
+
   # Wait for all parallel rebuilds; `wait` exits after the slowest.
   for pid in "${jobs[@]}"; do wait "$pid"; done
 

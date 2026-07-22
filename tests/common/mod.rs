@@ -96,6 +96,42 @@ pub fn native_lib_search_dirs(rlib: &std::path::Path) -> Vec<PathBuf> {
     dirs
 }
 
+/// Count the warnings **loft itself** raised about `script_name` (a `.loft` file name).
+///
+/// Use this instead of counting every `warning:` line whenever a test spawns the loft binary:
+/// a `--native` run relays rustc's whole stderr verbatim (`src/main.rs`, "Relay rustc's own
+/// output"), and rustc opens its diagnostics with the same `warning:` header, so a bare count
+/// also counts the toolchain's.  That difference is invisible on Linux — where the generated
+/// crate compiles clean — and shows up only on another host: on `windows-latest` an MSVC
+/// linker warning plus rustc's `warning: N warnings emitted` summary added two phantom
+/// warnings and failed a test that passes everywhere else.
+///
+/// Attribution keys on the location every loft diagnostic carries — `  --> <script>:<line>:<col>`
+/// on the line below the header (pretty, the default) or ` at <script>:<line>:<col>` on the
+/// header itself (compact, `LOFT_ERRORS=compact`).  rustc's diagnostics point at the generated
+/// `loft_native_<pid>.rs`, or carry no location at all, so neither is ever counted.
+#[allow(dead_code)]
+pub fn loft_warnings(stderr: &str, script_name: &str) -> usize {
+    let lines: Vec<&str> = stderr.lines().collect();
+    let mut count = 0;
+    for (i, line) in lines.iter().enumerate() {
+        // Compact: `Warning[code]: <message> at <file>:<line>:<col>` — one line, self-locating.
+        if line.starts_with("Warning") && line.contains(script_name) {
+            count += 1;
+            continue;
+        }
+        // Pretty: `warning[code]: <message>` followed by the `-->` location line.
+        let header = line.starts_with("warning:") || line.starts_with("warning[");
+        let points_at_script = lines
+            .get(i + 1)
+            .is_some_and(|loc| loc.trim_start().starts_with("-->") && loc.contains(script_name));
+        if header && points_at_script {
+            count += 1;
+        }
+    }
+    count
+}
+
 #[allow(dead_code)]
 static DEFAULT_PARSED: OnceLock<(Data, Stores)> = OnceLock::new();
 

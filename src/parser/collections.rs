@@ -216,7 +216,7 @@ impl Parser {
         } else if matches!(vtp, Type::Function(_, _, _)) {
             4
         } else if let Type::Vector(inner, _) = vtp {
-            (crate::data::element_size(inner) as u16).max(4)
+            (crate::data::element_stack_size(inner) as u16).max(4)
         } else {
             self.database.size(db_tp)
         }
@@ -1938,7 +1938,7 @@ use #count instead"
                                         ) {
                                         u32::from(offs[i])
                                     } else {
-                                        crate::data::element_offsets(&elem_types)[i] as u32
+                                        crate::data::element_stack_offsets(&elem_types)[i] as u32
                                     };
                                     self.get_val(
                                         &elem_tp,
@@ -2594,7 +2594,7 @@ use #count instead"
                 && let Some(idx) = destructure_var_nrs.iter().position(|&dv| dv == v)
             {
                 let elem_offset = if tuple_d_nr == u32::MAX {
-                    crate::data::element_offsets(&elem_types)[idx] as u32
+                    crate::data::element_stack_offsets(&elem_types)[idx] as u32
                 } else if let Some(offs) = crate::data::stored_tuple_offsets_for_def(
                     &self.data,
                     &self.database,
@@ -2603,7 +2603,7 @@ use #count instead"
                 ) {
                     u32::from(offs[idx])
                 } else {
-                    crate::data::element_offsets(&elem_types)[idx] as u32
+                    crate::data::element_stack_offsets(&elem_types)[idx] as u32
                 };
                 let read = self.get_val(
                     &elem_types[idx],
@@ -2901,7 +2901,7 @@ use #count instead"
                 i32::from(n)
             } else if matches!(&elem_tp, Type::Function(_, _, _)) {
                 // Plan-06 phase 4d.A.2 — fn-ref vector storage is
-                // 4-byte i32 d_nr (matches `data::element_size(Type::Function)`).
+                // 4-byte i32 d_nr (matches `data::element_stack_size(Type::Function)`).
                 // The known_type / db_size lookup below would return
                 // var_size(.., Argument) = 20 (the wide stack-slot
                 // width for fn-refs), which is wrong for vector

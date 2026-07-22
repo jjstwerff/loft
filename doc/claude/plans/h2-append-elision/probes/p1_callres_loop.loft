@@ -1,0 +1,8 @@
+struct D { v: integer }
+struct E { v: integer }
+fn pick(t: vector<D>, i: integer) -> D { c = D { v: 0 }; for k in 0..len(t) { if k == i { c = t[k] ?? D{v:0}; } } c }
+fn mk(d: D) -> E { E { v: d.v } }
+fn mkc(d: D, q: integer) -> E { E { v: d.v + q } }
+fn seed() -> vector<D> { t: vector<D> = []; t += [D{v:1}]; t += [D{v:2}]; t += [D{v:3}]; t }
+fn show(out: vector<E>) { for j in 0..len(out) { e = out[j] ?? E{v:-1}; print("{e.v} "); } print("\n"); }
+fn main() { t = seed(); out: vector<E> = []; for i in 0..3 { d = pick(t, i); out += [mk(d)]; } show(out); }

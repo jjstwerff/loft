@@ -72,8 +72,12 @@ jobs:
           python3 - <<'EOF'
           import pathlib
           import xml.etree.ElementTree as ET
-          p = pathlib.Path("target/nextest/junit.xml")
-          if not p.exists():
+          # Glob: nextest writes the report under the profile's store dir
+          # (`target/nextest/<profile>/`), NOT at the repo-rooted spelling.
+          p = next(iter(sorted(pathlib.Path("target/nextest").glob("*/junit.xml"))), None)
+          if p is None:
+              print("::warning title=Flaky detection did not run::no nextest JUnit report "
+                    "under target/nextest/*/junit.xml — flaky passes were NOT checked")
               raise SystemExit(0)
           root = ET.fromstring(p.read_text())
           for tc in root.iter("testcase"):

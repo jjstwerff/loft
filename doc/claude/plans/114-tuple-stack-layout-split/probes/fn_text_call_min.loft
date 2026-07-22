@@ -1,0 +1,10 @@
+fn invoke(p: (fn(integer) -> integer, text)) -> integer {
+    print("{p.1}\n");
+    p.0(7)
+}
+fn main() {
+    sq = fn(n: integer) -> integer { n * n };
+    result = invoke((sq, "sq-tag"));
+    print("{result}\n");
+    assert(result == 49, "closure_arg");
+}

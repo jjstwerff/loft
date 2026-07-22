@@ -1,0 +1,2 @@
+fn f(t: (fn(integer) -> integer, text)) { print("{t.1}\n"); }
+fn main() { sq = fn(n: integer) -> integer { n * n }; f((sq, "tag")); }

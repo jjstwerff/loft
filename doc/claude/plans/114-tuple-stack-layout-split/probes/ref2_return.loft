@@ -1,0 +1,3 @@
+struct P { v: integer }
+fn mk() -> (P, P) { a = P { v: 10 }; b = P { v: 20 }; (a, b) }
+fn main() { t = mk(); print("{t.0.v},{t.1.v}\n"); }

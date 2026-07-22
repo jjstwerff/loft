@@ -1,0 +1,6 @@
+// H3 read path — a u32 near the top of its range, stored and read with no assignment
+// involved at all.  Range is limit(0, 4_294_967_294), so 4000000000 is well inside it.
+fn main() {
+  v: vector<u32> = [4000000000, 3000000000];
+  print("got {v[0]},{v[1]} | 4000000000,3000000000\n");
+}

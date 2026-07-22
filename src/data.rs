@@ -316,6 +316,20 @@ impl IntegerSpec {
     pub fn is_wide_template(&self) -> bool {
         self.min == i32::MIN + 1 && self.max == u32::MAX
     }
+
+    /// True when the declared range is non-negative AND runs past `i32::MAX` — a value
+    /// no *signed* 4-byte slot can hold.  Such a type needs the unsigned 4-byte op pair
+    /// (`OpGetInt4Raw` / `OpGetInt4Full`); the signed `OpGetInt4` sign-extends it on load
+    /// and, worse, its `i32::MIN` sentinel is the legal value 2147483648.
+    ///
+    /// Both halves are load-bearing.  The `min >= 0` half is what excludes the WIDE
+    /// (8-byte) template, which sets `max == u32::MAX` purely as a "wider than i32"
+    /// marker while keeping a negative `min` — an `max > i32::MAX` test alone would
+    /// misroute every plain `integer`.
+    #[must_use]
+    pub fn unsigned_wide(&self) -> bool {
+        self.min >= 0 && self.max > i32::MAX as u32
+    }
 }
 
 /// The narrow-integer storage op KIND a field of a resolved storage width uses —
@@ -341,8 +355,17 @@ pub enum NarrowIntKind {
     /// `u16::MAX` both swallow the max as null).  Read via `OpGetShortFull`; the
     /// write reuses `OpSetShortRaw` (same `(val - min)` store).
     ShortFull,
-    /// 4-byte raw.
+    /// 4-byte raw, SIGNED — `i32` and any `size(4)` range inside `i32`'s bounds.
+    /// `i32::MIN` is the null sentinel.
     Int4,
+    /// 4-byte UNSIGNED with the reserved `u32::MAX` null sentinel — a nullable slot, or
+    /// a narrow-vector element, of a type whose range runs past `i32::MAX` (`u32`).  The
+    /// 4-byte twin of `ShortRaw`.
+    Int4Raw,
+    /// 4-byte UNSIGNED, NO sentinel — a NOT-NULL field of such a type, so the full 2^32
+    /// round-trips.  Read via `OpGetInt4Full`; the write reuses `OpSetInt4Raw` (same
+    /// unsigned store).  The 4-byte twin of `ShortFull`.
+    Int4Full,
     /// 8-byte raw — the wide default.
     Int,
 }
@@ -356,13 +379,19 @@ impl NarrowIntKind {
     /// but only when the slot is NOT nullable; a nullable slot always reserves a
     /// sentinel regardless of field-vs-vector.
     #[must_use]
-    pub fn of(width: u8, nullable: bool, narrow_vec: bool) -> Self {
+    pub fn of(width: u8, nullable: bool, narrow_vec: bool, unsigned_wide: bool) -> Self {
         match width {
             1 if nullable => NarrowIntKind::ByteNullable,
             1 => NarrowIntKind::Byte,
             2 if nullable => NarrowIntKind::Short,
             2 if narrow_vec => NarrowIntKind::ShortRaw,
             2 => NarrowIntKind::ShortFull,
+            // The 4-byte split mirrors the 2-byte one directly above, but applies ONLY
+            // to a range that runs past `i32::MAX` (`unsigned_wide`).  Everything else
+            // 4-byte — `i32` above all — stays on the signed `Int4` pair, whose stored
+            // bytes are two's complement and are relied on beyond this module.
+            4 if unsigned_wide && (nullable || narrow_vec) => NarrowIntKind::Int4Raw,
+            4 if unsigned_wide => NarrowIntKind::Int4Full,
             4 => NarrowIntKind::Int4,
             _ => NarrowIntKind::Int,
         }
@@ -388,6 +417,8 @@ impl NarrowIntKind {
             NarrowIntKind::Short => "OpGetShort",
             NarrowIntKind::ShortFull => "OpGetShortFull",
             NarrowIntKind::Int4 => "OpGetInt4",
+            NarrowIntKind::Int4Raw => "OpGetInt4Raw",
+            NarrowIntKind::Int4Full => "OpGetInt4Full",
             NarrowIntKind::Int => "OpGetInt",
         }
     }
@@ -404,6 +435,9 @@ impl NarrowIntKind {
             // differs (`OpGetShortFull`, no sentinel decode).
             NarrowIntKind::ShortFull => "OpSetShortRaw",
             NarrowIntKind::Int4 => "OpSetInt4",
+            // not-null 4-byte reuses the raw unsigned store; only the READ differs
+            // (`OpGetInt4Full`, no sentinel decode) — as `ShortFull` does one width down.
+            NarrowIntKind::Int4Raw | NarrowIntKind::Int4Full => "OpSetInt4Raw",
             NarrowIntKind::Int => "OpSetInt",
         }
     }
@@ -1974,10 +2008,10 @@ pub fn has_lifetime_concern(t: &Type) -> bool {
 /// caller (`Data::tuple_def`) and the database `align` field set by
 /// `database::types`.
 #[must_use]
-pub fn element_align(t: &Type) -> u8 {
+pub fn element_stack_align(t: &Type) -> u8 {
     match t {
         // @PLN25 slice (b): `Optional(τ)` aligns like its base (same storage).
-        Type::Optional(inner) => element_align(inner),
+        Type::Optional(inner) => element_stack_align(inner),
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Character => 4,
         // P249 — fn-ref slot layout per `variables::size` and
@@ -2003,7 +2037,7 @@ pub fn element_align(t: &Type) -> u8 {
 /// Internal: max alignment across a tuple's elements.  Recursive
 /// because nested tuples contribute their own max alignment.
 fn element_offsets_alignment_max(types: &[Type]) -> u8 {
-    types.iter().map(element_align).max().unwrap_or(1)
+    types.iter().map(element_stack_align).max().unwrap_or(1)
 }
 
 /// Stack width in bytes of a single element type.
@@ -2015,10 +2049,10 @@ fn element_offsets_alignment_max(types: &[Type]) -> u8 {
 /// the runtime read path (`element_offsets`) and the storage layout
 /// (`calculate_positions_with_groups`) agree on every byte offset.
 #[must_use]
-pub fn element_size(t: &Type) -> usize {
+pub fn element_stack_size(t: &Type) -> usize {
     match t {
         // @PLN25 slice (b): `Optional(τ)` shares its base's sentinel storage size.
-        Type::Optional(inner) => element_size(inner),
+        Type::Optional(inner) => element_stack_size(inner),
         Type::Boolean | Type::Enum(_, false, _) => 1,
         Type::Single | Type::Character => 4,
         // P249 — fn-ref slot is 20 bytes (8 B d_nr + 12 B closure DbRef);
@@ -2037,28 +2071,78 @@ pub fn element_size(t: &Type) -> usize {
         | Type::Radix(_, _, _)
         | Type::Enum(_, true, _) => std::mem::size_of::<crate::keys::DbRef>(),
         Type::Tuple(elems) => {
-            // Atomic-group size: each element padded to its natural-
-            // alignment boundary inside the tuple block.  Identical
-            // to `LinkedFieldGroup::group_size` so storage layout
-            // (via `calculate_positions_with_groups`) and runtime
-            // reads (via `element_offsets`) line up byte-for-byte.
-            let mut pos: usize = 0;
-            for t in elems {
-                let align = element_align(t).max(1) as usize;
-                let rem = pos % align;
-                if rem != 0 {
-                    pos += align - rem;
-                }
-                pos += element_size(t);
-            }
-            pos
+            // @PLN114 — the STACK view: one `aligned_stack_step` slot per element,
+            // because that is what a push actually advances.  The natural-alignment
+            // packing this used to do described neither side — the callee's frame was
+            // sized from it while the caller's pushes stepped by 8, so `(P,P)`
+            // reserved 24 bytes for a 32-byte push and the callee read its second
+            // element 4 bytes early.  Storage is `element_storage_size`'s job now, so
+            // widening here no longer costs a byte on the heap.
+            elems
+                .iter()
+                .map(|t| {
+                    crate::variables::aligned_stack_step(element_stack_size(t) as u32) as usize
+                })
+                .sum()
         }
         _ => 0,
     }
 }
 
+/// The **STORAGE** width of one tuple element, in the record's terms (@PLN114).
+///
+/// Sibling of [`element_stack_size`]. A tuple has two legitimate layouts and the
+/// names must say which is which — they genuinely differ: `(u8, u16)` is **3 bytes
+/// stored** and **16 on the stack**. Consulting the wrong one silently is the whole
+/// bug class this pair exists to end.
+///
+/// [`element_size`] reports the **eval-stack** width: `Integer` is 8 bytes flat,
+/// because that is what a push occupies regardless of the alias's `size(N)`.  A
+/// tuple element stored in a record or a vector is a *field*, so it must be sized
+/// the way a field is — `IntegerSpec::byte_width`, the one home for the storage
+/// width (`forced_size` first, else the range).  Using the stack width for storage
+/// is what makes `(u8, u16)` occupy 16 bytes where `struct { a: u8, b: u16 }`
+/// occupies 3.
+///
+/// Records pack TIGHTLY — `struct { a: u8, b: u32, c: u16 }` is 1+4+2 = 7 bytes with
+/// no padding, because store access is unaligned-tolerant — so there is no alignment
+/// term here.
+#[must_use]
+pub fn element_storage_size(t: &Type) -> usize {
+    match t.base() {
+        Type::Integer(spec) => spec.byte_width(true) as usize,
+        Type::Tuple(elems) => elems.iter().map(element_storage_size).sum(),
+        // Measured against the record oracle: `(u8, text)` is 5 bytes, so a stored
+        // `text` element is the 4-byte heap pointer, NOT the 16-byte stack `Str`.
+        // `read_tuple_at_wide` says the same ("text: 4-byte heap-pointer") and
+        // inflates it to a `Str` for the worker slot.
+        Type::Text(_) => 4,
+        // A stored fn-ref is EIGHT bytes: `parser/mod.rs`'s `get_val` documents the
+        // shape — "storage is two database fields per loft attribute: `<attr>` 4B
+        // i32 d_nr, `<attr>__closure_rec` 4B vector header at pos+4".  The 20-byte
+        // figure is the STACK slot (8B d_nr + 12B closure DbRef), which `get_val`
+        // reconstructs from these two halves.  Reserving only 4 truncates the
+        // closure half and the fn-ref reads back wrong.
+        Type::Function(_, _, _) => 8,
+        other => element_stack_size(other),
+    }
+}
+
+/// Element offsets in the **STORAGE** (record) layout: cumulative
+/// [`element_storage_size`], packed tight. Sibling of [`element_stack_offsets`].
+#[must_use]
+pub fn element_storage_offsets(types: &[Type]) -> Vec<usize> {
+    let mut offsets = Vec::with_capacity(types.len());
+    let mut pos = 0usize;
+    for t in types {
+        offsets.push(pos);
+        pos += element_storage_size(t);
+    }
+    offsets
+}
+
 /// Byte offset of each element in a tuple-like layout.
-/// Element *i* starts at `offsets[i]`; total size is `element_size(&Type::Tuple(types))`.
+/// Element *i* starts at `offsets[i]`; total size is `element_stack_size(&Type::Tuple(types))`.
 ///
 /// **Alignment-aware**: each element is placed at the next position
 /// that satisfies its natural alignment.  For `(byte, integer)`,
@@ -2070,17 +2154,13 @@ pub fn element_size(t: &Type) -> usize {
 /// `calculate_positions_with_groups`) and runtime reads (via
 /// codegen / `read_tuple_at_wide`) compute the same offsets.
 #[must_use]
-pub fn element_offsets(types: &[Type]) -> Vec<usize> {
+pub fn element_stack_offsets(types: &[Type]) -> Vec<usize> {
     let mut offsets = Vec::with_capacity(types.len());
     let mut pos: usize = 0;
     for t in types {
-        let align = element_align(t).max(1) as usize;
-        let rem = pos % align;
-        if rem != 0 {
-            pos += align - rem;
-        }
         offsets.push(pos);
-        pos += element_size(t);
+        // @PLN114 — one stepped slot per element; see `element_stack_size`.
+        pos += crate::variables::aligned_stack_step(element_stack_size(t) as u32) as usize;
     }
     offsets
 }
@@ -2236,7 +2316,9 @@ mod tuple_stack_layout_tests {
     //! these helpers — it goes through the synthetic `__tuple<…>`
     //! struct's post-finish field positions via
     //! `state::codegen::stored_tuple_field_offset`.
-    use super::{IntegerSpec, Type, element_align, element_offsets, element_size};
+    use super::{
+        IntegerSpec, Type, element_stack_align, element_stack_offsets, element_stack_size,
+    };
 
     fn integer() -> Type {
         Type::Integer(IntegerSpec {
@@ -2255,23 +2337,95 @@ mod tuple_stack_layout_tests {
     fn stack_offsets_two_integers() {
         // (int, int): both 8B aligned 8.  Stack layout: [0, 8].
         let elems = vec![integer(), integer()];
-        assert_eq!(element_offsets(&elems), vec![0, 8]);
-        assert_eq!(element_size(&Type::Tuple(elems)), 16);
+        assert_eq!(element_stack_offsets(&elems), vec![0, 8]);
+        assert_eq!(element_stack_size(&Type::Tuple(elems)), 16);
     }
 
     #[test]
     fn stack_offsets_three_bools() {
-        // (bool, bool, bool): all 1B align 1.  Tightly packed.
+        // (bool, bool, bool) on the STACK: one stepped slot each, so [0, 8, 16] and
+        // 24 bytes — NOT the packed [0, 1, 2] this asserted before @PLN114.
+        //
+        // The old expectation described the storage layout while naming itself a
+        // stack test, and it was wrong about the stack in a way that mattered: a
+        // bool push advances `aligned_stack_step(1)` = 8, so a callee reading the
+        // second element at +1 read the first element's padding.  `probes/bool3`
+        // (a `(boolean,boolean,boolean)` argument) is the runtime witness.
+        // Storage still packs these into 3 bytes — see `storage_view_packs_like_a_record`.
         let elems = vec![boolean(), boolean(), boolean()];
-        assert_eq!(element_offsets(&elems), vec![0, 1, 2]);
-        assert_eq!(element_size(&Type::Tuple(elems)), 3);
+        assert_eq!(element_stack_offsets(&elems), vec![0, 8, 16]);
+        assert_eq!(element_stack_size(&Type::Tuple(elems)), 24);
+    }
+
+    fn narrow(bits: u8) -> Type {
+        // u8 / u16 / u32 shaped: a range-limited integer carrying `size(N)`.
+        Type::Integer(IntegerSpec {
+            min: 0,
+            max: match bits {
+                1 => 255,
+                2 => 65535,
+                _ => 4_294_967_294,
+            },
+            not_null: false,
+            forced_size: std::num::NonZeroU8::new(bits),
+        })
+    }
+
+    /// @PLN114 D1 — the storage view sizes elements as record FIELDS.
+    ///
+    /// Hand-computed against the record oracle: `struct { a: u8, b: u32, c: u16 }`
+    /// measures 7 bytes per record on this build, so the tuple of the same three
+    /// element types must compute 7 too.
+    #[test]
+    fn storage_view_packs_like_a_record() {
+        use super::{element_storage_offsets, element_storage_size};
+        let elems = vec![narrow(1), narrow(4), narrow(2)];
+        assert_eq!(element_storage_offsets(&elems), vec![0, 1, 5]);
+        assert_eq!(
+            element_storage_size(&Type::Tuple(elems)),
+            7,
+            "u8 + u32 + u16 packs to 7 bytes, as `struct M` does"
+        );
+
+        let pair = vec![narrow(1), narrow(2)];
+        assert_eq!(element_storage_offsets(&pair), vec![0, 1]);
+        assert_eq!(element_storage_size(&Type::Tuple(pair)), 3);
+    }
+
+    /// The stack view is unchanged and deliberately WIDER — a push occupies a whole
+    /// slot whatever the alias says.  The two views must not be confused, so pin the
+    /// difference rather than leaving it implicit.
+    #[test]
+    fn stack_view_stays_wide_where_storage_narrows() {
+        use super::{element_stack_size, element_storage_size};
+        let elems = vec![narrow(1), narrow(4), narrow(2)];
+        assert_eq!(
+            element_stack_size(&Type::Tuple(elems.clone())),
+            24,
+            "stack: three 8-byte integer slots"
+        );
+        assert_eq!(
+            element_storage_size(&Type::Tuple(elems)),
+            7,
+            "storage: 1 + 4 + 2"
+        );
+    }
+
+    /// Plain `integer` has no `forced_size`, so both views agree at 8 — which is why
+    /// `(integer, integer)` tuples have never shown either defect.
+    #[test]
+    fn storage_and_stack_agree_for_plain_integers() {
+        use super::{element_stack_size, element_storage_size};
+        let elems = vec![integer(), integer()];
+        assert_eq!(element_stack_size(&Type::Tuple(elems.clone())), 16);
+        assert_eq!(element_storage_size(&Type::Tuple(elems)), 16);
     }
 
     #[test]
     fn stack_alignment_max_member() {
         // Max alignment among elements drives the tuple's alignment.
         let elems = vec![boolean(), integer()];
-        assert_eq!(element_align(&Type::Tuple(elems)), 8);
+        assert_eq!(element_stack_align(&Type::Tuple(elems)), 8);
     }
 }
 
@@ -2279,7 +2433,7 @@ mod tuple_stack_layout_tests {
 /// (text, reference, vector, collection, struct-enum).
 #[must_use]
 pub fn owned_elements(types: &[Type]) -> Vec<(usize, usize)> {
-    let offsets = element_offsets(types);
+    let offsets = element_stack_offsets(types);
     let mut result = Vec::new();
     for (i, t) in types.iter().enumerate() {
         match t {
@@ -3326,7 +3480,7 @@ impl Data {
             };
         }
         // Plan-06 ARC.md A6.c — fn-ref vector elements are 4-byte
-        // d_nrs (`element_size(Type::Function) = 4`).  The previous
+        // d_nrs (`element_stack_size(Type::Function) = 4`).  The previous
         // routing via `vector_of` → `type_elm(Function)` →
         // `def_nr("i32").known_type` lands on a placeholder type
         // with `size = 0`, so `vector_append`'s stride is 0 and
@@ -4381,6 +4535,17 @@ impl Data {
         for (i, t) in types.iter().enumerate() {
             let aname = format!("_{i}");
             let attr_idx = self.add_attribute(lexer, d, &aname, t.clone());
+            // @PLN114 — a tuple element is nullable only if its TYPE says so, exactly
+            // like a declared struct field.  `add_attribute` defaults `nullable:
+            // true`, and a declared field overrides it from the declaration (`a: u8`
+            // is not-null, `a: u8?` is not); the synthetic tuple attributes never
+            // did, so every element resolved as nullable.  That split the op pair:
+            // `NarrowIntKind::of` gave the WRITE `Short`/`ByteNullable` (the `+1`
+            // sentinel encodings) while the READ resolved `ShortRaw`/`Byte`, so a
+            // narrow element was written shifted and read raw — `(1,2)` read back
+            // `(1,3)`.  The record picks the not-null pair on both sides; now so does
+            // the tuple.
+            self.set_attr_nullable(d, attr_idx, matches!(t, Type::Optional(_)));
             indices.push(attr_idx as u16);
             // For tuple element-size we use `data::element_size` (the
             // vector-storage width).  Natural alignment of an integer-
@@ -4389,26 +4554,13 @@ impl Data {
             // alignment is 4.  Functions are 4 bytes (i32 d_nr); the
             // stack-slot inflation (to 20B) happens at read-back, not
             // here — the GROUP's storage view is what matters.
-            let sz = element_size(t) as u16;
-            // @PLN25: peel `Optional(τ)` to its base so the inline align matches the
-            // peeled `element_size` above — an `Optional(Integer)` tuple element is sz=8
-            // and must be align=8, not the `_ => 1` that corrupts LinkedFieldGroup offsets.
-            let align = match t.base() {
-                Type::Boolean | Type::Enum(_, false, _) => 1,
-                Type::Single | Type::Character | Type::Function(_, _, _) => 4,
-                Type::Integer(_) | Type::Float => 8,
-                Type::Text(_) => 4, // heap pointer
-                Type::Reference(_, _)
-                | Type::Vector(_, _)
-                | Type::RefVar(_)
-                | Type::Sorted(_, _, _)
-                | Type::Index(_, _, _)
-                | Type::Hash(_, _, _)
-                | Type::Radix(_, _, _)
-                | Type::Enum(_, true, _) => 4, // DbRef alignment
-                Type::Tuple(_) => 8, // conservative max
-                _ => 1,
-            };
+            let sz = element_stack_size(t) as u16;
+            // @PLN114 A4 — one alignment table.  This used to carry an inline copy
+            // of `element_align`'s rules, which had already drifted: it said
+            // `Function => 4` where `element_align` says 8 (P249: the fn-ref slot's
+            // 8-byte d_nr dictates the slot alignment).  Nothing compared them, so
+            // nothing caught it.  `element_align` peels `Optional(τ)` itself.
+            let align = element_stack_align(t);
             sizes_aligns.push((sz, align));
         }
         let alignment = LinkedFieldGroup::group_alignment(

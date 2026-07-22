@@ -407,7 +407,11 @@ pub extern "C" fn loft_gl_swap_buffers() {
 
 #[loft_native]
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_gl_clear(color: u32) {
+pub extern "C" fn loft_gl_clear(color: i64) {
+    // `i64`, not `u32`: the loft side declares `gl_clear(color: integer)`, and loft
+    // emits the extern from that declaration, so it passes 64 bits.  Narrow the packed
+    // 0xAARRGGBB colour here rather than in the signature.
+    let color = color as u32;
     gl_guard!();
     // Color is packed as 0xAARRGGBB by graphics::rgba().
     let a = ((color >> 24) & 0xFF) as f32 / 255.0;

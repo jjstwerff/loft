@@ -1,0 +1,2511 @@
+=== bytecode ===
+fn n_f(t:(integer(0, 65535), integer(0, 65535))) {#block(1):void
+  __work_1(65535):text = "";
+  [1] n_print({#Formatted string(2):text["__work_1"]
+    __work_1(65535):text = "";
+    OpFormatInt(__work_1(65535), t.0, 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), ",");
+    OpFormatInt(__work_1(65535), t.1, 10i32, 0i32, 32i32, false, false, 2i32);
+    OpAppendText(__work_1(65535), "
+");
+    __work_1(65535);
+  }#Formatted string(2):text["__work_1"]);
+  OpFreeText(__work_1(65535));
+}#block(1):void
+
+byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/u16pair.loft:n_f(t: (integer(0, 65535), integer(0, 65535))[0])
+   0[16]: return-address  @abs=7565
+   0[24]: ReserveFrame(size=24)
+   3[48]: InitText(var[24]) var=__work_1[24]:text
+   6[48]: [1] ClearText(var[24]) var=__work_1[24]:text
+   9[48]: ConstText(_value="") -> text
+  11[64]: VarInt(var[0]) -> integer
+  14[72]: ConstInt(val=0) -> integer
+  23[80]: FormatInt(var[24], val: integer, radix=10, width: integer, token=32, plus=false, note=false, dir=2)
+  31[64]: ConstText(_value=",") -> text
+  34[80]: AppendText(var[24], v1: text)
+  37[64]: VarInt(var[8]) -> integer
+  40[72]: ConstInt(val=0) -> integer
+  49[80]: FormatInt(var[24], val: integer, radix=10, width: integer, token=32, plus=false, note=false, dir=2)
+  57[64]: ConstText(_value="\n") -> text
+  60[80]: AppendText(var[24], v1: text)
+  63[64]: VarText(var[24]) -> text var=__work_1[24]:text
+  66[80]: FreeStack(value=16, discard=32)
+  70[64]: Call(d_nr=355, args_size=16, fn=n_print)
+  89[48]: FreeText(var[24])
+  92[48]: Return(ret=16, value=0, discard=48)
+
+fn n_main() {#block(1):void
+  [2] n_f((300i32, 400i32));
+}#block(1):void
+
+byte-code for /home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/u16pair.loft:n_main()
+   0[0]: return-address  @abs=7663
+   0[8]: [2] ConstInt(val=300) -> integer
+   9[16]: ConstInt(val=400) -> integer
+  18[24]: Call(d_nr=641, args_size=16, fn=n_f)
+  37[8]: Return(ret=0, value=0, discard=8)
+
+
+=== rust ===
+#![allow(unused_imports)]
+#![allow(unused_parens)]
+#![allow(unused_variables)]
+#![allow(unreachable_code)]
+#![allow(unused_mut)]
+#![allow(non_snake_case)]
+#![allow(dead_code)]
+#![allow(redundant_semicolons)]
+#![allow(unused_assignments)]
+#![allow(unused_labels)]
+#![allow(unused_braces)]
+#![allow(clippy::double_parens)]
+#![allow(clippy::unused_unit)]
+#![allow(unused_unsafe)]
+
+extern crate loft;
+use loft::database::Stores;
+use loft::keys::{DbRef, Str, Key, Content};
+use loft::ops;
+use loft::vector;
+use loft::hash;
+use loft::tree;
+use loft::codegen_runtime;
+use loft::codegen_runtime::*;
+fn init(cell: &std::cell::UnsafeCell<Stores>) {
+    let db: &mut Stores = unsafe { &mut *cell.get() };
+    let t0: u16 = 0;
+    let t1: u16 = 1;
+    let t2: u16 = 2;
+    let t3: u16 = 3;
+    let t4: u16 = 4;
+    let t5: u16 = 5;
+    let t6: u16 = 6;
+    let _ = (t0, t1, t2, t3, t4, t5, t6); // suppress unused-let warnings for unreferenced base types
+    let t7 = db.enumerate("FieldValue");
+    let t8 = db.structure("__typevar_Self", 0);
+    let t9 = db.structure("__typevar_T", 0);
+    let t10 = db.structure("main_vector<T>", 0);
+    let vec_vector = db.vector(t9);
+    db.field(t10, "vector", vec_vector);
+    let t11 = db.vector(t9);
+    let _ = t11; // may be unused
+    let t12 = db.structure("FvBool", 1);
+    let byte_enum = db.byte(0, false);
+    db.field(t12, "enum", byte_enum);
+    db.field(t12, "v", t4);
+    let t13 = db.byte(0, false);
+    let _ = t13; // may be unused
+    let t14 = db.structure("FvInt", 2);
+    let byte_enum = db.byte(0, false);
+    db.field(t14, "enum", byte_enum);
+    db.field(t14, "v", 0);
+    let t15 = db.structure("FvLong", 3);
+    let byte_enum = db.byte(0, false);
+    db.field(t15, "enum", byte_enum);
+    db.field(t15, "v", 0);
+    let t16 = db.structure("FvFloat", 4);
+    let byte_enum = db.byte(0, false);
+    db.field(t16, "enum", byte_enum);
+    db.field(t16, "v", t3);
+    let t17 = db.structure("FvSingle", 5);
+    let byte_enum = db.byte(0, false);
+    db.field(t17, "enum", byte_enum);
+    db.field(t17, "v", t2);
+    let t18 = db.structure("FvChar", 6);
+    let byte_enum = db.byte(0, false);
+    db.field(t18, "enum", byte_enum);
+    db.field(t18, "v", t6);
+    let t19 = db.structure("FvText", 7);
+    let byte_enum = db.byte(0, false);
+    db.field(t19, "enum", byte_enum);
+    db.field(t19, "v", t5);
+    let t20 = db.structure("StructField", 0);
+    db.field(t20, "name", t5);
+    db.field(t20, "value", t7);
+    let t21 = db.vector(t0);
+    let _ = t21; // may be unused
+    let t22 = db.structure("main_vector<integer>", 0);
+    let vec_vector = db.vector(t0);
+    db.field(t22, "vector", vec_vector);
+    let t23 = db.vector(t5);
+    let _ = t23; // may be unused
+    let t24 = db.enumerate("Format");
+    let t25 = db.enumerate("FileResult");
+    let t26 = db.structure("EnvVariable", 0);
+    db.field(t26, "name", t5);
+    db.field(t26, "value", t5);
+    let t27 = db.structure("File", 0);
+    db.field(t27, "path", t5);
+    db.field(t27, "size", 0);
+    db.field(t27, "format", t24);
+    let int_ref = db.int(-2147483647, true);
+    db.field(t27, "ref", int_ref);
+    db.field(t27, "current", 0);
+    db.field(t27, "next", 0);
+    let t28 = db.int(-2147483647, true);
+    let _ = t28; // may be unused
+    let t29 = db.structure("main_vector<text>", 0);
+    let vec_vector = db.vector(t5);
+    db.field(t29, "vector", vec_vector);
+    let t30 = db.structure("main_vector<File>", 0);
+    let vec_vector = db.vector(t27);
+    db.field(t30, "vector", vec_vector);
+    let t31 = db.vector(t27);
+    let _ = t31; // may be unused
+    let t32 = db.enumerate("ArgValue");
+    let t33 = db.structure("NullVal", 1);
+    let byte_enum = db.byte(0, false);
+    db.field(t33, "enum", byte_enum);
+    let t34 = db.structure("BoolVal", 2);
+    let byte_enum = db.byte(0, false);
+    db.field(t34, "enum", byte_enum);
+    db.field(t34, "b", t4);
+    let t35 = db.structure("IntVal", 3);
+    let byte_enum = db.byte(0, false);
+    db.field(t35, "enum", byte_enum);
+    db.field(t35, "n", 0);
+    let t36 = db.structure("LongVal", 4);
+    let byte_enum = db.byte(0, false);
+    db.field(t36, "enum", byte_enum);
+    db.field(t36, "n", 0);
+    let t37 = db.structure("FloatVal", 5);
+    let byte_enum = db.byte(0, false);
+    db.field(t37, "enum", byte_enum);
+    db.field(t37, "f", t3);
+    let t38 = db.structure("SingleVal", 6);
+    let byte_enum = db.byte(0, false);
+    db.field(t38, "enum", byte_enum);
+    db.field(t38, "f", t2);
+    let t39 = db.structure("CharVal", 7);
+    let byte_enum = db.byte(0, false);
+    db.field(t39, "enum", byte_enum);
+    db.field(t39, "c", t6);
+    let t40 = db.structure("TextVal", 8);
+    let byte_enum = db.byte(0, false);
+    db.field(t40, "enum", byte_enum);
+    db.field(t40, "t", t5);
+    let t41 = db.structure("RefVal", 9);
+    let byte_enum = db.byte(0, false);
+    db.field(t41, "enum", byte_enum);
+    db.field(t41, "store", 0);
+    db.field(t41, "rec", 0);
+    db.field(t41, "pos", 0);
+    let t42 = db.structure("FnVal", 10);
+    let byte_enum = db.byte(0, false);
+    db.field(t42, "enum", byte_enum);
+    db.field(t42, "d_nr", 0);
+    let t43 = db.structure("OtherVal", 11);
+    let byte_enum = db.byte(0, false);
+    db.field(t43, "enum", byte_enum);
+    db.field(t43, "description", t5);
+    let t44 = db.structure("ArgInfo", 0);
+    db.field(t44, "name", t5);
+    db.field(t44, "type_name", t5);
+    db.field(t44, "value", t32);
+    let t45 = db.structure("VarInfo", 0);
+    db.field(t45, "name", t5);
+    db.field(t45, "type_name", t5);
+    db.field(t45, "value", t32);
+    let t46 = db.structure("StackFrame", 0);
+    db.field(t46, "function", t5);
+    db.field(t46, "file", t5);
+    db.field(t46, "line", 0);
+    let vec_arguments = db.vector(t44);
+    db.field(t46, "arguments", vec_arguments);
+    let vec_variables = db.vector(t45);
+    db.field(t46, "variables", vec_variables);
+    let t47 = db.vector(t44);
+    let _ = t47; // may be unused
+    let t48 = db.vector(t45);
+    let _ = t48; // may be unused
+    let t49 = db.structure("main_vector<ArgInfo>", 0);
+    let vec_vector = db.vector(t44);
+    db.field(t49, "vector", vec_vector);
+    let t50 = db.structure("main_vector<VarInfo>", 0);
+    let vec_vector = db.vector(t45);
+    db.field(t50, "vector", vec_vector);
+    let t51 = db.enumerate("CoroutineStatus");
+    let t52 = db.enumerate("JsonValue");
+    let t53 = db.structure("JNull", 1);
+    let byte_enum = db.byte(0, false);
+    db.field(t53, "enum", byte_enum);
+    let t54 = db.structure("JBool", 2);
+    let byte_enum = db.byte(0, false);
+    db.field(t54, "enum", byte_enum);
+    db.field(t54, "value", t4);
+    let t55 = db.structure("JNumber", 3);
+    let byte_enum = db.byte(0, false);
+    db.field(t55, "enum", byte_enum);
+    db.field(t55, "value", t3);
+    let t56 = db.structure("JString", 4);
+    let byte_enum = db.byte(0, false);
+    db.field(t56, "enum", byte_enum);
+    db.field(t56, "value", t5);
+    let t57 = db.structure("JArray", 5);
+    let byte_enum = db.byte(0, false);
+    db.field(t57, "enum", byte_enum);
+    let vec_items = db.vector(t52);
+    db.field(t57, "items", vec_items);
+    let t58 = db.vector(t52);
+    let _ = t58; // may be unused
+    let t59 = db.structure("JObject", 6);
+    let byte_enum = db.byte(0, false);
+    db.field(t59, "enum", byte_enum);
+    let t60 = db.structure("JsonField", 0);
+    db.field(t60, "name", t5);
+    db.field(t60, "value", t52);
+    let vec_fields = db.vector(t60);
+    db.field(t59, "fields", vec_fields);
+    let t61 = db.vector(t60);
+    let _ = t61; // may be unused
+    let t62 = db.structure("JInteger", 7);
+    let byte_enum = db.byte(0, false);
+    db.field(t62, "enum", byte_enum);
+    db.field(t62, "value", 0);
+    let t63 = db.structure("main_vector<JsonValue>", 0);
+    let vec_vector = db.vector(t52);
+    db.field(t63, "vector", vec_vector);
+    let t64 = db.structure("main_vector<JsonField>", 0);
+    let vec_vector = db.vector(t60);
+    db.field(t64, "vector", vec_vector);
+    let t65 = db.structure("__tuple<integer(0, 65535),integer(0, 65535)>", 0);
+    db.field(t65, "_0", 0);
+    db.field(t65, "_1", 0);
+    db.add_tuple_group(t65, &[0, 1]);
+    let t66 = db.short(0, true);
+    let _ = t66; // may be unused
+    db.value(t7, "FvBool", t12);
+    db.value(t7, "FvInt", t14);
+    db.value(t7, "FvLong", t15);
+    db.value(t7, "FvFloat", t16);
+    db.value(t7, "FvSingle", t17);
+    db.value(t7, "FvChar", t18);
+    db.value(t7, "FvText", t19);
+    db.value(t24, "TextFile", u16::MAX);
+    db.value(t24, "LittleEndian", u16::MAX);
+    db.value(t24, "BigEndian", u16::MAX);
+    db.value(t24, "Directory", u16::MAX);
+    db.value(t24, "NotExists", u16::MAX);
+    db.value(t25, "Ok", u16::MAX);
+    db.value(t25, "NotFound", u16::MAX);
+    db.value(t25, "PermissionDenied", u16::MAX);
+    db.value(t25, "IsDirectory", u16::MAX);
+    db.value(t25, "Other", u16::MAX);
+    db.value(t25, "ok", u16::MAX);
+    db.value(t32, "NullVal", t33);
+    db.value(t32, "BoolVal", t34);
+    db.value(t32, "IntVal", t35);
+    db.value(t32, "LongVal", t36);
+    db.value(t32, "FloatVal", t37);
+    db.value(t32, "SingleVal", t38);
+    db.value(t32, "CharVal", t39);
+    db.value(t32, "TextVal", t40);
+    db.value(t32, "RefVal", t41);
+    db.value(t32, "FnVal", t42);
+    db.value(t32, "OtherVal", t43);
+    db.value(t51, "Created", u16::MAX);
+    db.value(t51, "Suspended", u16::MAX);
+    db.value(t51, "Running", u16::MAX);
+    db.value(t51, "Exhausted", u16::MAX);
+    db.value(t52, "JNull", t53);
+    db.value(t52, "JBool", t54);
+    db.value(t52, "JNumber", t55);
+    db.value(t52, "JString", t56);
+    db.value(t52, "JArray", t57);
+    db.value(t52, "JObject", t59);
+    db.value(t52, "JInteger", t62);
+    db.value(t52, "field", u16::MAX);
+    db.value(t52, "item", u16::MAX);
+    db.value(t52, "len", u16::MAX);
+    db.value(t52, "as_text", u16::MAX);
+    db.value(t52, "as_number", u16::MAX);
+    db.value(t52, "as_long", u16::MAX);
+    db.value(t52, "as_bool", u16::MAX);
+    db.value(t52, "kind", u16::MAX);
+    db.value(t52, "keys", u16::MAX);
+    db.value(t52, "fields", u16::MAX);
+    db.value(t52, "has_field", u16::MAX);
+    db.value(t52, "to_json", u16::MAX);
+    db.value(t52, "to_json_pretty", u16::MAX);
+    db.finish();
+}
+
+fn i_parse_errors(cell: &std::cell::UnsafeCell<Stores>) -> String {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  loft::codegen_runtime::i_parse_errors(stores)
+}
+
+
+fn i_parse_error_push(cell: &std::cell::UnsafeCell<Stores>, mut var_msg: &str) {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  loft::codegen_runtime::i_parse_error_push(stores, var_msg)
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:47
+fn __iface_14_OpLt(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> u8 {
+  todo!("native function __iface_14_OpLt")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:53
+fn __iface_17_OpEq(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> u8 {
+  todo!("native function __iface_17_OpEq")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:59
+fn __iface_19_OpAdd(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> DbRef {
+  todo!("native function __iface_19_OpAdd")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:66
+fn __iface_21_OpMul(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> DbRef {
+  todo!("native function __iface_21_OpMul")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:67
+fn __iface_21_OpMin(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef) -> DbRef {
+  todo!("native function __iface_21_OpMin")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:74
+fn __iface_24_scale(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_factor: i64) -> i64 {
+  todo!("native function __iface_24_scale")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:80
+fn __iface_26_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef) -> Str {
+  todo!("native function __iface_26_to_text")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:151
+fn t_7integer_abs(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:152
+  return ops::op_abs_int((var_both))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:236
+fn t_7integer_floor_mod(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64, mut var_divisor: i64) -> i64 { //block_1: optional(integer(-2147483647, 2147483647, false))
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:237
+  return {{ let _v_v2 = (var_divisor); if _v_v2 == 0 { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::DivideByZero); i64::MIN } else { ops::op_rem_int(({ops::op_add_int(({{ let _v_v2 = (var_divisor); if _v_v2 == 0 { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::DivideByZero); i64::MIN } else { ops::op_rem_int((var_both), _v_v2) } }}), (var_divisor))}), _v_v2) } }}
+  } /*block_1: optional(integer(-2147483647, 2147483647, false))*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:253
+fn t_6single_abs(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:254
+  return (var_both).abs()
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:291
+fn t_6single_cos(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:292
+  return {{ let _v_v1 = (var_both); match (0_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:297
+fn t_6single_sin(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:298
+  return {{ let _v_v1 = (var_both); match (1_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:303
+fn t_6single_tan(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:304
+  return {{ let _v_v1 = (var_both); match (2_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:309
+fn t_6single_acos(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:310
+  return {{ let _v_v1 = (var_both); match (3_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:315
+fn t_6single_asin(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:316
+  return {{ let _v_v1 = (var_both); match (4_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:321
+fn t_6single_atan(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:322
+  return {{ let _v_v1 = (var_both); match (5_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:328
+fn t_6single_ceil(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:329
+  return {{ let _v_v1 = (var_both); match (6_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:335
+fn t_6single_floor(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:336
+  return {{ let _v_v1 = (var_both); match (7_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:341
+fn t_6single_round(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:342
+  return {{ let _v_v1 = (var_both); match (8_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:347
+fn t_6single_sqrt(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:348
+  return {{ let _v_v1 = (var_both); match (9_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f32::NAN } }}
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:356
+fn t_6single_atan2(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_v2: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:357
+  return {{ let _v_v2 = (var_v2); { let _v_v1 = (var_both); match (0_i8) { 0 => _v_v1.atan2(_v_v2), 1 => _v_v1.log(_v_v2), _ => f32::NAN } } }}
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:363
+fn t_6single_log(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_v2: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:364
+  return {{ let _v_v2 = (var_v2); { let _v_v1 = (var_both); match (1_i8) { 0 => _v_v1.atan2(_v_v2), 1 => _v_v1.log(_v_v2), _ => f32::NAN } } }}
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:372
+fn t_6single_pow(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_v2: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:373
+  return (var_both).powf((var_v2))
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:406
+fn t_5float_abs(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:407
+  return (var_both).abs()
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:422
+fn t_5float_cos(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:423
+  return {{ let _v_v1 = (var_both); match (0_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:428
+fn t_5float_sin(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:429
+  return {{ let _v_v1 = (var_both); match (1_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:434
+fn t_5float_tan(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:435
+  return {{ let _v_v1 = (var_both); match (2_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:440
+fn t_5float_acos(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:441
+  return {{ let _v_v1 = (var_both); match (3_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:446
+fn t_5float_asin(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:447
+  return {{ let _v_v1 = (var_both); match (4_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:452
+fn t_5float_atan(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:453
+  return {{ let _v_v1 = (var_both); match (5_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:459
+fn t_5float_ceil(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:460
+  return {{ let _v_v1 = (var_both); match (6_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:466
+fn t_5float_floor(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:467
+  return {{ let _v_v1 = (var_both); match (7_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:472
+fn t_5float_round(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:473
+  return {{ let _v_v1 = (var_both); match (8_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:478
+fn t_5float_sqrt(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:479
+  return {{ let _v_v1 = (var_both); match (9_i8) { 0 => _v_v1.cos(), 1 => _v_v1.sin(), 2 => _v_v1.tan(), 3 => _v_v1.acos(), 4 => _v_v1.asin(), 5 => _v_v1.atan(), 6 => _v_v1.ceil(), 7 => _v_v1.floor(), 8 => _v_v1.round(), 9 => _v_v1.sqrt(), _ => f64::NAN } }}
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:487
+fn t_5float_atan2(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_v2: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:488
+  return {{ let _v_v2 = (var_v2); { let _v_v1 = (var_both); match (0_i8) { 0 => _v_v1.atan2(_v_v2), 1 => _v_v1.log(_v_v2), _ => f64::NAN } } }}
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:494
+fn t_5float_log(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_v2: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:495
+  return {{ let _v_v2 = (var_v2); { let _v_v1 = (var_both); match (1_i8) { 0 => _v_v1.atan2(_v_v2), 1 => _v_v1.log(_v_v2), _ => f64::NAN } } }}
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:503
+fn t_5float_pow(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_v2: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:504
+  return (var_both).powf((var_v2))
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:510
+fn t_6single_exp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:511
+  return ((std::f64::consts::E) as f32).powf((var_both))
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:516
+fn t_5float_exp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:517
+  return (std::f64::consts::E).powf((var_both))
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:522
+fn t_6single_ln(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:523
+  return t_6single_log(cell, var_both, (std::f64::consts::E) as f32)
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:528
+fn t_5float_ln(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:529
+  return t_5float_log(cell, var_both, std::f64::consts::E)
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:534
+fn t_6single_log2(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:535
+  return t_6single_log(cell, var_both, 2_f32)
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:540
+fn t_5float_log2(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:541
+  return t_5float_log(cell, var_both, 2_f64)
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:546
+fn t_6single_log10(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32) -> f32 { //block_1: optional(single)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:547
+  return t_6single_log(cell, var_both, 10_f32)
+  } /*block_1: optional(single)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:552
+fn t_5float_log10(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64) -> f64 { //block_1: optional(float)
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:553
+  return t_5float_log(cell, var_both, 10_f64)
+  } /*block_1: optional(float)*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:606
+fn t_7integer_min(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64, mut var_b: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:607
+  return if ((((var_both) as i64) <= ((var_b) as i64)) as u8) == 1 { //block_2: integer
+    var_both
+    } /*block_2: integer*/ else { //block_3: integer
+    var_b
+    } /*block_3: integer*/
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:611
+fn t_7integer_max(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64, mut var_b: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:612
+  return if ((((var_b) as i64) <= ((var_both) as i64)) as u8) == 1 { //block_2: integer
+    var_both
+    } /*block_2: integer*/ else { //block_3: integer
+    var_b
+    } /*block_3: integer*/
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:616
+fn t_7integer_clamp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i64, mut var_lo: i64, mut var_hi: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:617
+  return t_7integer_min(cell, t_7integer_max(cell, var_both, var_lo), var_hi)
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:622
+fn t_6single_min(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_b: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:623
+  return if (({{ let _v_v2 = (var_b); { let _v_v1 = (var_both); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8) == 1 { //block_2: single
+    var_both
+    } /*block_2: single*/ else { //block_3: single
+    var_b
+    } /*block_3: single*/
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:627
+fn t_6single_max(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_b: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:628
+  return if (({{ let _v_v2 = (var_both); { let _v_v1 = (var_b); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8) == 1 { //block_2: single
+    var_both
+    } /*block_2: single*/ else { //block_3: single
+    var_b
+    } /*block_3: single*/
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:632
+fn t_6single_clamp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_lo: f32, mut var_hi: f32) -> f32 { //block_1: single
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:633
+  return t_6single_min(cell, t_6single_max(cell, var_both, var_lo), var_hi)
+  } /*block_1: single*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:637
+fn t_5float_min(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_b: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:638
+  return if (({{ let _v_v2 = (var_b); { let _v_v1 = (var_both); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8) == 1 { //block_2: float
+    var_both
+    } /*block_2: float*/ else { //block_3: float
+    var_b
+    } /*block_3: float*/
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:642
+fn t_5float_max(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_b: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:643
+  return if (({{ let _v_v2 = (var_both); { let _v_v1 = (var_b); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8) == 1 { //block_2: float
+    var_both
+    } /*block_2: float*/ else { //block_3: float
+    var_b
+    } /*block_3: float*/
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:647
+fn t_5float_clamp(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_lo: f64, mut var_hi: f64) -> f64 { //block_1: float
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:648
+  return t_5float_min(cell, t_5float_max(cell, var_both, var_lo), var_hi)
+  } /*block_1: float*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:655
+fn t_5float_approx(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f64, mut var_b: f64, mut var_eps: f64) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:656
+  return (if ((if ((((!(var_both).is_nan()) as u8) != 1) as u8) == 1 {({true} as u8)} else {({((!(var_b).is_nan()) as u8) != 1} as u8)}) as u8) == 1 {({{ //block_2: boolean
+      (false) as u8
+      } /*block_2: boolean*/} as u8)} else {({{ //block_3: boolean
+      ({{ let _v_v2 = (var_eps); { let _v_v1 = (t_5float_abs(cell, (var_both) - (var_b))); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8
+      } /*block_3: boolean*/} as u8)}) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:660
+fn t_6single_approx(cell: &std::cell::UnsafeCell<Stores>, mut var_both: f32, mut var_b: f32, mut var_eps: f32) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:661
+  return (if ((if ((((!(var_both).is_nan()) as u8) != 1) as u8) == 1 {({true} as u8)} else {({((!(var_b).is_nan()) as u8) != 1} as u8)}) as u8) == 1 {({{ //block_2: boolean
+      (false) as u8
+      } /*block_2: boolean*/} as u8)} else {({{ //block_3: boolean
+      ({{ let _v_v2 = (var_eps); { let _v_v1 = (t_6single_abs(cell, (var_both) - (var_b))); _v_v1.is_nan() || (!_v_v2.is_nan() && _v_v1 <= _v_v2) } }}) as u8
+      } /*block_3: boolean*/} as u8)}) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:680
+fn t_4text_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: &str) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:681
+  return (var_both).chars().count() as i64
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:690
+fn t_4text_size(cell: &std::cell::UnsafeCell<Stores>, mut var_both: &str) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:691
+  return (var_both).len() as i64
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:697
+fn t_9character_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: i32) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:698
+  return OpLengthCharacter(cell, var_both)
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:953
+fn t_6vector_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:954
+  return i64::from(vector::length_vector(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:991
+fn t_6sorted_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:992
+  return i64::from(vector::length_vector(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:999
+fn t_6vector_clear(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1000
+  if var_both.rec != 0 { vector::clear_vector(&var_both, &mut stores.allocations); };
+  } /*block_1: void*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1150
+fn t_4hash_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1151
+  return i64::from(hash::count(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1163
+fn t_4hash_size(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1164
+  return i64::from(hash::table_bytes(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+fn n_assert<M: std::fmt::Display, F: std::fmt::Display>(_cell: &std::cell::UnsafeCell<Stores>, test: u8, msg: M, file: F, line: i64) {
+  if test != 1 { panic!("{}:{} {}", file, line, msg); }
+}
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1192
+fn n_panic(cell: &std::cell::UnsafeCell<Stores>, mut var_message: &str, mut var_file: &str, mut var_line: i64) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1197
+fn n_log_info(cell: &std::cell::UnsafeCell<Stores>, mut var_message: &str, mut var_file: &str, mut var_line: i64) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1200
+fn n_log_warn(cell: &std::cell::UnsafeCell<Stores>, mut var_message: &str, mut var_file: &str, mut var_line: i64) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1203
+fn n_log_error(cell: &std::cell::UnsafeCell<Stores>, mut var_message: &str, mut var_file: &str, mut var_line: i64) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1206
+fn n_log_fatal(cell: &std::cell::UnsafeCell<Stores>, mut var_message: &str, mut var_file: &str, mut var_line: i64) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1212
+fn n_print(cell: &std::cell::UnsafeCell<Stores>, mut var_v1: &str) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("print", "/home/jurjens/workspace/loft2/default/01_code.loft", 1212);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1213
+  {{ let _v_v1 = (var_v1); #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+crate::loft_host_print(_v_v1.as_ptr(), _v_v1.len());
+#[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
+if !loft::rpc::print_or_capture(_v_v1) { print!("{}", _v_v1); }
+#[cfg(all(not(feature = "wasm"), target_arch = "wasm32", target_os = "wasi"))]
+print!("{}", _v_v1);
+#[cfg(feature = "wasm")]
+crate::wasm::output_push(_v_v1); }};
+  } /*block_1: void*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1218
+fn n_println(cell: &std::cell::UnsafeCell<Stores>, mut var_v1: &str) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("println", "/home/jurjens/workspace/loft2/default/01_code.loft", 1218);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1219
+  let _pre_0 = &*({ //Formatted string_2: text["__work_1"]
+    var___work_1 = String::with_capacity(16_usize);
+    ops::format_text(&mut var___work_1, var_v1, 0_i64, 2, 32);
+    var___work_1 += &*("\n");
+    &var___work_1
+    } /*Formatted string_2: text["__work_1"]*/);
+  {{ let _v_v1 = (_pre_0); #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+crate::loft_host_print(_v_v1.as_ptr(), _v_v1.len());
+#[cfg(all(not(feature = "wasm"), not(target_arch = "wasm32")))]
+if !loft::rpc::print_or_capture(_v_v1) { print!("{}", _v_v1); }
+#[cfg(all(not(feature = "wasm"), target_arch = "wasm32", target_os = "wasi"))]
+print!("{}", _v_v1);
+#[cfg(feature = "wasm")]
+crate::wasm::output_push(_v_v1); }};
+  ;
+  } /*block_1: void*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1227
+fn n_eprint(cell: &std::cell::UnsafeCell<Stores>, mut var_v1: &str) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1232
+fn n_eprintln(cell: &std::cell::UnsafeCell<Stores>, mut var_v1: &str) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("eprintln", "/home/jurjens/workspace/loft2/default/01_code.loft", 1232);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1233
+  let _pre_1 = &*({ //Formatted string_2: text["__work_1"]
+    var___work_1 = String::with_capacity(16_usize);
+    ops::format_text(&mut var___work_1, var_v1, 0_i64, 2, 32);
+    var___work_1 += &*("\n");
+    &var___work_1
+    } /*Formatted string_2: text["__work_1"]*/);
+  eprint!("{}", (_pre_1));
+  ;
+  } /*block_1: void*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1292
+fn t_7spatial_len(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1293
+  return i64::from(codegen_runtime::spatial_len(&(var_both), &stores.allocations))
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1376
+fn n_yield_frame(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1387
+fn n_parallel_for(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> DbRef {
+  todo!("native function n_parallel_for")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1411
+fn n_parallel_discard(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1429
+fn n_parallel_queue(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1434
+fn n_parallel_buf_get(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> i64 {
+  todo!("native function n_parallel_buf_get")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1437
+fn n_parallel_buf_drop(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1452
+fn n_parallel_queue_text(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue_text")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1456
+fn n_parallel_buf_get_text(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> String {
+  todo!("native function n_parallel_buf_get_text")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1458
+fn n_parallel_buf_drop_text(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1474
+fn n_parallel_queue_ref(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue_ref")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1476
+fn n_parallel_buf_get_ref(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> DbRef {
+  todo!("native function n_parallel_buf_get_ref")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1479
+fn n_parallel_buf_drop_ref(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1494
+fn n_parallel_queue_narrow(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue_narrow")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1499
+fn n_parallel_buf_get_narrow(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64, mut var_return_size: i64, mut var_signed: i64) -> i64 {
+  todo!("native function n_parallel_buf_get_narrow")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1501
+fn n_parallel_buf_drop_narrow(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1508
+fn n_parallel_buf_get_single(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> f32 {
+  todo!("native function n_parallel_buf_get_single")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1514
+fn n_parallel_buf_get_float(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> f64 {
+  todo!("native function n_parallel_buf_get_float")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1531
+fn n_parallel_fold(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_init: i64, mut var_fold: i64, mut var_threads: i64) -> i64 {
+  todo!("native function n_parallel_fold")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1547
+fn n_parallel_queue_fn(cell: &std::cell::UnsafeCell<Stores>, mut var_input: DbRef, mut var_element_size: i64, mut var_return_size: i64, mut var_threads: i64, mut var_func: i64) -> i64 {
+  todo!("native function n_parallel_queue_fn")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1560
+fn n_parallel_buf_get_fn(cell: &std::cell::UnsafeCell<Stores>, mut var_idx: i64) -> (u32, DbRef) {
+  todo!("native function n_parallel_buf_get_fn")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1562
+fn n_parallel_buf_drop_fn(cell: &std::cell::UnsafeCell<Stores>) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1573
+fn t_1T_OpLt(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef) -> u8 {
+  todo!("native function t_1T_OpLt")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1593
+fn t_1T_OpAdd(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_other: DbRef, mut var___retbuf: DbRef) -> DbRef {
+  todo!("native function t_1T_OpAdd")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1603
+fn n_sum_of(cell: &std::cell::UnsafeCell<Stores>, mut var_v: DbRef) -> i64 { //block_1: integer
+  if loft::live_dispatch::live_flipped(0) { return loft::live_dispatch::live_call_i64(cell, 0, |st| { st.put_stack(var_v); }); }
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("sum_of", "/home/jurjens/workspace/loft2/default/01_code.loft", 1603);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1604
+  return t_7integer_sum(cell, var_v, 0_i64)
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1611
+fn __iface_421_children(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef) -> DbRef {
+  todo!("native function __iface_421_children")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1613
+fn t_1T_children(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var___retbuf: DbRef) -> DbRef {
+  todo!("native function t_1T_children")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1651
+fn t_7integer_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i64, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1652
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    ops::format_long_with_tag(var___work_1, var_self, stores.take_format_fault(), 10 as u8, 0_i64, 32 as u8, false, false, 2 as i8);
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1655
+fn t_5float_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: f64, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1656
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    ops::format_float(var___work_1, var_self, 0_i64, -1_i64, 2_i64 as i8);
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1659
+fn t_6single_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: f32, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1660
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    ops::format_single(var___work_1, var_self, 0_i64, -1_i64, 2_i64 as i8);
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1663
+fn t_7boolean_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: u8, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1664
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    ops::format_text(&mut var___work_1, &*({{ let _v_v1 = ((var_self) as u8); if _v_v1 == 1 {"true"} else if _v_v1 == 255 {"null"} else {"false"} }}), 0_i64, 2, 32);
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1667
+fn t_9character_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32, mut var___work_1: &mut String) -> Str { //block_1: text["__work_1"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1668
+  return Str::new({ { //Formatted string_2: text["__work_1"]
+    *var___work_1 = ("").to_string();
+    {let c = var_self; if c != 0 { var___work_1.push(ops::to_char(c)); } };
+    &*var___work_1
+    } /*Formatted string_2: text["__work_1"]*/ })
+  } /*block_1: text["__work_1"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1671
+fn t_4text_to_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> String { //block_1: text["self"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1672
+  return (var_self).to_string()
+  } /*block_1: text["self"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/01_code.loft:1593
+fn t_7integer_sum(cell: &std::cell::UnsafeCell<Stores>, mut var_v: DbRef, mut var_init: i64) -> i64 { //block_1: integer
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  let mut var___ref_1: i64 = 0;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1594
+  let mut var_result: i64 = var_init;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1595
+  { //For block_2: void
+    let mut var_i__index: i64 = i64::MIN;
+    'l3: loop { //For loop_3
+      let mut var_i: i64 = { //Iter range_4: integer
+        var_i__index = if ((((ops::op_conv_bool_from_int((var_i__index))) as u8) != 1) as u8) == 1 {0_i64} else {ops::op_add_int((var_i__index), (1_i64))};
+        if ((((t_6vector_len(cell, var_v)) as i64) <= ((var_i__index) as i64)) as u8) == 1 {break} else {()};
+        var_i__index
+        } /*Iter range_4: integer*/;
+      { //block_5: void
+        let _pre_2 = {{let __vr = (var_v); let __vi = (var_i); stores.vec_get_or_raise_runtime(&__vr, (8_i64) as u32, __vi)}};
+        var_result = {ops::op_add_int((var_result), ({{let db = (_pre_2); if db.rec == 0 { i64::MIN } else { stores.store(&db).get_int(db.rec, db.pos + (0_i64) as u32)} }}))};
+        } /*block_5: void*/;
+      } /*For loop_3*/;
+    } /*For block_2: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/01_code.loft:1596
+  return var_result
+  } /*block_1: integer*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:48
+fn t_10FileResult_ok(cell: &std::cell::UnsafeCell<Stores>, mut var_self: u8) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:49
+  return ((({{ let _v_v1 = ((var_self) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((1_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:55
+fn n_fs_result(cell: &std::cell::UnsafeCell<Stores>, mut var_code: i64) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("fs_result", "/home/jurjens/workspace/loft2/default/02_files.loft", 55);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:56
+  return { { //scalar_match_2: FileResult
+    let mut var__match_subj_1: i64 = var_code;
+    if ((((var__match_subj_1) as i64) == ((0_i64) as i64)) as u8) == 1 {1_u8} else {if ((((var__match_subj_1) as i64) == ((1_i64) as i64)) as u8) == 1 {2_u8} else {if ((((var__match_subj_1) as i64) == ((2_i64) as i64)) as u8) == 1 {3_u8} else {if ((((var__match_subj_1) as i64) == ((3_i64) as i64)) as u8) == 1 {4_u8} else {5_u8}}}}
+    } /*scalar_match_2: FileResult*/ }
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:131
+fn t_4File_content(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_result: &mut String) -> Str { //block_1: optional(text(deps { items: [1] }))
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:134
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_2: never
+    return Str::new(loft::state::STRING_NULL)
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:135
+  *var_result = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:136
+  let mut var_txt: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:137
+  OpGetFileText(cell, var_self, &mut var_txt);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:138
+  *var_result += &*(&var_txt);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:139
+  ;
+  return Str::new(&*var_result)
+  } /*block_1: optional(text(deps { items: [1] }))*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:148
+fn t_4File_lines(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var___retbuf: DbRef) -> DbRef { //block_1: vector<text>["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  let mut var___vdb_1: DbRef = DbRef::NULL;
+  var___vdb_1 = DbRef::NULL;
+  let mut var___work_1: String = "".to_string();
+  if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:149
+  var___vdb_1 = OpDatabase(cell,var___vdb_1, 29_i32);
+  let mut var_result: DbRef = {{ let _v_v1 = (var___vdb_1); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }};
+  {{ let _v_val = (0_i64); {let db = (var___vdb_1); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (0_i64) as u32, v); }} }};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:151
+  let mut var_c: String = "".to_string();
+  { //ncc_2: void
+    let _pre_2 = { //default ref_3: ref(reference)["__work_1"]
+      var___work_1 = "".to_string();
+      &mut var___work_1
+      } /*default ref_3: ref(reference)["__work_1"]*/;
+    let mut var___ncc_1: String = t_4File_content(cell, var_self, _pre_2).to_string();
+    if (((&var___ncc_1) != loft::state::STRING_NULL) as u8) == 1 {var_c = var___ncc_1.clone()} else {var_c = "".to_string()};
+    } /*ncc_2: void*/;
+  ;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:152
+  let mut var_p: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:153
+  let mut var_prev_cr: u8 = (false) as u8;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:154
+  { //For block_4: void
+    let mut var_ch__index: i64 = 0_i64;
+    let mut var_ch__next: i64 = 0_i64;
+    'l5: loop { //For loop_5
+      let mut var_ch: i32 = { //for text next_6: character
+        var_ch__index = var_ch__next;
+        let mut var__for_result_1: i32 = (ops::text_character((&var_c), (var_ch__next))) as u32 as i32;
+        var_ch__next = ops::op_add_int((var_ch__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_6: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_ch)))) as u8) != 1) as u8) == 1 { //break_7: void
+        break;
+        } /*break_7: void*/ else {()};
+      { //block_8: void
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:155
+        let mut var__elm_1: DbRef = DbRef::NULL;
+        let mut var__elm_2: DbRef = DbRef::NULL;
+        if (((({{ let _v_v1 = (ops::to_char(var_ch)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (10_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_9: void
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:156
+          let mut var_e: i64 = var_ch__index;
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:157
+          if ((var_prev_cr) as u8) == 1 { //block_10: void
+            {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+            var__elm_1 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+            {{let db = (var__elm_1); let s_val = (&*(OpGetTextSub(&var_c, var_p, ops::op_min_int((var_e), (1_i64))))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+            OpFinishRecord(cell, var_result, var__elm_1, 23_i32, 65535_i32);
+            } /*block_10: void*/ else { //block_11: void
+            {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+            var__elm_2 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+            {{let db = (var__elm_2); let s_val = (&*(OpGetTextSub(&var_c, var_p, var_e))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+            OpFinishRecord(cell, var_result, var__elm_2, 23_i32, 65535_i32);
+            } /*block_11: void*/;
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:158
+          var_p = var_ch__next;
+          } /*block_9: void*/ else {()};
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:160
+        var_prev_cr = ((({{ let _v_v1 = (ops::to_char(var_ch)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (13_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8;
+        } /*block_8: void*/;
+      } /*For loop_5*/;
+    } /*For block_4: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:162
+  let mut var__elm_3: DbRef = DbRef::NULL;
+  if ((((var_p) as i64) < ((t_4text_size(cell, &var_c)) as i64)) as u8) == 1 { //block_12: void
+    {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+    var__elm_3 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+    {{let db = (var__elm_3); let s_val = (&*(OpGetTextSub(&var_c, var_p, t_4text_size(cell, &var_c)))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+    OpFinishRecord(cell, var_result, var__elm_3, 23_i32, 65535_i32);
+    } /*block_12: void*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:163
+  { //one_buffer_vec_copy_13: vector<text>["__retbuf"]
+    if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+    { let _av_t = var___retbuf; let _av_s = var_result; stores.vector_add(&_av_t, &_av_s, (5_i64) as u16); };
+    ;
+    ;
+    OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+    return var___retbuf
+    } /*one_buffer_vec_copy_13: vector<text>["__retbuf"]*/
+  } /*block_1: vector<text>["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:171
+fn t_4text_split(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_separator: i32, mut var___retbuf: DbRef) -> DbRef { //block_1: vector<text>["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  let mut var___vdb_1: DbRef = DbRef::NULL;
+  var___vdb_1 = DbRef::NULL;
+  if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:172
+  var___vdb_1 = OpDatabase(cell,var___vdb_1, 29_i32);
+  let mut var_result: DbRef = {{ let _v_v1 = (var___vdb_1); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }};
+  {{ let _v_val = (0_i64); {let db = (var___vdb_1); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (0_i64) as u32, v); }} }};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:173
+  let mut var_p: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:174
+  { //For block_2: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l3: loop { //For loop_3
+      let mut var_c: i32 = { //for text next_4: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_4: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_c)))) as u8) != 1) as u8) == 1 { //break_5: void
+        break;
+        } /*break_5: void*/ else {()};
+      { //block_6: void
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:175
+        let mut var__elm_1: DbRef = DbRef::NULL;
+        if (((({{ let _v_v1 = (ops::to_char(var_c)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(var_separator)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_7: void
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:176
+          {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+          var__elm_1 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+          {{let db = (var__elm_1); let s_val = (&*(OpGetTextSub(var_self, var_p, var_c__index))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+          OpFinishRecord(cell, var_result, var__elm_1, 23_i32, 65535_i32);
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:177
+          var_p = var_c__next;
+          } /*block_7: void*/ else {()};
+        } /*block_6: void*/;
+      } /*For loop_3*/;
+    } /*For block_2: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:183
+  let mut var__elm_2: DbRef = DbRef::NULL;
+  if ((((0_i64) as i64) < ((t_4text_len(cell, var_self)) as i64)) as u8) == 1 { //block_8: void
+    {vector::pre_alloc_vector(&(var_result), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+    var__elm_2 = OpNewRecord(cell, var_result, 23_i32, 65535_i32);
+    {{let db = (var__elm_2); let s_val = (&*(OpGetTextSub(var_self, var_p, t_4text_size(cell, var_self)))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+    OpFinishRecord(cell, var_result, var__elm_2, 23_i32, 65535_i32);
+    } /*block_8: void*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:184
+  { //one_buffer_vec_copy_9: vector<text>["__retbuf"]
+    if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+    { let _av_t = var___retbuf; let _av_s = var_result; stores.vector_add(&_av_t, &_av_s, (5_i64) as u16); };
+    OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+    return var___retbuf
+    } /*one_buffer_vec_copy_9: vector<text>["__retbuf"]*/
+  } /*block_1: vector<text>["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:197
+fn t_4text_split_text(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_separator: &str, mut var___retbuf: DbRef) -> DbRef { //block_1: vector<text>["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  let mut var___vdb_1: DbRef = DbRef::NULL;
+  var___vdb_1 = DbRef::NULL;
+  if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:198
+  var___vdb_1 = OpDatabase(cell,var___vdb_1, 29_i32);
+  let mut var_out: DbRef = {{ let _v_v1 = (var___vdb_1); DbRef {store_nr: _v_v1.store_nr, rec: _v_v1.rec, pos: _v_v1.pos + (0_i64) as u32} }};
+  {{ let _v_val = (0_i64); {let db = (var___vdb_1); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (0_i64) as u32, v); }} }};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:199
+  let mut var_n: i64 = t_4text_size(cell, var_self);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:200
+  if ((((var_n) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    {stores.vector_replace(&(var___retbuf), &(var_out), (5_u16));};
+          OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+      return var___retbuf
+
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:201
+  let mut var_sl: i64 = t_4text_size(cell, var_separator);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:202
+  let mut var__elm_1: DbRef = DbRef::NULL;
+  if ((((var_sl) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_3: never
+    // loft:/home/jurjens/workspace/loft2/default/02_files.loft:203
+    {vector::pre_alloc_vector(&(var_out), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+    var__elm_1 = OpNewRecord(cell, var_out, 23_i32, 65535_i32);
+    {{let db = (var__elm_1); let s_val = (var_self).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+    OpFinishRecord(cell, var_out, var__elm_1, 23_i32, 65535_i32);
+    {stores.vector_replace(&(var___retbuf), &(var_out), (5_u16));};
+          OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+      return var___retbuf
+
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:205
+  let mut var_p: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:206
+  let mut var_i: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:207
+  'l4: loop { //while_4
+    if ((((((ops::op_add_int((var_i), (var_sl))) as i64) <= ((var_n) as i64)) as u8) != 1) as u8) == 1 { //break_5: void
+      break;
+      } /*break_5: void*/ else {()};
+    { //block_6: void
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:208
+      let mut var__elm_2: DbRef = DbRef::NULL;
+      if (((&*(OpGetTextSub(var_self, var_i, ops::op_add_int((var_i), (var_sl))))) == (var_separator)) as u8) == 1 { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:209
+        {vector::pre_alloc_vector(&(var_out), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+        var__elm_2 = OpNewRecord(cell, var_out, 23_i32, 65535_i32);
+        {{let db = (var__elm_2); let s_val = (&*(OpGetTextSub(var_self, var_p, var_i))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+        OpFinishRecord(cell, var_out, var__elm_2, 23_i32, 65535_i32);
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:210
+        var_p = ops::op_add_int((var_i), (var_sl));
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:211
+        var_i = var_p;
+        } /*block_7: void*/ else { //block_8: void
+        var_i = ops::op_add_int((var_i), (1_i64));
+        } /*block_8: void*/;
+      } /*block_6: void*/;
+    } /*while_4*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:214
+  {vector::pre_alloc_vector(&(var_out), (1_i64) as u32, (4_i64) as u32, &mut stores.allocations);};
+  let mut var__elm_3: DbRef = OpNewRecord(cell, var_out, 23_i32, 65535_i32);
+  {{let db = (var__elm_3); let s_val = (&*(OpGetTextSub(var_self, var_p, var_n))).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (0_i64) as u32, s_pos); }}};
+  OpFinishRecord(cell, var_out, var__elm_3, 23_i32, 65535_i32);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:215
+  { //one_buffer_vec_copy_9: vector<text>["__retbuf"]
+    if var___retbuf.rec != 0 { vector::clear_vector(&var___retbuf, &mut stores.allocations); };
+    { let _av_t = var___retbuf; let _av_s = var_out; stores.vector_add(&_av_t, &_av_s, (5_i64) as u16); };
+    OpFreeRef(cell,var___vdb_1, "var___vdb_1"); var___vdb_1.store_nr = u16::MAX;
+    return var___retbuf
+    } /*one_buffer_vec_copy_9: vector<text>["__retbuf"]*/
+  } /*block_1: vector<text>["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:230
+fn n_valid_path(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("valid_path", "/home/jurjens/workspace/loft2/default/02_files.loft", 230);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:231
+  let mut var_depth: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:232
+  let mut var_start: i64 = 0_i64;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:233
+  { //For block_2: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l3: loop { //For loop_3
+      let mut var_c: i32 = { //for text next_4: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_path), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_4: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_c)))) as u8) != 1) as u8) == 1 { //break_5: void
+        break;
+        } /*break_5: void*/ else {()};
+      { //block_6: void
+        // loft:/home/jurjens/workspace/loft2/default/02_files.loft:234
+        let mut var_part: String = "".to_string();
+        if ((if (((({{ let _v_v1 = (ops::to_char(var_c)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 {({true} as u8)} else {({(({{ let _v_v1 = (ops::to_char(var_c)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (92_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)}) as u8) == 1 { //block_7: void
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:235
+          var_part = OpGetTextSub(var_path, var_start, var_c__index).to_string();
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:236
+          var_start = var_c__next;
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:237
+          if (((&var_part) == ("..")) as u8) == 1 { //block_8: void
+            // loft:/home/jurjens/workspace/loft2/default/02_files.loft:238
+            var_depth = ops::op_min_int_nullable((var_depth), (1_i64));
+            // loft:/home/jurjens/workspace/loft2/default/02_files.loft:239
+            if ((((var_depth) as i64) < ((0_i64) as i64)) as u8) == 1 { //block_9: never
+              let mut var___ret_1: u8 = (false) as u8;
+              ;
+              return (var___ret_1) as u8
+              } /*block_9: never*/ else {()};
+            } /*block_8: void*/ else {if ((if (((&var_part) != (".")) as u8) == 1 {({((0_i64) as i64) < ((t_4text_len(cell, &var_part)) as i64)} as u8)} else {({false} as u8)}) as u8) == 1 { //block_10: void
+              // loft:/home/jurjens/workspace/loft2/default/02_files.loft:240
+              var_depth = ops::op_add_int((var_depth), (1_i64));
+              } /*block_10: void*/ else {()}};
+          } /*block_7: void*/ else {()};
+        ;
+        } /*block_6: void*/;
+      } /*For loop_3*/;
+    } /*For block_2: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:243
+  if ((((var_start) as i64) < ((t_4text_size(cell, var_path)) as i64)) as u8) == 1 { //block_11: void
+    // loft:/home/jurjens/workspace/loft2/default/02_files.loft:244
+    let mut var_part: String = OpGetTextSub(var_path, var_start, t_4text_size(cell, var_path)).to_string();
+    // loft:/home/jurjens/workspace/loft2/default/02_files.loft:245
+    if (((&var_part) == ("..")) as u8) == 1 { //block_12: void
+      var_depth = ops::op_min_int((var_depth), (1_i64));
+      } /*block_12: void*/ else {()};
+    ;
+    } /*block_11: void*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:247
+  return (((0_i64) as i64) <= ((var_depth) as i64)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:253
+fn n_file(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str, mut var_result: DbRef) -> DbRef { //block_1: ref(File)["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("file", "/home/jurjens/workspace/loft2/default/02_files.loft", 253);
+  let _call_guard = codegen_runtime::CallGuard;
+  let _rb_w_result: DbRef = var_result;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:254
+  var_result = OpDatabase(cell,var_result, 27_i32);
+  {{let db = (var_result); let s_val = (var_path).to_string(); if db.rec != 0 { let store = stores.store_mut(&db); let s_pos = store.set_str(&s_val); store.set_u32_raw(db.rec, db.pos + (24_i64) as u32, s_pos); }}};
+  {{ let _v_val = (i64::MIN); {let db = (var_result); let v = if _v_val == i64::MIN { i32::MIN } else { _v_val as i32 }; if db.rec != 0 { stores.store_mut(&db).set_i32_raw(db.rec, db.pos + (28_i64) as u32, v); }} }};
+  {{let db = (var_result); let v = (0_i64); if db.rec != 0 { stores.store_mut(&db).set_int(db.rec, db.pos + (0_i64) as u32, v); }}};
+  {{let db = (var_result); let v = ((0_u8) as u8); if db.rec != 0 { stores.store_mut(&db).set_byte(db.rec, db.pos + (32_i64) as u32, 0, i32::from(v)); }}};
+  {{let db = (var_result); let v = (0_i64); if db.rec != 0 { stores.store_mut(&db).set_int(db.rec, db.pos + (8_i64) as u32, v); }}};
+  {{let db = (var_result); let v = (0_i64); if db.rec != 0 { stores.store_mut(&db).set_int(db.rec, db.pos + (16_i64) as u32, v); }}};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:255
+  if ((n_valid_path(cell, var_path)) as u8) == 1 { //block_2: void
+    stores.get_file(&(var_result));
+    } /*block_2: void*/ else { //block_3: void
+    {{let db = (var_result); let v = ((5_u8) as u8); if db.rec != 0 { stores.store_mut(&db).set_byte(db.rec, db.pos + (32_i64) as u32, 0, i32::from(v)); }}};
+    } /*block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:256
+  return var_result
+  } /*block_1: ref(File)["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:263
+fn n_exists(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("exists", "/home/jurjens/workspace/loft2/default/02_files.loft", 263);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___lift_1: DbRef = DbRef::NULL;
+  let mut var___ref_1: DbRef = DbRef::NULL;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:264
+  { let _old___lift_1: DbRef = var___lift_1; { let _dst = var___lift_1; let _src = n_file(cell, var_path, var___ref_1); if _src.store_nr == u16::MAX || _src.store_nr == _dst.store_nr { if _dst.store_nr != u16::MAX && _dst.store_nr != _src.store_nr { OpFreeRef(cell, _dst, "__lift_1(displaced)"); } var___lift_1 = _src; } else { var___lift_1 = OpDatabase(cell, _dst, 27_i32); OpCopyRecord(cell,_src, var___lift_1, 32795_i32); } }; if _old___lift_1.store_nr != var___lift_1.store_nr { OpFreeRef(cell, _old___lift_1, "var___lift_1(prev)"); } };
+  let _pre_2 = {{let db = (var___lift_1); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}};
+  let mut var___ret_1: u8 = ((({{ let _v_v1 = ((_pre_2) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) != (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8;
+  OpFreeRef(cell,var___lift_1, "var___lift_1"); var___lift_1.store_nr = u16::MAX;
+  OpFreeRef(cell,var___ref_1, "var___ref_1"); var___ref_1.store_nr = u16::MAX;
+  return (var___ret_1) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:270
+fn t_4File_exists(cell: &std::cell::UnsafeCell<Stores>, mut var_both: DbRef) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:271
+  return ((({{ let _v_v1 = (({{let db = (var_both); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) != (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:278
+fn n_delete(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("delete", "/home/jurjens/workspace/loft2/default/02_files.loft", 278);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:279
+  if ((((n_exists(cell, var_path)) as u8) != 1) as u8) == 1 { //block_2: never
+    return 2_u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:280
+  return n_fs_result(cell, codegen_runtime::fs_delete(&stores.resolve_path((var_path))))
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:288
+fn n_move(cell: &std::cell::UnsafeCell<Stores>, mut var_from: &str, mut var_to: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("move", "/home/jurjens/workspace/loft2/default/02_files.loft", 288);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:289
+  if ((if ((((n_valid_path(cell, var_to)) as u8) != 1) as u8) == 1 {({true} as u8)} else {({((n_valid_path(cell, var_from)) as u8) != 1} as u8)}) as u8) == 1 { //block_2: never
+    return 2_u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:290
+  if ((((n_exists(cell, var_from)) as u8) != 1) as u8) == 1 { //block_3: never
+    return 2_u8
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:291
+  if ((n_exists(cell, var_to)) as u8) == 1 { //block_4: never
+    return 5_u8
+    } /*block_4: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:292
+  return n_fs_result(cell, codegen_runtime::fs_move(&stores.resolve_path((var_from)), &stores.resolve_path((var_to))))
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:298
+fn n_mkdir(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("mkdir", "/home/jurjens/workspace/loft2/default/02_files.loft", 298);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:299
+  if ((((n_valid_path(cell, var_path)) as u8) != 1) as u8) == 1 { //block_2: never
+    return 2_u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:300
+  return n_fs_result(cell, codegen_runtime::fs_mkdir(&stores.resolve_path((var_path))))
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:306
+fn n_mkdir_all(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("mkdir_all", "/home/jurjens/workspace/loft2/default/02_files.loft", 306);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:307
+  if ((((n_valid_path(cell, var_path)) as u8) != 1) as u8) == 1 { //block_2: never
+    return 2_u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:308
+  return n_fs_result(cell, codegen_runtime::fs_mkdir_all(&stores.resolve_path((var_path))))
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:313
+fn n_is_dir(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 {
+  todo!("native function n_is_dir")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:318
+fn n_is_file(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 {
+  todo!("native function n_is_file")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:325
+fn n_list_dir(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> DbRef {
+  todo!("native function n_list_dir")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:332
+fn n_read_bytes(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> DbRef {
+  todo!("native function n_read_bytes")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:338
+fn n_write_bytes(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str, mut var_bytes: DbRef) -> u8 {
+  todo!("native function n_write_bytes")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:354
+fn n_mtime(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> i64 {
+  todo!("native function n_mtime")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:364
+fn n_store_durable_check(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 {
+  todo!("native function n_store_durable_check")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:374
+fn n_store_durable_seal(cell: &std::cell::UnsafeCell<Stores>, mut var_path: &str) -> u8 {
+  todo!("native function n_store_durable_seal")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:414
+fn n_store_persist_bind(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_path: &str) -> u8 {
+  todo!("native function n_store_persist_bind")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:431
+fn n_store_load(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_path: &str) -> u8 {
+  todo!("native function n_store_load")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:445
+fn n_store_load_url(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_url: &str, mut var_sha256: &str) -> u8 {
+  todo!("native function n_store_load_url")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:456
+fn n_store_load_url_trusted(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_url: &str) -> u8 {
+  todo!("native function n_store_load_url_trusted")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:468
+fn n_store_load_untrusted(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef, mut var_path: &str) -> u8 {
+  todo!("native function n_store_load_untrusted")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:481
+fn n_store_verify(cell: &std::cell::UnsafeCell<Stores>, mut var_r: DbRef) -> u8 {
+  todo!("native function n_store_verify")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:493
+fn n_store_load_key(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_path: &str, mut var_key: i64) -> u8 {
+  todo!("native function n_store_load_key")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:503
+fn n_store_load_key_text(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_path: &str, mut var_key: &str) -> u8 {
+  todo!("native function n_store_load_key_text")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:513
+fn n_store_load_keys(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_path: &str, mut var_keys: DbRef) -> i64 {
+  todo!("native function n_store_load_keys")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:524
+fn n_store_load_range(cell: &std::cell::UnsafeCell<Stores>, mut var_local: DbRef, mut var_path: &str, mut var_lo: i64, mut var_hi: i64) -> i64 {
+  todo!("native function n_store_load_range")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:530
+fn t_4File_set_file_size(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_size: i64) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:531
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((4_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_2: never
+    return 4_u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:532
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_3: never
+    return 2_u8
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:533
+  if ((((var_size) as i64) < ((0_i64) as i64)) as u8) == 1 { //block_4: never
+    return 5_u8
+    } /*block_4: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:534
+  if ((OpTruncateFile(cell, var_self, var_size)) as u8) == 1 { //block_5: never
+    return 1_u8
+    } /*block_5: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:535
+  return 5_u8
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:543
+fn t_4File_sync(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:544
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((4_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:545
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((5_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_3: never
+    return (false) as u8
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:546
+  return (OpSyncFile(cell, var_self)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:553
+fn t_4File_files(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_result: DbRef) -> DbRef { //block_1: vector<ref(File)>["__retbuf"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  if var_result.rec != 0 { vector::clear_vector(&var_result, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:554
+  if var_result.rec != 0 { vector::clear_vector(&var_result, &mut stores.allocations); };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:555
+  if (((({{ let _v_v1 = (({{let db = (var_self); if db.rec == 0 { 0u8 } else { let r = stores.store(&db).get_byte(db.rec, db.pos + (32_i64) as u32, 0); if r < 0 { 255u8 } else { r as u8 } }}}) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64) == (({{ let _v_v1 = ((4_u8) as u8); if _v_v1 == 255 { i64::MIN } else { i64::from(_v_v1) } }}) as i64)) as u8) == 1 { //block_2: void
+    {stores.get_dir((&*({{let db = (var_self); if db.rec == 0 { loft::state::STRING_NULL } else { let store = stores.store(&db); store.get_str(store.get_u32_raw(db.rec, db.pos + (24_i64) as u32)) } }})), &(var_result))};
+    } /*block_2: void*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:556
+  return var_result
+  } /*block_1: vector<ref(File)>["__retbuf"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:561
+fn n_write_text_raw(cell: &std::cell::UnsafeCell<Stores>, mut var_file: DbRef, mut var_v: &str) -> u8 {
+  todo!("native function n_write_text_raw")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:569
+fn t_4File_write(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_v: &str) -> u8 { //block_1: FileResult
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:570
+  return if (({{ let __wf_v = (var_v); stores.write_file(&(var_self), __wf_v) }}) as u8) == 1 { //block_2: FileResult
+    1_u8
+    } /*block_2: FileResult*/ else { //block_3: FileResult
+    5_u8
+    } /*block_3: FileResult*/
+  } /*block_1: FileResult*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:577
+fn n_env_variables(cell: &std::cell::UnsafeCell<Stores>) -> DbRef {
+  todo!("native function n_env_variables")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:582
+fn n_env_variable(cell: &std::cell::UnsafeCell<Stores>, mut var_name: &str) -> Str {
+  todo!("native function n_env_variable")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:592
+fn n_host_input(cell: &std::cell::UnsafeCell<Stores>) -> Str {
+  todo!("native function n_host_input")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:602
+fn n_host_output(cell: &std::cell::UnsafeCell<Stores>, mut var_msg: &str) {
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:622
+fn n_store_memory(cell: &std::cell::UnsafeCell<Stores>) -> Str {
+  todo!("native function n_store_memory")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:688
+fn t_4text_starts_with(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> u8 {
+  todo!("native function t_4text_starts_with")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:692
+fn t_4text_ends_with(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> u8 {
+  todo!("native function t_4text_ends_with")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:701
+fn t_4text_dir(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> String { //block_1: text["self"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:702
+  let mut var_n: i64 = t_4text_size(cell, var_self);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:703
+  let mut var_i: i64 = var_n;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:704
+  'l2: loop { //while_2
+    if ((((((0_i64) as i64) < ((var_i) as i64)) as u8) != 1) as u8) == 1 { //break_3: void
+      break;
+      } /*break_3: void*/ else {()};
+    { //block_4: void
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:705
+      if (((({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((var_self), (ops::op_min_int((var_i), (1_i64))))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_5: never
+        return (OpGetTextSub(var_self, 0_i64, ops::op_min_int((var_i), (1_i64)))).to_string()
+        } /*block_5: never*/ else {()};
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:706
+      var_i = ops::op_min_int((var_i), (1_i64));
+      } /*block_4: void*/;
+    } /*while_2*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:708
+  return ("").to_string()
+  } /*block_1: text["self"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:716
+fn t_4text_basename(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> String { //block_1: text["self"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:717
+  let mut var_n: i64 = t_4text_size(cell, var_self);
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:718
+  let mut var_i: i64 = var_n;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:719
+  'l2: loop { //while_2
+    if ((((((0_i64) as i64) < ((var_i) as i64)) as u8) != 1) as u8) == 1 { //break_3: void
+      break;
+      } /*break_3: void*/ else {()};
+    { //block_4: void
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:720
+      if (((({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((var_self), (ops::op_min_int((var_i), (1_i64))))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_5: never
+        return (OpGetTextSub(var_self, var_i, var_n)).to_string()
+        } /*block_5: never*/ else {()};
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:721
+      var_i = ops::op_min_int((var_i), (1_i64));
+      } /*block_4: void*/;
+    } /*while_2*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:723
+  return (var_self).to_string()
+  } /*block_1: text["self"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:731
+fn t_4text_join(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_other: &str, mut var___work_1: &mut String, mut var___work_2: &mut String) -> Str { //block_1: text["__work_1", "__work_2", "other"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_2 = ("").to_string();
+  *var___work_1 = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:732
+  if (((var_other).starts_with(("/"))) as u8) == 1 { //block_2: never
+    return Str::new(var_other)
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:733
+  if (((var_self) == ("")) as u8) == 1 { //block_3: never
+    return Str::new(var_other)
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:734
+  if (((var_self).ends_with(("/"))) as u8) == 1 { //block_4: never
+    return Str::new({ { //Formatted string_5: text["__work_1"]
+      *var___work_1 = ("").to_string();
+      ops::format_text(&mut var___work_1, var_self, 0_i64, 2, 32);
+      ops::format_text(&mut var___work_1, var_other, 0_i64, 2, 32);
+      &*var___work_1
+      } /*Formatted string_5: text["__work_1"]*/ })
+    } /*block_4: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:735
+  return Str::new({ { //Formatted string_6: text["__work_2"]
+    *var___work_2 = ("").to_string();
+    ops::format_text(&mut var___work_2, var_self, 0_i64, 2, 32);
+    *var___work_2 += &*("/");
+    ops::format_text(&mut var___work_2, var_other, 0_i64, 2, 32);
+    &*var___work_2
+    } /*Formatted string_6: text["__work_2"]*/ })
+  } /*block_1: text["__work_1", "__work_2", "other"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/02_files.loft:745
+fn t_4text_resolve(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_target: &str, mut var_t: &mut String, mut var___work_4: &mut String) -> Str { //block_1: text["base", "t"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  *var___work_4 = ("").to_string();
+  let mut var___work_3: String = "".to_string();
+  let mut var___work_2: String = "".to_string();
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:746
+  let mut var_base: String = var_self.to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:747
+  *var_t = (var_target).to_string();
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:749
+  'l2: loop { //while_2
+    if (({((if ((if ((((2_i64) as i64) <= ((t_4text_size(cell, &*var_t)) as i64)) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (0_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (46_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (1_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) != 1}) as u8) == 1 { //break_3: void
+      break;
+      } /*break_3: void*/ else {()};
+    { //block_4: void
+      var___work_1.clear();
+      var___work_1 += &*(OpGetTextSub(&*var_t, 2_i64, t_4text_size(cell, &*var_t)));
+      *var_t = (&var___work_1).to_string();
+      } /*block_4: void*/;
+    } /*while_2*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:751
+  'l5: loop { //while_5
+    if (({((if ((if ((if ((((3_i64) as i64) <= ((t_4text_size(cell, &*var_t)) as i64)) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (0_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (46_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (1_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (46_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) == 1 {({(({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&*var_t), (2_i64))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)} as u8)} else {({false} as u8)}) as u8) != 1}) as u8) == 1 { //break_6: void
+      break;
+      } /*break_6: void*/ else {()};
+    { //block_7: void
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:752
+      let mut var_bn: i64 = t_4text_size(cell, &var_base);
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:753
+      let mut var_cut: i64 = var_bn;
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:754
+      let mut var_walked: u8 = (false) as u8;
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:755
+      'l8: loop { //while_8
+        if ((((((0_i64) as i64) < ((var_cut) as i64)) as u8) != 1) as u8) == 1 { //break_9: void
+          break;
+          } /*break_9: void*/ else {()};
+        { //block_10: void
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:756
+          if (((({{ let _v_v1 = (ops::to_char((stores.text_char_or_raise_runtime((&var_base), (ops::op_min_int((var_cut), (1_i64))))) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64) == (({{ let _v_v1 = (ops::to_char(({ let _v_v1 = (47_i64); if _v_v1 == i64::MIN { char::from(0) } else if let Some(c) = char::from_u32((_v_v1) as u32) { c } else { stores.raise_recoverable_runtime(loft::runtime_error::RuntimeErrorKind::CastOutOfRange); char::from(0) } }) as u32 as i32)); if _v_v1 == char::from(0) { i64::MIN } else { i64::from(_v_v1 as u32) } }}) as i64)) as u8) == 1 { //block_11: never
+            // loft:/home/jurjens/workspace/loft2/default/02_files.loft:757
+            var_cut = ops::op_min_int((var_cut), (1_i64));
+            // loft:/home/jurjens/workspace/loft2/default/02_files.loft:758
+            var_walked = (true) as u8;
+            // loft:/home/jurjens/workspace/loft2/default/02_files.loft:759
+            break
+            } /*block_11: never*/ else {()};
+          // loft:/home/jurjens/workspace/loft2/default/02_files.loft:761
+          var_cut = ops::op_min_int((var_cut), (1_i64));
+          } /*block_10: void*/;
+        } /*while_8*/;
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:763
+      if ((var_walked) as u8) == 1 { //block_12: void
+        var___work_2.clear();
+        var___work_2 += &*(OpGetTextSub(&var_base, 0_i64, var_cut));
+        var_base = var___work_2.clone();
+        } /*block_12: void*/ else { //block_13: void
+        var_base = "".to_string();
+        } /*block_13: void*/;
+      // loft:/home/jurjens/workspace/loft2/default/02_files.loft:764
+      var___work_3.clear();
+      var___work_3 += &*(OpGetTextSub(&*var_t, 3_i64, t_4text_size(cell, &*var_t)));
+      *var_t = (&var___work_3).to_string();
+      } /*block_7: void*/;
+    } /*while_5*/;
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:766
+  if (((&var_base) == ("")) as u8) == 1 { //block_14: never
+    ;
+    ;
+    ;
+    ;
+    return Str::new(&*var_t)
+    } /*block_14: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/02_files.loft:767
+  { //Formatted string_15: text["__work_4"]
+    *var___work_4 = ("").to_string();
+    ops::format_text(&mut var___work_4, &var_base, 0_i64, 2, 32);
+    *var___work_4 += &*("/");
+    ops::format_text(&mut var___work_4, &*var_t, 0_i64, 2, 32);
+    ;
+    ;
+    ;
+    ;
+    return Str::new(&*var___work_4)
+    } /*Formatted string_15: text["__work_4"]*/
+  } /*block_1: text["base", "t"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:19
+fn t_4text_starts_with_at(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_pos: i64, mut var_prefix: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:20
+  let mut var_pl: i64 = t_4text_size(cell, var_prefix);
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:21
+  let mut var_sl: i64 = t_4text_size(cell, var_self);
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:22
+  if ((((var_pos) as i64) < ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:23
+  if ((((var_sl) as i64) < ((ops::op_add_int((var_pos), (var_pl))) as i64)) as u8) == 1 { //block_3: never
+    return (false) as u8
+    } /*block_3: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:24
+  return ((&*(OpGetTextSub(var_self, var_pos, ops::op_add_int((var_pos), (var_pl))))) == (var_prefix)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:31
+fn t_4text_trim(cell: &std::cell::UnsafeCell<Stores>, mut var_both: &str) -> Str {
+  todo!("native function t_4text_trim")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:35
+fn t_4text_trim_start(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> Str {
+  todo!("native function t_4text_trim_start")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:39
+fn t_4text_trim_end(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> Str {
+  todo!("native function t_4text_trim_end")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:45
+fn t_4text_find(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> i64 {
+  todo!("native function t_4text_find")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:51
+fn t_4text_rfind(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> i64 {
+  todo!("native function t_4text_rfind")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:59
+fn t_4text_contains(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:60
+  return (((if let Some(v) = (var_self).find((var_value)) { v as i64 } else { i64::MIN }) as i64) != ((i64::MIN) as i64)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:64
+fn t_4text_replace(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_value: &str, mut var_with: &str) -> Str {
+  todo!("native function t_4text_replace")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:68
+fn t_4text_to_lowercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> Str {
+  todo!("native function t_4text_to_lowercase")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:72
+fn t_4text_to_uppercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> Str {
+  todo!("native function t_4text_to_uppercase")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:76
+fn t_4text_is_lowercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:77
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:78
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_c)))) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:79
+        if (((((ops::to_char(var_c)).is_lowercase()) as u8) != 1) as u8) == 1 { //block_8: never
+          return (false) as u8
+          } /*block_8: never*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:81
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:85
+fn t_9character_is_lowercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_lowercase")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:90
+fn t_4text_is_uppercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:91
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:92
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_c)))) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:93
+        if (((((ops::to_char(var_c)).is_uppercase()) as u8) != 1) as u8) == 1 { //block_8: never
+          return (false) as u8
+          } /*block_8: never*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:95
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:99
+fn t_9character_is_uppercase(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_uppercase")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:104
+fn t_4text_is_numeric(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:105
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:106
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_c)))) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:107
+        if (((((ops::to_char(var_c)).is_numeric()) as u8) != 1) as u8) == 1 { //block_8: never
+          return (false) as u8
+          } /*block_8: never*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:109
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:113
+fn t_9character_is_numeric(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_numeric")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:118
+fn t_4text_is_alphanumeric(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:119
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:120
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_c)))) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:121
+        if (((((ops::to_char(var_c)).is_alphanumeric()) as u8) != 1) as u8) == 1 { //block_8: never
+          return (false) as u8
+          } /*block_8: never*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:123
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:127
+fn t_9character_is_alphanumeric(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_alphanumeric")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:132
+fn t_4text_is_alphabetic(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:133
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:134
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_c)))) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:135
+        if (((((ops::to_char(var_c)).is_alphabetic()) as u8) != 1) as u8) == 1 { //block_8: never
+          return (false) as u8
+          } /*block_8: never*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:137
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:141
+fn t_9character_is_alphabetic(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_alphabetic")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:146
+fn t_4text_is_whitespace(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:147
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:148
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_c)))) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:149
+        if (((((ops::to_char(var_c)).is_whitespace()) as u8) != 1) as u8) == 1 { //block_8: never
+          return (false) as u8
+          } /*block_8: never*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:151
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:155
+fn t_9character_is_whitespace(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_whitespace")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:160
+fn t_4text_is_control(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str) -> u8 { //block_1: boolean
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:161
+  if ((((t_4text_len(cell, var_self)) as i64) == ((0_i64) as i64)) as u8) == 1 { //block_2: never
+    return (false) as u8
+    } /*block_2: never*/ else {()};
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:162
+  { //For block_3: void
+    let mut var_c__index: i64 = 0_i64;
+    let mut var_c__next: i64 = 0_i64;
+    'l4: loop { //For loop_4
+      let mut var_c: i32 = { //for text next_5: character
+        var_c__index = var_c__next;
+        let mut var__for_result_1: i32 = (ops::text_character((var_self), (var_c__next))) as u32 as i32;
+        var_c__next = ops::op_add_int((var_c__next), (OpLengthCharacter(cell, var__for_result_1)));
+        var__for_result_1
+        } /*for text next_5: character*/;
+      if ((((ops::op_conv_bool_from_character((ops::to_char(var_c)))) as u8) != 1) as u8) == 1 { //break_6: void
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:163
+        if (((((ops::to_char(var_c)).is_control()) as u8) != 1) as u8) == 1 { //block_8: never
+          return (false) as u8
+          } /*block_8: never*/ else {()};
+        } /*block_7: void*/;
+      } /*For loop_4*/;
+    } /*For block_3: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:165
+  return (true) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:169
+fn t_9character_is_control(cell: &std::cell::UnsafeCell<Stores>, mut var_self: i32) -> u8 {
+  todo!("native function t_9character_is_control")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:175
+fn t_6vector_join(cell: &std::cell::UnsafeCell<Stores>, mut var_self: DbRef, mut var_sep: &str, mut var_result: &mut String) -> Str { //block_1: text["result"]
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:176
+  *var_result = ("").to_string();
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:177
+  { //For block_2: void
+    let mut var_p__count: i64 = 0_i64;
+    let mut var__vector_1: DbRef = var_self;
+    let mut var_p__index: i64 = -1_i64;
+    'l3: loop { //For loop_3
+      let mut var_p = { //iter next_4: text
+        var_p__index = ops::op_add_int((var_p__index), (1_i64));
+        let _pre_3 = vector::get_vector(&(var__vector_1), (4_i64) as u32, (var_p__index), &stores.allocations);
+        {{let db = (_pre_3); if db.rec == 0 { loft::state::STRING_NULL } else { let store = stores.store(&db); store.get_str(store.get_u32_raw(db.rec, db.pos + (0_i64) as u32)) } }}
+        } /*iter next_4: text*/.to_string();
+      if ((((i64::from(vector::length_vector(&(var__vector_1), &stores.allocations))) as i64) <= ((var_p__index) as i64)) as u8) == 1 { //break_5: void
+        ;
+        break;
+        } /*break_5: void*/ else {()};
+      if ((((var_p__index) as i64) < ((0_i64) as i64)) as u8) == 1 { //break_6: void
+        ;
+        break;
+        } /*break_6: void*/ else {()};
+      { //block_7: void
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:178
+        if ((((((var_p__count) as i64) == ((0_i64) as i64)) as u8) != 1) as u8) == 1 { //block_8: void
+          *var_result += &*(var_sep);
+          } /*block_8: void*/ else {()};
+        // loft:/home/jurjens/workspace/loft2/default/03_text.loft:179
+        *var_result += &*(&var_p);
+        } /*block_7: void*/;
+      var_p__count = ops::op_add_int((var_p__count), (1_i64));
+      ;
+      } /*For loop_3*/;
+    } /*For block_2: void*/;
+  // loft:/home/jurjens/workspace/loft2/default/03_text.loft:181
+  return Str::new(&*var_result)
+  } /*block_1: text["result"]*/
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:189
+fn n_arguments(cell: &std::cell::UnsafeCell<Stores>) -> DbRef {
+  todo!("native function n_arguments")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:201
+fn t_4text_byte_at(cell: &std::cell::UnsafeCell<Stores>, mut var_self: &str, mut var_i: i64) -> i64 {
+  todo!("native function t_4text_byte_at")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:209
+fn n_text_from_bytes(cell: &std::cell::UnsafeCell<Stores>, mut var_bytes: DbRef) -> Str {
+  todo!("native function n_text_from_bytes")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:215
+fn n_ymd_days_ago(cell: &std::cell::UnsafeCell<Stores>, mut var_days: i64) -> Str {
+  todo!("native function n_ymd_days_ago")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:220
+fn n_directory(cell: &std::cell::UnsafeCell<Stores>, mut var_v: &mut String) -> Str {
+  todo!("native function n_directory")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:225
+fn n_user_directory(cell: &std::cell::UnsafeCell<Stores>, mut var_v: &mut String) -> Str {
+  todo!("native function n_user_directory")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:230
+fn n_program_directory(cell: &std::cell::UnsafeCell<Stores>, mut var_v: &mut String) -> Str {
+  todo!("native function n_program_directory")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/03_text.loft:235
+fn n_source_dir(cell: &std::cell::UnsafeCell<Stores>) -> Str {
+  todo!("native function n_source_dir")
+}
+
+
+// loft:/home/jurjens/workspace/loft2/default/05_coroutine.loft:17
+fn n_exhausted(cell: &std::cell::UnsafeCell<Stores>, mut var_gen: DbRef) -> u8 { //block_1: boolean
+  if loft::live_dispatch::live_flipped(1) { return loft::live_dispatch::live_call_u8(cell, 1, |st| { st.put_stack(var_gen); }); }
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("exhausted", "/home/jurjens/workspace/loft2/default/05_coroutine.loft", 17);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/default/05_coroutine.loft:18
+  return (loft::codegen_runtime::coroutine_is_exhausted(var_gen)) as u8
+  } /*block_1: boolean*/
+
+// loft:/home/jurjens/workspace/loft2/default/06_json.loft:67
+fn n_json_errors(cell: &std::cell::UnsafeCell<Stores>) -> String {
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  loft::codegen_runtime::i_json_errors(stores)
+}
+
+
+// loft:/home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/u16pair.loft:1
+fn n_f(cell: &std::cell::UnsafeCell<Stores>, mut var_t: (i64, i64)) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("f", "/home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/u16pair.loft", 1);
+  let _call_guard = codegen_runtime::CallGuard;
+  let mut var___work_1: String = "".to_string();
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/u16pair.loft:1
+  let _pre_3 = &*({ //Formatted string_2: text["__work_1"]
+    var___work_1 = String::with_capacity(32_usize);
+    ops::format_long_with_tag(&mut var___work_1, var_t.0, stores.take_format_fault(), 10 as u8, 0_i64, 32 as u8, false, false, 2 as i8);
+    var___work_1 += &*(",");
+    ops::format_long_with_tag(&mut var___work_1, var_t.1, stores.take_format_fault(), 10 as u8, 0_i64, 32 as u8, false, false, 2 as i8);
+    var___work_1 += &*("\n");
+    &var___work_1
+    } /*Formatted string_2: text["__work_1"]*/);
+  n_print(cell, _pre_3);
+  ;
+  } /*block_1: void*/
+
+// loft:/home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/u16pair.loft:2
+fn n_main(cell: &std::cell::UnsafeCell<Stores>) { //block_1: void
+  let stores: &mut Stores = unsafe { &mut *cell.get() };
+  cr_call_push("main", "/home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/u16pair.loft", 2);
+  let _call_guard = codegen_runtime::CallGuard;
+  // loft:/home/jurjens/workspace/loft2/doc/claude/plans/114-tuple-stack-layout-split/probes/u16pair.loft:2
+  n_f(cell, (300_i64, 400_i64));
+  } /*block_1: void*/
+
+const LOFT_PROGRAM_RELATIVE: bool = true;
+static LOFT_LIVE_FNS: &[&str] = &["n_sum_of", "n_exhausted", ];
+static LOFT_SRC: Option<&str> = None;
+
+fn main() {
+    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());
+    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);
+    let __run = || {
+    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));
+    { let stores: &mut Stores = unsafe { &mut *cell.get() }; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var("LOFT_PATHS") { stores.program_relative = m.eq_ignore_ascii_case("program"); } }
+    if !loft::live_dispatch::live_enabled() { init(&cell); }
+    n_main(&cell);
+    { let stores: &Stores = unsafe { &*cell.get() }; if stores.had_fatal { std::process::exit(1); } }
+    if !loft::live_dispatch::live_enabled() {
+    if std::env::var("LOFT_NATIVE_LEAK_CHECK").is_ok() {
+        let stores: &Stores = unsafe { &*cell.get() };
+        let leaks = stores.collect_store_leaks();
+        if !leaks.is_empty() {
+            let count = leaks.len();
+            let preview = if count <= 5 { leaks.join(", ") } else { format!("{} ... and {} more", leaks[..5].join(", "), count - 5) };
+            eprintln!("Warning: {count} stores not freed at program exit: {preview}");
+        }
+    }
+    }
+    #[cfg(not(target_arch = "wasm32"))] if std::env::var("LOFT_STORES").as_deref() == Ok("timeline") { let stores: &Stores = unsafe { &*cell.get() }; loft::database::timeline_summary(stores.collect_store_leaks().len()); }
+    };
+    // @PLN98 — the large-stack thread (@PLN28) is a NATIVE affordance;
+    // wasm32 (wasip2 / browser) has no thread support, and Android must run
+    // on its `android_main` thread (the ALooper owner — a spawned thread
+    // would panic in the graphics event pump), so both run `__run` inline.
+    #[cfg(all(not(target_arch = "wasm32"), not(target_os = "android")))]
+    std::thread::Builder::new().stack_size(loft::codegen_runtime::NATIVE_MAIN_STACK).spawn(__run).expect("failed to spawn main-stack thread").join().expect("main thread panicked");
+    #[cfg(any(target_arch = "wasm32", target_os = "android"))]
+    __run();
+}
+
+=== slots ===
+fn n_f:
+  #    arg  name                 type           scope  slot         live
+  ----------------------------------------------------------------------
+  0    arg  t                    (int,int)      -      [0, 16)      -
+  1         __work_1             text           -      [24, 48)     -
+
+
+
+=== types ===
+fn n_f -> void:
+  #    arg  name                     type [deps]
+  ----------------------------------------------------------------------
+  0    arg  t                        (integer(0, 65535), integer(0, 65535))
+  1         __work_1                 text
+

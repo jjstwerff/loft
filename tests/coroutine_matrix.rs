@@ -10,10 +10,11 @@
 //! `tests/common/cross_mode.rs` (shared with `tuple_matrix`,
 //! `closure_matrix`, `template_matrix`) asserts byte-identical stdout.
 //!
-//! **Every cell is `#[ignore]` by default** — the harness shells out
-//! to `loft --interpret` and `loft --native` per cell, the latter
-//! invoking `rustc`.  Too heavy for the default `cargo test` path.
-//! Run the matrix explicitly:
+//! **These cells RUN by default** (@PLN114).  They were `#[ignore]`d as too heavy;
+//! measured, the whole 201-cell matrix takes ~10 seconds.  The cost was never the
+//! issue — the silence was: two SIGSEGVs, a silent `+1` corruption of every narrow
+//! tuple element, a 3.4x memory overhead and a cross-backend par-worker corruption
+//! all sat behind that attribute until the set was run by hand.
 //!
 //! ```bash
 //! cargo test --release --test coroutine_matrix -- --ignored

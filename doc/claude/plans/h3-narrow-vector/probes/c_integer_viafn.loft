@@ -1,0 +1,10 @@
+// H3 via-fn path — the write reaches the element through a STRUCT PARAMETER, the shape
+// crawler's collision field used.  Hand-computed: direct=70000 via_fn=70000.
+struct S { a: vector<integer> }
+fn poke(s: S, i: integer) { s.a[i] = 70000; }
+fn main() {
+  s = S { a: [1, 2, 3] };
+  s.a[0] = 70000;
+  poke(s, 1);
+  print("got {s.a[0]},{s.a[1]} | 70000,70000\n");
+}

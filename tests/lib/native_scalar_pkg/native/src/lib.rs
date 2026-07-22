@@ -19,10 +19,23 @@
 
 use loft_ffi_macros::loft_native;
 
+// `i64`, NOT `i32`: the loft declaration types this `integer`, and loft maps `integer`
+// to `i64` on the C boundary (doc/claude/PACKAGES.md), emitting the extern from the
+// DECLARATION and calling it directly.  A narrower Rust return is an ABI mismatch, not
+// a harmless narrowing — on x86-64 SysV an `i32` return leaves the upper half of `rax`
+// undefined.  42 happens to survive it; `n_native_sentinel` below does not, which is
+// why it exists.
 #[loft_native]
 #[no_mangle]
-pub extern "C" fn n_native_answer() -> i32 {
+pub extern "C" fn n_native_answer() -> i64 {
     42
+}
+
+/// Returns -1 — the value that makes an integer-width ABI mismatch observable.
+#[loft_native]
+#[no_mangle]
+pub extern "C" fn n_native_sentinel() -> i64 {
+    -1
 }
 
 // The `loft_ffi::loft_register! { … }` + `loft_register_bridges! { … }`

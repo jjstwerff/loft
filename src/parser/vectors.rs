@@ -2693,7 +2693,8 @@ impl Parser {
                 // `OpSetByteNullable`/`OpSetShort` for nullable ones.  The fallback
                 // (`n` outside the narrow gate) keeps the wide `set_field` path.
                 let n = spec.vector_narrow_width().unwrap();
-                let kind = crate::data::NarrowIntKind::of(n, elem_nullable, true);
+                let kind =
+                    crate::data::NarrowIntKind::of(n, elem_nullable, true, spec.unsigned_wide());
                 let pos = Value::Int(0);
                 let op = if kind.takes_min() {
                     let m = Value::Int(spec.usable_min(kind.reserves_sentinel()));

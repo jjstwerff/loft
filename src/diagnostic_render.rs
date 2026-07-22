@@ -21,6 +21,7 @@
 //! detail.
 
 use std::collections::HashMap;
+use std::fmt::Write as _;
 use std::sync::Mutex;
 
 use crate::diagnostics::{DiagEntry, Diagnostics, Level};
@@ -253,18 +254,16 @@ pub fn render_entry_pretty(
     // @PLN102 arc-E E1 — the `[code]` names the frozen-identity diagnostic;
     // omitted when the site carries no code yet.
     let code_tag = entry.code.map_or(String::new(), |c| format!("[{c}]"));
-    out.push_str(&format!(
-        "{color_open}{bold_open}{label}{code_tag}{reset}{bold_open}: {}{reset}\n",
+    let _ = writeln!(
+        out,
+        "{color_open}{bold_open}{label}{code_tag}{reset}{bold_open}: {}{reset}",
         entry.message
-    ));
+    );
     if entry.file.is_empty() || entry.line == 0 {
         return out;
     }
     // Location: `  --> file:line:col`
-    out.push_str(&format!(
-        "  --> {}:{}:{}\n",
-        entry.file, entry.line, entry.col
-    ));
+    let _ = writeln!(out, "  --> {}:{}:{}", entry.file, entry.line, entry.col);
     // Source line + caret, only if loader returns a line.
     let Some(line_text) = loader.line(&entry.file, entry.line) else {
         return out;
@@ -272,15 +271,12 @@ pub fn render_entry_pretty(
     let line_num_str = entry.line.to_string();
     let gutter = digit_width(entry.line);
     let pad = " ".repeat(gutter);
-    out.push_str(&format!("{pad} |\n"));
-    out.push_str(&format!(
-        "{line_num_str} | {}\n",
-        render_source_line(&line_text)
-    ));
+    let _ = writeln!(out, "{pad} |");
+    let _ = writeln!(out, "{line_num_str} | {}", render_source_line(&line_text));
     let col_byte_0based = entry.col.saturating_sub(1) as usize;
     let display_col = display_column(&line_text, col_byte_0based);
     let caret_pad = " ".repeat(display_col);
-    out.push_str(&format!("{pad} | {caret_pad}{color_open}^{reset}\n"));
+    let _ = writeln!(out, "{pad} | {caret_pad}{color_open}^{reset}");
     out
 }
 
@@ -356,9 +352,10 @@ pub fn render_pretty_all(
         let reset = if use_color { ANSI_RESET } else { "" };
         let plural = if error_count == 1 { "error" } else { "errors" };
         out.push('\n');
-        out.push_str(&format!(
-            "{color_open}{bold_open}error{reset}{bold_open}: aborting due to {error_count} previous {plural}{reset}\n"
-        ));
+        let _ = writeln!(
+            out,
+            "{color_open}{bold_open}error{reset}{bold_open}: aborting due to {error_count} previous {plural}{reset}"
+        );
     }
     out
 }

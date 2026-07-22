@@ -1,0 +1,3 @@
+struct P { v: integer }
+fn f(t: (integer, P)) { print("{t.0},{t.1.v}\n"); }
+fn main() { a = P { v: 10 }; f((22, a)); }

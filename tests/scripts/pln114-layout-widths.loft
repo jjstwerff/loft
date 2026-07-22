@@ -1,0 +1,65 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN114 instruments 1, 2 and 3 (the record half).
+//
+// These lock in the widths that are CORRECT today, so the tuple-layout rewrite
+// cannot pay for correctness with memory.  A scalar's declared width and a
+// vector's allocated size are the two numbers a user can see, and `struct` is the
+// oracle the tuple layout is being moved onto — the record cases here are what the
+// tuple cases must eventually match.
+//
+// The tuple half (stride + mixed-width round-trip) is still WRONG and is tracked as
+// the ignored specs `pln114_tuple_stride_matches_record` /
+// `pln114_mixed_width_tuple_round_trip` in tests/issues.rs.
+
+struct Small { a: u8, b: u16, c: character, d: single }
+struct Mixed { a: u8, b: u32, c: u16 }
+
+fn test_sizeof_scalar_widths() {
+  // Instrument 1 — a declared width is part of the type's contract.
+  assert(sizeof(u8) == 1, "sizeof(u8)");
+  assert(sizeof(i8) == 1, "sizeof(i8)");
+  assert(sizeof(u16) == 2, "sizeof(u16)");
+  assert(sizeof(i16) == 2, "sizeof(i16)");
+  assert(sizeof(i32) == 4, "sizeof(i32)");
+  assert(sizeof(u32) == 4, "sizeof(u32)");
+  assert(sizeof(character) == 4, "sizeof(character)");
+  assert(sizeof(single) == 4, "sizeof(single)");
+}
+
+fn test_vector_allocated_size_per_scalar() {
+  // Instrument 2 — `size(v)` is length x stride, so it exposes the element
+  // stride the store actually reserved.
+  vb: vector<u8> = [1, 2, 3, 4];
+  vi: vector<u16> = [1, 2, 3, 4];
+  vc: vector<character> = ['a', 'b', 'c', 'd'];
+  vs: vector<single> = [1.0f, 2.0f, 3.0f, 4.0f];
+  vo: vector<boolean> = [true, false, true, false];
+  assert(size(vb) == 4, "vector<u8> x4 is 4 bytes");
+  assert(size(vi) == 8, "vector<u16> x4 is 8 bytes");
+  assert(size(vc) == 16, "vector<character> x4 is 16 bytes");
+  assert(size(vs) == 16, "vector<single> x4 is 16 bytes");
+  assert(size(vo) == 4, "vector<boolean> x4 is 4 bytes");
+}
+
+fn test_record_packs_mixed_widths() {
+  // Instrument 3, record half — the oracle.  Five fields of four different
+  // widths round-trip exactly, and the vector stride stays packed (1+4+2 = 7).
+  m = Mixed { a: 200, b: 5, c: 65000 };
+  assert(m.a == 200, "record u8 field");
+  assert(m.b == 5, "record u32 field");
+  assert(m.c == 65000, "record u16 field");
+  v: vector<Mixed> = [Mixed { a: 1, b: 2, c: 3 }, Mixed { a: 4, b: 5, c: 6 }];
+  assert(size(v) == 14, "vector<Mixed> x2 packs to 7 bytes per record");
+  assert(v[0].a == 1 && v[0].b == 2 && v[0].c == 3, "record element 0 round-trips");
+  assert(v[1].a == 4 && v[1].b == 5 && v[1].c == 6, "record element 1 round-trips");
+}
+
+fn test_record_small_field_mix() {
+  s = Small { a: 250, b: 65000, c: 'Z', d: 2.5f };
+  assert(s.a == 250, "u8 field");
+  assert(s.b == 65000, "u16 field");
+  assert(s.c == 'Z', "character field");
+  assert(s.d == 2.5f, "single field");
+}

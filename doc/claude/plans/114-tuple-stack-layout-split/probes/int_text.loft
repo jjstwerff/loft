@@ -1,0 +1,2 @@
+fn f(t: (integer, text)) { print("{t.0},{t.1}\n"); }
+fn main() { f((11, "bb")); }
