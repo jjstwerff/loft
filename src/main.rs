@@ -7882,20 +7882,10 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
     }
 
     // Initialize the runtime logger
-    let conf_path = if let Some(ref cp) = log_conf {
-        std::path::PathBuf::from(cp)
-    } else {
-        // Prefer .loft/log.conf beside the script; fall back to log.conf beside the script.
-        let script_dir = std::path::Path::new(&abs_file)
-            .parent()
-            .unwrap_or(std::path::Path::new("."));
-        let loft_conf = script_dir.join(".loft").join("log.conf");
-        if loft_conf.exists() {
-            loft_conf
-        } else {
-            script_dir.join("log.conf")
-        }
-    };
+    // Resolved through the SHARED helper so the interpreter and a compiled `--native`
+    // binary look in the same places (`.loft/log.conf`, then `log.conf`, beside the
+    // program).  They diverging here is how native ended up with no logger at all.
+    let conf_path = logger::Logger::resolve_config_path(log_conf.as_deref(), &abs_file);
     let mut lg = logger::Logger::from_config_file(&conf_path, &abs_file);
     if production {
         lg.config.production = true;

@@ -18,6 +18,11 @@
 //!
 //! Three separate properties, because each can regress alone and each hid part of the
 //! original bug: the process STOPS, it exits NON-ZERO, and it SAYS why.
+//!
+//! The same stub-class also swallowed the whole `log_*` family — an audit of every
+//! empty-bodied generated builtin turned up exactly two live cases, `panic` and the four
+//! `log_*`, so both are guarded here.  (The other empty bodies are dead stubs whose calls
+//! the generator lowers inline, and `yield_frame`, a documented native no-op.)
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -135,4 +140,68 @@ fn assert_still_halts_on_both_backends() {
             "[{backend}] the assert message never reached stderr.\nstderr: {stderr}"
         );
     }
+}
+
+/// `log_info` / `log_warn` / `log_error` / `log_fatal` must reach the log file on BOTH
+/// backends.  They did not: a generated binary booted no logger at all, so every
+/// structured log call was silently dropped on `--native` — measured at 2 records on
+/// `--interpret` against 0 on `--native` with the same config.
+///
+/// Silent loss of diagnostics on the backend you actually deploy is the failure mode this
+/// guards: nothing crashes, nothing is wrong in the output, the evidence just is not there.
+///
+/// Uses the DEFAULT config discovery (`log.conf` beside the program) rather than
+/// `--log-conf`, deliberately — that flag goes to the loft driver, which a compiled binary
+/// never sees, so a test built on it would pass on the interpreter and prove nothing about
+/// native.  `LOFT_LOG_CONF` is the compiled-binary equivalent.
+#[test]
+fn log_family_writes_on_both_backends() {
+    if !have_rustc() {
+        println!("log_family_writes_on_both_backends: skipped (no rustc)");
+        return;
+    }
+    let prog = "fn main() {\n  log_error(\"LOG-MARKER-E\");\n  log_warn(\"LOG-MARKER-W\");\n}\n";
+    let conf = "[log]\nfile = log.txt\nlevel = warn\nproduction = false\n";
+
+    let mut rendered = Vec::new();
+    for (tag, backend) in [("li", "--interpret"), ("ln", "--native")] {
+        let dir = std::env::temp_dir().join(format!("loft_logfam_{}_{tag}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).expect("mkdir");
+        std::fs::write(dir.join("p.loft"), prog).expect("write prog");
+        std::fs::write(dir.join("log.conf"), conf).expect("write conf");
+        let out = Command::new(env!("CARGO_BIN_EXE_loft"))
+            .args([backend, dir.join("p.loft").to_str().unwrap()])
+            .env("LOFT_TIMEOUT", "180")
+            .current_dir(&dir)
+            .output()
+            .expect("spawn loft");
+        let log = std::fs::read_to_string(dir.join("log.txt")).unwrap_or_default();
+        assert!(
+            log.contains("LOG-MARKER-E") && log.contains("LOG-MARKER-W"),
+            "[{backend}] structured log records never reached log.txt — the log family is \
+             a no-op on this backend.\nlog.txt: {log:?}\nstderr: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        // Strip the timestamp, and the per-backend temp dir from the source path (the two
+        // legs run in separate directories so the native build artifacts cannot collide).
+        // What must agree is severity, source BASENAME + line, and message.
+        let dir_s = dir.to_string_lossy().to_string();
+        let stripped: Vec<String> = log
+            .lines()
+            .map(|l| {
+                l.split_whitespace()
+                    .skip(1)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .replace(&dir_s, "<dir>")
+            })
+            .collect();
+        rendered.push(stripped);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+    assert_eq!(
+        rendered[0], rendered[1],
+        "the backends write DIFFERENT log records for the same program"
+    );
 }

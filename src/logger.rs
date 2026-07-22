@@ -145,6 +145,34 @@ impl Logger {
         }
     }
 
+    /// Where to look for the log config — the ONE answer both backends use.
+    ///
+    /// `explicit` is `--log-conf` under the interpreter and `LOFT_LOG_CONF` inside a
+    /// compiled binary: a `--native` program is a separate process that never sees the
+    /// driver's flags, so an env var is the only way to redirect a shipped binary's
+    /// logging. Otherwise the search is the same on both: `.loft/log.conf` beside the
+    /// program, else `log.conf` beside it.
+    ///
+    /// Shared deliberately. The two backends resolving this differently is precisely how
+    /// `--native` came to log nothing at all: it had no logger, so every `log_info` /
+    /// `log_warn` / `log_error` / `log_fatal` was silently dropped on the DEFAULT backend
+    /// while `--interpret` wrote them.
+    #[must_use]
+    pub fn resolve_config_path(explicit: Option<&str>, main_loft_file: &str) -> PathBuf {
+        if let Some(p) = explicit {
+            return PathBuf::from(p);
+        }
+        let dir = Path::new(main_loft_file)
+            .parent()
+            .unwrap_or_else(|| Path::new("."));
+        let loft_conf = dir.join(".loft").join("log.conf");
+        if loft_conf.exists() {
+            loft_conf
+        } else {
+            dir.join("log.conf")
+        }
+    }
+
     /// Build a `Logger` from a config file path (or defaults if the file doesn't exist).
     ///
     /// `main_loft_file` is used to determine the default log directory.

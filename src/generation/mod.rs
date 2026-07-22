@@ -1896,6 +1896,20 @@ extern crate loft;"
             "const LOFT_PROGRAM_RELATIVE: bool = {};",
             self.stores.program_relative
         )?;
+        // The program's own `.loft` path, baked in so the compiled binary can find its
+        // log config in the same places the interpreter does (`.loft/log.conf`, then
+        // `log.conf`, beside the program).  Without a logger the generated `n_log_*`
+        // bodies have nowhere to write, which is how `--native` silently dropped every
+        // `log_info` / `log_warn` / `log_error` / `log_fatal`.
+        let main_file = {
+            let d = self.data.def_nr("n_main");
+            if d == u32::MAX {
+                String::new()
+            } else {
+                self.data.def(d).position().file.clone()
+            }
+        };
+        writeln!(w, "static LOFT_MAIN_FILE: &str = {main_file:?};")?;
         if self.emit_live {
             write!(w, "static LOFT_LIVE_FNS: &[&str] = &[")?;
             for n in &self.live_fns {
@@ -1916,7 +1930,7 @@ extern crate loft;"
             // ~8 MiB OS main-thread stack), then the optional native leak check.
             write!(
                 w,
-                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
             )?;
             writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
@@ -1948,7 +1962,7 @@ extern crate loft;"
             // references no `live_dispatch` symbol at all.
             write!(
                 w,
-                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    init(&cell);\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    init(&cell);\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
             )?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
             writeln!(
@@ -3265,6 +3279,41 @@ extern crate loft;"
         //
         // Generic `Display` params mirror `n_assert`: the message reaches this as a
         // `Str` or a `&str` depending on whether it is a literal or a formatted string.
+        // The `log_*` family, for the same reason as `n_panic`: no `#rust` template, not
+        // special-cased, so the generic path emitted `fn n_log_error(..) {}` and every
+        // structured log call vanished on `--native`.  Measured before the fix, with a
+        // logger configured: 2 records on `--interpret`, 0 on `--native`.  Silent loss of
+        // diagnostics on the backend you actually deploy is where bugs hide, which is why
+        // this is worth a body rather than an allow-list entry.
+        //
+        // `log_fatal` only logs — it carries no halt semantics (that is `panic`), so all
+        // four map to the same shape at different severities.  Generic `Display` params
+        // mirror `n_assert` / `n_panic`: the message arrives as `Str` or `&str`.
+        if *def.code() == Value::Null
+            && let Some(sev) = match def.name() {
+                "n_log_info" => Some("Info"),
+                "n_log_warn" => Some("Warn"),
+                "n_log_error" => Some("Error"),
+                "n_log_fatal" => Some("Fatal"),
+                _ => None,
+            }
+        {
+            writeln!(
+                w,
+                "fn {}<M: std::fmt::Display, F: std::fmt::Display>(cell: &std::cell::UnsafeCell<Stores>, msg: M, file: F, line: i64) {{",
+                def.name()
+            )?;
+            writeln!(
+                w,
+                "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};"
+            )?;
+            writeln!(
+                w,
+                "  if let Some(ref logger) = stores.logger && let Ok(mut lg) = logger.lock() {{ lg.log(loft::logger::Severity::{sev}, &file.to_string(), line as u32, &msg.to_string()); }}"
+            )?;
+            writeln!(w, "}}\n")?;
+            return Ok(());
+        }
         if def.name() == "n_panic" && *def.code() == Value::Null {
             writeln!(
                 w,
