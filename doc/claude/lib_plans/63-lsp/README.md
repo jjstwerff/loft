@@ -540,6 +540,11 @@ Skip until LSP.1 measurements show real users hitting the 10k-line wall.
 editor.  Set a breakpoint in `.loft` source, run, hit the breakpoint,
 inspect locals, step.
 
+**Full design: [DAP.md](DAP.md)** — the DAP⇆RPC map, envelope mechanics
+(`seq`/`request_seq`, handshake ordering, `variablesReference`), worked message
+translations, the code-point table over `rpc::handle`, and the D0–D6 gates. The
+surface table + spine below are its summary.
+
 ### Surface
 
 | Request | Behaviour |
