@@ -1772,6 +1772,10 @@ impl State {
                 stack.add_op("OpVarRef", self);
                 self.code_add(free_pos);
                 stack.add_op("OpFreeRef", self);
+                // @PLN118 — this var takes an unconditional pre-build free; its
+                // block-exit free must reset it to the sentinel so a loop re-entry's
+                // pre-build free cannot re-free a reused slot (moros glb H4 UAF).
+                stack.owned_reassigned.insert(v);
             }
             // @PLN85 unification (first chokepoint collapse, LOFT_JOIN_OWN): read the
             // ONE carried fact instead of the type-shape proxy below. A `??`-JOIN call
@@ -2874,6 +2878,31 @@ impl State {
             stack.add_op("OpVarRef", self);
             self.code_add(var_pos - 8);
             stack.add_op("OpFreeRef", self);
+            return Type::Void;
+        }
+        // @PLN118 — free a heap variable that took an unconditional pre-build free
+        // (`generate_set`'s `owned_ref` path), then RESET its slot to the null
+        // sentinel.  The native backend resets after EVERY var free
+        // (`generation/ops/ref_ops.rs`: `OpFreeRef(...); var_x.store_nr = u16::MAX`);
+        // the interpreter emitted `OpVarRef + OpFreeRef` only, leaving the variable
+        // pointing at the freed slot.  In a loop the block-exit sweep frees the
+        // per-iteration temp and the next iteration's pre-build `OpFreeRef` re-frees
+        // it — and if the allocator reclaimed that slot for a live value meanwhile,
+        // the re-free destroys it (the moros glb H4 store-slot-reuse UAF: `pos`
+        // reads null on 4-of-7 hex verts).  `OpInitRefSentinel` after the free makes
+        // that re-free a no-op.  Scoped to `owned_reassigned` (not every var free):
+        // a retbuf/Database-reused local like `off` keeps its DbRef for in-place
+        // `OpDatabase` reuse, and nulling it destabilises the `protect_store_frees`
+        // machinery (leaks the returned value).
+        if stack.data.def(op).name() == "OpFreeRef"
+            && let Some(Value::Var(v)) = parameters.first()
+            && stack.owned_reassigned.contains(v)
+        {
+            let var_pos = stack.var_pos(*v);
+            self.generate(&parameters[0], stack, false);
+            stack.add_op("OpFreeRef", self);
+            stack.add_op("OpInitRefSentinel", self);
+            self.code_add(var_pos);
             return Type::Void;
         }
         // try destination-passing optimisation for text-producing natives.

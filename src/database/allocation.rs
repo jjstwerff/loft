@@ -733,6 +733,12 @@ impl Stores {
     /// S29: Find the lowest free slot index below `max` using the `free_bits` bitmap.
     /// Returns `self.max` when no freed slot is available (caller must grow the Vec).
     fn find_free_slot(&self) -> u16 {
+        // @PLN118 arc D — LOFT_NO_SLOT_REUSE=1: never reclaim a freed slot; always
+        // grow. A diagnostic stopgap that proves whether the corruption is
+        // slot-reuse-while-referenced (if the null vanishes, it is). Off by default.
+        if crate::keys::no_slot_reuse() {
+            return self.max;
+        }
         for (wi, &word) in self.free_bits.iter().enumerate() {
             if word != 0 {
                 let bit = word.trailing_zeros() as u16;

@@ -1883,16 +1883,36 @@ impl State {
                     // that took the slot to `stamped + 1`, making THIS ref stale) over the
                     // last free — a heavily-reused slot's last free is a different occupant's.
                     // Names the chokepoint (the dropped dep) rather than only the read symptom.
+                    // @PLN118 arc E — also name the freeing OP (recorded with the free site) so
+                    // the report says WHICH free to fix, not just where; needs `Data`, valid
+                    // throughout execution (null only in a parallel worker, tolerated below).
+                    let op_name = |opc: u16| -> String {
+                        if self.data_ptr.is_null() {
+                            format!("op#{opc}")
+                        } else {
+                            // SAFETY: data_ptr is set in execute_argv, valid for the run.
+                            unsafe { &*self.data_ptr }
+                                .operator_name(opc)
+                                .map_or_else(|| format!("op#{opc}"), str::to_string)
+                        }
+                    };
                     let free_str = crate::keys::uaf_freed_pc_at_gen(db.store_nr, stamped + 1)
                         .or_else(|| crate::keys::uaf_freed_pc(db.store_nr))
-                        .map_or_else(String::new, |(fpc, _d, _op)| {
+                        .map_or_else(String::new, |(fpc, _d, op)| {
                             let fline = self
                                 .line_numbers
                                 .range(..=fpc)
                                 .next_back()
                                 .map_or(0, |(_, &v)| v);
-                            format!(" (last freed at code_pos={fpc}, line {fline})")
+                            format!(
+                                " (freed at code_pos={fpc}, line {fline}, by {})",
+                                op_name(op)
+                            )
                         });
+                    // @PLN118 arc E — the READING op is the one currently dispatching (this
+                    // pop happens inside its handler); `last_context` holds its opcode byte.
+                    let (_rpc, read_op, _fd) = crate::crash_report::last_context();
+                    let read_op_str = op_name(u16::from(read_op));
                     // @PLN118 arc B refinement — a stale read DURING a record deep-copy is the
                     // copy reading a stale SUB-reference: the copy is incomplete and the source
                     // free is CORRECT — so name the COPY as the op to fix, not the free. A stale
@@ -1910,7 +1930,7 @@ impl State {
                     eprintln!(
                         "[uaf-gen] stale DbRef popped: store #{} (rec={}, pos={}) was gen {stamped} \
                          at push but is now gen {} (freed+reused since) — read at code_pos={} \
-                         (line {line}){free_str} — {verdict}",
+                         (line {line}) by {read_op_str}{free_str} — {verdict}",
                         db.store_nr,
                         db.rec,
                         db.pos,

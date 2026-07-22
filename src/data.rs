@@ -5426,6 +5426,14 @@ impl Data {
         self.def(self.operators[&op])
     }
 
+    /// The display name of opcode `op`, or `None` when it is not a registered
+    /// operator (e.g. the `255` extended-op prefix seen without its ext byte).
+    /// Non-panicking companion to `operator` for diagnostics (`LOFT_UAF_GEN`).
+    #[must_use]
+    pub fn operator_name(&self, op: u16) -> Option<&str> {
+        self.operators.get(&op).map(|&d| self.def(d).name.as_str())
+    }
+
     pub fn attr_used(&mut self, d_nr: u32, a_nr: usize) {
         self.used_attributes.insert((d_nr, a_nr));
     }

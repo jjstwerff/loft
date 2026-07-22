@@ -31,6 +31,17 @@ pub struct Stack<'a> {
     pub def_nr: u32,
     pub logging: bool,
     loops: Vec<Loop>,
+    /// @PLN118 — vars that received an unconditional pre-build `OpFreeRef` on an
+    /// owned reassignment (`generate_set`, the `owned_ref` path).  In a loop such a
+    /// var is freed at the block-exit sweep AND re-freed by the next iteration's
+    /// pre-build free; if the allocator reused the slot meanwhile, that re-free
+    /// destroys a live value (the moros glb H4 UAF).  The block-exit `OpFreeRef`
+    /// (`generate_call`) resets these — and only these — to the null sentinel, so
+    /// the pre-build free no-ops.  Excludes retbuf/Database-reused locals (`off`),
+    /// which never take a pre-build free and rely on keeping their DbRef.  Mirrors
+    /// native's unconditional post-free reset (`generation/ops/ref_ops.rs`), scoped
+    /// to the vars that actually need it.
+    pub owned_reassigned: std::collections::HashSet<u16>,
 }
 
 impl<'a> Stack<'a> {
@@ -42,6 +53,7 @@ impl<'a> Stack<'a> {
             logging,
             loops: Vec::new(),
             function,
+            owned_reassigned: std::collections::HashSet::new(),
         }
     }
 

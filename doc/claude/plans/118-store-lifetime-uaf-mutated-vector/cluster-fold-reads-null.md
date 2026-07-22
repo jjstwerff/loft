@@ -233,9 +233,60 @@ downgraded to unconfirmed; the tool-supported root is a premature free / aggress
 The next arc-E step follows the premature-free lead — identify which op pops the stale `Vec3` and
 which free the causal free (`code_pos=74096`) is — rather than the `OpCopyRecord` boundary matrix.
 
+## Arc E — RESOLVED: the interpreter never re-sentinels a freed variable (native does)
+
+The premature-free lead ran to ground. Two cheap, non-perturbing instrument upgrades on the real
+repro (synthetic reduction still fails — six+ attempts, same as the corruption) named the exact ops:
+
+1. **Op-naming on `LOFT_UAF_GEN`** (`src/state/mod.rs`, `src/data.rs::operator_name`) — the stale-read
+   report now prints the *reading* op (from `crash_report::last_context`) and the *freeing* op (already
+   recorded in `FREED_AT_GEN`). Verdict on the load-bearing pair at `emit_hex_surface` line 102
+   (`m.vertices += [vertex(pos, up, vec2(u,v))]`): **read by `OpPutRef`, freed by `OpFreeRef`**, the
+   free at `code_pos=74096` *preceding* the read at `74134` within the one append statement.
+2. **`LOFT_NO_SLOT_REUSE`** (`src/database/allocation.rs::find_free_slot`, arc-D stopgap) — never
+   reclaim a freed slot. **The null vanishes: 3/32 → 0/32.** That is the decisive proof the corruption
+   is **slot-reuse-while-referenced**, not a copy defect (a `GetFloat` read-trace also showed `centre.x`
+   reads REAL at the `pos` computation — the old probe-2 "centre.x null" was a `println` artifact; the
+   null is the stored *vertex temp* on a reused slot).
+
+**The chokepoint (the interpreter/native divergence).** The compiler emits, per loop iteration, an
+owned-reassign **pre-build `OpFreeRef`** on each `__lift` temp (free the previous value before rebuild)
+AND a **block-exit `OpFreeRef`** (`get_free_vars`). Native's `OpFreeRef` of a *variable* additionally
+resets it to the null sentinel (`generation/ops/ref_ops.rs`: `OpFreeRef(...); var_x.store_nr =
+u16::MAX`), so the next iteration's pre-build free reads `u16::MAX` and no-ops. **The interpreter emitted
+`OpVarRef + OpFreeRef` with no `OpInitRefSentinel`** — the variable kept pointing at the freed slot, and
+the next iteration's pre-build free re-freed it; if the allocator had reclaimed that slot for a live
+value meanwhile, the re-free destroyed it → the stored `pos` reads null on 4-of-7 verts. Native has no
+operand stack and re-sentinels, so it is clean.
+
+**The fix (`src/state/codegen.rs::generate_call`, `src/stack.rs`).** Track the vars that take the
+unconditional pre-build free (`owned_reassigned`) and emit `OpInitRefSentinel` after their block-exit
+`OpFreeRef` — mirroring native, scoped to exactly the vars that need it. **Interpreter-only** (native
+already correct); **both backends now export 0/32.** Excludes retbuf/`OpDatabase`-reused locals like
+`off` (they keep their DbRef for in-place reuse; sentinelling them destabilises `protect_store_frees`).
+
+## Arc F — UNMASKED leak (the "other end"): the `@P290` protect over-protects the retbuf
+
+Fixing the corruption **unmasked a pre-existing, interpreter-specific leak** — `kt=96 Vec2×8160`
+(`mr_corner_offset`'s returned Vec2, `off`'s source). This is the plan's separately-tracked "leak"
+severity: the corruption's over-free had been *accidentally* freeing that Vec2, so `main` shows wrong
+data + no Vec2 leak; the fix shows correct data + the leak. **VERIFIED pre-existing:** `LOFT_NO_SLOT_REUSE`
+(an unrelated corruption fix) exposes the same leak (`Vec2×6120`) — so it is independent of the codegen
+fix. **VERIFIED interpreter-only:** `--native` (`LOFT_NATIVE_LEAK_CHECK`) is clean.
+
+Mechanism (characterised, not yet fixed): native frees the returned Vec2 with `OpCopyRecord`'s `0x8000`
+source-free directly; the interpreter wraps `off = mr_corner_offset(ci)` in `n_protect_store_frees` (@P290)
+which **blocks** the `0x8000` free of the retbuf work-ref, and the fallback `OpFreeRef` leaks it (leak
+sites are the middle early-returns i=1–4, not the first i=0 or the tail i=5). The protect is spurious for
+the return buffer — it SHOULD be freed. **Not fixed here:** it is a distinct bug in the fragile @P290
+protect/retbuf machinery, layout-dependent (no minimal repro, like the corruption), so it needs its own
+matrix-first pass rather than a blind edit. It is a *resource* bug (correct output; at-exit for the export
+consumer), strictly less severe than the *correctness* corruption it replaces.
+
 ## Artifacts
 
 - Null/real pattern (84 rows): `/tmp/h4pat.txt`; full timeline (275k lines): `/tmp/h4_timeline.txt`.
-- Repro worktree: moros `5e677b7`. Native repro attempt: `/tmp/h4_native.glb` (clean, 0/32).
-- Detector: `LOFT_UAF_GEN=1` on the repro (non-perturbing) — read + causal-free attribution +
-  copy-vs-deref verdict (H4 = all `PREMATURE FREE`).
+- Repro worktree: moros `5e677b7`. Native repro: clean, 0/32, no leak.
+- Detector: `LOFT_UAF_GEN=1` on the repro (non-perturbing) — read + causal-free attribution + reading/
+  freeing op names + copy-vs-deref verdict (H4 = all `PREMATURE FREE`).
+- Corruption-vs-reuse proof: `LOFT_NO_SLOT_REUSE=1` (3/32 → 0/32). Leak provenance: `LOFT_LEAK_SITES=1`.

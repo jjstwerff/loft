@@ -626,6 +626,14 @@ pub fn uaf_gen_enabled() -> bool {
     *UAF_GEN.get_or_init(|| std::env::var_os("LOFT_UAF_GEN").is_some())
 }
 
+/// `LOFT_NO_SLOT_REUSE=1` — @PLN118 arc D: never reclaim a freed store slot (always
+/// grow). Diagnostic stopgap to test whether a corruption is slot-reuse-while-referenced.
+#[must_use]
+pub fn no_slot_reuse() -> bool {
+    static NR: OnceLock<bool> = OnceLock::new();
+    *NR.get_or_init(|| std::env::var_os("LOFT_NO_SLOT_REUSE").is_some())
+}
+
 /// `LOFT_WATCH_STORE=<n>` — the write-watch for cluster-462's root: after each
 /// `copy_record` whose DESTINATION is store `<n>`, scan the just-written record's text
 /// fields for an out-of-bounds pointer and report the op that produced it (pc/line +

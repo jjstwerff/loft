@@ -11,17 +11,25 @@ Tracks [`loft-lang/plans#118`](https://github.com/loft-lang/plans/issues/118) (`
 
 ## Status
 
-> **NEXT SESSION PICKS UP HERE (fresh eyes).** Arcs A + B **DONE**; arc E **re-attributed, not
-> fixed**. The refined `LOFT_UAF_GEN` verdict (arc-B refinement) overrode arc E's IR-inferred
-> "incomplete `OpCopyRecord`" guess: on the repro it verdicts **`PREMATURE FREE` (not a copy)** for
-> all 23 reads → the tool-supported root is an **interpreter slot-reuse-while-referenced** free at a
-> **non-copy** pop. **Do this next:** on the repro (`moros 5e677b7`, `LOFT_UAF_GEN=1`, non-perturbing,
-> null = 3/32; `--native` is the clean oracle) identify (a) **which op** pops the stale `Vec3` at
-> `line 102` and (b) **which free** `code_pos=74096` corresponds to — then fix that free/dropped-dep
-> at the interpreter store chokepoint (NOT a blind edit; NOT the `OpCopyRecord` boundary matrix I'd
-> earlier proposed). Full trail: [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md) (read the
-> "Arc B refinement" section last — it corrects arc E). Arcs C (positive-control oracle) + D
-> (differential native switch / `disable_slot_reuse` stopgap) still open.
+> **CORRUPTION FIXED (arc E) — the leak (arc F) is the open follow-up.** The null export is
+> **resolved on both backends (0/32)**; full suite **3385/3385 green**. Root: the interpreter's
+> `OpFreeRef` of a variable did **not** reset it to the null sentinel (native's does), so a loop
+> temp freed at the block-exit sweep was **re-freed** by the next iteration's pre-build free — and if
+> the allocator had reclaimed that slot, the re-free destroyed a live value → stored `pos` reads null
+> on 4-of-7 verts. Fix: `src/state/codegen.rs::generate_call` emits `OpInitRefSentinel` after the
+> block-exit free of the owned-reassigned vars (tracked in `src/stack.rs::owned_reassigned`), mirroring
+> native, interpreter-only. Proven by `LOFT_NO_SLOT_REUSE` (3/32→0/32) + op-named `LOFT_UAF_GEN`.
+>
+> **Open — arc F (the "other end"):** the corruption fix **unmasked a pre-existing, interpreter-only
+> leak** (`Vec2×8160` — `mr_corner_offset`'s returned Vec2). The corruption's over-free had been
+> accidentally freeing it; `--native` frees it correctly via `OpCopyRecord` `0x8000`, but the
+> interpreter's `n_protect_store_frees` (@P290) blocks that free of the retbuf work-ref and the fallback
+> leaks. VERIFIED pre-existing (`LOFT_NO_SLOT_REUSE` exposes it too) and interpreter-only. Not blind-
+> fixed: fragile @P290 subsystem, layout-dependent (no minimal repro, like the corruption) — needs its
+> own matrix-first pass. It is a *resource* bug (correct output; at-exit for the export consumer),
+> strictly less severe than the *correctness* corruption it replaces. Full trail:
+> [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md) (arcs E + F). Arc C (positive-control
+> oracle) still open; arc D delivered the `LOFT_NO_SLOT_REUSE` stopgap.
 
 **Open — Stage A in progress; the null is ATTRIBUTED.** A loft program silently exports
 `"min": [null, null, null]` into a glTF (moros H4). Stage A reproduced it (moros `5e677b7` → 3/32
@@ -112,8 +120,9 @@ The load-bearing cell: **reference-into-relocated-vector reads the null sentinel
 | **A** — reproduce + attribute | **DONE** (interp). Mechanism class VERIFIED: an **interpreter store-slot-reuse UAF** in `emit_hex_surface`'s corner loop (a live `Vec3` freed early, slot reused → null pos); native-clean, producer-side, layout-fragile. Remaining: pin the exact freed slot (needs arc-B non-perturbing tracer) + a standalone probe | Mostly done |
 | **B** — enhance the lifetime tool | **DONE + refined.** The existing sound `LOFT_UAF_GEN` (per-slot gen + operand-stack shadow) catches H4 non-perturbingly where `LOFT_UAF` (variable-based) misses it. Added **free-site attribution keyed per-generation** (`keys.rs` `FREED_AT_GEN`, `state/mod.rs`) so it names the CAUSAL free. **Refinement:** a **copy-vs-deref verdict** (`keys.rs` `COPY_DEPTH`/`uaf_in_copy`, marked around `copy_record`/`finish_record` in `state/io.rs`) — a stale read *during* a record deep-copy is `INCOMPLETE RECORD-COPY` (fix the copy), one *outside* is `PREMATURE FREE` (fix the free). This turns "prematurely freed" (which pointed at a correctly-placed temp free) into a decisive root. **H4 verdict: all 23 reads = `PREMATURE FREE`, none copy** — which CORRECTS arc E (below) | **Done** |
 | **C** — oracle | make B **non-vacuous**: a known-GOOD probe (must stay silent) + a known-BAD probe (must fire) — a positive control, per "a fooleable oracle is a liability" (plans/README.md). Graduate to a gate | Open |
-| **D** — second implementation + switch | a conservative store-handling variant behind an env switch (e.g. **copy-on-held-reference** / no-relocate-under-live-borrow), run **differentially** (@PLN89 pattern) against the current path: identical output ⇒ same; divergence localises the bug. The safe variant is a flip-on **stopgap** while the real fix lands | Open |
-| **E** — fix at the chokepoint | **RE-ATTRIBUTED (arc-B verdict), not fixed.** Bytecode is CORRECT (frees at the right places); native runs it clean → an interpreter-side store bug. Arc E first *inferred* an `OpCopyRecord`/`copy_claims` copy-incomplete root from the IR; the **refined detector overrode that** — the caught stale read verdicts `PREMATURE FREE` (outside any copy), so the tool-supported root is an **interpreter slot-reuse-while-referenced** premature free at a non-copy pop, NOT a copy-materialisation bug (cluster doc, arc-B-refinement section). Next step: identify which op pops the stale `Vec3` + which free `code_pos=74096` is — a blind edit to the store path still risks the suite; NOT landed | Re-attributed (premature free), fix open |
+| **D** — second implementation + switch | **Delivered as `LOFT_NO_SLOT_REUSE`** (`allocation.rs::find_free_slot`): never reclaim a freed slot. Off by default; run differentially it turned 3/32→0/32, the decisive proof the corruption is slot-reuse-while-referenced. Kept as a gated diagnostic/stopgap | Done (stopgap) |
+| **E** — fix at the chokepoint | **DONE — both backends 0/32, suite 3385/3385 green.** Op-named `LOFT_UAF_GEN` (read op `OpPutRef`, free op `OpFreeRef`) + `LOFT_NO_SLOT_REUSE` (3/32→0/32) pinned it: the interpreter's `OpFreeRef` of a variable did **not** reset it to the sentinel (native does), so a loop temp freed at the block-exit sweep was **re-freed** by the next iteration's pre-build free of a possibly-reclaimed slot. Fix: `generate_call` emits `OpInitRefSentinel` after the block-exit free of `owned_reassigned` vars (`src/stack.rs`), mirroring native, interpreter-only | **Done** |
+| **F** — the unmasked leak (other end) | **OPEN.** Fixing E unmasked a pre-existing, interpreter-only `Vec2×8160` leak — `n_protect_store_frees` (@P290) blocks the retbuf's legitimate `OpCopyRecord` `0x8000` free (native has no protect and frees it). VERIFIED pre-existing (`LOFT_NO_SLOT_REUSE` exposes it too, `Vec2×6120`) + interpreter-only (`--native` clean). A resource bug, layout-dependent — needs its own matrix-first pass, not a blind @P290 edit | Open |
 
 ## Phase ordering
 
