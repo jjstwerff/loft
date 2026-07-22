@@ -29,7 +29,7 @@
 
 #![allow(clippy::too_many_lines)]
 
-use std::io::{BufReader, Read};
+use std::io::{BufRead, BufReader, Read};
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
 use std::process::{Child, Command, Stdio};
@@ -116,6 +116,9 @@ fn drain_with_timeout(mut child: Child, timeout: Duration) -> (String, Option<i3
 struct ServerGuard {
     child: Option<Child>,
     port: u16,
+    /// Everything the server child wrote to stderr while we waited for it to bind,
+    /// captured on a reader thread.  `diagnose_listen_failure` drains the rest.
+    early_stderr: Option<std::sync::mpsc::Receiver<String>>,
 }
 
 impl ServerGuard {
@@ -127,11 +130,58 @@ impl ServerGuard {
             .current_dir(examples_dir())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped());
-        let child = cmd.spawn().expect("failed to spawn loft server");
+        let mut child = cmd.spawn().expect("failed to spawn loft server");
+        // Read stderr line-by-line on a thread so `bind_outcome` can watch for the
+        // listener's verdict without blocking, and without consuming the handle that
+        // `diagnose_listen_failure` needs.
+        let early_stderr = child.stderr.take().map(|s| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            thread::spawn(move || {
+                for line in BufReader::new(s).lines().map_while(Result::ok) {
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+            rx
+        });
         ServerGuard {
             child: Some(child),
             port,
+            early_stderr,
         }
+    }
+
+    /// Wait until this server has decided whether it owns `self.port`.
+    ///
+    /// **Not the same question as "is anything listening there".**  `pick_free_port`
+    /// binds `:0`, reads the port and closes, so between that close and this server's
+    /// bind another test can take the port — measured at roughly 1 % for 12 concurrent
+    /// pickers and 10 % for 64, and the full suite has ~9 files racing on this idiom.
+    /// The loser is invisible from the outside: `server::listen` hands back a `Server`
+    /// whose handle is `-1` and the script cheerfully prints "listening", so a plain
+    /// connect-probe SUCCEEDS — against the *winner's* server.  The losing test then
+    /// runs its clients against a stranger's server, and the failure surfaces far away
+    /// as "client hung" or "neither client observed the other".
+    ///
+    /// So ask the server itself.  The native listener prints exactly one of these:
+    ///   ok   — `loft server listening on 0.0.0.0:<port>`
+    ///   lost — `loft_tcp_listen: cannot bind 0.0.0.0:<port>: Address already in use`
+    fn bind_outcome(&self, timeout: Duration) -> BindOutcome {
+        let Some(rx) = self.early_stderr.as_ref() else {
+            return BindOutcome::Unknown;
+        };
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            match rx.recv_timeout(Duration::from_millis(100)) {
+                Ok(line) if line.contains("cannot bind") => return BindOutcome::PortTaken,
+                Ok(line) if line.contains("loft server listening on") => return BindOutcome::Bound,
+                Ok(_) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {}
+                Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => break,
+            }
+        }
+        BindOutcome::Unknown
     }
 
     fn wait_listening(&self) -> bool {
@@ -201,6 +251,69 @@ impl Drop for ServerGuard {
     }
 }
 
+/// What the server child said about its own bind — see [`ServerGuard::bind_outcome`].
+#[derive(PartialEq, Eq, Debug)]
+enum BindOutcome {
+    Bound,
+    PortTaken,
+    /// The server said neither within the budget (an old build, or a genuinely stuck
+    /// child).  Treated as "carry on and let `wait_listening` judge", so this helper can
+    /// never be the reason a test fails.
+    Unknown,
+}
+
+/// Start `server_script` on a port it actually owns, retrying the pick when it loses the
+/// race described in [`ServerGuard::bind_outcome`].  Returns the guard and its port.
+///
+/// Retrying is the right response rather than failing: losing the pick is an ordinary,
+/// expected event under a saturated box, and re-picking costs milliseconds.  What must
+/// never happen is what happened before — proceeding against someone else's server.
+fn spawn_server_on_free_port(server_script: &str) -> (ServerGuard, u16) {
+    spawn_server_on_free_port_inner(server_script, false).0
+}
+
+/// `steal_first`: hold the FIRST picked port so this server is guaranteed to lose the
+/// bind — the fault injection `server_detects_and_retries_a_stolen_port` uses to prove
+/// the detection is not vacuous.  Also returns how many picks were burned.
+fn spawn_server_on_free_port_inner(
+    server_script: &str,
+    steal_first: bool,
+) -> ((ServerGuard, u16), usize) {
+    const ATTEMPTS: usize = 5;
+    let mut last_taken = 0;
+    let mut thief = None;
+    for attempt in 0..ATTEMPTS {
+        let port = pick_free_port();
+        if steal_first && attempt == 0 {
+            // Hold it on 127.0.0.1 — the server binds 0.0.0.0:port, which collides.
+            thief = TcpListener::bind(("127.0.0.1", port)).ok();
+            assert!(
+                thief.is_some(),
+                "fault injection could not hold port {port}"
+            );
+        }
+        let mut s = ServerGuard::spawn(server_script, port);
+        match s.bind_outcome(Duration::from_secs(60)) {
+            BindOutcome::PortTaken => {
+                last_taken = port;
+                continue; // `s` drops here, killing the zombie that never bound
+            }
+            BindOutcome::Bound | BindOutcome::Unknown => {
+                if !s.wait_listening() {
+                    let diag = s.diagnose_listen_failure();
+                    panic!("server failed to start within 60s{diag}");
+                }
+                drop(thief);
+                return ((s, port), attempt);
+            }
+        }
+    }
+    drop(thief);
+    panic!(
+        "could not obtain a free port for {server_script} in {ATTEMPTS} attempts (last contended port {last_taken})"
+    );
+}
+
 /// Spawn a v2 client as a subprocess, returning a Child whose
 /// stdout is piped (and stderr inherited).  Caller is responsible
 /// for `drain_with_timeout` and cleanup.  `port` is forwarded via
@@ -243,6 +356,40 @@ fn count_occurrences(haystack: &str, needle: &str) -> usize {
 
 // ── Tests ────────────────────────────────────────────────────────────────
 
+/// Positive control for the port-race detection, and the reason it exists.
+///
+/// Steals the first picked port on purpose, so the server MUST lose its bind.  Asserts
+/// two things:
+///   1. a bare connect-probe still succeeds on the stolen port — which is exactly why
+///      `wait_for_port` alone could never catch this, and why a losing test used to sail
+///      on and run its clients against whoever actually owned the port;
+///   2. `spawn_server_on_free_port` nonetheless notices, burns that pick, and comes back
+///      with a server on a DIFFERENT port that really works.
+///
+/// Without the `bind_outcome` check this test fails at step 2, so it cannot go vacuous.
+#[test]
+fn server_detects_and_retries_a_stolen_port() {
+    let ((_server, port), attempts_burned) =
+        spawn_server_on_free_port_inner("tictactoe_server_v2.loft", true);
+    assert!(
+        attempts_burned >= 1,
+        "the stolen port was not detected — the fault injection did not take effect"
+    );
+
+    // The server we got back is a real one: a client can complete a game against it.
+    let client = spawn_client("S", port);
+    let (out, status) = drain_with_timeout(client, Duration::from_secs(60));
+    assert_eq!(
+        status,
+        Some(0),
+        "client did not exit cleanly; stdout=\n{out}"
+    );
+    assert!(
+        out.contains("[S] GameOver: X"),
+        "retried server did not play a full game; stdout=\n{out}"
+    );
+}
+
 /// Smoke test — single client connects, plays through to GameOver.
 /// This is the same protocol the v1 client validates, but driving
 /// the v2 server.  Locks in: handshake, namespace registry, basic
@@ -264,15 +411,7 @@ fn v2_single_client_completes_game() {
     // (these tests share the same binary; cargo runs them
     // sequentially by default within one binary unless --test-threads
     // is bumped).
-    let port = pick_free_port();
-    let _server = {
-        let mut s = ServerGuard::spawn("tictactoe_server_v2.loft", port);
-        if !s.wait_listening() {
-            let diag = s.diagnose_listen_failure();
-            panic!("server failed to start within 60s{diag}");
-        }
-        s
-    };
+    let (_server, port) = spawn_server_on_free_port("tictactoe_server_v2.loft");
 
     let client = spawn_client("S", port);
     let (out, status) = drain_with_timeout(client, Duration::from_secs(60));
@@ -308,15 +447,7 @@ fn v2_single_client_completes_game() {
 /// on counts, not order.
 #[test]
 fn v2_two_clients_with_spectator_routing() {
-    let port = pick_free_port();
-    let _server = {
-        let mut s = ServerGuard::spawn("tictactoe_server_v2.loft", port);
-        if !s.wait_listening() {
-            let diag = s.diagnose_listen_failure();
-            panic!("server failed to start within 60s{diag}");
-        }
-        s
-    };
+    let (_server, port) = spawn_server_on_free_port("tictactoe_server_v2.loft");
 
     // P229a: both clients spawn essentially simultaneously, then each
     // pauses ~200 ms after handshake before placing its first X.  On
@@ -402,15 +533,7 @@ fn v2_two_clients_with_spectator_routing() {
 /// A finished before B's MAP arrived, so its events are gone.
 #[test]
 fn v2_late_join_independent_games() {
-    let port = pick_free_port();
-    let _server = {
-        let mut s = ServerGuard::spawn("tictactoe_server_v2.loft", port);
-        if !s.wait_listening() {
-            let diag = s.diagnose_listen_failure();
-            panic!("server failed to start within 60s{diag}");
-        }
-        s
-    };
+    let (_server, port) = spawn_server_on_free_port("tictactoe_server_v2.loft");
 
     // A connects, plays, finishes.
     let a = spawn_client("A", port);

@@ -23,6 +23,13 @@ const FIXTURE: &str = r#"fn main() {
 /// Run the fixture on `backend`, feeding `stdin`, return captured stdout.  Each
 /// call gets its own temp dir so `--native`'s `.loft/` build artifacts and
 /// parallel test threads never collide.
+///
+/// On anything other than a clean exit with output, the returned string is a
+/// DIAGNOSTIC rather than the empty string.  This used to discard stderr and return
+/// `""`, so when the `--native` leg failed under full-suite load the assertion read
+/// `left: "echo=[café] len=4\n", right: ""` — a symptom with its cause thrown away,
+/// leaving nothing to act on but "it flaked".  A failing build or a killed child now
+/// says so, in the panic message, at the moment it happens.
 fn run(backend: &str, stdin: &str) -> String {
     let id = SEQ.fetch_add(1, Ordering::Relaxed);
     let dir = std::env::temp_dir().join(format!("loft_host_input_{}_{id}", std::process::id()));
@@ -34,7 +41,7 @@ fn run(backend: &str, stdin: &str) -> String {
         .current_dir(env!("CARGO_MANIFEST_DIR"))
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .spawn()
         .expect("spawn loft");
     child
@@ -45,7 +52,21 @@ fn run(backend: &str, stdin: &str) -> String {
         .expect("write stdin");
     let out = child.wait_with_output().expect("wait");
     let _ = std::fs::remove_dir_all(&dir);
-    String::from_utf8_lossy(&out.stdout).into_owned()
+    let stdout = String::from_utf8_lossy(&out.stdout).into_owned();
+    if out.status.success() && !stdout.is_empty() {
+        return stdout;
+    }
+    // Carry the cause into the assertion instead of returning a bare "".
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    format!(
+        "<{backend} produced no usable output: status={:?}, stdout={stdout:?}, stderr={}>",
+        out.status,
+        if stderr.trim().is_empty() {
+            "(empty)".to_string()
+        } else {
+            format!("{:?}", stderr.trim())
+        }
+    )
 }
 
 /// The whole point: the same source reading `host_input()` produces byte-for-byte
