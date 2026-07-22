@@ -2240,6 +2240,10 @@ use #count instead"
             // (expose-iteration-scratch.md Open question A).
             if hash_scratch_var != u16::MAX {
                 for_steps.push(self.cl("OpFreeScratch", &[Value::Var(hash_scratch_var)]));
+                // Null the scratch var so the scope-exit OpFreeScratch (emitted by
+                // get_free_vars, which catches the `return`-out-of-loop path) is a no-op
+                // here — its rec==0 guard skips a nulled ref, so the two never double-free.
+                for_steps.push(v_set(hash_scratch_var, Value::Null));
             }
             *code = v_block(for_steps, Type::Void, "For block");
         } else {

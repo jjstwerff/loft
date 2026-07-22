@@ -8,12 +8,11 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 A slice of [@PLN105](105-ffi-deliver-layout-bridge.md) (the FFI deliver / layout
 bridge). Surfaced by the `routing` consumer (`docs/loft-feedback.md`, 2026-07-22,
 "`expose` UN-RETRACTED"). **Status: Steps 0-4 DONE — an exposed hash/radix now iterates
-(new `on=4` mode), correct and leak-clean for complete / break / repeated / nested walks
-on both backends (loop-epilogue conditional free). Residuals: a `return` out of an exposed
-loop leaks the scratch (caught by the leak check), and bounded-range over an exposed
-non-hash source still errors (Step 5). Step 3's header approach was falsified for `on=3`
-en route but is sound under the compile-time `on=4` split.** This doc is the single source
-of truth; it leads
+(new `on=4` mode), correct and leak-clean on both backends for every loop exit —
+complete / break / repeated / nested / return (loop-epilogue free + a coordinated
+scope-exit free). Only remaining gap: bounded-range over an exposed non-hash source still
+errors (Step 5). Step 3's header approach was falsified for `on=3` en route but is sound
+under the compile-time `on=4` split.** This doc is the single source of truth; it leads
 with the probes/tooling/oracles because the risk is entirely in the store-lifetime
 subsystem (loft weakness #1) and the build must be gated behind instruments that can
 *falsify* each step — which is exactly what caught Step 3.
@@ -234,10 +233,10 @@ store is freed when iteration **completes** (`step` at `pos == i32::MAX`, only w
 `source != data.store_nr`; the elements live in the source, untouched) — the interpreter
 and the native runtime `step` mirror each other. *Verified: the exposed matrix iterates ==
 the writable golden and is leak-clean on a complete walk (both backends); 502/85/the golden
-stay green.* The dedicated store is freed on every **loop exit** by the epilogue's
-conditional `OpFreeScratch` (Open question A), so complete / break / repeated / nested
-exposed iteration are leak-clean. **Sole residual:** a `return` out of the loop bypasses
-the epilogue and leaks the current scratch store — caught by the leak check, never a UAF.
+stay green.* The dedicated store is freed on **every** exit — a loop epilogue
+`OpFreeScratch` (complete/break/repeated/nested) plus a coordinated `get_free_vars`
+scope-exit `OpFreeScratch` for the `return` path, the epilogue nulling the var so the two
+never double-free (Open question A). All exits are leak-clean on both backends.
 
 **Step 5 — bounded range over an exposed non-hash source (not started).** `on=4` fires only
 for `Hash|Radix` (always full iteration → no `ordered_find`). A range over an exposed
@@ -253,20 +252,20 @@ break/return leak (A) and bounded-range-over-exposed (Step 5).
 
 ## Open questions (probe before choosing — do not assume)
 
-- **A. Scratch free (RESOLVED for loop exits; `return` residual).** The scratch var
-  carries `hash_deps` (borrow → the scope machinery never frees it), so the dedicated
-  read-only store had no owner. The fix is a **loop-epilogue conditional free**: `parse_for`
-  emits `OpFreeScratch(hash_scratch)` right after the `on=4` loop, which frees the scratch's
-  whole store **only when it differs from the source** recorded in the header (offset 8) —
-  a no-op for a co-located (writable) scratch, and self-contained (no source-witness var
-  needed). It runs on completion AND `break` (break leaves the `v_loop` to the epilogue),
-  and once per (re-)entry, so **complete / break / repeated (loop-in-loop) / nested**
-  exposed iteration are all leak-clean on both backends. **Sole residual:** a `return` out
-  of the loop jumps to function exit, past the epilogue, and leaks the current scratch
-  store (leak-check flags it; never a UAF — the freed store holds only rec-nrs, not
-  elements). Closing it needs `OpFreeScratch` at *function*-scope exit too, coordinated so
-  it doesn't double-free the loop-epilogue's (e.g. `OpFreeScratch` nulling the var it
-  frees). Deferred as a smaller follow-up.
+- **A. Scratch free (RESOLVED — all exit paths).** The scratch var carries `hash_deps`
+  (borrow → the scope machinery never frees it), so the dedicated read-only store had no
+  owner. Two coordinated frees cover every exit: **(1)** a **loop-epilogue** conditional
+  free — `parse_for` emits `OpFreeScratch(hash_scratch)` right after the `on=4` loop, which
+  frees the scratch's whole store **only when it differs from the source** recorded in the
+  header (offset 8) — a no-op for a co-located (writable) scratch. It runs on completion AND
+  `break`, once per (re-)entry, covering complete / break / repeated / nested. **(2)** a
+  **scope-exit** free — `get_free_vars` emits the same `OpFreeScratch` for a `hash_scratch`
+  var at its scope exit, which is what a `return`-out-of-loop hits (it bypasses the
+  epilogue). The two never double-free: the epilogue **nulls** the scratch var after
+  freeing (`v_set … Null`), and `OpFreeScratch`'s `rec==0` guard skips a nulled ref — so on
+  complete/break the scope-exit free is a no-op, and only the `return` path (epilogue
+  skipped, var still live) actually frees there. All of complete / break / repeated /
+  nested / **return** are leak-clean on both backends.
 - **B. Dedicated store lifecycle.** Persistent-and-reused vs fresh-per-iteration. A
   persistent empty store may trip the "N stores not freed at exit" census — check what
   the census counts (live records vs allocated slots) before choosing. Prefer reuse via

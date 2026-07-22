@@ -12,6 +12,13 @@
 
 struct Tile { tkey: integer, ox: integer }
 
+// Returns out of an exposed-collection loop: the loop epilogue is bypassed, so the
+// dedicated scratch store is freed by the scope-exit OpFreeScratch (get_free_vars).
+fn first_over(h: hash<Tile[tkey]>, thresh: integer) -> integer {
+  for t in h { if t.tkey > thresh { return t.tkey; } }
+  0
+}
+
 fn main() {
   h: hash<Tile[tkey]> = [];
   h += [Tile{ tkey: 3, ox: 30 }];
@@ -48,6 +55,7 @@ fn main() {
   nest = 0;
   for a in h { for b in h { nest += 1; } }     // nested
   assert(nest == 16, "nested exposed iter (nest {nest}, expect 16)");
+  assert(first_over(h, 2) == 3, "return out of an exposed loop");  // scope-exit free
   release(2, h);
 
   println("pln105-expose-iterate ok");
