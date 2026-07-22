@@ -7,10 +7,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 A slice of [@PLN105](105-ffi-deliver-layout-bridge.md) (the FFI deliver / layout
 bridge). Surfaced by the `routing` consumer (`docs/loft-feedback.md`, 2026-07-22,
-"`expose` UN-RETRACTED"). **Status: design converged, no code yet.** This doc is the
-single source of truth; it leads with the probes/tooling/oracles because the risk is
-entirely in the store-lifetime subsystem (loft weakness #1) and the build must be
-gated behind instruments that can *falsify* each step.
+"`expose` UN-RETRACTED"). **Status: Steps 0-2 DONE (golden + refactor + clean-error
+safety net); Step 3 FALSIFIED and reverted (see below); Steps 4-5 = a self-contained
+`on=4` mode slice, not yet built.** This doc is the single source of truth; it leads
+with the probes/tooling/oracles because the risk is entirely in the store-lifetime
+subsystem (loft weakness #1) and the build must be gated behind instruments that can
+*falsify* each step — which is exactly what caught Step 3.
 
 ---
 
@@ -196,29 +198,48 @@ everything after it (no more silent hang while the real fix is built). *Oracle: 
 iteration → clean typed error, not panic/hang, both backends; matrix's writable cells
 unchanged.*
 
-**Step 3 — thread the source `store_nr` through the header (additive, inert).** Extend
-the scratch header to a 2-word record carrying the source `store_nr`; write it in
-`build_rec_scratch`; `step_ordered` **reads** it for the yield. Keep the scratch
-co-located (still in the source store) so *source == scratch* and behaviour is byte-for-
-byte unchanged. *Oracle: all iteration values + leak unchanged, both backends — the
-machinery is present but dormant.*
+**~~Step 3 — thread the source `store_nr` through the header (additive, inert).~~
+FALSIFIED — this is the design-protocol earning its keep.** The plan was a 2-word scratch
+header carrying the source `store_nr` at offset 8, read back by `step_ordered` for the
+yield. Implemented, it broke `502-keyed-slice-for-only` and
+`85-store-lifetime-claims-keystone` on **both** backends (a bad `store_nr` → out-of-bounds
+`allocations[…]` panic at `allocation.rs:974`). **Why:** the `on=3` path serves **two**
+data shapes, not one. `data.pos` is offset 4 for a freshly-built scratch, but a
+**struct-field offset** (12, in test 502) when a keyed collection is iterated *in place* —
+so `data.pos + 4` is not a header slot I control; it reads a neighbouring field as a
+store number. There is **no fixed offset** for the source store because the on=3 `data` is
+not always my header. The corrected invariant: **the source store_nr must be carried
+out-of-band in the iterator STATE, not in the iterated record** — which is precisely the
+dormant `on=4` mode the code already documents (`allocation.rs:1000-1002`: *"the runtime
+retains the original hash's `store_nr` via the companion iterator-local allocated by
+`parse_for_iter_setup`"*). Step 3 is reverted; its intent folds into Step 4 below. *(The
+probe that caught this was free: the existing keyed-slice/store-lifetime tests. The
+"inert" claim was the over-clean absorption the protocol warns of.)*
 
-**Step 4 — put the scratch in a writable store when the source is read-only (the
-behaviour change).** When `build_rec_scratch`'s target is `read_only`, claim the scratch
-in a dedicated writable store; `step_ordered` already yields with the header's source
-`store_nr`. Resolve the **scratch-free** question (Open question A) so the dedicated
-store's records are reclaimed. *Oracle: the full matrix — exposed-hash-full == writable
-golden (value), exposed bytes unchanged (invariant), census back to baseline (leak),
-both backends.* Replaces Step 2's error for the hash-full case.
+**Step 4 — a distinct `on=4` read-only-source iteration mode (the real fix, now a
+protocol change, not a header tweak).** Revive `on=4`: for a read-only (exposed) source,
+build the scratch in a dedicated writable store and iterate it via a mode whose
+**iterator state also carries the source `store_nr`**; `step` for `on=4` yields
+`DbRef{store_nr: source, rec, pos: 8}`. Normal iteration stays `on=3` (yields
+`data.store_nr`, unchanged — so 502/85 and the golden are untouched). Wire it through
+`parse_for_iter_setup` (mode + state), `iterate`/`step` on both backends, and the scratch
+lifecycle (Open question A). *Oracle: the full matrix — exposed-hash-full == writable
+golden (value), exposed bytes unchanged (invariant), census to baseline (leak), both
+backends; AND 502/85/the golden stay green (the `on=3` path is byte-for-byte unchanged).*
+Replaces Step 2's error for the hash-full case. **This is genuinely M — a bytecode-mode
+change in the store-lifetime subsystem — and should be built as its own slice with the
+matrix above, not squeezed onto the end of Steps 1-2.**
 
-**Step 5 — bounded range over an exposed non-hash source.** Either thread the source
-`store_nr` into `ordered_find`'s key reads, or keep Step 2's clean error for that cell.
-*Oracle: bounded-range-over-exposed either matches its golden or errors cleanly — never a
-silent wrong element.*
+**Step 5 — bounded range over an exposed non-hash source.** `on=4`'s `iterate` setup, for
+a *range*, still needs `ordered_find` to read record keys from the source store (not the
+scratch store). Either thread the source `store_nr` there too, or keep Step 2's clean
+error for that cell. *Oracle: bounded-range-over-exposed either matches its golden or
+errors cleanly — never a silent wrong element.*
 
-Steps 1 and 2 are independently shippable and each strictly improve the status quo; 3 is
-inert; 4 is the real fix, gated behind the invariant + leak oracles; 5 closes the scope
-gap.
+Steps 1 and 2 are **done and shippable** (the mirror-collapse refactor and the clean-error
+safety net — no more silent wasm hang). Step 3 was falsified and reverted; its goal moves
+into Step 4, which is now a self-contained `on=4` mode slice gated behind the full oracle
+set. Step 5 closes the scope gap.
 
 ## Open questions (probe before choosing — do not assume)
 
