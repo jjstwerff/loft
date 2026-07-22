@@ -176,22 +176,52 @@ where
     });
     if let Some(seen) = worker_trace {
         let indices = seen.into_inner().unwrap();
-        eprintln!(
+        let summary = format!(
             "loft: LOFT_TRACE_PAR_WORKERS parallel_workers n_rows={n_rows} threads={threads} \
              distinct_workers={} indices={indices:?}",
             indices.len(),
         );
+        // Native: stderr.  Wasm: stderr is dropped, so surface the count in the
+        // program output where the browser harness reads it back from
+        // compile_and_run's JSON.
+        #[cfg(not(feature = "wasm"))]
+        eprintln!("{summary}");
+        #[cfg(feature = "wasm")]
+        crate::wasm::output_push(&format!("{summary}\n"));
     }
     out
 }
 
-/// @PLN117 step 0 — is the parallel-worker tracer armed?  Read `LOFT_TRACE_PAR_WORKERS`
-/// once; off ⇒ the dispatch chokepoint stays allocation-free.
+/// @PLN117 step 0 — runtime arm switch for the parallel-worker tracer.  The
+/// wasm harness has no environment variables, so it flips this through a wasm
+/// export (`set_par_trace_workers`) before running the instrument.
+#[cfg(feature = "threading")]
+static PAR_TRACE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Arm or disarm the parallel-worker tracer at runtime (@PLN117 step 0).
+#[cfg(feature = "threading")]
+pub fn set_par_trace(on: bool) {
+    PAR_TRACE_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// @PLN117 step 0 — is the parallel-worker tracer armed?  Armed by the runtime
+/// switch, or (native only) by `LOFT_TRACE_PAR_WORKERS` read once.  Off ⇒ the
+/// dispatch chokepoint stays allocation-free.
 #[cfg(feature = "threading")]
 fn par_trace_enabled() -> bool {
-    use std::sync::OnceLock;
-    static ON: OnceLock<bool> = OnceLock::new();
-    *ON.get_or_init(|| std::env::var_os("LOFT_TRACE_PAR_WORKERS").is_some())
+    if PAR_TRACE_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        use std::sync::OnceLock;
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("LOFT_TRACE_PAR_WORKERS").is_some())
+    }
+    #[cfg(feature = "wasm")]
+    {
+        false
+    }
 }
 
 /// Plan-06 phase 3b.1 — merge per-thread batches into one ordered vector.

@@ -92,7 +92,10 @@ serde              = { version = "1", optional = true, features = ["derive"] }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys             = { version = "0.3", optional = true }
 web-sys            = { version = "0.3", optional = true, features = ["console"] }
-wasm-bindgen-rayon = { version = "1.2", optional = true }
+# @PLN117 — `no-bundler`: the worker bootstrap resolves the main module via an
+# explicit URL (not a bundler's `../../..` package resolution), which is what
+# loft's static-file deployment (gallery / `loft --html`) needs.
+wasm-bindgen-rayon = { version = "1.2", optional = true, features = ["no-bundler"] }
 rayon              = { version = "1.10", optional = true }
 libloading         = { version = "0.8", optional = true }
 loft-ffi           = { path = "loft-ffi" }

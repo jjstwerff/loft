@@ -1209,6 +1209,16 @@ pub fn output_take() -> String {
 #[cfg(feature = "wasm-threads")]
 pub use wasm_bindgen_rayon::init_thread_pool;
 
+/// @PLN117 step 0 — arm the parallel-worker tracer from JS (the browser has no
+/// env vars).  With it on, a `par` reports `distinct_workers=N` into the
+/// program output, so the harness can prove dispatch really crossed >=2 Web
+/// Worker threads.
+#[cfg(feature = "wasm-threads")]
+#[wasm_bindgen::prelude::wasm_bindgen]
+pub fn set_par_trace_workers(on: bool) {
+    crate::parallel::set_par_trace(on);
+}
+
 // ── W1.18-2  Worker entry point for WASM threading ──────────────────────────
 
 /// Entry point called by each Worker Thread.  The JS worker loop calls

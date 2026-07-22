@@ -952,14 +952,28 @@ clean-wasm:
 # worker bootstrap is web-target-only; --target nodejs cannot drive it.
 # A page must `await init()` then `await initThreadPool(hardwareConcurrency)`
 # before any par; on a host without cross-origin isolation it skips the pool
-# and par() falls back to sequential (never breaks).  Design + arcs:
+# and par() falls back to sequential (never breaks — verified in-browser).
+# Prove it: python3 tests/wasm/coi-server.py 8799 tests/wasm & then load
+# /par-thread-proof.html in a cross-origin-isolated browser.  Design + arcs:
 # doc/claude/plans/117-browser-multithreading/.
+#
+# The link-arg set below is what wasm-bindgen's thread transform requires and
+# this toolchain's rustc does NOT auto-emit from +atomics alone: shared +
+# imported memory with a maximum, plus lld's synthesized TLS / heap-base
+# globals kept as exports.  Drop any one and the bundle silently builds with a
+# NON-shared memory — workers then die at runtime with "Memory could not be
+# cloned".  (max-memory 1 GiB = 16384 wasm pages.)
+WASM_MT_RUSTFLAGS = -C target-feature=+atomics,+bulk-memory,+mutable-globals \
+  -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 \
+  -C link-arg=--import-memory -C link-arg=--export=__heap_base \
+  -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size \
+  -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base
 wasm-mt:
-	RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
+	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
 	rustup run nightly \
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir tests/wasm/pkg-mt --release \
 	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
-	@echo "Built tests/wasm/pkg-mt/ (--target web, threaded)."
+	@echo "Built tests/wasm/pkg-mt/ (--target web, threaded, shared memory)."
 
 fill:
 	@cargo build --release -q
