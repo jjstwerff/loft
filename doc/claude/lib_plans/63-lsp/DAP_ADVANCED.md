@@ -317,10 +317,13 @@ reverts too.
   reverse, step over a mutating line (`a=99`), `step_back` → line + local revert to the exact
   pre-step state (byte-level), and a `step_back` past the floor is a clean no-op. Interpreter
   only (reverse execution does not apply to `--native`).
-- **RX3 — engine: bounded ring.** Cap the ring at N (drop the oldest when full; N via env,
-  default e.g. 200); a `step_back` past the floor returns a clean "no earlier state", never a
-  wrong one. *Gate:* N+1 steps then N+1 `step_back`s — the last reports the floor, no
-  corruption; the retained window is exactly N.
+- **RX3 — engine: bounded ring. ✅ DONE.** `reverse_ring` is a `VecDeque` capped at
+  `reverse_cap` — a push past the cap drops the oldest (`pop_front`), `step_back` takes the
+  back; `set_reverse` sizes it from `LOFT_REVERSE_DEPTH` (default 200), `set_reverse_depth(n)`
+  overrides (DAP layer / tests). *Gate:*
+  `tests/debugger.rs::rx3_ring_is_bounded_to_the_depth` — cap 2, three steps → exactly two
+  `step_back`s succeed, the third is a clean floor, and the dropped (oldest) step's line is
+  unreachable (the cap held; no unbounded growth, no corruption).
 - **RX4 — RPC: a `stepBack` verb.** Add `{"req":"stepBack"}` → `State::step_back` →
   `report(..., "step", ...)` (the refreshed frame + a `stopped{reason:"step"}`), mirroring
   `stepOver`. Leave `undo`/`redo` as the edit-scoped verbs. *Gate:* `tests/rpc.rs` — step

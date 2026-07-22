@@ -1399,3 +1399,59 @@ fn rx2_step_back_reverses_a_step() {
         "state unchanged at the floor"
     );
 }
+
+/// @PLN63 RX3 — the reverse ring is BOUNDED to its depth: with a cap of 2, three forward steps
+/// drop the oldest, so exactly two step_backs succeed and the third hits a clean floor — and
+/// the dropped (oldest) step is NOT reachable, proving the cap held (no unbounded growth, no
+/// corruption).
+#[test]
+fn rx3_ring_is_bounded_to_the_depth() {
+    let mut p = repl();
+    // Each line READS `a`, so none is a dead store elided by codegen — every line is a step.
+    let mut state = run_to_pause(
+        &mut p,
+        &[
+            "fn build() -> integer {\n  a = 1;\n  a = a + 1;\n  a = a + 2;\n  a = a + 4;\n  a + 0\n}",
+        ],
+        "build()",
+        "build",
+        2, // pause at `a = 1;`
+    );
+    state.set_reverse(true);
+    state.set_reverse_depth(2); // retain only the last 2 steps
+    let origin_line = state.paused_line();
+
+    // Three forward steps → the ring keeps only the most recent 2 (the oldest is dropped).
+    for _ in 0..3 {
+        assert!(
+            state.debug_step(StepMode::Over, &p.data),
+            "each step re-pauses"
+        );
+    }
+
+    // Exactly two step_backs succeed (the retained window); the third hits the bounded floor.
+    assert!(
+        state.step_back(&p.data),
+        "step back 1 of 2 (within the cap)"
+    );
+    assert!(
+        state.step_back(&p.data),
+        "step back 2 of 2 (within the cap)"
+    );
+    let floor_line = state.paused_line();
+    assert!(
+        !state.step_back(&p.data),
+        "the 3rd step_back hits the bounded floor — a clean no-op"
+    );
+    assert_eq!(
+        state.paused_line(),
+        floor_line,
+        "state unchanged at the floor"
+    );
+
+    // The oldest step was dropped by the cap, so the origin line is NOT reachable.
+    assert_ne!(
+        floor_line, origin_line,
+        "the dropped step (the origin line) is unreachable — the cap held"
+    );
+}

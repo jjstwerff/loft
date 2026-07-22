@@ -137,10 +137,14 @@ pub struct Debugger {
     /// pre-step state into `reverse_ring` before executing, so `step_back` can restore it.
     /// Off by default (normal debug sessions pay no snapshot cost).
     pub reverse: bool,
-    /// @PLN63 RX — the reverse-step checkpoint ring, newest last.  Distinct from the M2
-    /// `undo_stack` (which a step self-clears): a `debug_step` PUSHES here, `step_back` POPS
-    /// + restores.  Bounded in RX3.
-    pub reverse_ring: Vec<crate::state::StepCheckpoint>,
+    /// @PLN63 RX — the reverse-step checkpoint ring, newest at the back.  Distinct from the M2
+    /// `undo_stack` (which a step self-clears): a `debug_step` PUSHES the back, `step_back`
+    /// POPS the back + restores.  **Bounded** to `reverse_cap` (RX3): a push past the cap drops
+    /// the oldest (front), so only the last N steps are reversible.
+    pub reverse_ring: std::collections::VecDeque<crate::state::StepCheckpoint>,
+    /// @PLN63 RX3 — the ring's capacity (the reversible depth), set when reverse is armed from
+    /// `LOFT_REVERSE_DEPTH` (default 200).  0 = unset (never, while armed).
+    pub reverse_cap: usize,
 }
 
 /// @PLN16 B1 — collect the **static** call targets in an IR body into `out`.

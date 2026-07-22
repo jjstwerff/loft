@@ -104,6 +104,17 @@ impl std::fmt::Debug for StepCheckpoint {
     }
 }
 
+/// @PLN63 RX3 — the reverse-step ring depth (how many steps back are retained), from
+/// `LOFT_REVERSE_DEPTH`, defaulting to 200.  A non-positive / unparseable value → the default.
+fn reverse_depth_from_env() -> usize {
+    const DEFAULT_REVERSE_DEPTH: usize = 200;
+    std::env::var("LOFT_REVERSE_DEPTH")
+        .ok()
+        .and_then(|s| s.parse::<usize>().ok())
+        .filter(|&n| n > 0)
+        .unwrap_or(DEFAULT_REVERSE_DEPTH)
+}
+
 /// Runtime state of a single coroutine instance (CO1.1).
 /// Holds the serialised stack and metadata needed to suspend and resume.
 #[derive(Clone, Debug)]
@@ -3469,8 +3480,25 @@ impl State {
         self.enable_debug();
         if let Some(d) = self.debug.as_mut() {
             d.reverse = on;
-            if !on {
+            if on {
+                if d.reverse_cap == 0 {
+                    d.reverse_cap = reverse_depth_from_env();
+                }
+            } else {
                 d.reverse_ring.clear();
+            }
+        }
+    }
+
+    /// @PLN63 RX3 — set the reverse ring's capacity (the reversible depth, ≥ 1), trimming the
+    /// oldest steps if it shrinks below the current length.  The DAP layer / tests use this to
+    /// override `LOFT_REVERSE_DEPTH`.
+    pub fn set_reverse_depth(&mut self, depth: usize) {
+        self.enable_debug();
+        if let Some(d) = self.debug.as_mut() {
+            d.reverse_cap = depth.max(1);
+            while d.reverse_ring.len() > d.reverse_cap {
+                d.reverse_ring.pop_front();
             }
         }
     }
@@ -3480,7 +3508,7 @@ impl State {
     /// paused frame so the drill-down reflects it.  Returns `false` when the ring is empty
     /// (no earlier state retained) — a clean floor, never a wrong state.
     pub fn step_back(&mut self, data: &crate::data::Data) -> bool {
-        let Some(cp) = self.debug.as_mut().and_then(|d| d.reverse_ring.pop()) else {
+        let Some(cp) = self.debug.as_mut().and_then(|d| d.reverse_ring.pop_back()) else {
             return false;
         };
         self.restore_checkpoint(&cp);
@@ -4572,7 +4600,11 @@ impl State {
             && let Some(cp) = self.snapshot_checkpoint()
             && let Some(d) = self.debug.as_mut()
         {
-            d.reverse_ring.push(cp);
+            // RX3 — bounded ring: a push past the cap drops the oldest step.
+            if d.reverse_cap > 0 && d.reverse_ring.len() >= d.reverse_cap {
+                d.reverse_ring.pop_front();
+            }
+            d.reverse_ring.push_back(cp);
         }
         self.database.frame_yield = false;
         let start_line = self.line_at(self.code_pos);
