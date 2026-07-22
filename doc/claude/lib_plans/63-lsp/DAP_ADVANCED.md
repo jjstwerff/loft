@@ -238,50 +238,105 @@ DB is self-contained after DB0–DB1; the DAP half (DB3–DB4) is a thin transla
 `"nothing to do"` after a *step* because a step records no edit journal. True reverse
 execution needs the engine to remember prior execution **states**, which it does not.
 
-**Design decision — reuse the journal, don't snapshot the world.** loft already journals
-store mutations (`crate::database::Journal`, the M2 edit machinery, `mod.rs:2687`+). Reverse
-execution generalizes that from *edits* to *steps*: journal the store mutations **and** the
-stack delta of each executed step, so a step can be reverted by replaying its journal
-backward. This avoids a full-State snapshot per step (unaffordable) and builds on proven
-infrastructure. **Open question to settle with a probe first (RX0):** the checkpoint
-granularity — per source-line (step) vs per opcode — and the memory ceiling of an unbounded
-timeline (likely a bounded ring, "reverse up to N steps", surfaced honestly).
+### What the investigation found (this refutes the first design decision)
+
+The original sketch said "reuse the journal, don't snapshot the world." A read of the real
+machinery shows that does **not** hold — the journal cannot see ordinary execution:
+
+| Finding | Code point | Consequence for RX |
+|---|---|---|
+| The M2 undo journal records modifies **only at explicit edit sites** (armed by `begin_edit_journal`, snapshotted by `edit_before`/`edit_after`) — never during opcode execution. | `mod.rs:2663`–`2684`, `2689` | A step's writes are invisible to the journal; "reuse the journal" can't reverse a step. |
+| `debug_step` runs **N opcodes** per step (until the line/depth changes), each mutating stores through raw `addr_mut` scattered across `fill.rs`. There is **no central write chokepoint** to hook cheaply. | `mod.rs:4458`–`4531` | Journaling every execution write means instrumenting the hot path — unacceptable for a language runtime. |
+| The `@PLN16.J` recording (`start_recording`/`take_journal`) captures **structural** changes (claim / delete = `StoreChange::Insert`/`Free`) only, **not** data modifies. | `database/mod.rs:751`, `764`; `store.rs:118` | Reusing it gives allocation/free reversal but misses value writes — insufficient alone. |
+| `debug_step` **clears** the undo/redo history on every step ("resuming reuses frame slots → a stale-slot undo"). | `mod.rs:4472` | RX's history must be a **separate** ring the step loop does not wipe. |
+| `Stores::clone()` deliberately **drops `allocations`** ("runtime-only… only valid during execution"). | `database/mod.rs:508` | A snapshot cannot reuse `clone`; the heap needs an explicit byte copy. |
+| A per-store **deep byte-copy already exists** — `clone_locked` allocates a fresh buffer and `copy_nonoverlapping`s the bytes (used for `par` worker stores). | `store.rs:1224` | The snapshot primitive is proven code, not new `unsafe` — model the heap snapshot on it. |
+
+### Design decision (revised) — a bounded **snapshot ring**, all cost off the hot path
+
+Reverse execution **checkpoints the execution-mutable state before each step** and restores it
+to step back — correct **by construction** (restore = copy the exact bytes back), and it keeps
+**zero** instrumentation on the normal execution path (the snapshot is taken only while a
+reverse-step-armed session steps; a normal run and even a normal debug run pay nothing). The
+cost is one heap byte-copy per stepped step, **bounded** by a ring of the last N steps.
+
+A checkpoint is the execution-mutable subset of `State` (the compile-time maps — `bytecode`,
+`vars`, `calls`, `line_numbers`, `const_refs`, … — never change during a step, so they are
+**not** copied):
+
+- **registers:** `code_pos`, `call_stack`, `call_depth`, `stack_cur`, `stack_high`,
+  `stack_pos`, `stack_cap_bytes`, `arguments`, `coroutines`, `active_coroutines`
+  (`mod.rs` `struct State`);
+- **heap:** a deep byte-copy of every `database.allocations[i]` (modelled on `clone_locked`).
+
+This also **removes** the slot-reuse hazard that forced the M2 edit-journal to self-clear
+(`mod.rs:4472`): a full heap+stack snapshot restores the entire stack store, so a reused slot
+is never a problem — a strict improvement over the edit journal.
 
 **Invariant.** `stepBack` lands on **exactly** the state before the last forward step —
 frame, locals, stack pointer, and store contents byte-identical to never having taken it.
-*Falsify:* snapshot the frame + all locals, `next`, `stepBack`, re-snapshot → byte-identical;
-then a store-mutating step (`v[0] = 9`), `stepBack` → the store reverts too.
+*Falsify (RX0):* snapshot the frame + all locals + the heap bytes, `next`, `stepBack`,
+re-snapshot → byte-identical; then a store-mutating step (`v[0] = 9`), `stepBack` → the store
+reverts too.
 
-**Chokepoints.** `Journal` + `begin_edit_journal`/`commit`/`debug_undo` (`mod.rs:2687`–`2720`,
-`debugger.rs:107`); the step loop `debug_step` (`repl.rs:2158`); RPC `undo`/`redo` (already
-wired, `rpc.rs:318`); DAP `stepBack`/`reverseContinue`.
+**Chokepoints.** `clone_locked` (`store.rs:1224`, the heap-copy primitive); the step loop
+`debug_step` (`mod.rs:4458`) — snapshot at its entry; a new ring on `Debugger`
+(`debugger.rs`), distinct from `undo_stack`; a new RPC `stepBack` verb (NOT the edit
+`undo`/`redo`, which stay edit-scoped); DAP `stepBack`/`reverseContinue`.
 
-**Steps.**
+### Small, safe steps
 
-- **RX0 — the falsification probe FIRST.** Before any engine change, build the byte-identity
-  probe above as a `tests/` harness that **fails** today (proving reverse execution is
-  absent), and measure journal size per step on a representative program — this sizes the
-  timeline and picks the granularity. (The @PLN16 matrix-first rule: earn the fix.)
-- **RX1 — engine: journal a step.** Arm the store journal around each `debug_step` (not just
-  around an edit), and capture the stack-bytes delta, into a per-step timeline entry. *Gate
-  (unit):* one step produces one revertible timeline entry.
-- **RX2 — engine: `step_back`.** Revert the top timeline entry (store journal backward +
-  restore the stack delta + rewind the bytecode position + refresh the paused frame). Redo
-  replays it forward. *Gate:* the RX0 byte-identity probe now PASSES on both backends.
-- **RX3 — engine: bounded timeline.** Cap the timeline at N entries (a ring); reverting past
-  the cap returns a clean "no earlier state" (not a wrong one). Surface N. *Gate:* N+1 steps
-  then N+1 `step_back`s — the last reports the floor, no corruption.
-- **RX4 — RPC: reason + frame on `undo`/`redo`.** `undo`/`redo` return the refreshed frame
-  (they do today) plus a `reason` so the adapter can label the stop; unchanged wire shape
-  otherwise. *Gate:* `tests/rpc.rs` — undo after a step returns the prior frame (was `"nothing
-  to do"`).
+- **RX0 — falsification + sizing probe FIRST.** A `tests/` probe that (a) **fails** today —
+  step forward, `undo` → `"nothing to do"`, proving reverse execution is absent — and (b)
+  deep-copies `allocations` before/after a representative step and prints the total bytes, to
+  size the ring N and confirm the snapshot cost is acceptable. (The @PLN16 matrix-first rule:
+  earn the fix; the number decides whether the ring approach ships as-is or needs the
+  copy-on-write refinement below.)
+- **RX1 — engine: the checkpoint primitive.** `Stores::snapshot_heap() -> HeapSnapshot`
+  (each allocation deep-copied à la `clone_locked`) + `restore_heap(&HeapSnapshot)` (copy the
+  bytes back / swap the buffers); a `StepCheckpoint { heap, code_pos, call_stack, … }` capturing
+  the register subset above. *Gate (unit):* snapshot → mutate a record + push/pop a frame →
+  restore → byte-identical `allocations` + registers.
+- **RX2 — engine: `step_back`.** At `debug_step` entry (when reverse-arming is on) push a
+  `StepCheckpoint` to the ring; add `State::step_back()` that pops the top, restores it, and
+  refreshes the paused frame (`refresh_paused_frame`). *Gate:* the RX0 byte-identity probe now
+  **passes** (interpreter only — reverse execution does not apply to `--native`).
+- **RX3 — engine: bounded ring.** Cap the ring at N (drop the oldest when full; N via env,
+  default e.g. 200); a `step_back` past the floor returns a clean "no earlier state", never a
+  wrong one. *Gate:* N+1 steps then N+1 `step_back`s — the last reports the floor, no
+  corruption; the retained window is exactly N.
+- **RX4 — RPC: a `stepBack` verb.** Add `{"req":"stepBack"}` → `State::step_back` →
+  `report(..., "step", ...)` (the refreshed frame + a `stopped{reason:"step"}`), mirroring
+  `stepOver`. Leave `undo`/`redo` as the edit-scoped verbs. *Gate:* `tests/rpc.rs` — step
+  forward then `stepBack` returns the prior frame (was `"nothing to do"`).
 - **RX5 — DAP: `stepBack` / `reverseContinue`.** Advertise `supportsStepBack`; `stepBack` →
-  RPC `undo` → `stopped{reason:"step"}`; `reverseContinue` → `undo` to the timeline floor →
-  `stopped`. *Gate:* `tests/dap_transport.rs` — step forward, `stepBack`, assert the line +
+  RPC `stepBack` → `stopped{reason:"step"}`; `reverseContinue` → `stepBack` to the ring floor
+  → `stopped`. *Gate:* `tests/dap_transport.rs` — step forward, `stepBack`, assert the line +
   locals returned to the prior stop.
 
-RX is the deepest change (a new engine capability) and is scoped last; RX0's probe is the
-gate on whether the journal-reuse approach holds before investing in RX1–RX5.
+### Honest limits (state these up front, they are inherent)
+
+- **I/O is not reversed.** The snapshot is heap + registers only: a `print` during the
+  reversed step stays in the console, and file / DB writes are **not** rolled back. Reverse
+  execution restores **program memory state**, not external side effects — true of every
+  time-travel debugger. `reverseContinue` then re-running forward re-executes those effects.
+- **Bounded depth.** Only the last **N** steps are reversible (the ring); older history is
+  gone. `reverseContinue` reverses to the ring floor, **not** to a prior breakpoint (there is
+  no backward breakpoint matching in v1) — surfaced, not faked.
+- **Interpreter only.** No `--native`; `supportsStepBack` is advertised only over the
+  interpreter-backed adapter.
+- **File-backed stores.** A durable/mmap store's bytes are copied in memory but the underlying
+  file is not rewritten on restore (an I/O limit as above); v1 either refuses reverse-arming
+  when a durable store is live, or documents the caveat — decide at RX1 from the RX0 findings.
+- **Cost.** One heap deep-copy per stepped step while armed (opt-in). If RX0 shows the copy is
+  too heavy for large heaps, the follow-up is **copy-on-write per record** — extend the
+  `@PLN16.J` store `recording` (`store.rs`) to snapshot a record on its first write during a
+  step, so only touched records are captured (efficient, but it re-introduces a hot-path hook,
+  which is exactly why it is the *refinement*, not the v1).
+
+RX is the deepest change (a genuinely new engine capability) and is scoped last; RX0's probe
+is the gate — the ring approach ships if the per-step byte-copy is affordable, else the
+copy-on-write refinement is the fallback.
 
 ---
 
