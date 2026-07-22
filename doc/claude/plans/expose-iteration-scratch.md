@@ -7,9 +7,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 A slice of [@PLN105](105-ffi-deliver-layout-bridge.md) (the FFI deliver / layout
 bridge). Surfaced by the `routing` consumer (`docs/loft-feedback.md`, 2026-07-22,
-"`expose` UN-RETRACTED"). **Status: Steps 0-2 DONE (golden + refactor + clean-error
-safety net); Step 3 FALSIFIED and reverted (see below); Steps 4-5 = a self-contained
-`on=4` mode slice, not yet built.** This doc is the single source of truth; it leads
+"`expose` UN-RETRACTED"). **Status: Steps 0-4 DONE — an exposed hash/radix now iterates
+(new `on=4` mode), correct and leak-clean on a complete walk, both backends. Residual: an
+early break/return during exposed iteration leaks the scratch (caught by the leak check),
+and bounded-range over an exposed non-hash source still errors (Step 5). Step 3's header
+approach was falsified for `on=3` en route but is sound under the compile-time `on=4`
+split.** This doc is the single source of truth; it leads
 with the probes/tooling/oracles because the risk is entirely in the store-lifetime
 subsystem (loft weakness #1) and the build must be gated behind instruments that can
 *falsify* each step — which is exactly what caught Step 3.
@@ -216,40 +219,49 @@ retains the original hash's `store_nr` via the companion iterator-local allocate
 probe that caught this was free: the existing keyed-slice/store-lifetime tests. The
 "inert" claim was the over-clean absorption the protocol warns of.)*
 
-**Step 4 — a distinct `on=4` read-only-source iteration mode (the real fix, now a
-protocol change, not a header tweak).** Revive `on=4`: for a read-only (exposed) source,
-build the scratch in a dedicated writable store and iterate it via a mode whose
-**iterator state also carries the source `store_nr`**; `step` for `on=4` yields
-`DbRef{store_nr: source, rec, pos: 8}`. Normal iteration stays `on=3` (yields
-`data.store_nr`, unchanged — so 502/85 and the golden are untouched). Wire it through
-`parse_for_iter_setup` (mode + state), `iterate`/`step` on both backends, and the scratch
-lifecycle (Open question A). *Oracle: the full matrix — exposed-hash-full == writable
-golden (value), exposed bytes unchanged (invariant), census to baseline (leak), both
-backends; AND 502/85/the golden stay green (the `on=3` path is byte-for-byte unchanged).*
-Replaces Step 2's error for the hash-full case. **This is genuinely M — a bytecode-mode
-change in the store-lifetime subsystem — and should be built as its own slice with the
-matrix above, not squeezed onto the end of Steps 1-2.**
+**Step 4 — a distinct `on=4` mode (DONE, both backends).** `fill_iter`'s `Hash|Radix` arm
+(which always follows the `hash_scratch` substitution → a fresh scratch at `data.pos=4`)
+now emits **`on=4`** instead of `on=3`; everything else — including in-place Ordered fields
+(pos 12) and index/sorted — stays `on=3`. The header threading Step 3 tried *is* safe here
+because `on=4` is a **compile-time** guarantee of a fresh scratch: `build_rec_scratch`
+records the source store_nr at header offset 8, and `on=4`'s `step` yields there
+(`sourced` flag on the shared `vector::step_ordered`). `iterate` shares the `on=3` cursor
+setup (`3 | 4 =>`). A **read-only source** gets its scratch in a fresh dedicated store
+(`database(1)`) so the exposed buffer is never claimed into or moved; a writable source
+stays co-located (source == scratch store → the golden is byte-identical). The dedicated
+store is freed when iteration **completes** (`step` at `pos == i32::MAX`, only when
+`source != data.store_nr`; the elements live in the source, untouched) — the interpreter
+and the native runtime `step` mirror each other. *Verified: the exposed matrix iterates ==
+the writable golden and is leak-clean on a complete walk (both backends); 502/85/the golden
+stay green.* **Residual (Open question A):** an early `break`/`return` out of an exposed
+iteration skips the completion free, leaking the dedicated scratch store — caught by the
+leak check, never a silent corruption. The robust fix is a conditional free on every
+loop-scope exit (see A); deferred as it needs the scope-exit codegen.
 
-**Step 5 — bounded range over an exposed non-hash source.** `on=4`'s `iterate` setup, for
-a *range*, still needs `ordered_find` to read record keys from the source store (not the
-scratch store). Either thread the source `store_nr` there too, or keep Step 2's clean
-error for that cell. *Oracle: bounded-range-over-exposed either matches its golden or
-errors cleanly — never a silent wrong element.*
+**Step 5 — bounded range over an exposed non-hash source (not started).** `on=4` fires only
+for `Hash|Radix` (always full iteration → no `ordered_find`). A range over an exposed
+`sorted`/`index`/`spatial` stays `on=3`; claiming its scratch in the read-only store would
+still panic. Either extend `on=4` to those (threading the source store into `ordered_find`'s
+key reads) or restore Step 2's clean error for that cell. *Oracle: bounded-range-over-
+exposed either matches its golden or errors cleanly — never a silent wrong element.*
 
-Steps 1 and 2 are **done and shippable** (the mirror-collapse refactor and the clean-error
-safety net — no more silent wasm hang). Step 3 was falsified and reverted; its goal moves
-into Step 4, which is now a self-contained `on=4` mode slice gated behind the full oracle
-set. Step 5 closes the scope gap.
+Steps 0-4 are **done** (refactor + clean-error safety net + the `on=4` mode that makes an
+exposed hash/radix iterate, leak-clean on a complete walk). Step 3's header idea was
+falsified for `on=3` but is sound under the compile-time `on=4` split. Two gaps remain: the
+break/return leak (A) and bounded-range-over-exposed (Step 5).
 
 ## Open questions (probe before choosing — do not assume)
 
-- **A. Scratch free (the load-bearing one).** The scratch var carries `hash_deps` at
-  parse time (borrow → never freed); the read-only store home is a *runtime* fact. Two
-  candidates, decide by probing the leak oracle: **(a)** emit an explicit
-  free-of-scratch at loop-scope exit targeting the scratch's *actual* store (works for
-  both co-located and dedicated); **(b)** a dedicated scratch store that reclaims per
-  build. (a) is preferred (composes with nesting); (b) risks failure path #4. *Falsify
-  whichever you pick with the nested-exposed-iteration cell + the leak oracle.*
+- **A. Scratch free (PARTLY RESOLVED — the residual).** The scratch var carries
+  `hash_deps` (borrow → the scope machinery never frees it), so the dedicated read-only
+  store had no owner and leaked. Step 4 frees it at iteration **completion** (in `step`,
+  when `pos == i32::MAX` and `source != data.store_nr`) — leak-clean for a full walk, the
+  common shape (routing renders every tile). **Still open:** an early `break`/`return`
+  never reaches completion, so the store leaks (the leak check flags it — not a silent
+  corruption, and never a UAF, since the freed store holds only rec-nrs, not elements).
+  The robust fix is a *conditional* free on every loop-scope exit — free the scratch's
+  store only when it differs from the source — which needs the loop scope-exit codegen to
+  emit it (the borrow-typed scratch var gets no `OpFreeRef` today). Deferred.
 - **B. Dedicated store lifecycle.** Persistent-and-reused vs fresh-per-iteration. A
   persistent empty store may trip the "N stores not freed at exit" census — check what
   the census counts (live records vs allocated slots) before choosing. Prefer reuse via
