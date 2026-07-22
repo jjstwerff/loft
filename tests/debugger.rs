@@ -1329,3 +1329,73 @@ fn n_is(state: &State, val: &str) -> bool {
         .paused_frame()
         .is_some_and(|f| f.locals.iter().any(|(k, v)| k == "n" && v == val))
 }
+
+/// @PLN63 RX2 — `step_back` reverses a forward step: with reverse armed, stepping over a
+/// heap-mutating line then stepping back returns to the exact prior state — line + local value
+/// restored (byte-level).  This is the RX0 falsification FLIPPED: what `debug_undo` could not
+/// do, the snapshot ring does.  A step_back past the floor is a clean no-op.
+#[test]
+fn rx2_step_back_reverses_a_step() {
+    let mut p = repl();
+    // `a` is a scalar local mutated by the step; it is read on lines 3 AND 5, so its liveness
+    // range spans the mutation and it stays visible at both stops (avoiding the read-dominated
+    // under-show).  `b` keeps the frame non-trivial.
+    let mut state = run_to_pause(
+        &mut p,
+        &["fn build() -> integer {\n  a = 5;\n  b = a;\n  a = 99;\n  a + b\n}"],
+        "build()",
+        "build",
+        4, // pause at `a = 99;` — a == 5, not yet mutated
+    );
+    state.set_reverse(true);
+    let read_a = |s: &State| {
+        s.paused_frame().and_then(|f| {
+            f.locals
+                .iter()
+                .find(|(k, _)| k == "a")
+                .map(|(_, v)| v.clone())
+        })
+    };
+    let line_before = state.paused_line();
+    assert_eq!(
+        read_a(&state).as_deref(),
+        Some("5"),
+        "a == 5 before the step"
+    );
+
+    // Step over the mutating line → a becomes 99, the line advances.
+    assert!(
+        state.debug_step(StepMode::Over, &p.data),
+        "the step re-pauses"
+    );
+    assert_ne!(
+        state.paused_line(),
+        line_before,
+        "the step advanced the line"
+    );
+    assert_eq!(
+        read_a(&state).as_deref(),
+        Some("99"),
+        "the step mutated a to 99"
+    );
+
+    // STEP BACK — line + local value return to exactly the pre-step state.
+    assert!(state.step_back(&p.data), "step_back succeeds");
+    assert_eq!(state.paused_line(), line_before, "the line reverted");
+    assert_eq!(
+        read_a(&state).as_deref(),
+        Some("5"),
+        "a reverted to its pre-step value (byte-level heap restore)"
+    );
+
+    // The ring floor: nothing earlier retained → a clean no-op, state unchanged.
+    assert!(
+        !state.step_back(&p.data),
+        "no earlier state → clean floor, no corruption"
+    );
+    assert_eq!(
+        state.paused_line(),
+        line_before,
+        "state unchanged at the floor"
+    );
+}

@@ -93,6 +93,17 @@ pub struct StepCheckpoint {
     active_coroutines: Vec<usize>,
 }
 
+impl std::fmt::Debug for StepCheckpoint {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "StepCheckpoint(pc={}, frames={})",
+            self.code_pos,
+            self.call_stack.len()
+        )
+    }
+}
+
 /// Runtime state of a single coroutine instance (CO1.1).
 /// Holds the serialised stack and metadata needed to suspend and resume.
 #[derive(Clone, Debug)]
@@ -3452,6 +3463,31 @@ impl State {
         self.active_coroutines.clone_from(&cp.active_coroutines);
     }
 
+    /// @PLN63 RX2 — arm (or disarm) reverse stepping: while on, each `debug_step` checkpoints
+    /// the pre-step state so `step_back` can return to it.  Off costs nothing.
+    pub fn set_reverse(&mut self, on: bool) {
+        self.enable_debug();
+        if let Some(d) = self.debug.as_mut() {
+            d.reverse = on;
+            if !on {
+                d.reverse_ring.clear();
+            }
+        }
+    }
+
+    /// @PLN63 RX2 — step **backward**: pop the most recent checkpoint and restore it (heap +
+    /// registers), landing on exactly the state before the last forward step; refresh the
+    /// paused frame so the drill-down reflects it.  Returns `false` when the ring is empty
+    /// (no earlier state retained) — a clean floor, never a wrong state.
+    pub fn step_back(&mut self, data: &crate::data::Data) -> bool {
+        let Some(cp) = self.debug.as_mut().and_then(|d| d.reverse_ring.pop()) else {
+            return false;
+        };
+        self.restore_checkpoint(&cp);
+        self.refresh_paused_frame(data);
+        true
+    }
+
     /// Execute-loop hook: if `pc` is a registered breakpoint, capture the live
     /// frame.  Returns `true` to **suspend** the loop (stepping mode — the frame is
     /// stashed in `debug.paused` for the driver to read / edit, then `resume`);
@@ -4529,6 +4565,15 @@ impl State {
         data: &crate::data::Data,
     ) -> bool {
         use crate::debugger::StepMode;
+        // @PLN63 RX2 — when reverse-stepping is armed, checkpoint the pre-step state before
+        // executing anything, so `step_back` can restore it.  Skipped (nothing to reverse to)
+        // when a durable store makes the heap non-snapshotable.
+        if self.debug.as_ref().is_some_and(|d| d.reverse)
+            && let Some(cp) = self.snapshot_checkpoint()
+            && let Some(d) = self.debug.as_mut()
+        {
+            d.reverse_ring.push(cp);
+        }
         self.database.frame_yield = false;
         let start_line = self.line_at(self.code_pos);
         let start_depth = self.call_stack.len();

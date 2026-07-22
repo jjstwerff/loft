@@ -725,6 +725,12 @@ pub struct HeapSnapshot {
     max: u16,
 }
 
+impl std::fmt::Debug for HeapSnapshot {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "HeapSnapshot({} stores)", self.allocations.len())
+    }
+}
+
 impl Stores {
     /// H8 — grow `allocations` to `high_water` slots (the `par` dispenser's
     /// one-past-last index) so every worker-allocated slot has a parent slot to

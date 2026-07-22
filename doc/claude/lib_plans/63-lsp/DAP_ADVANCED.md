@@ -308,10 +308,15 @@ reverts too.
   *Gate:* `tests/debugger.rs::rx1_checkpoint_restores_heap_and_registers` — snapshot → edit a
   heap local (`n=999`) + move registers (PC + push a frame) → restore → `n` back to 42, PC +
   `call_stack` restored, and the checkpoint is reusable (copied, not consumed).
-- **RX2 — engine: `step_back`.** At `debug_step` entry (when reverse-arming is on) push a
-  `StepCheckpoint` to the ring; add `State::step_back()` that pops the top, restores it, and
-  refreshes the paused frame (`refresh_paused_frame`). *Gate:* the RX0 byte-identity probe now
-  **passes** (interpreter only — reverse execution does not apply to `--native`).
+- **RX2 — engine: `step_back`. ✅ DONE.** A `reverse` flag + `reverse_ring:
+  Vec<StepCheckpoint>` on `Debugger` (`debugger.rs`), distinct from the M2 `undo_stack` the
+  step self-clears; `debug_step` pushes a checkpoint at entry **only when armed** (a
+  default-off branch — normal stepping pays nothing); `State::set_reverse(on)` arms it and
+  `State::step_back(data)` pops the top, restores it, and refreshes the paused frame. *Gate:*
+  `tests/debugger.rs::rx2_step_back_reverses_a_step` — the RX0 falsification FLIPPED: arm
+  reverse, step over a mutating line (`a=99`), `step_back` → line + local revert to the exact
+  pre-step state (byte-level), and a `step_back` past the floor is a clean no-op. Interpreter
+  only (reverse execution does not apply to `--native`).
 - **RX3 — engine: bounded ring.** Cap the ring at N (drop the oldest when full; N via env,
   default e.g. 200); a `step_back` past the floor returns a clean "no earlier state", never a
   wrong one. *Gate:* N+1 steps then N+1 `step_back`s — the last reports the floor, no

@@ -133,6 +133,14 @@ pub struct Debugger {
     /// @PLN16 M3 — the watchpoint that fired during the most recent resume (for the
     /// driver to report), cleared at the start of each resume.
     pub last_watch: Option<WatchHit>,
+    /// @PLN63 RX — reverse-stepping armed.  When set, each `debug_step` checkpoints the
+    /// pre-step state into `reverse_ring` before executing, so `step_back` can restore it.
+    /// Off by default (normal debug sessions pay no snapshot cost).
+    pub reverse: bool,
+    /// @PLN63 RX — the reverse-step checkpoint ring, newest last.  Distinct from the M2
+    /// `undo_stack` (which a step self-clears): a `debug_step` PUSHES here, `step_back` POPS
+    /// + restores.  Bounded in RX3.
+    pub reverse_ring: Vec<crate::state::StepCheckpoint>,
 }
 
 /// @PLN16 B1 — collect the **static** call targets in an IR body into `out`.
