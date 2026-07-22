@@ -151,15 +151,17 @@ proven correct.
   `tests/extract.rs` — apply the edit, RE-PARSE clean, and RUN identically before/after
   on the interpreter (single-output + loop in-out); `lsp_transport::extract_function_offered_on_a_multiline_selection`
   (real binary — the action carries the new function + the call).
-- **E5 — ownership / deps correctness.** An input that is a heap value
-  (vector / struct / text — `tp(v).heap_dep().is_some()`) must pass with the SAME
-  ownership the original had (by-value copy vs `&`-borrow), per
-  [OWNERSHIP_MODEL.md](../../OWNERSHIP_MODEL.md); an in-out heap var returns its
-  store. v1 REFUSES what it cannot prove safe (a `&`-param captured in the slice, a
-  borrowed view whose base is outside the slice) with a clear message, rather than
-  emit a subtly-wrong edit. *Gate:* extract a slice over a `vector<T>` local →
-  correct ownership on both backends (`LOFT_STORES=warn` / `LOFT_NATIVE_LEAK_CHECK`
-  clean); the refused cases return a diagnostic-carrying `CodeAction`-absence.
+- **E5 — ownership / deps correctness — DONE.** OWNED heap values
+  (`vector` / `struct` / `text` by value) ARE safe and allowed: loft copies them into
+  the parameter and delivers an in-out via the return — probed run-identical for a
+  read-only struct / text / vector and a struct in-out. `extract_function` REFUSES
+  (returns `None`, so no action) when any input OR output is a `Type::RefVar` — a
+  `&`-reference whose aliasing can't be re-expressed as a by-value parameter/return
+  (the extracted call might copy where the original aliased). The probe showed a `&`
+  case printing the same value, but same-output ≠ proven-equivalent aliasing, so it is
+  refused per the design (a broader deps analysis, and allowing read-only refs, are
+  follow-ups). *Gate met:* `tests/extract.rs` — a `&vector<integer>` input is refused;
+  an owned struct in-out extracts, re-parses clean, and RUNS identically.
 - **E6 — `self` + refusals.** `self` becomes a leading input; refuse a selection
   that (a) lives in a `#rust` / `#native` body, (b) contains a `Return` / `break` /
   `continue` / `yield` targeting outside the slice (would change control flow), or

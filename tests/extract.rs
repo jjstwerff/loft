@@ -260,6 +260,50 @@ fn e4_extraction_is_behaviour_preserving_loop_in_out() {
     assert_eq!(run(g), run(&applied), "same output before/after extraction");
 }
 
+// ── E5 — ownership / deps: refuse a &-reference, allow owned heap by value ─────
+
+#[test]
+fn e5_refuses_a_reference_parameter_input() {
+    // `v` is a `&`-reference param used (and rebound) in the slice — its aliasing
+    // can't be safely re-expressed as a by-value parameter, so extraction is refused.
+    let f = "fn f(v: &vector<integer>) -> integer {\n  v = [9];\n  a = v.len();\n  return a;\n}\n";
+    assert!(
+        extract_function(f, "buf.loft", "default", 2, 3).is_none(),
+        "a &-reference input is refused (E5 safety)"
+    );
+}
+
+#[test]
+fn e5_owned_heap_by_value_is_allowed_and_preserves_behaviour() {
+    // An owned struct is copied into the parameter and delivered back via the return
+    // (in-out) — value semantics make it safe.  Extract `p.x = p.x + 1` (modifies p).
+    let f = "struct P { x: integer, y: integer }\nfn f(p: P) -> integer {\n  p.x = p.x + 1;\n  return p.x + p.y;\n}\n\
+             fn main() { q = P{x: 3, y: 4}; print(\"{f(q)}\"); }\n";
+    let e = extract_function(f, "buf.loft", "default", 3, 3).expect("owned struct is allowed");
+    // p is an in-out param (its type is `P`, not `&P`).
+    assert!(
+        e.new_function.contains("p: P"),
+        "struct param by value: {}",
+        e.new_function
+    );
+    let applied = apply(f, &e);
+    let diags = loft::lsp::diagnose(&applied, "buf.loft", "default");
+    let errs: Vec<_> = diags
+        .entries()
+        .iter()
+        .filter(|d| d.level >= loft::diagnostics::Level::Error)
+        .collect();
+    assert!(
+        errs.is_empty(),
+        "extracted program is clean:\n{applied}\n{errs:?}"
+    );
+    assert_eq!(
+        run(f),
+        run(&applied),
+        "same output before/after extracting a struct in-out"
+    );
+}
+
 #[test]
 fn e1_refuses_a_selection_inside_a_nested_block() {
     // 1  fn g() {

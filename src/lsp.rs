@@ -1925,6 +1925,18 @@ pub fn extract_function(
     // Inputs (E2, live-in-filtered) and outputs (E3) from this one parse.
     let (inputs, outputs) = slice_signature(data, f, b, first_op, last_op);
     let vars = data.def(f).variables();
+    // E5 — REFUSE a `&`-reference input/output.  A borrow's aliasing can't be safely
+    // re-expressed as a by-value parameter/return (the extracted call might copy where
+    // the original aliased), so rather than emit a subtly-wrong edit we offer nothing.
+    // Owned heap values (`vector`/`struct`/`text` by value) ARE safe: loft copies them
+    // into the parameter and delivers an in-out via the return.
+    if inputs
+        .iter()
+        .chain(outputs.iter())
+        .any(|&v| matches!(vars.tp(v), crate::data::Type::RefVar(_)))
+    {
+        return None;
+    }
     let ty = |v: u16| data.type_name_str(vars.tp(v));
     let params: Vec<String> = inputs
         .iter()
