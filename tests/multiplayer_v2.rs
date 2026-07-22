@@ -285,8 +285,13 @@ fn spawn_server_on_free_port_inner(
     for attempt in 0..ATTEMPTS {
         let port = pick_free_port();
         if steal_first && attempt == 0 {
-            // Hold it on 127.0.0.1 — the server binds 0.0.0.0:port, which collides.
-            thief = TcpListener::bind(("127.0.0.1", port)).ok();
+            // Hold the port on the SAME address the server binds (`0.0.0.0:{port}` — see
+            // the `server` package's `n_tcp_listen`).  Binding `127.0.0.1` collides on
+            // Linux but NOT on macOS/BSD, where a wildcard bind coexists with a
+            // loopback-specific one: the injected fault silently did not happen there,
+            // the server bound fine, and this control failed on macOS CI while passing
+            // locally.  Matching the address makes the conflict identical on both.
+            thief = TcpListener::bind(("0.0.0.0", port)).ok();
             assert!(
                 thief.is_some(),
                 "fault injection could not hold port {port}"
