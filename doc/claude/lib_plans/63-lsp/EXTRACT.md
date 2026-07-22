@@ -138,13 +138,19 @@ proven correct.
   `for_each_child`. *Gate met:* `tests/extract.rs` — extracting the `for` where
   `total` is read after → `total` is an output AND an in-out param; a dead write is
   excluded; two live-out writes → two outputs (a tuple return).
-- **E4 — synthesize + edit.** Build `fn <name>(ins) -> outs { <selected text>
-  return (outs) }` (single output → `-> U` / `return o`; none → `-> void`, no return;
-  tuple for ≥2), and the call `(outs) = <name>(ins)`; emit a `WorkspaceEdit` (insert
-  the fn after the enclosing fn, replace the selection with the call) reusing the
-  rename edit builder. *Gate:* `lsp_transport` — extract a simple selection; assert
-  the two edits, then RE-PARSE the applied text and assert it is diagnostic-clean and
-  runs identically on both backends (the extraction is behaviour-preserving).
+- **E4 — synthesize + edit — DONE.** `lsp::extract_function(…) -> ExtractEdit` builds
+  `fn extracted(ins) -> outs { <selected text> return … }` (0 outputs → no return type /
+  no return; 1 → `-> T` / `return o`; ≥2 → `-> (T…)` / `return (o…)` — loft tuple return
+  + destructure, verified) and the call (`(outs) = extracted(ins)`), preserving variable
+  names so the selected body resolves unchanged. The binary emits a `WorkspaceEdit`
+  inserting the function at the buffer end + replacing the selection with the call (both
+  ranges in original-document coordinates). **A discovery hardened the signature:** the
+  E2 upward-exposed inputs were intersected with LIVE-IN (`slice_signature`) — without
+  it a `for` binder became a spurious parameter that COLLIDED with the loop binder and
+  made the extracted function invalid; the live-in filter excludes it. *Gates:*
+  `tests/extract.rs` — apply the edit, RE-PARSE clean, and RUN identically before/after
+  on the interpreter (single-output + loop in-out); `lsp_transport::extract_function_offered_on_a_multiline_selection`
+  (real binary — the action carries the new function + the call).
 - **E5 — ownership / deps correctness.** An input that is a heap value
   (vector / struct / text — `tp(v).heap_dep().is_some()`) must pass with the SAME
   ownership the original had (by-value copy vs `&`-borrow), per

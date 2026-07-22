@@ -134,7 +134,7 @@ fn main() {
             ("textDocument/codeAction", Some(id)) => {
                 // Step B: turn each diagnostic that carries a structured
                 // `suggestion` into a "Change to `X`" quick-fix (a WorkspaceEdit).
-                let actions = code_actions(&msg);
+                let actions = code_actions(&msg, &documents, &stdlib_dir);
                 send(&stdout, &response(id, Parsed::Array(actions)));
             }
             ("textDocument/semanticTokens/full", Some(id)) => {
@@ -537,7 +537,11 @@ fn completion_item(c: &loft::lsp::Completion) -> Parsed {
 /// (round-tripped from step A), a `CodeAction` quick-fix whose `WorkspaceEdit`
 /// replaces the diagnostic's range with the suggestion.  loft already COMPUTED
 /// the fix ("did you mean 'X'") — this just applies it.
-fn code_actions(msg: &Parsed) -> Vec<Parsed> {
+fn code_actions(
+    msg: &Parsed,
+    documents: &HashMap<String, String>,
+    stdlib_dir: &str,
+) -> Vec<Parsed> {
     let Some(params) = obj_get(msg, "params") else {
         return Vec::new();
     };
@@ -555,13 +559,15 @@ fn code_actions(msg: &Parsed) -> Vec<Parsed> {
                 .filter_map(|d| quickfix_from_diagnostic(d, &uri)),
         );
     }
-    // E0 (extract-function stub) — offer `refactor.extract` on a MULTI-LINE
-    // selection (a real statement selection, never a bare cursor or a single-line
-    // diagnostic range, so a quick-fix request is unaffected).  The edit is a no-op
-    // until the data-flow engine (E1–E4, EXTRACT.md) computes the extracted
-    // signature; single-line-statement extraction is a follow-on.
-    if let Some(range) = obj_get(params, "range").filter(|r| range_is_multiline(r)) {
-        actions.push(extract_function_action(&uri, range));
+    // E4 (extract-function) — on a MULTI-LINE selection (a real statement selection,
+    // never a bare cursor or a single-line diagnostic range, so a quick-fix request is
+    // unaffected), offer `refactor.extract` with the WorkspaceEdit the data-flow
+    // engine computes.  Absent when the selection does not map to whole statements.
+    if let Some(range) = obj_get(params, "range").filter(|r| range_is_multiline(r))
+        && let Some(text) = documents.get(&uri)
+        && let Some(action) = extract_function_action(&uri, range, text, stdlib_dir)
+    {
+        actions.push(action);
     }
     actions
 }
@@ -599,16 +605,71 @@ fn range_is_multiline(range: &Parsed) -> bool {
     }
 }
 
-/// E0 — the `refactor.extract` stub action.  Offered on a selection so editors show
-/// the refactoring and the transport gate can assert it; its edit is a no-op until
-/// E1–E4 (EXTRACT.md) wire the data-flow engine that computes the real edit.
-fn extract_function_action(uri: &str, _range: &Parsed) -> Parsed {
-    let changes = Parsed::Object(vec![(uri.to_string(), 0, Parsed::Array(Vec::new()))]);
-    obj(vec![
+/// E4 — the `refactor.extract` action: a `WorkspaceEdit` that inserts the new
+/// function after the buffer and replaces the selected statement lines with the call
+/// (both ranges in ORIGINAL-document coordinates, per LSP).  `None` when the selection
+/// does not map to whole statements (`loft::lsp::extract_function`).
+fn extract_function_action(
+    uri: &str,
+    range: &Parsed,
+    text: &str,
+    stdlib_dir: &str,
+) -> Option<Parsed> {
+    let (start_line, end_line) = range_lines(range)?;
+    let e = loft::lsp::extract_function(text, "buf.loft", stdlib_dir, start_line, end_line)?;
+    // Insert the new function at the buffer end (a zero-width edit there).
+    let (end_l, end_c) = doc_end(text);
+    let insert = obj(vec![
+        (
+            "range",
+            obj(vec![
+                ("start", position(end_l, end_c)),
+                ("end", position(end_l, end_c)),
+            ]),
+        ),
+        ("newText", Parsed::Str(format!("\n{}\n", e.new_function))),
+    ]);
+    // Replace the selected lines (0-based) with the call.
+    let last0 = e.end_line - 1;
+    let last_len = text
+        .lines()
+        .nth(last0 as usize)
+        .map_or(0, |l| l.chars().count() as u32);
+    let replace = obj(vec![
+        (
+            "range",
+            obj(vec![
+                ("start", position(e.start_line - 1, 0)),
+                ("end", position(last0, last_len)),
+            ]),
+        ),
+        ("newText", Parsed::Str(e.call.clone())),
+    ]);
+    let changes = Parsed::Object(vec![(
+        uri.to_string(),
+        0,
+        Parsed::Array(vec![replace, insert]),
+    )]);
+    Some(obj(vec![
         ("title", Parsed::Str("Extract to function".into())),
         ("kind", Parsed::Str("refactor.extract".into())),
         ("edit", obj(vec![("changes", changes)])),
-    ])
+    ]))
+}
+
+/// The 1-based INCLUSIVE line range of an LSP selection `Range`.  An end at column 0
+/// on a later line (a whole-line selection) stops at the previous line.
+fn range_lines(range: &Parsed) -> Option<(u32, u32)> {
+    let coord = |end: &str, axis: &str| {
+        obj_get(range, end)
+            .and_then(|p| obj_get(p, axis))
+            .and_then(Parsed::as_i64)
+    };
+    let sl = coord("start", "line")?;
+    let el = coord("end", "line")?;
+    let ec = coord("end", "character")?;
+    let end_line = if ec == 0 && el > sl { el } else { el + 1 };
+    Some((u32::try_from(sl + 1).ok()?, u32::try_from(end_line).ok()?))
 }
 
 fn publish_diagnostics(uri: &str, diagnostics: Vec<Parsed>) -> Parsed {

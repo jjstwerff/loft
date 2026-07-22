@@ -1116,11 +1116,12 @@ fn extract_function_offered_on_a_multiline_selection() {
     s.notify("initialized", "{}");
 
     let uri = "file:///x.loft";
-    let prog = "fn f() -> integer {\n  a = 1\n  b = a + 2\n  return b\n}\n";
+    // 0-based lines 1-2 are `y = x + 1;` and `z = y * 2;`.
+    let prog = "fn f(x: integer) -> integer {\n  y = x + 1;\n  z = y * 2;\n  return z;\n}\n";
     s.notify("textDocument/didOpen", &open_params(uri, prog));
     let _ = s.recv();
 
-    let action_kinds = |s: &mut Session, id: i64, range: &str| -> Vec<String> {
+    let code_action = |s: &mut Session, id: i64, range: &str| -> Vec<Parsed> {
         s.request(
             id,
             "textDocument/codeAction",
@@ -1129,31 +1130,57 @@ fn extract_function_offered_on_a_multiline_selection() {
             ),
         );
         match field(&s.recv(), "result") {
-            Some(Parsed::Array(a)) => a.iter().filter_map(|x| field_str(x, "kind")).collect(),
+            Some(Parsed::Array(a)) => a.clone(),
             other => panic!("codeAction result is an array, got {other:?}"),
         }
     };
 
-    // A MULTI-LINE selection (the two assignment lines) → an extract action.
-    let sel = action_kinds(
+    // A MULTI-LINE selection of the two assignments → an extract action carrying the
+    // real WorkspaceEdit (E4): the new function + the call.
+    let actions = code_action(
         &mut s,
         2,
-        r#"{"start":{"line":1,"character":2},"end":{"line":2,"character":11}}"#,
+        r#"{"start":{"line":1,"character":2},"end":{"line":2,"character":12}}"#,
+    );
+    let ext = actions
+        .iter()
+        .find(|a| field_str(a, "kind").as_deref() == Some("refactor.extract"))
+        .expect("an extract action is offered");
+    let changes = field(field(ext, "edit").unwrap(), "changes").unwrap();
+    let new_texts: Vec<String> = match changes {
+        Parsed::Object(e) => e
+            .iter()
+            .flat_map(|(_, _, v)| match v {
+                Parsed::Array(edits) => edits
+                    .iter()
+                    .filter_map(|ed| field_str(ed, "newText"))
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    let joined = new_texts.join("\n");
+    assert!(
+        joined.contains("fn extracted(x: integer) -> integer"),
+        "the new function is in the edit: {joined}"
     );
     assert!(
-        sel.iter().any(|k| k == "refactor.extract"),
-        "extract offered on a multi-line selection: {sel:?}"
+        joined.contains("z = extracted(x)"),
+        "the call replaces the selection: {joined}"
     );
 
     // A bare cursor (zero-width, single line) → no extract action.
-    let cursor = action_kinds(
+    let cursor = code_action(
         &mut s,
         3,
         r#"{"start":{"line":1,"character":2},"end":{"line":1,"character":2}}"#,
     );
     assert!(
-        !cursor.iter().any(|k| k == "refactor.extract"),
-        "no extract on a bare cursor: {cursor:?}"
+        !cursor
+            .iter()
+            .any(|a| field_str(a, "kind").as_deref() == Some("refactor.extract")),
+        "no extract on a bare cursor"
     );
 
     s.notify("exit", "null");

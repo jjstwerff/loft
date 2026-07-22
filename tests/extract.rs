@@ -4,7 +4,41 @@
 //! E1: map a line selection to the enclosing function's contiguous TOP-LEVEL
 //! statement slice, refusing anything that does not map to whole statements.
 
-use loft::lsp::{extract_inputs, extract_outputs, extract_range};
+use loft::lsp::{ExtractEdit, extract_function, extract_inputs, extract_outputs, extract_range};
+
+/// Apply an `ExtractEdit`: replace the selection lines with the call, then append
+/// the new function after the buffer (as the LSP `WorkspaceEdit` does).
+fn apply(text: &str, e: &ExtractEdit) -> String {
+    let lines: Vec<&str> = text.lines().collect();
+    let (lo, hi) = ((e.start_line - 1) as usize, (e.end_line - 1) as usize);
+    let mut out: Vec<String> = Vec::new();
+    for (i, l) in lines.iter().enumerate() {
+        if i == lo {
+            out.push(e.call.clone());
+        } else if i > lo && i <= hi {
+            // skip — replaced by the call
+        } else {
+            out.push((*l).to_string());
+        }
+    }
+    format!("{}\n{}\n", out.join("\n"), e.new_function)
+}
+
+/// The program's stdout on the interpreter (for behaviour-preserving checks).
+fn run(src: &str) -> String {
+    let dir = std::path::PathBuf::from(env!("CARGO_TARGET_TMPDIR"));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join(format!("extract_run_{}.loft", src.len()));
+    std::fs::write(&file, src).unwrap();
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_loft"))
+        .arg("--interpret")
+        .arg(&file)
+        .env("LOFT_TIMEOUT", "30")
+        .current_dir(env!("CARGO_MANIFEST_DIR"))
+        .output()
+        .expect("run loft");
+    String::from_utf8_lossy(&out.stdout).into_owned()
+}
 
 // 1  fn f() -> integer {
 // 2    a = 1;
@@ -161,6 +195,69 @@ fn e3_multiple_live_out_writes_become_multiple_outputs() {
         outs.contains(&"a".to_string()) && outs.contains(&"b".to_string()),
         "{outs:?}"
     );
+}
+
+// ── E4 — synthesise the new function + the call, behaviour-preserving ─────────
+
+#[test]
+fn e4_extraction_is_behaviour_preserving_single_output() {
+    // Extract `y = x + 1; z = y * 2` out of f: input `x`, output `z`.
+    let f = "fn f(x: integer) -> integer {\n  y = x + 1;\n  z = y * 2;\n  return z;\n}\n\
+             fn main() { print(\"{f(5)}\"); }\n";
+    let e = extract_function(f, "buf.loft", "default", 2, 3).expect("extracts");
+    eprintln!("NEW FN:\n{}\nCALL: {}", e.new_function, e.call);
+    assert!(
+        e.new_function
+            .contains("fn extracted(x: integer) -> integer"),
+        "signature: {}",
+        e.new_function
+    );
+    assert!(e.call.contains("z = extracted(x)"), "call: {}", e.call);
+    // Applying the edit re-parses clean AND runs identically.
+    let applied = apply(f, &e);
+    let diags = loft::lsp::diagnose(&applied, "buf.loft", "default");
+    let errs: Vec<_> = diags
+        .entries()
+        .iter()
+        .filter(|d| d.level >= loft::diagnostics::Level::Error)
+        .collect();
+    assert!(
+        errs.is_empty(),
+        "extracted program is clean:\n{applied}\n{errs:?}"
+    );
+    assert_eq!(run(f), run(&applied), "same output before/after extraction");
+}
+
+#[test]
+fn e4_extraction_is_behaviour_preserving_loop_in_out() {
+    // Extract the loop out of g: `total` is an in-out param, `n` an input.
+    let g = "fn g(n: integer) -> integer {\n  total = 0;\n  for i in 0..n {\n    total = total + i;\n  }\n  return total;\n}\n\
+             fn main() { print(\"{g(4)}\"); }\n";
+    let e = extract_function(g, "buf.loft", "default", 3, 5).expect("extracts the loop");
+    eprintln!("NEW FN:\n{}\nCALL: {}", e.new_function, e.call);
+    // `total` is both a parameter and the return value (in-out).
+    assert!(
+        e.new_function.contains("total: integer"),
+        "total param: {}",
+        e.new_function
+    );
+    assert!(
+        e.call.contains("total = extracted("),
+        "call reassigns total: {}",
+        e.call
+    );
+    let applied = apply(g, &e);
+    let diags = loft::lsp::diagnose(&applied, "buf.loft", "default");
+    let errs: Vec<_> = diags
+        .entries()
+        .iter()
+        .filter(|d| d.level >= loft::diagnostics::Level::Error)
+        .collect();
+    assert!(
+        errs.is_empty(),
+        "extracted program is clean:\n{applied}\n{errs:?}"
+    );
+    assert_eq!(run(g), run(&applied), "same output before/after extraction");
 }
 
 #[test]
