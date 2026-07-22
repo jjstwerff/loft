@@ -1,0 +1,16 @@
+struct V3 { x: float, y: float, z: float }
+fn inner(vx: float, vy: float, vz: float) -> V3 { V3 { x: vx, y: vy, z: vz } }
+fn outer(q: integer) -> V3 {
+  x = q as float * 1.5;
+  inner(x, 0.0, 0.0)
+}
+fn main() {
+  total = 0.0;
+  n = 0;
+  while n < 300 {
+    c = outer(n);
+    total = total + c.x;
+    n = n + 1;
+  }
+  println("total={total}");
+}

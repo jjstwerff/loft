@@ -4341,7 +4341,7 @@ impl State {
             // LOFT_LEAK_SITES — group leaked stores by ALLOCATION site (created_at →
             // source line) so the leak's where-from is named, not just its type. Gated.
             if std::env::var_os("LOFT_LEAK_SITES").is_some() {
-                let mut by_site: std::collections::BTreeMap<(u32, u16), usize> =
+                let mut by_site: std::collections::BTreeMap<(u32, u16, bool), usize> =
                     std::collections::BTreeMap::new();
                 for (s_nr, s) in self.database.allocations.iter().enumerate() {
                     if (s_nr == 0 && self.database.stack_store_at_zero)
@@ -4351,11 +4351,13 @@ impl State {
                     {
                         continue;
                     }
-                    *by_site.entry((s.created_at, s.known_type)).or_default() += 1;
+                    *by_site
+                        .entry((s.created_at, s.known_type, s.is_free_protected()))
+                        .or_default() += 1;
                 }
                 let mut sites: Vec<_> = by_site.into_iter().collect();
                 sites.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
-                for ((created_at, kt), n) in sites {
+                for ((created_at, kt, protd), n) in sites {
                     let line = self
                         .line_numbers
                         .range(..=created_at)
@@ -4367,7 +4369,8 @@ impl State {
                         .get(kt as usize)
                         .map_or("?", |t| t.name.as_str());
                     eprintln!(
-                        "  [leak-site] {n}× {tn} (kt={kt}) allocated at pc={created_at} (line {line})"
+                        "  [leak-site] {n}× {tn} (kt={kt}) allocated at pc={created_at} (line {line}) \
+                         free_protected={protd}"
                     );
                 }
             }

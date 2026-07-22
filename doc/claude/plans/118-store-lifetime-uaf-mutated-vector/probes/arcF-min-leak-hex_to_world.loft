@@ -1,0 +1,11 @@
+use moros_render;
+fn main() {
+  total = 0.0;
+  n = 0;
+  while n < 300 {
+    c = hex_to_world(n, 0, 0);
+    total = total + c.x;
+    n = n + 1;
+  }
+  println("total={total}");
+}

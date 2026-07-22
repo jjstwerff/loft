@@ -265,23 +265,52 @@ unconditional pre-build free (`owned_reassigned`) and emit `OpInitRefSentinel` a
 already correct); **both backends now export 0/32.** Excludes retbuf/`OpDatabase`-reused locals like
 `off` (they keep their DbRef for in-place reuse; sentinelling them destabilises `protect_store_frees`).
 
-## Arc F — UNMASKED leak (the "other end"): the `@P290` protect over-protects the retbuf
+## Arc F — UNMASKED leak (the "other end"): the interpret↔shared-library `StaticCall` boundary
 
-Fixing the corruption **unmasked a pre-existing, interpreter-specific leak** — `kt=96 Vec2×8160`
-(`mr_corner_offset`'s returned Vec2, `off`'s source). This is the plan's separately-tracked "leak"
-severity: the corruption's over-free had been *accidentally* freeing that Vec2, so `main` shows wrong
-data + no Vec2 leak; the fix shows correct data + the leak. **VERIFIED pre-existing:** `LOFT_NO_SLOT_REUSE`
-(an unrelated corruption fix) exposes the same leak (`Vec2×6120`) — so it is independent of the codegen
-fix. **VERIFIED interpreter-only:** `--native` (`LOFT_NATIVE_LEAK_CHECK`) is clean.
+Fixing the corruption **unmasked a pre-existing, interpreter-only leak** — `Vec2×8160` on the moros
+repro. This is the plan's separately-tracked "leak" severity: the corruption's over-free had been
+*accidentally* freeing those stores, so `main` shows wrong data + no leak; the fix shows correct data +
+the leak. **VERIFIED pre-existing:** `LOFT_NO_SLOT_REUSE` (an unrelated corruption fix) exposes the same
+leak — independent of the codegen fix. **VERIFIED interpreter-only:** `--native` (`LOFT_NATIVE_LEAK_CHECK`)
+is clean.
 
-Mechanism (characterised, not yet fixed): native frees the returned Vec2 with `OpCopyRecord`'s `0x8000`
-source-free directly; the interpreter wraps `off = mr_corner_offset(ci)` in `n_protect_store_frees` (@P290)
-which **blocks** the `0x8000` free of the retbuf work-ref, and the fallback `OpFreeRef` leaks it (leak
-sites are the middle early-returns i=1–4, not the first i=0 or the tail i=5). The protect is spurious for
-the return buffer — it SHOULD be freed. **Not fixed here:** it is a distinct bug in the fragile @P290
-protect/retbuf machinery, layout-dependent (no minimal repro, like the corruption), so it needs its own
-matrix-first pass rather than a blind edit. It is a *resource* bug (correct output; at-exit for the export
-consumer), strictly less severe than the *correctness* corruption it replaces.
+### Localized to a minimal repro (2nd investigation, this session)
+
+The moros leak is `mr_corner_offset`'s returned `Vec2`, and it splits **exactly in half** — the two call
+sites `emit_hex_surface` (line 98) and `hex_corner_world` (line 177). Line 98's copies all FREE their
+source; `hex_corner_world`'s leak. Walked down to the **minimal repro** (no graphics Scene, so it runs):
+
+```loft
+use moros_render;
+fn main() {
+  n = 0;
+  while n < 300 { c = hex_to_world(n, 0, 0); n = n + 1; }   // leaks 299× Vec3, interp only
+}
+```
+
+`hex_to_world` returns `vec3(x,y,z)`. Two facts settle the root:
+- **The callee bytecode is IRRELEVANT.** `n_vec3` (graphics-0.3.0) — like a plain LOCAL `vec3` — allocates
+  a **fresh** store and ignores its `__retbuf` param. A purely-local `outer()` returning a local
+  `inner()` (byte-for-byte the same shape) does **NOT** leak.
+- **The ONLY difference that leaks is `StaticCall` vs `Call`.** The caller bytecode for `c = hex_to_world`
+  (shared) and `c = outer` (local) is IDENTICAL — both `OpDatabase + protect + CopyRefOrNull(0x8000) +
+  OpFreeRef`. Local resolves the callee to `Call(n_outer)` (runs its bytecode via `fn_call`/`fn_return`);
+  shared resolves to `StaticCall(loft_shared_n_hex_to_world)` → `self.library[call]` (the installed
+  library's own implementation, `state/mod.rs::static_call`). **Local doesn't leak, shared does.**
+
+So arc F is a store-lifetime bug at the **interpret↔shared-library call boundary**: when interpreted code
+calls an installed/shared function that returns a struct via the retbuf ABI, the returned store is
+orphaned. A non-perturbing `LOFT_WATCH_PC`/`NTH` slot-lifecycle trace confirmed the leaked store is
+**reused-without-`free_named`** mid-loop and leaked at loop end (never routed through a free); the
+`LOFT_LEAK_SITES` report (now enriched with `free_protected`) confirmed the leaked stores are NOT stuck-
+protected — they are simply never freed.
+
+**Not fixed here:** it is a substrate-level issue in the `StaticCall` / `shared_store_dispatch` retbuf-
+return contract, not the @P290 protect it superficially resembles. Per the debugging discipline (finish
+the localization, route it — don't blind-patch a fragile ABI boundary), the fix belongs in a focused
+session on the interpret↔native-library return path. It is a *resource* bug (correct output; at-exit for
+the export consumer, but per-frame for a long-running game), strictly less severe than the *correctness*
+corruption it replaces.
 
 ## Artifacts
 

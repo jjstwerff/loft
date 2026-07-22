@@ -20,16 +20,17 @@ Tracks [`loft-lang/plans#118`](https://github.com/loft-lang/plans/issues/118) (`
 > block-exit free of the owned-reassigned vars (tracked in `src/stack.rs::owned_reassigned`), mirroring
 > native, interpreter-only. Proven by `LOFT_NO_SLOT_REUSE` (3/32→0/32) + op-named `LOFT_UAF_GEN`.
 >
-> **Open — arc F (the "other end"):** the corruption fix **unmasked a pre-existing, interpreter-only
-> leak** (`Vec2×8160` — `mr_corner_offset`'s returned Vec2). The corruption's over-free had been
-> accidentally freeing it; `--native` frees it correctly via `OpCopyRecord` `0x8000`, but the
-> interpreter's `n_protect_store_frees` (@P290) blocks that free of the retbuf work-ref and the fallback
-> leaks. VERIFIED pre-existing (`LOFT_NO_SLOT_REUSE` exposes it too) and interpreter-only. Not blind-
-> fixed: fragile @P290 subsystem, layout-dependent (no minimal repro, like the corruption) — needs its
-> own matrix-first pass. It is a *resource* bug (correct output; at-exit for the export consumer),
-> strictly less severe than the *correctness* corruption it replaces. Full trail:
-> [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md) (arcs E + F). Arc C (positive-control
-> oracle) still open; arc D delivered the `LOFT_NO_SLOT_REUSE` stopgap.
+> **Open — arc F (the "other end"), now LOCALIZED:** the corruption fix **unmasked a pre-existing,
+> interpreter-only leak**. Root (2nd investigation): the **interpret↔shared-library `StaticCall`
+> boundary** — interpreted code calling an installed/shared function that returns a struct via retbuf
+> orphans the returned store. **Minimal repro:** `c = hex_to_world(n,0,0)` in a loop (`use moros_render`)
+> leaks 299× Vec3; a byte-identical LOCAL callee (`Call`, not `StaticCall`) does NOT leak; `--native`
+> clean. It is NOT the @P290 protect it superficially resembles — a `LOFT_WATCH_PC` slot-lifecycle trace
+> showed the leaked store is reused-without-`free_named` / leaked, never routed through a free. Not blind-
+> fixed: substrate-level `static_call` retbuf-return contract, routed to its own session. A *resource*
+> bug (correct output; at-exit for the export consumer), strictly less severe than the *correctness*
+> corruption it replaces. Full trail: [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md) (arcs
+> E + F). Arc C (positive-control oracle) still open; arc D delivered the `LOFT_NO_SLOT_REUSE` stopgap.
 
 **Open — Stage A in progress; the null is ATTRIBUTED.** A loft program silently exports
 `"min": [null, null, null]` into a glTF (moros H4). Stage A reproduced it (moros `5e677b7` → 3/32
@@ -122,7 +123,7 @@ The load-bearing cell: **reference-into-relocated-vector reads the null sentinel
 | **C** — oracle | make B **non-vacuous**: a known-GOOD probe (must stay silent) + a known-BAD probe (must fire) — a positive control, per "a fooleable oracle is a liability" (plans/README.md). Graduate to a gate | Open |
 | **D** — second implementation + switch | **Delivered as `LOFT_NO_SLOT_REUSE`** (`allocation.rs::find_free_slot`): never reclaim a freed slot. Off by default; run differentially it turned 3/32→0/32, the decisive proof the corruption is slot-reuse-while-referenced. Kept as a gated diagnostic/stopgap | Done (stopgap) |
 | **E** — fix at the chokepoint | **DONE — both backends 0/32, suite 3385/3385 green.** Op-named `LOFT_UAF_GEN` (read op `OpPutRef`, free op `OpFreeRef`) + `LOFT_NO_SLOT_REUSE` (3/32→0/32) pinned it: the interpreter's `OpFreeRef` of a variable did **not** reset it to the sentinel (native does), so a loop temp freed at the block-exit sweep was **re-freed** by the next iteration's pre-build free of a possibly-reclaimed slot. Fix: `generate_call` emits `OpInitRefSentinel` after the block-exit free of `owned_reassigned` vars (`src/stack.rs`), mirroring native, interpreter-only | **Done** |
-| **F** — the unmasked leak (other end) | **OPEN.** Fixing E unmasked a pre-existing, interpreter-only `Vec2×8160` leak — `n_protect_store_frees` (@P290) blocks the retbuf's legitimate `OpCopyRecord` `0x8000` free (native has no protect and frees it). VERIFIED pre-existing (`LOFT_NO_SLOT_REUSE` exposes it too, `Vec2×6120`) + interpreter-only (`--native` clean). A resource bug, layout-dependent — needs its own matrix-first pass, not a blind @P290 edit | Open |
+| **F** — the unmasked leak (other end) | **OPEN — localized to a minimal repro.** Fixing E unmasked a pre-existing, interpreter-only leak. Root: the **interpret↔shared-library `StaticCall` boundary** — when interpreted code calls an installed/shared function returning a struct via retbuf, the returned store is orphaned. Minimal repro `c = hex_to_world(n,0,0)` in a loop (`use moros_render`) leaks 299× Vec3; a byte-identical LOCAL `Call` (not `StaticCall`) does NOT leak; `--native` clean. NOT the @P290 protect it resembles. Substrate-level `static_call` retbuf-return fix — route to its own session, no blind patch | Open (localized) |
 
 ## Phase ordering
 
