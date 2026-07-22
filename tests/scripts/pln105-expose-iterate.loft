@@ -37,5 +37,18 @@ fn main() {
   for t in h { n += 1; }
   assert(n == 4, "post-release mutate + iter (n {n}, expect 4)");
 
+  // The dedicated scratch store is freed on EVERY loop exit (the on=4 epilogue's
+  // OpFreeScratch), so break, repeated (loop-in-loop) and nested exposed iteration
+  // are all leak-clean — the runner's leak check is the assertion.
+  expose(2, h);
+  for t in h { break; }                       // early break
+  reps = 0;
+  for i in 0..3 { for t in h { reps += 1; } }  // repeated build+free
+  assert(reps == 12, "repeated exposed iter (reps {reps}, expect 12)");
+  nest = 0;
+  for a in h { for b in h { nest += 1; } }     // nested
+  assert(nest == 16, "nested exposed iter (nest {nest}, expect 16)");
+  release(2, h);
+
   println("pln105-expose-iterate ok");
 }

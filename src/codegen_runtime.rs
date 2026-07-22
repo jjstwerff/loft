@@ -433,6 +433,23 @@ pub fn OpFreeRefIfDistinct(
     }
 }
 
+/// Free an `on=4` iteration scratch's DEDICATED store at loop exit.  Frees the whole
+/// scratch store only when it differs from the SOURCE store recorded in the scratch
+/// header (offset `pos + 4`); co-located (writable source) and null (rec 0) scratches
+/// are no-ops.  Bytecode equivalent: `free_scratch` in `src/fill.rs`.
+pub fn OpFreeScratch(cell: &std::cell::UnsafeCell<Stores>, scratch: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if scratch.rec == 0 {
+        return;
+    }
+    let source = stores
+        .store(&scratch)
+        .get_u32_raw(scratch.rec, scratch.pos + 4) as u16;
+    if source != scratch.store_nr {
+        stores.free(&scratch);
+    }
+}
+
 /// Format a database record as text and append it to the output string.
 /// Bytecode equivalent: `OpFormatDatabase` in `src/state/io.rs:278`.
 pub fn OpFormatDatabase(
@@ -983,21 +1000,9 @@ pub fn OpStep(
         _ => stores.element_reference(&data, i32::MAX),
     };
 
-    // on=4 over a read-only/exposed source builds its rec-nr scratch in a fresh
-    // DEDICATED store; free it when iteration completes (elements are in the source,
-    // untouched).  A co-located scratch (source == data.store_nr) must NOT be freed.
-    // Mirrors src/state/io.rs step().  Decide with the shared ref, then re-acquire a
-    // mutable one — `stores` is not used afterwards.  (Early break/return skips this —
-    // a bounded residual, expose-iteration-scratch.md Open question A.)
-    let free_scratch = on & 63 == 4
-        && cur == i32::MAX as u32
-        && stores.store(&data).get_u32_raw(data.rec, data.pos + 4) as u16 != data.store_nr;
-
+    // on=4's dedicated scratch store (read-only source) is freed by the loop epilogue's
+    // OpFreeScratch, not here — that also covers an early break.
     *iter = pack_iter(cur, finish);
-    if free_scratch {
-        let stores_mut: &mut Stores = unsafe { &mut *cell.get() };
-        stores_mut.free(&data);
-    }
     result
 }
 

@@ -1685,10 +1685,15 @@ use #count instead"
             // `self.data.def(content)`; passing 0 gave whatever
             // definition happens to sit at index 0 and corrupted
             // stack layout.
+            // Set to the `hash_scratch` var for on=4 (Hash/Radix) iteration, so the
+            // loop epilogue can free a read-only source's DEDICATED scratch store
+            // (`OpFreeScratch`, a no-op when co-located).  u16::MAX = not on=4.
+            let mut hash_scratch_var: u16 = u16::MAX;
             if let Type::Hash(content, _, dep) | Type::Radix(content, _, dep) = in_type.clone() {
                 let is_radix = matches!(in_type, Type::Radix(_, _, _));
                 let scratch_tp = Type::Reference(content, dep.clone());
                 let scratch_var = self.create_unique("hash_scratch", &scratch_tp);
+                hash_scratch_var = scratch_var;
                 let hash_tp_id = self.get_type(&in_type);
                 let tp_arg = if hash_tp_id == u16::MAX {
                     0
@@ -2226,6 +2231,16 @@ use #count instead"
                 ));
             }
             for_steps.push(v_loop(lp, "For loop"));
+            // on=4 epilogue — free a read-only source's DEDICATED scratch store on loop
+            // exit.  Runs on completion AND break (break leaves the v_loop to here), and
+            // once per (re-)entry so a loop-in-loop frees each build.  Conditional:
+            // OpFreeScratch frees only when the scratch store differs from the source
+            // recorded in the header, so a co-located scratch (writable source) is a
+            // no-op.  A `return` out of the loop still bypasses this — a bounded residual
+            // (expose-iteration-scratch.md Open question A).
+            if hash_scratch_var != u16::MAX {
+                for_steps.push(self.cl("OpFreeScratch", &[Value::Var(hash_scratch_var)]));
+            }
             *code = v_block(for_steps, Type::Void, "For block");
         } else {
             diagnostic!(self.lexer, Level::Error, "Expect variable after for");

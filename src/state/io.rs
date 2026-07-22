@@ -1188,27 +1188,13 @@ impl State {
                     )
                 }
                 3 | 4 => {
-                    let sourced = on & 63 == 4;
+                    // on=4 (fresh-scratch hash/radix) yields in the source store recorded
+                    // in the scratch header; on=3 (co-located) yields in data.store_nr.
+                    // A read-only source's dedicated scratch store is freed by the loop
+                    // epilogue's OpFreeScratch, not here (covers break too).
                     let (elem, new_pos) =
-                        vector::step_ordered(&data, cur, &self.database.allocations, sourced);
+                        vector::step_ordered(&data, cur, &self.database.allocations, on & 63 == 4);
                     self.put_var(state_var - 8, new_pos);
-                    // on=4 over a read-only/exposed source builds its rec-nr scratch in a
-                    // fresh DEDICATED store (build_rec_scratch).  Free it when iteration
-                    // completes — the yielded elements live in the source store, untouched.
-                    // A co-located scratch (source == scratch store) must NOT be freed: it
-                    // IS the source.  (An early break/return skips this and leaves the
-                    // scratch to the leak check — a bounded residual, expose-iteration-
-                    // scratch.md Open question A.)
-                    if sourced && new_pos == i32::MAX as u32 {
-                        let src = self
-                            .database
-                            .store(&data)
-                            .get_u32_raw(data.rec, data.pos + 4)
-                            as u16;
-                        if src != data.store_nr {
-                            self.database.free(&data);
-                        }
-                    }
                     elem
                 }
                 _ => panic!("Not implemented"),
