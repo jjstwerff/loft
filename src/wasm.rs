@@ -1219,25 +1219,12 @@ pub fn set_par_trace_workers(on: bool) {
     crate::parallel::set_par_trace(on);
 }
 
-// ── W1.18-2  Worker entry point for WASM threading ──────────────────────────
-
-/// Entry point called by each Worker Thread.  The JS worker loop calls
-/// this with the function index and element range.  The worker reads from the
-/// shared WASM memory (Store heap) and writes results directly back.
-///
-/// This is a no-op stub until the wasm-threads feature build is available.
-/// The actual implementation needs access to the shared State, which requires
-/// the wasm-threads + atomics build flags.
-#[cfg(feature = "wasm")]
-#[wasm_bindgen::prelude::wasm_bindgen]
-pub fn worker_entry(_fn_index: u32, _start: u32, _end: u32) {
-    // TODO(W1.18-2): implement when wasm-threads feature build is available.
-    // The worker needs to:
-    // 1. Access the shared Store heap via WASM linear memory
-    // 2. Create a lightweight State for bytecode execution
-    // 3. Loop from start..end, executing fn_index for each element
-    // 4. Write results directly to the shared output buffer
-}
+// @PLN117 step 4 — the hand-rolled `worker_entry` stub (a never-implemented
+// W1.18-2 no-op) and its JS glue (`tests/wasm/{worker,parallel}.mjs`,
+// `harness.mjs::initThreaded`) were retired.  Browser threading now rides the
+// wasm-bindgen-rayon pool (the same rayon scheduler as native) — ONE scheduler,
+// not two half-built ones.  See `set_par_trace_workers` / `init_thread_pool`
+// above and `doc/claude/plans/117-browser-multithreading/`.
 
 #[cfg(test)]
 mod tests {
