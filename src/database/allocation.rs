@@ -1094,58 +1094,52 @@ impl Stores {
         self.build_rec_scratch(coll, &recs)
     }
 
-    /// Materialise `recs` (live hash rec-nrs) into a rec-nr scratch vector that
-    /// the Ordered (on=3) iteration path walks.
+    /// Materialise `recs` (live hash/radix rec-nrs) into a rec-nr scratch vector that
+    /// the Ordered `on=4` iteration path walks.
     ///
-    /// C60 piece 3 edit A: allocate IN THE HASH'S STORE, not a fresh one.  This
-    /// makes the yielded scratch DbRef share `store_nr` with the hash records —
-    /// so when Ordered iteration yields `DbRef{store=scratch.store_nr,
-    /// rec=<u32 rec-nr from vector>, pos=8}`, the rec-nr resolves to a valid
-    /// hash record in the same store.  No new on=4 mode, no bytecode protocol
-    /// change — hash iteration reuses the existing Ordered (on=3) path.
+    /// The scratch's header records the SOURCE (records) store_nr at offset 8, so the
+    /// `on=4` yield resolves each element in that store regardless of where the scratch
+    /// itself lives.  A WRITABLE source keeps the scratch co-located (source == scratch
+    /// store — the fast path).  A READ-ONLY/exposed source cannot be claimed into (and
+    /// its buffer must not move), so the scratch goes in a fresh dedicated store while
+    /// the elements still resolve in the exposed source (expose-iteration-scratch.md).
     fn build_rec_scratch(&mut self, hash_ref: &DbRef, recs: &[u32]) -> DbRef {
-        // Step 2 (expose-iteration-scratch) — the scratch is claimed in the
-        // collection's own store; a pinned (exposed) store rejects the claim
-        // (`Store::claim` asserts `!read_only`), which surfaced as a deep panic —
-        // a *silent trap / hang* under wasm.  Raise a clear, actionable error at
-        // the boundary instead.  (Step 4 will build the scratch in a writable
-        // store so the exposed collection iterates; this guard then narrows to the
-        // cases that step cannot serve.)
-        if self.store(hash_ref).read_only {
-            self.raise_runtime(crate::runtime_error::RuntimeErrorKind::UserPanic {
-                message: "cannot iterate an exposed collection — call \
-                          `release(tag, value)` first, then re-`expose` (reads and \
-                          lookups are fine while a collection is exposed)"
-                    .to_string(),
-            });
-            // A rec-0 scratch yields nothing; the `had_fatal` halt fires before the
-            // (empty) loop body would run.
-            return DbRef {
-                store_nr: hash_ref.store_nr,
-                rec: 0,
-                pos: 4,
-            };
-        }
+        // Pick the scratch store: a read-only/exposed source needs a separate writable
+        // home (claiming into it would panic and could move its buffer, invalidating the
+        // exposed view).  `database(1)` hands back a fresh owned store.
+        let scratch_store = if self.store(hash_ref).read_only {
+            self.database(1).store_nr
+        } else {
+            hash_ref.store_nr
+        };
+        let scratch_ref = DbRef {
+            store_nr: scratch_store,
+            rec: 0,
+            pos: 0,
+        };
         let n = recs.len();
         // 8-byte header + n * 4 bytes of u32 rec-nrs, rounded up to 8-byte
         // words (store claim granularity).
         let vec_words = ((n as u32) * 4 + 8).div_ceil(8);
         let vec_words = vec_words.max(1);
-        let vec_cr = self.claim(hash_ref, vec_words);
+        let vec_cr = self.claim(&scratch_ref, vec_words);
         let vec_rec = vec_cr.rec;
-        let header_cr = self.claim(hash_ref, 1);
+        // 2-word header: offset 4 = rec-nr vector, offset 8 = SOURCE (records) store_nr,
+        // read by the `on=4` yield (`vector::step_ordered` with `sourced`).
+        let header_cr = self.claim(&scratch_ref, 2);
         let header_rec = header_cr.rec;
         {
-            let store = self.store_mut(hash_ref);
+            let store = self.store_mut(&scratch_ref);
             store.set_u32_raw(vec_rec, 4, n as u32);
             for (i, &rec_nr) in recs.iter().enumerate() {
                 let base = 8 + (i as u32) * 4;
                 store.set_u32_raw(vec_rec, base, rec_nr);
             }
             store.set_u32_raw(header_rec, 4, vec_rec);
+            store.set_u32_raw(header_rec, 8, u32::from(hash_ref.store_nr));
         }
         DbRef {
-            store_nr: hash_ref.store_nr,
+            store_nr: scratch_store,
             rec: header_rec,
             pos: 4,
         }

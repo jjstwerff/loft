@@ -1533,13 +1533,15 @@ impl Parser {
                 arg = 4;
             }
             Parts::Hash(_, _) | Parts::Radix(_, _) => {
-                // C60 piece 3 edit C: route hash iteration through
-                // Ordered's on=3 code.  Parser has substituted the
-                // iterated expression with a `hash_scratch` ref to a
-                // u32-stride rec-nr vector in the hash's store (B+A).
-                // @PLN48 — a Radix walks the tree into the same scratch
-                // rec-vector (it is already key-ordered), then iterates it.
-                on = 3;
+                // Route hash/radix iteration through the Ordered code as on=4.
+                // The parser has substituted the iterated expression with a
+                // `hash_scratch` ref to a fresh u32-stride rec-nr vector
+                // (`build_rec_scratch`), so `data.pos` is always 4 and the source
+                // (records) store_nr sits in the scratch header — on=4's `step`
+                // yields there, which lets the scratch live in a writable store
+                // when the source is read-only/exposed (expose-iteration-scratch).
+                // In-place Ordered fields (a keyed struct field) stay on=3 above.
+                on = 4;
                 arg = 4;
             }
             _ => {

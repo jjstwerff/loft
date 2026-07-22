@@ -1051,8 +1051,10 @@ impl State {
                     );
                 }
             }
-            3 => {
-                // ordered points to the position inside the vector of references
+            3 | 4 => {
+                // ordered points to the position inside the vector of references.
+                // on=4 (fresh-scratch hash/radix, source store in the header) shares the
+                // exact same cursor setup — only step()'s yield store differs.
                 if from.is_empty() && till.is_empty() {
                     // C60 piece 3 edit E: unbounded iteration (`for e
                     // in h { … }` with no range).  ordered_find with an
@@ -1185,10 +1187,28 @@ impl State {
                         },
                     )
                 }
-                3 => {
+                3 | 4 => {
+                    let sourced = on & 63 == 4;
                     let (elem, new_pos) =
-                        vector::step_ordered(&data, cur, &self.database.allocations);
+                        vector::step_ordered(&data, cur, &self.database.allocations, sourced);
                     self.put_var(state_var - 8, new_pos);
+                    // on=4 over a read-only/exposed source builds its rec-nr scratch in a
+                    // fresh DEDICATED store (build_rec_scratch).  Free it when iteration
+                    // completes — the yielded elements live in the source store, untouched.
+                    // A co-located scratch (source == scratch store) must NOT be freed: it
+                    // IS the source.  (An early break/return skips this and leaves the
+                    // scratch to the leak check — a bounded residual, expose-iteration-
+                    // scratch.md Open question A.)
+                    if sourced && new_pos == i32::MAX as u32 {
+                        let src = self
+                            .database
+                            .store(&data)
+                            .get_u32_raw(data.rec, data.pos + 4)
+                            as u16;
+                        if src != data.store_nr {
+                            self.database.free(&data);
+                        }
+                    }
                     elem
                 }
                 _ => panic!("Not implemented"),
