@@ -1195,6 +1195,20 @@ pub fn output_take() -> String {
     OUTPUT.with(|buf| std::mem::take(&mut *buf.borrow_mut()))
 }
 
+// ── @PLN117 step 1 — wasm-bindgen-rayon thread-pool export ──────────────────
+//
+// Re-exporting `init_thread_pool` makes wasm-bindgen generate the JS
+// `initThreadPool(numThreads)` export plus the Web-Worker startup shim that
+// installs the GLOBAL rayon pool.  Once the page (or the node harness) awaits
+// `initThreadPool(n)` before any `par`, loft's `.into_par_iter()` dispatch in
+// `src/parallel.rs` runs across `n` real workers instead of the sequential
+// fallback.  See `doc/claude/plans/117-browser-multithreading/`.
+//
+// Only under `wasm-threads` (wasm + threading + the atomics/build-std bundle);
+// a plain `--features wasm` build keeps today's single-threaded `par`.
+#[cfg(feature = "wasm-threads")]
+pub use wasm_bindgen_rayon::init_thread_pool;
+
 // ── W1.18-2  Worker entry point for WASM threading ──────────────────────────
 
 /// Entry point called by each Worker Thread.  The JS worker loop calls

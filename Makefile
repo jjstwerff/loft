@@ -945,11 +945,21 @@ clean:
 clean-wasm:
 	-rm -rf target/wasm32-unknown-unknown target/wasm32-wasip2 doc/pkg
 
+# @PLN117 — threaded browser bundle: par() / par_fold over real Web Worker
+# threads via wasm-bindgen-rayon (rayon on a SharedArrayBuffer + wasm atomics).
+# Needs the nightly toolchain WITH rust-src (build-std rebuilds std with
+# atomics) plus wasm-pack.  --target web is MANDATORY — wasm-bindgen-rayon's
+# worker bootstrap is web-target-only; --target nodejs cannot drive it.
+# A page must `await init()` then `await initThreadPool(hardwareConcurrency)`
+# before any par; on a host without cross-origin isolation it skips the pool
+# and par() falls back to sequential (never breaks).  Design + arcs:
+# doc/claude/plans/117-browser-multithreading/.
 wasm-mt:
 	RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
-	wasm-pack build --target nodejs --out-dir tests/wasm/pkg-mt \
-	-- --features wasm-threads --no-default-features
-	@echo "Built tests/wasm/pkg-mt/ — run: node tests/wasm/suite.mjs --threaded 19-threading.loft"
+	rustup run nightly \
+	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir tests/wasm/pkg-mt --release \
+	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
+	@echo "Built tests/wasm/pkg-mt/ (--target web, threaded)."
 
 fill:
 	@cargo build --release -q

@@ -140,8 +140,7 @@ where
     // wasm-bindgen-rayon model so the two scheduler stories converge.
     use rayon::prelude::*;
     let threads = n_threads.max(1).min(n_rows.max(1));
-    let pool = rayon_pool();
-    pool.install(|| {
+    with_pool(|| {
         (0..threads)
             .into_par_iter()
             .map(|t| {
@@ -189,9 +188,39 @@ pub(crate) fn merge_batches<R: Clone>(
     results
 }
 
-/// Lazily-initialised global rayon pool.  Threading-feature only.
-/// Uses `num_cpus`'s default thread count (rayon's default).
+/// Run `f` on the rayon pool that drives loft's parallel dispatch (@PLN117 step 2).
+///
+/// - **Native:** install onto loft's private, lazily-built pool (`rayon_pool`).
+/// - **Wasm (`wasm-bindgen-rayon`):** run `f` directly so the `.into_par_iter()`
+///   inside it dispatches over the GLOBAL rayon pool that JS `initThreadPool(n)`
+///   installed.  A private `ThreadPoolBuilder` cannot spawn under wasm — there
+///   are no OS threads to build on — so the global pool is the only one with
+///   real workers.  Before `initThreadPool` has run (or when the host is not
+///   cross-origin-isolated so the page never called it), the global pool has a
+///   single thread and `f` runs sequentially on the caller: the never-break
+///   sequential fallback (@PLN117 arc D).  Same bounds as `ThreadPool::install`,
+///   so it is a drop-in at every call site.
 #[cfg(feature = "threading")]
+pub(crate) fn with_pool<R, F>(f: F) -> R
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    #[cfg(not(feature = "wasm"))]
+    {
+        rayon_pool().install(f)
+    }
+    #[cfg(feature = "wasm")]
+    {
+        f()
+    }
+}
+
+/// Lazily-initialised private rayon pool for the native backend.  Uses rayon's
+/// default thread count.  Not built under wasm — the wasm arm of `with_pool`
+/// uses the global `wasm-bindgen-rayon` pool instead (a private builder can't
+/// spawn OS threads that don't exist in the browser).
+#[cfg(all(feature = "threading", not(feature = "wasm")))]
 fn rayon_pool() -> &'static rayon::ThreadPool {
     use std::sync::OnceLock;
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
@@ -729,12 +758,11 @@ pub fn run_parallel_queue_ref(
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
     use rayon::prelude::*;
-    let pool = rayon_pool();
     let stores_immut: &Stores = &*stores;
     let prog_ref = &prog;
     let extras_ref = &extras;
     let dispenser_ref = &dispenser;
-    let batches: Vec<(Vec<(usize, DbRef)>, Stores)> = pool.install(|| {
+    let batches: Vec<(Vec<(usize, DbRef)>, Stores)> = with_pool(|| {
         (0..n_workers)
             .into_par_iter()
             .map(|t| {
