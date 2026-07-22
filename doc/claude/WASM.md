@@ -1351,7 +1351,9 @@ random     = ["dep:rand_core", "dep:rand_pcg"]  # disabled for WASM — host pro
 threading  = []                            # enables par() — OS threads or Web Workers
 
 [dependencies]
-wasm-bindgen-rayon = { version = "1.2", optional = true }
+# `no-bundler`: the worker bootstrap resolves the main module by URL, not a
+# bundler's package resolution — loft ships static files (@PLN117).
+wasm-bindgen-rayon = { version = "1.2", optional = true, features = ["no-bundler"] }
 ```
 
 **Build commands:**
@@ -1360,10 +1362,43 @@ wasm-bindgen-rayon = { version = "1.2", optional = true }
 # Single-threaded WASM (works everywhere, including file://)
 wasm-pack build --target web -- --features wasm --no-default-features
 
-# Multi-threaded WASM (requires COEP/COOP headers)
-RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
-  wasm-pack build --target web -- --features wasm-threads --no-default-features
+# Multi-threaded WASM (par() over real Web Workers) — use `make wasm-mt`.
+# @PLN117: this toolchain's rustc does NOT auto-emit the wasm-threads linker
+# flags from +atomics, so ALL of these are required.  Drop any one and the
+# bundle silently builds a NON-shared memory → workers die at runtime with
+# "Memory could not be cloned":
+RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals \
+  -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 \
+  -C link-arg=--import-memory -C link-arg=--export=__heap_base \
+  -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size \
+  -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base' \
+  rustup run nightly \
+  wasm-pack build --target web --out-dir tests/wasm/pkg-mt --release \
+  -- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
 ```
+
+Requires the **nightly** toolchain with **rust-src** (`build-std` rebuilds std with
+atomics). `--target web` is mandatory — wasm-bindgen-rayon's worker bootstrap is
+web-target-only, and node has no Web Worker global, so the **browser** is the proof
+environment.
+
+**COOP/COEP hosting contract (arc D).** The threaded bundle needs
+`crossOriginIsolated === true` (the precondition for `SharedArrayBuffer` + wasm
+atomics), which a host grants only by sending **both**:
+
+```
+Cross-Origin-Opener-Policy: same-origin
+Cross-Origin-Embedder-Policy: require-corp
+```
+
+`require-corp` means every cross-origin sub-resource must itself opt in
+(`Cross-Origin-Resource-Policy` / CORS) or it won't load — plan for it when a page
+pulls cross-origin assets. Before any `par`, JS must
+`await init(); if (crossOriginIsolated) await initThreadPool(navigator.hardwareConcurrency)`.
+When the host is **not** isolated, skip `initThreadPool` — the same `par` then runs
+sequentially (one worker) and **never crashes** (proven). `tests/wasm/coi-server.py`
+is a reference COOP/COEP server; `tests/wasm/par-thread-proof.{html,sh}` is the
+in-browser proof (a `par` dispatched across 4 Web Workers, value matching native).
 
 **What each gate controls:**
 
@@ -1379,6 +1414,18 @@ RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
 ---
 
 ## Threading in WASM — Two-Tier Design
+
+> **⚠ Superseded implementation (@PLN117).** The hand-rolled Web-Worker dispatch
+> described below (`worker_entry`, a manual `SharedArrayBuffer` control buffer,
+> `LoftThreadPool`) was **never implemented** (`worker_entry` was a no-op stub) and
+> has been **retired**. Browser `par()` now rides **`wasm-bindgen-rayon`** — the
+> same rayon scheduler the native backend uses — via `src/parallel.rs::with_pool`
+> and the `initThreadPool` export. Build with `make wasm-mt`; the COOP/COEP
+> contract, the two-tier (isolated → threaded, else → sequential) fallback, and the
+> runtime detection idea below all still hold. The current, proven picture is
+> **§ Cargo Feature Gates → Build commands** above and
+> `doc/claude/plans/117-browser-multithreading/`. The text below is kept for the
+> two-tier design rationale only.
 
 ### Overview
 
@@ -2482,6 +2529,17 @@ used by WASM worker spawning (W1.18).
 ---
 
 ## W1.18 — Node.js Worker Threads: Testing `par()` Outside the Browser
+
+> **⚠ Retired (@PLN117).** This whole node-Worker approach (`worker_entry` +
+> `LoftThreadPool` + `worker.mjs`/`parallel.mjs` + `initThreaded`, built with
+> `--target nodejs`) has been **removed**. Its premise — "node avoids the browser's
+> COOP/COEP obstacle" — does not survive contact with `wasm-bindgen-rayon`, which is
+> `--target web` only and needs a **Web Worker** global that node lacks. Browser
+> `par()` runs on the wasm-bindgen-rayon pool, and the proof harness is the
+> **browser**: `make wasm-mt` + `tests/wasm/par-thread-proof.{html,sh}` +
+> `coi-server.py`. The COOP/COEP requirement is real and documented under
+> **§ Cargo Feature Gates → Build commands** above. The section below is obsolete;
+> kept only as a record of the abandoned node-worker attempt.
 
 ### Why Node.js, not the browser
 
