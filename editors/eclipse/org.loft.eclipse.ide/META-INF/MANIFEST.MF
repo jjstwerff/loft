@@ -1,0 +1,16 @@
+Manifest-Version: 1.0
+Bundle-ManifestVersion: 2
+Bundle-Name: Loft IDE (LSP + DAP)
+Bundle-SymbolicName: org.loft.eclipse.ide;singleton:=true
+Bundle-Version: 0.9.0.qualifier
+Bundle-Vendor: loft-lang
+Bundle-License: LGPL-3.0-or-later
+Automatic-Module-Name: org.loft.eclipse.ide
+Bundle-RequiredExecutionEnvironment: JavaSE-17
+Bundle-ActivationPolicy: lazy
+Require-Bundle: org.eclipse.core.runtime,
+ org.eclipse.core.resources,
+ org.eclipse.lsp4e,
+ org.eclipse.lsp4e.debug;resolution:=optional,
+ org.eclipse.tm4e.registry,
+ org.eclipse.tm4e.languageconfiguration;resolution:=optional

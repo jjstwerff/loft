@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?eclipse version="3.4"?>
+<!--
+  Loft IDE for Eclipse — wires the loft language server (loft-lsp) and debug
+  adapter (loft-dap) into Eclipse via LSP4E, TM4E, and DSP4E.  Nothing loft-specific
+  is reimplemented here: this bundle only declares the .loft content type and points
+  the three community plugins at loft's own binaries + TextMate grammar.
+-->
+<plugin>
+
+   <!-- The .loft content type — everything else keys off this. -->
+   <extension point="org.eclipse.core.contenttype.contentTypes">
+      <content-type
+            id="org.loft.eclipse.ide.content-type"
+            name="Loft Source File"
+            base-type="org.eclipse.core.runtime.text"
+            file-extensions="loft"
+            priority="normal"/>
+   </extension>
+
+   <!-- Syntax highlighting: the TextMate grammar (shared with the VS Code extension). -->
+   <extension point="org.eclipse.tm4e.registry.grammars">
+      <grammar
+            scopeName="source.loft"
+            path="syntaxes/loft.tmLanguage.json"/>
+      <scopeNameContentTypeBinding
+            contentTypeId="org.loft.eclipse.ide.content-type"
+            scopeName="source.loft"/>
+   </extension>
+
+   <!-- Brackets / comments / auto-close, from the same language-configuration.json. -->
+   <extension point="org.eclipse.tm4e.languageconfiguration.languageConfigurations">
+      <languageConfiguration
+            contentTypeId="org.loft.eclipse.ide.content-type"
+            path="language-configuration.json"/>
+   </extension>
+
+   <!-- Code intelligence: the loft-lsp language server (LSP4E). -->
+   <extension point="org.eclipse.lsp4e.languageServer">
+      <server
+            id="org.loft.eclipse.ide.lsp"
+            label="Loft Language Server (loft-lsp)"
+            class="org.loft.eclipse.ide.LoftLanguageServer"
+            singleton="true"/>
+      <contentTypeMapping
+            id="org.loft.eclipse.ide.lsp"
+            contentType="org.loft.eclipse.ide.content-type"/>
+   </extension>
+
+</plugin>
