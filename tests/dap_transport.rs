@@ -266,9 +266,10 @@ fn handshake_advertises_capabilities_then_initialized() {
         Some(true),
         "advertises conditional breakpoints"
     );
-    assert!(
-        field(caps, "supportsStepBack").is_none(),
-        "does NOT advertise reverse stepping (a follow-up): {caps:?}"
+    assert_eq!(
+        field_bool(caps, "supportsStepBack"),
+        Some(true),
+        "advertises reverse stepping (RX): {caps:?}"
     );
 
     // The `initialized` event follows the response (never before it).
@@ -845,6 +846,132 @@ fn data_breakpoint_on_local_fires_on_change() {
         field_str(&stopped, "reason").as_deref(),
         Some("data breakpoint"),
         "the change fires a data breakpoint: {stopped:?}"
+    );
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
+
+/// The top stack frame's current source line (via a fresh stackTrace).
+fn top_line(d: &mut Dap) -> Option<i64> {
+    d.stack_frames().first().and_then(|f| field_i64(f, "line"))
+}
+
+/// The current value of local `name` in the top frame (via scopes → variables).
+fn local_val(d: &mut Dap, name: &str) -> Option<String> {
+    let lref = d.current_locals_ref();
+    d.variables(lref)
+        .iter()
+        .find(|v| field_str(v, "name").as_deref() == Some(name))
+        .and_then(|v| field_str(v, "value"))
+}
+
+// ── RX5 — reverse stepping over DAP (DAP_ADVANCED.md § RX) ────────────────────────────
+// stepBack reverses a forward step in the editor: after stepping over a mutating line, a
+// stepBack returns the line AND the local to the exact prior stop.
+#[test]
+fn step_back_reverses_a_step_over_dap() {
+    let mut d = Dap::start();
+    let caps = d.handshake();
+    assert_eq!(
+        field_bool(&caps, "supportsStepBack"),
+        Some(true),
+        "advertises reverse stepping"
+    );
+    let src = "fn main() {\n  a = 1;\n  a = a + 1;\n  a = a + 2;\n  print(\"a={a}\")\n}\n";
+    let path = d.launch("rxstep", src, false);
+    let file = json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()));
+    let seq = d.request(
+        "setBreakpoints",
+        &format!(r#"{{"source":{{"path":{file}}},"breakpoints":[{{"line":3}}]}}"#),
+    );
+    let _ = d.recv_response(seq);
+    d.configuration_done();
+    let _ = d.recv_event("stopped");
+
+    assert_eq!(top_line(&mut d), Some(3), "at the breakpoint line 3");
+    assert_eq!(
+        local_val(&mut d, "a").as_deref(),
+        Some("1"),
+        "a == 1 at the stop"
+    );
+
+    // Step forward → line 4, a == 2.
+    let n = d.request("next", r#"{"threadId":1}"#);
+    let _ = d.recv_response(n);
+    let stepped = d.recv_event("stopped");
+    assert_eq!(field_str(&stepped, "reason").as_deref(), Some("step"));
+    assert_eq!(top_line(&mut d), Some(4), "advanced to line 4");
+    assert_eq!(
+        local_val(&mut d, "a").as_deref(),
+        Some("2"),
+        "a == 2 after the step"
+    );
+
+    // STEP BACK → line 3, a reverted to 1.
+    let sb = d.request("stepBack", r#"{"threadId":1}"#);
+    let _ = d.recv_response(sb);
+    let back = d.recv_event("stopped");
+    assert_eq!(
+        field_str(&back, "reason").as_deref(),
+        Some("step"),
+        "stepBack is a step stop: {back:?}"
+    );
+    assert_eq!(top_line(&mut d), Some(3), "reverted to line 3");
+    assert_eq!(
+        local_val(&mut d, "a").as_deref(),
+        Some("1"),
+        "a reverted to its pre-step value 1"
+    );
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
+
+// reverseContinue reverses to the ring floor: from deep in the program it walks all retained
+// checkpoints back to the earliest and reports one landing stop.
+#[test]
+fn reverse_continue_walks_back_to_the_floor() {
+    let mut d = Dap::start();
+    d.handshake();
+    let src = "fn main() {\n  a = 1;\n  a = a + 1;\n  a = a + 2;\n  print(\"a={a}\")\n}\n";
+    let path = d.launch("rxcont", src, false);
+    let file = json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()));
+    let seq = d.request(
+        "setBreakpoints",
+        &format!(r#"{{"source":{{"path":{file}}},"breakpoints":[{{"line":3}}]}}"#),
+    );
+    let _ = d.recv_response(seq);
+    d.configuration_done();
+    let _ = d.recv_event("stopped"); // line 3, a == 1
+
+    // Step forward twice → line 5, a == 4 (checkpoints for lines 3 and 4 accumulate).
+    for _ in 0..2 {
+        let n = d.request("next", r#"{"threadId":1}"#);
+        let _ = d.recv_response(n);
+        let _ = d.recv_event("stopped");
+    }
+    assert_eq!(top_line(&mut d), Some(5), "stepped to line 5");
+    assert_eq!(
+        local_val(&mut d, "a").as_deref(),
+        Some("4"),
+        "a == 4 at line 5"
+    );
+
+    // reverseContinue → all the way back to the earliest retained stop (line 3, a == 1).
+    let rc = d.request("reverseContinue", r#"{"threadId":1}"#);
+    let _ = d.recv_response(rc);
+    let landed = d.recv_event("stopped");
+    assert_eq!(field_str(&landed, "reason").as_deref(), Some("step"));
+    assert_eq!(
+        top_line(&mut d),
+        Some(3),
+        "reversed to the ring floor (line 3)"
+    );
+    assert_eq!(
+        local_val(&mut d, "a").as_deref(),
+        Some("1"),
+        "a reversed all the way back to 1"
     );
 
     d.disconnect();

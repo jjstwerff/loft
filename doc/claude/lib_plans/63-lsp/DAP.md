@@ -301,10 +301,12 @@ each stays an honest capability bit or clean error.
   not fake one. It advertises `supportsTerminateRequest` and honours a step budget
   (`--max-steps`) instead. A `pause` request returns a clean "not supported" error.
   (Not in DAP_ADVANCED — needs an interrupt path, its own plan.)
-- **Reverse-execution stepping** (`stepBack`/`reverseContinue`) — the engine's undo/redo is
-  reverse-*edit* (revert a `setValue` journal, @PLN16 M2), **not** reverse execution: a
-  probe showed `undo` after a step returns `"nothing to do"`. `supportsStepBack` is **not**
-  advertised. Design: [DAP_ADVANCED.md § RX](DAP_ADVANCED.md#rx--reverse-execution-the-large-one-engine-checkpointing--rpc--dap).
+- **Reverse-execution stepping** (`stepBack`/`reverseContinue`) — **BUILT**: a bounded
+  snapshot ring checkpoints each forward step, so `stepBack` / `reverseContinue` restore the
+  prior state (heap + registers) byte-identically
+  ([DAP_ADVANCED.md § RX](DAP_ADVANCED.md#rx--reverse-execution-the-large-one-engine-checkpointing--rpc--dap)).
+  `supportsStepBack` is advertised. Interpreter-only; I/O is not reversed (heap-only restore);
+  depth is `LOFT_REVERSE_DEPTH` (default 200).
 - **Structured variable expansion** — **BUILT** (no longer a leaf-only refusal): a struct
   or nested value expands into its children via `debug_eval_json`, a node is a leaf iff its
   JSON value is a scalar ([DAP_ADVANCED.md § VE](DAP_ADVANCED.md#ve--structured-variable-expansion-adapter-only--built)).

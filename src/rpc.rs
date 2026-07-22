@@ -350,9 +350,11 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
         "stepBack" => {
             // @PLN63 RX4 — reverse one step (distinct from the edit-scoped `undo`/`redo`).
             // Reverse never terminates the program: we stay paused whether it moved or hit
-            // the ring floor, so report the current frame as a `step` stop.
-            out.push(resp_ok(id, ""));
-            let _ = session.debug_step_back();
+            // the ring floor, so report the current frame as a `step` stop.  `moved` says
+            // whether a checkpoint was restored (false = the ring floor) — the driver uses it
+            // to end a `reverseContinue`.
+            let moved = session.debug_step_back();
+            out.push(resp_ok(id, &format!("\"moved\":{moved}")));
             report(session, "step", session.is_debugging(), &mut out);
         }
         "eval" => {

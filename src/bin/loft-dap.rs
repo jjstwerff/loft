@@ -40,6 +40,9 @@ const FRAME_ID: i64 = 1000;
 /// mistaken for a current node: a stale handle returns an empty `variables` list, never a
 /// wrong subtree.  Clear of `FRAME_ID` (a separate DAP id space) and always non-zero.
 const VAR_REF_BASE: i64 = 1000;
+/// Safety cap on `reverseContinue`'s reverse loop — the engine ring is already bounded (RX3),
+/// so the floor is reached well within this; the cap only guards against a pathological depth.
+const MAX_REVERSE_CONTINUE: usize = 1_000_000;
 
 fn main() {
     // A debuggee fault must not print to stdout (the protocol channel); silence the raw
@@ -223,6 +226,9 @@ impl Adapter {
                     driver.set_function_breakpoint("main");
                     self.pending_entry = true;
                 }
+                // RX — arm reverse stepping so forward steps checkpoint (we advertise
+                // `supportsStepBack`, so the client offers reverse controls from the start).
+                let _ = driver.drive(r#"{"id":0,"req":"setReverse","on":true}"#);
                 self.mark_resume();
                 let (msgs, _) = driver.drive(r#"{"id":0,"req":"run","entry":"main"}"#);
                 self.emit_events(out, &msgs);
@@ -328,6 +334,43 @@ impl Adapter {
                 };
                 let (msgs, _) = driver.drive(&format!("{{\"id\":0,\"req\":\"{verb}\"}}"));
                 self.emit_events(out, &msgs);
+            }
+
+            // ── RX reverse execution (supportsStepBack) ───────────────────────────
+            "stepBack" => {
+                // Reverse one step → the engine restores the prior checkpoint and reports a
+                // `stopped{reason:"step"}` (or, at the ring floor, the unchanged frame).
+                self.respond(out, request_seq, &command, true, None, None);
+                self.mark_resume();
+                let (msgs, _) = driver.drive(r#"{"id":0,"req":"stepBack"}"#);
+                self.emit_events(out, &msgs);
+            }
+            "reverseContinue" => {
+                // Reverse to the ring floor: drive `stepBack` until it stops moving
+                // (`moved:false`), suppressing the intermediate stops, then report the one
+                // landing frame.  Bounded by the ring depth (RX3), so the loop always ends.
+                self.respond(
+                    out,
+                    request_seq,
+                    &command,
+                    true,
+                    Some(obj(vec![("allThreadsContinued", Parsed::Bool(true))])),
+                    None,
+                );
+                self.mark_resume();
+                let mut landing = Vec::new();
+                for _ in 0..MAX_REVERSE_CONTINUE {
+                    let (msgs, _) = driver.drive(r#"{"id":0,"req":"stepBack"}"#);
+                    let moved = rpc_ok(&msgs, 0)
+                        .ok()
+                        .and_then(|r| field_bool(&r, "moved"))
+                        .unwrap_or(false);
+                    landing = msgs;
+                    if !moved {
+                        break;
+                    }
+                }
+                self.emit_events(out, &landing);
             }
 
             // ── D6 evaluate + setVariable ─────────────────────────────────────────
@@ -759,10 +802,10 @@ impl Adapter {
     }
 }
 
-/// The v1 capability set (DAP.md § Envelope mechanics).  `supportsStepBack` is
-/// deliberately absent (reverse execution is a follow-up), and hit-conditional
-/// breakpoints are NOT advertised — the engine has no hit-count, so advertising it would
-/// let a client set a condition the adapter silently ignores (a wrong picture).
+/// The capability set (DAP.md § Envelope mechanics).  `supportsStepBack` enables the DAP
+/// `stepBack` + `reverseContinue` controls (RX).  Hit-conditional breakpoints are NOT
+/// advertised — the engine has no hit-count, so advertising it would let a client set a
+/// condition the adapter silently ignores (a wrong picture).
 fn capabilities() -> Parsed {
     obj(vec![
         ("supportsConfigurationDoneRequest", Parsed::Bool(true)),
@@ -771,6 +814,7 @@ fn capabilities() -> Parsed {
         ("supportsTerminateRequest", Parsed::Bool(true)),
         ("supportsSetVariable", Parsed::Bool(true)),
         ("supportsDataBreakpoints", Parsed::Bool(true)),
+        ("supportsStepBack", Parsed::Bool(true)),
     ])
 }
 

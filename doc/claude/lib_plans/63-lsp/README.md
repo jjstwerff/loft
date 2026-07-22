@@ -564,14 +564,16 @@ is a translation over the `--rpc` engine's one dispatch chokepoint.
 | `next` / `stepIn` / `stepOut` | RPC `stepOver`/`stepIn`/`stepOut` → `stopped{reason:"step"}`. |
 | `continue` | RPC `continue` → the next stop or `terminated`. `pause` is refused (no async interrupt). |
 | `dataBreakpointInfo` / `setDataBreakpoints` | **Data breakpoints** ([DAP_ADVANCED.md](DAP_ADVANCED.md) DB, built): watch a scalar local (or a nested field/element) via the engine's watchpoints; a change stops with `reason:"data breakpoint"`. Set at a stop only. |
+| `stepBack` / `reverseContinue` | **Reverse execution** ([DAP_ADVANCED.md](DAP_ADVANCED.md) RX, built): a bounded snapshot ring restores the prior state byte-identically. Interpreter-only; I/O not reversed; depth `LOFT_REVERSE_DEPTH` (default 200). |
 | `evaluate {expression, frameId, context}` | RPC `eval` in the frame's scope (identifier / field-access / call). |
 | `setVariable` / `setExpression` | RPC `setValue` → the refreshed frame value. |
 | `disconnect` / `terminate` | RPC `disconnect`; `terminated`, loop ends. |
 
 **Advanced tools** ([DAP_ADVANCED.md](DAP_ADVANCED.md), each a small-step spine grounded in
-probe findings): structured **v**ariable **e**xpansion (VE), multi-**f**rame **s**tack (SF), and
-**d**ata **b**reakpoints via watchpoints (DB) are **built**; only **r**everse e**x**ecution
-(RX) remains deferred (it needs real execution checkpointing — the largest engine step).
+probe findings) — **all built**: structured **v**ariable **e**xpansion (VE), multi-**f**rame
+**s**tack (SF), **d**ata **b**reakpoints via watchpoints (DB), and **r**everse e**x**ecution
+(RX, a bounded snapshot ring). Only `pause` (async interrupt) and multi-worker `par` threads
+remain honest refusals.
 
 ### What is already built — loft-dap is a TRANSLATION, not a new debugger
 

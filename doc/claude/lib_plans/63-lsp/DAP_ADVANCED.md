@@ -334,10 +334,18 @@ reverts too.
   `tests/rpc.rs::rpc_step_back_reverses_a_step` — arm reverse, run to a breakpoint, `stepOver`
   (line 3→4, `a` 1→2), `stepBack` → back at line 3 with `a` reverted to 1 (was a no-op via
   `undo`), no termination.
-- **RX5 — DAP: `stepBack` / `reverseContinue`.** Advertise `supportsStepBack`; `stepBack` →
-  RPC `stepBack` → `stopped{reason:"step"}`; `reverseContinue` → `stepBack` to the ring floor
-  → `stopped`. *Gate:* `tests/dap_transport.rs` — step forward, `stepBack`, assert the line +
-  locals returned to the prior stop.
+- **RX5 — DAP: `stepBack` / `reverseContinue`. ✅ DONE.** loft-dap advertises
+  `supportsStepBack`, arms reverse at `configurationDone` (RPC `setReverse on:true`, so forward
+  steps checkpoint), maps `stepBack` → RPC `stepBack` → `stopped{reason:"step"}`, and
+  `reverseContinue` → drives `stepBack` until the RPC `moved:false` (the ring floor),
+  suppressing the intermediate stops and reporting the one landing frame. *Gates:*
+  `tests/dap_transport.rs::{step_back_reverses_a_step_over_dap, reverse_continue_walks_back_to_the_floor}`
+  — step over `a=a+1` (line 3→4, `a` 1→2), `stepBack` → line 3 with `a` back to 1; and from
+  line 5 (`a`=4) `reverseContinue` → the floor (line 3, `a`=1).
+
+**RX COMPLETE** (RX0–RX5): reverse execution works from a DAP editor. The `moved` flag was
+added to the RPC `stepBack` response so `reverseContinue` knows when to stop. Ring depth is
+`LOFT_REVERSE_DEPTH` (default 200).
 
 ### Honest limits (state these up front, they are inherent)
 
