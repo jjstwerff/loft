@@ -109,21 +109,12 @@ test('directory listing', () => {
   assert(r.output.includes('b.loft'));
 });
 
-test('rand with seed is deterministic', () => {
-  const code = `
-    fn main() {
-      rand_seed(42l);
-      a = rand(1, 1000);
-      b = rand(1, 1000);
-      println("{a}");
-      println("{b}");
-    }
-  `;
-  const r1 = runCode(code);
-  const r2 = runCode(code);
-  assert(r1.success && r2.success, `Expected both runs to succeed; got: ${r1.diagnostics} / ${r2.diagnostics}`);
-  assert(r1.output === r2.output, 'Expected same output from seeded rand');
-});
+// NOTE: the seeded-`rand` determinism test was removed here. `rand` / `rand_seed`
+// are no longer core loft builtins — they were drained to the `random` library
+// (@PLAN12 phase 3.5a; see src/codegen_runtime.rs), so `Unknown function rand_seed`
+// even in a default build. The core `--features wasm` bundle these bridge tests
+// drive does not carry the `random` lib, so this coverage belongs in a
+// library-level test, not the core bridge suite.
 
 test('mkdir_all and nested write', () => {
   const r = runCode(`
@@ -149,11 +140,11 @@ test('binary write and read back (BigEndian)', () => {
   const r = runCode(`
     fn main() {
      {f = file("/project/data.bin");
-      f#format = Format.BigEndian;
-      f += 0x01020304;
+      f#format = BigEndian;
+      f += 0x01020304 as i32;
      }
      {f = file("/project/data.bin");
-      f#format = Format.BigEndian;
+      f#format = BigEndian;
       v = f#read(4) as i32;
       println("{v}");
      }
@@ -168,14 +159,14 @@ test('binary seek and partial read', () => {
   const r = runCode(`
     fn main() {
      {f = file("/project/seek.bin");
-      f#format = Format.LittleEndian;
-      f += 10;
-      f += 20;
-      f += 30;
+      f#format = LittleEndian;
+      f += 10 as i32;
+      f += 20 as i32;
+      f += 30 as i32;
      }
      {f = file("/project/seek.bin");
-      f#format = Format.LittleEndian;
-      f#next = 4l;
+      f#format = LittleEndian;
+      f#next = 4;
       v = f#read(4) as i32;
       println("{v}");
       n = f#next;
@@ -193,15 +184,15 @@ test('truncate file with f#size', () => {
   const r = runCode(`
     fn main() {
      {f = file("/project/trunc.bin");
-      f#format = Format.LittleEndian;
-      f += 1;
-      f += 2;
-      f += 3;
-      f += 4;
+      f#format = LittleEndian;
+      f += 1 as i32;
+      f += 2 as i32;
+      f += 3 as i32;
+      f += 4 as i32;
      }
      {f = file("/project/trunc.bin");
-      f#format = Format.LittleEndian;
-      f#size = 8l;
+      f#format = LittleEndian;
+      f#size = 8;
       sz = f#size;
       println("{sz}");
      }

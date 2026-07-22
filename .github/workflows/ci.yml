@@ -813,16 +813,19 @@ jobs:
         # whole job is), so drift shows red without blocking merge.
         run: make features-check
 
-  # WASM node bridge — build the wasm-pack nodejs bundle and RUN the binary-I/O +
-  # rand bridge tests (tests/wasm/bridge.test.mjs).  The per-platform `Test` job's
+  # WASM node bridge — build the wasm-pack nodejs bundle and RUN the binary-I/O
+  # bridge tests (tests/wasm/bridge.test.mjs).  The per-platform `Test` job's
   # `wasm_compile_and_run_smoke` self-SKIPS whenever tests/wasm/pkg/ is absent —
   # which is EVERY run, because nothing built it — so its green was a silent skip,
-  # not a pass.  That hid that several bridge programs still use the REMOVED `Nl`
-  # long-literal suffix (`42l`, `4l`, `8l`) and no longer parse, leaving the wasm
-  # binary-I/O + rand surface untested.  This job builds the bundle so the tests
-  # actually run; they are RED today until the bridge programs are ported to
-  # current syntax.  ADVISORY (not in required-status-checks): surfaces the
-  # breakage visibly without blocking merges until it is fixed.
+  # not a pass.  That silent skip hid that several bridge programs had rotted onto
+  # the REMOVED `Nl` long-literal suffix (`42l`) and the old `Format.BigEndian`
+  # spelling, so they no longer parsed and the wasm binary-I/O surface went
+  # untested.  The programs are now ported to current syntax (bare `BigEndian`,
+  # `f += … as i32`, plain int offsets); this job builds the bundle so they
+  # actually RUN in CI and stay honest.  ADVISORY (not in required-status-checks):
+  # visible on every PR without blocking; promote to required once it has proven
+  # stable.  (The seeded-`rand` case was dropped — `rand` moved to the `random`
+  # library, @PLAN12, and is not in the core bundle these tests drive.)
   wasm-bridge:
     name: wasm node bridge (ubuntu, advisory)
     runs-on: ubuntu-latest
