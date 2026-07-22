@@ -18,11 +18,17 @@ nulled, interpreter) and walked the null to its source:
 nor the returned `Vec3` — it is the **fold reading a periodic null pattern out of `me.vertices`**:
 iterating that vector reads **48 of 84** `pos.x` as null in an **exactly period-7 pattern (3
 real, 4 null)**, and only on the FIRST fold (`glb_pos_max` over the same vector, second, is
-correct). That is a store **layout / lazy-materialisation** fingerprint, confirming the
-store-lifetime diagnosis (not null-flow) and linking to the persistent `Vec3` leak. Remaining:
-attribute the exact store event (`LOFT_STORES=timeline`), characterise the stride, check
-`--native`, then upgrade the @PLN103 inspector to *see* this class, use it as an oracle, and fix
-at the chokepoint. This README is the single source of truth for phase status.
+correct). Follow-ups then FALSIFIED the
+"transient" reading: reading `me.vertices` directly in the consumer (no copy) already gives null,
+and `glb_pos_max` reads the SAME nulls — so the corruption is **persistent** (48/84 records hold
+a null `pos`, period-7 = one hex's 7 verts), and the min/max asymmetry is a **comparison
+artifact** (`null < x` propagates in min; `null > x` is false so max ignores it). The handoff's
+own "delegating the corner table clears it" localises the producer to moros's local
+hex-corner-offset `Vec3` computation — the loft reading: a `Vec3` corner temporary is freed
+before the vertex `pos` is written from it (a store UAF; the `Vec3` leak is the other end).
+See [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md). Remaining: pin the producer
+`Vec3` free site, then upgrade the @PLN103 inspector to a kt-tagged write-/read-through-freed-
+store check (the timeline is too coarse), use it as an oracle, and fix at the chokepoint. This README is the single source of truth for phase status.
 
 ## Goal
 
@@ -53,7 +59,9 @@ one chokepoint**, with the tooling to catch the whole class — not just this in
 | `Vec3` leak co-occurs with the null | VERIFIED (handoff; survives 16:34 build) |
 | the null is in the **fold reading `me.vertices`** (period-7 3-real/4-null, first fold only), NOT the seed or the return `Vec3` | **VERIFIED** — instrumented `glb_pos_min` on the `5e677b7` repro (cluster doc) |
 | root = `me.vertices` store layout / lazy-materialisation defect (stride mismatch or premature `Vec3` sub-store free), linked to the `Vec3` leak | **HYPOTHESIZED** — the refined mechanism; arc B must confirm/kill |
-| "first call nulls, second correct" ⇒ a transient bad store state on first access | HYPOTHESIZED (consistent with the min-before-max order) |
+| "transient bad store state on first access" | **FALSIFIED** — `glb_pos_max` reads the SAME nulls; the source store (read directly, no copy) is null before either fold |
+| the corruption is **persistent** (48/84 records null `pos`); min/max asymmetry is a **comparison artifact** (`null < x` true, `null > x` false) | **VERIFIED** — direct `me.vertices[3]` read + `glb_pos_max` seed instrument |
+| producer = moros local hex-corner `Vec3` temporary freed before the vertex `pos` write (UAF), leak = its other end | **HYPOTHESIZED** — strongly supported (period-7 = per-hex 4/7; "delegate corner table clears it") |
 
 ## Stage A — the probe matrix (write probes BEFORE reading more source)
 

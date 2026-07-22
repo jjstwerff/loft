@@ -67,7 +67,52 @@ iteration appears to *complete* the materialisation, so the second fold is clean
 4. **Shrink under attribution.** With the store identified, minimise the moros scene toward one
    nulled mesh so the timeline is tractable and graduate a probe.
 
+## Decisive update — persistent store corruption + a comparison artifact (transient hypothesis FALSIFIED)
+
+Two follow-up instruments changed the picture and are the load-bearing result:
+
+1. **VERIFIED — the null is in the SOURCE store, not the pass-by-value copy.** Reading
+   `me.vertices[3].pos.x` **directly in `save_scene_glb`** (before any fold call) already gives
+   `null` (`v3x=null v4x=null`, `v0x=0`). So `me.vertices` — the `vector<Vertex>` field on the
+   scene-mesh loop var — genuinely holds null `pos` for those records; it is not a copy defect.
+2. **VERIFIED — `glb_pos_max` reads the SAME nulls.** Instrumenting `glb_pos_max`'s seed shows
+   `v3x=null v4x=null` too. So **both folds read the same 48/84 nulls** — the store corruption is
+   **persistent, not transient**. The earlier "first-fold-only / lazy-materialisation"
+   hypothesis is **FALSIFIED**.
+
+**Why min nulls and max doesn't is a COMPARISON artifact, not two store states.** min does
+`if v.pos.x < mx { mx = v.pos.x }`: a null `pos.x` compares **less-than** every real, so min
+adopts it and returns null. max does `if v.pos.x > mx`: a null is **not greater-than** any real,
+so max ignores it and returns the true maximum. Same data, opposite propagation. (Secondary
+concern: a null float comparing as `< real` under `<` is its own semantics question — but it is
+the *messenger* here, not the bug.)
+
+### The refined mechanism (HYPOTHESIZED — strongly supported)
+
+The corruption is **persistent null `pos` on 4 of every 7 vertices** (period-7 = one hex's 7
+verts; 84 = 12 hexes). The handoff's own reduction — *"delegating the corner table to
+`hex_grid::hex_corner_offset` clears it"* — localises it to moros's **local hex-corner-offset
+computation** (the `HEX_WIDTH/2.0 = 0.866` path that correlates with every nulled mesh). The
+loft-side reading: a **`Vec3` corner-offset temporary is freed before the vertex `pos` is
+written from it** (a store-lifetime UAF), so 4/7 stored `pos` read the freed store's null; the
+co-occurring `Vec3` leak is the other end of the same broken lifetime (some `Vec3` temporaries
+never freed). This is the classic loft store-lifetime edge — a dep dropped on a `Vec3` temporary
+that a pending write still needs.
+
+### Where this points arc B / E
+
+- **Arc B target sharpened:** the oracle must catch **a store record written from (or aliasing)
+  a `Vec3` that was already freed** — i.e. a write-through / read-through a freed store — *not*
+  merely a free-before-dependent-*read* (the existing static overlay). The `LOFT_STORES=timeline`
+  tool is too coarse to see it (275k untagged alloc/free lines; no kt tag, no value↔store map) —
+  which is itself the tool gap: B needs a **kt-tagged, value-attributed** deref/write check.
+- **Next Stage-A step:** instrument moros's `emit_hex_surface` / corner-offset to catch the
+  exact `Vec3` temporary whose free precedes the vertex-`pos` write (the producer site), then
+  minimise from that one hex.
+- **Do NOT** "fix" via the comparison (guarding `null` in min) nor via discharging `glb` — both
+  mask a genuinely corrupt store.
+
 ## Artifacts
 
-- Null/real pattern (84 rows): `/tmp/h4pat.txt` (regenerate via the pre-scan instrument).
+- Null/real pattern (84 rows): `/tmp/h4pat.txt`; full timeline (275k lines): `/tmp/h4_timeline.txt`.
 - Repro worktree: moros `5e677b7`.
