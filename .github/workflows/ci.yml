@@ -813,6 +813,32 @@ jobs:
         # whole job is), so drift shows red without blocking merge.
         run: make features-check
 
+  # WASM node bridge — build the wasm-pack nodejs bundle and RUN the binary-I/O +
+  # rand bridge tests (tests/wasm/bridge.test.mjs).  The per-platform `Test` job's
+  # `wasm_compile_and_run_smoke` self-SKIPS whenever tests/wasm/pkg/ is absent —
+  # which is EVERY run, because nothing built it — so its green was a silent skip,
+  # not a pass.  That hid that several bridge programs still use the REMOVED `Nl`
+  # long-literal suffix (`42l`, `4l`, `8l`) and no longer parse, leaving the wasm
+  # binary-I/O + rand surface untested.  This job builds the bundle so the tests
+  # actually run; they are RED today until the bridge programs are ported to
+  # current syntax.  ADVISORY (not in required-status-checks): surfaces the
+  # breakage visibly without blocking merges until it is fixed.
+  wasm-bridge:
+    name: wasm node bridge (ubuntu, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: curl -sSLf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+      - name: Build the node bridge bundle
+        run: wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm
+      - name: Run WASM bridge tests
+        run: node tests/wasm/bridge.test.mjs
+
   # Browser-bundle freshness — a change set that edits a committed browser
   # bundle's SOURCE (currently the Brick Buster .loft) must rebuild + commit the
   # bundle in the SAME set, or the deployed website goes stale — the recurring
