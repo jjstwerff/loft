@@ -11,6 +11,18 @@ Tracks [`loft-lang/plans#118`](https://github.com/loft-lang/plans/issues/118) (`
 
 ## Status
 
+> **NEXT SESSION PICKS UP HERE (fresh eyes).** Arcs A + B **DONE**; arc E **re-attributed, not
+> fixed**. The refined `LOFT_UAF_GEN` verdict (arc-B refinement) overrode arc E's IR-inferred
+> "incomplete `OpCopyRecord`" guess: on the repro it verdicts **`PREMATURE FREE` (not a copy)** for
+> all 23 reads → the tool-supported root is an **interpreter slot-reuse-while-referenced** free at a
+> **non-copy** pop. **Do this next:** on the repro (`moros 5e677b7`, `LOFT_UAF_GEN=1`, non-perturbing,
+> null = 3/32; `--native` is the clean oracle) identify (a) **which op** pops the stale `Vec3` at
+> `line 102` and (b) **which free** `code_pos=74096` corresponds to — then fix that free/dropped-dep
+> at the interpreter store chokepoint (NOT a blind edit; NOT the `OpCopyRecord` boundary matrix I'd
+> earlier proposed). Full trail: [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md) (read the
+> "Arc B refinement" section last — it corrects arc E). Arcs C (positive-control oracle) + D
+> (differential native switch / `disable_slot_reuse` stopgap) still open.
+
 **Open — Stage A in progress; the null is ATTRIBUTED.** A loft program silently exports
 `"min": [null, null, null]` into a glTF (moros H4). Stage A reproduced it (moros `5e677b7` → 3/32
 nulled, interpreter) and walked the null to its source:
