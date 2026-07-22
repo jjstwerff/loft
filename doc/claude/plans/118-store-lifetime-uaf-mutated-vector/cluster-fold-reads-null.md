@@ -1,0 +1,73 @@
+<!--
+Copyright (c) 2026 Jurjen Stellingwerff
+SPDX-License-Identifier: LGPL-3.0-or-later
+-->
+
+# Cluster — the fold reads a periodic null pattern from `me.vertices`
+
+Stage-A attribution of moros H4. Every mechanism statement is tagged **VERIFIED** (with the
+observation that shows it) or **HYPOTHESIZED**.
+
+## Reproducible anchor
+
+- **VERIFIED.** moros `5e677b7` (handoff commit) exported via
+  `loft --interpret --path <loft>/ --lib lib/ lib/moros_render/examples/demo_village.loft out.glb`
+  → **3/32 accessors nulled** (`[0,8,12]`), each `min=[null,null,null]` with a correct `max`;
+  `Warning: … kt=97 Vec3×2` leak alongside.
+- **VERIFIED.** moros `7b106ec` (current main) → **0/32 nulled**, but the **same `Vec3×2` leak
+  persists**. So the null is *consumer-commit-dependent* (heap-layout-fragile) while the leak is
+  the *persistent* store-lifetime fingerprint — they are related but **not one fact** (the leak
+  survives without the null).
+- Backend: interpreter only so far. `--native` reproduction is **untested** (open Q3).
+
+## Where the null is manufactured (walked in, not inferred)
+
+Instrumenting `glb_pos_min` (`glb-0.1.2/src/glb.loft:51`) on the `5e677b7` repro:
+
+1. **VERIFIED — not the seed.** `mx = verts[0].pos.x` reads a real value (`0`) for the meshes
+   that end up nulled.
+2. **VERIFIED — not the return store.** Logging `mx/my/mz` immediately before `vec3(mx,my,mz)`
+   already shows `null`; the returned `Vec3` faithfully carries the null. So the leaked `Vec3`
+   return store is a *separate* symptom, not the null's source.
+3. **VERIFIED — the fold reads null from the vector.** A pre-scan `for v2 in verts { … v2.pos.x }`
+   over the 84-vertex mesh reads **48 of 84** `pos.x` as `null`, in an **exactly periodic
+   pattern, period 7 — 3 real then 4 null, repeated 12× (84 = 12·7)**. The real x-values come in
+   groups of three (`0,0,1` · `0.866,0.866,1` · …).
+4. **VERIFIED — transient.** `glb_pos_max(me.vertices)`, called immediately after over the *same*
+   vector, reads correctly (min is the FIRST fold, max the second). So `me.vertices` is in a bad
+   state on first full iteration and a good state on the second.
+
+## What this rules in / out
+
+- **Rules OUT null-flow / a `glb` semantic defect** (again): the null is real data read wrong,
+  not an undischarged nullable — discharging `verts[0]?` would only paper over reads 1–4.
+- **Rules OUT "a genuine null vertex":** the same vertices read correctly on the second fold and
+  in other consumers; the value is real, the *read* is wrong.
+- **Rules IN a store layout / materialisation defect on `me.vertices`.** A clean period-7 (3
+  valid / 4 null) is a **stride or lazy-copy fingerprint**, not random corruption: the reader
+  strides across data that is only partially present/valid on first access.
+
+## Leading hypothesis (HYPOTHESIZED — for arc B/E to confirm or kill)
+
+`me.vertices` is dereferenced on first access before its backing is fully materialised (a
+lazy copy/borrow of the mesh's vertex store), OR `Vertex.pos` (a `Vec3`) sub-stores are
+prematurely freed/aliased for a subset of records — the period-7 being the allocation/free
+stride of those sub-stores, which would also explain the co-occurring `Vec3` leak (the two ends
+of one broken lifetime: some `Vec3` freed-and-read-null, others never freed). The first full
+iteration appears to *complete* the materialisation, so the second fold is clean.
+
+## Immediate next steps (arc A→B handoff)
+
+1. **Attribute the store.** Turn `LOFT_STORES=timeline` on the repro and correlate the vertex
+   store's alloc/free/relocate events with the first-vs-second fold — is `me.vertices` freed,
+   relocated, or copied between the mesh-vector build and the first `glb_pos_min`?
+2. **Characterise the stride.** Dump the `Vertex` record layout glb reads vs moros builds
+   (period 7 ≈ ? fields); confirm stride-mismatch vs sub-store-free.
+3. **Native.** Re-run the repro on `--native` (open Q3) — shared model vs interp-only.
+4. **Shrink under attribution.** With the store identified, minimise the moros scene toward one
+   nulled mesh so the timeline is tractable and graduate a probe.
+
+## Artifacts
+
+- Null/real pattern (84 rows): `/tmp/h4pat.txt` (regenerate via the pre-scan instrument).
+- Repro worktree: moros `5e677b7`.

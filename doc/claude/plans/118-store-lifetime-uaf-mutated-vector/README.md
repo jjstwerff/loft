@@ -11,14 +11,18 @@ Tracks [`loft-lang/plans#118`](https://github.com/loft-lang/plans/issues/118) (`
 
 ## Status
 
-**Open — Stage A not started.** A loft program silently exports `"min": [null, null, null]`
-into a glTF (moros H4): a real, non-null value becomes null inside `glb_pos_min`, with **no
-diagnostic anywhere** (producing package 161 tests / 0 warnings; `loft --check` clean). The
-loft-internals diagnosis is a **store-lifetime / reference-invalidation bug** (not null-flow),
-in loft's #1 weak area. This plan characterises the mechanism with matrix-first probes, upgrades
-the @PLN103 lifetime inspector to *see* this class (its documented blind spot), uses that as an
-oracle, and validates the fix differentially against a switchable conservative implementation.
-This README is the single source of truth for phase status.
+**Open — Stage A in progress; the null is ATTRIBUTED.** A loft program silently exports
+`"min": [null, null, null]` into a glTF (moros H4). Stage A reproduced it (moros `5e677b7` → 3/32
+nulled, interpreter) and walked the null to its source:
+[`cluster-fold-reads-null.md`](cluster-fold-reads-null.md). It is **not** the `glb_pos_min` seed,
+nor the returned `Vec3` — it is the **fold reading a periodic null pattern out of `me.vertices`**:
+iterating that vector reads **48 of 84** `pos.x` as null in an **exactly period-7 pattern (3
+real, 4 null)**, and only on the FIRST fold (`glb_pos_max` over the same vector, second, is
+correct). That is a store **layout / lazy-materialisation** fingerprint, confirming the
+store-lifetime diagnosis (not null-flow) and linking to the persistent `Vec3` leak. Remaining:
+attribute the exact store event (`LOFT_STORES=timeline`), characterise the stride, check
+`--native`, then upgrade the @PLN103 inspector to *see* this class, use it as an oracle, and fix
+at the chokepoint. This README is the single source of truth for phase status.
 
 ## Goal
 
@@ -47,7 +51,8 @@ one chokepoint**, with the tooling to catch the whole class — not just this in
 | min nulls, max correct, same run/data | VERIFIED (handoff, re-tested 3 builds incl. 16:34) |
 | all vertices non-null; consumer's fold correct | VERIFIED (handoff scan) |
 | `Vec3` leak co-occurs with the null | VERIFIED (handoff; survives 16:34 build) |
-| root = a reference into a **mutated `vector<Mesh>`** (by-name-lookup-then-append) relocating the element store → stale `verts[0]` read → null sentinel | **HYPOTHESIZED** — the leading mechanism; Stage A must confirm/falsify |
+| the null is in the **fold reading `me.vertices`** (period-7 3-real/4-null, first fold only), NOT the seed or the return `Vec3` | **VERIFIED** — instrumented `glb_pos_min` on the `5e677b7` repro (cluster doc) |
+| root = `me.vertices` store layout / lazy-materialisation defect (stride mismatch or premature `Vec3` sub-store free), linked to the `Vec3` leak | **HYPOTHESIZED** — the refined mechanism; arc B must confirm/kill |
 | "first call nulls, second correct" ⇒ a transient bad store state on first access | HYPOTHESIZED (consistent with the min-before-max order) |
 
 ## Stage A — the probe matrix (write probes BEFORE reading more source)
@@ -76,7 +81,7 @@ The load-bearing cell: **reference-into-relocated-vector reads the null sentinel
 
 | Item | Concern | Status |
 |---|---|---|
-| **A** — reproduce + boundary | matrix probes → minimal repro that nulls on BOTH backends; map pass/fail to the real store edge (the filed "by-name append" scope is a hypothesis) | Open |
+| **A** — reproduce + boundary | **repro'd** (moros `5e677b7`, interp) + **null attributed** to the fold reading a period-7 null pattern from `me.vertices` (see cluster doc); remaining: store-event attribution (`LOFT_STORES=timeline`), stride characterisation, `--native` | In progress |
 | **B** — enhance the lifetime tool | close the @PLN103 inspector's **missing-dep blind spot** (LIFETIME.md:677): a runtime check that flags a **deref of a store whose backing record was relocated/freed** and ATTRIBUTES the null to that store edge (extend `LOFT_STORES=timeline`/the store `read_only`/relocation path; and a static `free-before-dependent-read` sibling for the *dropped-dep* case) | Open |
 | **C** — oracle | make B **non-vacuous**: a known-GOOD probe (must stay silent) + a known-BAD probe (must fire) — a positive control, per "a fooleable oracle is a liability" (plans/README.md). Graduate to a gate | Open |
 | **D** — second implementation + switch | a conservative store-handling variant behind an env switch (e.g. **copy-on-held-reference** / no-relocate-under-live-borrow), run **differentially** (@PLN89 pattern) against the current path: identical output ⇒ same; divergence localises the bug. The safe variant is a flip-on **stopgap** while the real fix lands | Open |
