@@ -310,9 +310,11 @@ each stays an honest capability bit or clean error.
   JSON value is a scalar ([DAP_ADVANCED.md § VE](DAP_ADVANCED.md#ve--structured-variable-expansion-adapter-only--built)).
   Remaining leaf-only edge: a **bare top-level heap-vector** local shows under its `__vdb`
   backing (a `frame_field` fidelity limit, not VE).
-- **Multi-frame stack** — v1 shows the current frame only (the RPC `stackTrace` returns
-  one frame); a partial call stack is never invented. The `call_stack` data exists but
-  isn't surfaced. Design: [DAP_ADVANCED.md § SF](DAP_ADVANCED.md#sf--multi-frame-stack-trace-engine--rpc--dap).
+- **Multi-frame stack** — **BUILT** (no longer single-frame): `stackTrace` returns the full
+  runtime call stack, innermost first, each frame at its parked / call-site line, and
+  `scopes {frameId}` reads any frame's locals
+  ([DAP_ADVANCED.md § SF](DAP_ADVANCED.md#sf--multi-frame-stack-trace-engine--rpc--dap--built)).
+  Caller-frame locals are leaves (eval is top-frame-scoped).
 - **Data breakpoints** (break on a variable's change) — the engine's watchpoints resolve
   only store/heap regions, so a stack local is `"not a watchable scalar region"` (probed).
   Design: [DAP_ADVANCED.md § DB](DAP_ADVANCED.md#db--data-breakpoints-via-watchpoints-engine--rpc--dap).

@@ -317,6 +317,53 @@ fn rpc_eval_bare_vector_live() {
     let _ = std::fs::remove_file(&path);
 }
 
+// @PLN63 SF — `stackTrace` returns the FULL runtime call stack (a `frames` array),
+// innermost first, each frame with its function + call-site line + locals, alongside the
+// legacy single `frame` (additive).  A breakpoint three calls deep surfaces all three
+// user frames.
+#[test]
+fn rpc_stack_trace_returns_full_call_stack() {
+    let path = tmp_program(
+        "sfstack",
+        "fn inner(z: integer) -> integer {\n  z * 2\n}\n\
+         fn middle(y: integer) -> integer {\n  inner(y + 1)\n}\n\
+         fn main() {\n  r = middle(10);\n  print(\"r={r}\")\n}\n",
+    );
+    let file = json_path(&path);
+    let out = drive(&[
+        format!("{{\"id\":1,\"req\":\"launch\",\"file\":\"{file}\"}}"),
+        format!(
+            "{{\"id\":2,\"req\":\"setBreakpoints\",\"file\":\"{file}\",\"breakpoints\":[{{\"line\":2}}]}}"
+        ),
+        "{\"id\":3,\"req\":\"run\"}".to_string(),
+        "{\"id\":4,\"req\":\"stackTrace\"}".to_string(),
+        "{\"id\":5,\"req\":\"disconnect\"}".to_string(),
+    ]);
+    // The legacy single frame (top) is still present (additive compatibility).
+    assert!(
+        out.contains("\"frame\":{\"function\":\"inner\""),
+        "legacy single frame retained: {out}"
+    );
+    // The new multi-frame array: inner (top, line 2) → middle (call site line 5) → main.
+    let stack_line = out
+        .lines()
+        .find(|l| l.contains("\"id\":4"))
+        .expect("stackTrace response");
+    assert!(
+        stack_line.contains("\"frames\":[{\"function\":\"inner\",\"line\":2"),
+        "top frame inner at line 2: {stack_line}"
+    );
+    assert!(
+        stack_line.contains("{\"function\":\"middle\",\"line\":5"),
+        "caller middle at its call site line 5: {stack_line}"
+    );
+    assert!(
+        stack_line.contains("{\"function\":\"main\","),
+        "caller main is on the stack: {stack_line}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
 // `setBreakpoints` answers with a per-breakpoint `verified` flag: `true` for a line
 // carrying breakable code, `false` for a line that can never fire (no code on it, or
 // a file the program doesn't use) — so a client sees a dead breakpoint immediately

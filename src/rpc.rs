@@ -361,7 +361,7 @@ pub(crate) fn handle(session: &mut ReplSession, line: &str) -> (Vec<String>, boo
         }
         "undo" => out.push(step_resp(id, session.debug_undo(), session)),
         "redo" => out.push(step_resp(id, session.debug_redo(), session)),
-        "stackTrace" => out.push(resp_ok(id, &frame_field(session))),
+        "stackTrace" => out.push(resp_ok(id, &stack_field(session))),
         "disconnect" => {
             out.push(resp_ok(id, ""));
             return (out, true);
@@ -470,6 +470,30 @@ fn frame_field(session: &ReplSession) -> String {
         }
         None => "\"frame\":null".to_string(),
     }
+}
+
+/// A `stackTrace` body: the legacy single `frame` (the top frame, kept additively for
+/// compatibility) plus a `frames` array — one `{function, line, locals}` per runtime call
+/// frame, innermost first (@PLN63 SF, the multi-frame stack).
+fn stack_field(session: &ReplSession) -> String {
+    let frames: Vec<String> = session
+        .paused_stack()
+        .iter()
+        .map(|f| {
+            let locals: Vec<String> = f
+                .locals
+                .iter()
+                .map(|(n, v)| format!("{{\"name\":{},\"value\":{}}}", esc(n), esc(v)))
+                .collect();
+            format!(
+                "{{\"function\":{},\"line\":{},\"locals\":[{}]}}",
+                esc(&f.function),
+                f.line,
+                locals.join(",")
+            )
+        })
+        .collect();
+    format!("{},\"frames\":[{}]", frame_field(session), frames.join(","))
 }
 
 /// An `ok` response carrying the refreshed frame (for `undo`/`redo`).

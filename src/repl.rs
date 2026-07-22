@@ -1938,6 +1938,17 @@ impl ReplSession {
         self.paused.as_deref().and_then(State::paused_frame)
     }
 
+    /// The full runtime call stack at the current suspension (innermost frame first), each
+    /// frame carrying its function, source line, and live locals — the multi-frame
+    /// `stackTrace` source (@PLN63 SF).  Empty when not paused.
+    #[must_use]
+    pub fn paused_stack(&self) -> Vec<crate::debugger::BreakHit> {
+        self.paused
+            .as_deref()
+            .map(|s| s.break_stack(&self.parser.data))
+            .unwrap_or_default()
+    }
+
     /// The source line the current suspension is stopped on, or `None` if not paused —
     /// drives the browser debugger's current-line marker (it moves as you step).
     #[must_use]

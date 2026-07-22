@@ -105,7 +105,21 @@ from the parent's cached tree, never re-evaluated by path.
 
 ---
 
-## SF — multi-frame stack trace (engine → RPC → DAP)
+## SF — multi-frame stack trace (engine → RPC → DAP) — **BUILT**
+
+> **Status: LANDED.** Engine: `State::break_stack` (`mod.rs`, @PLN16 B3) **already**
+> captured the full call stack with per-frame locals — proven by
+> `tests/debugger.rs::b3_full_stack_includes_indirect_caller`; SF only added a per-frame
+> `line` to `BreakHit` (from `line_at(pc)`) and exposed `ReplSession::paused_stack()`. RPC:
+> `stackTrace` now returns a `frames` array beside the legacy single `frame` (additive).
+> DAP: `src/bin/loft-dap.rs` fans out one `StackFrame` per frame (`frameId = FRAME_ID +
+> depth`, the synthetic `replmain_*` entry wrapper filtered), and `scopes {frameId}` reads
+> any frame's locals. Gate `tests/dap_transport.rs::stack_trace_walks_all_frames_and_reads_caller_locals`.
+> **Two honest limits:** (1) a caller frame's locals are **leaves** — `debug_eval_json`
+> evaluates in the top/paused frame only, so a caller's struct/vector can't expand truthfully
+> (VE applies to the top frame). (2) A frame's locals inherit the read-dominated liveness
+> under-show (`capture_frame_at`): a local not yet read at the call-site pc may be absent
+> (e.g. `main` showing `__work_1` rather than `a`) — a `frame_field` fidelity limit, not SF.
 
 **Gap.** `stackTrace` returns the current frame only; a call three deep shows one frame
 (DAP.md § Risks). The client's call-stack panel is effectively blind.
@@ -148,6 +162,9 @@ a synthesized, reordered, or truncated stack. *Falsify:* a 3-deep call chain
   the caller frame's `line` is the call site, not the callee's body.
 
 SF depends on nothing but itself; it is the second increment (highest value after VE).
+**All five steps LANDED** — SF0/SF1 were mostly the pre-existing `break_stack` (the design
+under-counted the engine work: the walk + per-frame locals already existed; only the line +
+exposure were new).
 
 ---
 

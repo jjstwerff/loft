@@ -40,6 +40,10 @@ pub struct BreakHit {
     /// (`("n", "42")`).  The slice captures arguments (live at fn entry); a later
     /// slice that breaks mid-body adds the locals assigned so far.
     pub locals: Vec<(String, String)>,
+    /// The source line this frame is parked on — the breakpoint line for the top
+    /// frame, the call-site line for a caller (the multi-frame `stackTrace`, @PLN63
+    /// SF).  0 when unknown.
+    pub line: u32,
 }
 
 /// @PLN16 M3 — a **watchpoint** (data breakpoint): a fixed heap region whose bytes are

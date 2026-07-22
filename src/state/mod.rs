@@ -3418,6 +3418,7 @@ impl State {
             return crate::debugger::BreakHit {
                 function: "?".to_string(),
                 locals: Vec::new(),
+                line: self.line_at(pc),
             };
         }
         let raw = data.def(d_nr).name();
@@ -3472,7 +3473,11 @@ impl State {
                 )
             })
             .collect();
-        crate::debugger::BreakHit { function, locals }
+        crate::debugger::BreakHit {
+            function,
+            locals,
+            line: self.line_at(pc),
+        }
     }
 
     /// Render a frame variable at frame offset `off` (its `vars.stack(i)`) of type

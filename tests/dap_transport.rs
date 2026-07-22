@@ -156,6 +156,26 @@ impl Dap {
         field_i64(&scopes[0], "variablesReference").expect("locals ref")
     }
 
+    /// The `Locals` scope `variablesReference` for a specific stack frame.
+    fn scope_ref(&mut self, frame_id: i64) -> i64 {
+        let sc = self.request("scopes", &format!(r#"{{"frameId":{frame_id}}}"#));
+        let scopes = field_arr(field(&self.recv_response(sc), "body").unwrap(), "scopes")
+            .expect("scopes")
+            .clone();
+        field_i64(&scopes[0], "variablesReference").expect("scope ref")
+    }
+
+    /// The `stackFrames` array from a `stackTrace` request.
+    fn stack_frames(&mut self) -> Vec<Parsed> {
+        let st = self.request("stackTrace", r#"{"threadId":1}"#);
+        field_arr(
+            field(&self.recv_response(st), "body").unwrap(),
+            "stackFrames",
+        )
+        .cloned()
+        .unwrap_or_default()
+    }
+
     /// The `variables` list for a reference.
     fn variables(&mut self, var_ref: i64) -> Vec<Parsed> {
         let seq = self.request(
@@ -672,6 +692,78 @@ fn variable_expansion_walks_structs_vectors_and_nesting() {
     assert!(
         d.variables(sq_ref).is_empty(),
         "a stale expansion handle after resume returns empty"
+    );
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
+
+// ── SF — multi-frame stack trace (DAP_ADVANCED.md § SF) ──────────────────────────────
+// A breakpoint three calls deep shows the whole runtime stack innermost-first (the
+// synthetic `replmain_*` entry wrapper filtered out), each frame at its parked / call-site
+// line; the top frame's locals expand (VE), and a CALLER frame's locals are readable.
+#[test]
+fn stack_trace_walks_all_frames_and_reads_caller_locals() {
+    let mut d = Dap::start();
+    d.handshake();
+    let src = "fn inner(z: integer) -> integer {\n  w = z * 2;\n  w\n}\n\
+               fn middle(y: integer) -> integer {\n  m = inner(y + 1);\n  m\n}\n\
+               fn main() {\n  a = 10;\n  r = middle(a);\n  print(\"r={r}\")\n}\n";
+    let path = d.launch("sf", src, false);
+
+    // Break at line 2 (inner's body) — the stack is inner ← middle ← main.
+    let file = json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()));
+    let seq = d.request(
+        "setBreakpoints",
+        &format!(r#"{{"source":{{"path":{file}}},"breakpoints":[{{"line":2}}]}}"#),
+    );
+    let _ = d.recv_response(seq);
+    d.configuration_done();
+    let _ = d.recv_event("stopped");
+
+    let frames = d.stack_frames();
+    // Three USER frames, innermost first; the `replmain_*` wrapper is dropped.
+    let names: Vec<Option<String>> = frames.iter().map(|f| field_str(f, "name")).collect();
+    assert_eq!(
+        names,
+        vec![
+            Some("inner".into()),
+            Some("middle".into()),
+            Some("main".into())
+        ],
+        "innermost-first user frames, wrapper filtered: {frames:?}"
+    );
+    // SF4 — each frame at its line: the breakpoint line (top) and the call sites (callers).
+    let lines: Vec<Option<i64>> = frames.iter().map(|f| field_i64(f, "line")).collect();
+    assert_eq!(
+        lines,
+        vec![Some(2), Some(6), Some(11)],
+        "breakpoint line + call-site lines: {frames:?}"
+    );
+    // Distinct frame ids so scopes/variables can target any frame.
+    let ids: Vec<i64> = frames.iter().filter_map(|f| field_i64(f, "id")).collect();
+    assert_eq!(ids.len(), 3);
+    assert!(
+        ids[0] != ids[1] && ids[1] != ids[2],
+        "distinct frameIds: {ids:?}"
+    );
+
+    // Top frame (inner): its locals read, z == 11 (10 + 1).
+    let top_ref = d.scope_ref(ids[0]);
+    let top_vars = d.variables(top_ref);
+    assert_eq!(
+        field_str(var(&top_vars, "z"), "value").as_deref(),
+        Some("11"),
+        "top frame `inner` z == 11: {top_vars:?}"
+    );
+
+    // SF — a CALLER frame's locals are readable: `middle`'s y == 10.
+    let mid_ref = d.scope_ref(ids[1]);
+    let mid_vars = d.variables(mid_ref);
+    assert_eq!(
+        field_str(var(&mid_vars, "y"), "value").as_deref(),
+        Some("10"),
+        "caller frame `middle` y == 10: {mid_vars:?}"
     );
 
     d.disconnect();

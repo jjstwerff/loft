@@ -103,10 +103,21 @@ struct Adapter {
     /// One `eval` per top-level struct/vector local caches its whole tree here, so drilling
     /// deeper navigates in memory (no re-eval).  Cleared on every resume + stop.
     var_values: HashMap<i64, Parsed>,
-    /// The current frame's function name (the `stackTrace` frame label).
-    frame_func: String,
-    /// The source line the current stop is parked on (the editor's current-line marker).
-    frame_line: Option<i64>,
+    /// SF — the runtime call stack from the last `stackTrace` (innermost first); the DAP
+    /// frameId of entry `d` is `FRAME_ID + d`.  Rebuilt per `stackTrace`, cleared on resume.
+    stack: Vec<StackEntry>,
+    /// SF — a caller frame's Locals-scope handle → its (leaf) locals.  The top frame uses
+    /// the VE-capable `locals_ref` instead; a caller can't be evaluated in, so its locals
+    /// are leaves.  Cleared on every resume + stop.
+    caller_scopes: HashMap<i64, Vec<(String, String)>>,
+}
+
+/// One runtime call frame for the SF stack: its function, parked source line (call site for
+/// a caller), and rendered locals.
+struct StackEntry {
+    function: String,
+    line: i64,
+    locals: Vec<(String, String)>,
 }
 
 impl Adapter {
@@ -226,23 +237,30 @@ impl Adapter {
                 self.respond(out, request_seq, &command, true, Some(body), None);
             }
             "stackTrace" => {
-                let frames = if self.paused {
-                    vec![obj(vec![
-                        ("id", Parsed::Int(FRAME_ID)),
-                        ("name", Parsed::Str(self.frame_func.clone())),
-                        ("line", Parsed::Int(self.frame_line.unwrap_or(1))),
-                        ("column", Parsed::Int(1)),
-                        (
-                            "source",
-                            obj(vec![
-                                ("path", Parsed::Str(self.program.clone())),
-                                ("name", Parsed::Str(basename(&self.program))),
-                            ]),
-                        ),
-                    ])]
-                } else {
-                    vec![]
-                };
+                // SF — the full runtime call stack (innermost first): drive the RPC
+                // `stackTrace`, one DAP StackFrame per frame with a distinct frameId.
+                self.refresh_stack(driver);
+                let program = self.program.clone();
+                let frames: Vec<Parsed> = self
+                    .stack
+                    .iter()
+                    .enumerate()
+                    .map(|(depth, f)| {
+                        obj(vec![
+                            ("id", Parsed::Int(FRAME_ID + depth as i64)),
+                            ("name", Parsed::Str(f.function.clone())),
+                            ("line", Parsed::Int(f.line)),
+                            ("column", Parsed::Int(1)),
+                            (
+                                "source",
+                                obj(vec![
+                                    ("path", Parsed::Str(program.clone())),
+                                    ("name", Parsed::Str(basename(&program))),
+                                ]),
+                            ),
+                        ])
+                    })
+                    .collect();
                 let total = i64::try_from(frames.len()).unwrap_or(0);
                 let body = obj(vec![
                     ("stackFrames", Parsed::Array(frames)),
@@ -251,11 +269,30 @@ impl Adapter {
                 self.respond(out, request_seq, &command, true, Some(body), None);
             }
             "scopes" => {
+                // Per-frame Locals scope: the top frame (depth 0) uses the VE-capable
+                // handle (`debug_eval_json` evaluates in the paused/top frame); a caller
+                // frame gets a leaf scope over its cached locals (eval is top-frame-scoped,
+                // so a caller's values can't be expanded truthfully).
+                let frame_id = args
+                    .and_then(|a| field_i64(a, "frameId"))
+                    .unwrap_or(FRAME_ID);
+                let depth = frame_id - FRAME_ID;
+                let scope_ref = if depth == 0 {
+                    self.locals_ref
+                } else if let Some(locals) =
+                    self.stack.get(depth as usize).map(|f| f.locals.clone())
+                {
+                    let handle = self.mint();
+                    self.caller_scopes.insert(handle, locals);
+                    handle
+                } else {
+                    0
+                };
                 let body = obj(vec![(
                     "scopes",
                     Parsed::Array(vec![obj(vec![
                         ("name", Parsed::Str("Locals".into())),
-                        ("variablesReference", Parsed::Int(self.locals_ref)),
+                        ("variablesReference", Parsed::Int(scope_ref)),
                         ("expensive", Parsed::Bool(false)),
                     ])]),
                 )]);
@@ -388,6 +425,8 @@ impl Adapter {
         self.paused = false;
         self.locals.clear();
         self.var_values.clear();
+        self.stack.clear();
+        self.caller_scopes.clear();
     }
 
     /// Translate the RPC messages produced by a resume into DAP events, ignoring the RPC
@@ -452,17 +491,41 @@ impl Adapter {
         }
     }
 
-    /// Cache the frame carried by a `stopped` event and mint this stop's Locals handle.
+    /// Cache the top frame carried by a `stopped` event and mint this stop's Locals handle.
+    /// (The full multi-frame stack is fetched lazily on the `stackTrace` request.)
     fn on_stop(&mut self, ev: &Parsed) {
         self.var_values.clear(); // a fresh expansion tree per stop
+        self.stack.clear();
+        self.caller_scopes.clear();
         self.locals_ref = self.mint();
         self.paused = true;
-        let frame = field(ev, "frame");
-        self.frame_func = frame
-            .and_then(|f| field_str(f, "function"))
-            .unwrap_or_default();
-        self.frame_line = frame.and_then(|f| field_i64(f, "line"));
-        self.locals = frame.map(read_locals).unwrap_or_default();
+        self.locals = field(ev, "frame").map(read_locals).unwrap_or_default();
+    }
+
+    /// SF — fetch the full runtime call stack (RPC `stackTrace`) into `self.stack`, innermost
+    /// first, dropping the debugger's own `replmain_*` entry wrapper (not user code).
+    fn refresh_stack(&mut self, driver: &mut DebugDriver) {
+        self.stack.clear();
+        self.caller_scopes.clear();
+        if !self.paused {
+            return;
+        }
+        let (msgs, _) = driver.drive(r#"{"id":0,"req":"stackTrace"}"#);
+        let Ok(resp) = rpc_ok(&msgs, 0) else { return };
+        let Some(frames) = field(&resp, "frames").and_then(as_array) else {
+            return;
+        };
+        for f in frames {
+            let function = field_str(f, "function").unwrap_or_default();
+            if function.starts_with("replmain_") {
+                continue; // the file-run debugger's synthetic entry wrapper
+            }
+            self.stack.push(StackEntry {
+                function,
+                line: field_i64(f, "line").unwrap_or(0),
+                locals: read_locals(f),
+            });
+        }
     }
 
     // ── VE — structured variable expansion (DAP_ADVANCED.md § VE) ─────────────────────
@@ -505,6 +568,9 @@ impl Adapter {
             // VE1/VE2 — one level of the cached JSON tree; an object/array child gets its
             // own handle (drilling deeper navigates the cached tree, no re-eval).
             self.expand_node(&node)
+        } else if let Some(locals) = self.caller_scopes.get(&want).cloned() {
+            // SF — a caller frame's Locals: leaves only (eval is top-frame-scoped).
+            locals.iter().map(|(n, v)| var_entry(n, v, 0)).collect()
         } else {
             vec![] // VE3 — a stale or unknown handle
         }
