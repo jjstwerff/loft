@@ -29,8 +29,9 @@ fall-back to today's sequential behaviour when the host can't provide cross-orig
 
 - **Effort:** L — runtime + build wiring + JS glue + a real deployment constraint (COOP/COEP).
 - **Value:** G (goal-enabling: browser games / multiplayer / routing all depend on it).
-- **Design:** ready (the pieces exist; this is wiring + re-proving the memory model under
-  shared memory, not new invention).
+- **Design:** ready — the step-by-step plan (small gated steps + exact code points) is in
+  [`DESIGN.md`](DESIGN.md); this is wiring + re-proving the memory model under shared memory,
+  not new invention.
 
 ## Why it exists
 
