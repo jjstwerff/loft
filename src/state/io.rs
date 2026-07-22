@@ -1378,10 +1378,20 @@ impl State {
     }
 
     pub fn copy_record(&mut self) {
+        // @PLN118 arc B — mark the deep-copy so the gen-detector classifies a stale read here
+        // (a copy reading a stale sub-ref) apart from a plain deref (a premature free). The
+        // source-record pops below are exactly where a stale `Vec3` sub-field surfaces.
+        let mark = crate::keys::uaf_gen_enabled();
+        if mark {
+            crate::keys::uaf_copy_enter();
+        }
         let raw_tp = self.code::<u16>();
         let to = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         self.do_copy_record(data, to, raw_tp);
+        if mark {
+            crate::keys::uaf_copy_exit();
+        }
     }
 
     /// Core of `OpCopyRecord` / `OpCopyRefOrNull`: deep-copy record `data` into
@@ -1791,11 +1801,20 @@ impl State {
     }
 
     pub fn finish_record(&mut self) {
+        // @PLN118 arc B — same copy-context mark as `copy_record` (finish deep-copies the
+        // source record into a parent field; a stale source pop here is a copy-incomplete).
+        let mark = crate::keys::uaf_gen_enabled();
+        if mark {
+            crate::keys::uaf_copy_enter();
+        }
         let parent_tp = self.code::<u16>();
         let fld = self.code::<u16>();
         let record = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         self.database.record_finish(&data, &record, parent_tp, fld);
+        if mark {
+            crate::keys::uaf_copy_exit();
+        }
     }
 
     pub fn db_from_text(&mut self, val: &str, db_tp: u16) -> DbRef {

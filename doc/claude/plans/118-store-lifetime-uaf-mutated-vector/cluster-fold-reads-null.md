@@ -201,8 +201,41 @@ per-iter append) did NOT reproduce; like the handoff's six, the trigger needs th
 fixed** — the responsible next step is a focused `OpCopyRecord` boundary-matrix session (or a
 cross-package nested-struct minimal repro), not a blind edit to the copy path.
 
+## Arc B refinement — copy-vs-deref verdict (and it CORRECTS arc E)
+
+The arc-B detector said *"prematurely freed"* but arc E argued the free is correct and the copy is
+incomplete — a contradiction. To resolve which root it is, the detector now **distinguishes the two
+roots that share the one symptom** (`src/keys.rs` `COPY_DEPTH` + `uaf_in_copy`, marked around
+`copy_record`/`finish_record` in `src/state/io.rs`, reported in `src/state/mod.rs`):
+
+- a stale read **while a record deep-copy is on the stack** → `INCOMPLETE RECORD-COPY` (the copy
+  read a stale sub-ref; the source free is correct — fix the copy);
+- a stale read **outside a copy** → `PREMATURE FREE` (a plain deref of a store freed while the ref
+  was live — fix the free / the dropped dep).
+
+**Verdict on H4 (VERIFIED, tool-backed):** every one of the 23 stale reads — including the load-
+bearing `line 102` `emit_hex_surface` read — classifies **`PREMATURE FREE`, none `INCOMPLETE
+RECORD-COPY`**, even though the IR confirms `OpCopyRecord`/`OpFinishRecord` DO run at line 102. So
+the sound detector places the caught stale read **outside** `copy_record`/`finish_record` — it is a
+plain operand-stack pop (the `vertex(…)` call-arg delivery or an `OpFreeRefIfDistinct`), not the
+copy's source-pop.
+
+**What this does to arc E's conclusion (honest correction).** Arc E's *"interp `OpCopyRecord`
+deep-copy doesn't finish before the free"* was **inferred from the IR** (frees correctly placed →
+must be an execution bug in the copy). The sound tool does **not** corroborate that: it puts the
+stale read at a **premature free** at a non-copy pop, i.e. an **interpreter slot-reuse-while-
+referenced** root (a live `Vec3` slot freed+reclaimed while an operand-stack ref is still live) —
+NOT a copy-materialisation bug. Caveat that keeps this honest: `copy_claims` reads sub-refs via
+`get_field` (a record read), which the operand-stack tracer cannot see, so "not during a copy"
+cannot *disprove* a sub-ref copy read — but the tracer DID catch a real, separate premature-free
+pop, and that is the stronger evidence. **Net: the `OpCopyRecord`-incomplete hypothesis is
+downgraded to unconfirmed; the tool-supported root is a premature free / aggressive slot reuse.**
+The next arc-E step follows the premature-free lead — identify which op pops the stale `Vec3` and
+which free the causal free (`code_pos=74096`) is — rather than the `OpCopyRecord` boundary matrix.
+
 ## Artifacts
 
 - Null/real pattern (84 rows): `/tmp/h4pat.txt`; full timeline (275k lines): `/tmp/h4_timeline.txt`.
 - Repro worktree: moros `5e677b7`. Native repro attempt: `/tmp/h4_native.glb` (clean, 0/32).
-- Detector: `LOFT_UAF_GEN=1` on the repro (non-perturbing) — read + causal-free attribution.
+- Detector: `LOFT_UAF_GEN=1` on the repro (non-perturbing) — read + causal-free attribution +
+  copy-vs-deref verdict (H4 = all `PREMATURE FREE`).

@@ -655,6 +655,31 @@ thread_local! {
         std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
+thread_local! {
+    /// @PLN118 arc B refinement — depth of record deep-copies (`copy_record`/`finish_record`)
+    /// on the stack. A `LOFT_UAF_GEN` stale read while > 0 is a record COPY reading a stale
+    /// sub-reference (the copy is incomplete; the correctly-placed source free is NOT the bug)
+    /// — a distinct root from a plain deref of a genuinely prematurely-freed store.
+    static COPY_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Enter a record deep-copy (bump the depth). Gate at the call site on `uaf_gen_enabled`.
+pub fn uaf_copy_enter() {
+    COPY_DEPTH.with(|d| d.set(d.get() + 1));
+}
+
+/// Leave a record deep-copy (drop the depth). Saturating so a mismatched pair can't underflow.
+pub fn uaf_copy_exit() {
+    COPY_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+}
+
+/// True when a record deep-copy is currently executing (a stale read here is a copy-incomplete,
+/// not a premature-free).
+#[must_use]
+pub fn uaf_in_copy() -> bool {
+    COPY_DEPTH.with(|d| d.get() > 0)
+}
+
 /// Bump store `slot`'s generation (called from `free_named` under `LOFT_UAF_GEN`).
 pub fn uaf_bump_gen(slot: u16) {
     SLOT_GEN.with(|g| {

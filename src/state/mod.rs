@@ -1891,12 +1891,26 @@ impl State {
                                 .range(..=fpc)
                                 .next_back()
                                 .map_or(0, |(_, &v)| v);
-                            format!(" — prematurely freed at code_pos={fpc} (line {fline})")
+                            format!(" (last freed at code_pos={fpc}, line {fline})")
                         });
+                    // @PLN118 arc B refinement — a stale read DURING a record deep-copy is the
+                    // copy reading a stale SUB-reference: the copy is incomplete and the source
+                    // free is CORRECT — so name the COPY as the op to fix, not the free. A stale
+                    // read outside a copy IS a premature-free candidate. This is the distinction
+                    // that turns "prematurely freed" (which points at a correctly-placed temp
+                    // free) into "incomplete record-copy" (which points at the actual op).
+                    let verdict = if crate::keys::uaf_in_copy() {
+                        "INCOMPLETE RECORD-COPY — a copy read a stale sub-reference; the copy \
+                         did not finish deep-copying before the source was freed (the free is \
+                         correct — fix the copy, not the free)"
+                    } else {
+                        "PREMATURE FREE — a plain deref of a store freed while this ref was live \
+                         (fix the free / the dropped dep)"
+                    };
                     eprintln!(
                         "[uaf-gen] stale DbRef popped: store #{} (rec={}, pos={}) was gen {stamped} \
                          at push but is now gen {} (freed+reused since) — read at code_pos={} \
-                         (line {line}){free_str}",
+                         (line {line}){free_str} — {verdict}",
                         db.store_nr,
                         db.rec,
                         db.pos,
