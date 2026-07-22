@@ -26,9 +26,13 @@ artifact** (`null < x` propagates in min; `null > x` is false so max ignores it)
 own "delegating the corner table clears it" localises the producer to moros's local
 hex-corner-offset `Vec3` computation — the loft reading: a `Vec3` corner temporary is freed
 before the vertex `pos` is written from it (a store UAF; the `Vec3` leak is the other end).
-See [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md). Remaining: pin the producer
-`Vec3` free site, then upgrade the @PLN103 inspector to a kt-tagged write-/read-through-freed-
-store check (the timeline is too coarse), use it as an oracle, and fix at the chokepoint. This README is the single source of truth for phase status.
+Probes 1-3 then collapsed the space: the pos is null **at construction** (read-back = pos, ruling
+out later-overwrite / write-lost / stride), `off` is always real (mr_corner_offset is fine), and
+`--native` is **CLEAN (0/32)** — so this is an **interpreter store-slot-reuse UAF**: a live `Vec3`
+(`centre` / a corner temp) freed too early in `emit_hex_surface`'s corner loop, its slot reused by
+a later allocation → the pos reads null. It is **layout-fragile** (a `println` moves the fault),
+so arc B needs a non-perturbing, kt-tagged tracer; native is the correct differential oracle
+(arc D). See [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md). This README is the single source of truth for phase status.
 
 ## Goal
 
@@ -61,7 +65,11 @@ one chokepoint**, with the tooling to catch the whole class — not just this in
 | root = `me.vertices` store layout / lazy-materialisation defect (stride mismatch or premature `Vec3` sub-store free), linked to the `Vec3` leak | **HYPOTHESIZED** — the refined mechanism; arc B must confirm/kill |
 | "transient bad store state on first access" | **FALSIFIED** — `glb_pos_max` reads the SAME nulls; the source store (read directly, no copy) is null before either fold |
 | the corruption is **persistent** (48/84 records null `pos`); min/max asymmetry is a **comparison artifact** (`null < x` true, `null > x` false) | **VERIFIED** — direct `me.vertices[3]` read + `glb_pos_max` seed instrument |
-| producer = moros local hex-corner `Vec3` temporary freed before the vertex `pos` write (UAF), leak = its other end | **HYPOTHESIZED** — strongly supported (period-7 = per-hex 4/7; "delegate corner table clears it") |
+| the pos is null **at construction** (read-back = pos); rules out later-overwrite / write-lost / stride | **VERIFIED** — probe 2 (read-after-write in emit_hex_surface) |
+| `off` (mr_corner_offset) is always real — not the culprit | **VERIFIED** — probe 2 |
+| the bug is **interpreter-specific** (native exports 0/32) | **VERIFIED** — probe 3 (`--native`) |
+| the bug is **layout-fragile**; loft `println` instrumentation perturbs it | **VERIFIED** — centre.x reads real at loop-top but the after-append pos is null |
+| root class = an **interpreter store-slot-reuse UAF** on a live `Vec3` (`centre`/corner temp) in the corner loop; leak = its other end | **VERIFIED class** (exact slot HYPOTHESIZED) |
 
 ## Stage A — the probe matrix (write probes BEFORE reading more source)
 
@@ -89,7 +97,7 @@ The load-bearing cell: **reference-into-relocated-vector reads the null sentinel
 
 | Item | Concern | Status |
 |---|---|---|
-| **A** — reproduce + boundary | **repro'd** (moros `5e677b7`, interp) + **null attributed** to the fold reading a period-7 null pattern from `me.vertices` (see cluster doc); remaining: store-event attribution (`LOFT_STORES=timeline`), stride characterisation, `--native` | In progress |
+| **A** — reproduce + attribute | **DONE** (interp). Mechanism class VERIFIED: an **interpreter store-slot-reuse UAF** in `emit_hex_surface`'s corner loop (a live `Vec3` freed early, slot reused → null pos); native-clean, producer-side, layout-fragile. Remaining: pin the exact freed slot (needs arc-B non-perturbing tracer) + a standalone probe | Mostly done |
 | **B** — enhance the lifetime tool | close the @PLN103 inspector's **missing-dep blind spot** (LIFETIME.md:677): a runtime check that flags a **deref of a store whose backing record was relocated/freed** and ATTRIBUTES the null to that store edge (extend `LOFT_STORES=timeline`/the store `read_only`/relocation path; and a static `free-before-dependent-read` sibling for the *dropped-dep* case) | Open |
 | **C** — oracle | make B **non-vacuous**: a known-GOOD probe (must stay silent) + a known-BAD probe (must fire) — a positive control, per "a fooleable oracle is a liability" (plans/README.md). Graduate to a gate | Open |
 | **D** — second implementation + switch | a conservative store-handling variant behind an env switch (e.g. **copy-on-held-reference** / no-relocate-under-live-borrow), run **differentially** (@PLN89 pattern) against the current path: identical output ⇒ same; divergence localises the bug. The safe variant is a flip-on **stopgap** while the real fix lands | Open |
@@ -117,8 +125,8 @@ The load-bearing cell: **reference-into-relocated-vector reads the null sentinel
 2. **Why first-only.** Why does min (first) null and max (second) not — does the first fold's own
    allocation (the leaked `Vec3`) perturb the heap, or is the store lazily materialised on first
    deref? The leak↔null link (are they one fact?) is the tell.
-3. **native vs interpret.** Does it reproduce identically on both, or is it interp-only (a
-   different store path)? Determines whether the fix is in the shared dep model or a backend.
+3. ~~native vs interpret~~ **ANSWERED: interpreter-only** (native exports 0/32). The fix is in
+   the interpreter's store allocation/reuse path; native is the correct differential oracle (arc D).
 
 ## Cross-arc dependencies / see also
 

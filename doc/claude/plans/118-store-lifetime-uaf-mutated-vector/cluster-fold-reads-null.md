@@ -112,7 +112,42 @@ that a pending write still needs.
 - **Do NOT** "fix" via the comparison (guarding `null` in min) nor via discharging `glb` — both
   mask a genuinely corrupt store.
 
+## Probes 1–3 — the hypothesis space collapsed
+
+The producer is `emit_hex_surface` (moros_render.loft:90): per hex it builds **1 centre + 6
+corner** verts (= the period-7), each corner `pos = vec3(centre.x + off.x, centre.y, centre.z +
+off.y)` with `off = mr_corner_offset(ci)` (the local corner fn the handoff flagged).
+
+- **Probe 2 (read-after-write) — VERIFIED.** Instrumenting right after each vertex append:
+  `off.x`/`off.y` are **always real** (mr_corner_offset is NOT the culprit); `pos.x` is null for
+  **ci ≥ 2**; and the read-back of the just-stored vertex **equals `pos`**. So the vertex `pos` is
+  null **at construction**, not overwritten later. This **rules out (c) later-overwrite, (b)
+  write-never-happens, (d) stride-write** — it is a value that is already null when written,
+  i.e. **(a) a store UAF/reuse**: `vec3(centre.x + off.x, …)` reads a `Vec3` (`centre`, or a slot
+  it shares) that has been freed/reused after the loop's first couple of `vec3()`/`vertex()`
+  allocations.
+- **Probe 1 (temporal) — VERIFIED (producer-side).** The null is present at the emit site, so the
+  corruption is a producer event, not a later scene-assembly/relocation one.
+- **Probe 3 (native) — VERIFIED, and it's the big one.** `--native` exports **0/32 nulled** — the
+  bug **does not reproduce on the native backend**. So it is **interpreter-specific**: the fault
+  is in the interpreter's store allocation/reuse path, not the shared IR or the native codegen.
+  (Open Q3 answered.) This also hands arc D its oracle for free: **native is the correct
+  reference** to run the interpreter differentially against.
+- **META — the bug is layout-fragile and loft-level instrumentation PERTURBS it.** Reading
+  `centre.x` at the loop *top* shows it correct for all ci, but the after-append probe shows the
+  `pos` null for ci ≥ 2 — moving a `println` (which itself allocates format/text stores) shifts
+  the heap and moves the fault. This is the plan's thesis made concrete: `println`-probing can't
+  attribute this, and `LOFT_STORES=timeline` is too coarse (275k untagged lines) — **arc B needs
+  a non-perturbing, kt-tagged, value→store-attributed reuse/UAF tracer.**
+
+### Net mechanism (VERIFIED class; exact slot HYPOTHESIZED)
+
+An **interpreter store-slot reuse** frees a live `Vec3` (`centre` / a corner temp) too early in
+`emit_hex_surface`'s corner loop, and a subsequent allocation reuses the slot, so `pos` for the
+later corners reads null. Persistent (both folds see it), producer-side, native-clean,
+layout-fragile — and the co-occurring `Vec3` leak is the same broken lifetime's other end.
+
 ## Artifacts
 
 - Null/real pattern (84 rows): `/tmp/h4pat.txt`; full timeline (275k lines): `/tmp/h4_timeline.txt`.
-- Repro worktree: moros `5e677b7`.
+- Repro worktree: moros `5e677b7`. Native repro attempt: `/tmp/h4_native.glb` (clean, 0/32).
