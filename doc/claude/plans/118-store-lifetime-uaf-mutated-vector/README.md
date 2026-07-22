@@ -11,7 +11,8 @@ Tracks [`loft-lang/plans#118`](https://github.com/loft-lang/plans/issues/118) (`
 
 ## Status
 
-> **BOTH ENDS FIXED — corruption (arc E) AND leak (arc F) resolved; full suite 3385/3385 green.**
+> **CLOSED 2026-07-22 — BOTH ENDS FIXED (corruption arc E + leak arc F), both with graduated
+> regressions; full suite 3385/3385 green on both backends.**
 >
 > **Arc E (corruption).** The interpreter's `OpFreeRef` of a variable did **not** reset it to the null
 > sentinel (native's does), so a loop temp freed at the block-exit sweep was **re-freed** by the next
@@ -19,7 +20,9 @@ Tracks [`loft-lang/plans#118`](https://github.com/loft-lang/plans/issues/118) (`
 > live value → stored `pos` reads null on 4-of-7 verts. Fix: `src/state/codegen.rs::generate_call`
 > emits `OpInitRefSentinel` after the block-exit free of the owned-reassigned vars
 > (`src/stack.rs::owned_reassigned`), mirroring native, interpreter-only. Proven by `LOFT_NO_SLOT_REUSE`
-> (3/32→0/32) + op-named `LOFT_UAF_GEN`.
+> (3/32→0/32) + op-named `LOFT_UAF_GEN`. **Regression:**
+> `tests/codegen_emitter.rs::pln118_arce_owned_reassign_emits_sentinel` — an emission-structure guard
+> (the symptom is layout-fragile and unrepro'able in-tree; see *Regression migration* below).
 >
 > **Arc F (the unmasked leak) — FIXED (oracle-first).** Fixing E unmasked a pre-existing interp-only
 > leak. Following the retrospective's rule this time, arc C (the differential oracle,
@@ -40,28 +43,24 @@ Tracks [`loft-lang/plans#118`](https://github.com/loft-lang/plans/issues/118) (`
 > `tests/n3_parity.rs::shared_bridge_nested_return_no_orphan_leak`. Full trail:
 > [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md) § Arc F — RESOLVED.
 
-**Open — Stage A in progress; the null is ATTRIBUTED.** A loft program silently exports
-`"min": [null, null, null]` into a glTF (moros H4). Stage A reproduced it (moros `5e677b7` → 3/32
-nulled, interpreter) and walked the null to its source:
-[`cluster-fold-reads-null.md`](cluster-fold-reads-null.md). It is **not** the `glb_pos_min` seed,
-nor the returned `Vec3` — it is the **fold reading a periodic null pattern out of `me.vertices`**:
-iterating that vector reads **48 of 84** `pos.x` as null in an **exactly period-7 pattern (3
-real, 4 null)**, and only on the FIRST fold (`glb_pos_max` over the same vector, second, is
-correct). Follow-ups then FALSIFIED the
-"transient" reading: reading `me.vertices` directly in the consumer (no copy) already gives null,
-and `glb_pos_max` reads the SAME nulls — so the corruption is **persistent** (48/84 records hold
-a null `pos`, period-7 = one hex's 7 verts), and the min/max asymmetry is a **comparison
-artifact** (`null < x` propagates in min; `null > x` is false so max ignores it). The handoff's
-own "delegating the corner table clears it" localises the producer to moros's local
-hex-corner-offset `Vec3` computation — the loft reading: a `Vec3` corner temporary is freed
-before the vertex `pos` is written from it (a store UAF; the `Vec3` leak is the other end).
-Probes 1-3 then collapsed the space: the pos is null **at construction** (read-back = pos, ruling
-out later-overwrite / write-lost / stride), `off` is always real (mr_corner_offset is fine), and
-`--native` is **CLEAN (0/32)** — so this is an **interpreter store-slot-reuse UAF**: a live `Vec3`
-(`centre` / a corner temp) freed too early in `emit_hex_surface`'s corner loop, its slot reused by
-a later allocation → the pos reads null. It is **layout-fragile** (a `println` moves the fault),
-so arc B needs a non-perturbing, kt-tagged tracer; native is the correct differential oracle
-(arc D). See [`cluster-fold-reads-null.md`](cluster-fold-reads-null.md). This README is the single source of truth for phase status.
+### Regression migration (both clusters guarded)
+
+| Cluster | Guard | Kind |
+|---|---|---|
+| **Arc F** (leak) | `tests/n3_parity.rs::shared_bridge_nested_return_no_orphan_leak` | runtime leak diff; `LOFT_NO_BRIDGE_ORPHAN_FREE` is the non-vacuous positive control |
+| **Arc E** (corruption) | `tests/codegen_emitter.rs::pln118_arce_owned_reassign_emits_sentinel` | emission-structure guard |
+
+Arc E's corruption is **layout-fragile** — it reproduces only on the external moros `5e677b7` scene.
+The in-tree `demo_village` fixture exports **0/32 even with the fix reverted** (verified during
+close-out), so **no in-suite SYMPTOM repro is possible** — a driver replaying the real
+`emit_hex_surface` across 40 meshes stays clean both with and without the fix. The fix's emitted
+signature IS deterministic, though: the minimal owned-reassign-in-loop program emits exactly **one**
+`InitRefSentinel` with the fix and **zero** without it (verified by neutralizing
+`owned_reassigned.insert` in `generate_call` and re-introspecting). The arc-E guard asserts that
+signature — non-vacuous by construction, guarding the FIX rather than the unreproducible symptom.
+
+This README is the single source of truth for phase status; the full mechanism trail is in
+[`cluster-fold-reads-null.md`](cluster-fold-reads-null.md).
 
 ## Goal
 
@@ -126,11 +125,11 @@ The load-bearing cell: **reference-into-relocated-vector reads the null sentinel
 
 | Item | Concern | Status |
 |---|---|---|
-| **A** — reproduce + attribute | **DONE** (interp). Mechanism class VERIFIED: an **interpreter store-slot-reuse UAF** in `emit_hex_surface`'s corner loop (a live `Vec3` freed early, slot reused → null pos); native-clean, producer-side, layout-fragile. Remaining: pin the exact freed slot (needs arc-B non-perturbing tracer) + a standalone probe | Mostly done |
+| **A** — reproduce + attribute | **DONE** (interp). Mechanism class VERIFIED: an **interpreter store-slot-reuse UAF** in `emit_hex_surface`'s corner loop (a live `Vec3` freed early, slot reused → null pos); native-clean, producer-side, layout-fragile. Exact slot pinned in arc E; a standalone symptom probe is provably impossible (the in-tree scene exports 0/32 with the fix off) so arc E's guard is emission-structure, not symptom | **Done** |
 | **B** — enhance the lifetime tool | **DONE + refined.** The existing sound `LOFT_UAF_GEN` (per-slot gen + operand-stack shadow) catches H4 non-perturbingly where `LOFT_UAF` (variable-based) misses it. Added **free-site attribution keyed per-generation** (`keys.rs` `FREED_AT_GEN`, `state/mod.rs`) so it names the CAUSAL free. **Refinement:** a **copy-vs-deref verdict** (`keys.rs` `COPY_DEPTH`/`uaf_in_copy`, marked around `copy_record`/`finish_record` in `state/io.rs`) — a stale read *during* a record deep-copy is `INCOMPLETE RECORD-COPY` (fix the copy), one *outside* is `PREMATURE FREE` (fix the free). This turns "prematurely freed" (which pointed at a correctly-placed temp free) into a decisive root. **H4 verdict: all 23 reads = `PREMATURE FREE`, none copy** — which CORRECTS arc E (below) | **Done** |
 | **C** — oracle | **DONE (this session, arc-F fix built on it).** [`oracle/leak-oracle.sh`](oracle/) — a **differential interp-vs-native leak oracle** (@PLN89 pattern): native is the clean reference (no bridge), so the interp-minus-native leaked-store set IS the bug. [`oracle/run-matrix.sh`](oracle/run-matrix.sh) drives the matrix; the FLIP (`--flip` = `LOFT_NO_BRIDGE_ORPHAN_FREE=1`) is the positive control that MUST fire, the direct-return probe is the negative control that MUST stay clean. One run gave the boundary a dozen ad-hoc traces did not | **Done** |
 | **D** — second implementation + switch | **Two, both kept.** Arc E: `LOFT_NO_SLOT_REUSE` (`allocation.rs::find_free_slot`, 3/32→0/32). Arc F: **`LOFT_NO_BRIDGE_ORPHAN_FREE`** (`keys.rs`) — disables the bridge orphan-free; run differentially it resurrects the leak, the decisive proof + the oracle's positive control | **Done** |
-| **E** — fix at the chokepoint | **DONE — both backends 0/32, suite 3385/3385 green.** The interpreter's `OpFreeRef` of a variable did **not** reset it to the sentinel (native does), so a loop temp freed at the block-exit sweep was **re-freed** by the next iteration's pre-build free of a possibly-reclaimed slot. Fix: `generate_call` emits `OpInitRefSentinel` after the block-exit free of `owned_reassigned` vars (`src/stack.rs`), mirroring native, interpreter-only | **Done** |
+| **E** — fix at the chokepoint | **DONE — both backends 0/32, suite 3385/3385 green.** The interpreter's `OpFreeRef` of a variable did **not** reset it to the sentinel (native does), so a loop temp freed at the block-exit sweep was **re-freed** by the next iteration's pre-build free of a possibly-reclaimed slot. Fix: `generate_call` emits `OpInitRefSentinel` after the block-exit free of `owned_reassigned` vars (`src/stack.rs`), mirroring native, interpreter-only. Regression `tests/codegen_emitter.rs::pln118_arce_owned_reassign_emits_sentinel` (emission-structure guard, non-vacuous 1-vs-0 differential) | **Done** |
 | **F** — the unmasked leak (other end) | **DONE — fixed at the bridge chokepoint.** Oracle-first this time. Root (corrected): a **nested-call return** (not "cross-lib") drives the interpreted caller to forward a null hidden-dest retbuf, so `native_lib.rs::shared_bridge_wrapper` allocates a **fallback dest** that the inner struct-literal callee ignores and orphans — one leaked store per call, interp-only (whole-`--native` has no bridge). Fix: the bridge frees the fallback dest when the callee returned a different store; gated by `LOFT_NO_BRIDGE_ORPHAN_FREE`. Regression `tests/n3_parity.rs::shared_bridge_nested_return_no_orphan_leak` | **Done** |
 
 ## Phase ordering

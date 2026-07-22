@@ -391,3 +391,21 @@ flip as a non-vacuous positive control).
 - Detector: `LOFT_UAF_GEN=1` on the repro (non-perturbing) — read + causal-free attribution + reading/
   freeing op names + copy-vs-deref verdict (H4 = all `PREMATURE FREE`).
 - Corruption-vs-reuse proof: `LOFT_NO_SLOT_REUSE=1` (3/32 → 0/32). Leak provenance: `LOFT_LEAK_SITES=1`.
+
+## Close-out — regression migration (2026-07-22)
+
+Both clusters are guarded in the suite; the plan closed on that basis:
+
+- **Arc F** → `tests/n3_parity.rs::shared_bridge_nested_return_no_orphan_leak` (runtime leak diff;
+  `LOFT_NO_BRIDGE_ORPHAN_FREE` is the positive control).
+- **Arc E** → `tests/codegen_emitter.rs::pln118_arce_owned_reassign_emits_sentinel` (emission-structure
+  guard).
+
+**Why arc E's guard is emission-structure, not symptom.** The corruption is layout-fragile: it
+reproduces only on the external moros `5e677b7` scene. Verified at close-out — the in-tree
+`demo_village` fixture (7796 verts, 32 accessors) exports **0/32 null mins even with the fix
+neutralized** (`owned_reassigned.insert` commented out + rebuilt), and a synthetic driver replaying
+the real `emit_hex_surface` across 40 meshes stays clean both ways. So no in-suite SYMPTOM repro is
+possible. The fix's emission IS deterministic: the minimal owned-reassign-in-loop program emits
+exactly one `InitRefSentinel` with the fix and zero without it. The guard asserts that signature —
+non-vacuous by construction (proven by the 1-vs-0 neutralized differential).
