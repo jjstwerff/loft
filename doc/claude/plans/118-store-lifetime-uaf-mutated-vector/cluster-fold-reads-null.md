@@ -176,6 +176,31 @@ that a still-live operand-stack ref reads** — the shared `up` normal (passed t
 `vertex()` calls) and/or the vertex temp: a dropped dep on a value the append copy still needs. The
 fix (arc E) is at that append/copy free, in the interpreter's store path (native is clean).
 
+## Arc E — attributed to interp `OpCopyRecord` (NOT codegen); fix blocked on a minimal repro
+
+Introspecting `emit_hex_surface` settled where the fault is NOT: **the bytecode is correct.**
+`up`/`centre` are freed at the FUNCTION END (line 110); the loop body frees only per-iteration
+temps (`pos`, `off`, the `__lift` vertex temp) AFTER `OpCopyRecord(__lift_4, _elm_2)` +
+`OpFinishRecord` copy the constructed `Vertex` into the vector element. The dep model emitted the
+frees in the right places.
+
+`vertex(vp,vn,vuv) = Vertex { pos: vp, normal: vn, uv: vuv }` and `Vertex { pos: Vec3, normal:
+Vec3, uv: Vec2 }` — so the copy is a **record with nested `Vec3`/`Vec2` sub-structs**. **Native
+runs this exact IR clean (0/32); the interpreter nulls (3/32).** Therefore the fault is in the
+**interpreter's execution** of `OpCopyRecord`/`copy_claims`/`OpFinishRecord`: the deep-copy of the
+`Vertex`'s nested `Vec3` into the vector element is not fully materialised before the source `Vec3`
+temp (`pos`/`up`) is freed — layout-dependently, so 4/7 records dangle. Loft's #1-weakness class
+(nested-record deep-copy vs free ordering), interpreter-side only.
+
+**Why the fix is NOT landed here (rigor / stop-condition).** A safe fix needs a minimal repro to
+prove the working bytecode + a boundary matrix on `OpCopyRecord`-of-nested-struct-then-free (interp
+vs native) — `OpCopyRecord` is a hot, core op, so a blind change risks the whole suite. Two minimal
+attempts (`e_min`, `e_min2` — nested `V3`/`V2` structs, shared centre+up, field-arith `pos`,
+per-iter append) did NOT reproduce; like the handoff's six, the trigger needs the full heap
+(cross-package `mesh3d` types + path-dep are the untested axis). So arc E is **attributed but not
+fixed** — the responsible next step is a focused `OpCopyRecord` boundary-matrix session (or a
+cross-package nested-struct minimal repro), not a blind edit to the copy path.
+
 ## Artifacts
 
 - Null/real pattern (84 rows): `/tmp/h4pat.txt`; full timeline (275k lines): `/tmp/h4_timeline.txt`.
