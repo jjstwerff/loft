@@ -1250,6 +1250,43 @@ impl Store {
         }
     }
 
+    /// @PLN63 RX1 — a **writable** deep byte-copy of this in-memory store, for the reverse-step
+    /// checkpoint ring.  Like [`clone_locked`](Self::clone_locked) it allocates a fresh buffer
+    /// and copies the bytes, but the copy is writable (`read_only = false`) and keeps the
+    /// free-space tree + claims (`free_root`, `needs_coalesce`, `claims`) — because a restored
+    /// store resumes *execution* and will `claim`/`delete`, unlike a worker borrow which never
+    /// allocates.  The caller guarantees `!self.is_file_backed()`; the copy is heap-owned
+    /// (`file = None`, `borrowed = false`) so `Drop` deallocates it correctly.
+    #[must_use]
+    pub(crate) fn snapshot_copy(&self) -> Store {
+        let l = Layout::from_size_align(self.size as usize * 8, 8).expect("snapshot layout");
+        let ptr = unsafe { A.alloc(l) };
+        unsafe { std::ptr::copy_nonoverlapping(self.ptr, ptr, self.size as usize * 8) };
+        Store {
+            ptr,
+            size: self.size,
+            claims: self.claims.clone(),
+            #[cfg(feature = "mmap")]
+            file: None,
+            free: self.free,
+            read_only: false,
+            free_protected: self.free_protected,
+            borrowed: false,
+            created_at: self.created_at,
+            last_op_at: self.last_op_at,
+            free_root: self.free_root,
+            needs_coalesce: self.needs_coalesce,
+            generation: self.generation,
+            recording: None,
+            tag: self.tag,
+            pinned: self.pinned,
+            lock_origin: String::new(),
+            known_type: self.known_type,
+            durable_meta_path: None,
+            durable_tier: 0,
+        }
+    }
+
     /// Create a read-only view that shares the original's buffer pointer.
     /// The borrow is `locked = true` (writes panic/discard) and `borrowed = true`
     /// (Drop does NOT free the buffer — the main thread owns it).

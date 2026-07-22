@@ -297,11 +297,17 @@ reverts too.
   sessions (small heaps), and a bounded ring (RX3) caps depth; the linear heap-scaling is the
   documented caveat, with copy-on-write-per-record as the fallback only if a heap-heavy session
   proves it necessary.
-- **RX1 — engine: the checkpoint primitive.** `Stores::snapshot_heap() -> HeapSnapshot`
-  (each allocation deep-copied à la `clone_locked`) + `restore_heap(&HeapSnapshot)` (copy the
-  bytes back / swap the buffers); a `StepCheckpoint { heap, code_pos, call_stack, … }` capturing
-  the register subset above. *Gate (unit):* snapshot → mutate a record + push/pop a frame →
-  restore → byte-identical `allocations` + registers.
+- **RX1 — engine: the checkpoint primitive. ✅ DONE.** `Store::snapshot_copy` (`store.rs`) — a
+  **writable** deep byte-copy that, unlike `clone_locked`, keeps the free tree + claims (a
+  restored store resumes allocation); `Stores::snapshot_heap() -> Option<HeapSnapshot>` /
+  `restore_heap(&HeapSnapshot)` (`database/mod.rs`) — copies every allocation, **`None` when a
+  durable/mmap store is live** (its file isn't reversible — the honest boundary); and
+  `State::snapshot_checkpoint() -> Option<StepCheckpoint>` / `restore_checkpoint`
+  (`state/mod.rs`) wrapping the heap with the register subset (`code_pos`, `call_stack`,
+  `call_depth`, `stack_cur/high/pos/cap_bytes`, `arguments`, `coroutines`, `active_coroutines`).
+  *Gate:* `tests/debugger.rs::rx1_checkpoint_restores_heap_and_registers` — snapshot → edit a
+  heap local (`n=999`) + move registers (PC + push a frame) → restore → `n` back to 42, PC +
+  `call_stack` restored, and the checkpoint is reusable (copied, not consumed).
 - **RX2 — engine: `step_back`.** At `debug_step` entry (when reverse-arming is on) push a
   `StepCheckpoint` to the ring; add `State::step_back()` that pops the top, restores it, and
   refreshes the paused frame (`refresh_paused_frame`). *Gate:* the RX0 byte-identity probe now

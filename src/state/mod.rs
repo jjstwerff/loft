@@ -74,6 +74,25 @@ pub enum CoroutineStatus {
     Exhausted,
 }
 
+/// @PLN63 RX1 — a checkpoint of the execution-mutable [`State`] for the reverse-step ring: the
+/// heap ([`HeapSnapshot`](crate::database::HeapSnapshot)) plus every register a step moves.  The
+/// compile-time maps (`bytecode`, `vars`, `calls`, `line_numbers`, `const_refs`, …) are
+/// execution-invariant, so they are NOT captured.  Restoring one (`State::restore_checkpoint`)
+/// makes the state byte-identical to when it was taken — the basis for `step_back` (RX2).
+pub struct StepCheckpoint {
+    heap: crate::database::HeapSnapshot,
+    code_pos: u32,
+    call_stack: Vec<CallFrame>,
+    call_depth: u32,
+    stack_cur: DbRef,
+    stack_high: u32,
+    stack_pos: u32,
+    stack_cap_bytes: u32,
+    arguments: u16,
+    coroutines: Vec<Option<Box<CoroutineFrame>>>,
+    active_coroutines: Vec<usize>,
+}
+
 /// Runtime state of a single coroutine instance (CO1.1).
 /// Holds the serialised stack and metadata needed to suspend and resume.
 #[derive(Clone, Debug)]
@@ -3392,6 +3411,45 @@ impl State {
         if let Some(d) = self.debug.as_mut() {
             d.paused = Some(hit);
         }
+    }
+
+    /// @PLN63 RX1 — capture the execution-mutable state (heap + registers) for the reverse-step
+    /// ring.  `None` when a durable (file-backed) store is live — its file cannot be reversed,
+    /// so reverse-stepping is refused for that session (a normal debug session is all
+    /// in-memory).  Read-only; take it at a step boundary.
+    #[must_use]
+    pub fn snapshot_checkpoint(&self) -> Option<StepCheckpoint> {
+        Some(StepCheckpoint {
+            heap: self.database.snapshot_heap()?,
+            code_pos: self.code_pos,
+            call_stack: self.call_stack.clone(),
+            call_depth: self.call_depth,
+            stack_cur: self.stack_cur,
+            stack_high: self.stack_high,
+            stack_pos: self.stack_pos,
+            stack_cap_bytes: self.stack_cap_bytes,
+            arguments: self.arguments,
+            coroutines: self.coroutines.clone(),
+            active_coroutines: self.active_coroutines.clone(),
+        })
+    }
+
+    /// @PLN63 RX1 — restore a [`StepCheckpoint`]: the heap bytes + every execution register, so
+    /// the state is byte-identical to when the checkpoint was taken.  The checkpoint is left
+    /// intact (copied, not consumed).  Refresh the paused frame after, so the drill-down
+    /// reflects the restored values.
+    pub fn restore_checkpoint(&mut self, cp: &StepCheckpoint) {
+        self.database.restore_heap(&cp.heap);
+        self.code_pos = cp.code_pos;
+        self.call_stack.clone_from(&cp.call_stack);
+        self.call_depth = cp.call_depth;
+        self.stack_cur = cp.stack_cur;
+        self.stack_high = cp.stack_high;
+        self.stack_pos = cp.stack_pos;
+        self.stack_cap_bytes = cp.stack_cap_bytes;
+        self.arguments = cp.arguments;
+        self.coroutines.clone_from(&cp.coroutines);
+        self.active_coroutines.clone_from(&cp.active_coroutines);
     }
 
     /// Execute-loop hook: if `pc` is a registered breakpoint, capture the live

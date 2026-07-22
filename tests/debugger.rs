@@ -1265,3 +1265,67 @@ fn rx0_reverse_execution_absent_and_snapshot_size() {
         "the snapshot is bounded: {heap_after} bytes"
     );
 }
+
+/// @PLN63 RX1 — the checkpoint primitive: a snapshot captures the heap + execution registers,
+/// and a restore makes the state byte-identical to when it was taken.  Mutate a heap value AND
+/// registers after the snapshot, restore, and assert BOTH reverted; the checkpoint is reusable.
+#[test]
+fn rx1_checkpoint_restores_heap_and_registers() {
+    let mut p = repl();
+    // Pause with the arg `n` and a heap vector `v` both live (line 3, `n + v[0]`).
+    let mut state = run_to_pause(
+        &mut p,
+        &["fn f(n: integer) -> integer {\n  v = [1, 2, 3];\n  n + v[0]\n}"],
+        "f(42)",
+        "f",
+        3,
+    );
+    let cp = state
+        .snapshot_checkpoint()
+        .expect("an all-in-memory heap snapshots");
+    let code_pos_at_snapshot = state.code_pos;
+    let frames_at_snapshot = state.call_stack.len();
+
+    // MUTATE the heap: edit the stack-local `n` (writes the stack store).
+    assert!(state.set_frame_value("n", 999, &p.data), "edit n = 999");
+    state.refresh_paused_frame(&p.data);
+    assert!(
+        n_is(&state, "999"),
+        "the edit took: {:?}",
+        state.paused_frame()
+    );
+    // MUTATE registers: advance the PC and push a synthetic frame.
+    state.code_pos += 8;
+    let dup = state.call_stack.last().cloned().expect("a live frame");
+    state.call_stack.push(dup);
+
+    // RESTORE — heap + registers revert to the snapshot.
+    state.restore_checkpoint(&cp);
+    state.refresh_paused_frame(&p.data);
+    assert!(
+        n_is(&state, "42"),
+        "heap restored — n back to 42: {:?}",
+        state.paused_frame()
+    );
+    assert_eq!(state.code_pos, code_pos_at_snapshot, "code_pos restored");
+    assert_eq!(
+        state.call_stack.len(),
+        frames_at_snapshot,
+        "call_stack restored"
+    );
+
+    // The checkpoint is left intact (copied, not consumed) — a second restore also works.
+    state.code_pos += 16;
+    state.restore_checkpoint(&cp);
+    assert_eq!(
+        state.code_pos, code_pos_at_snapshot,
+        "checkpoint is reusable"
+    );
+}
+
+/// Whether the paused frame's local `n` currently renders as `val`.
+fn n_is(state: &State, val: &str) -> bool {
+    state
+        .paused_frame()
+        .is_some_and(|f| f.locals.iter().any(|(k, v)| k == "n" && v == val))
+}
