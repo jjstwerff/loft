@@ -92,6 +92,39 @@ debug side still uses the DSP4E launch from **A3** (a bundled launch shortcut is
 > back to **Path A** — it drives the exact same binaries and is the verified route. Please
 > report any adjustment needed so the plugin can be pinned to a known-good target platform.
 
+## Dependencies (LSP4E · DSP4E · TM4E) — and how to make them auto-install
+
+The three Eclipse plugins this integration needs are declared as dependencies in **two**
+places, each covering a different moment:
+
+- **Runtime** — `META-INF/MANIFEST.MF` `Require-Bundle` lists `org.eclipse.lsp4e`,
+  `org.eclipse.lsp4e.debug`, `org.eclipse.tm4e.registry`, … so the loft bundle won't
+  *start* unless they're present.
+- **Install-time** — the feature `org.loft.eclipse.ide.feature` (`feature.xml`) declares them
+  as p2 `<requires>`, so **installing the feature pulls them in automatically** when their
+  update sites are configured. This is the "define them as dependencies" answer: users add
+  the loft feature + the two sites below and p2 resolves LSP4E/DSP4E/TM4E for them.
+
+Update sites (add via *Help → Install New Software… → Add…*):
+
+| Plugin | Update site |
+|---|---|
+| LSP4E + DSP4E (`org.eclipse.lsp4e`, `org.eclipse.lsp4e.debug`) | `https://download.eclipse.org/lsp4e/releases/latest/` |
+| TM4E (`org.eclipse.tm4e.feature`) | `https://download.eclipse.org/tm4e/releases/latest/` |
+
+**Install the prerequisites without the GUI** (headless p2 director — handy for scripting a
+dev box; this is how they were installed here):
+
+```sh
+~/opt/eclipse/eclipse -nosplash -application org.eclipse.equinox.p2.director \
+  -repository https://download.eclipse.org/lsp4e/releases/latest/,https://download.eclipse.org/tm4e/releases/latest/ \
+  -installIU org.eclipse.lsp4e,org.eclipse.lsp4e.debug,org.eclipse.tm4e.feature.feature.group \
+  -destination ~/opt/eclipse -profile epp.package.committers
+```
+
+They also come as part of the **2026-06 release train** (`https://download.eclipse.org/releases/2026-06/`)
+if you prefer a single, version-matched site.
+
 ## Status
 
 `@PLN63` LSP.1–LSP.3 shipped; this is the Eclipse client wiring toward the **IDE.ECLIPSE**
