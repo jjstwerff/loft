@@ -8,3 +8,13 @@
 // Bare `#native` → symbol `n_native_answer` by convention (the fn name).
 pub fn native_answer() -> integer;
 #native
+
+// The ABI oracle.  `native_answer` returns 42 — a small POSITIVE value, which survives
+// any integer width, so it cannot detect a signature mismatch.  This one returns -1,
+// which does not: loft types this `integer` and so emits `extern "C" { fn
+// n_native_sentinel() -> i64; }`, and if the Rust side declared a narrower return the
+// upper half of the register would be undefined and -1 would arrive as 4294967295.
+// That is a real bug this shape has caught in shipped libraries (loft-libs-net's
+// `server::listen`, whose `handle >= 0` check it silently defeated on --native).
+pub fn native_sentinel() -> integer;
+#native
