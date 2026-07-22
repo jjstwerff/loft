@@ -140,10 +140,25 @@ where
     // wasm-bindgen-rayon model so the two scheduler stories converge.
     use rayon::prelude::*;
     let threads = n_threads.max(1).min(n_rows.max(1));
-    with_pool(|| {
+    // @PLN117 step 0 — parallelism falsification instrument.  When
+    // LOFT_TRACE_PAR_WORKERS is set, each rayon task records the rayon worker
+    // index that ran it; after the join we report how many DISTINCT workers
+    // took part.  This is the positive control that proves a `par` really
+    // dispatched across ≥2 workers (native today, the wasm pool once wired)
+    // and, crucially, that the harness can FAIL — a `par(..., 1)` reports 1.
+    // Non-perturbing: the gate is read once, and when off the per-task branch
+    // sees `None` and allocates nothing.
+    let worker_trace: Option<std::sync::Mutex<std::collections::BTreeSet<usize>>> =
+        par_trace_enabled().then(|| std::sync::Mutex::new(std::collections::BTreeSet::new()));
+    let worker_trace_ref = &worker_trace;
+    let out = with_pool(|| {
         (0..threads)
             .into_par_iter()
             .map(|t| {
+                if let Some(seen) = worker_trace_ref {
+                    let idx = rayon::current_thread_index().unwrap_or(usize::MAX);
+                    seen.lock().unwrap().insert(idx);
+                }
                 let start = t * n_rows / threads;
                 let end = (t + 1) * n_rows / threads;
                 // @PLN108 R2 — the SINGLE clone: always borrow the parent read-only
@@ -158,7 +173,25 @@ where
                 f(start, end, worker_stores)
             })
             .collect()
-    })
+    });
+    if let Some(seen) = worker_trace {
+        let indices = seen.into_inner().unwrap();
+        eprintln!(
+            "loft: LOFT_TRACE_PAR_WORKERS parallel_workers n_rows={n_rows} threads={threads} \
+             distinct_workers={} indices={indices:?}",
+            indices.len(),
+        );
+    }
+    out
+}
+
+/// @PLN117 step 0 — is the parallel-worker tracer armed?  Read `LOFT_TRACE_PAR_WORKERS`
+/// once; off ⇒ the dispatch chokepoint stays allocation-free.
+#[cfg(feature = "threading")]
+fn par_trace_enabled() -> bool {
+    use std::sync::OnceLock;
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_TRACE_PAR_WORKERS").is_some())
 }
 
 /// Plan-06 phase 3b.1 — merge per-thread batches into one ordered vector.
