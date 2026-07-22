@@ -34,6 +34,13 @@ required-features = ["registry"]
 name = "loft-lsp"
 path = "src/bin/loft-lsp.rs"
 
+# @PLN63 LSP.3 — the loft Debug Adapter (DAP over JSON-RPC/stdio).  Links the loft
+# rlib and translates DAP requests to/from the `--rpc` debug engine (rpc::DebugDriver);
+# wire JSON is loft's own json mod, same "own your dependencies" rule as loft-lsp.
+[[bin]]
+name = "loft-dap"
+path = "src/bin/loft-dap.rs"
+
 [features]
 default      = ["mmap", "random", "threading", "registry", "native-extensions", "remote-store"]
 threading    = ["dep:rayon"]

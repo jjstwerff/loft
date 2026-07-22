@@ -8,13 +8,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > **Identity:** a design sub-doc of `@PLN63` (loft-lsp), the `loft-dap` row of the
 > distribution table. Slug `loft-dap`. Companion to
 > [EXTRACT.md](EXTRACT.md) (the LSP.2 refactor design).
-> **Status:** DESIGN — the D0–D6 spine is specified; **no `src/bin/loft-dap.rs`
-> yet**. The debug ENGINE and its wire protocol it translates are both LANDED
-> (@PLN16 A–F/M1–M5, `loft debug --rpc`, `src/rpc.rs`,
-> [16.P PROTOCOL.md](../../plans/16-debugger/PROTOCOL.md)); this doc is the
-> DAP-side translation over them. The Neovim plugin already auto-registers the
-> adapter the moment the binary appears (`editors/nvim/lua/loft.lua:101`), so
-> nothing downstream waits on more than this binary.
+> **Status:** BUILT — the D0–D6 spine is implemented in `src/bin/loft-dap.rs`
+> (a separate binary linking the `loft` rlib, the loft-lsp shape), gated by the
+> `tests/dap_transport.rs` DAP-framed harness (D0; 7 tests, D1–D6). The one
+> engine-side change was `loft::rpc::DebugDriver` (`src/rpc.rs`) — a `pub` wrapper
+> over the `pub(crate) handle` chokepoint that arms the in-process session exactly
+> as `run_rpc` does; `run_rpc` was refactored onto it (behaviour-identical, the 11
+> `tests/rpc.rs` still green). The debug ENGINE and its wire protocol it translates
+> were already LANDED (@PLN16 A–F/M1–M5, `loft debug --rpc`,
+> [16.P PROTOCOL.md](../../plans/16-debugger/PROTOCOL.md)); this doc is the DAP-side
+> translation over them. The Neovim plugin auto-registers the adapter the moment the
+> binary is on `$PATH` (`editors/nvim/lua/loft.lua:101`), so it now lights up.
+>
+> **One deviation from the capability list below:** `supportsHitConditionalBreakpoints`
+> is NOT advertised — the engine has no hit-count, so advertising it would let a client
+> set a hit condition the adapter silently ignores (a wrong picture). Plain
+> `supportsConditionalBreakpoints` IS advertised (conditions pass straight through).
 
 ## Goal
 
@@ -155,11 +164,12 @@ RPC event     {"event":E, <body>}
   it). An event has no `request_seq`.
 - **Handshake ordering (strict).** On `initialize`: send the capabilities *response*
   FIRST, THEN the `initialized` *event* — the client waits for `initialized` before
-  sending `setBreakpoints`, and reversing them hangs the session. Capabilities:
-  `supportsConfigurationDoneRequest`, `supportsConditionalBreakpoints`,
-  `supportsHitConditionalBreakpoints`, `supportsEvaluateForHovers`,
-  `supportsTerminateRequest`; **NOT** `supportsStepBack` (undo/redo exist in the
-  engine but reverse-*execution* stepping is a follow-up, § Non-goals).
+  sending `setBreakpoints`, and reversing them hangs the session. Capabilities
+  (as built): `supportsConfigurationDoneRequest`, `supportsConditionalBreakpoints`,
+  `supportsEvaluateForHovers`, `supportsTerminateRequest`, `supportsSetVariable`;
+  **NOT** `supportsHitConditionalBreakpoints` (no engine hit-count — see the Status
+  note) and **NOT** `supportsStepBack` (undo/redo exist in the engine but
+  reverse-*execution* stepping is a follow-up, § Non-goals).
 - **Deferred launch.** DAP's launch sequence is `initialize → (initialized) → launch →
   setBreakpoints… → configurationDone`. loft-dap answers `launch` by loading the
   program only (RPC `launch`, no `run`) and defers the actual start to

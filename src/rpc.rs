@@ -61,6 +61,53 @@ fn capture_take() -> String {
     })
 }
 
+/// An in-process debug session driven one wire-protocol line at a time — the seam both
+/// [`run_rpc`] (NDJSON on stdio) and the `loft-dap` DAP adapter drive the engine through,
+/// with no child interpreter process and no port.  Construction mirrors `run_rpc`'s
+/// preamble: a stepping-enabled [`ReplSession`] over `stdlib_dir` + `lib_dirs`, with the
+/// program's `print` output routed to the capture sink (drained into `output` events);
+/// `Drop` ends the capture.
+///
+/// `loft-dap` links the `loft` rlib as a separate binary — the same shape as `loft-lsp` —
+/// and translates DAP JSON to/from the [`handle`] chokepoint via [`drive`](Self::drive),
+/// so it inherits the engine coverage of `tests/rpc.rs` for free and adds only the
+/// protocol translation.
+pub struct DebugDriver {
+    session: ReplSession,
+}
+
+impl DebugDriver {
+    /// Build a stepping-enabled debug session and arm output capture.
+    ///
+    /// # Errors
+    /// Returns an I/O error if the stdlib cannot be loaded.
+    pub fn new(stdlib_dir: &str, lib_dirs: &[String]) -> std::io::Result<Self> {
+        let mut session = ReplSession::new_with_libs(stdlib_dir, lib_dirs)?;
+        session.debug_stepping(true);
+        capture_begin();
+        Ok(Self { session })
+    }
+
+    /// Handle one NDJSON request line: the messages to emit (response first, then any
+    /// events) and whether the client asked to disconnect.  The one dispatch chokepoint.
+    pub fn drive(&mut self, line: &str) -> (Vec<String>, bool) {
+        handle(&mut self.session, line)
+    }
+
+    /// Set a **function-scoped** breakpoint at `func`'s entry — the engine capability the
+    /// file:line `setBreakpoints` verb does not surface — so the DAP adapter can honour
+    /// `stopOnEntry` by pausing at the program's first statement.
+    pub fn set_function_breakpoint(&mut self, func: &str) {
+        self.session.add_breakpoint(func);
+    }
+}
+
+impl Drop for DebugDriver {
+    fn drop(&mut self) {
+        capture_end();
+    }
+}
+
 /// Run the file-run debugger over the wire protocol: read NDJSON requests from `input`,
 /// write NDJSON responses + events to `out`, until EOF or a `disconnect` request.
 ///
@@ -72,19 +119,17 @@ pub fn run_rpc<R: BufRead, W: Write>(
     input: R,
     out: &mut W,
 ) -> std::io::Result<()> {
-    let mut session = ReplSession::new_with_libs(stdlib_dir, lib_dirs)?;
-    session.debug_stepping(true);
+    let mut driver = DebugDriver::new(stdlib_dir, lib_dirs)?;
     // Silence the raw panic handler — a fault in the debugged program is caught and
     // reported as `terminated`, not printed.
     let prev_hook = std::panic::take_hook();
     std::panic::set_hook(Box::new(|_| {}));
-    capture_begin();
     for line in input.lines() {
         let line = line?;
         if line.trim().is_empty() {
             continue;
         }
-        let (messages, disconnect) = handle(&mut session, &line);
+        let (messages, disconnect) = driver.drive(&line);
         for m in messages {
             writeln!(out, "{m}")?;
         }
@@ -93,7 +138,6 @@ pub fn run_rpc<R: BufRead, W: Write>(
             break;
         }
     }
-    capture_end();
     std::panic::set_hook(prev_hook);
     Ok(())
 }

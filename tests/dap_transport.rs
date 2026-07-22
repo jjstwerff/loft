@@ -1,0 +1,550 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN63 D0 — protocol test harness for `loft-dap` (the DAP debug adapter).
+//
+// Drives the loft-dap binary over stdio with `Content-Length`-framed DAP JSON and
+// asserts its replies + events, so the transport (D1) and every later step (D2-D6)
+// is CI-tested WITHOUT a live editor.  The harness carries its own positive control
+// (`unsupported_request_is_an_error_not_a_success`): it proves it can distinguish a
+// FAILED response (`success:false`) from a success — so a green handshake test is
+// meaningful, not vacuous (the @PLN16 "prove the harness can fail" rule).
+//
+// The engine path underneath is already proven end-to-end by `tests/rpc.rs`; these
+// tests exercise only the DAP TRANSLATION (framing, envelope, drill-down synthesis).
+
+use std::io::{BufRead, BufReader, Read, Write};
+use std::process::{Child, ChildStdin, ChildStdout, Command, Stdio};
+
+use loft::json::{self, Parsed};
+
+/// A live loft-dap subprocess with framed read/write over its stdio.
+struct Dap {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    seq: i64,
+}
+
+impl Dap {
+    fn start() -> Self {
+        let mut child = Command::new(env!("CARGO_BIN_EXE_loft-dap"))
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .expect("spawn loft-dap");
+        let stdin = child.stdin.take().unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        Dap {
+            child,
+            stdin,
+            stdout,
+            seq: 0,
+        }
+    }
+
+    /// Send a DAP request, returning the `seq` used (so a response can be matched by
+    /// `request_seq`).
+    fn request(&mut self, command: &str, arguments: &str) -> i64 {
+        self.seq += 1;
+        let seq = self.seq;
+        let body = format!(
+            r#"{{"seq":{seq},"type":"request","command":"{command}","arguments":{arguments}}}"#
+        );
+        write!(self.stdin, "Content-Length: {}\r\n\r\n{body}", body.len()).unwrap();
+        self.stdin.flush().unwrap();
+        seq
+    }
+
+    /// Read one framed message and parse it.
+    fn recv(&mut self) -> Parsed {
+        let mut content_length = 0usize;
+        loop {
+            let mut line = String::new();
+            let n = self.stdout.read_line(&mut line).unwrap();
+            assert!(n > 0, "adapter closed stdout before replying");
+            let header = line.trim_end_matches(['\r', '\n']);
+            if header.is_empty() {
+                break;
+            }
+            if let Some(v) = header.strip_prefix("Content-Length:") {
+                content_length = v.trim().parse().unwrap();
+            }
+        }
+        let mut buf = vec![0u8; content_length];
+        self.stdout.read_exact(&mut buf).unwrap();
+        json::parse(&String::from_utf8(buf).unwrap()).expect("reply is valid JSON")
+    }
+
+    /// Read messages until a `response` for `request_seq` arrives (skipping events),
+    /// then return it.
+    fn recv_response(&mut self, request_seq: i64) -> Parsed {
+        for _ in 0..64 {
+            let m = self.recv();
+            if field_str(&m, "type").as_deref() == Some("response")
+                && field_i64(&m, "request_seq") == Some(request_seq)
+            {
+                return m;
+            }
+        }
+        panic!("no response for request_seq {request_seq}");
+    }
+
+    /// Read messages until an `event` named `name` arrives (skipping others), then return
+    /// its body.
+    fn recv_event(&mut self, name: &str) -> Parsed {
+        for _ in 0..64 {
+            let m = self.recv();
+            if field_str(&m, "type").as_deref() == Some("event")
+                && field_str(&m, "event").as_deref() == Some(name)
+            {
+                return field(&m, "body").cloned().unwrap_or(Parsed::Null);
+            }
+        }
+        panic!("no `{name}` event arrived");
+    }
+
+    /// The standard `initialize` → `initialized` handshake; returns the capabilities.
+    fn handshake(&mut self) -> Parsed {
+        let seq = self.request("initialize", "{}");
+        let init = self.recv_response(seq);
+        let caps = field(&init, "body").cloned().expect("initialize body");
+        self.recv_event("initialized");
+        caps
+    }
+
+    /// Launch a program written to a temp file; returns its path (kept alive for the run).
+    fn launch(&mut self, tag: &str, src: &str, stop_on_entry: bool) -> std::path::PathBuf {
+        let path = tmp_program(tag, src);
+        let seq = self.request(
+            "launch",
+            &format!(
+                r#"{{"program":{},"stopOnEntry":{stop_on_entry}}}"#,
+                json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()))
+            ),
+        );
+        let resp = self.recv_response(seq);
+        assert_eq!(
+            field_bool(&resp, "success"),
+            Some(true),
+            "launch succeeds: {resp:?}"
+        );
+        path
+    }
+
+    fn configuration_done(&mut self) {
+        let seq = self.request("configurationDone", "{}");
+        let resp = self.recv_response(seq);
+        assert_eq!(field_bool(&resp, "success"), Some(true), "configDone ok");
+    }
+
+    fn disconnect(&mut self) {
+        let seq = self.request("disconnect", "{}");
+        let _ = self.recv_response(seq);
+        let _ = self.child.wait();
+    }
+}
+
+// ── json field helpers ───────────────────────────────────────────────────────────────
+fn field<'a>(v: &'a Parsed, key: &str) -> Option<&'a Parsed> {
+    match v {
+        Parsed::Object(e) => e.iter().find(|(k, _, _)| k == key).map(|(_, _, val)| val),
+        _ => None,
+    }
+}
+fn field_str(v: &Parsed, key: &str) -> Option<String> {
+    match field(v, key) {
+        Some(Parsed::Str(s)) => Some(s.clone()),
+        _ => None,
+    }
+}
+fn field_i64(v: &Parsed, key: &str) -> Option<i64> {
+    field(v, key).and_then(Parsed::as_i64)
+}
+fn field_bool(v: &Parsed, key: &str) -> Option<bool> {
+    match field(v, key) {
+        Some(Parsed::Bool(b)) => Some(*b),
+        _ => None,
+    }
+}
+fn field_arr<'a>(v: &'a Parsed, key: &str) -> Option<&'a Vec<Parsed>> {
+    match field(v, key) {
+        Some(Parsed::Array(a)) => Some(a),
+        _ => None,
+    }
+}
+
+/// A unique temp `.loft` path keyed by tag + pid (so parallel tests don't collide).
+fn tmp_program(tag: &str, src: &str) -> std::path::PathBuf {
+    let p = std::env::temp_dir().join(format!("loft_dap_{tag}_{}.loft", std::process::id()));
+    std::fs::write(&p, src).expect("write temp program");
+    p
+}
+
+// ── D1 — transport skeleton + handshake ──────────────────────────────────────────────
+// initialize → capabilities response (correct request_seq) → `initialized` event, in
+// that STRICT order.  The inline positive control proves the harness can see a FAILURE:
+// an unsupported request comes back `success:false`, not a spurious success.
+#[test]
+fn handshake_advertises_capabilities_then_initialized() {
+    let mut d = Dap::start();
+
+    let seq = d.request("initialize", "{}");
+    let init = d.recv_response(seq);
+    assert_eq!(
+        field_str(&init, "type").as_deref(),
+        Some("response"),
+        "a response envelope"
+    );
+    assert_eq!(
+        field_i64(&init, "request_seq"),
+        Some(seq),
+        "echoes the request seq as request_seq"
+    );
+    assert_eq!(field_bool(&init, "success"), Some(true));
+    let caps = field(&init, "body").expect("capabilities body");
+    assert_eq!(
+        field_bool(caps, "supportsConfigurationDoneRequest"),
+        Some(true),
+        "advertises configurationDone (the launch sequencing hinge): {caps:?}"
+    );
+    assert_eq!(
+        field_bool(caps, "supportsConditionalBreakpoints"),
+        Some(true),
+        "advertises conditional breakpoints"
+    );
+    assert!(
+        field(caps, "supportsStepBack").is_none(),
+        "does NOT advertise reverse stepping (a follow-up): {caps:?}"
+    );
+
+    // The `initialized` event follows the response (never before it).
+    let m = d.recv();
+    assert_eq!(field_str(&m, "type").as_deref(), Some("event"));
+    assert_eq!(field_str(&m, "event").as_deref(), Some("initialized"));
+
+    // Positive control — the harness can tell failure from success.
+    let bad = d.request("bogusRequest", "{}");
+    let resp = d.recv_response(bad);
+    assert_eq!(
+        field_bool(&resp, "success"),
+        Some(false),
+        "an unsupported request is an ERROR response, not a success: {resp:?}"
+    );
+
+    d.disconnect();
+}
+
+// ── D2 — launch + run to termination + streamed output ───────────────────────────────
+// A trivial program's `print` surfaces as an `output` event, then `terminated` (preceded
+// by the synthesized `exited`).  The first real program under the adapter.
+#[test]
+fn launch_runs_to_termination_and_streams_output() {
+    let mut d = Dap::start();
+    d.handshake();
+    let path = d.launch("run", "fn main() {\n  print(\"hello-dap\")\n}\n", false);
+
+    d.configuration_done();
+    let out = d.recv_event("output");
+    assert!(
+        field_str(&out, "output")
+            .unwrap_or_default()
+            .contains("hello-dap"),
+        "the program's print is an output event: {out:?}"
+    );
+    assert_eq!(
+        field_str(&out, "category").as_deref(),
+        Some("stdout"),
+        "program output rides the stdout category"
+    );
+
+    // `exited` (process model) precedes `terminated` (session ended).
+    let exited = d.recv_event("exited");
+    assert_eq!(field_i64(&exited, "exitCode"), Some(0));
+    let _ = d.recv_event("terminated");
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
+
+// ── D2 — stopOnEntry pauses before the first statement ───────────────────────────────
+#[test]
+fn stop_on_entry_pauses_at_entry() {
+    let mut d = Dap::start();
+    d.handshake();
+    let path = d.launch(
+        "entry",
+        "fn main() {\n  a = 1;\n  print(\"a={a}\")\n}\n",
+        true,
+    );
+
+    d.configuration_done();
+    let stopped = d.recv_event("stopped");
+    assert_eq!(
+        field_str(&stopped, "reason").as_deref(),
+        Some("entry"),
+        "stopOnEntry yields a stop with reason `entry`: {stopped:?}"
+    );
+    assert_eq!(field_i64(&stopped, "threadId"), Some(1));
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
+
+// ── D3 — breakpoints + stopped ───────────────────────────────────────────────────────
+// A live line verifies and stops the run at the right function; a line with no breakable
+// code comes back `verified:false` (a dead breakpoint the client hears about now).
+#[test]
+fn breakpoint_verifies_and_stops() {
+    let mut d = Dap::start();
+    d.handshake();
+    // helper's body is line 2; main calls it.
+    let src = "fn helper(n: integer) -> integer {\n  n * 2\n}\nfn main() {\n  a = helper(21);\n  print(\"a={a}\")\n}\n";
+    let path = d.launch("bp", src, false);
+
+    // Breakpoint on line 2 (live) + line 99 (dead).
+    let file = json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()));
+    let seq = d.request(
+        "setBreakpoints",
+        &format!(r#"{{"source":{{"path":{file}}},"breakpoints":[{{"line":2}},{{"line":99}}]}}"#),
+    );
+    let resp = d.recv_response(seq);
+    let bps = field_arr(field(&resp, "body").unwrap(), "breakpoints").expect("breakpoints array");
+    assert_eq!(
+        (
+            field_bool(&bps[0], "verified"),
+            field_bool(&bps[1], "verified")
+        ),
+        (Some(true), Some(false)),
+        "line 2 verifies, line 99 does not: {bps:?}"
+    );
+
+    d.configuration_done();
+    let stopped = d.recv_event("stopped");
+    assert_eq!(
+        field_str(&stopped, "reason").as_deref(),
+        Some("breakpoint"),
+        "stops for a breakpoint: {stopped:?}"
+    );
+
+    // The stop is inside `helper` — confirmed via the stackTrace frame.
+    let st = d.request("stackTrace", r#"{"threadId":1}"#);
+    let frames = field_arr(field(&d.recv_response(st), "body").unwrap(), "stackFrames")
+        .expect("stackFrames")
+        .clone();
+    assert_eq!(
+        field_str(&frames[0], "name").as_deref(),
+        Some("helper"),
+        "the frame is `helper`: {frames:?}"
+    );
+    assert_eq!(field_i64(&frames[0], "line"), Some(2), "parked on line 2");
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
+
+// ── D4 — inspection drill-down + stale reference ─────────────────────────────────────
+// At a stop, walk threads → stackTrace → scopes → variables and assert the locals-panel
+// content; after a resume, the prior `variablesReference` returns an empty list.
+#[test]
+fn drilldown_reads_locals_and_invalidates_stale_reference() {
+    let mut d = Dap::start();
+    d.handshake();
+    // `a` is assigned on line 2, so at the line-3 stop it is a live local.
+    let src = "fn main() {\n  a = 21;\n  b = a + 1;\n  print(\"b={b}\")\n}\n";
+    let path = d.launch("drill", src, false);
+
+    let file = json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()));
+    let seq = d.request(
+        "setBreakpoints",
+        &format!(r#"{{"source":{{"path":{file}}},"breakpoints":[{{"line":3}}]}}"#),
+    );
+    let _ = d.recv_response(seq);
+
+    d.configuration_done();
+    let _ = d.recv_event("stopped");
+
+    // threads → one synthetic main thread.
+    let t = d.request("threads", "{}");
+    let threads = field_arr(field(&d.recv_response(t), "body").unwrap(), "threads")
+        .expect("threads")
+        .clone();
+    assert_eq!(field_i64(&threads[0], "id"), Some(1));
+
+    // stackTrace → frameId; scopes → the Locals scope reference; variables → the locals.
+    let st = d.request("stackTrace", r#"{"threadId":1}"#);
+    let frames = field_arr(field(&d.recv_response(st), "body").unwrap(), "stackFrames")
+        .expect("stackFrames")
+        .clone();
+    let frame_id = field_i64(&frames[0], "id").expect("frameId");
+
+    let sc = d.request("scopes", &format!(r#"{{"frameId":{frame_id}}}"#));
+    let scopes = field_arr(field(&d.recv_response(sc), "body").unwrap(), "scopes")
+        .expect("scopes")
+        .clone();
+    assert_eq!(field_str(&scopes[0], "name").as_deref(), Some("Locals"));
+    let locals_ref = field_i64(&scopes[0], "variablesReference").expect("locals ref");
+
+    let vr = d.request(
+        "variables",
+        &format!(r#"{{"variablesReference":{locals_ref}}}"#),
+    );
+    let vars = field_arr(field(&d.recv_response(vr), "body").unwrap(), "variables")
+        .expect("variables")
+        .clone();
+    let a = vars
+        .iter()
+        .find(|v| field_str(v, "name").as_deref() == Some("a"))
+        .expect("local `a` is present");
+    assert_eq!(
+        field_str(a, "value").as_deref(),
+        Some("21"),
+        "local a == 21: {vars:?}"
+    );
+    assert_eq!(
+        field_i64(a, "variablesReference"),
+        Some(0),
+        "a scalar local is a leaf (ref 0)"
+    );
+
+    // Resume, then read the OLD reference — it is stale → an empty list.
+    let cont = d.request("continue", r#"{"threadId":1}"#);
+    let _ = d.recv_response(cont);
+    let _ = d.recv_event("terminated");
+    let vr2 = d.request(
+        "variables",
+        &format!(r#"{{"variablesReference":{locals_ref}}}"#),
+    );
+    let vars2 = field_arr(field(&d.recv_response(vr2), "body").unwrap(), "variables")
+        .expect("variables")
+        .clone();
+    assert!(
+        vars2.is_empty(),
+        "a stale reference after resume returns empty: {vars2:?}"
+    );
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
+
+// ── D5 — stepping + continue ─────────────────────────────────────────────────────────
+// Step-over from one line lands on the next (reason `step`); continue then runs to
+// termination.
+#[test]
+fn step_over_advances_then_continue_terminates() {
+    let mut d = Dap::start();
+    d.handshake();
+    let src = "fn main() {\n  a = 1;\n  b = 2;\n  print(\"{a}{b}\")\n}\n";
+    let path = d.launch("step", src, false);
+
+    let file = json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()));
+    let seq = d.request(
+        "setBreakpoints",
+        &format!(r#"{{"source":{{"path":{file}}},"breakpoints":[{{"line":2}}]}}"#),
+    );
+    let _ = d.recv_response(seq);
+
+    d.configuration_done();
+    let first = d.recv_event("stopped");
+    assert_eq!(field_str(&first, "reason").as_deref(), Some("breakpoint"));
+
+    // Step over → the next line, reason `step`.
+    let step = d.request("next", r#"{"threadId":1}"#);
+    let _ = d.recv_response(step);
+    let stepped = d.recv_event("stopped");
+    assert_eq!(
+        field_str(&stepped, "reason").as_deref(),
+        Some("step"),
+        "a step stop: {stepped:?}"
+    );
+    let st = d.request("stackTrace", r#"{"threadId":1}"#);
+    let frames = field_arr(field(&d.recv_response(st), "body").unwrap(), "stackFrames")
+        .expect("stackFrames")
+        .clone();
+    assert_eq!(
+        field_i64(&frames[0], "line"),
+        Some(3),
+        "step-over advanced to line 3: {frames:?}"
+    );
+
+    // Continue → runs to termination.
+    let cont = d.request("continue", r#"{"threadId":1}"#);
+    let _ = d.recv_response(cont);
+    let _ = d.recv_event("terminated");
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
+
+// ── D6 — evaluate + setVariable ──────────────────────────────────────────────────────
+// Evaluate an expression against the paused frame; set a variable and see the change in
+// the next `variables` read.
+#[test]
+fn evaluate_and_set_variable_at_a_stop() {
+    let mut d = Dap::start();
+    d.handshake();
+    let src = "fn main() {\n  a = 21;\n  b = a + 1;\n  print(\"b={b}\")\n}\n";
+    let path = d.launch("eval", src, false);
+
+    let file = json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()));
+    let seq = d.request(
+        "setBreakpoints",
+        &format!(r#"{{"source":{{"path":{file}}},"breakpoints":[{{"line":3}}]}}"#),
+    );
+    let _ = d.recv_response(seq);
+
+    d.configuration_done();
+    let _ = d.recv_event("stopped");
+
+    // evaluate `a + 100` in the frame → 121.
+    let ev = d.request("evaluate", r#"{"expression":"a + 100","context":"repl"}"#);
+    let body = field(&d.recv_response(ev), "body")
+        .cloned()
+        .expect("evaluate body");
+    assert_eq!(
+        field_str(&body, "result").as_deref(),
+        Some("121"),
+        "evaluate a + 100 == 121: {body:?}"
+    );
+
+    // setVariable a = 5, then read variables → a is now 5.
+    let sv = d.request(
+        "setVariable",
+        r#"{"variablesReference":2001,"name":"a","value":"5"}"#,
+    );
+    let sv_body = field(&d.recv_response(sv), "body")
+        .cloned()
+        .expect("setVariable body");
+    assert_eq!(
+        field_str(&sv_body, "value").as_deref(),
+        Some("5"),
+        "setVariable echoes the new value: {sv_body:?}"
+    );
+
+    // Fetch the current Locals reference and confirm the edit is reflected.
+    let sc = d.request("scopes", r#"{"frameId":1000}"#);
+    let scopes = field_arr(field(&d.recv_response(sc), "body").unwrap(), "scopes")
+        .expect("scopes")
+        .clone();
+    let locals_ref = field_i64(&scopes[0], "variablesReference").unwrap();
+    let vr = d.request(
+        "variables",
+        &format!(r#"{{"variablesReference":{locals_ref}}}"#),
+    );
+    let vars = field_arr(field(&d.recv_response(vr), "body").unwrap(), "variables")
+        .expect("variables")
+        .clone();
+    let a = vars
+        .iter()
+        .find(|v| field_str(v, "name").as_deref() == Some("a"))
+        .expect("local `a`");
+    assert_eq!(
+        field_str(a, "value").as_deref(),
+        Some("5"),
+        "the edited value is reflected in the next variables read: {vars:?}"
+    );
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
