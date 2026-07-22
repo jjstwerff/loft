@@ -108,3 +108,4 @@ canonical; these pages are its generated shadow. Regenerate with
 | [@I86](I86.md) | Startup cache & embedded stdlib |
 | [@I87](I87.md) | Auto-use / lazy library triggers |
 | [@I90](I90.md) | Shared utilities & data structures |
+| [@I91](I91.md) | Language server (LSP) + parse-time resolution index |

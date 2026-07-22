@@ -538,5 +538,11 @@
     "title": "Shared utilities & data structures",
     "kind": "infra",
     "body": "## What it does\n\nA grab-bag of small, dependency-free building blocks the rest of the engine reuses: base64 encoding, hashing, a radix tree, a generic tree, and cross-platform helpers. None is a feature on its own — they are the shared primitives other subsystems are built from.\n\n## Where it lives\n\n`src/base64.rs`, `src/hash.rs`, `src/radix_tree.rs`, `src/tree.rs`, `src/platform.rs`\n"
+  },
+  {
+    "number": 91,
+    "title": "Language server (LSP) + parse-time resolution index",
+    "kind": "infra",
+    "body": "## What it does\n\nServes loft to an editor over the Language Server Protocol, so a plain text editor can\nshow live diagnostics and answer questions about the code it is displaying. The server\nre-parses the buffer on every edit with a real stdlib-loaded parser — the same front end\nthe compiler uses — so what the editor reports is what the compiler would report, not a\nsecond approximation of loft's rules.\n\nUnderneath it, the parser records what each identifier occurrence actually resolves to as\nit parses. That index is what lets \"what is this symbol?\" and \"where else is THIS binding\nused?\" be answered precisely rather than by matching names as text, which would confuse\ntwo different variables that happen to share a name. Recording is gated behind a flag that\nis off by default, so ordinary compilation pays nothing for it.\n\n## Where it lives\n\n`src/bin/loft-lsp.rs` (the LSP wire protocol over JSON-RPC / stdio; the binary owns\ntransport and locating the stdlib), `src/lsp.rs` (the library-side surface that calls the\ncompiler, so the compiler coupling stays out of the binary), `src/resolution.rs` (the\nparse-time resolution index: position → resolved binding)."
   }
 ]
