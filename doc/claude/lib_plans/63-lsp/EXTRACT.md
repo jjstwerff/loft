@@ -7,9 +7,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 > **Identity:** a design sub-doc of `@PLN63` (loft-lsp), the `refactor.extract`
 > table row. Slug `extract-function`.
-> **Status:** design — written before code, so the data-flow engine (the whole
-> cost) is scoped against fixed parser code points and lands in small, safe,
-> individually-verifiable steps. No code yet.
+> **Status:** IMPLEMENTED — the E0–E6 spine is complete (`src/lsp.rs`
+> `extract_function` + `src/bin/loft-lsp.rs`; gates in `tests/extract.rs` +
+> `tests/lsp_transport.rs`). `refactor.extract` is a working, behaviour-preserving
+> refactoring for the common straight-line + single-loop case (scalars + owned heap,
+> methods included); the follow-ups below (expression extraction, read-only refs, a
+> broader deps analysis, unique naming) remain.
 
 ## Goal
 
@@ -162,14 +165,22 @@ proven correct.
   refused per the design (a broader deps analysis, and allowing read-only refs, are
   follow-ups). *Gate met:* `tests/extract.rs` — a `&vector<integer>` input is refused;
   an owned struct in-out extracts, re-parses clean, and RUNS identically.
-- **E6 — `self` + refusals.** `self` becomes a leading input; refuse a selection
-  that (a) lives in a `#rust` / `#native` body, (b) contains a `Return` / `break` /
-  `continue` / `yield` targeting outside the slice (would change control flow), or
-  (c) reads a variable declared *after* the selection. Each refusal is a clear
-  message, never a broken edit. *Gate:* unit — each refusal case yields `None` +
-  reason; a method extraction threads `self`.
+- **E6 — `self` + refusals — DONE.** `self` needs NO special handling — it is a
+  normal input parameter (`is_argument(0)`, live-in), so a method's statements extract
+  and run identically (probed + tested). `extract_function` REFUSES a slice whose
+  control flow ESCAPES it (`control_flow_escapes`): a `return` / `yield` (always leaves
+  the function — extracting it would return from the NEW function, not the caller, and
+  a value-`return` in a void extracted fn does not even parse), or a `break` /
+  `continue` targeting a loop OUTSIDE the slice (loop-depth 0). A `break` inside a loop
+  fully within the slice is fine — so a WHOLE for-loop still extracts (its iterator
+  break is inside its `Loop`). A `#rust` / non-block body is already refused by the
+  `Value::Block` guard (E1). *Gate met:* `tests/extract.rs` — a `return` in the slice is
+  refused while the whole for-loop is allowed; a method extraction threads `self` and
+  runs identically.
 
-E0–E6 complete `refactor.extract` for the common straight-line + single-loop case.
+**E0–E6 complete — `refactor.extract` is a working, behaviour-preserving refactoring**
+for the common straight-line + single-loop case (over scalars and owned heap values,
+in methods too).
 Follow-ups (own steps): extracting an EXPRESSION (not whole statements); a selection
 spanning nested blocks; renaming a captured local that collides in the new scope.
 

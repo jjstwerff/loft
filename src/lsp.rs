@@ -1883,6 +1883,29 @@ fn collect_reads(node: &crate::data::Value, out: &mut Vec<u16>) {
     }
 }
 
+/// @PLN63 E6 — whether `node` contains control flow that would ESCAPE the extracted
+/// slice: a `return` / `yield` (always leaves the function), or a `break` / `continue`
+/// whose target loop is not itself inside the slice (`loop_depth` counts loops entered
+/// WITHIN the slice; at depth 0 a break/continue targets an outer loop).
+fn control_flow_escapes(node: &crate::data::Value, loop_depth: u32) -> bool {
+    use crate::data::Value;
+    match node.unspan() {
+        Value::Return(_) | Value::Yield(_) => true,
+        Value::Break(_) | Value::Continue(_) | Value::BreakWith(_, _) => loop_depth == 0,
+        Value::Loop(b) => b
+            .operators
+            .iter()
+            .any(|o| control_flow_escapes(o, loop_depth + 1)),
+        other => {
+            let mut escapes = false;
+            other.for_each_child(&mut |c| {
+                escapes = escapes || control_flow_escapes(c, loop_depth);
+            });
+            escapes
+        }
+    }
+}
+
 /// @PLN63 E4 — the concrete edit for extracting a statement slice: the new function
 /// to insert and the call that replaces the selection.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1922,6 +1945,16 @@ pub fn extract_function(
         return None;
     };
     let (first_op, last_op) = statement_slice(b, start_line, end_line)?;
+    // E6 — REFUSE control flow that escapes the slice: a `return` / `yield` (always
+    // leaves the function), or a `break` / `continue` targeting a loop OUTSIDE the
+    // slice.  Extracting it would change control flow (the `return` would leave the
+    // NEW function, not the caller), so offer nothing rather than a broken edit.
+    if b.operators[first_op..=last_op]
+        .iter()
+        .any(|op| control_flow_escapes(op, 0))
+    {
+        return None;
+    }
     // Inputs (E2, live-in-filtered) and outputs (E3) from this one parse.
     let (inputs, outputs) = slice_signature(data, f, b, first_op, last_op);
     let vars = data.def(f).variables();

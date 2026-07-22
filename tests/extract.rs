@@ -304,6 +304,56 @@ fn e5_owned_heap_by_value_is_allowed_and_preserves_behaviour() {
     );
 }
 
+// ── E6 — self threading + control-flow refusals ──────────────────────────────
+
+#[test]
+fn e6_refuses_control_flow_that_escapes_the_slice() {
+    // A `return` inside the slice would leave the EXTRACTED function, not `f`, so the
+    // extraction is refused (it would change control flow — a broken edit otherwise).
+    let f = "fn f(x: integer) -> integer {\n  if x > 0 {\n    return x;\n  }\n  return 0;\n}\n";
+    assert!(
+        extract_function(f, "buf.loft", "default", 2, 4).is_none(),
+        "a return inside the slice is refused (E6)"
+    );
+    // A WHOLE for-loop is still extractable — its internal iterator break is inside
+    // the loop, so it does not escape the slice.
+    let g = "fn g(n: integer) -> integer {\n  total = 0;\n  for i in 0..n {\n    total = total + i;\n  }\n  return total;\n}\n";
+    assert!(
+        extract_function(g, "buf.loft", "default", 3, 5).is_some(),
+        "a whole for-loop extracts (its break is inside the loop)"
+    );
+}
+
+#[test]
+fn e6_method_extraction_threads_self_and_preserves_behaviour() {
+    // `self` is a normal input parameter; extracting a method's statements works and
+    // is behaviour-preserving.
+    let m = "struct P { x: integer, y: integer }\nfn area(self: P) -> integer {\n  a = self.x * self.y;\n  b = a + 1;\n  return b;\n}\n\
+             fn main() { q = P{x: 3, y: 4}; print(\"{q.area()}\"); }\n";
+    let e = extract_function(m, "buf.loft", "default", 3, 4).expect("method statements extract");
+    assert!(
+        e.new_function.contains("self: P"),
+        "self is threaded as a parameter: {}",
+        e.new_function
+    );
+    let applied = apply(m, &e);
+    let diags = loft::lsp::diagnose(&applied, "buf.loft", "default");
+    let errs: Vec<_> = diags
+        .entries()
+        .iter()
+        .filter(|d| d.level >= loft::diagnostics::Level::Error)
+        .collect();
+    assert!(
+        errs.is_empty(),
+        "extracted program is clean:\n{applied}\n{errs:?}"
+    );
+    assert_eq!(
+        run(m),
+        run(&applied),
+        "same output before/after extracting from a method"
+    );
+}
+
 #[test]
 fn e1_refuses_a_selection_inside_a_nested_block() {
     // 1  fn g() {
