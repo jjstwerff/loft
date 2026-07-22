@@ -168,7 +168,23 @@ exposure were new).
 
 ---
 
-## DB — data breakpoints via watchpoints (engine → RPC → DAP)
+## DB — data breakpoints via watchpoints (engine → RPC → DAP) — **BUILT**
+
+> **Status: LANDED.** Engine (DB0/DB1): `resolve_watch_region` now resolves a bare scalar
+> local to its **stack slot** (via `frame_slot` + a `Type`→content map) and tags the
+> `Watchpoint` with the frame it belongs to (`StackWatchFrame`); `poll_watchpoints` drops a
+> stack watch the instant its frame returns (a retain pass over `call_stack`), so a reused
+> slot never fires — the heap-vs-stack split the engine deliberately avoided is now handled,
+> not dodged. RPC (DB2): `setWatch`'s existing ok/err IS the `verified` signal (no wire
+> change). DAP (DB3/DB4): `dataBreakpointInfo` reconstructs the watch target from
+> (container, name) — a top-level local is its name, a nested field/element extends the VE
+> handle's tracked path (`sq.lead`, `sq.members[0]`); `setDataBreakpoints` clears + sets each
+> via `setWatch`; a hit rides the existing `stopped{reason:"data breakpoint"}` map.
+> Gates: `tests/rpc.rs::{rpc_watch_stack_local_fires_on_change, rpc_watch_stack_local_drops_on_frame_exit}`,
+> `tests/dap_transport.rs::data_breakpoint_on_local_fires_on_change`. **Two honest limits:**
+> a data breakpoint can only be **set at a stop** (the frame must exist to resolve a local —
+> not during pre-run config); and a **caller** frame's locals aren't watchable (the resolve
+> uses the top/paused frame, `call_stack.last()`).
 
 **Gap.** DAP data breakpoints ("break when this variable changes") aren't offered. The
 engine HAS watchpoints (`add_watchpoint`, `poll_watchpoints`, `mod.rs:3242`+) and a watch
@@ -211,6 +227,7 @@ new value; watch an unwatchable expression → `verified:false`, no stop.
   breakpoint on a local, continue, assert the stop + the changed value.
 
 DB is self-contained after DB0–DB1; the DAP half (DB3–DB4) is a thin translation.
+**All five steps LANDED.**
 
 ---
 

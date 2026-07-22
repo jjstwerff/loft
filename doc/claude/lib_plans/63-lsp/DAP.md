@@ -315,9 +315,11 @@ each stays an honest capability bit or clean error.
   `scopes {frameId}` reads any frame's locals
   ([DAP_ADVANCED.md § SF](DAP_ADVANCED.md#sf--multi-frame-stack-trace-engine--rpc--dap--built)).
   Caller-frame locals are leaves (eval is top-frame-scoped).
-- **Data breakpoints** (break on a variable's change) — the engine's watchpoints resolve
-  only store/heap regions, so a stack local is `"not a watchable scalar region"` (probed).
-  Design: [DAP_ADVANCED.md § DB](DAP_ADVANCED.md#db--data-breakpoints-via-watchpoints-engine--rpc--dap).
+- **Data breakpoints** (break on a variable's change) — **BUILT**: `supportsDataBreakpoints`
+  is advertised; a scalar local (or a nested struct-field / vector-element) can be watched and
+  the run stops on its change
+  ([DAP_ADVANCED.md § DB](DAP_ADVANCED.md#db--data-breakpoints-via-watchpoints-engine--rpc--dap--built)).
+  Set at a stop only; caller-frame locals aren't watchable.
 
 Each boundary is an honest capability bit or a clean error — never a silent, wrong
 response.

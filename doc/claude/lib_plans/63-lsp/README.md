@@ -563,14 +563,15 @@ is a translation over the `--rpc` engine's one dispatch chokepoint.
 | `variables` | The frame's locals from the last stop (a stale reference → empty), **with structured expansion** ([DAP_ADVANCED.md](DAP_ADVANCED.md) VE, built): a struct/vector value drills into its children; a scalar is a leaf. |
 | `next` / `stepIn` / `stepOut` | RPC `stepOver`/`stepIn`/`stepOut` → `stopped{reason:"step"}`. |
 | `continue` | RPC `continue` → the next stop or `terminated`. `pause` is refused (no async interrupt). |
+| `dataBreakpointInfo` / `setDataBreakpoints` | **Data breakpoints** ([DAP_ADVANCED.md](DAP_ADVANCED.md) DB, built): watch a scalar local (or a nested field/element) via the engine's watchpoints; a change stops with `reason:"data breakpoint"`. Set at a stop only. |
 | `evaluate {expression, frameId, context}` | RPC `eval` in the frame's scope (identifier / field-access / call). |
 | `setVariable` / `setExpression` | RPC `setValue` → the refreshed frame value. |
 | `disconnect` / `terminate` | RPC `disconnect`; `terminated`, loop ends. |
 
 **Advanced tools** ([DAP_ADVANCED.md](DAP_ADVANCED.md), each a small-step spine grounded in
-probe findings): structured **v**ariable **e**xpansion (VE) and multi-**f**rame **s**tack (SF)
-are **built**; still deferred — **d**ata **b**reakpoints via watchpoints (DB) and **r**everse
-e**x**ecution (RX), each needing more engine work.
+probe findings): structured **v**ariable **e**xpansion (VE), multi-**f**rame **s**tack (SF), and
+**d**ata **b**reakpoints via watchpoints (DB) are **built**; only **r**everse e**x**ecution
+(RX) remains deferred (it needs real execution checkpointing — the largest engine step).
 
 ### What is already built — loft-dap is a TRANSLATION, not a new debugger
 

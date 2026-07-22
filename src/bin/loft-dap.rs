@@ -103,6 +103,9 @@ struct Adapter {
     /// One `eval` per top-level struct/vector local caches its whole tree here, so drilling
     /// deeper navigates in memory (no re-eval).  Cleared on every resume + stop.
     var_values: HashMap<i64, Parsed>,
+    /// DB — the loft path expression each expansion handle evaluates to (`sq`, `sq.lead`,
+    /// `sq.members[0]`), so a data breakpoint on a nested variable reconstructs its target.
+    var_paths: HashMap<i64, String>,
     /// SF — the runtime call stack from the last `stackTrace` (innermost first); the DAP
     /// frameId of entry `d` is `FRAME_ID + d`.  Rebuilt per `stackTrace`, cleared on resume.
     stack: Vec<StackEntry>,
@@ -385,6 +388,61 @@ impl Adapter {
                 }
             }
 
+            // ── DB data breakpoints (break on a variable's change, via watchpoints) ──
+            "dataBreakpointInfo" => {
+                // Reconstruct the loft watch target from (container, name) and offer it as
+                // the opaque `dataId`; `setDataBreakpoints` is the source of truth on whether
+                // it verifies.  A target we can't address (a caller frame, an unknown
+                // container) → `dataId: null` (the client greys out the option).
+                let name = args.and_then(|a| field_str(a, "name")).unwrap_or_default();
+                let container = args
+                    .and_then(|a| field_i64(a, "variablesReference"))
+                    .unwrap_or(0);
+                let body = match self.data_target(container, &name) {
+                    Some(expr) => obj(vec![
+                        ("dataId", Parsed::Str(expr.clone())),
+                        ("description", Parsed::Str(expr)),
+                        (
+                            "accessTypes",
+                            Parsed::Array(vec![Parsed::Str("write".into())]),
+                        ),
+                    ]),
+                    None => obj(vec![
+                        ("dataId", Parsed::Null),
+                        ("description", Parsed::Str(format!("cannot watch {name}"))),
+                    ]),
+                };
+                self.respond(out, request_seq, &command, true, Some(body), None);
+            }
+            "setDataBreakpoints" => {
+                // Replace the whole watch set: clear, then one watchpoint per dataId; each
+                // comes back verified iff the engine could resolve it (`setWatch` ok).  A
+                // hit later rides the RPC `watch` stop → DAP `stopped{reason:"data breakpoint"}`.
+                let _ = driver.drive(r#"{"id":0,"req":"clearWatch"}"#);
+                let ids: Vec<String> = args
+                    .and_then(|a| field(a, "breakpoints"))
+                    .and_then(as_array)
+                    .map(|bps| bps.iter().filter_map(|b| field_str(b, "dataId")).collect())
+                    .unwrap_or_default();
+                let verified: Vec<Parsed> = ids
+                    .iter()
+                    .map(|expr| {
+                        let rpc = json::to_json_string(&obj(vec![
+                            ("id", Parsed::Int(request_seq)),
+                            ("req", Parsed::Str("setWatch".into())),
+                            ("expr", Parsed::Str(expr.clone())),
+                        ]));
+                        let (msgs, _) = driver.drive(&rpc);
+                        obj(vec![(
+                            "verified",
+                            Parsed::Bool(rpc_ok(&msgs, request_seq).is_ok()),
+                        )])
+                    })
+                    .collect();
+                let body = obj(vec![("breakpoints", Parsed::Array(verified))]);
+                self.respond(out, request_seq, &command, true, Some(body), None);
+            }
+
             // ── boundaries — an honest capability bit or a clean error, never a wrong
             //    picture (§ Refusals) ───────────────────────────────────────────────
             "pause" => {
@@ -425,6 +483,7 @@ impl Adapter {
         self.paused = false;
         self.locals.clear();
         self.var_values.clear();
+        self.var_paths.clear();
         self.stack.clear();
         self.caller_scopes.clear();
     }
@@ -495,6 +554,7 @@ impl Adapter {
     /// (The full multi-frame stack is fetched lazily on the `stackTrace` request.)
     fn on_stop(&mut self, ev: &Parsed) {
         self.var_values.clear(); // a fresh expansion tree per stop
+        self.var_paths.clear();
         self.stack.clear();
         self.caller_scopes.clear();
         self.locals_ref = self.mint();
@@ -535,10 +595,12 @@ impl Adapter {
         VAR_REF_BASE + self.next_ref
     }
 
-    /// Register a JSON node under a fresh handle so the client can expand it.
-    fn mint_value(&mut self, value: Parsed) -> i64 {
+    /// Register a JSON node under a fresh handle so the client can expand it, remembering the
+    /// loft `path` that evaluates to it (so a DB data breakpoint can reconstruct the target).
+    fn mint_value(&mut self, value: Parsed, path: String) -> i64 {
         let handle = self.mint();
         self.var_values.insert(handle, value);
+        self.var_paths.insert(handle, path);
         handle
     }
 
@@ -552,13 +614,14 @@ impl Adapter {
         }
         if want == self.locals_ref {
             // VE0 — top level: keep the flat-frame value; add a handle only when the local
-            // evaluates to an expandable value.  One `eval` per local (a pure read).
+            // evaluates to an expandable value.  One `eval` per local (a pure read).  The
+            // path of a top-level local is its name.
             let locals = self.locals.clone();
             locals
                 .iter()
                 .map(|(name, value)| {
                     let handle = match self.eval_json(driver, name) {
-                        Some(v) if expandable(&v) => self.mint_value(v),
+                        Some(v) if expandable(&v) => self.mint_value(v, name.clone()),
                         _ => 0,
                     };
                     var_entry(name, value, handle)
@@ -567,7 +630,8 @@ impl Adapter {
         } else if let Some(node) = self.var_values.get(&want).cloned() {
             // VE1/VE2 — one level of the cached JSON tree; an object/array child gets its
             // own handle (drilling deeper navigates the cached tree, no re-eval).
-            self.expand_node(&node)
+            let parent_path = self.var_paths.get(&want).cloned().unwrap_or_default();
+            self.expand_node(&node, &parent_path)
         } else if let Some(locals) = self.caller_scopes.get(&want).cloned() {
             // SF — a caller frame's Locals: leaves only (eval is top-frame-scoped).
             locals.iter().map(|(n, v)| var_entry(n, v, 0)).collect()
@@ -577,29 +641,59 @@ impl Adapter {
     }
 
     /// The immediate children of a cached JSON node as DAP variables (object fields / array
-    /// elements); each child that is itself object/array gets a fresh expansion handle.
-    fn expand_node(&mut self, node: &Parsed) -> Vec<Parsed> {
+    /// elements); each child that is itself object/array gets a fresh expansion handle.  A
+    /// child's path extends `parent_path` (`parent.field` / `parent[i]`) for DB targeting.
+    fn expand_node(&mut self, node: &Parsed, parent_path: &str) -> Vec<Parsed> {
         match node {
             Parsed::Object(entries) => entries
                 .iter()
-                .map(|(k, _, v)| var_entry(k, &render_value(v), self.child_handle(v)))
+                .map(|(k, _, v)| {
+                    let path = format!("{parent_path}.{k}");
+                    var_entry(k, &render_value(v), self.child_handle(v, path))
+                })
                 .collect(),
             Parsed::Array(items) => items
                 .iter()
                 .enumerate()
-                .map(|(i, v)| var_entry(&format!("[{i}]"), &render_value(v), self.child_handle(v)))
+                .map(|(i, v)| {
+                    let path = format!("{parent_path}[{i}]");
+                    var_entry(
+                        &format!("[{i}]"),
+                        &render_value(v),
+                        self.child_handle(v, path),
+                    )
+                })
                 .collect(),
             _ => vec![], // a scalar node has no children (never registered as expandable)
         }
     }
 
     /// An expansion handle for a child value when it is itself expandable, else `0` (leaf).
-    fn child_handle(&mut self, v: &Parsed) -> i64 {
+    fn child_handle(&mut self, v: &Parsed, path: String) -> i64 {
         if expandable(v) {
-            self.mint_value(v.clone())
+            self.mint_value(v.clone(), path)
         } else {
             0
         }
+    }
+
+    /// DB — the loft watch expression for a variable named `name` inside the container
+    /// `variablesReference`: a top-level local is its own name; a child of an expansion
+    /// handle extends that handle's path (`parent.field` / `parent[i]`).  `None` for an
+    /// unwatchable container (a caller frame's scope, an unknown handle) so the client
+    /// won't offer a data breakpoint the engine can't set.
+    fn data_target(&self, container: i64, name: &str) -> Option<String> {
+        if container == self.locals_ref {
+            return Some(name.to_string());
+        }
+        // A `[i]` array element already carries its own bracket; a field is `.name`.
+        self.var_paths.get(&container).map(|parent| {
+            if name.starts_with('[') {
+                format!("{parent}{name}")
+            } else {
+                format!("{parent}.{name}")
+            }
+        })
     }
 
     /// Evaluate `expr` in the paused frame and return its value as JSON (`None` when it
@@ -676,6 +770,7 @@ fn capabilities() -> Parsed {
         ("supportsEvaluateForHovers", Parsed::Bool(true)),
         ("supportsTerminateRequest", Parsed::Bool(true)),
         ("supportsSetVariable", Parsed::Bool(true)),
+        ("supportsDataBreakpoints", Parsed::Bool(true)),
     ])
 }
 

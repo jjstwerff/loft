@@ -769,3 +769,84 @@ fn stack_trace_walks_all_frames_and_reads_caller_locals() {
     d.disconnect();
     let _ = std::fs::remove_file(&path);
 }
+
+// ── DB — data breakpoints via watchpoints (DAP_ADVANCED.md § DB) ──────────────────────
+// The adapter advertises data breakpoints; `dataBreakpointInfo` offers a watchable local
+// as a `dataId` (and refuses an unwatchable container with `null`); `setDataBreakpoints`
+// verifies it, and a later change to the local fires `stopped{reason:"data breakpoint"}`.
+#[test]
+fn data_breakpoint_on_local_fires_on_change() {
+    let mut d = Dap::start();
+    let caps = d.handshake();
+    assert_eq!(
+        field_bool(&caps, "supportsDataBreakpoints"),
+        Some(true),
+        "advertises data breakpoints: {caps:?}"
+    );
+    let src = "fn main() {\n  x = 1;\n  x = 2;\n  x = 3;\n  print(\"x={x}\")\n}\n";
+    let path = d.launch("db", src, false);
+
+    // Break at line 3 (x == 1 assigned).
+    let file = json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()));
+    let seq = d.request(
+        "setBreakpoints",
+        &format!(r#"{{"source":{{"path":{file}}},"breakpoints":[{{"line":3}}]}}"#),
+    );
+    let _ = d.recv_response(seq);
+    d.configuration_done();
+    let _ = d.recv_event("stopped");
+
+    let lref = d.current_locals_ref();
+
+    // dataBreakpointInfo on the local `x` → a dataId + write access.
+    let info = d.request(
+        "dataBreakpointInfo",
+        &format!(r#"{{"variablesReference":{lref},"name":"x"}}"#),
+    );
+    let info_body = field(&d.recv_response(info), "body")
+        .cloned()
+        .expect("info body");
+    assert_eq!(
+        field_str(&info_body, "dataId").as_deref(),
+        Some("x"),
+        "dataId is the watch expression: {info_body:?}"
+    );
+
+    // An unknown container → a null dataId (the client greys out the option).
+    let bad = d.request(
+        "dataBreakpointInfo",
+        r#"{"variablesReference":999999,"name":"nope"}"#,
+    );
+    let bad_body = field(&d.recv_response(bad), "body")
+        .cloned()
+        .expect("info body");
+    assert!(
+        matches!(field(&bad_body, "dataId"), Some(Parsed::Null)),
+        "an unwatchable container → null dataId: {bad_body:?}"
+    );
+
+    // setDataBreakpoints → verified.
+    let set = d.request("setDataBreakpoints", r#"{"breakpoints":[{"dataId":"x"}]}"#);
+    let set_body = field(&d.recv_response(set), "body")
+        .cloned()
+        .expect("set body");
+    let bps = field_arr(&set_body, "breakpoints").expect("breakpoints");
+    assert_eq!(
+        field_bool(&bps[0], "verified"),
+        Some(true),
+        "the data breakpoint verifies: {set_body:?}"
+    );
+
+    // Continue → x changes → a stop with reason `data breakpoint`.
+    let cont = d.request("continue", r#"{"threadId":1}"#);
+    let _ = d.recv_response(cont);
+    let stopped = d.recv_event("stopped");
+    assert_eq!(
+        field_str(&stopped, "reason").as_deref(),
+        Some("data breakpoint"),
+        "the change fires a data breakpoint: {stopped:?}"
+    );
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}

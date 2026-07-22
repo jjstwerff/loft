@@ -3221,7 +3221,14 @@ impl State {
         &self,
         expr: &str,
         data: &crate::data::Data,
-    ) -> Option<(u16, u32, u32, u32, u16)> {
+    ) -> Option<(
+        u16,
+        u32,
+        u32,
+        u32,
+        u16,
+        Option<crate::debugger::StackWatchFrame>,
+    )> {
         let (store_nr, rec, off, content) = if let Some(open) = expr.find('[') {
             let base = expr[..open].trim();
             if base.contains('.') {
@@ -3239,10 +3246,43 @@ impl State {
             let path: Vec<&str> = segs.collect();
             self.path_region(base, &path, data)?
         } else {
-            return None; // a bare local lives in a stack slot — not a stable watch target
+            // @PLN63 DB0 — a bare scalar local: watch its **stack** slot, bound to the
+            // current frame (dropped when that frame returns).  Unlike a heap region this
+            // isn't a stable target across frame exit, so it carries a `StackWatchFrame`.
+            let (rec, at, tp, _is_arg) = self.frame_slot(expr.trim(), data)?;
+            let content = Self::scalar_content(&tp)?;
+            let len = Self::scalar_len(content)?;
+            let frame = self.call_stack.last()?;
+            let watch_frame = crate::debugger::StackWatchFrame {
+                d_nr: frame.d_nr,
+                args_base: frame.args_base,
+                depth: u32::try_from(self.call_stack.len() - 1).ok()?,
+            };
+            return Some((
+                self.stack_cur.store_nr,
+                rec,
+                at,
+                len,
+                content,
+                Some(watch_frame),
+            ));
         };
         let len = Self::scalar_len(content)?;
-        Some((store_nr, rec, off, len, content))
+        Some((store_nr, rec, off, len, content, None))
+    }
+
+    /// The scalar primitive type number (the `Watchpoint.content` / `ShowDb` code) for a
+    /// watchable scalar `Type`, or `None` for a non-scalar (struct / vector / text / enum).
+    fn scalar_content(tp: &crate::data::Type) -> Option<u16> {
+        use crate::data::Type;
+        Some(match tp {
+            Type::Integer(_) => 0,
+            Type::Single => 2,
+            Type::Float => 3,
+            Type::Boolean => 4,
+            Type::Character => 6,
+            _ => return None,
+        })
     }
 
     /// @PLN16 M3 — set a **watchpoint** on the scalar heap region named by `expr`
@@ -3250,7 +3290,8 @@ impl State {
     /// pauses when a later write changes it.  Returns `false` for an unwatchable
     /// expression (a bare local, a non-scalar / null / out-of-range target).
     pub fn add_watchpoint(&mut self, expr: &str, data: &crate::data::Data) -> bool {
-        let Some((store_nr, rec, off, len, content)) = self.resolve_watch_region(expr, data) else {
+        let Some((store_nr, rec, off, len, content, frame)) = self.resolve_watch_region(expr, data)
+        else {
             return false;
         };
         let last = self.database.allocations[store_nr as usize].read_span(rec, off, len);
@@ -3262,6 +3303,7 @@ impl State {
             len,
             content,
             last,
+            frame,
         };
         self.enable_debug();
         if let Some(d) = self.debug.as_deref_mut() {
@@ -3275,6 +3317,20 @@ impl State {
     /// of a resumed run ([`debug_step`](Self::debug_step)).  Skips a watch whose store
     /// was freed (the value was deallocated) rather than reading stale memory.
     fn poll_watchpoints(&mut self) -> Option<crate::debugger::WatchHit> {
+        // @PLN63 DB1 — drop stack-local watches whose frame has returned (the slot is now
+        // dead / reused), BEFORE reading — so a popped local never fires a spurious hit.  A
+        // heap watch (`frame: None`) survives frame exit and is kept.
+        {
+            let call_stack = &self.call_stack;
+            if let Some(d) = self.debug.as_deref_mut() {
+                d.watchpoints.retain(|w| match w.frame {
+                    None => true,
+                    Some(f) => call_stack
+                        .get(f.depth as usize)
+                        .is_some_and(|c| c.d_nr == f.d_nr && c.args_base == f.args_base),
+                });
+            }
+        }
         let count = self.debug.as_deref().map_or(0, |d| d.watchpoints.len());
         for i in 0..count {
             let (store_nr, rec, off, len, content) = {

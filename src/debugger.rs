@@ -49,11 +49,12 @@ pub struct BreakHit {
 /// @PLN16 M3 — a **watchpoint** (data breakpoint): a fixed heap region whose bytes are
 /// re-read after each op of a resumed run; when they differ from `last`, execution
 /// pauses.  `content` is the scalar primitive type number (the `ShowDb` map) for
-/// rendering old → new.  The region is heap-resident (a struct field / vector element),
-/// so it survives stepping and frame exit — unlike a stack local.
+/// rendering old → new.  A heap region (a struct field / vector element) survives frame
+/// exit; a **stack** region (a bare scalar local — @PLN63 DB) is bound to the frame it was
+/// set in (`frame`) and dropped the moment that frame returns, so a reused slot never fires.
 #[derive(Debug, Clone)]
 pub struct Watchpoint {
-    /// The source expression the user watched (`pt.x`, `v[0]`), for display.
+    /// The source expression the user watched (`pt.x`, `v[0]`, `n`), for display.
     pub label: String,
     pub store_nr: u16,
     pub rec: u32,
@@ -64,6 +65,22 @@ pub struct Watchpoint {
     pub content: u16,
     /// The region's bytes at the last poll; a change from these is what fires.
     pub last: Box<[u8]>,
+    /// The call frame a **stack**-local watch is bound to; `None` for a heap watch (which
+    /// survives frame exit).  A stack watch is dropped once its frame is no longer live.
+    pub frame: Option<StackWatchFrame>,
+}
+
+/// @PLN63 DB — the identity of the call frame a stack-local watch belongs to.  A watch is
+/// live only while `call_stack[depth]` is still this exact frame; once it returns (the entry
+/// shrinks away or is a different `(d_nr, args_base)`), the slot is dead and the watch drops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct StackWatchFrame {
+    /// The watched frame's function.
+    pub d_nr: u32,
+    /// The frame's argument-region base (its stack identity at a given depth).
+    pub args_base: u32,
+    /// The frame's index in the `call_stack` when the watch was set.
+    pub depth: u32,
 }
 
 /// @PLN16 M3 — a watchpoint that just fired: the label and the rendered old → new value.
