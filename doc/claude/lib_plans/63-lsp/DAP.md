@@ -293,17 +293,27 @@ test (the DAP side, D0), and a real-editor smoke.
 
 ## Refusals + v1 boundaries (never a wrong picture)
 
+Each boundary below is now designed as a small-step spine in
+[DAP_ADVANCED.md](DAP_ADVANCED.md) (grounded in probes on the `--rpc` path); until built,
+each stays an honest capability bit or clean error.
+
 - **`pause`** (async interrupt) — the RPC v1 has no mid-run interrupt; loft-dap does
   not fake one. It advertises `supportsTerminateRequest` and honours a step budget
   (`--max-steps`) instead. A `pause` request returns a clean "not supported" error.
-- **Reverse-execution stepping** (`stepBack`/`reverseContinue`) — the engine has
-  undo/redo, but exposing them as DAP reverse stepping is a follow-up; `supportsStepBack`
-  is **not** advertised, so no client offers a control the adapter can't honour.
+  (Not in DAP_ADVANCED — needs an interrupt path, its own plan.)
+- **Reverse-execution stepping** (`stepBack`/`reverseContinue`) — the engine's undo/redo is
+  reverse-*edit* (revert a `setValue` journal, @PLN16 M2), **not** reverse execution: a
+  probe showed `undo` after a step returns `"nothing to do"`. `supportsStepBack` is **not**
+  advertised. Design: [DAP_ADVANCED.md § RX](DAP_ADVANCED.md#rx--reverse-execution-the-large-one-engine-checkpointing--rpc--dap).
 - **Structured variable expansion** — every local is a leaf in v1 (the flat frame
-  renders values to strings). Drilling into a struct/vector child needs a value-walking
-  RPC; until then `variablesReference` on a variable is `0`.
+  renders values to strings). Drilling into a struct/vector child rides `debug_eval_json`
+  (adapter-only, no engine change). Design: [DAP_ADVANCED.md § VE](DAP_ADVANCED.md#ve--structured-variable-expansion-adapter-only).
 - **Multi-frame stack** — v1 shows the current frame only (the RPC `stackTrace` returns
-  one frame); a partial call stack is never invented.
+  one frame); a partial call stack is never invented. The `call_stack` data exists but
+  isn't surfaced. Design: [DAP_ADVANCED.md § SF](DAP_ADVANCED.md#sf--multi-frame-stack-trace-engine--rpc--dap).
+- **Data breakpoints** (break on a variable's change) — the engine's watchpoints resolve
+  only store/heap regions, so a stack local is `"not a watchable scalar region"` (probed).
+  Design: [DAP_ADVANCED.md § DB](DAP_ADVANCED.md#db--data-breakpoints-via-watchpoints-engine--rpc--dap).
 
 Each boundary is an honest capability bit or a clean error — never a silent, wrong
 response.

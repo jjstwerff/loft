@@ -547,20 +547,30 @@ surface table + spine below are its summary.
 
 ### Surface
 
-| Request | Behaviour |
+This table is the **as-built** v1 surface (D0–D6, [DAP.md](DAP.md)). The debuggee runs
+**in-process** inside the adapter — no child process, no port (Decision 1); every request
+is a translation over the `--rpc` engine's one dispatch chokepoint.
+
+| Request | Behaviour (as built) |
 |---|---|
-| `initialize` | Capabilities: `supportsConfigurationDoneRequest = true`, `supportsConditionalBreakpoints = true`, `supportsHitConditionalBreakpoints = true`, `supportsExceptionInfoRequest = true`. |
-| `launch` | Spawn a child loft interpreter process with `LOFT_DAP_PORT=$port` env var; the interpreter connects back and registers as the debuggee. |
-| `setBreakpoints` | Translate `.loft` `(file, line)` to a bytecode position; install a breakpoint flag on that opcode. |
-| `configurationDone` | Resume the debuggee from its initial pause. |
-| `threads` | Return the single thread (or one per parallel worker). |
-| `stackTrace` | Return the `vector<StackFrame>` from TR1.3. |
-| `scopes` | Per frame: `Locals`, `Arguments`, `Globals`. |
-| `variables` | Walk the named slots in the requested scope; format using `Data` types. |
-| `next` / `stepIn` / `stepOut` | Single-step at the source-line granularity. |
-| `continue` / `pause` | Run / interrupt. |
-| `evaluate` | Evaluate a small loft expression in the current frame's scope (LSP.3 v1 only supports identifier / field-access / call). |
-| `disconnect` | Tear down the debuggee. |
+| `initialize` | Capabilities: `supportsConfigurationDoneRequest`, `supportsConditionalBreakpoints`, `supportsEvaluateForHovers`, `supportsTerminateRequest`, `supportsSetVariable`. **NOT** `supportsHitConditionalBreakpoints` (no engine hit-count) nor `supportsStepBack` (see [DAP_ADVANCED.md](DAP_ADVANCED.md)). |
+| `launch {program, stopOnEntry?}` | Load the program in-process (RPC `launch`, no run); the run is deferred to `configurationDone`. `stopOnEntry` installs a function breakpoint at `main`'s entry. |
+| `setBreakpoints {source, breakpoints:[{line, condition?}]}` | RPC `setBreakpoints`; each line comes back `verified` (breakable in the loaded program) or not. Conditions pass straight through to the engine's resolve loop. |
+| `configurationDone` | The deferred launch — RPC `run` (entry `main`); a hit → `stopped`, else `terminated`. |
+| `threads` | The single synthetic thread `{id:1, name:"main"}` (one-per-worker `par` is a follow-up). |
+| `stackTrace` | The current frame only (`{id, name, line, source}`) — the RPC frame is flat. True multi-frame is [DAP_ADVANCED.md](DAP_ADVANCED.md) SF. |
+| `scopes` | A single `Locals` scope with a per-stop `variablesReference`. |
+| `variables` | The frame's locals from the last stop (leaf values; a stale reference → empty). Structured expansion is [DAP_ADVANCED.md](DAP_ADVANCED.md) VE. |
+| `next` / `stepIn` / `stepOut` | RPC `stepOver`/`stepIn`/`stepOut` → `stopped{reason:"step"}`. |
+| `continue` | RPC `continue` → the next stop or `terminated`. `pause` is refused (no async interrupt). |
+| `evaluate {expression, frameId, context}` | RPC `eval` in the frame's scope (identifier / field-access / call). |
+| `setVariable` / `setExpression` | RPC `setValue` → the refreshed frame value. |
+| `disconnect` / `terminate` | RPC `disconnect`; `terminated`, loop ends. |
+
+**Deferred to [DAP_ADVANCED.md](DAP_ADVANCED.md)** (each a small-step spine, most needing an
+engine step first — grounded in the probe findings there): structured **v**ariable **e**xpansion
+(VE), multi-**f**rame **s**tack (SF), **d**ata **b**reakpoints via watchpoints (DB), and
+**r**everse e**x**ecution (RX).
 
 ### What is already built — loft-dap is a TRANSLATION, not a new debugger
 
