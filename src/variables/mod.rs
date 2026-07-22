@@ -951,6 +951,14 @@ impl Function {
     }
 
     pub fn is_independent(&self, var_nr: u16) -> bool {
+        // No such variable — e.g. the `u16::MAX` sentinel a file-scope construction
+        // carries when there is no destination slot.  Such a var is not an in-place
+        // target; report `false` so the caller allocates fresh (mirrors `tp`, which
+        // returns `Type::Null` for the same out-of-range index).  Guarding here keeps
+        // `P p = P{}` at module scope from indexing an empty var table and panicking.
+        if var_nr as usize >= self.variables.len() {
+            return false;
+        }
         let d = self.variables[var_nr as usize].type_def.depend();
         d.is_empty() || (d.len() == 1 && d[0] == var_nr)
     }

@@ -2189,7 +2189,13 @@ impl Parser {
                 Value::Null
             };
             let mut parent_tp = Type::Reference(td_nr, crate::data::Deps::none());
-            if let Value::Var(v) = code {
+            // A `u16::MAX` destination is the "no slot" sentinel a file-scope
+            // construction carries (`P p = P{}` at module scope); it has no frame
+            // var to borrow from, and `depending` asserts on the marker — leave the
+            // parent type independent rather than panicking.
+            if let Value::Var(v) = code
+                && *v != u16::MAX
+            {
                 parent_tp = parent_tp.depending(*v);
             }
             // Collection fields prime `value` with an in-field write target
