@@ -560,17 +560,17 @@ is a translation over the `--rpc` engine's one dispatch chokepoint.
 | `threads` | The single synthetic thread `{id:1, name:"main"}` (one-per-worker `par` is a follow-up). |
 | `stackTrace` | The current frame only (`{id, name, line, source}`) — the RPC frame is flat. True multi-frame is [DAP_ADVANCED.md](DAP_ADVANCED.md) SF. |
 | `scopes` | A single `Locals` scope with a per-stop `variablesReference`. |
-| `variables` | The frame's locals from the last stop (leaf values; a stale reference → empty). Structured expansion is [DAP_ADVANCED.md](DAP_ADVANCED.md) VE. |
+| `variables` | The frame's locals from the last stop (a stale reference → empty), **with structured expansion** ([DAP_ADVANCED.md](DAP_ADVANCED.md) VE, built): a struct/vector value drills into its children; a scalar is a leaf. |
 | `next` / `stepIn` / `stepOut` | RPC `stepOver`/`stepIn`/`stepOut` → `stopped{reason:"step"}`. |
 | `continue` | RPC `continue` → the next stop or `terminated`. `pause` is refused (no async interrupt). |
 | `evaluate {expression, frameId, context}` | RPC `eval` in the frame's scope (identifier / field-access / call). |
 | `setVariable` / `setExpression` | RPC `setValue` → the refreshed frame value. |
 | `disconnect` / `terminate` | RPC `disconnect`; `terminated`, loop ends. |
 
-**Deferred to [DAP_ADVANCED.md](DAP_ADVANCED.md)** (each a small-step spine, most needing an
-engine step first — grounded in the probe findings there): structured **v**ariable **e**xpansion
-(VE), multi-**f**rame **s**tack (SF), **d**ata **b**reakpoints via watchpoints (DB), and
-**r**everse e**x**ecution (RX).
+**Advanced tools** ([DAP_ADVANCED.md](DAP_ADVANCED.md), each a small-step spine grounded in
+probe findings): structured **v**ariable **e**xpansion (VE) is **built**; still deferred (each
+needs an engine step first) — multi-**f**rame **s**tack (SF), **d**ata **b**reakpoints via
+watchpoints (DB), and **r**everse e**x**ecution (RX).
 
 ### What is already built — loft-dap is a TRANSLATION, not a new debugger
 

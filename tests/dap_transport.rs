@@ -144,6 +144,38 @@ impl Dap {
         let _ = self.recv_response(seq);
         let _ = self.child.wait();
     }
+
+    /// The current stop's `Locals` scope `variablesReference` (via stackTrace → scopes).
+    fn current_locals_ref(&mut self) -> i64 {
+        let st = self.request("stackTrace", r#"{"threadId":1}"#);
+        let _ = self.recv_response(st);
+        let sc = self.request("scopes", r#"{"frameId":1000}"#);
+        let scopes = field_arr(field(&self.recv_response(sc), "body").unwrap(), "scopes")
+            .expect("scopes")
+            .clone();
+        field_i64(&scopes[0], "variablesReference").expect("locals ref")
+    }
+
+    /// The `variables` list for a reference.
+    fn variables(&mut self, var_ref: i64) -> Vec<Parsed> {
+        let seq = self.request(
+            "variables",
+            &format!(r#"{{"variablesReference":{var_ref}}}"#),
+        );
+        field_arr(
+            field(&self.recv_response(seq), "body").unwrap(),
+            "variables",
+        )
+        .cloned()
+        .unwrap_or_default()
+    }
+}
+
+/// Find a variable by name in a `variables` list (panics if absent).
+fn var<'a>(vars: &'a [Parsed], name: &str) -> &'a Parsed {
+    vars.iter()
+        .find(|v| field_str(v, "name").as_deref() == Some(name))
+        .unwrap_or_else(|| panic!("no variable `{name}` in {vars:?}"))
 }
 
 // ── json field helpers ───────────────────────────────────────────────────────────────
@@ -543,6 +575,103 @@ fn evaluate_and_set_variable_at_a_stop() {
         field_str(a, "value").as_deref(),
         Some("5"),
         "the edited value is reflected in the next variables read: {vars:?}"
+    );
+
+    d.disconnect();
+    let _ = std::fs::remove_file(&path);
+}
+
+// ── VE — structured variable expansion (DAP_ADVANCED.md § VE) ─────────────────────────
+// A scalar local stays a leaf (ref 0); a struct / vector local carries an expansion
+// handle whose children are exactly its fields / elements; a vector-of-structs expands
+// two levels (VE2); a handle from a prior stop is invalidated on resume (VE3).
+//
+// The reliable path is a struct value shown BY NAME (`sq`), expanded through its evaluated
+// JSON tree — its vector field + nested struct field drill down without depending on the
+// frame's naming of bare heap locals (which shows a top-level `vector` under its `__vdb`
+// backing — a `frame_field` fidelity limit, not VE; see DAP_ADVANCED.md § VE).
+#[test]
+fn variable_expansion_walks_structs_vectors_and_nesting() {
+    let mut d = Dap::start();
+    d.handshake();
+    // At the line-6 stop, n + sq are live (total is the stop line, not yet set).
+    let src = "struct Point { x: integer, y: integer }\n\
+               struct Squad { members: vector<integer>, lead: Point }\n\
+               fn main() {\n\
+              \x20 n = 7;\n\
+              \x20 sq = Squad { members: [10, 20, 30], lead: Point { x: 9, y: 2 } };\n\
+              \x20 total = n + sq.lead.x;\n\
+              \x20 print(\"total={total}\")\n\
+               }\n";
+    let path = d.launch("ve", src, false);
+
+    let file = json::to_json_string(&Parsed::Str(path.to_string_lossy().into_owned()));
+    let seq = d.request(
+        "setBreakpoints",
+        &format!(r#"{{"source":{{"path":{file}}},"breakpoints":[{{"line":6}}]}}"#),
+    );
+    let _ = d.recv_response(seq);
+    d.configuration_done();
+    let _ = d.recv_event("stopped");
+
+    let lref = d.current_locals_ref();
+    let locals = d.variables(lref);
+
+    // VE0 — a scalar local is a leaf (ref 0), value from the flat frame.
+    let n = var(&locals, "n");
+    assert_eq!(
+        field_i64(n, "variablesReference"),
+        Some(0),
+        "scalar `n` is a leaf"
+    );
+    assert_eq!(field_str(n, "value").as_deref(), Some("7"));
+
+    // VE0 — the struct local carries a non-zero expansion handle.
+    let sq_ref = field_i64(var(&locals, "sq"), "variablesReference").expect("sq ref");
+    assert!(sq_ref != 0, "struct `sq` is expandable");
+
+    // VE1 — expanding the struct yields exactly its fields; a struct/vector field is itself
+    // expandable, a scalar field is a leaf.
+    let fields = d.variables(sq_ref);
+    assert_eq!(fields.len(), 2, "Squad has two fields: {fields:?}");
+    let members_ref =
+        field_i64(var(&fields, "members"), "variablesReference").expect("members ref");
+    let lead_ref = field_i64(var(&fields, "lead"), "variablesReference").expect("lead ref");
+    assert!(
+        members_ref != 0 && lead_ref != 0,
+        "both fields are expandable"
+    );
+
+    // VE1 — the vector field expands to its elements as `[i]`, in order.
+    let elems = d.variables(members_ref);
+    let elem_vals: Vec<Option<String>> = ["[0]", "[1]", "[2]"]
+        .iter()
+        .map(|i| field_str(var(&elems, i), "value"))
+        .collect();
+    assert_eq!(
+        elem_vals,
+        vec![Some("10".into()), Some("20".into()), Some("30".into())],
+        "vector elements in order: {elems:?}"
+    );
+    assert_eq!(
+        field_i64(var(&elems, "[0]"), "variablesReference"),
+        Some(0),
+        "a scalar element is a leaf"
+    );
+
+    // VE2 — two-level nesting through the CACHED tree (sq → lead → x/y), no re-eval (a
+    // direct `eval sq.lead.x` isn't needed — the values come from sq's cached JSON).
+    let lead = d.variables(lead_ref);
+    assert_eq!(field_str(var(&lead, "x"), "value").as_deref(), Some("9"));
+    assert_eq!(field_str(var(&lead, "y"), "value").as_deref(), Some("2"));
+
+    // VE3 — after a resume the prior handle is stale → empty, never a wrong subtree.
+    let cont = d.request("continue", r#"{"threadId":1}"#);
+    let _ = d.recv_response(cont);
+    let _ = d.recv_event("terminated");
+    assert!(
+        d.variables(sq_ref).is_empty(),
+        "a stale expansion handle after resume returns empty"
     );
 
     d.disconnect();

@@ -305,9 +305,11 @@ each stays an honest capability bit or clean error.
   reverse-*edit* (revert a `setValue` journal, @PLN16 M2), **not** reverse execution: a
   probe showed `undo` after a step returns `"nothing to do"`. `supportsStepBack` is **not**
   advertised. Design: [DAP_ADVANCED.md § RX](DAP_ADVANCED.md#rx--reverse-execution-the-large-one-engine-checkpointing--rpc--dap).
-- **Structured variable expansion** — every local is a leaf in v1 (the flat frame
-  renders values to strings). Drilling into a struct/vector child rides `debug_eval_json`
-  (adapter-only, no engine change). Design: [DAP_ADVANCED.md § VE](DAP_ADVANCED.md#ve--structured-variable-expansion-adapter-only).
+- **Structured variable expansion** — **BUILT** (no longer a leaf-only refusal): a struct
+  or nested value expands into its children via `debug_eval_json`, a node is a leaf iff its
+  JSON value is a scalar ([DAP_ADVANCED.md § VE](DAP_ADVANCED.md#ve--structured-variable-expansion-adapter-only--built)).
+  Remaining leaf-only edge: a **bare top-level heap-vector** local shows under its `__vdb`
+  backing (a `frame_field` fidelity limit, not VE).
 - **Multi-frame stack** — v1 shows the current frame only (the RPC `stackTrace` returns
   one frame); a partial call stack is never invented. The `call_stack` data exists but
   isn't surfaced. Design: [DAP_ADVANCED.md § SF](DAP_ADVANCED.md#sf--multi-frame-stack-trace-engine--rpc--dap).

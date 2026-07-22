@@ -22,6 +22,7 @@
 // captured as a `terminated` event, and the panic message is silenced (the hook
 // below) so it can never corrupt the stream.
 
+use std::collections::HashMap;
 use std::io::{self, BufRead, Write};
 use std::path::Path;
 
@@ -34,10 +35,11 @@ const THREAD_ID: i64 = 1;
 /// The single stack frame id (v1 surfaces the current frame only; the RPC
 /// `stackTrace` returns one frame — a true multi-frame stack is an engine follow-up).
 const FRAME_ID: i64 = 1000;
-/// Base for the `Locals` scope's `variablesReference`.  A fresh handle is minted per
-/// stop (base + stop count) so a reference from a prior stop is never mistaken for the
-/// current frame — a stale reference returns an empty `variables` list, never a wrong one.
-const LOCALS_REF_BASE: i64 = 2000;
+/// Offset for the monotonic `variablesReference` counter — every scope + expansion handle
+/// is minted from it and NEVER reused (VE3), so a reference from a prior stop is never
+/// mistaken for a current node: a stale handle returns an empty `variables` list, never a
+/// wrong subtree.  Clear of `FRAME_ID` (a separate DAP id space) and always non-zero.
+const VAR_REF_BASE: i64 = 1000;
 
 fn main() {
     // A debuggee fault must not print to stdout (the protocol channel); silence the raw
@@ -94,8 +96,13 @@ struct Adapter {
     locals: Vec<(String, String)>,
     /// The `variablesReference` handle for the current `Locals` scope; stale after a resume.
     locals_ref: i64,
-    /// Number of stops so far — mints a fresh `locals_ref` each stop.
-    stop_count: i64,
+    /// The monotonic source of every `variablesReference` (scopes + expansion handles) —
+    /// only grows, so a handle is never reused across stops (VE3).
+    next_ref: i64,
+    /// VE — expansion handles: a `variablesReference` → the cached JSON node it expands.
+    /// One `eval` per top-level struct/vector local caches its whole tree here, so drilling
+    /// deeper navigates in memory (no re-eval).  Cleared on every resume + stop.
+    var_values: HashMap<i64, Parsed>,
     /// The current frame's function name (the `stackTrace` frame label).
     frame_func: String,
     /// The source line the current stop is parked on (the editor's current-line marker).
@@ -258,26 +265,7 @@ impl Adapter {
                 let want = args
                     .and_then(|a| field_i64(a, "variablesReference"))
                     .unwrap_or(0);
-                // Only the CURRENT stop's reference yields content; a stale one (from a
-                // prior stop, invalidated by the last resume) returns empty.
-                let vars: Vec<Parsed> = if self.paused && want == self.locals_ref {
-                    self.locals
-                        .iter()
-                        .map(|(n, v)| {
-                            obj(vec![
-                                ("name", Parsed::Str(n.clone())),
-                                ("value", Parsed::Str(v.clone())),
-                                // The flat frame carries no per-local type (DAP `type`
-                                // is optional) and every value is a leaf (ref 0) —
-                                // structured expansion is a follow-up.
-                                ("type", Parsed::Str(String::new())),
-                                ("variablesReference", Parsed::Int(0)),
-                            ])
-                        })
-                        .collect()
-                } else {
-                    vec![]
-                };
+                let vars = self.build_variables(driver, want);
                 let body = obj(vec![("variables", Parsed::Array(vars))]);
                 self.respond(out, request_seq, &command, true, Some(body), None);
             }
@@ -399,6 +387,7 @@ impl Adapter {
     fn mark_resume(&mut self) {
         self.paused = false;
         self.locals.clear();
+        self.var_values.clear();
     }
 
     /// Translate the RPC messages produced by a resume into DAP events, ignoring the RPC
@@ -463,10 +452,10 @@ impl Adapter {
         }
     }
 
-    /// Cache the frame carried by a `stopped` event and mint this stop's `variablesReference`.
+    /// Cache the frame carried by a `stopped` event and mint this stop's Locals handle.
     fn on_stop(&mut self, ev: &Parsed) {
-        self.stop_count += 1;
-        self.locals_ref = LOCALS_REF_BASE + self.stop_count;
+        self.var_values.clear(); // a fresh expansion tree per stop
+        self.locals_ref = self.mint();
         self.paused = true;
         let frame = field(ev, "frame");
         self.frame_func = frame
@@ -474,6 +463,93 @@ impl Adapter {
             .unwrap_or_default();
         self.frame_line = frame.and_then(|f| field_i64(f, "line"));
         self.locals = frame.map(read_locals).unwrap_or_default();
+    }
+
+    // ── VE — structured variable expansion (DAP_ADVANCED.md § VE) ─────────────────────
+    /// Mint the next `variablesReference` from the monotonic counter (never reused → VE3).
+    fn mint(&mut self) -> i64 {
+        self.next_ref += 1;
+        VAR_REF_BASE + self.next_ref
+    }
+
+    /// Register a JSON node under a fresh handle so the client can expand it.
+    fn mint_value(&mut self, value: Parsed) -> i64 {
+        let handle = self.mint();
+        self.var_values.insert(handle, value);
+        handle
+    }
+
+    /// Build the `variables` list for a reference: the Locals scope (top-level frame locals,
+    /// each given an expansion handle when it evaluates to a non-empty struct/vector), a
+    /// registered expansion handle (the cached JSON node's immediate children), or empty for
+    /// a stale / unknown reference or when not paused.
+    fn build_variables(&mut self, driver: &mut DebugDriver, want: i64) -> Vec<Parsed> {
+        if !self.paused {
+            return vec![];
+        }
+        if want == self.locals_ref {
+            // VE0 — top level: keep the flat-frame value; add a handle only when the local
+            // evaluates to an expandable value.  One `eval` per local (a pure read).
+            let locals = self.locals.clone();
+            locals
+                .iter()
+                .map(|(name, value)| {
+                    let handle = match self.eval_json(driver, name) {
+                        Some(v) if expandable(&v) => self.mint_value(v),
+                        _ => 0,
+                    };
+                    var_entry(name, value, handle)
+                })
+                .collect()
+        } else if let Some(node) = self.var_values.get(&want).cloned() {
+            // VE1/VE2 — one level of the cached JSON tree; an object/array child gets its
+            // own handle (drilling deeper navigates the cached tree, no re-eval).
+            self.expand_node(&node)
+        } else {
+            vec![] // VE3 — a stale or unknown handle
+        }
+    }
+
+    /// The immediate children of a cached JSON node as DAP variables (object fields / array
+    /// elements); each child that is itself object/array gets a fresh expansion handle.
+    fn expand_node(&mut self, node: &Parsed) -> Vec<Parsed> {
+        match node {
+            Parsed::Object(entries) => entries
+                .iter()
+                .map(|(k, _, v)| var_entry(k, &render_value(v), self.child_handle(v)))
+                .collect(),
+            Parsed::Array(items) => items
+                .iter()
+                .enumerate()
+                .map(|(i, v)| var_entry(&format!("[{i}]"), &render_value(v), self.child_handle(v)))
+                .collect(),
+            _ => vec![], // a scalar node has no children (never registered as expandable)
+        }
+    }
+
+    /// An expansion handle for a child value when it is itself expandable, else `0` (leaf).
+    fn child_handle(&mut self, v: &Parsed) -> i64 {
+        if expandable(v) {
+            self.mint_value(v.clone())
+        } else {
+            0
+        }
+    }
+
+    /// Evaluate `expr` in the paused frame and return its value as JSON (`None` when it
+    /// evaluates to null or the eval fails) — the RPC `eval` verb, a pure read.
+    fn eval_json(&mut self, driver: &mut DebugDriver, expr: &str) -> Option<Parsed> {
+        let rpc = json::to_json_string(&obj(vec![
+            ("id", Parsed::Int(0)),
+            ("req", Parsed::Str("eval".into())),
+            ("expr", Parsed::Str(expr.to_string())),
+        ]));
+        let (msgs, _) = driver.drive(&rpc);
+        let resp = rpc_ok(&msgs, 0).ok()?;
+        match field(&resp, "value") {
+            Some(Parsed::Null) | None => None,
+            Some(v) => Some(v.clone()),
+        }
     }
 
     fn next_seq(&mut self) -> i64 {
@@ -577,6 +653,27 @@ fn render_value(v: &Parsed) -> String {
         Parsed::Str(s) => s.clone(),
         other => json::to_json_string(other),
     }
+}
+
+/// Whether a JSON value has children to drill into — a non-empty object or array.  A node
+/// is a leaf (DAP `variablesReference: 0`) iff this is false (VE's leaf invariant).
+fn expandable(v: &Parsed) -> bool {
+    match v {
+        Parsed::Object(o) => !o.is_empty(),
+        Parsed::Array(a) => !a.is_empty(),
+        _ => false,
+    }
+}
+
+/// A DAP `Variable`: `name`, display `value`, empty `type` (the flat frame carries none),
+/// and an expansion `variablesReference` (0 = leaf).
+fn var_entry(name: &str, value: &str, var_ref: i64) -> Parsed {
+    obj(vec![
+        ("name", Parsed::Str(name.to_string())),
+        ("value", Parsed::Str(value.to_string())),
+        ("type", Parsed::Str(String::new())),
+        ("variablesReference", Parsed::Int(var_ref)),
+    ])
 }
 
 // ── json helpers over loft::json::Parsed (mirrors loft-lsp) ──────────────────────────

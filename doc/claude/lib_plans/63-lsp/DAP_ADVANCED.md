@@ -44,7 +44,17 @@ translated — if the engine can't do it truthfully, the adapter refuses it, nev
 
 ---
 
-## VE — structured variable expansion (adapter-only)
+## VE — structured variable expansion (adapter-only) — **BUILT**
+
+> **Status: LANDED.** `src/bin/loft-dap.rs` (`build_variables`/`expand_node`/`mint_value`);
+> gate `tests/dap_transport.rs::variable_expansion_walks_structs_vectors_and_nesting`
+> (VE0–VE3). No engine change, as designed. **Known limit (a `frame_field` issue, not VE):**
+> a **bare top-level heap-vector local** appears in the frame under its `__vdb_N` compiler
+> backing (or is absent), so it may not show under its source name — VE still expands
+> whatever IS shown and evaluable, and a vector **nested inside** an evaluable value (a
+> struct field, an element) expands fully via the JSON tree. Making the top-level frame
+> locals source-faithful for heap vectors is a separate frame-fidelity follow-up (see SF's
+> per-frame locals, SF1).
 
 **Gap.** Every `variables` entry is a leaf (`variablesReference: 0`); a struct or vector
 local shows its one-line rendering with no drill-in (DAP.md Decision 3).
@@ -86,8 +96,12 @@ only its fields; expand a scalar → no expand arrow (ref 0).
   reference after a resume returns empty, never a wrong subtree. *Gate:* expand at stop A,
   resume, reuse the handle → empty.
 
-All four steps are loft-dap-local; no engine or RPC change. **VE is the recommended first
-increment.**
+All four steps are loft-dap-local; no engine or RPC change — **all four LANDED.** The gate
+drives the reliable path (a struct `sq` shown by name → expand its vector field `members`
+and nested struct field `lead` → their leaves, through the cached JSON tree). Note VE2's
+tree-cache is load-bearing, not just an optimization: a probe showed `eval sq.members`
+returns `null` (a direct vector field-access doesn't evaluate), so children MUST be read
+from the parent's cached tree, never re-evaluated by path.
 
 ---
 
