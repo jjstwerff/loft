@@ -6,7 +6,22 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 # @PLN115 — Parse-time resolution index
 
 **Tracker:** [loft-lang/plans#115](https://github.com/loft-lang/plans/issues/115) ·
-**Subject:** loft · **Status:** future (design-first)
+**Subject:** loft · **Status:** CLOSED 2026-07-22 (delivered)
+
+> **CLOSED 2026-07-22.** Shipped on `main` in
+> [loft-lang/loft#610](https://github.com/loft-lang/loft/pull/610) (merged 2026-07-21,
+> bundled with the @PLN63 loft-lsp server); [loft-lang/plans#115](https://github.com/loft-lang/plans/issues/115)
+> closed. The S1–S7 recording spine (Local/Global/Field/Method) and every consumer —
+> references, rename, inlayHint (feature E, the reason this plan exists),
+> go-to-definition, hover, semantic tokens, completion — are live, plus the
+> declaration tail (params, `for`, long-lambda). Verified green on this tree:
+> `tests/resolution_index.rs` (15, incl. the recording-off-by-default gate) and the LSP
+> consumer suites `lsp_transport`/`lsp_semantic`/`lsp_completion`/`lsp_refs`/`lsp_rename`/`lsp_hover`
+> (45). Remaining work is **optional** and untracked — the exotic S6 member paths
+> (poly-enum, nullable-unwrap, bounded-T stub, vector methods) and the last declaration
+> binders (short `|x|` lambdas, `for` destructure / `#fields`, param-with-lambda-default,
+> constants); each is safe (no declaration → F-v1 name-scan fallback) and @PLN63 can
+> pick any up when a consumer needs it.
 
 ## Status
 
