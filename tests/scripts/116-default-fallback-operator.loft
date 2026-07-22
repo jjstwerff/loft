@@ -11,6 +11,9 @@
 enum Color { Red, Green, Blue }
 struct Point { x: integer, y: integer }
 struct Scal { i: integer?, f: float?, s: single?, b: boolean?, ch: character?, t: text?, c: Color? }
+// @PLN116 enum-in-record rule: a bare enum field has no default (an enum's 0 is null),
+// so a record defaults only when every enum field is chosen — here via `= Green`.
+struct Chosen { tint: Color = Green, n: integer }
 
 fn colname(c: Color) -> text {
   match c { Red => "Red", Green => "Green", Blue => "Blue", _ => "NULL" }
@@ -58,6 +61,11 @@ fn main() {
   built = Point {};
   defaulted = ps[9]?;
   assert(built.x == defaulted.x && built.y == defaulted.y, "S-empty == x-op agreement");
+
+  // enum-in-record: a record defaults only when every enum field is chosen (`= Green`)
+  chosens: vector<Chosen> = [Chosen { tint: Color.Blue, n: 5 }];
+  ch = chosens[9]?;
+  assert(colname(ch.tint) == "Green" && ch.n == 0, "record w/ chosen enum defaults");
 
   // operator interaction: `x? ?? y` and the greedy `a ?? (b?)` lex
   assert(((a / b0)? ?? 99) == 0, "x? then ?? y");

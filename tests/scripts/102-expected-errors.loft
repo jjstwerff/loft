@@ -18,6 +18,14 @@ enum Shape {
   Square { side: float },
 }
 
+// @PLN116 — a struct with a BARE (non-`Optional`) enum field; used by the
+// enum-soundness error fns below (omitting `direction` has no default).
+struct Segment {
+  start: integer,
+  direction: Direction,
+  end: integer,
+}
+
 fn vec_sum(r: vector<integer>) -> integer {
   total = 0;
   for vs_e in r { total += vs_e; }
@@ -370,4 +378,22 @@ fn test_inferred_text_null_start_not_widened() {
 // @EXPECT_ERROR: got void on return from block
 fn pe_missing_return_path(n: integer) -> text {
   if n > 0 { return "pos"; }
+}
+
+// @PLN116 — a BARE (non-`Optional`) enum field has no default: an enum's 0 is null, and a
+// non-null field may not hold null, so the record author must choose (provide it, give it
+// `= <variant>`, or type it `E?`).  `S{}` omitting such a field is a compile error.
+// @EXPECT_ERROR: is an enum with no default
+fn pe_struct_omits_bare_enum_field() {
+  s = Segment { start: 0, end: 2 };
+  assert(s.start == 0, "unreached");
+}
+
+// @PLN116 — the same one rule from the `x?` default-fallback side: a record whose bare enum
+// field has no explicit choice has no default, so `x?` on it is a compile error.
+// @EXPECT_ERROR: no explicit choice
+fn pe_x_default_on_bare_enum_record() {
+  segs: vector<Segment> = [Segment { start: 1, direction: Direction.North, end: 2 }];
+  s = segs[9]?;
+  assert(s.start == 0, "unreached");
 }

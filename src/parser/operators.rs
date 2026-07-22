@@ -2008,12 +2008,39 @@ impl Parser {
         parent_tp: &mut Type,
         ctp: &mut Type,
     ) {
+        // Same C54.G-hybrid swap `??` does: if the operand is an immediate trapping
+        // arithmetic / index op (`(a / b)?`, `v[i]?`), swap it to the Nullable peer so
+        // it yields the sentinel silently instead of raising, then the fallback below
+        // discharges it — making `x?` a true synonym for `x ?? <default>`.
+        if !self.first_pass {
+            Self::rewrite_outer_arith_to_nullable(code, &self.data);
+        }
+        let base = ctp.base().clone();
+        // The single well-definedness check (the home `S{}` shares): a bare reference,
+        // or a record with an un-defaulted non-null field or a bare enum field with no
+        // explicit choice, has no default.  `x?` needing one there is a COMPILE error —
+        // a static check, consistent with "no runtime errors ever" (C80).  `x?` is new
+        // syntax (no program relies on it), so this always fires when the base lacks a
+        // default; the message names the culprit and the remedy.
+        if let Err(reason) = self.data.has_default(&base) {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`?` needs a default here, but {reason} — discharge with `?? <default>` \
+                     instead, or keep the value nullable"
+                );
+            }
+            self.expr_not_null = false;
+            *ctp = base;
+            return;
+        }
         // Redundant-`?` warning — the SAME authority as the redundant-`??` lint: a
-        // provably not-null operand (`expr_not_null`) whose type is not `Optional` and
-        // is not a declared-nullable call.  A C80-nullable index / field read has
-        // `expr_not_null == false`, so it is correctly NOT flagged — its default is
-        // live (an out-of-bounds / missing read yields null).  Like `??`, the coalesce
-        // is still emitted even when redundant (the default is simply never taken).
+        // provably not-null operand (`expr_not_null`) whose type is not `Optional` and is
+        // not a declared-nullable call.  A C80-nullable index / field read has
+        // `expr_not_null == false`, so it is correctly NOT flagged — its default is live
+        // (an out-of-bounds / missing read yields null).  Like `??`, the coalesce is
+        // still emitted even when redundant (the default is simply never taken).
         if self.expr_not_null
             && !self.first_pass
             && !matches!(ctp, Type::Optional(_))
@@ -2031,45 +2058,6 @@ impl Parser {
         // field hint must not fire on it — mirrors `p.field ?? d`.
         if let Some(key) = self.last_field_read_site.take() {
             self.defended_field_reads.insert(key);
-        }
-        // Same C54.G-hybrid swap `??` does: if the operand is an immediate trapping
-        // arithmetic / index op (`(a / b)?`, `v[i]?`), swap it to the Nullable peer so
-        // it yields the sentinel silently instead of raising, then the fallback below
-        // discharges it — making `x?` a true synonym for `x ?? <default>`.
-        if !self.first_pass {
-            Self::rewrite_outer_arith_to_nullable(code, &self.data);
-        }
-        let operand_nullable = matches!(ctp, Type::Optional(_));
-        let base = ctp.base().clone();
-        // The single well-definedness check (shared with `S{}`): a bare reference or a
-        // record with an un-defaulted non-null field has no default.  Only a GENUINELY
-        // nullable operand (`Optional`) needs the default, so only there is the missing
-        // default a COMPILE error (a static check, consistent with "no runtime errors
-        // ever" — C80).  On a non-null operand the default is never used, so a no-default
-        // type just makes the `?` a redundant no-op (below), not an error.
-        if let Err(reason) = self.data.has_default(&base) {
-            if operand_nullable {
-                if !self.first_pass {
-                    // No stable `code =` tag: current loft has no way to declare a
-                    // no-default field (bare `&T` fields are rejected) nor a nullable
-                    // reference, so this branch is an unreachable safety net — a machine
-                    // code would need a trigger program the language can't express (E1).
-                    diagnostic!(
-                        self.lexer,
-                        Level::Error,
-                        "`?` needs a default here, but {reason} — discharge with `?? <default>` \
-                         instead, or keep the value nullable"
-                    );
-                }
-            } else if !self.first_pass {
-                diagnostic!(
-                    self.lexer,
-                    Level::Warning,
-                    "Redundant `?` — the operand is not null, so the type default is never used"
-                );
-            }
-            *ctp = base;
-            return;
         }
         // A collection defaults to a REAL empty collection.  Its `[]` construction must
         // be parsed IN the coalesce's right-operand context (its ownership view-model

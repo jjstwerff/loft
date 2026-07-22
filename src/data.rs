@@ -4168,14 +4168,38 @@ impl Data {
                 let rec = self.def(*d_nr).name().to_string();
                 for a in 0..self.attributes(*d_nr) {
                     let at = &self.def(*d_nr).attributes()[a];
-                    // A `= expr` default, a nullable field (defaults null), a computed /
-                    // routine field (not stored), and a const-default field all supply
-                    // their own value — only a plain non-null field can lack one.
-                    if at.value != Value::Null || at.nullable || at.constant || at.hidden {
+                    let ftp = self.attr_type(*d_nr, a);
+                    // An explicit `= expr` default, a const-default / hidden field, and a
+                    // computed (routine) field all supply their own value.
+                    if at.value != Value::Null
+                        || at.constant
+                        || at.hidden
+                        || matches!(ftp, Type::Routine(_))
+                    {
                         continue;
                     }
-                    let ftp = self.attr_type(*d_nr, a);
-                    if matches!(ftp, Type::Routine(_)) {
+                    // @PLN116 — a BARE (non-`Optional`) enum field needs an EXPLICIT choice.
+                    // The enum's first-defined variant is a valid default for a bare enum
+                    // (`x?` on `E?`), but choosing a variant AS a record's silent default is a
+                    // real semantic decision the author must make — otherwise declaration
+                    // order becomes a hidden default.  A bare enum's `nullable` flag is only
+                    // the artifact that its 0 IS its null, so it does NOT excuse the field —
+                    // only a genuinely `Optional`-typed field (below) defaults to null.  The
+                    // synthetic `__nullable<…>` enum (a nullable struct field's inline rep) is
+                    // excluded — it is handled as a real nullable.
+                    if let Type::Enum(e, _, _) = &ftp
+                        && !self.def(*e).name.starts_with("__")
+                    {
+                        let fname = self.attr_name(*d_nr, a);
+                        let tn = ftp.name(self);
+                        return Err(format!(
+                            "record `{rec}` has no default: field `{fname}: {tn}` is an enum with \
+                             no explicit choice — add `{fname}: {tn} = <variant>`, or make it \
+                             `{tn}?` (defaults null)"
+                        ));
+                    }
+                    // A genuinely nullable field defaults to `null`.
+                    if at.nullable || matches!(ftp, Type::Optional(_)) {
                         continue;
                     }
                     if self.has_default(&ftp).is_err() {

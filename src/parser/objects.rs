@@ -2631,6 +2631,29 @@ impl Parser {
                 self.object_init(list, tp, pos + fld, code, &HashSet::new());
                 continue;
             } else if default == Value::Null {
+                // @PLN116 — a BARE (non-`Optional`) enum field cannot be silently
+                // zero-filled: an enum's 0 is its null/undefined value (variants are
+                // 1-based), so filling a NON-null enum field with 0 puts null into a
+                // non-null slot — a contradiction the null model otherwise forbids (a
+                // scalar's 0 is a valid value; an enum's 0 is the absence of one).  The
+                // record author must make an explicit choice — provide the field, give it
+                // `= <variant>`, or type it `E?` (where null IS allowed).  So an OMITTED
+                // bare enum field is a compile error.  The synthetic `__nullable<…>` field
+                // was skipped above; a genuinely `Optional` enum field is `Optional(Enum)`
+                // here (not `Enum`), so it null-fills correctly through `to_default` below.
+                // This is the `S{}` half of the one `has_default` rule `x?` enforces.
+                if let Type::Enum(e, _, _) = &tp
+                    && !self.data.def(*e).name.starts_with("__")
+                    && !self.first_pass
+                {
+                    let tn = tp.name(&self.data);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "field `{nm}: {tn}` is an enum with no default — specify it in the \
+                         constructor, give it `= <variant>`, or make it `{tn}?` (defaults null)"
+                    );
+                }
                 // LOFT.md § constructors: an omitted field gets "the zero
                 // value for its type" — numerics default to 0 (NOT null;
                 // tests/scripts/06-structs.loft locks this).  Pointer

@@ -69,7 +69,10 @@ struct Definition {
   nr: i32,
   file: u16,
   line: i32,
-  structure: Structure,
+  // @PLN116 — an enum field needs an explicit default (an enum's 0 is null, and a
+  // non-null field may not hold null).  A real Definition always sets `structure`; the
+  // name+nr `def_names` key (which never reads it) takes this benign first-variant default.
+  structure: Structure = Function,
   typedef: u16,
   arguments: u8,
   variables: vector < Variable >,

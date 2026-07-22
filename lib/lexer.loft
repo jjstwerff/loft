@@ -40,7 +40,10 @@ pub struct Lexer {
   pos: integer,
   start: integer,
   // the start of the last encountered token (till index)
-  scanned: Scanned,
+  // @PLN116 — an enum field needs an explicit default (an enum's 0 is null, and a
+  // non-null field may not hold null); `Unknown` is the honest "nothing scanned yet"
+  // zero, and it is reset to `Unknown` at parse start (see `parse_string`) anyway.
+  scanned: Scanned = Unknown,
   // the type of the last scanned thing or token
   formatting: boolean,
   // the last scan was a formatting expression
