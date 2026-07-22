@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I91 — Editor tooling: language server (LSP), debug adapter (DAP), resolution index
 //
 // loft-dap — the loft Debug Adapter (DAP over JSON-RPC / stdio).
 //

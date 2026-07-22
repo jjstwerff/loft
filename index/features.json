@@ -538,5 +538,11 @@
     "title": "Shared utilities & data structures",
     "kind": "infra",
     "body": "## What it does\n\nA grab-bag of small, dependency-free building blocks the rest of the engine reuses: base64 encoding, hashing, a radix tree, a generic tree, and cross-platform helpers. None is a feature on its own — they are the shared primitives other subsystems are built from.\n\n## Where it lives\n\n`src/base64.rs`, `src/hash.rs`, `src/radix_tree.rs`, `src/tree.rs`, `src/platform.rs`\n"
+  },
+  {
+    "number": 91,
+    "title": "Editor tooling: language server (LSP), debug adapter (DAP), resolution index",
+    "kind": "infra",
+    "body": "## What it does\n\nServes loft to an editor over the two protocols editors speak, so a plain text editor\nbecomes a working loft environment.\n\nThe **language server** (LSP) answers questions about the code being displayed and shows\nlive diagnostics. It re-parses the buffer on every edit with a real stdlib-loaded parser —\nthe same front end the compiler uses — so what the editor reports is what the compiler\nwould report, not a second approximation of loft's rules.\n\nThe **debug adapter** (DAP) lets you set breakpoints, step, inspect locals and evaluate\nexpressions in any DAP-aware editor. It is a pure translator rather than a second\ndebugger: every capability already exists behind the `--rpc` debug engine (@I83), and this\nlayer adds only the DAP framing and handshake, holding the debuggee in-process.\n\nUnderneath the language server, the parser records what each identifier occurrence\nactually resolves to as it parses. That index is what lets \"what is this symbol?\" and\n\"where else is THIS binding used?\" be answered precisely rather than by matching names as\ntext, which would confuse two different variables that happen to share a name. Recording\nis gated behind a flag that is off by default, so ordinary compilation pays nothing.\n\n## Where it lives\n\n`src/bin/loft-lsp.rs` (LSP wire protocol over JSON-RPC / stdio), `src/bin/loft-dap.rs`\n(DAP framing over the `--rpc` debug engine), `src/lsp.rs` (the library-side surface that\ncalls the compiler, so the compiler coupling stays out of the binaries),\n`src/resolution.rs` (the parse-time resolution index: position → resolved binding)."
   }
 ]

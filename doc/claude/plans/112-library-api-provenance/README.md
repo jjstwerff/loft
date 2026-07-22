@@ -435,7 +435,7 @@ cache — valid until some lib's published version or `origin/main` sub-path sha
 
 ## See also
 
-- [LIBRARIES.md](../../LIBRARIES.md) — the committed published catalogue (phase 1 target).
+- [LIBRARIES.md](../../LIBRARIES.md) — the committed published catalogue (phase 1 target). <!--noindex-->
 - `scripts/gen-library-catalogue.py` — the committed-catalogue generator (phases 1/2/5).
 - `scripts/lib-overlay.py` — the per-context overlay engine: `local`+`pinned` union + adaptive
   render + api-compat (phase 3).

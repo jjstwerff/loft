@@ -8,7 +8,7 @@ user-invocable: false
 
 Always consult this before writing or reviewing `.loft` files.
 
-**Before reimplementing stdlib-or-library functionality, check [doc/claude/LIBRARIES.md](../../../doc/claude/LIBRARIES.md) and `loft install <name>` — a registered library may already provide it.**
+**Before reimplementing stdlib-or-library functionality, check [doc/claude/LIBRARIES.md](../../../doc/claude/LIBRARIES.md) and `loft install <name>` — a registered library may already provide it.** <!--noindex-->
 
 ---
 
