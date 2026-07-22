@@ -560,6 +560,36 @@ pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
     }
 }
 
+/// One step of the Ordered (`on=3`) iteration path over a `hash`/`index`/`radix`/
+/// `spatial` collection: advance the u32-stride rec-nr cursor and yield the record it
+/// points at.  Shared by the interpreter (`State::step`) and the native runtime
+/// (`codegen_runtime::step`) so the two cannot drift.  `data.pos` locates the rec-nr
+/// vector pointer — offset 4 for a freshly-built scratch, but a struct-field offset
+/// when iterating a keyed field in place, so it is NOT a fixed header slot.  `cur` is
+/// the current cursor.  Returns `(yielded element, new cursor)`.  The element resolves
+/// in `data.store_nr`: scratch and records are co-located, so decoupling the two (to
+/// iterate a read-only/exposed source) needs an out-of-band source store_nr carried in
+/// the iterator state, not a header field — see expose-iteration-scratch.md.
+pub fn step_ordered(data: &DbRef, cur: u32, stores: &[Store]) -> (DbRef, u32) {
+    let mut pos = cur as i32;
+    vector_next(data, &mut pos, 4, stores);
+    let store = keys::store(data, stores);
+    let vector = store.get_u32_raw(data.rec, data.pos);
+    let rec = if pos == i32::MAX {
+        0
+    } else {
+        store.get_u32_raw(vector, pos as u32)
+    };
+    (
+        DbRef {
+            store_nr: data.store_nr,
+            rec,
+            pos: 8,
+        },
+        pos as u32,
+    )
+}
+
 pub fn vector_step(data: &DbRef, pos: &mut i32, stores: &[Store]) {
     let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
     if rec == 0 {

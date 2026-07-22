@@ -1186,20 +1186,10 @@ impl State {
                     )
                 }
                 3 => {
-                    let mut pos = cur as i32;
-                    vector::vector_next(&data, &mut pos, 4, &self.database.allocations);
-                    let vector = store.get_u32_raw(data.rec, data.pos);
-                    let rec = if pos == i32::MAX {
-                        0
-                    } else {
-                        store.get_u32_raw(vector, pos as u32)
-                    };
-                    self.put_var(state_var - 8, pos as u32);
-                    DbRef {
-                        store_nr: data.store_nr,
-                        rec,
-                        pos: 8,
-                    }
+                    let (elem, new_pos) =
+                        vector::step_ordered(&data, cur, &self.database.allocations);
+                    self.put_var(state_var - 8, new_pos);
+                    elem
                 }
                 _ => panic!("Not implemented"),
             }

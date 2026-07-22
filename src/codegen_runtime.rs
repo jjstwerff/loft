@@ -972,23 +972,11 @@ pub fn OpStep(
             }
         }
         3 => {
-            // C60 piece 3: Ordered iteration over u32-stride rec-nr
-            // vector.  Mirrors src/state/io.rs step() on=3 arm.
-            let mut pos = cur as i32;
-            vector::vector_next(&data, &mut pos, 4, all);
-            let store = crate::keys::store(&data, all);
-            let vector = store.get_u32_raw(data.rec, data.pos);
-            let rec = if pos == i32::MAX {
-                0
-            } else {
-                store.get_u32_raw(vector, pos as u32)
-            };
-            cur = pos as u32;
-            DbRef {
-                store_nr: data.store_nr,
-                rec,
-                pos: 8,
-            }
+            // C60 piece 3: Ordered iteration over the u32-stride rec-nr scratch.
+            // Shares `vector::step_ordered` with the interpreter (src/state/io.rs).
+            let (elem, new_pos) = vector::step_ordered(&data, cur, all);
+            cur = new_pos;
+            elem
         }
         _ => stores.element_reference(&data, i32::MAX),
     };
