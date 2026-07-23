@@ -138,21 +138,117 @@ It is *low-risk* (it is wasm-bindgen-rayon's proven mechanism with the wasm-bind
 for raw imports), but it is the design's keystone, so **implementation step 0 is a throwaway POC of
 exactly this** — if it fails, the design changes here, cheaply, before any pipeline surgery.
 
-## Phased plan (each phase independently landable + gated)
+## Phased plan — small, safe, gated steps (each independently landable)
 
-0. **POC** the C2/C3 keystone (raw rayon-in-wasm across Blob workers). Gate: ≥2 distinct workers,
-   correct value — the `par-thread-proof` shape, on a raw bundle.
-1. **C1 build recipe**: `wasm_threads` flag + build-std/atomics wired into the runtime-rlib build;
-   cache. Gate: a threaded raw rlib builds; the linker accepts shared memory.
-2. **C2 loft threading runtime** (`init_thread_pool`, `spawn_workers`, `start_worker`, the
-   spawn_handler) behind the flag. Gate: native suite green; `par` unchanged when the flag is off.
-3. **C3 JS bootstrap** (gallery file + `--html` inline). Gate: the four headless gates pass on the
-   loft-runtime bundle.
-4. **`--html` threaded** (C1 decision a/b + inline C3 + the auto-detect opt-out). Gate: a
-   `par`-using `--html` page threads on a COOP/COEP host and runs sequential elsewhere; a `par`-free
-   page is byte-for-byte the current single-threaded bundle.
-5. **Migrate the gallery** to loft's runtime; **drop wasm-bindgen-rayon**. Gate: all gates still
-   green; `Cargo.toml` no longer depends on `wasm-bindgen-rayon`.
+Each step names its **exact code points** and the **gate** that proves it before the next starts.
+The ordering keeps the working gallery (wasm-bindgen-rayon) untouched until its loft-runtime
+replacement is green (F7). Steps 0–2 are purely additive (feature-gated, default OFF → zero risk to
+existing builds); the first behaviour change to a shipped path is step 4.
+
+### Phase 0 — POC the keystone (throwaway; nothing committed to the repo)
+
+- **0.1 — a raw threaded wasm, no wasm-bindgen.** In a scratch dir (`$CLAUDE_JOB_DIR/tmp/poc/`), a
+  standalone `cdylib`: rayon + a `ThreadPoolBuilder::spawn_handler(|t| { sender.send(t); Ok(()) })
+  .build_global()` (copied from `wasm-bindgen-rayon-1.3.0/src/lib.rs::build`), a raw import
+  `#[link(wasm_import_module = "loft_thread")] unsafe extern "C" { fn loft_thread_spawn_workers(n:
+  u32, receiver: *const u8); }` (model: `src/wasm_assets.rs:28`), and `#[unsafe(no_mangle)] pub
+  extern "C" fn loft_rayon_start_worker(receiver: *const u8)` that pulls a `ThreadBuilder` and runs
+  it. Build with the proven `make wasm-mt` recipe (nightly + `-Z build-std=panic_abort,std` + the
+  `WASM_MT_RUSTFLAGS` link-arg set in the `Makefile`).
+  - **Gate:** builds; `native_utils::html_wasm_import_modules` reports the imports are exactly
+    `{loft_thread}` — **no** `__wbindgen_placeholder__`. Proves loft threading needs no wasm-bindgen.
+- **0.2 — drive it across Blob workers.** A throwaway JS harness (in `$…/tmp/poc/`): create a shared
+  `WebAssembly.Memory({shared:true,…})`, instantiate; implement `loft_thread.spawn_workers(n,recv)`
+  by spawning `n` Blob-URL workers, each `postMessage`'d `{module, memory, recv}` -> the worker
+  instantiates the module against the shared memory and calls `loft_rayon_start_worker(recv)`; then
+  run a `.into_par_iter().sum()` and read the distinct-worker count (as `par-thread-proof.html`
+  does). Serve COOP/COEP via `tests/wasm/coi-server.py`, drive headless.
+  - **Gate:** `distinct_workers >= 2` + correct sum on a RAW bundle. **If this fails, the design
+    changes here — before any pipeline surgery.**
+
+### Phase 1 — the build recipe (C1), additive, feature-gated
+
+- **1.1 — a `wasm-native-threads` Cargo feature.** `Cargo.toml` `[features]`: add
+  `wasm-native-threads = ["threading"]` (NOT `wasm` — this is the raw, wasm-bindgen-free path).
+  `default` unchanged.
+  - **Gate:** `cargo build` (default) unchanged; `cargo check --features wasm-native-threads`
+    compiles (nothing consumes it yet).
+- **1.2 — a threaded runtime-rlib shape.** `src/native_utils.rs`: add
+  `WasmRuntimeShape::HtmlThreads` beside `Html` (~line 138) — same triple
+  (`wasm32-unknown-unknown`), `features()` = `"random wasm-native-threads"` (~line 179),
+  `isolated_target_subdir()` = `Some("target/loft/html-mt")` (~line 189). In
+  `ensure_loft_runtime_rlib` (~line 263) the cargo command for this shape gains
+  `rustup run nightly` + `-Z build-std=panic_abort,std` + `RUSTFLAGS=<WASM_MT_RUSTFLAGS>`.
+  - **Gate:** `ensure_loft_runtime_rlib(HtmlThreads)` produces a threaded `libloft.rlib` + an
+    atomics-std under `target/loft/html-mt/`; the existing `Html` shape build command is untouched.
+
+### Phase 2 — loft's threading runtime (C2), behind the feature
+
+- **2.1 — `src/wasm_threads.rs` (new), `#[cfg(feature = "wasm-native-threads")]`.** loft's
+  `PoolBuilder` (a `std`/`crossbeam` channel + the spawn_handler from 0.1), `pub fn
+  init_thread_pool(n: usize)` that spawns via the `loft_thread_spawn_workers` import then
+  `build_global()`, the raw import block, and the `loft_rayon_start_worker` export. Register the
+  module in `src/lib.rs`. Mirrors `wasm-bindgen-rayon-1.3.0/src/lib.rs` with the wasm-bindgen
+  boundary swapped for the raw import.
+  - **Gate:** `cargo check --features wasm-native-threads` clean; default build unchanged.
+- **2.2 — confirm `with_pool` already covers this path.** `src/parallel.rs::with_pool` (~line 154)
+  runs `f()` (the global pool) under `#[cfg(feature = "wasm")]`; broaden that arm's cfg to
+  `any(feature = "wasm", feature = "wasm-native-threads")` so the raw path also uses the global
+  pool loft's `init_thread_pool` installs. `rayon_pool()` stays `not(wasm)`-gated — extend to
+  `not(any(wasm, wasm-native-threads))`.
+  - **Gate:** `loft introspect` on a `par` fixture is **byte-identical** before/after on both
+    backends (with_pool is runtime, not emitted); `cargo test --test threading` 47/47 (default,
+    feature off); `cargo check --features wasm-native-threads` clean.
+
+### Phase 3 — the JS worker bootstrap (C3), one source
+
+- **3.1 — `doc/loft-thread.js` (new).** `installLoftThreads(imports, getModule, getMemory)` adds a
+  `loft_thread` key to the wasm imports object implementing `spawn_workers(n, recv)`; plus the
+  inlined worker body (instantiate `module` vs shared `memory`, call `loft_rayon_start_worker`).
+  Written to be usable **both** as a file (gallery) and `include_str!`-inlined (`--html`), matching
+  how `doc/loft-gl-wasm.js` is consumed today (`src/main.rs:6989`).
+  - **Gate:** `node --check doc/loft-thread.js`; loads without error.
+- **3.2 — prove the four gates on a loft-runtime RAW bundle.** Build a raw threaded bundle (the
+  Phase-1 recipe) wired to `doc/loft-thread.js`, and run the existing gates against it.
+  - **Gate:** `par-thread-proof.sh`, `par-memory-proof.sh`, `par-scaling-bench.sh`,
+    `par-ui-responsive.sh` all PASS on the loft-runtime bundle (parity with the wasm-bindgen-rayon
+    numbers). This retires the keystone risk for real bundles.
+
+### Phase 4 — `--html` threaded (the payoff; first change to a shipped path)
+
+- **4.1 — atomics-std for `--html` (D1=a).** Switch the `prog.wasm` build (`src/main.rs` ~6609,
+  the `rustc` invocation) to a generated **cargo** crate built with `-Z build-std` + the atomics
+  link-args, `--extern loft=<HtmlThreads rlib>`. Re-solve the crate-dup guard (the reason for
+  `rustc`-direct, `src/main.rs` ~6643): pin loft as a single path/rlib dep so exactly one copy
+  links. Extend the import allow-list `native_utils::html_wasm_import_modules_ok` (~line 587) to
+  permit `loft_thread`.
+  - **Gate:** `loft --html` on a par-using program emits a wasm importing ONLY
+    `{loft_gl, loft_io, loft_thread}`; it instantiates in a COOP/COEP dev server.
+- **4.2 — inline the bootstrap + init.** Add `include_str!("../doc/loft-thread.js")` beside the
+  gl glue (`src/main.rs` ~6989); in the emitted non-module driver (`src/main.rs` ~7037) call the
+  COI-gated `init_thread_pool(navigator.hardwareConcurrency)` before `loft_start`. asyncify note:
+  the worker loop must not be on an asyncify-suspended path (workers run `loft_rayon_start_worker`,
+  not `loft_start`) — verify the `--asyncify` pass (~6855) leaves the worker export intact.
+  - **Gate:** a par-using `--html` page threads on a COOP/COEP host (`distinct_workers >= 2`) and
+    runs sequential on a plain host (never breaks — the arc-D fallback, in a self-contained file).
+- **4.3 — the opt-out (D2).** `src/generation/mod.rs`: set an `Output.uses_par` flag when emitting
+  any `n_parallel_*` call (the list at ~line 116). `--html` takes the threaded path only when
+  `uses_par` (else today's single-threaded `rustc`-direct path, unchanged); add `--threads` /
+  `--no-threads` overrides in the CLI arg parse (`src/main.rs` ~4737).
+  - **Gate:** a par-free `--html` page is byte-identical to today's bundle; a par-using one is
+    threaded; both render.
+
+### Phase 5 — migrate the gallery, drop wasm-bindgen-rayon
+
+- **5.1 — gallery on loft's runtime.** Point `make gallery-mt` / `make wasm-mt` at
+  `wasm-native-threads` + `doc/loft-thread.js`; the gallery loaders (`doc/playground.html`,
+  `doc/gallery-run.html`) call loft's `init_thread_pool` instead of wasm-bindgen-rayon's.
+  - **Gate:** the four headless gates still green on the gallery bundle.
+- **5.2 — remove the dependency.** Drop `wasm-bindgen-rayon` from `Cargo.toml` (~line 95, incl. the
+  `no-bundler` feature), the re-export in `src/wasm.rs`, and any wasm-bindgen-rayon-only Makefile
+  flags.
+  - **Gate:** `cargo build` clean; `Cargo.lock` no longer lists `wasm-bindgen-rayon`; the four gates
+    green. loft now owns its `par` runtime end-to-end.
 
 ## Open decisions for sign-off
 
