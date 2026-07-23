@@ -1,5 +1,6 @@
 // Copyright (c) 2026 Jurjen Stellingwerff
 // SPDX-License-Identifier: LGPL-3.0-or-later
+// @I72 — Parallel execution runtime (the browser half: where `par`'s threads come from)
 // @PLN117 — loft's own browser thread pool (no wasm-bindgen)
 
 //! loft's browser thread pool: `par` on real Web Worker threads.
