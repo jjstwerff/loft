@@ -1,0 +1,53 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN118 arc E / crawler-H6 — a live `list_dir` result must survive a file read,
+// at EVERY listing rather than only the first.
+//
+// Reading a file inside a loop over a `list_dir` vector used to free a slot that
+// vector still referenced (the interpreter's store-slot-reuse UAF).  From the
+// SECOND listing onward `len()` collapsed to 0 mid-loop and the remaining entries
+// were silently skipped: a consumer's round-trip gate walked two corpus
+// directories, loaded 3 of 22 entries from the second, and reported a CLEAN PASS
+// on the 13 it saw.  A slightly different shape of the same reuse segfaulted the
+// interpreter outright.  Native was clean throughout, so this also guards the
+// backends against diverging again.
+//
+// Two directories with DIFFERENT entry counts, so reading the wrong listing is
+// distinguishable from reading none, and every entry's CONTENT is checked, so a
+// right-length-wrong-values outcome cannot pass either.  The counts are asserted
+// before the loop, after the loop, and against what the loop actually visited —
+// the "two measurements disagreeing" property that caught it in the consumer.
+
+fn test() {
+    mkdir_all("h6_d0");
+    mkdir_all("h6_d1");
+    for i in 0..3 { file("h6_d0/f{i}.t").write("d0f{i}"); }
+    for i in 0..5 { file("h6_d1/f{i}.t").write("d1f{i}"); }
+
+    counts = [3, 5];
+    for k in 0..2 {
+        d = "h6_d{k}";
+        want = counts[k] ?? 0;
+        ns = list_dir(d) ?? [];
+        assert(len(ns) == want, "every entry of {d} is listed before any file read");
+        seen = 0;
+        good = 0;
+        for i in 0..len(ns) {
+            nm = ns[i] ?? "";
+            if nm.ends_with(".t") {
+                c = content(file("{d}/{nm}")) ?? "";
+                seen = seen + 1;
+                if c.starts_with("d{k}f") { good = good + 1; }
+            }
+        }
+        assert(len(ns) == want, "the listing of {d} survives the file reads");
+        assert(seen == want, "every entry of {d} is visited by the loop");
+        assert(good == want, "every entry of {d} reads back its own content");
+    }
+
+    for i in 0..3 { delete("h6_d0/f{i}.t"); }
+    for i in 0..5 { delete("h6_d1/f{i}.t"); }
+    delete("h6_d0");
+    delete("h6_d1");
+}
