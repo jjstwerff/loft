@@ -221,3 +221,8 @@ pub mod stdlib_sources;
 pub mod wasm;
 pub mod wasm_assets;
 pub mod wasm_gl;
+// @PLN117 — the browser thread pool.  Browser-only by nature (it exists because
+// wasm has no `thread::spawn`), so it is not compiled for the host: type-checking
+// it is the wasm build's job, via `make check-wasm-threads`.
+#[cfg(all(feature = "wasm-native-threads", target_arch = "wasm32"))]
+pub mod wasm_threads;

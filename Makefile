@@ -102,7 +102,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
+.PHONY: check-wasm-threads gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -988,7 +988,19 @@ WASM_MT_RUSTFLAGS = -C target-feature=+atomics,+bulk-memory,+mutable-globals \
   -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 \
   -C link-arg=--import-memory -C link-arg=--export=__heap_base \
   -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size \
-  -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base
+  -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base \
+  -C link-arg=--export=__stack_pointer
+
+# @PLN117 — type-check loft's OWN browser thread pool (src/wasm_threads.rs).  It
+# is browser-only by nature, so the host `cargo clippy --all-features` never sees
+# it; this is where it gets compiled.  Same recipe the `--html` threaded build
+# uses, minus the link step.
+check-wasm-threads:
+	RUSTFLAGS='-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals' \
+	rustup run nightly cargo check --lib --target wasm32-unknown-unknown \
+	--no-default-features --features "random wasm-native-threads" \
+	--target-dir target/loft/html-mt -Zbuild-std=panic_abort,std
+
 wasm-mt:
 	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
 	rustup run nightly \

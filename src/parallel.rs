@@ -275,12 +275,13 @@ pub(crate) fn merge_batches<R: Clone>(
 /// Run `f` on the rayon pool that drives loft's parallel dispatch (@PLN117 step 2).
 ///
 /// - **Native:** install onto loft's private, lazily-built pool (`rayon_pool`).
-/// - **Wasm (`wasm-bindgen-rayon`):** run `f` directly so the `.into_par_iter()`
-///   inside it dispatches over the GLOBAL rayon pool that JS `initThreadPool(n)`
-///   installed.  A private `ThreadPoolBuilder` cannot spawn under wasm — there
-///   are no OS threads to build on — so the global pool is the only one with
-///   real workers.  Before `initThreadPool` has run (or when the host is not
-///   cross-origin-isolated so the page never called it), the global pool has a
+/// - **Browser:** run `f` directly so the `.into_par_iter()` inside it dispatches
+///   over the GLOBAL rayon pool the page installed — loft's own
+///   (`wasm_threads::loft_pool_build`) or, for the wasm-bindgen bundle,
+///   `initThreadPool(n)`.  A private `ThreadPoolBuilder` cannot spawn under wasm
+///   — there are no OS threads to build on — so the global pool is the only one
+///   with real workers.  Before the pool is installed (or when the host is not
+///   cross-origin-isolated so the page never built one), the global pool has a
 ///   single thread and `f` runs sequentially on the caller: the never-break
 ///   sequential fallback (@PLN117 arc D).  Same bounds as `ThreadPool::install`,
 ///   so it is a drop-in at every call site.
@@ -290,21 +291,21 @@ where
     R: Send,
     F: FnOnce() -> R + Send,
 {
-    #[cfg(not(feature = "wasm"))]
+    #[cfg(not(browser_pool))]
     {
         rayon_pool().install(f)
     }
-    #[cfg(feature = "wasm")]
+    #[cfg(browser_pool)]
     {
         f()
     }
 }
 
 /// Lazily-initialised private rayon pool for the native backend.  Uses rayon's
-/// default thread count.  Not built under wasm — the wasm arm of `with_pool`
-/// uses the global `wasm-bindgen-rayon` pool instead (a private builder can't
-/// spawn OS threads that don't exist in the browser).
-#[cfg(all(feature = "threading", not(feature = "wasm")))]
+/// default thread count.  Not built under wasm — the browser arm of `with_pool`
+/// uses the page's global pool instead (a private builder can't spawn OS threads
+/// that don't exist in the browser).
+#[cfg(all(feature = "threading", not(browser_pool)))]
 fn rayon_pool() -> &'static rayon::ThreadPool {
     use std::sync::OnceLock;
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();

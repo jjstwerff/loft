@@ -48,6 +48,14 @@ wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
                 "dep:js-sys", "dep:web-sys", "png", "dep:fontdue",
                 "dep:console_error_panic_hook"]
 wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
+# @PLN117 — loft's OWN browser threading: rayon driven through the raw
+# `loft_thread.*` host bridge, with no wasm-bindgen anywhere, so it links into
+# both the wasm-bindgen gallery bundle and the raw `loft --html` one.
+# `rayon/web_spin_lock` is not optional: without it rayon reaches a `std` lock
+# from the calling thread on every `par` and the browser main thread — which may
+# not block — throws "Atomics.wait cannot be called in this context".  The
+# `wasm_sync` that feature pulls is loft's own (see `[patch.crates-io]`).
+wasm-native-threads = ["threading", "rayon/web_spin_lock", "dep:wasm_sync"]
 png          = ["dep:png"]
 # @PLN53 F1 — expose the raw-source fuzz oracle (src/fuzz_oracle.rs) for the
 # cargo-fuzz `program_source` target. Also compiled under `cfg(test)`, so the
@@ -99,6 +107,10 @@ wasm-bindgen-rayon = { version = "1.2", optional = true, features = ["no-bundler
 rayon              = { version = "1.10", optional = true }
 libloading         = { version = "0.8", optional = true }
 loft-ffi           = { path = "loft-ffi" }
+# @PLN117 — loft's main-thread-safe locks.  A direct dependency as well as a
+# `[patch]` target: loft itself calls `set_can_block(false)` on the browser main
+# thread, and the patch is what puts the same crate under rayon's spin locks.
+wasm_sync          = { path = "wasm-sync", optional = true }
 console_error_panic_hook = { version = "0.1", optional = true }
 ureq               = { version = "2", optional = true }
 zip                = { version = "2", optional = true, default-features = false, features = ["deflate"] }
@@ -106,6 +118,15 @@ tar                = { version = "0.4", optional = true }
 flate2             = { version = "1", optional = true }
 sha2               = { version = "0.10" }
 ed25519-dalek      = { version = "2", optional = true, default-features = false, features = ["std"] }
+
+# @PLN117 — rayon's `web_spin_lock` feature hard-codes a dependency on the
+# crates.io `wasm_sync`, whose main-thread detection needs wasm-bindgen.  loft's
+# raw browser wasm must not import wasm-bindgen at all (`--html` rejects such a
+# bundle), so every build resolves `wasm_sync` to loft's own drop-in instead.
+# Off wasm the replacement is a straight `std` pass-through, so native builds are
+# unaffected whether or not the feature is on.
+[patch.crates-io]
+wasm_sync = { path = "wasm-sync" }
 
 [target.'cfg(unix)'.dependencies]
 libc               = "0.2"

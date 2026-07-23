@@ -1,0 +1,18 @@
+[package]
+# The name is load-bearing: this crate REPLACES the crates.io `wasm_sync` that
+# rayon's `web_spin_lock` feature depends on, via `[patch.crates-io]` in the
+# workspace root.  Both the name and a version matching rayon-core's `^0.1`
+# requirement must stay as they are or the patch silently stops applying.
+name = "wasm_sync"
+version = "0.1.2"
+edition = "2024"
+authors = ["Jurjen Stellingwerff"]
+license = "LGPL-3.0-or-later"
+description = "Main-thread-safe Mutex/Condvar for loft's browser threading (wasm-bindgen-free)"
+homepage = "https://github.com/loft-lang/loft"
+repository = "https://github.com/loft-lang/loft"
+publish = false
+
+[lib]
+name = "wasm_sync"
+path = "src/lib.rs"
