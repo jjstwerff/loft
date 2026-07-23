@@ -9,22 +9,22 @@ Tracks [`loft-lang/plans#117`](https://github.com/loft-lang/plans/issues/117) (`
 
 ## Status
 
-**Open — core + memory model + gallery + all verification proven end-to-end in-browser (steps 0–4,
-arcs A/B/C/D, B1-gallery, E1/E2/E3); only the routed `loft --html` export + CI wiring remain.** A
+**Open — INTEGRAL threading done: `par` runs on Web Worker threads in EVERY browser build
+(`loft --html` and the gallery), on ONE loft-owned runtime; only CI wiring remains.** A
 loft `par`, run through `compile_and_run`
 in a real (headless) browser, **dispatches across multiple Web Worker threads over shared wasm
 memory** with correct results (proven for primitive, struct+text, and vector returns) and a
-never-break sequential fallback. The load-bearing risk (does
-rayon-via-`wasm-bindgen-rayon` actually build, link, and parallelise loft's dispatch?) is
-**resolved**. What is proven, landed on `tuxedo-extract-function`, and pushed:
+never-break sequential fallback. The load-bearing risk (does rayon actually build, link, and
+parallelise loft's dispatch in a browser?) is **resolved**. What is proven, landed on
+`tuxedo-extract-function`, and pushed:
 
-- **Build + link + export** (`src/wasm.rs` re-exports `init_thread_pool`; `make wasm-mt`).
+- **Build + link + pool** (`src/wasm_threads.rs`, `doc/loft-thread.js`; `make wasm-mt`).
 - **Native dispatch seam** (`src/parallel.rs::with_pool`) — wasm uses the global rayon pool,
   native its private pool; behaviourally identical on native (threading suite 47/47).
 - **In-browser dispatch:** `distinct_workers=4`, `par_sum=36023`, matching the native
   `--interpret` **and** `--native` reference (`36023`). ~1.8× wall-clock here (interpreter
   overhead dominates 48 elems / 4 workers).
-- **Arc-D fallback:** with no `initThreadPool`, the same `par` runs sequentially
+- **Arc-D fallback:** with no pool started, the same `par` runs sequentially
   (`distinct_workers=1`), succeeds, and gives the correct value — **it never breaks**.
 - **Arc-C memory model:** the read-only-share model holds under shared linear memory —
   allocation-heavy struct+text AND vector-return `par` match the native reference on every
@@ -38,47 +38,52 @@ rayon-via-`wasm-bindgen-rayon` actually build, link, and parallelise loft's disp
   (memory model, both return shapes), `par-scaling-bench.sh` (scaling), `par-ui-responsive.sh`
   (UI); `coi-server.py` is the COOP/COEP host.
 
-**The toolchain finding (load-bearing).** `wasm-bindgen-rayon` only threads if the wasm memory
-is SHARED + IMPORTED with a maximum and lld's synthesized TLS / heap-base globals survive as
-exports. This toolchain's rustc does **not** auto-emit those from `+atomics`, so `make wasm-mt`
+**The toolchain finding (load-bearing).** A wasm only threads if its memory is SHARED + IMPORTED
+with a maximum and lld's synthesized TLS / heap-base globals survive as exports. This toolchain's rustc does **not** auto-emit those from `+atomics`, so `make wasm-mt`
 passes the full link-arg set explicitly (`--shared-memory --max-memory --import-memory
---export=__heap_base --export=__wasm_init_tls/__tls_size/__tls_align/__tls_base`). Drop any one
-and the bundle silently builds a **non-shared** memory → workers die at runtime with *"Memory
-could not be cloned"*. `Cargo.toml` also enables `wasm-bindgen-rayon`'s `no-bundler` feature so
-the worker bootstrap resolves the main module by URL (loft ships static files, no bundler).
-`--target web` is mandatory (the old `wasm-mt` target used `--target nodejs`, which cannot drive
-the rayon worker bootstrap; **node also has no Web Worker global**, so the browser — not node —
-is the proof environment).
+--export=__heap_base --export=__wasm_init_tls/__tls_size/__tls_align/__tls_base`, plus loft's own
+`--export=__stack_pointer`). Drop any one and the bundle silently builds a **non-shared** memory →
+workers die at runtime with *"Memory could not be cloned"*. `--target web` is mandatory (the old
+`wasm-mt` target used `--target nodejs`, which cannot drive the worker bootstrap; **node also has
+no Web Worker global**, so the browser — not node — is the proof environment).
+
+**B1 — `loft --html` threaded export: DONE.** A self-contained single-file page (wasm inlined as
+base64 in a non-module `<script>`, no wasm-bindgen) dispatches `par` across Web Workers.
+`loft --html` picks the threaded runtime when the program has a reachable `par`; `--threads` /
+`--no-threads` override. It links an atomics std through a **sysroot assembled from the
+`build-std` output** so the `rustc`-direct pipeline, its single loft copy, and the wasm-bridge
+crates are unchanged (design decision D1=b — the option the pre-implementation design had ranked
+second). Gate `tests/wasm/html-thread-proof.sh`: threaded `distinct_workers=8`, plain host
+`distinct_workers=1`, `--no-threads`, all `par_sum=36023` = the interpreter.
+
+**One runtime everywhere — `wasm-bindgen-rayon` is gone.** loft owns its `par` runtime end to end
+(`src/wasm_threads.rs` + `doc/loft-thread.js` + `wasm-sync/`): rayon still schedules, loft supplies
+the threads, because a browser has no `thread::spawn`. The pool is plain wasm exports with **no
+host imports at all** — the host sequences start-up anyway — which is what lets the same runtime
+serve the raw `--html` bundle and the wasm-bindgen gallery bundle, whose glue builds its own
+imports and would reject an extra module. The gallery was migrated onto it and all four gates
+re-pass, scaling included (8w = 5.3×, slightly better than under wasm-bindgen-rayon).
+
+**Three things the POC falsified before any pipeline surgery** (see
+[`DESIGN-integral-threads.md`](DESIGN-integral-threads.md) § Phase 0 result): `rayon/web_spin_lock`
+is mandatory and its `wasm_sync` had to become loft's own (the browser main thread may not block,
+and rayon locks there on every join); pool start-up must be two-phase and host-driven (one-shot
+deadlocks); and each worker needs its own shadow stack + TLS block installed from JS, plus an
+`--export=__stack_pointer` link-arg.
 
 **Remaining:**
 
-- **B1 — `loft --html` threaded export (its own arc; design fork).** The gallery half is done;
-  the self-contained single-file `--html` export is NOT a quick follow-on. `--html` inlines the
-  wasm as **base64 in a non-module `<script>`** (`src/main.rs` ~6929), which is incompatible with
-  `wasm-bindgen-rayon`'s worker bootstrap (ESM `--target web` + a separate `workerHelpers.js`
-  imported via `import.meta.url`; workers `new Worker(url,{type:'module'})` then re-import the
-  main module). Two options, pick under the design skill: **(a)** a custom inlined worker
-  bootstrap — each worker instantiates the inlined base64 wasm against the SHARED memory and runs
-  the rayon worker loop (self-contained kept; hand-rolled, the case the retired stub was meant
-  for); **(b)** switch `--html` to a multi-file ESM bundle for the threaded path (drops the
-  single-file property games rely on). Also needs the `--html` rustc invocation to add the
-  atomics/build-std/shared-memory flags + run the wasm-bindgen threads transform. Games use little
-  `par` today, and the routing consumer can deploy the multi-file `pkg-mt` on a COOP/COEP host —
-  so this is lower urgency than it looks.
-- **CI wiring** — the four headless gates (`par-thread-proof.sh`, `par-memory-proof.sh`,
-  `par-scaling-bench.sh`, `par-ui-responsive.sh`) all pass locally but need chromium on the CI
-  runner to run there, so the threaded path can't silently rot.
+- **CI wiring** — the five headless gates (`par-thread-proof.sh`, `par-memory-proof.sh`,
+  `par-scaling-bench.sh`, `par-ui-responsive.sh`, `html-thread-proof.sh`) all pass locally but need
+  chromium on the CI runner to run there, so the threaded path can't silently rot.
 
-Steps 0–4 + arcs A/B/C/D + B1-gallery + all of Track 4 (E1/E2/E3) are done. The only feature work
-left is the routed `loft --html` threaded export. This README is the single source of truth for
-phase status.
+Steps 0–4, arcs A/B/C/D, B1 (gallery **and** `--html`), and all of Track 4 (E1/E2/E3) are done.
+This README is the single source of truth for phase status.
 
-loft's parallel execution otherwise runs **sequentially on the main thread in the browser**: the
-default `--target web` bundle is built `--features wasm` (no `threading`), so `par(...)` and
-`par_fold` take `parallel.rs`'s non-threading fallback. This plan wires the `wasm-threads` path
-(rayon backed by `wasm-bindgen-rayon` = Web Workers over SharedArrayBuffer + wasm atomics) into
-the browser build so the whole parallel-dispatch surface runs on real threads, at parity with the
-native OS-thread (rayon) model.
+The **default** (non-threaded) `--target web` gallery bundle is still built `--features wasm`
+without `threading`, so `par` there takes `parallel.rs`'s sequential fallback — a threaded gallery
+is `make gallery-mt`, deployed on a COOP/COEP host. A `loft --html` page needs no such choice: it
+picks the threaded runtime from the program itself.
 
 ## Goal
 
@@ -104,7 +109,7 @@ runs sequentially in the caller's thread — same results, no parallelism."* For
 or a game's per-entity update, that means the whole workload runs on the main thread and freezes
 the page while it does. The infrastructure to fix it already exists but is unwired:
 
-- `Cargo.toml`: `wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]`.
+- `Cargo.toml`: a `wasm-threads` feature exists (at plan-open it pulled `wasm-bindgen-rayon`).
 - `Makefile:951`: a **nodejs** multi-thread bundle (`tests/wasm/pkg-mt/`) is built with it.
 - `src/wasm.rs::worker_entry`: a **no-op stub** (W1.18-2 TODO) — an older hand-rolled-worker
   design; the intended model is the rayon/`wasm-bindgen-rayon` scheduler (`parallel.rs:140`,
@@ -128,11 +133,11 @@ working correctly on the main thread alongside the worker pool.
 
 | Item | Concern | Status |
 |---|---|---|
-| **A** — threaded `--target web` bundle | build the browser bundle with `--features wasm-threads`; JS glue inits the pool (`await init(); await initThreadPool(navigator.hardwareConcurrency)`) before any `par` | **Build + gallery DONE.** `make wasm-mt` (full link-arg set, `no-bundler`); pool proven to initialise in-browser (`pool_init=ok`, N workers). **B1 gallery:** `make gallery-mt` (→ `doc/pkg-mt`, no clobber of the committed single-threaded gallery); `playground.html`/`gallery-run.html` call `initThreadPool` when `crossOriginIsolated` (inert on the single-threaded bundle — proven both ways); `make serve` sends COOP/COEP. **`loft --html` fold-in pending** — see below |
-| **B** — dispatch over the wasm rayon pool | route `run_parallel_*` and `par_fold` over the `wasm-bindgen-rayon` pool; retire the `worker_entry` stub so there is ONE scheduler | **Dispatch DONE + proven** (`with_pool` seam; in-browser `distinct_workers=4`, value matches native). Retiring the hand-rolled stub = step 4, pending |
+| **A** — threaded browser bundles | build with threading; the page starts the pool (`await init(); startLoftWorkers(...)`) before any `par` | **DONE for BOTH.** Gallery: `make wasm-mt` / `gallery-mt` (full link-arg set, → `doc/pkg-mt`, no clobber of the committed single-threaded gallery); `playground.html`/`gallery-run.html` start loft's pool when `crossOriginIsolated` (inert on the single-threaded bundle — proven both ways); `make serve` sends COOP/COEP. **`loft --html`** chooses the threaded runtime from the program itself and inlines the bootstrap, staying one self-contained file |
+| **B** — dispatch over the browser rayon pool | route `run_parallel_*` and `par_fold` over the page's global pool; ONE scheduler, not two | **DONE + proven** (`with_pool` seam; in-browser `distinct_workers=4`, value matches native). The hand-rolled `worker_entry` stub is gone — and so is `wasm-bindgen-rayon`: the pool is loft's own (`src/wasm_threads.rs`), shared by every browser build |
 | **C** — memory model under SHARED memory | re-prove the @PLN108 read-only-share model (`clone_for_light_worker`, borrowed parent stores, `read_only` write-panic) now that the Store heap is a *shared* `SharedArrayBuffer` across workers, under atomics | **DONE + proven.** Invariant (worker reads shared read-only parent, writes only own scratch) holds across 5 verified re-assertion sites — C93 static, the release-active read-only `assert!`, the read-only borrow, join-before-drop, and the **lock-guarded wasm DLMALLOC** (concurrent worker alloc is serialized). Empirical: `par-memory-proof.{html,sh}` runs allocation-heavy struct+text AND vector-return `par` across 4 Web Workers, every rep == native ref, real ≥4-worker concurrency, 30-rep race hunt clean. `par_share_for`/copy-path is gone (@PLN108 left ONE borrow path) |
-| **D** — cross-origin isolation + fallback | COOP/COEP hosting contract; runtime `crossOriginIsolated` detection; **graceful fallback to sequential** when unavailable | **DONE + proven** — `coi-server.py` sends COOP/COEP; without `initThreadPool` the `par` runs sequentially (`distinct_workers=1`) and never crashes. B3 (document the contract in WASM.md for real hosts) pending |
-| **E** — verify + measure | in-browser proof a `par` runs OFF the main thread + scales; an automated gate; benchmark vs native + vs sequential-wasm | **E1 + E2 + E3 DONE.** Four headless gates: `par-thread-proof.sh` (dispatch + fallback), `par-memory-proof.sh` (memory model), `par-scaling-bench.sh` (scaling — par-time 1w→8w = 3154→612ms, 5.2×; 2.9× at 4w; ~2× the native interpreter), `par-ui-responsive.sh` (E1 — a rAF loop delivers ~3× more frames + ~½ the worst-case jank threaded vs sequential). All value-stable. Only CI wiring (chromium on the runner) left |
+| **D** — cross-origin isolation + fallback | COOP/COEP hosting contract; runtime `crossOriginIsolated` detection; **graceful fallback to sequential** when unavailable | **DONE + proven** — `coi-server.py` sends COOP/COEP, `html-plain-server.py` deliberately does not; on a non-isolated host the SAME threaded `--html` bundle runs `distinct_workers=1` with the same value and never crashes. Contract documented in WASM.md |
+| **E** — verify + measure | in-browser proof a `par` runs OFF the main thread + scales; an automated gate; benchmark vs native + vs sequential-wasm | **E1 + E2 + E3 DONE.** Five headless gates: `par-thread-proof.sh` (dispatch + fallback), `par-memory-proof.sh` (memory model), `par-scaling-bench.sh` (scaling — par-time 1w→8w = 3154→612ms, 5.2×; 2.9× at 4w; ~2× the native interpreter), `par-ui-responsive.sh` (E1 — a rAF loop delivers ~3× more frames + ~½ the worst-case jank threaded vs sequential), and `html-thread-proof.sh` (the `loft --html` bundle: threaded, non-isolated fallback, and `--no-threads`, each against the interpreter's value). All value-stable. Only CI wiring (chromium on the runner) left |
 
 ## Phase ordering
 
@@ -152,10 +157,11 @@ working correctly on the main thread alongside the worker pool.
 
 ## Open questions
 
-1. **rayon-via-wasm-bindgen-rayon vs the hand-rolled `worker_entry`.** Confirm the
-   `wasm-bindgen-rayon` pool actually drives `.into_par_iter()` in loft's build (it should — it
-   installs a global rayon pool) and delete `worker_entry` rather than finishing it. If a
-   loft-specific reason blocks rayon-on-wasm, the hand-rolled dispatch is the fallback design.
+1. **rayon-via-wasm-bindgen-rayon vs the hand-rolled `worker_entry`.** ANSWERED: neither.
+   rayon does drive `.into_par_iter()` in the browser, so `worker_entry` is deleted — but the
+   scheduler needed no wasm-bindgen at all. loft supplies the threads itself
+   (`src/wasm_threads.rs`), which is what lets ONE pool serve the `--html` bundle as well as the
+   gallery, and `wasm-bindgen-rayon` is dropped.
 2. **@PLN108 borrow model under shared memory.** On native, the read-only-share borrows parent
    stores because the dispatcher joins all workers before the parent drops. Under a shared
    `SharedArrayBuffer`, is the same lifetime argument sound, or does shared memory + atomics

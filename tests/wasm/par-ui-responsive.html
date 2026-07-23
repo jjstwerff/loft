@@ -17,7 +17,8 @@ window.addEventListener('error', e => report('winerror=' + (e.message||e.filenam
 window.addEventListener('unhandledrejection', e => report('reject=' + ((e.reason&&e.reason.message)||e.reason)));
 </script>
 <script type=module>
-import init, { initThreadPool, compile_and_run } from './pkg-mt/loft.js';
+import init, { compile_and_run } from './pkg-mt/loft.js';
+import { startLoftWorkers } from './pkg-mt/loft-thread.js';
 const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
 const P      = q.has('threads') ? (parseInt(q.get('threads'),10) || 0) : 8;
 const work   = parseInt(q.get('work')  || '40000', 10);
@@ -28,9 +29,9 @@ const SRC = `fn heavy(x: integer) -> integer { acc = 0; for i in 0..${work} { ac
 fn main() { data = [0]; for i in 1..${elems} { data += [i]; } total = 0; for a in data par(b = heavy(a), 8) { total += b; } println("total={total}"); }`;
 (async () => {
   try {
-    await init();
+    const wasm = await init();
     if (!self.crossOriginIsolated) return report('FAIL coi=false');
-    if (P > 0) await initThreadPool(P);
+    if (P > 0) await startLoftWorkers(wasm, P, { memory: wasm.memory, mainJS: new URL('./pkg-mt/loft.js', import.meta.url).href });
     let frames = 0, last = performance.now(), maxGap = 0, value = '?';
     const start = last;
     const frame = () => {

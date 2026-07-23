@@ -17,7 +17,8 @@ window.addEventListener('error', e => report('winerror=' + (e.message||e.filenam
 window.addEventListener('unhandledrejection', e => report('reject=' + ((e.reason&&e.reason.message)||e.reason)));
 </script>
 <script type=module>
-import init, { initThreadPool, compile_and_run, set_par_trace_workers } from './pkg-mt/loft.js';
+import init, { compile_and_run, set_par_trace_workers } from './pkg-mt/loft.js';
+import { startLoftWorkers } from './pkg-mt/loft-thread.js';
 const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
 const threads = q.has('threads') ? (parseInt(q.get('threads'),10) || 0) : 4;
 const reps    = parseInt(q.get('reps') || '10', 10);
@@ -46,9 +47,9 @@ fn main() {
 const SRC = cas === 'vector' ? VECTOR : STRUCT;
 (async () => {
   try {
-    await init();
+    const wasm = await init();
     if (!self.crossOriginIsolated) return report('FAIL coi=false');
-    if (threads > 0) await initThreadPool(threads);
+    if (threads > 0) await startLoftWorkers(wasm, threads, { memory: wasm.memory, mainJS: new URL('./pkg-mt/loft.js', import.meta.url).href });
     set_par_trace_workers(true);
     const results = new Set();
     let minWorkers = 1e9, allOk = true, badDiag = '';

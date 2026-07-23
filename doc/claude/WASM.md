@@ -1344,16 +1344,21 @@ build profiles exist — single-threaded and multi-threaded:
 default    = ["png", "mmap", "random", "threading"]
 wasm       = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
               "dep:js-sys", "dep:web-sys", "png"]
-wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
+wasm-threads = ["wasm", "wasm-native-threads"]   # gallery bundle: wasm-bindgen + the pool
+wasm-native-threads = ["threading", "rayon/web_spin_lock", "dep:wasm_sync"]
 png        = ["dep:png"]
 mmap       = ["dep:mmap-storage"]         # disabled for WASM — no file-backed mmap
 random     = ["dep:rand_core", "dep:rand_pcg"]  # disabled for WASM — host provides RNG
 threading  = []                            # enables par() — OS threads or Web Workers
 
-[dependencies]
-# `no-bundler`: the worker bootstrap resolves the main module by URL, not a
-# bundler's package resolution — loft ships static files (@PLN117).
-wasm-bindgen-rayon = { version = "1.2", optional = true, features = ["no-bundler"] }
+[patch.crates-io]
+# rayon's `web_spin_lock` is what keeps a `par` on the browser main thread from
+# throwing "Atomics.wait cannot be called in this context" — that thread may not
+# block, and rayon takes a lock there on every join.  The `wasm_sync` that
+# feature pulls detects the main thread with `web_sys::window()`, i.e. needs
+# wasm-bindgen, which the raw `--html` wasm must not contain — so loft supplies
+# its own (@PLN117).
+wasm_sync = { path = "wasm-sync" }
 ```
 
 **Build commands:**
@@ -1371,16 +1376,28 @@ RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals \
   -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 \
   -C link-arg=--import-memory -C link-arg=--export=__heap_base \
   -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size \
-  -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base' \
+  -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base \
+  -C link-arg=--export=__stack_pointer' \
   rustup run nightly \
   wasm-pack build --target web --out-dir tests/wasm/pkg-mt --release \
   -- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
 ```
 
+`--export=__stack_pointer` is loft's own (@PLN117): every `WebAssembly.Instance`
+starts with the SAME stack pointer, so the worker bootstrap must move each worker
+onto its own shadow stack before it runs any wasm.  The same list is in
+`native_utils::WASM_THREAD_FLAGS`, which is what `loft --html` passes.
+
 Requires the **nightly** toolchain with **rust-src** (`build-std` rebuilds std with
-atomics). `--target web` is mandatory — wasm-bindgen-rayon's worker bootstrap is
-web-target-only, and node has no Web Worker global, so the **browser** is the proof
+atomics). `--target web` is mandatory — the worker bootstrap imports the generated
+glue as a module, and node has no Web Worker global, so the **browser** is the proof
 environment.
+
+**`loft --html` threads too, and needs no flags.** A program with a reachable
+`par` gets the threaded runtime automatically; `--no-threads` opts out and
+`--threads` forces it on.  It links the same pool through an atomics-std sysroot
+assembled from the `build-std` output, so a page stays ONE self-contained file
+with no wasm-bindgen in it.  Gate: `tests/wasm/html-thread-proof.sh`.
 
 **COOP/COEP hosting contract (arc D).** The threaded bundle needs
 `crossOriginIsolated === true` (the precondition for `SharedArrayBuffer` + wasm
@@ -1394,9 +1411,20 @@ Cross-Origin-Embedder-Policy: require-corp
 `require-corp` means every cross-origin sub-resource must itself opt in
 (`Cross-Origin-Resource-Policy` / CORS) or it won't load — plan for it when a page
 pulls cross-origin assets. Before any `par`, JS must
-`await init(); if (crossOriginIsolated) await initThreadPool(navigator.hardwareConcurrency)`.
-When the host is **not** isolated, skip `initThreadPool` — the same `par` then runs
-sequentially (one worker) and **never crashes** (proven). `tests/wasm/coi-server.py`
+```js
+const wasm = await init();
+if (crossOriginIsolated) {
+  const { startLoftWorkers } = await import('./pkg/loft-thread.js');
+  await startLoftWorkers(wasm, navigator.hardwareConcurrency,
+                         { memory: wasm.memory, mainJS: new URL('./pkg/loft.js', import.meta.url).href });
+}
+```
+
+A `loft --html` page does this itself (`loftInstantiate`, inlined).  When the host
+is **not** isolated, `startLoftWorkers` returns 0 and the same `par` runs
+sequentially (one worker) and **never crashes** (proven).  `globalThis.loftThreads`
+is how many worker threads a page actually got, and `?loftTrace=1` makes loft
+report how many workers each individual `par` dispatched across. `tests/wasm/coi-server.py`
 is a reference COOP/COEP server; `tests/wasm/par-thread-proof.{html,sh}` is the
 in-browser proof (a `par` dispatched across 4 Web Workers, value matching native).
 
@@ -1405,7 +1433,8 @@ in-browser proof (a `par` dispatched across 4 Web Workers, value matching native
 | Feature | Native | WASM (single) | WASM (threaded) | Notes |
 |---|---|---|---|---|
 | `threading` | ON | OFF | **ON** | OS threads / Web Workers / sequential fallback |
-| `wasm-threads` | — | — | ON | Adds `wasm-bindgen-rayon` for Web Worker pool |
+| `wasm-threads` | — | — | ON | wasm-bindgen bundle + loft's Web Worker pool |
+| `wasm-native-threads` | — | — | ON | loft's pool itself — also what `loft --html` links, without wasm-bindgen |
 | `mmap` | ON | OFF | OFF | No file-backed mmap in browser |
 | `random` | ON | OFF | OFF | Host provides RNG via bridge |
 | `png` | ON | **ON** | **ON** | Pure Rust — compiles to WASM |
@@ -1418,9 +1447,13 @@ in-browser proof (a `par` dispatched across 4 Web Workers, value matching native
 > **⚠ Superseded implementation (@PLN117).** The hand-rolled Web-Worker dispatch
 > described below (`worker_entry`, a manual `SharedArrayBuffer` control buffer,
 > `LoftThreadPool`) was **never implemented** (`worker_entry` was a no-op stub) and
-> has been **retired**. Browser `par()` now rides **`wasm-bindgen-rayon`** — the
-> same rayon scheduler the native backend uses — via `src/parallel.rs::with_pool`
-> and the `initThreadPool` export. Build with `make wasm-mt`; the COOP/COEP
+> has been **retired**. Browser `par()` now rides **loft's own rayon pool**
+> (`src/wasm_threads.rs` + `doc/loft-thread.js`) — the same rayon scheduler the
+> native backend uses — via `src/parallel.rs::with_pool`. rayon schedules; loft
+> only supplies the threads, because a browser has no `thread::spawn`. The pool is
+> plain wasm exports with no host imports, which is why the SAME runtime serves
+> the wasm-bindgen gallery bundle and the raw `loft --html` one. Build with
+> `make wasm-mt`; the COOP/COEP
 > contract, the two-tier (isolated → threaded, else → sequential) fallback, and the
 > runtime detection idea below all still hold. The current, proven picture is
 > **§ Cargo Feature Gates → Build commands** above and
@@ -1522,25 +1555,23 @@ Cross-Origin-Embedder-Policy: require-corp
 Without these headers, the browser blocks `SharedArrayBuffer` construction (Spectre
 mitigation). This is why Tier 2 cannot work from `file://` URLs.
 
-**Rust implementation using `wasm-bindgen-rayon`:**
+**Rust implementation** (as shipped — @PLN117; the sketch this section originally
+carried used `wasm-bindgen-rayon`, which loft no longer depends on):
 
 ```rust
-// src/parallel.rs — under #[cfg(all(feature = "threading", feature = "wasm-threads"))]
+// src/wasm_threads.rs — under #[cfg(feature = "wasm-native-threads")]
 
-use wasm_bindgen_rayon::init_thread_pool;
-
-/// Called once at WASM init to spawn the worker pool.
-/// worker_count is typically navigator.hardwareConcurrency.
-#[wasm_bindgen]
-pub fn init_parallel(worker_count: usize) {
-    init_thread_pool(worker_count);
-}
+// The page spawns the Web Workers and sequences start-up; rayon schedules.
+loft_pool_new(n) -> handoff    // create the handoff, mark this thread non-blocking
+loft_rayon_start_worker(h)     // each worker: claim one rayon thread and run it
+loft_pool_build()              // install the global pool once the workers are up
 ```
 
-`wasm-bindgen-rayon` provides the glue: it spawns Web Workers that share the WASM
-linear memory, and exposes rayon's thread pool to Rust code. The existing
-`run_parallel_*` functions in `src/parallel.rs` use `std::thread::spawn` which, under
-the atomics target feature, compiles to Web Worker creation.
+Plain wasm exports with no host imports, driven from `doc/loft-thread.js`.  That is
+what lets ONE pool serve both the wasm-bindgen gallery bundle and the raw
+`loft --html` one, whose glue builds its own imports and would reject an extra
+module.  `std::thread::spawn` does NOT become a Web Worker under the atomics target
+feature — it is unsupported, which is exactly why the threads come from the host.
 
 Alternatively, if loft's parallel model doesn't fit rayon's work-stealing pattern,
 the worker pool can be managed directly:
@@ -2380,9 +2411,9 @@ correct.
 **Goal:** `par()` loops use real Web Workers when SharedArrayBuffer is available.
 
 **Changes:**
-- `Cargo.toml`: `wasm-threads` feature adds `wasm-bindgen-rayon`
-- `src/parallel.rs`: add `#[cfg(feature = "wasm-threads")]` implementations that
-  use `wasm-bindgen-rayon` or direct Worker management
+- `Cargo.toml`: `wasm-threads` feature adds the Web Worker pool (@PLN117: loft's
+  own, `wasm-native-threads`; this plan predates it and said `wasm-bindgen-rayon`)
+- `src/parallel.rs`: route the `par` dispatch over the page's global pool
 - `ide/src/loft-worker.js`: worker script
 - `ide/src/wasm-bridge.js`: `initWasmThreaded()` with shared memory and worker pool
 - `ide/serve.mjs`: dev server with COOP/COEP headers
@@ -2535,7 +2566,7 @@ used by WASM worker spawning (W1.18).
 > `--target nodejs`) has been **removed**. Its premise — "node avoids the browser's
 > COOP/COEP obstacle" — does not survive contact with `wasm-bindgen-rayon`, which is
 > `--target web` only and needs a **Web Worker** global that node lacks. Browser
-> `par()` runs on the wasm-bindgen-rayon pool, and the proof harness is the
+> `par()` runs on loft's own pool (`src/wasm_threads.rs`), and the proof harness is the
 > **browser**: `make wasm-mt` + `tests/wasm/par-thread-proof.{html,sh}` +
 > `coi-server.py`. The COOP/COEP requirement is real and documented under
 > **§ Cargo Feature Gates → Build commands** above. The section below is obsolete;

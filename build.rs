@@ -101,7 +101,9 @@ fn main() {
     // has the threading feature switched on — `cargo clippy --all-features` does
     // — keeps the private native pool, because there is no page to install one.
     println!("cargo:rustc-check-cfg=cfg(browser_pool)");
-    let wasm_target = std::env::var("TARGET").unwrap_or_default().starts_with("wasm32");
+    let wasm_target = std::env::var("TARGET")
+        .unwrap_or_default()
+        .starts_with("wasm32");
     let wasm_bindgen_build = std::env::var_os("CARGO_FEATURE_WASM").is_some();
     let loft_browser_threads = std::env::var_os("CARGO_FEATURE_WASM_NATIVE_THREADS").is_some();
     if wasm_bindgen_build || (loft_browser_threads && wasm_target) {

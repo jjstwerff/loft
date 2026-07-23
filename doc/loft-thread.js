@@ -6,13 +6,21 @@
 // gallery bundle, and inlined into the single-file `loft --html` page (which
 // strips the trailing `export`, the same way loft-asyncify.js is inlined).
 //
-// Usage, in order (the order is load-bearing — see startLoftWorkers):
-//   const memory  = loftSharedMemory(wasmBytes);      // BEFORE instantiating
-//   const imports = { env: { memory }, ... };
-//   installLoftThreads(imports, () => instance.exports, module, memory);
-//   const { instance } = await WebAssembly.instantiate(module, imports);
-//   await startLoftWorkers(instance.exports, navigator.hardwareConcurrency);
+// Two kinds of loft wasm use this, and the difference is one line in the worker:
+//
+//   raw (`loft --html`)   — instantiate the module directly, then move this
+//                           thread onto its own stack + TLS block.
+//   wasm-bindgen gallery  — `import(mainJS)` and let the generated glue do it.
+//
+// Everything else — who spawns, in what order, and the pool itself — is shared.
+//
+// Usage:
+//   const memory = loftSharedMemory(wasmBytes);     // BEFORE instantiating
+//   const { instance } = await WebAssembly.instantiate(module, { env: { memory }, ... });
+//   await startLoftWorkers(instance.exports, navigator.hardwareConcurrency, { module, memory });
 //   instance.exports.loft_start();
+//
+// …or, for the gallery, `startLoftWorkers(wasm, n, { memory, mainJS })`.
 //
 // Without any of this the wasm still runs: rayon falls back to a single-threaded
 // pool and `par` runs sequentially, with identical results (@PLN117 arc D).  A
@@ -23,41 +31,49 @@
 // keeps a deep loft recursion behaving the same wherever it runs.
 const LOFT_WORKER_STACK = 1 << 20;
 
-// The worker body, inlined so a self-contained page stays one file.  It runs
-// before anything else on that thread: a fresh instance starts with the SAME
-// stack pointer as the main thread, so it must be moved onto its own stack and
-// TLS block before it executes any other wasm.
+// The worker body, inlined so a self-contained page stays one file.  The stack
+// and TLS setup runs before anything else on this thread: a fresh instance
+// starts with the SAME stack pointer as the main thread, so until it is moved
+// off it, running any wasm here corrupts the page.
 const LOFT_WORKER_SOURCE = `
 self.onmessage = async (e) => {
-  const { module, memory, handoff, stackTop, tlsBase } = e.data;
-  let instance;
+  const { module, memory, handoff, stackTop, tlsBase, mainJS } = e.data;
+  let exports;
   try {
-    // Every import has to be present or the instance will not link, and a worker
-    // has none of the page's host objects (no canvas, no DOM).  So each one gets
-    // a stub: a worker runs loft bytecode, and a host call from inside a par body
-    // no-ops with a warning rather than taking the whole page down.
-    const imports = { env: { memory } };
-    let warned = false;
-    for (const im of WebAssembly.Module.imports(module)) {
-      if (im.kind !== 'function') continue;
-      (imports[im.module] = imports[im.module] || {})[im.name] = () => {
-        if (!warned) {
-          warned = true;
-          console.warn('loft: host call ' + im.module + '.' + im.name + ' is not available on a worker thread');
-        }
-      };
+    if (mainJS) {
+      // wasm-bindgen bundle: its glue owns instantiation, including this
+      // thread's stack and TLS.
+      const pkg = await import(mainJS);
+      exports = await pkg.default({ module_or_path: new URL('loft_bg.wasm', mainJS), memory });
+    } else {
+      // Raw bundle.  Every import has to be present or the instance will not
+      // link, and a worker has none of the page's host objects (no canvas, no
+      // DOM).  So each one gets a stub: a worker runs loft bytecode, and a host
+      // call from inside a par body no-ops with a warning rather than taking the
+      // whole page down.
+      const imports = { env: { memory } };
+      let warned = false;
+      for (const im of WebAssembly.Module.imports(module)) {
+        if (im.kind !== 'function') continue;
+        (imports[im.module] = imports[im.module] || {})[im.name] = () => {
+          if (!warned) {
+            warned = true;
+            console.warn('loft: host call ' + im.module + '.' + im.name + ' is not available on a worker thread');
+          }
+        };
+      }
+      const result = await WebAssembly.instantiate(module, imports);
+      exports = (result.instance || result).exports;
+      exports.__stack_pointer.value = stackTop;
+      if (tlsBase) exports.__wasm_init_tls(tlsBase);
     }
-    const result = await WebAssembly.instantiate(module, imports);
-    instance = result.instance || result;
-    instance.exports.__stack_pointer.value = stackTop;
-    if (tlsBase) instance.exports.__wasm_init_tls(tlsBase);
   } catch (err) {
     self.postMessage({ loftWorker: 'failed', error: String((err && err.message) || err) });
     return;
   }
   self.postMessage({ loftWorker: 'ready' });
   try {
-    instance.exports.loft_rayon_start_worker(handoff);   // runs until the page ends
+    exports.loft_rayon_start_worker(handoff);   // runs until the page ends
   } catch (err) {
     self.postMessage({ loftWorker: 'failed', error: String((err && err.message) || err) });
   }
@@ -123,64 +139,60 @@ function loftMemoryImportLimits(wasmBytes) {
   return null;
 }
 
-/**
- * Add the `loft_thread` host bridge to a wasm imports object.
- *
- * `getExports` is called lazily because the bridge can only run after the
- * instance exists, while the imports object must be complete before it does.
- */
-function installLoftThreads(imports, getExports, module, memory) {
-  const state = { workers: [], ready: null };
-  imports.loft_thread = {
-    // Called from `loft_pool_new`.  Spawns the workers and returns immediately:
-    // waiting for them here would deadlock, because they cannot finish booting
-    // until this call returns to the event loop.
-    spawn_workers(n, handoff) {
-      const exports = getExports();
-      const url = URL.createObjectURL(new Blob([LOFT_WORKER_SOURCE], { type: 'text/javascript' }));
-      const tlsSize = exports.__tls_size ? exports.__tls_size.value : 0;
-      const tlsAlign = exports.__tls_align ? exports.__tls_align.value : 8;
-      const pending = [];
-      for (let i = 0; i < n; i++) {
-        // Allocated here, on the one thread that is currently running wasm:
-        // a worker cannot allocate its own stack without first standing on one.
-        const stack = exports.loft_thread_alloc(LOFT_WORKER_STACK, 16);
-        const tls = tlsSize ? exports.loft_thread_alloc(tlsSize, tlsAlign) : 0;
-        if (!stack || (tlsSize && !tls)) {
-          pending.push(Promise.reject(new Error('loft: out of memory for a worker stack')));
-          break;
-        }
-        const worker = new Worker(url);
-        pending.push(new Promise((resolve, reject) => {
-          worker.onmessage = (e) => {
-            if (e.data && e.data.loftWorker === 'ready') resolve();
-            else if (e.data && e.data.loftWorker === 'failed') reject(new Error(e.data.error));
-          };
-          worker.onerror = (e) => reject(new Error(e.message || 'loft worker failed'));
-        }));
-        worker.postMessage({ module, memory, handoff, stackTop: stack + LOFT_WORKER_STACK, tlsBase: tls });
-        // Held so the workers are not garbage-collected out from under the pool.
-        state.workers.push(worker);
-      }
-      state.ready = Promise.all(pending);
-    }
-  };
-  return state;
-}
+// Spawned workers are held here so the browser does not collect them out from
+// under the pool they are running.
+const loftWorkers = [];
 
 /**
- * Start the pool: ask for `threads` workers, wait for them, then install rayon's
- * global pool over them.  Resolves to the number of worker threads actually
- * running — 0 when the page runs single-threaded, which is not an error.
+ * Start the pool: claim the handoff, spawn `threads` workers, wait for them to
+ * come up, then install rayon's global pool over them.  Resolves to the number
+ * of worker threads actually running — 0 when the page runs single-threaded,
+ * which is a supported outcome and not an error.
+ *
+ * The three steps have to be in that order and cannot be collapsed: installing
+ * the pool waits for the workers to prime, and the workers cannot finish booting
+ * until the main thread returns to the event loop.
+ *
+ * `where` is `{ memory }` plus either `module` (a raw bundle) or `mainJS` (the
+ * URL of a wasm-bindgen bundle's glue).
  *
  * Every failure path resolves to 0 rather than throwing: a page whose host
- * cannot thread must still run its program, sequentially.
+ * cannot thread must still run its program.
  */
-async function startLoftWorkers(exports, threads, state) {
+async function startLoftWorkers(exports, threads, where) {
   if (!self.crossOriginIsolated || !exports.loft_pool_new || !(threads > 1)) return 0;
   try {
-    if (exports.loft_pool_new(threads) !== 0) return 0;
-    await state.ready;
+    const handoff = exports.loft_pool_new(threads);
+    if (!handoff) return 0;
+    const { module = null, memory, mainJS = null } = where;
+    const url = URL.createObjectURL(new Blob([LOFT_WORKER_SOURCE], { type: 'text/javascript' }));
+    const tlsSize = !mainJS && exports.__tls_size ? exports.__tls_size.value : 0;
+    const tlsAlign = !mainJS && exports.__tls_align ? exports.__tls_align.value : 8;
+    const pending = [];
+    for (let i = 0; i < threads; i++) {
+      // Allocated here, on the one thread that is currently running wasm: a
+      // worker cannot allocate its own stack without first standing on one.
+      const stack = mainJS ? 0 : exports.loft_thread_alloc(LOFT_WORKER_STACK, 16);
+      const tls = tlsSize ? exports.loft_thread_alloc(tlsSize, tlsAlign) : 0;
+      if (!mainJS && (!stack || (tlsSize && !tls))) {
+        throw new Error('loft: out of memory for a worker stack');
+      }
+      const worker = new Worker(url, mainJS ? { type: 'module' } : undefined);
+      pending.push(new Promise((resolve, reject) => {
+        worker.onmessage = (e) => {
+          if (e.data && e.data.loftWorker === 'ready') resolve();
+          else if (e.data && e.data.loftWorker === 'failed') reject(new Error(e.data.error));
+        };
+        worker.onerror = (e) => reject(new Error(e.message || 'loft worker failed'));
+      }));
+      worker.postMessage({
+        module, memory, handoff, mainJS,
+        stackTop: stack + LOFT_WORKER_STACK, tlsBase: tls
+      });
+      loftWorkers.push(worker);
+    }
+    await Promise.all(pending);
+    URL.revokeObjectURL(url);
     return exports.loft_pool_build() === 0 ? threads : 0;
   } catch (e) {
     console.warn('loft: threading unavailable, running par sequentially —', e.message || e);
@@ -221,16 +233,12 @@ async function loftInstantiate(wasmBytes, imports, maxThreads) {
   // A threaded build imports its memory, so the memory must exist — and be
   // shared — before the instance does.
   const memory = loftSharedMemory(wasmBytes);
-  let instance = null;
-  let state = null;
-  if (memory) {
-    imports.env = Object.assign(imports.env || {}, { memory });
-    state = installLoftThreads(imports, () => instance.exports, module, memory);
-  }
+  if (memory) imports.env = Object.assign(imports.env || {}, { memory });
   const result = await WebAssembly.instantiate(module, imports);
-  instance = result.instance || result;
-  const threads = state
-    ? await startLoftWorkers(instance.exports, maxThreads || navigator.hardwareConcurrency, state)
+  const instance = result.instance || result;
+  const threads = memory
+    ? await startLoftWorkers(instance.exports, maxThreads || navigator.hardwareConcurrency,
+                             { module, memory })
     : 0;
   // How many worker threads this page got — 0 means `par` runs sequentially.
   // A page that expected parallelism cannot otherwise tell: results are the same
@@ -246,4 +254,4 @@ async function loftInstantiate(wasmBytes, imports, maxThreads) {
 
 // One line, and the last one: `loft --html` inlines this file into a non-module
 // <script> by deleting exactly this statement (as it does for the other glue).
-export { installLoftThreads, startLoftWorkers, loftInstantiate, loftTextDecoder, loftSharedMemory, loftMemoryImportLimits };
+export { startLoftWorkers, loftInstantiate, loftTextDecoder, loftSharedMemory, loftMemoryImportLimits };

@@ -19,7 +19,8 @@ window.addEventListener('error', e => report('winerror=' + (e.message||e.filenam
 window.addEventListener('unhandledrejection', e => report('reject=' + ((e.reason&&e.reason.message)||e.reason)));
 </script>
 <script type=module>
-import init, { initThreadPool, compile_and_run, set_par_trace_workers } from './pkg-mt/loft.js';
+import init, { compile_and_run, set_par_trace_workers } from './pkg-mt/loft.js';
+import { startLoftWorkers } from './pkg-mt/loft-thread.js';
 const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
 const threads = q.has('threads') ? (parseInt(q.get('threads'),10) || 0) : 4;
 const work    = parseInt(q.get('work') || '40000', 10);
@@ -38,9 +39,9 @@ fn main() {
 }`;
 (async () => {
   try {
-    await init();
+    const wasm = await init();
     if (!self.crossOriginIsolated) return report('FAIL coi=false — host is not cross-origin isolated (needs COOP/COEP)');
-    if (threads > 0) await initThreadPool(threads);   // threads=0 → sequential fallback (arc D)
+    if (threads > 0) await startLoftWorkers(wasm, threads, { memory: wasm.memory, mainJS: new URL('./pkg-mt/loft.js', import.meta.url).href });   // 0 → sequential fallback (arc D)
     set_par_trace_workers(true);
     const t0 = performance.now();
     const res = JSON.parse(compile_and_run(JSON.stringify([{name:'main.loft', content: SRC}])));

@@ -21,6 +21,13 @@
 //! [`loft_pool_new`], awaits each worker's *ready* message, and only then calls
 //! [`loft_pool_build`].
 //!
+//! Because the host has to sequence start-up anyway, it also does the spawning:
+//! [`loft_pool_new`] hands back the handoff pointer and the host takes it from
+//! there.  Nothing here calls out to JS, so this runtime needs no host import of
+//! its own — which is what lets the SAME pool serve both the raw `--html`
+//! bundle and the wasm-bindgen gallery one, whose glue builds its imports itself
+//! and would reject an extra module.
+//!
 //! ## What the host must do per worker
 //!
 //! Every `WebAssembly.Instance` gets its own copy of the mutable globals, but
@@ -58,17 +65,6 @@ struct Handoff {
 /// The single pool per page, or null before [`loft_pool_new`].
 static HANDOFF: AtomicPtr<Handoff> = AtomicPtr::new(std::ptr::null_mut());
 
-// The host bridge, in the same raw-import family as `loft_gl.*` / `loft_io.*`.
-#[cfg(not(feature = "wasm"))]
-#[link(wasm_import_module = "loft_thread")]
-unsafe extern "C" {
-    /// Spawn `n` Web Workers, each of which must call
-    /// [`loft_rayon_start_worker`] with this same `handoff` pointer.  Returns as
-    /// soon as the workers are requested — see the module docs on why it must
-    /// not wait for them.
-    fn spawn_workers(n: u32, handoff: *const u8);
-}
-
 /// Reserve a zeroed, leaked block of wasm memory — the host carves each worker's
 /// shadow stack and TLS block out of calls to this.
 ///
@@ -85,15 +81,15 @@ pub extern "C" fn loft_thread_alloc(size: u32, align: u32) -> u32 {
     (unsafe { std::alloc::alloc_zeroed(layout) }) as u32
 }
 
-/// Start building the pool: register the handoff and ask the host for `n`
-/// workers.  Returns 0 on success, or a negative code if a pool already exists.
+/// Start building the pool, and return the handoff pointer the host must pass to
+/// every worker it spawns (0 if a pool already exists).
 ///
 /// Call this from the page's main thread — it is the thread that may not block,
 /// and this is where loft says so.
 #[unsafe(no_mangle)]
-pub extern "C" fn loft_pool_new(num_threads: u32) -> i32 {
+pub extern "C" fn loft_pool_new(num_threads: u32) -> u32 {
     if !HANDOFF.load(Ordering::Acquire).is_null() {
-        return -1;
+        return 0;
     }
     let threads = num_threads.clamp(1, MAX_THREADS) as usize;
     let handoff: &'static Handoff = Box::leak(Box::new(Handoff {
@@ -106,9 +102,7 @@ pub extern "C" fn loft_pool_new(num_threads: u32) -> i32 {
     // This thread runs the page: `memory.atomic.wait32` throws here, so every
     // lock it takes from now on — including rayon's own — has to spin instead.
     wasm_sync::set_can_block(false);
-    // SAFETY: `handoff` is leaked, so the pointer stays valid for the page's life.
-    unsafe { spawn_workers(threads as u32, ptr.cast::<u8>()) };
-    0
+    ptr as u32
 }
 
 /// Install the global rayon pool over the workers the host has spawned.  Call

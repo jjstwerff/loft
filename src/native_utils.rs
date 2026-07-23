@@ -171,8 +171,7 @@ pub(crate) enum WasmRuntimeShape {
 /// wasm.  wasm-bindgen's thread transform did this internally; the raw path does
 /// it from JS, which needs the global exported.
 /// What to install when the threaded browser build cannot compile its std.
-pub(crate) const ATOMICS_STD_TOOLCHAIN_HINT: &str =
-    "  Browser threading rebuilds std with wasm atomics, which needs the nightly \
+pub(crate) const ATOMICS_STD_TOOLCHAIN_HINT: &str = "  Browser threading rebuilds std with wasm atomics, which needs the nightly \
      toolchain and its sources:\n    rustup toolchain install nightly\n    rustup component \
      add rust-src --toolchain nightly\n  Or build without threads: loft --html --no-threads \
      <program>.loft";
@@ -420,7 +419,9 @@ pub(crate) fn ensure_atomics_sysroot(profile_dir: &std::path::Path) -> Option<st
         if src.extension().is_none_or(|e| e != "rlib") {
             continue;
         }
-        let Some(name) = src.file_name() else { continue };
+        let Some(name) = src.file_name() else {
+            continue;
+        };
         // loft's own rlibs stay out: the link names them with `--extern` and
         // `-L dependency=`, and a third copy on the sysroot search path is how
         // rustc ends up reporting multiple candidates for one crate.
@@ -818,7 +819,7 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
                 // module is the red flag this guards.  The one exception is the
                 // shared MEMORY a threaded build imports as `env.memory` (kind 2) —
                 // still no function may come from `env`.
-                if !m.starts_with("loft_") && !(m == "env" && kind == 2) {
+                if !(m.starts_with("loft_") || (m == "env" && kind == 2)) {
                     bad.insert(m);
                 }
             }

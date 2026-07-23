@@ -47,10 +47,14 @@ threading    = ["dep:rayon"]
 wasm         = ["dep:wasm-bindgen", "dep:serde", "dep:serde-wasm-bindgen",
                 "dep:js-sys", "dep:web-sys", "png", "dep:fontdue",
                 "dep:console_error_panic_hook"]
-wasm-threads = ["wasm", "threading", "dep:wasm-bindgen-rayon"]
-# @PLN117 — loft's OWN browser threading: rayon driven through the raw
-# `loft_thread.*` host bridge, with no wasm-bindgen anywhere, so it links into
-# both the wasm-bindgen gallery bundle and the raw `loft --html` one.
+# @PLN117 — the gallery bundle: wasm-bindgen PLUS loft's own browser thread
+# pool.  The pool is not wasm-bindgen's and never was loft-specific glue on top of
+# a crate; it is the same runtime the raw `--html` bundle links, so `par` behaves
+# identically in both.
+wasm-threads = ["wasm", "wasm-native-threads"]
+# @PLN117 — loft's OWN browser threading: rayon over Web Workers the host spawns,
+# with no wasm-bindgen anywhere, so it links into both the wasm-bindgen gallery
+# bundle and the raw `loft --html` one.
 # `rayon/web_spin_lock` is not optional: without it rayon reaches a `std` lock
 # from the calling thread on every `par` and the browser main thread — which may
 # not block — throws "Atomics.wait cannot be called in this context".  The
@@ -100,10 +104,6 @@ serde              = { version = "1", optional = true, features = ["derive"] }
 serde-wasm-bindgen = { version = "0.6", optional = true }
 js-sys             = { version = "0.3", optional = true }
 web-sys            = { version = "0.3", optional = true, features = ["console"] }
-# @PLN117 — `no-bundler`: the worker bootstrap resolves the main module via an
-# explicit URL (not a bundler's `../../..` package resolution), which is what
-# loft's static-file deployment (gallery / `loft --html`) needs.
-wasm-bindgen-rayon = { version = "1.2", optional = true, features = ["no-bundler"] }
 rayon              = { version = "1.10", optional = true }
 libloading         = { version = "0.8", optional = true }
 loft-ffi           = { path = "loft-ffi" }

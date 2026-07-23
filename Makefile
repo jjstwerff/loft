@@ -377,13 +377,14 @@ wasm:
 # committed single-threaded doc/pkg (which stays the default — no nightly /
 # build-std burden on gallery CI).  To deploy a threaded gallery: build this,
 # copy doc/pkg-mt over ./pkg on a COOP/COEP host; the playground/gallery loaders
-# call initThreadPool automatically when crossOriginIsolated.  Needs the same
+# start loft's pool automatically when crossOriginIsolated.  Needs the same
 # nightly + rust-src toolchain as `wasm-mt`.
 gallery-mt:
 	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
 	rustup run nightly \
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg-mt --release \
 	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
+	@cp doc/loft-thread.js doc/pkg-mt/
 	@echo "Built doc/pkg-mt/ (threaded gallery). Deploy as ./pkg on a COOP/COEP host; serve with 'make serve'."
 
 # gallery: verify-and-rebuild the web gallery end-to-end so it can
@@ -967,13 +968,15 @@ clean-wasm:
 	-rm -rf target/wasm32-unknown-unknown target/wasm32-wasip2 doc/pkg
 
 # @PLN117 — threaded browser bundle: par() / par_fold over real Web Worker
-# threads via wasm-bindgen-rayon (rayon on a SharedArrayBuffer + wasm atomics).
+# threads on loft's own pool (rayon on a SharedArrayBuffer + wasm atomics; the
+# same runtime `loft --html` links, see src/wasm_threads.rs).
 # Needs the nightly toolchain WITH rust-src (build-std rebuilds std with
-# atomics) plus wasm-pack.  --target web is MANDATORY — wasm-bindgen-rayon's
-# worker bootstrap is web-target-only; --target nodejs cannot drive it.
-# A page must `await init()` then `await initThreadPool(hardwareConcurrency)`
-# before any par; on a host without cross-origin isolation it skips the pool
-# and par() falls back to sequential (never breaks — verified in-browser).
+# atomics) plus wasm-pack.  --target web is MANDATORY — the worker bootstrap
+# imports the generated glue as a module; --target nodejs cannot drive it (and
+# node has no Web Worker).  A page must `await init()` then
+# `startLoftWorkers(wasm, n, {memory, mainJS})` from loft-thread.js before any
+# par; on a host without cross-origin isolation it skips the pool and par()
+# falls back to sequential (never breaks — verified in-browser).
 # Prove it: python3 tests/wasm/coi-server.py 8799 tests/wasm & then load
 # /par-thread-proof.html in a cross-origin-isolated browser.  Design + arcs:
 # doc/claude/plans/117-browser-multithreading/.
@@ -1006,6 +1009,7 @@ wasm-mt:
 	rustup run nightly \
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir tests/wasm/pkg-mt --release \
 	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
+	@cp doc/loft-thread.js tests/wasm/pkg-mt/
 	@echo "Built tests/wasm/pkg-mt/ (--target web, threaded, shared memory)."
 
 fill:

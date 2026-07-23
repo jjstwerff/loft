@@ -1195,19 +1195,14 @@ pub fn output_take() -> String {
     OUTPUT.with(|buf| std::mem::take(&mut *buf.borrow_mut()))
 }
 
-// ── @PLN117 step 1 — wasm-bindgen-rayon thread-pool export ──────────────────
+// ── @PLN117 — the thread pool ───────────────────────────────────────────────
 //
-// Re-exporting `init_thread_pool` makes wasm-bindgen generate the JS
-// `initThreadPool(numThreads)` export plus the Web-Worker startup shim that
-// installs the GLOBAL rayon pool.  Once the page (or the node harness) awaits
-// `initThreadPool(n)` before any `par`, loft's `.into_par_iter()` dispatch in
-// `src/parallel.rs` runs across `n` real workers instead of the sequential
-// fallback.  See `doc/claude/plans/117-browser-multithreading/`.
-//
-// Only under `wasm-threads` (wasm + threading + the atomics/build-std bundle);
-// a plain `--features wasm` build keeps today's single-threaded `par`.
-#[cfg(feature = "wasm-threads")]
-pub use wasm_bindgen_rayon::init_thread_pool;
+// A threaded gallery bundle gets its pool from `crate::wasm_threads`, the same
+// runtime the raw `loft --html` bundle links: rayon over Web Workers the page
+// spawns.  Its entry points are plain wasm exports (`loft_pool_new`,
+// `loft_pool_build`, `loft_rayon_start_worker`), driven from `doc/loft-thread.js`
+// — nothing here to re-export.  Until the page starts them, `par` takes rayon's
+// single-threaded fallback and returns the same values, only sequentially.
 
 /// @PLN117 step 0 — arm the parallel-worker tracer from JS (the browser has no
 /// env vars).  With it on, a `par` reports `distinct_workers=N` into the

@@ -6641,7 +6641,9 @@ fn main() {
                         native_utils::ATOMICS_STD_TOOLCHAIN_HINT
                     );
                     (
-                        native_utils::ensure_loft_runtime_rlib(native_utils::WasmRuntimeShape::Html),
+                        native_utils::ensure_loft_runtime_rlib(
+                            native_utils::WasmRuntimeShape::Html,
+                        ),
                         false,
                     )
                 }
@@ -6651,7 +6653,11 @@ fn main() {
         // The atomics std lives beside that rlib; this hands it to `rustc` as a
         // sysroot.  Missing it is a link error, never a quietly unthreaded page.
         let atomics_sysroot = threaded
-            .then(|| html_runtime_dir.as_deref().and_then(native_utils::ensure_atomics_sysroot))
+            .then(|| {
+                html_runtime_dir
+                    .as_deref()
+                    .and_then(native_utils::ensure_atomics_sysroot)
+            })
             .flatten();
         // Compile to wasm32-unknown-unknown cdylib
         let wasm_path = build_dir.join("prog.wasm");
@@ -6901,7 +6907,11 @@ fn main() {
             // A threaded bundle uses atomics, shared memory and mutable globals;
             // without these wasm-opt rejects the module outright rather than
             // silently dropping anything.
-            wasm_opt.args(["--enable-threads", "--enable-bulk-memory", "--enable-mutable-globals"]);
+            wasm_opt.args([
+                "--enable-threads",
+                "--enable-bulk-memory",
+                "--enable-mutable-globals",
+            ]);
         }
         let final_wasm = if wasm_opt
             .args([
@@ -7059,7 +7069,7 @@ fn main() {
         // (module `export` stripped, as with the asyncify and deliver glue) so a page
         // stays a single file.
         let thread_js = include_str!("../doc/loft-thread.js").replace(
-            "export { installLoftThreads, startLoftWorkers, loftInstantiate, loftTextDecoder, loftSharedMemory, loftMemoryImportLimits };",
+            "export { startLoftWorkers, loftInstantiate, loftTextDecoder, loftSharedMemory, loftMemoryImportLimits };",
             "",
         );
         // @lib_plan-29 W2: concatenate every used library's
