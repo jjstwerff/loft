@@ -52,7 +52,14 @@ const SRC = cas === 'vector' ? VECTOR : STRUCT;
     if (threads > 0) await startLoftWorkers(wasm, threads, { memory: wasm.memory, mainJS: new URL('./pkg-mt/loft.js', import.meta.url).href });
     set_par_trace_workers(true);
     const results = new Set();
-    let minWorkers = 1e9, allOk = true, badDiag = '';
+    // Both ends of the per-rep worker spread.  `min` is the strict claim (EVERY
+    // rep ran concurrently) and holds on a machine with cores to spare; `max`
+    // is the weaker one (concurrency was demonstrated across the reps), which
+    // is all a contended 4-vCPU CI runner can promise — rayon can hand one
+    // worker the whole tiny workload before the others wake.  The driver picks
+    // which one it asserts on ($CONCURRENCY_STAT); the VALUE check is unaffected
+    // either way.
+    let minWorkers = 1e9, maxWorkers = 0, allOk = true, badDiag = '';
     for (let r = 0; r < reps; r++) {
       const res = JSON.parse(compile_and_run(JSON.stringify([{name:'main.loft', content: SRC}])));
       if (!res.success) { allOk = false; badDiag = (res.diagnostics||'crash').slice(0,80); break; }
@@ -60,8 +67,9 @@ const SRC = cas === 'vector' ? VECTOR : STRUCT;
       results.add((out.match(/v=(\S+)/) || [])[1] || 'none');
       const dw = parseInt((out.match(/distinct_workers=(\d+)/) || [])[1] || '1', 10);
       if (dw < minWorkers) minWorkers = dw;
+      if (dw > maxWorkers) maxWorkers = dw;
     }
-    report(`RESULT case=${cas} threads=${threads} reps=${reps} success=${allOk} distinct=${[...results].join(',')} min_workers=${minWorkers} diag=${badDiag}`);
+    report(`RESULT case=${cas} threads=${threads} reps=${reps} success=${allOk} distinct=${[...results].join(',')} min_workers=${minWorkers} max_workers=${maxWorkers} diag=${badDiag}`);
   } catch (e) { report('caught=' + ((e && e.message) || String(e))); }
 })();
 </script>

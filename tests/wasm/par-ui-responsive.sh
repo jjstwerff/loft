@@ -11,12 +11,19 @@
 # Calibration (env): THREADS (default 8 workers) and MIN_FRAME_RATIO_X10 (20,
 # i.e. 2.0x) describe this 24-core dev box; the CI workflow lowers both for a
 # 4-vCPU runner — see .github/workflows/browser-threads.yml.
+#
+# UI_WORK / UI_WINDOW size the SAMPLE, and they matter more than the floor: a
+# ratio needs frames to be a ratio at all.  On a slow runner the dev-box values
+# yielded 4 frames against 3 — noise, not a measurement — so CI asks for lighter
+# per-frame work over a longer window.  They fall back to WORK / WINDOW so
+# running this gate by hand still works; the separate names keep them from
+# retuning par-scaling-bench, which reads WORK too.
 # Exit 0 pass / 1 fail.
 set -u
 cd "$(dirname "$0")/../.."
 . tests/wasm/gate-lib.sh
 PORT="${PORT:-8764}"; ROOT=tests/wasm; REPORT="$(mktemp)"
-WORK="${WORK:-40000}"; ELEMS="${ELEMS:-48}"; WINDOW="${WINDOW:-3000}"
+WORK="${UI_WORK:-${WORK:-40000}}"; ELEMS="${ELEMS:-48}"; WINDOW="${UI_WINDOW:-${WINDOW:-3000}}"
 THREADS="${THREADS:-8}"; MIN_FRAME_RATIO_X10="${MIN_FRAME_RATIO_X10:-20}"
 CHROME="$(command -v chromium || command -v chromium-browser || command -v google-chrome || echo chromium)"
 [ -f "$ROOT/pkg-mt/loft.js" ] || { echo "SKIP: no threaded bundle — run 'make wasm-mt'"; exit 0; }

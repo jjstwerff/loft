@@ -85,12 +85,25 @@ no-op:
 - **A SKIP is a failure in CI.** Each gate exits 0 on a missing prerequisite so a dev without a
   browser still gets a useful run — on the runner everything is installed, so "skipped" can only
   mean the provisioning broke. `--ci` preflights the five prerequisites and fails on any `SKIP`.
-- **Performance floors are calibrated to the runner, not switched off.** 4 vCPUs against this
-  box's 24, so the workflow sets `POOLS="1 2 4"`, `MIN_SPEEDUP_PCT=150`, `THREADS=4`,
+- **Measurement is calibrated to the runner, not switched off.** 4 vCPUs against this box's 24,
+  so the workflow sets `POOLS="1 2 4"`, `MIN_SPEEDUP_PCT=150`, `THREADS=4`,
   `MIN_FRAME_RATIO_X10=15` (defaults, i.e. this box: `1 2 4 8` / 250 / 8 / 20). A `par` that stops
-  parallelising still fails. `WAIT_SCALE=3` stretches the wait for each page's report line; the
-  gates now exit as soon as it lands (they used to sleep a fixed 15–34s per cell), so the cap
-  costs nothing when things are healthy.
+  parallelising still fails, and **every value assertion is untouched**. `WAIT_SCALE=3` stretches
+  the wait for each page's report line; the gates now exit as soon as it lands (they used to sleep
+  a fixed 15–34s per cell), so the cap costs nothing when things are healthy.
+
+The **first CI run found two more** — both sampling artefacts of a small, contended machine, each
+reproduced locally under `taskset -c 0-3` before being touched (all values were correct on the
+runner throughout):
+
+- `par-memory-proof` asserted `min_workers >= 2` — EVERY one of 12 reps concurrent. On 4 vCPUs
+  rayon handed one rep its whole (small) workload on a single worker. The page now reports both
+  ends of the spread and `CONCURRENCY_STAT` picks which is asserted: `min` (this box, strict) vs
+  `max` (CI — concurrency demonstrated across the reps). The per-rep value check, which is what
+  actually catches a race, is unchanged.
+- `par-ui-responsive` got 4 frames against 3 — too small to be a ratio at all. `UI_WORK=15000` /
+  `UI_WINDOW=9000` sample lighter work over a longer window: 77 frames vs 35 (2.2×) on 4 CPUs.
+  Separate names from the bench's `WORK` so retuning one cannot silently retune the other.
 
 A red run surfaces on every PR through ci.yml's `Nightly health (informational)` job, which now
 reports `browser-threads.yml` beside miri and the daily matrix.

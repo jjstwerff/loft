@@ -82,19 +82,33 @@ jobs:
     timeout-minutes: 90
 
     # CALIBRATION.  A GitHub runner has 4 vCPUs against this project's 24-core
-    # dev box, so the two performance gates measure the same claims at floors
-    # the hardware can actually deliver — lowered, not switched off.  A `par`
-    # that stops parallelising still fails: 4 workers must beat 1 by 1.5x and
-    # the frame count must still nearly double.  WAIT_SCALE stretches every
-    # gate's wait for the page's report line (they exit as soon as it lands, so
-    # a generous cap costs nothing when things are healthy).
+    # dev box, so the gates measure the same claims at floors the hardware can
+    # actually deliver — lowered, not switched off.  A `par` that stops
+    # parallelising still fails: 4 workers must beat 1 by 1.5x and the frame
+    # count must still rise by half.  Every VALUE assertion is untouched; these
+    # only retune what is sampled and how fast it must be.
+    #
+    # Measured on the first CI run (kept here so the numbers have a source):
+    # scaling 100/142/217% over 1/2/4 workers, `--html` and dispatch both over
+    # 4 workers, every value equal to the interpreter's.
+    #
+    # CONCURRENCY_STAT=max — with 12 reps on 4 contended vCPUs, rayon gave one
+    # rep a single worker; concurrency demonstrated across the reps is what this
+    # hardware can promise, and the per-rep value check is what catches a race.
+    # UI_WORK/UI_WINDOW — the dev-box sizing produced 4 frames against 3, too
+    # small to be a ratio, so CI samples lighter work over a longer window.
+    # WAIT_SCALE stretches every wait for the page's report line (gates exit as
+    # soon as it lands, so a generous cap costs nothing when things are healthy).
     env:
       WAIT_SCALE: "3"
       POOLS: "1 2 4"
       SPEEDUP_AT: "4"
       MIN_SPEEDUP_PCT: "150"
+      CONCURRENCY_STAT: "max"
       THREADS: "4"
       MIN_FRAME_RATIO_X10: "15"
+      UI_WORK: "15000"
+      UI_WINDOW: "9000"
 
     steps:
       - uses: actions/checkout@v5
