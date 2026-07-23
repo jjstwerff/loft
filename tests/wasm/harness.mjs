@@ -117,6 +117,13 @@ export async function runAll() {
     }
   }
   console.log(`\n${passed} passed, ${failed} failed`);
+  // Report the failure to the PROCESS, not just to the reader.  Returning the
+  // count told a human what happened while `node …` still exited 0, so the
+  // `wasm-bridge` CI job (`node tests/wasm/bridge.test.mjs`) could not go red —
+  // a broken bridge printed FAIL lines under a green check.  Setting
+  // `exitCode` (rather than calling `process.exit`) lets the remaining tests
+  // and any pending output finish first.
+  if (failed > 0) process.exitCode = 1;
   return failed;
 }
 

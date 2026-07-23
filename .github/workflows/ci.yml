@@ -842,6 +842,13 @@ jobs:
       - name: Run WASM bridge tests
         run: node tests/wasm/bridge.test.mjs
 
+      # @PLN13 phase 5 — the browser half of script mode.  `tests/script_mode.rs`
+      # covers the interpreter and `--native`; this covers the path the playground
+      # actually uses (`compile_and_run` applying `script::script_desugar`), which
+      # is the whole no-install funnel and was previously unguarded.
+      - name: Run WASM script-mode tests
+        run: node tests/wasm/script.test.mjs
+
   # Browser-bundle freshness — a change set that edits a committed browser
   # bundle's SOURCE (currently the Brick Buster .loft) must rebuild + commit the
   # bundle in the SAME set, or the deployed website goes stale — the recurring
