@@ -14,7 +14,13 @@
 <pre id=log>running…</pre>
 <script>
 const q = new URLSearchParams(location.search);
-const page = q.get('page') || 'par-html.html';
+// The driver only ever loads a page this gate just built, so `page` is matched
+// against that closed set rather than concatenated into the iframe URL: a query
+// parameter must not be able to steer the frame somewhere else (CodeQL js/xss +
+// js/client-side-unvalidated-url-redirection).
+const PAGES = ['par-html.html', 'threaded.html', 'sequential.html'];
+const requested = q.get('page') || PAGES[0];
+const page = PAGES.includes(requested) ? requested : PAGES[0];
 const wait = parseInt(q.get('wait') || '9000', 10);
 const report = m => { document.getElementById('log').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
 window.addEventListener('error', e => report('winerror=' + (e.message || e)));

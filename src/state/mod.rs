@@ -1886,15 +1886,14 @@ impl State {
                     // @PLN118 arc E — also name the freeing OP (recorded with the free site) so
                     // the report says WHICH free to fix, not just where; needs `Data`, valid
                     // throughout execution (null only in a parallel worker, tolerated below).
+                    // SAFETY: data_ptr is set in execute_argv and stays valid for the
+                    // run; `as_ref` folds the null a parallel worker leaves behind into
+                    // None instead of a hand-written null check beside a deref, so there
+                    // is no path here that dereferences an unchecked pointer.
+                    let data: Option<&Data> = unsafe { self.data_ptr.as_ref() };
                     let op_name = |opc: u16| -> String {
-                        if self.data_ptr.is_null() {
-                            format!("op#{opc}")
-                        } else {
-                            // SAFETY: data_ptr is set in execute_argv, valid for the run.
-                            unsafe { &*self.data_ptr }
-                                .operator_name(opc)
-                                .map_or_else(|| format!("op#{opc}"), str::to_string)
-                        }
+                        data.and_then(|d| d.operator_name(opc))
+                            .map_or_else(|| format!("op#{opc}"), str::to_string)
                     };
                     let free_str = crate::keys::uaf_freed_pc_at_gen(db.store_nr, stamped + 1)
                         .or_else(|| crate::keys::uaf_freed_pc(db.store_nr))

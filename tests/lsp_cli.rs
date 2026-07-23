@@ -69,9 +69,14 @@ fn def_resolves_a_stdlib_method_by_name() {
     assert!(!items.is_empty(), "resolves `starts_with`");
     let sig = field_str(&items[0], "signature").unwrap_or_default();
     assert!(sig.contains("starts_with"), "the signature names it: {sig}");
+    // `file` is a NATIVE absolute path, so it separates with `\` on Windows —
+    // compare separator-agnostically rather than assuming POSIX.  (The `file://`
+    // URIs the LSP hands editors are normalised to `/` at the producer; this
+    // field deliberately stays native for a CLI consumer.)
     assert!(
         field_str(&items[0], "file")
             .unwrap_or_default()
+            .replace('\\', "/")
             .contains("default/"),
         "points into the stdlib source: {items:?}"
     );

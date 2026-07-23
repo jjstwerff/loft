@@ -845,7 +845,23 @@ fn stdlib_file_uri(stdlib_dir: &str, rel_file: &str) -> String {
         .unwrap_or_else(|| Path::new(""))
         .join(rel_file);
     let abs = std::fs::canonicalize(&path).unwrap_or(path);
-    format!("file://{}", abs.display())
+    file_uri(&abs)
+}
+
+/// `file://` URI for an absolute path, in the shape editors actually accept.
+///
+/// Windows needs three things the naive `format!("file://{}", p.display())` gets
+/// wrong: the extended-length `\\?\` prefix stripped (see [`loft::lsp::plain_path`]),
+/// separators as `/`, and a THIRD slash before the drive letter — `file:///D:/a.loft`,
+/// not `file://D:\a.loft`.  A POSIX path already starts with `/`, so it takes the
+/// same branch and is unchanged.
+fn file_uri(abs: &Path) -> String {
+    let plain = loft::lsp::plain_path(abs).replace('\\', "/");
+    if plain.starts_with('/') {
+        format!("file://{plain}")
+    } else {
+        format!("file:///{plain}")
+    }
 }
 
 // ── tracker-tag integration (T1 hover / T2 documentLink) ─────────────────────
