@@ -22,6 +22,35 @@ use std::io::Write;
 use std::string::ToString;
 use typedef::complete_definition;
 
+/// The "you probably meant `pkg::name`" message for an unresolved bare call, or
+/// `None` when no published package exports such a free function (@PLN13 phase 6,
+/// diagnostics slice).
+///
+/// Bare calls into a library still do not RESOLVE — that is the rest of phase 6,
+/// and it has to settle stdlib shadowing first (a bare `find(…)` already binds to
+/// the stdlib `find`, silently). What this removes is the dead end: the name was
+/// right, it just was not imported, and the message now says where it lives.
+#[cfg(feature = "registry")]
+fn registry_fn_hint(name: &str) -> Option<String> {
+    let pkgs = crate::registry_index::packages_exporting_fn(name);
+    let (first, _) = (pkgs.first()?, ());
+    let provider = if pkgs.len() == 1 {
+        format!("the `{first}` package provides it")
+    } else {
+        let names: Vec<String> = pkgs.iter().map(|p| format!("`{p}`")).collect();
+        format!("the {} packages provide it", names.join(" / "))
+    };
+    Some(format!(
+        "Unknown function {name} — {provider}; call `{first}::{name}(…)`, or add `use {first};` and call it bare"
+    ))
+}
+
+/// Registry-less build: no index to consult, so no hint (@PLN13 phase 6).
+#[cfg(not(feature = "registry"))]
+fn registry_fn_hint(_name: &str) -> Option<String> {
+    None
+}
+
 /// @PLN102 case B (soften-nullflow-discharge.md) — the sign / lower-bound lattice used to
 /// prove a domain-fault op's argument is in its safe domain (`sqrt` needs `≥ 0`, `ln` needs
 /// `> 0`). `Pos ⊑ NonNeg ⊑ Unknown` (stronger → weaker); `Unknown` is the conservative default.
@@ -3332,7 +3361,16 @@ impl Parser {
                 // a similar-name suggestion across all user functions.
                 let method_types = self.find_method_receivers(name);
                 if method_types.is_empty() {
-                    if let Some(s) = self.suggest_function_name(name) {
+                    // @PLN13 phase 6 (diagnostics slice): the name may simply be
+                    // unimported rather than wrong.  An EXACT hit in a published
+                    // package outranks the fuzzy same-name guess below — `rand`
+                    // is not a misspelling of a local function, it lives in
+                    // `random` — so this is offered first.  Bare calls still do
+                    // not resolve; this only replaces a dead end with the two
+                    // ways to say what was meant.
+                    if let Some(hint) = registry_fn_hint(name) {
+                        diagnostic_at!(self.lexer, name_pos, Level::Error, "{hint}");
+                    } else if let Some(s) = self.suggest_function_name(name) {
                         diagnostic_at!(
                             self.lexer,
                             name_pos,
