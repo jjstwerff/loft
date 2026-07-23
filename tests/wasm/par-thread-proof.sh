@@ -33,6 +33,9 @@ P="$(run '?threads=4' 18)"; echo "  $P"
 echo "== sequential fallback (no initThreadPool) =="
 S="$(run '?threads=0' 16)"; echo "  $S"
 
+echo "== nested par (a par worker that itself runs a par) =="
+N="$(run '?threads=4&nested=1' 16)"; echo "  $N"
+
 fail=0
 dw="$(echo "$P" | grep -oP 'distinct_workers=\K\d+')"
 echo "$P" | grep -q 'success=true' || { echo "FAIL: parallel run not successful"; fail=1; }
@@ -42,5 +45,8 @@ echo "$S" | grep -q 'distinct_workers=1' || echo "WARN: fallback distinct_worker
 # value gate: both runs must agree on par_sum
 pp="$(echo "$P" | grep -oP 'par_sum=\K\d+')"; ss="$(echo "$S" | grep -oP 'par_sum=\K\d+')"
 [ -n "$pp" ] && [ "$pp" = "$ss" ] || { echo "FAIL: par_sum mismatch parallel=$pp sequential=$ss"; fail=1; }
-if [ $fail -eq 0 ]; then echo "PASS: par dispatched across $dw workers; fallback correct; par_sum=$pp"; fi
+# Nested par: a hand-computed value, so agreeing backends cannot hide a wrong one.
+echo "$N" | grep -q 'success=true' || { echo "FAIL: nested par run not successful"; fail=1; }
+echo "$N" | grep -q 'par_sum=712' || { echo "FAIL: nested par expected par_sum=712, got '$N'"; fail=1; }
+if [ $fail -eq 0 ]; then echo "PASS: par dispatched across $dw workers; fallback correct; nested par correct; par_sum=$pp"; fi
 exit $fail

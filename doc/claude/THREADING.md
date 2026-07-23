@@ -134,6 +134,27 @@ Pops (reverse declaration order): `func`, `threads`, `return_size`, `element_siz
 | 4 | `set_int(rec, fld, bits as i32)` |
 | 1 | `set_byte(rec, fld, 0, bits as i32)` |
 
+### Nested `par` — a worker inherits its parent's context
+
+A worker's `Stores` is a light view of its parent's, and it carries the parent's
+`ParallelCtx` (bytecode + library + `Data`).  That is what lets a `par` inside a
+`par` worker dispatch in turn: the nested dispatch needs the program it is running,
+and a worker has no `State::execute()` of its own to install one.
+
+The pointers are safe for a worker for the same reason they are safe for the thread
+that set them — **the parent joins its workers before its own `execute()` returns** —
+and they are read-only: a worker only reads the bytecode, library and `Data` its
+parent is already running.
+
+Inheriting it is the whole mechanism; there is no depth limit and no per-level
+bookkeeping.  rayon nests the dispatches on the same pool, so depth K costs no extra
+threads.  Before this, the interpreter aborted the run (*"parallel_queue called
+outside State::execute()"*) while `--native` computed the right answer — the same
+program meaning two different things depending on the backend, and in the browser
+(which runs the interpreter) a page that hung.  Locked in by `tests/par_nested.rs`
+(depth 2, depth 3, and a text return — each against a hand-computed value, on both
+backends) and by the nested cell in `tests/wasm/par-thread-proof.sh`.
+
 ### Where the threads come from (@PLN117)
 
 One seam decides it: `parallel.rs::with_pool`.
@@ -1919,7 +1940,7 @@ pub unsafe fn clone_for_light_worker(
         files:              Vec::new(),
         scratch:            Vec::new(),
         last_parse_errors:  Vec::new(),
-        parallel_ctx:       None,
+        parallel_ctx:       self.parallel_ctx.clone(),   // inherited — see below
         logger:             self.logger.clone(),
         had_fatal:          false,
         #[cfg(not(feature = "wasm"))]

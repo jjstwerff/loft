@@ -24,7 +24,27 @@ import { startLoftWorkers } from './pkg-mt/loft-thread.js';
 const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
 const threads = q.has('threads') ? (parseInt(q.get('threads'),10) || 0) : 4;
 const work    = parseInt(q.get('work') || '40000', 10);
-const SRC = `
+// @PLN117 — ?nested=1 swaps in a `par` whose worker ITSELF runs a `par`.  That
+// shape used to abort the run in the browser (the interpreter's worker had no
+// program context), so it is worth its own cell: mid(x) = x + (1+..+8), summed
+// over 1..=16 -> 136 + 16*36 = 712, hand-computed.
+const NESTED_SRC = `
+fn leaf(r: integer) -> integer { return r; }
+
+fn mid(x: integer) -> integer {
+    rows = [1, 2, 3, 4, 5, 6, 7, 8];
+    acc = x;
+    for r in rows par(v = leaf(r), 4) { acc += v; }
+    return acc;
+}
+
+fn main() {
+    data = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16];
+    sum = 0;
+    for a in data par(b = mid(a), 4) { sum += b; }
+    println("par_sum={sum}");
+}`;
+const FLAT_SRC = `
 fn heavy(x: integer) -> integer {
     acc = 0;
     for i in 0..${work} { acc += (x * i + i) % 7; }
@@ -37,6 +57,7 @@ fn main() {
     for a in data par(b = heavy(a), 8) { sum += b; }
     println("par_sum={sum}");
 }`;
+const SRC = q.get('nested') === '1' ? NESTED_SRC : FLAT_SRC;
 (async () => {
   try {
     const wasm = await init();

@@ -1374,7 +1374,15 @@ impl Stores {
             const_refs: self.const_refs.clone(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
-            parallel_ctx: None,
+            // The worker inherits the parent's program context, so a `par`
+            // inside a `par` worker can dispatch in turn.  Without it the
+            // nested dispatch finds no context and aborts the run
+            // ("parallel_queue called outside State::execute()").  The pointers
+            // stay valid because the parent joins its workers before its own
+            // `execute()` returns — the lifetime rule `ParallelCtx` already
+            // documents — and they are read-only: the worker only reads the
+            // same bytecode, library and `Data` its parent is running.
+            parallel_ctx: self.parallel_ctx.clone(),
             par_buffer_stack: Vec::new(),
             par_text_buffer_stack: Vec::new(),
             par_ref_buffer_stack: Vec::new(),

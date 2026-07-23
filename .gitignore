@@ -117,3 +117,6 @@ doc/claude/plans/h3-narrow-vector/bytecode-comparisons/*-full.txt
 # disk so local Android builds keep working, but never tracked.
 tests/fixtures/libs/*/native/.cargo/
 doc/pkg-mt/
+
+# Scratch build trees (e.g. a feature-variant build used while debugging).
+target-*/
