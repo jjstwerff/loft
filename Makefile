@@ -371,6 +371,21 @@ profile:
 wasm:
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg --release -- --features wasm --no-default-features
 
+# @PLN117 — the THREADED gallery bundle: par() over real Web Worker threads.
+# Same shape as `make wasm` but with the wasm-threads recipe (see `wasm-mt` for
+# the full-flag-set rationale), output to doc/pkg-mt so it does NOT clobber the
+# committed single-threaded doc/pkg (which stays the default — no nightly /
+# build-std burden on gallery CI).  To deploy a threaded gallery: build this,
+# copy doc/pkg-mt over ./pkg on a COOP/COEP host; the playground/gallery loaders
+# call initThreadPool automatically when crossOriginIsolated.  Needs the same
+# nightly + rust-src toolchain as `wasm-mt`.
+gallery-mt:
+	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	rustup run nightly \
+	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg-mt --release \
+	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
+	@echo "Built doc/pkg-mt/ (threaded gallery). Deploy as ./pkg on a COOP/COEP host; serve with 'make serve'."
+
 # gallery: verify-and-rebuild the web gallery end-to-end so it can
 # recover from a partially-broken state.  Use this when the browser
 # reports errors like "Failed to grow table" (wasm/JS glue mismatch),
@@ -456,10 +471,16 @@ gallery:
 	@python3 scripts/cache_bust_html.py >/dev/null
 	@echo "  [7/7] gallery ready — run 'make serve' and open http://localhost:8000/gallery.html"
 
+# @PLN117 — COOP/COEP so a threaded gallery bundle (`make gallery-mt`) gets
+# crossOriginIsolated === true and par() runs on Web Workers.  Harmless for the
+# default single-threaded bundle (the gallery is self-contained / same-origin).
+# Reuses the cross-origin-isolated static server built for the threaded-wasm
+# harness.  Without these headers the gallery still runs — par() just sequential.
 serve:
 	@echo "Playground: http://localhost:8000/playground.html"
 	@echo "Gallery:    http://localhost:8000/gallery.html"
-	cd doc && python3 -m http.server 8000
+	@echo "(COOP/COEP on — a threaded gallery from 'make gallery-mt' runs par() on Web Workers)"
+	python3 tests/wasm/coi-server.py 8000 doc
 
 # ── Branch review viewer (plan-35) ─────────────────────────────
 # Serves a branch-aware doc + code review dashboard.

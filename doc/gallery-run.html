@@ -298,6 +298,16 @@ function explainLoadError(e) {
 async function initLoft() {
   try {
     await init();
+    // @PLN117 — real Web Worker threads for par() when the host is cross-origin
+    // isolated (COOP/COEP → SharedArrayBuffer).  Inert on the single-threaded
+    // bundle (initThreadPool undefined) and on non-isolated hosts: par() stays
+    // sequential — never breaks.  Threaded gallery: `make gallery-mt` + COOP/COEP.
+    try {
+      if (self.crossOriginIsolated) {
+        const m = await import('./pkg/loft.js?v=414aad87ebcb');
+        if (m.initThreadPool) await m.initThreadPool(navigator.hardwareConcurrency);
+      }
+    } catch (e) { console.warn('loft: thread pool init skipped —', e); }
     loftReady = true;
     runBtn.disabled = false;
     document.getElementById('loading').style.display = 'none';
