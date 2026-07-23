@@ -6160,7 +6160,16 @@ impl Parser {
         // operator '<' on 'unknown' and 'boolean'" still fires.  A truly-unresolvable
         // unary operand re-errors on pass 2 (this guard is first-pass only).
         // (@PLN102 transitive cross-package inference.)
-        if self.first_pass && types.len() == 1 && types[0].is_unknown() {
+        //
+        // The same applies when EVERY operand is unresolved — `f() - g()` with both
+        // callees defined lower in the file.  The `possible` loop matches the first
+        // candidate (`OpMinInt`) and locks the result to integer; pass 2 re-resolves
+        // to the real float return and the assignment errors "cannot change type from
+        // integer to float" at a line that looks correct.  Requiring ALL operands to be
+        // unknown is what keeps the diagnostic above intact: it has one KNOWN operand
+        // (`boolean`), so it still reaches the error path.  One known operand is enough
+        // to steer resolution, so only the no-information case defers to pass 2.
+        if self.first_pass && !types.is_empty() && types.iter().all(Type::is_unknown) {
             return Type::Unknown(0);
         }
         // I8.1: if any operand is a generic type variable, skip the main operator loop
