@@ -1,0 +1,184 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "Loft",
+  "scopeName": "source.loft",
+  "fileTypes": ["loft"],
+  "patterns": [
+    { "include": "#comments" },
+    { "include": "#annotations" },
+    { "include": "#strings" },
+    { "include": "#numbers" },
+    { "include": "#keywords" },
+    { "include": "#types" },
+    { "include": "#fn-declaration" },
+    { "include": "#type-declaration" },
+    { "include": "#identifiers" }
+  ],
+  "repository": {
+    "comments": {
+      "patterns": [
+        {
+          "name": "comment.line.documentation.loft",
+          "match": "///.*$"
+        },
+        {
+          "name": "comment.line.double-slash.loft",
+          "match": "//.*$"
+        }
+      ]
+    },
+    "annotations": {
+      "patterns": [
+        {
+          "name": "meta.annotation.test.loft",
+          "match": "@(EXPECT_ERROR|EXPECT_WARNING|EXPECT_FAIL|NAME|TITLE|MARK)\\b.*$"
+        },
+        {
+          "name": "meta.annotation.loft",
+          "match": "#(rust|native|opcode|impure|pure)\\b"
+        }
+      ]
+    },
+    "strings": {
+      "patterns": [
+        {
+          "name": "string.quoted.double.loft",
+          "begin": "\"",
+          "end": "\"",
+          "patterns": [
+            {
+              "name": "constant.character.escape.loft",
+              "match": "\\\\[nrt\\\\\"0]"
+            },
+            {
+              "name": "constant.character.escape.loft",
+              "match": "\\{\\{|\\}\\}"
+            },
+            {
+              "name": "meta.interpolation.loft",
+              "begin": "\\{",
+              "end": "\\}",
+              "beginCaptures": {
+                "0": { "name": "punctuation.section.interpolation.begin.loft" }
+              },
+              "endCaptures": {
+                "0": { "name": "punctuation.section.interpolation.end.loft" }
+              },
+              "patterns": [
+                { "include": "#numbers" },
+                { "include": "#keywords" },
+                { "include": "#types" },
+                { "include": "#identifiers" }
+              ]
+            }
+          ]
+        },
+        {
+          "name": "string.quoted.backtick.loft",
+          "begin": "`",
+          "end": "`",
+          "patterns": [
+            {
+              "name": "constant.character.escape.loft",
+              "match": "\\\\."
+            }
+          ]
+        }
+      ]
+    },
+    "numbers": {
+      "patterns": [
+        {
+          "name": "constant.numeric.hex.loft",
+          "match": "\\b0x[0-9a-fA-F_]+\\b"
+        },
+        {
+          "name": "constant.numeric.binary.loft",
+          "match": "\\b0b[01_]+\\b"
+        },
+        {
+          "name": "constant.numeric.octal.loft",
+          "match": "\\b0o[0-7_]+\\b"
+        },
+        {
+          "name": "constant.numeric.float.loft",
+          "match": "\\b[0-9][0-9_]*\\.[0-9][0-9_]*([eE][+-]?[0-9_]+)?\\b"
+        },
+        {
+          "name": "constant.numeric.decimal.loft",
+          "match": "\\b[0-9][0-9_]*\\b"
+        }
+      ]
+    },
+    "keywords": {
+      "patterns": [
+        {
+          "name": "keyword.declaration.loft",
+          "match": "\\b(fn|struct|enum|type|pub|use|interface|const|let)\\b"
+        },
+        {
+          "name": "keyword.control.loft",
+          "match": "\\b(if|else|for|while|match|in|return|break|continue|yield)\\b"
+        },
+        {
+          "name": "keyword.operator.word.loft",
+          "match": "\\b(and|or|not|as)\\b"
+        },
+        {
+          "name": "constant.language.boolean.loft",
+          "match": "\\b(true|false)\\b"
+        },
+        {
+          "name": "constant.language.null.loft",
+          "match": "\\bnull\\b"
+        },
+        {
+          "name": "keyword.other.loft",
+          "match": "\\b(assert|debug_assert|panic|sizeof|self|par|par_light|par_fold|stack_trace|log_info|log_warn|log_error|log_fatal|log_debug|log_trace|print|println|len)\\b"
+        },
+        {
+          "name": "storage.modifier.loft",
+          "match": "\\b(not\\s+null)\\b"
+        }
+      ]
+    },
+    "types": {
+      "patterns": [
+        {
+          "name": "support.type.primitive.loft",
+          "match": "\\b(integer|boolean|float|single|long|character|text|byte|void|reference|enumerate|i8|i16|i32|u8|u16|u32)\\b"
+        },
+        {
+          "name": "support.type.collection.loft",
+          "match": "\\b(vector|sorted|hash|index|spatial|iterator)\\b"
+        }
+      ]
+    },
+    "fn-declaration": {
+      "match": "\\b(fn)\\s+([a-z_][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.loft" },
+        "2": { "name": "entity.name.function.loft" }
+      }
+    },
+    "type-declaration": {
+      "match": "\\b(struct|enum|type|interface)\\s+([A-Z][A-Za-z0-9_]*)",
+      "captures": {
+        "1": { "name": "keyword.declaration.loft" },
+        "2": { "name": "entity.name.type.loft" }
+      }
+    },
+    "identifiers": {
+      "patterns": [
+        {
+          "name": "constant.other.loft",
+          "match": "\\b[A-Z][A-Z0-9_]+\\b"
+        },
+        {
+          "name": "entity.name.type.loft",
+          "match": "\\b[A-Z][A-Za-z0-9_]*\\b"
+        }
+      ]
+    }
+  }
+}

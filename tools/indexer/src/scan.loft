@@ -327,7 +327,10 @@ fn is_skipped_dir(name: text) -> boolean {
     // the wrong root and would surface as false-positive
     // broken links — bash's `git ls-files` skips these
     // (they're gitignored); loft mirrors via the dir name.
+    // `pkg-mt` (the threaded bundle, @PLN117) is the same
+    // output under a different name, so match the family.
     if name == "pkg" { return true; }
+    if name.starts_with("pkg-") { return true; }
     false
 }
 

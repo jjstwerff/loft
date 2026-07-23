@@ -1,0 +1,178 @@
+# @PLN117 — the browser-threading gates, run where they cannot rot.
+#
+# `par` on Web Worker threads is proven by five HEADLESS BROWSER gates
+# (tests/wasm/*.sh).  They need what a normal CI job does not have: a nightly
+# toolchain with rust-src (the threaded build rebuilds std with wasm atomics),
+# a threaded wasm bundle, a COOP/COEP host, and a real chromium.  That is why
+# they live in their own workflow instead of ci.yml.
+#
+# WHEN IT RUNS
+#   - nightly at 05:00 UTC — clear of the 03:00 daily CI matrix and the 04:00
+#     miri run.  This is the real safety net: it covers every change, including
+#     ones to files the path filter below does not list (src/state/mod.rs,
+#     src/generation/, src/main.rs — all touched constantly, all too broad to
+#     put on a per-PR trigger for a ~40-minute job).
+#   - per PR / push-to-main, but only when the diff touches the threading
+#     surface itself, where the feedback is worth the wall-clock.
+#   - on demand (workflow_dispatch).
+#
+# NOT a required check: a red here is a real regression to fix, but the daily
+# `Nightly health (informational)` job in ci.yml is what surfaces it on PRs.
+name: Browser threading
+
+on:
+  schedule:
+    - cron: '0 5 * * *'
+  # (GitHub Actions does not support YAML anchors, so the surface is spelled
+  # out twice — keep the two lists in step.)
+  pull_request:
+    branches: [main]
+    paths:
+      - 'src/parallel.rs'
+      - 'src/wasm_threads.rs'
+      - 'src/wasm.rs'
+      - 'src/native_utils.rs'
+      - 'wasm-sync/**'
+      - 'doc/loft-thread.js'
+      - 'tests/wasm/**'
+      - 'scripts/par_gates.sh'
+      - 'Makefile'
+      - 'Cargo.toml'
+      - '.github/workflows/browser-threads.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src/parallel.rs'
+      - 'src/wasm_threads.rs'
+      - 'src/wasm.rs'
+      - 'src/native_utils.rs'
+      - 'wasm-sync/**'
+      - 'doc/loft-thread.js'
+      - 'tests/wasm/**'
+      - 'scripts/par_gates.sh'
+      - 'Makefile'
+      - 'Cargo.toml'
+      - '.github/workflows/browser-threads.yml'
+  workflow_dispatch:
+
+concurrency:
+  group: browser-threads-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_MULTIPLEXING: "false"
+  CARGO_INCREMENTAL: "0"
+
+jobs:
+  gates:
+    name: par on Web Workers
+    runs-on: ubuntu-latest
+    # Two std rebuilds with atomics (the wasm-bindgen bundle, then the --html
+    # sysroot) dominate; the five gates themselves are minutes.
+    timeout-minutes: 90
+
+    # CALIBRATION.  A GitHub runner has 4 vCPUs against this project's 24-core
+    # dev box, so the gates measure the same claims at floors the hardware can
+    # actually deliver — lowered, not switched off.  A `par` that stops
+    # parallelising still fails: 4 workers must beat 1 by 1.5x and the frame
+    # count must still rise by half.  Every VALUE assertion is untouched; these
+    # only retune what is sampled and how fast it must be.
+    #
+    # Measured on the runner (kept here so the numbers have a source): scaling
+    # 100/159/224% over 1/2/4 workers, UI 33 frames against 19 sequential
+    # (1.7x; 2.2x under `taskset -c 0-3` locally), `--html` and dispatch both
+    # over 4 workers, every value equal to the interpreter's.  The frame floor
+    # sits at 1.3x rather than just under the observed 1.7x: this runs nightly,
+    # and a gate that goes red on runner noise gets ignored, which costs more
+    # than the tenths it buys.
+    #
+    # CONCURRENCY_STAT=max — with 12 reps on 4 contended vCPUs, rayon gave one
+    # rep a single worker; concurrency demonstrated across the reps is what this
+    # hardware can promise, and the per-rep value check is what catches a race.
+    # UI_WORK/UI_WINDOW — the dev-box sizing produced 4 frames against 3, too
+    # small to be a ratio, so CI samples lighter work over a longer window.
+    # WAIT_SCALE stretches every wait for the page's report line (gates exit as
+    # soon as it lands, so a generous cap costs nothing when things are healthy).
+    env:
+      WAIT_SCALE: "3"
+      POOLS: "1 2 4"
+      SPEEDUP_AT: "4"
+      MIN_SPEEDUP_PCT: "150"
+      CONCURRENCY_STAT: "max"
+      THREADS: "4"
+      MIN_FRAME_RATIO_X10: "13"
+      UI_WORK: "15000"
+      UI_WINDOW: "9000"
+
+    steps:
+      - uses: actions/checkout@v5
+
+      # Nightly + rust-src: `-Z build-std` is the only way to get a std
+      # compiled with +atomics, which is what makes the wasm threadable.
+      - name: Install Rust nightly (rust-src)
+        uses: dtolnay/rust-toolchain@nightly
+        with:
+          components: rust-src
+          targets: wasm32-unknown-unknown
+
+      # Stable last so it stays the default toolchain, matching a dev box
+      # (rust-toolchain.toml pins this checkout to stable; the threaded builds
+      # reach for nightly explicitly via `rustup run nightly`).
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      # mold: .cargo/config.toml links x86_64 Linux with it.
+      # binaryen: `loft --html` needs wasm-opt to inject asyncify.
+      - name: Install mold + binaryen
+        run: sudo apt-get update && sudo apt-get install -y mold binaryen
+
+      - name: Install wasm-pack
+        run: curl -sSLf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      # The gates drive a real browser.  The runner image ships Google Chrome;
+      # install it if that ever stops being true, because a missing browser
+      # must never quietly turn these gates into a green no-op.
+      - name: Ensure a headless browser
+        run: |
+          if command -v google-chrome || command -v chromium || command -v chromium-browser; then
+            echo "browser present"
+          else
+            wget -q https://dl.google.com/linux/direct/google-chrome-stable_current_amd64.deb
+            sudo apt-get install -y ./google-chrome-stable_current_amd64.deb
+          fi
+          "$(command -v google-chrome || command -v chromium || command -v chromium-browser)" --version
+
+      - name: Cache cargo
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ubuntu-cargo-threads-${{ hashFiles('**/Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            ubuntu-cargo-threads-${{ hashFiles('**/Cargo.lock') }}-
+            ubuntu-cargo-threads-
+
+      # The interpreter reference every gate compares against, and the binary
+      # the `--html` gate exports pages with.
+      - name: Build loft (release)
+        run: cargo build --release
+
+      # The threaded --target web bundle the four bundle gates load.  Its
+      # link-arg set is load-bearing: drop one and the memory is not shared, so
+      # workers die at runtime with "Memory could not be cloned" (see
+      # doc/claude/WASM.md).
+      - name: Build the threaded wasm bundle
+        run: make wasm-mt
+
+      - name: Run the five gates
+        run: scripts/par_gates.sh --ci

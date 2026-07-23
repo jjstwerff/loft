@@ -813,6 +813,35 @@ jobs:
         # whole job is), so drift shows red without blocking merge.
         run: make features-check
 
+  # WASM node bridge — build the wasm-pack nodejs bundle and RUN the binary-I/O
+  # bridge tests (tests/wasm/bridge.test.mjs).  The per-platform `Test` job's
+  # `wasm_compile_and_run_smoke` self-SKIPS whenever tests/wasm/pkg/ is absent —
+  # which is EVERY run, because nothing built it — so its green was a silent skip,
+  # not a pass.  That silent skip hid that several bridge programs had rotted onto
+  # the REMOVED `Nl` long-literal suffix (`42l`) and the old `Format.BigEndian`
+  # spelling, so they no longer parsed and the wasm binary-I/O surface went
+  # untested.  The programs are now ported to current syntax (bare `BigEndian`,
+  # `f += … as i32`, plain int offsets); this job builds the bundle so they
+  # actually RUN in CI and stay honest.  ADVISORY (not in required-status-checks):
+  # visible on every PR without blocking; promote to required once it has proven
+  # stable.  (The seeded-`rand` case was dropped — `rand` moved to the `random`
+  # library, @PLAN12, and is not in the core bundle these tests drive.)
+  wasm-bridge:
+    name: wasm node bridge (ubuntu, advisory)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust stable
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - name: Install wasm-pack
+        run: curl -sSLf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+      - name: Build the node bridge bundle
+        run: wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm
+      - name: Run WASM bridge tests
+        run: node tests/wasm/bridge.test.mjs
+
   # Browser-bundle freshness — a change set that edits a committed browser
   # bundle's SOURCE (currently the Brick Buster .loft) must rebuild + commit the
   # bundle in the SAME set, or the deployed website goes stale — the recurring
@@ -1252,6 +1281,20 @@ jobs:
                 sections.push(`**miri nightly** (${miri.created_at.slice(0, 10)}): `
                   + jobs.map((j) => `${icon(j.conclusion)} ${j.name}`).join(' · ')
                   + ` — [run #${miri.run_number}](${miri.html_url})`);
+              }
+              // @PLN117 browser-threading gates (browser-threads.yml, nightly +
+              // on threading-surface pushes) — the only place `par` on real Web
+              // Worker threads is proven, so a red there is invisible anywhere
+              // else.  Tolerates a missing workflow (not yet on main, renamed)
+              // instead of losing the whole report to a 404.
+              let threads = null;
+              try { threads = await latestRun('browser-threads.yml', {}); } catch (e) { /* not on main yet */ }
+              if (threads) {
+                const jobs = await runJobs(threads);
+                if (jobs.some(isBad)) attentionNeeded = true;
+                sections.push(`**browser threading** (${threads.created_at.slice(0, 10)}): `
+                  + jobs.map((j) => `${icon(j.conclusion)} ${j.name}`).join(' · ')
+                  + ` — [run #${threads.run_number}](${threads.html_url})`);
               }
               // Scheduled daily full-matrix CI — the only place Windows runs.
               // ~20 jobs, so name the failures and count the rest.

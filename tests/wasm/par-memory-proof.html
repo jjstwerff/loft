@@ -1,0 +1,75 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Jurjen Stellingwerff  SPDX-License-Identifier: LGPL-3.0-or-later -->
+<!-- @PLN117 arc C — memory model under SHARED linear memory.  Runs an
+     allocation-heavy `par` (worker-store allocation + adoption + rebase, plus
+     text interning / vector building) across many workers over many elements,
+     repeated R times, and checks every run agrees with the native reference.  A
+     shared-memory allocator race, a broken read-only parent borrow, a lifetime
+     (join-before-drop) fault, or an adoption/rebase bug would surface as a wrong
+     value, a wrong length, or a crash.  ?case=struct|vector, ?threads=N (0 =
+     sequential fallback), ?reps=R. -->
+<meta charset=utf-8><title>loft par memory-model proof</title>
+<pre id=out>running…</pre>
+<script>
+const q = new URLSearchParams(location.search);
+const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
+window.addEventListener('error', e => report('winerror=' + (e.message||e.filename||e)));
+window.addEventListener('unhandledrejection', e => report('reject=' + ((e.reason&&e.reason.message)||e.reason)));
+</script>
+<script type=module>
+import init, { compile_and_run, set_par_trace_workers } from './pkg-mt/loft.js';
+import { startLoftWorkers } from './pkg-mt/loft-thread.js';
+const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
+const threads = q.has('threads') ? (parseInt(q.get('threads'),10) || 0) : 4;
+const reps    = parseInt(q.get('reps') || '10', 10);
+const cas     = q.get('case') || 'struct';
+// struct+text: worker allocates a text (interned) + a struct record per element,
+//   adopted + rebased back to the parent.  Output = (sum n, sum label bytes).
+const STRUCT = `
+struct Item { label: text, n: integer }
+fn build(x: integer) -> Item { Item { label: "item-{x}-{x * x}", n: x * x } }
+fn main() {
+    data = [0]; for i in 1..256 { data += [i]; }
+    sumn = 0; labs = 0;
+    for a in data par(it = build(a), 8) { sumn += it.n; labs += size(it.label); }
+    println("v={sumn}/{labs}");
+}`;
+// vector return: worker builds an 8-element vector per element (owned heap,
+//   hidden-dest delivery).  Output = (sum of all elements, total count).
+const VECTOR = `
+fn build(x: integer) -> vector<integer> { v = [x]; for i in 1..8 { v += [x * i]; } v }
+fn main() {
+    data = [0]; for i in 1..200 { data += [i]; }
+    tot = 0; cnt = 0;
+    for a in data par(v = build(a), 8) { for e in v { tot += e; cnt += 1; } }
+    println("v={tot}/{cnt}");
+}`;
+const SRC = cas === 'vector' ? VECTOR : STRUCT;
+(async () => {
+  try {
+    const wasm = await init();
+    if (!self.crossOriginIsolated) return report('FAIL coi=false');
+    if (threads > 0) await startLoftWorkers(wasm, threads, { memory: wasm.memory, mainJS: new URL('./pkg-mt/loft.js', import.meta.url).href });
+    set_par_trace_workers(true);
+    const results = new Set();
+    // Both ends of the per-rep worker spread.  `min` is the strict claim (EVERY
+    // rep ran concurrently) and holds on a machine with cores to spare; `max`
+    // is the weaker one (concurrency was demonstrated across the reps), which
+    // is all a contended 4-vCPU CI runner can promise — rayon can hand one
+    // worker the whole tiny workload before the others wake.  The driver picks
+    // which one it asserts on ($CONCURRENCY_STAT); the VALUE check is unaffected
+    // either way.
+    let minWorkers = 1e9, maxWorkers = 0, allOk = true, badDiag = '';
+    for (let r = 0; r < reps; r++) {
+      const res = JSON.parse(compile_and_run(JSON.stringify([{name:'main.loft', content: SRC}])));
+      if (!res.success) { allOk = false; badDiag = (res.diagnostics||'crash').slice(0,80); break; }
+      const out = res.output || '';
+      results.add((out.match(/v=(\S+)/) || [])[1] || 'none');
+      const dw = parseInt((out.match(/distinct_workers=(\d+)/) || [])[1] || '1', 10);
+      if (dw < minWorkers) minWorkers = dw;
+      if (dw > maxWorkers) maxWorkers = dw;
+    }
+    report(`RESULT case=${cas} threads=${threads} reps=${reps} success=${allOk} distinct=${[...results].join(',')} min_workers=${minWorkers} max_workers=${maxWorkers} diag=${badDiag}`);
+  } catch (e) { report('caught=' + ((e && e.message) || String(e))); }
+})();
+</script>

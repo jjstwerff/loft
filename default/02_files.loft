@@ -71,7 +71,11 @@ pub struct File {
   // 24
   size: integer,
   // 0
-  format: Format,
+  // @PLN116 — a bare enum field needs an explicit default (an enum's 0 is null, and a
+  // non-null field may not hold null).  A fresh File is `NotExists` until `OpGetFile`
+  // determines the real format for a valid path (see `file()`), so `NotExists` is the
+  // honest placeholder — it is overwritten before any read.
+  format: Format = NotExists,
   // 32
   ref: i32?,
   // 28

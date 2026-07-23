@@ -800,6 +800,12 @@ fn OpFreeRefTag(v1: reference, tag: const u16);
 // placeholder) frees the orphan.
 fn OpFreeRefIfDistinct(placeholder: reference, witness: reference);
 #rust"if @placeholder.store_nr != @witness.store_nr {{ s.database.free(&@placeholder); }}"
+// Free an on=4 iteration scratch's DEDICATED store at loop exit: the scratch header
+// records the SOURCE (records) store_nr at offset `pos + 4`; free the whole scratch
+// store only when it differs (a read-only/exposed source got a fresh dedicated store).
+// A co-located scratch (writable source, store == source) or a null scratch is a no-op.
+fn OpFreeScratch(scratch: reference);
+#rust"if @scratch.rec != 0 {{ let __src = s.database.store(&@scratch).get_u32_raw(@scratch.rec, @scratch.pos + 4) as u16; if __src != @scratch.store_nr {{ s.database.free(&@scratch); }} }}"
 fn OpSizeofRef(val: reference) -> integer;
 fn OpVarRef(pos: const u16) -> reference;
 #rust"{{let r = *s.get_var::<DbRef>(@pos); stores.valid(&r); r}}"

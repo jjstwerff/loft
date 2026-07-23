@@ -733,6 +733,12 @@ impl Stores {
     /// S29: Find the lowest free slot index below `max` using the `free_bits` bitmap.
     /// Returns `self.max` when no freed slot is available (caller must grow the Vec).
     fn find_free_slot(&self) -> u16 {
+        // @PLN118 arc D — LOFT_NO_SLOT_REUSE=1: never reclaim a freed slot; always
+        // grow. A diagnostic stopgap that proves whether the corruption is
+        // slot-reuse-while-referenced (if the null vanishes, it is). Off by default.
+        if crate::keys::no_slot_reuse() {
+            return self.max;
+        }
         for (wi, &word) in self.free_bits.iter().enumerate() {
             if word != 0 {
                 let bit = word.trailing_zeros() as u16;
@@ -1094,36 +1100,52 @@ impl Stores {
         self.build_rec_scratch(coll, &recs)
     }
 
-    /// Materialise `recs` (live hash rec-nrs) into a rec-nr scratch vector that
-    /// the Ordered (on=3) iteration path walks.
+    /// Materialise `recs` (live hash/radix rec-nrs) into a rec-nr scratch vector that
+    /// the Ordered `on=4` iteration path walks.
     ///
-    /// C60 piece 3 edit A: allocate IN THE HASH'S STORE, not a fresh one.  This
-    /// makes the yielded scratch DbRef share `store_nr` with the hash records —
-    /// so when Ordered iteration yields `DbRef{store=scratch.store_nr,
-    /// rec=<u32 rec-nr from vector>, pos=8}`, the rec-nr resolves to a valid
-    /// hash record in the same store.  No new on=4 mode, no bytecode protocol
-    /// change — hash iteration reuses the existing Ordered (on=3) path.
+    /// The scratch's header records the SOURCE (records) store_nr at offset 8, so the
+    /// `on=4` yield resolves each element in that store regardless of where the scratch
+    /// itself lives.  A WRITABLE source keeps the scratch co-located (source == scratch
+    /// store — the fast path).  A READ-ONLY/exposed source cannot be claimed into (and
+    /// its buffer must not move), so the scratch goes in a fresh dedicated store while
+    /// the elements still resolve in the exposed source (expose-iteration-scratch.md).
     fn build_rec_scratch(&mut self, hash_ref: &DbRef, recs: &[u32]) -> DbRef {
+        // Pick the scratch store: a read-only/exposed source needs a separate writable
+        // home (claiming into it would panic and could move its buffer, invalidating the
+        // exposed view).  `database(1)` hands back a fresh owned store.
+        let scratch_store = if self.store(hash_ref).read_only {
+            self.database(1).store_nr
+        } else {
+            hash_ref.store_nr
+        };
+        let scratch_ref = DbRef {
+            store_nr: scratch_store,
+            rec: 0,
+            pos: 0,
+        };
         let n = recs.len();
         // 8-byte header + n * 4 bytes of u32 rec-nrs, rounded up to 8-byte
         // words (store claim granularity).
         let vec_words = ((n as u32) * 4 + 8).div_ceil(8);
         let vec_words = vec_words.max(1);
-        let vec_cr = self.claim(hash_ref, vec_words);
+        let vec_cr = self.claim(&scratch_ref, vec_words);
         let vec_rec = vec_cr.rec;
-        let header_cr = self.claim(hash_ref, 1);
+        // 2-word header: offset 4 = rec-nr vector, offset 8 = SOURCE (records) store_nr,
+        // read by the `on=4` yield (`vector::step_ordered` with `sourced`).
+        let header_cr = self.claim(&scratch_ref, 2);
         let header_rec = header_cr.rec;
         {
-            let store = self.store_mut(hash_ref);
+            let store = self.store_mut(&scratch_ref);
             store.set_u32_raw(vec_rec, 4, n as u32);
             for (i, &rec_nr) in recs.iter().enumerate() {
                 let base = 8 + (i as u32) * 4;
                 store.set_u32_raw(vec_rec, base, rec_nr);
             }
             store.set_u32_raw(header_rec, 4, vec_rec);
+            store.set_u32_raw(header_rec, 8, u32::from(hash_ref.store_nr));
         }
         DbRef {
-            store_nr: hash_ref.store_nr,
+            store_nr: scratch_store,
             rec: header_rec,
             pos: 4,
         }
@@ -1352,7 +1374,15 @@ impl Stores {
             const_refs: self.const_refs.clone(),
             last_parse_errors: Vec::new(),
             last_json_errors: Vec::new(),
-            parallel_ctx: None,
+            // The worker inherits the parent's program context, so a `par`
+            // inside a `par` worker can dispatch in turn.  Without it the
+            // nested dispatch finds no context and aborts the run
+            // ("parallel_queue called outside State::execute()").  The pointers
+            // stay valid because the parent joins its workers before its own
+            // `execute()` returns — the lifetime rule `ParallelCtx` already
+            // documents — and they are read-only: the worker only reads the
+            // same bytecode, library and `Data` its parent is running.
+            parallel_ctx: self.parallel_ctx.clone(),
             par_buffer_stack: Vec::new(),
             par_text_buffer_stack: Vec::new(),
             par_ref_buffer_stack: Vec::new(),

@@ -1879,10 +1879,58 @@ impl State {
                         .range(..=self.code_pos)
                         .next_back()
                         .map_or(0, |(_, &v)| v);
+                    // @PLN118 arc B — attribute the FREE site. Prefer the CAUSAL free (the one
+                    // that took the slot to `stamped + 1`, making THIS ref stale) over the
+                    // last free — a heavily-reused slot's last free is a different occupant's.
+                    // Names the chokepoint (the dropped dep) rather than only the read symptom.
+                    // @PLN118 arc E — also name the freeing OP (recorded with the free site) so
+                    // the report says WHICH free to fix, not just where; needs `Data`, valid
+                    // throughout execution (null only in a parallel worker, tolerated below).
+                    let op_name = |opc: u16| -> String {
+                        if self.data_ptr.is_null() {
+                            format!("op#{opc}")
+                        } else {
+                            // SAFETY: data_ptr is set in execute_argv, valid for the run.
+                            unsafe { &*self.data_ptr }
+                                .operator_name(opc)
+                                .map_or_else(|| format!("op#{opc}"), str::to_string)
+                        }
+                    };
+                    let free_str = crate::keys::uaf_freed_pc_at_gen(db.store_nr, stamped + 1)
+                        .or_else(|| crate::keys::uaf_freed_pc(db.store_nr))
+                        .map_or_else(String::new, |(fpc, _d, op)| {
+                            let fline = self
+                                .line_numbers
+                                .range(..=fpc)
+                                .next_back()
+                                .map_or(0, |(_, &v)| v);
+                            format!(
+                                " (freed at code_pos={fpc}, line {fline}, by {})",
+                                op_name(op)
+                            )
+                        });
+                    // @PLN118 arc E — the READING op is the one currently dispatching (this
+                    // pop happens inside its handler); `last_context` holds its opcode byte.
+                    let (_rpc, read_op, _fd) = crate::crash_report::last_context();
+                    let read_op_str = op_name(u16::from(read_op));
+                    // @PLN118 arc B refinement — a stale read DURING a record deep-copy is the
+                    // copy reading a stale SUB-reference: the copy is incomplete and the source
+                    // free is CORRECT — so name the COPY as the op to fix, not the free. A stale
+                    // read outside a copy IS a premature-free candidate. This is the distinction
+                    // that turns "prematurely freed" (which points at a correctly-placed temp
+                    // free) into "incomplete record-copy" (which points at the actual op).
+                    let verdict = if crate::keys::uaf_in_copy() {
+                        "INCOMPLETE RECORD-COPY — a copy read a stale sub-reference; the copy \
+                         did not finish deep-copying before the source was freed (the free is \
+                         correct — fix the copy, not the free)"
+                    } else {
+                        "PREMATURE FREE — a plain deref of a store freed while this ref was live \
+                         (fix the free / the dropped dep)"
+                    };
                     eprintln!(
                         "[uaf-gen] stale DbRef popped: store #{} (rec={}, pos={}) was gen {stamped} \
                          at push but is now gen {} (freed+reused since) — read at code_pos={} \
-                         (line {line})",
+                         (line {line}) by {read_op_str}{free_str} — {verdict}",
                         db.store_nr,
                         db.rec,
                         db.pos,
@@ -4112,6 +4160,7 @@ impl State {
         let mut bytecode_len = self.bytecode.len() as u32;
         let uaf_on = crate::keys::uaf_check_enabled();
         let uaf_src_on = crate::keys::uaf_src_enabled();
+        let uaf_gen_on = crate::keys::uaf_gen_enabled();
         // @PLN18 phase 02 — tier-0 live reload: a counter-gated poll so a file
         // save can swap one fn's dispatch targets mid-run (append-only code, so
         // the cached length refreshes after a swap).  One decrement + one
@@ -4174,7 +4223,10 @@ impl State {
             if !self.database.uaf_freed_this_op.is_empty() {
                 if uaf_on {
                     self.uaf_scan_freed(data);
-                } else if uaf_src_on {
+                } else if uaf_src_on || uaf_gen_on {
+                    // Stamp each freed slot's site so the gen-detector's stale-read report
+                    // (@PLN118 arc B) can name WHERE the store was prematurely freed, not
+                    // just where the stale ref is read.
                     let freed = std::mem::take(&mut self.database.uaf_freed_this_op);
                     let d_nr = self.call_stack.last().map_or(u32::MAX, |f| f.d_nr);
                     for &slot in &freed {
@@ -4289,7 +4341,7 @@ impl State {
             // LOFT_LEAK_SITES — group leaked stores by ALLOCATION site (created_at →
             // source line) so the leak's where-from is named, not just its type. Gated.
             if std::env::var_os("LOFT_LEAK_SITES").is_some() {
-                let mut by_site: std::collections::BTreeMap<(u32, u16), usize> =
+                let mut by_site: std::collections::BTreeMap<(u32, u16, bool), usize> =
                     std::collections::BTreeMap::new();
                 for (s_nr, s) in self.database.allocations.iter().enumerate() {
                     if (s_nr == 0 && self.database.stack_store_at_zero)
@@ -4299,11 +4351,13 @@ impl State {
                     {
                         continue;
                     }
-                    *by_site.entry((s.created_at, s.known_type)).or_default() += 1;
+                    *by_site
+                        .entry((s.created_at, s.known_type, s.is_free_protected()))
+                        .or_default() += 1;
                 }
                 let mut sites: Vec<_> = by_site.into_iter().collect();
                 sites.sort_by_key(|&(_, n)| std::cmp::Reverse(n));
-                for ((created_at, kt), n) in sites {
+                for ((created_at, kt, protd), n) in sites {
                     let line = self
                         .line_numbers
                         .range(..=created_at)
@@ -4315,7 +4369,8 @@ impl State {
                         .get(kt as usize)
                         .map_or("?", |t| t.name.as_str());
                     eprintln!(
-                        "  [leak-site] {n}× {tn} (kt={kt}) allocated at pc={created_at} (line {line})"
+                        "  [leak-site] {n}× {tn} (kt={kt}) allocated at pc={created_at} (line {line}) \
+                         free_protected={protd}"
                     );
                 }
             }
@@ -5173,11 +5228,15 @@ impl State {
             d_nr,
             call_pos: 0,
             args_base: self.stack_step(4),
-            args_size: 16,
+            // The one argument is the `Str` pushed below, and a `Str` is
+            // pointer-sized: 16 bytes natively, 8 on wasm32.  Stack-trace and
+            // variable-snapshot readers scan `args_size` bytes of the frame, so a
+            // hardcoded 16 sends them past the argument in a browser build.
+            args_size: size_of::<Str>() as u16,
             line: 0,
         });
         self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
-        self.put_stack(input_str); // 16 bytes
+        self.put_stack(input_str);
         for &extra in extra_args {
             self.put_stack(extra as i64);
         }

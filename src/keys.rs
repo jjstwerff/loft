@@ -293,7 +293,7 @@ pub fn uaf_src_enabled() -> bool {
 /// Either UAF instrument is on (gates the `uaf_freed_this_op` recording in `free_named`).
 #[must_use]
 pub fn uaf_any_enabled() -> bool {
-    uaf_check_enabled() || uaf_src_enabled()
+    uaf_check_enabled() || uaf_src_enabled() || uaf_gen_enabled()
 }
 
 /// `LOFT_POISON=1` (@PLN54 S3) — the arena poison-on-free keystone. When on, `free_named`
@@ -320,6 +320,19 @@ pub fn poison_enabled() -> bool {
 pub fn copy_dump_enabled() -> bool {
     static ON: OnceLock<bool> = OnceLock::new();
     *ON.get_or_init(|| std::env::var_os("LOFT_COPY_DUMP").is_some())
+}
+
+/// `LOFT_NO_BRIDGE_ORPHAN_FREE=1` — @PLN118 arc F opt-out / differential switch. The shared-store
+/// bridge (`native_lib::shared_bridge_wrapper`) frees a FALLBACK destination record it allocated
+/// itself when the inner fn ignored the retbuf and returned a fresh store (a struct-literal return
+/// does) — otherwise that record is orphaned across the interp↔cdylib boundary, one leaked store
+/// per call. Setting this reproduces the pre-fix leak (the arc-D "second implementation to flip
+/// to" + the differential leak oracle's positive control). Default OFF (the fix is active). One
+/// cached env read; the free itself only fires when the fallback was allocated.
+#[must_use]
+pub fn bridge_orphan_free_disabled() -> bool {
+    static ON: OnceLock<bool> = OnceLock::new();
+    *ON.get_or_init(|| std::env::var_os("LOFT_NO_BRIDGE_ORPHAN_FREE").is_some())
 }
 
 /// `LOFT_REPORT_COPIES=1` (or the `--report-copies` CLI flag) — @PLN90 Step 5. The USER-FACING
@@ -626,6 +639,14 @@ pub fn uaf_gen_enabled() -> bool {
     *UAF_GEN.get_or_init(|| std::env::var_os("LOFT_UAF_GEN").is_some())
 }
 
+/// `LOFT_NO_SLOT_REUSE=1` — @PLN118 arc D: never reclaim a freed store slot (always
+/// grow). Diagnostic stopgap to test whether a corruption is slot-reuse-while-referenced.
+#[must_use]
+pub fn no_slot_reuse() -> bool {
+    static NR: OnceLock<bool> = OnceLock::new();
+    *NR.get_or_init(|| std::env::var_os("LOFT_NO_SLOT_REUSE").is_some())
+}
+
 /// `LOFT_WATCH_STORE=<n>` — the write-watch for cluster-462's root: after each
 /// `copy_record` whose DESTINATION is store `<n>`, scan the just-written record's text
 /// fields for an out-of-bounds pointer and report the op that produced it (pc/line +
@@ -653,6 +674,31 @@ thread_local! {
     /// its eval-stack byte offset. At POP, a shadow-vs-current mismatch = reused-since-push.
     static STACK_SHADOW: std::cell::RefCell<std::collections::HashMap<u32, u32>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+}
+
+thread_local! {
+    /// @PLN118 arc B refinement — depth of record deep-copies (`copy_record`/`finish_record`)
+    /// on the stack. A `LOFT_UAF_GEN` stale read while > 0 is a record COPY reading a stale
+    /// sub-reference (the copy is incomplete; the correctly-placed source free is NOT the bug)
+    /// — a distinct root from a plain deref of a genuinely prematurely-freed store.
+    static COPY_DEPTH: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
+}
+
+/// Enter a record deep-copy (bump the depth). Gate at the call site on `uaf_gen_enabled`.
+pub fn uaf_copy_enter() {
+    COPY_DEPTH.with(|d| d.set(d.get() + 1));
+}
+
+/// Leave a record deep-copy (drop the depth). Saturating so a mismatched pair can't underflow.
+pub fn uaf_copy_exit() {
+    COPY_DEPTH.with(|d| d.set(d.get().saturating_sub(1)));
+}
+
+/// True when a record deep-copy is currently executing (a stale read here is a copy-incomplete,
+/// not a premature-free).
+#[must_use]
+pub fn uaf_in_copy() -> bool {
+    COPY_DEPTH.with(|d| d.get() > 0)
 }
 
 /// Bump store `slot`'s generation (called from `free_named` under `LOFT_UAF_GEN`).
@@ -704,21 +750,41 @@ thread_local! {
     /// the premature-free op without a full operand-stack scan.
     static FREED_AT: std::cell::RefCell<std::collections::HashMap<u16, (u32, u32, u16)>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
+    /// @PLN118 arc B — the free site keyed by `(slot, post-free generation)`. For a slot
+    /// freed-and-reused many times, `FREED_AT` (last free only) names the LAST occupant's
+    /// free, not the free that made a specific stale ref stale. Keyed by generation, the
+    /// gen-detector can name the CAUSAL free (the one at the ref's stamped gen + 1).
+    static FREED_AT_GEN: std::cell::RefCell<std::collections::HashMap<(u16, u32), (u32, u32, u16)>> =
+        std::cell::RefCell::new(std::collections::HashMap::new());
 }
 
-/// Record (under `LOFT_UAF`) that store `slot` was freed while executing `pc` in
-/// function `d_nr`, by the op whose opcode is `op` (names the freeing op category:
-/// a scope-exit `OpFreeRef`, an `OpFreeRefIfDistinct`, or a `copy_record` free-bit).
+/// Record (under `LOFT_UAF`/`LOFT_UAF_GEN`) that store `slot` was freed while executing
+/// `pc` in function `d_nr`, by the op whose opcode is `op` (names the freeing op category:
+/// a scope-exit `OpFreeRef`, an `OpFreeRefIfDistinct`, or a `copy_record` free-bit). Also
+/// stamps it against the slot's now-current (post-free) generation for causal attribution.
 pub fn uaf_record_free(slot: u16, pc: u32, d_nr: u32, op: u16) {
     FREED_AT.with(|m| {
         m.borrow_mut().insert(slot, (pc, d_nr, op));
     });
+    if uaf_gen_enabled() {
+        let slot_gen = uaf_slot_gen(slot);
+        FREED_AT_GEN.with(|m| {
+            m.borrow_mut().insert((slot, slot_gen), (pc, d_nr, op));
+        });
+    }
 }
 
 /// The `(code_pos, d_nr, op_code)` of `slot`'s most-recent recorded free, if any.
 #[must_use]
 pub fn uaf_freed_pc(slot: u16) -> Option<(u32, u32, u16)> {
     FREED_AT.with(|m| m.borrow().get(&slot).copied())
+}
+
+/// The free that took `slot` to generation `gen` (the CAUSAL free for a DbRef stamped at
+/// `gen - 1`), if recorded. Falls back to `uaf_freed_pc` at the call site when absent.
+#[must_use]
+pub fn uaf_freed_pc_at_gen(slot: u16, want_gen: u32) -> Option<(u32, u32, u16)> {
+    FREED_AT_GEN.with(|m| m.borrow().get(&(slot, want_gen)).copied())
 }
 
 #[must_use]

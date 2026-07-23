@@ -1,5 +1,19 @@
 # Tuple layout: the call-argument push violates the packed layout
 
+> **CLOSED 2026-07-22.** Shipped on `main` in [#611](https://github.com/loft-lang/loft/pull/611)
+> (merged 2026-07-22); [loft-lang/plans#114](https://github.com/loft-lang/plans/issues/114)
+> closed. Every defect this plan opened with is fixed and guarded: a tuple is
+> byte-identical to the record of the same fields on all 148 oracle shapes, and the
+> oracle now **asserts** it (`cargo test --test pln114_layout_oracle`). Verified green
+> on this tree: the oracle, the three `pln114_*` specs in `tests/issues.rs`, the three
+> `tests/scripts/pln114-*.loft` under `loft_suite`, and the `stack_align_guard` sweep.
+> Two optional follow-ups are **deliberately not tracked** — they are cleanup, not
+> correctness, and are recorded in § STATUS so they aren't lost: (1) delete the
+> candidate-dead P249 fn-ref step fixups and the `#493` `OpSetInt4` projection in
+> `codegen.rs` (each needs an `introspect`-diff to prove it dead before removal);
+> (2) watch the first Windows/macOS nightlies now that the 201 matrix cells run by
+> default. Everything below is the investigation kept for its reasoning.
+
 > **Reframed after step 0.** This started as "split two competing layout regimes and
 > give tuples one owner". The probe corpus showed there is no competition to
 > resolve: **packed already wins at every destination** — local, struct field,
@@ -21,7 +35,7 @@
 > `bytecode-comparisons/`.
 
 
-## STATUS (2026-07-21) — the defect work is COMPLETE; follow-ups remain
+## STATUS (2026-07-22) — CLOSED; defect work COMPLETE, only optional cleanup remains
 
 Every defect this plan opened with, and every one it uncovered on the way, is fixed
 and guarded. What remains is cleanup and coverage, not correctness.

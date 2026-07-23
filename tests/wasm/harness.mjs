@@ -133,40 +133,8 @@ export async function runAll() {
 
 export { runAll as run };
 
-// ── W1.18-5 — Threaded WASM initialisation ──────────────────────────────────
-// Creates a shared-memory WASM instance + thread pool for par() testing.
-// Requires: wasm-threads feature build in tests/wasm/pkg-mt/
-// Usage:
-//   import { initThreaded } from './harness.mjs';
-//   const { instance, pool } = await initThreaded('pkg-mt/loft_bg.wasm');
-
-/**
- * Initialise a threaded WASM environment with Worker Thread pool.
- * @param {string} wasmPath — path to the wasm-threads feature binary
- * @param {number} [nWorkers] — defaults to CPU count
- * @returns {Promise<{instance: WebAssembly.Instance, pool: *, memory: WebAssembly.Memory}>}
- */
-export async function initThreaded(wasmPath, nWorkers) {
-  const { readFileSync } = await import('node:fs');
-  const os = await import('node:os');
-  const { LoftThreadPool } = await import('./parallel.mjs');
-  const n = nWorkers ?? os.availableParallelism();
-
-  const bytes = readFileSync(wasmPath);
-  const module = await WebAssembly.compile(bytes);
-
-  const memory = new WebAssembly.Memory({
-    initial: 256,   // 16 MB
-    maximum: 16384,  // 1 GB
-    shared: true,
-  });
-
-  const pool = new LoftThreadPool(module, memory, n);
-  await pool.waitReady();
-
-  const { instance } = await WebAssembly.instantiate(module, {
-    env: { memory },
-  });
-
-  return { instance, pool, memory };
-}
+// @PLN117 step 4 — the hand-rolled `initThreaded` / `LoftThreadPool` model
+// (node worker_threads over a manual SharedArrayBuffer control buffer) was
+// retired along with worker.mjs / parallel.mjs.  Browser threading now rides
+// the wasm-bindgen-rayon pool; the in-browser proof harness is
+// `tests/wasm/par-thread-proof.{html,sh}` + `coi-server.py`.

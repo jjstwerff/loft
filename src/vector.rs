@@ -560,6 +560,46 @@ pub fn vector_next(data: &DbRef, pos: &mut i32, size: u16, stores: &[Store]) {
     }
 }
 
+/// One step of the Ordered iteration path over a `hash`/`index`/`radix`/`spatial`
+/// collection: advance the u32-stride rec-nr cursor and yield the record it points at.
+/// Shared by the interpreter (`State::step`) and the native runtime
+/// (`codegen_runtime::step`) so the two cannot drift.  `cur` is the current cursor;
+/// returns `(yielded element, new cursor)`.
+///
+/// The mode picks where the yielded RECORD lives:
+/// * `on=3` (`sourced == false`) — scratch and records are co-located, so the element
+///   is in `data.store_nr`.  `data.pos` locates the rec-nr vector pointer, which is a
+///   struct-field offset when a keyed field is iterated in place — NOT a fixed slot.
+/// * `on=4` (`sourced == true`) — the scratch is a fresh record this iteration built
+///   (`build_rec_scratch`), so `data.pos` is always 4 and the SOURCE (records) store_nr
+///   sits at the header's offset 8 (`data.pos + 4`).  Yielding in that store lets the
+///   scratch live in a different (writable) store than a read-only/exposed source — see
+///   expose-iteration-scratch.md.
+pub fn step_ordered(data: &DbRef, cur: u32, stores: &[Store], sourced: bool) -> (DbRef, u32) {
+    let mut pos = cur as i32;
+    vector_next(data, &mut pos, 4, stores);
+    let store = keys::store(data, stores);
+    let vector = store.get_u32_raw(data.rec, data.pos);
+    let rec = if pos == i32::MAX {
+        0
+    } else {
+        store.get_u32_raw(vector, pos as u32)
+    };
+    let elem_store = if sourced {
+        store.get_u32_raw(data.rec, data.pos + 4) as u16
+    } else {
+        data.store_nr
+    };
+    (
+        DbRef {
+            store_nr: elem_store,
+            rec,
+            pos: 8,
+        },
+        pos as u32,
+    )
+}
+
 pub fn vector_step(data: &DbRef, pos: &mut i32, stores: &[Store]) {
     let rec = keys::store(data, stores).get_u32_raw(data.rec, data.pos);
     if rec == 0 {

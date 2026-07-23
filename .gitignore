@@ -111,3 +111,12 @@ target-da/
 # `loft introspect width-corpus.loft`; they carry absolute paths and shift with
 # every stdlib def_nr change, so committing them only churns the repo.
 doc/claude/plans/h3-narrow-vector/bytecode-comparisons/*-full.txt
+
+# A fixture-local Android NDK linker config: absolute, machine-specific paths that
+# cannot resolve on any other machine or in CI.  Committed by accident in #580; kept on
+# disk so local Android builds keep working, but never tracked.
+tests/fixtures/libs/*/native/.cargo/
+doc/pkg-mt/
+
+# Scratch build trees (e.g. a feature-variant build used while debugging).
+target-*/

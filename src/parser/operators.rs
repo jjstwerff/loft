@@ -3,7 +3,7 @@
 
 use super::{
     Data, IntegerSpec, Level, OPERATORS, Parser, Position, Type, Value, diagnostic_format, rename,
-    v_block, v_if, v_set,
+    to_default, v_block, v_if, v_set,
 };
 
 // Operator parsing and type dispatch.
@@ -853,7 +853,18 @@ impl Parser {
         while self.lexer.peek_token(".")
             || self.lexer.peek_token("[")
             || (self.lexer.peek_token("(") && matches!(t, Type::Function(_, _, _)))
+            || self.lexer.peek_token("?")
         {
+            // @PLN116 — postfix default-fallback `x?`.  Handled first (a default-
+            // fallback never faults, so it skips the `.`/`[]` span-wrapping below),
+            // then re-enter the loop so a following `.`/`[]` chains onto the
+            // discharged, now non-null value (`x?.field`).  The lexer's greedy
+            // two-char match means `??` never reaches here as two `?` tokens.
+            if self.lexer.has_token("?") {
+                self.handle_default_fallback(var_tp, code, parent_tp, &mut t);
+                self.record_type_trace(&t);
+                continue;
+            }
             // Plan-07 phase 1, steps 1.11 + 1.12 — capture the chaining
             // token's source position before `has_token` consumes it.
             // Wrapped when the iteration consumes a fault-prone access
@@ -1644,7 +1655,24 @@ impl Parser {
         } else {
             var_tp
         };
-        let rhs_type = self.parse_operators(rhs_hint, &mut rhs, parent_tp, precedence + 1);
+        // @PLN116 `x?` — the postfix default-fallback supplies its right operand here
+        // instead of the source (there is no `?? <expr>` in the text).  Two forms, both
+        // emitting the exact same null-check `if`/block a hand-written `x ?? <default>`
+        // would: a SOURCE (an empty collection `[]`, parsed HERE so its ownership
+        // view-model matches the in-context `?? []`), or a PRE-BUILT value (scalars,
+        // text, enum, record).
+        let rhs_type = if let Some(src) = self.pending_default_src.take() {
+            let saved = std::mem::take(&mut self.lexer);
+            self.lexer.parse_string(&format!("{src}\n"), "<x?-default>");
+            let t = self.parse_operators(rhs_hint, &mut rhs, parent_tp, precedence + 1);
+            self.lexer = saved;
+            t
+        } else if let Some((pending, pending_tp)) = self.pending_default_rhs.take() {
+            rhs = pending;
+            pending_tp
+        } else {
+            self.parse_operators(rhs_hint, &mut rhs, parent_tp, precedence + 1)
+        };
         self.known_var_or_type(&rhs, &rhs_pos);
 
         // @PLN102 gate-2 `?? null` soundness — `a ?? b` yields `a` when non-null else `b`, so it
@@ -1962,6 +1990,178 @@ impl Parser {
         } else {
             t
         }
+    }
+
+    /// @PLN116 — the postfix default-fallback operator `x?`.  `x? : T` discharges a
+    /// nullable `x: T?` to `T` by falling back to `T`'s default when `x` is null — pure
+    /// sugar for `x ?? construct_default(T)`, reusing the whole `??` emission path.
+    ///
+    /// On a non-null operand the default is dead, so it is an identity plus a
+    /// redundant-`?` warning (mirrors the redundant-`??` lint).  When `T` has no
+    /// well-defined default (a bare reference, or a record with an un-defaulted
+    /// non-null field) it is a COMPILE error — a static well-definedness check, fully
+    /// consistent with "no runtime errors ever" (C80).
+    pub(crate) fn handle_default_fallback(
+        &mut self,
+        var_tp: &Type,
+        code: &mut Value,
+        parent_tp: &mut Type,
+        ctp: &mut Type,
+    ) {
+        // Same C54.G-hybrid swap `??` does: if the operand is an immediate trapping
+        // arithmetic / index op (`(a / b)?`, `v[i]?`), swap it to the Nullable peer so
+        // it yields the sentinel silently instead of raising, then the fallback below
+        // discharges it — making `x?` a true synonym for `x ?? <default>`.
+        if !self.first_pass {
+            Self::rewrite_outer_arith_to_nullable(code, &self.data);
+        }
+        let base = ctp.base().clone();
+        // The single well-definedness check (the home `S{}` shares): a bare reference,
+        // or a record with an un-defaulted non-null field or a bare enum field with no
+        // explicit choice, has no default.  `x?` needing one there is a COMPILE error —
+        // a static check, consistent with "no runtime errors ever" (C80).  `x?` is new
+        // syntax (no program relies on it), so this always fires when the base lacks a
+        // default; the message names the culprit and the remedy.
+        if let Err(reason) = self.data.has_default(&base) {
+            if !self.first_pass {
+                diagnostic!(
+                    self.lexer,
+                    Level::Error,
+                    "`?` needs a default here, but {reason} — discharge with `?? <default>` \
+                     instead, or keep the value nullable"
+                );
+            }
+            self.expr_not_null = false;
+            *ctp = base;
+            return;
+        }
+        // Redundant-`?` warning — the SAME authority as the redundant-`??` lint: a
+        // provably not-null operand (`expr_not_null`) whose type is not `Optional` and is
+        // not a declared-nullable call.  A C80-nullable index / field read has
+        // `expr_not_null == false`, so it is correctly NOT flagged — its default is live
+        // (an out-of-bounds / missing read yields null).  Like `??`, the coalesce is
+        // still emitted even when redundant (the default is simply never taken).
+        if self.expr_not_null
+            && !self.first_pass
+            && !matches!(ctp, Type::Optional(_))
+            && !self.call_declares_nullable(code)
+        {
+            diagnostic!(
+                self.lexer,
+                Level::Warning,
+                "Redundant `?` — '{}' is 'not null', so the type default is never used",
+                self.expr_not_null_name,
+            );
+        }
+        self.expr_not_null = false;
+        // `a.b?` defends the `b` read (the default handles a null), so the not-null
+        // field hint must not fire on it — mirrors `p.field ?? d`.
+        if let Some(key) = self.last_field_read_site.take() {
+            self.defended_field_reads.insert(key);
+        }
+        // A collection defaults to a REAL empty collection.  Its `[]` construction must
+        // be parsed IN the coalesce's right-operand context (its ownership view-model
+        // depends on that context — a standalone `[]` leaks), so route it as a SOURCE
+        // that `build_null_coalesce_default` parses at its own parse site.
+        if matches!(
+            base,
+            Type::Vector(_, _)
+                | Type::Hash(_, _, _)
+                | Type::Sorted(_, _, _)
+                | Type::Index(_, _, _)
+                | Type::Radix(_, _, _)
+        ) {
+            *ctp = base;
+            let lhs_type = ctp.clone();
+            self.pending_default_src = Some("[]".to_string());
+            self.build_null_coalesce_default(
+                var_tp,
+                code,
+                parent_tp,
+                OPERATORS.len(),
+                ctp,
+                &lhs_type,
+            );
+            return;
+        }
+        let Some((default, default_tp)) = self.build_default(&base) else {
+            // `has_default` passed but the builder cannot form the value — recover as the
+            // non-null base so the cascade is bounded (should not happen in practice).
+            *ctp = base;
+            return;
+        };
+        // Peel `Optional` → the non-null base, exactly as `handle_null_coalesce` does,
+        // then hand the pre-built default to `build_null_coalesce_default` (it consumes
+        // `pending_default_rhs` instead of parsing a right operand).
+        *ctp = base;
+        let lhs_type = ctp.clone();
+        self.pending_default_rhs = Some((default, default_tp));
+        // The precedence is irrelevant — the right operand is pre-built, never parsed.
+        self.build_null_coalesce_default(var_tp, code, parent_tp, OPERATORS.len(), ctp, &lhs_type);
+    }
+
+    /// @PLN116 — build type `tp`'s default VALUE (the single source both `x?` and, in
+    /// time, `S{}` consult).  `None` means `tp` has no well-defined default (the caller
+    /// raises the compile error).  `tp` is the already-peeled non-null base.
+    pub(crate) fn build_default(&mut self, tp: &Type) -> Option<(Value, Type)> {
+        match tp {
+            Type::Integer(_) | Type::Float | Type::Single | Type::Boolean => {
+                Some((to_default(tp, &self.data), tp.clone()))
+            }
+            // `character`'s default `'\0'` is codepoint 0 wrapped in the char-typed
+            // conversion (`OpConvCharacterFromInt`) — a bare `Int(0)` is a plain `i32`
+            // that native rejects in the distinct `character` slot (E0308).  This is
+            // exactly the value the `'\0'` literal emits.
+            Type::Character => Some((
+                self.cl("OpConvCharacterFromInt", &[Value::Int(0)]),
+                tp.clone(),
+            )),
+            Type::Text(_) => Some((Value::Text(String::new()), tp.clone())),
+            // Collections are handled by the caller via `pending_default_src` (parsed
+            // in-context), never here — see `handle_default_fallback`.
+            // An enum defaults to its first-defined variant (a marked default variant
+            // would override — arc B; no marker exists yet).  `emit_variant_value`
+            // handles both a unit enum (the discriminant) and a struct-enum (an
+            // allocated variant record with its own fields defaulted).
+            Type::Enum(enum_nr, _, _) => {
+                let first = self.data.attr_name(*enum_nr, 0);
+                if first.is_empty() {
+                    return None;
+                }
+                let mut v = Value::Null;
+                let t = self.emit_variant_value(*enum_nr, &first, &mut v);
+                Some((v, t))
+            }
+            // A record defaults to `S{}` — every field defaulted, exactly the value a
+            // bare `S{}` literal builds (`has_default` has already verified each field
+            // has a default).  Parsed from the synthetic `S {}` source so it reuses
+            // `parse_object`'s construction AND its work-ref ownership / freeing (a
+            // hand-rolled `OpDatabase` + `object_init` mismanages the store free — #306).
+            Type::Reference(d_nr, _)
+                if self.data.def_type(*d_nr) == crate::data::DefType::Struct =>
+            {
+                let name = self.data.def(*d_nr).name().to_string();
+                Some(self.subparse_default(&format!("{name} {{}}"), tp))
+            }
+            _ => None,
+        }
+    }
+
+    /// @PLN116 — parse a synthetic default-value SOURCE (e.g. `Point {}`) as if it
+    /// were a `??` right operand, then restore the main token stream.  Used for the
+    /// record default: a struct construction is token-driven (`parse_object` reads
+    /// `{ … }`), so it cannot be hand-built as a bare `Value`; sub-parsing `S {}`
+    /// reuses `parse_object`'s construction AND its work-ref ownership / freeing.
+    /// The parse runs in the SAME function context (only the lexer is swapped), so
+    /// its work-refs, types and pass state are all correct; `hint` types the parse.
+    fn subparse_default(&mut self, src: &str, hint: &Type) -> (Value, Type) {
+        let saved = std::mem::take(&mut self.lexer);
+        self.lexer.parse_string(&format!("{src}\n"), "<x?-default>");
+        let mut rhs = Value::Null;
+        let mut parent = Type::Unknown(0);
+        let rhs_type = self.parse_operators(hint, &mut rhs, &mut parent, 0);
+        self.lexer = saved;
+        (rhs, rhs_type)
     }
 
     /// @PLN25 DN4 `(N-Cast?)` — lower `e as τ?` (narrowing, not provably-fit) to a

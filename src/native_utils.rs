@@ -146,6 +146,12 @@ pub(crate) enum WasmRuntimeShape {
     /// (`--features random`, no wasm-bindgen).  Isolated under `target/loft/html/`
     /// so the wasm-bindgen `make wasm` build (same triple) can't stomp it.
     Html,
+    /// @PLN117 — `loft --html` for a program that uses `par`: the [`Html`](Self::Html)
+    /// shape plus loft's browser threading (`wasm-native-threads`), which needs a
+    /// std recompiled with wasm atomics.  Only cargo can produce that (`-Z
+    /// build-std`, hence a nightly toolchain), and it lands beside the rlib in this
+    /// shape's own directory, where the `--html` link picks it up as a sysroot.
+    HtmlThreads,
     /// `loft --native-wasm`: `wasm32-wasip2`, `--features random`.  Its triple has
     /// only ONE shape, so it is not stomped and keeps the default `target/` output
     /// the install/test paths (`make install-artifacts`, the wasm_library_suite)
@@ -153,11 +159,41 @@ pub(crate) enum WasmRuntimeShape {
     Wasi,
 }
 
+/// @PLN117 — the `-C` flags a threaded browser wasm must be built with, shared by
+/// the runtime-rlib build and the final `--html` link (`make wasm-mt` passes the
+/// same set).  This toolchain's rustc does NOT derive the memory and TLS flags
+/// from `+atomics`, and dropping any one of them yields a bundle that builds but
+/// whose workers die at runtime with *"Memory could not be cloned"*.
+///
+/// `--export=__stack_pointer` is loft's own addition (@PLN117 amendment A3): every
+/// `WebAssembly.Instance` starts with the same stack pointer, so the worker
+/// bootstrap must move each worker onto its own shadow stack before it runs any
+/// wasm.  wasm-bindgen's thread transform did this internally; the raw path does
+/// it from JS, which needs the global exported.
+/// What to install when the threaded browser build cannot compile its std.
+pub(crate) const ATOMICS_STD_TOOLCHAIN_HINT: &str = "  Browser threading rebuilds std with wasm atomics, which needs the nightly \
+     toolchain and its sources:\n    rustup toolchain install nightly\n    rustup component \
+     add rust-src --toolchain nightly\n  Or build without threads: loft --html --no-threads \
+     <program>.loft";
+
+pub(crate) const WASM_THREAD_FLAGS: &[&str] = &[
+    "-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals",
+    "-Clink-arg=--shared-memory",
+    "-Clink-arg=--max-memory=1073741824",
+    "-Clink-arg=--import-memory",
+    "-Clink-arg=--export=__heap_base",
+    "-Clink-arg=--export=__wasm_init_tls",
+    "-Clink-arg=--export=__tls_size",
+    "-Clink-arg=--export=__tls_align",
+    "-Clink-arg=--export=__tls_base",
+    "-Clink-arg=--export=__stack_pointer",
+];
+
 impl WasmRuntimeShape {
     /// The rustc/rustup target triple this shape compiles for.
     fn triple(self) -> &'static str {
         match self {
-            WasmRuntimeShape::Html => "wasm32-unknown-unknown",
+            WasmRuntimeShape::Html | WasmRuntimeShape::HtmlThreads => "wasm32-unknown-unknown",
             WasmRuntimeShape::Wasi => "wasm32-wasip2",
         }
     }
@@ -166,8 +202,15 @@ impl WasmRuntimeShape {
     fn name(self) -> &'static str {
         match self {
             WasmRuntimeShape::Html => "html",
+            WasmRuntimeShape::HtmlThreads => "html-mt",
             WasmRuntimeShape::Wasi => "wasi",
         }
+    }
+
+    /// Does this shape need a std recompiled with wasm atomics (`-Z build-std`,
+    /// nightly)?  Only the threaded browser shape does.
+    pub(crate) fn needs_atomics_std(self) -> bool {
+        matches!(self, WasmRuntimeShape::HtmlThreads)
     }
 
     /// The cargo `--features` this shape's runtime rlib is built with (always
@@ -177,6 +220,7 @@ impl WasmRuntimeShape {
     fn features(self) -> &'static str {
         match self {
             WasmRuntimeShape::Html | WasmRuntimeShape::Wasi => "random",
+            WasmRuntimeShape::HtmlThreads => "random wasm-native-threads",
         }
     }
 
@@ -187,6 +231,7 @@ impl WasmRuntimeShape {
     fn isolated_target_subdir(self) -> Option<&'static str> {
         match self {
             WasmRuntimeShape::Html => Some("target/loft/html"),
+            WasmRuntimeShape::HtmlThreads => Some("target/loft/html-mt"),
             WasmRuntimeShape::Wasi => None,
         }
     }
@@ -260,7 +305,16 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
          LOFT_NO_AUTO_REBUILD=1 to skip and link the existing rlib instead.",
         shape.name()
     );
-    let mut cmd = std::process::Command::new("cargo");
+    // @PLN117 — the threaded shape needs a std compiled with wasm atomics, which
+    // only `-Z build-std` produces, which only nightly accepts: run cargo through
+    // `rustup run nightly`.  Every other shape runs the default toolchain's cargo.
+    let mut cmd = if shape.needs_atomics_std() {
+        let mut c = std::process::Command::new("rustup");
+        c.args(["run", "nightly", "cargo"]);
+        c
+    } else {
+        std::process::Command::new("cargo")
+    };
     cmd.args([
         "build",
         "--release",
@@ -279,6 +333,14 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
     .env_remove("CARGO_ENCODED_RUSTFLAGS")
     .stdout(std::process::Stdio::inherit())
     .stderr(std::process::Stdio::inherit());
+    if shape.needs_atomics_std() {
+        // std itself must carry the atomics/TLS ABI, so it is rebuilt from source
+        // with the SAME flags as loft's rlib and the final link — mixing an
+        // atomics rlib with a non-atomics std does not link at all (lld: "shared
+        // memory is disallowed by std ... not compiled with 'atomics'").
+        cmd.arg("-Zbuild-std=panic_abort,std")
+            .env("RUSTFLAGS", WASM_THREAD_FLAGS.join(" "));
+    }
     if let Some(sub) = shape.isolated_target_subdir() {
         cmd.arg("--target-dir").arg(tree.join(sub));
     }
@@ -292,6 +354,9 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
                 "loft: could not build loft's wasm runtime rlib for {triple} — install the \
                  target (`rustup target add {triple}`), or run with --interpret."
             );
+            if shape.needs_atomics_std() {
+                eprintln!("{}", ATOMICS_STD_TOOLCHAIN_HINT);
+            }
             rlib.exists().then_some(profile_dir)
         }
         Err(e) => {
@@ -299,9 +364,80 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
                 "loft: cannot run cargo to build the wasm runtime rlib for {triple}: {e} — \
                  needs a Rust toolchain with the {triple} target."
             );
+            if shape.needs_atomics_std() {
+                eprintln!("{}", ATOMICS_STD_TOOLCHAIN_HINT);
+            }
             rlib.exists().then_some(profile_dir)
         }
     }
+}
+
+/// @PLN117 — the `rustc` a `--html` wasm is compiled with.
+///
+/// Plain `rustc` normally; with an atomics sysroot (a threaded page) it is
+/// nightly's, plus the flags that build shared-memory wasm.  Both are forced by
+/// the same fact: that sysroot's rlibs were produced by nightly, and an rlib
+/// links only with the compiler that built it.
+pub(crate) fn wasm_rustc(atomics_sysroot: Option<&std::path::Path>) -> std::process::Command {
+    let Some(sysroot) = atomics_sysroot else {
+        return std::process::Command::new("rustc");
+    };
+    let mut cmd = std::process::Command::new("rustup");
+    cmd.args(["run", "nightly", "rustc"]);
+    cmd.arg("--sysroot").arg(sysroot);
+    cmd.args(WASM_THREAD_FLAGS);
+    cmd
+}
+
+/// @PLN117 — assemble the atomics-compiled sysroot the threaded `--html` link
+/// needs, and return its root.
+///
+/// `-Z build-std` recompiles std with wasm atomics, but that is a *cargo* flag
+/// and `--html` links with `rustc` directly (one loft copy, shared with the wasm
+/// bridge crates — the reason it does not go through cargo).  The two meet here:
+/// [`WasmRuntimeShape::HtmlThreads`]'s cargo build leaves the atomics std beside
+/// loft's rlib, and copying those rlibs into the layout rustc expects turns them
+/// into a `--sysroot` the direct link can use.  Without it the link fails outright
+/// (*"--shared-memory is disallowed by std … not compiled with 'atomics'"*), so
+/// the failure mode is loud, never a silently single-threaded page.
+///
+/// `profile_dir` is what [`ensure_loft_runtime_rlib`] returned for that shape.
+/// Copies only what is missing or has changed size, so repeat builds are cheap.
+pub(crate) fn ensure_atomics_sysroot(profile_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let deps = profile_dir.join("deps");
+    // <target-dir>/<triple>/release -> <target-dir>
+    let target_dir = profile_dir.parent()?.parent()?;
+    let sysroot = target_dir.join("sysroot");
+    let lib_dir = sysroot
+        .join("lib")
+        .join("rustlib")
+        .join("wasm32-unknown-unknown")
+        .join("lib");
+    std::fs::create_dir_all(&lib_dir).ok()?;
+    for entry in std::fs::read_dir(&deps).ok()?.flatten() {
+        let src = entry.path();
+        if src.extension().is_none_or(|e| e != "rlib") {
+            continue;
+        }
+        let Some(name) = src.file_name() else {
+            continue;
+        };
+        // loft's own rlibs stay out: the link names them with `--extern` and
+        // `-L dependency=`, and a third copy on the sysroot search path is how
+        // rustc ends up reporting multiple candidates for one crate.
+        if name.to_string_lossy().starts_with("libloft") {
+            continue;
+        }
+        let dst = lib_dir.join(name);
+        let same = std::fs::metadata(&dst)
+            .ok()
+            .zip(entry.metadata().ok())
+            .is_some_and(|(a, b)| a.len() == b.len());
+        if !same {
+            std::fs::copy(&src, &dst).ok()?;
+        }
+    }
+    Some(sysroot)
 }
 
 /// The dependency search dir for a [`loft_lib_dir`] result: `lib_dir` itself
@@ -676,11 +812,14 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
                     return Ok(());
                 }
                 let m = String::from_utf8_lossy(module).into_owned();
-                // loft's own host imports (`loft_io` / `loft_gl`) AND library-bridge
-                // host imports (e.g. the crypto bridge's `loft_crypto.random_fill`)
-                // all use a `loft_` prefix.  A wasm-bindgen stomp instead imports
-                // `__wbindgen_*`, so a non-`loft_` module is the red flag this guards.
-                if !m.starts_with("loft_") {
+                // loft's own host imports (`loft_io` / `loft_gl` / @PLN117's
+                // `loft_thread`) AND library-bridge host imports (e.g. the crypto
+                // bridge's `loft_crypto.random_fill`) all use a `loft_` prefix.  A
+                // wasm-bindgen stomp instead imports `__wbindgen_*`, so a non-`loft_`
+                // module is the red flag this guards.  The one exception is the
+                // shared MEMORY a threaded build imports as `env.memory` (kind 2) —
+                // still no function may come from `env`.
+                if !(m.starts_with("loft_") || (m == "env" && kind == 2)) {
                     bad.insert(m);
                 }
             }

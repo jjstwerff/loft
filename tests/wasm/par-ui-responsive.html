@@ -1,0 +1,51 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Jurjen Stellingwerff  SPDX-License-Identifier: LGPL-3.0-or-later -->
+<!-- @PLN117 E1 — off-main-thread UI responsiveness.  A requestAnimationFrame
+     loop advances an animation and runs one heavy par() per frame for a fixed
+     window.  With the Web Worker pool each frame's par finishes ~N x faster, so
+     the rAF loop delivers many more frames (the UI stays responsive) than the
+     sequential fallback, whose long per-frame par starves the frame loop.
+     Reports frames delivered + worst inter-frame gap.  ?threads=P (0 =
+     sequential), ?work, ?elems, ?window (ms). -->
+<meta charset=utf-8><title>loft par UI responsiveness</title>
+<style>#box{width:24px;height:24px;background:#3a7;position:absolute}</style>
+<pre id=out>running…</pre><div id=box></div>
+<script>
+const q = new URLSearchParams(location.search);
+const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
+window.addEventListener('error', e => report('winerror=' + (e.message||e.filename||e)));
+window.addEventListener('unhandledrejection', e => report('reject=' + ((e.reason&&e.reason.message)||e.reason)));
+</script>
+<script type=module>
+import init, { compile_and_run } from './pkg-mt/loft.js';
+import { startLoftWorkers } from './pkg-mt/loft-thread.js';
+const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
+const P      = q.has('threads') ? (parseInt(q.get('threads'),10) || 0) : 8;
+const work   = parseInt(q.get('work')  || '40000', 10);
+const elems  = parseInt(q.get('elems') || '48', 10);
+const WINDOW = parseInt(q.get('window')|| '2500', 10);
+const box = document.getElementById('box');
+const SRC = `fn heavy(x: integer) -> integer { acc = 0; for i in 0..${work} { acc += (x * i + i) % 7; } acc % 1000 + x }
+fn main() { data = [0]; for i in 1..${elems} { data += [i]; } total = 0; for a in data par(b = heavy(a), 8) { total += b; } println("total={total}"); }`;
+(async () => {
+  try {
+    const wasm = await init();
+    if (!self.crossOriginIsolated) return report('FAIL coi=false');
+    if (P > 0) await startLoftWorkers(wasm, P, { memory: wasm.memory, mainJS: new URL('./pkg-mt/loft.js', import.meta.url).href });
+    let frames = 0, last = performance.now(), maxGap = 0, value = '?';
+    const start = last;
+    const frame = () => {
+      const now = performance.now();
+      const gap = now - last; last = now;
+      if (frames > 0 && gap > maxGap) maxGap = gap;  // skip the first (init) gap
+      frames++;
+      box.style.left = (frames % 40) * 6 + 'px';     // advance the animation
+      const res = JSON.parse(compile_and_run(JSON.stringify([{name:'main.loft', content: SRC}])));
+      value = (res.output||'').match(/total=(\d+)/)?.[1] || value;
+      if (performance.now() - start < WINDOW) requestAnimationFrame(frame);
+      else report(`E1 threads=${P} window=${WINDOW} frames=${frames} fps=${(frames/(WINDOW/1000)).toFixed(1)} max_gap_ms=${maxGap.toFixed(0)} value=${value}`);
+    };
+    requestAnimationFrame(frame);
+  } catch (e) { report('caught=' + ((e && e.message) || String(e))); }
+})();
+</script>

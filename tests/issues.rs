@@ -9396,6 +9396,33 @@ fn mk() -> V3 { V3 { x: 1.0, y: 2.0, z: 3.0 } }"
     .result(Value::Float(-3.0));
 }
 
+/// @PLN102 — the same re-typeable escape for a BINARY op whose operands are
+/// ALL still unresolved on the first pass: `f() - g()` with both callees defined
+/// lower in the file.  The single-operand guard above did not cover it, so the
+/// `possible` loop matched `OpMinInt` and locked `x` to integer; pass 2 resolved
+/// the real float returns and the assignment errored "cannot change type from
+/// integer to float" at a line the author never wrote wrong.
+///
+/// Deliberately scoped to ALL operands unknown: one KNOWN operand is enough to
+/// steer resolution, so a genuine mismatch (the "No matching operator '<' on
+/// 'unknown' and 'boolean'" assertion in
+/// `quality_6d_keyed_collection_constructor_hint`) must still reach the error
+/// path.  Both sums are hand-computed: 2.5 - 1.5 and 2.5 + 1.5.
+#[test]
+fn pln102_binary_op_on_all_forward_resolved_operands() {
+    code!(
+        "fn run() -> float {
+    x = f() - g();
+    y = f() + g();
+    x + y * 10.0
+}
+fn f() -> float { 2.5 }
+fn g() -> float { 1.5 }"
+    )
+    .expr("run()")
+    .result(Value::Float(41.0));
+}
+
 /// QUALITY 6c — the free-function hint must NOT fire when there is
 /// no `n_<field>` function compatible with the receiver.  Locks the
 /// specificity of the hint: a genuinely-misspelled field produces

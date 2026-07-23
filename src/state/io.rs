@@ -1051,8 +1051,10 @@ impl State {
                     );
                 }
             }
-            3 => {
-                // ordered points to the position inside the vector of references
+            3 | 4 => {
+                // ordered points to the position inside the vector of references.
+                // on=4 (fresh-scratch hash/radix, source store in the header) shares the
+                // exact same cursor setup — only step()'s yield store differs.
                 if from.is_empty() && till.is_empty() {
                     // C60 piece 3 edit E: unbounded iteration (`for e
                     // in h { … }` with no range).  ordered_find with an
@@ -1185,21 +1187,15 @@ impl State {
                         },
                     )
                 }
-                3 => {
-                    let mut pos = cur as i32;
-                    vector::vector_next(&data, &mut pos, 4, &self.database.allocations);
-                    let vector = store.get_u32_raw(data.rec, data.pos);
-                    let rec = if pos == i32::MAX {
-                        0
-                    } else {
-                        store.get_u32_raw(vector, pos as u32)
-                    };
-                    self.put_var(state_var - 8, pos as u32);
-                    DbRef {
-                        store_nr: data.store_nr,
-                        rec,
-                        pos: 8,
-                    }
+                3 | 4 => {
+                    // on=4 (fresh-scratch hash/radix) yields in the source store recorded
+                    // in the scratch header; on=3 (co-located) yields in data.store_nr.
+                    // A read-only source's dedicated scratch store is freed by the loop
+                    // epilogue's OpFreeScratch, not here (covers break too).
+                    let (elem, new_pos) =
+                        vector::step_ordered(&data, cur, &self.database.allocations, on & 63 == 4);
+                    self.put_var(state_var - 8, new_pos);
+                    elem
                 }
                 _ => panic!("Not implemented"),
             }
@@ -1382,10 +1378,20 @@ impl State {
     }
 
     pub fn copy_record(&mut self) {
+        // @PLN118 arc B — mark the deep-copy so the gen-detector classifies a stale read here
+        // (a copy reading a stale sub-ref) apart from a plain deref (a premature free). The
+        // source-record pops below are exactly where a stale `Vec3` sub-field surfaces.
+        let mark = crate::keys::uaf_gen_enabled();
+        if mark {
+            crate::keys::uaf_copy_enter();
+        }
         let raw_tp = self.code::<u16>();
         let to = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         self.do_copy_record(data, to, raw_tp);
+        if mark {
+            crate::keys::uaf_copy_exit();
+        }
     }
 
     /// Core of `OpCopyRecord` / `OpCopyRefOrNull`: deep-copy record `data` into
@@ -1795,11 +1801,20 @@ impl State {
     }
 
     pub fn finish_record(&mut self) {
+        // @PLN118 arc B — same copy-context mark as `copy_record` (finish deep-copies the
+        // source record into a parent field; a stale source pop here is a copy-incomplete).
+        let mark = crate::keys::uaf_gen_enabled();
+        if mark {
+            crate::keys::uaf_copy_enter();
+        }
         let parent_tp = self.code::<u16>();
         let fld = self.code::<u16>();
         let record = *self.get_stack::<DbRef>();
         let data = *self.get_stack::<DbRef>();
         self.database.record_finish(&data, &record, parent_tp, fld);
+        if mark {
+            crate::keys::uaf_copy_exit();
+        }
     }
 
     pub fn db_from_text(&mut self, val: &str, db_tp: u16) -> DbRef {

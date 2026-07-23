@@ -434,6 +434,19 @@ pub struct Parser {
     /// `build_null_coalesce_default`).  Set in the `as` handler, consumed by the
     /// next `??`, and cleared by any other intervening operator.
     pub(crate) dn4_checked_narrow: Option<Type>,
+    /// @PLN116 `x?` — a pre-built default RHS for the postfix default-fallback
+    /// operator.  `x?` desugars to `x ?? construct_default(T)`; rather than parse a
+    /// `??` right operand from source, the postfix-`?` site builds the type's default
+    /// value here and `build_null_coalesce_default` consumes it INSTEAD of parsing —
+    /// so `x?` reuses the whole `??` emission path and is bytecode-identical to a
+    /// hand-written `x ?? <default>`.  Set at the `?` site, taken exactly once.
+    pub(crate) pending_default_rhs: Option<(Value, Type)>,
+    /// @PLN116 `x?` — a synthetic default-value SOURCE for the postfix operator, used
+    /// when the default must be parsed IN the `??` right-operand context rather than
+    /// pre-built (an empty collection `[]`, whose ownership view-model depends on that
+    /// context — parsing it standalone leaks).  `build_null_coalesce_default` swaps the
+    /// lexer to this source at its own parse site, so `x?` matches `x ?? []` exactly.
+    pub(crate) pending_default_src: Option<String>,
     /// @PLN99 Arc C — set by `convert` when it dispatches a struct/reference-returning
     /// USER conversion (`x as T` via `fn OpConvTFromS`).  Such a conversion ALLOCATES a
     /// fresh owned store, so its result must NOT inherit the source's deps (the reinterpret-
@@ -733,6 +746,8 @@ impl Parser {
             is_capture_bindings: Vec::new(),
             last_cast_alias: u32::MAX,
             dn4_checked_narrow: None,
+            pending_default_rhs: None,
+            pending_default_src: None,
             conv_owned_result: None,
             trace_types: false,
             trace_types_lines: Vec::new(),
@@ -6145,7 +6160,16 @@ impl Parser {
         // operator '<' on 'unknown' and 'boolean'" still fires.  A truly-unresolvable
         // unary operand re-errors on pass 2 (this guard is first-pass only).
         // (@PLN102 transitive cross-package inference.)
-        if self.first_pass && types.len() == 1 && types[0].is_unknown() {
+        //
+        // The same applies when EVERY operand is unresolved — `f() - g()` with both
+        // callees defined lower in the file.  The `possible` loop matches the first
+        // candidate (`OpMinInt`) and locks the result to integer; pass 2 re-resolves
+        // to the real float return and the assignment errors "cannot change type from
+        // integer to float" at a line that looks correct.  Requiring ALL operands to be
+        // unknown is what keeps the diagnostic above intact: it has one KNOWN operand
+        // (`boolean`), so it still reaches the error path.  One known operand is enough
+        // to steer resolution, so only the no-information case defers to pass 2.
+        if self.first_pass && !types.is_empty() && types.iter().all(Type::is_unknown) {
             return Type::Unknown(0);
         }
         // I8.1: if any operand is a generic type variable, skip the main operator loop

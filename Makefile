@@ -102,7 +102,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
+.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -371,6 +371,22 @@ profile:
 wasm:
 	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg --release -- --features wasm --no-default-features
 
+# @PLN117 — the THREADED gallery bundle: par() over real Web Worker threads.
+# Same shape as `make wasm` but with the wasm-threads recipe (see `wasm-mt` for
+# the full-flag-set rationale), output to doc/pkg-mt so it does NOT clobber the
+# committed single-threaded doc/pkg (which stays the default — no nightly /
+# build-std burden on gallery CI).  To deploy a threaded gallery: build this,
+# copy doc/pkg-mt over ./pkg on a COOP/COEP host; the playground/gallery loaders
+# start loft's pool automatically when crossOriginIsolated.  Needs the same
+# nightly + rust-src toolchain as `wasm-mt`.
+gallery-mt:
+	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	rustup run nightly \
+	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir doc/pkg-mt --release \
+	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
+	@cp doc/loft-thread.js doc/pkg-mt/
+	@echo "Built doc/pkg-mt/ (threaded gallery). Deploy as ./pkg on a COOP/COEP host; serve with 'make serve'."
+
 # gallery: verify-and-rebuild the web gallery end-to-end so it can
 # recover from a partially-broken state.  Use this when the browser
 # reports errors like "Failed to grow table" (wasm/JS glue mismatch),
@@ -456,10 +472,16 @@ gallery:
 	@python3 scripts/cache_bust_html.py >/dev/null
 	@echo "  [7/7] gallery ready — run 'make serve' and open http://localhost:8000/gallery.html"
 
+# @PLN117 — COOP/COEP so a threaded gallery bundle (`make gallery-mt`) gets
+# crossOriginIsolated === true and par() runs on Web Workers.  Harmless for the
+# default single-threaded bundle (the gallery is self-contained / same-origin).
+# Reuses the cross-origin-isolated static server built for the threaded-wasm
+# harness.  Without these headers the gallery still runs — par() just sequential.
 serve:
 	@echo "Playground: http://localhost:8000/playground.html"
 	@echo "Gallery:    http://localhost:8000/gallery.html"
-	cd doc && python3 -m http.server 8000
+	@echo "(COOP/COEP on — a threaded gallery from 'make gallery-mt' runs par() on Web Workers)"
+	python3 tests/wasm/coi-server.py 8000 doc
 
 # ── Branch review viewer (plan-35) ─────────────────────────────
 # Serves a branch-aware doc + code review dashboard.
@@ -945,11 +967,81 @@ clean:
 clean-wasm:
 	-rm -rf target/wasm32-unknown-unknown target/wasm32-wasip2 doc/pkg
 
+# @PLN117 — threaded browser bundle: par() / par_fold over real Web Worker
+# threads on loft's own pool (rayon on a SharedArrayBuffer + wasm atomics; the
+# same runtime `loft --html` links, see src/wasm_threads.rs).
+# Needs the nightly toolchain WITH rust-src (build-std rebuilds std with
+# atomics) plus wasm-pack.  --target web is MANDATORY — the worker bootstrap
+# imports the generated glue as a module; --target nodejs cannot drive it (and
+# node has no Web Worker).  A page must `await init()` then
+# `startLoftWorkers(wasm, n, {memory, mainJS})` from loft-thread.js before any
+# par; on a host without cross-origin isolation it skips the pool and par()
+# falls back to sequential (never breaks — verified in-browser).
+# Prove it: python3 tests/wasm/coi-server.py 8799 tests/wasm & then load
+# /par-thread-proof.html in a cross-origin-isolated browser.  Design + arcs:
+# doc/claude/plans/117-browser-multithreading/.
+#
+# The link-arg set below is what wasm-bindgen's thread transform requires and
+# this toolchain's rustc does NOT auto-emit from +atomics alone: shared +
+# imported memory with a maximum, plus lld's synthesized TLS / heap-base
+# globals kept as exports.  Drop any one and the bundle silently builds with a
+# NON-shared memory — workers then die at runtime with "Memory could not be
+# cloned".  (max-memory 1 GiB = 16384 wasm pages.)
+WASM_MT_RUSTFLAGS = -C target-feature=+atomics,+bulk-memory,+mutable-globals \
+  -C link-arg=--shared-memory -C link-arg=--max-memory=1073741824 \
+  -C link-arg=--import-memory -C link-arg=--export=__heap_base \
+  -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size \
+  -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base \
+  -C link-arg=--export=__stack_pointer
+
+# @PLN117 — prove `par` still computes the right answers in a build WITHOUT the
+# threading feature (the shape `make wasm` ships to the browser).  CI only
+# `cargo check`s that configuration, which is how a par that returned garbage
+# there stayed invisible: the family's native entries were feature-gated out, so
+# the interpreter called functions that were not registered.  This runs the
+# threading scripts on both builds and diffs — a par must mean the same thing
+# with and without threads, only slower.
+check-no-threading:
+	@CARGO_TARGET_DIR=target-nothread cargo build --release -q --no-default-features --features "mmap random"
+	@cargo build --release -q
+	@fail=0; for f in tests/scripts/22-threading.loft tests/scripts/22b-par-fold.loft \
+	                 tests/scripts/22c-par-sources.loft tests/scripts/22d-par-narrow.loft; do \
+	  ./target/release/loft --interpret $$f 2>/dev/null > /tmp/loft-thr.out; \
+	  ./target-nothread/release/loft --path $$(pwd)/ --interpret $$f 2>/dev/null > /tmp/loft-nothr.out; \
+	  if diff -q /tmp/loft-thr.out /tmp/loft-nothr.out >/dev/null; then echo "  ok   $$f"; \
+	  else echo "  FAIL $$f — par differs with and without the threading feature"; fail=1; fi; done; \
+	rm -f /tmp/loft-thr.out /tmp/loft-nothr.out; \
+	if [ $$fail -eq 0 ]; then echo "PASS: par is identical with and without threads"; fi; exit $$fail
+
+# @PLN117 — every in-browser threading gate, in one command.  Each measures a
+# claim rather than assuming it: that `par` really dispatches across Web Worker
+# threads, that the shared-memory model still holds, that it scales, that the UI
+# stays responsive, and that a `loft --html` page does all of that too — each
+# against the value the interpreter produces.  Needs a headless chromium; the
+# bundle gates additionally need `make wasm-mt` (they SKIP without it).  The
+# runner keeps going after a failing gate and prints one table at the end;
+# `scripts/par_gates.sh --ci` is the same run with a SKIP promoted to a failure,
+# which is what .github/workflows/browser-threads.yml runs nightly.
+par-gates:
+	@scripts/par_gates.sh
+
+# @PLN117 — type-check loft's OWN browser thread pool (src/wasm_threads.rs).  It
+# is browser-only by nature, so the host `cargo clippy --all-features` never sees
+# it; this is where it gets compiled.  Same recipe the `--html` threaded build
+# uses, minus the link step.
+check-wasm-threads:
+	RUSTFLAGS='-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals' \
+	rustup run nightly cargo check --lib --target wasm32-unknown-unknown \
+	--no-default-features --features "random wasm-native-threads" \
+	--target-dir target/loft/html-mt -Zbuild-std=panic_abort,std
+
 wasm-mt:
-	RUSTFLAGS='-C target-feature=+atomics,+bulk-memory,+mutable-globals' \
-	wasm-pack build --target nodejs --out-dir tests/wasm/pkg-mt \
-	-- --features wasm-threads --no-default-features
-	@echo "Built tests/wasm/pkg-mt/ — run: node tests/wasm/suite.mjs --threaded 19-threading.loft"
+	RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	rustup run nightly \
+	$$HOME/.cargo/bin/wasm-pack build --target web --out-dir tests/wasm/pkg-mt --release \
+	-- --no-default-features --features wasm-threads -Z build-std=panic_abort,std
+	@cp doc/loft-thread.js tests/wasm/pkg-mt/
+	@echo "Built tests/wasm/pkg-mt/ (--target web, threaded, shared memory)."
 
 fill:
 	@cargo build --release -q

@@ -67,6 +67,18 @@ fn unknown_var() {
     code!("fn test() { a == 1 }").error("Unknown variable 'a' at unknown_var:1:13");
 }
 
+// A typed declaration that CONSTRUCTS a struct at module scope (`CFG p = P { … };`)
+// used to ICE the parser: file scope has no function var table, so the construction
+// destination is the `u16::MAX` "no slot" sentinel — which `Function::is_independent`
+// indexed out of bounds and `parse_object_field`'s `depending()` asserted on. The
+// malformed declaration must yield an ordinary diagnostic, never a panic. (Surfaced
+// while probing @PLN116.)
+#[test]
+fn module_scope_struct_ctor_no_ice() {
+    code!("struct P { x: integer }\nCFG p = P { x: 1 };\nfn test() { }")
+        .error("Expect token = at module_scope_struct_ctor_no_ice:2:6");
+}
+
 /// S1: a misspelled variable name must produce a clear "Unknown variable" diagnostic
 /// on the second pass without creating a ghost variable that could cause cascading errors.
 #[test]

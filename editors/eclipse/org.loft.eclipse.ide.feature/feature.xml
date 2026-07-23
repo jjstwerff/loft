@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Loft IDE feature — bundles the loft wiring plugin and declares its Eclipse
+  prerequisites (LSP4E, DSP4E, TM4E) as p2 requirements.  Installing this feature from
+  an update site (with the LSP4E + TM4E sites also configured) makes p2 resolve and
+  install those three automatically — the "define them as dependencies" answer.
+-->
+<feature
+      id="org.loft.eclipse.ide.feature"
+      label="Loft IDE (LSP + DAP)"
+      version="0.9.0.qualifier"
+      provider-name="loft-lang">
+
+   <description url="https://github.com/loft-lang/loft">
+      Full loft support in Eclipse: code intelligence via the loft-lsp language server
+      (LSP4E) and interpreter-mode debugging via the loft-dap debug adapter (DSP4E), with
+      TextMate syntax highlighting (TM4E).  Requires the loft-lsp and loft-dap binaries on
+      PATH (or set the LOFT_LSP env var / loft.lsp system property to their absolute paths).
+   </description>
+
+   <license url="https://www.gnu.org/licenses/lgpl-3.0.html">
+      SPDX-License-Identifier: LGPL-3.0-or-later
+   </license>
+
+   <!-- The loft wiring bundle (content type + grammar + language server). -->
+   <plugin
+         id="org.loft.eclipse.ide"
+         download-size="0"
+         install-size="0"
+         version="0.0.0"
+         unpack="false"/>
+
+   <!-- Prerequisites — p2 resolves + installs these from their update sites (see README):
+        TM4E ships a feature; LSP4E + DSP4E ship as bundles. -->
+   <requires>
+      <import feature="org.eclipse.tm4e.feature" version="0.17.0" match="greaterOrEqual"/>
+      <import plugin="org.eclipse.lsp4e" version="0.19.0" match="greaterOrEqual"/>
+      <import plugin="org.eclipse.lsp4e.debug" version="0.17.0" match="greaterOrEqual"/>
+   </requires>
+</feature>

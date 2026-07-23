@@ -531,8 +531,9 @@ impl State {
             ValueType::ParFor => panic!(
                 "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
             ),
-            // @PLN11 G2/M3.5 — FnRef: 16-byte fn-ref on stack (d_nr 4B +
-            // closure DbRef 12B).  add_op already advances stack.position.
+            // @PLN11 G2/M3.5 — FnRef on the stack: [d_nr i64][closure DbRef],
+            // 8 + 12 B (P249 widened d_nr from 4).  add_op already advances
+            // stack.position.
             ValueType::FnRef => {
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::from(node.fnref_dnr()));
@@ -633,7 +634,7 @@ impl State {
                     Type::Function(_, _, _) => {
                         stack.add_op("OpVarFnRef", self);
                         // @PLAN53 S4: 20B fn-ref push − 16B `text` account.
-                        stack.position += stack.step(20) - stack.step(16);
+                        stack.position += stack.fnref_signature_gap();
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
                     Type::Float => stack.add_op("OpVarFloat", self),
@@ -733,10 +734,10 @@ impl State {
                     // 20 B in matching layout.  The opcode's stdlib
                     // signature pops 16 B (`text`) but the runtime
                     // actually pops 20 B; mirror gen_set_first_at_tos's
-                    // `stack.position -= 4` correction.
+                    // `fnref_signature_gap` correction.
                     Type::Function(_, _, _) => {
                         stack.add_op("OpPutFnRef", self);
-                        stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                        stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
                     Type::Float => stack.add_op("OpPutFloat", self),
@@ -1287,7 +1288,7 @@ impl State {
                 // +4 stack tracker bump for the signature mismatch.
                 Type::Function(_, _, _) => {
                     stack.add_op("OpVarFnRef", self);
-                    stack.position += stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                    stack.position += stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                 }
                 Type::Boolean => stack.add_op("OpVarBool", self),
                 Type::Float => stack.add_op("OpVarFloat", self),
@@ -1336,10 +1337,10 @@ impl State {
                 // P249 — fn-ref slot is 20 B; matches push above.
                 // OpPutFnRef's signature pops 16 B (`text`) but the
                 // runtime pops 20; mirror gen_set_first_at_tos's
-                // `stack.position -= 4` correction.
+                // `fnref_signature_gap` correction.
                 Type::Function(_, _, _) => {
                     stack.add_op("OpPutFnRef", self);
-                    stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                    stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                 }
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Float => stack.add_op("OpPutFloat", self),
@@ -1772,6 +1773,10 @@ impl State {
                 stack.add_op("OpVarRef", self);
                 self.code_add(free_pos);
                 stack.add_op("OpFreeRef", self);
+                // @PLN118 — this var takes an unconditional pre-build free; its
+                // block-exit free must reset it to the sentinel so a loop re-entry's
+                // pre-build free cannot re-free a reused slot (moros glb H4 UAF).
+                stack.owned_reassigned.insert(v);
             }
             // @PLN85 unification (first chokepoint collapse, LOFT_JOIN_OWN): read the
             // ONE carried fact instead of the type-shape proxy below. A `??`-JOIN call
@@ -2207,11 +2212,11 @@ impl State {
                 // DbRef).  OpPutInt would only pop 8 B and leave the
                 // closure half garbage in the destination.  OpPutFnRef
                 // pops 20 B; mirror gen_set_first_at_tos's
-                // `stack.position -= 4` correction (op signature
+                // `fnref_signature_gap` correction (op signature
                 // declares 16 B / `text` but the runtime pops 20).
                 Type::Function(_, _, _) => {
                     stack.add_op("OpPutFnRef", self);
-                    stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                    stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                 }
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Float => stack.add_op("OpPutFloat", self),
@@ -2334,7 +2339,7 @@ impl State {
             // slot.  `OpPutFnRef`'s stdlib signature pops a 16-byte
             // `text`, so the runtime actually pops 20 bytes but the
             // compile-time tracker only accounts for 16 — mirror
-            // `set_var`'s `stack.position -= 4` correction.
+            // `set_var`'s `fnref_signature_gap` correction.
             if *value == Value::Null {
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::MIN);
@@ -2345,7 +2350,7 @@ impl State {
             let var_pos = stack.var_pos(v);
             stack.add_op("OpPutFnRef", self);
             self.code_add(var_pos);
-            stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+            stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
         } else if matches!(stack.function.tp(v), Type::RefVar(_))
             && let Value::Var(src) = value
             && matches!(stack.function.tp(*src), Type::RefVar(_))
@@ -2876,6 +2881,31 @@ impl State {
             stack.add_op("OpFreeRef", self);
             return Type::Void;
         }
+        // @PLN118 — free a heap variable that took an unconditional pre-build free
+        // (`generate_set`'s `owned_ref` path), then RESET its slot to the null
+        // sentinel.  The native backend resets after EVERY var free
+        // (`generation/ops/ref_ops.rs`: `OpFreeRef(...); var_x.store_nr = u16::MAX`);
+        // the interpreter emitted `OpVarRef + OpFreeRef` only, leaving the variable
+        // pointing at the freed slot.  In a loop the block-exit sweep frees the
+        // per-iteration temp and the next iteration's pre-build `OpFreeRef` re-frees
+        // it — and if the allocator reclaimed that slot for a live value meanwhile,
+        // the re-free destroys it (the moros glb H4 store-slot-reuse UAF: `pos`
+        // reads null on 4-of-7 hex verts).  `OpInitRefSentinel` after the free makes
+        // that re-free a no-op.  Scoped to `owned_reassigned` (not every var free):
+        // a retbuf/Database-reused local like `off` keeps its DbRef for in-place
+        // `OpDatabase` reuse, and nulling it destabilises the `protect_store_frees`
+        // machinery (leaks the returned value).
+        if stack.data.def(op).name() == "OpFreeRef"
+            && let Some(Value::Var(v)) = parameters.first()
+            && stack.owned_reassigned.contains(v)
+        {
+            let var_pos = stack.var_pos(*v);
+            self.generate(&parameters[0], stack, false);
+            stack.add_op("OpFreeRef", self);
+            stack.add_op("OpInitRefSentinel", self);
+            self.code_add(var_pos);
+            return Type::Void;
+        }
         // try destination-passing optimisation for text-producing natives.
         if self.try_text_dest_pass(stack, op, parameters) {
             return Type::Void;
@@ -2933,8 +2963,11 @@ impl State {
                     if parameters[a_nr] == Value::Null && stack.position == stack_before {
                         self.emit_typed_null(stack, &a.typedef);
                     }
-                    // Function args are 16B (4B d_nr + 12B closure DbRef).
-                    // A plain fn-ref constant produces only 4B via OpConstInt; pad to 16B.
+                    // A fn-ref arg is [d_nr i64][closure DbRef] — 8 + 12 B, which
+                    // the eval stack steps to 8 + 16 = 24.  A plain fn-ref constant
+                    // pushes only the d_nr (8), so pad the closure half.  Both halves
+                    // are target-independent, unlike the `text` slot the fn-ref OPS
+                    // are declared with (see `Stack::fnref_signature_gap`).
                     if matches!(a.typedef, Type::Function(_, _, _))
                         && stack.position - stack_before < 16
                     {
@@ -3382,7 +3415,7 @@ impl State {
                 // Post-2c fn-ref slot is 20 bytes, but OpVarFnRef's stdlib
                 // signature returns `text` (16 B Str).  Add the 4-byte
                 // discrepancy to the compile-time stack tracker.
-                stack.position += stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                stack.position += stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
             }
             Type::Character => stack.add_op("OpVarCharacter", self),
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
@@ -3461,7 +3494,7 @@ impl State {
                         // vars.
                         Type::Function(_, _, _) => {
                             stack.add_op("OpVarFnRef", self);
-                            stack.position += stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                            stack.position += stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
                         Type::Float => stack.add_op("OpVarFloat", self),
@@ -3967,7 +4000,7 @@ impl State {
                 // Post-2c fn-ref slot is 20 bytes, but OpPutFnRef's stdlib
                 // signature pops `text` (16 B Str).  Subtract the 4-byte
                 // discrepancy from the compile-time stack tracker.
-                stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
             }
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),

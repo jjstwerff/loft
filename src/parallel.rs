@@ -22,11 +22,12 @@ type ProgramRefs = (Arc<Vec<u8>>, Arc<Vec<crate::database::Call>>);
 
 /// Wrapper for `*mut u8` that is `Send + Sync` for cross-thread direct writes.
 /// SAFETY: callers must ensure non-overlapping writes and join all threads.
-#[cfg(feature = "threading")]
+///
+/// Present in a build without threads too, so the dispatch it appears in has ONE
+/// body rather than a second, unexercised copy — the sequential `map_workers`
+/// simply runs that body on one thread.
 struct SendMutPtr(*mut u8);
-#[cfg(feature = "threading")]
 unsafe impl Send for SendMutPtr {}
-#[cfg(feature = "threading")]
 unsafe impl Sync for SendMutPtr {}
 
 /// Immutable interpreter context shared across all worker threads.
@@ -140,11 +141,15 @@ where
     // wasm-bindgen-rayon model so the two scheduler stories converge.
     use rayon::prelude::*;
     let threads = n_threads.max(1).min(n_rows.max(1));
-    let pool = rayon_pool();
-    pool.install(|| {
+    // @PLN117 step 0 — parallelism falsification instrument (see `WorkerTrace`):
+    // when armed, prove this `par` dispatched across ≥2 workers.
+    let trace = WorkerTrace::new();
+    let trace_ref = &trace;
+    let out = with_pool(|| {
         (0..threads)
             .into_par_iter()
             .map(|t| {
+                trace_ref.record();
                 let start = t * n_rows / threads;
                 let end = (t + 1) * n_rows / threads;
                 // @PLN108 R2 — the SINGLE clone: always borrow the parent read-only
@@ -159,7 +164,97 @@ where
                 f(start, end, worker_stores)
             })
             .collect()
-    })
+    });
+    trace.report("parallel_workers", n_rows, threads);
+    out
+}
+
+/// @PLN117 step 0 — runtime arm switch for the parallel-worker tracer.  The
+/// wasm harness has no environment variables, so it flips this through a wasm
+/// export (`set_par_trace_workers`) before running the instrument.
+static PAR_TRACE_ON: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+/// Arm or disarm the parallel-worker tracer at runtime (@PLN117 step 0).
+pub fn set_par_trace(on: bool) {
+    PAR_TRACE_ON.store(on, std::sync::atomic::Ordering::Relaxed);
+}
+
+/// @PLN117 step 0 — is the parallel-worker tracer armed?  Armed by the runtime
+/// switch, or (native only) by `LOFT_TRACE_PAR_WORKERS` read once.  Off ⇒ the
+/// dispatch chokepoint stays allocation-free.
+fn par_trace_enabled() -> bool {
+    if PAR_TRACE_ON.load(std::sync::atomic::Ordering::Relaxed) {
+        return true;
+    }
+    #[cfg(not(feature = "wasm"))]
+    {
+        use std::sync::OnceLock;
+        static ON: OnceLock<bool> = OnceLock::new();
+        *ON.get_or_init(|| std::env::var_os("LOFT_TRACE_PAR_WORKERS").is_some())
+    }
+    #[cfg(feature = "wasm")]
+    {
+        false
+    }
+}
+
+/// @PLN117 step 0 — per-dispatch collector of the DISTINCT rayon worker indices
+/// that ran a `par`, so the harness can prove a dispatch really crossed ≥2
+/// workers (and that it can FAIL — `par(..., 1)` reports 1).  Used at EVERY
+/// dispatch chokepoint (`parallel_workers` and `run_parallel_queue_ref`) so the
+/// count is reported no matter which return-shape path a `par` takes.
+///
+/// Non-perturbing: `new()` allocates only when the tracer is armed; when off,
+/// `record()` is a single `Option` branch and nothing is heap-allocated.
+struct WorkerTrace(Option<std::sync::Mutex<std::collections::BTreeSet<usize>>>);
+
+impl WorkerTrace {
+    fn new() -> Self {
+        Self(par_trace_enabled().then(|| std::sync::Mutex::new(std::collections::BTreeSet::new())))
+    }
+
+    /// Record the current worker index — call once per task inside the pool.
+    /// A build without threads has exactly one worker, so it records index 0 and
+    /// reports `distinct_workers=1`: the honest answer, not an absent one.
+    fn record(&self) {
+        if let Some(seen) = &self.0 {
+            #[cfg(feature = "threading")]
+            let index = rayon::current_thread_index().unwrap_or(usize::MAX);
+            #[cfg(not(feature = "threading"))]
+            let index = 0usize;
+            seen.lock().unwrap().insert(index);
+        }
+    }
+
+    /// Emit the distinct-worker count for `site` after the join.  Native →
+    /// stderr; wasm → the program output (wasm stderr is dropped), where the
+    /// browser harness reads it back from `compile_and_run`'s JSON.
+    fn report(self, site: &str, n_rows: usize, threads: usize) {
+        if let Some(seen) = self.0 {
+            let indices = seen.into_inner().unwrap();
+            let summary = format!(
+                "loft: LOFT_TRACE_PAR_WORKERS {site} n_rows={n_rows} threads={threads} \
+                 distinct_workers={} indices={indices:?}",
+                indices.len(),
+            );
+            #[cfg(not(any(
+                feature = "wasm",
+                all(target_arch = "wasm32", not(target_os = "wasi"))
+            )))]
+            eprintln!("{summary}");
+            #[cfg(feature = "wasm")]
+            crate::wasm::output_push(&format!("{summary}\n"));
+            // @PLN117 — the raw browser build (`loft --html`) has no stderr, so
+            // the tracer would report into nothing.  Send it down the page's own
+            // print path instead, which is what makes an in-browser `par` gate
+            // able to READ how many workers actually ran.
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
+            {
+                let line = format!("{summary}\n");
+                crate::loft_host_print(line.as_ptr(), line.len());
+            }
+        }
+    }
 }
 
 /// Plan-06 phase 3b.1 — merge per-thread batches into one ordered vector.
@@ -189,9 +284,40 @@ pub(crate) fn merge_batches<R: Clone>(
     results
 }
 
-/// Lazily-initialised global rayon pool.  Threading-feature only.
-/// Uses `num_cpus`'s default thread count (rayon's default).
+/// Run `f` on the rayon pool that drives loft's parallel dispatch (@PLN117 step 2).
+///
+/// - **Native:** install onto loft's private, lazily-built pool (`rayon_pool`).
+/// - **Browser:** run `f` directly so the `.into_par_iter()` inside it dispatches
+///   over the GLOBAL rayon pool the page installed — loft's own
+///   (`wasm_threads::loft_pool_build`) or, for the wasm-bindgen bundle,
+///   `initThreadPool(n)`.  A private `ThreadPoolBuilder` cannot spawn under wasm
+///   — there are no OS threads to build on — so the global pool is the only one
+///   with real workers.  Before the pool is installed (or when the host is not
+///   cross-origin-isolated so the page never built one), the global pool has a
+///   single thread and `f` runs sequentially on the caller: the never-break
+///   sequential fallback (@PLN117 arc D).  Same bounds as `ThreadPool::install`,
+///   so it is a drop-in at every call site.
 #[cfg(feature = "threading")]
+pub(crate) fn with_pool<R, F>(f: F) -> R
+where
+    R: Send,
+    F: FnOnce() -> R + Send,
+{
+    #[cfg(not(browser_pool))]
+    {
+        rayon_pool().install(f)
+    }
+    #[cfg(browser_pool)]
+    {
+        f()
+    }
+}
+
+/// Lazily-initialised private rayon pool for the native backend.  Uses rayon's
+/// default thread count.  Not built under wasm — the browser arm of `with_pool`
+/// uses the page's global pool instead (a private builder can't spawn OS threads
+/// that don't exist in the browser).
+#[cfg(all(feature = "threading", not(browser_pool)))]
 fn rayon_pool() -> &'static rayon::ThreadPool {
     use std::sync::OnceLock;
     static POOL: OnceLock<rayon::ThreadPool> = OnceLock::new();
@@ -200,6 +326,35 @@ fn rayon_pool() -> &'static rayon::ThreadPool {
             .build()
             .expect("rayon pool init failed")
     })
+}
+
+/// Run `f` once per worker index and collect the results — on the pool when loft
+/// was built with threads, sequentially when it was not.
+///
+/// [`parallel_workers`] is the same idea for dispatches that let this module
+/// build the worker's view of the stores.  `run_parallel_queue_ref` builds its
+/// own (it hands the worker's whole `Stores` back so the parent can adopt the
+/// records it allocated), so it maps the indices through here instead.  Either
+/// way, whether loft has threads is decided in ONE place per dispatch shape —
+/// the caller is written once and reads the same in both builds.
+#[cfg(feature = "threading")]
+pub(crate) fn map_workers<R, F>(n_workers: usize, f: F) -> Vec<R>
+where
+    R: Send,
+    F: Fn(usize) -> R + Sync + Send,
+{
+    use rayon::prelude::*;
+    with_pool(|| (0..n_workers).into_par_iter().map(&f).collect())
+}
+
+/// Sequential [`map_workers`] for a build without threads: same slicing, same
+/// order, same results — just one thread doing all of it.
+#[cfg(not(feature = "threading"))]
+pub(crate) fn map_workers<R, F>(n_workers: usize, f: F) -> Vec<R>
+where
+    F: Fn(usize) -> R,
+{
+    (0..n_workers).map(f).collect()
 }
 
 /// Sequential equivalent of `parallel_workers` for the `not(threading)` path.
@@ -694,7 +849,6 @@ pub fn run_parallel_text(
 ///
 /// Currently `#[allow(dead_code)]` — 8d.1 is the first call-site
 /// consumer (`n_parallel_queue_ref` native fn).
-#[cfg(feature = "threading")]
 #[allow(dead_code, clippy::too_many_arguments)]
 #[must_use]
 pub fn run_parallel_queue_ref(
@@ -728,99 +882,100 @@ pub fn run_parallel_queue_ref(
     let input_t = *input;
     let extras = extra_args.to_vec();
     let prog = Arc::new(program);
-    use rayon::prelude::*;
-    let pool = rayon_pool();
     let stores_immut: &Stores = &*stores;
     let prog_ref = &prog;
     let extras_ref = &extras;
     let dispenser_ref = &dispenser;
-    let batches: Vec<(Vec<(usize, DbRef)>, Stores)> = pool.install(|| {
-        (0..n_workers)
-            .into_par_iter()
-            .map(|t| {
-                let start = t * n_rows / n_workers;
-                let end = (t + 1) * n_rows / n_workers;
-                // @PLN108 R4b: queue_ref borrows the parent read-only like every other
-                // par worker — but with ZERO scratch stores.  Its output slots are
-                // assigned by the shared `dispenser` (floor `parent_len + 1`); pre-seeded
-                // scratch would push the worker's stack store into that range and the
-                // dispenser would climb into a live slot ("Allocating a used store" —
-                // probe 3).  Scratch-free ⇒ layout identical to the retired byte-copy
-                // clone (borrows at `0..parent_len`, stack at `parent_len`), so the
-                // dispenser math is unchanged.
-                let mut ws = unsafe { stores_immut.clone_for_light_worker_with_scratch(0) };
-                ws.stores.free_bits.clear();
-                ws.stores.disable_slot_reuse = true;
-                // The worker's stack store (allocated by
-                // `prog.new_state(ws)` via `db.database(1000)`) MUST
-                // land at `allocations.len()` (push-at-end), NOT
-                // through the dispenser — the stack store is a
-                // worker-local scratch buffer; routing it through
-                // the parent-namespace dispenser would put parent at
-                // risk of swapping that scratch buffer back in.
-                // Leave `worker_slot_dispenser = None` until
-                // `new_state` returns, then attach it for the
-                // worker's user-code allocations.
-                let mut state = prog_ref.new_state(ws);
-                state.database.worker_slot_dispenser = Some(Arc::clone(dispenser_ref));
-                state.database.worker_allocated_indices.clear();
-                let mut batch = Vec::with_capacity(end - start);
-                for row_idx in start..end {
-                    let row_ref = vector::get_vector(
-                        &input_t,
-                        element_size,
-                        row_idx as i64,
-                        &state.database.allocations,
-                    );
-                    // ARC.md A6.a — when the worker fn has hidden
-                    // caller-supplied destination params (added by
-                    // `ref_return` for Vector / Reference / Enum-payload
-                    // returns), allocate a fresh storage slot per
-                    // hidden arg in the worker's output store and pass
-                    // it as a 12-byte param after the input element.
-                    // The worker writes its result into the destination;
-                    // its DbRef survives in the worker's allocations
-                    // table and gets adopted + rebased back to parent
-                    // alongside the rest.
-                    // ARC.md A6.a — pre-allocate a real backing store
-                    // (NOT `state.database.null()`) for each hidden
-                    // destination.  `null()` returns a u32::MAX-sized
-                    // sentinel store: subsequent record claims silently
-                    // fail, so `out += [i]` writes go nowhere and the
-                    // returned vector is empty.  A 100-word real store
-                    // is enough seed; the standard claim path grows it
-                    // as the worker appends.
-                    let hidden_dests: Vec<DbRef> = (0..n_hidden_dests)
-                        .map(|_| state.database.database(100))
-                        .collect();
-                    // Primitive element (a `vector<integer>` / materialised range)
-                    // must reach the worker as its value, not the element DbRef.
-                    // Text and struct/DbRef inputs keep the DbRef path (correct as-is).
-                    let arg = if prim_in > 0 && prim_in <= 8 {
-                        crate::state::WorkerArg::Primitive {
-                            value: read_primitive_at(&state.database, &row_ref, element_size),
-                            size: prim_in,
-                        }
-                    } else {
-                        crate::state::WorkerArg::Ref(row_ref)
-                    };
-                    let r = state.execute_at_ref(fn_pos, arg, &hidden_dests, extras_ref);
-                    // @PLAN59 witness-free (mirrors the plain-call
-                    // `OpFreeRefIfDistinct` pair): a worker whose tail built
-                    // its OWN store (literal return — the signature-time
-                    // buffer stays unwritten) leaves the pre-allocated dest
-                    // orphaned; free every dest the result did not adopt.
-                    for d in &hidden_dests {
-                        if d.store_nr != r.store_nr {
-                            state.database.free(d);
-                        }
-                    }
-                    batch.push((row_idx, r));
+    // @PLN117 arc C — instrument the struct/ref/vector return path too, so the
+    // memory-model harness can prove THIS (allocation + adoption + rebase heavy)
+    // dispatch really crossed ≥2 workers under shared memory, not just the
+    // simple `parallel_workers` path.
+    let trace = WorkerTrace::new();
+    let trace_ref = &trace;
+    let batches: Vec<(Vec<(usize, DbRef)>, Stores)> = map_workers(n_workers, |t| {
+        trace_ref.record();
+        let start = t * n_rows / n_workers;
+        let end = (t + 1) * n_rows / n_workers;
+        // @PLN108 R4b: queue_ref borrows the parent read-only like every other
+        // par worker — but with ZERO scratch stores.  Its output slots are
+        // assigned by the shared `dispenser` (floor `parent_len + 1`); pre-seeded
+        // scratch would push the worker's stack store into that range and the
+        // dispenser would climb into a live slot ("Allocating a used store" —
+        // probe 3).  Scratch-free ⇒ layout identical to the retired byte-copy
+        // clone (borrows at `0..parent_len`, stack at `parent_len`), so the
+        // dispenser math is unchanged.
+        let mut ws = unsafe { stores_immut.clone_for_light_worker_with_scratch(0) };
+        ws.stores.free_bits.clear();
+        ws.stores.disable_slot_reuse = true;
+        // The worker's stack store (allocated by
+        // `prog.new_state(ws)` via `db.database(1000)`) MUST
+        // land at `allocations.len()` (push-at-end), NOT
+        // through the dispenser — the stack store is a
+        // worker-local scratch buffer; routing it through
+        // the parent-namespace dispenser would put parent at
+        // risk of swapping that scratch buffer back in.
+        // Leave `worker_slot_dispenser = None` until
+        // `new_state` returns, then attach it for the
+        // worker's user-code allocations.
+        let mut state = prog_ref.new_state(ws);
+        state.database.worker_slot_dispenser = Some(Arc::clone(dispenser_ref));
+        state.database.worker_allocated_indices.clear();
+        let mut batch = Vec::with_capacity(end - start);
+        for row_idx in start..end {
+            let row_ref = vector::get_vector(
+                &input_t,
+                element_size,
+                row_idx as i64,
+                &state.database.allocations,
+            );
+            // ARC.md A6.a — when the worker fn has hidden
+            // caller-supplied destination params (added by
+            // `ref_return` for Vector / Reference / Enum-payload
+            // returns), allocate a fresh storage slot per
+            // hidden arg in the worker's output store and pass
+            // it as a 12-byte param after the input element.
+            // The worker writes its result into the destination;
+            // its DbRef survives in the worker's allocations
+            // table and gets adopted + rebased back to parent
+            // alongside the rest.
+            // ARC.md A6.a — pre-allocate a real backing store
+            // (NOT `state.database.null()`) for each hidden
+            // destination.  `null()` returns a u32::MAX-sized
+            // sentinel store: subsequent record claims silently
+            // fail, so `out += [i]` writes go nowhere and the
+            // returned vector is empty.  A 100-word real store
+            // is enough seed; the standard claim path grows it
+            // as the worker appends.
+            let hidden_dests: Vec<DbRef> = (0..n_hidden_dests)
+                .map(|_| state.database.database(100))
+                .collect();
+            // Primitive element (a `vector<integer>` / materialised range)
+            // must reach the worker as its value, not the element DbRef.
+            // Text and struct/DbRef inputs keep the DbRef path (correct as-is).
+            let arg = if prim_in > 0 && prim_in <= 8 {
+                crate::state::WorkerArg::Primitive {
+                    value: read_primitive_at(&state.database, &row_ref, element_size),
+                    size: prim_in,
                 }
-                (batch, state.database)
-            })
-            .collect()
+            } else {
+                crate::state::WorkerArg::Ref(row_ref)
+            };
+            let r = state.execute_at_ref(fn_pos, arg, &hidden_dests, extras_ref);
+            // @PLAN59 witness-free (mirrors the plain-call
+            // `OpFreeRefIfDistinct` pair): a worker whose tail built
+            // its OWN store (literal return — the signature-time
+            // buffer stays unwritten) leaves the pre-allocated dest
+            // orphaned; free every dest the result did not adopt.
+            for d in &hidden_dests {
+                if d.store_nr != r.store_nr {
+                    state.database.free(d);
+                }
+            }
+            batch.push((row_idx, r));
+        }
+        (batch, state.database)
     });
+    trace.report("run_parallel_queue_ref", n_rows, n_workers);
     let null_db = DbRef::NULL;
     let mut refs: Vec<DbRef> = vec![null_db; n_rows];
     let mut adopted: Vec<u16> = Vec::new();
@@ -876,7 +1031,6 @@ pub fn run_parallel_queue_ref(
 /// overwrite it.  Reviving sets `free=false, ref_count=1` so the
 /// slot is owned by `par_ref_buffer_stack`'s adopted list — freed
 /// later by `n_parallel_buf_drop_ref`.
-#[cfg(feature = "threading")]
 fn revive_record_chain(
     stores: &mut Stores,
     record_ref: &DbRef,
@@ -1034,7 +1188,6 @@ pub fn run_parallel_int(
 /// # Panics
 /// Panics if a worker thread panics.  Empty input returns `init` without
 /// dispatching workers.
-#[cfg(feature = "threading")]
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_parallel_fold(
@@ -1116,45 +1269,6 @@ pub fn run_parallel_fold(
             &[partial as u64],
             8,
         );
-        acc = new_acc as i64;
-    }
-    acc
-}
-
-#[cfg(not(feature = "threading"))]
-#[allow(clippy::too_many_arguments, dead_code)]
-#[must_use]
-pub fn run_parallel_fold(
-    stores: &Stores,
-    program: WorkerProgram,
-    fold_fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    init: i64,
-    _n_threads: usize,
-    extra_args: &[u64],
-) -> i64 {
-    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
-    if n_rows == 0 {
-        return init;
-    }
-    let prog = Arc::new(program);
-    let mut state = prog.new_state(unsafe { stores.clone_for_light_worker() });
-    let mut acc = init;
-    let extras = extra_args.to_vec();
-    for row_idx in 0..n_rows {
-        let row_ref = vector::get_vector(
-            input,
-            element_size,
-            row_idx as i64,
-            &state.database.allocations,
-        );
-        let row_val = read_primitive_at(&state.database, &row_ref, element_size);
-        let mut call_extras = Vec::with_capacity(1 + extras.len());
-        call_extras.push(row_val);
-        call_extras.extend_from_slice(&extras);
-        let new_acc =
-            state.execute_at_raw_primitive_input(fold_fn_pos, acc as u64, 8, &call_extras, 8);
         acc = new_acc as i64;
     }
     acc
@@ -1388,7 +1502,6 @@ pub fn run_parallel_queue(
 ///
 /// # Panics
 /// Panics if a worker thread panics.
-#[cfg(feature = "threading")]
 #[allow(clippy::too_many_arguments)]
 #[must_use]
 pub fn run_parallel_queue_fn(
@@ -1431,40 +1544,6 @@ pub fn run_parallel_queue_fn(
             }
         }
     });
-    buf
-}
-
-#[cfg(not(feature = "threading"))]
-#[allow(clippy::too_many_arguments, dead_code)]
-#[must_use]
-pub fn run_parallel_queue_fn(
-    stores: &Stores,
-    program: &WorkerProgram,
-    fn_pos: u32,
-    input: &DbRef,
-    element_size: u32,
-    _n_threads: usize,
-    extra_args: &[u64],
-) -> Vec<u8> {
-    const FN_REF_SIZE: usize = 20;
-    let n_rows = vector::length_vector(input, &stores.allocations) as usize;
-    if n_rows == 0 {
-        return Vec::new();
-    }
-    let mut buf = vec![0u8; n_rows * FN_REF_SIZE];
-    let mut state = program.new_state(unsafe { stores.clone_for_light_worker() });
-    for row_idx in 0..n_rows {
-        let row_ref = vector::get_vector(
-            input,
-            element_size,
-            row_idx as i64,
-            &state.database.allocations,
-        );
-        unsafe {
-            let dst = buf.as_mut_ptr().add(row_idx * FN_REF_SIZE);
-            state.execute_at_raw_to(fn_pos, &row_ref, extra_args, FN_REF_SIZE as u32, dst);
-        }
-    }
     buf
 }
 

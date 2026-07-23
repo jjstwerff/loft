@@ -44,6 +44,51 @@ fix runs matrix-first (CLAUDE.md § Debugging policy).
 > loft). In priority order; **gate 1 is the definition of "stabilized," not one item
 > among five.**
 
+### The overriding gate — proven by working, not by a green checklist (soak target: early September)
+
+**Clearing the list below is the beginning, not the end.** A stable declaration is not
+"the gates are green." loft has to **work** — real, varied programs built and run in it,
+and *staying* correct as it evolves — not be a well-specified language admired from afar. A
+green board means "no *known* problem"; stable means "proven across the ways people actually
+use it." Those are different claims, and only the second earns the name.
+
+**Stable / contract 1 is a one-way door.** At contract 1, compatibility becomes *absolute*
+([COMPATIBILITY.md](COMPATIBILITY.md)) — no functioning program ever breaks again, forever.
+You walk through that door once. The only thing that earns the confidence to open it is
+**breadth of real use** exercising the contract surface — because a contract that has only
+been *tested*, not *lived in*, hides exactly the defects that surface the moment someone uses
+it a way you didn't imagine.
+
+**One consumer is not breadth.** **crawler** (a ~29k-line hex roguelike, a separate repo)
+proved loft can build a real game — and in doing so surfaced defects nothing internal had
+(a compiler `SIGSEGV` on a self-referential `??`, a silent interpreter struct-corruption),
+precisely because it *used* loft differently. But games/graphics/procedural-world/3D/
+store-lifetime is **one slice** of the contract. A different domain stresses a different
+edge, and finds the class of defect only that edge produces.
+
+**So the stable declaration waits on a diverse consumer soak.** Beyond crawler, **four more
+projects — deliberately unlike crawler and unlike each other — are now exercising other
+angles** of the language and stdlib:
+
+| Consumer | Angle it stresses (that crawler does not) |
+|---|---|
+| **crawler** | games · graphics · procedural world-gen · 3D math · struct/vector store-lifetime |
+| **routing** | graph / pathfinding data structures · large-collection throughput · algorithmic core |
+| **zero-trust** | security · crypto · protocol / wire encoding · wasm bridges · exactness under adversarial input |
+| *(two more)* | further distinct angles — each finds the contract stress its own domain uniquely produces |
+
+Each of these will do for its domain what crawler did for games: surface the real defects
+that turn "no known bugs" into "proven." **Target: hold the stable declaration until ~early
+September**, giving the four additional consumers a genuine soak against the live toolchain.
+
+This does **not** contradict the standing "work-limited, not time-limited" rule above: the
+gates get cleared when the work is done, and stable *additionally* waits until diverse real
+use has exercised the contract — which is why the useful marker is a **soak window
+(~September), a floor on the declaration, not a ship date to rush toward**. If a consumer
+surfaces a contract-level defect, the freeze waits until it is fixed and re-verified; if the
+breadth stays clean through the soak, the door opens. Consumer coverage is tracked as
+[GOALS.md Goal C](GOALS.md#goal-c--capability-via-dogfood)'s build matrix.
+
 1. **Seal the memory model — the non-negotiable gate.** The store-lifetime /
    return-bind-ownership class (loft's stated #1 weakness, REOPENED 2026-06-21) must be
    **closed, not merely quiet**. At one dogfooding agent a residual UAF/over-free

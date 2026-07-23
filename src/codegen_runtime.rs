@@ -433,6 +433,23 @@ pub fn OpFreeRefIfDistinct(
     }
 }
 
+/// Free an `on=4` iteration scratch's DEDICATED store at loop exit.  Frees the whole
+/// scratch store only when it differs from the SOURCE store recorded in the scratch
+/// header (offset `pos + 4`); co-located (writable source) and null (rec 0) scratches
+/// are no-ops.  Bytecode equivalent: `free_scratch` in `src/fill.rs`.
+pub fn OpFreeScratch(cell: &std::cell::UnsafeCell<Stores>, scratch: DbRef) {
+    let stores: &mut Stores = unsafe { &mut *cell.get() };
+    if scratch.rec == 0 {
+        return;
+    }
+    let source = stores
+        .store(&scratch)
+        .get_u32_raw(scratch.rec, scratch.pos + 4) as u16;
+    if source != scratch.store_nr {
+        stores.free(&scratch);
+    }
+}
+
 /// Format a database record as text and append it to the output string.
 /// Bytecode equivalent: `OpFormatDatabase` in `src/state/io.rs:278`.
 pub fn OpFormatDatabase(
@@ -867,12 +884,13 @@ pub fn OpIterate(
                 pack_iter(start, finish)
             }
         }
-        3 => {
+        3 | 4 => {
             // C60 piece 3: Ordered iteration — `data` points at a
             // header record whose offset-4 word is the u32-stride
             // rec-nr vector rec-nr.  Unbounded form (from/till empty)
             // uses the "not started" sentinel recognised by
             // `vector_next` (i32::MAX = 0x7FFF_FFFF), NOT u32::MAX.
+            // on=4 (fresh-scratch hash/radix) shares this cursor setup.
             if from.is_empty() && till.is_empty() {
                 pack_iter(i32::MAX as u32, 0)
             } else if reverse {
@@ -971,28 +989,19 @@ pub fn OpStep(
                 pos: 8,
             }
         }
-        3 => {
-            // C60 piece 3: Ordered iteration over u32-stride rec-nr
-            // vector.  Mirrors src/state/io.rs step() on=3 arm.
-            let mut pos = cur as i32;
-            vector::vector_next(&data, &mut pos, 4, all);
-            let store = crate::keys::store(&data, all);
-            let vector = store.get_u32_raw(data.rec, data.pos);
-            let rec = if pos == i32::MAX {
-                0
-            } else {
-                store.get_u32_raw(vector, pos as u32)
-            };
-            cur = pos as u32;
-            DbRef {
-                store_nr: data.store_nr,
-                rec,
-                pos: 8,
-            }
+        3 | 4 => {
+            // C60 piece 3: Ordered iteration over the u32-stride rec-nr scratch.
+            // Shares `vector::step_ordered` with the interpreter (src/state/io.rs).
+            // on=4 (fresh-scratch hash/radix) yields in the source store from the header.
+            let (elem, new_pos) = vector::step_ordered(&data, cur, all, on & 63 == 4);
+            cur = new_pos;
+            elem
         }
         _ => stores.element_reference(&data, i32::MAX),
     };
 
+    // on=4's dedicated scratch store (read-only source) is freed by the loop epilogue's
+    // OpFreeScratch, not here — that also covers an early break.
     *iter = pack_iter(cur, finish);
     result
 }

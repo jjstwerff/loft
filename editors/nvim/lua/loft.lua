@@ -6,10 +6,10 @@
 -- The LSP side is DEPENDENCY-FREE — it uses Neovim's built-in `vim.lsp` (0.8+),
 -- so `require('loft').setup()` is all you need to get diagnostics, completion,
 -- hover, go-to-definition, references, rename, code actions, inlay hints,
--- semantic tokens, and tracker-tag hovers from `loft-lsp`.  The DAP side is
--- registered only when nvim-dap AND the `loft-dap` binary are both present
--- (loft-dap is not built yet — see editors/nvim/README.md), so it stays inert
--- until it lands.
+-- semantic tokens, and tracker-tag hovers from `loft-lsp`.  The DAP side (full
+-- debugging via `loft-dap`: breakpoints, stepping, variables, data breakpoints,
+-- reverse execution) is registered when nvim-dap AND the `loft-dap` binary are both
+-- present — see editors/nvim/USAGE.md for the debug keymaps.
 
 local M = {}
 
@@ -99,7 +99,7 @@ function M.setup(opts)
   end
 
   -- ── loft-dap — register the debug adapter IF nvim-dap + the binary exist ────
-  -- Inert until loft-dap lands (LSP.3 / @PLN63 D0–D6).
+  -- Full DAP surface (D0–D6 + VE/SF/DB/RX); bind the debug keys per editors/nvim/USAGE.md.
   local dap_cmd = find_bin("loft-dap", opts.loft_dap)
   local ok, dap = pcall(require, "dap")
   if ok and dap_cmd then

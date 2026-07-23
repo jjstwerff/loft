@@ -1,0 +1,62 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// @PLN105 — iterate an EXPOSED (read-only-pinned) hash (doc/claude/plans/
+// expose-iteration-scratch.md, Step 4 / on=4).  Before on=4 this PANICKED at
+// store.rs:647 ("Claim on read-only store") — a silent trap / hang under wasm —
+// because ordered iteration builds a sorted rec-nr scratch in the collection's own
+// store.  on=4 builds that scratch in a fresh DEDICATED store, records the source
+// store_nr in the scratch header, yields elements in the (exposed) source, and frees
+// the dedicated store when iteration completes (leak-clean).  `expose`/`release` only
+// pin/unpin (`lock_store`) off the --html target, so this runs on interpret + native.
+
+struct Tile { tkey: integer, ox: integer }
+
+// Returns out of an exposed-collection loop: the loop epilogue is bypassed, so the
+// dedicated scratch store is freed by the scope-exit OpFreeScratch (get_free_vars).
+fn first_over(h: hash<Tile[tkey]>, thresh: integer) -> integer {
+  for t in h { if t.tkey > thresh { return t.tkey; } }
+  0
+}
+
+fn main() {
+  h: hash<Tile[tkey]> = [];
+  h += [Tile{ tkey: 3, ox: 30 }];
+  h += [Tile{ tkey: 1, ox: 10 }];
+  h += [Tile{ tkey: 2, ox: 20 }];
+
+  // Writable source: ascending key order (the golden the exposed case must match).
+  ks = "";
+  for t in h { ks = ks + "{t.tkey}"; }
+  assert(ks == "123", "writable iter (got {ks})");
+
+  // Exposed source: identical key order + field reads resolve in the exposed store.
+  expose(1, h);
+  ks2 = "";  sum = 0;
+  for t in h { ks2 = ks2 + "{t.tkey}"; sum += t.ox; }
+  assert(ks2 == "123", "exposed iter order (got {ks2})");
+  assert(sum == 60, "exposed field read (sum {sum}, expect 60)");
+  release(1, h);
+
+  // After release the store is fully writable again: mutate + iterate.
+  h += [Tile{ tkey: 4, ox: 40 }];
+  n = 0;
+  for t in h { n += 1; }
+  assert(n == 4, "post-release mutate + iter (n {n}, expect 4)");
+
+  // The dedicated scratch store is freed on EVERY loop exit (the on=4 epilogue's
+  // OpFreeScratch), so break, repeated (loop-in-loop) and nested exposed iteration
+  // are all leak-clean — the runner's leak check is the assertion.
+  expose(2, h);
+  for t in h { break; }                       // early break
+  reps = 0;
+  for i in 0..3 { for t in h { reps += 1; } }  // repeated build+free
+  assert(reps == 12, "repeated exposed iter (reps {reps}, expect 12)");
+  nest = 0;
+  for a in h { for b in h { nest += 1; } }     // nested
+  assert(nest == 16, "nested exposed iter (nest {nest}, expect 16)");
+  assert(first_over(h, 2) == 3, "return out of an exposed loop");  // scope-exit free
+  release(2, h);
+
+  println("pln105-expose-iterate ok");
+}

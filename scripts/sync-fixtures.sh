@@ -138,6 +138,33 @@ shapes/README.md
 imaging/README.md
 web/README.md
 web/src/web.loft
+# --- @PLN110 len/size flip + formatter + Android support -------------------------
+# These fixtures are deliberately AHEAD of their pinned tags and must stay that way:
+# re-syncing would revert working code and break the suite.  Three causes, all real:
+#   * @PLN110 renamed `len(text)` to a CHARACTER count and `size(text)` to bytes, so
+#     every `.len()` on a byte buffer became `.size()`.  The pinned tags predate it.
+#   * the formatter has been run in-repo since the tags were cut (whitespace only).
+#   * graphics gained an Android backend (`android_gl.rs` + `cfg` gates) that has
+#     never been released upstream.
+# Take these upstream and re-pin when those packages next cut a release; until then
+# the fixture is the newer artifact and the tag is the stale one.
+web/tests/pack.loft
+time/src/time.loft
+game_protocol/examples/tictactoe_client_v2.loft
+game_protocol/examples/tictactoe_client_v3_probe.loft
+game_protocol/examples/v5_t1_binary_client.loft
+game_protocol/examples/v5_t1_binary_server.loft
+game_protocol/examples/v5_t2_session_blobs_client.loft
+game_protocol/examples/v5_t4_catch_up_client.loft
+graphics/native/Cargo.toml
+graphics/native/src/android_gl.rs
+graphics/native/src/audio.rs
+graphics/native/src/lib.rs
+graphics/native/src/shader.rs
+graphics/native/src/window.rs
+graphics/native/tests/gold.rs
+graphics/src/glb.loft
+graphics/src/graphics.loft
 EOF
 )
 
@@ -191,13 +218,33 @@ while IFS= read -r line; do
             #   target      — native build output (`rm`d on sync below)
             #   Cargo.lock  — gitignored repo-wide (.gitignore)
             #   .loft       — loft per-source cache dir, gitignored
-            diff_out="$(diff -qr -x target -x Cargo.lock -x .loft "$src" "$dest" 2>&1 || true)"
+            #   .cargo      — fixture-local Android NDK linker config (absolute,
+            #                 machine-specific paths); gitignored since it can only
+            #                 resolve on the machine that wrote it
+            #   loft.lock / log.txt / _tmp_* — output written by RUNNING the fixture's
+            #                 own tests; all gitignored, so they can never be committed,
+            #                 but they otherwise make a local `--check` report drift that
+            #                 CI (a clean checkout) does not see
+            diff_out="$(diff -qr -x target -x Cargo.lock -x .loft -x .cargo \
+                -x loft.lock -x log.txt -x '_tmp_*' "$src" "$dest" 2>&1 || true)"
+            # Normalise to ONE RELATIVE PATH PER LINE before matching LOCAL_PATCHES.
+            # `diff -qr` emits two shapes, and the old substring filter only ever matched
+            # the first:
+            #   "Files <src>/x/y and <dest>/x/y differ"  -> x/y
+            #   "Only in <src>/x: y"                     -> x/y
+            # A file that exists in only ONE side (a fixture-only addition like
+            # `android_gl.rs`) therefore could not be declared a local patch at all — the
+            # path `x/y` never appears literally in an "Only in <dir>: <name>" line.
+            diff_out="$(printf '%s\n' "$diff_out" | sed -E \
+                -e "s|^Files .*/$pkg/(.*) and .* differ\$|\1|" \
+                -e "s|^Only in .*/$pkg: (.*)\$|\1|" \
+                -e "s|^Only in .*/$pkg/(.*): (.*)\$|\1/\2|")"
             # Drop any diff line touching a documented LOCAL_PATCHES file for
             # this pkg (intentional, must-keep divergence from the tag).
             while IFS= read -r patch; do
                 [[ -z "$patch" || "$patch" != "$pkg/"* ]] && continue
                 rel="${patch#"$pkg"/}"
-                diff_out="$(grep -vF -- "$rel" <<< "$diff_out" || true)"
+                diff_out="$(grep -vxF -- "$rel" <<< "$diff_out" || true)"
             done <<< "$LOCAL_PATCHES"
             if [[ -n "${diff_out//[[:space:]]/}" ]]; then
                 echo "[check] DRIFT: tests/fixtures/libs/$pkg vs $chunk@$ref"

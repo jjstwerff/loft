@@ -1,0 +1,45 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Jurjen Stellingwerff  SPDX-License-Identifier: LGPL-3.0-or-later -->
+<!-- @PLN117 E2 — par() scaling benchmark.  Measures the wall-clock of a
+     CPU-heavy `par` at a given wasm-rayon pool size and isolates the parallel
+     execution time by subtracting the constant parse/setup overhead (measured
+     from a trivial program), so the speedup reflects par() dispatch, not the
+     one-time compile.  ?threads=P (pool size; 0 = sequential fallback),
+     ?work=ITERS, ?elems=E, ?trials=T (min wall-clock over T trials). -->
+<meta charset=utf-8><title>loft par scaling benchmark</title>
+<pre id=out>running…</pre>
+<script>
+const q = new URLSearchParams(location.search);
+const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
+window.addEventListener('error', e => report('winerror=' + (e.message||e.filename||e)));
+window.addEventListener('unhandledrejection', e => report('reject=' + ((e.reason&&e.reason.message)||e.reason)));
+</script>
+<script type=module>
+import init, { compile_and_run, set_par_trace_workers } from './pkg-mt/loft.js';
+import { startLoftWorkers } from './pkg-mt/loft-thread.js';
+const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
+const P      = q.has('threads') ? (parseInt(q.get('threads'),10) || 0) : 4;
+const work   = parseInt(q.get('work')  || '200000', 10);
+const elems  = parseInt(q.get('elems') || '48', 10);
+const trials = parseInt(q.get('trials')|| '3', 10);
+const TRIVIAL = 'fn main() { println("x"); }';
+const BENCH = `fn heavy(x: integer) -> integer { acc = 0; for i in 0..${work} { acc += (x * i + i) % 7; } acc % 1000 + x }
+fn main() { data = [0]; for i in 1..${elems} { data += [i]; } total = 0; for a in data par(b = heavy(a), 8) { total += b; } println("total={total}"); }`;
+const runMs = src => { const t0 = performance.now(); const r = JSON.parse(compile_and_run(JSON.stringify([{name:'main.loft', content: src}]))); return { ms: performance.now() - t0, r }; };
+const minMs = (src, n) => { let best = Infinity, last; for (let i=0;i<n;i++){ const {ms,r}=runMs(src); if(ms<best)best=ms; last=r; } return { ms: best, r: last }; };
+(async () => {
+  try {
+    const wasm = await init();
+    if (!self.crossOriginIsolated) return report('FAIL coi=false');
+    if (P > 0) await startLoftWorkers(wasm, P, { memory: wasm.memory, mainJS: new URL('./pkg-mt/loft.js', import.meta.url).href });
+    set_par_trace_workers(true);
+    runMs(BENCH);                                   // warm-up (discard)
+    const parse = minMs(TRIVIAL, trials).ms;        // constant overhead
+    const b = minMs(BENCH, trials);
+    const total = (b.r.output||'').match(/total=(\d+)/);
+    const dw = (b.r.output||'').match(/distinct_workers=(\d+)/);
+    const par = Math.max(0.01, b.ms - parse);
+    report(`BENCH threads=${P} work=${work} elems=${elems} parse_ms=${parse.toFixed(0)} bench_ms=${b.ms.toFixed(0)} par_ms=${par.toFixed(0)} value=${total?total[1]:'?'} dw=${dw?dw[1]:'?'} success=${b.r.success}`);
+  } catch (e) { report('caught=' + ((e && e.message) || String(e))); }
+})();
+</script>

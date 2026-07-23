@@ -62,6 +62,12 @@ pub type Call = fn(&mut Stores, &mut DbRef);
 ///
 /// All raw pointers are valid for the duration of the `execute()` call
 /// that set them.
+///
+/// A worker inherits its parent's context (`clone_for_light_worker_with_scratch`)
+/// so that a `par` inside a `par` worker can dispatch in turn — the pointers stay
+/// valid for a worker exactly as they do for the thread that set them, because
+/// workers are joined before `execute()` returns.
+#[derive(Clone, Copy)]
 pub struct ParallelCtx {
     pub bytecode: *const Arc<Vec<u8>>,
     pub library: *const Arc<Vec<Call>>,

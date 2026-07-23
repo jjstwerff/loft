@@ -7,14 +7,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 Wires the **`loft-lsp`** language server into Neovim's built-in LSP, so a `.loft`
 buffer gets diagnostics, completion, hover, go-to-definition, find-references,
-rename, code actions, inlay hints, semantic-token highlighting, document outline,
-and tracker-tag (`@PLN63`) hovers — everything the language server ships. The
-debug adapter (`loft-dap`) is auto-registered too, but only once it exists and
-`nvim-dap` is installed (it's [not built yet](../../doc/claude/lib_plans/63-lsp/README.md#lsp3--loft-dap-debug-adapter-090));
-until then this is LSP-only.
+rename, code actions (incl. **extract-function**), inlay hints, semantic-token
+highlighting, document outline, and tracker-tag (`@PLN63`) hovers — everything the
+language server ships. The debug adapter (**`loft-dap`**) is auto-registered too when
+`nvim-dap` is installed, giving full interpreter-mode debugging: breakpoints, stepping,
+variables (struct/vector expansion), multi-frame stack, data breakpoints, and reverse
+execution.
 
 The LSP side is **dependency-free** — it uses `vim.lsp` (Neovim 0.8+), so you do
 **not** need `nvim-lspconfig` or any plugin to try it.
+
+> **Full feature coverage, install, and every keystroke (LSP + debugging):
+> [USAGE.md](USAGE.md).** This README is the LSP quick-start.
 
 ## 1. Build the language server
 
@@ -84,12 +88,12 @@ are enabled automatically on Neovim 0.10+; toggle with
 - `loft_lsp` — absolute path to the `loft-lsp` binary (default: `loft-lsp` on `$PATH`).
 - `loft_dap` — absolute path to `loft-dap` (default: `loft-dap` on `$PATH`; inert until the binary exists).
 
-## Debugging (loft-dap) — future
+## Debugging (loft-dap)
 
-Once `loft-dap` is built and `nvim-dap` is installed, `setup()` registers the
-adapter and a "Run current file" configuration automatically — no extra config.
-The scope of that adapter is the D0–D6 spine in
-[the @PLN63 plan](../../doc/claude/lib_plans/63-lsp/README.md#lsp3--loft-dap-debug-adapter-090).
+With `nvim-dap` installed, `setup()` registers the `loft` adapter and a "Run current
+file" launch config automatically — no extra config. Bind the debug keys and see the
+full walkthrough (breakpoints, stepping, variable expansion, multi-frame stack, data
+breakpoints, and **reverse execution**) in **[USAGE.md](USAGE.md)**.
 
 ## Troubleshooting
 

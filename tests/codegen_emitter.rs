@@ -170,6 +170,63 @@ fn let_bind_on_repeat_appears_in_emission() {
     );
 }
 
+/// @PLN118 arc E — the interpreter must re-sentinel an owned-reassigned
+/// variable after its block-exit free, mirroring the native backend
+/// (`generation/ops/ref_ops.rs` resets `store_nr = u16::MAX` after every
+/// var free).  A struct variable reassigned each loop iteration from a
+/// fresh call (`p = mk(i)`) takes an unconditional pre-build `OpFreeRef`
+/// AND a block-exit `OpFreeRef`; without an `OpInitRefSentinel` after the
+/// block-exit free, a loop re-entry's pre-build free re-frees a slot the
+/// allocator may have reclaimed for a live value — the moros glb H4
+/// store-slot-reuse UAF (`pos` reads null on 4-of-7 hex verts, 3/32
+/// exported accessors).
+///
+/// Why this guards the FIX rather than the SYMPTOM: the corruption is
+/// layout-fragile and only reproduces on the external moros `5e677b7`
+/// scene — the in-tree `demo_village` fixture exports 0/32 even with the
+/// fix reverted, so no in-suite symptom repro exists.  The fix's emitted
+/// signature is deterministic, though: this minimal program emits exactly
+/// one `InitRefSentinel` with the fix and ZERO without it (verified by
+/// neutralizing `owned_reassigned.insert` in `generate_call` and
+/// re-introspecting).  Asserting the sentinel is present is the
+/// non-vacuous guard.
+#[test]
+fn pln118_arce_owned_reassign_emits_sentinel() {
+    let dir = std::env::temp_dir();
+    let src = dir.join("pln118_arce_owned_reassign.loft");
+    std::fs::write(
+        &src,
+        "struct P { x: integer }\n\
+         fn mk(v: integer) -> P { P { x: v } }\n\
+         fn main() {\n\
+         \x20   p = mk(0);\n\
+         \x20   for i in 0..3 { p = mk(i); }\n\
+         \x20   println(\"{p.x}\");\n\
+         }\n",
+    )
+    .expect("write arc-E source");
+
+    let out = Command::new(loft_binary())
+        .args(["--introspect", src.to_str().unwrap()])
+        .current_dir(project_root())
+        .output()
+        .expect("failed to spawn loft binary — run `cargo build --release` first");
+    let _ = std::fs::remove_file(&src);
+    let ir = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "introspect failed: {}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(
+        ir.contains("InitRefSentinel"),
+        "arc-E fix missing: the owned-reassigned `p`, freed at block-exit, is not \
+         followed by an `InitRefSentinel`, so a loop re-entry re-frees a reused \
+         slot (moros glb H4 store-slot-reuse UAF).  Neutralizing \
+         `owned_reassigned.insert` in `generate_call` drops this to zero.  IR:\n{ir}"
+    );
+}
+
 // ============================================================
 // Phase 01 ABI consolidation gates
 // ============================================================

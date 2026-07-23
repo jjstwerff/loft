@@ -4493,6 +4493,9 @@ fn main() {
     // LOFT_ERRORS env var).  None = use env-or-default (Pretty).
     let mut error_mode_arg: Option<String> = None;
     let mut html_out: Option<String> = None;
+    // @PLN117 — `--threads` / `--no-threads`; `None` = decide from whether the
+    // program actually uses `par`.
+    let mut html_threads: Option<bool> = None;
     let mut tests_dir: Option<String> = None;
     // Plan-08 phase 01: --introspect mode collects per-section
     // selectors, output paths, and filters into one Options bundle.
@@ -4744,6 +4747,13 @@ fn main() {
             } else {
                 String::new()
             });
+        // @PLN117 — override the automatic choice of whether the page carries
+        // loft's browser thread pool.  By default a program that uses `par` gets
+        // it and one that doesn't stays single-threaded.
+        } else if a == "--threads" {
+            html_threads = Some(true);
+        } else if a == "--no-threads" {
+            html_threads = Some(false);
         } else if a == "--tests" {
             // Optional directory/file: consume next non-flag arg.
             // Skip --native/--no-warnings/--deny-warnings that may appear between --tests and the path.
@@ -6560,6 +6570,10 @@ fn main() {
         // from racing on the old shared scratch/loft_html.{rs,wasm}.
         let build_dir = platform::build_scratch_dir("html");
         let rs_path = build_dir.join("prog.rs");
+        // @PLN117 — does this program actually run anything in parallel?  Set
+        // from the emitted reachable set below; it is what decides whether the
+        // page carries loft's thread pool.
+        let uses_par;
         {
             let mut f = match std::fs::File::create(&rs_path) {
                 Ok(f) => f,
@@ -6596,17 +6610,61 @@ fn main() {
                 eprintln!("loft: html code generation failed: {e}");
                 std::process::exit(1);
             }
+            uses_par = out.uses_parallel();
         }
         // @PLN100 Slice 1 — build (on stale/missing) + locate loft's own wasm
         // runtime rlib in the ISOLATED `--html` shape dir (`target/loft/html/`), so
         // a wasm-bindgen `make wasm` build can't stomp it and no manual `make` step
         // is needed.  Computed once and reused for both the main link and each wasm
         // bridge crate (they must link the SAME loft copy).
-        let html_runtime_dir =
-            native_utils::ensure_loft_runtime_rlib(native_utils::WasmRuntimeShape::Html);
+        //
+        // @PLN117 — a program that uses `par` gets the THREADED shape, whose
+        // rlib is compiled together with an atomics std so `par` can run on Web
+        // Workers.  `--threads` / `--no-threads` override the choice.  Threading
+        // needs a nightly toolchain (only `-Z build-std` produces that std); when
+        // it isn't there we say so and fall back to the single-threaded shape
+        // rather than refusing to build a page at all — `par` then runs
+        // sequentially, which is exactly what a non-isolated host does anyway.
+        let want_threads = html_threads.unwrap_or(uses_par);
+        let (html_runtime_dir, threaded) = {
+            let shape = if want_threads {
+                native_utils::WasmRuntimeShape::HtmlThreads
+            } else {
+                native_utils::WasmRuntimeShape::Html
+            };
+            match native_utils::ensure_loft_runtime_rlib(shape) {
+                Some(dir) => (Some(dir), want_threads),
+                None if want_threads => {
+                    eprintln!(
+                        "loft: --html: could not build the THREADED browser runtime — this page \
+                         will run `par` sequentially on the main thread.\n{}",
+                        native_utils::ATOMICS_STD_TOOLCHAIN_HINT
+                    );
+                    (
+                        native_utils::ensure_loft_runtime_rlib(
+                            native_utils::WasmRuntimeShape::Html,
+                        ),
+                        false,
+                    )
+                }
+                None => (None, false),
+            }
+        };
+        // The atomics std lives beside that rlib; this hands it to `rustc` as a
+        // sysroot.  Missing it is a link error, never a quietly unthreaded page.
+        let atomics_sysroot = threaded
+            .then(|| {
+                html_runtime_dir
+                    .as_deref()
+                    .and_then(native_utils::ensure_atomics_sysroot)
+            })
+            .flatten();
         // Compile to wasm32-unknown-unknown cdylib
         let wasm_path = build_dir.join("prog.wasm");
-        let mut cmd = std::process::Command::new("rustc");
+        // @PLN117 — an rlib only links with the rustc that built it, and the
+        // threaded runtime + its atomics std come from nightly (only `-Z
+        // build-std` can produce that std).  So the link runs on nightly too.
+        let mut cmd = native_utils::wasm_rustc(atomics_sysroot.as_deref());
         cmd.arg("--edition=2024")
             .arg("--target")
             .arg("wasm32-unknown-unknown")
@@ -6752,7 +6810,10 @@ fn main() {
                     bridge_dep_search = Some(deps);
                 }
             }
-            let mut build = std::process::Command::new("rustc");
+            // @PLN117 — a bridge links into the same wasm as loft's runtime, so it
+            // gets the same compiler and the same std: an atomics rlib and a
+            // non-atomics one do not link together.
+            let mut build = native_utils::wasm_rustc(atomics_sysroot.as_deref());
             build
                 .arg("--edition=2024")
                 .arg("--target")
@@ -6841,7 +6902,18 @@ fn main() {
         // Asyncify lets loft_gl_swap_buffers suspend the WASM execution
         // so the browser can render the frame via requestAnimationFrame.
         let opt_path = build_dir.join("prog_opt.wasm");
-        let final_wasm = if std::process::Command::new("wasm-opt")
+        let mut wasm_opt = std::process::Command::new("wasm-opt");
+        if threaded {
+            // A threaded bundle uses atomics, shared memory and mutable globals;
+            // without these wasm-opt rejects the module outright rather than
+            // silently dropping anything.
+            wasm_opt.args([
+                "--enable-threads",
+                "--enable-bulk-memory",
+                "--enable-mutable-globals",
+            ]);
+        }
+        let final_wasm = if wasm_opt
             .args([
                 // -O / -Oz plus --asyncify strips the host imports
                 // (loft_gl.*, loft_io.*) entirely — wasm goes from 25
@@ -6992,6 +7064,14 @@ fn main() {
         // module for the node harness; here it is inlined into a non-module `<script>`).
         let reader_js =
             include_str!("../doc/loft-deliver.js").replace("export { readLoftValue };", "");
+        // @PLN117 — the browser thread pool's host half, and with it `loftInstantiate`:
+        // the ONE way a loft page comes up, threaded or not.  Inlined into both shells
+        // (module `export` stripped, as with the asyncify and deliver glue) so a page
+        // stays a single file.
+        let thread_js = include_str!("../doc/loft-thread.js").replace(
+            "export { startLoftWorkers, loftInstantiate, loftTextDecoder, loftSharedMemory, loftMemoryImportLimits };",
+            "",
+        );
         // @lib_plan-29 W2: concatenate every used library's
         // `[wasm.bridge].host_js` file into the HTML preamble.  Each
         // file pushes a registration callback onto
@@ -7026,8 +7106,16 @@ fn main() {
         // shim (no WebGL2, no asyncify, no canvas).  `loft_gl` (graphics/audio)
         // or a `loft_<lib>` bridge means the program opted into the full engine
         // page.  Unparsable → full page (the shell that satisfies every import).
-        let minimal_page = crate::native_utils::html_wasm_import_modules(&wasm_bytes)
-            .is_some_and(|mods| mods.iter().all(|m| m == "loft_io"));
+        // Threading is orthogonal to which shell a page needs — `loft_thread` and
+        // the imported `env.memory` say nothing about graphics — so they are not
+        // counted here.  Otherwise a compute-only program that uses `par` would
+        // start shipping the full WebGL2 page.
+        let minimal_page =
+            crate::native_utils::html_wasm_import_modules(&wasm_bytes).is_some_and(|mods| {
+                mods.iter()
+                    .filter(|m| *m != "loft_thread" && *m != "env")
+                    .all(|m| m == "loft_io")
+            });
         let html = if minimal_page {
             format!(
                 r#"<!DOCTYPE html>
@@ -7037,6 +7125,7 @@ fn main() {
 <script>
 {asyncify_js}
 {reader_js}
+{thread_js}
 // Minimal engine-less loft page: a small wasm + this tiny shim.  No WebGL2, no
 // canvas — only `loft_io` (text out + the async `store_load_url_trusted` fetch).
 // Asyncify IS driven here (via AsyncifyCtrl above) so a synchronous loft call can
@@ -7047,7 +7136,7 @@ fn main() {
 const wasmB64="{wasm_b64}";
 const wasmBytes=Uint8Array.from(atob(wasmB64),c=>c.charCodeAt(0));
 const out=document.getElementById('out');
-const dec=new TextDecoder();
+const dec=loftTextDecoder();   // @PLN117: also reads a threaded page's SHARED memory
 let mem;
 // JS -> loft input is a QUEUE: seed it with globalThis.loftInput (a string)
 // before this runs, push live messages any time with globalThis.loftPush(msg)
@@ -7113,18 +7202,21 @@ const imports={{loft_io:{{
   }},
   loft_host_release:(tag)=>{{ if(globalThis.loftExposed)globalThis.loftExposed.delete(String(tag)); if(globalThis.loftRelease)globalThis.loftRelease(tag); }}
 }}}};
-WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
-  mem=r.instance.exports.memory;
+// @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
+// built for it AND the host is cross-origin isolated, and otherwise brings it up
+// exactly as before (par then runs sequentially, same results).
+loftInstantiate(wasmBytes,imports).then(({{instance,memory}})=>{{
+  mem=memory||instance.exports.memory;
   // If the wasm was asyncify-instrumented (wasm-opt --asyncify present), drive it
   // through AsyncifyCtrl so store_load_url_trusted can suspend for an async
   // fetch().  Progress after the first suspend is EVENT-driven: each
   // loft_host_http_get .then() calls ctrl.ac.resume('loft_start') when its
   // response arrives (no render pump needed — a headless page has no rAF loop).
-  if(r.instance.exports.asyncify_start_unwind){{
-    ctrl.ac=new AsyncifyCtrl(r.instance);
+  if(instance.exports.asyncify_start_unwind){{
+    ctrl.ac=new AsyncifyCtrl(instance);
     ctrl.ac.start('loft_start');
   }}else{{
-    r.instance.exports.loft_start();
+    instance.exports.loft_start();
   }}
 }}).catch(e=>{{out.textContent+="\n[loft] "+e;}});
 </script></body></html>"#
@@ -7140,6 +7232,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(r=>{{
 <script>
 {asyncify_js}
 {reader_js}
+{thread_js}
 {gl_js}
 {host_js_extensions}
 const wasmB64="{wasm_b64}";
@@ -7157,13 +7250,16 @@ const imports=buildLoftImports(canvas,output,()=>mem,ctrl);
 for(const reg of (globalThis.LOFT_WASM_EXTENSIONS||[])){{
   try{{reg(imports,ctrl,()=>mem);}}catch(e){{console.error('loft host_js extension failed',e);}}
 }}
-WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
-  mem=r.instance.exports.memory;
+// @PLN117 — one boot path: loftInstantiate threads the page when the wasm was
+// built for it AND the host is cross-origin isolated, and otherwise brings it up
+// exactly as before (par then runs sequentially, same results).
+loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
+  mem=memory||instance.exports.memory;
   // @P321(c) Phase 3b: decode base64 PNG assets to RGB bytes before
   // loft_start so the wasm-side imaging bridge looks them up sync.
   ctrl.assets=await decodeLoftAssets(ctrl.assets);
-  if(r.instance.exports.asyncify_start_unwind){{
-    const ac=new AsyncifyCtrl(r.instance);
+  if(instance.exports.asyncify_start_unwind){{
+    const ac=new AsyncifyCtrl(instance);
     ctrl.ac=ac;
     ac.start('loft_start');
     if(ac.sleeping){{
@@ -7183,7 +7279,7 @@ WebAssembly.instantiate(wasmBytes,imports).then(async r=>{{
       schedule();
     }}
   }}else{{
-    r.instance.exports.loft_start();
+    instance.exports.loft_start();
   }}
 }});
 </script></body></html>"#

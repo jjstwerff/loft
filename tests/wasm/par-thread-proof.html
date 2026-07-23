@@ -1,0 +1,76 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Jurjen Stellingwerff  SPDX-License-Identifier: LGPL-3.0-or-later -->
+<!-- @PLN117 — in-browser proof that a loft `par` dispatches across real Web
+     Worker threads.  Loads the threaded bundle (make wasm-mt), awaits the
+     wasm-bindgen-rayon pool, arms the worker tracer, runs a CPU-heavy `par`
+     through compile_and_run, and reports how many DISTINCT workers ran it.
+     Serve behind tests/wasm/coi-server.py (COOP/COEP) so crossOriginIsolated
+     is true.  Query: ?threads=N (0 = skip initThreadPool → sequential
+     fallback), ?work=ITERS.  Shows the result in the page AND reports it to
+     /report so the headless driver (par-thread-proof.sh) can read it. -->
+<meta charset=utf-8><title>loft par thread proof</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;margin:2rem}pre{background:#111;color:#0f0;padding:1rem;border-radius:6px;white-space:pre-wrap}</style>
+<h1>loft <code>par</code> Web-Worker dispatch proof</h1>
+<pre id=out>running…</pre>
+<script>
+const q = new URLSearchParams(location.search);
+const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
+window.addEventListener('error', e => report('winerror=' + (e.message||e.filename||e)));
+window.addEventListener('unhandledrejection', e => report('reject=' + ((e.reason&&e.reason.message)||e.reason)));
+</script>
+<script type=module>
+import init, { compile_and_run, set_par_trace_workers } from './pkg-mt/loft.js';
+import { startLoftWorkers } from './pkg-mt/loft-thread.js';
+const report = m => { document.getElementById('out').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
+const threads = q.has('threads') ? (parseInt(q.get('threads'),10) || 0) : 4;
+const work    = parseInt(q.get('work') || '40000', 10);
+// @PLN117 — ?nested=1 swaps in a `par` whose worker ITSELF runs a `par`.  That
+// shape used to abort the run in the browser (the interpreter's worker had no
+// program context), so it is worth its own cell: mid(x) = x + (1+..+8), summed
+// over 1..=16 -> 136 + 16*36 = 712, hand-computed.
+const NESTED_SRC = `
+fn leaf(r: integer) -> integer { return r; }
+
+fn mid(x: integer) -> integer {
+    rows = [1, 2, 3, 4, 5, 6, 7, 8];
+    acc = x;
+    for r in rows par(v = leaf(r), 4) { acc += v; }
+    return acc;
+}
+
+fn main() {
+    data = [1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16];
+    sum = 0;
+    for a in data par(b = mid(a), 4) { sum += b; }
+    println("par_sum={sum}");
+}`;
+const FLAT_SRC = `
+fn heavy(x: integer) -> integer {
+    acc = 0;
+    for i in 0..${work} { acc += (x * i + i) % 7; }
+    acc % 1000 + x
+}
+fn main() {
+    data = [0];
+    for i in 1..48 { data += [i]; }
+    sum = 0;
+    for a in data par(b = heavy(a), 8) { sum += b; }
+    println("par_sum={sum}");
+}`;
+const SRC = q.get('nested') === '1' ? NESTED_SRC : FLAT_SRC;
+(async () => {
+  try {
+    const wasm = await init();
+    if (!self.crossOriginIsolated) return report('FAIL coi=false — host is not cross-origin isolated (needs COOP/COEP)');
+    if (threads > 0) await startLoftWorkers(wasm, threads, { memory: wasm.memory, mainJS: new URL('./pkg-mt/loft.js', import.meta.url).href });   // 0 → sequential fallback (arc D)
+    set_par_trace_workers(true);
+    const t0 = performance.now();
+    const res = JSON.parse(compile_and_run(JSON.stringify([{name:'main.loft', content: SRC}])));
+    const ms = Math.round(performance.now() - t0);
+    const out = res.output || '';
+    const dw = (out.match(/distinct_workers=(\d+)/) || [])[1] || 'none';
+    const ps = (out.match(/par_sum=(\d+)/) || [])[1] || '?';
+    report(`RESULT success=${res.success} pool_threads=${threads} distinct_workers=${dw} par_sum=${ps} ms=${ms} hc=${navigator.hardwareConcurrency}`);
+  } catch (e) { report('caught=' + ((e && e.message) || String(e))); }
+})();
+</script>

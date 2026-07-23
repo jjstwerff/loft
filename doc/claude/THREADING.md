@@ -134,6 +134,90 @@ Pops (reverse declaration order): `func`, `threads`, `return_size`, `element_siz
 | 4 | `set_int(rec, fld, bits as i32)` |
 | 1 | `set_byte(rec, fld, 0, bits as i32)` |
 
+### A build without threads still runs `par` (@PLN117)
+
+`threading` off does not mean "no `par`" — it means one thread runs the same
+dispatch.  The whole `n_parallel_*` family is registered in **both** builds and
+the runtime bodies are shared; the only thing that differs is one function per
+dispatch shape:
+
+| shape | with threads | without |
+|---|---|---|
+| most dispatches | `parallel_workers` — rayon over N slices | one call over the whole range |
+| `run_parallel_queue_ref` | `map_workers` — rayon over worker indices | a sequential `map` |
+
+That is the whole difference, and it is why the two agree: `make check-no-threading`
+runs the threading scripts on both builds and diffs the output.
+
+This used to be a **silent wrong answer**, which is worse than the missing feature
+it looked like.  The family's entries in `native::FUNCTIONS` were all
+`#[cfg(feature = "threading")]`, so a build without it registered none of them and
+the interpreter's `par` called functions that were not there — returning garbage,
+with no error.  `make wasm` ships exactly that configuration, so every `par` in the
+browser playground was quietly wrong.  Two sequential dispatch bodies also existed
+as *duplicates* of the threaded ones; being unreachable, one of them had gone
+wrong unnoticed.  There is now one body per shape.
+
+### Nested `par` — a worker inherits its parent's context
+
+A worker's `Stores` is a light view of its parent's, and it carries the parent's
+`ParallelCtx` (bytecode + library + `Data`).  That is what lets a `par` inside a
+`par` worker dispatch in turn: the nested dispatch needs the program it is running,
+and a worker has no `State::execute()` of its own to install one.
+
+The pointers are safe for a worker for the same reason they are safe for the thread
+that set them — **the parent joins its workers before its own `execute()` returns** —
+and they are read-only: a worker only reads the bytecode, library and `Data` its
+parent is already running.
+
+Inheriting it is the whole mechanism; there is no depth limit and no per-level
+bookkeeping.  rayon nests the dispatches on the same pool, so depth K costs no extra
+threads.  Before this, the interpreter aborted the run (*"parallel_queue called
+outside State::execute()"*) while `--native` computed the right answer — the same
+program meaning two different things depending on the backend, and in the browser
+(which runs the interpreter) a page that hung.  Locked in by `tests/par_nested.rs`
+(depth 2, depth 3, and a text return — each against a hand-computed value, on both
+backends) and by the nested cell in `tests/wasm/par-thread-proof.sh`.
+
+### Where the threads come from (@PLN117)
+
+One seam decides it: `parallel.rs::with_pool`.
+
+| Build | Threads | Pool |
+|---|---|---|
+| native | OS threads | loft's private rayon pool (`rayon_pool()`) |
+| browser | Web Workers | the page's GLOBAL rayon pool, installed by `wasm_threads::loft_pool_build` |
+| browser, pool not started | none | rayon's single-threaded fallback — `par` runs sequentially, same values |
+
+rayon schedules in every case, so `par` and `par_fold` behave identically
+everywhere.  The browser difference is only *where the threads come from*: wasm
+has no `thread::spawn`, so the page spawns Web Workers and each one claims a
+rayon thread through `loft_rayon_start_worker` (`src/wasm_threads.rs`, host half
+in `doc/loft-thread.js`).  Both browser bundles — `loft --html` and the
+wasm-bindgen gallery — link that same runtime.
+
+Two things about a browser thread are not like a native one:
+
+- **The main thread may not block.** `memory.atomic.wait32` throws there, and
+  rayon takes a lock on the calling thread on every join, so the whole build uses
+  `rayon/web_spin_lock` over loft's own `wasm-sync/` (spin instead of park on
+  that one thread).
+- **A worker starts on the main thread's shadow stack**, because every
+  `WebAssembly.Instance` copies the same initial globals.  The host moves each
+  worker onto its own stack and TLS block before it runs any wasm.
+
+Details and the in-browser proofs: [WASM.md](WASM.md) §
+Threading, and `doc/claude/plans/117-browser-multithreading/`.
+
+**Proving it stays true.** Browser threading cannot be checked by the Rust suite —
+it needs a real browser, a COOP/COEP host and a threaded bundle — so five headless
+gates carry it: `make par-gates` locally, and the `Browser threading` workflow
+(`.github/workflows/browser-threads.yml`) nightly plus on any PR touching the
+threading surface.  They measure dispatch (worker count), the shared-memory model,
+scaling, UI responsiveness, and the `loft --html` bundle, each against the value the
+interpreter produces.  In CI a gate that SKIPs for a missing prerequisite **fails**
+(`scripts/par_gates.sh --ci`): the one way this could rot is by quietly not running.
+
 ---
 
 ## Compiler Validation Summary
@@ -1889,7 +1973,7 @@ pub unsafe fn clone_for_light_worker(
         files:              Vec::new(),
         scratch:            Vec::new(),
         last_parse_errors:  Vec::new(),
-        parallel_ctx:       None,
+        parallel_ctx:       self.parallel_ctx.clone(),   // inherited — see below
         logger:             self.logger.clone(),
         had_fatal:          false,
         #[cfg(not(feature = "wasm"))]

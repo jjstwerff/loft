@@ -1195,25 +1195,31 @@ pub fn output_take() -> String {
     OUTPUT.with(|buf| std::mem::take(&mut *buf.borrow_mut()))
 }
 
-// ── W1.18-2  Worker entry point for WASM threading ──────────────────────────
+// ── @PLN117 — the thread pool ───────────────────────────────────────────────
+//
+// A threaded gallery bundle gets its pool from `crate::wasm_threads`, the same
+// runtime the raw `loft --html` bundle links: rayon over Web Workers the page
+// spawns.  Its entry points are plain wasm exports (`loft_pool_new`,
+// `loft_pool_build`, `loft_rayon_start_worker`), driven from `doc/loft-thread.js`
+// — nothing here to re-export.  Until the page starts them, `par` takes rayon's
+// single-threaded fallback and returns the same values, only sequentially.
 
-/// Entry point called by each Worker Thread.  The JS worker loop calls
-/// this with the function index and element range.  The worker reads from the
-/// shared WASM memory (Store heap) and writes results directly back.
-///
-/// This is a no-op stub until the wasm-threads feature build is available.
-/// The actual implementation needs access to the shared State, which requires
-/// the wasm-threads + atomics build flags.
-#[cfg(feature = "wasm")]
+/// @PLN117 step 0 — arm the parallel-worker tracer from JS (the browser has no
+/// env vars).  With it on, a `par` reports `distinct_workers=N` into the
+/// program output, so the harness can prove dispatch really crossed >=2 Web
+/// Worker threads.
+#[cfg(feature = "wasm-threads")]
 #[wasm_bindgen::prelude::wasm_bindgen]
-pub fn worker_entry(_fn_index: u32, _start: u32, _end: u32) {
-    // TODO(W1.18-2): implement when wasm-threads feature build is available.
-    // The worker needs to:
-    // 1. Access the shared Store heap via WASM linear memory
-    // 2. Create a lightweight State for bytecode execution
-    // 3. Loop from start..end, executing fn_index for each element
-    // 4. Write results directly to the shared output buffer
+pub fn set_par_trace_workers(on: bool) {
+    crate::parallel::set_par_trace(on);
 }
+
+// @PLN117 step 4 — the hand-rolled `worker_entry` stub (a never-implemented
+// W1.18-2 no-op) and its JS glue (`tests/wasm/{worker,parallel}.mjs`,
+// `harness.mjs::initThreaded`) were retired.  Browser threading now rides the
+// wasm-bindgen-rayon pool (the same rayon scheduler as native) — ONE scheduler,
+// not two half-built ones.  See `set_par_trace_workers` / `init_thread_pool`
+// above and `doc/claude/plans/117-browser-multithreading/`.
 
 #[cfg(test)]
 mod tests {

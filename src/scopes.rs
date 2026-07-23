@@ -3738,6 +3738,16 @@ impl Scopes {
             if v == ret_var || suppress_source(function, v) {
                 continue;
             }
+            // on=4 iteration scratch (`hash_scratch`): a `return` out of an exposed loop
+            // bypasses the loop epilogue's OpFreeScratch, so free the dedicated scratch
+            // store here at scope exit too.  OpFreeScratch is conditional (frees only a
+            // read-only source's dedicated store) and rec==0-guarded; the epilogue nulls
+            // the var on the complete/break paths, so the two never double-free.
+            // (expose-iteration-scratch.md Open question A.)
+            if function.name(v).contains("hash_scratch") {
+                ls.push(call("OpFreeScratch", v, data));
+                continue;
+            }
             // T1.3: tuple scope exit — free owned elements in reverse index order.
             if let Type::Tuple(elems) = function.tp(v) {
                 let owned = crate::data::owned_elements(elems);
