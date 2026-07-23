@@ -1,0 +1,33 @@
+<!doctype html>
+<!-- Copyright (c) 2026 Jurjen Stellingwerff  SPDX-License-Identifier: LGPL-3.0-or-later -->
+<!-- @PLN117 — driver for the `loft --html` threading gate.  A `loft --html`
+     page is self-contained and starts itself, so this loads one in an iframe
+     (same origin, so its output and `loftThreads` are readable) and reports
+     what it produced.  `?loftTrace=1` makes loft say how many worker threads
+     each `par` really dispatched across, which is the claim under test.
+     Serve behind tests/wasm/coi-server.py for the threaded run; serve without
+     those headers to check the sequential fallback.
+     Query: ?page=<file.html>, ?wait=<ms>. -->
+<meta charset=utf-8><title>loft --html threading proof</title>
+<style>body{font:15px/1.5 system-ui,sans-serif;margin:1rem}pre{background:#111;color:#0f0;padding:1rem;border-radius:6px;white-space:pre-wrap}</style>
+<h1>loft <code>--html</code> Web-Worker dispatch proof</h1>
+<pre id=log>running…</pre>
+<script>
+const q = new URLSearchParams(location.search);
+const page = q.get('page') || 'par-html.html';
+const wait = parseInt(q.get('wait') || '9000', 10);
+const report = m => { document.getElementById('log').textContent = m; fetch('/report?r=' + encodeURIComponent(m)).catch(()=>{}); };
+window.addEventListener('error', e => report('winerror=' + (e.message || e)));
+const frame = document.createElement('iframe');
+frame.width = 640; frame.height = 240;
+frame.src = page + '?loftTrace=1';
+document.body.appendChild(frame);
+setTimeout(() => {
+  try {
+    const doc = frame.contentDocument;
+    const text = (doc.getElementById('out') || doc.body).textContent.replace(/\s+/g, ' ').trim();
+    report(`RESULT coi=${self.crossOriginIsolated} threads=${frame.contentWindow.loftThreads}`
+         + ` hc=${navigator.hardwareConcurrency} out<<${text}>>`);
+  } catch (e) { report('driver_error=' + (e.message || e)); }
+}, wait);
+</script>

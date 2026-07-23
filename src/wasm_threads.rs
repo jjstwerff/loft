@@ -135,6 +135,18 @@ pub extern "C" fn loft_pool_build() -> i32 {
     if built.is_ok() { 0 } else { -2 }
 }
 
+/// Report, into the page's own output, how many worker threads each `par`
+/// dispatch actually used.
+///
+/// A page that expected parallelism has no other way to tell whether it got it —
+/// a host without cross-origin isolation silently runs everything on one thread,
+/// with correct results either way.  The page shell arms this from
+/// `?loftTrace=1`; it is also what the in-browser threading gates read.
+#[unsafe(no_mangle)]
+pub extern "C" fn loft_set_par_trace(on: u32) {
+    crate::parallel::set_par_trace(on != 0);
+}
+
 /// A Web Worker's entry point: claim one rayon thread and run it.  Never
 /// returns while the pool lives.
 ///

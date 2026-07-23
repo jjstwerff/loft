@@ -237,10 +237,26 @@ impl WorkerTrace {
                  distinct_workers={} indices={indices:?}",
                 indices.len(),
             );
-            #[cfg(not(feature = "wasm"))]
+            #[cfg(not(any(
+                feature = "wasm",
+                all(target_arch = "wasm32", not(target_os = "wasi"))
+            )))]
             eprintln!("{summary}");
             #[cfg(feature = "wasm")]
             crate::wasm::output_push(&format!("{summary}\n"));
+            // @PLN117 — the raw browser build (`loft --html`) has no stderr, so
+            // the tracer would report into nothing.  Send it down the page's own
+            // print path instead, which is what makes an in-browser `par` gate
+            // able to READ how many workers actually ran.
+            #[cfg(all(
+                target_arch = "wasm32",
+                not(target_os = "wasi"),
+                not(feature = "wasm")
+            ))]
+            {
+                let line = format!("{summary}\n");
+                crate::loft_host_print(line.as_ptr(), line.len());
+            }
         }
     }
 }

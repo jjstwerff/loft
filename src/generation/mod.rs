@@ -1761,6 +1761,20 @@ extern crate loft;"
         w.write_all(&scrub_generated_crate_refs(&buf))
     }
 
+    /// Does the emitted program dispatch `par` / `par_fold`?
+    ///
+    /// Meaningful once the reachable set exists (after
+    /// [`output_native_reachable`](Self::output_native_reachable)).  `--html`
+    /// asks so a program that never runs anything in parallel is not made to
+    /// carry browser threading: a threaded page needs a nightly toolchain to
+    /// build and a cross-origin-isolated host to serve (@PLN117 opt-out).
+    #[must_use]
+    pub fn uses_parallel(&self) -> bool {
+        self.reachable
+            .iter()
+            .any(|d| self.data.def(*d).name().starts_with("n_parallel_"))
+    }
+
     /// @PLN11 Arc N — emit the reachable native program as a **library** cdylib:
     /// header + `init` + only the reachable functions, with **no `fn main()` /
     /// `loft_start` bootstrap** even if an `n_main` exists in `data` (it belongs to

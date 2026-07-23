@@ -46,7 +46,9 @@ async function decodeLoftAssets(rawAssets) {
 
 function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   const gl = canvas.getContext('webgl2', { antialias: true, alpha: false });
-  const decoder = new TextDecoder();
+  // @PLN117: loftTextDecoder also reads a threaded page's SHARED memory, which
+  // a plain TextDecoder refuses; falls back when the page has no threading glue.
+  const decoder = typeof loftTextDecoder === 'function' ? loftTextDecoder() : new TextDecoder();
   function readStr(ptr, len) {
     return decoder.decode(new Uint8Array(getMem().buffer, ptr, len));
   }

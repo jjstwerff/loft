@@ -373,6 +373,72 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
     }
 }
 
+/// @PLN117 — the `rustc` a `--html` wasm is compiled with.
+///
+/// Plain `rustc` normally; with an atomics sysroot (a threaded page) it is
+/// nightly's, plus the flags that build shared-memory wasm.  Both are forced by
+/// the same fact: that sysroot's rlibs were produced by nightly, and an rlib
+/// links only with the compiler that built it.
+pub(crate) fn wasm_rustc(atomics_sysroot: Option<&std::path::Path>) -> std::process::Command {
+    let Some(sysroot) = atomics_sysroot else {
+        return std::process::Command::new("rustc");
+    };
+    let mut cmd = std::process::Command::new("rustup");
+    cmd.args(["run", "nightly", "rustc"]);
+    cmd.arg("--sysroot").arg(sysroot);
+    cmd.args(WASM_THREAD_FLAGS);
+    cmd
+}
+
+/// @PLN117 — assemble the atomics-compiled sysroot the threaded `--html` link
+/// needs, and return its root.
+///
+/// `-Z build-std` recompiles std with wasm atomics, but that is a *cargo* flag
+/// and `--html` links with `rustc` directly (one loft copy, shared with the wasm
+/// bridge crates — the reason it does not go through cargo).  The two meet here:
+/// [`WasmRuntimeShape::HtmlThreads`]'s cargo build leaves the atomics std beside
+/// loft's rlib, and copying those rlibs into the layout rustc expects turns them
+/// into a `--sysroot` the direct link can use.  Without it the link fails outright
+/// (*"--shared-memory is disallowed by std … not compiled with 'atomics'"*), so
+/// the failure mode is loud, never a silently single-threaded page.
+///
+/// `profile_dir` is what [`ensure_loft_runtime_rlib`] returned for that shape.
+/// Copies only what is missing or has changed size, so repeat builds are cheap.
+pub(crate) fn ensure_atomics_sysroot(profile_dir: &std::path::Path) -> Option<std::path::PathBuf> {
+    let deps = profile_dir.join("deps");
+    // <target-dir>/<triple>/release -> <target-dir>
+    let target_dir = profile_dir.parent()?.parent()?;
+    let sysroot = target_dir.join("sysroot");
+    let lib_dir = sysroot
+        .join("lib")
+        .join("rustlib")
+        .join("wasm32-unknown-unknown")
+        .join("lib");
+    std::fs::create_dir_all(&lib_dir).ok()?;
+    for entry in std::fs::read_dir(&deps).ok()?.flatten() {
+        let src = entry.path();
+        if src.extension().is_none_or(|e| e != "rlib") {
+            continue;
+        }
+        let Some(name) = src.file_name() else { continue };
+        // loft's own rlibs stay out: the link names them with `--extern` and
+        // `-L dependency=`, and a third copy on the sysroot search path is how
+        // rustc ends up reporting multiple candidates for one crate.
+        if name.to_string_lossy().starts_with("libloft") {
+            continue;
+        }
+        let dst = lib_dir.join(name);
+        let same = std::fs::metadata(&dst)
+            .ok()
+            .zip(entry.metadata().ok())
+            .is_some_and(|(a, b)| a.len() == b.len());
+        if !same {
+            std::fs::copy(&src, &dst).ok()?;
+        }
+    }
+    Some(sysroot)
+}
+
 /// The dependency search dir for a [`loft_lib_dir`] result: `lib_dir` itself
 /// when it already IS `deps/` (the preferred deps-first resolution, #304/#307),
 /// else `lib_dir/deps`.  Appending "deps" unconditionally yields an invalid
@@ -745,11 +811,14 @@ pub(crate) fn html_wasm_import_modules_ok(wasm: &[u8]) -> Result<(), Vec<String>
                     return Ok(());
                 }
                 let m = String::from_utf8_lossy(module).into_owned();
-                // loft's own host imports (`loft_io` / `loft_gl`) AND library-bridge
-                // host imports (e.g. the crypto bridge's `loft_crypto.random_fill`)
-                // all use a `loft_` prefix.  A wasm-bindgen stomp instead imports
-                // `__wbindgen_*`, so a non-`loft_` module is the red flag this guards.
-                if !m.starts_with("loft_") {
+                // loft's own host imports (`loft_io` / `loft_gl` / @PLN117's
+                // `loft_thread`) AND library-bridge host imports (e.g. the crypto
+                // bridge's `loft_crypto.random_fill`) all use a `loft_` prefix.  A
+                // wasm-bindgen stomp instead imports `__wbindgen_*`, so a non-`loft_`
+                // module is the red flag this guards.  The one exception is the
+                // shared MEMORY a threaded build imports as `env.memory` (kind 2) —
+                // still no function may come from `env`.
+                if !m.starts_with("loft_") && !(m == "env" && kind == 2) {
                     bad.insert(m);
                 }
             }
