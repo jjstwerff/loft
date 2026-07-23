@@ -134,6 +134,30 @@ Pops (reverse declaration order): `func`, `threads`, `return_size`, `element_siz
 | 4 | `set_int(rec, fld, bits as i32)` |
 | 1 | `set_byte(rec, fld, 0, bits as i32)` |
 
+### A build without threads still runs `par` (@PLN117)
+
+`threading` off does not mean "no `par`" — it means one thread runs the same
+dispatch.  The whole `n_parallel_*` family is registered in **both** builds and
+the runtime bodies are shared; the only thing that differs is one function per
+dispatch shape:
+
+| shape | with threads | without |
+|---|---|---|
+| most dispatches | `parallel_workers` — rayon over N slices | one call over the whole range |
+| `run_parallel_queue_ref` | `map_workers` — rayon over worker indices | a sequential `map` |
+
+That is the whole difference, and it is why the two agree: `make check-no-threading`
+runs the threading scripts on both builds and diffs the output.
+
+This used to be a **silent wrong answer**, which is worse than the missing feature
+it looked like.  The family's entries in `native::FUNCTIONS` were all
+`#[cfg(feature = "threading")]`, so a build without it registered none of them and
+the interpreter's `par` called functions that were not there — returning garbage,
+with no error.  `make wasm` ships exactly that configuration, so every `par` in the
+browser playground was quietly wrong.  Two sequential dispatch bodies also existed
+as *duplicates* of the threaded ones; being unreachable, one of them had gone
+wrong unnoticed.  There is now one body per shape.
+
 ### Nested `par` — a worker inherits its parent's context
 
 A worker's `Stores` is a light view of its parent's, and it carries the parent's

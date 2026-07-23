@@ -62,12 +62,16 @@ const SKIP = new Set([
  * Tests that run through WASM but whose output is NOT compared to native.
  * - Time-sensitive: output changes every run.
  * - Order-sensitive with randomness: values differ per seed but behaviour is correct.
- * - Threading: sequential in WASM Tier 1, may differ from native parallel output.
+ *
+ * `22-threading.loft` used to sit here on the assumption that a sequential WASM
+ * `par` merely ordered its output differently.  It did not: a build without the
+ * `threading` feature had no par runtime registered at all, so every `par`
+ * returned garbage — and this list is what kept that invisible.  A par now
+ * produces byte-identical output with and without threads, so it COMPARES.
  */
 const SKIP_COMPARE = new Set([
   '16-time.loft',      // now()/ticks() values are non-deterministic
   '22-time.loft',      // same — doc version
-  '22-threading.loft', // sequential WASM vs parallel native; results correct but order differs
   '15-random.loft',    // rand() without seed — non-deterministic
   '21-random.loft',    // same — doc version
 ]);

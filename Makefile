@@ -102,7 +102,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: check-wasm-threads par-gates gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
+.PHONY: check-wasm-threads check-no-threading par-gates gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -993,6 +993,25 @@ WASM_MT_RUSTFLAGS = -C target-feature=+atomics,+bulk-memory,+mutable-globals \
   -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size \
   -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base \
   -C link-arg=--export=__stack_pointer
+
+# @PLN117 — prove `par` still computes the right answers in a build WITHOUT the
+# threading feature (the shape `make wasm` ships to the browser).  CI only
+# `cargo check`s that configuration, which is how a par that returned garbage
+# there stayed invisible: the family's native entries were feature-gated out, so
+# the interpreter called functions that were not registered.  This runs the
+# threading scripts on both builds and diffs — a par must mean the same thing
+# with and without threads, only slower.
+check-no-threading:
+	@CARGO_TARGET_DIR=target-nothread cargo build --release -q --no-default-features --features "mmap random"
+	@cargo build --release -q
+	@fail=0; for f in tests/scripts/22-threading.loft tests/scripts/22b-par-fold.loft \
+	                 tests/scripts/22c-par-sources.loft tests/scripts/22d-par-narrow.loft; do \
+	  ./target/release/loft --interpret $$f 2>/dev/null > /tmp/loft-thr.out; \
+	  ./target-nothread/release/loft --path $$(pwd)/ --interpret $$f 2>/dev/null > /tmp/loft-nothr.out; \
+	  if diff -q /tmp/loft-thr.out /tmp/loft-nothr.out >/dev/null; then echo "  ok   $$f"; \
+	  else echo "  FAIL $$f — par differs with and without the threading feature"; fail=1; fi; done; \
+	rm -f /tmp/loft-thr.out /tmp/loft-nothr.out; \
+	if [ $$fail -eq 0 ]; then echo "PASS: par is identical with and without threads"; fi; exit $$fail
 
 # @PLN117 — every in-browser threading gate, in one command.  Each measures a
 # claim rather than assuming it: that `par` really dispatches across Web Worker

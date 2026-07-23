@@ -5,13 +5,10 @@
 use crate::database::Stores;
 use crate::keys::{DbRef, Str};
 use crate::logger::Severity;
-#[cfg(feature = "threading")]
 use crate::parallel::{WorkerProgram, run_parallel_text};
 use crate::platform::sep;
 use crate::state::{Call, State};
-#[cfg(feature = "threading")]
 use crate::vector;
-#[cfg(feature = "threading")]
 use std::sync::Arc;
 #[cfg(not(target_arch = "wasm32"))]
 use std::time::SystemTime;
@@ -27,7 +24,6 @@ use std::time::SystemTime;
 /// per-row push doesn't blow the worker stack frame budget.  64 is
 /// one cache line plus headroom for 4-element tuples of Long /
 /// Float.
-#[cfg(feature = "threading")]
 #[derive(Copy, Clone, PartialEq, Eq, Debug)]
 enum InputKind {
     /// Worker takes a `DbRef` in slot 0 (struct-by-ref, vector,
@@ -47,7 +43,6 @@ enum InputKind {
 /// Maximum bytes accepted for `InputKind::Primitive`.  Anything
 /// wider falls back to `InputKind::Ref` so the worker stack frame
 /// stays bounded.
-#[cfg(feature = "threading")]
 const INPUT_PRIMITIVE_MAX_BYTES: usize = 64;
 
 /// P189d — element types of a tuple first-arg, or `None` if the
@@ -61,7 +56,6 @@ const INPUT_PRIMITIVE_MAX_BYTES: usize = 64;
 /// `read_tuple_at_wide` which produces a clean failure mode (vs. the
 /// hang from raw `read_primitive_at_wide` reading 20 bytes from a
 /// 4-byte stride).
-#[cfg(feature = "threading")]
 fn tuple_first_arg_types(def: &crate::data::Definition) -> Option<Vec<crate::data::Type>> {
     let first = def.attributes.first()?;
     match &first.typedef {
@@ -71,7 +65,6 @@ fn tuple_first_arg_types(def: &crate::data::Definition) -> Option<Vec<crate::dat
     }
 }
 
-#[cfg(feature = "threading")]
 fn input_kind_for_first_arg(def: &crate::data::Definition) -> InputKind {
     use crate::data::Type;
     let Some(first) = def.attributes.first() else {
@@ -199,49 +192,27 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     ("n_protect_store_frees", n_protect_store_frees),
     ("n_unprotect_store_frees", n_unprotect_store_frees),
     ("n_yield_frame", n_yield_frame),
-    #[cfg(feature = "threading")]
     ("n_parallel_for", n_parallel_for),
-    #[cfg(feature = "threading")]
     ("n_parallel_for_light", n_parallel_for_light),
-    #[cfg(feature = "threading")]
     ("n_parallel_discard", n_parallel_discard),
-    #[cfg(feature = "threading")]
     ("n_parallel_queue", n_parallel_queue),
-    #[cfg(feature = "threading")]
     ("n_parallel_fold", n_parallel_fold),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_get", n_parallel_buf_get),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_drop", n_parallel_buf_drop),
-    #[cfg(feature = "threading")]
     ("n_parallel_queue_text", n_parallel_queue_text),
-    #[cfg(feature = "threading")]
     // @PLN10 Phase 1 — dest-passing variant (interp scratch retirement).
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_get_text_dest", n_parallel_buf_get_text_dest),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_text", n_parallel_buf_drop_text),
-    #[cfg(feature = "threading")]
     ("n_parallel_queue_ref", n_parallel_queue_ref),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_get_ref", n_parallel_buf_get_ref),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_ref", n_parallel_buf_drop_ref),
-    #[cfg(feature = "threading")]
     ("n_parallel_queue_narrow", n_parallel_queue_narrow),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_get_narrow", n_parallel_buf_get_narrow),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_narrow", n_parallel_buf_drop_narrow),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_get_single", n_parallel_buf_get_single),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_get_float", n_parallel_buf_get_float),
-    #[cfg(feature = "threading")]
     ("n_parallel_queue_fn", n_parallel_queue_fn),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_get_fn", n_parallel_buf_get_fn),
-    #[cfg(feature = "threading")]
     ("n_parallel_buf_drop_fn", n_parallel_buf_drop_fn),
     ("n_now", n_now),
     ("n_ticks", n_ticks),
@@ -1469,7 +1440,6 @@ fn n_yield_frame(stores: &mut Stores, _stack: &mut DbRef) {
 
 // ── Parallel threading functions (feature = "threading") ──────────────
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A4 (closed 2026-05-07) — the legacy materialised
 /// `parallel_for` path is unreachable.  After A3.6, every primitive
 /// return type — including Single (4-byte f32) and Float (8-byte
@@ -1490,7 +1460,6 @@ fn n_parallel_for(_stores: &mut Stores, _stack: &mut DbRef) {
     );
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A4 (closed 2026-05-07) — companion to
 /// `n_parallel_for`.  Was the per-worker-pool variant; same fate
 /// after A3.6 routes Single/Float through Queue.
@@ -1502,7 +1471,6 @@ fn n_parallel_for_light(_stores: &mut Stores, _stack: &mut DbRef) {
     );
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 PRIORITY.md spine step 3 — `Stitch::Discard` runtime entry.
 /// Pops the same arg layout as `n_parallel_for` (input, element_size,
 /// return_size, threads, func, extras..., n_extra), dispatches the
@@ -1602,7 +1570,6 @@ fn n_parallel_discard(stores: &mut Stores, stack: &mut DbRef) {
 /// native fns; the per-stitch behaviour lives in
 /// `parallel_queue_dispatch`'s match arms (dispatcher choice +
 /// post-processing + per-type buffer-stack push).
-#[cfg(feature = "threading")]
 #[derive(Copy, Clone)]
 enum QueueStitch {
     Int,
@@ -1630,7 +1597,6 @@ enum QueueStitch {
 /// dispatchers diverge structurally.  A8.b targets a different
 /// layer (interp-bridge native fns) where the divergence IS
 /// boilerplate.
-#[cfg(feature = "threading")]
 #[allow(clippy::too_many_lines)]
 fn parallel_queue_dispatch(stores: &mut Stores, stack: &mut DbRef, stitch: QueueStitch) {
     let fn_label = match stitch {
@@ -1868,7 +1834,6 @@ fn parallel_queue_dispatch(stores: &mut Stores, stack: &mut DbRef, stitch: Queue
     stores.put(stack, n_rows);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 PRIORITY.md spine step 8a — `Stitch::Queue` runtime entry.
 /// Pops the same arg layout as `n_parallel_for` (input, element_size,
 /// return_size, threads, func, extras..., n_extra), dispatches the
@@ -1887,7 +1852,6 @@ fn n_parallel_queue(stores: &mut Stores, stack: &mut DbRef) {
     parallel_queue_dispatch(stores, stack, QueueStitch::Int);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A5 — `Stitch::Reduce` runtime entry.
 ///
 /// V1 stack layout (LIFO pop): `n_extra` (i64), N extras (i64), threads
@@ -1956,7 +1920,6 @@ fn n_parallel_fold(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, result);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 spine step 8a — read one element from the active par buffer.
 ///
 /// Pops `idx` (i64), reads `stores.par_buffer_stack.last()[idx]`, and
@@ -1977,7 +1940,6 @@ fn n_parallel_buf_get(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, val);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 spine step 8a — pop the active par buffer.  Called after
 /// the body loop completes.  Panics if the stack is already empty
 /// (parser-side bug).  Void return.
@@ -1988,7 +1950,6 @@ fn n_parallel_buf_drop(stores: &mut Stores, _stack: &mut DbRef) {
         .expect("parallel_buf_drop: par_buffer_stack is already empty");
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 spine step 8c — text-return Queue runtime entry.  Same
 /// arg layout as `n_parallel_queue`, but workers return owned
 /// `String`s collected via `run_parallel_text` (which routes through
@@ -2006,7 +1967,6 @@ fn n_parallel_queue_text(stores: &mut Stores, stack: &mut DbRef) {
     parallel_queue_dispatch(stores, stack, QueueStitch::Text);
 }
 
-#[cfg(feature = "threading")]
 /// @PLN10 Phase 1 — destination-passing variant of `n_parallel_buf_get_text`.
 /// Always-non-null (clones an owned `String` from the par text buffer).
 /// Routed by `is_text_dest_native`.
@@ -2026,7 +1986,6 @@ fn n_parallel_buf_get_text_dest(stores: &mut Stores, stack: &mut DbRef) {
         .push_str(&s_owned);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 spine step 8c — pop the active par text buffer.  Called
 /// after the body loop completes.  Panics if the stack is already
 /// empty (parser-side bug).  Void return.
@@ -2037,7 +1996,6 @@ fn n_parallel_buf_drop_text(stores: &mut Stores, _stack: &mut DbRef) {
         .expect("parallel_buf_drop_text: par_text_buffer_stack is already empty");
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 spine step 8d.1 — reference-return Queue runtime entry.
 /// Same arg layout as `n_parallel_queue` but workers return a
 /// `DbRef` into their own output stores.  `run_parallel_queue_ref`
@@ -2055,7 +2013,6 @@ fn n_parallel_queue_ref(stores: &mut Stores, stack: &mut DbRef) {
     parallel_queue_dispatch(stores, stack, QueueStitch::Ref);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 spine step 8d.1 — read one rebased `DbRef` from the
 /// active par-ref buffer.  Pops `idx` (i64), reads
 /// `par_ref_buffer_stack.last().0[idx]`, pushes the `DbRef` (12
@@ -2075,7 +2032,6 @@ fn n_parallel_buf_get_ref(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, r);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 spine step 8d.1 — pop the active par-ref buffer and free
 /// every adopted store.  Called after the body loop completes.
 /// Panics if the stack is already empty (parser-side bug).
@@ -2098,7 +2054,6 @@ fn n_parallel_buf_drop_ref(stores: &mut Stores, _stack: &mut DbRef) {
     }
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A3 — narrow-primitive Queue runtime entry.  Same
 /// arg layout as `n_parallel_queue`; workers return a 1, 2, or 4-byte
 /// value.  Internally reuses `run_parallel_queue`'s `Vec<u64>`
@@ -2112,7 +2067,6 @@ fn n_parallel_queue_narrow(stores: &mut Stores, stack: &mut DbRef) {
     parallel_queue_dispatch(stores, stack, QueueStitch::Narrow);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A3 — read one narrow row from the active narrow
 /// buffer.  Pops `(idx, return_size, signed)` (i64s; `signed` is
 /// 0/1).  Reads `return_size` little-endian bytes at offset
@@ -2161,7 +2115,6 @@ fn n_parallel_buf_get_narrow(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, val);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A3 — pop the active narrow-queue buffer.  Called
 /// after the body loop completes.  Panics if the stack is already
 /// empty (parser-side bug).  Void return.
@@ -2172,7 +2125,6 @@ fn n_parallel_buf_drop_narrow(stores: &mut Stores, _stack: &mut DbRef) {
         .expect("parallel_buf_drop_narrow: par_narrow_buffer_stack is already empty");
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A3.6 — typed reader for `single` (f32) returns
 /// from `n_parallel_queue_narrow` (stride 4).  Reads the same
 /// per-row bytes as `n_parallel_buf_get_narrow` but interprets them
@@ -2212,7 +2164,6 @@ fn n_parallel_buf_get_single(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, val);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A3.6 — typed reader for `float` (f64) returns
 /// from `n_parallel_queue` (stride 8 / Vec<u64> rows).  Reads the
 /// same per-row u64 as `n_parallel_buf_get` but interprets the bits
@@ -2233,7 +2184,6 @@ fn n_parallel_buf_get_float(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, val);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A6.b — fn-ref-return Queue runtime entry.  Same
 /// arg layout as `n_parallel_queue` but workers return 20-byte
 /// fn-ref blobs (8B i64 d_nr + 12B closure DbRef per Rust's
@@ -2251,7 +2201,6 @@ fn n_parallel_queue_fn(stores: &mut Stores, stack: &mut DbRef) {
     parallel_queue_dispatch(stores, stack, QueueStitch::Fn);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A6.b — read one 20-byte fn-ref blob from the
 /// active fn-buffer.  Pops `idx` (i64), reads 20 bytes at offset
 /// `idx * 20` from `par_fn_buffer_stack.last()`, and pushes them
@@ -2282,7 +2231,6 @@ fn n_parallel_buf_get_fn(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, bytes_20);
 }
 
-#[cfg(feature = "threading")]
 /// Plan-06 ARC.md A6.b — pop the active fn-queue buffer.  Called
 /// after the body loop completes.  Panics if the stack is already
 /// empty (parser-side bug).  Void return.
