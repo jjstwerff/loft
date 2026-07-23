@@ -105,6 +105,11 @@ runner throughout):
   `UI_WINDOW=9000` sample lighter work over a longer window: 77 frames vs 35 (2.2×) on 4 CPUs.
   Separate names from the bench's `WORK` so retuning one cannot silently retune the other.
 
+**Green on the runner** (run 30042663620): all five gates pass — dispatch and `--html` across 4
+workers, scaling 100/159/224% over 1/2/4, UI 33 frames vs 19 sequential, every value equal to the
+interpreter's. The frame floor is set at 1.3× rather than just under that 1.7×: this runs nightly,
+and a gate that reddens on runner noise gets ignored, which costs more than the tenths it buys.
+
 A red run surfaces on every PR through ci.yml's `Nightly health (informational)` job, which now
 reports `browser-threads.yml` beside miri and the daily matrix.
 
