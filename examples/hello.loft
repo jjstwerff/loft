@@ -1,11 +1,14 @@
 // hello.loft — the canonical first program.
 //
-// Loft has no `let`, no `var`, no type annotations on locals.  You
-// assign a value and the compiler infers the type for you.  String
-// interpolation uses braces: `"Hello, {name}!"` substitutes the
-// variable.  `print` writes without a trailing newline.
+// This whole file IS the program.  A `.loft` file with loose statements is a
+// SCRIPT: no `fn main`, no `;` needed between top-level statements, and they
+// run once, top to bottom.  Add a `fn main` when you want an explicit entry
+// point — both shapes are compiled the same way after that.
+//
+// Loft has no `let`, no `var`, no type annotations on locals.  You assign a
+// value and the compiler infers the type for you.  String interpolation uses
+// braces: `"Hello, {name}!"` substitutes the variable.  `print` writes without
+// a trailing newline.
 
-fn main() {
-  name = "world";
-  print("Hello, {name}!\n");
-}
+name = "world"
+print("Hello, {name}!\n")

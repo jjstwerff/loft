@@ -12,6 +12,7 @@ and can emit Rust code for host integration.
 ## Contents
 - [Naming Conventions (enforced by the parser)](#naming-conventions-enforced-by-the-parser)
 - [Types](#types)
+- [Scripts (a file with no `fn main`)](#scripts-a-file-with-no-fn-main)
 - [Declarations](#declarations)
 - [Operators](#operators)
 - [Literals](#literals)
@@ -322,6 +323,38 @@ struct Point {
 ```
 
 ---
+
+## Scripts (a file with no `fn main`)
+
+A `.loft` file whose top level contains **loose statements** runs as a **script**: the
+statements are collected into one synthesized `fn main` and run **once**, in source order,
+sharing state. Nothing to opt into — `loft hello.loft` just runs it (@PLN13).
+
+```loft
+name = "world"
+print("Hello, {name}!\n")
+
+fn twice(x: integer) -> integer { x * 2 }   // defs stay top-level, and are HOISTED
+print("{twice(21)}\n")                      // → 42, even though `twice` is declared above-or-below
+```
+
+- **`;` is optional between the script's TOP-LEVEL statements** — and only there. Inside a
+  `{…}` block the normal rule applies (separate statements with `;`; the block-final one may
+  omit it), so two `;`-less statements inside a `for` body are a parse error.
+- **Top-level defs** (`fn` / `struct` / `enum` / `type`) stay top-level and are callable from
+  the loose statements regardless of order.
+- **A file is not a script** when it has a `fn main`, or contains only definitions (a library) —
+  those are compiled exactly as before. A file with a mistyped def keyword (`funcion main()`)
+  is also not treated as a script, so the parser's real "unknown keyword" error still surfaces
+  instead of being buried inside a synthesized `main`.
+- **`--script` forces script mode**; auto-detection is the default and can only affect source
+  that loft rejects today.
+- **Function signatures stay typed.** Parameter types are never inferred: the script → function
+  step is where a programmer should think about types, and it is what buys the compile-time
+  safety and the native/WASM speed.
+
+The same desugar runs in the browser, so a script is exactly what the
+[playground](../playground.html) executes — no install, no boilerplate.
 
 ## Declarations
 
