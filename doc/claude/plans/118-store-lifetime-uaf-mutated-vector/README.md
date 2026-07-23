@@ -24,6 +24,21 @@ Tracks [`loft-lang/plans#118`](https://github.com/loft-lang/plans/issues/118) (`
 > `tests/codegen_emitter.rs::pln118_arce_owned_reassign_emits_sentinel` — an emission-structure guard
 > (the symptom is layout-fragile and unrepro'able in-tree; see *Regression migration* below).
 >
+> **Arc E also fixed crawler-H6 — and that one IS repro'able, so it now has a symptom guard.**
+> Reported independently by two consumers (crawler, then hexbody): reading a file inside a loop over a
+> live `list_dir` result silently emptied the vector **from the second listing onward**, so entries
+> were skipped without an error. It cost real coverage — hexbody's round-trip gate walked two corpus
+> directories, loaded **3 of 22** entries from the second, and reported a **clean pass** on the 13 it
+> saw. Same mechanism as H4 (a freed slot reclaimed while a live reference survives), same
+> interpreter-only signature: on `2026.7.2` `--interpret` reproduces and `--native` is clean.
+> Verified on this branch — pre-fix the guard **SIGSEGVs**, post-fix it passes on both backends, and
+> the H6 program emits 6 `OpInitRefSentinel` against the pre-fix 4, tying the repair to arc E rather
+> than to a layout accident. **Regression:**
+> [`tests/scripts/586-h6-list-dir-survives-file-read.loft`](../../../../tests/scripts/586-h6-list-dir-survives-file-read.loft)
+> — two directories of DIFFERENT sizes, with the count asserted before the loop, after the loop, and
+> against what the loop visited, plus each entry's content, so neither a short listing nor a
+> right-length-wrong-values read can pass.
+>
 > **Arc F (the unmasked leak) — FIXED (oracle-first).** Fixing E unmasked a pre-existing interp-only
 > leak. Following the retrospective's rule this time, arc C (the differential oracle,
 > [`oracle/`](oracle/)) + a self-contained synthetic probe matrix ([`probes/`](probes/)) were built

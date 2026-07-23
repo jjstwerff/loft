@@ -57,8 +57,9 @@ fn resolves_a_stdlib_type_with_its_doc_read_from_stdlib_source() {
         vec!["One call frame in the stack trace.".to_string()],
         "the doc is read from the stdlib source file, not the buffer"
     );
+    // Native separators on Windows — see the note in tests/lsp_cli.rs.
     assert!(
-        h.def_file.starts_with("default/"),
+        h.def_file.replace('\\', "/").starts_with("default/"),
         "resolves into the stdlib source: {}",
         h.def_file
     );

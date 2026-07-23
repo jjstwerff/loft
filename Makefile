@@ -112,8 +112,8 @@ help:
 	  | sed 's/^# \{0,1\}//'
 
 all:
-	rustfmt src/*.rs --edition 2024
-	RUSTFLAGS=-g cargo build --release
+	@rustfmt src/*.rs --edition 2024
+	@RUSTFLAGS=-g cargo build --release
 
 check-targets:
 	@if ! command -v rustup >/dev/null 2>&1; then \
@@ -144,39 +144,45 @@ doctor:
 # Compile every artifact that lands in /usr/local.  Runs as the unprivileged
 # user (see AS_USER) — never root — so sccache and target/ ownership stay
 # correct even under `sudo make install`.
+#
+# The three builds, in recipe order:
+#   1. wasm32-wasip2 lib.
+#   2. wasm32-unknown-unknown lib — W1.1, the browser target for `--html` export.
+#   3. the host lib into an ISOLATED target dir, so deps/ contains exactly one
+#      copy of each crate — no binary-only duplicates (e.g. libloading) that
+#      cause StableCrateId collisions during native compilation.
+#
+# Why build 3 carries the feature list it does:
+#   - `native-extensions` is REQUIRED: the `--native` codegen unconditionally
+#     emits `loft::native_call::{enter,build_store}` to marshal a heap value
+#     (`vector<u8>`, struct) across the cdylib FFI (src/generation/mod.rs), and
+#     that module is `#[cfg(feature = "native-extensions")]` (src/lib.rs).  Drop
+#     it here and the installed `libloft.rlib` lacks `native_call`, so every
+#     `--native` run of a library with a `vector`/struct-returning (or -taking)
+#     `#native` fn fails to compile with `E0433: cannot find native_call in loft`.
+#   - `registry` + `remote-store` are BOTH in the crate's `default` features, so
+#     omitting them here made the installed native runtime diverge from a normal
+#     build: `store_load_url*` (registry-gated `load_url`,
+#     src/database/allocation.rs) and the sibling remote/URL store loaders
+#     (remote-store-gated) then `--interpret`-accept but `--native`-REJECT with
+#     `no method load_url` on the stable toolchain (reported by a consumer on
+#     2026.7.1).  Both pull only `ureq` (+ archive/crypto for registry) and are
+#     dead-stripped from any `--native` binary that doesn't call them, so
+#     bundling them is free for programs that don't fetch stores.
+#
+# The closing prune is the E0514 guard — cargo's deps/ accumulates a
+# `libloft_ffi-<hash>.rlib` per rustc version across builds; after a `rustup
+# update` the OLD one lingers beside the freshly-built one.  The install `cp`s
+# ALL of them into the shared deps/, and because `cp` flattens every file's
+# mtime to install-time the mtime-based loft_ffi resolver
+# (native_lib::loft_ffi_for_libloft) can then pick the STALE one — so every
+# `--native` build fails `E0514: crate loft_ffi compiled by an incompatible
+# version of rustc`.  Keep only the newest (the just-built, current-rustc)
+# loft_ffi rlib so exactly one, matching, copy is installed.
 install-artifacts: check-targets all
-	cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
-	# W1.1: browser WASM target for --html export
-	cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
-	# Build library in isolated target dir so deps/ contains exactly one copy
-	# of each crate — no binary-only duplicates (e.g. libloading) that cause
-	# StableCrateId collisions during native compilation.
-	#
-	# `native-extensions` is REQUIRED: the `--native` codegen unconditionally
-	# emits `loft::native_call::{enter,build_store}` to marshal a heap value
-	# (`vector<u8>`, struct) across the cdylib FFI (src/generation/mod.rs), and
-	# that module is `#[cfg(feature = "native-extensions")]` (src/lib.rs).  Drop
-	# it here and the installed `libloft.rlib` lacks `native_call`, so every
-	# `--native` run of a library with a `vector`/struct-returning (or -taking)
-	# `#native` fn fails to compile with `E0433: cannot find native_call in loft`.
-	# `registry` + `remote-store` are BOTH in the crate's `default` features, so
-	# omitting them here made the installed native runtime diverge from a normal
-	# build: `store_load_url*` (registry-gated `load_url`, src/database/allocation.rs)
-	# and the sibling remote/URL store loaders (remote-store-gated) then
-	# `--interpret`-accept but `--native`-REJECT with `no method load_url` on the
-	# stable toolchain (reported by a consumer on 2026.7.1).  Both pull only
-	# `ureq` (+ archive/crypto for registry) and are dead-stripped from any
-	# `--native` binary that doesn't call them, so bundling them is free for
-	# programs that don't fetch stores.
-	cargo build --release --lib --no-default-features --features mmap,random,threading,native-extensions,registry,remote-store --target-dir target/install-lib
-	# E0514 guard — cargo's deps/ accumulates a `libloft_ffi-<hash>.rlib` per rustc
-	# version across builds; after a `rustup update` the OLD one lingers beside the
-	# freshly-built one.  The install `cp`s ALL of them into the shared deps/, and
-	# because `cp` flattens every file's mtime to install-time the mtime-based
-	# loft_ffi resolver (native_lib::loft_ffi_for_libloft) can then pick the STALE
-	# one — so every `--native` build fails `E0514: crate loft_ffi compiled by an
-	# incompatible version of rustc`.  Keep only the newest (the just-built,
-	# current-rustc) loft_ffi rlib so exactly one, matching, copy is installed.
+	@cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
+	@cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
+	@cargo build --release --lib --no-default-features --features mmap,random,threading,native-extensions,registry,remote-store --target-dir target/install-lib
 	@stale=$$(ls -t target/install-lib/release/deps/libloft_ffi-*.rlib 2>/dev/null | tail -n +2); \
 	 if [ -n "$$stale" ]; then echo "  pruning stale loft_ffi rlib(s): $$stale"; rm -f $$stale; fi
 

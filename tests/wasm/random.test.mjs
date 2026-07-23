@@ -4,11 +4,11 @@
 /**
  * W1.11 — rand / rand_seed determinism tests.
  *
- * Two layers:
- *   1. Host-level: verify the xoshiro128** PRNG in host.mjs is deterministic
- *      and produces values in the correct range.  No WASM needed.
- *   2. WASM-level: verify that loft's `rand()` / `rand_seed()` produce the
- *      same output when seeded identically.  Requires the WASM package.
+ * Host-level: verify the xoshiro128** PRNG in host.mjs is deterministic and
+ * produces values in the correct range.  No WASM needed.
+ *
+ * The WASM-level `rand()` / `rand_seed()` layer this file used to carry is gone —
+ * see the note further down.
  *
  * Run:
  *   node tests/wasm/random.test.mjs
@@ -70,57 +70,14 @@ test('random_int(n, n) always returns n', () => {
   }
 });
 
-// ── WASM-level tests (require wasm-pack build) ────────────────────────────────
-
-let compileAndRun;
-try {
-  ({ compile_and_run: compileAndRun } = await import('./pkg/loft.js'));
-} catch {
-  console.log('NOTE  WASM-level random tests skipped — package not built');
-  console.log('      Run: wasm-pack build --target nodejs --out-dir tests/wasm/pkg -- --no-default-features --features wasm');
-}
-
-if (compileAndRun) {
-  const BASE_TREE = { '/': { 'project': { 'main.loft': { '$type': 'text', '$content': '' } } } };
-
-  function runCode(code) {
-    const { host } = createHost(JSON.parse(JSON.stringify(BASE_TREE)));
-    globalThis.loftHost = host;
-    const raw = compileAndRun(JSON.stringify([{ name: 'main.loft', content: code }]));
-    return JSON.parse(raw);
-  }
-
-  test('loft rand_seed produces deterministic output', () => {
-    const code = `
-      fn main() {
-        rand_seed(42)
-        println(rand(1, 1000))
-        println(rand(1, 1000))
-        println(rand(1, 1000))
-      }
-    `;
-    const r1 = runCode(code);
-    const r2 = runCode(code);
-    assert(r1.success, `Run 1 failed: ${r1.diagnostics}`);
-    assert(r2.success, `Run 2 failed: ${r2.diagnostics}`);
-    assert(r1.output === r2.output, `Output differed:\n  run1: ${r1.output}\n  run2: ${r2.output}`);
-  });
-
-  test('loft rand_seed(0) != rand_seed(1) output', () => {
-    const seed0 = runCode(`fn main() { rand_seed(0)\nprintln(rand(1, 1000000)) }`);
-    const seed1 = runCode(`fn main() { rand_seed(1)\nprintln(rand(1, 1000000)) }`);
-    assert(seed0.success && seed1.success);
-    // Different seeds should (with overwhelming probability) produce different first values.
-    assert(seed0.output !== seed1.output, 'Expected different output for different seeds');
-  });
-
-  test('loft rand without seed succeeds', () => {
-    const r = runCode(`fn main() { println(rand(1, 100)) }`);
-    assert(r.success, `Expected success; diagnostics: ${r.diagnostics}`);
-    const v = parseInt(r.output.trim(), 10);
-    assert(v >= 1 && v <= 100, `Out of range: ${v}`);
-  });
-}
+// ── WASM-level `rand` / `rand_seed` tests: REMOVED, not skipped ───────────────
+//
+// `rand` / `rand_seed` moved OUT of the core bundle into the `random` library
+// (@PLAN12), so testing them against a `--features wasm` build asserted a
+// capability that is deliberately gone: the three cases failed with "Unknown
+// function rand", and because this file is not part of any CI job nobody saw it.
+// Their coverage belongs to the `random` library's own tests. What stays here is
+// the layer that IS still core — the host-side xoshiro128** PRNG above.
 
 // ── Run ────────────────────────────────────────────────────────────────────────
 

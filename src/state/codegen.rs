@@ -1741,9 +1741,18 @@ impl State {
             // OpFreeRefIfDistinct — which also degrades to a no-op for the
             // S1 in-place shapes (the new value IS the old store).
             let rhs_reads_v = value.reads_var(v);
+            // loft#615 — an OWNED heap variable that is re-assigned must free the
+            // store it is dropping, and `Vector` was missing from this list while
+            // `Reference` / `Enum` had it.  A `??` materialises its subject into a
+            // function-scope owner (`__ncc_N`, see
+            // `parser/operators.rs::handle_null_coalesce`); re-assigning it once per
+            // loop iteration overwrote the previous store with nothing freeing it, so
+            // `for … { ns = list_dir(d) ?? [] }` leaked exactly (iterations - 1)
+            // stores.  Empty deps is loft's owned-vs-borrowed convention, so a view
+            // (`vv[i]`, a `??` result naming its owner) still takes no free here.
             let owned_ref = matches!(
                 stack.function.tp(v),
-                Type::Reference(_, _) | Type::Enum(_, true, _)
+                Type::Reference(_, _) | Type::Enum(_, true, _) | Type::Vector(_, _)
             ) && stack.function.tp(v).depend().is_empty()
                 && !is_hidden_buf_arg;
             // An `OpNewRecord` RHS returns an INTERIOR ref into an existing

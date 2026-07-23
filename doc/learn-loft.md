@@ -20,10 +20,8 @@ day-to-day loft.
 ## 1. Hello, loft (3 min)
 
 ```loft
-fn main() {
-  name = "world";
-  print("Hello, {name}!\n");
-}
+name = "world"
+print("Hello, {name}!\n")
 ```
 
 Run it:
@@ -38,14 +36,30 @@ Output:
 Hello, world!
 ```
 
+That is the whole file — no `fn main`, no semicolons, no imports.  A `.loft`
+file with loose statements is a **script**: they run once, top to bottom.  You
+can try the same two lines in the browser [playground](playground.html) without
+installing anything.
+
+Once a program grows past a handful of statements you give it functions, and
+those *are* typed — that step is covered in §5.  A file with a `fn main` is
+compiled exactly as it always was:
+
+```loft
+fn main() {
+  name = "world";
+  print("Hello, {name}!\n");
+}
+```
+
 Three loft conventions in three lines:
 
 - **No `let`, no `var`, no type annotations on locals.**  You assign
   `name = "world"` and the compiler infers the type.
 - **String interpolation in braces.**  `"Hello, {name}!"` substitutes
   the variable.  For literal braces use `{{` / `}}`.
-- **`fn main()` is the entry point.**  Like Rust or C, but without
-  the function-signature ceremony.
+- **No entry-point ceremony.**  Loose statements run as a script; `fn main()`
+  is there when you want an explicit entry point, like Rust or C.
 
 ---
 

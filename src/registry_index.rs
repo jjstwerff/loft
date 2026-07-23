@@ -519,6 +519,79 @@ pub fn registry_url() -> String {
     std::env::var("LOFT_REGISTRY_URL").unwrap_or_else(|_| DEFAULT_REGISTRY_URL.to_string())
 }
 
+/// Published packages exporting a FREE function named `name` — the data behind
+/// the "you probably meant `pkg::name`" diagnostic (@PLN13 phase 6, the
+/// diagnostics slice).
+///
+/// Reads the CACHED index only (`~/.loft/registry/index.json`) and never the
+/// network: this runs while the compiler is already reporting an error, so it
+/// must not stall, and a machine with no cache simply gets no hint.  The index
+/// is signature-verified when it is FETCHED; here it is only a source of names
+/// for a message, so an unverifiable or malformed cache degrades to silence
+/// rather than an error.  Package names are still filtered to the registry's own
+/// identifier shape, so nothing from that file can inject text into a
+/// diagnostic.
+///
+/// Methods are deliberately excluded — a `pub fn f(self: T)` is not callable
+/// bare, and a published method already resolves without a `use` via the
+/// lazy-load triggers (`derive_triggers`).  Only the free-function shape the
+/// bare call could actually have meant is offered.
+#[must_use]
+pub fn packages_exporting_fn(name: &str) -> Vec<String> {
+    if name.is_empty() {
+        return Vec::new();
+    }
+    let (index_path, _, _) = index_paths();
+    let Ok(content) = std::fs::read_to_string(index_path) else {
+        return Vec::new();
+    };
+    let Ok(index) = parse_index(&content) else {
+        return Vec::new();
+    };
+    let mut hits: Vec<String> = index
+        .packages
+        .iter()
+        .filter(|(pkg, _)| {
+            !pkg.is_empty()
+                && pkg
+                    .chars()
+                    .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '_' || c == '-')
+        })
+        .filter(|(_, p)| {
+            // Newest version wins: an old pin may still list a function the
+            // package has since dropped, and suggesting that would send the
+            // reader to an API they cannot install today.
+            p.versions
+                .values()
+                .next_back()
+                .is_some_and(|v| v.api.iter().any(|item| exports_free_fn(&item.sig, name)))
+        })
+        .map(|(pkg, _)| pkg.clone())
+        .collect();
+    hits.sort();
+    hits.dedup();
+    hits
+}
+
+/// Does the API signature `sig` declare a free function called `name`?
+///
+/// Matches `pub fn <name>(` and then rejects a `self` / `both` receiver, which
+/// makes it a method rather than something a bare call could resolve to.
+fn exports_free_fn(sig: &str, name: &str) -> bool {
+    let Some(rest) = sig.trim_start().strip_prefix("pub fn ") else {
+        return false;
+    };
+    let Some(args) = rest.strip_prefix(name) else {
+        return false;
+    };
+    let Some(args) = args.strip_prefix('(') else {
+        return false;
+    };
+    let first = args.split(',').next().unwrap_or("").trim();
+    let receiver = first.split(':').next().unwrap_or("").trim();
+    receiver != "self" && receiver != "both"
+}
+
 /// Local cache root (`~/.loft/registry/`).
 #[must_use]
 pub fn cache_dir() -> PathBuf {

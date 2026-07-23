@@ -938,10 +938,26 @@ fn scan_identifiers(text: &str, file: &str) -> Vec<(String, Reference)> {
 
 /// Canonical absolute path string (falls back to the lossy path on error).
 fn canonical(p: &Path) -> String {
-    std::fs::canonicalize(p)
-        .unwrap_or_else(|_| p.to_path_buf())
-        .to_string_lossy()
-        .into_owned()
+    let abs = std::fs::canonicalize(p).unwrap_or_else(|_| p.to_path_buf());
+    plain_path(&abs)
+}
+
+/// A path as a consumer expects to see it, with Windows' extended-length prefix
+/// removed.
+///
+/// `std::fs::canonicalize` returns a VERBATIM path on Windows — `\\?\D:\src\a.loft`,
+/// or `\\?\UNC\server\share\…` for a network path.  That prefix is an OS detail for
+/// bypassing the legacy MAX_PATH limit, and it leaks: it reached the `file` field of
+/// every `loft def --json` result and every LSP `file://` URI, where editors do not
+/// accept it.  Strip it so a path means the same thing to a consumer on every platform.
+/// Non-Windows paths pass through untouched.
+pub fn plain_path(p: &Path) -> String {
+    let s = p.to_string_lossy();
+    if let Some(unc) = s.strip_prefix(r"\\?\UNC\") {
+        format!(r"\\{unc}")
+    } else {
+        s.strip_prefix(r"\\?\").unwrap_or(&s).to_string()
+    }
 }
 
 /// Every `.loft` file under `root`, skipping build / VCS / dependency dirs.
