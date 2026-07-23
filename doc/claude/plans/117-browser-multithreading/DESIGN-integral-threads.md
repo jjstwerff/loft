@@ -7,7 +7,61 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 Companion to [`README.md`](README.md) / [`DESIGN.md`](DESIGN.md). Written **before code**
 (design-protocol): the failure paths and the re-assertion count are where the invariant
-becomes nameable. Status: **DESIGN — awaiting sign-off. Not implemented.**
+becomes nameable. Status: **Phase 0 (POC) DONE — keystone claim CONFIRMED, design amended;
+implementation in progress.**
+
+## Phase 0 result — the keystone holds, three amendments
+
+The throwaway POC (a raw `cdylib`: rayon + loft's `spawn_handler` over a raw
+`loft_thread.spawn_workers` import, built with `build-std` + shared memory, driven across Blob
+Web Workers by a **non-module** `<script>`) **works**: imports are exactly
+`{env.memory, loft_thread}` — no `__wbindgen_placeholder__` — and it reports
+`distinct_workers=4`, value identical to the sequential run (`sum=36023`, the same number loft's
+own `par-thread-proof` gate produces from the equivalent loft program). The sequential fallback
+(no pool) gives `distinct_workers=1` and the same value. **loft's `par` runtime needs no
+wasm-bindgen.**
+
+It also falsified three things the pre-implementation design got wrong. Each was invisible on
+paper and cost minutes to find in the POC:
+
+- **A1 — `rayon/web_spin_lock` is mandatory, and loft must supply its own `wasm_sync`.**
+  A page's main thread may not block: any `memory.atomic.wait32` there throws *"Atomics.wait
+  cannot be called in this context"*. rayon reaches its internal `Mutex`/`Condvar` from the
+  calling thread in two places (`build_global` → `wait_until_primed`, and `in_worker_cold`'s
+  `LockLatch` — the join every `par` from the main thread performs), so a stock-`std` rayon dies
+  on the first `par`. rayon's `web_spin_lock` feature fixes this by swapping `std::sync` for the
+  `wasm_sync` crate — which is exactly what makes the *existing* gallery work (wasm-bindgen-rayon
+  depends on `rayon` with `features = ["web_spin_lock"]`; nothing in loft said so). But
+  crates.io's `wasm_sync` detects the main thread with `web_sys::window()` — **wasm-bindgen
+  again**, which the raw path forbids. So loft ships its own drop-in `wasm_sync` (in-tree
+  `wasm-sync/`, wired with `[patch.crates-io]`): same spin-instead-of-block behaviour, no
+  wasm-bindgen. Its `can_block` defaults to *true* (plain `std`, today's semantics) and loft
+  marks the **main** thread non-blocking — fail-open, so a missed mark throws loudly rather than
+  silently burning CPU.
+- **A2 — pool init must be two-phase (JS-driven), not one wasm call.** The design's C2 shape
+  (`init_thread_pool` calls the spawn import, then `build_global`) **deadlocks**: `build_global`
+  waits for the workers to prime while the main thread is still inside the call, so the workers
+  never finish booting. Proven both ways in the POC — one-shot hangs, two-phase returns in 3 ms.
+  The runtime therefore exposes `loft_pool_new(n)` (create the handoff + ask the host to spawn)
+  and `loft_pool_build()` (install the global pool); the JS bootstrap awaits every worker's
+  *ready* message in between. This is the ordering `wasm-bindgen-rayon`'s `startWorkers` uses,
+  and it is the reason it uses one.
+- **A3 — each worker needs its own shadow stack + TLS block, set from JS.** Every
+  `WebAssembly.Instance` gets its own copy of the mutable globals but they all start at the *same*
+  value, so without this every worker tramples the main thread's shadow stack. wasm-bindgen's
+  thread transform did this silently; the raw path must do it itself: export `__stack_pointer`
+  (one more link-arg than `make wasm-mt` passes), have the wasm export an allocator
+  (`loft_thread_alloc`), and let the worker bootstrap set `__stack_pointer` and call
+  `__wasm_init_tls` on per-worker blocks before running the worker loop. Also: the shared memory
+  is imported as **`env.memory`**, so `--html`'s import allow-list must admit `env` and
+  `loft_thread`.
+
+**D1 is decided by probe: (b), `rustc`-direct + `--sysroot`.** An atomics std sysroot assembled
+from the `build-std` output (copy the `deps/*.rlib` into
+`<sysroot>/lib/rustlib/wasm32-unknown-unknown/lib/`) compiles a shared-memory cdylib with
+`rustc` directly — verified. That keeps the `--html` pipeline, its single loft copy, and the
+wasm-bridge crates exactly as they are; option (a) (generated cargo crate) would have had to
+re-solve the crate-dup guard for no gain.
 
 ## The ask
 
