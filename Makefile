@@ -112,8 +112,8 @@ help:
 	  | sed 's/^# \{0,1\}//'
 
 all:
-	rustfmt src/*.rs --edition 2024
-	RUSTFLAGS=-g cargo build --release
+	@rustfmt src/*.rs --edition 2024
+	@RUSTFLAGS=-g cargo build --release
 
 check-targets:
 	@if ! command -v rustup >/dev/null 2>&1; then \
