@@ -5228,11 +5228,15 @@ impl State {
             d_nr,
             call_pos: 0,
             args_base: self.stack_step(4),
-            args_size: 16,
+            // The one argument is the `Str` pushed below, and a `Str` is
+            // pointer-sized: 16 bytes natively, 8 on wasm32.  Stack-trace and
+            // variable-snapshot readers scan `args_size` bytes of the frame, so a
+            // hardcoded 16 sends them past the argument in a browser build.
+            args_size: size_of::<Str>() as u16,
             line: 0,
         });
         self.stack_pos = self.stack_step(4); // @PLAN53 2j: stepped par-worker entry base (guard-clean; identity flag-OFF)
-        self.put_stack(input_str); // 16 bytes
+        self.put_stack(input_str);
         for &extra in extra_args {
             self.put_stack(extra as i64);
         }

@@ -531,8 +531,9 @@ impl State {
             ValueType::ParFor => panic!(
                 "Value::ParFor codegen lands in plan-06 spine step 3b — should not be reachable from existing parser paths"
             ),
-            // @PLN11 G2/M3.5 — FnRef: 16-byte fn-ref on stack (d_nr 4B +
-            // closure DbRef 12B).  add_op already advances stack.position.
+            // @PLN11 G2/M3.5 — FnRef on the stack: [d_nr i64][closure DbRef],
+            // 8 + 12 B (P249 widened d_nr from 4).  add_op already advances
+            // stack.position.
             ValueType::FnRef => {
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::from(node.fnref_dnr()));
@@ -2962,8 +2963,11 @@ impl State {
                     if parameters[a_nr] == Value::Null && stack.position == stack_before {
                         self.emit_typed_null(stack, &a.typedef);
                     }
-                    // Function args are 16B (4B d_nr + 12B closure DbRef).
-                    // A plain fn-ref constant produces only 4B via OpConstInt; pad to 16B.
+                    // A fn-ref arg is [d_nr i64][closure DbRef] — 8 + 12 B, which
+                    // the eval stack steps to 8 + 16 = 24.  A plain fn-ref constant
+                    // pushes only the d_nr (8), so pad the closure half.  Both halves
+                    // are target-independent, unlike the `text` slot the fn-ref OPS
+                    // are declared with (see `Stack::fnref_signature_gap`).
                     if matches!(a.typedef, Type::Function(_, _, _))
                         && stack.position - stack_before < 16
                     {

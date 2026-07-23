@@ -168,8 +168,13 @@ impl OpEmitter for OpCoroutineNextEmitter {
                     ctx.w,
                     "loft::codegen_runtime::coroutine_next_dbref({gen_code}, stores)"
                 )?,
-                // size_of::<&str>() == 16 — text-yielding generator.
-                16 => write!(
+                // Text-yielding generator.  `byte_size` is a `text` slot, whose
+                // width is HOST-dependent (`&str` = pointer + length: 16 bytes
+                // where a pointer is 8 wide, 8 on wasm32).  Matching the literal
+                // would silently fall through to the i64 arm on a 32-bit host, so
+                // the arm is keyed on the type instead.  Only the host compiles
+                // today, which is why a literal survived here.
+                n if n as usize == size_of::<&str>() => write!(
                     ctx.w,
                     "loft::codegen_runtime::coroutine_next_text({gen_code}, stores)"
                 )?,

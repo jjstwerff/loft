@@ -1414,6 +1414,21 @@ survived so long.  The correction now reads its size from `Str`
 size together.  **When touching stack arithmetic, size a slot from the type, never
 from the number you measured on x86_64.**
 
+A sweep of every literal size in the slot/stack code (`step(<lit>)`, `< 16`
+padding thresholds, `args_size`, and size-keyed `match` arms) found two more of
+the same class and confirmed the rest are target-independent (an i64/f64/DbRef=12
+is the same width everywhere; only `Str`/`String`/pointer sizes move):
+- **the text-yielding coroutine's dispatch arm** was keyed on the literal `16`,
+  so on a 32-bit host it would fall through to the i64 arm and mis-transport the
+  yielded string — latent (only the host runs codegen today), now
+  `n == size_of::<&str>()`;
+- **a `par` text-input worker's call frame** recorded `args_size: 16`, and the
+  stack-trace / variable-snapshot readers scan that many bytes — 8 too many on
+  wasm, so a browser `stack_trace()` inside such a worker walked past the
+  argument.  Now `size_of::<Str>()`.
+Both are guarded by compared scripts in the node wasm suite (`22c-par-sources`,
+`35p-iterator-match`, `51-coroutines`), which run against the native reference.
+
 **COOP/COEP hosting contract (arc D).** The threaded bundle needs
 `crossOriginIsolated === true` (the precondition for `SharedArrayBuffer` + wasm
 atomics), which a host grants only by sending **both**:
