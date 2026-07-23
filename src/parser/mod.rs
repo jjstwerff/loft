@@ -33,7 +33,7 @@ use typedef::complete_definition;
 #[cfg(feature = "registry")]
 fn registry_fn_hint(name: &str) -> Option<String> {
     let pkgs = crate::registry_index::packages_exporting_fn(name);
-    let (first, _) = (pkgs.first()?, ());
+    let first = pkgs.first()?;
     let provider = if pkgs.len() == 1 {
         format!("the `{first}` package provides it")
     } else {
