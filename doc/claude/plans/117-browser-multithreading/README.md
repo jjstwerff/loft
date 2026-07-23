@@ -9,10 +9,11 @@ Tracks [`loft-lang/plans#117`](https://github.com/loft-lang/plans/issues/117) (`
 
 ## Status
 
-**Open — core proven end-to-end in-browser (steps 0–3); memory-model re-proof +
-integration remain.** A loft `par`, run through `compile_and_run` in a real (headless)
-browser, now **dispatches across multiple Web Worker threads over shared wasm memory** with
-correct results and a never-break sequential fallback. The load-bearing risk (does
+**Open — core + memory model proven end-to-end in-browser (steps 0–4, arcs A/B/C/D);
+gallery/`--html` integration + benchmarks remain.** A loft `par`, run through `compile_and_run`
+in a real (headless) browser, **dispatches across multiple Web Worker threads over shared wasm
+memory** with correct results (proven for primitive, struct+text, and vector returns) and a
+never-break sequential fallback. The load-bearing risk (does
 rayon-via-`wasm-bindgen-rayon` actually build, link, and parallelise loft's dispatch?) is
 **resolved**. What is proven, landed on `tuxedo-extract-function`, and pushed:
 
@@ -24,8 +25,11 @@ rayon-via-`wasm-bindgen-rayon` actually build, link, and parallelise loft's disp
   overhead dominates 48 elems / 4 workers).
 - **Arc-D fallback:** with no `initThreadPool`, the same `par` runs sequentially
   (`distinct_workers=1`), succeeds, and gives the correct value — **it never breaks**.
-- **Headless gate:** `tests/wasm/par-thread-proof.sh` (chromium) asserts the parallelism +
-  value gate; `par-thread-proof.html` + `coi-server.py` are the harness.
+- **Arc-C memory model:** the read-only-share model holds under shared linear memory —
+  allocation-heavy struct+text AND vector-return `par` match the native reference on every
+  rep across 4 workers (30-rep race hunt clean); the wasm allocator lock-guards DLMALLOC.
+- **Headless gates:** `tests/wasm/par-thread-proof.sh` (dispatch + fallback) and
+  `par-memory-proof.sh` (memory model, both return shapes); `coi-server.py` is the COOP/COEP host.
 
 **The toolchain finding (load-bearing).** `wasm-bindgen-rayon` only threads if the wasm memory
 is SHARED + IMPORTED with a maximum and lld's synthesized TLS / heap-base globals survive as
@@ -39,11 +43,11 @@ the worker bootstrap resolves the main module by URL (loft ships static files, n
 the rayon worker bootstrap; **node also has no Web Worker global**, so the browser — not node —
 is the proof environment).
 
-**Remaining:** step 4 (retire the hand-rolled `worker_entry`/`LoftThreadPool` model, now dead);
-Track 2 arc C (**re-prove the memory model under shared linear memory with a positive-control
-race** — the S-category spine, only partially covered by the correct-value runs above); Track 3
-B1/B3 (fold the threaded bundle into the gallery / `loft --html` export + document the COOP/COEP
-contract in WASM.md); Track 4 E1/E2 (off-main-thread UI demo + scaling benchmark). This README
+**Remaining:** Track 3 **B1** (fold the threaded bundle into the gallery / `loft --html` export
+pipeline — the `make wasm` path at Makefile ~372 still builds a single-threaded `--target web`
+bundle; make it emit the threaded bundle + COOP/COEP-serving glue); Track 4 **E1** (off-main-thread
+UI-responsive demo) + **E2** (scaling benchmark, par vs threads 1..N); and wiring the two headless
+gates into CI (needs chromium on the runner). Steps 0–4 + arcs A/B/C/D + E3 are done. This README
 is the single source of truth for phase status.
 
 loft's parallel execution otherwise runs **sequentially on the main thread in the browser**: the
@@ -103,7 +107,7 @@ working correctly on the main thread alongside the worker pool.
 |---|---|---|
 | **A** — threaded `--target web` bundle | build the browser bundle with `--features wasm-threads`; JS glue inits the pool (`await init(); await initThreadPool(navigator.hardwareConcurrency)`) before any `par` | **Build DONE** (`make wasm-mt`, full link-arg set, `no-bundler`); pool proven to initialise in-browser (`pool_init=ok`, N workers). Gallery / `loft --html` fold-in (B1) pending |
 | **B** — dispatch over the wasm rayon pool | route `run_parallel_*` and `par_fold` over the `wasm-bindgen-rayon` pool; retire the `worker_entry` stub so there is ONE scheduler | **Dispatch DONE + proven** (`with_pool` seam; in-browser `distinct_workers=4`, value matches native). Retiring the hand-rolled stub = step 4, pending |
-| **C** — memory model under SHARED memory | re-prove the @PLN108 read-only-share model (`clone_for_light_worker`, borrowed parent stores, `read_only` write-panic, `clone_for_worker` freed-slot reinit) now that the Store heap is a *shared* `SharedArrayBuffer` across workers, under atomics; the wasm equivalent of the ASan/TSan-clean gate | **Partial** — the correct-value parallel runs are evidence the read-only-share model holds under shared memory, but the adversarial positive-control race (M0) + struct-return (`queue_ref`) allocator audit (M1) are still owed. The S-category spine |
+| **C** — memory model under SHARED memory | re-prove the @PLN108 read-only-share model (`clone_for_light_worker`, borrowed parent stores, `read_only` write-panic) now that the Store heap is a *shared* `SharedArrayBuffer` across workers, under atomics | **DONE + proven.** Invariant (worker reads shared read-only parent, writes only own scratch) holds across 5 verified re-assertion sites — C93 static, the release-active read-only `assert!`, the read-only borrow, join-before-drop, and the **lock-guarded wasm DLMALLOC** (concurrent worker alloc is serialized). Empirical: `par-memory-proof.{html,sh}` runs allocation-heavy struct+text AND vector-return `par` across 4 Web Workers, every rep == native ref, real ≥4-worker concurrency, 30-rep race hunt clean. `par_share_for`/copy-path is gone (@PLN108 left ONE borrow path) |
 | **D** — cross-origin isolation + fallback | COOP/COEP hosting contract; runtime `crossOriginIsolated` detection; **graceful fallback to sequential** when unavailable | **DONE + proven** — `coi-server.py` sends COOP/COEP; without `initThreadPool` the `par` runs sequentially (`distinct_workers=1`) and never crashes. B3 (document the contract in WASM.md for real hosts) pending |
 | **E** — verify + measure | in-browser proof a `par` runs OFF the main thread + scales; an automated gate; benchmark vs native + vs sequential-wasm | **E3 DONE** (`par-thread-proof.sh` headless gate). E1 (off-main-thread UI-responsive demo) + E2 (scaling benchmark) pending |
 
