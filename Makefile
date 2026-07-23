@@ -102,7 +102,7 @@ ifeq ($(shell id -u),0)
 AS_USER := $(if $(SUDO_USER),sudo -u $(SUDO_USER) -H,)
 endif
 
-.PHONY: check-wasm-threads gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
+.PHONY: check-wasm-threads par-gates gate ci-miri all check-targets doctor install install-artifacts uninstall debug test quick profile clean clean-wasm fill ci ship run-tests clippy memory last meld generate gtest pdf bench test-native test-wasm test-html-render loft-test wasm-assets test-packages test-package-native-tests test-gl-headless test-gl-smoke test-gl-golden update-gl-golden serve wasm gallery game crystal-editor play native-editor editor-dist help rebuild-native-cdylibs view-build view-refresh view index index-install-hook libcatalogue features-fetch features-gen features-check api-compat check-contract-goldens
 
 # Print the overview at the top of this file.  Useful when you land on a
 # fresh checkout and want to know what buttons are available without
@@ -993,6 +993,19 @@ WASM_MT_RUSTFLAGS = -C target-feature=+atomics,+bulk-memory,+mutable-globals \
   -C link-arg=--export=__wasm_init_tls -C link-arg=--export=__tls_size \
   -C link-arg=--export=__tls_align -C link-arg=--export=__tls_base \
   -C link-arg=--export=__stack_pointer
+
+# @PLN117 — every in-browser threading gate, in one command.  Each measures a
+# claim rather than assuming it: that `par` really dispatches across Web Worker
+# threads, that the shared-memory model still holds, that it scales, that the UI
+# stays responsive, and that a `loft --html` page does all of that too — each
+# against the value the interpreter produces.  Needs a headless chromium; the
+# bundle gates additionally need `make wasm-mt` (they SKIP without it).
+par-gates:
+	@tests/wasm/par-thread-proof.sh
+	@tests/wasm/par-memory-proof.sh
+	@tests/wasm/par-scaling-bench.sh
+	@tests/wasm/par-ui-responsive.sh
+	@tests/wasm/html-thread-proof.sh
 
 # @PLN117 — type-check loft's OWN browser thread pool (src/wasm_threads.rs).  It
 # is browser-only by nature, so the host `cargo clippy --all-features` never sees

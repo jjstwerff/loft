@@ -134,6 +134,36 @@ Pops (reverse declaration order): `func`, `threads`, `return_size`, `element_siz
 | 4 | `set_int(rec, fld, bits as i32)` |
 | 1 | `set_byte(rec, fld, 0, bits as i32)` |
 
+### Where the threads come from (@PLN117)
+
+One seam decides it: `parallel.rs::with_pool`.
+
+| Build | Threads | Pool |
+|---|---|---|
+| native | OS threads | loft's private rayon pool (`rayon_pool()`) |
+| browser | Web Workers | the page's GLOBAL rayon pool, installed by `wasm_threads::loft_pool_build` |
+| browser, pool not started | none | rayon's single-threaded fallback — `par` runs sequentially, same values |
+
+rayon schedules in every case, so `par` and `par_fold` behave identically
+everywhere.  The browser difference is only *where the threads come from*: wasm
+has no `thread::spawn`, so the page spawns Web Workers and each one claims a
+rayon thread through `loft_rayon_start_worker` (`src/wasm_threads.rs`, host half
+in `doc/loft-thread.js`).  Both browser bundles — `loft --html` and the
+wasm-bindgen gallery — link that same runtime.
+
+Two things about a browser thread are not like a native one:
+
+- **The main thread may not block.** `memory.atomic.wait32` throws there, and
+  rayon takes a lock on the calling thread on every join, so the whole build uses
+  `rayon/web_spin_lock` over loft's own `wasm-sync/` (spin instead of park on
+  that one thread).
+- **A worker starts on the main thread's shadow stack**, because every
+  `WebAssembly.Instance` copies the same initial globals.  The host moves each
+  worker onto its own stack and TLS block before it runs any wasm.
+
+Details and the in-browser proofs: [WASM.md](WASM.md) §
+Threading, and `doc/claude/plans/117-browser-multithreading/`.
+
 ---
 
 ## Compiler Validation Summary
