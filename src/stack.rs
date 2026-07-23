@@ -16,6 +16,12 @@ use crate::state::State;
 use crate::variables;
 use crate::variables::Function;
 
+/// Bytes a fn-ref occupies in a variable slot and on the operand stack:
+/// `[d_nr i64][closure DbRef]`.  Target-independent — unlike the `text` slot the
+/// fn-ref ops are DECLARED with, which is host-sized (see
+/// [`Stack::fnref_signature_gap`]).  Mirrors `variables::size(Type::Function)`.
+pub const FN_REF_SLOT: u16 = 20;
+
 pub struct Loop {
     start: u32,
     stack: u16,
@@ -66,6 +72,25 @@ impl<'a> Stack<'a> {
     #[allow(clippy::unused_self)]
     pub fn step(&self, size: u16) -> u16 {
         variables::aligned_stack_step(u32::from(size)) as u16
+    }
+
+    /// @PLAN53 S4 — the gap between what a fn-ref op MOVES and what its stdlib
+    /// signature DECLARES.
+    ///
+    /// `OpVarFnRef` / `OpPutFnRef` move a whole [`FN_REF_SLOT`]-byte fn-ref blob
+    /// (`[d_nr i64][closure DbRef]`), but loft's type system cannot express a
+    /// fn-ref type in the stdlib declaration, so both ops are declared to take a
+    /// `text` and codegen adjusts the operand stack by the difference.
+    ///
+    /// The difference is **not a constant**: a `text` argument is a host-sized
+    /// slot (`Str` = pointer + length), so it is 16 bytes where a pointer is 8
+    /// wide and 8 bytes on wasm32 where it is 4.  Hardcoding the 64-bit number
+    /// left every fn-ref bind 8 bytes out on wasm — native was correct, the
+    /// browser corrupted its operand stack on `f = some_fn`.
+    #[inline]
+    #[must_use]
+    pub fn fnref_signature_gap(&self) -> u16 {
+        self.step(FN_REF_SLOT) - self.step(size_of::<crate::keys::Str>() as u16)
     }
 
     /** Return the amount of space on stack is needed as calculated from code */
@@ -191,5 +216,38 @@ impl<'a> Stack<'a> {
     pub fn loop_position(&self, loop_nr: u16) -> u16 {
         let l = self.loops.len() - 1;
         self.loops[l - loop_nr as usize].stack
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::data::{Deps, Type};
+
+    /// The fn-ref slot size has two homes — this constant and `variables::size`
+    /// — and codegen's operand-stack arithmetic only balances while they agree.
+    #[test]
+    fn fn_ref_slot_matches_variables_size() {
+        let int = Type::Integer(crate::data::IntegerSpec::wide());
+        let f = Type::Function(Vec::new(), Box::new(int), Deps::default());
+        assert_eq!(
+            FN_REF_SLOT,
+            variables::size(&f, &Context::Variable),
+            "FN_REF_SLOT and variables::size disagree on the fn-ref slot"
+        );
+    }
+
+    /// `fnref_signature_gap` corrects for the `text` the fn-ref ops are DECLARED
+    /// with, so it has to use the size a `text` argument really occupies on THIS
+    /// target.  A hardcoded 64-bit 16 left wasm32 eight bytes out, and every
+    /// `f = some_fn` corrupted the operand stack in the browser.
+    #[test]
+    fn fnref_gap_tracks_the_declared_text_size() {
+        let text_arg = variables::size(&Type::Text(Deps::default()), &Context::Argument);
+        assert_eq!(
+            text_arg as usize,
+            size_of::<crate::keys::Str>(),
+            "the fn-ref ops' declared `text` argument is not a Str-sized slot"
+        );
     }
 }

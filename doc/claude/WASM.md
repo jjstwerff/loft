@@ -1399,6 +1399,21 @@ environment.
 assembled from the `build-std` output, so a page stays ONE self-contained file
 with no wasm-bindgen in it.  Gate: `tests/wasm/html-thread-proof.sh`.
 
+**Host-sized types are the wasm hazard class.** A pointer is 8 bytes natively and
+**4 on wasm32**, so anything sized off a Rust type that contains one differs
+between the two targets — `Str` (`ptr + len`) is 16 bytes natively and 8 on wasm,
+`String` 24 and 12.  loft sizes `text` slots from exactly those types, which is
+correct and self-consistent; what breaks is code that *hardcodes the 64-bit
+number*.  Codegen did this for the fn-ref ops — `OpVarFnRef` / `OpPutFnRef` move a
+20-byte fn-ref but are DECLARED taking a `text`, and the correction was written
+`step(20) - step(16)`.  On wasm the declared slot is 8, not 16, so every
+`f = some_fn` left the operand stack 8 bytes out: a bind faulted, a call through
+it freed a garbage pointer.  Native was correct throughout, which is why it
+survived so long.  The correction now reads its size from `Str`
+(`Stack::fnref_signature_gap`), and a unit test pins the two homes of the fn-ref
+size together.  **When touching stack arithmetic, size a slot from the type, never
+from the number you measured on x86_64.**
+
 **COOP/COEP hosting contract (arc D).** The threaded bundle needs
 `crossOriginIsolated === true` (the precondition for `SharedArrayBuffer` + wasm
 atomics), which a host grants only by sending **both**:

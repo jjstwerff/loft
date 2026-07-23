@@ -633,7 +633,7 @@ impl State {
                     Type::Function(_, _, _) => {
                         stack.add_op("OpVarFnRef", self);
                         // @PLAN53 S4: 20B fn-ref push − 16B `text` account.
-                        stack.position += stack.step(20) - stack.step(16);
+                        stack.position += stack.fnref_signature_gap();
                     }
                     Type::Boolean => stack.add_op("OpVarBool", self),
                     Type::Float => stack.add_op("OpVarFloat", self),
@@ -733,10 +733,10 @@ impl State {
                     // 20 B in matching layout.  The opcode's stdlib
                     // signature pops 16 B (`text`) but the runtime
                     // actually pops 20 B; mirror gen_set_first_at_tos's
-                    // `stack.position -= 4` correction.
+                    // `fnref_signature_gap` correction.
                     Type::Function(_, _, _) => {
                         stack.add_op("OpPutFnRef", self);
-                        stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                        stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                     }
                     Type::Boolean => stack.add_op("OpPutBool", self),
                     Type::Float => stack.add_op("OpPutFloat", self),
@@ -1287,7 +1287,7 @@ impl State {
                 // +4 stack tracker bump for the signature mismatch.
                 Type::Function(_, _, _) => {
                     stack.add_op("OpVarFnRef", self);
-                    stack.position += stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                    stack.position += stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                 }
                 Type::Boolean => stack.add_op("OpVarBool", self),
                 Type::Float => stack.add_op("OpVarFloat", self),
@@ -1336,10 +1336,10 @@ impl State {
                 // P249 — fn-ref slot is 20 B; matches push above.
                 // OpPutFnRef's signature pops 16 B (`text`) but the
                 // runtime pops 20; mirror gen_set_first_at_tos's
-                // `stack.position -= 4` correction.
+                // `fnref_signature_gap` correction.
                 Type::Function(_, _, _) => {
                     stack.add_op("OpPutFnRef", self);
-                    stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                    stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                 }
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Float => stack.add_op("OpPutFloat", self),
@@ -2211,11 +2211,11 @@ impl State {
                 // DbRef).  OpPutInt would only pop 8 B and leave the
                 // closure half garbage in the destination.  OpPutFnRef
                 // pops 20 B; mirror gen_set_first_at_tos's
-                // `stack.position -= 4` correction (op signature
+                // `fnref_signature_gap` correction (op signature
                 // declares 16 B / `text` but the runtime pops 20).
                 Type::Function(_, _, _) => {
                     stack.add_op("OpPutFnRef", self);
-                    stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                    stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                 }
                 Type::Boolean => stack.add_op("OpPutBool", self),
                 Type::Float => stack.add_op("OpPutFloat", self),
@@ -2338,7 +2338,7 @@ impl State {
             // slot.  `OpPutFnRef`'s stdlib signature pops a 16-byte
             // `text`, so the runtime actually pops 20 bytes but the
             // compile-time tracker only accounts for 16 — mirror
-            // `set_var`'s `stack.position -= 4` correction.
+            // `set_var`'s `fnref_signature_gap` correction.
             if *value == Value::Null {
                 stack.add_op("OpConstInt", self);
                 self.code_add(i64::MIN);
@@ -2349,7 +2349,7 @@ impl State {
             let var_pos = stack.var_pos(v);
             stack.add_op("OpPutFnRef", self);
             self.code_add(var_pos);
-            stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+            stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
         } else if matches!(stack.function.tp(v), Type::RefVar(_))
             && let Value::Var(src) = value
             && matches!(stack.function.tp(*src), Type::RefVar(_))
@@ -3411,7 +3411,7 @@ impl State {
                 // Post-2c fn-ref slot is 20 bytes, but OpVarFnRef's stdlib
                 // signature returns `text` (16 B Str).  Add the 4-byte
                 // discrepancy to the compile-time stack tracker.
-                stack.position += stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                stack.position += stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
             }
             Type::Character => stack.add_op("OpVarCharacter", self),
             Type::RefVar(_) => stack.add_op("OpVarRef", self),
@@ -3490,7 +3490,7 @@ impl State {
                         // vars.
                         Type::Function(_, _, _) => {
                             stack.add_op("OpVarFnRef", self);
-                            stack.position += stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                            stack.position += stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
                         }
                         Type::Boolean => stack.add_op("OpVarBool", self),
                         Type::Float => stack.add_op("OpVarFloat", self),
@@ -3996,7 +3996,7 @@ impl State {
                 // Post-2c fn-ref slot is 20 bytes, but OpPutFnRef's stdlib
                 // signature pops `text` (16 B Str).  Subtract the 4-byte
                 // discrepancy from the compile-time stack tracker.
-                stack.position -= stack.step(20) - stack.step(16); // @PLAN53 S4 fn-ref
+                stack.position -= stack.fnref_signature_gap(); // @PLAN53 S4 fn-ref
             }
             Type::Character => stack.add_op("OpPutCharacter", self),
             Type::Enum(_, false, _) => stack.add_op("OpPutEnum", self),
