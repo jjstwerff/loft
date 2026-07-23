@@ -140,25 +140,15 @@ where
     // wasm-bindgen-rayon model so the two scheduler stories converge.
     use rayon::prelude::*;
     let threads = n_threads.max(1).min(n_rows.max(1));
-    // @PLN117 step 0 — parallelism falsification instrument.  When
-    // LOFT_TRACE_PAR_WORKERS is set, each rayon task records the rayon worker
-    // index that ran it; after the join we report how many DISTINCT workers
-    // took part.  This is the positive control that proves a `par` really
-    // dispatched across ≥2 workers (native today, the wasm pool once wired)
-    // and, crucially, that the harness can FAIL — a `par(..., 1)` reports 1.
-    // Non-perturbing: the gate is read once, and when off the per-task branch
-    // sees `None` and allocates nothing.
-    let worker_trace: Option<std::sync::Mutex<std::collections::BTreeSet<usize>>> =
-        par_trace_enabled().then(|| std::sync::Mutex::new(std::collections::BTreeSet::new()));
-    let worker_trace_ref = &worker_trace;
+    // @PLN117 step 0 — parallelism falsification instrument (see `WorkerTrace`):
+    // when armed, prove this `par` dispatched across ≥2 workers.
+    let trace = WorkerTrace::new();
+    let trace_ref = &trace;
     let out = with_pool(|| {
         (0..threads)
             .into_par_iter()
             .map(|t| {
-                if let Some(seen) = worker_trace_ref {
-                    let idx = rayon::current_thread_index().unwrap_or(usize::MAX);
-                    seen.lock().unwrap().insert(idx);
-                }
+                trace_ref.record();
                 let start = t * n_rows / threads;
                 let end = (t + 1) * n_rows / threads;
                 // @PLN108 R2 — the SINGLE clone: always borrow the parent read-only
@@ -174,21 +164,7 @@ where
             })
             .collect()
     });
-    if let Some(seen) = worker_trace {
-        let indices = seen.into_inner().unwrap();
-        let summary = format!(
-            "loft: LOFT_TRACE_PAR_WORKERS parallel_workers n_rows={n_rows} threads={threads} \
-             distinct_workers={} indices={indices:?}",
-            indices.len(),
-        );
-        // Native: stderr.  Wasm: stderr is dropped, so surface the count in the
-        // program output where the browser harness reads it back from
-        // compile_and_run's JSON.
-        #[cfg(not(feature = "wasm"))]
-        eprintln!("{summary}");
-        #[cfg(feature = "wasm")]
-        crate::wasm::output_push(&format!("{summary}\n"));
-    }
+    trace.report("parallel_workers", n_rows, threads);
     out
 }
 
@@ -221,6 +197,51 @@ fn par_trace_enabled() -> bool {
     #[cfg(feature = "wasm")]
     {
         false
+    }
+}
+
+/// @PLN117 step 0 — per-dispatch collector of the DISTINCT rayon worker indices
+/// that ran a `par`, so the harness can prove a dispatch really crossed ≥2
+/// workers (and that it can FAIL — `par(..., 1)` reports 1).  Used at EVERY
+/// dispatch chokepoint (`parallel_workers` and `run_parallel_queue_ref`) so the
+/// count is reported no matter which return-shape path a `par` takes.
+///
+/// Non-perturbing: `new()` allocates only when the tracer is armed; when off,
+/// `record()` is a single `Option` branch and nothing is heap-allocated.
+#[cfg(feature = "threading")]
+struct WorkerTrace(Option<std::sync::Mutex<std::collections::BTreeSet<usize>>>);
+
+#[cfg(feature = "threading")]
+impl WorkerTrace {
+    fn new() -> Self {
+        Self(par_trace_enabled().then(|| std::sync::Mutex::new(std::collections::BTreeSet::new())))
+    }
+
+    /// Record the current rayon worker index — call once per task inside the pool.
+    fn record(&self) {
+        if let Some(seen) = &self.0 {
+            seen.lock()
+                .unwrap()
+                .insert(rayon::current_thread_index().unwrap_or(usize::MAX));
+        }
+    }
+
+    /// Emit the distinct-worker count for `site` after the join.  Native →
+    /// stderr; wasm → the program output (wasm stderr is dropped), where the
+    /// browser harness reads it back from `compile_and_run`'s JSON.
+    fn report(self, site: &str, n_rows: usize, threads: usize) {
+        if let Some(seen) = self.0 {
+            let indices = seen.into_inner().unwrap();
+            let summary = format!(
+                "loft: LOFT_TRACE_PAR_WORKERS {site} n_rows={n_rows} threads={threads} \
+                 distinct_workers={} indices={indices:?}",
+                indices.len(),
+            );
+            #[cfg(not(feature = "wasm"))]
+            eprintln!("{summary}");
+            #[cfg(feature = "wasm")]
+            crate::wasm::output_push(&format!("{summary}\n"));
+        }
     }
 }
 
@@ -825,10 +846,17 @@ pub fn run_parallel_queue_ref(
     let prog_ref = &prog;
     let extras_ref = &extras;
     let dispenser_ref = &dispenser;
+    // @PLN117 arc C — instrument the struct/ref/vector return path too, so the
+    // memory-model harness can prove THIS (allocation + adoption + rebase heavy)
+    // dispatch really crossed ≥2 workers under shared memory, not just the
+    // simple `parallel_workers` path.
+    let trace = WorkerTrace::new();
+    let trace_ref = &trace;
     let batches: Vec<(Vec<(usize, DbRef)>, Stores)> = with_pool(|| {
         (0..n_workers)
             .into_par_iter()
             .map(|t| {
+                trace_ref.record();
                 let start = t * n_rows / n_workers;
                 let end = (t + 1) * n_rows / n_workers;
                 // @PLN108 R4b: queue_ref borrows the parent read-only like every other
@@ -912,6 +940,7 @@ pub fn run_parallel_queue_ref(
             })
             .collect()
     });
+    trace.report("run_parallel_queue_ref", n_rows, n_workers);
     let null_db = DbRef::NULL;
     let mut refs: Vec<DbRef> = vec![null_db; n_rows];
     let mut adopted: Vec<u16> = Vec::new();
