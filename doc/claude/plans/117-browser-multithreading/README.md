@@ -9,8 +9,8 @@ Tracks [`loft-lang/plans#117`](https://github.com/loft-lang/plans/issues/117) (`
 
 ## Status
 
-**Open — INTEGRAL threading done: `par` runs on Web Worker threads in EVERY browser build
-(`loft --html` and the gallery), on ONE loft-owned runtime; only CI wiring remains.** A
+**Open — INTEGRAL threading done and gated in CI: `par` runs on Web Worker threads in EVERY
+browser build (`loft --html` and the gallery), on ONE loft-owned runtime.** A
 loft `par`, run through `compile_and_run`
 in a real (headless) browser, **dispatches across multiple Web Worker threads over shared wasm
 memory** with correct results (proven for primitive, struct+text, and vector returns) and a
@@ -71,11 +71,29 @@ and rayon locks there on every join); pool start-up must be two-phase and host-d
 deadlocks); and each worker needs its own shadow stack + TLS block installed from JS, plus an
 `--export=__stack_pointer` link-arg.
 
-**Remaining:**
+**CI wiring — DONE.** The five gates run on a runner, not just this box:
+`.github/workflows/browser-threads.yml` (`Browser threading`) installs what they need —
+nightly + `rust-src`, `wasm-pack`, binaryen, headless Chrome — builds the release loft and
+`make wasm-mt`, then runs `scripts/par_gates.sh --ci`. It fires **nightly at 05:00 UTC**
+(clear of the 03:00 daily matrix and 04:00 miri) and **per PR on the threading surface**
+(`src/parallel.rs`, `src/wasm_threads.rs`, `src/wasm.rs`, `src/native_utils.rs`, `wasm-sync/`,
+`doc/loft-thread.js`, `tests/wasm/`, `Makefile`, `Cargo.toml`); the nightly is what covers the
+broad files (`src/state/mod.rs`, `src/generation/`, `src/main.rs`) that are too hot to put on a
+per-PR trigger for a ~40-minute job. Two decisions make it a real gate rather than a green
+no-op:
 
-- **CI wiring** — the five headless gates (`par-thread-proof.sh`, `par-memory-proof.sh`,
-  `par-scaling-bench.sh`, `par-ui-responsive.sh`, `html-thread-proof.sh`) all pass locally but need
-  chromium on the CI runner to run there, so the threaded path can't silently rot.
+- **A SKIP is a failure in CI.** Each gate exits 0 on a missing prerequisite so a dev without a
+  browser still gets a useful run — on the runner everything is installed, so "skipped" can only
+  mean the provisioning broke. `--ci` preflights the five prerequisites and fails on any `SKIP`.
+- **Performance floors are calibrated to the runner, not switched off.** 4 vCPUs against this
+  box's 24, so the workflow sets `POOLS="1 2 4"`, `MIN_SPEEDUP_PCT=150`, `THREADS=4`,
+  `MIN_FRAME_RATIO_X10=15` (defaults, i.e. this box: `1 2 4 8` / 250 / 8 / 20). A `par` that stops
+  parallelising still fails. `WAIT_SCALE=3` stretches the wait for each page's report line; the
+  gates now exit as soon as it lands (they used to sleep a fixed 15–34s per cell), so the cap
+  costs nothing when things are healthy.
+
+A red run surfaces on every PR through ci.yml's `Nightly health (informational)` job, which now
+reports `browser-threads.yml` beside miri and the daily matrix.
 
 Steps 0–4, arcs A/B/C/D, B1 (gallery **and** `--html`), and all of Track 4 (E1/E2/E3) are done.
 This README is the single source of truth for phase status.
@@ -137,7 +155,7 @@ working correctly on the main thread alongside the worker pool.
 | **B** — dispatch over the browser rayon pool | route `run_parallel_*` and `par_fold` over the page's global pool; ONE scheduler, not two | **DONE + proven** (`with_pool` seam; in-browser `distinct_workers=4`, value matches native). The hand-rolled `worker_entry` stub is gone — and so is `wasm-bindgen-rayon`: the pool is loft's own (`src/wasm_threads.rs`), shared by every browser build |
 | **C** — memory model under SHARED memory | re-prove the @PLN108 read-only-share model (`clone_for_light_worker`, borrowed parent stores, `read_only` write-panic) now that the Store heap is a *shared* `SharedArrayBuffer` across workers, under atomics | **DONE + proven.** Invariant (worker reads shared read-only parent, writes only own scratch) holds across 5 verified re-assertion sites — C93 static, the release-active read-only `assert!`, the read-only borrow, join-before-drop, and the **lock-guarded wasm DLMALLOC** (concurrent worker alloc is serialized). Empirical: `par-memory-proof.{html,sh}` runs allocation-heavy struct+text AND vector-return `par` across 4 Web Workers, every rep == native ref, real ≥4-worker concurrency, 30-rep race hunt clean. `par_share_for`/copy-path is gone (@PLN108 left ONE borrow path) |
 | **D** — cross-origin isolation + fallback | COOP/COEP hosting contract; runtime `crossOriginIsolated` detection; **graceful fallback to sequential** when unavailable | **DONE + proven** — `coi-server.py` sends COOP/COEP, `html-plain-server.py` deliberately does not; on a non-isolated host the SAME threaded `--html` bundle runs `distinct_workers=1` with the same value and never crashes. Contract documented in WASM.md |
-| **E** — verify + measure | in-browser proof a `par` runs OFF the main thread + scales; an automated gate; benchmark vs native + vs sequential-wasm | **E1 + E2 + E3 DONE.** Five headless gates: `par-thread-proof.sh` (dispatch + fallback), `par-memory-proof.sh` (memory model), `par-scaling-bench.sh` (scaling — par-time 1w→8w = 3154→612ms, 5.2×; 2.9× at 4w; ~2× the native interpreter), `par-ui-responsive.sh` (E1 — a rAF loop delivers ~3× more frames + ~½ the worst-case jank threaded vs sequential), and `html-thread-proof.sh` (the `loft --html` bundle: threaded, non-isolated fallback, and `--no-threads`, each against the interpreter's value). All value-stable. Only CI wiring (chromium on the runner) left |
+| **E** — verify + measure | in-browser proof a `par` runs OFF the main thread + scales; an automated gate; benchmark vs native + vs sequential-wasm | **E1 + E2 + E3 DONE.** Five headless gates: `par-thread-proof.sh` (dispatch + fallback), `par-memory-proof.sh` (memory model), `par-scaling-bench.sh` (scaling — par-time 1w→8w = 3154→612ms, 5.2×; 2.9× at 4w; ~2× the native interpreter), `par-ui-responsive.sh` (E1 — a rAF loop delivers ~3× more frames + ~½ the worst-case jank threaded vs sequential), and `html-thread-proof.sh` (the `loft --html` bundle: threaded, non-isolated fallback, and `--no-threads`, each against the interpreter's value). All value-stable, all run in CI by `.github/workflows/browser-threads.yml` (nightly + threading-surface PRs), where a skipped gate is a failure |
 
 ## Phase ordering
 

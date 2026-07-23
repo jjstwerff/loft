@@ -1282,6 +1282,20 @@ jobs:
                   + jobs.map((j) => `${icon(j.conclusion)} ${j.name}`).join(' · ')
                   + ` — [run #${miri.run_number}](${miri.html_url})`);
               }
+              // @PLN117 browser-threading gates (browser-threads.yml, nightly +
+              // on threading-surface pushes) — the only place `par` on real Web
+              // Worker threads is proven, so a red there is invisible anywhere
+              // else.  Tolerates a missing workflow (not yet on main, renamed)
+              // instead of losing the whole report to a 404.
+              let threads = null;
+              try { threads = await latestRun('browser-threads.yml', {}); } catch (e) { /* not on main yet */ }
+              if (threads) {
+                const jobs = await runJobs(threads);
+                if (jobs.some(isBad)) attentionNeeded = true;
+                sections.push(`**browser threading** (${threads.created_at.slice(0, 10)}): `
+                  + jobs.map((j) => `${icon(j.conclusion)} ${j.name}`).join(' · ')
+                  + ` — [run #${threads.run_number}](${threads.html_url})`);
+              }
               // Scheduled daily full-matrix CI — the only place Windows runs.
               // ~20 jobs, so name the failures and count the rest.
               const daily = await latestRun('ci.yml', { event: 'schedule' });

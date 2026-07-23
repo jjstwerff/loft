@@ -8,13 +8,14 @@
 # Exit 0 pass / 1 fail.
 set -u
 cd "$(dirname "$0")/../.."
+. tests/wasm/gate-lib.sh
 PORT="${PORT:-8785}"; ROOT=tests/wasm; REPORT="$(mktemp)"
 CHROME="$(command -v chromium || command -v chromium-browser || command -v google-chrome || echo chromium)"
 [ -f "$ROOT/pkg-mt/loft.js" ] || { echo "SKIP: no threaded bundle — run 'make wasm-mt'"; exit 0; }
 python3 "$ROOT/coi-server.py" "$PORT" "$ROOT" "$REPORT" >/dev/null 2>&1 &
 SRV=$!; trap 'kill $SRV 2>/dev/null; rm -f "$REPORT"' EXIT; sleep 1
-run() { : > "$REPORT"; timeout 70 "$CHROME" --headless=new --no-sandbox --disable-gpu \
-  "http://127.0.0.1:$PORT/par-memory-proof.html$1" >/dev/null 2>&1 & local ch=$!; sleep "$2"; kill $ch 2>/dev/null; head -1 "$REPORT"; }
+run() { : > "$REPORT"; timeout $(( 70 * ${WAIT_SCALE:-1} )) "$CHROME" --headless=new --no-sandbox --disable-gpu \
+  "http://127.0.0.1:$PORT/par-memory-proof.html$1" >/dev/null 2>&1 & local ch=$!; await_report "$REPORT" "$2"; stop_browser $ch; head -1 "$REPORT"; }
 fail=0
 # case → native reference value (native --interpret == --native)
 check() {  # $1=label $2=query $3=wait $4=expected-ref $5=need-concurrency(1/0)

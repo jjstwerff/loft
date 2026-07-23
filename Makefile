@@ -1018,13 +1018,12 @@ check-no-threading:
 # threads, that the shared-memory model still holds, that it scales, that the UI
 # stays responsive, and that a `loft --html` page does all of that too — each
 # against the value the interpreter produces.  Needs a headless chromium; the
-# bundle gates additionally need `make wasm-mt` (they SKIP without it).
+# bundle gates additionally need `make wasm-mt` (they SKIP without it).  The
+# runner keeps going after a failing gate and prints one table at the end;
+# `scripts/par_gates.sh --ci` is the same run with a SKIP promoted to a failure,
+# which is what .github/workflows/browser-threads.yml runs nightly.
 par-gates:
-	@tests/wasm/par-thread-proof.sh
-	@tests/wasm/par-memory-proof.sh
-	@tests/wasm/par-scaling-bench.sh
-	@tests/wasm/par-ui-responsive.sh
-	@tests/wasm/html-thread-proof.sh
+	@scripts/par_gates.sh
 
 # @PLN117 — type-check loft's OWN browser thread pool (src/wasm_threads.rs).  It
 # is browser-only by nature, so the host `cargo clippy --all-features` never sees

@@ -209,6 +209,15 @@ Two things about a browser thread are not like a native one:
 Details and the in-browser proofs: [WASM.md](WASM.md) §
 Threading, and `doc/claude/plans/117-browser-multithreading/`.
 
+**Proving it stays true.** Browser threading cannot be checked by the Rust suite —
+it needs a real browser, a COOP/COEP host and a threaded bundle — so five headless
+gates carry it: `make par-gates` locally, and the `Browser threading` workflow
+(`.github/workflows/browser-threads.yml`) nightly plus on any PR touching the
+threading surface.  They measure dispatch (worker count), the shared-memory model,
+scaling, UI responsiveness, and the `loft --html` bundle, each against the value the
+interpreter produces.  In CI a gate that SKIPs for a missing prerequisite **fails**
+(`scripts/par_gates.sh --ci`): the one way this could rot is by quietly not running.
+
 ---
 
 ## Compiler Validation Summary

@@ -10,6 +10,7 @@
 #   tests/wasm/par-thread-proof.sh
 set -u
 cd "$(dirname "$0")/../.."
+. tests/wasm/gate-lib.sh
 PORT="${PORT:-8788}"
 ROOT=tests/wasm
 REPORT="$(mktemp)"
@@ -21,11 +22,11 @@ python3 "$ROOT/coi-server.py" "$PORT" "$ROOT" "$REPORT" >/dev/null 2>&1 &
 SRV=$!
 trap 'kill $SRV 2>/dev/null; rm -f "$REPORT"' EXIT
 sleep 1
-run() {  # $1 = query, $2 = seconds to wait
+run() {  # $1 = query, $2 = seconds to wait for the page's line
   : > "$REPORT"
-  timeout 45 "$CHROME" --headless=new --no-sandbox --disable-gpu \
+  timeout $(( 45 * ${WAIT_SCALE:-1} )) "$CHROME" --headless=new --no-sandbox --disable-gpu \
     "http://127.0.0.1:$PORT/par-thread-proof.html$1" >/dev/null 2>&1 &
-  local ch=$!; sleep "$2"; kill $ch 2>/dev/null
+  local ch=$!; await_report "$REPORT" "$2"; stop_browser $ch
   head -1 "$REPORT"
 }
 echo "== parallel (initThreadPool 4) =="

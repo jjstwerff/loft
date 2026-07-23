@@ -2877,10 +2877,26 @@ cargo test --test wrap wasm_dir
 
 #### CI integration
 
-The WASM threading test is optional in CI — it requires `wasm-pack` and a
-nightly Rust toolchain (for `-C target-feature=+atomics`).  The `WASM_SKIP` list
-ensures CI passes without the threaded build.  When the build environment is
-available, remove the entry to enable the test.
+Browser threading has its own workflow — **`.github/workflows/browser-threads.yml`**
+(`Browser threading`), which runs the five headless gates nightly at 05:00 UTC and on
+any PR touching the threading surface (`src/parallel.rs`, `src/wasm_threads.rs`,
+`wasm-sync/`, `doc/loft-thread.js`, `tests/wasm/`, …).  It installs what the rest of
+CI has no reason to carry: nightly + `rust-src` (the atomics std comes from
+`-Z build-std`), `wasm-pack`, binaryen, and a headless Chrome.  Locally the same run
+is `make par-gates`.
+
+Two properties keep it honest:
+
+- **A skipped gate is a CI failure.** Every gate exits 0 when a prerequisite is
+  missing so a dev without a browser still gets a useful run; `scripts/par_gates.sh
+  --ci` preflights the prerequisites and turns any `SKIP` into a red job, because a
+  gate that skips itself green is the one way this can rot unnoticed.
+- **The performance floors are calibrated, not disabled.** A runner has 4 vCPUs
+  against the dev box's 24, so the workflow lowers the scaling and frame-rate floors
+  (`POOLS`, `SPEEDUP_AT`, `MIN_SPEEDUP_PCT`, `THREADS`, `MIN_FRAME_RATIO_X10`) to what
+  that hardware delivers — a `par` that stops parallelising still fails.
+
+A red run is surfaced on every PR by ci.yml's `Nightly health (informational)` job.
 
 #### Implementation status
 

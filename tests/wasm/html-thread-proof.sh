@@ -20,6 +20,7 @@
 #   tests/wasm/html-thread-proof.sh
 set -u
 cd "$(dirname "$0")/../.."
+. tests/wasm/gate-lib.sh
 LOFT=target/release/loft
 PORT="${PORT:-8794}"
 PLAIN_PORT="${PLAIN_PORT:-8795}"
@@ -51,26 +52,30 @@ fn main() {
 LOFT
 
 # The reference: what this program means, decided by the interpreter.
-REF="$(LOFT_TIMEOUT=120 "$LOFT" "$WORK/par.loft" | grep -oP 'par_sum=\K\d+')"
+REF="$(LOFT_TIMEOUT=$(( 120 * ${WAIT_SCALE:-1} )) "$LOFT" "$WORK/par.loft" | grep -oP 'par_sum=\K\d+')"
 echo "== reference (interpreter) par_sum=$REF =="
 [ -n "$REF" ] || { echo "FAIL: interpreter produced no par_sum"; exit 1; }
 
 echo "== building pages =="
-LOFT_TIMEOUT=900 "$LOFT" --html "$WORK/threaded.html" "$WORK/par.loft" >/dev/null 2>&1 \
+# The threaded export rebuilds std with atomics on a cold tree; 15 minutes is
+# plenty on this box and not on a 4-vCPU runner, so it rides WAIT_SCALE too.
+BUILD_TIMEOUT=$(( 900 * ${WAIT_SCALE:-1} ))
+LOFT_TIMEOUT=$BUILD_TIMEOUT "$LOFT" --html "$WORK/threaded.html" "$WORK/par.loft" >/dev/null 2>&1 \
   || { echo "FAIL: loft --html (threaded) failed"; exit 1; }
-LOFT_TIMEOUT=900 "$LOFT" --html "$WORK/sequential.html" --no-threads "$WORK/par.loft" >/dev/null 2>&1 \
+LOFT_TIMEOUT=$BUILD_TIMEOUT "$LOFT" --html "$WORK/sequential.html" --no-threads "$WORK/par.loft" >/dev/null 2>&1 \
   || { echo "FAIL: loft --html --no-threads failed"; exit 1; }
 
-run() {  # $1 = server script, $2 = port, $3 = page, $4 = seconds
+run() {  # $1 = server script, $2 = port, $3 = page, $4 = seconds to wait
   : > "$REPORT"
   python3 "$1" "$2" "$WORK" "$REPORT" >/dev/null 2>&1 &
   local srv=$!
   sleep 1
-  timeout 60 "$CHROME" --headless=new --no-sandbox --disable-gpu \
+  timeout $(( 60 * ${WAIT_SCALE:-1} )) "$CHROME" --headless=new --no-sandbox --disable-gpu \
     "http://127.0.0.1:$2/driver.html?page=$3" >/dev/null 2>&1 &
   local ch=$!
-  sleep "$4"
-  kill $ch $srv 2>/dev/null
+  await_report "$REPORT" "$4"
+  stop_browser $ch
+  kill $srv 2>/dev/null
   wait $srv 2>/dev/null
   head -1 "$REPORT"
 }
