@@ -321,42 +321,51 @@ owner's to approve:
   where the repo has the mechanism but not the *why* — notably **LGPL**, which
   the repo never justifies anywhere, and which every evaluator asks about.
 
-### T3.3 — animated hero — **headless capture RULED OUT; needs a manual recording**
+### T3.3 — animated hero — **blocked on the game not rendering, not on tooling**
 
-Attempted and evidenced, so nobody repeats it. Two blockers, either one fatal:
+`ffmpeg` is now installed (7.0.2 static, `~/.local/bin/ffmpeg`, no sudo needed),
+so encoding is no longer a blocker. The remaining one is upstream of capture:
+**Brick Buster draws a static, partial canvas here and never advances.**
 
-**1. The game does not animate in headless Chrome.** Driving it works — a CDP
-`Input.dispatchKeyEvent` Space press leaves the title screen (the bricks come up
-undimmed) — but the frame loop never advances. Six captures over ~4 s of
-wall-clock produced **one distinct frame**; re-running with
-`Emulation.setVirtualTimePolicy` (the standard way to drive `requestAnimationFrame`
-deterministically) produced **one distinct frame** as well. The frozen frame is
-also partial: 3 of 5 brick rows, no ball, no score. WebGL itself is fine — the
-harness already runs Chrome with `--enable-unsafe-swiftshader` /
-`--use-angle=swiftshader`, and colours render.
+Five approaches, all the same result — headless + wall-clock, headless +
+`Emulation.setVirtualTimePolicy`, a real (non-headless) Chrome on an Xvfb
+display, a fresh `make game` rebuild, and click-then-Space. Attribution, not
+guesswork:
 
-*This also explains the T2.4 finding*: `doc/brick-buster.html` renders a partial,
-static frame to any headless viewer, which is roughly what a link-preview bot
-sees.
+- `requestAnimationFrame` runs at **61 ticks/s** — the browser loop is healthy.
+- Input **is** received: a CDP click + Space changes the canvas exactly once
+  (title → play field), then it never changes again.
+- The play state renders **3 of 5 brick rows, no ball, no score**.
+- No console errors, no exceptions.
 
-**2. There is no encoder on this machine.** `ffmpeg`, `ImageMagick` (`convert` /
-`magick`) and `gifski` are all absent, so even a good frame sequence could not be
-turned into a GIF or webm. (An APNG could be assembled from PNG frames with
-node's `zlib` alone, but that is only worth writing once blocker 1 is solved.)
+**The project's own gate reproduces it**, which is what turns this from "my
+capture is wrong" into a finding: `tests/html_render.rs` fails with
+`canvas.blank — canvas has only 6 distinct colors (threshold 20)` on a
+freshly-built artifact.
 
-**What a manual recording needs** — the asset is worth having, so the spec:
+*(One instrument was invalid and is worth flagging: hashing `canvas.toDataURL()`
+measures nothing on a WebGL canvas without `preserveDrawingBuffer` — it returns
+blank regardless. `Page.captureScreenshot`, which composites, is the honest
+signal.)*
 
-- ~5 seconds, mid-play, with the things a still cannot show: **ball motion, brick
-  breaks, a powerup drop, and multiball**. Skip the title screen; the poster
-  already covers identification.
-- The game's own 800×600 canvas, no desktop chrome or cursor.
-- GIF for the README (safest there), webm/mp4 optional for the site.
-- **Keep the PNG.** OpenGraph does not animate, so
-  `images/hero-brick-buster.png` stays the `og:image` regardless — that is
-  already how `SITE_OG_IMAGE` is wired.
+**Two questions for the owner, in order:**
 
-Recording it in a real browser (`make game`, then open `doc/brick-buster.html`)
-sidesteps blocker 1 entirely, since the loop runs fine there.
+1. **Does Brick Buster still render correctly in a real browser?** If yes, this
+   is a SwiftShader/software-GL limitation and the animated hero simply needs a
+   manual recording (spec below). If no, the shipped game page has a real
+   regression — which matters more than the hero.
+2. **Is the render gate actually running anywhere?** It skips in `make ci`
+   whenever the wasm rlib is newer than the bundle — the normal dev-machine state
+   — and the job that runs it (`ci.yml`, `binary(html_render)`) is PR-triggered,
+   so it has not run on this branch. A gate that skips locally and only fires on
+   a PR is close to unwatched.
+
+**Manual recording spec** (unchanged, and now only the capture is missing):
+~5 s mid-play showing ball motion, brick breaks, a powerup drop and multiball;
+the game's own 800×600 canvas, no desktop chrome; GIF for the README. Keep the
+PNG — OpenGraph does not animate, so `SITE_OG_IMAGE` stays as it is. With
+`ffmpeg` present, `ffmpeg -i clip.webm -vf "fps=15,scale=800:-1,palettegen"` /
+`paletteuse` turns a screen recording into the GIF in one step.
 
 ### ~~T3.5~~ — DONE 2026-07-24, routed differently than proposed
 `examples/README.md` added. The review suggested routing game-seekers to the
