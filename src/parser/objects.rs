@@ -2791,7 +2791,29 @@ impl Parser {
                     // alias (i32, u8).  `elem_tp` is the narrow type
                     // (Parts::Byte / Parts::Int) when applicable.
                     let vec_tp = self.vector_of(content);
-                    let elem_tp = self.database.content(vec_tp);
+                    // #628 — `elem_tp` is the store type of ONE element: the stride
+                    // `vector_add` copies by.  For a NESTED `vector<vector<T>>` field
+                    // that element is the inner vector's own 4-byte handle, so its
+                    // type is `vec_tp` itself; `content(vec_tp)` peels one level too
+                    // many and yielded the inner SCALAR (`Parts::Base`, size 8).
+                    // `vector_add` then strode 8 bytes over 4-byte handles, so
+                    // `Bag { a: v }` reported the right OUTER length with every inner
+                    // row empty, and walked off the populated region into a SIGSEGV
+                    // once the struct carried three such fields.
+                    //
+                    // Same rule as #553 for a vector-typed accumulator element: the
+                    // element's OWN vector store type, not one level deeper.  It must
+                    // come from `vector_of` (which consults `narrow_vector_content`)
+                    // and NOT be re-derived — a fresh `vector(db_type(u8))` registers
+                    // a byte row with different nullability than the narrow registry
+                    // uses, so the copy read a `vector<u8>` built as one type through
+                    // another and crashed.  Scalar and narrow-scalar fields keep the
+                    // peeled type, which is correct for them.
+                    let elem_tp = if matches!(**content, Type::Vector(_, _)) {
+                        vec_tp
+                    } else {
+                        self.database.content(vec_tp)
+                    };
                     let field_ref = self.cl(
                         "OpGetField",
                         &[
