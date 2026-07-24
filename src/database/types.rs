@@ -39,6 +39,38 @@ fn schema_trace(event: &str, name: &str, nr: u16) {
     }
 }
 
+/// `LOFT_TRACE_MINT=1` — narrate every collection-type lookup to stderr as
+/// `[mint] <kind> <name> hit=<nr>|MINT=<nr> len=<n> <- <caller frames>`.
+///
+/// The collection constructors ([`Stores::vector`], `sorted`, `hash`, `index`)
+/// dedupe on the RENDERED NAME, so a lookup that misses silently mints a second
+/// type for a collection that already exists — a duplicate whose id gets baked
+/// into emitted code while the runtime table never grows to hold it.  The
+/// symptom is an out-of-bounds panic far from the cause, and nothing in it names
+/// the miss.  This trace is what attributes the panic to the lookup that missed:
+/// diff a working run against a broken one and the extra `MINT=` line is the
+/// fault.  The caller frames separate the pipelines (parse / warm load / native
+/// emitter) that each hold their own `Stores`.
+///
+/// Pairs with [`schema_trace`], which does the same for struct registration.
+fn mint_trace(kind: &str, name: &str, found: Option<u16>, len: usize) {
+    if std::env::var_os("LOFT_TRACE_MINT").is_none() {
+        return;
+    }
+    let what = found.map_or_else(|| format!("MINT={len}"), |nr| format!("hit={nr}"));
+    let bt = std::backtrace::Backtrace::force_capture().to_string();
+    let frames: Vec<&str> = bt
+        .lines()
+        .filter(|l| l.contains("loft::") && !l.contains("types::"))
+        .take(4)
+        .map(str::trim)
+        .collect();
+    eprintln!(
+        "[mint] {kind} {name:?} {what} len={len} <- {}",
+        frames.join(" | ")
+    );
+}
+
 fn key_type_nr_for_content(content: u16, types: &[Type]) -> i8 {
     if content <= 5 {
         return 1 + content as i8;
@@ -61,13 +93,50 @@ impl Stores {
     /// The derived `parents` back-references stay empty — only parse-time layout
     /// validation + debug display read them, neither of which runs on the load
     /// path.
+    ///
+    /// `names` is keyed by the name the *constructor* renders
+    /// ([`Stores::vector`], [`Stores::sorted`], …), which is how those calls
+    /// dedupe.  [`Stores::finish`] then PROMOTES a collection whose content is
+    /// shared and renames it in place — `vector<X>` → `array<X>`,
+    /// `sorted<X[k]>` → `ordered<X[k]>` — without touching `names`, so on a cold
+    /// run the pre-promotion spelling stays the live lookup key.  Rebuilding the
+    /// map from the stored names alone would therefore lose exactly those keys,
+    /// and the next `vector`/`sorted` call would miss and mint a SECOND type for
+    /// a collection that already exists.  That id gets baked into emitted native
+    /// code while `init()` never registers it, so the runtime type table is
+    /// shorter than the id it is indexed with → an out-of-bounds panic on every
+    /// warm-cache `--native` run.  [`Stores::promoted_lookup_key`] restores the
+    /// constructor spelling as an alias so the round-trip is faithful.
     pub(crate) fn install_schema(&mut self, types: Vec<Type>) {
         self.names = types
             .iter()
             .enumerate()
             .map(|(i, t)| (t.name.clone(), i as u16))
             .collect();
+        // Aliases go on AFTER the primary map, and never overwrite: a schema
+        // that also holds a genuinely unpromoted `vector<X>` keeps its own id.
+        for (i, t) in types.iter().enumerate() {
+            if let Some(key) = Self::promoted_lookup_key(t) {
+                self.names.entry(key).or_insert(i as u16);
+            }
+        }
         self.types = types;
+    }
+
+    /// The constructor spelling of a type [`Stores::finish`] promoted, or `None`
+    /// when the type was never promoted.  Promotion rewrites only the leading
+    /// word of the rendered name and leaves the `<content[key]>` tail byte-identical
+    /// (`Stores::key_name` and `Stores::create_key` render that tail the same way),
+    /// so recovering the original key is an exact prefix swap rather than a re-render.
+    fn promoted_lookup_key(t: &Type) -> Option<String> {
+        match t.parts {
+            Parts::Array(_) => t.name.strip_prefix("array<").map(|r| format!("vector<{r}")),
+            Parts::Ordered(_, _) => t
+                .name
+                .strip_prefix("ordered<")
+                .map(|r| format!("sorted<{r}")),
+            _ => None,
+        }
     }
 
     /**
@@ -1139,6 +1208,12 @@ impl Stores {
         } else {
             format!("vector<{}>", self.types[content as usize].name)
         };
+        mint_trace(
+            "vector",
+            &name,
+            self.names.get(&name).copied(),
+            self.types.len(),
+        );
         if let Some(nr) = self.names.get(&name) {
             *nr
         } else {
@@ -1194,6 +1269,12 @@ impl Stores {
             }
         }
         name += "]>";
+        mint_trace(
+            "hash",
+            &name,
+            self.names.get(&name).copied(),
+            self.types.len(),
+        );
         if let Some(nr) = self.names.get(&name) {
             *nr
         } else {
@@ -1264,6 +1345,12 @@ impl Stores {
     pub fn sorted(&mut self, content: u16, key: &[(String, bool)]) -> u16 {
         let mut name = "sorted<".to_string() + &self.types[content as usize].name + "[";
         let key_nrs = self.create_key(content, key, &mut name);
+        mint_trace(
+            "sorted",
+            &name,
+            self.names.get(&name).copied(),
+            self.types.len(),
+        );
         if let Some(nr) = self.names.get(&name) {
             *nr
         } else {
@@ -1285,6 +1372,12 @@ impl Stores {
         // index type — otherwise the content struct accumulates stale
         // `#left_N / #right_N / #color_N` triples that push real user
         // fields to unexpected positions and break tree traversal.
+        mint_trace(
+            "index",
+            &name,
+            self.names.get(&name).copied(),
+            self.types.len(),
+        );
         if let Some(nr) = self.names.get(&name) {
             return *nr;
         }
@@ -1655,8 +1748,18 @@ impl Stores {
             // `vector<T>` to an unrelated default-library id (e.g. FieldValue),
             // so a 3+-deep `vector<vector<vector<X>>>` copy got a bogus type-id
             // and `copy_claims` dispatched as the wrong type → OOB panic.
+            //
+            // The element id comes from `Data::vector_element_type` — the one
+            // derivation of that fact, shared with the parser's `vector_of` and
+            // `typedef.rs::fill_database`.  Recursing through `db_type` instead
+            // re-entered the Integer arm below, which knows nothing of the
+            // element-side narrow forms (no `4 → int`, no `ShortRaw`) and so
+            // widened every narrow element to 8-byte `integer` (loft#624 nested).
             crate::data::Type::Vector(elem, _) => {
-                let e = self.db_type(elem, data);
+                let e = match data.vector_element_type(elem, self) {
+                    Some(e) => e,
+                    None => self.db_type(elem, data),
+                };
                 self.vector(e)
             }
             _ => data.def(data.type_def_nr(tp)).known_type,
@@ -2344,7 +2447,7 @@ impl Type {
 
 #[cfg(test)]
 mod layout_tests {
-    use super::{Field, Parts, Stores};
+    use super::{Field, Parts, Stores, Type};
     use crate::keys::Content;
 
     /// Build a clean two-field struct via the public API.
@@ -2361,6 +2464,75 @@ mod layout_tests {
     fn validate_all_layouts_clean_after_init_returns_no_issues() {
         let s = Stores::new();
         assert!(s.validate_all_layouts().is_empty());
+    }
+
+    /// Build the shape that makes `finish()` promote: `Node` is the content of an
+    /// `index` AND of a `vector`/`sorted`, so it is LINKED and both collections are
+    /// renamed in place (`vector<Node>` → `array<Node>`, `sorted<Node[id]>` →
+    /// `ordered<Node[id]>`).  Returns `(node, vector<Node>, sorted<Node[id]>)`.
+    fn promoted_node_schema(s: &mut Stores) -> (u16, u16, u16) {
+        let int_c = s.name("integer");
+        let node = s.structure("Node", 0);
+        s.field(node, "id", int_c);
+        let key = [("id".to_string(), true)];
+        let vec_c = s.vector(node);
+        let idx_c = s.index(node, &key);
+        let sorted_c = s.sorted(node, &key);
+        let hash_c = s.hash(node, &["id".to_string()]);
+        let graph = s.structure("Graph", 0);
+        s.field(graph, "nodes", vec_c);
+        s.field(graph, "idx", idx_c);
+        let wide = s.structure("Wide", 0);
+        s.field(wide, "a", sorted_c);
+        s.field(wide, "b", hash_c);
+        s.finish();
+        (node, vec_c, sorted_c)
+    }
+
+    /// A schema round-trip (the whole-program warm cache) must not lose the lookup
+    /// key of a type `finish()` promoted.  `install_schema` rebuilds `names` from the
+    /// stored names, which for a promoted collection is the POST-promotion spelling —
+    /// so without the constructor-key alias the next `vector`/`sorted` call misses and
+    /// mints a SECOND type for a collection that already exists.  That duplicate id is
+    /// baked into emitted native code while `init()` never registers it, panicking with
+    /// "index out of bounds" on every warm-cache `--native` run.
+    #[test]
+    fn install_schema_keeps_the_lookup_key_of_a_promoted_collection() {
+        let mut s = Stores::new();
+        let (node, vec_c, sorted_c) = promoted_node_schema(&mut s);
+        let key = [("id".to_string(), true)];
+        // Promotion happened: the stored names are the post-promotion spellings.
+        assert_eq!(s.types[vec_c as usize].name, "array<Node>");
+        assert_eq!(s.types[sorted_c as usize].name, "ordered<Node[id]>");
+        // Pre-round-trip, a repeat construction resolves to the existing type.
+        assert_eq!(s.vector(node), vec_c);
+        assert_eq!(s.sorted(node, &key), sorted_c);
+
+        let before = s.types.len();
+        s.install_schema(s.types.clone());
+        // Post-round-trip it must still resolve to the SAME id, minting nothing.
+        assert_eq!(s.vector(node), vec_c, "vector<Node> minted a duplicate");
+        assert_eq!(
+            s.sorted(node, &key),
+            sorted_c,
+            "sorted<Node[id]> minted a duplicate"
+        );
+        assert_eq!(s.types.len(), before, "the round-trip grew the type table");
+    }
+
+    /// The alias must never displace a type the schema really holds: a schema
+    /// carrying BOTH a promoted `array<Node>` and a distinct unpromoted
+    /// `vector<Node>` keeps each name on its own id.
+    #[test]
+    fn install_schema_alias_never_overwrites_a_real_name() {
+        let mut s = Stores::new();
+        let (_node, vec_c, _sorted_c) = promoted_node_schema(&mut s);
+        let mut types = s.types.clone();
+        let unpromoted = types.len() as u16;
+        types.push(Type::data("vector<Node>", Parts::Vector(0)));
+        s.install_schema(types);
+        assert_eq!(s.names.get("vector<Node>").copied(), Some(unpromoted));
+        assert_eq!(s.names.get("array<Node>").copied(), Some(vec_c));
     }
 
     #[test]

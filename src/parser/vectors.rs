@@ -1805,13 +1805,22 @@ impl Parser {
         // (4 of 12 bytes) → eval-stack skew → garbage rec-id into the locked
         // CONST_STORE.  Deep-copy the inner record instead.  Scalar elements keep
         // `set_field`.
-        if let Type::Vector(elem_tp, _) = in_t {
+        if matches!(in_t, Type::Vector(_, _)) {
             lp.push(self.cl(
                 "OpSetInt4",
                 &[Value::Var(elm), Value::Int(0), Value::Int(0)],
             ));
-            let elem_known = self.database.db_type(elem_tp, &self.data);
-            let type_nr = Value::Int(i32::from(self.database.vector(elem_known)));
+            // The ELEMENT type of the outer vector — one derivation, shared with
+            // the `+=` append and the slice.  Deriving it as
+            // `vector(db_type(inner))` re-entered `db_type`'s scalar arm, which
+            // sizes a narrow int as if it were nullable (`u8` -> 2, `u16` -> 4 ->
+            // plain `integer`) and so named a DIFFERENT row than the one the
+            // element was written into (loft#624 nested).
+            let type_nr = Value::Int(i32::from(
+                self.data
+                    .vector_element_type(in_t, &mut self.database)
+                    .unwrap_or(u16::MAX),
+            ));
             lp.push(self.cl(
                 "OpCopyRecord",
                 &[Value::Var(comp_var), Value::Var(elm), type_nr],
@@ -2670,11 +2679,18 @@ impl Parser {
                     let free_source_bit: i32 = 0;
                     let type_nr = if self.first_pass {
                         Value::Int(i32::from(u16::MAX))
-                    } else if let Type::Vector(elem_tp, _) = in_t {
-                        // For vector-typed elements, resolve via database.vector() to
-                        // get the correct Parts::Vector type for deep copy.
-                        let elem_known = self.database.db_type(elem_tp, &self.data);
-                        Value::Int(i32::from(self.database.vector(elem_known)) | free_source_bit)
+                    } else if matches!(in_t, Type::Vector(_, _)) {
+                        // The ELEMENT type of the outer vector, from the shared
+                        // resolver — the same id the literal, slice and comprehension
+                        // paths use.  `vector(db_type(inner))` named a different row:
+                        // `db_type`'s scalar arm sizes a narrow int as if nullable, so
+                        // a `vector<vector<u8>>` element deep-copied against a
+                        // `vector<short>` row (loft#624 nested).
+                        let elem_id = self
+                            .data
+                            .vector_element_type(in_t, &mut self.database)
+                            .unwrap_or(u16::MAX);
+                        Value::Int(i32::from(elem_id) | free_source_bit)
                     } else {
                         Value::Int(
                             i32::from(self.data.def(inner_nr).known_type()) | free_source_bit,

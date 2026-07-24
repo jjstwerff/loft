@@ -230,6 +230,12 @@ pub struct State {
     /// DbRef for each pre-built vector constant, indexed by definition number.
     /// Zeroed entries for non-constant definitions. Populated during `byte_code()`.
     pub const_refs: Vec<DbRef>,
+    /// #629 follow-up — set when the CALLER claims the entry fn's hidden return
+    /// buffer and will read it after [`execute_argv`](State::execute_argv)
+    /// returns.  Default `false`, so the buffer is freed with the entry frame the
+    /// way an ordinary call site frees the one it allocated; the REPL's capture
+    /// wrapper is the exception (see [`keep_entry_return`](State::keep_entry_return)).
+    pub(crate) keep_entry_return: bool,
 }
 
 pub(crate) fn new_ref(data: &DbRef, pos: u32, arg: u16) -> DbRef {
@@ -460,6 +466,7 @@ impl State {
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
             const_refs: Vec::new(),
+            keep_entry_return: false,
         }
     }
 
@@ -2427,6 +2434,36 @@ impl State {
         ))
     }
 
+    /// @PLN14 arc D — the live frame's slot for local `name`, as a [`DbRef`]
+    /// addressing it inside the stack store, plus its declared type and whether it
+    /// is an argument.  `None` when there is no current frame or no such local.
+    ///
+    /// This is the write end of the **frame-seed**: a store-resident binding is
+    /// loaded into its slot through this address, after which the ordinary
+    /// slot-based codegen runs untouched (Q1 — seeding needs no new opcodes).  It
+    /// is the same slot [`set_frame_literal`](Self::set_frame_literal) edits, but
+    /// exposed as an address so a **heap** value can be seeded too: that path has
+    /// a real `DbRef` to install (materialized from the session store) rather than
+    /// a literal to reconstruct, which is precisely what `set_frame_literal`
+    /// cannot do.
+    #[must_use]
+    pub fn frame_slot_addr(
+        &self,
+        name: &str,
+        data: &crate::data::Data,
+    ) -> Option<(DbRef, crate::data::Type, bool)> {
+        let (rec, at, tp, is_arg) = self.frame_slot(name, data)?;
+        Some((
+            DbRef {
+                store_nr: self.stack_cur.store_nr,
+                rec,
+                pos: at,
+            },
+            tp,
+            is_arg,
+        ))
+    }
+
     /// Whether `name` is a local **shown** at the current suspension — i.e. it
     /// appears in the captured paused frame.  The text edit path gates on this so a
     /// user can only edit a text local they can see; the memory-safety of the write
@@ -4107,7 +4144,30 @@ impl State {
         // aligned mode (step(4)=8) so the entry function's locals — and every
         // frame it calls — land on their alignment boundary; with the V1 base
         // of 4 the whole entry frame is misaligned by 4.  Identity when off.
-        let entry_base = crate::variables::aligned_stack_step(4);
+        // #629: a TEXT return is `ref_return`-promoted like a vector, but its
+        // buffer is a `String` the CALLER owns, not a store record — an ordinary
+        // call site declares a `__work_N` local, `OpCreateStack`s a ref to it,
+        // and frees it after.  The entry supplied nothing, so the callee wrote
+        // through an uninitialised slot and teardown double-freed it (SIGABRT on
+        // EVERY `fn main() -> text`, including a literal).  Reserve one real
+        // `String` per hidden text attr BELOW the argument area, so the frame's
+        // argument offsets are exactly what they were.
+        let attrs = &data.def(d_nr).attributes();
+        let mut text_bufs: Vec<u32> = Vec::new();
+        self.stack_pos = crate::variables::aligned_stack_step(4);
+        for a in *attrs {
+            if a.hidden
+                && matches!(&a.typedef, Type::RefVar(t) if matches!(t.base(), Type::Text(_)))
+            {
+                text_bufs.push(self.stack_pos);
+                self.put_stack(String::new());
+            }
+        }
+        // @PLAN53 cluster 2 / S4: the entry frame base must be 8-aligned in
+        // aligned mode (step(4)=8) so the entry function's locals — and every
+        // frame it calls — land on their alignment boundary; with the V1 base
+        // of 4 the whole entry frame is misaligned by 4.  Identity when off.
+        let entry_base = crate::variables::aligned_stack_step(self.stack_pos.max(4));
         self.stack_pos = entry_base;
         // Plan-07 phase 1 step 1.20 / phase 3 — publish source_spans
         // to the panic hook so a Rust panic inside any opcode dispatch
@@ -4124,7 +4184,6 @@ impl State {
             line: 0,
         });
         // If fn main declares a vector<text> parameter, push argv before the return address.
-        let attrs = &data.def(d_nr).attributes();
         if attrs.len() == 1 && !attrs[0].hidden && matches!(attrs[0].typedef, Type::Vector(_, _)) {
             let args_vec = self.database.text_vector(argv);
             self.put_stack(args_vec);
@@ -4143,13 +4202,27 @@ impl State {
         // every element write pointing at `stores[u16::MAX]`.  Allocating here
         // is exactly what the `OpDatabase`-before-the-call a real caller emits
         // does, so entry and non-entry frames now honour the same contract.
+        let mut next_text_buf = 0;
+        let mut heap_ret_slots: Vec<u32> = Vec::new();
         for a in *attrs {
-            if a.hidden
-                && matches!(
-                    a.typedef,
-                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                )
-            {
+            if !a.hidden {
+                continue;
+            }
+            if matches!(&a.typedef, Type::RefVar(t) if matches!(t.base(), Type::Text(_))) {
+                // Hand the callee a ref to the `String` reserved above — the
+                // same shape `OpCreateStack` builds for an ordinary caller.
+                let slot = text_bufs[next_text_buf];
+                next_text_buf += 1;
+                let db = crate::keys::DbRef {
+                    store_nr: self.stack_cur.store_nr,
+                    rec: self.stack_cur.rec,
+                    pos: self.stack_cur.pos + slot,
+                };
+                self.put_stack(db);
+            } else if matches!(
+                a.typedef,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            ) {
                 // Only the VECTOR contract is caller-allocates.  A struct /
                 // data-enum body opens with its own `OpDatabase`, which turns the
                 // sentinel into a store itself — pre-allocating for those would
@@ -4160,6 +4233,12 @@ impl State {
                 } else {
                     crate::keys::DbRef::NULL
                 };
+                // Remember WHERE the dest ref sits so the frame teardown below can
+                // read back whatever the body left there and free it.  Read back
+                // rather than reuse `dest`: a struct / data-enum body opens with its
+                // own `OpDatabase`, so the record it actually returns is allocated
+                // during the run and the sentinel pushed here is not it.
+                heap_ret_slots.push(self.stack_pos);
                 self.put_stack(dest);
             }
         }
@@ -4315,9 +4394,62 @@ impl State {
 
         // Fix #88: pop the synthetic entry-function frame.
         if !self.database.frame_yield {
+            self.free_entry_return(&heap_ret_slots, &text_bufs);
             self.call_stack.pop();
             self.database.parallel_ctx = None;
         }
+    }
+
+    /// #629 follow-up — free the entry fn's hidden return buffer(s) as the entry
+    /// frame is torn down.
+    ///
+    /// `execute_argv` IS the caller of a heap-returning entry, and the ordinary
+    /// contract is caller-allocates / caller-frees: at a real call site the buffer
+    /// is a `__work_N` local that scope exit frees.  The entry frame is synthetic —
+    /// no bytecode ever emits that free — so #629's fix, which made the buffer a
+    /// real allocation instead of a null sentinel, traded a corruption for a leak:
+    /// one store per run for EVERY heap aggregate return (`vector` of any element
+    /// type, `struct`, data enum), plus one `String` per text return.  Bounded, but
+    /// it is the entry's return value, so a long-lived host that runs many programs
+    /// on one `Stores` accumulates them.
+    ///
+    /// Read the ref back from the slot rather than trusting the value pushed there:
+    /// only a vector is pre-allocated by the caller, while a struct / data-enum body
+    /// opens with its own `OpDatabase` and installs the record it allocated.
+    ///
+    /// Skipped when [`keep_entry_return`](Self::keep_entry_return) is set — the REPL
+    /// reads the returned value off the stack AFTER this returns, so freeing here
+    /// would hand it a dangling ref.
+    fn free_entry_return(&mut self, heap_slots: &[u32], text_slots: &[u32]) {
+        if self.keep_entry_return {
+            return;
+        }
+        for &slot in heap_slots {
+            let db = *self
+                .database
+                .store(&self.stack_cur)
+                .addr::<DbRef>(self.stack_cur.rec, self.stack_cur.pos + slot);
+            if db.store_nr != u16::MAX {
+                self.free_ref_db(db);
+            }
+        }
+        for &slot in text_slots {
+            // The `String` reserved below the argument area, freed by absolute
+            // offset — see `free_text_at` for why it cannot go through `free_text`.
+            self.free_text_at(slot);
+        }
+    }
+
+    /// #629 follow-up — declare that THIS caller will read the entry fn's return
+    /// value after [`execute_argv`](Self::execute_argv) returns, so the entry frame
+    /// must not free the hidden return buffer.  Ownership passes to the caller.
+    ///
+    /// The REPL's capture wrapper (`fn replmain_N() -> P { … }`) is the one such
+    /// caller in-tree: it runs the generation and then reads the value straight off
+    /// the stack.  Its `State` is a throwaway whose `Stores` is dropped immediately
+    /// after, which is what makes claiming the buffer without freeing it safe there.
+    pub fn keep_entry_return(&mut self) {
+        self.keep_entry_return = true;
     }
 
     /// Check that all stores have been freed. Call after the last
@@ -4819,6 +4951,7 @@ impl State {
             parallel_n_arms: 0,
             parallel_arm_positions: Vec::new(),
             const_refs: Vec::new(),
+            keep_entry_return: false,
         }
     }
 

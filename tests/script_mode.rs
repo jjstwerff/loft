@@ -70,3 +70,105 @@ fn semicolon_less_script_runs_on_both_backends() {
     let (nout, nok) = run(&["--native"], &fixture);
     assert!(nok && nout.contains("total=15"), "native ;-less: {nout:?}");
 }
+
+// ── T0.2 — a script's diagnostics use the USER's line numbers ────────────────
+//
+// The desugar hoists defs and inserts lines (the `fn main() {` prologue, a
+// fresh-line `;` after each `;`-less statement), so a diagnostic carried
+// GENERATED coordinates: a 2-line script reported its second statement on line
+// 4.  That also silently dropped the source snippet, because the renderer looked
+// up a line the user's file does not have — one cause, two symptoms, so the
+// snippet returns with the line fix.
+
+/// Run `loft <args> <file>` and return stderr (where diagnostics go).
+fn run_stderr(args: &[&str], file: &Path) -> String {
+    let out = Command::new(loft_bin())
+        .args(args)
+        .arg(file)
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke loft");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn t02_script_diagnostic_uses_source_line_and_shows_snippet() {
+    let dir = std::env::temp_dir();
+    let file = dir.join(format!("loft_t02_{}.loft", std::process::id()));
+    // The review's repro verbatim: the misspelled call is on line 2 of 2.
+    std::fs::write(&file, "name = \"world\"\nprintt(\"Hello, {name}!\\n\")\n").expect("write");
+    for backend in ["--interpret", "--native"] {
+        let err = run_stderr(&[backend], &file);
+        assert!(
+            err.contains("Unknown function printt"),
+            "{backend}: expected the unknown-function error; got {err:?}"
+        );
+        assert!(
+            err.contains(".loft:2:"),
+            "{backend}: the error must be reported on SOURCE line 2, not the \
+             generated line; got {err:?}"
+        );
+        // The snippet is the second symptom of the same cause: it renders only
+        // when the reported line actually exists in the user's file.
+        assert!(
+            err.contains("printt(\"Hello, {name}!"),
+            "{backend}: the source snippet must render; got {err:?}"
+        );
+    }
+    let _ = std::fs::remove_file(&file);
+}
+
+/// A one-line script reports line 1 — the prologue must not shift it.
+#[test]
+fn t02_one_line_script_reports_line_one() {
+    let dir = std::env::temp_dir();
+    let file = dir.join(format!("loft_t02_one_{}.loft", std::process::id()));
+    std::fs::write(&file, "printt(\"hi\")\n").expect("write");
+    let err = run_stderr(&["--interpret"], &file);
+    assert!(
+        err.contains(".loft:1:"),
+        "a one-line script must report line 1; got {err:?}"
+    );
+    let _ = std::fs::remove_file(&file);
+}
+
+// ── First-use: a mistyped path is one of the commonest first actions ─────────
+
+/// A typo'd filename suggests the nearest sibling instead of dead-ending.
+/// The old text was `Unknown file:<path>` — no space, no suggestion — which made
+/// a one-character slip read like a broken install.
+#[test]
+fn mistyped_file_path_suggests_the_neighbour() {
+    let dir = std::env::temp_dir().join(format!("loft_fu_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("hello.loft"), "println(\"hi\")\n").expect("write");
+
+    let out = Command::new(loft_bin())
+        .arg(dir.join("helo.loft"))
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke loft");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no such file:"),
+        "expected the plain no-such-file wording; got {err:?}"
+    );
+    assert!(
+        err.contains("did you mean 'hello.loft'?"),
+        "expected a sibling suggestion; got {err:?}"
+    );
+
+    // A name with no near neighbour must NOT invent a suggestion.
+    let out2 = Command::new(loft_bin())
+        .arg(dir.join("zzzzzzzz.loft"))
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke loft");
+    let err2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(err2.contains("no such file:"), "got {err2:?}");
+    assert!(
+        !err2.contains("did you mean"),
+        "an unrelated name must not get a suggestion; got {err2:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

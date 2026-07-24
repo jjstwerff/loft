@@ -75,3 +75,53 @@ fn test_622_ncc_compare_nested_positions() {
 }
 
 fn both_true(a: boolean, b: boolean) -> boolean { return a && b; }
+
+// ── #622 follow-up: the NARROWING-CAST shape ────────────────────────────────
+//
+// Reported later, in a comment rather than the issue body, and so still open
+// when the comparison half above was closed: a `??` discharge from a NARROW-INT
+// vector, masked, then narrowed — `((v[i] ?? 0) & 255) as u8` — failed native
+// compilation with E0308.  A narrow-int value-block cast its own tail to the
+// element width (`… as u8`), but a loft `integer` expression is `i64` in every
+// Rust position EXCEPT a function's return signature, so each consumer had to
+// widen it back.  Return and assignment did; the operand seam of
+// `op_logical_and_int` did not.  The tail cast is now confined to the function
+// BODY block (`block_tail_cast`), which is the only place the narrow Rust type
+// is real, so no consumer needs a widen.
+//
+// The failing case is a NARROW INTERSECTION — narrow-int source AND bitwise `&`
+// AND a narrowing cast.  Change any one and it compiled, so the near variants
+// are asserted alongside it; a guard picked without them reports this fixed.
+// Native-only, like the rest of this file.
+fn test_622_narrow_source_mask_cast() {
+  src: vector<u8> = [];
+  for i in 0..4 { src += [ ((i + 1) & 255) as u8 ]; }
+
+  // The reported shape: narrow source + mask + narrowing cast.
+  out: vector<u8> = [];
+  for i in 0..len(src) { out += [ ((src[i] ?? 0) & 255) as u8 ]; }
+  assert(len(out) == 4, "narrow source + mask + cast: len={len(out)}");
+  assert((out[0] ?? 0) == 1 && (out[3] ?? 0) == 4, "narrow mask+cast values: {out}");
+
+  // Same source and mask, WIDER destination — the destination is irrelevant.
+  wide: vector<u16> = [];
+  for i in 0..len(src) { wide += [ ((src[i] ?? 0) & 255) as u16 ]; }
+  assert((wide[2] ?? 0) == 3, "narrow source + mask + u16 cast: {wide}");
+
+  // A u16 source takes the same path.
+  s16: vector<u16> = [4096, 8192];
+  o16: vector<u16> = [];
+  for i in 0..len(s16) { o16 += [ ((s16[i] ?? 0) & 255) as u16 ]; }
+  assert((o16[0] ?? 0) == 0 && (o16[1] ?? 0) == 0, "u16 source masked to low byte: {o16}");
+
+  // The variants that always compiled — they must keep working AND stay correct.
+  wid: vector<integer> = [1, 2, 3];
+  a: vector<u8> = []; for i in 0..len(wid) { a += [ ((wid[i] ?? 0) & 255) as u8 ]; }
+  assert((a[2] ?? 0) == 3, "wide source + mask + cast: {a}");
+  b: vector<u8> = []; for i in 0..len(src) { b += [ (src[i] ?? 0) as u8 ]; }
+  assert((b[1] ?? 0) == 2, "narrow source, no mask: {b}");
+  c: vector<u8> = []; for i in 0..len(src) { c += [ ((src[i] ?? 0) % 256) as u8 ]; }
+  assert((c[1] ?? 0) == 2, "narrow source, modulo not mask: {c}");
+  d: vector<u8> = []; for i in 0..len(src) { e = src[i] ?? 0; d += [ (e & 255) as u8 ]; }
+  assert((d[1] ?? 0) == 2, "narrow source, bound to a local first: {d}");
+}

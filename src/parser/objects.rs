@@ -9,6 +9,22 @@ use super::{
 
 // Variable resolution, struct construction, and object parsing.
 
+/// The ops a struct-literal field parse cannot emit in place, collected for the
+/// caller (`Parser::parse_object`) to splice at a fixed point.  Both exist
+/// because a field's ops are order-sensitive against the record-creation
+/// prelude (`Set(x, Null)` + `OpDatabase`), and the field parse does not know
+/// where that prelude ends.
+#[derive(Default)]
+pub(crate) struct FieldSinks {
+    /// #330 — a field initialiser that READS the in-place target, lifted into a
+    /// temp that must run BEFORE the prelude re-inits the record.
+    hoists: Vec<Value>,
+    /// #437 — the 4-byte header zeroing for each VECTOR field, spliced as one
+    /// block directly AFTER the prelude so no field's header is cleared after
+    /// its contents land.
+    vector_headers: Vec<Value>,
+}
+
 impl Parser {
     /// @P387 / @P383 — the user-facing argument types of a fn used as a
     /// first-class `fn` value.  Excludes the SYNTHETIC return buffer the fn-ref
@@ -1916,17 +1932,27 @@ impl Parser {
         // `len(v)` stays as the `len` builtin call at parse time; `LengthVector` is the internal
         // slice-bound form. Match both, mirroring the bounds-proof recogniser in `operators.rs`
         // (`matches!(name, "len" | "LengthVector")`).
-        if *data == Value::Null
-            && !incl
-            && let Value::Call(d, largs) = till.unspan()
-            && matches!(
-                self.data.def(*d).original_name().as_str(),
-                "len" | "LengthVector"
-            )
-            && largs.len() == 1
-            && let Some(vk) = crate::parser::operators::vec_key(&largs[0], &self.data)
-        {
-            self.vars.set_loop_len_bound(vk);
+        // A bound HELD IN A LOCAL (`n = len(s); for i in 0..n`) counts as the same
+        // bound: `len_bound_locals` carries `len(X)` forward from the assignment.
+        // That form is not a stylistic variant — it is the one the published `cbor`
+        // encoder shipped, so a lint that only sees the inline `0..len(X)` would have
+        // missed the real bug.
+        if *data == Value::Null && !incl {
+            let vk = match till.unspan() {
+                Value::Call(d, largs)
+                    if matches!(
+                        self.data.def(*d).original_name().as_str(),
+                        "len" | "LengthVector"
+                    ) && largs.len() == 1 =>
+                {
+                    crate::parser::operators::vec_key(&largs[0], &self.data)
+                }
+                Value::Var(n) => self.len_bound_locals.get(n).copied(),
+                _ => None,
+            };
+            if let Some(vk) = vk {
+                self.vars.set_loop_len_bound(vk);
+            }
         }
         // loft#384: a vector slice (`data` present, not a pure `0..n` range) must
         // resolve negative bounds from the end and clamp into `[0, len]`, else the
@@ -2125,7 +2151,7 @@ impl Parser {
         list: &mut Vec<Value>,
         found_fields: &mut HashSet<String>,
         in_place_var: Option<u16>,
-        hoists: &mut Vec<Value>,
+        sinks: &mut FieldSinks,
     ) -> bool {
         // Accept both bare identifiers and JSON-style quoted strings as field names.
         let field = if let Some(id) = self.lexer.has_identifier() {
@@ -2176,10 +2202,32 @@ impl Parser {
             {
                 // Collection/enum-big header is a 4-byte u32 record pointer.
                 // Post-2c `OpSetInt` writes 8 bytes and overflows the field.
-                list.push(self.cl(
+                //
+                // #437 — a VECTOR field's prime goes to `primes`, which the caller
+                // splices as one block directly after the `OpDatabase` prelude, so
+                // every vector header is zeroed before ANY field's value is built.
+                // Emitted inline it sat between the PREVIOUS field's fill and its
+                // own, and a vector local whose literal build is retargeted INTO the
+                // field (the elision that fires for a literal-initialised,
+                // otherwise-unused local) then ran its fill BEFORE this zeroing —
+                // erasing the header it had just written.  Only the first field
+                // mentioned in the literal escaped, because the prelude it rides
+                // along with is hoisted above the retargeted builds.
+                //
+                // KEYED collections (sorted / hash / index / radix) and enum-big keep
+                // the inline prime: their fills are record INSERTS whose ordering
+                // against a sibling's prime is load-bearing (hoisting them merged two
+                // keyed fields' records — `502-keyed-slice-for-only`).  They also do
+                // not take the retarget path, so #437 does not reach them.
+                let prime = self.cl(
                     "OpSetInt4",
                     &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
-                ));
+                );
+                if matches!(td, Type::Vector(_, _)) {
+                    sinks.vector_headers.push(prime);
+                } else {
+                    list.push(prime);
+                }
                 let info = self.type_info(&td);
                 self.cl(
                     "OpGetField",
@@ -2246,7 +2294,7 @@ impl Parser {
                     self.change_var_type(tmp, &exp_tp);
                 }
                 let prev = std::mem::replace(&mut value, Value::Var(tmp));
-                hoists.push(v_set(tmp, prev));
+                sinks.hoists.push(v_set(tmp, prev));
             }
             self.handle_field(td_nr, code, list, &field, &mut value, &exp_tp);
         }
@@ -2316,7 +2364,7 @@ impl Parser {
         let mut list = Vec::new();
         let mut new_object = false;
         let mut in_place_var: Option<u16> = None;
-        let mut hoists: Vec<Value> = Vec::new();
+        let mut sinks = FieldSinks::default();
         let work = self.vars.work_ref();
         if let Value::Var(v_nr) = code {
             let var_tp = self.vars.tp(*v_nr).clone();
@@ -2430,6 +2478,11 @@ impl Parser {
         // INSIDE the shared store (`OpNewRecord`/`OpFinishRecord` against that DbRef) rather than
         // in a throwaway store that is immediately freed (the silent no-op this fixes).
         let mut found_fields = HashSet::new();
+        // #437 — everything pushed so far is the record-creation prelude
+        // (`Set(x, Null)` + `OpDatabase`).  Vector-field headers are zeroed as one
+        // block right after it, before any field value; see the note in
+        // `parse_object_field`.
+        let prelude_len = list.len();
         loop {
             if self.lexer.peek_token("}") {
                 break;
@@ -2440,7 +2493,7 @@ impl Parser {
                 &mut list,
                 &mut found_fields,
                 in_place_var,
-                &mut hoists,
+                &mut sinks,
             ) {
                 self.lexer.revert(link);
                 self.vars.clean_work_refs(work);
@@ -2451,11 +2504,16 @@ impl Parser {
             }
         }
         self.lexer.token("}");
+        // #437 splice: every vector-field header zeroed as one block, directly
+        // after the prelude and before the first field's value.
+        for (i, header) in sinks.vector_headers.drain(..).enumerate() {
+            list.insert(prelude_len + i, header);
+        }
         // #330 splice: run the hoisted self-reading field values BEFORE the
         // in-place `Set(x, Null) + OpDatabase(x)` prelude clears the record.
-        if !hoists.is_empty() {
-            hoists.append(&mut list);
-            list = hoists;
+        if !sinks.hoists.is_empty() {
+            sinks.hoists.append(&mut list);
+            list = std::mem::take(&mut sinks.hoists);
         }
         if !self.first_pass {
             self.object_init(&mut list, td_nr, 0, code, &found_fields);
@@ -2793,27 +2851,15 @@ impl Parser {
                     let vec_tp = self.vector_of(content);
                     // #628 — `elem_tp` is the store type of ONE element: the stride
                     // `vector_add` copies by.  For a NESTED `vector<vector<T>>` field
-                    // that element is the inner vector's own 4-byte handle, so its
-                    // type is `vec_tp` itself; `content(vec_tp)` peels one level too
-                    // many and yielded the inner SCALAR (`Parts::Base`, size 8).
-                    // `vector_add` then strode 8 bytes over 4-byte handles, so
-                    // `Bag { a: v }` reported the right OUTER length with every inner
-                    // row empty, and walked off the populated region into a SIGSEGV
+                    // that element is the inner vector's own 4-byte handle row; for a
+                    // scalar or narrow-scalar field it is that scalar's row.
+                    // `append_elem_tp` derives both from the one shared resolver, the
+                    // same id the `+=` append and the literal build pass to
+                    // `record_new` — a separately re-derived id is how the copy came
+                    // to stride 8 bytes over 4-byte handles, giving `Bag { a: v }` the
+                    // right OUTER length with every inner row empty, and a SIGSEGV
                     // once the struct carried three such fields.
-                    //
-                    // Same rule as #553 for a vector-typed accumulator element: the
-                    // element's OWN vector store type, not one level deeper.  It must
-                    // come from `vector_of` (which consults `narrow_vector_content`)
-                    // and NOT be re-derived — a fresh `vector(db_type(u8))` registers
-                    // a byte row with different nullability than the narrow registry
-                    // uses, so the copy read a `vector<u8>` built as one type through
-                    // another and crashed.  Scalar and narrow-scalar fields keep the
-                    // peeled type, which is correct for them.
-                    let elem_tp = if matches!(**content, Type::Vector(_, _)) {
-                        vec_tp
-                    } else {
-                        self.database.content(vec_tp)
-                    };
+                    let elem_tp = self.append_elem_tp(content) as u16;
                     let field_ref = self.cl(
                         "OpGetField",
                         &[

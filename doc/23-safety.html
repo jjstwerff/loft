@@ -3,12 +3,24 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Loft - Safety</title>
+<title>Safety — Loft, a language for small browser games</title>
+  <meta name="description" content="Language traps and how to avoid them">
+<link rel="canonical" href="https://loft-lang.org/loft/23-safety.html">
+<meta property="og:title" content="Safety — Loft, a language for small browser games">
+<meta property="og:description" content="Language traps and how to avoid them">
+<meta property="og:type" content="article">
+<meta property="og:url" content="https://loft-lang.org/loft/23-safety.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Safety — Loft, a language for small browser games">
+<meta name="twitter:description" content="Language traps and how to avoid them">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
 <link rel="stylesheet" href="style.css">
 <style>.playground-link{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}.playground-link:hover{filter:brightness(1.15)}@media print{.playground-link{display:none}}</style>
 </head>
 <body>
-<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <span class="cur">Safety</span> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
+<nav><div class="nav-links"><a href="index.html">Home</a> · <a href="install.html">Install</a> · <a href="roadmap.html">Roadmap</a> · <span class="nav-sep">Language:</span> · <a href="00-vs-rust.html">vs Rust</a> · <a href="00-vs-python.html">vs Python</a> · <a href="00-performance.html">Performance</a> · <a href="01-keywords.html">Keywords</a> · <a href="02-text.html">Texts</a> · <a href="03-integer.html">Integers</a> · <a href="04-boolean.html">Boolean</a> · <a href="05-float.html">Float</a> · <a href="06-function.html">Functions</a> · <a href="07-vector.html">Vector</a> · <a href="08-struct.html">Structs</a> · <a href="09-enum.html">Enums</a> · <a href="10-sorted.html">Sorted</a> · <a href="11-index.html">Index</a> · <a href="12-hash.html">Hash</a> · <a href="13-file.html">File</a> · <a href="14-image.html">Image</a> · <a href="15-lexer.html">Lexer</a> · <a href="16-parser.html">Parser</a> · <a href="17-libraries.html">Libraries</a> · <a href="18-locks.html">Store Locks</a> · <a href="19-threading.html">Parallel execution</a> · <a href="20-logging.html">Logging</a> · <a href="21-random.html">Random</a> · <a href="22-time.html">Time</a> · <span class="cur">Safety</span> · <a href="24-json.html">JSON</a> · <a href="25-generics.html">Generics</a> · <a href="26-closures.html">Closures</a> · <a href="27-coroutines.html">Coroutines</a> · <a href="28-tuples.html">Tuples</a> · <a href="29-match.html">Match</a> · <a href="30-formatting.html">Formatting</a> · <a href="31-ref-forward.html">Reference parameter forwarding</a> · <a href="32-time.html">Time library</a> · <span class="nav-sep">Library:</span> · <a href="stdlib-types.html">Types</a> · <a href="stdlib-interfaces.html">Interfaces</a> · <a href="stdlib-math.html">Math</a> · <a href="stdlib-exp-ln-log2-log10.html">exp / ln / log2 / log10</a> · <a href="stdlib-min-max-clamp.html">min / max / clamp</a> · <a href="stdlib-text.html">Text</a> · <a href="stdlib-collections.html">Collections</a> · <a href="stdlib-output-and-diagnostics.html">Output and Diagnostics</a> · <a href="stdlib-vector-aggregates.html">Vector aggregates</a> · <a href="stdlib-field-iteration-support-types.html">Field iteration support types</a> · <a href="stdlib-file-system.html">File System</a> · <a href="stdlib-environment.html">Environment</a> · <a href="stdlib-time.html">Time</a> · <a href="stdlib-memory-diagnostics.html">Memory diagnostics</a> · <a href="stdlib-vector-operations-t2-8-t2-5.html">Vector operations (T2-8, T2-5)</a></div><div class="search-wrap"><input type="search" id="search" placeholder="Search functions, types…" autocomplete="off"><div id="search-results" class="search-results" hidden></div></div></nav>
 <h1>Safety</h1>
 <article>
 <p>Loft catches many errors at compile time, but a few surprises remain at runtime. This page catalogues every known trap so you can write confident code from day one. Each section includes a live example that proves the described behavior. Helper used in the <code>??</code> double-evaluation example below. Increments the call counter and returns the given value unchanged.</p>
@@ -17,7 +29,9 @@
   value
 }</code></pre>
 <p>Used to obtain a null text value (an uninitialized field is the NUL sentinel).</p>
-<pre><code><span class="kw">struct</span> <span class="en">NullTextHolder</span> { s: <span class="ty"><a href="stdlib-types.html">text</a></span> }</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">NullTextHolder</span> {
+  s: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="null-values-hidden-reserved-values">Null values — hidden reserved values</h2>
 <p>Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:</p>
@@ -37,7 +51,7 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n != <span class="nm">0</span>, <span class="st">"null is not zero; it is -9 223 372 036 854 775 808"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i64::MIN is the most negative 64-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(! (n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
 <p>Text null is the NUL character (<code>\0</code>), not the empty string. Parsing a JSON object with a missing text field produces the NUL sentinel:</p>
 <pre><code>  holder = <span class="en">NullTextHolder</span>.<span class="fn-call">parse</span>(`{{}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!holder.s, <span class="st">"missing JSON text field is null (the NUL sentinel)"</span>);
@@ -53,28 +67,28 @@
 <h2 id="integer-overflow-yields-null">Integer overflow yields null</h2>
 <p>A calculation that overflows the integer range is uncomputable, so loft yields null and keeps running — it never wraps to a silently-wrong number (the way C, or a Rust release build, would) and it never crashes. One bad value degrades locally; the rest of the program still computes. huge = 9223372036854775807; huge + 1  →  null (not a wrapped negative) To trace where overflows arise, opt into the debug log level. Mitigation: check the result for null, or keep intermediate values within range.</p>
 <pre><code>  huge = <span class="nm">9223372036854775807</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(huge + <span class="nm">1</span>), <span class="st">"overflow yields null, not a wrapped value"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(! (huge + <span class="nm">1</span>), <span class="st">"overflow yields null, not a wrapped value"</span>);</code></pre>
 <h2 id="bitwise-operators-with-zero">Bitwise operators with zero</h2>
 <p>All bitwise operators (AND, OR, XOR, shift) work correctly with zero. Zero is the identity element for OR, XOR, and shift; zero for AND.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> &amp; <span class="nm">0</span> == <span class="nm">0</span>, <span class="st">"AND with 0: zero"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> | <span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"OR with 0: identity"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> ^ <span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"XOR with 0: identity"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span> &lt;&lt; <span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift left by 0: identity"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span> &gt;&gt; <span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift right by 0: identity"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span>&amp;<span class="nm">0</span> == <span class="nm">0</span>, <span class="st">"AND with 0: zero"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span>|<span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"OR with 0: identity"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span>^<span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"XOR with 0: identity"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span>&lt;&lt;<span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift left by 0: identity"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span>&gt;&gt;<span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift right by 0: identity"</span>);</code></pre>
 <h2 id="float-null-compares-uniformly-with-every-other-scalar">Float null compares uniformly with every other scalar</h2>
 <p>Floats store null as <code>NaN</code> internally, but null COMPARISON is uniform with every other scalar type (@PLN102 null model): <code>null == null</code> is TRUE, null is not equal to any real value, and null orders as the low extreme. Detect a null float with <code>f == null</code> (or <code>!f</code> / <code>f ?? default</code>) — NOT the old <code>f != f</code> trick, which no longer works now that <code>null == null</code> is true. Both the defended and the undefended division yield null and continue (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft); the undefended site additionally reports a warning.</p>
 <pre><code>  bad = <span class="nm">0.0</span> / <span class="nm">0.0</span> ?? <span class="kw">null</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"a null float is falsy"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad == <span class="kw">null</span>, <span class="st">"detect a null float with `== null`"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad == bad, <span class="st">"null == null is true (uniform null model)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(bad != <span class="kw">null</span>), <span class="st">"a null float `!= null` is false"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(! (bad != <span class="kw">null</span>), <span class="st">"a null float `!= null` is false"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad != <span class="nm">0.0</span>, <span class="st">"null != 0.0 is true"</span>);</code></pre>
 <p>Use <code>f == null</code>, <code>!f</code>, or <code>f ?? default</code> to check for null floats.</p>
-<h2 id="text-length-counts-bytes-not-characters">Text length counts bytes, not characters</h2>
-<p><code>len()</code> on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes. <code>size()</code> returns the number of Unicode code points (characters). These two values differ whenever the text contains any multi-byte character.</p>
+<h2 id="text-length-counts-characters-size-counts-bytes">Text length counts characters; size counts bytes</h2>
+<p><code>len()</code> on text returns the number of characters (Unicode code points) — the human count. <code>size()</code> returns the number of UTF-8 bytes; multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes. The two values differ whenever the text contains any multi-byte character.</p>
 <pre><code>  emoji = <span class="st">"Hi 😊!"</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(emoji) == <span class="nm">8</span>, <span class="st">"5 visible chars but 8 bytes (emoji is 4 bytes)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(emoji) == <span class="nm">5</span>, <span class="st">"size() counts code points: {size(emoji)}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(emoji) == <span class="nm">5</span>, <span class="st">"5 characters (H, i, space, 😊, !)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(emoji) == <span class="nm">8</span>, <span class="st">"8 UTF-8 bytes (the emoji is 4): {size(emoji)}"</span>);</code></pre>
 <p>Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. Mitigation: Use <code>for c in text</code> to iterate by character. Use <code>c#index</code> and <code>c#next</code> to get the byte boundaries of each character.</p>
 <pre><code>  count = <span class="nm">0</span>;
   <span class="kw">for</span> c <span class="kw">in</span> emoji { count += <span class="nm">1</span>; }
@@ -128,8 +142,8 @@
 <p><code>lines()</code> and <code>content()</code> read a file as UTF-8 text and crash on invalid UTF-8 (a binary file, or a different encoding such as Latin-1). For binary data, set a binary format on the file — <code>f#format = LittleEndian</code> (or <code>BigEndian</code>) — and read raw bytes / integers directly (see 13-file.loft). So: read UTF-8 text in text mode, everything else in a binary format.</p>
 <h2 id="xor-is-not-exponentiation">XOR is <code>^</code>, not exponentiation</h2>
 <p>Unlike some languages where <code>^</code> means "power", in loft <code>^</code> is bitwise XOR. For exponentiation use the <code>**</code> operator (<code>2 ** 10 == 1024</code>, <code>2.0 ** 3.0 == 8.0</code>) or the <code>pow()</code> function. Watch one precedence footgun: <code>-x ** y</code> parses as <code>-(x ** y)</code>, so loft warns on it — write <code>(-x) ** y</code> when you mean to raise a negated base.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0b1010</span> ^ <span class="nm">0b1100</span>) == <span class="nm">0b0110</span>, <span class="st">"^ is XOR"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">2</span> ** <span class="nm">10</span> == <span class="nm">1024</span>, <span class="st">"** is the power operator"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0b1010</span>^<span class="nm">0b1100</span>) == <span class="nm">0b0110</span>, <span class="st">"^ is XOR"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">2</span>**<span class="nm">10</span> == <span class="nm">1024</span>, <span class="st">"** is the power operator"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"pow() also computes powers"</span>);
 }</code></pre>
 

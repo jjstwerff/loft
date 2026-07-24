@@ -69,6 +69,43 @@ surprise there); and the **comparison** level is **non-associative** — `a == b
 `1 < x < 10` are rejected at parse time, because left-associative grouping would silently
 compare a boolean to the third operand. Parenthesise, or use `&&` for a range test.
 
+### Postfix `?` is NOT a rung on the ladder — it is a primary suffix (@PLN116)
+
+```
+  (G-Post-Default)  postfix `?` (the default-fallback, types.md `(N-Default)`) is a SUFFIX on
+                    a PRIMARY expression, not a level in the table above.  It binds TIGHTER
+                    than level 11 (`as`) and than every binary operator, alongside `.` and
+                    `[]`, and chains with them left-to-right:
+                        a.b?           ≡  (a.b)?
+                        points[i]?.x   ≡  ((points[i])?).x        discharge, THEN read
+                        x? as T        ≡  (x?) as T
+                        a + b?         ≡  a + (b?)
+  (G-Lex-Coal)      `??` is lexed by MAXIMAL MUNCH, so a `??` is never two `?` tokens:
+                        a ?? b?        ≡  a ?? (b?)               (never `a ? (? b?)`)
+```
+
+**In words.** `?` and `??` look like a pair but sit at **opposite ends** of the ladder: `??`
+is the loosest thing in the language (level 0) and `?` is tighter than the tightest rung.
+That is deliberate — `??` takes a whole expression on its left, while `?` is a suffix that
+grabs only the primary it is stuck to, exactly like `.` and `[]`.
+
+The consequence is the one trap in the pair: **on a binary result they need opposite
+parenthesisation.** `a / b ?? 0` discharges the division and needs no parens; `a / b?` does
+*not* discharge the division — it is `a / (b?)`, so the division is still undischarged and
+the whole expression is null. The discharging form is `(a / b)?`. So `?` is a strict
+improvement over `?? <default>` on a **primary** (`row.label?`, `points[i]?`, `x?` — no
+parens, strictly shorter) and a *wash* on a binary result, where it costs the parens `??`
+does not need. Anything steering a maker from `??` to `?` must respect that split.
+
+**Falsifying program** (obeying `(G-Post-Default)` and reading `?`/`??` as symmetric disagree):
+
+```loft
+a = 10;  b = 0;
+a / b ?? 0      // 0
+(a / b)?        // 0
+a / b?          // null   ← reading `?` as "loose like ??" predicts 0
+```
+
 ### Prefix `&` is NOT an operator — it is the reference annotation
 
 ```

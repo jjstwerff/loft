@@ -168,6 +168,46 @@ compute." There is **no** context-dependent "trap-suppression mode" any more —
 null whether or not it sits under `??` (C80); `??` just decides what to do with that null.
 (This is what closes the old D-op-3.)
 
+### `x?` — a fallback to the TYPE's default (@PLN116)
+
+```
+  (E-Default)   ⟨e?, σ⟩ → ⟨v, σ⟩                        if  e → v  with v ≠ null
+                ⟨e?, σ⟩ → ⟨construct_default(τ), σ'⟩    if  e → null
+                                                        where τ is e's STATIC type and, for a
+                                                        record / collection τ, σ' is σ extended
+                                                        with a FRESHLY constructed value
+```
+
+**In words.** `x?` is `x ?? <the default the type gives>`, so it reduces exactly like
+`(E-Coalesce)` except that the fallback is not written at the site — it comes from the type.
+`construct_default` and its domain `has_default` are defined once in
+[types.md § Defaults](types.md); `x?` on a type with no default does not reach this rule at
+all, because it is rejected at compile time.
+
+Two things this rule is pinning that are easy to get wrong:
+
+- **The fallback is chosen by the STATIC type, not the runtime value.** There is no value to
+  inspect — `e` reduced to `null`, which carries no type. So `(E-Default)` is the one
+  evaluation rule that reads the typing derivation, and a backend must therefore resolve the
+  default at compile time. (`(E-Coalesce)` needs no such thing: its fallback is an
+  expression already in the program.)
+- **The default is a FRESH value, never a shared one.** For a record or collection, each
+  evaluation of `e?` constructs its own — `points[i]?` twice yields two distinct `Point{}`s.
+  A shared singleton would alias: mutating one discharge's result would be visible through
+  another's, which the ownership model ([ownership.md](ownership.md)) forbids for a value
+  the expression owns.
+
+**Falsifying program.** The two discharges sit at opposite ends of the precedence ladder
+([grammar.md `(G-Post-Default)`](grammar.md)), so on a *binary* result they need opposite
+parenthesisation — the one place they are not interchangeable by eye:
+
+```loft
+a = 10;  b = 0;
+a / b ?? 0      // 0     — `??` is LOOSEST, so it discharges the division
+(a / b)?        // 0     — same, parenthesised
+a / b?          // null  — `?` is TIGHTEST: this is `a / (b?)`, and the DIVISION is undischarged
+```
+
 ### Observability — report a fault only where it is UNGUARDED
 
 ```

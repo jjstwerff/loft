@@ -201,9 +201,17 @@ impl Parser {
     /// The decision chain, in precedence order:
     /// - linked db type (structs holding vectors/text etc.) → 4-byte rec-id
     /// - narrow-int element → its forced 1/2/4-byte storage width
-    /// - fn-ref element → the 4-byte d_nr (@P343)
-    /// - nested vector element → the inner scalar width, min 4 (#475)
+    /// - anything the shared element-type resolver knows
+    ///   (`Data::vector_element_type`) → that schema type's own size: a fn-ref
+    ///   is a 4-byte d_nr (@P343), a NESTED vector is a 4-byte handle, a plain
+    ///   leaf is its scalar width
     /// - else → the schema's `database.size(db_tp)`
+    ///
+    /// The nested case used to read `element_stack_size(inner).max(4)` — the
+    /// INNER scalar's width, so a `vector<vector<integer>>` strode 8 over rows
+    /// that are 4-byte handles.  It agreed with the storage side only while the
+    /// storage side made the same mistake; reading both from one derivation is
+    /// what keeps reader and writer in step (loft#624 nested).
     pub(crate) fn vector_elem_iter_stride(&mut self, vtp: &Type) -> u16 {
         let vec_tp = self.data.type_def_nr(vtp);
         let db_tp = self.data.def(vec_tp).known_type();
@@ -213,10 +221,8 @@ impl Parser {
             && let Some(n) = spec.vector_narrow_width()
         {
             u16::from(n)
-        } else if matches!(vtp, Type::Function(_, _, _)) {
-            4
-        } else if let Type::Vector(inner, _) = vtp {
-            (crate::data::element_stack_size(inner) as u16).max(4)
+        } else if let Some(elem) = self.data.vector_element_type(vtp, &mut self.database) {
+            self.database.size(elem)
         } else {
             self.database.size(db_tp)
         }

@@ -36,7 +36,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-BASELINE=".feature_coverage_baseline"
+BASELINE="scripts/.feature_coverage_baseline"
 MIN_LINES=25   # files below this many non-blank lines are trivial glue — dodge.
 
 # Implementation source worth cataloguing: the language itself — Rust under

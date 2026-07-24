@@ -68,7 +68,9 @@ Created library `my_lib/`:
 ```
 
 `loft new` validates the name (lowercase ascii + digits +
-underscore) and refuses to overwrite an existing dir.
+underscore), refuses a **reserved namespace name** (`std`, `core` — these resolve to a
+built-in namespace, not a package; see [C101](DESIGN_DECISIONS.md)), and refuses to
+overwrite an existing dir.
 
 `release.sh` (executable) is a one-command release: it reads name + version
 from `loft.toml`, runs the test gate + a deterministic-package check, commits any

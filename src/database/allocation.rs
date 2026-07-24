@@ -1744,19 +1744,29 @@ impl Stores {
                 self.store_mut(to).set_u32_raw(into, 8 + 4 * i, 0);
                 continue;
             }
-            let new = self.store_mut(to).claim(size.div_ceil(8));
+            // A record is an 8-byte header followed by `size` payload bytes, and
+            // `claim` takes 8-byte WORDS — so the element needs `1 + size/8`
+            // words, and its payload is copied from offset 8 for the full `size`.
+            // Claiming `size.div_ceil(8)` left out the header word, and copying
+            // `size - 4` from offset 4 both started 4 bytes early and stopped 4
+            // bytes short: for `It { k: integer, v: integer }` that copied `k` and
+            // never `v`, and `v`'s slot fell outside the record, so reading it
+            // returned the NEXT record's header — `k` correct, `v` a plausible
+            // large integer (`(claim << 32) | length`).  The `copy_claims` recursion
+            // just below always used offset 8; these two now agree with it.
+            let new = self.store_mut(to).claim(1 + size.div_ceil(8));
             self.copy_block(
                 &DbRef {
                     store_nr: rec.store_nr,
                     rec: elm,
-                    pos: 4,
+                    pos: 8,
                 },
                 &DbRef {
                     store_nr: to.store_nr,
                     rec: new,
-                    pos: 4,
+                    pos: 8,
                 },
-                size - 4,
+                size,
             );
             self.store_mut(to).set_u32_raw(into, 8 + 4 * i, new);
             self.copy_claims(
@@ -2783,18 +2793,23 @@ impl Stores {
         }
         use crate::paged_reader::{PageSource, PagedReader};
         let Ok(source) = PageSource::open(path) else {
+            Self::refuse_paged(path, "it cannot be opened as a paged source");
             return 0;
         };
         let mut reader = PagedReader::new(source);
         let tp = self.allocations[local.store_nr as usize].known_type;
         if tp == u16::MAX {
+            Self::refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
-        let content_tp = match self.types[tp as usize].parts {
-            Parts::Sorted(c, _) => c,
-            _ => return 0, // range needs an ordered collection
+        // Range needs an ordered collection.
+        let Parts::Sorted(content_tp, _) = self.types[tp as usize].parts else {
+            let reason = self.wrong_collection_reason(tp, "a sorted collection");
+            Self::refuse_paged(path, &reason);
+            return 0;
         };
         if !self.is_copyable_entry(content_tp) {
+            Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
             return 0;
         }
         let keys = self.keys(tp).to_vec();
@@ -2924,6 +2939,47 @@ impl Stores {
         }
     }
 
+    /// Report that a paged working-set load REFUSED the request and loaded
+    /// nothing. Every refusal in `load_key(s)` / `load_key_text` / `load_range`
+    /// speaks through here, for the same reason
+    /// [`layout_gate_ok`](Stores::layout_gate_ok) warns: these loaders report
+    /// failure as `false` / `0`, which is exactly what an ABSENT KEY looks like,
+    /// so a silent refusal reads as "the data isn't there" and sends the caller
+    /// hunting for missing data instead of an unsupported shape (#632).
+    #[cfg(feature = "remote-store")]
+    fn refuse_paged(path: &str, reason: &str) {
+        eprintln!(
+            "store loader: refusing {path} — {reason}; loaded NOTHING (a refusal, \
+             not an absent key)"
+        );
+    }
+
+    /// The refusal reason when the bound store does not root the collection kind
+    /// the loader needs (`want` names it, e.g. "a hash"). Spells out the
+    /// commonest cause because the type name alone does not suggest the fix.
+    #[cfg(feature = "remote-store")]
+    fn wrong_collection_reason(&self, tp: u16, want: &str) -> String {
+        format!(
+            "its bound store roots `{}`, not {want} — a collection declared as a \
+             struct FIELD records the WRAPPER STRUCT as the store's type (#632), so \
+             declare it as an annotated local (`h: hash<T[k]> = []`) for paged loads, \
+             or read it whole with `store_load`",
+            self.type_name(tp)
+        )
+    }
+
+    /// The refusal reason when an entry has a field the working-set copy cannot
+    /// relocate into the local store.
+    #[cfg(feature = "remote-store")]
+    fn not_copyable_reason(&self, content_tp: u16) -> String {
+        format!(
+            "entry type `{}` has a field the working-set copy cannot relocate \
+             (a `vector<text>` / `vector<vector>` element pointer would dangle in \
+             the local store); whole-image `store_load` carries these fields",
+            self.type_name(content_tp)
+        )
+    }
+
     /// True when an entry of type `content_tp` can be partially loaded today —
     /// every field is [copyable](Stores::is_copyable_field). Otherwise the
     /// collection is refused (safe-refusal, never a broken heap).
@@ -2956,18 +3012,22 @@ impl Stores {
         }
         use crate::paged_reader::{PageSource, PagedReader};
         let Ok(source) = PageSource::open(path) else {
+            Self::refuse_paged(path, "it cannot be opened as a paged source");
             return false;
         };
         let mut reader = PagedReader::new(source);
         let tp = self.allocations[local.store_nr as usize].known_type;
         if tp == u16::MAX {
+            Self::refuse_paged(path, "the target collection's store has no recorded type");
             return false;
         }
-        let content_tp = match self.types[tp as usize].parts {
-            Parts::Hash(c, _) => c,
-            _ => return false,
+        let Parts::Hash(content_tp, _) = self.types[tp as usize].parts else {
+            let reason = self.wrong_collection_reason(tp, "a hash");
+            Self::refuse_paged(path, &reason);
+            return false;
         };
         if !self.is_copyable_entry(content_tp) {
+            Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
             return false;
         }
         let keys = self.keys(tp).to_vec();
@@ -2991,6 +3051,7 @@ impl Stores {
         // `path` is a local file OR an `http(s)://` URL — the paged reader pulls
         // only the pages a lookup touches, from disk or over the network (#517).
         let Ok(source) = PageSource::open(path) else {
+            Self::refuse_paged(path, "it cannot be opened as a paged source");
             return 0;
         };
         let mut reader = PagedReader::new(source);
@@ -2998,6 +3059,7 @@ impl Stores {
         // Schema from the LIVE type of `local` (never reverse-engineered bytes).
         let tp = self.allocations[local.store_nr as usize].known_type;
         if tp == u16::MAX {
+            Self::refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
         // SAFE REFUSAL (3b.1) — `load_one` can copy an entry whose fields are
@@ -3006,11 +3068,14 @@ impl Stores {
         // copy (3b.3+); until then, refuse the whole collection (load nothing)
         // rather than build a heap with a dangling pointer. `store_verify` would
         // catch a broken copy — this makes sure one is never built.
-        let content_tp = match self.types[tp as usize].parts {
-            Parts::Hash(c, _) => c,
-            _ => return 0, // only Hash supported so far (Sorted lands at 3b.7)
+        // Only Hash supported so far (Sorted lands at 3b.7).
+        let Parts::Hash(content_tp, _) = self.types[tp as usize].parts else {
+            let reason = self.wrong_collection_reason(tp, "a hash");
+            Self::refuse_paged(path, &reason);
+            return 0;
         };
         if !self.is_copyable_entry(content_tp) {
+            Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
             return 0;
         }
         let keys = self.keys(tp).to_vec();

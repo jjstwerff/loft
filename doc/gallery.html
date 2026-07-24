@@ -6,7 +6,19 @@
   <meta http-equiv="Expires" content="0">
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Loft Graphics Gallery</title>
+<title>Graphics gallery — Loft, a language for small browser games</title>
+<meta name="description" content="Demos written in Loft, running live in WebGL in the browser — including Brick Buster, a complete arcade game.">
+<link rel="canonical" href="https://loft-lang.org/loft/gallery.html">
+<meta property="og:title" content="Graphics gallery — Loft, a language for small browser games">
+<meta property="og:description" content="Demos written in Loft, running live in WebGL in the browser — including Brick Buster, a complete arcade game.">
+<meta property="og:type" content="website">
+<meta property="og:url" content="https://loft-lang.org/loft/gallery.html">
+<meta property="og:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
+<meta property="og:site_name" content="Loft">
+<meta name="twitter:card" content="summary_large_image">
+<meta name="twitter:title" content="Graphics gallery — Loft, a language for small browser games">
+<meta name="twitter:description" content="Demos written in Loft, running live in WebGL in the browser — including Brick Buster, a complete arcade game.">
+<meta name="twitter:image" content="https://loft-lang.org/loft/images/hero-brick-buster.png">
 <style>
 :root {
   --bg: #1e1e2e;
@@ -83,6 +95,17 @@ main { max-width: 1200px; margin: 0 auto; padding: 24px 20px 40px; }
   transition: border-color 0.12s, transform 0.12s;
 }
 .card:hover { border-color: var(--accent); transform: translateY(-2px); }
+/* T2.4 — a static poster so a tile shows the demo before WebGL warms (and for
+   crawlers and slow connections, which never run it at all).  Hidden when the
+   demo has no poster yet, so adding one is just dropping a file in. */
+.card-poster {
+  display: block;
+  width: 100%;
+  aspect-ratio: 4 / 3;
+  object-fit: cover;
+  background: #0b0b12;
+  border-bottom: 1px solid var(--border);
+}
 .card-body {
   flex: 1;
   padding: 14px 16px 10px;
@@ -138,7 +161,7 @@ footer a { color: var(--accent); text-decoration: none; }
 <body>
 <header>
   <h1>Loft</h1>
-  <div class="crumbs"><strong>Graphics gallery</strong> — 25+ live demos</div>
+  <div class="crumbs"><strong>Graphics gallery</strong> — live WebGL demos written in Loft</div>
   <nav>
     <a href="examples.html">Examples</a>
     <a href="docs.html">Documentation</a>
@@ -149,8 +172,7 @@ footer a { color: var(--accent); text-decoration: none; }
 
 <main>
   <p class="intro">
-    Adapted from the <strong>LearnOpenGL</strong> tutorials and extended
-    with a complete arcade game.  Every demo runs live in your browser
+    Demos written in loft.  Every demo runs live in your browser
     via WebGL.  Click <strong>Open</strong> to view the source, or
     <strong>▶ Run</strong> to launch it on a canvas.
   </p>
@@ -173,13 +195,13 @@ footer a { color: var(--accent); text-decoration: none; }
   ·
   <a href="https://loft-lang.org/loft/">Documentation</a>
   ·
-  <a href="lib/graphics/examples/README.md">Source on GitHub</a>
+  <a href="https://github.com/loft-lang/loft/blob/main/tools/brick-buster/25-brick-buster.loft">Source on GitHub</a>
 </footer>
 
 <script type="module">
 import { GALLERY_LIST } from './gallery-examples.js?v=eb74897e415e';
 
-// Carve the 25-ish demos into four readable sections by example number.
+// Carve the demos into four readable sections by example number.
 // Numbers correspond to the leading digits of each filename (e.g. 01-…).
 // 00-smoke is a build smoke test, not a user-facing demo.
 const RANGES = {
@@ -198,6 +220,11 @@ function renderCard(ex) {
   const card = document.createElement('article');
   card.className = 'card';
   card.innerHTML = `
+    <a href="gallery-run.html?example=${encodeURIComponent(ex.key)}">
+      <img class="card-poster" alt="" loading="lazy"
+           src="images/poster-${encodeURIComponent(ex.key)}.png"
+           onerror="this.remove()">
+    </a>
     <a class="card-body" href="gallery-run.html?example=${encodeURIComponent(ex.key)}">
       <h3></h3>
       <p class="desc"></p>
@@ -207,6 +234,8 @@ function renderCard(ex) {
       <a class="card-action run" href="gallery-run.html?example=${encodeURIComponent(ex.key)}&autorun=1">▶ Run</a>
     </div>
   `;
+  const poster = card.querySelector('.card-poster');
+  if (poster) poster.alt = `${ex.name} — screenshot`;
   card.querySelector('h3').textContent = ex.name;
   card.querySelector('.desc').textContent = ex.desc || '';
   return card;
@@ -218,6 +247,14 @@ for (const [name, predicate] of Object.entries(RANGES)) {
   const items = GALLERY_LIST.filter((ex) => predicate(exampleNumber(ex.key)));
   for (const ex of items) {
     grid.appendChild(renderCard(ex));
+  }
+  // A section with no demos behind it renders as a bare heading over empty
+  // space, which reads as "broken" rather than "not written yet".  Hide the
+  // whole section; it reappears by itself as soon as a demo lands in its range.
+  if (items.length === 0) {
+    const section = grid.closest('section') || grid.previousElementSibling;
+    if (section) section.style.display = 'none';
+    grid.style.display = 'none';
   }
 }
 </script>

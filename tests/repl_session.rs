@@ -1315,3 +1315,51 @@ fn value_of_struct_binding_still_renders_618() {
     assert!(matches!(s.eval("p = P { x: 1 }"), Eval::Ran));
     assert_eq!(s.value_of("p").as_deref(), Some("P{x:1}"));
 }
+
+// ── FU.3: one typo must produce one message ─────────────────────────────────
+
+/// A failed input reported diagnostics about the *replayed session body* as if
+/// the user had just typed them: `prnt("hi")` after `x = 5` answered with the
+/// real error **and** `Variable x is never read`, which is false — `x` was read,
+/// by the very input that failed to compile.  Every prelude line clamps onto the
+/// user's line 1, so N earlier bindings produced N false warnings all pointing
+/// at the same wrong column.
+#[test]
+fn a_failed_input_does_not_warn_about_the_replayed_session() {
+    let mut s = session();
+    assert!(matches!(s.eval("x = 5"), Eval::Ran));
+    assert!(matches!(s.eval("y = 6"), Eval::Ran));
+    assert!(matches!(s.eval("z = 7"), Eval::Ran));
+
+    let Eval::Error(diags) = s.eval("prnt(\"hi\")") else {
+        panic!("a typo'd function name must be an error");
+    };
+
+    // The real error survives — dropping it would leave the REPL rejecting the
+    // input while saying nothing.
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.level >= loft::diagnostics::Level::Error),
+        "the error itself must still reach the user; got {diags:?}"
+    );
+    // ...and it is the ONLY thing reported.
+    let noise: Vec<String> = diags
+        .iter()
+        .filter(|d| d.level < loft::diagnostics::Level::Error)
+        .map(loft::diagnostics::DiagEntry::to_string_compact)
+        .collect();
+    assert!(
+        noise.is_empty(),
+        "a typo must not warn about earlier, correct bindings; got {noise:?}"
+    );
+
+    // The session is unharmed: x really was readable all along.
+    assert!(
+        matches!(
+            s.eval("assert(x + y + z == 18, \"bindings survived\")"),
+            Eval::Ran
+        ),
+        "the replayed bindings must still be live after the failed input"
+    );
+}

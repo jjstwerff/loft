@@ -41,6 +41,7 @@ struct NotNull { i: integer, t: text }
 struct Nullable { n: integer?, f: float? }
 struct Vec1 { v: vector<integer> }
 struct VecNest { vv: vector<vector<integer>> }
+struct VecNestNarrow { vv: vector<vector<u8>> }
 struct VecText { v: vector<text> }
 struct Item { ik: integer }
 struct Bag { items: hash<Item[ik]> }
@@ -62,6 +63,7 @@ const TYPES: &[&str] = &[
     "Nullable",
     "Vec1",
     "VecNest",
+    "VecNestNarrow",
     "VecText",
     "Item",
     "Bag",
@@ -76,8 +78,12 @@ const TYPES: &[&str] = &[
 /// A layout change flips this. Re-bless (with the golden) on an intentional change.
 /// (@PLN97 F9 2026-07-17 — re-blessed after adding the `@endian` line to the layout dump.
 /// @PLN102 arc-E F9 2026-07-19 — re-blessed after adding the `Nullable` corpus type +
-/// folding the DEF-level nullability schema into the golden.)
-const LAYOUT_ALGO_HASH: u64 = 5_366_778_852_810_394_803;
+/// folding the DEF-level nullability schema into the golden.
+/// 2026-07-24 — re-blessed after adding `VecNestNarrow`: a nested vector with a NARROW
+/// inner is the shape the #477/#483/#624 class keeps recurring in, and the corpus could
+/// not see it.  `vector<vector<integer>>` alone is layout-UNCHANGED by that fix, so
+/// only the added row moves the hash — see doc/claude/plans/nested-narrow-width/.)
+const LAYOUT_ALGO_HASH: u64 = 10_683_398_740_164_760_276;
 
 /// @PLN102 arc-E flip-gate (Gate 1 step 3) — the `contract` version at which the
 /// CURRENT layout was frozen. The store layout IS the persistence contract, so

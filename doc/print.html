@@ -10,7 +10,7 @@
 <header class="print-header">
 <h1>Loft Language Reference</h1>
 <p class="tagline">Complete language and standard library documentation</p>
-<p class="version">v2026.7.1</p>
+<p class="version">v2026.7.2</p>
 <p><a href="index.html">&#8592; Back to online documentation</a> &nbsp;|&nbsp; <a href="00-vs-rust.html">vs Rust comparison</a></p>
 </header>
 <nav class="print-toc">
@@ -50,7 +50,7 @@
 <li><a href="#29-match">Match</a> — <span class="toc-desc">Pattern matching with match expressions</span></li>
 <li><a href="#30-formatting">Formatting</a> — <span class="toc-desc">Format strings — interpolation, alignment, and number bases</span></li>
 <li><a href="#31-ref-forward">Reference parameter forwarding</a> — <span class="toc-desc">Forwarding &amp; parameters between functions</span></li>
-<li><a href="#32-time">Time</a> — <span class="toc-desc">The time library — dates and times as epoch milliseconds.</span></li>
+<li><a href="#32-time">Time library</a> — <span class="toc-desc">The time library — dates and times as epoch milliseconds.</span></li>
 <li class="toc-section"><a href="#stdlib">Standard Library</a></li>
 <li class="toc-indent"><a href="#stdlib-types">Types</a></li>
 <li class="toc-indent"><a href="#stdlib-interfaces">Interfaces</a></li>
@@ -162,10 +162,10 @@
 <pre><code>  a = <span class="st">"1"</span> + <span class="st">"2"</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"'{a:4}'"</span> == <span class="st">"'12  '"</span>, <span class="st">"Formatting text"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(a + <span class="st">"123"</span>) == <span class="nm">5</span>, <span class="st">"Text length"</span>);</code></pre>
-<p><code>len()</code> counts bytes, not visible characters. An emoji like <code>😃</code> takes 4 bytes in UTF-8, a heart symbol <code>♥</code> takes 3, and every plain ASCII letter takes exactly 1. Keep this in mind whenever you use len() to check how "long" something is to a human reader.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"😃"</span>) == <span class="nm">4</span>, <span class="st">"Emoji byte length"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"♥"</span>) == <span class="nm">3</span>, <span class="st">"Heart byte length"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"abc"</span>) == <span class="nm">3</span>, <span class="st">"ASCII byte length"</span>);</code></pre>
+<p><code>len()</code> counts characters (Unicode code points), the human count: an emoji like <code>😃</code> is one character, a heart symbol <code>♥</code> is one, and each ASCII letter is one. For the UTF-8 byte length (bounds checks, byte indexing) use <code>size()</code>.</p>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"😃"</span>) == <span class="nm">1</span>, <span class="st">"Emoji is one character"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"♥"</span>) == <span class="nm">1</span>, <span class="st">"Heart is one character"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(<span class="st">"abc"</span>) == <span class="nm">3</span>, <span class="st">"ASCII character count"</span>);</code></pre>
 <h2 id="reading-individual-characters">Reading individual characters</h2>
 <p>Square brackets with a single byte index give you the character at that position. For plain ASCII text every byte is one character, so indexing by position is straightforward. Loft will return the full character even if it spans multiple bytes.</p>
 <pre><code>  s = <span class="st">"ABCDE"</span>;
@@ -179,18 +179,16 @@
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(s[<span class="nm">3..</span>] == <span class="st">"DE"</span>, <span class="st">"Open-ended sub-string"</span>);</code></pre>
 <p>A negative end index counts backwards from the end of the text. <code>-1</code> means "stop one byte before the very last byte". Combined with a start offset this lets you trim a known suffix without knowing the exact length.</p>
 <pre><code>  txt = <span class="st">"12😊🙃45"</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(txt[<span class="nm">2..</span>- <span class="nm">1</span>] == <span class="st">"😊🙃4"</span>, <span class="st">"UTF-8 sub-string by byte range"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(txt[<span class="nm">2..</span> - <span class="nm">1</span>] == <span class="st">"😊🙃4"</span>, <span class="st">"UTF-8 sub-string by byte range"</span>);</code></pre>
 <h2 id="iterating-over-characters">Iterating over characters</h2>
 <p>A <code>for</code> loop over a text value visits one character at a time, even when characters span multiple bytes. Two loop helpers give you position information without any extra code: <code>c#index</code> is the byte offset where the current character starts. <code>c#next</code> is the byte offset immediately after the current character ends. This makes it easy to build a byte-offset map or to collect characters starting from a specific position.</p>
 <pre><code>  result = <span class="st">""</span>;
-  positions =[];
-  nexts =[];
+  positions = [];
+  nexts = [];
   <span class="kw">for</span> c <span class="kw">in</span> <span class="st">"Hi 😊!"</span> {
-    positions +=[c#<span class="ty">index</span>];
-    nexts +=[c#next];
-    <span class="kw">if</span> c#<span class="ty">index</span> &gt;= <span class="nm">3</span> {
-      result += c;
-    }
+    positions += [c#<span class="ty">index</span>];
+    nexts += [c#next];
+    <span class="kw">if</span> c#<span class="ty">index</span> &gt;= <span class="nm">3</span> { result += c; }
   }
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(result == <span class="st">"😊!"</span>, <span class="st">"Character iteration was {result}"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="st">"{positions}"</span> == <span class="st">"[0,1,2,3,7]"</span>, <span class="st">"Character positions was {positions}"</span>);
@@ -1230,8 +1228,8 @@ pixel.value()           pack r,g,b into a single 0xRRGGBB integer
       imaging::<span class="en">Pixel</span> { r: <span class="nm">128</span>, g: <span class="nm">128</span>, b: <span class="nm">128</span> }
     ]
   };</code></pre>
-<p>Write to a temporary path so the example leaves nothing behind in the project.</p>
-<pre><code>  scratch = <span class="st">"/tmp/loft-doc-swatch.png"</span>;
+<p>Write to a scratch file in the working directory, then delete it below so the example leaves nothing behind. A cwd-relative path (with <code>#cwd</code>) works on every OS — a hard-coded <code>/tmp/…</code> would not exist on Windows.</p>
+<pre><code>  scratch = <span class="st">"loft-doc-swatch.png"</span>;
   saved = swatch.<span class="fn-call">save_png</span>(scratch);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(saved, <span class="st">"save_png reported success"</span>);</code></pre>
 <h2 id="round-tripping">Round-Tripping</h2>
@@ -1800,7 +1798,9 @@ elapsed_ms  = elapsed_us / 1000
   value
 }</code></pre>
 <p>Used to obtain a null text value (an uninitialized field is the NUL sentinel).</p>
-<pre><code><span class="kw">struct</span> <span class="en">NullTextHolder</span> { s: <span class="ty"><a href="stdlib-types.html">text</a></span> }</code></pre>
+<pre><code><span class="kw">struct</span> <span class="en">NullTextHolder</span> {
+  s: <span class="ty"><a href="stdlib-types.html">text</a></span>,
+}</code></pre>
 <pre><code><span class="kw">fn</span> <span class="fn-call">main</span>() {</code></pre>
 <h2 id="null-values-hidden-reserved-values">Null values — hidden reserved values</h2>
 <p>Every type reserves one special value to mean "nothing here" (null). That reserved value looks like any other value, so be aware of what it is for each type:</p>
@@ -1820,7 +1820,7 @@ elapsed_ms  = elapsed_us / 1000
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n != <span class="nm">0</span>, <span class="st">"null is not zero; it is -9 223 372 036 854 775 808"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(n &lt; <span class="nm">0</span>, <span class="st">"i64::MIN is the most negative 64-bit integer"</span>);</code></pre>
 <p>Arithmetic on null propagates: null plus anything is null.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(! (n + <span class="nm">1</span>), <span class="st">"null + 1 is still null"</span>);</code></pre>
 <p>Text null is the NUL character (<code>\0</code>), not the empty string. Parsing a JSON object with a missing text field produces the NUL sentinel:</p>
 <pre><code>  holder = <span class="en">NullTextHolder</span>.<span class="fn-call">parse</span>(`{{}}`);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!holder.s, <span class="st">"missing JSON text field is null (the NUL sentinel)"</span>);
@@ -1836,28 +1836,28 @@ elapsed_ms  = elapsed_us / 1000
 <h2 id="integer-overflow-yields-null">Integer overflow yields null</h2>
 <p>A calculation that overflows the integer range is uncomputable, so loft yields null and keeps running — it never wraps to a silently-wrong number (the way C, or a Rust release build, would) and it never crashes. One bad value degrades locally; the rest of the program still computes. huge = 9223372036854775807; huge + 1  →  null (not a wrapped negative) To trace where overflows arise, opt into the debug log level. Mitigation: check the result for null, or keep intermediate values within range.</p>
 <pre><code>  huge = <span class="nm">9223372036854775807</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(huge + <span class="nm">1</span>), <span class="st">"overflow yields null, not a wrapped value"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(! (huge + <span class="nm">1</span>), <span class="st">"overflow yields null, not a wrapped value"</span>);</code></pre>
 <h2 id="bitwise-operators-with-zero">Bitwise operators with zero</h2>
 <p>All bitwise operators (AND, OR, XOR, shift) work correctly with zero. Zero is the identity element for OR, XOR, and shift; zero for AND.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> &amp; <span class="nm">0</span> == <span class="nm">0</span>, <span class="st">"AND with 0: zero"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> | <span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"OR with 0: identity"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span> ^ <span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"XOR with 0: identity"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span> &lt;&lt; <span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift left by 0: identity"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span> &gt;&gt; <span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift right by 0: identity"</span>);</code></pre>
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span>&amp;<span class="nm">0</span> == <span class="nm">0</span>, <span class="st">"AND with 0: zero"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span>|<span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"OR with 0: identity"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">0b1010</span>^<span class="nm">0</span> == <span class="nm">0b1010</span>, <span class="st">"XOR with 0: identity"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span>&lt;&lt;<span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift left by 0: identity"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">5</span>&gt;&gt;<span class="nm">0</span> == <span class="nm">5</span>, <span class="st">"shift right by 0: identity"</span>);</code></pre>
 <h2 id="float-null-compares-uniformly-with-every-other-scalar">Float null compares uniformly with every other scalar</h2>
 <p>Floats store null as <code>NaN</code> internally, but null COMPARISON is uniform with every other scalar type (@PLN102 null model): <code>null == null</code> is TRUE, null is not equal to any real value, and null orders as the low extreme. Detect a null float with <code>f == null</code> (or <code>!f</code> / <code>f ?? default</code>) — NOT the old <code>f != f</code> trick, which no longer works now that <code>null == null</code> is true. Both the defended and the undefended division yield null and continue (C80 / E-Uncomp — see tests/scripts/184-i333-div-zero-null-continues.loft); the undefended site additionally reports a warning.</p>
 <pre><code>  bad = <span class="nm">0.0</span> / <span class="nm">0.0</span> ?? <span class="kw">null</span>;
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!bad, <span class="st">"a null float is falsy"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad == <span class="kw">null</span>, <span class="st">"detect a null float with `== null`"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad == bad, <span class="st">"null == null is true (uniform null model)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(!(bad != <span class="kw">null</span>), <span class="st">"a null float `!= null` is false"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(! (bad != <span class="kw">null</span>), <span class="st">"a null float `!= null` is false"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(bad != <span class="nm">0.0</span>, <span class="st">"null != 0.0 is true"</span>);</code></pre>
 <p>Use <code>f == null</code>, <code>!f</code>, or <code>f ?? default</code> to check for null floats.</p>
-<h2 id="text-length-counts-bytes-not-characters">Text length counts bytes, not characters</h2>
-<p><code>len()</code> on text returns the number of UTF-8 bytes, not the number of visible characters. Multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes. <code>size()</code> returns the number of Unicode code points (characters). These two values differ whenever the text contains any multi-byte character.</p>
+<h2 id="text-length-counts-characters-size-counts-bytes">Text length counts characters; size counts bytes</h2>
+<p><code>len()</code> on text returns the number of characters (Unicode code points) — the human count. <code>size()</code> returns the number of UTF-8 bytes; multi-byte characters (accented letters, emoji, CJK) each occupy 2-4 bytes. The two values differ whenever the text contains any multi-byte character.</p>
 <pre><code>  emoji = <span class="st">"Hi 😊!"</span>;
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(emoji) == <span class="nm">8</span>, <span class="st">"5 visible chars but 8 bytes (emoji is 4 bytes)"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(emoji) == <span class="nm">5</span>, <span class="st">"size() counts code points: {size(emoji)}"</span>);</code></pre>
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="bi"><a href="stdlib-text.html">len</a></span>(emoji) == <span class="nm">5</span>, <span class="st">"5 characters (H, i, space, 😊, !)"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-text.html">size</a></span>(emoji) == <span class="nm">8</span>, <span class="st">"8 UTF-8 bytes (the emoji is 4): {size(emoji)}"</span>);</code></pre>
 <p>Slicing and indexing also use byte offsets. Slicing in the middle of a multi-byte character is an error. Mitigation: Use <code>for c in text</code> to iterate by character. Use <code>c#index</code> and <code>c#next</code> to get the byte boundaries of each character.</p>
 <pre><code>  count = <span class="nm">0</span>;
   <span class="kw">for</span> c <span class="kw">in</span> emoji { count += <span class="nm">1</span>; }
@@ -1911,8 +1911,8 @@ elapsed_ms  = elapsed_us / 1000
 <p><code>lines()</code> and <code>content()</code> read a file as UTF-8 text and crash on invalid UTF-8 (a binary file, or a different encoding such as Latin-1). For binary data, set a binary format on the file — <code>f#format = LittleEndian</code> (or <code>BigEndian</code>) — and read raw bytes / integers directly (see 13-file.loft). So: read UTF-8 text in text mode, everything else in a binary format.</p>
 <h2 id="xor-is-not-exponentiation">XOR is <code>^</code>, not exponentiation</h2>
 <p>Unlike some languages where <code>^</code> means "power", in loft <code>^</code> is bitwise XOR. For exponentiation use the <code>**</code> operator (<code>2 ** 10 == 1024</code>, <code>2.0 ** 3.0 == 8.0</code>) or the <code>pow()</code> function. Watch one precedence footgun: <code>-x ** y</code> parses as <code>-(x ** y)</code>, so loft warns on it — write <code>(-x) ** y</code> when you mean to raise a negated base.</p>
-<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0b1010</span> ^ <span class="nm">0b1100</span>) == <span class="nm">0b0110</span>, <span class="st">"^ is XOR"</span>);
-  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">2</span> ** <span class="nm">10</span> == <span class="nm">1024</span>, <span class="st">"** is the power operator"</span>);
+<pre><code>  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>((<span class="nm">0b1010</span>^<span class="nm">0b1100</span>) == <span class="nm">0b0110</span>, <span class="st">"^ is XOR"</span>);
+  <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="nm">2</span>**<span class="nm">10</span> == <span class="nm">1024</span>, <span class="st">"** is the power operator"</span>);
   <span class="bi"><a href="stdlib-output-and-diagnostics.html">assert</a></span>(<span class="fn-call"><a href="stdlib-math.html">pow</a></span>(<span class="nm">2.0</span>, <span class="nm">3.0</span>) == <span class="nm">8.0</span>, <span class="st">"pow() also computes powers"</span>);
 }</code></pre>
 </section>
@@ -2510,7 +2510,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 }</code></pre>
 </section>
 <section class="print-section" id="32-time">
-<h1>Time</h1>
+<h1>Time library</h1>
 <p>@ARGS: --lib tests/fixtures/libs</p>
 <p>The <code>time</code> library represents a point in time as a plain <code>integer</code> (i64) holding milliseconds since the Unix epoch — the same unit <code>now()</code> returns.  All calendar math is UTC and uses the proleptic Gregorian calendar, so results are identical on the interpreter, <code>--native</code>, and WebAssembly.  Import it with <code>use time;</code> and call its free functions with the <code>time::</code> prefix.</p>
 <p>Timezone model: field accessors and formatters are UTC.  For local-day bucketing pass a fixed UTC offset in minutes (<code>to_local</code> / <code>local_day</code> / <code>today</code>).  There is no timezone database and no daylight-saving handling — a fixed offset only.</p>
@@ -3036,11 +3036,11 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p class="section-desc">Functions for working with text (UTF-8 strings) and character values. Read the value of a variable and put a reference to it on the stack</p>
 <div class="item">
 <pre><code>pub fn len(both: text) -&gt; integer</code></pre>
-<p>Number of bytes in the text. Use for bounds checks and iteration limits.</p>
+<p>Number of characters (Unicode code points) in the text (@PLN110) — the human count, as in every mainstream language. For a byte length (bounds checks, the limit of byte-positioned indexing / slicing) use `size`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn size(both: text) -&gt; integer</code></pre>
-<p>Number of Unicode code points (characters) in the text.</p>
+<p>Number of bytes in the text (@PLN110). This is the bound for byte-positioned operations: `s[i]`, slices `s[a..b]`, and `find`/`rfind` all use byte offsets. For the human character count use `len`.</p>
 </div>
 <div class="item">
 <pre><code>pub fn len(both: character) -&gt; integer</code></pre>
@@ -3048,14 +3048,14 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <p class="section-desc">Splits self on every occurrence of separator and returns the parts as a vector. Use to parse CSV lines or space-separated tokens.</p>
 <div class="item">
-<pre><code>pub fn split(self: text, separator: character) -&gt; vector &lt; text &gt;</code></pre>
+<pre><code>pub fn split(self: text, separator: character) -&gt; vector&lt;text&gt;</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn split_text(self: text, separator: text) -&gt; vector &lt; text &gt;</code></pre>
+<pre><code>pub fn split_text(self: text, separator: text) -&gt; vector&lt;text&gt;</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn starts_with_at(self: text, pos: integer, prefix: text) -&gt; boolean</code></pre>
-<p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.len()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.len() exceeds self.len() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
+<p>Functions for searching, transforming, and classifying text and character values. Character classification functions return true only if every character in the text satisfies the condition. The single-character variants test one code point. (`starts_with` / `ends_with` moved to `02_files.loft` so the path helpers there can call them; both still available as `text.starts_with` / `text.ends_with`.) Returns true if self contains `prefix` starting at byte position `pos`.  Sugar over `self[pos..pos + prefix.size()] == prefix` for the common &quot;is this token at this offset?&quot; pattern in scanners / parsers.  Returns false (not an error) when pos + prefix.size() exceeds self.size() — same shape as `starts_with` for the &quot;prefix too long for input&quot; case.</p>
 <p>Faster than comparing characters one at a time for a known prefix at `pos`.</p>
 </div>
 <div class="item">
@@ -3080,7 +3080,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <div class="item">
 <pre><code>pub fn contains(self: text, value: text) -&gt; boolean</code></pre>
-<p>Returns true if value appears anywhere in self. @PLN102 arc C — superseded by `find`; kept as a shim over it (the old form keeps working). `s.contains(v)` == `s.find(v) != null` — `find` returns the position, `contains` is its found?/not-found? projection.</p>
+<p>Returns true if value appears anywhere in self. `s.contains(v)` == `s.find(v) != null` — `find` returns the position, `contains` is its found?/not-found? projection.  NOT superseded: `contains` is the clearer idiom for a membership test (a boolean predicate), and folding it onto `find` (below) is an implementation detail, not a reason to steer callers away from it.</p>
 </div>
 <div class="item">
 <pre><code>pub fn replace(self: text, value: text, with: text) -&gt; text</code></pre>
@@ -3151,7 +3151,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>True if the character is a control character.</p>
 </div>
 <div class="item">
-<pre><code>pub fn join(self: vector &lt; text &gt;, sep: text) -&gt; text</code></pre>
+<pre><code>pub fn join(self: vector&lt;text&gt;, sep: text) -&gt; text</code></pre>
 <p>Joins parts with sep between each consecutive pair. Returns &quot;&quot; for an empty vector. Use to build comma-separated lists, path segments, or any delimited output.</p>
 </div>
 <h2 id="stdlib-collections">Collections</h2>
@@ -3171,6 +3171,10 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub fn len(both: hash) -&gt; integer</code></pre>
 <p>Number of elements in a hash collection.</p>
+</div>
+<div class="item">
+<pre><code>pub fn size(both: hash) -&gt; integer</code></pre>
+<p>The byte footprint of a hash (@PLN110): its full bucket table, holes included.  The table is the hash's own allocation — `elms` slots, each a 4-byte record-id (an empty slot is a hole and still counts, because open addressing's spare capacity IS the format).  Allocation-local: the entry records live in separate allocations and are not counted.  Grows in steps as the table rehashes (load factor 0.75).  0 for an empty (unallocated) hash.</p>
 </div>
 <h2 id="stdlib-output-and-diagnostics">Output and Diagnostics</h2>
 <div class="item">
@@ -3218,15 +3222,15 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <h2 id="stdlib-vector-aggregates">Vector aggregates</h2>
 <div class="item">
-<pre><code>pub fn min_of&lt;T: Ordered&gt;(v: vector&lt;T&gt;) -&gt; T?</code></pre>
+<pre><code>pub fn min_of &lt; T: Ordered &gt; (v: vector&lt;T&gt;) -&gt; T?</code></pre>
 <p>Smallest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
 </div>
 <div class="item">
-<pre><code>pub fn max_of&lt;T: Ordered&gt;(v: vector&lt;T&gt;) -&gt; T?</code></pre>
+<pre><code>pub fn max_of &lt; T: Ordered &gt; (v: vector&lt;T&gt;) -&gt; T?</code></pre>
 <p>Largest element in a vector, or null when the vector is empty (@PLN102 keystone step 4 — the type is honest about the empty case).  Works on any Ordered type (op &lt;).</p>
 </div>
 <div class="item">
-<pre><code>pub fn sum&lt;T: Addable&gt;(v: vector&lt;T&gt;, init: T) -&gt; T</code></pre>
+<pre><code>pub fn sum &lt; T: Addable &gt; (v: vector&lt;T&gt;, init: T) -&gt; T</code></pre>
 <p>Sum of vector elements with caller-supplied identity.  Works on any Addable type. Example: sum([10, 20, 12], 0) == 42</p>
 </div>
 <div class="item">
@@ -3237,24 +3241,24 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <pre><code>pub interface Walkable</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn tree_walk&lt;T: Walkable&gt;(wk_root: T, cap: integer) -&gt; vector&lt;T&gt;</code></pre>
+<pre><code>pub fn tree_walk &lt; T: Walkable &gt; (wk_root: T, cap: integer) -&gt; vector&lt;T&gt;</code></pre>
 </div>
 <h2 id="stdlib-field-iteration-support-types">Field iteration support types</h2>
 <div class="item">
 <pre><code>pub enum FieldValue {
-  FvBool   { v: boolean },
-  FvInt    { v: integer },
-  FvLong   { v: integer },
-  FvFloat  { v: float },
+  FvBool { v: boolean },
+  FvInt { v: integer },
+  FvLong { v: integer },
+  FvFloat { v: float },
   FvSingle { v: single },
-  FvChar   { v: character },
-  FvText   { v: text }
+  FvChar { v: character },
+  FvText { v: text },
 }</code></pre>
 <p>Wraps a field value in a type-discriminated enum for compile-time field iteration.</p>
 </div>
 <div class="item">
 <pre><code>pub struct StructField {
-  name:  text,
+  name: text,
   value: FieldValue,
 }</code></pre>
 <p>Represents a single struct field during compile-time iteration.</p>
@@ -3288,7 +3292,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <div class="item">
 <pre><code>pub struct EnvVariable {
   name: text,
-  value: text
+  value: text,
 }</code></pre>
 </div>
 <div class="item">
@@ -3297,7 +3301,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   LittleEndian,
   BigEndian,
   Directory,
-  NotExists
+  NotExists,
 }</code></pre>
 </div>
 <div class="item">
@@ -3306,7 +3310,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
   NotFound,
   PermissionDenied,
   IsDirectory,
-  Other
+  Other,
 }</code></pre>
 <p>Result of a filesystem-mutating operation (delete, move, mkdir). Use ok() to get a simple boolean, or match on specific variants for detailed error handling.  Every variant can actually be produced: Ok on success, NotFound for a missing / out-of-project path, PermissionDenied when the OS refuses access, IsDirectory when a file op targets a directory (e.g. deleting a directory with delete()), and Other for anything else. (--native and --interpret classify from the OS error; the wasm host reports only Ok / Other, and NotFound still comes from the loft-level existence check.)</p>
 </div>
@@ -3320,20 +3324,24 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 
   size: integer,
 
-  format: Format,
+  // @PLN116 — a bare enum field needs an explicit default (an enum's 0 is null, and a
+  // non-null field may not hold null).  A fresh File is `NotExists` until `OpGetFile`
+  // determines the real format for a valid path (see `file()`), so `NotExists` is the
+  // honest placeholder — it is overwritten before any read.
+  format: Format = NotExists,
 
   ref: i32?,
 
   current: integer,
 
-  next: integer
+  next: integer,
 }</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn content(self: File) -&gt; text? fs#read</code></pre>
+<pre><code>pub fn content(self: File) -&gt; text?fs#read</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn lines(self: File) -&gt; vector &lt; text &gt; fs#read</code></pre>
+<pre><code>pub fn lines(self: File) -&gt; vector&lt;text&gt; fs#read</code></pre>
 </div>
 <p class="section-desc">Returns the platform path separator character: '\' on Windows, '/' elsewhere. Detected once at startup from the runtime filesystem.</p>
 <div class="item">
@@ -3370,15 +3378,15 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>Returns true if `path` exists and is a regular file. Use to confirm a directory entry is a readable file before opening it.</p>
 </div>
 <div class="item">
-<pre><code>pub fn list_dir(path: text) -&gt; vector &lt; text &gt; ? fs#read</code></pre>
+<pre><code>pub fn list_dir(path: text) -&gt; vector&lt;text&gt; ?fs#read</code></pre>
 <p>Lists the entry NAMES of directory `path` (base names, not full paths), sorted.  @PLN102 H4 — a MISSING / non-directory path lists as NULL (distinct from an EMPTY directory, `[]`); discharge with `?? []` to keep the old shape. Use to enumerate a directory; join with `path` to build full child paths.</p>
 </div>
 <div class="item">
-<pre><code>pub fn read_bytes(path: text) -&gt; vector &lt; u8 &gt; ? fs#read</code></pre>
+<pre><code>pub fn read_bytes(path: text) -&gt; vector&lt;u8&gt; ?fs#read</code></pre>
 <p>Reads the whole file `path` as raw bytes.  @PLN102 H4 — a MISSING / unreadable file reads as NULL (distinct from an EMPTY file, `[]`); discharge with `?? []` to keep the old shape.  Binary-exact (round-trips with write_bytes); use for non-UTF-8 data — for text prefer `file(path).content()`.</p>
 </div>
 <div class="item">
-<pre><code>pub fn write_bytes(path: text, bytes: vector &lt; u8 &gt;) -&gt; boolean fs#update</code></pre>
+<pre><code>pub fn write_bytes(path: text, bytes: vector&lt;u8&gt;) -&gt; boolean fs#update</code></pre>
 <p>Writes `bytes` to file `path`, truncating any existing content.  Returns true on success.  The inverse of read_bytes; the pair round-trips a non-UTF-8 blob byte-for-byte.</p>
 </div>
 <div class="item">
@@ -3446,7 +3454,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <pre><code>pub fn sync(self: File) -&gt; boolean fs#update</code></pre>
 </div>
 <div class="item">
-<pre><code>pub fn files(self: File) -&gt; vector &lt; File &gt; fs#read</code></pre>
+<pre><code>pub fn files(self: File) -&gt; vector&lt;File&gt; fs#read</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn write(self: File, v: text) -&gt; FileResult fs#update</code></pre>
@@ -3455,7 +3463,7 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <h2 id="stdlib-environment">Environment</h2>
 <p class="section-desc">Returns all environment variables as a vector of EnvVariable records (fields: name, value). Use to inspect or forward the full environment.</p>
 <div class="item">
-<pre><code>pub fn env_variables() -&gt; vector &lt; EnvVariable &gt; env#read</code></pre>
+<pre><code>pub fn env_variables() -&gt; vector&lt;EnvVariable&gt; env#read</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn env_variable(name: text) -&gt; text env#read</code></pre>
@@ -3471,14 +3479,14 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 </div>
 <p class="section-desc">Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.</p>
 <div class="item">
-<pre><code>pub fn arguments() -&gt; vector &lt; text &gt;</code></pre>
+<pre><code>pub fn arguments() -&gt; vector&lt;text&gt;</code></pre>
 </div>
 <div class="item">
 <pre><code>pub fn byte_at(self: text, i: integer) -&gt; integer</code></pre>
 <p>Return the BYTE at position `i` (0..len) as integer 0-255, or 0 for out-of-bounds.  Unlike `text[i]` which decodes the UTF-8 codepoint containing byte `i` (walking back through continuation bytes), `byte_at(i)` is a pure O(1) byte read. Use in ASCII-heavy scanning hot paths (tokenisers, regex- like loops) where the UTF-8 decode is wasted work — every non-ASCII byte still returns a valid 0-255 number; the caller compares against ASCII constants so byte semantics suffice.  ~5-10× faster than `text[i]` for pure-ASCII checks.</p>
 </div>
 <div class="item">
-<pre><code>pub fn text_from_bytes(bytes: vector &lt; u8 &gt;) -&gt; text</code></pre>
+<pre><code>pub fn text_from_bytes(bytes: vector&lt;u8&gt;) -&gt; text</code></pre>
 <p>Build a text from the raw UTF-8 bytes of a vector&lt;u8&gt; — the inverse of byte_at.  Use in binary decoders (CBOR text, HPKE byte composition) that assemble a byte buffer and need to turn it back into text.  Bytes that are not valid UTF-8 yield the empty text (never a crash); validate first if you must tell &quot;empty input&quot; from &quot;invalid bytes&quot; apart.</p>
 </div>
 <div class="item">
@@ -3486,15 +3494,15 @@ if len(json_errors()) &gt; 0 { log_warn(json_errors()); }
 <p>Returns the UTC calendar date `days` days before today as `YYYY-MM-DD`. Use for cutoff dates in time-window filters; negative `days` clamps to today.</p>
 </div>
 <div class="item">
-<pre><code>pub fn directory(v:  &amp; text = &quot;&quot;) -&gt; text</code></pre>
+<pre><code>pub fn directory(v: &amp;text = &quot;&quot;) -&gt; text</code></pre>
 <p>Returns the current working directory, optionally with v appended as a subpath. Use to construct absolute paths relative to where the program was launched.</p>
 </div>
 <div class="item">
-<pre><code>pub fn user_directory(v:  &amp; text = &quot;&quot;) -&gt; text</code></pre>
+<pre><code>pub fn user_directory(v: &amp;text = &quot;&quot;) -&gt; text</code></pre>
 <p>Returns the current user's home directory, optionally with v appended. Use for storing user-specific data or configuration.</p>
 </div>
 <div class="item">
-<pre><code>pub fn program_directory(v:  &amp; text = &quot;&quot;) -&gt; text</code></pre>
+<pre><code>pub fn program_directory(v: &amp;text = &quot;&quot;) -&gt; text</code></pre>
 <p>Returns the directory containing the running executable, optionally with v appended. Use to locate assets bundled alongside the program.</p>
 </div>
 <div class="item">

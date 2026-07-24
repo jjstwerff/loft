@@ -177,7 +177,7 @@ impl SandboxConfig {
 
     /// The profile NAME a `fn:<name>` designation maps to, if the function is
     /// designated sandboxed.  The compiler resolves each parsed function against
-    /// this (@PLN86 step 1.2); file-glob selectors are a later addition.
+    /// this (@PLN86 step 1.2).
     #[must_use]
     pub fn fn_designation(&self, fn_name: &str) -> Option<&str> {
         let selector = format!("fn:{fn_name}");
@@ -185,6 +185,81 @@ impl SandboxConfig {
             .iter()
             .find(|(s, _)| *s == selector)
             .map(|(_, p)| p.as_str())
+    }
+
+    /// The profile NAME designating a function, by either selector form: the
+    /// per-function `fn:<name>`, or a **path selector** matching the source file
+    /// the function is defined in (`"src/oplog.loft"`, `"plugins/**/*.loft"`).
+    ///
+    /// A path selector is what makes the correct policy for plugin-shaped code a
+    /// single line (#631).  Admission analyses only the functions it is told about,
+    /// so a module's private helpers must be designated too — naming each one is
+    /// tedious enough that the tempting alternative is to allow-list the whole
+    /// library, which is the one policy that silently switches the guards off.
+    /// Designating the FILE covers every helper in it and keeps them analysed.
+    #[must_use]
+    pub fn designation_for(&self, fn_name: &str, file: &str) -> Option<&str> {
+        let selector = format!("fn:{fn_name}");
+        self.designations
+            .iter()
+            .find(|(s, _)| {
+                *s == selector || (!s.starts_with("fn:") && path_selector_matches(s, file))
+            })
+            .map(|(_, p)| p.as_str())
+    }
+}
+
+/// Does path selector `pat` designate source file `file`?
+///
+/// `*` matches within one path segment, `**` across segments, `?` one character.
+/// The selector is written relative to the project (`src/oplog.loft`) while the
+/// parser carries whatever path it opened the file by, so a match against any
+/// trailing segment boundary of `file` counts — anchoring on the full path would
+/// make an otherwise-correct selector silently designate nothing, and a sandbox
+/// policy that silently covers nothing is the failure mode this whole area exists
+/// to prevent.
+#[must_use]
+pub fn path_selector_matches(pat: &str, file: &str) -> bool {
+    let file = file.replace('\\', "/");
+    if glob_matches(pat.as_bytes(), file.as_bytes()) {
+        return true;
+    }
+    file.match_indices('/')
+        .any(|(i, _)| glob_matches(pat.as_bytes(), &file.as_bytes()[i + 1..]))
+}
+
+/// A path selector a diagnostic can suggest for `file`: its last two segments
+/// (`src/oplog.loft`), which is how the policy would be written.  The parser
+/// resolves sources to absolute paths, and echoing one back would read as a
+/// machine-specific policy nobody can commit.
+#[must_use]
+pub fn suggested_path_selector(file: &str) -> String {
+    let file = file.replace('\\', "/");
+    let mut segs = file.rsplit('/');
+    match (segs.next(), segs.next()) {
+        (Some(base), Some(dir)) if !dir.is_empty() => format!("{dir}/{base}"),
+        (Some(base), _) => base.to_string(),
+        _ => file,
+    }
+}
+
+/// Backtracking glob match of `pat` against `text` (`**` spans `/`, `*` does not).
+fn glob_matches(pat: &[u8], text: &[u8]) -> bool {
+    match pat.first() {
+        None => text.is_empty(),
+        Some(b'*') => {
+            if pat.starts_with(b"**") {
+                let rest = &pat[2..];
+                // `**/` also matches zero segments, so `a/**/b.loft` covers `a/b.loft`.
+                let skip = usize::from(rest.first() == Some(&b'/'));
+                return (0..=text.len()).any(|i| glob_matches(&pat[2..], &text[i..]))
+                    || (skip == 1 && glob_matches(&rest[1..], text));
+            }
+            let stop = text.iter().position(|&c| c == b'/').unwrap_or(text.len());
+            (0..=stop).any(|i| glob_matches(&pat[1..], &text[i..]))
+        }
+        Some(b'?') => !text.is_empty() && text[0] != b'/' && glob_matches(&pat[1..], &text[1..]),
+        Some(&c) => text.first() == Some(&c) && glob_matches(&pat[1..], &text[1..]),
     }
 }
 
@@ -648,6 +723,25 @@ pub fn describe_violation(
              `{group}` — not granted.\n  fix: add `{group}` to `allow`, or add its \
              library `{libhint}` to `allow_libs`.\n  allowed capabilities: [{allowed_caps}]"
         ),
+        // The fix ORDER matters here (#631).  When the unreachable symbol is the
+        // sandboxed code's OWN private helper, leading with `allow_libs` teaches the
+        // one policy that must never be written: allow-listing the script's own
+        // library marks every helper in it host-vetted, which silently switches OFF
+        // the raw-write guard and drops the helper's loops from the data envelope.
+        // `self_allow_list_violations` now rejects that policy outright, so the
+        // diagnostic must lead with the fix that works — designate the helper.
+        CapViolation::UntaggedSymbol { .. } if lib.is_some() && lib == def_library(data, from) => {
+            format!(
+                "{pos}: sandboxed `{from_name}` reaches `{sym_name}`, a helper in its OWN \
+                 library `{libhint}`, which is not designated sandboxed.\n  fix: designate \
+                 it too — add `\"fn:{sym_name}\"` to the `[sandbox]` selector list, or \
+                 designate the whole file with a path selector (`\"{}\"`).\n  note: do NOT \
+                 add `{libhint}` to `allow_libs` — a library holding sandboxed code cannot \
+                 vet itself, and allow-listing it would disable the raw-write guard and \
+                 under-report the data envelope for every helper in it.",
+                suggested_path_selector(&data.def(symbol).position().file)
+            )
+        }
         CapViolation::UntaggedSymbol { .. } => format!(
             "{pos}: sandboxed `{from_name}` reaches `{sym_name}` (library `{libhint}`), which \
              is neither an allowed library nor a granted capability.\n  fix: add `{libhint}` \
@@ -662,6 +756,87 @@ pub fn describe_violation(
              set `native_ffi = true` for this profile."
         ),
     }
+}
+
+/// @PLN86 / #631 — a profile that allow-lists a library which itself holds
+/// sandboxed code.  `allow_libs` means *"the host vetted this library, include it
+/// as a unit"*; naming the script's own library asserts that the script vets
+/// itself.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct SelfAllowListViolation {
+    pub profile: String,
+    pub library: String,
+    /// A sandboxed def in that library, for the position the diagnostic points at.
+    pub def: u32,
+}
+
+/// @PLN86 / #631 — every profile that allow-lists a library holding one of its
+/// OWN sandboxed defs.
+///
+/// This is the policy that silently turns admission off.  `allow_libs` makes each
+/// symbol in the named library a **trusted leaf**: not descended into, not
+/// capability-checked, its loops absent from the data envelope, its raw writes
+/// unattributed.  That is exactly right for a host library and exactly wrong for
+/// the sandboxed module itself, where it means an escaping mutation admits as soon
+/// as it moves into a one-line helper (`push(out, i)` passes where the identical
+/// `out.v += [i]` is rejected), and a plugin whose entry point delegates to helpers
+/// reports `O(1)` while being `O(n)`.
+///
+/// Both effects are invisible in the output — the reason this is a hard rejection
+/// rather than a lint.  A helper belonging to the sandboxed unit is designated, not
+/// allow-listed; [`describe_violation`] points at that fix.
+#[must_use]
+pub fn self_allow_list_violations(
+    data: &Data,
+    config: &SandboxConfig,
+    sandboxed: &HashMap<u32, String>,
+) -> Vec<SelfAllowListViolation> {
+    let mut out: Vec<SelfAllowListViolation> = Vec::new();
+    for (&def, profile_name) in sandboxed {
+        let Some(library) = def_library(data, def) else {
+            continue;
+        };
+        let Some(profile) = config.profiles.get(profile_name) else {
+            continue;
+        };
+        if !profile.allows_lib(&library) {
+            continue;
+        }
+        // One report per (profile, library) — the lowest def_nr, for determinism.
+        if let Some(seen) = out
+            .iter_mut()
+            .find(|v| v.profile == *profile_name && v.library == library)
+        {
+            seen.def = seen.def.min(def);
+        } else {
+            out.push(SelfAllowListViolation {
+                profile: profile_name.clone(),
+                library,
+                def,
+            });
+        }
+    }
+    out.sort_unstable();
+    out
+}
+
+/// @PLN86 / #631 — render a self-allow-list violation as an actionable error.
+#[must_use]
+pub fn describe_self_allow_list_violation(data: &Data, v: &SelfAllowListViolation) -> String {
+    let SelfAllowListViolation {
+        profile, library, ..
+    } = v;
+    let name = display_name(data, v.def);
+    format!(
+        "{}: profile `{profile}` allow-lists `{library}`, the library its own sandboxed \
+         `{name}` lives in — a library holding sandboxed code cannot vet itself.\n  This \
+         would mark every function in `{library}` a trusted leaf, silently disabling the \
+         raw-write guard for them and dropping their loops from the data envelope.\n  fix: \
+         remove `{library}` from `allow_libs`, and designate the helpers it was covering \
+         (add each `\"fn:<name>\"`, or a path selector for the whole file) to the \
+         `[sandbox]` list.  Keep `allow_libs` for host libraries only.",
+        data.def(v.def).position()
+    )
 }
 
 /// @PLN86 step P3 — a totality violation: a sandboxed script that cannot be
@@ -1910,5 +2085,50 @@ data_budget = "8_000_000"
         let cfg = parse_sandbox_config("[package]\nname = \"x\"\n");
         assert!(!cfg.is_active());
         assert!(cfg.profiles.is_empty());
+    }
+
+    /// #631 — a path selector must match the file as an author writes it
+    /// (project-relative) against the absolute path the parser carries, and must
+    /// not over-match: a selector that designates nothing, or designates the wrong
+    /// file, is a sandbox policy that silently covers the wrong code.
+    #[test]
+    fn path_selector_matches_relative_and_glob_forms() {
+        let abs = "/home/u/proj/src/oplog.loft";
+        assert!(path_selector_matches("src/oplog.loft", abs));
+        assert!(path_selector_matches("oplog.loft", abs));
+        assert!(path_selector_matches(abs, abs));
+        assert!(path_selector_matches("src/*.loft", abs));
+        assert!(path_selector_matches("proj/**/*.loft", abs));
+        assert!(path_selector_matches("**/oplog.loft", abs));
+        assert!(path_selector_matches("src/oplo?.loft", abs));
+        // `**/` also spans zero segments.
+        assert!(path_selector_matches("proj/**/src/oplog.loft", abs));
+
+        assert!(!path_selector_matches("src/other.loft", abs));
+        assert!(!path_selector_matches("oplog", abs));
+        // A partial trailing segment is not a match — only whole segments count.
+        assert!(!path_selector_matches("log.loft", abs));
+        // `*` stops at a separator, so it cannot reach across a directory: `**` is
+        // the form that spans one.  (A bare `*.loft` still matches any `.loft` file,
+        // via the trailing-segment rule — that selector IS "every loft file".)
+        assert!(!path_selector_matches(
+            "src/*.loft",
+            "/home/u/proj/src/sub/oplog.loft"
+        ));
+        assert!(path_selector_matches(
+            "src/**/*.loft",
+            "/home/u/proj/src/sub/oplog.loft"
+        ));
+    }
+
+    /// #631 — the selector a diagnostic offers must be writable into a committed
+    /// policy, so it is project-relative rather than the machine's absolute path.
+    #[test]
+    fn suggested_path_selector_is_relative() {
+        assert_eq!(
+            suggested_path_selector("/home/u/proj/src/oplog.loft"),
+            "src/oplog.loft"
+        );
+        assert_eq!(suggested_path_selector("oplog.loft"), "oplog.loft");
     }
 }

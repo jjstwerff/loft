@@ -1350,3 +1350,49 @@ fn issue620_wasip2_clocks_are_real_not_zero() {
         "now() must return real epoch milliseconds on wasip2, not 0 (#620).\nout: {out}"
     );
 }
+
+/// #620, the OTHER half: the `--html` (browser) target.  The first fix made
+/// `--native-wasm` (wasip2) read a real clock, but the browser build has no
+/// `std` clock at all and returned a hardcoded 0 — so `now()` read the same
+/// instant forever and every duration measured 0ms, silently.  It now reads the
+/// host's `Date.now()` / `performance.now()` through two `loft_io` imports.
+///
+/// `ticks_moved` is the load-bearing assertion: it needs the clock to ADVANCE
+/// across real work, which a constant (0 or otherwise) cannot do.  The `guard`
+/// value proves the timed section actually ran, so a stopped clock can never be
+/// excused as the loop being optimised away.
+#[test]
+fn issue620_html_browser_clocks_are_real_not_zero() {
+    let src = "fn burn(seed: integer) -> integer {\n\
+               \x20   h = seed + 1;\n\
+               \x20   for _ in 0..2000000 { h = (h * 1103515245 + 12345) % 2147483647; }\n\
+               \x20   h\n\
+               }\n\
+               fn main() {\n\
+               \x20 t0 = ticks(); n0 = now();\n\
+               \x20 guard = burn(1);\n\
+               \x20 t1 = ticks();\n\
+               \x20 println(\"ticks_moved={t1 - t0 > 0}\");\n\
+               \x20 println(\"now_is_epoch={n0 > 1600000000000}\");\n\
+               \x20 println(\"guard={guard}\");\n\
+               }\n";
+    let Some((stdout, stderr, ok)) = run_html_wasm("issue620_html_clocks", src) else {
+        return;
+    };
+    assert!(
+        ok,
+        "browser clock program trapped.\nstdout: {stdout}\nstderr: {stderr}"
+    );
+    assert!(
+        stdout.contains("guard=152472650"),
+        "the timed section must actually run (guard value).\nstdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("ticks_moved=true"),
+        "ticks() must advance across real work on --html (#620).\nstdout: {stdout}"
+    );
+    assert!(
+        stdout.contains("now_is_epoch=true"),
+        "now() must return real epoch milliseconds on --html, not 0 (#620).\nstdout: {stdout}"
+    );
+}

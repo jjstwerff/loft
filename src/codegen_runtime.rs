@@ -1335,20 +1335,28 @@ impl FileVal for i32 {
                     *self = i32::from(b);
                 }
             }
+            // @PLN47 W2/W3 — signedness comes from the type's range; see the `i64`
+            // impl below for the full note.
             _ => match &stores.types[db_tp as usize].parts {
-                crate::database::Parts::Byte(_, _) => {
+                crate::database::Parts::Byte(from, _) => {
                     if let Some(&b) = bytes.first() {
-                        *self = i32::from(b);
+                        *self = if *from < 0 {
+                            i32::from(b as i8)
+                        } else {
+                            i32::from(b)
+                        };
                     }
                 }
-                crate::database::Parts::Short(_, _) | crate::database::Parts::ShortRaw(_, _) => {
+                crate::database::Parts::Short(from, _)
+                | crate::database::Parts::ShortRaw(from, _) => {
                     if bytes.len() >= 2 {
-                        let v = if little_endian {
-                            i16::from_le_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
-                        } else {
-                            i16::from_be_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
+                        let d: [u8; 2] = bytes[..2].try_into().unwrap_or([0; 2]);
+                        *self = match (little_endian, *from < 0) {
+                            (true, true) => i32::from(i16::from_le_bytes(d)),
+                            (true, false) => i32::from(u16::from_le_bytes(d)),
+                            (false, true) => i32::from(i16::from_be_bytes(d)),
+                            (false, false) => i32::from(u16::from_be_bytes(d)),
                         };
-                        *self = i32::from(v);
                     }
                 }
                 _ => {
@@ -1457,20 +1465,34 @@ impl FileVal for i64 {
                     *self = i64::from(b);
                 }
             }
+            // @PLN47 W2/W3 — the SIGN of a narrow read comes from the type's own
+            // range: `i8`/`i16` (range `from` negative) sign-extend, `u8`/`u16`
+            // (`from >= 0`) zero-extend.  Reading unconditionally as `i8`/`i16`
+            // only landed on the right value because a downstream `as u8`/`as u16`
+            // re-narrowed it; a `u16` 0xBEEF delivered here as -16657 the moment
+            // nothing did (loft#624 follow-up).  Same rule as the interpreter's
+            // `State::dispatch_read_data`, so the two backends agree by
+            // construction rather than by a consumer's cast.
             _ => match &stores.types[db_tp as usize].parts {
-                crate::database::Parts::Byte(_, _) => {
+                crate::database::Parts::Byte(from, _) => {
                     if let Some(&b) = bytes.first() {
-                        *self = i64::from(b);
+                        *self = if *from < 0 {
+                            i64::from(b as i8)
+                        } else {
+                            i64::from(b)
+                        };
                     }
                 }
-                crate::database::Parts::Short(_, _) | crate::database::Parts::ShortRaw(_, _) => {
+                crate::database::Parts::Short(from, _)
+                | crate::database::Parts::ShortRaw(from, _) => {
                     if bytes.len() >= 2 {
-                        let v = if little_endian {
-                            i16::from_le_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
-                        } else {
-                            i16::from_be_bytes(bytes[..2].try_into().unwrap_or([0; 2]))
+                        let d: [u8; 2] = bytes[..2].try_into().unwrap_or([0; 2]);
+                        *self = match (little_endian, *from < 0) {
+                            (true, true) => i64::from(i16::from_le_bytes(d)),
+                            (true, false) => i64::from(u16::from_le_bytes(d)),
+                            (false, true) => i64::from(i16::from_be_bytes(d)),
+                            (false, false) => i64::from(u16::from_be_bytes(d)),
                         };
-                        *self = i64::from(v);
                     }
                 }
                 crate::database::Parts::Int(_, _) => {
@@ -2043,7 +2065,7 @@ pub fn n_now() -> i64 {
 /// the comment always described.
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 pub fn n_now() -> i64 {
-    0
+    crate::loft_host_time_now_ms() as i64
 }
 
 /// Return microseconds elapsed since program start (monotonic clock).
@@ -2070,10 +2092,12 @@ pub fn n_ticks(cell: &std::cell::UnsafeCell<Stores>) -> i64 {
     (crate::wasm::host_time_ticks() - stores.start_time_ms) * 1000
 }
 
-/// #620 — browser-only fallback; `wasm32-wasip2` uses the real clock above.
+/// #620 — browser arm; `wasm32-wasip2` uses the real clock above.  Reads the
+/// host's `performance.now()`, already monotonic and page-relative, so unlike
+/// the `wasm`-feature arm it needs no `start_time_ms` subtraction.
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 pub fn n_ticks(_cell: &std::cell::UnsafeCell<Stores>) -> i64 {
-    0
+    crate::loft_host_time_ticks_us() as i64
 }
 
 /// Return the platform path separator as a loft character (`i32`).

@@ -3437,6 +3437,27 @@ impl Write for Into {
 }
 
 #[allow(dead_code)]
+/// @T0.3 — the loft type a newcomer's habit from another language means.
+///
+/// Suggestion only: these names stay **undefined**, they are not aliases you can
+/// write (making `int` legal is a language question, not a diagnostic one — see
+/// `DESIGN_DECISIONS.md`).  Every entry is a name verified to be UNDEFINED in
+/// loft; the width types that ARE legal (`i8`/`i16`/`i32`/`u8`/`u16`/`u32`) are
+/// deliberately absent, since a legal name never reaches an unknown-type error.
+pub(crate) fn builtin_type_alias(name: &str) -> Option<&'static str> {
+    Some(match name {
+        // Rust / C / Java / Go habits for the 64-bit integer loft calls `integer`.
+        "int" | "i64" | "u64" | "long" => "integer",
+        // `float` is 64-bit and `single` is 32-bit, so f64→float and f32→single.
+        "f64" | "double" => "float",
+        "f32" => "single",
+        "str" | "string" => "text",
+        "bool" => "boolean",
+        "char" => "character",
+        _ => return None,
+    })
+}
+
 impl Data {
     /// @PLN11 arc D — serialize this `Data` to a file-backed IR store at
     /// `path` (zero-copy-loadable via [`Data::open`]).  Thin wrapper over
@@ -3528,6 +3549,52 @@ impl Data {
             return Some(database.int(0, false));
         }
         None
+    }
+
+    /// Use this for the schema type id of a vector ELEMENT whose loft type is
+    /// `content` — the ONE derivation of that fact.
+    ///
+    /// Three rules, in order: a narrow numeric (or fn-ref) leaf resolves through
+    /// [`Data::narrow_vector_content`]; a NESTED vector recurses, so the inner
+    /// element's width survives; anything else uses the leaf's own registered
+    /// `known_type`.
+    ///
+    /// `None` means "not derivable yet" — the leaf has no registered type id
+    /// (a forward reference, a generic type variable, an unresolved content
+    /// type).  Each caller keeps its own recovery for that case, because the
+    /// options differ: `typedef.rs::fill_database` can fill the missing type on
+    /// the spot, while `Parser::vector_of` must bake a sentinel and let the
+    /// later fill pass re-derive.
+    ///
+    /// Every writer AND reader of a vector element type routes here, which is
+    /// the point: the three independent derivations this replaces agreed only
+    /// when the element happened to be 8 bytes wide, so a declared
+    /// `vector<vector<u16>>` REGISTERED as `vector<vector<integer>>` and the
+    /// renderer read two 2-byte elements as one 8-byte slot (loft#624 nested,
+    /// the named remainder of the plan-58 / loft#437 / #457 / #483 family —
+    /// `doc/claude/plans/nested-narrow-width/`).
+    pub fn vector_element_type(
+        &self,
+        content: &Type,
+        database: &mut crate::database::Stores,
+    ) -> Option<u16> {
+        if let Some(narrow) = self.narrow_vector_content(content, database) {
+            return Some(narrow);
+        }
+        // A nested vector element is itself a vector.  `type_elm` collapses a
+        // level here (`Vector(inner)` → `type_def_nr(inner)`), which loses the
+        // inner width; recurse instead so the registered outer content type is
+        // a real `vector<<inner storage>>`.
+        if let Type::Vector(inner, _) = content.base() {
+            let elem = self.vector_element_type(inner, database)?;
+            return Some(database.vector(elem));
+        }
+        let c_nr = self.type_elm(content);
+        if c_nr == u32::MAX {
+            return None;
+        }
+        let c_tp = self.def(c_nr).known_type();
+        if c_tp == u16::MAX { None } else { Some(c_tp) }
     }
 
     #[must_use]
@@ -5271,13 +5338,26 @@ impl Data {
     /// reach it without threading the parser through.
     #[must_use]
     pub fn suggest_type_name(&self, name: &str) -> Option<String> {
+        // A name a newcomer types out of habit from another language resolves by
+        // TABLE, not by edit distance — `int`/`str`/`i64` are 3 characters (below
+        // `suggest_similar_capped`'s floor) and `bool`→`boolean` (3),
+        // `char`→`character` (5) and `string`→`text` (unrelated) all exceed its
+        // distance cap.  Distance can reach none of them, so the table is the
+        // whole mechanism for this class; edit distance below still catches real
+        // typos (`intger`, `bolean`).
+        if let Some(alias) = builtin_type_alias(name) {
+            return Some(alias.to_string());
+        }
         let candidates: Vec<&str> = self
             .definitions
             .iter()
             .filter_map(|d| {
                 if !matches!(
                     d.def_type,
-                    DefType::Struct | DefType::Enum | DefType::EnumValue
+                    // `Type` is the base types (`integer`, `text`, …) — without it
+                    // a mistyped BUILTIN had no candidates at all, which is why
+                    // `intger` used to suggest nothing.
+                    DefType::Struct | DefType::Enum | DefType::EnumValue | DefType::Type
                 ) {
                     return None;
                 }

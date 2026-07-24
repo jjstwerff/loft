@@ -1,0 +1,130 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression (loft#624 nested — the named remainder of the plan-58 / loft#437 /
+// #457 / #483 family, reported from outside by the Commonstore consumer whose
+// `vector<u8>` is a ciphertext carrier).
+//
+// A nested vector with a NARROW numeric inner element was misread wherever the
+// element's schema type id mattered: `"{v}"` on a `vector<vector<u16>>` rendered
+// two 2-byte elements as one 8-byte slot (`[[131204073,0],…]`), and on a
+// `vector<vector<u8>>` it SIGSEGV'd on both backends; `v[lo..hi]` returned the
+// right outer length with the inner rows emptied.
+//
+// Root cause: "the schema type id for element type T" had SEVEN independent
+// derivations (parser `vector_of`, `Stores::db_type`, `typedef::fill_database`,
+// the index-read stride, the iteration stride, the slice materialiser, and the
+// runtime append/copy/format strides).  They agreed only when the element was
+// 8 bytes wide — exactly the observed boundary — so a declared
+// `vector<vector<u16>>` REGISTERED as `vector<vector<integer>>` and no reader
+// could know the width.  All of them now read `Data::vector_element_type`.
+//
+// The axes below are one composition each; every expected value is hand-computed
+// (both backends were wrong the SAME way, so agreement is not a pass).  Full
+// matrix + the 24-probe suite: doc/claude/plans/nested-narrow-width/.
+
+fn fmt_nest(v: vector<vector<integer>>) -> text {
+  out = "";
+  for i in 0..len(v) {
+    if i > 0 { out += "|"; }
+    row = v[i] ?? [];
+    for j in 0..len(row) { if j > 0 { out += ","; } out += "{row[j] ?? 0}"; }
+  }
+  return out;
+}
+
+// --- render: every narrow width, and the wide control ---
+fn check_render() {
+  a: vector<vector<u8>>  = [[11, 22], [33, 44]];
+  b: vector<vector<u16>> = [[1001, 2002], [3003, 4004]];
+  c: vector<vector<i16>> = [[101, 202], [303, 404]];
+  d: vector<vector<i32>> = [[100001, 200002], [300003, 400004]];
+  e: vector<vector<u32>> = [[100001, 200002], [300003, 400004]];
+  f: vector<vector<integer>> = [[1, 2], [3, 4]];
+  assert("{a}" == "[[11,22],[33,44]]", "render u8: {a}");
+  assert("{b}" == "[[1001,2002],[3003,4004]]", "render u16: {b}");
+  assert("{c}" == "[[101,202],[303,404]]", "render i16: {c}");
+  assert("{d}" == "[[100001,200002],[300003,400004]]", "render i32: {d}");
+  assert("{e}" == "[[100001,200002],[300003,400004]]", "render u32: {e}");
+  assert("{f}" == "[[1,2],[3,4]]", "render integer (control): {f}");
+}
+
+// --- element-wise access is the reference the whole class is measured against ---
+fn check_elementwise() {
+  v: vector<vector<u8>> = [[11, 22], [33, 44]];
+  r0 = v[0] ?? []; r1 = v[1] ?? [];
+  assert((r0[0] ?? 0) == 11 && (r0[1] ?? 0) == 22, "elemwise row0: {r0}");
+  assert((r1[0] ?? 0) == 33 && (r1[1] ?? 0) == 44, "elemwise row1: {r1}");
+}
+
+// --- slice keeps the rows AND their contents ---
+fn check_slice() {
+  a: vector<vector<u8>> = [[11, 22], [33, 44], [55, 66]];
+  s = a[1..3];
+  o = "";
+  for i in 0..len(s) {
+    if i > 0 { o += "|"; }
+    row = s[i] ?? [];
+    for j in 0..len(row) { if j > 0 { o += ","; } o += "{row[j] ?? 0}"; }
+  }
+  assert(len(s) == 2 && o == "33,44|55,66", "slice u8: len={len(s)} {o}");
+
+  b: vector<vector<integer>> = [[1, 2], [3, 4], [5, 6]];
+  t = b[1..3];
+  assert(len(t) == 2 && fmt_nest(t) == "3,4|5,6", "slice integer (control): {fmt_nest(t)}");
+}
+
+// --- all four construction paths agree (the fault was identical in each) ---
+fn ret_u16() -> vector<vector<u16>> { return [[1001, 2002], [3003, 4004]]; }
+fn built_u8() -> vector<vector<u8>> {
+  o: vector<vector<u8>> = [];
+  for i in 0..3 { r: vector<u8> = []; for j in 0..4 { r += [ (((i * 4) + j + 1) & 255) as u8 ]; } o += [ r ]; }
+  return o;
+}
+fn check_paths() {
+  lit: vector<vector<u16>> = [[1001, 2002], [3003, 4004]];
+  loc: vector<vector<u16>> = [];
+  loc += [[1001, 2002]]; loc += [[3003, 4004]];
+  want = "[[1001,2002],[3003,4004]]";
+  assert("{lit}" == want, "path literal: {lit}");
+  assert("{loc}" == want, "path append: {loc}");
+  assert("{ret_u16()}" == want, "path fn-return: {ret_u16()}");
+
+  // a LOOP-built narrow nest returned from a fn, then sliced — the shape the
+  // consumer's differential exercises.
+  v = built_u8();
+  assert("{v}" == "[[1,2,3,4],[5,6,7,8],[9,10,11,12]]", "path loop+return: {v}");
+  s = v[1..3];
+  o = "";
+  for i in 0..len(s) {
+    if i > 0 { o += "|"; }
+    row = s[i] ?? [];
+    for j in 0..len(row) { if j > 0 { o += ","; } o += "{row[j] ?? 0}"; }
+  }
+  assert(o == "5,6,7,8|9,10,11,12", "loop+return then slice: {o}");
+}
+
+// --- depth 3, and concat/reassign, which copy rows rather than build them ---
+fn nest_reassigned() -> vector<vector<integer>> {
+  z: vector<vector<integer>> = [[9]]; z = [[1], [2]]; z
+}
+fn check_deep_and_copy() {
+  d3: vector<vector<vector<i32>>> = [[[111111, 222222]], [[333333]]];
+  assert("{d3}" == "[[[111111,222222]],[[333333]]]", "depth 3 i32: {d3}");
+
+  a: vector<vector<u8>> = [[11, 22]];
+  b: vector<vector<u8>> = [[33, 44]];
+  a += b;
+  assert("{a}" == "[[11,22],[33,44]]", "nested concat u8: {a}");
+
+  assert(fmt_nest(nest_reassigned()) == "1|2", "reassign + implicit return: {nest_reassigned()}");
+}
+
+fn main() {
+  check_render();
+  check_elementwise();
+  check_slice();
+  check_paths();
+  check_deep_and_copy();
+  println("624-nested-narrow-width ok");
+}

@@ -43,7 +43,7 @@
 set -u
 cd "$(dirname "$0")/.."
 
-BASELINE=".lint_comments_baseline"
+BASELINE="scripts/.lint_comments_baseline"
 
 FILES=$(find src lib -name '*.rs' 2>/dev/null | grep -E '/src/|^src/')
 if [ -z "$FILES" ]; then echo "no source files found"; exit 0; fi

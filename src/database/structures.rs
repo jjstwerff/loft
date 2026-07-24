@@ -82,22 +82,14 @@ impl Stores {
                 vector::sorted_new(&d, u32::from(self.size(c)), &mut self.allocations)
             }
             Parts::Vector(c) => {
-                // #475: when the content `c` is itself a vector (a nested vector
-                // like `vector<vector<T>>`), stride the OUTER slot by the inner
-                // scalar width — the de-facto stride the index
-                // (`elm_size_raw.max(4)` in parser/fields.rs), iteration, and
-                // local construction all use.  `self.size(c)` is the 4-byte rec-id
-                // handle; a struct-field nested vector would stride the outer slot
-                // by 4 and mismatch the stride-8 index → #475 crash.
-                let stride = if matches!(
-                    self.types[c as usize].parts,
-                    Parts::Vector(_) | Parts::Array(_)
-                ) {
-                    u32::from(self.size(self.content(c))).max(4)
-                } else {
-                    u32::from(self.size(c))
-                };
-                vector::vector_append(&d, stride, &mut self.allocations)
+                // The outer slot strides by the element type's own size — for a
+                // nested vector that is the 4-byte rec-id handle.  #475 used to
+                // special-case this to the INNER scalar width (min 4) because the
+                // element type registered as the level-collapsed inner scalar, so
+                // `size(c)` read the wrong thing; now that `vector_element_type`
+                // registers a real `vector<inner>`, `size(c)` IS the handle and
+                // the special case would re-introduce the very mismatch it fixed.
+                vector::vector_append(&d, u32::from(self.size(c)), &mut self.allocations)
             }
             Parts::Array(c)
             | Parts::Ordered(c, _)
@@ -416,19 +408,14 @@ impl Stores {
         // reallocate the vector and invalidate `o_rec`.  Reading it after the resize would
         // reference freed memory, silently producing corrupt data.
         let o_rec = keys::store(o_db, &self.allocations).get_u32_raw(o_db.rec, o_db.pos);
-        // Element stride.  For VECTOR-typed rows (`vector<vector<T>>`), the
-        // row is a small record holding the inner vector's u32 handle, and
-        // its stride is what the READ path computes (`fields.rs`
-        // `elm_size`): the inner content's size clamped to >= 4 (the
-        // @PLAN58 boolean-handle clamp) — `size(known)` itself is the
-        // 4-byte struct-FIELD slot size, which under-strides 8/16-byte
-        // rows and made nested `a += b` read garbage handles (SIGSEGV) or
-        // shallow-copy rows.  Scalar/struct rows keep `size(known)`.
-        let size = if matches!(self.types[known as usize].parts, Parts::Vector(_)) {
-            u32::from(self.size(self.content(known))).max(4)
-        } else {
-            u32::from(self.size(known))
-        };
+        // Element stride — the element type's own size, for every row shape.
+        // A VECTOR-typed row (`vector<vector<T>>`) is the inner vector's 4-byte
+        // handle, which is exactly `size(known)` now that the element type
+        // registers as a real `vector<inner>` (`Data::vector_element_type`)
+        // rather than the level-collapsed inner scalar.  The former
+        // `size(content(known)).max(4)` reproduced the READ path's own
+        // mis-derivation; both now read this one fact.
+        let size = u32::from(self.size(known));
         // If source and destination share the same backing vector record, copy source elements
         // to a local buffer first so the resize cannot invalidate the source pointer.
         let same_vec = db.store_nr == o_db.store_nr && o_rec != 0 && {

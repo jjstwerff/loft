@@ -58,6 +58,49 @@ divide-by-zero additionally logs a Warn (overflow is silent — the null is the
 signal).  A function returning `integer` may `return null` (it yields `i64::MIN`,
 detectable with `!result`).
 
+**Prefer `x?` when the fallback is just the type's zero (@PLN116).** Postfix `?`
+discharges `T?` to `T` using **the type's own** default, so `?? 0` / `?? 0.0` /
+`?? ""` / `?? Pixel{r:0,g:0,b:0}` boilerplate collapses to one character.  `??`
+supplies *the default you give*; `?` supplies *the default the type gives* — that
+pairing is the mnemonic.
+
+```loft
+name  = row.label?          // text?   → ""      (was: ?? "")
+first = points[i]?          // Point?  → Point{} (every field defaulted)
+count = (a / b)?            // integer? → 0      (parens — see below)
+```
+
+Defaults: scalar → `0`/`0.0`/`false`/`'\0'`, `text` → `""`, collection → empty,
+record → every field defaulted, nullable `U?` → `null`, bare enum → its
+**first-declared** variant.
+
+Three things to know before reaching for it:
+
+- **`?` binds TIGHTEST, `??` binds LOOSEST** — opposite ends.  On a *binary*
+  result that flips the parens: `a / b ?? 0` discharges the division, but
+  `a / b?` is `a / (b?)` and evaluates to **null**.  Write `(a / b)?`.  So `?` is
+  a clear win on a **primary** (`row.label?`, `v[i]?`, `x?` — no parens) and a
+  wash on arithmetic.
+- **On an enum it is positional.** `c?` is the first-*declared* variant, so
+  reordering the enum silently changes it.  Use `?? Colour.Red` when the variant
+  matters.
+- **Two types have no default, so `x?` is a COMPILE error** (never a runtime one):
+  a bare reference, and a record with a bare enum field lacking `= <variant>`.
+  The error names the fixes; `??` or `match` is the fallback.
+
+**At a text parse, put `?` after the CHECKED cast:**
+
+```loft
+n = (s as integer?)?     // integer — checked cast, then default ⇒ 0 on a bad parse
+n = s as integer ?? 0    // integer — the assert-or-default form
+n = s as integer?        // integer? — the nullable CAST (that `?` belongs to the type)
+n = (s as integer)?      // COMPILE ERROR — a bare `as` on text is an assertion
+```
+
+A bare `text as integer` is an *assertion* the compiler refuses (a parse can't be
+proven), so `(s as integer)?` fails on the inner cast — not because `?` is
+unavailable.  Write the checked cast first.
+
 **Parsing text is fallible, so `text as integer` types `integer?`** (`as float` →
 `float?`, `as single` → `single?`).  `"42" as integer` is a **parse**, not a numeric
 cast — a non-numeric string yields `null`, so the compiler types the result nullable
@@ -468,15 +511,21 @@ pub fn exists(both: File) -> boolean { both.format != Format.NotExists }
 | 8 | `+`, `-` | |
 | 9 | `*`, `/`, `%` | |
 | 10 | `as` | type cast/conversion |
+| — (tightest) | postfix `?` | default-fallback — a **suffix**, not a rung: binds tighter than `as`, like `.` / `[]` |
 
 Unary: `!` (logical not / null check), `-` (negation), `~` (bitwise NOT, integer only)
 Assignment: `=`, `+=`, `-=`, `*=`, `/=`, `%=`
 
 ```loft
 name = record.field ?? "default"   // null-coalescing
+name = record.field?               // …or the TYPE's default ("" for text)
 x as i32                           // cast to a 4-byte sized integer
 flags & ~32                        // bitwise NOT — clears bit 5
 ```
+
+**`?` and `??` are at opposite ends of this table**, so they parenthesise
+oppositely on a binary result: `a / b ?? 0` discharges the division, `a / b?` is
+`a / (b?)` and yields **null** — write `(a / b)?`.
 
 ### `is` variant check
 

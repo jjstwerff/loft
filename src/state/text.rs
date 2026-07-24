@@ -487,6 +487,30 @@ impl State {
         self.string_mut(pos).clear();
     }
 
+    /// #629 follow-up — free the entry fn's hidden TEXT return buffer, addressed by
+    /// its ABSOLUTE stack offset.
+    ///
+    /// [`free_text`](Self::free_text) takes a bytecode operand measured BACKWARDS
+    /// from the current `stack_pos`; the entry's buffers are reserved before the
+    /// frame exists and are therefore held as absolute offsets, so they cannot go
+    /// through it (passing one walks off the stack store and segfaults on teardown).
+    /// Same deallocation, and it reports the free to the text timeline so
+    /// `LOFT_TEXT_TIMELINE`'s ledger does not read this as an orphan.
+    pub(super) fn free_text_at(&mut self, slot: u32) {
+        let tl_fn = text_tl_on().then(|| self.call_stack.last().map(|f| f.d_nr));
+        let rec = self.stack_cur.rec;
+        let at = self.stack_cur.pos + slot;
+        let s = self
+            .database
+            .store_mut(&self.stack_cur)
+            .addr_mut::<String>(rec, at);
+        if let Some(fn_nr) = tl_fn {
+            text_tl_free(fn_nr, s.as_ptr() as usize, s.capacity(), s.as_str());
+        }
+        s.clear();
+        s.shrink_to(0);
+    }
+
     /**
     Free the content of a text variable.
     # Panics

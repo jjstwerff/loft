@@ -117,6 +117,12 @@ function buildLoftImports(canvas, output, getMem, asyncCtrl) {
   return {
     loft_io: coerceArgs({
       loft_host_print(ptr, len) { output.textContent += readStr(ptr, len); },
+      // #620: the browser CLOCK bridge.  wasm32-unknown-unknown has no std
+      // clock, so without these now()/ticks() returned a hardcoded 0 and every
+      // frame timer read the same instant.  performance.now() is monotonic and
+      // page-relative — exactly ticks()'s contract.
+      loft_host_time_now_ms() { return Date.now(); },
+      loft_host_time_ticks_us() { return performance.now() * 1000; },
       // JS -> loft input is a QUEUE, the mirror of loft_host_print: seed it
       // with globalThis.loftInput (a string) before loft_start, push live
       // messages any time with globalThis.loftPush(msg) — e.g. fetch()

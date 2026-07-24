@@ -3,7 +3,7 @@
 
 [![CI](https://github.com/loft-lang/loft/actions/workflows/ci.yml/badge.svg)](https://github.com/loft-lang/loft/actions/workflows/ci.yml)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2026.7.1-blue.svg)](https://github.com/loft-lang/loft/releases)
+[![Version](https://img.shields.io/github/v/release/loft-lang/loft?label=version&color=blue)](https://github.com/loft-lang/loft/releases)
 [![Gallery](https://img.shields.io/badge/gallery-live-brightgreen)](https://loft-lang.org/loft/gallery.html)
 
 [**▶ Try it in the browser**](https://loft-lang.org/loft/playground.html) · [**🎮 Play Brick Buster**](https://loft-lang.org/loft/brick-buster.html) · [**🖼 Graphics gallery**](https://loft-lang.org/loft/gallery.html) · [**📘 Docs**](https://loft-lang.org/loft/)
@@ -20,14 +20,14 @@
 
 **A complete arcade game** — paddle, ball, coloured bricks, 7 different powerups, chiptune music, hand-designed levels, pause, game-over, sound effects, animated paddle explosion — written in loft and running in your browser. Click the image above, press **Space**, play. No install, no sign-up, no download.
 
-And it's one file: [`25-brick-buster.loft`](tools/brick-buster/25-brick-buster.loft).
+The whole game is one file — [read all 1,983 lines](tools/brick-buster/25-brick-buster.loft). No engine, no framework, no build step: that file *is* the game.
 
 ## Three ways to see loft
 
 | | |
 |---|---|
 | **🌐 [Playground](https://loft-lang.org/loft/playground.html)** | Type a few lines of loft, press run, see output. That *is* the whole tutorial. |
-| **🖼 [Gallery](https://loft-lang.org/loft/gallery.html)** | 24 interactive graphics demos, from hello-triangle to physically-based rendering with shadows — every one running live in WebGL. |
+| **🎮 [Brick Buster](https://loft-lang.org/loft/brick-buster.html)** | A complete arcade game, running live in WebGL. Press Space to play, then read the one file it is written in. |
 | **💻 [Install locally](doc/claude/DEVELOPMENT.md)** | `cargo install --git https://github.com/loft-lang/loft --bin loft` |
 
 ---
@@ -101,6 +101,17 @@ loft examples/structs.loft      # Structs and methods
 loft examples/match.loft        # Pattern matching on enums
 ```
 
+## How loft is built — and why it can't be orphaned
+
+loft is developed almost entirely by AI coding agents, steered by one person who put
+**documentation and tooling above writing code**. So everything needed to work on loft
+is in this public repo: the full source, ~73k lines of documentation, and ten
+**executable skills** that teach an agent *how* to fix a bug, change code generation, or
+ship a library. Point any capable coding agent at the repo, let it load the skills, and
+it can continue the work — investigate, fix, verify on both backends, and land through
+`make ci`. The project's knowledge lives in the repo, not in a founder, so its **bus
+factor is effectively zero**: [How loft develops itself, and how to prove it yourself](doc/claude/BUS_FACTOR.md).
+
 ## Packages & libraries
 
 `loft install <name>` downloads a library from the registry into `~/.loft/lib/`
@@ -119,22 +130,6 @@ read, debug, and ship like your own code:
 Bounded generics and interfaces keep them type-safe; `loft test` runs a
 package's test suite.
 
-## Graphics examples
-
-The `graphics` library ships 24 progressive examples — hover each for a live preview in the [gallery](https://loft-lang.org/loft/gallery.html):
-
-| File | What it shows |
-|---|---|
-| `01-hello-window.loft` | A green window |
-| `10-2d-canvas.loft` | 2D drawing primitives |
-| `08-basic-lighting.loft` | Phong lighting on a 3D cube |
-| `16-shadow-mapping.loft` | Real-time shadows |
-| `18-pbr.loft` | Physically-based rendering |
-| `24-renderer-demo.loft` | Full scene with PBR + shadows — **no shader code** |
-| **`25-brick-buster.loft`** | **A complete arcade game** |
-
-See the [full example list](https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics/examples) in the graphics chunk repo.
-
 ## Contributing
 
 Highest-impact areas today:
@@ -145,17 +140,6 @@ Highest-impact areas today:
 - **Documentation polish** — most reference pages have their code snippets extracted and run as tests; the hand-written comparison and performance pages are checked by hand, so a careful read still catches drift
 
 See [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) for the workflow and [PLANNING.md](doc/claude/PLANNING.md) for the roadmap.
-
-## How loft is built — and why it can't be orphaned
-
-loft is developed almost entirely by AI coding agents, steered by one person who put
-**documentation and tooling above writing code**. So everything needed to work on loft
-is in this public repo: the full source, ~73k lines of documentation, and ten
-**executable skills** that teach an agent *how* to fix a bug, change code generation, or
-ship a library. Point any capable coding agent at the repo, let it load the skills, and
-it can continue the work — investigate, fix, verify on both backends, and land through
-`make ci`. The project's knowledge lives in the repo, not in a founder, so its **bus
-factor is effectively zero**: [How loft develops itself, and how to prove it yourself](doc/claude/BUS_FACTOR.md).
 
 ## Documentation
 

@@ -62,6 +62,17 @@ unsafe extern "C" {
     // the `len`-then-`copy` shape `loft_host_input_len`/`copy` already proves.
     pub(crate) safe fn loft_host_http_get(url_ptr: *const u8, url_len: usize) -> usize;
     pub(crate) safe fn loft_host_http_get_copy(ptr: *mut u8);
+    // #620 — the browser CLOCK bridge.  `--native-wasm` (wasip2) reads a real
+    // clock through `std`, but this target has no `std` clock at all, so
+    // `now()`/`ticks()` used to return a hardcoded 0: a frame timer read the
+    // same instant forever and every duration measured 0ms, silently.
+    // `f64` because both JS sources are doubles (`Date.now()` is ms since the
+    // epoch, well past i32; `performance.now()` is a fractional ms) — crossing
+    // as f64 and narrowing on the loft side keeps the full range.
+    // `performance.now()` is monotonic and page-relative, which is exactly
+    // `ticks()`'s contract, so no start-time subtraction is needed here.
+    pub(crate) safe fn loft_host_time_now_ms() -> f64;
+    pub(crate) safe fn loft_host_time_ticks_us() -> f64;
     // @PLN105 Phase 2 — `deliver(tag, value)`: hand the JS host a self-describing handle to a
     // live loft value with no serialization.  `store_base` is the value's Store buffer base in
     // wasm linear memory (`Store.ptr`); `(rec, pos)` is its `DbRef` within that store.  The reader

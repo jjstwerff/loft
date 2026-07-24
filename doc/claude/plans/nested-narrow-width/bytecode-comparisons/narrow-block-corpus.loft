@@ -1,0 +1,39 @@
+// One function per code path the narrow-int value-block tail cast touches.
+// Used as the before/after introspect corpus for the #622 narrowing-cast fix.
+
+// 1. narrow-int RETURN via an implicit tail expression (the block IS the fn body,
+//    so its Rust type is Context::Result = u8 and the tail cast is load-bearing).
+fn tail_u8(a: integer) -> u8 { return (a & 255) as u8; }
+
+// 2. narrow-int fn body whose tail is a value-block (`??`).
+fn body_ncc_u8(v: vector<u8>) -> u8 { return (v[0] ?? 0) as u8; }
+
+// 3. the reported shape — a narrow-int `??` block as an integer OPERATOR operand,
+//    inside a vector-literal element (loft#622 follow-up: `out += [ (…) as u8 ]`).
+fn masked(v: vector<u8>) -> integer {
+  out: vector<u8> = [];
+  for i in 0..len(v) { out += [ ((v[i] ?? 0) & 255) as u8 ]; }
+  return len(out);
+}
+
+// 4. narrow-int `??` block assigned to a wide integer local (#433's seam).
+fn assign_wide(v: vector<u8>) -> integer { b: integer = v[0] ?? 0; return b; }
+
+// 5. boolean value-block — bool transient vs u8 storage form; the tail cast here
+//    is a REAL conversion and must survive.
+fn bool_ncc(v: vector<boolean>) -> boolean { return v[0] ?? false; }
+
+// 6. narrow-int iterator-next (the i64::MIN sentinel must not be truncated).
+fn iter_u16(v: vector<u16>) -> integer { t = 0; for x in v { t += x; } return t; }
+
+fn main() {
+  b: vector<u8> = [7, 9];
+  w: vector<u16> = [1000, 2000];
+  f: vector<boolean> = [true, false];
+  println("tail_u8      {tail_u8(300)}");
+  println("body_ncc_u8  {body_ncc_u8(b)}");
+  println("masked       {masked(b)}");
+  println("assign_wide  {assign_wide(b)}");
+  println("bool_ncc     {bool_ncc(f)}");
+  println("iter_u16     {iter_u16(w)}");
+}

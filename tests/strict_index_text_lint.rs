@@ -29,8 +29,9 @@ fn corpus() -> PathBuf {
 }
 
 /// Message-only substring — avoids the `strict-index` token that also appears on the corpus
-/// filename `-->` source-location line (which would double-count every warning).
-const LINT_MSG: &str = "is byte-indexed";
+/// filename `-->` source-location line (which would double-count every warning).  Shared by
+/// both reads the lint covers (`text[i]` and `byte_at(i)`), which differ after this prefix.
+const LINT_MSG: &str = "walks `0..len(text)`";
 
 fn run(backend: &str, opt_out: bool) -> (String, String, Option<i32>) {
     let mut cmd = Command::new(loft_bin());
@@ -64,17 +65,29 @@ fn assert_default_on(backend: &str) {
         Some(0),
         "[{backend}] corpus did not exit 0\n{stdout}\n---\n{diag}"
     );
-    // Exactly one warning — the FIRE case. More = a false positive on an OK case (char iteration,
-    // size-bounded byte walk, or a vector index); fewer = the lint regressed.
+    // Exactly the three FIRE cases. More = a false positive on an OK case (char iteration,
+    // size-bounded byte walk, a vector index, a byte read of a DIFFERENT text, or a bound
+    // whose local was reassigned); fewer = the lint regressed.
     let n = lint_count(&diag);
     assert_eq!(
-        n, 1,
-        "[{backend}] want exactly 1 text strict-index warning (the len(text)-bounded byte index), \
-         got {n}\n{diag}"
+        n, 3,
+        "[{backend}] want exactly 3 text strict-index warnings (the len(text)-bounded byte \
+         indexes), got {n}\n{diag}"
     );
     assert!(
         diag.contains("strict-index-text-corpus.loft:15:"),
         "[{backend}] the FIRE `s[i]` at line 15 (loop var bounded by len(s)) must warn\n{diag}"
+    );
+    // `byte_at` is the same units error through a different read, and the local-bound form
+    // (`n = len(s); for i in 0..n`) is the one the published cbor encoder shipped — a lint
+    // that saw only the inline `s[i]` shape would have missed the real bug.
+    assert!(
+        diag.contains("strict-index-text-corpus.loft:54:"),
+        "[{backend}] the FIRE `byte_at(i)` at line 54 (inline len(s) bound) must warn\n{diag}"
+    );
+    assert!(
+        diag.contains("strict-index-text-corpus.loft:66:"),
+        "[{backend}] the FIRE `byte_at(i)` at line 66 (bound held in a local) must warn\n{diag}"
     );
     assert!(
         diag.contains("index `i`"),

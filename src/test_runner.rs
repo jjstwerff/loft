@@ -38,6 +38,28 @@ impl Drop for CwdGuard {
         }
     }
 }
+/// @PLN86 / #631 — the `[sandbox]` policy governing `file`, or `None` when no
+/// package above it declares one.
+///
+/// The run path reads `loft.toml` from the directory beside the file it loads, but
+/// a test file lives in `tests/` while the code it exercises lives in `src/`, so the
+/// policy is at the package ROOT.  Walking up finds it from either place; without
+/// that walk `loft test` would keep silently skipping admission for every package
+/// laid out normally, which is the whole defect.
+fn sandbox_policy_for(file: &str) -> Option<loft::sandbox::SandboxConfig> {
+    let mut dir = std::path::Path::new(file).parent()?;
+    for _ in 0..4 {
+        if let Ok(content) = std::fs::read_to_string(dir.join("loft.toml")) {
+            let cfg = loft::sandbox::parse_sandbox_config(&content);
+            if cfg.is_active() {
+                return Some(cfg);
+            }
+        }
+        dir = dir.parent()?;
+    }
+    None
+}
+
 fn enter_source_dir(source_dir: &str, program_relative: bool) -> CwdGuard {
     if program_relative
         && !source_dir.is_empty()
@@ -415,6 +437,20 @@ pub(crate) fn run_tests(
     let mut total_pass = 0u32;
     let mut total_fail = 0u32;
     let mut total_files = 0u32;
+    // Tests counted as PASSED on the reported backend that never actually ran on
+    // it (`@EXPECT_FAIL` / `@IGNORE` under `--native`, or a file with no
+    // native-runnable fn).  Reported so a green count cannot stand in for
+    // coverage it does not have.
+    let mut total_skipped = 0u32;
+    // Files whose package declares a `[sandbox]` policy AND that designate sandboxed
+    // code — the ones admission actually covered.  Reported so a green run cannot be
+    // read as admission coverage it never had (#631).
+    let mut sandbox_checked_files = 0u32;
+    // A `[sandbox]` policy was found for at least one file, whether or not it
+    // designated anything.  Kept apart from `sandbox_checked_files` so a policy
+    // that matches NOTHING reports as its own state — that is the silent case, and
+    // calling it "no policy" would hide exactly what needs saying.
+    let mut sandbox_policy_seen = false;
     let mut dir_summaries: Vec<(String, u32, u32)> = Vec::new(); // (dir, pass, fail)
 
     for (dir_path, files) in &dirs {
@@ -465,6 +501,16 @@ pub(crate) fn run_tests(
                         .to_string(),
                 );
             }
+            // @PLN86 / #631 — apply the package's `[sandbox]` policy so admission runs
+            // here too.  It used to engage only on the run path and `loft sandbox-check`,
+            // so a suite stayed green with a deliberate capability violation injected —
+            // the same silence-reads-as-coverage shape as the backend scope below.
+            // Designation must be set BEFORE parsing: `def_sandbox` forms during the
+            // parse, and admission reads what the parse recorded.
+            if let Some(policy) = sandbox_policy_for(&abs_file) {
+                sandbox_policy_seen = true;
+                p.set_sandbox_config(policy);
+            }
             if p.parse_dir(&(default_dir.to_string() + "default"), true, false)
                 .is_err()
             {
@@ -502,6 +548,16 @@ pub(crate) fn run_tests(
                     file_result.warnings.push(line.clone());
                 } else {
                     file_result.errors.push(line.clone());
+                }
+            }
+            // @PLN86 / #631 — an admission violation fails the file, exactly as a
+            // compile error does.  A rejected script cannot run at all, so a suite
+            // that reported it green was reporting on something the host would refuse
+            // to load.
+            if p.has_sandboxed_defs() {
+                sandbox_checked_files += 1;
+                for e in p.sandbox_admission_errors() {
+                    file_result.errors.push(format!("Sandbox admission: {e}"));
                 }
             }
 
@@ -817,9 +873,11 @@ pub(crate) fn run_tests(
                 if native_fns.is_empty() {
                     // Nothing to run natively — record as pass with note.
                     if file_result.tests.is_empty() {
-                        file_result
-                            .tests
-                            .push(("(no native tests)".to_string(), true, None));
+                        file_result.tests.push((
+                            "(no native tests)".to_string(),
+                            true,
+                            Some("skip-native".to_string()),
+                        ));
                     }
                 } else {
                     // Generate Rust source.
@@ -1311,6 +1369,14 @@ pub(crate) fn run_tests(
                 .iter()
                 .filter(|(_, _, m)| m.as_deref() == Some("ignored"))
                 .count();
+            total_skipped += u32::try_from(
+                file_result
+                    .tests
+                    .iter()
+                    .filter(|(_, _, m)| m.as_deref() == Some("skip-native"))
+                    .count(),
+            )
+            .unwrap_or(0);
             let pass_count = file_result
                 .tests
                 .iter()
@@ -1372,16 +1438,54 @@ pub(crate) fn run_tests(
         println!();
     }
 
+    // The result states WHICH backend produced it.  `loft test` and
+    // `loft test --native` each exercise exactly one, so a bare "ok" used to be
+    // identical whether the other backend was clean or had never been compiled
+    // once — silence read as coverage.  A consumer discovered a quarter of their
+    // packages had never been native-compiled while `loft test` stayed green
+    // throughout, and could only find out by running the native sweep by hand.
+    // The scope is not optional and not behind a flag: it rides on the default
+    // path, because that is the path that was lying.
+    let (ran, missing, missing_cmd) = if native_mode {
+        ("native", "the interpreter", "loft test")
+    } else {
+        ("the interpreter", "native", "loft test --native")
+    };
+    // Tests that were counted but never executed on `ran` (see `total_skipped`).
+    let skipped = if total_skipped > 0 {
+        format!(", {total_skipped} skipped")
+    } else {
+        String::new()
+    };
+    // Same rule for admission: state whether it covered anything.  A suite that ran
+    // with no policy in sight is silent about admission, and a consumer read that
+    // silence as coverage — they injected a deliberate capability violation and the
+    // suite stayed green.
+    let admission = if sandbox_checked_files > 0 {
+        format!(
+            "; admission checked on {sandbox_checked_files} file{}",
+            if sandbox_checked_files == 1 { "" } else { "s" }
+        )
+    } else if sandbox_policy_seen {
+        "; a [sandbox] policy is present but designated nothing here — admission \
+         covered NO code (check the selectors)"
+            .to_string()
+    } else {
+        "; no [sandbox] policy — admission not exercised".to_string()
+    };
+    let scope =
+        format!("[ran on {ran} only{skipped} — {missing} not exercised: {missing_cmd}{admission}]");
+
     let total = total_pass + total_fail;
     if total_fail == 0 {
         println!(
-            "test result: ok. {total_pass} passed; {total_files} file{}",
+            "test result: ok. {total_pass} passed; {total_files} file{}  {scope}",
             if total_files == 1 { "" } else { "s" }
         );
         0
     } else {
         println!(
-            "test result: FAILED. {total_fail} failed; {total_pass} passed; {total} total; {total_files} file{}",
+            "test result: FAILED. {total_fail} failed; {total_pass} passed; {total} total; {total_files} file{}  {scope}",
             if total_files == 1 { "" } else { "s" }
         );
         1

@@ -15,6 +15,7 @@ SortedBag	size=4	struct{items@0:ordered<Item[ik]>}
 Tup	size=12	struct{pair@0:__tuple<integer,text>}
 Vec1	size=4	struct{v@0:vector<integer>}
 VecNest	size=4	struct{vv@0:vector<vector<integer>>}
+VecNestNarrow	size=4	struct{vv@0:vector<vector<byte>>}
 VecText	size=4	struct{v@0:vector<text>}
 Wide	size=2	struct{s@0:short_raw<-32768,false>}
 __tuple<integer,text>	size=12	struct{_0@0:integer, _1@8:text}
@@ -32,8 +33,10 @@ short_raw<-32768,false>	size=2	shortraw(start=-32768,null=false)
 short_raw<0,false>	size=2	shortraw(start=0,null=false)
 single	size=4	base
 text	size=4	base
+vector<byte>	size=4	vector<byte>(elem_size=1)
 vector<integer>	size=4	vector<integer>(elem_size=8)
 vector<text>	size=4	vector<text>(elem_size=4)
+vector<vector<byte>>	size=4	vector<vector<byte>>(elem_size=4)
 vector<vector<integer>>	size=4	vector<vector<integer>>(elem_size=4)
 === F9 nullability ===
 nn/1;Nullable:f,n

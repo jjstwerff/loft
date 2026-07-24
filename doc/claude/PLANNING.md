@@ -2734,6 +2734,12 @@ be skipped if the `http` feature is not compiled in or if the network is unavail
 Standalone `loft` repository created (2026-03-16).  The remaining R item is the
 workspace split needed before starting the Web IDE.
 
+**Presentation / first-contact work** — the first-run experience, README
+truthfulness, doc-site discoverability and repo surface — has its own design in
+[FIRST_CONTACT.md](FIRST_CONTACT.md), from an external review carrying the
+visitor's perspective (2026-07-24).  Batched B1–B5 there; B1 (first-run bugs)
+is the sequencing head.
+
 ---
 
 ### R1  Add `cdylib` + `rlib` crate types for WASM compilation

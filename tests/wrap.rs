@@ -1367,3 +1367,164 @@ fn p369_silent_runtime_fault_fails_harness() {
         "@P369: the same fault WITH @EXPECT_FAIL must be scored as an expected pass"
     );
 }
+
+/// The `loft test` result line must state WHICH backend produced it.
+///
+/// `loft test` and `loft test --native` each exercise exactly one backend, so a
+/// bare `test result: ok` was identical whether the other backend was clean or
+/// had never been compiled once.  A consumer shipped a quarter of their packages
+/// with no native coverage at all for as long as those packages had existed,
+/// because `loft test` stayed green throughout and nothing said what "green"
+/// covered — silence read as coverage.  The scope note therefore rides on the
+/// DEFAULT invocation, not behind a flag: the default is the path that was lying.
+///
+/// Asserted on both invocations, because a note that only appears under
+/// `--native` would leave the silent path exactly as it was.
+#[test]
+fn test_result_states_its_backend_scope() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let pkg_dir = Path::new("lib/audience_crystal");
+    if !pkg_dir.join("tests").is_dir() {
+        return Ok(()); // package layout changed; the suite's own runs still cover it
+    }
+
+    let out = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, "01-editor-helpers", &[])?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let result_line = combined
+        .lines()
+        .find(|l| l.starts_with("test result:"))
+        .unwrap_or_default();
+    assert!(
+        result_line.contains("ran on the interpreter only"),
+        "the default `loft test` result must name the backend it ran on:\n{result_line}"
+    );
+    assert!(
+        result_line.contains("native not exercised"),
+        "the default `loft test` result must say the native backend was NOT covered — \
+         that omission is the whole defect:\n{result_line}"
+    );
+    assert!(
+        result_line.contains("loft test --native"),
+        "the note must carry the command that closes the gap:\n{result_line}"
+    );
+
+    // The mirror case: a native-only run must not imply interpreter coverage.
+    let out_n = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, "01-editor-helpers", &["--native"])?;
+    let combined_n = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out_n.stdout),
+        String::from_utf8_lossy(&out_n.stderr)
+    );
+    if let Some(line_n) = combined_n.lines().find(|l| l.starts_with("test result:")) {
+        assert!(
+            line_n.contains("ran on native only"),
+            "the `--native` result must name its backend:\n{line_n}"
+        );
+        assert!(
+            line_n.contains("the interpreter not exercised"),
+            "a native-only run must not read as full coverage either:\n{line_n}"
+        );
+    }
+    Ok(())
+}
+
+/// #631 — `loft test` must EXERCISE admission, and say so.
+///
+/// The check used to engage only on the run path and via `loft sandbox-check`, so a
+/// package could carry a deliberate capability violation and its suite stayed green.
+/// A consumer verified exactly that by injecting one; a green suite said nothing about
+/// admission, which is easy to mistake for coverage — the same silence-reads-as-coverage
+/// shape as the backend scope note above.
+///
+/// Three states, all asserted: a clean sandboxed package reports the files admission
+/// covered, a violating one FAILS, and a policy whose selectors match nothing says so
+/// rather than passing quietly (the state that looks identical to real coverage).
+#[test]
+fn loft_test_runs_admission_and_states_its_scope() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let tmp = std::env::temp_dir().join(format!("loft_admit_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("tests"))?;
+
+    let policy = |selector: &str| {
+        format!(
+            "[package]\nname = \"plugpkg\"\nversion = \"0.1.0\"\n\n\
+             [sandbox]\nplug = [\"{selector}\"]\n\n\
+             [profile.plug]\nallow_libs = [\"code\"]\nmax_input_n = 64\n\
+             data_budget = 1048576\n"
+        )
+    };
+    let source = |body: &str| {
+        format!(
+            "fn total(v: vector<integer>) -> integer {{\n  t = 0;\n  \
+             for i in 0..len(v) {{ t += v[i] ?? 0; }}\n  return {body};\n}}\n\
+             fn test_total() {{ assert(total([1,2,3]) >= 6, \"sum\"); }}\n"
+        )
+    };
+    let run = || -> std::io::Result<String> {
+        let out = std::process::Command::new(loft_bin)
+            .current_dir(&tmp)
+            .args(["test"])
+            .env("LOFT_TIMEOUT", "180")
+            .output()?;
+        Ok(format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ))
+    };
+    let result_line = |c: &str| {
+        c.lines()
+            .find(|l| l.starts_with("test result:"))
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    // 1. Clean sandboxed package — admission runs, passes, and is reported.
+    std::fs::write(tmp.join("loft.toml"), policy("fn:total"))?;
+    std::fs::write(tmp.join("tests/t_logic.loft"), source("t"))?;
+    let clean = result_line(&run()?);
+    assert!(
+        clean.starts_with("test result: ok."),
+        "a clean sandboxed package must pass:\n{clean}"
+    );
+    assert!(
+        clean.contains("admission checked on 1 file"),
+        "the result must state that admission covered the file:\n{clean}"
+    );
+
+    // 2. The consumer's probe: an injected capability violation must FAIL the suite.
+    std::fs::write(
+        tmp.join("tests/t_logic.loft"),
+        source("t + mtime(\"loft.toml\")"),
+    )?;
+    let violating = run()?;
+    assert!(
+        result_line(&violating).starts_with("test result: FAILED."),
+        "an ungranted capability must fail the suite — a green run here is the defect:\n{}",
+        result_line(&violating)
+    );
+    assert!(
+        violating.contains("Sandbox admission:"),
+        "the failure must name admission as the cause:\n{violating}"
+    );
+
+    // 3. A policy that designates NOTHING must say so; passing quietly is
+    //    indistinguishable from real coverage, which is the whole complaint.
+    std::fs::write(tmp.join("loft.toml"), policy("fn:no_such_function"))?;
+    std::fs::write(tmp.join("tests/t_logic.loft"), source("t"))?;
+    let empty = result_line(&run()?);
+    assert!(
+        empty.contains("designated nothing here"),
+        "a policy matching no code must be reported, not silently passed:\n{empty}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(())
+}

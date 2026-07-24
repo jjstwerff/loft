@@ -210,6 +210,11 @@ const stubs = {
     loft_host_deliver: () => {},
     loft_host_expose: () => {},
     loft_host_release: () => {},
+    // #620: the browser clock bridge.  REAL values, not the usual loose stub —
+    // the point of the guard that uses them is that a browser `now()`/`ticks()`
+    // advances, so a 0 stub here would make that test vacuously pass.
+    loft_host_time_now_ms: () => Date.now(),
+    loft_host_time_ticks_us: () => performance.now() * 1000,
     loft_host_print: (ptr, len) => {
       if (enableTrace) trace.push(`loft_host_print(${ptr}, ${len})`);
       if (instance) {

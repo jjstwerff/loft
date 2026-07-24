@@ -16,8 +16,8 @@ externalized-and-modelled (me)**. That forced externalization is *why* this read
 as an X-ray of the craft rather than a workaround — it isn't my process, it's *the*
 process, made legible.
 
-> **Current state & how to run.** The working tool lives in [`sketch/`](sketch):
-> `python3 sketch/draw.py` renders [`sketch/scene.draw`](sketch/scene.draw) and
+> **Current state & how to run.** The working tool lives in [`sketch/`](../../sketch):
+> `python3 sketch/draw.py` renders [`sketch/scene.draw`](../../sketch/scene.draw) and
 > re-renders on save; outputs (canvas / preview / stats) go to a temp dir, never
 > git. **For current mechanics — the scene grammar, the metric `check` channel, the
 > earned-rules ledger — `sketch/README.md` + `sketch/scene.draw` are the source of
@@ -64,7 +64,7 @@ The loop is the thing:
 > **look → commit a mark → see the gap between intent and result → adjust**
 
 This is the same shape as the matrix-first debugging protocol in
-[CLAUDE.md](CLAUDE.md): you don't understand the bug from one clever read, you
+[CLAUDE.md](../../CLAUDE.md): you don't understand the bug from one clever read, you
 draw its boundary out probe by probe until the shape becomes visible. The fix is
 downstream of the seeing, exactly as the drawing is downstream of the looking.
 
@@ -106,7 +106,7 @@ Three parts, in increasing order of difficulty:
 > **Historical (v1).** The append-and-tail `cmds.txt` model below was replaced by a
 > single editable `scene.draw` source the daemon reloads on save (editing *is*
 > undo). The *reasoning* — stateful canvas, cheap incremental marks — still holds;
-> the current mechanics live in [`sketch/`](sketch).
+> the current mechanics live in [`sketch/`](../../sketch).
 
 The naive approach (regenerate a Python script per drawing) **reinvents the pen
 on every stroke** — wasteful and stateless. The efficient design:
@@ -141,8 +141,8 @@ from scratch), and idempotent.
 
 > **Historical (v1).** This is the first grammar. The shipped tool adds `Circle`
 > (round by default), `Poly`, `name` / `landmark` / `check` (the metric channel),
-> and `# SHOULD` comments, and reads [`sketch/scene.draw`](sketch/scene.draw) (not a
-> `/tmp` `cmds.txt`). **Current grammar: [`sketch/README.md`](sketch/README.md).**
+> and `# SHOULD` comments, and reads [`sketch/scene.draw`](../../sketch/scene.draw) (not a
+> `/tmp` `cmds.txt`). **Current grammar: [`sketch/README.md`](../../sketch/README.md).**
 
 Coordinates are **fractions of the paper size (0..1)**, so they're
 resolution-independent. Origin top-left, y grows downward (image convention).
@@ -507,7 +507,7 @@ form, each observed gap between the numbers I chose and the image they produced.
 ### Where the gap is stored: the annotated drawing source (NOT a project doc)
 
 The storable, re-readable format is **not** a prose ledger — it is the **drawing
-source file itself** (the tool lives in [`sketch/`](sketch); the example source
+source file itself** (the tool lives in [`sketch/`](../../sketch); the example source
 is `sketch/scene.draw`, generated images stay out of git). Every stroke is
 output to that file, and each element carries an inline `# SHOULD:` comment
 stating what it must look like, right next to the numbers that draw it; earned
@@ -522,7 +522,7 @@ save).
 it. Corrections that prove stable **graduate into the tool** — round-`Circle`
 (was C1, "equal fractional radii aren't round") and darkest-cell stats (was C5)
 have already moved from notes into `draw.py`. That is the recipe improving without
-practice. Tool + worked example in repo: [`sketch/`](sketch) (`draw.py`,
+practice. Tool + worked example in repo: [`sketch/`](../../sketch) (`draw.py`,
 `scene.draw`, rendered `example.png`); generated images/stats default to a temp
 dir, never committed.
 
@@ -530,7 +530,7 @@ dir, never committed.
 
 ## From symbol to world — what "detail" actually means
 
-The first finished drawing (house/hill/sun/cloud, [`sketch/`](sketch)) passed
+The first finished drawing (house/hill/sun/cloud, [`sketch/`](../../sketch)) passed
 **5/5 metric checks and still did not capture the intent.** Everything after
 follows from sitting honestly with that.
 

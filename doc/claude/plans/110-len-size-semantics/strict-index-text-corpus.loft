@@ -45,9 +45,56 @@ fn ok_vector_index() {
   assert(total == 60, "vector sum");
 }
 
+// FIRE: the same units error read through `byte_at` instead of `s[i]` — `len(s)`
+// bounds a BYTE read.  This is the form the published cbor encoder shipped.
+fn fire_len_byte_at_inline() {
+  s = "café";
+  lead = 0;
+  for i in 0..len(s) {
+    if s.byte_at(i) == 195 { lead += 1; }
+  }
+  assert(lead >= 0, "runs (advisory lint, not an error)");
+}
+
+// FIRE: the bound held in a LOCAL first — `n = len(s); for i in 0..n`.  Exactly the
+// cbor shape: it truncates by one byte per multi-byte character, silently.
+fn fire_len_byte_at_via_local() {
+  s = "café";
+  n = len(s);
+  lead = 0;
+  for i in 0..n {
+    if s.byte_at(i) == 195 { lead += 1; }
+  }
+  assert(lead >= 0, "runs (advisory lint, not an error)");
+}
+
+// OK: bounded by len(s) but reading a DIFFERENT text — not this lint's shape.
+fn ok_byte_at_other_text() {
+  s = "café";
+  t = "abcdefgh";
+  total = 0;
+  for i in 0..len(s) { total += t.byte_at(i); }
+  assert(total > 0, "reads t, not s");
+}
+
+// OK: the local no longer holds len(s) by the time the loop reads it, so the bound
+// is unknown — an advisory lint must stay silent rather than guess.
+fn ok_byte_at_local_reassigned() {
+  s = "café";
+  n = len(s);
+  n = n - 1;
+  total = 0;
+  for i in 0..n { total += s.byte_at(i); }
+  assert(total > 0, "unknown bound, no warning");
+}
+
 fn main() {
   fire_len_text_byte_index();
   ok_char_iteration();
   ok_byte_walk_with_size();
   ok_vector_index();
+  fire_len_byte_at_inline();
+  fire_len_byte_at_via_local();
+  ok_byte_at_other_text();
+  ok_byte_at_local_reassigned();
 }

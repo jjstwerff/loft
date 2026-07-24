@@ -698,6 +698,9 @@ impl Parser {
             return false;
         };
         self.vars = Function::new(&fn_name, &self.lexer.pos().file);
+        // @PLN110 3a — var numbers are per-function, so a stale `len(X)` binding from
+        // the previous body would attach to an unrelated local here.
+        self.len_bound_locals.clear();
         // @PLN25 E2 — clear any type-var from a previous function before parsing
         // this one; set below if this function is generic.
         self.cur_type_var = u32::MAX;
@@ -884,10 +887,16 @@ impl Parser {
         }
         // @PLN86 step 1.2 — record the sandbox profile for a host-designated
         // function so the admission walk (and the nesting guard, 0.1) know this
-        // def is restricted.  Designation is host-controlled (`fn:<name>` here;
-        // file globs later) — never from the source, so a script cannot mark
-        // itself.  Re-derived on every pass (def_sandbox is cleared at parse start).
-        if let Some(profile) = self.sandbox.fn_designation(&fn_name).map(str::to_string) {
+        // def is restricted.  Designation is host-controlled — `fn:<name>`, or a
+        // path selector matching this def's source file (#631) — never from the
+        // source, so a script cannot mark itself.  Re-derived on every pass
+        // (def_sandbox is cleared at parse start).
+        let src_file = self.data.def(self.context).position().file.clone();
+        if let Some(profile) = self
+            .sandbox
+            .designation_for(&fn_name, &src_file)
+            .map(str::to_string)
+        {
             self.def_sandbox.insert(self.context, profile);
             // @PLN86 step 0.1 — enter restricted parsing for this def's body: the
             // nesting guard activates and its depth state starts fresh.

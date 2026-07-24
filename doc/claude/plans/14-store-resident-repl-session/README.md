@@ -9,158 +9,93 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 > (`status:future` — the issue is the source of truth for lifecycle state). Slug
 > `store-resident-repl-session`.
 
-## Status
+## Status — **DONE 2026-07-24**
 
-Open — design ready, no implementation. The model is established in
-[CONVERGENCE.md](CONVERGENCE.md) (moved here from @PLN12 on its close); this plan
-is the build. It is the successor to **@PLN12** (REPL + introspection, now
-finished): @PLN12's heavy residuals — the re-run *cost* and exact value-for-value
-resume — land here, and @PLN12's small open tail (an in-process
-result-as-`String` eval API for embedding) is absorbed as sub-arc **H** below
-(the store-resident value makes it nearly free).
+Shipped: the REPL's binding environment is **store-resident**. A bound value is
+materialized into a session store, observing reads that record instead of
+replaying the accumulated body, and the values survive an on-disk round-trip
+behind a fail-closed layout gate. Store-backed observing is **on by default**
+(`LOFT_NO_STORE_OBSERVE` opts out).
 
-The @PLN12 **REPL.X value-snapshot interim** has **shipped** as the *mitigation*: a
-binding's RHS runs once and is rewritten to an own-format literal, so side-effect
-repetition and error-poison are gone **for renderable types**. It does **not**
-remove the re-run *cost* (a long session still replays a body of literals each
-observe) and it **recomputes** non-deterministic values (`random()`, `now()`) on
-resume. This plan is the bottom-up successor that removes replay entirely.
+**Reference content now lives in [REPL.md § How session state works](../../REPL.md)** —
+what the session store buys, the `text` exception, re-bind lifetime, resume, and
+the `eval_value` embedding API. This file is the closure record.
 
-## Goal
-
-Replace the REPL's replayed-source session with a **store-resident binding
-environment** (`name → DbRef` / boxed-scalar in one persistent session store) so each
-binding's RHS runs **exactly once**, observing reads the stored value, and resume
-restores values **verbatim** — dissolving side-effect repetition, error-poison, and
-re-run cost in one model.
-
-**Design with the debugger in view ([@PLN16](../16-debugger/README.md)).** The same
-environment is the *breakpoint frame*: the debugger (browser-natural, but also
-terminal/embedded) drops into a REPL whose variables are a paused frame's locals. So
-the env must be **seedable from an arbitrary live frame** (slot table + values), not
-only from typed `name = …` bindings — "REPL session" and "breakpoint frame" are one
-env model. Keep this in scope for sub-arcs A/D so the env isn't re-shaped later.
-
-## Effort + design
-
-- **Effort:** H — execution-core + store change, multi-phase.
-- **Design:** ~ — [CONVERGENCE.md](CONVERGENCE.md) establishes the model and
-  proves the store/mmap/cache infra exists; this plan sequences the build and
-  names the open questions.
-- **Last touched:** 2026-06-08
-
-## The root the interim only masks
-
-Replay-source is the *shared* root: all three warts are the same mechanism
-(reconstruct-by-re-execution) seen from three angles. The interim masks two of them
-for renderable types by making the replayed source *pure* — but a pure replay is
-still a replay, so the cost and the non-determinism survive. Removing replay (store
-the value, read the value) removes the whole class, not three cases of it. That is
-the Goal-E move: one owned home for each bound value, every path consults it.
-
-## Composition matrix — Stage A
-
-The load-bearing claim is *"every value type survives `bind → session-store →
-observe` and `bind → session-store → save → mmap-restore` exactly equal."* Falsify
-it across the axes this change actually touches **before** wiring the environment in
-(throwaway `/tmp` probes on `--interpret`, then graduate to `tests/scripts/`):
-
-- **type-kind** — `integer` (incl. a **>32-bit** value), `float`, `single`,
-  `boolean`, `character`, `text` (empty · embedded `"`/`\n`/`\` · unicode · >256 B),
-  simple `enum`, struct-`enum`, `struct`, `vector`, **nested** struct,
-  vector-of-struct, `null`.
-- **persistence path** — `bind` · `observe` · **re-bind same name** (`n = n + 1` —
-  the old record orphans) · **cross-binding ref** (`b = a` — value-copy, must not
-  alias) · **save → restore** (resume).
-- **backend** — `--interpret` and `--native` (cross-mode divergence is real).
-- **negative / aliasing controls** — `b = a` then mutate `a` → confirm `b`
-  unchanged (loft value semantics, store-copy not alias); a **faulting** binding
-  records *nothing* (no environment entry, no poison) — the structural form of the
-  interim's `Capture::Failed`.
-
-Round-trip per cell: value → session store → observe → **equal**; and → save →
-mmap-restore → observe → **equal**. The feature is done when every cell is green on
-both backends, not when the demo runs.
-
-## Sub-arcs
-
-| Item | Status |
+| arc | shipped as |
 |---|---|
-| **A** — session store + binding-environment record (`name → (Type, handle)`) | Open |
-| **B** — value materialization: store-to-store copy of a run's result into the session store, returning a stable `DbRef` | Open |
-| **C** — scalars at rest (`x = 5`): boxed into the store, or a tiny inline tagged env value | Open |
-| **D** — frame-seed: prior names load from the session store into their slots before a new statement runs | Open |
-| **E** — observe / `:vars` read from the environment — **no body replay** | Open |
-| **F** — resume: mmap the session store + schema-version gating (stale image → fresh fallback) | Open |
-| **G** — lifetime: orphaned records on re-bind (`:reset` wipe first; GC only if it bites) | Open |
-| **H** — in-process result-as-`String` eval API (`eval(line) → rendered value`) for embedding/GUI — absorbed from @PLN12's REPL.T tail; nearly free once values are store-resident (the renderer already exists in `render_capture` / `show_loft`) | Open |
+| **A** env + session store | `ReplSession.session_store` + `env`, one detached `Store` adopted per run |
+| **B** materialize | `Stores::materialize` — `copy_block` + `copy_claims` |
+| **C** scalars at rest | boxed 1-field record, raw bytes (never the display literal) |
+| **D** frame-seed | `seed_paused_frame` + `State::frame_slot_addr`, no codegen change |
+| **E** observe reads the env | default-on; `env_value` (own-format) + `env_display` (display) |
+| **F** resume | `save_session_image` / `load_session_image` + `layout_algo_hash` gate |
+| **G** lifetime | re-bind frees the orphaned record; `:reset` drops the store |
+| **H** embedding API | `ReplSession::eval_value` |
 
-## Phase ordering
+Tests: `tests/pln14_matrix.rs` (38) — the value-type matrix, the differentials,
+and the guards.
 
-1. **A + B together** — the env record and the store-copy primitive are the spine;
-   nothing can observe-from-store until a value can *live* in the session store.
-2. **C (scalars)** — makes the model uniform: every binding's value lives in the
-   store, so seeding (D) is one path, not two.
-3. **D (frame-seed)** — a prior-name reference reads store → slot, then the existing
-   slot-based expression codegen runs unchanged (less invasive than new store-load
-   opcodes; see Q1).
-4. **E (observe reads the env)** — removes the replay; this is where side-effect
-   repetition **and** re-run cost die.
-5. **F (resume)** — reuses the startup-cache mmap mechanism
-   (`src/data_store.rs`/`src/cache.rs`); add the schema-version gate so a loft
-   upgrade rejects a stale image and falls back to fresh (or to the portable
-   text-replay resume already shipped).
-6. **G (lifetime)** — accept growth + `:reset` first; GC deferred unless a real
-   session hits it.
+## What the build actually taught
 
-## Open design questions
+Kept because each one contradicted the plan as written, and would otherwise be
+rediscovered:
 
-1. **Prior-name resolution: seed-frame vs store-load codegen.** Seed-frame reads
-   each referenced binding's value store→slot before the run, then reuses today's
-   slot codegen untouched; store-load codegen compiles a name to a `DbRef`-deref
-   opcode. **Lean seed-frame** — it touches no codegen and keeps one execution model.
-2. **Materialization: store-copy vs own-format round-trip.** Direct store-to-store
-   `DbRef` copy is **exact and same-version** (no float-decimal / enum-qualifier
-   edge cases); the own-format `show_loft` round-trip is the **migration /
-   cross-schema** tool (and display). They coexist — store-copy for the session
-   environment, own-format for live schema migration. State the separation so the
-   serializer isn't mistaken for the session-persistence path.
-3. **@P381 CONST_STORE re-lock under a persistent session store.** The value lives
-   in the *session* store, not the const-store; confirm a seed-from-store run
-   sidesteps the re-lock the way today's fresh-State model does.
-4. **Cross-binding value semantics.** `b = a` must copy (loft value semantics) —
-   probe that mutating `a` leaves `b` unchanged; the store-copy primitive (B) is
-   where this is enforced.
-5. **Scalar representation (C).** Boxed 1-field store record (uniform with D) vs an
-   inline tagged value in the env record (cheaper, but a second path through D).
+1. **The named sibling was the wrong one.** The plan built arc B on
+   `Store::snapshot_copy`. A loft value is a MULTI-store graph (a nested struct
+   puts each `Reference` field in its own store), so copying one store cannot
+   materialize one. The right primitive is the `OpCopyRecord` walk —
+   `copy_block` + `copy_claims` — which is type-driven, crosses stores, and
+   allocates each sub-record in the DESTINATION, so nothing is shared and nothing
+   needs rebasing. `rebase_walk_record` (the par path's `StoreRebase` walk) would
+   have been a silent trap: it returns early for a `Vector` record type and never
+   descends into collection elements.
+2. **A materialized value is self-contained in ONE store.** Freeing every other
+   user store leaves the copy readable. That is what made arc F small — the image
+   is one store, not a graph — and what lets arc A carry the env across throwaway
+   `State`s by adopting a single store at whatever slot is free.
+3. **Two renderings, both required.** Observing prints loft's *display* form
+   while `value_of` returns the *own-format literal*, and they genuinely differ
+   (`hi` vs `"hi"`, `{x:7,y:9}` vs `P{x:7,y:9}`, `3` vs `3.0`). Serving only one
+   from the store would have silently changed what every session prints.
+4. **Slot coalescing is real.** Two bindings can resolve to the SAME frame slot,
+   because the compiler coalesces locals whose live ranges do not overlap. The
+   frame-seed seeds each slot once and omits the skipped name from its report,
+   so a collision is visible instead of quietly wrong.
 
-## Cross-arc dependencies
+## The instruments, and the two that lied
 
-- **@PLN12** (REPL + introspection, **finished**) — this is its REPL.X
-  *store-resident endpoint*. The value-snapshot interim shipped under @PLN12;
-  @PLN14 supersedes it and absorbs @PLN12's open tail (sub-arc H).
-  [CONVERGENCE.md](CONVERGENCE.md) (moved here from @PLN12) is the design source.
-- **@PLN11** (`Data` as a store) — same direction (store-resident records over
-  in-memory structures); the session store reuses the store / mmap / startup-cache
-  infrastructure @PLN11 also builds on.
-- **[@PLN16](../16-debugger/README.md)** (debugger) — the prime consumer: the
-  breakpoint frame *is* this store-resident env (seeded from a paused frame).
-  @PLN14's env shape is load-bearing for it; the frame-seedable requirement above
-  comes from there.
-- **loft2 store-resident IR** — the eventual home (bindings as store records is a
-  facet of the representation rewrite); @PLN14 is the REPL-scoped down payment that
-  exercises the model against a real consumer first.
+The differential caught every regression it was built for, and twice the fault
+was in the *reading*, not the code. Two instruments were **vacuous** and had to
+be rebuilt — both found by asking "can this fail?", not by it failing:
+
+- The first value-type matrix green-lit two struct-enum cells that never built a
+  value (tuple-style `Shape.Circle(5)` is not loft syntax), so it compared
+  identical garbage. `assert_readable` now gates every cell, with
+  `calibration_guard_catches_an_unreadable_root` as its positive control.
+- The first arc-G growth guard measured the store's ARENA SIZE, which is
+  pre-allocated and stays flat whether or not orphans are released — it passed
+  with the free deliberately disabled. It now counts live records; with the free
+  disabled it reports 82 records where one bind leaves 2.
+
+`canvas.toDataURL()`-style blind instruments are the same class: validate the
+instrument before trusting a reading.
+
+## Known residuals (not blockers)
+
+- **`text` observes still replay** — stored as a 1-element `vector<text>` (the
+  @P293 work-around), and the display renderer quotes vector text elements.
+  Output is correct; only the speed win is missing. Closing it needs either raw
+  text on that path or a vector-element accessor.
+- **The resume image is not wired to auto-resume.** `~/.loft_session` text-replay
+  still owns that path; choosing precedence between them is a product decision.
+- **loft#618** — `value_of(<name>)` crashes for a vector binding on `main`
+  (fn-return copy of a borrowed local, the @P293 family). Pre-existing, filed
+  not fixed; the store-backed read sidesteps it because it executes nothing.
 
 ## See also
 
-- [CONVERGENCE.md](CONVERGENCE.md) — the model, *why not mmap the stack*, *why the
-  stores DO mmap*, the four remaining needs (this plan builds items 1–3), and the
-  RNG decision (moved here from @PLN12/03 on its close).
+- [REPL.md](../../REPL.md) — where the reference content lives now.
+- [CONVERGENCE.md](CONVERGENCE.md) — the model this plan built.
 - [DESIGN_DECISIONS.md § C72](../../DESIGN_DECISIONS.md) — resume restores stored
   values but deliberately **not** RNG generator state.
-- [GOALS.md § Why a language, not a store bolted onto an existing one](../../GOALS.md)
-  — the own-format migration north star (Q2's cross-schema tool).
-- `src/store.rs` · `src/data_store.rs` · `src/cache.rs` — the mmap + content-hashed
-  startup-cache infra phase F reuses.
-- **Tracker:** [loft-lang/plans#14](https://github.com/loft-lang/plans/issues/14)
-  (`plan` · `subject:loft` · `status:future`).
+- **Tracker:** [loft-lang/plans#14](https://github.com/loft-lang/plans/issues/14).

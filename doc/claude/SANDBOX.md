@@ -93,6 +93,43 @@ already-built IR, enforced at known points — not a new analysis engine.
 
 ---
 
+## Designation — what the policy must cover (#631)
+
+Admission only analyses the functions the policy **designates**. Everything else it
+reaches is a *trusted leaf*: not descended into, not capability-checked, its loops
+absent from the data envelope, its raw writes unattributed. That is right for a host
+library the host vetted, and wrong for the sandboxed module's own code — so the
+policy has to cover the whole unit, not just its entry point.
+
+Two selector forms, both host-controlled (a script can never designate itself):
+
+```toml
+[sandbox]
+plug = ["fn:apply_op"]        # one function
+plug = ["src/oplog.loft"]     # every function in a file — `*`, `**`, `?` allowed
+```
+
+Prefer the **path selector** for plugin-shaped code. A module with private helpers
+needs all of them designated, and naming each one is tedious enough that the
+tempting shortcut is to allow-list the whole library instead:
+
+```toml
+allow_libs = ["oplog"]        # REJECTED when `oplog` holds sandboxed code
+```
+
+That is now a hard admission error (`self_allow_list_violations`). `allow_libs`
+asserts *"the host vetted this library, include it as a unit"*, so naming the
+script's own library asserts that the script vets itself. Its effect was invisible
+and severe: an escaping mutation admitted as soon as it moved into a one-line helper
+(`push(out, i)` passed where the identical `out.v += [i]` was rejected), and a plugin
+whose entry point delegates to helpers reported `O(1)` while being `O(n)` — so a
+declared `data_budget` could be satisfied by a plugin that does not fit it. Both
+survive review, because nothing in the output says a check stopped running.
+
+Keep `allow_libs` for host libraries. Designate your own.
+
+---
+
 ## The validatable invariants
 
 Each: **Invariant · Chokepoint · Check (runnable) · Status today**.

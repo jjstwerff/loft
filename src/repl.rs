@@ -35,6 +35,87 @@ use std::io::{BufRead, Write};
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 
+/// @PLN14 arc A — initial word size of the session store.  It grows on demand
+/// like any store; this only sets how much room the first few bindings get
+/// without a realloc.
+const SESSION_STORE_WORDS: u32 = 1024;
+
+/// @PLN14 arc F — resume-image header: a magic so a foreign file is refused, and
+/// a format version so an older image is refused rather than misread.
+const SESSION_IMAGE_MAGIC: &[u8; 8] = b"LOFTSES1";
+const SESSION_IMAGE_VERSION: u32 = 1;
+
+/// @PLN14 arc F — the outcome of loading a resume image.  Every non-`Loaded`
+/// variant means the session was left **untouched**, so the caller falls back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageLoad {
+    /// The image was accepted; the session now holds its store-resident values.
+    Loaded,
+    /// No image file at that path — a first run.
+    Missing,
+    /// Not a session image, a different format version, truncated, or a store
+    /// arena `Store::from_bytes` refused as structurally invalid.
+    Malformed,
+    /// A valid image from a build whose STORAGE LAYOUT differs (a changed struct,
+    /// a different loft build, another endianness), or one referencing a type this
+    /// session has not defined.  The values cannot be read as they were written,
+    /// so they are refused rather than misread.
+    SchemaMismatch,
+}
+
+/// Encode a [`SessionShape`] as two bytes for the resume image.
+fn shape_tags(shape: SessionShape) -> (u8, u8) {
+    match shape {
+        SessionShape::Heap => (0, 0),
+        SessionShape::TextInVector => (1, 0),
+        SessionShape::Scalar(k) => (
+            2,
+            match k {
+                ScalarKind::Integer => 0,
+                ScalarKind::Float => 1,
+                ScalarKind::Single => 2,
+                ScalarKind::Boolean => 3,
+                ScalarKind::Character => 4,
+                ScalarKind::Text => 5,
+                ScalarKind::SimpleEnum => 6,
+            },
+        ),
+    }
+}
+
+/// Inverse of [`shape_tags`]; `None` on an unknown tag (a malformed image).
+fn shape_from_tags(tag: u8, kind: u8) -> Option<SessionShape> {
+    Some(match tag {
+        0 => SessionShape::Heap,
+        1 => SessionShape::TextInVector,
+        2 => SessionShape::Scalar(match kind {
+            0 => ScalarKind::Integer,
+            1 => ScalarKind::Float,
+            2 => ScalarKind::Single,
+            3 => ScalarKind::Boolean,
+            4 => ScalarKind::Character,
+            5 => ScalarKind::Text,
+            6 => ScalarKind::SimpleEnum,
+            _ => return None,
+        }),
+        _ => return None,
+    })
+}
+
+/// @PLN14 arc E — whether a fresh session starts with store-backed observing on.
+///
+/// **Default ON** since Step 8: observing a store-resident binding reads the
+/// session store instead of replaying the accumulated body. `LOFT_NO_STORE_OBSERVE`
+/// opts out, matching the repo's default-on `LOFT_NO_*` family.
+///
+/// Safe to default because what a session PRINTS is byte-identical either way —
+/// `a_real_repl_session_prints_identically_with_the_flip` runs the real binary
+/// over one script with the flag both ways and diffs stdout. The store serves
+/// both renderings (display and own-format) precisely so this flip is invisible.
+fn store_observe_default() -> bool {
+    std::env::var("LOFT_NO_STORE_OBSERVE").is_err()
+}
+
 /// Path to the auto-resume session file (`~/.loft_session`), or `None` if the
 /// home directory can't be located.  Shared by the interactive driver (which
 /// replays it on launch and appends new state-changing inputs to it) and the
@@ -912,28 +993,63 @@ fn escape_loft_text(raw: &str) -> String {
 ///
 /// `None` only on an unresolved type name (a fallback to source, never reached in
 /// practice for a value the session just produced).
-fn render_capture(state: &mut State, ret_ty: &Type, name: &str, json: bool) -> Option<String> {
+///
+/// `captured` receives the raw value the stack read consumed — the one chance to
+/// keep it, since `get_stack` pops.  @PLN14 gives it a home in the session store:
+/// arc B materializes a [`Captured::Heap`] ref, arc C boxes a
+/// [`Captured::Scalar`].  Raw, never the rendered literal: the store-resident
+/// value must be exact (a float round-tripped through its decimal form is not).
+fn render_capture(
+    state: &mut State,
+    ret_ty: &Type,
+    name: &str,
+    json: bool,
+    captured: &mut Option<Captured>,
+) -> Option<String> {
     match ret_ty {
-        Type::Integer(_) => Some(state.get_stack::<i64>().to_string()),
-        Type::Float => Some(float_literal(*state.get_stack::<f64>())),
+        Type::Integer(_) => {
+            let n = *state.get_stack::<i64>();
+            *captured = Some(Captured::Scalar(ScalarValue::Integer(n)));
+            Some(n.to_string())
+        }
+        Type::Float => {
+            let v = *state.get_stack::<f64>();
+            *captured = Some(Captured::Scalar(ScalarValue::Float(v)));
+            Some(float_literal(v))
+        }
         // own-format `2f` isn't valid JSON; drop the suffix for `json`.
-        Type::Single if json => Some(state.get_stack::<f32>().to_string()),
-        Type::Single => Some(format!("{}f", *state.get_stack::<f32>())),
+        Type::Single if json => {
+            let v = *state.get_stack::<f32>();
+            *captured = Some(Captured::Scalar(ScalarValue::Single(v)));
+            Some(v.to_string())
+        }
+        Type::Single => {
+            let v = *state.get_stack::<f32>();
+            *captured = Some(Captured::Scalar(ScalarValue::Single(v)));
+            Some(format!("{v}f"))
+        }
         Type::Boolean => {
             let v = *state.get_stack::<u8>() != 0;
+            *captured = Some(Captured::Scalar(ScalarValue::Boolean(v)));
             Some(if v { "true" } else { "false" }.to_string())
         }
         // own-format `'c'` isn't valid JSON; emit a JSON string for `json`.
-        Type::Character => char::from_u32(*state.get_stack::<u32>()).map(|c| {
-            if json {
+        Type::Character => {
+            let raw = *state.get_stack::<u32>();
+            let c = char::from_u32(raw)?;
+            *captured = Some(Captured::Scalar(ScalarValue::Character(raw)));
+            Some(if json {
                 format!("\"{c}\"")
             } else {
                 format!("'{c}'")
-            }
-        }),
-        Type::Text(_) => Some(escape_loft_text(
-            state.get_stack::<crate::keys::Str>().str(),
-        )),
+            })
+        }
+        Type::Text(_) => {
+            let s = state.get_stack::<crate::keys::Str>().str().to_string();
+            let lit = escape_loft_text(&s);
+            *captured = Some(Captured::Scalar(ScalarValue::Text(s)));
+            Some(lit)
+        }
         // Heap value backed by a `DbRef`: struct, vector, struct-enum variant.  The
         // return is a 12-byte `DbRef` on the stack top; `json` selects the inbuilt
         // serializer — `show_json` (RFC 8259, `{"x":3}`, the generic value→JSON walk
@@ -947,6 +1063,7 @@ fn render_capture(state: &mut State, ret_ty: &Type, name: &str, json: bool) -> O
                 return None;
             }
             let db = *state.get_stack::<crate::keys::DbRef>();
+            *captured = Some(Captured::Heap(db));
             let mut out = String::new();
             if json {
                 state.database.show_json(&mut out, &db, tp, false);
@@ -962,6 +1079,7 @@ fn render_capture(state: &mut State, ret_ty: &Type, name: &str, json: bool) -> O
                 return None;
             }
             let disc = *state.get_stack::<u8>();
+            *captured = Some(Captured::Scalar(ScalarValue::SimpleEnum(disc)));
             if disc == 0 {
                 Some("null".to_string())
             } else if json {
@@ -1000,6 +1118,59 @@ struct Savepoint {
     /// "Double structure type" abort in some later, unrelated parse.
     #[cfg(debug_assertions)]
     schema: (u16, u32, u64),
+}
+
+/// @PLN14 — the raw value a capture read off the stack, on its way to a home in
+/// the session store.  Split the way the store itself splits: a heap value is
+/// already a record (arc B copies it), a scalar is not (arc C boxes it).
+enum Captured {
+    /// A struct / vector / struct-enum: the record's root ref.
+    Heap(crate::keys::DbRef),
+    /// An inline value with no heap home of its own yet.
+    Scalar(ScalarValue),
+}
+
+/// @PLN14 arc C — a scalar in the exact form it left the stack in.  Kept raw
+/// rather than as its literal so boxing is lossless (`float_literal` is a
+/// display form; round-tripping through it is not the identity).
+enum ScalarValue {
+    Integer(i64),
+    Float(f64),
+    Single(f32),
+    Boolean(bool),
+    /// The raw `u32` scalar value, already known to be a valid `char`.
+    Character(u32),
+    Text(String),
+    /// A simple (payload-free) enum's 1-based discriminant; `0` is null.
+    SimpleEnum(u8),
+}
+
+/// @PLN14 arc C — how a boxed scalar is read back out of the session store.
+/// Mirrors [`ScalarValue`] without the payload: the bytes live in the store, this
+/// only says how to interpret them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScalarKind {
+    Integer,
+    Float,
+    Single,
+    Boolean,
+    Character,
+    Text,
+    SimpleEnum,
+}
+
+impl ScalarValue {
+    fn kind(&self) -> ScalarKind {
+        match self {
+            ScalarValue::Integer(_) => ScalarKind::Integer,
+            ScalarValue::Float(_) => ScalarKind::Float,
+            ScalarValue::Single(_) => ScalarKind::Single,
+            ScalarValue::Boolean(_) => ScalarKind::Boolean,
+            ScalarValue::Character(_) => ScalarKind::Character,
+            ScalarValue::Text(_) => ScalarKind::Text,
+            ScalarValue::SimpleEnum(_) => ScalarKind::SimpleEnum,
+        }
+    }
 }
 
 /// Outcome of trying to value-snapshot a binding's RHS (REPL.X capture).
@@ -1170,6 +1341,12 @@ struct BpMeta {
 }
 
 /// A live REPL session: stdlib + the statements entered so far.
+// The flags below (`replaying`, `stepping`, `reverse_armed`, `store_observe`) are
+// INDEPENDENT session modes, not the states of one machine: a session can be
+// replaying a saved file while stepping, with reverse armed, reading values from
+// the store.  Folding them into an enum would have to enumerate the product, so
+// the lint's suggested refactor is the worse shape here.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ReplSession {
     pub(crate) parser: Parser,
     /// The standard-library directory this session was built from, kept so the test runner
@@ -1224,6 +1401,61 @@ pub struct ReplSession {
     /// A game is a real `loft` run in its own process — its frame loop (and, once the
     /// graphics library lands, its native window) must not block the serve loop.
     game: Option<GameProc>,
+    /// @PLN14 arc A — **the session store**: one detached `Store` holding a
+    /// materialized copy of every heap-backed binding's value.  It is adopted into
+    /// each eval's throwaway `State` just long enough to materialize into, then
+    /// taken back out, so it outlives the run.  One `Store` suffices because a
+    /// materialized value is self-contained in it (see @PLN14 Step 0/1 findings).
+    session_store: Option<crate::store::Store>,
+    /// @PLN14 arc A — **the binding environment**: name → where that binding's value
+    /// lives in [`session_store`](Self::session_store).
+    ///
+    /// **Write-only for now (Step 2).**  The replay model stays the source of truth;
+    /// this shadow is written on every bind and read only by
+    /// [`env_value`](Self::env_value), which is the differential oracle Step 4's
+    /// frame-seed will be checked against.
+    env: std::collections::HashMap<String, SessionValue>,
+    /// @PLN14 arc E — **the flip**: when on, observing a store-resident binding
+    /// reads the session store instead of replaying the accumulated body.  ON by
+    /// default since Step 8; `LOFT_NO_STORE_OBSERVE` opts out, and
+    /// [`set_store_observe`](Self::set_store_observe) overrides it for a test.
+    store_observe: bool,
+    /// @PLN14 arc B — the value the most recent capture materialized, waiting to be
+    /// filed under the bound name by [`eval`](Self::eval).  `capture_typed` cannot
+    /// name it (only the caller knows the binding name), so it parks it here.
+    pending_materialized: Option<SessionValue>,
+}
+
+/// @PLN14 arc A — one binding's home in the session store.
+///
+/// Deliberately holds **no `store_nr`**: the session store is adopted at whatever
+/// slot is free in each eval's `State`, so the slot is not a stable identity.  A
+/// materialized value's interior references are slot-independent (in-store record
+/// ids), which is what makes this safe — pinned by
+/// `a_session_store_survives_re_adoption_at_a_different_slot`.
+#[derive(Debug, Clone)]
+struct SessionValue {
+    /// The loft-source type name, for the `show_loft` / enum schema lookup on
+    /// read-back.
+    type_name: String,
+    rec: u32,
+    pos: u32,
+    /// How to read the bytes back: a record the schema walks, or a boxed scalar.
+    shape: SessionShape,
+}
+
+/// @PLN14 — how a session-store entry is interpreted on read-back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionShape {
+    /// A record the schema can walk — rendered by `show_loft` with `type_name`'s
+    /// type id (arc B).
+    Heap,
+    /// A scalar boxed into a 1-field record (arc C).
+    Scalar(ScalarKind),
+    /// A `text` binding stored as the single-element `vector<text>` that
+    /// `capture_binding` builds to dodge @P293.  The characters ARE store-resident
+    /// (the vector copied them in); only the wrapper has to be undone on read.
+    TextInVector,
 }
 
 /// @PLN16 M5e slice 6 — a launched game: the child process + its drained output.
@@ -1232,6 +1464,21 @@ pub struct ReplSession {
 struct GameProc {
     child: std::process::Child,
     output: std::sync::Arc<std::sync::Mutex<String>>,
+}
+
+/// @PLN14 arc D — one binding's frame-seed result, as the differential Step 4 is
+/// gated on.
+///
+/// `replayed` is what the slot held *before* seeding — the value the body replay
+/// put there, i.e. the model still known to be correct.  `seeded` is what it holds
+/// *after* the store-resident value was written in.  Step 4's whole safety
+/// argument is that these two are equal for every binding: the new path is checked
+/// against the old one rather than trusted.
+#[derive(Debug, Clone)]
+pub struct SeedReport {
+    pub name: String,
+    pub replayed: String,
+    pub seeded: String,
 }
 
 impl ReplSession {
@@ -1258,6 +1505,10 @@ impl ReplSession {
             paused: None,
             workspace_file: None,
             game: None,
+            session_store: None,
+            store_observe: store_observe_default(),
+            env: std::collections::HashMap::new(),
+            pending_materialized: None,
             reverse_armed: false,
         })
     }
@@ -1300,6 +1551,10 @@ impl ReplSession {
             paused: None,
             workspace_file: None,
             game: None,
+            session_store: None,
+            store_observe: store_observe_default(),
+            env: std::collections::HashMap::new(),
+            pending_materialized: None,
             reverse_armed: false,
         }
     }
@@ -1362,6 +1617,16 @@ impl ReplSession {
     /// those fall through to [`capture_binding`] — scalars render as raw JSON there,
     /// a bare vector has no `.to_json()` and yields `None` (eval its elements instead).
     fn value_of_fmt(&mut self, expr: &str, json: bool) -> Option<String> {
+        // @PLN14 arc E — the own-format read (`value_of`) is answered from the
+        // session store too.  `json` keeps the existing path: the store read
+        // renders own-format, and the wire protocol wants JSON.
+        if !json
+            && self.store_observe
+            && let Some(name) = self.store_resident_name(expr)
+            && let Some(v) = self.env_value(&name)
+        {
+            return Some(v);
+        }
         if json && let Some(j) = self.capture_json(expr) {
             return Some(j);
         }
@@ -2176,6 +2441,10 @@ impl ReplSession {
         // Force the value above BOTH stores' high-water → its slots are free in live.
         let floor = live_top.max(build.database.high_water());
         build.database.raise_floor(floor);
+        // #629 follow-up — this wrapper RETURNS a value and `render_capture`
+        // reads it off the stack after the run, so claim the hidden return
+        // buffer: the entry teardown must not free what we are about to read.
+        build.keep_entry_return();
         build.execute_argv(&name, &self.parser.data, &[]);
         let root = if build.database.runtime_error.take().is_some() {
             None
@@ -2758,6 +3027,18 @@ impl ReplSession {
                         let bound = format!("{}{snap};\n", self.body);
                         if self.compile_generation(&bound, false, false).is_ok() {
                             self.body = bound;
+                            // @PLN14 arc A — file the shadow env entry under the
+                            // bound name.  A re-bind (`n = n + 1`) replaces it; the
+                            // old record is orphaned in the session store until
+                            // arc G collects it.
+                            if let Some(v) = self.pending_materialized.take() {
+                                // arc G — a re-bind orphans the old record; release
+                                // it so a long session does not grow per re-bind.
+                                if let Some(old) = self.env.remove(&var) {
+                                    self.free_session_value(&old);
+                                }
+                                self.env.insert(var.clone(), v);
+                            }
                             self.record_input(&snap); // persist the snapshot, not the RHS
                             return Eval::Ran;
                         }
@@ -2790,6 +3071,23 @@ impl ReplSession {
         // statement (`assert`, `print`) the temp binds to void and this fails to
         // compile — fall back to running the input plain so its side effects
         // still happen.
+        // @PLN14 arc E — THE FLIP: a bare name with a store-resident value is
+        // answered from the session store.  No generation is compiled and the
+        // accumulated body does not re-run, so a side effect in any earlier
+        // binding cannot repeat here and the observe cost stops growing with the
+        // session.  Not gated on `stepping`: answering from the store runs no
+        // code, so there is no breakpoint for stepping to catch — and the
+        // interactive driver turns stepping ON by default, which would otherwise
+        // disable the flip in exactly the session it is meant for.  Only an
+        // active pause is excluded (those inputs belong to the paused sub-mode).
+        if self.store_observe
+            && self.paused.is_none()
+            && let Some(name) = self.store_resident_name(input)
+            && let Some(shown) = self.env_display(&name)
+        {
+            println!("{shown}");
+            return Eval::Ran;
+        }
         let shown = format!(
             "{}__replval = {input};\nprintln(\"{{__replval}}\");\n",
             self.body
@@ -2818,14 +3116,30 @@ impl ReplSession {
     /// (The *column* and a def-body line can still sit on the next token — a separate parser
     /// position issue, not this offset.)  `<repl>`-only and clamped, so an underflow leaves
     /// the line at 1 rather than wrapping.
-    fn map_input_lines(&self, mut diags: Vec<DiagEntry>) -> Vec<DiagEntry> {
+    ///
+    /// A diagnostic at or below `prefix` is about the wrapper header or the **replayed
+    /// session body** — machinery the user did not type this turn — and the clamp above
+    /// would park it on their line 1 as if they had.  That produced the FU.3 cascade: one
+    /// typo answered with `Unknown function prnt` *and* `Variable x is never read` about
+    /// an earlier, correct binding, at a column inside the failing line.  So a prelude
+    /// **non-error is dropped**: the success path shows no warnings at all (this is the
+    /// only route by which any warning reaches the user), so surfacing the replay's
+    /// warnings only on failure was noise, and false noise at that — `x` *was* read, by
+    /// the input that failed to compile.  A prelude **error is kept**, imprecise line and
+    /// all: swallowing it would leave the REPL rejecting input while saying nothing, and a
+    /// bad position beats silence.
+    fn map_input_lines(&self, diags: Vec<DiagEntry>) -> Vec<DiagEntry> {
         let prefix = 1 + self.body.matches('\n').count() as u32;
-        for d in &mut diags {
-            if d.file == "<repl>" {
-                d.line = d.line.saturating_sub(prefix).max(1);
-            }
-        }
         diags
+            .into_iter()
+            .filter(|d| d.file != "<repl>" || d.line > prefix || d.level >= Level::Error)
+            .map(|mut d| {
+                if d.file == "<repl>" {
+                    d.line = d.line.saturating_sub(prefix).max(1);
+                }
+                d
+            })
+            .collect()
     }
 
     /// Parse one generation fn `fn replmain_N() { <gen_body> }`; when `execute`,
@@ -2956,13 +3270,24 @@ impl ReplSession {
         // The explicit `vector<text>` element type coerces a borrowed/work text
         // (`text["__work_N"]`, e.g. a concat) to a plain owned element.
         if ty == "text" {
-            return match self.capture_typed(&format!("[({rhs})]"), "vector<text>", json) {
+            let out = match self.capture_typed(&format!("[({rhs})]"), "vector<text>", json) {
                 Capture::Done(lit) => lit
                     .strip_prefix('[')
                     .and_then(|s| s.strip_suffix(']'))
                     .map_or(Capture::Skip, |inner| Capture::Done(inner.to_string())),
                 other => other,
             };
+            // @PLN14 arc C — the wrapper above materialized a `vector<text>`, but
+            // the BINDING is a `text`.  Left as-is the env would report `["hi"]`
+            // for `t = "hi"`, so retag it: the characters are already store-
+            // resident inside that vector, and the read side unwraps the single
+            // element back to a bare text literal.  (Capturing the text directly
+            // instead is exactly what @P293 forbids — a borrowed text read off the
+            // stack aborts the process.)
+            if let Some(v) = self.pending_materialized.as_mut() {
+                v.shape = SessionShape::TextInVector;
+            }
+            return out;
         }
         self.capture_typed(rhs, &ty, json)
     }
@@ -2996,6 +3321,7 @@ impl ReplSession {
         crate::scopes::check(&mut self.parser.data);
         let mut state = State::new(self.parser.database.clone());
         compile::byte_code(&mut state, &mut self.parser.data);
+        state.keep_entry_return();
         state.execute_argv(&name, &self.parser.data, &[]);
         // The RHS just ran (its side effect happened once).  A fault here is a
         // real binding error — surface it, don't fall back to source (which would
@@ -3004,7 +3330,19 @@ impl ReplSession {
             self.rewind(sp);
             return Capture::Failed(vec![err.to_diag_entry()]);
         }
-        let lit = render_capture(&mut state, &ret_ty, ty, json);
+        let mut captured = None;
+        let lit = render_capture(&mut state, &ret_ty, ty, json, &mut captured);
+        // @PLN14 arcs B + C — SHADOW WRITE: give the value its own home in the
+        // session store, whatever its shape.  Nothing reads it yet (the replay
+        // literal below is still the source of truth), so this cannot change
+        // behaviour; it is the differential oracle Step 4's frame-seed gets
+        // checked against.
+        self.pending_materialized = None;
+        match captured {
+            Some(Captured::Heap(root)) => self.materialize_into_session(&mut state, root, ty),
+            Some(Captured::Scalar(v)) => self.box_scalar_into_session(&mut state, &v, ty),
+            None => {}
+        }
         self.rewind(sp); // discard the throwaway cap gen
         lit.map_or(Capture::Skip, Capture::Done)
     }
@@ -3045,6 +3383,771 @@ impl ReplSession {
             sp.schema,
             "a rewound speculative parse must leave the schema exactly as it found it"
         );
+    }
+
+    /// @PLN14 arc B — copy `root` into the session store and park the resulting
+    /// location in [`pending_materialized`](Self::pending_materialized) for
+    /// [`eval`](Self::eval) to file under the bound name.
+    ///
+    /// The session store is adopted into this run's `State` only for the copy, then
+    /// taken straight back out, so it survives the throwaway `State`.  The slot it
+    /// lands at is not recorded — it differs run to run and a materialized value's
+    /// interior references do not depend on it.
+    fn materialize_into_session(
+        &mut self,
+        state: &mut State,
+        root: crate::keys::DbRef,
+        type_name: &str,
+    ) {
+        let tp = state.database.name(type_name);
+        if tp == u16::MAX {
+            return;
+        }
+        let slot = self.session_slot(state);
+        let copy = state.database.materialize(&root, tp, slot);
+        self.session_store = Some(state.database.take_store(slot));
+        if copy.rec != 0 {
+            self.pending_materialized = Some(SessionValue {
+                type_name: type_name.to_string(),
+                rec: copy.rec,
+                pos: copy.pos,
+                shape: SessionShape::Heap,
+            });
+        }
+    }
+
+    /// @PLN14 arc C — **scalars at rest**: box `v` into a 1-field record in the
+    /// session store, so a scalar binding has a store-resident home exactly like a
+    /// heap one.  That uniformity is the point: Step 4's frame-seed reads every
+    /// prior name from the store along ONE path rather than branching on whether
+    /// the value happened to be inline.
+    ///
+    /// The bytes are written raw (never via the display literal), so the value
+    /// read back is bit-identical — the reason Q2 keeps own-format out of the
+    /// session path.
+    fn box_scalar_into_session(&mut self, state: &mut State, v: &ScalarValue, type_name: &str) {
+        let slot = self.session_slot(state);
+        let store = &mut state.database.allocations[slot as usize];
+        // One header word + one payload word; `pos = 8` is the payload, matching
+        // the record shape `Stores::claim` hands out.
+        let rec = store.claim(2);
+        match v {
+            ScalarValue::Integer(n) => {
+                store.set_int(rec, 8, *n);
+            }
+            ScalarValue::Float(f) => {
+                store.set_float(rec, 8, *f);
+            }
+            ScalarValue::Single(f) => {
+                store.set_single(rec, 8, *f);
+            }
+            ScalarValue::Boolean(b) => {
+                store.set_int(rec, 8, i64::from(*b));
+            }
+            ScalarValue::Character(c) => {
+                store.set_u32_raw(rec, 8, *c);
+            }
+            ScalarValue::SimpleEnum(d) => {
+                store.set_int(rec, 8, i64::from(*d));
+            }
+            ScalarValue::Text(s) => {
+                // The text's BYTES are copied into the session store (`set_str`
+                // claims a record for them there), so the entry owns its
+                // characters rather than pointing at the run's memory — the
+                // bare-`Str` raw-pointer hazard cannot follow the value here.
+                let idx = store.set_str(s);
+                store.set_u32_raw(rec, 8, idx);
+            }
+        }
+        self.session_store = Some(state.database.take_store(slot));
+        self.pending_materialized = Some(SessionValue {
+            type_name: type_name.to_string(),
+            rec,
+            pos: 8,
+            shape: SessionShape::Scalar(v.kind()),
+        });
+    }
+
+    /// @PLN14 arc G — release a session-store entry whose name has been re-bound.
+    ///
+    /// `n = n + 1` in a REPL replaces the env entry, and without this the old
+    /// record stays claimed forever — a long session's store would grow with
+    /// every re-bind. The record is owned SOLELY by the env (nothing else holds a
+    /// ref into the session store), so freeing it on replace is safe.
+    ///
+    /// Nested heap the value owns (sub-records, in-store text) is released by
+    /// `remove_claims` first, then the record itself; a boxed scalar owns nothing
+    /// except a `Text`'s separate `set_str` record.
+    fn free_session_value(&mut self, entry: &SessionValue) {
+        let Some(store) = self.session_store.take() else {
+            return;
+        };
+        let mut state = State::new(self.parser.database.clone());
+        let slot = state.database.adopt_store(store);
+        let db = crate::keys::DbRef {
+            store_nr: slot,
+            rec: entry.rec,
+            pos: entry.pos,
+        };
+        match entry.shape {
+            SessionShape::Heap | SessionShape::TextInVector => {
+                let tp = state.database.name(&entry.type_name);
+                if tp != u16::MAX {
+                    state.database.remove_claims(&db, tp);
+                }
+            }
+            SessionShape::Scalar(ScalarKind::Text) => {
+                // The characters live in their own `set_str` record; the field
+                // holds its index.
+                let idx = state.database.store(&db).get_u32_raw(db.rec, db.pos);
+                if idx != 0 {
+                    state.database.store_mut(&db).delete(idx);
+                }
+            }
+            SessionShape::Scalar(_) => {} // inline bytes, nothing nested
+        }
+        state.database.store_mut(&db).delete(db.rec);
+        self.session_store = Some(state.database.take_store(slot));
+    }
+
+    /// @PLN14 arc A — the session store's slot in `state`, adopting the carried
+    /// store or creating one on the session's first binding.  The caller must take
+    /// it back out (`take_store`) before `state` is dropped.
+    fn session_slot(&mut self, state: &mut State) -> u16 {
+        match self.session_store.take() {
+            Some(store) => state.database.adopt_store(store),
+            None => state.database.database(SESSION_STORE_WORDS).store_nr,
+        }
+    }
+
+    /// @PLN14 arc A — read a binding back **from the session store** (not from the
+    /// replayed body), rendered own-format.  `None` when the name has no
+    /// store-resident value (an unbound name, or a bind the snapshot path
+    /// declined).
+    ///
+    /// This is the shadow's read side: Steps 2–3 use it purely as the differential
+    /// oracle (`env value == replayed value`); Step 5 is where observing switches
+    /// over to it and the body replay goes away.
+    pub fn env_value(&mut self, name: &str) -> Option<String> {
+        let entry = self.env.get(name)?.clone();
+        let store = self.session_store.take()?;
+        let mut state = State::new(self.parser.database.clone());
+        let slot = state.database.adopt_store(store);
+        let db = crate::keys::DbRef {
+            store_nr: slot,
+            rec: entry.rec,
+            pos: entry.pos,
+        };
+        let tp = state.database.name(&entry.type_name);
+        let out = Self::render_session_value(&mut state, &entry, &db, tp);
+        self.session_store = Some(state.database.take_store(slot));
+        out
+    }
+
+    /// Render one session-store entry in the own-format the replay literal uses —
+    /// the two must agree character for character, since that equality is what the
+    /// shadow is checked on.
+    fn render_session_value(
+        state: &mut State,
+        entry: &SessionValue,
+        db: &crate::keys::DbRef,
+        tp: u16,
+    ) -> Option<String> {
+        let store = state.database.store(db);
+        match entry.shape {
+            SessionShape::Scalar(ScalarKind::Integer) => Some(store.get_int(db.rec, 8).to_string()),
+            SessionShape::Scalar(ScalarKind::Float) => {
+                Some(float_literal(store.get_float(db.rec, 8)))
+            }
+            SessionShape::Scalar(ScalarKind::Single) => {
+                Some(format!("{}f", store.get_single(db.rec, 8)))
+            }
+            SessionShape::Scalar(ScalarKind::Boolean) => Some(
+                if store.get_int(db.rec, 8) != 0 {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            ),
+            SessionShape::Scalar(ScalarKind::Character) => {
+                char::from_u32(store.get_u32_raw(db.rec, 8)).map(|c| format!("'{c}'"))
+            }
+            SessionShape::Scalar(ScalarKind::Text) => {
+                let idx = store.get_u32_raw(db.rec, 8);
+                Some(escape_loft_text(store.get_str(idx)))
+            }
+            SessionShape::Scalar(ScalarKind::SimpleEnum) => {
+                let disc = u8::try_from(store.get_int(db.rec, 8)).unwrap_or(0);
+                if disc == 0 {
+                    Some("null".to_string())
+                } else if tp == u16::MAX {
+                    None
+                } else {
+                    Some(format!(
+                        "{}.{}",
+                        entry.type_name,
+                        state.database.enum_val(tp, disc)
+                    ))
+                }
+            }
+            SessionShape::Heap | SessionShape::TextInVector => {
+                if tp == u16::MAX {
+                    return None;
+                }
+                let mut s = String::new();
+                state.database.show_loft(&mut s, db, tp);
+                if entry.shape == SessionShape::TextInVector {
+                    // Stored as the single-element `vector<text>` the @P293
+                    // work-around builds; unwrap it back to the bare text literal,
+                    // exactly as `capture_binding` unwraps the rendered one.
+                    return s
+                        .strip_prefix('[')
+                        .and_then(|x| x.strip_suffix(']'))
+                        .map(str::to_string);
+                }
+                Some(s)
+            }
+        }
+    }
+
+    /// @PLN14 arc D — **the frame-seed**: load prior names from the session store
+    /// into their slots in the currently paused frame, and report the
+    /// before/after differential per binding.
+    ///
+    /// This is the step where a prior-name reference *can* read from the store
+    /// instead of from a replayed literal. It is deliberately NOT wired into the
+    /// normal eval path yet: Step 4 proves the mechanism against the still-running
+    /// replay, and Step 5 is where observing switches over and the replay goes
+    /// away. Nothing calls this during an ordinary session, so it cannot change
+    /// behaviour.
+    ///
+    /// Only locals that are BOTH in the env and live in the frame are seeded;
+    /// anything else is left alone. Returns one entry per seeded binding, or an
+    /// empty vector when not paused.
+    ///
+    /// # Panics
+    /// Panics if the session store cannot be returned to the session (an
+    /// unreachable adopt/take mismatch).
+    pub fn seed_paused_frame(&mut self) -> Vec<SeedReport> {
+        let Some(mut state) = self.paused.take() else {
+            return Vec::new();
+        };
+        let Some(store) = self.session_store.take() else {
+            self.paused = Some(state);
+            return Vec::new();
+        };
+        let slot = state.database.adopt_store(store);
+        let data = self.parser.data.clone();
+        // What the REPLAY put in the slots, read through the same renderer the
+        // debugger's variables panel uses.
+        state.refresh_paused_frame(&data);
+        let before = Self::render_frame(&state, &data);
+
+        let mut seeded_names = Vec::new();
+        // Two names can resolve to the SAME slot: the compiler coalesces the stack
+        // slots of locals whose live ranges do not overlap (an assigned-but-never-
+        // read local shares with the next one).  Seeding both would silently
+        // clobber the first — so seed a slot once and skip the rest.  The skipped
+        // name is simply absent from the report, which makes the situation visible
+        // to the caller instead of producing a quietly wrong value.
+        let mut written: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+        for (name, entry) in self.env.clone() {
+            let Some((dest, tp, _is_arg)) = state.frame_slot_addr(&name, &data) else {
+                continue; // not a local of this frame
+            };
+            if !written.insert((dest.rec, dest.pos)) {
+                continue; // slot already seeded by another (coalesced) binding
+            }
+            let src = crate::keys::DbRef {
+                store_nr: slot,
+                rec: entry.rec,
+                pos: entry.pos,
+            };
+            if Self::seed_one_slot(&mut state, &entry, &src, &dest, &tp) {
+                seeded_names.push(name);
+            }
+        }
+
+        state.refresh_paused_frame(&data);
+        let after = Self::render_frame(&state, &data);
+        self.session_store = Some(state.database.take_store(slot));
+        self.paused = Some(state);
+
+        seeded_names.sort();
+        seeded_names
+            .into_iter()
+            .map(|name| {
+                let pick = |m: &std::collections::HashMap<String, String>| {
+                    m.get(&name)
+                        .cloned()
+                        .unwrap_or_else(|| "<unreadable>".into())
+                };
+                SeedReport {
+                    replayed: pick(&before),
+                    seeded: pick(&after),
+                    name,
+                }
+            })
+            .collect()
+    }
+
+    /// The paused frame's locals as a name → rendered-value map.
+    ///
+    /// A **heap** local is rendered through `eval_frame_heap`, which dereferences
+    /// its `DbRef`; the captured frame's own rendering shows the slot's raw words
+    /// for those (`P{x:3,y:12884901900}` — a `DbRef` read as fields), which would
+    /// make the seed differential compare garbage to garbage.  Same precedence
+    /// `frame_value_of` uses.
+    fn render_frame(
+        state: &State,
+        data: &crate::data::Data,
+    ) -> std::collections::HashMap<String, String> {
+        let mut out: std::collections::HashMap<String, String> = state
+            .paused_frame()
+            .map(|h| h.locals.iter().cloned().collect())
+            .unwrap_or_default();
+        let names: Vec<String> = out.keys().cloned().collect();
+        for name in names {
+            if let Some(heap) = state.eval_frame_heap(&name, false, data) {
+                out.insert(name, heap);
+            }
+        }
+        out
+    }
+
+    /// Write one session-store value into the frame slot `dest` holds.
+    ///
+    /// A scalar is written raw (bit-exact, never through its literal). A heap
+    /// value is **materialized out of the session store into the run's own heap**
+    /// first — the same [`Stores::materialize`](crate::database::Stores::materialize)
+    /// chokepoint the bind side uses, run in the other direction — so the frame
+    /// gets its own copy and the session's master is never aliased into a slot the
+    /// running statement could mutate.
+    fn seed_one_slot(
+        state: &mut State,
+        entry: &SessionValue,
+        src: &crate::keys::DbRef,
+        dest: &crate::keys::DbRef,
+        tp: &Type,
+    ) -> bool {
+        match entry.shape {
+            SessionShape::Heap => {
+                let type_id = state.database.name(&entry.type_name);
+                if type_id == u16::MAX || !matches!(tp, Type::Reference(_, _) | Type::Vector(_, _))
+                {
+                    return false;
+                }
+                // A fresh store in the RUN's heap owns the frame's copy.
+                let home = state.database.database(SESSION_STORE_WORDS).store_nr;
+                let copy = state.database.materialize(src, type_id, home);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<crate::keys::DbRef>(dest.rec, dest.pos) = copy;
+                true
+            }
+            SessionShape::Scalar(kind) => Self::seed_scalar_slot(state, src, dest, kind),
+            // The wrapper is an implementation detail of the @P293 work-around, not
+            // a shape a frame slot ever has; seeding it would need the unwrapped
+            // text, which arc C stores inside the vector.  Left to Step 5.
+            SessionShape::TextInVector => false,
+        }
+    }
+
+    /// Raw slot write for a boxed scalar — bit-exact, no literal round-trip.
+    fn seed_scalar_slot(
+        state: &mut State,
+        src: &crate::keys::DbRef,
+        dest: &crate::keys::DbRef,
+        kind: ScalarKind,
+    ) -> bool {
+        let store = state.database.store(src);
+        match kind {
+            ScalarKind::Integer => {
+                let v = store.get_int(src.rec, src.pos);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<i64>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::Float => {
+                let v = store.get_float(src.rec, src.pos);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<f64>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::Single => {
+                let v = store.get_single(src.rec, src.pos);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<f32>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::Boolean => {
+                let v = u8::from(store.get_int(src.rec, src.pos) != 0);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<u8>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::Character => {
+                let v = store.get_u32_raw(src.rec, src.pos);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<u32>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::SimpleEnum => {
+                let v = u8::try_from(store.get_int(src.rec, src.pos)).unwrap_or(0);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<u8>(dest.rec, dest.pos) = v;
+            }
+            // Text needs the owned-`String` / borrowed-`Str` distinction the edit
+            // path makes (`set_frame_literal`); not part of Step 4's slice.
+            ScalarKind::Text => return false,
+        }
+        true
+    }
+
+    /// @PLN14 arc E — turn store-backed observing on or off for this session.
+    pub fn set_store_observe(&mut self, on: bool) {
+        self.store_observe = on;
+    }
+
+    /// @PLN14 arc E — whether observing currently reads the session store.
+    #[must_use]
+    pub fn store_observe(&self) -> bool {
+        self.store_observe
+    }
+
+    /// How many generations this session has compiled — i.e. how many times the
+    /// accumulated body has been replayed.
+    ///
+    /// This is the instrument Step 5 is measured with: the flip's whole point is
+    /// that observing a store-resident binding no longer advances this counter,
+    /// which is a direct proof that the body did not re-run (rather than an
+    /// indirect one via timing).
+    #[must_use]
+    pub fn generations(&self) -> u32 {
+        self.counter
+    }
+
+    /// `input` as the name of a store-resident binding, if that is all it is.
+    /// A bare identifier only — anything else is a real expression and still goes
+    /// through a generation.
+    fn store_resident_name(&self, input: &str) -> Option<String> {
+        let name = input.trim();
+        if name.is_empty() || !self.env.contains_key(name) {
+            return None;
+        }
+        let mut cs = name.chars();
+        let first = cs.next()?;
+        if !(first.is_ascii_alphabetic() || first == '_')
+            || !cs.all(|c| c.is_alphanumeric() || c == '_')
+        {
+            return None;
+        }
+        Some(name.to_string())
+    }
+
+    /// @PLN14 arc E — a binding's value read from the session store and rendered
+    /// the way loft **displays** it (`hi`, `{x:7,y:9}`, `3`), which is what the
+    /// echo and `:vars` print — as opposed to [`env_value`](Self::env_value)'s
+    /// own-format literal (`"hi"`, `P{x:7,y:9}`, `3.0`), which is what `value_of`
+    /// returns.  The two renderings genuinely differ, so the flip needs both or it
+    /// would change what a session prints.
+    pub fn env_display(&mut self, name: &str) -> Option<String> {
+        let entry = self.env.get(name)?.clone();
+        let store = self.session_store.take()?;
+        let mut state = State::new(self.parser.database.clone());
+        let slot = state.database.adopt_store(store);
+        let db = crate::keys::DbRef {
+            store_nr: slot,
+            rec: entry.rec,
+            pos: entry.pos,
+        };
+        let tp = state.database.name(&entry.type_name);
+        let out = Self::render_session_display(&mut state, &entry, &db, tp);
+        self.session_store = Some(state.database.take_store(slot));
+        out
+    }
+
+    /// The display form of one session-store entry (see [`env_display`]).
+    fn render_session_display(
+        state: &mut State,
+        entry: &SessionValue,
+        db: &crate::keys::DbRef,
+        tp: u16,
+    ) -> Option<String> {
+        let store = state.database.store(db);
+        match entry.shape {
+            SessionShape::Scalar(ScalarKind::Integer) => Some(store.get_int(db.rec, 8).to_string()),
+            // Display drops the own-format decimal point: `3.0` shows as `3`.
+            SessionShape::Scalar(ScalarKind::Float) => Some(store.get_float(db.rec, 8).to_string()),
+            SessionShape::Scalar(ScalarKind::Single) => {
+                Some(store.get_single(db.rec, 8).to_string())
+            }
+            SessionShape::Scalar(ScalarKind::Boolean) => Some(
+                if store.get_int(db.rec, 8) != 0 {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            ),
+            // Display is the bare character / bare text — no quotes.
+            SessionShape::Scalar(ScalarKind::Character) => {
+                char::from_u32(store.get_u32_raw(db.rec, 8)).map(|c| c.to_string())
+            }
+            SessionShape::Scalar(ScalarKind::Text) => {
+                Some(store.get_str(store.get_u32_raw(db.rec, 8)).to_string())
+            }
+            // Display is the variant alone, without the enum's name.
+            SessionShape::Scalar(ScalarKind::SimpleEnum) => {
+                let disc = u8::try_from(store.get_int(db.rec, 8)).unwrap_or(0);
+                if disc == 0 {
+                    Some("null".to_string())
+                } else if tp == u16::MAX {
+                    None
+                } else {
+                    Some(state.database.enum_val(tp, disc).to_string())
+                }
+            }
+            // A `text` binding is physically a 1-element `vector<text>`, and the
+            // native renderer QUOTES a vector's text elements (`["hi"]`), so
+            // unwrapping it yields `"hi"` where the session displays `hi`.
+            // Recovering the bare characters means either storing the raw text on
+            // this path or reading the element through a vector accessor — neither
+            // is Step 5's slice, so DECLINE and let the replay answer.  The
+            // own-format read (`env_value`) is unaffected: quoted is correct there.
+            SessionShape::TextInVector => None,
+            SessionShape::Heap => {
+                if tp == u16::MAX {
+                    return None;
+                }
+                let mut out = String::new();
+                state.database.show(&mut out, db, tp, false);
+                Some(out)
+            }
+        }
+    }
+
+    /// @PLN14 arc F — the layout key this session's stored values depend on.
+    ///
+    /// `layout_algo_hash` folds the record sizes, field byte positions, narrow-int
+    /// encodings, collection strides AND the host endianness of every type the env
+    /// references.  If any of those move — a different loft build, a changed
+    /// struct, a different-endian machine — the key changes and the image is
+    /// refused.  `None` when a referenced type no longer resolves, which is itself
+    /// a reason to refuse.
+    fn env_layout_key(&self) -> Option<u64> {
+        let mut roots: Vec<u16> = Vec::new();
+        for entry in self.env.values() {
+            let tp = self.parser.database.name(&entry.type_name);
+            if tp == u16::MAX {
+                // A scalar's type name is not a schema type; it carries no layout.
+                if matches!(entry.shape, SessionShape::Scalar(_)) {
+                    continue;
+                }
+                return None;
+            }
+            roots.push(tp);
+        }
+        roots.sort_unstable();
+        roots.dedup();
+        Some(self.parser.database.layout_algo_hash(&roots))
+    }
+
+    /// @PLN14 arc F — write the session's store-resident values to `path` as a
+    /// resume image: a header, the layout key, the binding environment, and the
+    /// session store's raw arena.
+    ///
+    /// Returns `false` (writing nothing) when there is nothing to save.
+    ///
+    /// # Errors
+    /// Returns the I/O error if the image cannot be written.
+    pub fn save_session_image(&self, path: &Path) -> std::io::Result<bool> {
+        let (Some(store), Some(key)) = (self.session_store.as_ref(), self.env_layout_key()) else {
+            return Ok(false);
+        };
+        if self.env.is_empty() {
+            return Ok(false);
+        }
+        let mut out: Vec<u8> = Vec::new();
+        out.extend_from_slice(SESSION_IMAGE_MAGIC);
+        out.extend_from_slice(&SESSION_IMAGE_VERSION.to_le_bytes());
+        out.extend_from_slice(&key.to_le_bytes());
+        let mut names: Vec<&String> = self.env.keys().collect();
+        names.sort(); // deterministic image bytes
+        out.extend_from_slice(&(names.len() as u32).to_le_bytes());
+        for name in names {
+            let e = &self.env[name];
+            for text in [name.as_str(), e.type_name.as_str()] {
+                out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                out.extend_from_slice(text.as_bytes());
+            }
+            out.extend_from_slice(&e.rec.to_le_bytes());
+            out.extend_from_slice(&e.pos.to_le_bytes());
+            let (tag, kind) = shape_tags(e.shape);
+            out.push(tag);
+            out.push(kind);
+        }
+        let bytes = store.raw_bytes();
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(bytes);
+        std::fs::write(path, &out)?;
+        Ok(true)
+    }
+
+    /// @PLN14 arc F — restore a [`save_session_image`](Self::save_session_image).
+    ///
+    /// **Fail-closed by construction.** Every way the image can be wrong — absent,
+    /// truncated, wrong magic or version, a layout key that does not match this
+    /// build's schema, or a store arena `Store::from_bytes` rejects — returns a
+    /// [`ImageLoad`] refusal and leaves the session **untouched**, so the caller
+    /// falls back to a fresh session (or to the shipped text-replay resume). The
+    /// image is never partially applied and a mismatch never miscomputes.
+    ///
+    /// The caller must have replayed the session's **type definitions** first: the
+    /// layout key is computed against the current schema, so an image referencing
+    /// a struct this session has not defined is correctly refused.
+    pub fn load_session_image(&mut self, path: &Path) -> ImageLoad {
+        let Ok(bytes) = std::fs::read(path) else {
+            return ImageLoad::Missing;
+        };
+        let Some((env, store_bytes, key)) = Self::decode_session_image(&bytes) else {
+            return ImageLoad::Malformed;
+        };
+        // Build the candidate env FIRST so the layout key is computed over exactly
+        // the types the image references, then compare against this build.
+        let saved_env = std::mem::replace(&mut self.env, env);
+        let matches = self.env_layout_key() == Some(key);
+        if !matches {
+            self.env = saved_env; // untouched — nothing was applied
+            return ImageLoad::SchemaMismatch;
+        }
+        let Some(store) = crate::store::Store::from_bytes(&store_bytes) else {
+            self.env = saved_env;
+            return ImageLoad::Malformed;
+        };
+        self.session_store = Some(store);
+        ImageLoad::Loaded
+    }
+
+    /// Parse an image into `(env, store bytes, layout key)`; `None` on anything
+    /// malformed.  Pure decoding — it applies nothing.
+    fn decode_session_image(
+        bytes: &[u8],
+    ) -> Option<(
+        std::collections::HashMap<String, SessionValue>,
+        Vec<u8>,
+        u64,
+    )> {
+        let mut at = 0usize;
+        let take = |at: &mut usize, n: usize| -> Option<&[u8]> {
+            let end = at.checked_add(n)?;
+            let out = bytes.get(*at..end)?;
+            *at = end;
+            Some(out)
+        };
+        if take(&mut at, SESSION_IMAGE_MAGIC.len())? != SESSION_IMAGE_MAGIC {
+            return None;
+        }
+        let version = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?);
+        if version != SESSION_IMAGE_VERSION {
+            return None;
+        }
+        let key = u64::from_le_bytes(take(&mut at, 8)?.try_into().ok()?);
+        let count = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?) as usize;
+        let mut env = std::collections::HashMap::with_capacity(count);
+        for _ in 0..count {
+            let mut text = || -> Option<String> {
+                let n = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?) as usize;
+                String::from_utf8(take(&mut at, n)?.to_vec()).ok()
+            };
+            let name = text()?;
+            let type_name = text()?;
+            let rec = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?);
+            let pos = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?);
+            let tag = *take(&mut at, 1)?.first()?;
+            let kind = *take(&mut at, 1)?.first()?;
+            let shape = shape_from_tags(tag, kind)?;
+            env.insert(
+                name,
+                SessionValue {
+                    type_name,
+                    rec,
+                    pos,
+                    shape,
+                },
+            );
+        }
+        let len = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?) as usize;
+        let store_bytes = take(&mut at, len)?.to_vec();
+        Some((env, store_bytes, key))
+    }
+
+    /// @PLN14 arc H — evaluate one line and **return** its rendered value instead
+    /// of printing it: the in-process eval API for an embedder or a GUI
+    /// (@PLN12's absorbed REPL.T tail).
+    ///
+    /// `Ok(Some(text))` for an expression that produced a value, `Ok(None)` for a
+    /// statement that did not (a binding, a definition, a `print`), and `Err` with
+    /// the diagnostics on a parse or runtime error. The session advances exactly
+    /// as it would through [`eval`](Self::eval) — this is the same evaluation, with
+    /// the value handed back rather than written to stdout.
+    ///
+    /// Nearly free at this point: the value is already store-resident and the
+    /// renderers (`show_loft` / `render_capture`) already exist, so a bare name
+    /// is answered from the session store without replaying the body at all.
+    ///
+    /// # Errors
+    /// Returns the diagnostics when the input does not parse or the run faults.
+    pub fn eval_value(&mut self, input: &str) -> Result<Option<String>, Vec<DiagEntry>> {
+        if Parser::statement_incomplete(input) {
+            return Ok(None);
+        }
+        // A bare name with a store-resident value: answer from the store, no
+        // generation compiled (the arc-E flip, used here regardless of the
+        // observe flag — this API has no stdout to keep byte-identical).
+        if self.paused.is_none()
+            && let Some(name) = self.store_resident_name(input)
+            && let Some(v) = self.env_value(&name)
+        {
+            return Ok(Some(v));
+        }
+        // A binding / definition advances the session but yields no value.
+        if Parser::starts_top_level_def(input) || Self::binding_name(input).is_some() {
+            return match self.eval(input) {
+                Eval::Error(diags) => Err(diags),
+                _ => Ok(None),
+            };
+        }
+        // Otherwise it is an expression: render it.
+        Ok(self.value_of(input))
+    }
+
+    /// @PLN14 arc G — how many records the session store currently holds (`0`
+    /// before the first binding).  Exposed so the re-bind growth guard can assert
+    /// that orphaned records are actually released; the arena's byte size is
+    /// pre-allocated and therefore says nothing.
+    #[must_use]
+    pub fn session_store_records(&self) -> usize {
+        self.session_store
+            .as_ref()
+            .map_or(0, crate::store::Store::claims_count)
+    }
+
+    /// @PLN14 arc A — the names that currently have a store-resident value.
+    #[must_use]
+    pub fn env_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.env.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// If `input` is a simple binding `<name> = <expr>` (not `==`/`+=`/…),
@@ -3282,6 +4385,26 @@ impl ReplSession {
         let names = self.bound_var_names();
         if names.is_empty() {
             return Ok(false);
+        }
+        // @PLN14 arc E — answer from the session store when EVERY bound name has a
+        // value there.  All-or-nothing on purpose: a name the snapshot path
+        // declined has no store entry, and printing a partial list from one source
+        // and the rest from another would be worse than replaying.
+        if self.store_observe {
+            let mut lines = Vec::with_capacity(names.len());
+            for n in &names {
+                let Some(v) = self.env_display(n) else {
+                    lines.clear();
+                    break;
+                };
+                lines.push(format!("{n} = {v}"));
+            }
+            if lines.len() == names.len() {
+                for line in lines {
+                    println!("{line}");
+                }
+                return Ok(true);
+            }
         }
         // Append one `println("name = {name}")` per variable after the body, so
         // a single run renders every current value through the same path a bare

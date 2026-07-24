@@ -1,0 +1,5 @@
+//! expect: [[10000000001,2],[3,4]]
+fn main() {
+  v: vector<vector<integer>> = [[10000000001, 2], [3, 4]];
+  println("{v}");
+}

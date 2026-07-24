@@ -126,6 +126,11 @@ semantics live in [binding.md](binding.md); here it is just one more thing `⤳`
 
   elimination (discharge — REQUIRED; there is NO  τ? ⤳ τ)
   (N-Coal)     Γ ⊢ e ⇒ τ?,  Γ ⊢ d ⇐ τ                ⟹   Γ ⊢ (e ?? d) ⇒ τ
+  (N-Default)  Γ ⊢ e ⇒ τ?,  has_default(τ)           ⟹   Γ ⊢ e? ⇒ τ            (@PLN116)
+               the TYPE's default discharges:  e?  ≡  e ?? construct_default(τ).
+               `has_default(τ)` is a STATIC side-condition — where it fails, `e?` is a
+               COMPILE error, never a runtime one (§ Defaults below).  The pairing is the
+               mnemonic: `??` = the default YOU give, `?` = the default the TYPE gives.
   (N-Match)    match e { null ⇒ …,  x ⇒ …(x:τ)… }      eliminates τ?, binds the τ arm
   (N-Store)    storing  e:τ?  into a  τ  slot without discharge is REJECTED — a WARNING for
                most τ (the null is representable-and-distinct in τ's non-null form), a hard
@@ -217,6 +222,99 @@ So `bytes_for(τ?)` and the sentinel-vs-tag choice are *consequences* of `τ`, n
 
 (Design + the evidence that the old implicit default-nullable rewrite broke parametricity
 and forced materialisation: [../plans/25-nullable-sequences/storage-vs-access-nullability.md](../plans/25-nullable-sequences/storage-vs-access-nullability.md).)
+
+### Defaults — `construct_default` and the `x?` discharge (@PLN116)
+
+`(N-Default)` discharges a `τ?` with **the type's own** default. That default is ONE partial
+function on types, shared with the `S{}` zero value (one home per fact,
+[Goal E](../GOALS.md)) — so `x?` and `S{}` can never disagree about what a `τ` defaults to.
+
+```
+  construct_default : τ ⇀ value        PARTIAL — has_default(τ) is exactly its domain
+
+  (D-Scalar)   construct_default(Integer[r]) = 0            (every width)
+               construct_default(Float)   = 0.0
+               construct_default(Single)  = 0.0f
+               construct_default(Boolean) = false
+               construct_default(Character) = '\0'
+  (D-Text)     construct_default(text)      = ""
+  (D-Coll)     construct_default(vector<τ>) = []            (likewise every keyed collection)
+  (D-Opt)      construct_default(τ?)        = null          an optional's default IS null
+  (D-Enum)     construct_default(Enum E)    = the FIRST-DECLARED variant of E
+  (D-Rec)      construct_default(S)         = S{f₁ = d₁ … fₙ = dₙ}
+                 where dᵢ = the field's `= expr` when given, else construct_default(τᵢ)
+                 REQUIRES  ∀i. has_default_field(fᵢ)
+
+  the two places the domain STOPS — has_default = FALSE, so `x?` (and `S{}`) is a COMPILE error
+  (D-NoRef)    has_default(&τ) = FALSE
+                 a bare reference / non-null DbRef has no zero: there is no "the null pointer"
+                 in a language whose storage is non-null by default.
+  (D-NoEnumF)  has_default_field(f : E) = FALSE  when E is a BARE (non-optional) enum and f
+               carries no `= expr`.
+                 An enum's 0 IS its null (variants are 1-based), so a non-null enum field may
+                 not silently zero-fill to it; and choosing a variant as a record's default is
+                 a real decision the author must make.  Fix by supplying the field, giving it
+                 `= <variant>`, or typing it `E?` — which then defaults to `null` by (D-Opt).
+```
+
+**In words.** Every type either has one obvious zero or it has none, and `x?` is exactly
+"discharge with that zero". Scalars go to `0`/`false`/`'\0'`, `text` to `""`, collections to
+empty, a record to itself with every field defaulted. Two things genuinely have no zero, and
+for those `x?` does not compile — you must say what you mean with `??` or `match`.
+
+**The partiality is a TYPE rule, not a runtime one.** This is what keeps `x?` consistent with
+"no *runtime* errors, ever" ([C80](../DESIGN_DECISIONS.md)): `x?` never fails at run time
+because the cases where no default exists are rejected at *compile* time. `has_default` is a
+static well-definedness condition on the operator, in the same family as `(N-Cast)`'s
+provable-fit requirement — not a check that can fire on a value.
+
+**A bare enum discharges positionally — say it out loud.** `(D-Enum)` makes `x?` on an enum
+mean *the first-declared variant*, so **reordering the variants silently changes what `x?`
+does**, while `x ?? Colour.Red` is order-independent. That asymmetry is deliberate (a bare
+enum has to default to *something*, and first-declared is the only choice that needs no extra
+declaration), but it means `?` on an enum trades an explicit choice for a positional one.
+Prefer `??` where the variant matters. Note the contrast with `(D-NoEnumF)`: a *bare* enum
+discharges to its first variant, yet an enum *field inside a record* refuses to — because
+defaulting a whole record silently is a much bigger claim than defaulting one expression.
+
+**At a text parse, `?` composes with the CHECKED cast, not the asserting one.** A bare
+`s as integer` on text is ill-typed under `(N-Cast)` — a parse cannot be *asserted* — so
+`(s as integer)?` is rejected by the inner cast, before `(N-Default)` is ever reached; its
+premise `Γ ⊢ e ⇒ τ?` simply does not hold. The composable form is the checked cast first:
+
+```loft
+(s as integer?)?          // integer   — checked cast ⇒ integer?, then `?` ⇒ 0 on a bad parse
+s as integer ?? 0         // integer   — the assert-or-default form `(N-Cast)` licenses
+s as integer              // COMPILE ERROR — an assertion a parse can't discharge
+```
+
+This is not a gap in `(N-Default)`: `?` discharges the parse result exactly like any other
+`τ?`. Only the *asserting* spelling is refused, and it is refused for reasons that have
+nothing to do with `?`.
+
+**Falsifying programs.**
+
+```loft
+// (D-Enum) — obeying the rule and reordering the enum disagree
+enum Colour { Red, Green, Blue }
+c: Colour? = null;
+c?                        // Red.  Swap Red/Green in the declaration and this becomes Green.
+
+// (D-NoEnumF) — a record whose enum field has no default cannot itself default
+struct Pixel { tint: Colour, x: integer }
+p: Pixel? = null;
+p?                        // COMPILE ERROR: `tint` is a bare enum with no `= expr`
+                          // fixes: `tint: Colour = Colour.Red`, or `tint: Colour?`
+
+// (D-Opt) — an optional defaults to null, so `?` on it is a no-op, not an unwrap
+o: integer? = null;
+o?                        // 0        (τ = integer here — `?` discharges the outer optional)
+
+// (D-Rec) — the default is structural, not a shared instance (see operational.md E-Default)
+struct P { x: integer, y: integer }
+q: P? = null;
+q?                        // P{x:0, y:0}
+```
 
 ### Null-flow — the general laws, across EVERY type (@PLN102, 2026-07-11)
 

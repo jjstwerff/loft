@@ -56,8 +56,18 @@ use std::env;
 use std::sync::{Arc, Mutex};
 
 fn print_help() {
-    println!("usage: loft [options] <file>");
-    println!("       loft --tests [dir]");
+    println!("usage: loft [options] <file>     run a loft program");
+    println!("       loft                       start the interactive REPL");
+    println!("       loft --tests [dir]         run a directory of tests");
+    println!();
+    // The option list below is long; a newcomer's two most likely actions are
+    // "run this file" and "poke at the language", so both are named up here
+    // rather than left to be found ~60 lines down.
+    println!("Getting started:");
+    println!("  loft hello.loft               run a program (compiles via rustc when available,");
+    println!("                                otherwise interprets — a downloaded release always");
+    println!("                                interprets, which is normal, not a fallback to fix)");
+    println!("  loft                          type loft and see results immediately");
     println!();
     println!("Options:");
     println!("  --version                     print version information");
@@ -1815,6 +1825,14 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
     {
         eprintln!(
             "loft new: library name must be lowercase ascii + digits + underscore (got `{name}`)"
+        );
+        return 1;
+    }
+    // A library may not claim a language-namespace name (`std`, `core`): those
+    // resolve to a built-in namespace, not a package (@PLN13 / C101).
+    if loft::libscan::is_reserved_package_name(name) {
+        eprintln!(
+            "loft new: `{name}` is a reserved namespace name (the standard library is `std::`); choose another library name"
         );
         return 1;
     }
@@ -5894,13 +5912,22 @@ fn main() {
     // `--script` remains an explicit request but is now redundant with auto-detect.
     // A desugared source (auto or `--script`) bypasses the whole-program cache, which is
     // keyed by the file on disk, not the transformed source.
-    let script_desugared: Option<String> = if abs_file.is_empty() {
-        None
-    } else {
-        std::fs::read_to_string(&abs_file)
-            .ok()
-            .and_then(|src| loft::script::script_desugar(&src))
-    };
+    // T0.2 — keep the desugar's line map beside the generated source: the desugar
+    // hoists defs and inserts lines, so a diagnostic carries GENERATED coordinates
+    // until it is mapped back (which also restores the source snippet, since the
+    // renderer then looks up a line the user's file actually has).
+    let (script_desugared, script_line_map): (Option<String>, Option<Vec<u32>>) =
+        if abs_file.is_empty() {
+            (None, None)
+        } else {
+            match std::fs::read_to_string(&abs_file)
+                .ok()
+                .and_then(|src| loft::script::script_desugar_mapped(&src))
+            {
+                Some((out, map)) => (Some(out), Some(map)),
+                None => (None, None),
+            }
+        };
     let program_cache_on =
         loft::cache::program_cache_enabled() && script_desugared.is_none() && !script_mode;
     p.track_sources = program_cache_on;
@@ -5985,6 +6012,12 @@ fn main() {
                 p.parse(&abs_file, false);
             }
         }
+    }
+    // T0.2 — put every diagnostic back into the user's line numbers before anything
+    // reads or renders them.  Done here, right after the parse that produced them,
+    // so no consumer downstream ever sees generated coordinates.
+    if let Some(map) = script_line_map.as_deref() {
+        p.diagnostics.remap_lines(&abs_file, map);
     }
     // @PLN90 W5 — the enforced copy lint: route every Avoidable structure copy
     // through the Warning channel so it surfaces with the other diagnostics.
@@ -7154,6 +7187,12 @@ globalThis.loftPush=(m)=>{{inQ.push(enc.encode(String(m)));}};
 const ctrl={{ac:null,httpBytes:null}};
 const imports={{loft_io:{{
   loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
+  // #620: the browser CLOCK bridge.  This target has no std clock, so without
+  // these `now()`/`ticks()` returned a hardcoded 0 — every duration measured
+  // 0ms silently.  `performance.now()` is monotonic and page-relative, which is
+  // exactly `ticks()`'s contract.
+  loft_host_time_now_ms:()=>Date.now(),
+  loft_host_time_ticks_us:()=>performance.now()*1000,
   loft_host_input_len:()=>inQ.length?inQ[0].length:0,
   loft_host_input_copy:(ptr)=>{{const b=inQ.shift();if(b)new Uint8Array(mem.buffer,ptr,b.length).set(b);}},
   loft_host_output:(ptr,len)=>{{const m=dec.decode(new Uint8Array(mem.buffer,ptr,len));
@@ -7544,12 +7583,13 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 let healed = native_utils::loft_source_tree()
                     .is_some_and(|tree| native_utils::rebuild_runtime(&tree, reason));
                 if !healed && !native_requested {
-                    eprintln!(
-                        "Warning: native compilation unavailable ({reason}); falling \
-                         back to the interpreter. To restore native, rebuild from source \
-                         (`cargo build --release`) — a downloaded release ships no native \
-                         runtime and always runs interpreted."
-                    );
+                    // T0.1 — SILENT on the default path.  The user did not ask for
+                    // native, and a downloaded release ships no native runtime by
+                    // design, so "rebuild from source" is not an action they want:
+                    // it reads as a defect report on a run that is about to succeed.
+                    // The reason is still recorded below and surfaced to whoever DID
+                    // ask (`--native`, or `LOFT_REQUIRE_NATIVE`, which hard-errors
+                    // with it) — silence here costs no diagnosis.
                     native_fallback_reason = Some(format!(
                         "native compilation unavailable ({reason}); rebuild loft"
                     ));
@@ -7681,13 +7721,25 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     // rather than failing.  This is the moment the old up-front
                     // probe used to fire; doing it here means a warm cache hit
                     // never pays for a `rustc --version` spawn.
-                    eprintln!("Warning: rustc not found, falling back to interpreter mode");
+                    // T0.1 — only explain when native was explicitly asked for.
+                    if native_requested {
+                        eprintln!(
+                            "loft: rustc not found — `--native` needs a Rust toolchain \
+                             on PATH; running interpreted instead."
+                        );
+                    }
                     native_fallback_reason = Some("rustc not found".to_string());
                     let _ = std::fs::remove_file(&emit_path);
                     break 'native;
                 }
                 Err(e) => {
-                    eprintln!("Warning: rustc check failed ({e}), falling back to interpreter");
+                    // T0.1 — as above: explain only on an explicit request.
+                    if native_requested {
+                        eprintln!(
+                            "loft: rustc could not be launched ({e}) — `--native` needs a \
+                             working Rust toolchain; running interpreted instead."
+                        );
+                    }
                     native_fallback_reason = Some(format!("rustc could not be launched ({e})"));
                     let _ = std::fs::remove_file(&emit_path);
                     break 'native;
@@ -7723,13 +7775,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 && !native_requested
                 && (crate_resolution_failure || rlib_format_failure)
             {
-                eprintln!(
-                    "Warning: native toolchain not usable here (cached build stale \
-                     after a rustc update, or loft's runtime library unavailable); \
-                     falling back to the interpreter. To restore native, rebuild from \
-                     source (`cargo build --release`) — a downloaded release ships no \
-                     native runtime and always runs interpreted."
-                );
+                // T0.1 — silent on the default path (see the rustc-mismatch arm above).
                 native_fallback_reason = Some(
                     "native toolchain not usable here (cached build stale after a rustc \
                      update, or loft's runtime library unavailable); rebuild loft"

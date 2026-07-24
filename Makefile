@@ -193,7 +193,7 @@ doctor:
 # `--native` build fails `E0514: crate loft_ffi compiled by an incompatible
 # version of rustc`.  Keep only the newest (the just-built, current-rustc)
 # loft_ffi rlib so exactly one, matching, copy is installed.
-install-artifacts: check-targets all
+install-artifacts: check-targets all wasm-html-mt-lib
 	@cargo build --release --target wasm32-wasip2 --lib --no-default-features --features random
 	@cargo build --release --target wasm32-unknown-unknown --lib --no-default-features --features random
 	@cargo build --release --lib --no-default-features --features mmap,random,threading,native-extensions,registry,remote-store --target-dir target/install-lib
@@ -226,6 +226,17 @@ install:
 	@sudo install -m 644 target/wasm32-unknown-unknown/release/libloft.rlib /usr/local/share/loft/wasm32-unknown-unknown/
 	@sudo rm -f /usr/local/share/loft/wasm32-unknown-unknown/deps/*.rlib
 	@sudo cp target/wasm32-unknown-unknown/release/deps/*.rlib /usr/local/share/loft/wasm32-unknown-unknown/deps/
+	@if [ -f target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib ]; then \
+	  echo "install: shipping the threaded browser runtime (html-mt)"; \
+	  sudo install -d /usr/local/share/loft/html-mt/wasm32-unknown-unknown/deps; \
+	  sudo install -m 644 target/loft/html-mt/wasm32-unknown-unknown/release/libloft.rlib \
+	    /usr/local/share/loft/html-mt/wasm32-unknown-unknown/; \
+	  sudo rm -f /usr/local/share/loft/html-mt/wasm32-unknown-unknown/deps/*.rlib; \
+	  sudo cp target/loft/html-mt/wasm32-unknown-unknown/release/deps/*.rlib \
+	    /usr/local/share/loft/html-mt/wasm32-unknown-unknown/deps/; \
+	else \
+	  echo "install: no threaded browser runtime built — 'loft --html --threads' will report it"; \
+	fi
 	@sudo chmod -R a+rX /usr/local/share/loft
 	@sudo install -m 755 target/release/loft /usr/local/bin/loft
 	@smoke="$${TMPDIR:-/tmp}/loft-install-smoke.loft"; \
@@ -1049,6 +1060,32 @@ par-gates:
 # is browser-only by nature, so the host `cargo clippy --all-features` never sees
 # it; this is where it gets compiled.  Same recipe the `--html` threaded build
 # uses, minus the link step.
+# #619 — BUILD the threaded browser runtime (the `html-mt` shape) so `make
+# install` can ship it.  Without this the installed loft has only the plain
+# `wasm32-unknown-unknown` shape, so `--html --threads` finds no threaded
+# runtime and falls back to a single-threaded page — the half of #619 that the
+# silent-fallback diagnostic reports but could not fix.
+#
+# NIGHTLY-CONDITIONAL by necessity: only `-Z build-std` can produce a std
+# compiled with wasm atomics, and that is nightly-only.  A stable-only box skips
+# it with a message and installs everything else; `--html --threads` then says
+# exactly what is missing (the #619 diagnostic) instead of silently degrading.
+wasm-html-mt-lib:
+	@if ! rustup run nightly rustc -V >/dev/null 2>&1; then \
+	  echo "skip: threaded browser runtime needs the nightly toolchain (rustup toolchain install nightly)"; \
+	  echo "      installing without it — 'loft --html --threads' will report the missing runtime."; \
+	elif ! rustup run nightly rustc --print sysroot 2>/dev/null | xargs -I{} test -d {}/lib/rustlib/src/rust; then \
+	  echo "skip: threaded browser runtime needs rust-src (rustup component add rust-src --toolchain nightly)"; \
+	  echo "      installing without it — 'loft --html --threads' will report the missing runtime."; \
+	else \
+	  echo "building the threaded browser runtime (html-mt) — build-std, one-time"; \
+	  RUSTFLAGS='$(WASM_MT_RUSTFLAGS)' \
+	  rustup run nightly cargo build --release --lib --target wasm32-unknown-unknown \
+	    --no-default-features --features "random wasm-native-threads" \
+	    --target-dir target/loft/html-mt -Zbuild-std=panic_abort,std \
+	  || { echo "FAIL: threaded browser runtime build"; exit 1; }; \
+	fi
+
 check-wasm-threads:
 	RUSTFLAGS='-Ctarget-feature=+atomics,+bulk-memory,+mutable-globals' \
 	rustup run nightly cargo check --lib --target wasm32-unknown-unknown \
@@ -1610,3 +1647,18 @@ loft-test:
 	else \
 		echo "All loft tests passed."; \
 	fi
+
+# T1.1 — link rot in user-facing Markdown (root + doc/, excluding the
+# agent-facing doc/claude/ which has its own drift checker).
+#   make linkcheck            relative links only — offline, fast, deterministic
+#   make linkcheck-external   also HEAD every http(s) link
+# Deliberately NOT part of `make ci`: an external-link check makes the build
+# depend on other people's uptime, buying flakiness for a class of rot that
+# moves slowly.  Nightly is its home; there a red run is information, not a
+# blocked merge.
+.PHONY: linkcheck linkcheck-external
+linkcheck:
+	scripts/linkcheck.sh
+
+linkcheck-external:
+	scripts/linkcheck.sh --external

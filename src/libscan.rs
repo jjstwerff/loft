@@ -24,6 +24,29 @@
 //!     capitalised, so `Color::Red` / `Shape::Circle` are never candidates.
 //!   * comments and plain (non-interpolated) string text are skipped.
 
+/// Package names reserved for a language namespace — a library may not claim
+/// one, because it resolves to a built-in namespace rather than a package
+/// (@PLN13 / [C101](../doc/claude/DESIGN_DECISIONS.md)):
+///
+///   * `std` — the standard library. `std::name` is the stdlib's qualified form
+///     and the escape hatch when a bare name is shadowed (by a user definition
+///     or a `use lib::*` import — see C97/C98). It is already bound in `data.rs`
+///     (`use_names["std"] = STD_SOURCE`), so a `std` library could never override
+///     it — reserving the *name* keeps it from being claimed or confused.
+///   * `core` — held for a possible future stdlib-core split (cf. Rust). Free to
+///     reserve pre-freeze; a compat break to add after the contract-1 freeze.
+///
+/// Enforced at `loft new` (creation) and honoured by the registry submission
+/// gate. This is the canonical list.
+pub const RESERVED_PACKAGE_NAMES: &[&str] = &["std", "core"];
+
+/// True when `name` is a [`RESERVED_PACKAGE_NAMES`] entry, i.e. a library may
+/// not be named `name` because it collides with a language namespace.
+#[must_use]
+pub fn is_reserved_package_name(name: &str) -> bool {
+    RESERVED_PACKAGE_NAMES.contains(&name)
+}
+
 #[inline]
 fn is_ident_start(c: u8) -> bool {
     c.is_ascii_alphabetic() || c == b'_'

@@ -19,7 +19,7 @@ Photoreal organic humans/animals are explicitly **out of scope** (perception-den
 topology-subtle — the same hard edge as realistic 2D faces); the target is readable,
 posable, animatable creatures, not sculpted realism.
 
-This is the **3D instantiation of the drawing method** ([`DRAWING.md`](../../../../DRAWING.md),
+This is the **3D instantiation of the drawing method** ([`DRAWING.md`](../../DRAWING.md),
 the `draw` skill): the same loop — frozen intent → block-in → exact metric checks →
 render → cold-observe critique → iterate — now where the *renderer does the
 value/form modelling* that was the 2D ceiling, and the work is mostly specification
