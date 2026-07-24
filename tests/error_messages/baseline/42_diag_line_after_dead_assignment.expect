@@ -1,0 +1,22 @@
+==== exit: 1 ====
+==== stdout ====
+==== stderr ====
+warning: Dead assignment — 'c' is overwritten before being read
+  --> <cases>/42_diag_line_after_dead_assignment.loft:16:9
+   |
+16 |   c = 1;
+   |         ^
+
+warning: Dead assignment — 'c' is overwritten before being read
+  --> <cases>/42_diag_line_after_dead_assignment.loft:17:9
+   |
+17 |   c = 2;
+   |         ^
+
+error: Unknown function printt — did you mean 'print'?
+  --> <cases>/42_diag_line_after_dead_assignment.loft:19:3
+   |
+19 |   printt("x");
+   |   ^
+
+error: aborting due to 1 previous error
