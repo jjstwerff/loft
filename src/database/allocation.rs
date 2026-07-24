@@ -2802,12 +2802,29 @@ impl Stores {
             Self::refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
-        // Range needs an ordered collection.
-        let Parts::Sorted(content_tp, _) = self.types[tp as usize].parts else {
+        // Range needs an ordered collection — `Sorted`, or its promoted `Ordered`
+        // form (a sorted collection whose element type is shared, renamed by
+        // `finish()`; without this a promoted sorted refused even as a plain local).
+        //
+        // NOT descended into a struct field like the hash loaders (#632): a paged
+        // range over a sorted collection declared as a struct field reads the flat
+        // element vector at the field's claim slot, which holds for a plain sorted
+        // but NOT for a promoted/linked `ordered` field (its elements sit behind an
+        // indirection the positional reader can't follow — whole-image `store_load`
+        // handles it). Since promotion depends on unrelated program structure,
+        // supporting the field form here would work or silently mis-read depending
+        // on whether the element type is shared. So a sorted collection declared as
+        // a field refuses AUDIBLY (its `known_type` is the wrapper struct) — the
+        // remaining @PLN97 arc G work. Hash-as-field IS supported (Hash never
+        // promotes, so its field layout is stable).
+        let Some(Parts::Sorted(content_tp, _) | Parts::Ordered(content_tp, _)) =
+            self.types.get(tp as usize).map(|t| &t.parts)
+        else {
             let reason = self.wrong_collection_reason(tp, "a sorted collection");
             Self::refuse_paged(path, &reason);
             return 0;
         };
+        let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
             Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
             return 0;
@@ -2980,6 +2997,48 @@ impl Stores {
         )
     }
 
+    /// @PLN97 arc G / #632 — the keyed-collection type a paged loader should use,
+    /// given the bound store's `known_type` and the target ref.
+    ///
+    /// When the store roots the collection DIRECTLY (`known_type` is
+    /// `Hash`/`Sorted`/`Index` — the annotated-local idiom `h: hash<T[k]> = []`),
+    /// that IS the type. When the collection is declared as a struct FIELD
+    /// (`struct Wrap { data: hash<T[k]> }`), the store roots the WRAPPER struct and
+    /// the collection is the field the target ref points at — `local.pos` is that
+    /// field's byte offset, exactly where `find_hash_entry` reads the collection
+    /// root claim in both the image and the target. So descend to the field at
+    /// `local.pos` whose type is a keyed collection. `u16::MAX` when `tp` is a
+    /// struct with no keyed-collection field there (a genuinely wrong shape).
+    #[cfg(feature = "remote-store")]
+    fn paged_collection_type(&self, tp: u16) -> u16 {
+        // `Ordered` is the PROMOTED form of `Sorted` (`finish()` renames a
+        // sorted collection whose element is shared by >1 container), so a
+        // collection that is `Sorted` in a small program is `Ordered` in one where
+        // its element is reused — both are the same keyed collection here.
+        let is_keyed = |t: u16| {
+            matches!(
+                self.types[t as usize].parts,
+                Parts::Hash(..) | Parts::Sorted(..) | Parts::Ordered(..) | Parts::Index(..)
+            )
+        };
+        match &self.types[tp as usize].parts {
+            _ if is_keyed(tp) => tp,
+            Parts::Struct(fields) | Parts::EnumValue(_, fields) => {
+                // The target ref's `pos` is the collection's claim slot, NOT the
+                // struct field offset, so it can't select the field. A wrapper with
+                // exactly ONE keyed-collection field is the reported idiom (`struct
+                // Wrap { data: hash<T[k]> }`) and unambiguous; use it. A struct with
+                // several keyed fields can't be disambiguated yet → refuse.
+                let mut keyed = fields.iter().filter(|f| is_keyed(f.content));
+                match (keyed.next(), keyed.next()) {
+                    (Some(f), None) => f.content,
+                    _ => u16::MAX,
+                }
+            }
+            _ => u16::MAX,
+        }
+    }
+
     /// True when an entry of type `content_tp` can be partially loaded today —
     /// every field is [copyable](Stores::is_copyable_field). Otherwise the
     /// collection is refused (safe-refusal, never a broken heap).
@@ -3016,16 +3075,18 @@ impl Stores {
             return false;
         };
         let mut reader = PagedReader::new(source);
-        let tp = self.allocations[local.store_nr as usize].known_type;
-        if tp == u16::MAX {
+        let root_tp = self.allocations[local.store_nr as usize].known_type;
+        if root_tp == u16::MAX {
             Self::refuse_paged(path, "the target collection's store has no recorded type");
             return false;
         }
-        let Parts::Hash(content_tp, _) = self.types[tp as usize].parts else {
-            let reason = self.wrong_collection_reason(tp, "a hash");
+        let tp = self.paged_collection_type(root_tp); // field form → the field's hash (#632)
+        let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
+            let reason = self.wrong_collection_reason(root_tp, "a hash");
             Self::refuse_paged(path, &reason);
             return false;
         };
+        let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
             Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
             return false;
@@ -3057,11 +3118,15 @@ impl Stores {
         let mut reader = PagedReader::new(source);
 
         // Schema from the LIVE type of `local` (never reverse-engineered bytes).
-        let tp = self.allocations[local.store_nr as usize].known_type;
-        if tp == u16::MAX {
+        // `known_type` roots the collection directly (annotated local) OR the
+        // wrapper struct when the collection is a field (#632) — resolve to the
+        // collection either way.
+        let root_tp = self.allocations[local.store_nr as usize].known_type;
+        if root_tp == u16::MAX {
             Self::refuse_paged(path, "the target collection's store has no recorded type");
             return 0;
         }
+        let tp = self.paged_collection_type(root_tp);
         // SAFE REFUSAL (3b.1) — `load_one` can copy an entry whose fields are
         // inline-scalar (raw word-copy) or `text` (relocated string, 3b.2). A
         // vector / nested / reference field still needs the recursive relocating
@@ -3069,11 +3134,12 @@ impl Stores {
         // rather than build a heap with a dangling pointer. `store_verify` would
         // catch a broken copy — this makes sure one is never built.
         // Only Hash supported so far (Sorted lands at 3b.7).
-        let Parts::Hash(content_tp, _) = self.types[tp as usize].parts else {
-            let reason = self.wrong_collection_reason(tp, "a hash");
+        let Some(Parts::Hash(content_tp, _)) = self.types.get(tp as usize).map(|t| &t.parts) else {
+            let reason = self.wrong_collection_reason(root_tp, "a hash");
             Self::refuse_paged(path, &reason);
             return 0;
         };
+        let content_tp = *content_tp;
         if !self.is_copyable_entry(content_tp) {
             Self::refuse_paged(path, &self.not_copyable_reason(content_tp));
             return 0;

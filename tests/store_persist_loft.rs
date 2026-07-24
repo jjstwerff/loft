@@ -1045,12 +1045,14 @@ fn run_mode_with_stderr(script: &Path, path: &Path, mode: &str) -> (String, Stri
 /// shape. The layout gate already warns for exactly this reason; every other
 /// refusal now routes through the same channel.
 ///
-/// The shape here is the field-declared collection of #632: the bound store
-/// records the WRAPPER STRUCT as its type, so no hash is found. The refusal
-/// stands (fixing it is @PLN97 arc G); being audible is what this pins.
+/// #632 part 2 — a HASH declared as a struct field is now paged-loadable. The
+/// bound store records the WRAPPER STRUCT as its type; the loader descends to the
+/// keyed-collection field and loads it. The reported failure ("silently return
+/// nothing for a collection declared as a struct field") is gone: the key loads,
+/// the value is right, and the copied heap verifies.
 #[test]
-fn paged_refusal_on_field_declared_collection_is_audible() {
-    let dir = scratch("paged_refusal_is_audible");
+fn paged_load_accepts_a_hash_declared_as_a_struct_field() {
+    let dir = scratch("paged_field_accept");
     let path = dir.join("field.store");
     let script = workspace_root().join("tests/scripts/store_load_field_refusal.loft");
 
@@ -1059,17 +1061,40 @@ fn paged_refusal_on_field_declared_collection_is_audible() {
     assert!(w_out.contains("write ok"), "write failed: {w_out:?}");
 
     let (out, err, code) = run_mode_with_stderr(&script, &path, "loadkey");
+    assert_eq!(code, 0, "{out:?}\n{err:?}");
+    assert!(
+        out.contains("field loadkey=true len=1 n=7717 verify=true"),
+        "hash-as-field must load the key with the right value + sound heap: {out:?}"
+    );
+    assert!(
+        !err.contains("refusing"),
+        "the hash field form must no longer refuse: {err:?}"
+    );
+}
+
+/// #632 — a SORTED collection declared as a struct field still refuses (a
+/// promoted/linked `ordered` field's elements sit behind an indirection the
+/// positional range reader can't follow — @PLN97 arc G). What this pins is that
+/// the refusal is AUDIBLE, never a silent `0` indistinguishable from "key absent".
+#[test]
+fn paged_refusal_on_sorted_field_is_audible() {
+    let dir = scratch("paged_sorted_field_refusal");
+    let path = dir.join("sfield.store");
+    let script = workspace_root().join("tests/scripts/store_load_field_refusal.loft");
+
+    let (w_out, _, w_code) = run_mode_with_stderr(&script, &path, "write_sorted");
+    assert_eq!(w_code, 0, "{w_out:?}");
+    assert!(w_out.contains("write ok"), "write failed: {w_out:?}");
+
+    let (out, err, code) = run_mode_with_stderr(&script, &path, "loadrange_sorted");
     assert_eq!(code, 0, "{out:?}");
-    // The refusal itself — unchanged behaviour, still safe (loads nothing).
-    assert!(out.contains("field loadkey=false"), "{out:?}");
-    assert!(out.contains("field len=0"), "{out:?}");
-    // …but it must no longer be silent, and must name the cause and the fix.
+    assert!(out.contains("sorted loadrange=0 len=0"), "{out:?}");
     assert!(
         err.contains("refusing") && err.contains("not an absent key"),
         "a refusal must be reported, not silent; stderr was: {err:?}"
     );
     assert!(
-        err.contains("FWrap") && err.contains("annotated local"),
+        err.contains("SWrap") && err.contains("annotated local"),
         "the warning must name the wrapper type and the fix; stderr was: {err:?}"
     );
 }
