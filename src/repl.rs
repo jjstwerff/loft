@@ -1378,6 +1378,21 @@ struct GameProc {
     output: std::sync::Arc<std::sync::Mutex<String>>,
 }
 
+/// @PLN14 arc D — one binding's frame-seed result, as the differential Step 4 is
+/// gated on.
+///
+/// `replayed` is what the slot held *before* seeding — the value the body replay
+/// put there, i.e. the model still known to be correct.  `seeded` is what it holds
+/// *after* the store-resident value was written in.  Step 4's whole safety
+/// argument is that these two are equal for every binding: the new path is checked
+/// against the old one rather than trusted.
+#[derive(Debug, Clone)]
+pub struct SeedReport {
+    pub name: String,
+    pub replayed: String,
+    pub seeded: String,
+}
+
 impl ReplSession {
     /// Start a session with the standard library loaded from `stdlib_dir`
     /// (e.g. `"default"`, or an absolute path to a release bundle's `default/`).
@@ -3409,6 +3424,208 @@ impl ReplSession {
                 Some(s)
             }
         }
+    }
+
+    /// @PLN14 arc D — **the frame-seed**: load prior names from the session store
+    /// into their slots in the currently paused frame, and report the
+    /// before/after differential per binding.
+    ///
+    /// This is the step where a prior-name reference *can* read from the store
+    /// instead of from a replayed literal. It is deliberately NOT wired into the
+    /// normal eval path yet: Step 4 proves the mechanism against the still-running
+    /// replay, and Step 5 is where observing switches over and the replay goes
+    /// away. Nothing calls this during an ordinary session, so it cannot change
+    /// behaviour.
+    ///
+    /// Only locals that are BOTH in the env and live in the frame are seeded;
+    /// anything else is left alone. Returns one entry per seeded binding, or an
+    /// empty vector when not paused.
+    ///
+    /// # Panics
+    /// Panics if the session store cannot be returned to the session (an
+    /// unreachable adopt/take mismatch).
+    pub fn seed_paused_frame(&mut self) -> Vec<SeedReport> {
+        let Some(mut state) = self.paused.take() else {
+            return Vec::new();
+        };
+        let Some(store) = self.session_store.take() else {
+            self.paused = Some(state);
+            return Vec::new();
+        };
+        let slot = state.database.adopt_store(store);
+        let data = self.parser.data.clone();
+        // What the REPLAY put in the slots, read through the same renderer the
+        // debugger's variables panel uses.
+        state.refresh_paused_frame(&data);
+        let before = Self::render_frame(&state, &data);
+
+        let mut seeded_names = Vec::new();
+        // Two names can resolve to the SAME slot: the compiler coalesces the stack
+        // slots of locals whose live ranges do not overlap (an assigned-but-never-
+        // read local shares with the next one).  Seeding both would silently
+        // clobber the first — so seed a slot once and skip the rest.  The skipped
+        // name is simply absent from the report, which makes the situation visible
+        // to the caller instead of producing a quietly wrong value.
+        let mut written: std::collections::HashSet<(u32, u32)> = std::collections::HashSet::new();
+        for (name, entry) in self.env.clone() {
+            let Some((dest, tp, _is_arg)) = state.frame_slot_addr(&name, &data) else {
+                continue; // not a local of this frame
+            };
+            if !written.insert((dest.rec, dest.pos)) {
+                continue; // slot already seeded by another (coalesced) binding
+            }
+            let src = crate::keys::DbRef {
+                store_nr: slot,
+                rec: entry.rec,
+                pos: entry.pos,
+            };
+            if Self::seed_one_slot(&mut state, &entry, &src, &dest, &tp) {
+                seeded_names.push(name);
+            }
+        }
+
+        state.refresh_paused_frame(&data);
+        let after = Self::render_frame(&state, &data);
+        self.session_store = Some(state.database.take_store(slot));
+        self.paused = Some(state);
+
+        seeded_names.sort();
+        seeded_names
+            .into_iter()
+            .map(|name| {
+                let pick = |m: &std::collections::HashMap<String, String>| {
+                    m.get(&name)
+                        .cloned()
+                        .unwrap_or_else(|| "<unreadable>".into())
+                };
+                SeedReport {
+                    replayed: pick(&before),
+                    seeded: pick(&after),
+                    name,
+                }
+            })
+            .collect()
+    }
+
+    /// The paused frame's locals as a name → rendered-value map.
+    ///
+    /// A **heap** local is rendered through `eval_frame_heap`, which dereferences
+    /// its `DbRef`; the captured frame's own rendering shows the slot's raw words
+    /// for those (`P{x:3,y:12884901900}` — a `DbRef` read as fields), which would
+    /// make the seed differential compare garbage to garbage.  Same precedence
+    /// `frame_value_of` uses.
+    fn render_frame(
+        state: &State,
+        data: &crate::data::Data,
+    ) -> std::collections::HashMap<String, String> {
+        let mut out: std::collections::HashMap<String, String> = state
+            .paused_frame()
+            .map(|h| h.locals.iter().cloned().collect())
+            .unwrap_or_default();
+        let names: Vec<String> = out.keys().cloned().collect();
+        for name in names {
+            if let Some(heap) = state.eval_frame_heap(&name, false, data) {
+                out.insert(name, heap);
+            }
+        }
+        out
+    }
+
+    /// Write one session-store value into the frame slot `dest` holds.
+    ///
+    /// A scalar is written raw (bit-exact, never through its literal). A heap
+    /// value is **materialized out of the session store into the run's own heap**
+    /// first — the same [`Stores::materialize`](crate::database::Stores::materialize)
+    /// chokepoint the bind side uses, run in the other direction — so the frame
+    /// gets its own copy and the session's master is never aliased into a slot the
+    /// running statement could mutate.
+    fn seed_one_slot(
+        state: &mut State,
+        entry: &SessionValue,
+        src: &crate::keys::DbRef,
+        dest: &crate::keys::DbRef,
+        tp: &Type,
+    ) -> bool {
+        match entry.shape {
+            SessionShape::Heap => {
+                let type_id = state.database.name(&entry.type_name);
+                if type_id == u16::MAX || !matches!(tp, Type::Reference(_, _) | Type::Vector(_, _))
+                {
+                    return false;
+                }
+                // A fresh store in the RUN's heap owns the frame's copy.
+                let home = state.database.database(SESSION_STORE_WORDS).store_nr;
+                let copy = state.database.materialize(src, type_id, home);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<crate::keys::DbRef>(dest.rec, dest.pos) = copy;
+                true
+            }
+            SessionShape::Scalar(kind) => Self::seed_scalar_slot(state, src, dest, kind),
+            // The wrapper is an implementation detail of the @P293 work-around, not
+            // a shape a frame slot ever has; seeding it would need the unwrapped
+            // text, which arc C stores inside the vector.  Left to Step 5.
+            SessionShape::TextInVector => false,
+        }
+    }
+
+    /// Raw slot write for a boxed scalar — bit-exact, no literal round-trip.
+    fn seed_scalar_slot(
+        state: &mut State,
+        src: &crate::keys::DbRef,
+        dest: &crate::keys::DbRef,
+        kind: ScalarKind,
+    ) -> bool {
+        let store = state.database.store(src);
+        match kind {
+            ScalarKind::Integer => {
+                let v = store.get_int(src.rec, src.pos);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<i64>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::Float => {
+                let v = store.get_float(src.rec, src.pos);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<f64>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::Single => {
+                let v = store.get_single(src.rec, src.pos);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<f32>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::Boolean => {
+                let v = u8::from(store.get_int(src.rec, src.pos) != 0);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<u8>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::Character => {
+                let v = store.get_u32_raw(src.rec, src.pos);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<u32>(dest.rec, dest.pos) = v;
+            }
+            ScalarKind::SimpleEnum => {
+                let v = u8::try_from(store.get_int(src.rec, src.pos)).unwrap_or(0);
+                *state
+                    .database
+                    .store_mut(dest)
+                    .addr_mut::<u8>(dest.rec, dest.pos) = v;
+            }
+            // Text needs the owned-`String` / borrowed-`Str` distinction the edit
+            // path makes (`set_frame_literal`); not part of Step 4's slice.
+            ScalarKind::Text => return false,
+        }
+        true
     }
 
     /// @PLN14 arc A — the names that currently have a store-resident value.

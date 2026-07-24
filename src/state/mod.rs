@@ -2427,6 +2427,36 @@ impl State {
         ))
     }
 
+    /// @PLN14 arc D — the live frame's slot for local `name`, as a [`DbRef`]
+    /// addressing it inside the stack store, plus its declared type and whether it
+    /// is an argument.  `None` when there is no current frame or no such local.
+    ///
+    /// This is the write end of the **frame-seed**: a store-resident binding is
+    /// loaded into its slot through this address, after which the ordinary
+    /// slot-based codegen runs untouched (Q1 — seeding needs no new opcodes).  It
+    /// is the same slot [`set_frame_literal`](Self::set_frame_literal) edits, but
+    /// exposed as an address so a **heap** value can be seeded too: that path has
+    /// a real `DbRef` to install (materialized from the session store) rather than
+    /// a literal to reconstruct, which is precisely what `set_frame_literal`
+    /// cannot do.
+    #[must_use]
+    pub fn frame_slot_addr(
+        &self,
+        name: &str,
+        data: &crate::data::Data,
+    ) -> Option<(DbRef, crate::data::Type, bool)> {
+        let (rec, at, tp, is_arg) = self.frame_slot(name, data)?;
+        Some((
+            DbRef {
+                store_nr: self.stack_cur.store_nr,
+                rec,
+                pos: at,
+            },
+            tp,
+            is_arg,
+        ))
+    }
+
     /// Whether `name` is a local **shown** at the current suspension — i.e. it
     /// appears in the captured paused frame.  The text edit path gates on this so a
     /// user can only edit a text local they can see; the memory-safety of the write

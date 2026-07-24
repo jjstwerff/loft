@@ -11,13 +11,17 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **Steps 0–3 landed 2026-07-24**: the matrix instrument (Step 0), the arc-B
+Open — **Steps 0–4 landed 2026-07-24**: the matrix instrument (Step 0), the arc-B
 materialize primitive (Step 1), the arc-A session store + env record as a
-**write-only shadow** (Step 2), and arc-C scalars at rest (Step 3). Every binding
-kind now has a store-resident home. The replay model is still the source of truth,
-so behaviour is unchanged and nothing in the corpus can regress. Next is Step 4
-(frame-seed, arc D) — the first step that *reads* the env, and the risk phase:
-it stays differential-gated against the still-running replay.
+**write-only shadow** (Step 2), arc-C scalars at rest (Step 3), and the arc-D
+frame-seed (Step 4). Every binding kind has a store-resident home, and a store
+value can be loaded back into its slot — proven equal to the replayed value.
+The replay model is still the source of truth and the seed is not on the eval
+path, so behaviour is unchanged and nothing in the corpus can regress.
+
+Next is **Step 5, the flip**: observe reads the env and the body replay is
+removed behind the flag. That is where side-effect repetition and re-run cost
+actually die. Step 4's differential is the evidence it can be taken.
 
 See *Step 0/1 findings* below — the materialize primitive is built on
 `copy_claims`, **not** the `snapshot_copy` this plan originally named — and the
@@ -106,7 +110,7 @@ both backends, not when the demo runs.
 | **A** — session store + binding-environment record (`name → (Type, handle)`) | **Shadow built** (Step 2, extended by Step 3) — written on **every** bind, read only by `env_value` |
 | **B** — value materialization: store-to-store copy of a run's result into the session store, returning a stable `DbRef` | **Primitive built** (`Stores::materialize`, Step 1) — not yet wired to a session |
 | **C** — scalars at rest (`x = 5`): boxed into the store, or a tiny inline tagged env value | **Built** (Step 3) — boxed 1-field record, raw bytes; text included via `TextInVector` |
-| **D** — frame-seed: prior names load from the session store into their slots before a new statement runs | Open |
+| **D** — frame-seed: prior names load from the session store into their slots before a new statement runs | **Built** (Step 4) — `seed_paused_frame`, differential-gated; not on the eval path yet |
 | **E** — observe / `:vars` read from the environment — **no body replay** | Open |
 | **F** — resume: mmap the session store + schema-version gating (stale image → fresh fallback) | Open |
 | **G** — lifetime: orphaned records on re-bind (`:reset` wipe first; GC only if it bites) | Open |
@@ -325,7 +329,53 @@ value the instrument cannot *see* must fail, not pass.
   narrow-range inference is out of @PLN14's scope and shares a signature with the
   `Double structure type` note on loft#618.
 
-- **Step 4 — frame-seed (arc D), flag-gated + differential. Effort M (the risk phase).**
+- **Step 4 — frame-seed (arc D), flag-gated + differential. Effort M (the risk phase).
+  BUILT 2026-07-24.** `ReplSession::seed_paused_frame` loads prior names from the
+  session store into their slots in a paused frame and returns a per-binding
+  `SeedReport { replayed, seeded }`; the tests assert those are equal for every
+  binding. Confirms Q1: **no codegen change** — the write goes through
+  `State::frame_slot_addr` (a new public accessor over the existing `frame_slot`),
+  after which the ordinary slot-based codegen runs untouched.
+  - **Seeding a heap local is the capability that was missing.**
+    `set_frame_literal` explicitly refuses heap locals because it would have to
+    reconstruct a `DbRef` in the live store from a literal. The session store
+    removes that problem: `seed_one_slot` runs `Stores::materialize` in the
+    *other* direction (session → a fresh store in the run's own heap) and installs
+    the resulting ref, so the frame gets its own copy and the session's master is
+    never aliased into a slot the running statement could mutate.
+  - Scalars are written **raw**, never through a literal — the arc-C exactness
+    argument carried into the slot write.
+  - **Not wired into the normal eval path.** Nothing calls it during an ordinary
+    session, so Step 4 cannot change behaviour; the body replay still fills the
+    slots and the seed is checked against it. Step 5 is the flip.
+  - Deferred to Step 5: seeding a `text` local (needs the owned-`String` vs
+    borrowed-`Str` distinction `set_frame_literal` makes) and `TextInVector`.
+
+  **The differential earned its keep twice.** It fired on the first run and both
+  times the fault was in the *reading*, not the seed: (1) the paused frame renders
+  a heap local's raw slot words (`P{x:3,y:12884901900}` — a `DbRef` read as
+  fields), so the comparison had to go through `eval_frame_heap` as `frame_value_of`
+  does; (2) the breakpoint sat on the `p = …` line itself, where `p`'s slot still
+  held stack garbage. In both cases the *seeded* value was already correct — which
+  is exactly the point of gating the flip on a differential rather than trusting it.
+  `frame_seed_actually_writes_the_slot` is the non-vacuity control: it corrupts a
+  slot with `debug_set` first, so a seed that silently no-ops fails.
+
+  **Slot coalescing — carry this into Step 5.** The differential then caught a
+  *third*, intermittent failure (≈2 runs in 12): two different bindings seeded the
+  **same** frame slot, the second silently clobbering the first. The compiler
+  coalesces the stack slots of locals whose live ranges do not overlap, so a local
+  that is assigned but **never read** shares a slot with the next one — and
+  `HashMap` iteration order decided which binding won, hence the flake. Two
+  consequences:
+  - `seed_paused_frame` now seeds each slot **once** (a `written` set keyed on
+    `(rec, pos)`) and omits the skipped name from its report, so a collision is
+    visible to the caller instead of producing a quietly wrong value.
+  - **Step 5 must not assume name → distinct slot.** When observing switches to
+    the env, a name whose slot is shared cannot be seeded independently; the
+    generation it seeds into has to keep every seeded binding live (they are read
+    by the statement being evaluated, which is normally exactly why they are
+    seeded — but a `:vars`-style whole-env read is the case where it will bite).
   Before a new statement runs, load prior names from the session store into their slots
   (seed-frame, Q1 — reuses today's slot codegen, no new opcodes), so a prior-name
   reference *can* read from store. **Keep replay running in parallel** and assert

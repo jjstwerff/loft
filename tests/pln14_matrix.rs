@@ -748,3 +748,115 @@ fn the_shadow_does_not_change_session_behaviour() {
     assert!(matches!(s.eval("assert(n == 15, \"n grew\")"), Eval::Ran));
     assert_eq!(s.value_of("n").as_deref(), Some("15"));
 }
+
+// ── Step 4 — frame-seed (arc D), the risk phase ─────────────────────────────
+//
+// The first step that READS the env.  It stays differential-gated: the body
+// replay still fills the slots, the seed overwrites them from the session
+// store, and every binding's before/after must match.  A divergence is a loud
+// failure here rather than a silent wrong value in a session.
+
+/// Pause inside a function whose locals share the session's binding names, seed
+/// those slots from the session store, and assert the store-resident value is
+/// EXACTLY what the replay had put there.
+#[test]
+fn frame_seed_agrees_with_the_replayed_slot() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("struct P { x: integer, y: integer }"),
+        Eval::Ran
+    ));
+    // Top-level bindings — these populate the store-resident env.
+    for input in [
+        "n = 42",
+        "f = 1.5",
+        "b = true",
+        "c = 'q'",
+        "v = [1, 2, 3]",
+        "p = P { x: 7, y: 9 }",
+    ] {
+        assert!(matches!(s.eval(input), Eval::Ran), "bind failed: {input}");
+    }
+    // A function whose locals carry the SAME names, so its frame is the shape a
+    // seeded REPL generation has.
+    //
+    // Every local must be READ later on: the compiler coalesces the stack slots of
+    // locals whose live ranges do not overlap, so assigned-but-never-read locals
+    // share one slot and two bindings would seed the same address.  (That is the
+    // flake the differential caught — `v` and `p` both landed on slot 148.)
+    assert!(matches!(
+        s.eval(
+            "fn probe() -> integer {\n  n = 42;\n  f = 1.5;\n  b = true;\n  c = 'q';\n  \
+             v = [1, 2, 3];\n  p = P { x: 7, y: 9 };\n  assert(b, \"b\");\n  \
+             assert(c == 'q', \"c\");\n  assert(f > 1.0, \"f\");\n  n + v[0] + p.x\n}"
+        ),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    // Line 8 is the first `assert` — every local above is assigned by now AND is
+    // still read further down, so all six are live in distinct slots.
+    s.add_breakpoint("probe:8");
+    assert!(
+        matches!(s.eval("probe()"), Eval::Paused),
+        "expected a pause inside probe"
+    );
+
+    let reports = s.seed_paused_frame();
+    let names: Vec<&str> = reports.iter().map(|r| r.name.as_str()).collect();
+    // ALL six, not a subset: a binding skipped for a coalesced slot must surface
+    // here rather than quietly reducing what the differential covers.
+    assert_eq!(
+        names,
+        vec!["b", "c", "f", "n", "p", "v"],
+        "the seed did not cover every live binding"
+    );
+    for r in &reports {
+        assert_eq!(
+            r.replayed, r.seeded,
+            "frame-seed DIVERGED for `{}`: replay had {:?}, the session store \
+             seeded {:?}",
+            r.name, r.replayed, r.seeded
+        );
+    }
+    s.debug_continue();
+}
+
+/// Non-vacuity: the seed must actually WRITE. Corrupt a slot first (via the
+/// debugger's edit path), then seed — the stored value must overwrite the
+/// corruption. Without this, "replayed == seeded" could pass by the seed being
+/// a no-op that never touched the slot.
+#[test]
+fn frame_seed_actually_writes_the_slot() {
+    let mut s = session();
+    assert!(matches!(s.eval("n = 42"), Eval::Ran));
+    assert!(matches!(
+        s.eval("fn probe() -> integer {\n  n = 42;\n  n\n}"),
+        Eval::Ran
+    ));
+    s.debug_stepping(true);
+    s.add_breakpoint("probe:3");
+    assert!(
+        matches!(s.eval("probe()"), Eval::Paused),
+        "expected a pause"
+    );
+
+    // Corrupt the slot: the frame now disagrees with the session store.
+    assert!(
+        s.debug_set("n", "999"),
+        "debug_set should edit the live local"
+    );
+    let reports = s.seed_paused_frame();
+    let n = reports
+        .iter()
+        .find(|r| r.name == "n")
+        .expect("n was seeded");
+    assert_eq!(
+        n.replayed, "999",
+        "the corruption should be what we replaced"
+    );
+    assert_eq!(
+        n.seeded, "42",
+        "the seed did not overwrite the slot from the session store"
+    );
+    s.debug_continue();
+}
