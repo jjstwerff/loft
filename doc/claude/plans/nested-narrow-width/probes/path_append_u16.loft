@@ -1,0 +1,9 @@
+//! expect: [[1001,2002],[3003,4004]]
+fn main() {
+  v: vector<vector<u16>> = [];
+  r: vector<u16> = [1001, 2002];
+  v += [r];
+  q: vector<u16> = [3003, 4004];
+  v += [q];
+  println("{v}");
+}

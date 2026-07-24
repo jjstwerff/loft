@@ -1,0 +1,5 @@
+//! expect: [[11,22],[33,44]]
+fn main() {
+  v: vector<vector<u8>> = [[11, 22], [33, 44]];
+  println("{v}");
+}
