@@ -1595,6 +1595,7 @@ mod tests {
         crate::ir_schema::compare_data(&fresh, &loaded).expect("round-trip equal incl. null_safe");
     }
 
+    #[cfg(feature = "mmap")]
     #[test]
     /// @PLN102 arc C step 1 — `#superseded "Y"` parses to the bare successor name
     /// and survives both the binary-store and JSON round-trips (so a marked stdlib
