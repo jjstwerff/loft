@@ -2489,3 +2489,55 @@ when the arg is a non-text `Printable`) — the one contained path that adds the
 without the method-overload regressions above. That is a deliberate type-checker
 special case, not folded into step 5. Variadic `print` would additionally require
 reversing the no-variadics stance and is not on the table for contract 1.
+
+## C101 — `std`/`core` are reserved package names; `std::name` is the stdlib's qualified form (the shadow escape hatch)
+
+**Catalogue:** @F2 (operators) / modules + naming. The pre-freeze completion of the
+[C97](#c97--)/[C98](#c98--) namespace model — sealing the one global namespace's own
+qualified name before the resolution rule freezes with contract 1. Closes @PLN13 phase 6.
+
+### Question
+
+[C97](#c97--) made the stdlib the sole global unqualified namespace and libraries
+module-scoped (`lib::name`); [C98](#c98--) makes `use lib::*` / `use lib::name` bring a
+library name into unqualified scope, where the imported name **wins** over the stdlib.
+Two loose ends the freeze must close: (1) when an imported (or user-defined) name shadows
+a stdlib name, is the stdlib symbol still reachable, and under what spelling? (2) nothing
+stops a library from being *named* `std`, colliding with that spelling — reserve it?
+
+### Evaluation
+
+Both are already answered in the implementation and only need to be made *intentional*
+before they freeze:
+
+- **`std::name` already resolves to the stdlib** — bound in `data.rs`
+  (`use_names["std"] = STD_SOURCE`), with qualified resolution falling back to it in
+  `use_analysis.rs`. Verified: with a user `enum E` shadowing the stdlib `E`, `std::E`
+  still reaches the stdlib ([LOFT.md](LOFT.md)); `std::max(3, 9)` → 9; `std::find("hello
+  world", "wor")` → 6 even though a bare `find(a, b)` binds the stdlib *method*
+  first-arg-as-self. So `std::` is the symmetric qualified form of `lib::name`, and the
+  escape hatch whenever a bare name is shadowed by a user def or a `use lib::*` import.
+- **`std` is special-cased in resolution** (`lib != "std"`, `data.rs`), so a library named
+  `std` cannot override the built-in binding — but the name is not yet refused at
+  creation, leaving a confusing, claimable name. Reserving it is pure pre-freeze
+  insurance: no published package is named `std`/`core` (verified), and the resolution
+  rule freezes with the contract, so a name that must never be a library is closed now.
+
+### Decision
+
+- **`std::name` is the stdlib's permanent qualified form** and the escape hatch for a
+  shadowed bare name (a user def or a `use lib::*` import shadowing a stdlib name — the
+  original stays reachable as `std::name`). It mirrors `lib::name`; bare-unqualified
+  remains the beginner default ([C97](#c97--)) and `std::` stays opt-in, never required.
+- **`std` and `core` are reserved package names** — refused by `loft new` and not
+  admissible to the registry (`core` held for a possible future stdlib-core split).
+  Canonical list + predicate: `libscan::RESERVED_PACKAGE_NAMES` /
+  `is_reserved_package_name`; guard test in `tests/imports.rs`.
+- **Not fixed by this:** the [C97](#c97--) residual stands — a library `self:`/`both:`
+  *method* named like a stdlib method still errors at definition (methods register as
+  attributes on a shared global type, which module-scoping and `std::` cannot cover).
+  Free-fn collisions are the real cases and are covered. The path for use-free *library*
+  calls is the existing lazy-load trigger surface (`derive_triggers` — method/type
+  triggers, @I87), grown by adoption and by completing under-covered trigger kinds
+  (e.g. operator overloads), **not** bare free-fn resolution (which C97/C98 declined).
+- Owner-directed 2026-07-24. Companion: [C97](#c97--)/[C98](#c98--); closes @PLN13 phase 6.

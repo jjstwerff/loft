@@ -1818,6 +1818,14 @@ fn scaffold_library(name: &str, native: bool, chunk: bool) -> i32 {
         );
         return 1;
     }
+    // A library may not claim a language-namespace name (`std`, `core`): those
+    // resolve to a built-in namespace, not a package (@PLN13 / C101).
+    if loft::libscan::is_reserved_package_name(name) {
+        eprintln!(
+            "loft new: `{name}` is a reserved namespace name (the standard library is `std::`); choose another library name"
+        );
+        return 1;
+    }
 
     let pkg_dir = std::path::PathBuf::from(name);
     if pkg_dir.exists() {

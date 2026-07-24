@@ -170,3 +170,31 @@ fn pln102_c97_library_may_define_a_stdlib_name() {
         p.diagnostics.lines()
     );
 }
+
+/// @PLN13 C101 — `std`/`core` are reserved package names (a library may not claim a
+/// language-namespace name), and `std::name` is the stdlib's qualified form — the escape
+/// hatch that still reaches a stdlib symbol shadowed by a user def or a `use lib::*`.
+#[test]
+fn pln13_c101_reserved_names_and_std_qualifier() {
+    // The canonical reserved list refuses the namespace names, admits ordinary ones.
+    assert!(loft::libscan::is_reserved_package_name("std"));
+    assert!(loft::libscan::is_reserved_package_name("core"));
+    assert!(!loft::libscan::is_reserved_package_name("regex"));
+    assert!(!loft::libscan::is_reserved_package_name("stdlib"));
+
+    // `std::name` resolves to the stdlib prelude: a program qualifying a stdlib call
+    // parses clean (the escape hatch freezes with the contract).
+    let mut p = Parser::new();
+    p.parse_dir("default", true, true).unwrap();
+    p.parse_str(
+        "fn main() { x = std::max(3, 9); print(\"{x}\"); }",
+        "c101_std.loft",
+        false,
+    );
+    scopes::check(&mut p.data);
+    assert!(
+        p.diagnostics.level() < Level::Error,
+        "std::max must resolve to the stdlib; got: {:?}",
+        p.diagnostics.lines()
+    );
+}
