@@ -2257,7 +2257,7 @@ impl Parser {
                 let msg = diagnostic_format(
                     Level::Warning,
                     format_args!(
-                        "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?? <default>` or `match` if that is not intended",
+                        "a nullable `{nm}?` is stored into {what} of the non-null type `{}` — it becomes null there; discharge with `?` (the type's default), `?? <default>`, or `match` if that is not intended",
                         target_tp.name(&self.data)
                     ),
                 );
@@ -2267,7 +2267,7 @@ impl Parser {
             let msg = diagnostic_format(
                 Level::Error,
                 format_args!(
-                    "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?? <default>` or `match`",
+                    "a nullable `{nm}?` cannot be stored into {what} of the non-null type `{}` — discharge it first with `?` (the type's default), `?? <default>`, or `match`",
                     target_tp.name(&self.data)
                 ),
             );

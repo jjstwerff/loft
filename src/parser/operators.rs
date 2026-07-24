@@ -2332,7 +2332,7 @@ impl Parser {
                             Level::Error,
                             "cannot cast a possibly-null `{}` to the non-null `{tps}` — it may \
                              be null; use `as {tps}?` for a checked cast (value or null), or \
-                             discharge first with `?? <default>`",
+                             discharge first with `?` (the type's default) or `?? <default>`",
                             ctp.name(&self.data),
                         );
                     }
@@ -2469,7 +2469,8 @@ impl Parser {
                                 Level::Error,
                                 code = "text-parse-may-fail",
                                 "a text parse `as {tps}` may fail — use `{tps}?` for a checked cast \
-                                 (value or null), or `?? <default>`",
+                                 (value or null), `?? <default>` for a fallback, or \
+                                 `(… as {tps}?)?` for the type's default",
                             );
                         }
                         // Keep `rt` non-null (the asserted target) to bound the cascade.

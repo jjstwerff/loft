@@ -277,6 +277,21 @@ Prefer `??` where the variant matters. Note the contrast with `(D-NoEnumF)`: a *
 discharges to its first variant, yet an enum *field inside a record* refuses to — because
 defaulting a whole record silently is a much bigger claim than defaulting one expression.
 
+**At a text parse, `?` composes with the CHECKED cast, not the asserting one.** A bare
+`s as integer` on text is ill-typed under `(N-Cast)` — a parse cannot be *asserted* — so
+`(s as integer)?` is rejected by the inner cast, before `(N-Default)` is ever reached; its
+premise `Γ ⊢ e ⇒ τ?` simply does not hold. The composable form is the checked cast first:
+
+```loft
+(s as integer?)?          // integer   — checked cast ⇒ integer?, then `?` ⇒ 0 on a bad parse
+s as integer ?? 0         // integer   — the assert-or-default form `(N-Cast)` licenses
+s as integer              // COMPILE ERROR — an assertion a parse can't discharge
+```
+
+This is not a gap in `(N-Default)`: `?` discharges the parse result exactly like any other
+`τ?`. Only the *asserting* spelling is refused, and it is refused for reasons that have
+nothing to do with `?`.
+
 **Falsifying programs.**
 
 ```loft
@@ -475,39 +490,12 @@ capture typing is a new *source* of the types loft already has; `match` also sta
 
 ## Deviations
 
-OPEN: **1** (DN7, below — `?` is refused at a text-parse `as`).  The @PLN25 nullability flip
-(DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
+OPEN: **0** — the @PLN25 nullability flip (DN1–DN6) is CLOSED (2026-07-02); D1/D2/D4 closed by
 fix/reconciliation.  The **@PLN102 DN3-Float extension** (below) is also CLOSED — SHIPPED
 default-on 2026-07-11 (#559): float `/`/`%` and the domain-partial float functions type `τ?`
 exactly like integer `/`/`%`.  Every DN1–DN6 + DN3-Float entry is CLOSED, retained as the
 record.  Per-situation mitigation catalogue:
 [../plans/25-nullable-sequences/DN1-MITIGATION.md](../plans/25-nullable-sequences/DN1-MITIGATION.md).
-
-### DN7 — OPEN (2026-07-24): `?` does not discharge a text-parse `as`
-
-**Rule violated:** `(N-Default)`.  It admits any `e ⇒ τ?` with `has_default(τ)`, and
-`s as integer` synthesises `integer?` by `(N-Cast)`/`(N-Parse)`.  So `(s as integer)?` should
-type `integer` and yield `0` on a bad parse.  The implementation **rejects** it:
-
-```
-error[text-parse-may-fail]: a text parse `as integer` may fail — use `integer?` for a
-checked cast (value or null), or `?? <default>`
-  --> probe.loft:5:21
-  |
-5 |   b = (s as integer)?;
-```
-
-**Where:** the `text-parse-may-fail` gate, `src/parser/operators.rs:2470`.  It enumerates its
-accepted discharges (`as τ?`, `?? d`) and `?` is not among them.
-
-**User-visible effect:** at a parse site — the place `?? 0` boilerplate is *most* common —
-`?` is unavailable, so the verbose form is the only concise discharge.  This directly blunts
-the operator @PLN116 added to remove that boilerplate.
-
-**Which side is wrong: the code.**  `?` *is* an explicit acknowledgement that the parse can
-fail — the same acknowledgement `?? d` makes — so the gate's purpose (never a silently
-unhandled parse) is already met by it.  The rule is sound; the accepted-discharge set is
-simply missing a member.  Fix = admit `?` at that gate, then delete this entry.
 
 ### DN1 — CLOSED (2026-07-02): scalar / field storage is non-null by default
 `(N-Dense)` now holds for scalars + struct fields, not just vector elements: a plain

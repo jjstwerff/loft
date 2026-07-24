@@ -88,11 +88,18 @@ Three things to know before reaching for it:
   a bare reference, and a record with a bare enum field lacking `= <variant>`.
   The error names the fixes; `??` or `match` is the fallback.
 
-**`?` does NOT work at a text parse** (today — tracked as `formal/types.md` DN7):
-`(s as integer)?` is rejected with `error[text-parse-may-fail]`.  At a parse, use
-`s as integer ?? 0` (default) or `s as integer?` (stay nullable).  Note
-`s as integer?` is the nullable **cast**, not a `?` discharge — the `?` there
-belongs to the type.
+**At a text parse, put `?` after the CHECKED cast:**
+
+```loft
+n = (s as integer?)?     // integer — checked cast, then default ⇒ 0 on a bad parse
+n = s as integer ?? 0    // integer — the assert-or-default form
+n = s as integer?        // integer? — the nullable CAST (that `?` belongs to the type)
+n = (s as integer)?      // COMPILE ERROR — a bare `as` on text is an assertion
+```
+
+A bare `text as integer` is an *assertion* the compiler refuses (a parse can't be
+proven), so `(s as integer)?` fails on the inner cast — not because `?` is
+unavailable.  Write the checked cast first.
 
 **Parsing text is fallible, so `text as integer` types `integer?`** (`as float` →
 `float?`, `as single` → `single?`).  `"42" as integer` is a **parse**, not a numeric
