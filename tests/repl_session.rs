@@ -1314,6 +1314,8 @@ fn value_of_struct_binding_still_renders_618() {
     assert!(matches!(s.eval("struct P { x: integer }"), Eval::Ran));
     assert!(matches!(s.eval("p = P { x: 1 }"), Eval::Ran));
     assert_eq!(s.value_of("p").as_deref(), Some("P{x:1}"));
+}
+
 // ── FU.3: one typo must produce one message ─────────────────────────────────
 
 /// A failed input reported diagnostics about the *replayed session body* as if
@@ -1359,4 +1361,5 @@ fn a_failed_input_does_not_warn_about_the_replayed_session() {
             Eval::Ran
         ),
         "the replayed bindings must still be live after the failed input"
-    );}
+    );
+}

@@ -1170,7 +1170,8 @@ impl ScalarValue {
             ScalarValue::Text(_) => ScalarKind::Text,
             ScalarValue::SimpleEnum(_) => ScalarKind::SimpleEnum,
         }
-    }}
+    }
+}
 
 /// Outcome of trying to value-snapshot a binding's RHS (REPL.X capture).
 enum Capture {
