@@ -17,6 +17,23 @@ pub(crate) fn with_trailing_sep(p: &std::path::Path) -> String {
 /// Pass `None` for the native target, `Some("wasm32-wasip2")` for WASM.
 /// Returns `None` when the rlib cannot be located.
 pub(crate) fn loft_lib_dir_for(target: Option<&str>) -> Option<std::path::PathBuf> {
+    loft_lib_dir_for_shaped(target, None)
+}
+
+/// As [`loft_lib_dir_for`], but keyed on a runtime SHAPE as well as the triple.
+///
+/// #619 — `Html` and `HtmlThreads` share the triple `wasm32-unknown-unknown`, so a
+/// triple-only lookup answers a request for the THREADED runtime with the
+/// single-threaded rlib.  That `Some` is silent: `--html --threads` then linked a
+/// runtime with no threading in it, exited 0, printed nothing, and produced a page
+/// annotated as threaded whose `par` ran sequentially on the main thread — the one
+/// outcome the caller has a diagnostic for, on the path where it was unreachable.
+/// A shape with its own `install_subdir` is looked up ONLY there, so a missing
+/// threaded runtime returns `None` and that diagnostic fires.
+pub(crate) fn loft_lib_dir_for_shaped(
+    target: Option<&str>,
+    shape_subdir: Option<&str>,
+) -> Option<std::path::PathBuf> {
     let exe_dir = env::current_exe().ok()?.parent()?.to_path_buf();
     // Dev layout: <project>/target/release/loft  or  <project>/target/debug/loft
     // The wasm rlib lives at <project>/target/wasm32-wasip2/release/
@@ -24,13 +41,27 @@ pub(crate) fn loft_lib_dir_for(target: Option<&str>) -> Option<std::path::PathBu
         // Walk up to find a sibling target/<triple>/release directory.
         let mut dir = exe_dir.clone();
         loop {
-            let candidate = dir.join("target").join(triple).join("release");
+            // A shaped runtime lives under its own subdir in BOTH layouts, never
+            // beside the default-shape rlib — see the #619 note above.
+            let candidate = match shape_subdir {
+                Some(sub) => dir
+                    .join("target")
+                    .join("loft")
+                    .join(sub)
+                    .join(triple)
+                    .join("release"),
+                None => dir.join("target").join(triple).join("release"),
+            };
             if candidate.join("libloft.rlib").exists() {
                 return Some(candidate);
             }
-            // Installed layout: <prefix>/share/loft/<triple>/
+            // Installed layout: <prefix>/share/loft/[<shape>/]<triple>/
             if dir.file_name().is_some_and(|n| n == "bin") {
-                let share = dir.parent()?.join("share").join("loft").join(triple);
+                let base = dir.parent()?.join("share").join("loft");
+                let share = match shape_subdir {
+                    Some(sub) => base.join(sub).join(triple),
+                    None => base.join(triple),
+                };
                 if share.join("libloft.rlib").exists() {
                     return Some(share);
                 }
@@ -235,6 +266,22 @@ impl WasmRuntimeShape {
             WasmRuntimeShape::Wasi => None,
         }
     }
+
+    /// #619 — the directory this shape's runtime is looked up under, RELATIVE to
+    /// the triple, in an installed bundle (`<prefix>/share/loft/<subdir>/<triple>/`)
+    /// and in a source tree (`target/loft/<subdir>/<triple>/release/`).
+    ///
+    /// `Html` and `HtmlThreads` share `wasm32-unknown-unknown`, so the triple alone
+    /// cannot tell them apart: a triple-only lookup handed a request for the
+    /// threaded runtime the single-threaded rlib, silently.  Only the shape that
+    /// needs distinguishing carries a subdir; the default shapes keep the flat
+    /// layout `make install` has always written, so nothing existing moves.
+    fn install_subdir(self) -> Option<&'static str> {
+        match self {
+            WasmRuntimeShape::HtmlThreads => Some("html-mt"),
+            WasmRuntimeShape::Html | WasmRuntimeShape::Wasi => None,
+        }
+    }
 }
 
 /// @PLN100 Slice 1 — ensure loft's own runtime rlib (`libloft.rlib`) for `shape`
@@ -259,7 +306,14 @@ pub(crate) fn ensure_loft_runtime_rlib(shape: WasmRuntimeShape) -> Option<std::p
     let triple = shape.triple();
     let Some(tree) = loft_source_tree() else {
         // Installed bundle: no source to compile — use the shipped rlib as-is.
-        return loft_lib_dir_for(Some(triple));
+        // #619 — keyed on the SHAPE, not just the triple: `Html` and `HtmlThreads`
+        // share `wasm32-unknown-unknown`, and answering a threaded request with the
+        // single-threaded rlib is what produced a page annotated as threaded with no
+        // threading in it.  `None` here reaches the caller's existing
+        // "could not build the THREADED browser runtime" diagnostic, which then
+        // falls back to the single-threaded shape with `threaded = false` — the
+        // honest outcome, and the one the artifact then reflects.
+        return loft_lib_dir_for_shaped(Some(triple), shape.install_subdir());
     };
     // The rlib lands under <target-dir>/<triple>/release/.  The Html shape gets an
     // isolated target-dir so the wasm-bindgen `make wasm` build (same triple)
