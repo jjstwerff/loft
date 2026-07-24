@@ -38,11 +38,14 @@ fn write_probe(name: &str, src: &str) -> std::path::PathBuf {
     path
 }
 
-/// Run `src` on both backends and assert each prints `expect`.
+/// Run `src` on both backends and assert each prints `expect` AND exits 0.
 ///
-/// The program prints the value it is about to return, so a buffer that is
-/// allocated but never filled fails as loudly as one that crashes — "it
-/// compiled and exited 0" is not evidence the value survived.
+/// Both halves are load-bearing.  The program prints the value it is about to
+/// return, so a buffer that is allocated but never filled fails as loudly as
+/// one that crashes — "it exited 0" is not evidence the value survived.  And
+/// the text double-free aborted AFTER the print, so a stdout-only assertion
+/// passes straight through the bug it is here to catch: the status check is
+/// what makes these cells able to fail.
 fn both_backends(name: &str, src: &str, expect: &str) {
     let path = write_probe(name, src);
     for backend in ["--interpret", "--native"] {
@@ -58,6 +61,12 @@ fn both_backends(name: &str, src: &str, expect: &str) {
         assert!(
             stdout.contains(expect),
             "{name} on {backend}: expected {expect:?}\nstdout:{stdout}\nstderr:{stderr}"
+        );
+        assert!(
+            out.status.success(),
+            "{name} on {backend}: exited {:?} after printing — a crash on teardown \
+             still corrupts the run\nstdout:{stdout}\nstderr:{stderr}",
+            out.status.code()
         );
     }
 }
@@ -103,6 +112,49 @@ fn entry_returns_vector_shapes_both_backends() {
             "vec_from_call.loft",
             "fn build() -> vector<integer> {\n  w = [4, 5];\n  w\n}\nfn main() -> vector<integer> {\n  v = build();\n  println(\"{v}\");\n  v\n}\n",
             "[4,5]",
+        ),
+    ] {
+        both_backends(name, src, expect);
+    }
+}
+
+/// A TEXT return is promoted the same way, but its buffer is a Rust `String`
+/// the caller owns rather than a store record.  Neither backend supplied one:
+/// the interpreter let the callee write through an uninitialised slot, so
+/// teardown double-freed it and EVERY `fn main() -> text` died with SIGABRT
+/// (a bare literal included — it is not shape-dependent); native omitted the
+/// `&mut String` argument and would not compile (E0061).
+///
+/// The shapes below are the ones @P293 lists as the hazardous text producers —
+/// a bare local read, a concat, an interpolation, a call-returned owned text —
+/// plus the literal, so a fix that only covered the "borrowed" cases is caught.
+#[test]
+fn entry_returns_text_both_backends() {
+    for (name, src, expect) in [
+        (
+            "text_literal.loft",
+            "fn main() -> text {\n  println(\"go\");\n  \"hi\"\n}\n",
+            "go",
+        ),
+        (
+            "text_local.loft",
+            "fn main() -> text {\n  t = \"hi\";\n  println(\"{t}\");\n  t\n}\n",
+            "hi",
+        ),
+        (
+            "text_concat.loft",
+            "fn main() -> text {\n  t = \"hi\" + \"!\";\n  println(\"{t}\");\n  t\n}\n",
+            "hi!",
+        ),
+        (
+            "text_interp.loft",
+            "fn main() -> text {\n  n = 7;\n  t = \"n={n}\";\n  println(\"{t}\");\n  t\n}\n",
+            "n=7",
+        ),
+        (
+            "text_fromcall.loft",
+            "fn build() -> text {\n  s = \"made\";\n  s\n}\nfn main() -> text {\n  t = build();\n  println(\"{t}\");\n  t\n}\n",
+            "made",
         ),
     ] {
         both_backends(name, src, expect);

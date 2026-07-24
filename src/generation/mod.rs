@@ -1958,6 +1958,17 @@ extern crate loft;"
                 Type::Reference(_, _) | Type::Enum(_, true, _) => {
                     args.push_str(", DbRef::NULL");
                 }
+                // A TEXT return is promoted the same way, but its buffer is a
+                // Rust `String` the caller owns rather than a store record —
+                // the signature takes `&mut String`, so the entry has to own
+                // one too (`let _pre = { …; &mut var___work_1 }` is what an
+                // ordinary call site emits).  `base()` peels `Optional`, NOT
+                // `RefVar`, so this arm must match the wrapper itself.
+                Type::RefVar(inner) if matches!(inner.base(), Type::Text(_)) => {
+                    let v = format!("__entry_text_{i}");
+                    let _ = writeln!(prelude, "    let mut {v}: String = String::new();");
+                    let _ = write!(args, ", &mut {v}");
+                }
                 _ => {}
             }
         }

@@ -4137,7 +4137,30 @@ impl State {
         // aligned mode (step(4)=8) so the entry function's locals — and every
         // frame it calls — land on their alignment boundary; with the V1 base
         // of 4 the whole entry frame is misaligned by 4.  Identity when off.
-        let entry_base = crate::variables::aligned_stack_step(4);
+        // #629: a TEXT return is `ref_return`-promoted like a vector, but its
+        // buffer is a `String` the CALLER owns, not a store record — an ordinary
+        // call site declares a `__work_N` local, `OpCreateStack`s a ref to it,
+        // and frees it after.  The entry supplied nothing, so the callee wrote
+        // through an uninitialised slot and teardown double-freed it (SIGABRT on
+        // EVERY `fn main() -> text`, including a literal).  Reserve one real
+        // `String` per hidden text attr BELOW the argument area, so the frame's
+        // argument offsets are exactly what they were.
+        let attrs = &data.def(d_nr).attributes();
+        let mut text_bufs: Vec<u32> = Vec::new();
+        self.stack_pos = crate::variables::aligned_stack_step(4);
+        for a in *attrs {
+            if a.hidden
+                && matches!(&a.typedef, Type::RefVar(t) if matches!(t.base(), Type::Text(_)))
+            {
+                text_bufs.push(self.stack_pos);
+                self.put_stack(String::new());
+            }
+        }
+        // @PLAN53 cluster 2 / S4: the entry frame base must be 8-aligned in
+        // aligned mode (step(4)=8) so the entry function's locals — and every
+        // frame it calls — land on their alignment boundary; with the V1 base
+        // of 4 the whole entry frame is misaligned by 4.  Identity when off.
+        let entry_base = crate::variables::aligned_stack_step(self.stack_pos.max(4));
         self.stack_pos = entry_base;
         // Plan-07 phase 1 step 1.20 / phase 3 — publish source_spans
         // to the panic hook so a Rust panic inside any opcode dispatch
@@ -4154,7 +4177,6 @@ impl State {
             line: 0,
         });
         // If fn main declares a vector<text> parameter, push argv before the return address.
-        let attrs = &data.def(d_nr).attributes();
         if attrs.len() == 1 && !attrs[0].hidden && matches!(attrs[0].typedef, Type::Vector(_, _)) {
             let args_vec = self.database.text_vector(argv);
             self.put_stack(args_vec);
@@ -4173,13 +4195,26 @@ impl State {
         // every element write pointing at `stores[u16::MAX]`.  Allocating here
         // is exactly what the `OpDatabase`-before-the-call a real caller emits
         // does, so entry and non-entry frames now honour the same contract.
+        let mut next_text_buf = 0;
         for a in *attrs {
-            if a.hidden
-                && matches!(
-                    a.typedef,
-                    Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
-                )
-            {
+            if !a.hidden {
+                continue;
+            }
+            if matches!(&a.typedef, Type::RefVar(t) if matches!(t.base(), Type::Text(_))) {
+                // Hand the callee a ref to the `String` reserved above — the
+                // same shape `OpCreateStack` builds for an ordinary caller.
+                let slot = text_bufs[next_text_buf];
+                next_text_buf += 1;
+                let db = crate::keys::DbRef {
+                    store_nr: self.stack_cur.store_nr,
+                    rec: self.stack_cur.rec,
+                    pos: self.stack_cur.pos + slot,
+                };
+                self.put_stack(db);
+            } else if matches!(
+                a.typedef,
+                Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
+            ) {
                 // Only the VECTOR contract is caller-allocates.  A struct /
                 // data-enum body opens with its own `OpDatabase`, which turns the
                 // sentinel into a store itself — pre-allocating for those would
