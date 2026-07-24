@@ -321,7 +321,42 @@ owner's to approve:
   where the repo has the mechanism but not the *why* — notably **LGPL**, which
   the repo never justifies anywhere, and which every evaluator asks about.
 
-### T3.3 — animated hero **[needs Jurjen or headless capture]** — unchanged
+### T3.3 — animated hero — **headless capture RULED OUT; needs a manual recording**
+
+Attempted and evidenced, so nobody repeats it. Two blockers, either one fatal:
+
+**1. The game does not animate in headless Chrome.** Driving it works — a CDP
+`Input.dispatchKeyEvent` Space press leaves the title screen (the bricks come up
+undimmed) — but the frame loop never advances. Six captures over ~4 s of
+wall-clock produced **one distinct frame**; re-running with
+`Emulation.setVirtualTimePolicy` (the standard way to drive `requestAnimationFrame`
+deterministically) produced **one distinct frame** as well. The frozen frame is
+also partial: 3 of 5 brick rows, no ball, no score. WebGL itself is fine — the
+harness already runs Chrome with `--enable-unsafe-swiftshader` /
+`--use-angle=swiftshader`, and colours render.
+
+*This also explains the T2.4 finding*: `doc/brick-buster.html` renders a partial,
+static frame to any headless viewer, which is roughly what a link-preview bot
+sees.
+
+**2. There is no encoder on this machine.** `ffmpeg`, `ImageMagick` (`convert` /
+`magick`) and `gifski` are all absent, so even a good frame sequence could not be
+turned into a GIF or webm. (An APNG could be assembled from PNG frames with
+node's `zlib` alone, but that is only worth writing once blocker 1 is solved.)
+
+**What a manual recording needs** — the asset is worth having, so the spec:
+
+- ~5 seconds, mid-play, with the things a still cannot show: **ball motion, brick
+  breaks, a powerup drop, and multiball**. Skip the title screen; the poster
+  already covers identification.
+- The game's own 800×600 canvas, no desktop chrome or cursor.
+- GIF for the README (safest there), webm/mp4 optional for the site.
+- **Keep the PNG.** OpenGraph does not animate, so
+  `images/hero-brick-buster.png` stays the `og:image` regardless — that is
+  already how `SITE_OG_IMAGE` is wired.
+
+Recording it in a real browser (`make game`, then open `doc/brick-buster.html`)
+sidesteps blocker 1 entirely, since the loop runs fine there.
 
 ### ~~T3.5~~ — DONE 2026-07-24, routed differently than proposed
 `examples/README.md` added. The review suggested routing game-seekers to the
