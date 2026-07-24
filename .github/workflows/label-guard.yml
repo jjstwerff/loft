@@ -101,11 +101,46 @@ jobs:
             ]);
 
             // 1) Auto-apply from the form answers.
-            //    sev/wa: single dropdown answer -> the first token on that line.
-            //    area:   checkboxes -> only the CHECKED boxes.
+            //    sev/wa: single dropdown answer.  area: only the CHECKED boxes.
+            //
+            // Scan the form's OWN answer sections, not the whole body.  An issue
+            // form renders each field as `### <label>` followed by the answer, so
+            // scoping to those sections is immune to tokens that merely appear in
+            // prose or in a quoted block.  Scanning the whole body scraped every
+            // `sev:`/`wa:` token anywhere in the text: #626 quotes this guard's own
+            // comment (which lists all three severities and all three workarounds)
+            // and so was labelled with all SIX mutually-exclusive tokens — exactly
+            // the triage-query poisoning that issue is about.
+            const sections = new Map();
+            let head = null;
+            for (const line of body.split(/\r?\n/)) {
+              const m = /^###\s+(.+?)\s*$/.exec(line);
+              if (m) { head = m[1].toLowerCase(); sections.set(head, []); }
+              else if (head) { sections.get(head).push(line); }
+            }
+            const section = (want) => {
+              for (const [h, lines] of sections) if (h.includes(want)) return lines.join("\n");
+              return null;
+            };
+            // Freeform issues (`gh issue create`, no form) have no `###` headings —
+            // fall back to the whole body minus fenced blocks, so a pasted log or a
+            // quoted example still cannot contribute labels.
+            const unfenced = body.replace(/```[\s\S]*?```/g, "");
+            const sevText  = section("severity")  ?? unfenced;
+            const waText   = section("workaround") ?? unfenced;
+            const areaText = section("area")       ?? unfenced;
+
             const found = new Set();
-            for (const m of body.matchAll(/\b(?:sev|wa):[a-z0-9-]+/g)) found.add(m[0]);
-            for (const m of body.matchAll(/-\s*\[[xX]\]\s*`?(area:[a-z0-9-]+)/g)) found.add(m[1]);
+            // `sev:` and `wa:` are SINGLE-CHOICE.  Take a value only when the
+            // section names exactly one — ambiguity means the guard must not
+            // guess; leaving it unset flags the issue, which is the safe outcome.
+            for (const [text, key] of [[sevText, "sev"], [waText, "wa"]]) {
+              const hits = new Set(
+                [...text.matchAll(new RegExp("\\b" + key + ":[a-z0-9-]+", "g"))].map(m => m[0]),
+              );
+              if (hits.size === 1) found.add([...hits][0]);
+            }
+            for (const m of areaText.matchAll(/-\s*\[[xX]\]\s*`?(area:[a-z0-9-]+)/g)) found.add(m[1]);
             const toApply = [...found].filter(l => valid.has(l) && !labels.has(l));
             if (toApply.length) {
               await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: toApply });
