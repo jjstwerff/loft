@@ -3111,14 +3111,30 @@ impl ReplSession {
     /// (The *column* and a def-body line can still sit on the next token — a separate parser
     /// position issue, not this offset.)  `<repl>`-only and clamped, so an underflow leaves
     /// the line at 1 rather than wrapping.
-    fn map_input_lines(&self, mut diags: Vec<DiagEntry>) -> Vec<DiagEntry> {
+    ///
+    /// A diagnostic at or below `prefix` is about the wrapper header or the **replayed
+    /// session body** — machinery the user did not type this turn — and the clamp above
+    /// would park it on their line 1 as if they had.  That produced the FU.3 cascade: one
+    /// typo answered with `Unknown function prnt` *and* `Variable x is never read` about
+    /// an earlier, correct binding, at a column inside the failing line.  So a prelude
+    /// **non-error is dropped**: the success path shows no warnings at all (this is the
+    /// only route by which any warning reaches the user), so surfacing the replay's
+    /// warnings only on failure was noise, and false noise at that — `x` *was* read, by
+    /// the input that failed to compile.  A prelude **error is kept**, imprecise line and
+    /// all: swallowing it would leave the REPL rejecting input while saying nothing, and a
+    /// bad position beats silence.
+    fn map_input_lines(&self, diags: Vec<DiagEntry>) -> Vec<DiagEntry> {
         let prefix = 1 + self.body.matches('\n').count() as u32;
-        for d in &mut diags {
-            if d.file == "<repl>" {
-                d.line = d.line.saturating_sub(prefix).max(1);
-            }
-        }
         diags
+            .into_iter()
+            .filter(|d| d.file != "<repl>" || d.line > prefix || d.level >= Level::Error)
+            .map(|mut d| {
+                if d.file == "<repl>" {
+                    d.line = d.line.saturating_sub(prefix).max(1);
+                }
+                d
+            })
+            .collect()
     }
 
     /// Parse one generation fn `fn replmain_N() { <gen_body> }`; when `execute`,

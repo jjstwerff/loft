@@ -415,22 +415,31 @@ file, start the REPL) before the option wall, and put the REPL in the usage
 header. It also states plainly that a release interprets by design, which is the
 same message [C102](DESIGN_DECISIONS.md) removed from the runtime path.
 
-### FU.3 — a failed REPL input emits a false warning about earlier, correct code
+### ~~FU.3~~ — a failed REPL input warned about earlier, correct code. FIXED
 ```
 loft> x = 5
 loft> prnt("hi")
 Error: Unknown function prnt — did you mean 'print'? at <repl>:1:1
 Warning: Variable x is never read at <repl>:1:4
 ```
-`x` **was** read. The warning is a cascade of the REPL's generation model: the
-input that would have read `x` failed to compile, so the unused-variable analysis
-sees the binding as dead. A beginner's single typo produces two messages, one of
-them false and pointing at a line they wrote correctly.
+`x` **was** read — by the very input that failed to compile. A beginner's single
+typo produced two messages, one of them false and pointing at a line they wrote
+correctly, at a column inside a different line.
 
-**Not fixed** — the honest fix is to suppress non-error diagnostics from a
-generation that failed to compile, which is a change to the REPL's diagnostic
-plumbing rather than a message tweak, and it wants its own think. Clean sessions
-are unaffected (verified): the noise appears only alongside a real error.
+**Mechanism** (matrix, `src/repl.rs`): an input runs as `fn replmain_N() { <replayed
+body> <input> }`, and `map_input_lines` subtracts the prefix with `.max(1)` — so
+*every* line of the replayed body clamps onto the user's line 1. Three prior
+bindings gave three false warnings, all at `1:4`. The success path drops the
+generation's diagnostics wholesale, so this failure path was the only route by
+which any warning reached the user at all — and what it surfaced was the replay's,
+never the user's.
+
+**Fix**: `map_input_lines` now drops a prelude-region **non-error** instead of
+clamping it onto line 1, and keeps a prelude-region **error** (imprecise line and
+all — swallowing it would leave the REPL rejecting input while saying nothing, and
+a bad position beats silence). Guarded by
+`repl_session::a_failed_input_does_not_warn_about_the_replayed_session`, calibrated
+by disabling the filter and confirming the three warnings return.
 
 ## Sequencing — five batches, not twenty PRs
 
