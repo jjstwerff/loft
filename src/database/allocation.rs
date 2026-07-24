@@ -1744,19 +1744,29 @@ impl Stores {
                 self.store_mut(to).set_u32_raw(into, 8 + 4 * i, 0);
                 continue;
             }
-            let new = self.store_mut(to).claim(size.div_ceil(8));
+            // A record is an 8-byte header followed by `size` payload bytes, and
+            // `claim` takes 8-byte WORDS — so the element needs `1 + size/8`
+            // words, and its payload is copied from offset 8 for the full `size`.
+            // Claiming `size.div_ceil(8)` left out the header word, and copying
+            // `size - 4` from offset 4 both started 4 bytes early and stopped 4
+            // bytes short: for `It { k: integer, v: integer }` that copied `k` and
+            // never `v`, and `v`'s slot fell outside the record, so reading it
+            // returned the NEXT record's header — `k` correct, `v` a plausible
+            // large integer (`(claim << 32) | length`).  The `copy_claims` recursion
+            // just below always used offset 8; these two now agree with it.
+            let new = self.store_mut(to).claim(1 + size.div_ceil(8));
             self.copy_block(
                 &DbRef {
                     store_nr: rec.store_nr,
                     rec: elm,
-                    pos: 4,
+                    pos: 8,
                 },
                 &DbRef {
                     store_nr: to.store_nr,
                     rec: new,
-                    pos: 4,
+                    pos: 8,
                 },
-                size - 4,
+                size,
             );
             self.store_mut(to).set_u32_raw(into, 8 + 4 * i, new);
             self.copy_claims(
