@@ -27,7 +27,7 @@ The whole game is one file — [read all 1,983 lines](tools/brick-buster/25-bric
 | | |
 |---|---|
 | **🌐 [Playground](https://loft-lang.org/loft/playground.html)** | Type a few lines of loft, press run, see output. That *is* the whole tutorial. |
-| **🖼 [Gallery](https://loft-lang.org/loft/gallery.html)** | 24 interactive graphics demos, from hello-triangle to physically-based rendering with shadows — every one running live in WebGL. |
+| **🎮 [Brick Buster](https://loft-lang.org/loft/brick-buster.html)** | A complete arcade game, running live in WebGL. Press Space to play, then read the one file it is written in. |
 | **💻 [Install locally](doc/claude/DEVELOPMENT.md)** | `cargo install --git https://github.com/loft-lang/loft --bin loft` |
 
 ---
@@ -129,22 +129,6 @@ read, debug, and ship like your own code:
 
 Bounded generics and interfaces keep them type-safe; `loft test` runs a
 package's test suite.
-
-## Graphics examples
-
-The `graphics` library ships 24 progressive examples — hover each for a live preview in the [gallery](https://loft-lang.org/loft/gallery.html):
-
-| File | What it shows |
-|---|---|
-| `01-hello-window.loft` | A green window |
-| `10-2d-canvas.loft` | 2D drawing primitives |
-| `08-basic-lighting.loft` | Phong lighting on a 3D cube |
-| `16-shadow-mapping.loft` | Real-time shadows |
-| `18-pbr.loft` | Physically-based rendering |
-| `24-renderer-demo.loft` | Full scene with PBR + shadows — **no shader code** |
-| **`25-brick-buster.loft`** | **A complete arcade game** |
-
-The graphics library lives in its own repo: [loft-libs-graphics](https://github.com/loft-lang/loft-libs-graphics).
 
 ## Contributing
 

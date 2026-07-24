@@ -297,9 +297,9 @@ fn write_index(
       </a>\n\
       <a class=\"showcase-tile showcase-sub\" href=\"gallery.html\">\n\
         <div class=\"showcase-caption\">\n\
-          <span class=\"showcase-tag\">24 demos</span>\n\
+          <span class=\"showcase-tag\">WebGL</span>\n\
           <h3>Graphics gallery</h3>\n\
-          <p>From a hello-triangle to physically-based rendering with shadows \u{2014} all running live in WebGL.</p>\n\
+          <p>Demos written in loft, running live in the browser \u{2014} including Brick Buster, a complete arcade game.</p>\n\
         </div>\n\
       </a>\n\
     </div>\n\

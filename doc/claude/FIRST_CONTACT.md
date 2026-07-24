@@ -32,7 +32,8 @@ against source rather than the release binary, which moved three of them.
 | T0.1 release-binary warning | **Confirmed** (source), and the proposed fix fails its own acceptance test — see C1 |
 | T0.2 line offset + missing snippet | **Confirmed, and re-localized** — see C2 |
 | T0.3 `int` has no did-you-mean | **Confirmed** — `error: Undefined type int`, no suggestion, snippet renders fine |
-| T1.1 badge / dead link | **Confirmed** — badge hardcodes `2026.7.1`; README:136 links a non-existent dir |
+| T1.1 badge / dead link | **Confirmed** — badge hardcoded `2026.7.1`; README:136 linked a non-existent dir |
+| T1.2 chunk-repo contradiction | **Resolved** — examples never pushed (claim removed); the chunk README is the stale side, not the main one |
 | T1.3 duplicate Time page | **Confirmed, worse** — see C3 |
 | T2.1 no meta tags | **Confirmed** — `doc/index.html` has zero description / OG / Twitter tags |
 | T4.1 root clutter | **Confirmed for tracked files, but mis-framed** — see C4 |
@@ -164,27 +165,32 @@ to `loft-libs-net/server` in @PLAN12).
 not backed by anything in the org (details below); fixing the *link* was safe,
 fixing the *claim* is a status question only the owner can answer.
 
-### T1.2 — chunk-repo contradiction **[needs Jurjen]** — now evidenced
+### ~~T1.2~~ — RESOLVED 2026-07-24 by the owner: the examples were never pushed
 
-Investigating T1.1 turned this from "two READMEs disagree" into a specific,
-verified gap. The facts:
+Owner's answer: **the 24 graphics examples were never pushed.** The claim is
+removed — not softened — everywhere it appeared:
 
-| claim | where | reality |
-|---|---|---|
-| "24 interactive graphics demos … every one running live in WebGL" | README:30 | — |
-| "The `graphics` library ships 24 progressive examples" | README:124 | — |
-| a table naming `01-hello-window.loft`, `08-basic-lighting.loft`, `18-pbr.loft`, … | README:128-135 | **none of these files exist anywhere in the `loft-lang` org** (org-wide code search finds only the README's own table and a plan doc) |
-| the gallery | `doc/gallery-examples.js` | contains **one** entry: `25-brick-buster` |
-| "Graphics gallery — 25+ live demos" | `doc/gallery.html:141` | the live page renders `00-smoke` |
-| `graphics` installable | README | chunk repo says **"TODO (blocked on `Type::Reference` codegen forwarding)"** for both `graphics` and `imaging` |
+| was | now |
+|---|---|
+| README pillar: "24 interactive graphics demos, from hello-triangle to PBR with shadows" | the pillar is **Brick Buster**, which is real and playable |
+| README § "Graphics examples": "ships 24 progressive examples" + a table of 7 files | section deleted |
+| `doc/gallery.html` crumb: "25+ live demos" | "live WebGL demos written in Loft" |
+| index tile: tag "24 demos", "hello-triangle to PBR" | tag "WebGL", describes what is actually there |
 
-So the chunk repo and the main README disagree because the main README is ahead of
-reality, not because the chunk repo is stale. **Decide the true status first** —
-whether the examples exist unpushed, or the claim retires until graphics ships —
-then one edit follows. Also still to fix: the chunk README's `jjstwerff/loft` link.
+**One correction to my own earlier write-up.** I reported the chunk repo as
+evidence that `graphics` was blocked. Checking the registry index shows
+`graphics` and `imaging` **are published** (alongside `input`, `server`,
+`markdown`, and 17 more), so `loft install graphics` works and the README's
+package table was right all along. The **chunk repo's** README is the stale
+one — it still says "TODO (blocked on `Type::Reference` codegen forwarding)".
 
-An agent should NOT rewrite these numbers unilaterally: "do the 24 examples exist
-somewhere I cannot see?" is a fact only the owner holds.
+So the two READMEs disagreed for two *different* reasons, and I had only found
+one: the main README overclaimed the **examples**, and the chunk README
+underclaims the **library**.
+
+**Still needs Jurjen** (other repo, cannot push from here): update
+`loft-libs-graphics/README.md` — drop the stale TODO/blocked status for
+`graphics` and `imaging`, and fix its `jjstwerff/loft` link to `loft-lang/loft`.
 
 ### ~~T1.3~~ — Time DONE 2026-07-24; ordering DEFERRED with a reason
 
@@ -231,12 +237,13 @@ Search Console + Bing submission; GitHub **social preview image** (this is what
 renders on every HN/Discord/Slack share — highest reach per minute of the whole
 document); repo topics.
 
-### T2.4 — gallery thumbnails — **BLOCKED on T1.2, not on tooling**
-Deferred deliberately. The gallery currently contains **one** demo
-(`25-brick-buster` — see T1.2), so "a static thumbnail per demo" is a build step
-for a one-item list. It becomes worth doing the moment the gallery has demos;
-until the T1.2 status question is answered, building the tooling would be
-infrastructure for content that does not exist.
+### T2.4 — gallery thumbnails — **UNBLOCKED, and now a smaller job**
+T1.2 is answered: the examples were never pushed, so the gallery legitimately
+holds one demo. A per-demo thumbnail pipeline is therefore still the wrong
+build to make now — but the *reason* changed from "unknown" to "known and
+settled". What is worth doing is a **single** static poster for Brick Buster so
+the one tile is not a grey box before WebGL warms, and it doubles as that
+demo's `og:image`. Small, and it stops being speculative infrastructure.
 
 ### T2 residual — pages `gendoc` does not own
 `brick-buster.html` is regenerated by `make game` (via `loft --html`), so its
