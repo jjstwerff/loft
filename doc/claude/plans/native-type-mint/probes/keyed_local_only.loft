@@ -1,0 +1,7 @@
+//! expect: RESULT sorted=17
+struct Node { id: integer, w: integer, tag: text }
+fn main() {
+  p: sorted<Node[id]> = []; p += Node{id:1,w:9,tag:"aa"}; p += Node{id:2,w:8,tag:"bb"};
+  s = 0; for n in p { s += n.w; }
+  println("RESULT sorted={s}");
+}

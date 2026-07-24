@@ -1,0 +1,11 @@
+//! expect: RESULT sorted=17 hash=7
+struct Node { id: integer, w: integer, tag: text }
+struct Wide { a: sorted<Node[id]>, b: hash<Node[id]> }
+fn main() {
+  p: sorted<Node[id]> = []; p += Node{id:1,w:9,tag:"aa"}; p += Node{id:2,w:8,tag:"bb"};
+  q: hash<Node[id]> = [];   q += Node{id:3,w:7,tag:"cc"};
+  d = Wide { a: p, b: q };
+  s = 0; for n in d.a { s += n.w; }
+  h = 0; for n in d.b { h += n.w; }
+  println("RESULT sorted={s} hash={h}");
+}

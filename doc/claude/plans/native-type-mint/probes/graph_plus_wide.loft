@@ -1,0 +1,14 @@
+//! expect: RESULT graph=17 wide=17
+struct Node { id: integer, w: integer, tag: text }
+struct Graph { nodes: vector<Node>, idx: index<Node[id]> }
+struct Wide { a: sorted<Node[id]>, b: hash<Node[id]> }
+fn main() {
+  g = Graph { nodes: [ Node{id:1,w:9,tag:"x"}, Node{id:2,w:8,tag:"y"} ],
+              idx:   [ Node{id:1,w:9,tag:"x"}, Node{id:2,w:8,tag:"y"} ] };
+  gs = 0; for n in g.nodes { gs += n.w; }
+  p: sorted<Node[id]> = []; p += Node{id:1,w:9,tag:"aa"}; p += Node{id:2,w:8,tag:"bb"};
+  q: hash<Node[id]> = [];   q += Node{id:3,w:7,tag:"cc"};
+  d = Wide { a: p, b: q };
+  ws = 0; for n in d.a { ws += n.w; }
+  println("RESULT graph={gs} wide={ws}");
+}

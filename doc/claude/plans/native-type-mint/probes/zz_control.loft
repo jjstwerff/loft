@@ -1,0 +1,2 @@
+//! expect: THIS-MUST-NEVER-APPEAR
+fn main() { println("control ran"); }
