@@ -112,6 +112,19 @@ recorded layout differs from the loading program's collection type is REFUSED
 sidecar (a legacy store) falls back to the `store_verify` backstop. Set
 `LOFT_LOADER_STATS=1` to observe `bytes_fetched` vs file size.
 
+**Every paged refusal is reported on stderr** (`store loader: refusing <path> — …;
+loaded NOTHING (a refusal, not an absent key)`). These loaders signal failure as
+`false` / `0`, which is exactly what an ABSENT KEY looks like, so a silent refusal
+reads as missing data and hides an unsupported shape. The refusal reasons are: the
+layout gate above; an unopenable source; a store with no recorded type; an entry
+with a field the working-set copy cannot relocate (`vector<text>` /
+`vector<vector>` — see `store_load_vectext_refuse.loft`); and **a collection
+declared as a struct FIELD**, whose bound store records the *wrapper struct* as its
+type so no hash/sorted root is found ([#632](https://github.com/loft-lang/loft/issues/632)
+— declare it as an annotated local `h: hash<T[k]> = []` for paged loads, or read it
+whole with `store_load`, which carries the field form fine). Pinned by
+`store_load_field_refusal.loft`.
+
 Full design:
 [`plans/97-layout-contract/REMOTE_STORE_LOADER.md`](plans/97-layout-contract/REMOTE_STORE_LOADER.md);
 the layout contract itself: [`formal/layout.md`](formal/layout.md).

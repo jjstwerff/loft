@@ -1020,3 +1020,56 @@ fn reload_on_missing_file_returns_true_with_empty_view() {
     );
     assert!(path.exists(), "bind should create the file");
 }
+
+/// `run_mode` that also hands back stderr — the refusal channel the paged
+/// loaders warn on.
+fn run_mode_with_stderr(script: &Path, path: &Path, mode: &str) -> (String, String, i32) {
+    let out = Command::new(loft_bin())
+        .arg("--interpret")
+        .arg(script)
+        .env("LOFT_PERSIST_TEST_PATH", path)
+        .env("LOFT_PERSIST_TEST_MODE", mode)
+        .current_dir(workspace_root())
+        .output()
+        .expect("failed to invoke loft binary");
+    (
+        String::from_utf8_lossy(&out.stdout).into_owned(),
+        String::from_utf8_lossy(&out.stderr).into_owned(),
+        out.status.code().unwrap_or(-1),
+    )
+}
+
+/// #632 — a paged load that REFUSES must say so. `store_load_key` and friends
+/// report failure as `false` / `0`, which is indistinguishable from "that key is
+/// absent", so a silent refusal reads as missing data and hides an unsupported
+/// shape. The layout gate already warns for exactly this reason; every other
+/// refusal now routes through the same channel.
+///
+/// The shape here is the field-declared collection of #632: the bound store
+/// records the WRAPPER STRUCT as its type, so no hash is found. The refusal
+/// stands (fixing it is @PLN97 arc G); being audible is what this pins.
+#[test]
+fn paged_refusal_on_field_declared_collection_is_audible() {
+    let dir = scratch("paged_refusal_is_audible");
+    let path = dir.join("field.store");
+    let script = workspace_root().join("tests/scripts/store_load_field_refusal.loft");
+
+    let (w_out, _, w_code) = run_mode_with_stderr(&script, &path, "write");
+    assert_eq!(w_code, 0, "{w_out:?}");
+    assert!(w_out.contains("write ok"), "write failed: {w_out:?}");
+
+    let (out, err, code) = run_mode_with_stderr(&script, &path, "loadkey");
+    assert_eq!(code, 0, "{out:?}");
+    // The refusal itself — unchanged behaviour, still safe (loads nothing).
+    assert!(out.contains("field loadkey=false"), "{out:?}");
+    assert!(out.contains("field len=0"), "{out:?}");
+    // …but it must no longer be silent, and must name the cause and the fix.
+    assert!(
+        err.contains("refusing") && err.contains("not an absent key"),
+        "a refusal must be reported, not silent; stderr was: {err:?}"
+    );
+    assert!(
+        err.contains("FWrap") && err.contains("annotated local"),
+        "the warning must name the wrapper type and the fix; stderr was: {err:?}"
+    );
+}

@@ -1,0 +1,37 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// #632 — a collection declared as a struct FIELD records the WRAPPER STRUCT as
+// its bound store's type, so the paged working-set loaders cannot find a hash
+// to load and refuse. The refusal itself is the known limitation; what this
+// script pins is that the refusal is AUDIBLE. These loaders report failure as
+// `false` / `0` — byte-identical to "that key isn't in the image" — so a silent
+// refusal sends the caller hunting for missing data instead of an unsupported
+// shape. (That is exactly what happened during the @PLN119 probes.)
+//
+// The stdout below says only what loft can see; the driver
+// (`store_persist_loft.rs`) asserts the explanatory warning on stderr.
+// Driven by `store_persist_loft.rs`.
+
+struct FRec { id: integer, n: integer }
+
+struct FWrap { data: hash<FRec[id]> }
+
+fn main() {
+  path = env_variable("LOFT_PERSIST_TEST_PATH");
+  mode = env_variable("LOFT_PERSIST_TEST_MODE");
+
+  w = FWrap { data: [] };
+
+  if mode == "write" {
+    w.data += [FRec { id: 4207, n: 7717 }];
+    if !store_persist_bind(w.data, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "loadkey" {
+    ok = store_load_key(w.data, path, 4207);
+    println("field loadkey={ok}");
+    println("field len={len(w.data)}");
+  } else {
+    println("FAIL unknown-mode")
+  }
+}
