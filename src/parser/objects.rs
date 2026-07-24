@@ -1932,17 +1932,27 @@ impl Parser {
         // `len(v)` stays as the `len` builtin call at parse time; `LengthVector` is the internal
         // slice-bound form. Match both, mirroring the bounds-proof recogniser in `operators.rs`
         // (`matches!(name, "len" | "LengthVector")`).
-        if *data == Value::Null
-            && !incl
-            && let Value::Call(d, largs) = till.unspan()
-            && matches!(
-                self.data.def(*d).original_name().as_str(),
-                "len" | "LengthVector"
-            )
-            && largs.len() == 1
-            && let Some(vk) = crate::parser::operators::vec_key(&largs[0], &self.data)
-        {
-            self.vars.set_loop_len_bound(vk);
+        // A bound HELD IN A LOCAL (`n = len(s); for i in 0..n`) counts as the same
+        // bound: `len_bound_locals` carries `len(X)` forward from the assignment.
+        // That form is not a stylistic variant — it is the one the published `cbor`
+        // encoder shipped, so a lint that only sees the inline `0..len(X)` would have
+        // missed the real bug.
+        if *data == Value::Null && !incl {
+            let vk = match till.unspan() {
+                Value::Call(d, largs)
+                    if matches!(
+                        self.data.def(*d).original_name().as_str(),
+                        "len" | "LengthVector"
+                    ) && largs.len() == 1 =>
+                {
+                    crate::parser::operators::vec_key(&largs[0], &self.data)
+                }
+                Value::Var(n) => self.len_bound_locals.get(n).copied(),
+                _ => None,
+            };
+            if let Some(vk) = vk {
+                self.vars.set_loop_len_bound(vk);
+            }
         }
         // loft#384: a vector slice (`data` present, not a pure `0..n` range) must
         // resolve negative bounds from the end and clamp into `[0, len]`, else the

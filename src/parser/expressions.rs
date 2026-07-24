@@ -1756,6 +1756,32 @@ use a separate collection or add after the loop"
             Vec::new()
         };
         self.change_var(to, &s_type);
+        // @PLN110 3a — track `n = len(s)` so `for i in 0..n` keeps the strict-index
+        // bound.  Any OTHER assignment to `n` drops the entry: a miss is the right
+        // failure for an advisory lint, a false warning is not.
+        if let Value::Var(lhs) = to.unspan() {
+            let bound = match code.unspan() {
+                Value::Call(d, largs)
+                    if op == "="
+                        && matches!(
+                            self.data.def(*d).original_name().as_str(),
+                            "len" | "LengthVector"
+                        )
+                        && largs.len() == 1 =>
+                {
+                    crate::parser::operators::vec_key(&largs[0], &self.data)
+                }
+                _ => None,
+            };
+            match bound {
+                Some(vk) => {
+                    self.len_bound_locals.insert(*lhs, vk);
+                }
+                None => {
+                    self.len_bound_locals.remove(lhs);
+                }
+            }
+        }
         if preserve_append_backing {
             for d in self.vars.tp(var_nr).depend() {
                 self.vars.make_independent(var_nr, d);

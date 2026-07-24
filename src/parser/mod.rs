@@ -152,6 +152,14 @@ pub struct Parser {
     /// A sandboxed script may mutate host data only via allow-listed `*.write`
     /// ops, never a raw field/element assignment.  Keyed by def_nr (idempotent).
     pub(crate) sandbox_raw_writes: HashMap<u32, crate::lexer::Position>,
+    /// @PLN110 3a — locals currently holding a `len(X)` result (`n = len(s)`), so
+    /// `for i in 0..n` carries the same strict-index bound as the inline
+    /// `for i in 0..len(s)`.  The two forms are the same units error, and the
+    /// bound-to-a-local one is what the published `cbor` encoder shipped, so a lint
+    /// that saw only the inline form would have missed the real bug.  Any other
+    /// assignment to the local DROPS its entry, so an unclear binding yields a miss
+    /// rather than a false warning.  Cleared per function.
+    pub(crate) len_bound_locals: HashMap<u16, crate::parser::operators::VecKey>,
     /// @PLN86 L4 — the functions a sandboxed def references as a fn-ref VALUE
     /// (`apply(read_file)`, `let h = read_file`, `[read_file]`, a returned
     /// fn-ref), mapped `def_nr -> {referenced fn def_nrs}`.  Recorded at the
@@ -717,6 +725,7 @@ impl Parser {
             last_field_target: None,
             param_locks: HashMap::new(),
             sandbox_param_overrides: HashMap::new(),
+            len_bound_locals: HashMap::new(),
             pending_param_locks: Vec::new(),
             pending_param_positions: Vec::new(),
             amp_pending: false,
@@ -1042,7 +1051,20 @@ impl Parser {
             crate::sandbox::data_envelope_violations(&self.data, &self.sandbox, &self.def_sandbox)
                 .into_iter()
                 .map(|v| crate::sandbox::describe_data_violation(&v));
-        caps.chain(totality)
+        // #631 — a profile that allow-lists the library its own sandboxed code lives
+        // in.  Listed FIRST: it disables the checks that produce the other findings,
+        // so any verdict computed under it is unsound and fixing it comes before
+        // anything else the walk reports.
+        let self_allow = crate::sandbox::self_allow_list_violations(
+            &self.data,
+            &self.sandbox,
+            &self.def_sandbox,
+        )
+        .into_iter()
+        .map(|v| crate::sandbox::describe_self_allow_list_violation(&self.data, &v));
+        self_allow
+            .chain(caps)
+            .chain(totality)
             .chain(raw_writes)
             .chain(field_reads)
             .chain(field_updates)
@@ -1112,6 +1134,47 @@ impl Parser {
             self.sandbox_complexity_degree(),
             self.sandbox_space_degree(),
         )
+    }
+
+    /// @PLN110 3a — warn on `for i in 0..len(s) { … s.byte_at(i) … }`.
+    ///
+    /// `len(text)` counts CHARACTERS while `byte_at` indexes BYTES, so this loop
+    /// stops one byte short per multi-byte character. It fails in the worst way
+    /// available: no diagnostic, no fault, a shorter buffer with plausible contents
+    /// that ASCII input never exposes. The published `cbor` library shipped exactly
+    /// this in its RFC 8949 text encoder — encoding `"José"` produced a short buffer,
+    /// `decode` reported success with an empty string, and a signature over the
+    /// round-trip still verified, because both sides ran the same truncating encoder.
+    ///
+    /// This is the `byte_at` sibling of the `text[i]` lint in `fields.rs`: the same
+    /// units error, the same bound, a different read. Advisory (the types are
+    /// correct) — the fix is `0..size(s)` for a byte walk, or `for c in s`.
+    fn warn_text_len_byte_index(&mut self, d_nr: u32, code: &Value) {
+        if self.first_pass || self.default || !crate::keys::text_index_units_lint_enabled() {
+            return;
+        }
+        let Value::Call(_, args) = code else { return };
+        if self.data.def(d_nr).original_name() != "byte_at" || args.len() != 2 {
+            return;
+        }
+        let Value::Var(iv) = args[1].unspan() else {
+            return;
+        };
+        let Some(bound) = self.vars.loop_len_bound(*iv) else {
+            return;
+        };
+        if crate::parser::operators::vec_key(&args[0], &self.data) != Some(bound) {
+            return;
+        }
+        let iname = self.vars.name(*iv).to_string();
+        diagnostic!(
+            self.lexer,
+            Level::Warning,
+            "index `{iname}` walks `0..len(text)` (a character count) but `byte_at({iname})` \
+             reads bytes — this truncates by one byte per multi-byte character and is silent \
+             on ASCII; use `0..size(text)` for a byte walk, or iterate with `for c in text` \
+             (@PLN110 strict-index)"
+        );
     }
 
     /// @PLN86 L4 — record that the current def references `fn_d_nr` as a fn-ref
@@ -6468,6 +6531,7 @@ impl Parser {
         self.add_defaults(d_nr, &mut actual, &mut all_types);
         let tp = self.call_dependencies(d_nr, &all_types);
         *code = Value::Call(d_nr, actual);
+        self.warn_text_len_byte_index(d_nr, code);
         // @PLN102 arc C step 3 — the recommended-idiom STEER.  A resolved call FROM
         // OWNED source (the entry project) to a `#superseded "Y"` symbol warns the
         // author toward `Y`; the old form keeps working (a never-break signpost, not
@@ -10451,6 +10515,38 @@ mod plan86_admission_tests {
         p
     }
 
+    /// #631 — parse `src` from a temp file whose BASENAME is handed to `cfg_for`, so
+    /// a test can designate the file by a path selector and allow-list the library
+    /// the source actually lands in (both are derived from the generated name).
+    fn parse_admit_file(cfg_for: impl Fn(&str, &str) -> String, src: &str) -> Parser {
+        static SEQ: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+        let stem = format!(
+            "plan86file_{}_{}",
+            std::process::id(),
+            SEQ.fetch_add(1, std::sync::atomic::Ordering::Relaxed),
+        );
+        let path = std::env::temp_dir().join(format!("{stem}.loft"));
+        let mut p = Parser::new();
+        // `def_library` is the file stem, so stem doubles as the library name.
+        p.set_sandbox_config(parse_sandbox_config(&cfg_for(
+            &format!("{stem}.loft"),
+            &stem,
+        )));
+        p.parse_dir("default", true, true).unwrap();
+        std::fs::write(&path, src).unwrap();
+        p.parse(path.to_str().unwrap(), false);
+        let _ = std::fs::remove_file(&path);
+        p
+    }
+
+    /// #631 — an entry point that fills its result through a private helper.  The
+    /// mutation escapes `build`, so it is the raw write the rule exists to reject;
+    /// moving it into `push` is the laundering.
+    const LAUNDER_SRC: &str = "struct S { v: vector<integer> }\n\
+                               fn push(s: S, x: integer) { s.v += [x]; }\n\
+                               fn build(n: integer) -> S { out = S { v: [] }; \
+                               for i in 0..n { push(out, i); } return out }\n";
+
     fn parse_admit_libs(
         designations: &[&str],
         allow_libs: &[&str],
@@ -10498,6 +10594,116 @@ mod plan86_admission_tests {
             | CapViolation::UntaggedSymbol { symbol, .. }
             | CapViolation::ExternalFfi { symbol, .. } => *symbol,
         }
+    }
+
+    /// #631 — `allow_libs` naming the library the sandboxed code ITSELF lives in is
+    /// rejected.  That policy makes every function in the module a trusted leaf, so
+    /// the raw-write guard stops seeing its helpers and the data envelope stops
+    /// counting their loops — both silently.  It is the policy the old diagnostic
+    /// suggested first, and it is the whole mechanism behind the laundering below.
+    #[test]
+    fn allow_listing_the_sandboxed_code_s_own_library_is_rejected() {
+        let p = parse_admit_file(
+            |file, lib| {
+                format!(
+                    "[sandbox]\nmod = [\"fn:build\"]\n[profile.mod]\n\
+                     allow_libs = [\"code\", \"{lib}\"]\n# file: {file}\n"
+                )
+            },
+            LAUNDER_SRC,
+        );
+        let errors = p.sandbox_admission_errors();
+        assert!(
+            errors.iter().any(|e| e.contains("cannot vet itself")),
+            "a self-allow-list must be rejected, got: {errors:?}"
+        );
+    }
+
+    /// #631 — allow-listing a genuine HOST library stays admitted: the rejection
+    /// above must key on the library holding sandboxed code, not on `allow_libs`.
+    #[test]
+    fn allow_listing_a_host_library_is_still_admitted() {
+        let p = parse_admit_file(
+            |file, _lib| {
+                format!("[sandbox]\nmod = [\"{file}\"]\n[profile.mod]\nallow_libs = [\"code\"]\n")
+            },
+            "fn helper(n: integer) -> integer { n + 1 }\n\
+             fn entry(n: integer) -> integer { helper(n) }\n",
+        );
+        assert!(
+            p.sandbox_admission_errors().is_empty(),
+            "a host-library allow-list must stay admitted: {:?}",
+            p.sandbox_admission_errors()
+        );
+    }
+
+    /// #631 shape 1 — the laundering itself.  With the module's own file designated,
+    /// the escaping mutation is caught wherever it is written: moving `out.v += [i]`
+    /// into a one-line helper must NOT change the verdict.
+    #[test]
+    fn a_same_library_helper_cannot_launder_an_escaping_raw_write() {
+        let cfg = |file: &str, _lib: &str| {
+            format!("[sandbox]\nmod = [\"{file}\"]\n[profile.mod]\nallow_libs = [\"code\"]\n")
+        };
+        let laundered = parse_admit_file(cfg, LAUNDER_SRC);
+        let inline = parse_admit_file(
+            cfg,
+            "struct S { v: vector<integer> }\n\
+             fn build(n: integer) -> S { out = S { v: [] }; \
+             for i in 0..n { out.v += [i]; } return out }\n",
+        );
+        assert!(
+            !inline.sandbox_raw_writes().is_empty(),
+            "the inline form is the control — it must reject"
+        );
+        assert!(
+            !laundered.sandbox_raw_writes().is_empty(),
+            "the same mutation moved into a same-library helper must reject too"
+        );
+    }
+
+    /// #631 shape 2 — the data envelope must count a designated file's helpers.  An
+    /// entry point that delegates all its work reported `O(1)` while being `O(n)`, so
+    /// a declared `data_budget` could be satisfied by a plugin that does not fit it.
+    #[test]
+    fn complexity_counts_loops_in_a_designated_file_s_helpers() {
+        let p = parse_admit_file(
+            |file, _lib| {
+                format!("[sandbox]\nmod = [\"{file}\"]\n[profile.mod]\nallow_libs = [\"code\"]\n")
+            },
+            "fn render(doc: vector<integer>) -> integer { t = 0; \
+             for i in 0..len(doc) { t += doc[i] ?? 0; } return t }\n\
+             fn dispatch(doc: vector<integer>) -> integer { return render(doc) }\n",
+        );
+        assert!(
+            p.sandbox_admission_errors().is_empty(),
+            "should admit: {:?}",
+            p.sandbox_admission_errors()
+        );
+        assert_eq!(
+            p.sandbox_complexity_degree(),
+            1,
+            "`dispatch` has no loop of its own but reaches one — that is O(n), not O(1)"
+        );
+    }
+
+    /// #631 — reaching an own-library helper names the fix that WORKS (designate it)
+    /// and warns off the one that silently disables the guard (`allow_libs`).
+    #[test]
+    fn reaching_an_own_library_helper_suggests_designation_not_allow_libs() {
+        let p = parse_admit_file(
+            |_file, _lib| {
+                "[sandbox]\nmod = [\"fn:build\"]\n[profile.mod]\nallow_libs = [\"code\"]\n"
+                    .to_string()
+            },
+            LAUNDER_SRC,
+        );
+        let errors = p.sandbox_admission_errors();
+        let msg = errors.join("\n");
+        assert!(
+            msg.contains("\"fn:push\"") && msg.contains("do NOT"),
+            "the fix must lead with designation and warn off allow_libs, got: {msg}"
+        );
     }
 
     /// @PLN86 2.3 — the admission convergence: a granted-cap reference admits, an
