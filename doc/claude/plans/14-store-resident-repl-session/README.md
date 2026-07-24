@@ -11,7 +11,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — design ready, no implementation. **Detailed build design added 2026-07-24**
+Open — **Steps 0–1 landed 2026-07-24** (the matrix instrument + the arc-B
+materialize primitive; both are test-only or dead code, so nothing in the corpus
+can regress yet). Next is Step 2: the session store + env record as a write-only
+shadow. See *Step 0/1 findings* below — the materialize primitive is built on
+`copy_claims`, **not** the `snapshot_copy` this plan originally named.
+
+Design ready for the rest. **Detailed build design added 2026-07-24**
 (see *Implementation design — small safe steps* below): the *in-memory* store
 round-trip is de-risked by the debugger's proven `snapshot_heap` sibling (reused for
 arc B), the residual is isolated to arc F (persist/resume + a schema-version gate),
@@ -92,7 +98,7 @@ both backends, not when the demo runs.
 | Item | Status |
 |---|---|
 | **A** — session store + binding-environment record (`name → (Type, handle)`) | Open |
-| **B** — value materialization: store-to-store copy of a run's result into the session store, returning a stable `DbRef` | Open |
+| **B** — value materialization: store-to-store copy of a run's result into the session store, returning a stable `DbRef` | **Primitive built** (`Stores::materialize`, Step 1) — not yet wired to a session |
 | **C** — scalars at rest (`x = 5`): boxed into the store, or a tiny inline tagged env value | Open |
 | **D** — frame-seed: prior names load from the session store into their slots before a new statement runs | Open |
 | **E** — observe / `:vars` read from the environment — **no body replay** | Open |
@@ -171,7 +177,8 @@ place the design could read clean and break at the first case.
 
 | Capability | Where | Reuse |
 |---|---|---|
-| Writable deep byte-copy of every store allocation | `Stores::snapshot_heap` / `Store::snapshot_copy` (`src/database/mod.rs`) | **arc B** — the materialize primitive |
+| Writable deep byte-copy of every store allocation | `Stores::snapshot_heap` / `Store::snapshot_copy` (`src/database/mod.rs`) | ~~arc B~~ — whole-heap only; **superseded for arc B** by `copy_claims` (see Step 0/1 findings). Still the Step-0 in-memory oracle |
+| Complete type-driven **cross-store** deep value copy (text, struct, enum, vector, array, hash, radix, index, `ChildRec`) | `copy_block` + `copy_claims` (`src/database/allocation.rs`), the `OpCopyRecord` walk | **arc B** — the real materialize primitive (`Stores::materialize`) |
 | Restore a heap snapshot in place | `Stores::restore_*` (`@PLN63 RX1`, `src/state/mod.rs`) | arc D/E — in-memory seed/restore |
 | mmap + content-hashed startup-cache | `src/data_store.rs` / `src/cache.rs` | **arc F** — persist/resume image |
 | Own-format value renderer | `show_loft` / `render_capture` (`src/repl.rs:915`,`:954`) | arc H (eval display); Q2's migration tool |
@@ -199,6 +206,54 @@ proof against the still-running replay. Ordered so each lands green on **both ba
   `Store::snapshot_copy`, returning a stable session `DbRef`. Rust unit + loft-script
   tests hit it *directly*, across the Step-0 matrix. **Safety:** dead code until wired —
   cannot regress anything. Enforces re-assertion site 1 at one chokepoint.
+  **Built 2026-07-24** as `Stores::materialize(value, tp, dest_store)`
+  (`src/database/mod.rs`) — but on a *different* sibling than this plan named; see
+  the finding below.
+
+### Step 0/1 findings — what the matrix actually read (2026-07-24)
+
+Step 0 is built as `tests/pln14_matrix.rs` (12 heap value-type cells × the in-memory
+round-trip, plus the aliasing, faulting, store-span and calibration controls) and
+Step 1's `Stores::materialize` passes every cell. Four readings changed the design:
+
+1. **A loft value is a MULTI-store graph.** A nested `struct` puts each `Reference`
+   field in its own store (`Line{a:P,b:P,tag}` spans 3), so a per-binding copy can
+   never be a lone `Store::snapshot_copy` of one store — pinned by
+   `a_nested_struct_spans_several_stores`.
+2. **The right sibling is `copy_claims`, not `snapshot_copy`.** `OpCopyRecord`'s walk
+   (`copy_block` + `copy_claims`, `src/database/allocation.rs`) is a *complete*,
+   type-driven deep copy that already crosses stores: it covers text, struct,
+   enum-value, vector, array, hash, radix, index and `ChildRec`, and **allocates each
+   sub-record freshly in the destination store**. That dissolves the store-number
+   rebasing this plan feared: there is nothing to remap, because nothing is shared.
+   `materialize` is therefore ~10 lines over proven machinery.
+3. **`rebase_walk_record` (the par path's `StoreRebase` walk) is NOT usable here** —
+   it returns early for a `Vector` record type, so it never descends into collection
+   elements. It is `#[allow(dead_code)]` and shaped for par's constrained values.
+   Reusing it would have inherited that hole silently. This was the plan's predicted
+   "site 2 leaking into site 1" — and the resolution was a *better* sibling, not a
+   harder problem.
+4. **Text in a struct field is in-store** (a `set_str` record; the field holds a
+   store-relative u32 index), so a byte copy carries it. The raw-pointer `Str{ptr,len}`
+   hazard is only the **bare stack** text value — i.e. a top-level `x = "…"` bind, which
+   is arc C's boxing case, not the heap-value path.
+5. **A materialized value is entirely self-contained in ONE store** — the strongest
+   reading, and it simplifies arcs A and F. Because `copy_claims` allocates every
+   sub-record and every text into the *destination* store, freeing every other user
+   store leaves the copy reading back identical
+   (`a_materialized_value_is_self_contained_in_one_store`, all 12 cells). So the
+   session store is a **single extractable, re-installable, persistable `Store`** —
+   arc F persists one store, not a graph, and arc A can carry the env across
+   throwaway `State`s by adopting that one store at a stable slot rather than
+   keeping a whole `Stores` alive.
+
+**Instrument calibration (the miss worth recording).** The matrix's first draft
+green-lit two struct-enum cells that never built a value: tuple-style
+`Shape.Circle(5)` is not loft syntax (variants are `Circle { radius: float }`), so the
+"value" was a null/garbage root and the round-trip compared identical garbage — a
+**vacuous pass**. `assert_readable` now gates every cell on a readable root, and
+`calibration_guard_catches_an_unreadable_root` is its positive control. Cells whose
+value the instrument cannot *see* must fail, not pass.
 
 - **Step 2 — session store + env record (arc A), write-only shadow. Effort M.**
   Add a persistent session `Stores` + `env: name → (Type, DbRef)`. Each REPL bind ALSO
@@ -273,11 +328,14 @@ signal to re-root at arc F, not to patch arc B.
    cross-schema** tool (and display). They coexist — store-copy for the session
    environment, own-format for live schema migration. State the separation so the
    serializer isn't mistaken for the session-persistence path.
-   **Resolved (2026-07-24):** store-copy is `Store::snapshot_copy` (arc B, the sibling's
-   proven primitive); own-format stays arc H / cross-schema only. The separation is now
-   load-bearing: `snapshot_copy` is schema-*invariant* (same-process) so it cannot be the
-   **resume** path across a loft build — that is arc F's mmap image + schema gate, a
-   distinct mechanism (see the re-assertion-site count above).
+   **Resolved (2026-07-24):** store-copy is `copy_block` + `copy_claims` — the
+   `OpCopyRecord` deep-copy walk — **not** `Store::snapshot_copy` as first written
+   (`snapshot_copy` copies one whole store, but a value spans several; `copy_claims`
+   re-allocates each sub-record in the destination store, so nothing is shared and
+   nothing needs rebasing). Own-format stays arc H / cross-schema only. The separation
+   is still load-bearing: the store-copy is schema-*invariant* (same-process) so it
+   cannot be the **resume** path across a loft build — that is arc F's mmap image +
+   schema gate, a distinct mechanism (see the re-assertion-site count above).
 3. **@P381 CONST_STORE re-lock under a persistent session store.** The value lives
    in the *session* store, not the const-store; confirm a seed-from-store run
    sidesteps the re-lock the way today's fresh-State model does.

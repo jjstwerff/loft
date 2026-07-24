@@ -832,6 +832,56 @@ impl Stores {
         self.max = snap.max;
     }
 
+    /// @PLN14 arc B — **the materialize chokepoint**: give the value rooted at
+    /// `value` (of type `tp`) its own home in `dest_store`, and return the stable
+    /// [`DbRef`] that store now owns.
+    ///
+    /// This is the one primitive a store-resident binding environment writes
+    /// through: a bind materializes its result here, and every later observe
+    /// reads the returned ref.  The copy is a **deep, by-value** copy — nested
+    /// structs, vectors, collections and text are re-allocated inside
+    /// `dest_store`, so the result shares nothing with `value` and survives the
+    /// source being mutated or freed (loft value semantics: `b = a` copies).
+    ///
+    /// It reuses the deep-copy walk `OpCopyRecord` runs
+    /// ([`copy_block`](Self::copy_block) + [`copy_claims`](Self::copy_claims)),
+    /// which already handles every container kind and copies **across** stores.
+    /// That is why a value spanning several stores needs no store-number
+    /// rebasing: `copy_claims` allocates each sub-record freshly in `dest_store`
+    /// rather than re-pointing at the source's.
+    ///
+    /// A null / empty source (`store_nr == u16::MAX`, or record 0) materializes
+    /// as null — a faulting bind records no value.
+    ///
+    /// # Panics
+    /// Panics if `dest_store` is not a live store in this table.
+    pub fn materialize(&mut self, value: &DbRef, tp: u16, dest_store: u16) -> DbRef {
+        if value.store_nr == u16::MAX || value.rec == 0 || tp == u16::MAX {
+            return self.null();
+        }
+        assert!(
+            (dest_store as usize) < self.allocations.len()
+                && !self.allocations[dest_store as usize].free,
+            "materialize: destination store #{dest_store} is not live"
+        );
+        // Byte size of the record, then the word count a record needs: one
+        // header word plus the payload (the `claim(1 + size.div_ceil(8))` shape
+        // the collection deep-copies use).
+        let size = u32::from(self.size(tp));
+        let rec = self.allocations[dest_store as usize].claim(1 + size.div_ceil(8));
+        let to = DbRef {
+            store_nr: dest_store,
+            rec,
+            pos: 8,
+        };
+        // The block copy overwrites the whole payload (so a reused free block
+        // leaves no garbage behind), and `copy_claims` then re-homes every
+        // nested allocation the raw bytes still point at in the source.
+        self.copy_block(value, &to, size);
+        self.copy_claims(value, &to, tp);
+        to
+    }
+
     /// Install an externally-allocated `Store` into this `Stores`'
     /// allocations table.  Returns the parent-side `store_nr`.
     ///

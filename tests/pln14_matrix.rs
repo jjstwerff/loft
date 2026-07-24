@@ -66,6 +66,7 @@ fn snapshot_round_trip(
     let (p, mut state) = build(defs, ty, expr);
     // `get_stack` CONSUMES — read the root DbRef exactly once.
     let root = *state.get_stack::<DbRef>();
+    assert_readable(&root, &state, expr);
     let tp = state.database.name(type_name);
     assert!(tp != u16::MAX, "unresolved type name `{type_name}`");
     let mut before = String::new();
@@ -97,7 +98,24 @@ const STRUCTS: &str = "struct P { x: integer, y: integer }\n\
      struct Line { a: P, b: P, tag: text }\n\
      struct Bag { items: vector<P>, name: text }\n\
      struct Big { id: integer, note: text }\n\
-     enum Shape { Circle(integer), Rect(integer, integer), Dot }";
+     enum Shape { Circle { radius: float }, \
+                  Rect { width: float, height: float }, \
+                  Tagged { name: text } }";
+
+/// Calibration guard — the instrument must be able to SEE the value before a
+/// cell may report anything.  A mis-specified case (bad syntax → a null or
+/// out-of-range root) would otherwise round-trip garbage to identical garbage
+/// and pass **vacuously**; that is exactly how the first draft of this matrix
+/// green-lit two struct-enum cells that never built a value at all.
+fn assert_readable(root: &DbRef, state: &State, expr: &str) {
+    assert!(
+        root.store_nr != u16::MAX
+            && (root.store_nr as usize) < state.database.allocations.len()
+            && root.rec != 0,
+        "vacuous cell: `{expr}` did not leave a readable heap value on the stack \
+         (root = {root:?}) — the case is mis-specified, not passing"
+    );
+}
 
 fn heap_cases() -> Vec<(&'static str, &'static str, String)> {
     let big_text = "x".repeat(400); // > 256 B text
@@ -146,9 +164,14 @@ fn heap_cases() -> Vec<(&'static str, &'static str, String)> {
             "vector<text>",
             "[\"\", \"one\", \"two \\u{2603}\"]".into(),
         ),
-        // struct-enum variants (heap-backed)
-        ("Shape", "Shape", "Shape.Circle(5)".into()),
-        ("Shape", "Shape", "Shape.Rect(3, 4)".into()),
+        // struct-enum variants (heap-backed): the variant name constructs it
+        ("Shape", "Shape", "Circle { radius: 1.5 }".into()),
+        ("Shape", "Shape", "Rect { width: 3.0, height: 4.0 }".into()),
+        (
+            "Shape",
+            "Shape",
+            "Tagged { name: \"a\\\"b \\u{2603}\" }".into(),
+        ),
     ]
 }
 
@@ -170,6 +193,73 @@ fn heap_values_survive_snapshot_round_trip() {
     }
 }
 
+/// Step 1 — the arc-B round-trip: `bind → materialize → observe`.  Materializes
+/// the value into a dedicated session store, then **deep-frees the source**
+/// (`remove_claims` + `free`, the proven inverse of the `copy_claims` walk
+/// materialize is built on) before reading the copy back.  Surviving that is the
+/// "exactly one owned home" property: the copy shares nothing with the source.
+fn materialize_round_trip(
+    defs: &[&str],
+    ty: &str,
+    type_name: &str,
+    expr: &str,
+) -> (String, String) {
+    let (_p, mut state) = build(defs, ty, expr);
+    let root = *state.get_stack::<DbRef>();
+    assert_readable(&root, &state, expr);
+    let tp = state.database.name(type_name);
+    assert!(tp != u16::MAX, "unresolved type name `{type_name}`");
+    let mut before = String::new();
+    state.database.show_loft(&mut before, &root, tp);
+
+    // The session store, and the value's own home inside it.
+    let session = state.database.database(256);
+    let copy = state.database.materialize(&root, tp, session.store_nr);
+    assert_ne!(
+        copy.store_nr, root.store_nr,
+        "materialize returned a ref into the SOURCE store for `{expr}`"
+    );
+
+    // Deep-free the source: every nested allocation it owns, then its store.
+    state.database.remove_claims(&root, tp);
+    state.database.free(&root);
+
+    let mut after = String::new();
+    state.database.show_loft(&mut after, &copy, tp);
+    (before, after)
+}
+
+#[test]
+fn materialize_gives_each_value_its_own_home() {
+    for (ty, type_name, expr) in heap_cases() {
+        let (before, after) = materialize_round_trip(&[STRUCTS], ty, type_name, &expr);
+        assert!(!before.is_empty(), "empty render for `{expr}`");
+        assert_eq!(
+            before, after,
+            "materialized copy did not survive the source being deep-freed for \
+             `{expr}` (type {type_name}) — it still shares storage with the source"
+        );
+    }
+}
+
+/// A null / empty source materializes as null: a faulting bind records no value
+/// (no env entry, no poison) rather than a half-built record.
+#[test]
+fn materialize_of_null_is_null() {
+    let (_p, mut state) = build(&[STRUCTS], "P", "P { x: 1, y: 2 }");
+    let root = *state.get_stack::<DbRef>();
+    let tp = state.database.name("P");
+    let session = state.database.database(256);
+    let null_src = DbRef {
+        store_nr: u16::MAX,
+        rec: 0,
+        pos: 0,
+    };
+    let out = state.database.materialize(&null_src, tp, session.store_nr);
+    assert_eq!(out.rec, 0, "a null source must materialize as null");
+    let _ = root;
+}
+
 /// Aliasing / value-semantics control (arc B's Q4): `b = a` must COPY, so a
 /// later mutation of `a` leaves `b` unchanged.  A store-copy materialize (not an
 /// alias) is the only way this holds — expressed as a loft program so it pins
@@ -181,7 +271,11 @@ fn cross_binding_is_a_copy_not_an_alias() {
         "integer",
         "a = [1, 2, 3];\n  b = a;\n  a[0] = 99;\n  b[0]",
     );
-    assert_eq!(*state.get_stack::<i64>(), 1, "b aliased a (expected a copy)");
+    assert_eq!(
+        *state.get_stack::<i64>(),
+        1,
+        "b aliased a (expected a copy)"
+    );
 }
 
 /// Negative control: a faulting RHS records a runtime error and NO value — the
@@ -227,4 +321,83 @@ fn a_nested_struct_spans_several_stores() {
         "expected a nested struct to span more stores than a flat one \
          (flat={flat}, nested={nested})"
     );
+}
+
+/// Positive control for the calibration guard: it must FIRE on each shape of
+/// unreadable root (the null sentinel, an out-of-range store, record 0).  A
+/// guard is only evidence once it is shown it can fail — otherwise the guard is
+/// itself the vacuous thing.
+#[test]
+fn calibration_guard_catches_an_unreadable_root() {
+    let (_p, state) = build(&[STRUCTS], "P", "P { x: 1, y: 2 }");
+    let live = state.database.allocations.len() as u16;
+    let unreadable = [
+        DbRef {
+            store_nr: u16::MAX,
+            rec: 0,
+            pos: 0,
+        }, // null sentinel
+        DbRef {
+            store_nr: 65281,
+            rec: 0,
+            pos: 0,
+        }, // out-of-range (garbage)
+        DbRef {
+            store_nr: live + 7,
+            rec: 1,
+            pos: 8,
+        }, // past the store table
+        DbRef {
+            store_nr: 2,
+            rec: 0,
+            pos: 8,
+        }, // in range but record 0
+    ];
+    for root in unreadable {
+        let fired =
+            std::panic::catch_unwind(|| assert_readable(&root, &state, "<synthetic>")).is_err();
+        assert!(fired, "the calibration guard did NOT fire on root {root:?}");
+    }
+}
+
+/// The property arcs A and F lean on: a materialized value is **entirely
+/// self-contained in ONE store**.  `copy_claims` allocates every sub-record and
+/// every text into the DESTINATION store, so after materialize we can free every
+/// other user store and the copy still reads back identical.  That is what makes
+/// the session store a single extractable / persistable unit (arc F persists one
+/// store, not a graph of them).
+#[test]
+fn a_materialized_value_is_self_contained_in_one_store() {
+    for (ty, type_name, expr) in heap_cases() {
+        let (_p, mut state) = build(&[STRUCTS], ty, &expr);
+        let root = *state.get_stack::<DbRef>();
+        assert_readable(&root, &state, &expr);
+        let tp = state.database.name(type_name);
+        let mut before = String::new();
+        state.database.show_loft(&mut before, &root, tp);
+
+        let session = state.database.database(256);
+        let copy = state.database.materialize(&root, tp, session.store_nr);
+
+        // Free EVERY other user store (store 0 is the eval stack; 1 is reserved).
+        let total = state.database.allocations.len() as u16;
+        for nr in 2..total {
+            if nr == session.store_nr {
+                continue;
+            }
+            state.database.free(&DbRef {
+                store_nr: nr,
+                rec: 0,
+                pos: 0,
+            });
+        }
+
+        let mut after = String::new();
+        state.database.show_loft(&mut after, &copy, tp);
+        assert_eq!(
+            before, after,
+            "materialized value was NOT self-contained in its store for `{expr}` \
+             (type {type_name}) — it still reads from a store we freed"
+        );
+    }
 }
