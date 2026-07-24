@@ -1,4 +1,4 @@
-# Label guard — ensure every issue carries the required triage labels.
+# Label guard — ensure every BUG-shaped issue carries the required triage labels.
 #
 # Two jobs in one: (1) auto-apply the `sev:` / `wa:` / `area:` labels a filer
 # chose in the bug-report form (issue-form dropdown/checkbox answers land in the
@@ -7,8 +7,26 @@
 # freeform, bypassing the form), apply `needs:labels` + a one-time comment naming
 # the missing categories.  Clears itself once the labels are set.
 #
+# Scope (#626): only DEFECTS carry the sev/wa/area contract.  Issues opened from
+# the showcase / feature-request / library-proposal templates are exempt and have
+# their stale `needs:labels` cleared — asking a showcase for a severity and a
+# compiler area is unanswerable, and the only way to satisfy it was to attach a
+# fake `sev:`/`wa:`/`area:`, which poisons the triage queries those labels exist
+# to serve.  Enforcement still defaults ON for anything without a non-bug marker,
+# so the freeform `gh issue create` case this guard exists for stays covered.
+#
+# Idempotence (#627): the guard reads LIVE labels via the API rather than the
+# event payload, is serialised per issue by `concurrency`, and marks its own
+# comment so it can recognise it.  Previously the check read `context.payload
+# .issue.labels` — a snapshot from when the event fired.  A template's own
+# `labels:` are applied by GitHub at creation, so that `labeled` event is NOT
+# suppressed by the GITHUB_TOKEN rule below and races the `opened` event: both
+# payloads predated `needs:labels`, both runs saw it as absent, and both
+# commented.  Every showcase issue got two identical bot comments.
+#
 # Loop-safe: label edits made with GITHUB_TOKEN do not trigger new workflow runs,
-# so the workflow's own add/remove of labels never re-fires it.
+# so the workflow's own add/remove of labels never re-fires it.  (That covers the
+# workflow's OWN edits only — see the #627 note above for the events it does not.)
 name: Label guard
 
 on:
@@ -18,6 +36,14 @@ on:
 permissions:
   issues: write
 
+# #627 — serialise runs for the SAME issue so two events (e.g. `opened` racing
+# the template's own `labeled`) cannot both pass the check-then-act below.
+# `cancel-in-progress: false`: the second event is not redundant — it may carry
+# the edit that supplies the missing labels, so it must run, not be dropped.
+concurrency:
+  group: label-guard-${{ github.event.issue.number }}
+  cancel-in-progress: false
+
 jobs:
   guard:
     runs-on: ubuntu-latest
@@ -26,13 +52,41 @@ jobs:
         with:
           script: |
             const { owner, repo } = context.repo;
-            const issue = context.payload.issue;
-            const number = issue.number;
-            const body = issue.body || "";
-            const labels = new Set((issue.labels || []).map(l => l.name));
+            const number = context.payload.issue.number;
             const NEEDS = "needs:labels";
+            // Identifies this guard's own comment across runs, so a re-run can
+            // recognise it without string-matching prose that may be reworded.
+            const MARKER = "<!-- loft-label-guard -->";
 
-            // Required label categories for a loft issue (LABELS.md).
+            // #627 — read LIVE state.  `context.payload.issue.labels` is a
+            // snapshot from when the event fired; two events seconds apart both
+            // predate the label this guard adds, so both would act on it.
+            const { data: live } = await github.rest.issues.get({
+              owner, repo, issue_number: number,
+            });
+            const body = live.body || "";
+            const labels = new Set(
+              (live.labels || []).map(l => (typeof l === "string" ? l : l.name)),
+            );
+
+            // #626 — a non-bug template's marker label.  These issues are not
+            // defects, so the sev/wa/area contract does not apply to them.
+            // Matched exactly or as a `prefix:` namespace (`showcase:pending`).
+            const NON_BUG = ["showcase", "enhancement", "proposal"];
+            const isNonBug = [...labels].some(l =>
+              NON_BUG.some(p => l === p || l.startsWith(p + ":")),
+            );
+            if (isNonBug) {
+              // Clear the flag if an earlier run (or the pre-#626 guard) set it.
+              if (labels.has(NEEDS)) {
+                await github.rest.issues.removeLabel({
+                  owner, repo, issue_number: number, name: NEEDS,
+                }).catch(() => {});
+              }
+              return;
+            }
+
+            // Required label categories for a loft BUG (LABELS.md).
             const categories = [
               { key: "sev:",  name: "severity — one `sev:high` / `sev:medium` / `sev:low`" },
               { key: "wa:",   name: "workaround — one `wa:clean` / `wa:partial` / `wa:none`" },
@@ -60,24 +114,32 @@ jobs:
 
             // 2) Enforce: is each required category present now?
             const missing = categories.filter(c => ![...labels].some(l => l.startsWith(c.key)));
-            const flagged = labels.has(NEEDS);
 
             if (missing.length === 0) {
-              if (flagged) {
+              if (labels.has(NEEDS)) {
                 await github.rest.issues.removeLabel({ owner, repo, issue_number: number, name: NEEDS })
                   .catch(() => {});
               }
               return;
             }
 
-            if (!flagged) {
-              await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [NEEDS] });
-              const list = missing.map(c => `- **${c.name}**`).join("\n");
-              await github.rest.issues.createComment({
-                owner, repo, issue_number: number,
-                body: `This issue is missing required triage labels:\n\n${list}\n\n`
-                  + `Apply one label from each missing category — see `
-                  + `[\`.github/LABELS.md\`](https://github.com/${owner}/${repo}/blob/main/.github/LABELS.md). `
-                  + `The \`${NEEDS}\` flag clears automatically once they are set.`,
-              });
+            // Adding an existing label is a no-op, so this is safe to repeat.
+            await github.rest.issues.addLabels({ owner, repo, issue_number: number, labels: [NEEDS] });
+
+            // #627 — comment at most once, decided on the comment list itself
+            // rather than on the label.  The label is the thing two racing runs
+            // disagreed about; the comment's own presence cannot be raced away.
+            const comments = await github.paginate(github.rest.issues.listComments, {
+              owner, repo, issue_number: number, per_page: 100,
+            });
+            if (comments.some(c => (c.body || "").includes(MARKER))) {
+              return;
             }
+            const list = missing.map(c => `- **${c.name}**`).join("\n");
+            await github.rest.issues.createComment({
+              owner, repo, issue_number: number,
+              body: `${MARKER}\nThis issue is missing required triage labels:\n\n${list}\n\n`
+                + `Apply one label from each missing category — see `
+                + `[\`.github/LABELS.md\`](https://github.com/${owner}/${repo}/blob/main/.github/LABELS.md). `
+                + `The \`${NEEDS}\` flag clears automatically once they are set.`,
+            });
