@@ -103,10 +103,17 @@ fn shape_from_tags(tag: u8, kind: u8) -> Option<SessionShape> {
 }
 
 /// @PLN14 arc E — whether a fresh session starts with store-backed observing on.
-/// Off unless `LOFT_PLN14_STORE_OBSERVE` is set, so Step 5 cannot change how any
-/// existing session behaves.
+///
+/// **Default ON** since Step 8: observing a store-resident binding reads the
+/// session store instead of replaying the accumulated body. `LOFT_NO_STORE_OBSERVE`
+/// opts out, matching the repo's default-on `LOFT_NO_*` family.
+///
+/// Safe to default because what a session PRINTS is byte-identical either way —
+/// `a_real_repl_session_prints_identically_with_the_flip` runs the real binary
+/// over one script with the flag both ways and diffs stdout. The store serves
+/// both renderings (display and own-format) precisely so this flip is invisible.
 fn store_observe_default() -> bool {
-    std::env::var("LOFT_PLN14_STORE_OBSERVE").is_ok()
+    std::env::var("LOFT_NO_STORE_OBSERVE").is_err()
 }
 
 /// Path to the auto-resume session file (`~/.loft_session`), or `None` if the
@@ -1408,10 +1415,9 @@ pub struct ReplSession {
     /// frame-seed will be checked against.
     env: std::collections::HashMap<String, SessionValue>,
     /// @PLN14 arc E — **the flip**: when on, observing a store-resident binding
-    /// reads the session store instead of replaying the accumulated body.  Off by
-    /// default (Step 5 ships it behind the flag); `LOFT_PLN14_STORE_OBSERVE` turns
-    /// it on for a real session, and [`set_store_observe`](Self::set_store_observe)
-    /// for a test.
+    /// reads the session store instead of replaying the accumulated body.  ON by
+    /// default since Step 8; `LOFT_NO_STORE_OBSERVE` opts out, and
+    /// [`set_store_observe`](Self::set_store_observe) overrides it for a test.
     store_observe: bool,
     /// @PLN14 arc B — the value the most recent capture materialized, waiting to be
     /// filed under the bound name by [`eval`](Self::eval).  `capture_typed` cannot
@@ -3021,6 +3027,11 @@ impl ReplSession {
                             // old record is orphaned in the session store until
                             // arc G collects it.
                             if let Some(v) = self.pending_materialized.take() {
+                                // arc G — a re-bind orphans the old record; release
+                                // it so a long session does not grow per re-bind.
+                                if let Some(old) = self.env.remove(&var) {
+                                    self.free_session_value(&old);
+                                }
                                 self.env.insert(var.clone(), v);
                             }
                             self.record_input(&snap); // persist the snapshot, not the RHS
@@ -3433,6 +3444,48 @@ impl ReplSession {
             pos: 8,
             shape: SessionShape::Scalar(v.kind()),
         });
+    }
+
+    /// @PLN14 arc G — release a session-store entry whose name has been re-bound.
+    ///
+    /// `n = n + 1` in a REPL replaces the env entry, and without this the old
+    /// record stays claimed forever — a long session's store would grow with
+    /// every re-bind. The record is owned SOLELY by the env (nothing else holds a
+    /// ref into the session store), so freeing it on replace is safe.
+    ///
+    /// Nested heap the value owns (sub-records, in-store text) is released by
+    /// `remove_claims` first, then the record itself; a boxed scalar owns nothing
+    /// except a `Text`'s separate `set_str` record.
+    fn free_session_value(&mut self, entry: &SessionValue) {
+        let Some(store) = self.session_store.take() else {
+            return;
+        };
+        let mut state = State::new(self.parser.database.clone());
+        let slot = state.database.adopt_store(store);
+        let db = crate::keys::DbRef {
+            store_nr: slot,
+            rec: entry.rec,
+            pos: entry.pos,
+        };
+        match entry.shape {
+            SessionShape::Heap | SessionShape::TextInVector => {
+                let tp = state.database.name(&entry.type_name);
+                if tp != u16::MAX {
+                    state.database.remove_claims(&db, tp);
+                }
+            }
+            SessionShape::Scalar(ScalarKind::Text) => {
+                // The characters live in their own `set_str` record; the field
+                // holds its index.
+                let idx = state.database.store(&db).get_u32_raw(db.rec, db.pos);
+                if idx != 0 {
+                    state.database.store_mut(&db).delete(idx);
+                }
+            }
+            SessionShape::Scalar(_) => {} // inline bytes, nothing nested
+        }
+        state.database.store_mut(&db).delete(db.rec);
+        self.session_store = Some(state.database.take_store(slot));
     }
 
     /// @PLN14 arc A — the session store's slot in `state`, adopting the carried
@@ -4014,6 +4067,57 @@ impl ReplSession {
         let len = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?) as usize;
         let store_bytes = take(&mut at, len)?.to_vec();
         Some((env, store_bytes, key))
+    }
+
+    /// @PLN14 arc H — evaluate one line and **return** its rendered value instead
+    /// of printing it: the in-process eval API for an embedder or a GUI
+    /// (@PLN12's absorbed REPL.T tail).
+    ///
+    /// `Ok(Some(text))` for an expression that produced a value, `Ok(None)` for a
+    /// statement that did not (a binding, a definition, a `print`), and `Err` with
+    /// the diagnostics on a parse or runtime error. The session advances exactly
+    /// as it would through [`eval`](Self::eval) — this is the same evaluation, with
+    /// the value handed back rather than written to stdout.
+    ///
+    /// Nearly free at this point: the value is already store-resident and the
+    /// renderers (`show_loft` / `render_capture`) already exist, so a bare name
+    /// is answered from the session store without replaying the body at all.
+    ///
+    /// # Errors
+    /// Returns the diagnostics when the input does not parse or the run faults.
+    pub fn eval_value(&mut self, input: &str) -> Result<Option<String>, Vec<DiagEntry>> {
+        if Parser::statement_incomplete(input) {
+            return Ok(None);
+        }
+        // A bare name with a store-resident value: answer from the store, no
+        // generation compiled (the arc-E flip, used here regardless of the
+        // observe flag — this API has no stdout to keep byte-identical).
+        if self.paused.is_none()
+            && let Some(name) = self.store_resident_name(input)
+            && let Some(v) = self.env_value(&name)
+        {
+            return Ok(Some(v));
+        }
+        // A binding / definition advances the session but yields no value.
+        if Parser::starts_top_level_def(input) || Self::binding_name(input).is_some() {
+            return match self.eval(input) {
+                Eval::Error(diags) => Err(diags),
+                _ => Ok(None),
+            };
+        }
+        // Otherwise it is an expression: render it.
+        Ok(self.value_of(input))
+    }
+
+    /// @PLN14 arc G — how many records the session store currently holds (`0`
+    /// before the first binding).  Exposed so the re-bind growth guard can assert
+    /// that orphaned records are actually released; the arena's byte size is
+    /// pre-allocated and therefore says nothing.
+    #[must_use]
+    pub fn session_store_records(&self) -> usize {
+        self.session_store
+            .as_ref()
+            .map_or(0, crate::store::Store::claims_count)
     }
 
     /// @PLN14 arc A — the names that currently have a store-resident value.

@@ -928,15 +928,17 @@ fn store_observe_value_of_matches_a_fresh_evaluation() {
     assert!(checked >= 8, "only {checked} cells covered");
 }
 
-/// The flip is OFF by default — Step 5 ships behind the flag, so an existing
-/// session behaves exactly as before unless it opts in.
+/// The flip's default, and that it can still be turned off.
+/// Step 8 — the flip is now the default, and the opt-out still works.
 #[test]
-fn store_observe_is_off_by_default() {
-    let s = session();
+fn store_observe_is_on_by_default_and_opt_outable() {
     assert!(
-        !s.store_observe(),
-        "store-backed observing must not be on by default"
+        session().store_observe(),
+        "store-backed observing is the default since Step 8"
     );
+    let mut s = session();
+    s.set_store_observe(false);
+    assert!(!s.store_observe(), "the opt-out must still turn it off");
 }
 
 /// End-to-end fidelity gate: a real REPL session must print BYTE-IDENTICAL
@@ -959,10 +961,12 @@ fn a_real_repl_session_prints_identically_with_the_flip() {
             .stdin(std::process::Stdio::piped())
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
+        // Step 8 — the flip is the DEFAULT now, so the comparison runs the
+        // opt-out (`LOFT_NO_STORE_OBSERVE`) as the "replay" side.
         if flip {
-            cmd.env("LOFT_PLN14_STORE_OBSERVE", "1");
+            cmd.env_remove("LOFT_NO_STORE_OBSERVE");
         } else {
-            cmd.env_remove("LOFT_PLN14_STORE_OBSERVE");
+            cmd.env("LOFT_NO_STORE_OBSERVE", "1");
         }
         let mut child = cmd.spawn().expect("spawn the loft repl");
         use std::io::Write;
@@ -1202,4 +1206,123 @@ fn a_restored_session_observes_from_the_store() {
         "a restored session should not need to replay anything"
     );
     let _ = std::fs::remove_file(&path);
+}
+
+// ── Step 7 — lifetime (arc G) ───────────────────────────────────────────────
+
+/// A re-bind releases the record the old value held, so a `n = n + 1` REPL loop
+/// does not grow the session store without bound.  The env is the ONLY holder of
+/// a ref into that store, which is what makes freeing on replace safe.
+#[test]
+fn re_binding_does_not_grow_the_session_store() {
+    let mut s = session();
+    assert!(matches!(s.eval("v = [1, 2, 3, 4, 5]"), Eval::Ran));
+    // Re-bind the same name many times; each one orphans its predecessor.
+    for i in 0..60 {
+        assert!(
+            matches!(
+                s.eval(&format!("v = [{i}, {}, {}]", i + 1, i + 2)),
+                Eval::Ran
+            ),
+            "re-bind {i} failed"
+        );
+    }
+    assert_eq!(s.env_names(), vec!["v"], "still exactly one binding");
+    assert_eq!(
+        s.env_value("v").as_deref(),
+        Some("[59,60,61]"),
+        "last value wins"
+    );
+    // Compare LIVE RECORDS against a session that bound the same value ONCE.
+    // (The arena's byte size is pre-allocated and stays flat either way, so
+    // measuring that would be vacuous — this guard was rewritten after the
+    // first version passed with the free deliberately disabled.)
+    let mut once = session();
+    assert!(matches!(once.eval("v = [59, 60, 61]"), Eval::Ran));
+    let (a, b) = (s.session_store_records(), once.session_store_records());
+    assert!(
+        a <= b + 2,
+        "60 re-binds left {a} records where one bind leaves {b} — the orphaned \
+         records are not being released"
+    );
+}
+
+/// A scalar re-bind is the common REPL shape (`n = n + 1`) and must free too.
+#[test]
+fn scalar_re_binding_reuses_store_space() {
+    let mut s = session();
+    assert!(matches!(s.eval("n = 0"), Eval::Ran));
+    for _ in 0..80 {
+        assert!(matches!(s.eval("n = n + 1"), Eval::Ran));
+    }
+    assert_eq!(s.env_value("n").as_deref(), Some("80"));
+    let mut once = session();
+    assert!(matches!(once.eval("n = 80"), Eval::Ran));
+    let (a, b) = (s.session_store_records(), once.session_store_records());
+    assert!(
+        a <= b + 2,
+        "80 scalar re-binds left {a} records where one bind leaves {b}"
+    );
+}
+
+/// `:reset` wipes the store-resident session.  It already did — the store and
+/// env ride the `ReplSession`, so rebuilding the session drops them — but that is
+/// a property worth pinning rather than rediscovering.
+#[test]
+fn a_fresh_session_carries_no_store_state() {
+    let mut s = session();
+    assert!(matches!(s.eval("v = [1, 2, 3]"), Eval::Ran));
+    assert_eq!(s.env_names(), vec!["v"]);
+    // What `:reset` does: replace the session.
+    let fresh = session();
+    assert!(
+        fresh.env_names().is_empty(),
+        "a reset session has no bindings"
+    );
+    assert_eq!(fresh.session_store_records(), 0, "and no session store");
+}
+
+// ── Step 8 — arc H: eval that RETURNS the value ─────────────────────────────
+
+/// The in-process eval API: a value comes back instead of going to stdout.
+#[test]
+fn eval_value_returns_rendered_values() {
+    let mut s = session_with_defs();
+    // A binding advances the session but yields no value.
+    assert_eq!(s.eval_value("v = [1, 2, 3]").expect("bind"), None);
+    assert_eq!(s.eval_value("p = P { x: 7, y: 9 }").expect("bind"), None);
+    // A definition likewise.
+    assert_eq!(s.eval_value("struct Q { a: integer }").expect("def"), None);
+    // A bare name is answered from the session store.
+    assert_eq!(s.eval_value("v").expect("read"), Some("[1,2,3]".into()));
+    assert_eq!(s.eval_value("p").expect("read"), Some("P{x:7,y:9}".into()));
+    // An expression is evaluated and rendered.
+    assert_eq!(s.eval_value("1 + 2").expect("expr"), Some("3".into()));
+}
+
+/// Reading a store-resident name through `eval_value` compiles no generation —
+/// the arc-E win, now reachable from the embedding API too.
+#[test]
+fn eval_value_reads_a_binding_without_replaying() {
+    let mut s = session();
+    assert!(matches!(s.eval("v = [1, 2, 3]"), Eval::Ran));
+    let before = s.generations();
+    assert_eq!(s.eval_value("v").expect("read"), Some("[1,2,3]".into()));
+    assert_eq!(
+        s.generations(),
+        before,
+        "reading a store-resident binding must not replay the body"
+    );
+}
+
+/// A broken input surfaces diagnostics rather than panicking or returning a value.
+#[test]
+fn eval_value_reports_errors() {
+    let mut s = session();
+    let out = s.eval_value("v = 1 2 3");
+    assert!(out.is_err(), "a parse error must be reported; got {out:?}");
+    assert!(
+        matches!(s.eval("ok = 1"), Eval::Ran),
+        "the session stays usable"
+    );
 }

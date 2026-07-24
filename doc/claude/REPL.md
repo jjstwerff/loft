@@ -381,18 +381,36 @@ enums) — so a side effect (printing, reading input) in the binding happens a
 single time, however often you read the name later (`name = read_line()` prompts
 once).
 
-Current limits, with their planned fixes in
-[plans/12-repl-and-introspection/](plans/12-repl-and-introspection):
+### The session store — values live in a store, not in replayed source
 
-- For a long session the REPL still **re-runs the accumulated bindings** (now all
-  side-effect-free literals) each time you observe a value, so cost grows with
-  session length. It stays *correct* (the literals are pure); the planned fix is
-  the store-resident session that keeps values without replay
-  ([plans/14-store-resident-repl-session/](plans/14-store-resident-repl-session/README.md)).
-- Auto-resume re-runs your bindings rather than restoring their stored values,
-  so a non-deterministic result (`random()`, `now()`) is recomputed on resume.
-  Exact value-for-value restore is the same store-resident model
-  ([@PLN14](plans/14-store-resident-repl-session/README.md)).
+A bound value is **materialized into a session store** and the environment maps
+`name → (type, record)`. Observing a name reads that record: no generation is
+compiled and the accumulated body is not replayed, so observe cost stops growing
+with session length. On by default; `LOFT_NO_STORE_OBSERVE` opts out.
+
+What that buys, and what it does not:
+
+- **Observing is O(1) in session length** for a store-resident binding. A `text`
+  binding is the exception — it is stored as the single-element `vector<text>`
+  the @P293 work-around builds, and the display renderer quotes a vector's text
+  elements, so text observes still fall back to the replay. Correct output,
+  no speed win.
+- **A re-bind releases the old record** (`n = n + 1` does not grow the store).
+  Nothing else holds a reference into the session store, which is what makes
+  freeing on replace safe. `:reset` drops the store entirely — it rides the
+  session object.
+- **Resume still re-runs your bindings**, so a non-deterministic result
+  (`random()`, `now()`) is recomputed. The exact value-for-value path exists as
+  an on-disk **session image** (`save_session_image` / `load_session_image`,
+  gated by a storage-layout hash so a stale or cross-build image falls back
+  rather than miscomputes) but is not yet wired into auto-resume.
+
+### Reading values from an embedder
+
+`ReplSession::eval_value(line)` evaluates one line and **returns** its rendered
+value instead of printing it — `Some(text)` for an expression, `None` for a
+binding or definition, `Err(diagnostics)` on a fault. A bare name is answered
+from the session store, so it compiles nothing.
 
 ## See also
 
