@@ -392,6 +392,27 @@ impl Default for Lexer {
     }
 }
 
+/// The closest existing sibling of `path` — a `.loft` file in the same directory
+/// whose name is within the shared edit-distance cap.  Used to turn a mistyped
+/// path into a suggestion rather than a dead end.
+fn suggest_sibling_file(path: &str) -> Option<String> {
+    let p = std::path::Path::new(path);
+    let want = p.file_name()?.to_str()?;
+    let dir = if p.parent()?.as_os_str().is_empty() {
+        std::path::Path::new(".")
+    } else {
+        p.parent()?
+    };
+    let names: Vec<String> = std::fs::read_dir(dir)
+        .ok()?
+        .filter_map(std::result::Result::ok)
+        .filter(|e| e.path().extension().is_some_and(|x| x == "loft"))
+        .filter_map(|e| e.file_name().to_str().map(String::from))
+        .collect();
+    let refs: Vec<&str> = names.iter().map(String::as_str).collect();
+    crate::diagnostics::suggest_similar_capped(want, &refs).map(String::from)
+}
+
 impl Lexer {
     /// Construct a lexer over `lines` using `config` as its lexicon (tokens,
     /// keywords, comment marker, string-interpolation).  Pass
@@ -1525,8 +1546,16 @@ impl Lexer {
             return;
         }
         let Ok(fp) = File::open(filename) else {
-            self.diagnostics
-                .add(Level::Fatal, &format!("Unknown file:{filename}"));
+            // Mistyping the path is one of the commonest FIRST things anyone does
+            // (`loft examples/helo.loft`), so answer it the way a mistyped
+            // function or type is answered: name the file and offer the nearest
+            // sibling.  The old text — `Unknown file:<path>`, no space, no
+            // suggestion — made a one-character slip look like a broken install.
+            let msg = suggest_sibling_file(filename).map_or_else(
+                || format!("no such file: {filename}"),
+                |s| format!("no such file: {filename} — did you mean '{s}'?"),
+            );
+            self.diagnostics.add(Level::Fatal, &msg);
             return;
         };
         self.lines = Box::new(BufReader::new(fp).lines());

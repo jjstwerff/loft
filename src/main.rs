@@ -56,8 +56,18 @@ use std::env;
 use std::sync::{Arc, Mutex};
 
 fn print_help() {
-    println!("usage: loft [options] <file>");
-    println!("       loft --tests [dir]");
+    println!("usage: loft [options] <file>     run a loft program");
+    println!("       loft                       start the interactive REPL");
+    println!("       loft --tests [dir]         run a directory of tests");
+    println!();
+    // The option list below is long; a newcomer's two most likely actions are
+    // "run this file" and "poke at the language", so both are named up here
+    // rather than left to be found ~60 lines down.
+    println!("Getting started:");
+    println!("  loft hello.loft               run a program (compiles via rustc when available,");
+    println!("                                otherwise interprets — a downloaded release always");
+    println!("                                interprets, which is normal, not a fallback to fix)");
+    println!("  loft                          type loft and see results immediately");
     println!();
     println!("Options:");
     println!("  --version                     print version information");

@@ -389,6 +389,49 @@ Enable before any launch post; link from README + `SUPPORT.md`.
 
 ---
 
+## First-use walkthrough (2026-07-24) — done as a visitor, not from the list
+
+After B1–B4 landed I ran the actual first-use path in a release-shaped sandbox
+(no source tree, no `rustc` on `PATH`) rather than working further down the list.
+Three things showed up that the external review had not, because they only appear
+when you *do* it:
+
+### ~~FU.1~~ — a mistyped path dead-ended. FIXED
+`loft examples/helo.loft` said `fatal: Unknown file:examples/helo.loft` — no
+space after the colon, no suggestion, with `hello.loft` sitting in the same
+directory, followed by a redundant "aborting due to 1 previous error". Mistyping
+the path is one of the *commonest first actions* anyone takes.
+
+Now: `no such file: examples/helo.loft — did you mean 'hello.loft'?`, reusing the
+same `suggest_similar_capped` cap the function/type suggestions use, over `.loft`
+siblings in the same directory. A name with no near neighbour gets no invented
+suggestion. Guarded by `script_mode::mistyped_file_path_suggests_the_neighbour`.
+
+### ~~FU.2~~ — `--help` buried the two things a newcomer wants. FIXED
+162 lines, opening with `--path` / `--project` / `--lib` / `--log-conf`. The
+usage header did not mention that **bare `loft` starts the REPL** — that was on
+line 64. Added a *Getting started* block naming the two likely actions (run a
+file, start the REPL) before the option wall, and put the REPL in the usage
+header. It also states plainly that a release interprets by design, which is the
+same message [C102](DESIGN_DECISIONS.md) removed from the runtime path.
+
+### FU.3 — a failed REPL input emits a false warning about earlier, correct code
+```
+loft> x = 5
+loft> prnt("hi")
+Error: Unknown function prnt — did you mean 'print'? at <repl>:1:1
+Warning: Variable x is never read at <repl>:1:4
+```
+`x` **was** read. The warning is a cascade of the REPL's generation model: the
+input that would have read `x` failed to compile, so the unused-variable analysis
+sees the binding as dead. A beginner's single typo produces two messages, one of
+them false and pointing at a line they wrote correctly.
+
+**Not fixed** — the honest fix is to suppress non-error diagnostics from a
+generation that failed to compile, which is a change to the REPL's diagnostic
+plumbing rather than a message tweak, and it wants its own think. Clean sessions
+are unaffected (verified): the noise appears only alongside a real error.
+
 ## Sequencing — five batches, not twenty PRs
 
 `CLAUDE.md` says bundle subjects into one CI cycle; a PR per item would burn ~30

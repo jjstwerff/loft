@@ -131,3 +131,44 @@ fn t02_one_line_script_reports_line_one() {
     );
     let _ = std::fs::remove_file(&file);
 }
+
+// ── First-use: a mistyped path is one of the commonest first actions ─────────
+
+/// A typo'd filename suggests the nearest sibling instead of dead-ending.
+/// The old text was `Unknown file:<path>` — no space, no suggestion — which made
+/// a one-character slip read like a broken install.
+#[test]
+fn mistyped_file_path_suggests_the_neighbour() {
+    let dir = std::env::temp_dir().join(format!("loft_fu_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("mkdir");
+    std::fs::write(dir.join("hello.loft"), "println(\"hi\")\n").expect("write");
+
+    let out = Command::new(loft_bin())
+        .arg(dir.join("helo.loft"))
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke loft");
+    let err = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        err.contains("no such file:"),
+        "expected the plain no-such-file wording; got {err:?}"
+    );
+    assert!(
+        err.contains("did you mean 'hello.loft'?"),
+        "expected a sibling suggestion; got {err:?}"
+    );
+
+    // A name with no near neighbour must NOT invent a suggestion.
+    let out2 = Command::new(loft_bin())
+        .arg(dir.join("zzzzzzzz.loft"))
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke loft");
+    let err2 = String::from_utf8_lossy(&out2.stderr);
+    assert!(err2.contains("no such file:"), "got {err2:?}");
+    assert!(
+        !err2.contains("did you mean"),
+        "an unrelated name must not get a suggestion; got {err2:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
