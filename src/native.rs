@@ -2277,19 +2277,14 @@ fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, crate::wasm::host_time_now());
 }
 
-/// the `--html` build (`wasm32-unknown-unknown`, no `wasm` feature)
-/// has no host time bridge; return 0 so programs that read `now()`
-/// without the bridge don't trap.  Mirror of the `n_ticks` fallback
-/// for the same target.
-///
-/// #620 — the gate used to be `target_arch = "wasm32"` alone, which also caught
-/// `wasm32-wasip2` (`--native-wasm`).  That target HAS a working clock, so the
-/// stub was overriding a real reading with 0 instead of standing in for a
-/// missing bridge; `not(target_os = "wasi")` narrows it to the browser build the
-/// comment always described.
+/// #620 — the `--html` build (`wasm32-unknown-unknown`, no `wasm` feature) has
+/// no `std` clock, so this reads the host's `Date.now()` through the `loft_io`
+/// import bridge.  It used to return a hardcoded 0, which is the whole second
+/// half of #620: every `now()` read the same instant and every duration
+/// measured 0ms with no error anywhere.
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 fn n_now(stores: &mut Stores, stack: &mut DbRef) {
-    stores.put(stack, 0i64);
+    stores.put(stack, crate::loft_host_time_now_ms() as i64);
 }
 
 /// Return microseconds elapsed since program start (monotonic clock).
@@ -2314,11 +2309,12 @@ fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, elapsed_micros);
 }
 
-/// #620 — browser-only fallback; `wasm32-wasip2` uses the real clock above.
+/// #620 — browser arm; `wasm32-wasip2` uses the real clock above.  Reads the
+/// host's `performance.now()`, which is already monotonic and page-relative
+/// (exactly `ticks()`'s contract), so it needs no start-time subtraction.
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
-    // no host time bridge on the --html build; return 0.
-    stores.put(stack, 0i64);
+    stores.put(stack, crate::loft_host_time_ticks_us() as i64);
 }
 
 /// TR1.3: Build `vector<StackFrame>` from the call-stack snapshot in Stores.

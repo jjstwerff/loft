@@ -459,16 +459,62 @@ pub(crate) fn wasm_rustc(atomics_sysroot: Option<&std::path::Path>) -> std::proc
 /// Copies only what is missing or has changed size, so repeat builds are cheap.
 pub(crate) fn ensure_atomics_sysroot(profile_dir: &std::path::Path) -> Option<std::path::PathBuf> {
     let deps = profile_dir.join("deps");
-    // <target-dir>/<triple>/release -> <target-dir>
-    let target_dir = profile_dir.parent()?.parent()?;
-    let sysroot = target_dir.join("sysroot");
+    // Candidate roots, in order.  #619: the derived one is the DEV layout
+    // (`<target-dir>/<triple>/release` -> `<target-dir>/sysroot`) and stays
+    // first so a repo build is unchanged.  In an INSTALLED layout the same
+    // derivation lands on `<prefix>/share/loft`, which is root-owned — the
+    // assembly failed there and `--html --threads` fell back to a
+    // single-threaded page.  The sysroot is a pure CACHE (copies of rlibs that
+    // are already installed), so a user-writable fallback is enough; nothing
+    // has to be shipped in it.
+    let mut roots: Vec<std::path::PathBuf> = Vec::new();
+    if let Some(target_dir) = profile_dir.parent().and_then(std::path::Path::parent) {
+        roots.push(target_dir.join("sysroot"));
+    }
+    roots.push(user_cache_sysroot_dir());
+    let mut last_err = None;
+    for sysroot in roots {
+        match assemble_atomics_sysroot(&deps, &sysroot) {
+            Ok(()) => return Some(sysroot),
+            Err(e) => last_err = Some(e),
+        }
+    }
+    if let Some(e) = last_err {
+        eprintln!(
+            "loft: could not assemble the wasm atomics sysroot ({e}) — \
+             `--html --threads` cannot link a shared-memory bundle without it."
+        );
+    }
+    None
+}
+
+/// `~/.loft/wasm-atomics-sysroot`, honouring `LOFT_HOME` like the rest of loft's
+/// user state.  Falls back to the temp dir when there is no home at all, so an
+/// unusual environment degrades to a rebuild-per-run rather than a failure.
+fn user_cache_sysroot_dir() -> std::path::PathBuf {
+    std::env::var_os("LOFT_HOME")
+        .map(std::path::PathBuf::from)
+        .or_else(dirs::home_dir)
+        .unwrap_or_else(std::env::temp_dir)
+        .join(".loft")
+        .join("wasm-atomics-sysroot")
+}
+
+/// Copy the atomics-compiled rlibs from `deps` into the `lib/rustlib/<triple>/lib`
+/// layout `rustc --sysroot` expects, under `sysroot`.
+///
+/// Copies only what is missing or has changed size, so repeat builds are cheap.
+fn assemble_atomics_sysroot(
+    deps: &std::path::Path,
+    sysroot: &std::path::Path,
+) -> std::io::Result<()> {
     let lib_dir = sysroot
         .join("lib")
         .join("rustlib")
         .join("wasm32-unknown-unknown")
         .join("lib");
-    std::fs::create_dir_all(&lib_dir).ok()?;
-    for entry in std::fs::read_dir(&deps).ok()?.flatten() {
+    std::fs::create_dir_all(&lib_dir)?;
+    for entry in std::fs::read_dir(deps)?.flatten() {
         let src = entry.path();
         if src.extension().is_none_or(|e| e != "rlib") {
             continue;
@@ -488,10 +534,10 @@ pub(crate) fn ensure_atomics_sysroot(profile_dir: &std::path::Path) -> Option<st
             .zip(entry.metadata().ok())
             .is_some_and(|(a, b)| a.len() == b.len());
         if !same {
-            std::fs::copy(&src, &dst).ok()?;
+            std::fs::copy(&src, &dst)?;
         }
     }
-    Some(sysroot)
+    Ok(())
 }
 
 /// The dependency search dir for a [`loft_lib_dir`] result: `lib_dir` itself
@@ -1592,5 +1638,84 @@ mod p350_html_wasm_import_check {
         assert!(html_wasm_import_modules_ok(b"not a wasm").is_ok());
         assert!(html_wasm_import_modules_ok(&[]).is_ok());
         assert!(html_wasm_import_modules_ok(b"\0asm\x01\x00\x00\x00\x02\xff").is_ok());
+    }
+}
+
+#[cfg(test)]
+mod atomics_sysroot_tests {
+    use super::*;
+
+    /// Build a fake shape dir `<root>/<triple>/release` with one dep rlib in it,
+    /// mirroring what `ensure_loft_runtime_rlib` hands `ensure_atomics_sysroot`.
+    fn fake_profile_dir(root: &std::path::Path) -> std::path::PathBuf {
+        let profile = root.join("wasm32-unknown-unknown").join("release");
+        let deps = profile.join("deps");
+        std::fs::create_dir_all(&deps).expect("deps");
+        std::fs::write(deps.join("libcore-abc.rlib"), b"rlib").expect("dep rlib");
+        // loft's own rlib must be EXCLUDED from the sysroot (duplicate-candidate
+        // errors at link time), so seed one to prove the filter still runs.
+        std::fs::write(deps.join("libloft-def.rlib"), b"rlib").expect("loft rlib");
+        profile
+    }
+
+    /// The dev layout is unchanged: the sysroot lands beside the target dir.
+    #[test]
+    fn assembles_next_to_the_target_dir_when_writable() {
+        let root = std::env::temp_dir().join(format!("loft_sysroot_dev_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let profile = fake_profile_dir(&root);
+        let got = ensure_atomics_sysroot(&profile).expect("sysroot assembled");
+        assert_eq!(got, root.join("sysroot"), "dev layout must not move");
+        let lib = got
+            .join("lib/rustlib/wasm32-unknown-unknown/lib")
+            .join("libcore-abc.rlib");
+        assert!(lib.exists(), "dep rlib copied into the sysroot");
+        assert!(
+            !got.join("lib/rustlib/wasm32-unknown-unknown/lib/libloft-def.rlib")
+                .exists(),
+            "loft's own rlib must stay out of the sysroot"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// #619 — the installed layout is root-owned, so the derived location cannot
+    /// be created.  The assembly must fall back to the user cache instead of
+    /// giving up, which is what silently produced a single-threaded page.
+    #[test]
+    #[cfg(unix)]
+    fn falls_back_to_the_user_cache_when_the_target_dir_is_read_only() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = std::env::temp_dir().join(format!("loft_sysroot_ro_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let root = base.join("share").join("loft");
+        let profile = fake_profile_dir(&root);
+        let home = base.join("home");
+        std::fs::create_dir_all(&home).expect("home");
+
+        // Make the derived sysroot parent unwritable — the installed-layout shape.
+        let mut perms = std::fs::metadata(&root).expect("meta").permissions();
+        perms.set_mode(0o555);
+        std::fs::set_permissions(&root, perms).expect("chmod ro");
+
+        // SAFETY: single-threaded test process; restored below.
+        unsafe { std::env::set_var("LOFT_HOME", &home) };
+        let got = ensure_atomics_sysroot(&profile);
+        unsafe { std::env::remove_var("LOFT_HOME") };
+
+        let mut perms = std::fs::metadata(&root).expect("meta").permissions();
+        perms.set_mode(0o755);
+        let _ = std::fs::set_permissions(&root, perms);
+
+        let got = got.expect("must fall back rather than return None");
+        assert!(
+            got.starts_with(&home),
+            "expected the user cache under {home:?}, got {got:?}"
+        );
+        assert!(
+            got.join("lib/rustlib/wasm32-unknown-unknown/lib/libcore-abc.rlib")
+                .exists(),
+            "dep rlib copied into the fallback sysroot"
+        );
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

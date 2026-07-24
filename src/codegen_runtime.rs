@@ -2043,7 +2043,7 @@ pub fn n_now() -> i64 {
 /// the comment always described.
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 pub fn n_now() -> i64 {
-    0
+    crate::loft_host_time_now_ms() as i64
 }
 
 /// Return microseconds elapsed since program start (monotonic clock).
@@ -2070,10 +2070,12 @@ pub fn n_ticks(cell: &std::cell::UnsafeCell<Stores>) -> i64 {
     (crate::wasm::host_time_ticks() - stores.start_time_ms) * 1000
 }
 
-/// #620 — browser-only fallback; `wasm32-wasip2` uses the real clock above.
+/// #620 — browser arm; `wasm32-wasip2` uses the real clock above.  Reads the
+/// host's `performance.now()`, already monotonic and page-relative, so unlike
+/// the `wasm`-feature arm it needs no `start_time_ms` subtraction.
 #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 pub fn n_ticks(_cell: &std::cell::UnsafeCell<Stores>) -> i64 {
-    0
+    crate::loft_host_time_ticks_us() as i64
 }
 
 /// Return the platform path separator as a loft character (`i32`).

@@ -7187,6 +7187,12 @@ globalThis.loftPush=(m)=>{{inQ.push(enc.encode(String(m)));}};
 const ctrl={{ac:null,httpBytes:null}};
 const imports={{loft_io:{{
   loft_host_print:(ptr,len)=>{{out.textContent+=dec.decode(new Uint8Array(mem.buffer,ptr,len));}},
+  // #620: the browser CLOCK bridge.  This target has no std clock, so without
+  // these `now()`/`ticks()` returned a hardcoded 0 — every duration measured
+  // 0ms silently.  `performance.now()` is monotonic and page-relative, which is
+  // exactly `ticks()`'s contract.
+  loft_host_time_now_ms:()=>Date.now(),
+  loft_host_time_ticks_us:()=>performance.now()*1000,
   loft_host_input_len:()=>inQ.length?inQ[0].length:0,
   loft_host_input_copy:(ptr)=>{{const b=inQ.shift();if(b)new Uint8Array(mem.buffer,ptr,b.length).set(b);}},
   loft_host_output:(ptr,len)=>{{const m=dec.decode(new Uint8Array(mem.buffer,ptr,len));
