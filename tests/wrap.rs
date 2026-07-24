@@ -1472,6 +1472,12 @@ fn loft_test_runs_admission_and_states_its_scope() -> std::io::Result<()> {
             .current_dir(&tmp)
             .args(["test"])
             .env("LOFT_TIMEOUT", "180")
+            // Isolate the spawned `loft test` from the process-global caches under
+            // `~/.cache/loft` / `~/.loft`: this suite runs alongside every other
+            // test binary on the same runner (the ASan gate builds them into one
+            // nextest invocation), and a heavily-loaded shared runner is exactly
+            // where cache interference turns a spawn-heavy test flaky.
+            .env("LOFT_NO_CACHE", "1")
             .output()?;
         Ok(format!(
             "{}{}",
