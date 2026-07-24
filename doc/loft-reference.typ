@@ -6707,18 +6707,6 @@ pub fn env_variable(name: text) -> text env#read
 
 Returns the value of the environment variable name, or null if it is not set. Use to read configuration from the shell environment.
 
-```rust
-pub fn host_input() -> text
-```
-
-Pops the next pending host message as one text; empty when there is none. The source is per-target: stdin (read once, to EOF) on native and --native-wasm (WASI); the JS host's input QUEUE on --html — seed it with globalThis.loftInput before loft\_start, and push live messages any time with globalThis.loftPush(msg) (e.g. fetch() completions).  Use for a headless compute module or a polled input loop — the inbound mirror of host\_output.  The engine only moves opaque bytes; the program parses them.
-
-```rust
-pub fn host_output(msg: text)
-```
-
-Sends one STRUCTURED message to the host shell — the outbound mirror of host\_input, distinct from user-facing print.  Per target: a line on stderr (native and WASI — the invoking process can script it); the page's globalThis.loftOutput(msg) handler on --html.  The browser pattern for loft-initiated work: host\_output a request (e.g. "fetch \<url\>"), the JS shell acts on it, and pushes the completion back via loftPush for host\_input to pop — JS owns the network, loft stays pure compute.
-
 Functions for interacting with the host operating system. Returns the script-level arguments passed after the script path. Does not include the loft binary name or loft CLI flags.
 
 ```rust
@@ -6766,6 +6754,34 @@ pub fn source_dir() -> text
 ```
 
 Returns the directory containing the main source file being executed. Use to locate data files relative to the script, regardless of working directory.
+
+== System directories (\#635)
+
+Private native: the OS temp dir, "" only where there is no filesystem.
+
+```rust
+pub fn temp_dir() -> text?env#read
+```
+
+Returns the system temporary directory, or null on a target with no filesystem (the browser). Prefer this over reading TMPDIR / TEMP / TMP directly: those differ by platform (Unix uses TMPDIR, Windows TEMP/TMP) and this also applies the OS fallback (e.g. /tmp) when none is set.
+
+```rust
+pub fn cache_dir() -> text?env#read
+```
+
+Returns loft's per-user cache directory (\$XDG\_CACHE\_HOME/loft, else \$HOME/.cache/loft) — the same root the engine caches into — or null on a target with no filesystem (the browser).
+
+```rust
+pub fn host_input() -> text
+```
+
+Pops the next pending host message as one text; empty when there is none. The source is per-target: stdin (read once, to EOF) on native and --native-wasm (WASI); the JS host's input QUEUE on --html — seed it with globalThis.loftInput before loft\_start, and push live messages any time with globalThis.loftPush(msg) (e.g. fetch() completions).  Use for a headless compute module or a polled input loop — the inbound mirror of host\_output.  The engine only moves opaque bytes; the program parses them.
+
+```rust
+pub fn host_output(msg: text)
+```
+
+Sends one STRUCTURED message to the host shell — the outbound mirror of host\_input, distinct from user-facing print.  Per target: a line on stderr (native and WASI — the invoking process can script it); the page's globalThis.loftOutput(msg) handler on --html.  The browser pattern for loft-initiated work: host\_output a request (e.g. "fetch \<url\>"), the JS shell acts on it, and pushes the completion back via loftPush for host\_input to pop — JS owns the network, loft stays pure compute.
 
 == Time
 
