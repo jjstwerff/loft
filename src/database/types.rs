@@ -21,6 +21,24 @@ use std::fmt::Write as _;
 /// (Struct, Hash, etc.) fall through to 7 (the historical catch-all,
 /// reads 1 byte — unchanged behaviour for nested-ref hash keys, which
 /// are unusual and unlikely to round-trip correctly anyway).
+/// `LOFT_TRACE_SCHEMA=1` — narrate every schema type registration and rollback
+/// to stderr as `[schema] <event> <name> -> <nr>`.
+///
+/// The schema is a shared, long-lived medium: a REPL session, the debugger and
+/// the package loader all parse into one `Stores`, and a parse that is later
+/// rolled back must leave it exactly as it found it.  When that fails the only
+/// symptom is a "Double structure type" abort at some *later*, unrelated parse,
+/// which names the collision but not the generation that leaked it — this trace
+/// is what attributes the leak to the parse that caused it (#618).
+///
+/// Pairs with [`Stores::schema_fingerprint`], which turns the same fact into an
+/// assertion instead of a thing to read.
+fn schema_trace(event: &str, name: &str, nr: u16) {
+    if std::env::var_os("LOFT_TRACE_SCHEMA").is_some() {
+        eprintln!("[schema] {event} {name:?} -> {nr}");
+    }
+}
+
 fn key_type_nr_for_content(content: u16, types: &[Type]) -> i8 {
     if content <= 5 {
         return 1 + content as i8;
@@ -68,6 +86,7 @@ impl Stores {
     */
     pub fn structure(&mut self, name: &str, enum_value: i32) -> u16 {
         let num = self.types.len() as u16;
+        schema_trace("register", name, num);
         assert!(
             !self.names.contains_key(name),
             "Double structure type {name}"
@@ -1452,6 +1471,64 @@ impl Stores {
     #[must_use]
     pub fn name(&self, name: &str) -> u16 {
         *self.names.get(name).unwrap_or(&u16::MAX)
+    }
+
+    /// The number of registered types — pair with [`rollback_types_to`] to undo
+    /// the schema a throwaway parse registered.
+    ///
+    /// [`rollback_types_to`]: Self::rollback_types_to
+    #[must_use]
+    pub fn types_len(&self) -> u16 {
+        self.types.len() as u16
+    }
+
+    /// A cheap total summary of the registered schema — `(type count, name
+    /// count, order-independent hash of every `name → nr` pair)`.
+    ///
+    /// The oracle for schema neutrality: an operation that is supposed to leave
+    /// the schema untouched (a rolled-back REPL capture generation, a
+    /// speculative parse) must return the SAME fingerprint it started with.
+    /// Comparing counts alone would miss a rollback that removed one name and
+    /// added another, so the hash covers the mapping itself; XOR keeps it
+    /// independent of `HashMap` iteration order.
+    #[must_use]
+    pub fn schema_fingerprint(&self) -> (u16, u32, u64) {
+        use std::hash::{Hash, Hasher};
+        let mut acc: u64 = 0;
+        for (name, &nr) in &self.names {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            name.hash(&mut h);
+            nr.hash(&mut h);
+            acc ^= h.finish();
+        }
+        (self.types.len() as u16, self.names.len() as u32, acc)
+    }
+
+    /// Drop every type registered at or after `keep`, the schema-side twin of
+    /// `Data::rollback_to` (#618).
+    ///
+    /// A REPL value-capture parses a synthetic program into the session's
+    /// `Data` **and** its `Stores`, then rolls the `Data` back.  Rolling back
+    /// only half left the schema holding names whose definitions no longer
+    /// exist, so the next capture that needed the same synthetic wrapper
+    /// re-registered the name and `structure` aborted with "Double structure
+    /// type" — reachable whenever a capture's return type has no pre-existing
+    /// `main_vector<…>` wrapper (e.g. an element type wide enough to carry a
+    /// range: `vector<integer(-2147483647, 4294967295)>`).
+    ///
+    /// Sound only because the two rollbacks are paired: a type registered by
+    /// that parse is referenced only by definitions the same parse added.
+    pub fn rollback_types_to(&mut self, keep: u16) {
+        if usize::from(keep) >= self.types.len() {
+            return;
+        }
+        for (name, &nr) in &self.names {
+            if nr >= keep {
+                schema_trace("rollback", name, nr);
+            }
+        }
+        self.types.truncate(keep as usize);
+        self.names.retain(|_, &mut nr| nr < keep);
     }
 
     pub fn short(&mut self, min: i32, nullable: bool) -> u16 {

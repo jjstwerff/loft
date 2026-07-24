@@ -4131,11 +4131,18 @@ impl State {
         }
         // @PLAN59: the entry fn may carry hidden heap return-buffer attrs
         // (ref_return promotion / the signature-time `__retbuf`).  Push one
-        // NULL-SENTINEL dest per hidden heap attr so the entry frame layout
-        // matches its argument vars — a promoted body `OpDatabase`s the slot
-        // (alloc-from-sentinel), an unwritten buffer stays a no-op sentinel.
-        // (The REPL's capture wrapper `fn replmain_N() -> P { … }` is the
-        // canonical caller of a heap-returning entry fn.)
+        // dest per hidden heap attr so the entry frame layout matches its
+        // argument vars.  (The REPL's capture wrapper `fn replmain_N() -> P
+        // { … }` is the canonical caller of a heap-returning entry fn.)
+        //
+        // #618: the buffer must be ALLOCATED, not a bare null sentinel.  Only a
+        // struct/enum body opens with `OpDatabase` (alloc-from-sentinel); a
+        // vector-returning body writes straight into the caller's buffer
+        // (`OpClearVector` / `OpPreAllocVector` / `OpFinishRecord`), because at
+        // an ordinary call site the caller allocated it — so a sentinel left
+        // every element write pointing at `stores[u16::MAX]`.  Allocating here
+        // is exactly what the `OpDatabase`-before-the-call a real caller emits
+        // does, so entry and non-entry frames now honour the same contract.
         for a in *attrs {
             if a.hidden
                 && matches!(
@@ -4143,7 +4150,17 @@ impl State {
                     Type::Reference(_, _) | Type::Vector(_, _) | Type::Enum(_, true, _)
                 )
             {
-                self.put_stack(crate::keys::DbRef::NULL);
+                // Only the VECTOR contract is caller-allocates.  A struct /
+                // data-enum body opens with its own `OpDatabase`, which turns the
+                // sentinel into a store itself — pre-allocating for those would
+                // just strand a second, unused record in the store.
+                let dest = if matches!(a.typedef, Type::Vector(_, _)) {
+                    self.alloc_hidden_return_buffer(data, &a.typedef)
+                        .unwrap_or(crate::keys::DbRef::NULL)
+                } else {
+                    crate::keys::DbRef::NULL
+                };
+                self.put_stack(dest);
             }
         }
         self.put_stack(u32::MAX);

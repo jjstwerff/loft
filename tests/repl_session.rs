@@ -1274,7 +1274,6 @@ fn repl_tracepoint_logs_and_continues() {
 /// has no such guard and the process aborts — so this must not merely degrade to
 /// `None`, it must return the value.
 #[test]
-#[ignore = "#618 open: needs the fn-return/heap-value substrate fix — see the comment above"]
 fn value_of_renders_vector_bindings_618() {
     let mut s = session();
     assert!(matches!(s.eval("v = [1, 2, 3]"), Eval::Ran));
@@ -1297,7 +1296,6 @@ fn value_of_renders_vector_bindings_618() {
 /// `v = [9000000000, 0]` binding panicking at `database/types.rs` instead of
 /// `keys.rs`; both are the fn-return copy, so guard the wide element here too.
 #[test]
-#[ignore = "#618 open: needs the fn-return/heap-value substrate fix — see the comment above"]
 fn value_of_renders_text_and_wide_vector_bindings_618() {
     let mut s = session();
     assert!(matches!(s.eval("vt = [\"a\", \"b\"]"), Eval::Ran));

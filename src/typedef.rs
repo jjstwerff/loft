@@ -637,6 +637,18 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
     } else {
         data.def(d_nr).name.clone()
     };
+    // `LOFT_TRACE_SCHEMA` — see `database::types::schema_trace`.  Logging the DEF
+    // behind each registration is what makes a duplicate attributable: the abort
+    // names only the colliding type, while the fault is one def being filled
+    // twice (a rolled-back parse re-creating it), which shows up here as the same
+    // `d_nr` registering a bare name and then a `src0::`-qualified one (#618).
+    if std::env::var_os("LOFT_TRACE_SCHEMA").is_some() {
+        eprintln!(
+            "[schema] fill d_nr={d_nr} src={} name={:?} -> reg={reg_name:?}",
+            data.def(d_nr).source,
+            data.def(d_nr).name,
+        );
+    }
     let s_type = database.structure(&reg_name, enum_value);
     data.definitions[d_nr as usize].known_type = s_type;
     if data.def_type(d_nr) == DefType::EnumValue {

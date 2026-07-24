@@ -16571,3 +16571,81 @@ fn pln114_alignment_tables_agree() {
         );
     }
 }
+
+// ── #618: an entry function returning a heap value ───────────────────────────
+// `ref_return` promotion makes a returned local BE the caller's hidden return
+// buffer, so the body writes straight into it.  An ordinary call site allocates
+// that buffer before the call; `execute_argv` pushed a bare `DbRef::NULL`, so
+// every element write addressed `stores[u16::MAX]` and aborted with
+// "index out of bounds: the len is 2 but the index is 65535".
+//
+// `ReplSession::value_of` was the reported symptom, but the entry contract is
+// what broke, so guard it directly here: a plain `fn main() -> vector<integer>`
+// reproduced it identically under `--interpret`.  Struct returns always worked
+// (their promoted body opens with its own `OpDatabase`) and are kept as the
+// negative control — a "fix" that regressed them would pass the vector cases.
+//
+// Interpreter only: `--native` cannot yet compile ANY heap-returning entry fn
+// (its generated `main` omits the hidden buffer argument → rustc E0428/E0061),
+// a separate pre-existing gap on the same contract.
+fn run_entry_returning(code: &str) -> (State, loft::data::Data) {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse_str(code, "issue618", false);
+    assert!(
+        p.diagnostics.lines().is_empty(),
+        "Parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute_argv("main", &p.data, &[]);
+    (state, p.data)
+}
+
+#[test]
+fn issue618_entry_fn_returns_bare_local_vector() {
+    // Pre-fix: aborted here rather than returning.  The `println` makes the
+    // built value observable even though the entry's return is discarded, so a
+    // silently-empty buffer cannot pass as success.
+    let (state, _) = run_entry_returning(
+        "fn main() -> vector<integer> {\n  v = [1, 2, 3];\n  println(\"{v}\");\n  v\n}",
+    );
+    assert!(
+        state.database.runtime_error.is_none(),
+        "entry returning a bare local vector must not fault"
+    );
+}
+
+#[test]
+fn issue618_entry_fn_returns_vector_shapes() {
+    // One axis per case: element kind, nesting depth, and zero cardinality —
+    // every shape routes through the same hidden-buffer contract.
+    for code in [
+        "fn main() -> vector<text> {\n  v = [\"a\", \"b\"];\n  println(\"{v}\");\n  v\n}",
+        "fn main() -> vector<vector<integer>> {\n  v = [[1, 2], [3]];\n  println(\"{v}\");\n  v\n}",
+        "fn main() -> vector<integer> {\n  v: vector<integer> = [];\n  println(\"{v}\");\n  v\n}",
+        // An element wider than 32 bits — the report's second signature.
+        "fn main() -> vector<integer> {\n  v = [9000000000, 0];\n  println(\"{v}\");\n  v\n}",
+    ] {
+        let (state, _) = run_entry_returning(code);
+        assert!(
+            state.database.runtime_error.is_none(),
+            "entry heap return faulted for: {code}"
+        );
+    }
+}
+
+#[test]
+fn issue618_entry_fn_returning_struct_still_works() {
+    // Negative control: this path allocates from the sentinel itself and was
+    // never broken — it must stay that way.
+    let (state, _) = run_entry_returning(
+        "struct P { x: integer }\nfn main() -> P {\n  p = P { x: 1 };\n  println(\"{p}\");\n  p\n}",
+    );
+    assert!(
+        state.database.runtime_error.is_none(),
+        "entry returning a struct must keep working"
+    );
+}

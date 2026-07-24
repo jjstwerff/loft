@@ -566,7 +566,7 @@ fn shared_bridge_wrapper(data: &Data, dups: &HashSet<String>, d_nr: u32) -> Stri
 /// library's compile-time type IDS live in a different id space than the
 /// caller's (@PLAN59: a lib-side constant id produced `claim(size=0)` /
 /// "Incomplete record" aborts once struct dests became universal).
-fn hidden_dest_type_name(data: &Data, t: &Type) -> Option<String> {
+pub(crate) fn hidden_dest_type_name(data: &Data, t: &Type) -> Option<String> {
     match t.base() {
         Type::Vector(elm, _) => Some(format!("main_vector<{}>", elm.name(data))),
         Type::Reference(td, _) | Type::Enum(td, true, _) => Some(data.def(*td).name().to_string()),

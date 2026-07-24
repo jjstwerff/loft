@@ -874,13 +874,26 @@ impl State {
             db = self.database.null();
             *self.mut_var::<DbRef>(var) = db;
         }
-        self.database.clear(&db);
+        let r = self.alloc_record_into(&db, db_tp, size, code_pos);
+        let db = self.mut_var::<DbRef>(var);
+        db.store_nr = r.store_nr;
+        db.rec = 1;
+        db.pos = 8;
+    }
+
+    /// Claim a fresh `db_tp` record of `size` payload bytes in `db`'s store and
+    /// stamp its header — the store-side half of [`alloc_record_at`], split out
+    /// so a caller that has no variable slot to write back to (the entry frame's
+    /// hidden return buffer, #618) allocates by exactly the same rules.
+    /// The returned `DbRef` addresses the record's payload.
+    fn alloc_record_into(&mut self, db: &DbRef, db_tp: u16, size: u16, code_pos: u32) -> DbRef {
+        self.database.clear(db);
         // The record layout is: word 0 = size header (4 B) + type tag (4 B),
         // payload from byte 8.  `Stores::claim` takes WORDS, so the payload's
         // `size` BYTES need `1 + ceil(size / 8)` words — passing `size` raw
         // under-claims for 1-byte payloads (a single-boolean struct/closure
         // record got zero payload bytes and wrote into the next word).
-        let r = self.database.claim(&db, 1 + u32::from(size).div_ceil(8));
+        let r = self.database.claim(db, 1 + u32::from(size).div_ceil(8));
         self.database.allocations[r.store_nr as usize].created_at = code_pos;
         // P259 commit 3 — record the type allocated into this store so
         // free_named can recognise closure-record stores at free time
@@ -890,10 +903,35 @@ impl State {
             .store_mut(&r)
             .set_u32_raw(r.rec, 4, u32::from(db_tp));
         self.database.set_default_value(db_tp, &r);
-        let db = self.mut_var::<DbRef>(var);
-        db.store_nr = r.store_nr;
-        db.rec = 1;
-        db.pos = 8;
+        DbRef {
+            store_nr: r.store_nr,
+            rec: 1,
+            pos: 8,
+        }
+    }
+
+    /// Allocate the hidden heap return buffer an entry function's caller is
+    /// contracted to supply, for a `ref_return`-promoted attr of type `t`
+    /// (#618).  `None` when the type has no shared-store schema name — the
+    /// caller then falls back to the null sentinel, i.e. today's behaviour.
+    ///
+    /// An ordinary call site emits `OpDatabase` on a local before the call
+    /// (`__ref_1 = null; OpDatabase(__ref_1, main_vector<integer>); get(__ref_1)`);
+    /// `execute_argv` has no bytecode to do that, so it allocates here instead.
+    pub(crate) fn alloc_hidden_return_buffer(
+        &mut self,
+        data: &crate::data::Data,
+        t: &crate::data::Type,
+    ) -> Option<DbRef> {
+        let tname = crate::native_lib::hidden_dest_type_name(data, t)?;
+        let db_tp = self.database.name(&tname);
+        if db_tp == u16::MAX {
+            return None;
+        }
+        // B2-runtime: EnumValue records must fit the parent enum's largest variant.
+        let size = self.database.enum_parent_size(db_tp);
+        let fresh = self.database.null();
+        Some(self.alloc_record_into(&fresh, db_tp, size, self.code_pos))
     }
 
     pub fn new_record(&mut self) {
