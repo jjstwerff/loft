@@ -296,6 +296,23 @@ control cell.  With `--baseline`, failing cells are labelled
 `cargo build --release --bin loft` inside it).  Leak detection: interp
 reads the exit warning; native runs under `LOFT_NATIVE_LEAK_CHECK=1`.
 
+**The INSTALLED `loft` is a free before/after oracle.**  `$(which loft)` is
+whatever `make install` last put there, so during a fix it is a ready-built
+binary from before your edits — no worktree, no second build, and none of the
+tree-destroying moves (`git stash`, `git checkout HEAD -- <file>`) the
+[debugging policy](../../CLAUDE.md) forbids.  Three uses, all of which paid off
+in the nested-narrow-width fix:
+
+```bash
+loft --interpret probe.loft            # baseline: is this failure mine or pre-existing?
+./target/debug/loft --interpret probe.loft   # ... vs the working tree
+loft --interpret tests/scripts/new-guard.loft   # must FAIL — proves a new guard isn't vacuous
+```
+
+Check its date first (`ls -l $(which loft)`) so you know which commit you are
+comparing against; re-running `make install` mid-investigation destroys the
+baseline.
+
 Graduate the cells that earn guarantees into `tests/scripts/` when the fix
 lands (protocol step 7) — e.g. `302-vector-buffer-delivery.loft` /
 `303-ref-reassign-free.loft` are graduated matrices.
