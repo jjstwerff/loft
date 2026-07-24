@@ -557,7 +557,8 @@ fn env_entries_survive_across_evals() {
     // Unrelated evals in between — each builds and drops its own State.
     assert!(matches!(s.eval("d = [9, 8]"), Eval::Ran));
     assert!(matches!(s.eval("n = 41 + 1"), Eval::Ran));
-    assert_eq!(s.env_names(), vec!["a", "b", "c", "d"]);
+    // `n` is a scalar and, since arc C (Step 3), store-resident too.
+    assert_eq!(s.env_names(), vec!["a", "b", "c", "d", "n"]);
     assert_eq!(s.env_value("a").as_deref(), Some("[1,2,3]"));
     assert_eq!(s.env_value("b").as_deref(), Some("P{x:7,y:9}"));
     assert_eq!(s.env_value("c").as_deref(), Some("[\"one\",\"two\"]"));
@@ -590,25 +591,148 @@ fn re_bind_replaces_the_env_entry() {
     assert_eq!(s.env_value("v").as_deref(), Some("[4,5]"));
 }
 
-/// Scope boundary, pinned so it is a decision and not a surprise: scalars and
-/// top-level text stay inline-only — no env entry until arc C (Step 3) boxes
-/// them.  Behaviour of the replay model is unchanged for them.
+// ── Step 3 — scalars at rest (arc C) ────────────────────────────────────────
+//
+// Every binding now has a store-resident home, scalar or not.  That uniformity
+// is the point: Step 4's frame-seed reads prior names along ONE path instead of
+// branching on whether a value happened to be inline.
+
+/// One cell per scalar kind: bind it, and the boxed value must render exactly
+/// what the replay literal renders.
+///
+/// Same BICONDITIONAL as the heap differential: the shadow holds a value exactly
+/// when the REPL.X snapshot path captured one.  A few shapes are declined by that
+/// path on `main` and so have no entry — notably a POSITIVE integer literal above
+/// the inferred `integer` range (`9000000000` is declined, `-9000000001` is not).
+/// That is pre-existing and unrelated to @PLN14; what matters here is that the
+/// shadow agrees about *whether* there is a value, never inventing one.
 #[test]
-fn scalars_and_text_have_no_env_entry_yet() {
-    let mut s = session();
-    assert!(matches!(s.eval("n = 5"), Eval::Ran));
-    assert!(matches!(s.eval("t = \"hello\""), Eval::Ran));
-    assert!(matches!(s.eval("f = 1.5"), Eval::Ran));
-    assert!(matches!(s.eval("b = true"), Eval::Ran));
+fn scalars_are_store_resident_and_agree_with_the_replay() {
+    let cases: &[(&str, &str)] = &[
+        ("n", "5"),
+        ("neg", "-17"),
+        ("big", "9000000000"), // > 32-bit, declined by the snapshot path
+        ("negbig", "-9000000001"),
+        ("zero", "0"),
+        ("f", "1.5"),
+        ("fneg", "-0.25"),
+        ("b", "true"),
+        ("bf", "false"),
+        ("c", "'x'"),
+        ("t", "\"hi\""),
+        ("empty", "\"\""),
+        ("esc", "\"a\\\"b\\nc\\\\d \\u{2603}\""),
+    ];
+    let mut checked = 0;
+    for (name, expr) in cases {
+        let mut s = session();
+        assert!(
+            matches!(s.eval(&format!("{name} = {expr}")), Eval::Ran),
+            "bind failed: {name} = {expr}"
+        );
+        let shadow = s.env_value(name);
+        let replayed = s.value_of(name);
+        match (&shadow, &replayed) {
+            (Some(shadow), Some(replayed)) => {
+                assert_eq!(
+                    shadow, replayed,
+                    "boxed scalar diverged from the replayed value for `{name} = {expr}`"
+                );
+                checked += 1;
+            }
+            (None, None) => {}
+            _ => panic!(
+                "shadow and snapshot disagree on WHETHER `{name} = {expr}` has a \
+                 value: env={shadow:?} snapshot={replayed:?}"
+            ),
+        }
+    }
     assert!(
-        s.env_names().is_empty(),
-        "scalars/text are arc C, not Step 2: {:?}",
-        s.env_names()
+        checked >= 10,
+        "only {checked} scalar cells carried a value — too few to be a differential"
     );
-    // The replay model still has them — the shadow changed nothing.
-    assert_eq!(s.value_of("n").as_deref(), Some("5"));
-    assert_eq!(s.value_of("t").as_deref(), Some("\"hello\""));
-    assert_eq!(s.env_value("n"), None);
+}
+
+/// Boxing is by RAW BYTES, not via the display literal — so a float that does not
+/// survive a naive decimal round-trip still comes back exact.  This is why Q2
+/// keeps own-format out of the session path.
+#[test]
+fn boxed_floats_are_exact() {
+    for expr in ["0.1 + 0.2", "1.0 / 3.0", "1.0e300 * 1.0e-300", "-0.0"] {
+        let mut s = session();
+        assert!(
+            matches!(s.eval(&format!("v = {expr}")), Eval::Ran),
+            "{expr}"
+        );
+        let shadow = s
+            .env_value("v")
+            .unwrap_or_else(|| panic!("no entry: {expr}"));
+        let replayed = s
+            .value_of("v")
+            .unwrap_or_else(|| panic!("no replay: {expr}"));
+        assert_eq!(shadow, replayed, "float lost exactness for `{expr}`");
+    }
+}
+
+/// A simple (payload-free) enum boxes its discriminant and reads back qualified.
+#[test]
+fn simple_enum_is_store_resident() {
+    let mut s = session();
+    assert!(matches!(
+        s.eval("enum Direction { North, East, South, West }"),
+        Eval::Ran
+    ));
+    assert!(matches!(s.eval("d = Direction.South"), Eval::Ran));
+    assert_eq!(s.env_value("d").as_deref(), Some("Direction.South"));
+    assert_eq!(s.value_of("d").as_deref(), Some("Direction.South"));
+}
+
+/// A `text` binding is store-resident with its CHARACTERS copied into the session
+/// store, and reads back as a bare text literal — not as the single-element
+/// `vector<text>` the @P293 work-around physically stores it in.
+#[test]
+fn text_is_store_resident_and_unwrapped() {
+    let mut s = session();
+    assert!(matches!(s.eval("t = \"hi\""), Eval::Ran));
+    assert_eq!(s.env_value("t").as_deref(), Some("\"hi\""));
+    // A COMPUTED text (the borrowed case @P293 is about) works the same way.
+    assert!(matches!(s.eval("u = t + \" there\""), Eval::Ran));
+    assert_eq!(s.env_value("u").as_deref(), Some("\"hi there\""));
+    assert_eq!(s.value_of("u").as_deref(), Some("\"hi there\""));
+}
+
+/// Every binding kind now has a home — the arc-C uniformity claim, stated as one
+/// assertion so a regression in any single kind shows up here.
+#[test]
+fn every_binding_kind_has_a_store_resident_home() {
+    let mut s = session_with_defs();
+    for input in [
+        "n = 5",
+        "f = 1.5",
+        "b = true",
+        "c = 'q'",
+        "t = \"hi\"",
+        "v = [1, 2, 3]",
+        "p = P { x: 1, y: 2 }",
+        "l = Line { a: P{x:1,y:2}, b: P{x:3,y:4}, tag: \"seg\" }",
+    ] {
+        assert!(matches!(s.eval(input), Eval::Ran), "bind failed: {input}");
+    }
+    assert_eq!(
+        s.env_names(),
+        vec!["b", "c", "f", "l", "n", "p", "t", "v"],
+        "some binding kind has no store-resident home"
+    );
+}
+
+/// A faulting bind still records nothing — no env entry, no poison.
+#[test]
+fn a_faulting_bind_records_no_env_entry() {
+    let mut s = session();
+    assert!(matches!(s.eval("ok = 1"), Eval::Ran));
+    let before = s.env_names();
+    let _ = s.eval("bad = assert(false, \"boom\")");
+    assert_eq!(s.env_names(), before, "a faulting bind left an env entry");
 }
 
 /// The shadow is WRITE-ONLY in Step 2: the replay model is still the source of

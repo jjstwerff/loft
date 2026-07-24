@@ -11,11 +11,13 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **Steps 0–2 landed 2026-07-24**: the matrix instrument (Step 0), the arc-B
-materialize primitive (Step 1), and the arc-A session store + env record as a
-**write-only shadow** (Step 2). The replay model is still the source of truth, so
-behaviour is unchanged and nothing in the corpus can regress. Next is Step 3
-(scalars at rest, arc C), which closes the one gap the shadow still has.
+Open — **Steps 0–3 landed 2026-07-24**: the matrix instrument (Step 0), the arc-B
+materialize primitive (Step 1), the arc-A session store + env record as a
+**write-only shadow** (Step 2), and arc-C scalars at rest (Step 3). Every binding
+kind now has a store-resident home. The replay model is still the source of truth,
+so behaviour is unchanged and nothing in the corpus can regress. Next is Step 4
+(frame-seed, arc D) — the first step that *reads* the env, and the risk phase:
+it stays differential-gated against the still-running replay.
 
 See *Step 0/1 findings* below — the materialize primitive is built on
 `copy_claims`, **not** the `snapshot_copy` this plan originally named — and the
@@ -101,9 +103,9 @@ both backends, not when the demo runs.
 
 | Item | Status |
 |---|---|
-| **A** — session store + binding-environment record (`name → (Type, handle)`) | **Shadow built** (Step 2) — written on every heap bind, read only by `env_value`; heap values only (scalars/text are arc C) |
+| **A** — session store + binding-environment record (`name → (Type, handle)`) | **Shadow built** (Step 2, extended by Step 3) — written on **every** bind, read only by `env_value` |
 | **B** — value materialization: store-to-store copy of a run's result into the session store, returning a stable `DbRef` | **Primitive built** (`Stores::materialize`, Step 1) — not yet wired to a session |
-| **C** — scalars at rest (`x = 5`): boxed into the store, or a tiny inline tagged env value | Open |
+| **C** — scalars at rest (`x = 5`): boxed into the store, or a tiny inline tagged env value | **Built** (Step 3) — boxed 1-field record, raw bytes; text included via `TextInVector` |
 | **D** — frame-seed: prior names load from the session store into their slots before a new statement runs | Open |
 | **E** — observe / `:vars` read from the environment — **no body replay** | Open |
 | **F** — resume: mmap the session store + schema-version gating (stale image → fresh fallback) | Open |
@@ -294,10 +296,34 @@ value the instrument cannot *see* must fail, not pass.
   shadow, behaviour unchanged. **Verify:** every env entry equals the replayed value
   across the matrix (the shadow is the differential oracle warming up).
 
-- **Step 3 — scalars at rest (arc C). Effort S.**
+- **Step 3 — scalars at rest (arc C). Effort S. BUILT 2026-07-24.**
   Make scalar binds (`x = 5`) materialize uniformly — boxed 1-field record vs inline
   tagged env value (Q5) — so seeding (D) is one path, not two. **Safety:** still
   write-only env; behaviour unchanged.
+  **Q5 resolved: the boxed 1-field store record.** `box_scalar_into_session` claims a
+  two-word record (header + payload) in the session store and writes the value with
+  the typed store setters; `SessionValue.shape` says how to read it back.
+  - **Raw bytes, never the display literal.** `render_capture` now hands back the
+    value it popped (`Captured::Heap` / `Captured::Scalar`) rather than only its
+    rendering, so boxing is lossless — `float_literal` is a display form and
+    round-tripping through it is not the identity (`boxed_floats_are_exact`).
+    This is Q2's separation applied to arc C.
+  - **Text becomes store-resident too**, with its characters copied into the
+    session store by `set_str`. It is physically the single-element `vector<text>`
+    that `capture_binding` builds to dodge @P293 (capturing a borrowed text off the
+    stack aborts the process), so the entry is tagged `TextInVector` and the read
+    side unwraps it back to a bare text literal. That also puts the bytes out of
+    reach of the raw-pointer `Str` hazard.
+  - Covered kinds: integer, float, single, boolean, character, text, simple enum —
+    `every_binding_kind_has_a_store_resident_home` asserts the arc-C uniformity
+    claim in one place.
+
+  **Pre-existing decline, pinned not fixed:** a POSITIVE integer literal above the
+  inferred `integer` range (`9000000000`) is declined by the REPL.X snapshot path
+  on `main` — `value_of` returns `None` — while `-9000000001` is fine. The shadow
+  agrees (no entry), which is what the biconditional checks; the underlying
+  narrow-range inference is out of @PLN14's scope and shares a signature with the
+  `Double structure type` note on loft#618.
 
 - **Step 4 — frame-seed (arc D), flag-gated + differential. Effort M (the risk phase).**
   Before a new statement runs, load prior names from the session store into their slots

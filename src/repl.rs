@@ -918,38 +918,62 @@ fn escape_loft_text(raw: &str) -> String {
 /// `None` only on an unresolved type name (a fallback to source, never reached in
 /// practice for a value the session just produced).
 ///
-/// `root_out` receives the value's `DbRef` for the **heap-backed** arm only — the
-/// stack read consumes it, so this is the one chance to keep it.  @PLN14 arc B
-/// materializes that ref into the session store; the inline arms leave it `None`
-/// (a scalar has no heap home until arc C boxes it).
+/// `captured` receives the raw value the stack read consumed — the one chance to
+/// keep it, since `get_stack` pops.  @PLN14 gives it a home in the session store:
+/// arc B materializes a [`Captured::Heap`] ref, arc C boxes a
+/// [`Captured::Scalar`].  Raw, never the rendered literal: the store-resident
+/// value must be exact (a float round-tripped through its decimal form is not).
 fn render_capture(
     state: &mut State,
     ret_ty: &Type,
     name: &str,
     json: bool,
-    root_out: &mut Option<crate::keys::DbRef>,
+    captured: &mut Option<Captured>,
 ) -> Option<String> {
     match ret_ty {
-        Type::Integer(_) => Some(state.get_stack::<i64>().to_string()),
-        Type::Float => Some(float_literal(*state.get_stack::<f64>())),
+        Type::Integer(_) => {
+            let n = *state.get_stack::<i64>();
+            *captured = Some(Captured::Scalar(ScalarValue::Integer(n)));
+            Some(n.to_string())
+        }
+        Type::Float => {
+            let v = *state.get_stack::<f64>();
+            *captured = Some(Captured::Scalar(ScalarValue::Float(v)));
+            Some(float_literal(v))
+        }
         // own-format `2f` isn't valid JSON; drop the suffix for `json`.
-        Type::Single if json => Some(state.get_stack::<f32>().to_string()),
-        Type::Single => Some(format!("{}f", *state.get_stack::<f32>())),
+        Type::Single if json => {
+            let v = *state.get_stack::<f32>();
+            *captured = Some(Captured::Scalar(ScalarValue::Single(v)));
+            Some(v.to_string())
+        }
+        Type::Single => {
+            let v = *state.get_stack::<f32>();
+            *captured = Some(Captured::Scalar(ScalarValue::Single(v)));
+            Some(format!("{v}f"))
+        }
         Type::Boolean => {
             let v = *state.get_stack::<u8>() != 0;
+            *captured = Some(Captured::Scalar(ScalarValue::Boolean(v)));
             Some(if v { "true" } else { "false" }.to_string())
         }
         // own-format `'c'` isn't valid JSON; emit a JSON string for `json`.
-        Type::Character => char::from_u32(*state.get_stack::<u32>()).map(|c| {
-            if json {
+        Type::Character => {
+            let raw = *state.get_stack::<u32>();
+            let c = char::from_u32(raw)?;
+            *captured = Some(Captured::Scalar(ScalarValue::Character(raw)));
+            Some(if json {
                 format!("\"{c}\"")
             } else {
                 format!("'{c}'")
-            }
-        }),
-        Type::Text(_) => Some(escape_loft_text(
-            state.get_stack::<crate::keys::Str>().str(),
-        )),
+            })
+        }
+        Type::Text(_) => {
+            let s = state.get_stack::<crate::keys::Str>().str().to_string();
+            let lit = escape_loft_text(&s);
+            *captured = Some(Captured::Scalar(ScalarValue::Text(s)));
+            Some(lit)
+        }
         // Heap value backed by a `DbRef`: struct, vector, struct-enum variant.  The
         // return is a 12-byte `DbRef` on the stack top; `json` selects the inbuilt
         // serializer — `show_json` (RFC 8259, `{"x":3}`, the generic value→JSON walk
@@ -963,7 +987,7 @@ fn render_capture(
                 return None;
             }
             let db = *state.get_stack::<crate::keys::DbRef>();
-            *root_out = Some(db);
+            *captured = Some(Captured::Heap(db));
             let mut out = String::new();
             if json {
                 state.database.show_json(&mut out, &db, tp, false);
@@ -979,6 +1003,7 @@ fn render_capture(
                 return None;
             }
             let disc = *state.get_stack::<u8>();
+            *captured = Some(Captured::Scalar(ScalarValue::SimpleEnum(disc)));
             if disc == 0 {
                 Some("null".to_string())
             } else if json {
@@ -1018,6 +1043,58 @@ struct Savepoint {
     #[cfg(debug_assertions)]
     schema: (u16, u32, u64),
 }
+
+/// @PLN14 — the raw value a capture read off the stack, on its way to a home in
+/// the session store.  Split the way the store itself splits: a heap value is
+/// already a record (arc B copies it), a scalar is not (arc C boxes it).
+enum Captured {
+    /// A struct / vector / struct-enum: the record's root ref.
+    Heap(crate::keys::DbRef),
+    /// An inline value with no heap home of its own yet.
+    Scalar(ScalarValue),
+}
+
+/// @PLN14 arc C — a scalar in the exact form it left the stack in.  Kept raw
+/// rather than as its literal so boxing is lossless (`float_literal` is a
+/// display form; round-tripping through it is not the identity).
+enum ScalarValue {
+    Integer(i64),
+    Float(f64),
+    Single(f32),
+    Boolean(bool),
+    /// The raw `u32` scalar value, already known to be a valid `char`.
+    Character(u32),
+    Text(String),
+    /// A simple (payload-free) enum's 1-based discriminant; `0` is null.
+    SimpleEnum(u8),
+}
+
+/// @PLN14 arc C — how a boxed scalar is read back out of the session store.
+/// Mirrors [`ScalarValue`] without the payload: the bytes live in the store, this
+/// only says how to interpret them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ScalarKind {
+    Integer,
+    Float,
+    Single,
+    Boolean,
+    Character,
+    Text,
+    SimpleEnum,
+}
+
+impl ScalarValue {
+    fn kind(&self) -> ScalarKind {
+        match self {
+            ScalarValue::Integer(_) => ScalarKind::Integer,
+            ScalarValue::Float(_) => ScalarKind::Float,
+            ScalarValue::Single(_) => ScalarKind::Single,
+            ScalarValue::Boolean(_) => ScalarKind::Boolean,
+            ScalarValue::Character(_) => ScalarKind::Character,
+            ScalarValue::Text(_) => ScalarKind::Text,
+            ScalarValue::SimpleEnum(_) => ScalarKind::SimpleEnum,
+        }
+    }}
 
 /// Outcome of trying to value-snapshot a binding's RHS (REPL.X capture).
 enum Capture {
@@ -1270,10 +1347,27 @@ pub struct ReplSession {
 /// `a_session_store_survives_re_adoption_at_a_different_slot`.
 #[derive(Debug, Clone)]
 struct SessionValue {
-    /// The loft-source type name, for the `show_loft` schema lookup on read-back.
+    /// The loft-source type name, for the `show_loft` / enum schema lookup on
+    /// read-back.
     type_name: String,
     rec: u32,
     pos: u32,
+    /// How to read the bytes back: a record the schema walks, or a boxed scalar.
+    shape: SessionShape,
+}
+
+/// @PLN14 — how a session-store entry is interpreted on read-back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SessionShape {
+    /// A record the schema can walk — rendered by `show_loft` with `type_name`'s
+    /// type id (arc B).
+    Heap,
+    /// A scalar boxed into a 1-field record (arc C).
+    Scalar(ScalarKind),
+    /// A `text` binding stored as the single-element `vector<text>` that
+    /// `capture_binding` builds to dodge @P293.  The characters ARE store-resident
+    /// (the vector copied them in); only the wrapper has to be undone on read.
+    TextInVector,
 }
 
 /// @PLN16 M5e slice 6 — a launched game: the child process + its drained output.
@@ -3026,11 +3120,16 @@ impl ReplSession {
                     .map_or(Capture::Skip, |inner| Capture::Done(inner.to_string())),
                 other => other,
             };
-            // @PLN14 — the wrapper above materialized a `vector<text>`, but the
-            // BINDING is a `text`.  Recording that mismatch would make the env
-            // report `["hi"]` for `t = "hi"`, so drop it: a top-level text value
-            // becomes store-resident in arc C (Step 3) with its own shape.
-            self.pending_materialized = None;
+            // @PLN14 arc C — the wrapper above materialized a `vector<text>`, but
+            // the BINDING is a `text`.  Left as-is the env would report `["hi"]`
+            // for `t = "hi"`, so retag it: the characters are already store-
+            // resident inside that vector, and the read side unwraps the single
+            // element back to a bare text literal.  (Capturing the text directly
+            // instead is exactly what @P293 forbids — a borrowed text read off the
+            // stack aborts the process.)
+            if let Some(v) = self.pending_materialized.as_mut() {
+                v.shape = SessionShape::TextInVector;
+            }
             return out;
         }
         self.capture_typed(rhs, &ty, json)
@@ -3073,15 +3172,18 @@ impl ReplSession {
             self.rewind(sp);
             return Capture::Failed(vec![err.to_diag_entry()]);
         }
-        let mut root = None;
-        let lit = render_capture(&mut state, &ret_ty, ty, json, &mut root);
-        // @PLN14 arc B — SHADOW WRITE: give the value its own home in the session
-        // store.  Nothing reads it yet (the replay literal below is still the
-        // source of truth), so this cannot change behaviour; it is the differential
-        // oracle Step 4's frame-seed gets checked against.
+        let mut captured = None;
+        let lit = render_capture(&mut state, &ret_ty, ty, json, &mut captured);
+        // @PLN14 arcs B + C — SHADOW WRITE: give the value its own home in the
+        // session store, whatever its shape.  Nothing reads it yet (the replay
+        // literal below is still the source of truth), so this cannot change
+        // behaviour; it is the differential oracle Step 4's frame-seed gets
+        // checked against.
         self.pending_materialized = None;
-        if let Some(root) = root {
-            self.materialize_into_session(&mut state, root, ty);
+        match captured {
+            Some(Captured::Heap(root)) => self.materialize_into_session(&mut state, root, ty),
+            Some(Captured::Scalar(v)) => self.box_scalar_into_session(&mut state, &v, ty),
+            None => {}
         }
         self.rewind(sp); // discard the throwaway cap gen
         lit.map_or(Capture::Skip, Capture::Done)
@@ -3143,11 +3245,7 @@ impl ReplSession {
         if tp == u16::MAX {
             return;
         }
-        let slot = match self.session_store.take() {
-            Some(store) => state.database.adopt_store(store),
-            // First binding of the session: a fresh store to own every value.
-            None => state.database.database(SESSION_STORE_WORDS).store_nr,
-        };
+        let slot = self.session_slot(state);
         let copy = state.database.materialize(&root, tp, slot);
         self.session_store = Some(state.database.take_store(slot));
         if copy.rec != 0 {
@@ -3155,16 +3253,79 @@ impl ReplSession {
                 type_name: type_name.to_string(),
                 rec: copy.rec,
                 pos: copy.pos,
+                shape: SessionShape::Heap,
             });
+        }
+    }
+
+    /// @PLN14 arc C — **scalars at rest**: box `v` into a 1-field record in the
+    /// session store, so a scalar binding has a store-resident home exactly like a
+    /// heap one.  That uniformity is the point: Step 4's frame-seed reads every
+    /// prior name from the store along ONE path rather than branching on whether
+    /// the value happened to be inline.
+    ///
+    /// The bytes are written raw (never via the display literal), so the value
+    /// read back is bit-identical — the reason Q2 keeps own-format out of the
+    /// session path.
+    fn box_scalar_into_session(&mut self, state: &mut State, v: &ScalarValue, type_name: &str) {
+        let slot = self.session_slot(state);
+        let store = &mut state.database.allocations[slot as usize];
+        // One header word + one payload word; `pos = 8` is the payload, matching
+        // the record shape `Stores::claim` hands out.
+        let rec = store.claim(2);
+        match v {
+            ScalarValue::Integer(n) => {
+                store.set_int(rec, 8, *n);
+            }
+            ScalarValue::Float(f) => {
+                store.set_float(rec, 8, *f);
+            }
+            ScalarValue::Single(f) => {
+                store.set_single(rec, 8, *f);
+            }
+            ScalarValue::Boolean(b) => {
+                store.set_int(rec, 8, i64::from(*b));
+            }
+            ScalarValue::Character(c) => {
+                store.set_u32_raw(rec, 8, *c);
+            }
+            ScalarValue::SimpleEnum(d) => {
+                store.set_int(rec, 8, i64::from(*d));
+            }
+            ScalarValue::Text(s) => {
+                // The text's BYTES are copied into the session store (`set_str`
+                // claims a record for them there), so the entry owns its
+                // characters rather than pointing at the run's memory — the
+                // bare-`Str` raw-pointer hazard cannot follow the value here.
+                let idx = store.set_str(s);
+                store.set_u32_raw(rec, 8, idx);
+            }
+        }
+        self.session_store = Some(state.database.take_store(slot));
+        self.pending_materialized = Some(SessionValue {
+            type_name: type_name.to_string(),
+            rec,
+            pos: 8,
+            shape: SessionShape::Scalar(v.kind()),
+        });
+    }
+
+    /// @PLN14 arc A — the session store's slot in `state`, adopting the carried
+    /// store or creating one on the session's first binding.  The caller must take
+    /// it back out (`take_store`) before `state` is dropped.
+    fn session_slot(&mut self, state: &mut State) -> u16 {
+        match self.session_store.take() {
+            Some(store) => state.database.adopt_store(store),
+            None => state.database.database(SESSION_STORE_WORDS).store_nr,
         }
     }
 
     /// @PLN14 arc A — read a binding back **from the session store** (not from the
     /// replayed body), rendered own-format.  `None` when the name has no
-    /// store-resident value: an unbound name, or a binding whose value is still
-    /// inline-only (scalars and top-level text — arc C).
+    /// store-resident value (an unbound name, or a bind the snapshot path
+    /// declined).
     ///
-    /// This is the shadow's read side: Step 2 uses it purely as the differential
+    /// This is the shadow's read side: Steps 2–3 use it purely as the differential
     /// oracle (`env value == replayed value`); Step 5 is where observing switches
     /// over to it and the body replay goes away.
     pub fn env_value(&mut self, name: &str) -> Option<String> {
@@ -3172,21 +3333,82 @@ impl ReplSession {
         let store = self.session_store.take()?;
         let mut state = State::new(self.parser.database.clone());
         let slot = state.database.adopt_store(store);
-        let tp = state.database.name(&entry.type_name);
-        let out = if tp == u16::MAX {
-            None
-        } else {
-            let db = crate::keys::DbRef {
-                store_nr: slot,
-                rec: entry.rec,
-                pos: entry.pos,
-            };
-            let mut s = String::new();
-            state.database.show_loft(&mut s, &db, tp);
-            Some(s)
+        let db = crate::keys::DbRef {
+            store_nr: slot,
+            rec: entry.rec,
+            pos: entry.pos,
         };
+        let tp = state.database.name(&entry.type_name);
+        let out = Self::render_session_value(&mut state, &entry, &db, tp);
         self.session_store = Some(state.database.take_store(slot));
         out
+    }
+
+    /// Render one session-store entry in the own-format the replay literal uses —
+    /// the two must agree character for character, since that equality is what the
+    /// shadow is checked on.
+    fn render_session_value(
+        state: &mut State,
+        entry: &SessionValue,
+        db: &crate::keys::DbRef,
+        tp: u16,
+    ) -> Option<String> {
+        let store = state.database.store(db);
+        match entry.shape {
+            SessionShape::Scalar(ScalarKind::Integer) => Some(store.get_int(db.rec, 8).to_string()),
+            SessionShape::Scalar(ScalarKind::Float) => {
+                Some(float_literal(store.get_float(db.rec, 8)))
+            }
+            SessionShape::Scalar(ScalarKind::Single) => {
+                Some(format!("{}f", store.get_single(db.rec, 8)))
+            }
+            SessionShape::Scalar(ScalarKind::Boolean) => Some(
+                if store.get_int(db.rec, 8) != 0 {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            ),
+            SessionShape::Scalar(ScalarKind::Character) => {
+                char::from_u32(store.get_u32_raw(db.rec, 8)).map(|c| format!("'{c}'"))
+            }
+            SessionShape::Scalar(ScalarKind::Text) => {
+                let idx = store.get_u32_raw(db.rec, 8);
+                Some(escape_loft_text(store.get_str(idx)))
+            }
+            SessionShape::Scalar(ScalarKind::SimpleEnum) => {
+                let disc = u8::try_from(store.get_int(db.rec, 8)).unwrap_or(0);
+                if disc == 0 {
+                    Some("null".to_string())
+                } else if tp == u16::MAX {
+                    None
+                } else {
+                    Some(format!(
+                        "{}.{}",
+                        entry.type_name,
+                        state.database.enum_val(tp, disc)
+                    ))
+                }
+            }
+            SessionShape::Heap | SessionShape::TextInVector => {
+                if tp == u16::MAX {
+                    return None;
+                }
+                let mut s = String::new();
+                state.database.show_loft(&mut s, db, tp);
+                if entry.shape == SessionShape::TextInVector {
+                    // Stored as the single-element `vector<text>` the @P293
+                    // work-around builds; unwrap it back to the bare text literal,
+                    // exactly as `capture_binding` unwraps the rendered one.
+                    return s
+                        .strip_prefix('[')
+                        .and_then(|x| x.strip_suffix(']'))
+                        .map(str::to_string);
+                }
+                Some(s)
+            }
+        }
     }
 
     /// @PLN14 arc A — the names that currently have a store-resident value.
