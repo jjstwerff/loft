@@ -54,6 +54,16 @@ pub struct InstallOptions {
     /// next to the script) and by future project-mode walk-up
     /// resolution (writes to the project root's `loft.lock`).
     pub lock_path: Option<PathBuf>,
+    /// Install the package(s) but write NO lockfile.  Set when a resolution
+    /// originates INSIDE the registry cache — a transitive dep auto-installed
+    /// while parsing an already-cached package (`~/.loft/registry/<pkg>/src`).
+    /// There is no consumer project to record against, and the only "project
+    /// root" the walk-up finds is the cached dependency's own dir, so the
+    /// default would write `loft.lock` INTO the immutable cache — harmless on
+    /// Unix (the dir is writable) but an ENOENT that aborts the whole resolution
+    /// on Windows.  Skipping the write is correct on every platform: the install
+    /// still lands, so `use <dep>` resolves.
+    pub skip_lockfile: bool,
 }
 
 /// High-level outcome printed back to the user.
@@ -212,6 +222,13 @@ pub fn install_one(
         report
             .installed
             .push((r.name.clone(), r.version.semver.clone()));
+    }
+
+    // A cache-internal resolution installs but records nothing — there is no
+    // consumer project here, only the cached dependency whose source triggered
+    // this (see `InstallOptions::skip_lockfile`).
+    if opts.skip_lockfile {
+        return Ok(report);
     }
 
     // Write lockfile.  When a lockfile already exists (e.g. from a
@@ -611,6 +628,7 @@ mod tests {
             refresh: false,
             offline: false,
             allow_prerelease: false,
+            skip_lockfile: false,
             lock_path: None,
         }
     }

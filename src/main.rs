@@ -768,6 +768,7 @@ fn package_info(name: &str) {
         refresh: false,
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     let loaded = match loft::install::load_index_reporting(&opts) {
@@ -951,6 +952,7 @@ fn api_registry_catalog(refresh: bool) {
         refresh,
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     match loft::install::load_index(&opts) {
@@ -1009,6 +1011,7 @@ fn write_api_stubs(lock_path: &std::path::Path, project_dir: &std::path::Path) {
         refresh: false,
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     if let Ok(index) = loft::install::load_index(&opts) {
@@ -1056,6 +1059,7 @@ fn list_installed() {
         refresh: false,
         offline: true, // never hit the network for this query
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     let index = loft::install::load_index(&opts).ok();
@@ -1189,6 +1193,7 @@ fn update_packages(opts: &UpdateOpts) -> i32 {
         refresh: false,
         offline: std::env::var("LOFT_OFFLINE").is_ok(),
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: Some(lock_path.clone()),
     };
     let index = match loft::install::load_index(&install_opts) {
@@ -1377,6 +1382,7 @@ fn bundle_export(outdir: &str, packages: Option<&[String]>, all: bool) -> i32 {
         refresh: false,
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     let index = match loft::install::load_index(&opts) {
@@ -2609,6 +2615,7 @@ fn pin_script(script: &str) {
         refresh: false,
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     let index = match loft::install::load_index(&opts_for_index) {
@@ -2624,6 +2631,7 @@ fn pin_script(script: &str) {
         refresh: false,
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: Some(sidecar.clone()),
     };
 
@@ -5013,6 +5021,7 @@ fn main() {
                 refresh: false,
                 offline: false,
                 allow_prerelease: false,
+                skip_lockfile: false,
                 lock_path: None,
             };
             let mut positional: Vec<String> = Vec::new();

@@ -8400,11 +8400,26 @@ impl Parser {
         // invoked from.  Not found → script mode — `lock_path: None`
         // falls back to cwd's `loft.lock` (the existing default).
         let cur_script = self.lexer.pos().file.replace(other_sep(), sep_str());
-        let project_root = Self::find_project_root(&cur_script);
+        // A transitive dep discovered while parsing an ALREADY-CACHED package
+        // (`~/.loft/registry/<pkg>/src/...`) has no consumer project: the only
+        // `loft.toml` the walk-up finds is the cached dep's own, so writing a
+        // `loft.lock` there would mutate the immutable cache — a harmless stray
+        // file on Unix, but an ENOENT that aborts the whole resolution on Windows
+        // (nightly `moros_glb_cli_end_to_end`).  Install without recording.
+        let in_registry_cache = std::fs::canonicalize(&cur_script)
+            .ok()
+            .zip(std::fs::canonicalize(crate::registry_index::cache_dir()).ok())
+            .is_some_and(|(script, cache)| script.starts_with(&cache));
+        let project_root = if in_registry_cache {
+            None
+        } else {
+            Self::find_project_root(&cur_script)
+        };
         let lock_path = project_root.as_ref().map(|p| p.join("loft.lock"));
         let opts = crate::install::InstallOptions {
             allow_unsigned: true,
             refresh: false,
+            skip_lockfile: in_registry_cache,
             // LOFT_OFFLINE=1 makes resolution HERMETIC: a missing package
             // fails fast and deterministically instead of fetching — what a
             // test-spawned fixture (or an air-gapped box) wants.  Mirrors
