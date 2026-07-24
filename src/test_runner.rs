@@ -415,6 +415,11 @@ pub(crate) fn run_tests(
     let mut total_pass = 0u32;
     let mut total_fail = 0u32;
     let mut total_files = 0u32;
+    // Tests counted as PASSED on the reported backend that never actually ran on
+    // it (`@EXPECT_FAIL` / `@IGNORE` under `--native`, or a file with no
+    // native-runnable fn).  Reported so a green count cannot stand in for
+    // coverage it does not have.
+    let mut total_skipped = 0u32;
     let mut dir_summaries: Vec<(String, u32, u32)> = Vec::new(); // (dir, pass, fail)
 
     for (dir_path, files) in &dirs {
@@ -817,9 +822,11 @@ pub(crate) fn run_tests(
                 if native_fns.is_empty() {
                     // Nothing to run natively — record as pass with note.
                     if file_result.tests.is_empty() {
-                        file_result
-                            .tests
-                            .push(("(no native tests)".to_string(), true, None));
+                        file_result.tests.push((
+                            "(no native tests)".to_string(),
+                            true,
+                            Some("skip-native".to_string()),
+                        ));
                     }
                 } else {
                     // Generate Rust source.
@@ -1311,6 +1318,14 @@ pub(crate) fn run_tests(
                 .iter()
                 .filter(|(_, _, m)| m.as_deref() == Some("ignored"))
                 .count();
+            total_skipped += u32::try_from(
+                file_result
+                    .tests
+                    .iter()
+                    .filter(|(_, _, m)| m.as_deref() == Some("skip-native"))
+                    .count(),
+            )
+            .unwrap_or(0);
             let pass_count = file_result
                 .tests
                 .iter()
@@ -1372,16 +1387,37 @@ pub(crate) fn run_tests(
         println!();
     }
 
+    // The result states WHICH backend produced it.  `loft test` and
+    // `loft test --native` each exercise exactly one, so a bare "ok" used to be
+    // identical whether the other backend was clean or had never been compiled
+    // once — silence read as coverage.  A consumer discovered a quarter of their
+    // packages had never been native-compiled while `loft test` stayed green
+    // throughout, and could only find out by running the native sweep by hand.
+    // The scope is not optional and not behind a flag: it rides on the default
+    // path, because that is the path that was lying.
+    let (ran, missing, missing_cmd) = if native_mode {
+        ("native", "the interpreter", "loft test")
+    } else {
+        ("the interpreter", "native", "loft test --native")
+    };
+    // Tests that were counted but never executed on `ran` (see `total_skipped`).
+    let skipped = if total_skipped > 0 {
+        format!(", {total_skipped} skipped")
+    } else {
+        String::new()
+    };
+    let scope = format!("[ran on {ran} only{skipped} — {missing} not exercised: {missing_cmd}]");
+
     let total = total_pass + total_fail;
     if total_fail == 0 {
         println!(
-            "test result: ok. {total_pass} passed; {total_files} file{}",
+            "test result: ok. {total_pass} passed; {total_files} file{}  {scope}",
             if total_files == 1 { "" } else { "s" }
         );
         0
     } else {
         println!(
-            "test result: FAILED. {total_fail} failed; {total_pass} passed; {total} total; {total_files} file{}",
+            "test result: FAILED. {total_fail} failed; {total_pass} passed; {total} total; {total_files} file{}  {scope}",
             if total_files == 1 { "" } else { "s" }
         );
         1

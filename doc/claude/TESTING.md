@@ -1442,8 +1442,21 @@ source is newer, `cargo build --lib` runs automatically.
 
   tests/: 1 failed, 5 passed
 
-test result: FAILED. 1 failed; 5 passed; 6 total; 2 files
+test result: FAILED. 1 failed; 5 passed; 6 total; 2 files  [ran on the interpreter only — native not exercised: loft test --native]
 ```
+
+**The result line names the backend it came from.**  `loft test` and `loft test
+--native` each exercise exactly ONE backend, so a bare `ok` was identical
+whether the other backend was clean or had never been compiled once — silence
+read as coverage.  (A consumer found a quarter of their packages had never been
+native-compiled while `loft test` stayed green throughout; they could only
+discover it by running the native sweep by hand.)  The scope rides on the
+DEFAULT path, because that is the path that was lying.
+
+Under `--native` the note also reports `N skipped` — tests counted as passing
+that never ran on that backend (`@EXPECT_FAIL` / `@IGNORE`, or a file with no
+native-runnable function), so a green count cannot stand in for coverage it does
+not have.
 
 Files with no `fn test*()` functions are silently skipped.  Hidden directories
 (starting with `.`) and `.loft/` artifact directories are excluded from the

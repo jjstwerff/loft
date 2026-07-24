@@ -1367,3 +1367,68 @@ fn p369_silent_runtime_fault_fails_harness() {
         "@P369: the same fault WITH @EXPECT_FAIL must be scored as an expected pass"
     );
 }
+
+/// The `loft test` result line must state WHICH backend produced it.
+///
+/// `loft test` and `loft test --native` each exercise exactly one backend, so a
+/// bare `test result: ok` was identical whether the other backend was clean or
+/// had never been compiled once.  A consumer shipped a quarter of their packages
+/// with no native coverage at all for as long as those packages had existed,
+/// because `loft test` stayed green throughout and nothing said what "green"
+/// covered — silence read as coverage.  The scope note therefore rides on the
+/// DEFAULT invocation, not behind a flag: the default is the path that was lying.
+///
+/// Asserted on both invocations, because a note that only appears under
+/// `--native` would leave the silent path exactly as it was.
+#[test]
+fn test_result_states_its_backend_scope() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let pkg_dir = Path::new("lib/audience_crystal");
+    if !pkg_dir.join("tests").is_dir() {
+        return Ok(()); // package layout changed; the suite's own runs still cover it
+    }
+
+    let out = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, "01-editor-helpers", &[])?;
+    let combined = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let result_line = combined
+        .lines()
+        .find(|l| l.starts_with("test result:"))
+        .unwrap_or_default();
+    assert!(
+        result_line.contains("ran on the interpreter only"),
+        "the default `loft test` result must name the backend it ran on:\n{result_line}"
+    );
+    assert!(
+        result_line.contains("native not exercised"),
+        "the default `loft test` result must say the native backend was NOT covered — \
+         that omission is the whole defect:\n{result_line}"
+    );
+    assert!(
+        result_line.contains("loft test --native"),
+        "the note must carry the command that closes the gap:\n{result_line}"
+    );
+
+    // The mirror case: a native-only run must not imply interpreter coverage.
+    let out_n = run_lib_test_in_temp_cwd(loft_bin, pkg_dir, "01-editor-helpers", &["--native"])?;
+    let combined_n = format!(
+        "{}{}",
+        String::from_utf8_lossy(&out_n.stdout),
+        String::from_utf8_lossy(&out_n.stderr)
+    );
+    if let Some(line_n) = combined_n.lines().find(|l| l.starts_with("test result:")) {
+        assert!(
+            line_n.contains("ran on native only"),
+            "the `--native` result must name its backend:\n{line_n}"
+        );
+        assert!(
+            line_n.contains("the interpreter not exercised"),
+            "a native-only run must not read as full coverage either:\n{line_n}"
+        );
+    }
+    Ok(())
+}
