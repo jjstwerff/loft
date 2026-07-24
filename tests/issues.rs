@@ -9423,6 +9423,70 @@ fn g() -> float { 1.5 }"
     .result(Value::Float(41.0));
 }
 
+/// @PLN102 — deferring an all-unknown operator to pass 2 must not SWALLOW a real
+/// error.  A genuinely undefined callee has no type on either pass, so it takes the
+/// same deferral path as the forward reference above; pass 2 must still reject it.
+/// Without this, widening the guard could turn a compile error into a silent
+/// mis-compile.
+#[test]
+fn pln102_all_unknown_deferral_still_reports_undefined_callee() {
+    code!(
+        "fn run() -> integer {
+    nope_a() - nope_b()
+}"
+    )
+    .error("Unknown function nope_a at pln102_all_unknown_deferral_still_reports_undefined_callee:2:5")
+    .error("Unknown function nope_b at pln102_all_unknown_deferral_still_reports_undefined_callee:2:16")
+    // The two trailing errors are a CASCADE ARTIFACT of the deferral, not signal:
+    // with no operand type on either pass the operator is never resolved, so the
+    // half-applied `OpMinInt` also trips its arity check.  Pinned because the
+    // harness compares the whole set — if a future change makes the deferral tidy
+    // up after itself, drop these two rather than treating them as a contract.
+    .error("missing argument for parameter 'v1' of `OpMinInt` — the call supplies too few arguments (add it, or give the parameter a default `= …`) at pln102_all_unknown_deferral_still_reports_undefined_callee:3:2")
+    .error("missing argument for parameter 'v2' of `OpMinInt` — the call supplies too few arguments (add it, or give the parameter a default `= …`) at pln102_all_unknown_deferral_still_reports_undefined_callee:3:2");
+}
+
+/// @PLN102 — the deferral is deliberately limited to the case where NO operand
+/// carries type information.  One KNOWN operand is enough to steer resolution, and
+/// keeping it on the resolving path is what preserves this diagnostic: the operands
+/// here are `unknown` and `boolean`, so the mismatch is still reported instead of
+/// being deferred into silence.  Widening the guard to "ANY operand unknown" would
+/// lose it.
+#[test]
+fn pln102_one_known_operand_keeps_the_mismatch_diagnostic() {
+    code!(
+        "fn run() -> boolean {
+    f() < true
+}
+fn f() -> float { 1.0 }"
+    )
+    .error(
+        "No matching operator '<' on 'unknown' and 'boolean' at pln102_one_known_operand_keeps_the_mismatch_diagnostic:3:1",
+    );
+}
+
+/// @PLN102 — KNOWN GAP, not a passing guard.  The fix above covers the case where
+/// every operand is unresolved (`f() - g()`); the mixed form `f() - 1`, with one
+/// literal operand, still mis-types exactly as the original report described.  The
+/// all-unknown restriction is what keeps
+/// `pln102_one_known_operand_keeps_the_mismatch_diagnostic` working, so closing this
+/// needs the operator search to defer on the RESULT type rather than on operand
+/// knownness — a larger change than the guard widening.  Recorded here so the
+/// remaining half is not rediscovered from scratch.
+#[test]
+#[ignore = "@PLN102 open: one-known-operand forward reference still mis-types (see doc comment)"]
+fn pln102_one_known_operand_forward_float_still_mistyped() {
+    code!(
+        "fn run() -> float {
+    a = f() - 1;
+    a
+}
+fn f() -> float { 4.5 }"
+    )
+    .expr("run()")
+    .result(Value::Float(3.5));
+}
+
 /// QUALITY 6c — the free-function hint must NOT fire when there is
 /// no `n_<field>` function compatible with the receiver.  Locks the
 /// specificity of the hint: a genuinely-misspelled field produces
