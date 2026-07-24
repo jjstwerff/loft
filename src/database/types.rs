@@ -1655,8 +1655,18 @@ impl Stores {
             // `vector<T>` to an unrelated default-library id (e.g. FieldValue),
             // so a 3+-deep `vector<vector<vector<X>>>` copy got a bogus type-id
             // and `copy_claims` dispatched as the wrong type → OOB panic.
+            //
+            // The element id comes from `Data::vector_element_type` — the one
+            // derivation of that fact, shared with the parser's `vector_of` and
+            // `typedef.rs::fill_database`.  Recursing through `db_type` instead
+            // re-entered the Integer arm below, which knows nothing of the
+            // element-side narrow forms (no `4 → int`, no `ShortRaw`) and so
+            // widened every narrow element to 8-byte `integer` (loft#624 nested).
             crate::data::Type::Vector(elem, _) => {
-                let e = self.db_type(elem, data);
+                let e = match data.vector_element_type(elem, self) {
+                    Some(e) => e,
+                    None => self.db_type(elem, data),
+                };
                 self.vector(e)
             }
             _ => data.def(data.type_def_nr(tp)).known_type,

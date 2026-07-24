@@ -11,7 +11,8 @@ use std::io::Write;
 
 use super::text::count_format_ops;
 use super::{
-    Output, block_needs_i64_widen, default_native_value, narrow_int_cast, rust_type, sanitize,
+    Output, block_needs_i64_widen, block_tail_cast, default_native_value, narrow_int_cast,
+    rust_type, sanitize,
 };
 
 impl Output<'_> {
@@ -337,7 +338,7 @@ impl Output<'_> {
             }
         };
         match code {
-            Value::Block(bl) => self.output_block(w, IrBlock::Native(bl), false)?,
+            Value::Block(bl) => self.output_block(w, IrBlock::Native(bl), false, false)?,
             Value::Loop(lp) => {
                 self.loop_stack.push(lp.scope);
                 writeln!(w, "'l{}: loop {{ //{}_{}", lp.scope, lp.name, lp.scope)?;
@@ -1642,11 +1643,15 @@ impl Output<'_> {
     }
 
     #[allow(clippy::too_many_lines)]
+    /// `is_fn_body` marks the one block whose Rust type is the function's
+    /// return signature (`Context::Result`).  Only there may the tail expression
+    /// carry a narrow-integer cast — see [`block_tail_cast`].
     pub(super) fn output_block(
         &mut self,
         w: &mut dyn Write,
         block: IrBlock,
         wrap_text: bool,
+        is_fn_body: bool,
     ) -> std::io::Result<()> {
         // @PLN11 G2/M4 — materialise-at-boundary: native is zero-cost; a
         // store-backed block materialises once, then the intricate `&Block` body
@@ -1959,7 +1964,7 @@ impl Output<'_> {
                     // `as i64` widening which is a no-op for i64 values.
                     let is_iter_next = bl.name.contains("iter next");
                     let narrow_cast = if is_return_expr && !value_is_return && !is_iter_next {
-                        narrow_int_cast(&bl.result)
+                        block_tail_cast(&bl.result, is_fn_body)
                     } else {
                         None
                     };
@@ -2101,7 +2106,7 @@ impl Output<'_> {
                 // to an OWNED String inside the block (where the local is still
                 // alive); `.to_string()` accepts &str / String / Str alike.
                 writeln!(w, "_ret.to_string()")?;
-            } else if let Some(cast) = narrow_int_cast(&bl.result) {
+            } else if let Some(cast) = block_tail_cast(&bl.result, is_fn_body) {
                 writeln!(w, "_ret as {cast}")?;
             } else {
                 writeln!(w, "_ret")?;
@@ -2113,7 +2118,7 @@ impl Output<'_> {
             self.indent(w)?;
             if is_text_result {
                 writeln!(w, "Str::new(loft::state::STRING_NULL)")?;
-            } else if let Some(cast) = narrow_int_cast(&bl.result) {
+            } else if let Some(cast) = block_tail_cast(&bl.result, is_fn_body) {
                 writeln!(w, "0 as {cast}")?;
             } else {
                 writeln!(w, "{}", default_native_value(&bl.result))?;

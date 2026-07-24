@@ -1197,25 +1197,19 @@ impl ShowDb<'_> {
         res
     }
 
-    /// The format walk's element step — `Stores::next` with #477's stride
-    /// rule for NESTED vector elements: when the content is itself a vector,
-    /// the element row is an `element_size(inner).max(4)` handle (matching
-    /// the parser's `vector_elem_iter_stride` and the construction), not the
-    /// content row's own 4-byte size.  Stepping by the row size walked INSIDE
-    /// the first element, so every later element rendered empty — and under a
-    /// shifted type table read a null sentinel as a record id (#483 SIGSEGV).
-    /// Scoped to the FORMAT walk on purpose: runtime search/iteration
-    /// consumers of `Stores::next` bake their strides at parse time and are
-    /// self-consistent.
+    /// The format walk's element step.  `Stores::next` strides a vector by its
+    /// element type's own size, which is right for every element shape —
+    /// including a NESTED vector, whose row is the inner vector's 4-byte handle.
+    ///
+    /// #477 used to override that here with `element_size(inner).max(4)`,
+    /// because a `vector<vector<T>>` registered its element as the collapsed
+    /// INNER scalar and `next` therefore stepped by the row size *inside* the
+    /// first element, rendering every later element empty (and, under a shifted
+    /// type table, reading a null sentinel as a record id — the #483 SIGSEGV).
+    /// `Data::vector_element_type` registers the real `vector<inner>` now, so
+    /// the plain rule is the correct one and the override would put the walk
+    /// back out of step with the writer.
     fn next_element(&self, data: &DbRef, pos: &mut i32) -> DbRef {
-        if let Parts::Vector(c) | Parts::Sorted(c, _) =
-            &self.stores.types[self.known_type as usize].parts
-            && let Parts::Vector(ci) = &self.stores.types[*c as usize].parts
-        {
-            let step = self.stores.types[*ci as usize].size.max(4);
-            vector::vector_next(data, pos, step, &self.stores.allocations);
-            return self.stores.element_reference(data, *pos);
-        }
         self.stores.next(data, pos, self.known_type)
     }
 

@@ -3809,12 +3809,6 @@ use a separate collection or add after the loop"
             && matches!(*next, Value::Block(_))
         {
             let ed_nr = self.data.type_def_nr(&elm_tp);
-            let known_db = if ed_nr == u32::MAX || self.data.def(ed_nr).known_type() == u16::MAX {
-                0
-            } else {
-                self.database.vector(self.data.def(ed_nr).known_type())
-            };
-            let known = Value::Int(i32::from(known_db));
             let fld = Value::Int(i32::from(u16::MAX));
             let elm_var = self.unique_elm_var(lhs_parent_tp, &elm_tp, var_nr);
             let for_var = self.create_unique("slice_elm", &elm_tp);
@@ -3833,31 +3827,29 @@ use a separate collection or add after the loop"
             // the borrow-dep and removes both faults.)
             let for_next = v_set(for_var, *next);
             let mut lp = vec![for_next];
-            // #553 — the record type of ONE accumulator element.  For a `vector<T>` element it
-            // is the element's OWN vector store type `vector_of(content)` (the same id the
-            // working `s += [a[i]]` append uses); the outer `known`
-            // (`database.vector(known_type(vector<T>))`) is one level too DEEP for a vector
-            // element (it builds a vector-of-vector), though correct for scalar/struct elements.
-            // #624 — a NARROW element (`u8` / `u16` / a 4-byte `integer` subtype) is
-            // stored packed at 1/2/4 bytes, but `known` above resolves the WIDE
-            // integer row.  Allocating each element through that row reserves 8 bytes
-            // per slot while the index READ strides 1, so `v[a..b]` on a `vector<u8>`
-            // kept only the first element and read zeros for the rest.  Resolve the
-            // narrow storage row the same way the `+=` append does.
-            let elm_type_id = if let Type::Vector(content, _) = &elm_tp {
-                Value::Int(i32::from(self.vector_of(content)))
-            } else if let Some(narrow) =
-                self.data.narrow_vector_content(&elm_tp, &mut self.database)
-            {
-                Value::Int(i32::from(self.database.vector(narrow)))
-            } else {
-                known.clone()
-            };
+            // Two DIFFERENT types, one per role — sharing one id here is what let
+            // the slice stride differently from the `s += [a[i]]` append it must
+            // agree with:
+            //   * `OpNewRecord` / `OpFinishRecord` take the CONTAINER being appended
+            //     to and stride its slots by that type's content size, so they need
+            //     `vector<elm_tp>`;
+            //   * `OpCopyRecord` deep-copies ONE element record, so it needs the
+            //     ELEMENT type itself.
+            // Both come from the shared resolver, so a narrow element (#624 —
+            // `u8`/`u16`/4-byte subtypes pack at 1/2/4 bytes, not the wide integer
+            // row) and a nested `vector<T>` element (#553 — a 4-byte handle row)
+            // land on the same ids the append uses.
+            let container_id = Value::Int(i32::from(self.vector_of(&elm_tp)));
+            let element_id = Value::Int(i32::from(
+                self.data
+                    .vector_element_type(&elm_tp, &mut self.database)
+                    .unwrap_or(u16::MAX),
+            ));
             lp.push(v_set(
                 elm_var,
                 self.cl(
                     "OpNewRecord",
-                    &[Value::Var(var_nr), elm_type_id.clone(), fld.clone()],
+                    &[Value::Var(var_nr), container_id.clone(), fld.clone()],
                 ),
             ));
             // A `vector<T>` element is an AGGREGATE — deep-copy the whole element into the fresh
@@ -3868,11 +3860,7 @@ use a separate collection or add after the loop"
             if matches!(elm_tp, Type::Vector(_, _)) {
                 lp.push(self.cl(
                     "OpCopyRecord",
-                    &[
-                        Value::Var(for_var),
-                        Value::Var(elm_var),
-                        elm_type_id.clone(),
-                    ],
+                    &[Value::Var(for_var), Value::Var(elm_var), element_id],
                 ));
             } else if let Some(op) = self.narrow_elm_set(&elm_tp, elm_var, &Value::Var(for_var)) {
                 // #624 — a narrow element needs the WIDTH-matched store op; `set_field`
@@ -3890,7 +3878,7 @@ use a separate collection or add after the loop"
             }
             lp.push(self.cl(
                 "OpFinishRecord",
-                &[Value::Var(var_nr), Value::Var(elm_var), elm_type_id, fld],
+                &[Value::Var(var_nr), Value::Var(elm_var), container_id, fld],
             ));
             let needs_db = self.vector_needs_db(var_nr, &elm_tp, true);
             let mut stmts = Vec::new();

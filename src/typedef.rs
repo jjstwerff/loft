@@ -680,26 +680,17 @@ pub(crate) fn fill_database(data: &mut Data, database: &mut Stores, d_nr: u32) {
                     if c_nr == u32::MAX {
                         continue;
                     }
-                    // route through the shared helper so locals,
-                    // parameters, and return types (Phase 5 migrations below)
-                    // use the same narrow-detection logic as struct fields.
-                    let c_tp = if let Some(narrow) = data.narrow_vector_content(&c_type, database) {
-                        narrow
-                    } else if matches!(*c_type, Type::Vector(_, _)) {
-                        // @PLAN58: a nested-vector element is itself a vector — the
-                        // level-collapsed type_elm→known_type path mis-resolves it.
-                        // Resolve recursively via db_type (the #250-proven resolver)
-                        // so nesting + the distinct single/struct element type-id
-                        // stay correct.  (Narrow-int element width is lost upstream
-                        // in literal type-inference, fixed separately — see plan-58.)
-                        database.db_type(&c_type, data)
+                    // route through the shared resolver so struct fields, locals,
+                    // parameters, return types and literals all derive the element
+                    // id the same way (narrow leaf, nested vector, plain
+                    // `known_type`).  `None` = the leaf has no id yet, which is
+                    // the one case this site can fix itself: fill it, then retry.
+                    let c_tp = if let Some(elem) = data.vector_element_type(&c_type, database) {
+                        elem
                     } else {
-                        let mut c_tp = data.def(c_nr).known_type;
-                        if c_tp == u16::MAX {
-                            fill_database(data, database, c_nr);
-                            c_tp = data.def(c_nr).known_type;
-                        }
-                        c_tp
+                        fill_database(data, database, c_nr);
+                        data.vector_element_type(&c_type, database)
+                            .unwrap_or(data.def(c_nr).known_type)
                     };
                     let tp = database.vector(c_tp);
                     data.check_vector(c_nr, tp, &data.def(d_nr).position.clone());

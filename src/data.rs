@@ -3551,6 +3551,52 @@ impl Data {
         None
     }
 
+    /// Use this for the schema type id of a vector ELEMENT whose loft type is
+    /// `content` — the ONE derivation of that fact.
+    ///
+    /// Three rules, in order: a narrow numeric (or fn-ref) leaf resolves through
+    /// [`Data::narrow_vector_content`]; a NESTED vector recurses, so the inner
+    /// element's width survives; anything else uses the leaf's own registered
+    /// `known_type`.
+    ///
+    /// `None` means "not derivable yet" — the leaf has no registered type id
+    /// (a forward reference, a generic type variable, an unresolved content
+    /// type).  Each caller keeps its own recovery for that case, because the
+    /// options differ: `typedef.rs::fill_database` can fill the missing type on
+    /// the spot, while `Parser::vector_of` must bake a sentinel and let the
+    /// later fill pass re-derive.
+    ///
+    /// Every writer AND reader of a vector element type routes here, which is
+    /// the point: the three independent derivations this replaces agreed only
+    /// when the element happened to be 8 bytes wide, so a declared
+    /// `vector<vector<u16>>` REGISTERED as `vector<vector<integer>>` and the
+    /// renderer read two 2-byte elements as one 8-byte slot (loft#624 nested,
+    /// the named remainder of the plan-58 / loft#437 / #457 / #483 family —
+    /// `doc/claude/plans/nested-narrow-width/`).
+    pub fn vector_element_type(
+        &self,
+        content: &Type,
+        database: &mut crate::database::Stores,
+    ) -> Option<u16> {
+        if let Some(narrow) = self.narrow_vector_content(content, database) {
+            return Some(narrow);
+        }
+        // A nested vector element is itself a vector.  `type_elm` collapses a
+        // level here (`Vector(inner)` → `type_def_nr(inner)`), which loses the
+        // inner width; recurse instead so the registered outer content type is
+        // a real `vector<<inner storage>>`.
+        if let Type::Vector(inner, _) = content.base() {
+            let elem = self.vector_element_type(inner, database)?;
+            return Some(database.vector(elem));
+        }
+        let c_nr = self.type_elm(content);
+        if c_nr == u32::MAX {
+            return None;
+        }
+        let c_tp = self.def(c_nr).known_type();
+        if c_tp == u16::MAX { None } else { Some(c_tp) }
+    }
+
     #[must_use]
     pub fn new() -> Data {
         Data {

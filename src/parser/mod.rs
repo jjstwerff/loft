@@ -1961,19 +1961,18 @@ impl Parser {
     // ********************
 
     /// canonical entry point for building a vector
-    /// database type from a content `Type`.  Consults
-    /// `Data::narrow_vector_content` first (single source of truth
-    /// for narrow-detection; shared with `typedef.rs::fill_database`
-    /// for struct fields).  Falls back to the content's own
-    /// `known_type` when narrow doesn't apply, or to the default
-    /// `integer` slot (0) when the content has no registered type
-    /// yet.  Every `database.vector(...)` call in `src/parser/`
-    /// should route through this helper so locals, parameters,
-    /// returns, and literals get the same narrow storage that
-    /// struct fields get via fill_database.
+    /// database type from a content `Type`.  Resolves the element id
+    /// through `Data::vector_element_type` (the single derivation of
+    /// that fact — narrow leaf, nested vector, or plain `known_type`;
+    /// shared with `typedef.rs::fill_database` for struct fields).
+    /// Falls back to the default `integer` slot (0) when the content
+    /// has no registered type yet.  Every `database.vector(...)` call
+    /// in `src/parser/` should route through this helper so locals,
+    /// parameters, returns, and literals get the same narrow storage
+    /// that struct fields get via fill_database.
     pub(crate) fn vector_of(&mut self, content: &Type) -> u16 {
-        if let Some(narrow) = self.data.narrow_vector_content(content, &mut self.database) {
-            return self.database.vector(narrow);
+        if let Some(elem) = self.data.vector_element_type(content, &mut self.database) {
+            return self.database.vector(elem);
         }
         let c_nr = self.data.type_elm(content);
         if c_nr == u32::MAX {
@@ -2013,20 +2012,21 @@ impl Parser {
     /// (zeroes) the appended elements.  `single` (a distinct base type) is
     /// unaffected either way; this only matters for narrow integer aliases.
     pub(crate) fn append_elem_tp(&mut self, content: &Type) -> i32 {
-        // A NESTED element (`content` is itself a vector) stores 16-byte
-        // inline vector headers whose record type is the inner vector's own
-        // database type — `vector_of(content)` already IS that element type
-        // (the same `known` the proven `vv += [inner]` build path passes to
-        // `record_new`, see @PLAN58 cluster IV in vectors.rs).  Unwrapping
-        // it once more with `.content()` lands on the SCALAR type one level
-        // down (`integer` → 0), so `vector_add` strides 8 over 16-byte rows
-        // and never deep-copies the sub-vector claims — nested `a += b`
-        // silently corrupted every row.
-        let vec_tp = self.vector_of(content);
-        if matches!(content, Type::Vector(_, _)) {
-            return i32::from(vec_tp);
-        }
-        i32::from(self.database.content(vec_tp))
+        // One derivation for every element shape — `Data::vector_element_type`.
+        // A NESTED element (`content` is itself a vector) resolves to the inner
+        // vector's OWN database type, the 4-byte handle row `record_new` writes;
+        // it used to be spelled `vector_of(content)`, which was the same id only
+        // while a nested element registered level-COLLAPSED.  Now that
+        // `vector<vector<T>>` registers honestly, `vector_of` is the CONTAINER
+        // and passing it strode `vector_add` one level too deep.
+        i32::from(
+            self.data
+                .vector_element_type(content, &mut self.database)
+                .unwrap_or_else(|| {
+                    let vec_tp = self.vector_of(content);
+                    self.database.content(vec_tp)
+                }),
+        )
     }
 
     /// Get an iterator.

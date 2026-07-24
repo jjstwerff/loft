@@ -77,9 +77,14 @@ fn main() {
     "array<Node> = 3 × 4 (by-reference, not 3 × 16 inline): {size(g.nodes)}"
   );
 
-  // --- nested vector: loft's real element stride is 8 (#477), not 4 ---
+  // --- nested vector: an inner vector is a HEAP element, so each row counts as
+  // its 4-byte record pointer — the same by-reference rule as `array<Node>`
+  // above, and what `OpSizeVector`'s contract has always said.  This pinned 16
+  // (2 × 8) while the outer slot strode by the inner SCALAR's width (#477); the
+  // element type now registers as a real `vector<integer>`, so the stride is the
+  // handle.  See doc/claude/plans/nested-narrow-width/. ---
   c: vector<vector<integer>> = [[1, 2], [3]];
-  assert(size(c) == 16, "vector<vector<integer>> = 2 × 8 (#477 stride): {size(c)}");
+  assert(size(c) == 8, "vector<vector<integer>> = 2 × 4 (heap rows by reference): {size(c)}");
 
   // --- spare capacity is EXCLUDED: size tracks the logical length ---
   e: vector<integer> = [];

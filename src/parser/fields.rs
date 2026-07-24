@@ -969,7 +969,11 @@ impl Parser {
             && let Some(n) = spec.vector_narrow_width()
         {
             i32::from(n)
-        } else if let Some(narrow) = self.data.narrow_vector_content(etp, &mut self.database) {
+        } else if let Some(elem) = self.data.vector_element_type(etp, &mut self.database) {
+            // Read the stride from the SAME element-type derivation the storage
+            // side uses (`Data::vector_element_type`), so the reader can never
+            // stride differently from the writer.
+            //
             // P214: Type::Function vector elements route through
             // `narrow_vector_content` to a `database.int(0, false)`
             // (size 4 d_nr storage).  The previous fallback via
@@ -978,7 +982,12 @@ impl Parser {
             // making `database.size(known) = 0` and producing a
             // stride-0 read that always hit slot 0 regardless of
             // index.
-            i32::from(self.database.size(narrow))
+            //
+            // A NESTED vector element resolves to a real `vector<…>` id (4-byte
+            // handle) instead of the level-collapsed inner scalar; without that,
+            // `v[i]` on a `vector<vector<u8>>` strode 8 while the rows were
+            // written 4 apart, so every row but the first read as empty.
+            i32::from(self.database.size(elem))
         } else {
             i32::from(self.database.size(known))
         };

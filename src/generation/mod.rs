@@ -624,20 +624,51 @@ fn sanitize(name: &str) -> String {
 #[must_use]
 fn narrow_int_cast(tp: &Type) -> Option<&'static str> {
     match tp {
-        // @PLN17: a boolean's storage form is `u8` (0/1/255); a transient
-        // expression is `bool`.  This central cast-helper is consulted at the
-        // return / store / arg seams, so `bool -> u8` coercion happens there
-        // uniformly (`(expr) as u8` — idempotent for u8, 0/1 for bool).
-        Type::Boolean => Some("u8"),
         Type::Integer(s) if s.range() - 1 <= 255 && i64::from(s.min) >= 0 => Some("u8"),
         Type::Integer(s) if s.range() - 1 <= 65536 && i64::from(s.min) >= 0 => Some("u16"),
         Type::Integer(s) if s.range() - 1 <= 255 => Some("i8"),
         Type::Integer(s) if s.range() - 1 <= 65536 => Some("i16"),
-        // @PLN25: a nullable boolean (`boolean?`) still stores as `u8` (tri-state
-        // 0/1/255), so the same bool→u8 wrap must fire — unlike a nullable narrow
-        // INTEGER, which is carried full-width i64 (rust_type) and must stay `None`.
+        _ => boolean_u8_cast(tp),
+    }
+}
+
+/// Use this for the `bool` → `u8` coercion alone, without the narrow-integer
+/// cases of [`narrow_int_cast`].
+///
+/// @PLN17: a boolean's storage form is `u8` (0/1/255) while a transient
+/// expression is `bool`, so this conversion is needed in EVERY non-expression
+/// position — return, store, arg, and the tail of any value-block.  The wrap
+/// `(expr) as u8` is idempotent for `u8` and yields 0/1 for `bool`.
+/// @PLN25: a nullable boolean (`boolean?`) stores as the same tri-state `u8` —
+/// unlike a nullable narrow INTEGER, which is carried full-width `i64`.
+#[must_use]
+fn boolean_u8_cast(tp: &Type) -> Option<&'static str> {
+    match tp {
+        Type::Boolean => Some("u8"),
         Type::Optional(inner) if matches!(inner.base(), Type::Boolean) => Some("u8"),
         _ => None,
+    }
+}
+
+/// Use this for the coercion a value-block's TAIL expression needs.
+///
+/// Integers follow one expression ABI: `i64` everywhere except a function's
+/// return signature, which is the only context where [`rust_type`] picks
+/// `u8`/`u16`/`i8`/`i16` (`Context::Result`).  A narrow-int cast therefore
+/// belongs on a function BODY block and nowhere else.  Applying it to a nested
+/// value-block — the `??` null-coalesce `#ncc` block — hands a `u8` to
+/// consumers that all expect `i64`, and every one of them then needs its own
+/// widen: loft#622's `((v[i] ?? 0) & 255) as u8` failed rustc E0308 because the
+/// operand seam of `op_logical_and_int` had none.
+///
+/// Booleans are the genuine exception and keep casting at every tail — see
+/// [`boolean_u8_cast`].
+#[must_use]
+fn block_tail_cast(tp: &Type, is_fn_body: bool) -> Option<&'static str> {
+    if is_fn_body {
+        narrow_int_cast(tp)
+    } else {
+        boolean_u8_cast(tp)
     }
 }
 
@@ -3666,7 +3697,7 @@ extern crate loft;"
                      cr_call_push(\"{loft_name}\", \"{escaped_file}\", {loft_line});\n  \
                      let _call_guard = codegen_runtime::CallGuard;{vdb_prologue}"
                 ));
-                self.output_block(w, body, returns_text)?;
+                self.output_block(w, body, returns_text, true)?;
                 self.call_stack_prefix = None;
             } else {
                 // Non-instrumented user-fn (e.g. `t_…` methods) — still
@@ -3675,7 +3706,7 @@ extern crate loft;"
                 self.call_stack_prefix = Some(format!(
                     "  let stores: &mut Stores = unsafe {{ &mut *cell.get() }};{vdb_prologue}"
                 ));
-                self.output_block(w, body, returns_text)?;
+                self.output_block(w, body, returns_text, true)?;
                 self.call_stack_prefix = None;
             }
         } else if *def.code() == Value::Null {

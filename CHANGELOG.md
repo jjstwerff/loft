@@ -21,6 +21,41 @@ use-after-free corruption around returns, reassignment, and `match` — has been
 retired wholesale and is now guarded on every night's CI. The registry, the sandbox,
 and reference binding all move forward too.
 
+### Unreleased — a `vector<vector<u8>>` finally reads back what you put in
+
+Nesting a **narrow** number inside a vector — `vector<vector<u8>>`, `<u16>`, `<i16>`,
+`<i32>`, `<u32>` — used to be misread the moment you did anything with the whole
+collection. Printing one packed two 2-byte values into a single 8-byte slot
+(`[[1001,2002],…]` came back as `[[131204073,0],…]`); with a 1-byte inner it crashed
+outright. Slicing gave the right number of rows with the contents emptied. Reading one
+element at a time was always correct, which is what made this so easy to miss: a length
+check passes, a spot-check of `v[0][0]` passes, and only a full comparison shows the
+damage. If your byte vectors carry real data — a file, a hash, a ciphertext — that is a
+silent corruption, and it is what the consumer who reported this was carrying.
+
+The cause was that loft's type table could not actually *say* "vector of vector of
+`u16`": a nested element collapsed to its inner scalar, so a declared
+`vector<vector<u16>>` registered as `vector<vector<integer>>` and nothing downstream
+could know the real width. Seven different places had each worked out the element's
+storage width for themselves, and they agreed only when that element happened to be 8
+bytes wide — exactly the boundary where the bug started. They now all read one answer,
+so a reader can no longer stride differently from the writer. Nesting depth 3+, every
+construction path (literal, typed local, `+=`, function return), slicing, printing,
+concatenating and binding into a struct field are all covered by the new guard.
+
+Two related fixes came with it. `((v[i] ?? 0) & 255) as u8` — pulling a byte out of a
+`vector<u8>`, masking it, and casting — now compiles on `--native`; it used to fail with
+a raw `rustc` type error unless you bound the value to a local first, and that workaround
+can go. And reading an **unsigned** narrow integer from a binary file on `--native` now
+zero-extends: a `u16` of `0xBEEF` read back as `-16657` in some contexts.
+
+One deliberate change comes with this: `size(v)` on a nested vector now reports each row
+as its 4-byte reference rather than the inner scalar's width — so
+`size(vector<vector<integer>>)` with two rows is 8, not 16. That is what `size`'s
+contract already promised ("a heap element counts as its record pointer, never the
+target's content"); the number had been following the stride bug. `len` is unaffected,
+and no on-disk layout changes.
+
 ### Unreleased — `u32` finally holds every `u32`
 
 Three fixes to narrow-width integers, all found by the crawler consumer building a
