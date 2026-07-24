@@ -1458,6 +1458,25 @@ that never ran on that backend (`@EXPECT_FAIL` / `@IGNORE`, or a file with no
 native-runnable function), so a green count cannot stand in for coverage it does
 not have.
 
+**The same line reports @PLN86 admission scope** (#631).  `loft test` applies the
+`[sandbox]` policy from the nearest `loft.toml` at or above each test file (the
+package root, since a test lives in `tests/` while the code it exercises lives in
+`src/`), and an admission violation FAILS the file just as a compile error does —
+a rejected script cannot run at all, so a suite that reported it green was
+reporting on something the host would refuse to load.  Three states:
+
+| Note | Meaning |
+|---|---|
+| `admission checked on N files` | a policy designated code, and it was admitted |
+| `a [sandbox] policy is present but designated nothing here` | the selectors matched no function — admission covered NOTHING |
+| `no [sandbox] policy — admission not exercised` | nothing to check |
+
+The middle state is the one worth reading: admission used to engage only on the
+run path and via `loft sandbox-check`, so a package could carry a deliberate
+capability violation and stay green.  Passing quietly under a policy that matches
+nothing looks identical to real coverage, which is why it gets its own note rather
+than falling back to "no policy".
+
 Files with no `fn test*()` functions are silently skipped.  Hidden directories
 (starting with `.`) and `.loft/` artifact directories are excluded from the
 recursive walk.

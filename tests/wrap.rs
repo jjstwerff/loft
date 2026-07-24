@@ -1432,3 +1432,99 @@ fn test_result_states_its_backend_scope() -> std::io::Result<()> {
     }
     Ok(())
 }
+
+/// #631 — `loft test` must EXERCISE admission, and say so.
+///
+/// The check used to engage only on the run path and via `loft sandbox-check`, so a
+/// package could carry a deliberate capability violation and its suite stayed green.
+/// A consumer verified exactly that by injecting one; a green suite said nothing about
+/// admission, which is easy to mistake for coverage — the same silence-reads-as-coverage
+/// shape as the backend scope note above.
+///
+/// Three states, all asserted: a clean sandboxed package reports the files admission
+/// covered, a violating one FAILS, and a policy whose selectors match nothing says so
+/// rather than passing quietly (the state that looks identical to real coverage).
+#[test]
+fn loft_test_runs_admission_and_states_its_scope() -> std::io::Result<()> {
+    let _g = WRAP_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    let loft_bin = env!("CARGO_BIN_EXE_loft");
+    let tmp = std::env::temp_dir().join(format!("loft_admit_test_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&tmp);
+    std::fs::create_dir_all(tmp.join("tests"))?;
+
+    let policy = |selector: &str| {
+        format!(
+            "[package]\nname = \"plugpkg\"\nversion = \"0.1.0\"\n\n\
+             [sandbox]\nplug = [\"{selector}\"]\n\n\
+             [profile.plug]\nallow_libs = [\"code\"]\nmax_input_n = 64\n\
+             data_budget = 1048576\n"
+        )
+    };
+    let source = |body: &str| {
+        format!(
+            "fn total(v: vector<integer>) -> integer {{\n  t = 0;\n  \
+             for i in 0..len(v) {{ t += v[i] ?? 0; }}\n  return {body};\n}}\n\
+             fn test_total() {{ assert(total([1,2,3]) >= 6, \"sum\"); }}\n"
+        )
+    };
+    let run = || -> std::io::Result<String> {
+        let out = std::process::Command::new(loft_bin)
+            .current_dir(&tmp)
+            .args(["test"])
+            .env("LOFT_TIMEOUT", "180")
+            .output()?;
+        Ok(format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        ))
+    };
+    let result_line = |c: &str| {
+        c.lines()
+            .find(|l| l.starts_with("test result:"))
+            .unwrap_or_default()
+            .to_string()
+    };
+
+    // 1. Clean sandboxed package — admission runs, passes, and is reported.
+    std::fs::write(tmp.join("loft.toml"), policy("fn:total"))?;
+    std::fs::write(tmp.join("tests/t_logic.loft"), source("t"))?;
+    let clean = result_line(&run()?);
+    assert!(
+        clean.starts_with("test result: ok."),
+        "a clean sandboxed package must pass:\n{clean}"
+    );
+    assert!(
+        clean.contains("admission checked on 1 file"),
+        "the result must state that admission covered the file:\n{clean}"
+    );
+
+    // 2. The consumer's probe: an injected capability violation must FAIL the suite.
+    std::fs::write(
+        tmp.join("tests/t_logic.loft"),
+        source("t + mtime(\"loft.toml\")"),
+    )?;
+    let violating = run()?;
+    assert!(
+        result_line(&violating).starts_with("test result: FAILED."),
+        "an ungranted capability must fail the suite — a green run here is the defect:\n{}",
+        result_line(&violating)
+    );
+    assert!(
+        violating.contains("Sandbox admission:"),
+        "the failure must name admission as the cause:\n{violating}"
+    );
+
+    // 3. A policy that designates NOTHING must say so; passing quietly is
+    //    indistinguishable from real coverage, which is the whole complaint.
+    std::fs::write(tmp.join("loft.toml"), policy("fn:no_such_function"))?;
+    std::fs::write(tmp.join("tests/t_logic.loft"), source("t"))?;
+    let empty = result_line(&run()?);
+    assert!(
+        empty.contains("designated nothing here"),
+        "a policy matching no code must be reported, not silently passed:\n{empty}"
+    );
+
+    let _ = std::fs::remove_dir_all(&tmp);
+    Ok(())
+}
