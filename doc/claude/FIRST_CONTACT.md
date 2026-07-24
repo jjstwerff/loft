@@ -188,9 +188,20 @@ So the two READMEs disagreed for two *different* reasons, and I had only found
 one: the main README overclaimed the **examples**, and the chunk README
 underclaims the **library**.
 
-**Still needs Jurjen** (other repo, cannot push from here): update
-`loft-libs-graphics/README.md` — drop the stale TODO/blocked status for
-`graphics` and `imaging`, and fix its `jjstwerff/loft` link to `loft-lang/loft`.
+**Chunk README fixed 2026-07-24** (direct commit to `loft-libs-graphics` —
+`main` is unprotected and this is a doc-only correction, the lightest sanctioned
+path per [plans/README.md](plans/README.md)):
+[`c405962`](https://github.com/loft-lang/loft-libs-graphics/commit/c405962f8a6b6def094aa6d28743d490ff1761b7).
+
+**All four rows were stale, not two.** The registry index and the repo's own tags
+say `graphics` v0.5.0 (nine releases), `imaging` v0.2.1, `shapes` v0.3.0,
+`gridmesh` v0.1.2 — the README claimed the first two were blocked and the other
+two were still at v0.1.0. Versions are now taken from those two sources rather
+than edited in place, the install snippet lists all four, and the design-doc link
+points at `loft-lang/loft`.
+
+So the pair is now consistent from both ends: loft no longer overclaims the
+**examples**, and the chunk repo no longer underclaims the **library**.
 
 ### ~~T1.3~~ — Time DONE 2026-07-24; ordering DEFERRED with a reason
 
