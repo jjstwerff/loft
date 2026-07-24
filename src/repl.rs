@@ -974,6 +974,34 @@ fn render_capture(state: &mut State, ret_ty: &Type, name: &str, json: bool) -> O
     }
 }
 
+/// A mark to rewind a **speculative parse** to — everything such a parse adds
+/// to the session, so it is undone as ONE unit (#618).
+///
+/// A REPL parse writes to two places: it appends `Data` definitions, and it
+/// registers the schema types those definitions need in `Stores`.  Rewinding
+/// only the definitions leaves the schema holding types whose defs are gone;
+/// the next parse then re-creates the same def, sees its name already taken,
+/// and registers a *source-qualified* duplicate — until the qualified name
+/// repeats too and `Stores::structure` aborts with "Double structure type".
+/// (Reachable via any type whose wrapper is not pre-registered by the stdlib,
+/// e.g. `vector<integer(-2147483647, 4294967295)>` from `v = [9000000000, 0]`.)
+///
+/// Taking and restoring both marks together is the whole point of the type:
+/// there are a dozen speculative-parse sites, and a bare `rollback_to(defs)`
+/// at any one of them re-opens the bug.  Take with
+/// [`ReplSession::savepoint`], restore with [`ReplSession::rewind`].
+#[derive(Clone, Copy)]
+struct Savepoint {
+    defs: u32,
+    types: u16,
+    /// Debug-only oracle: the schema summary at the mark.  [`ReplSession::rewind`]
+    /// asserts the restored schema matches it exactly, so a rewind that fails to
+    /// undo a registration is caught at its own call site rather than as a
+    /// "Double structure type" abort in some later, unrelated parse.
+    #[cfg(debug_assertions)]
+    schema: (u16, u32, u64),
+}
+
 /// Outcome of trying to value-snapshot a binding's RHS (REPL.X capture).
 enum Capture {
     /// The value was captured — store `name = <this literal>`.
@@ -1355,14 +1383,14 @@ impl ReplSession {
             "fn {name}() -> text {{\n{}({expr}).to_json()\n}}\n",
             self.body
         );
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, "<repl>", false);
         let failed = self.parser.diagnostics.entries()[pre_diag..]
             .iter()
             .any(|e| e.level >= Level::Error);
         if failed {
-            self.parser.data.rollback_to(pre_defs); // type has no `.to_json()`
+            self.rewind(sp); // type has no `.to_json()`
             return None;
         }
         self.counter = next;
@@ -1375,7 +1403,7 @@ impl ReplSession {
         } else {
             Some(state.get_stack::<crate::keys::Str>().str().to_string())
         };
-        self.parser.data.rollback_to(pre_defs); // discard the throwaway cap gen
+        self.rewind(sp); // discard the throwaway cap gen
         out
     }
 
@@ -1437,12 +1465,12 @@ impl ReplSession {
     /// # Errors
     /// Returns the error-level diagnostics if `src` does not parse.
     pub fn load_program_str(&mut self, src: &str, filename: &str) -> Result<(), Vec<DiagEntry>> {
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(src, filename, false);
         let produced: Vec<DiagEntry> = self.parser.diagnostics.entries()[pre_diag..].to_vec();
         if produced.iter().any(|e| e.level >= Level::Error) {
-            self.parser.data.rollback_to(pre_defs);
+            self.rewind(sp);
             return Err(produced);
         }
         Ok(())
@@ -1479,11 +1507,11 @@ impl ReplSession {
     /// Returns the I/O error if `path` cannot be read.
     pub fn compile(&mut self, path: &str) -> std::io::Result<Vec<DiagEntry>> {
         let src = std::fs::read_to_string(path)?;
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, path, false);
         let produced = self.parser.diagnostics.entries()[pre_diag..].to_vec();
-        self.parser.data.rollback_to(pre_defs);
+        self.rewind(sp);
         Ok(produced)
     }
 
@@ -2131,14 +2159,14 @@ impl ReplSession {
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}() -> {ty} {{\n{lit}\n}}\n");
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, "<repl>", false);
         let failed = self.parser.diagnostics.entries()[pre_diag..]
             .iter()
             .any(|e| e.level >= Level::Error);
         if failed {
-            self.parser.data.rollback_to(pre_defs);
+            self.rewind(sp);
             return None;
         }
         self.counter = next;
@@ -2163,7 +2191,7 @@ impl ReplSession {
                 None => None,
             }
         };
-        self.parser.data.rollback_to(pre_defs); // discard the throwaway cap gen
+        self.rewind(sp); // discard the throwaway cap gen
         root
     }
 
@@ -2430,7 +2458,7 @@ impl ReplSession {
     fn infer_frame_type(&mut self, sig: &str, seed: &str, expr: &str) -> Option<String> {
         let name = format!("replmain_{}", self.counter + 1);
         let src = format!("fn {name}({sig}) {{\n{seed}__t = ({expr});\n}}\n");
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, "<repl>", false);
         let failed = self.parser.diagnostics.entries()[pre_diag..]
@@ -2450,7 +2478,7 @@ impl ReplSession {
                     .map(|i| vars.tp(i).show(&self.parser.data, vars))
             }
         };
-        self.parser.data.rollback_to(pre_defs);
+        self.rewind(sp);
         result
     }
 
@@ -2473,14 +2501,14 @@ impl ReplSession {
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}({sig}) -> {ret_ty} {{\n{seed}({expr})\n}}\n");
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, "<repl>", false);
         let failed = self.parser.diagnostics.entries()[pre_diag..]
             .iter()
             .any(|e| e.level >= Level::Error);
         if failed {
-            self.parser.data.rollback_to(pre_defs);
+            self.rewind(sp);
             return None;
         }
         self.counter = next;
@@ -2707,12 +2735,12 @@ impl ReplSession {
             // and keep it — it persists in `data` (parse_str appends, never
             // wipes prior defs) and is callable from later inputs.  Nothing to
             // print or execute.
-            let pre_defs = self.parser.data.definitions();
+            let sp = self.savepoint();
             let pre_diag = self.parser.diagnostics.entries().len();
             self.parser.parse_str(input, "<repl>", false);
             let produced: Vec<DiagEntry> = self.parser.diagnostics.entries()[pre_diag..].to_vec();
             if produced.iter().any(|e| e.level >= Level::Error) {
-                self.parser.data.rollback_to(pre_defs);
+                self.rewind(sp);
                 return Eval::Error(produced);
             }
             self.record_input(input); // a def changes session state — persist it
@@ -2813,7 +2841,7 @@ impl ReplSession {
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}() {{\n{gen_body}}}\n");
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, "<repl>", false);
         // Only this call's diagnostics — `Diagnostics::level` is monotonic.
@@ -2821,7 +2849,7 @@ impl ReplSession {
         if produced.iter().any(|e| e.level >= Level::Error) {
             // The lexer clears its diagnostics per parse_str, so this error does
             // not leak into the next input — the session stays usable after a typo.
-            self.parser.data.rollback_to(pre_defs);
+            self.rewind(sp);
             return Err(produced);
         }
         self.counter = next;
@@ -2875,11 +2903,11 @@ impl ReplSession {
             // surface it as an error instead of silently swallowing it.  Roll the
             // throwaway gen back so the failed line leaves no def behind.
             if let Some(err) = state.database.runtime_error.take() {
-                self.parser.data.rollback_to(pre_defs);
+                self.rewind(sp);
                 return Err(vec![err.to_diag_entry()]);
             }
         } else {
-            self.parser.data.rollback_to(pre_defs);
+            self.rewind(sp);
         }
         Ok(())
     }
@@ -2950,14 +2978,14 @@ impl ReplSession {
         let next = self.counter + 1;
         let name = format!("replmain_{next}");
         let src = format!("fn {name}() -> {ty} {{\n{}{rhs}\n}}\n", self.body);
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, "<repl>", false);
         let failed = self.parser.diagnostics.entries()[pre_diag..]
             .iter()
             .any(|e| e.level >= Level::Error);
         if failed {
-            self.parser.data.rollback_to(pre_defs);
+            self.rewind(sp);
             return Capture::Skip;
         }
         self.counter = next;
@@ -2973,12 +3001,50 @@ impl ReplSession {
         // real binding error — surface it, don't fall back to source (which would
         // re-run the fault on every later observe and poison the session).
         if let Some(err) = state.database.runtime_error.take() {
-            self.parser.data.rollback_to(pre_defs);
+            self.rewind(sp);
             return Capture::Failed(vec![err.to_diag_entry()]);
         }
         let lit = render_capture(&mut state, &ret_ty, ty, json);
-        self.parser.data.rollback_to(pre_defs); // discard the throwaway cap gen
+        self.rewind(sp); // discard the throwaway cap gen
         lit.map_or(Capture::Skip, Capture::Done)
+    }
+
+    /// Discard a throwaway capture generation: both the definitions and the
+    /// schema types its parse added (#618).  Always undo the two together —
+    /// rolling back only the definitions strands schema names with no defs
+    /// behind them, and the next capture needing the same name aborts.
+    /// Mark the session state before a speculative parse, to be restored with
+    /// [`rewind`](Self::rewind).  See [`Savepoint`] for why both halves travel
+    /// together.
+    fn savepoint(&self) -> Savepoint {
+        Savepoint {
+            defs: self.parser.data.definitions(),
+            types: self.parser.database.types_len(),
+            #[cfg(debug_assertions)]
+            schema: self.parser.database.schema_fingerprint(),
+        }
+    }
+
+    /// Discard everything parsed since `sp` — the definitions and the schema
+    /// types registered for them.
+    fn rewind(&mut self, sp: Savepoint) {
+        if std::env::var_os("LOFT_TRACE_SCHEMA").is_some() {
+            eprintln!(
+                "[schema] rewind defs {}->{} types {}->{}",
+                self.parser.data.definitions(),
+                sp.defs,
+                self.parser.database.types_len(),
+                sp.types,
+            );
+        }
+        self.parser.data.rollback_to(sp.defs);
+        self.parser.database.rollback_types_to(sp.types);
+        #[cfg(debug_assertions)]
+        debug_assert_eq!(
+            self.parser.database.schema_fingerprint(),
+            sp.schema,
+            "a rewound speculative parse must leave the schema exactly as it found it"
+        );
     }
 
     /// If `input` is a simple binding `<name> = <expr>` (not `==`/`+=`/…),
@@ -3160,7 +3226,7 @@ impl ReplSession {
             let _ = writeln!(probe, "__cmpl{i} = {v};");
         }
         let src = format!("fn {name}() {{\n{probe}}}\n");
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, "<repl>", false);
         let failed = self.parser.diagnostics.entries()[pre_diag..]
@@ -3183,7 +3249,7 @@ impl ReplSession {
                 }
             }
         }
-        self.parser.data.rollback_to(pre_defs);
+        self.rewind(sp);
         out
     }
 
@@ -3237,7 +3303,7 @@ impl ReplSession {
         let name = format!("replmain_{}", self.counter + 1);
         let probe = format!("{}__t = {expr};\n", self.body);
         let src = format!("fn {name}() {{\n{probe}}}\n");
-        let pre_defs = self.parser.data.definitions();
+        let sp = self.savepoint();
         let pre_diag = self.parser.diagnostics.entries().len();
         self.parser.parse_str(&src, "<repl>", false);
         let failed = self.parser.diagnostics.entries()[pre_diag..]
@@ -3262,7 +3328,7 @@ impl ReplSession {
                 found
             }
         };
-        self.parser.data.rollback_to(pre_defs); // discard the probe def
+        self.rewind(sp); // discard the probe def
         result
     }
 }

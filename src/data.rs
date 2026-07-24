@@ -317,6 +317,30 @@ impl IntegerSpec {
         self.min == i32::MIN + 1 && self.max == u32::MAX
     }
 
+    /// The loft-SOURCE spelling of this spec, or `None` when it has no name of
+    /// its own and must be written as the explicit `integer(min, max)` form.
+    ///
+    /// The ONE home for this fact: [`Type::name`] and `Display for Type` both
+    /// render integers through it, so the two cannot drift.  They had — each
+    /// named the signed32 template `integer` but let the WIDE template (equally
+    /// `integer` in source, equally 8 bytes) fall through to the `integer(min,
+    /// max)` debug form.  The REPL builds a capture function from that name, so
+    /// it emitted `-> vector<integer(-2147483647, 4294967295)>`, which does not
+    /// parse (#618).
+    ///
+    /// Narrow aliases (`u8`/`i16`/…) carry a `forced_size` and match no template
+    /// here, so they keep a distinct name and a distinct storage width.
+    #[must_use]
+    pub fn source_name(&self) -> Option<&'static str> {
+        if self.is_signed32_template() || self.is_wide_template() {
+            Some("integer")
+        } else if self.min == 0 && self.max == 256 {
+            Some("byte")
+        } else {
+            None
+        }
+    }
+
     /// True when the declared range is non-negative AND runs past `i32::MAX` — a value
     /// no *signed* 4-byte slot can hold.  Such a type needs the unsigned 4-byte op pair
     /// (`OpGetInt4Raw` / `OpGetInt4Full`); the signed `OpGetInt4` sign-extends it on load
@@ -1837,8 +1861,9 @@ impl Type {
             Type::Float => "float".to_string(),
             Type::Single => "single".to_string(),
             Type::Character => "character".to_string(),
-            Type::Integer(spec) if spec.is_signed32_template() => "integer".to_string(),
-            Type::Integer(spec) if spec.min == 0 && spec.max == 256 => "byte".to_string(),
+            Type::Integer(spec) if spec.source_name().is_some() => {
+                spec.source_name().unwrap_or("integer").to_string()
+            }
             Type::Integer(spec) => format!("integer({}, {})", spec.min, spec.max),
             Type::Keys => "keys".to_string(),
             Type::Iterator(elem, _) => format!("iterator<{}>", elem.name(data)),
@@ -2519,8 +2544,9 @@ fn collect_callees(value: &Value, caller: u32, edges: &mut Vec<(u32, u32)>) {
 impl Display for Type {
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         match self {
-            Type::Integer(s) if s.is_signed32_template() => f.write_str("integer"),
-            Type::Integer(s) if s.min == 0 && s.max == 256 => f.write_str("byte"),
+            Type::Integer(s) if s.source_name().is_some() => {
+                f.write_str(s.source_name().unwrap_or("integer"))
+            }
             Type::Integer(IntegerSpec { min, max, .. }) => {
                 f.write_str(&format!("integer({min}, {max})"))
             }

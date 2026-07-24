@@ -1,0 +1,77 @@
+// Copyright (c) 2026 Jurjen Stellingwerff
+// SPDX-License-Identifier: LGPL-3.0-or-later
+//
+// Regression for #622 — a `??` null-coalescing text block compared against a
+// text local must native-compile in CALL-ARGUMENT position, not only when bound
+// to a variable first.
+//
+// `OpEqText` / `OpNeText` used the bare Rust `@v1 == @v2`, which coerces
+// nothing, so the two operands had to arrive in already-matching shapes.  Each
+// text provenance produces a different one: `&String` for a local, `&str` for an
+// indexed `vector<text>` element, and an OWNED `String` for a `??` block (it
+// ends in `.to_string()`).  In a call argument the block was emitted inline, so
+// `assert((v[0] ?? "") == t, …)` became `String == &String` → E0277, while
+// `b = (v[0] ?? "") == t; assert(b, …)` compiled because the pre-eval hoist
+// wrapped the block in `&*(…)`.  Both now route through `ops::op_eq_text` /
+// `op_ne_text`, whose `AsRef<str>` parameters meet every provenance at `&str` —
+// the same remedy @P347 already applied to `OpLtText` / `OpLeText`.
+//
+// Native-only defect (the interpreter was always correct), so these must run on
+// BOTH backends to be meaningful.
+
+fn ids() -> vector<text> {
+  out: vector<text> = [];
+  out += ["t1"];
+  out += ["t2"];
+  return out;
+}
+
+// The exact shape from the report: a `??` discharge compared to a text local,
+// directly inside a call argument.
+fn test_622_ncc_eq_local_in_call_arg() {
+  tid = "t1";
+  need = ids();
+  assert((need[0] ?? "") == tid, "ncc == local in call arg");
+  // …and the `&&` form the zero-trust packages actually used.
+  assert(len(need) == 2 && (need[0] ?? "") == tid, "ncc == local behind &&");
+}
+
+// Operand order must not matter — the local on the left failed identically.
+fn test_622_local_eq_ncc_in_call_arg() {
+  tid = "t2";
+  need = ids();
+  assert(tid == (need[1] ?? ""), "local == ncc in call arg");
+}
+
+fn test_622_ncc_ne_local_in_call_arg() {
+  tid = "t1";
+  need = ids();
+  assert((need[1] ?? "") != tid, "ncc != local in call arg");
+}
+
+// The provenances that already worked stay working: block-vs-literal,
+// block-vs-block, and the bound-to-a-local baseline.
+fn test_622_other_text_provenances() {
+  tid = "t1";
+  need = ids();
+  assert((need[0] ?? "") == "t1", "ncc == literal");
+  assert((need[0] ?? "") != (need[1] ?? ""), "ncc != ncc");
+  b = (need[0] ?? "") == tid;
+  assert(b, "bound-first baseline");
+  // Ordering ops routed through `ops::` since @P347 — guard them alongside.
+  assert((need[0] ?? "") < (need[1] ?? ""), "ncc < ncc");
+  assert((need[0] ?? "") <= tid, "ncc <= local");
+}
+
+// A `??` block in a condition and in a nested call argument.
+fn test_622_ncc_compare_nested_positions() {
+  tid = "t1";
+  need = ids();
+  hit = 0;
+  if (need[0] ?? "") == tid { hit = hit + 1; }
+  assert(hit == 1, "ncc == local as if-condition");
+  // Nested one call deeper.
+  assert(both_true((need[0] ?? "") == tid, (need[1] ?? "") != tid), "nested call arg");
+}
+
+fn both_true(a: boolean, b: boolean) -> boolean { return a && b; }

@@ -9423,6 +9423,70 @@ fn g() -> float { 1.5 }"
     .result(Value::Float(41.0));
 }
 
+/// @PLN102 — deferring an all-unknown operator to pass 2 must not SWALLOW a real
+/// error.  A genuinely undefined callee has no type on either pass, so it takes the
+/// same deferral path as the forward reference above; pass 2 must still reject it.
+/// Without this, widening the guard could turn a compile error into a silent
+/// mis-compile.
+#[test]
+fn pln102_all_unknown_deferral_still_reports_undefined_callee() {
+    code!(
+        "fn run() -> integer {
+    nope_a() - nope_b()
+}"
+    )
+    .error("Unknown function nope_a at pln102_all_unknown_deferral_still_reports_undefined_callee:2:5")
+    .error("Unknown function nope_b at pln102_all_unknown_deferral_still_reports_undefined_callee:2:16")
+    // The two trailing errors are a CASCADE ARTIFACT of the deferral, not signal:
+    // with no operand type on either pass the operator is never resolved, so the
+    // half-applied `OpMinInt` also trips its arity check.  Pinned because the
+    // harness compares the whole set — if a future change makes the deferral tidy
+    // up after itself, drop these two rather than treating them as a contract.
+    .error("missing argument for parameter 'v1' of `OpMinInt` — the call supplies too few arguments (add it, or give the parameter a default `= …`) at pln102_all_unknown_deferral_still_reports_undefined_callee:3:2")
+    .error("missing argument for parameter 'v2' of `OpMinInt` — the call supplies too few arguments (add it, or give the parameter a default `= …`) at pln102_all_unknown_deferral_still_reports_undefined_callee:3:2");
+}
+
+/// @PLN102 — the deferral is deliberately limited to the case where NO operand
+/// carries type information.  One KNOWN operand is enough to steer resolution, and
+/// keeping it on the resolving path is what preserves this diagnostic: the operands
+/// here are `unknown` and `boolean`, so the mismatch is still reported instead of
+/// being deferred into silence.  Widening the guard to "ANY operand unknown" would
+/// lose it.
+#[test]
+fn pln102_one_known_operand_keeps_the_mismatch_diagnostic() {
+    code!(
+        "fn run() -> boolean {
+    f() < true
+}
+fn f() -> float { 1.0 }"
+    )
+    .error(
+        "No matching operator '<' on 'unknown' and 'boolean' at pln102_one_known_operand_keeps_the_mismatch_diagnostic:3:1",
+    );
+}
+
+/// @PLN102 — KNOWN GAP, not a passing guard.  The fix above covers the case where
+/// every operand is unresolved (`f() - g()`); the mixed form `f() - 1`, with one
+/// literal operand, still mis-types exactly as the original report described.  The
+/// all-unknown restriction is what keeps
+/// `pln102_one_known_operand_keeps_the_mismatch_diagnostic` working, so closing this
+/// needs the operator search to defer on the RESULT type rather than on operand
+/// knownness — a larger change than the guard widening.  Recorded here so the
+/// remaining half is not rediscovered from scratch.
+#[test]
+#[ignore = "@PLN102 open: one-known-operand forward reference still mis-types (see doc comment)"]
+fn pln102_one_known_operand_forward_float_still_mistyped() {
+    code!(
+        "fn run() -> float {
+    a = f() - 1;
+    a
+}
+fn f() -> float { 4.5 }"
+    )
+    .expr("run()")
+    .result(Value::Float(3.5));
+}
+
 /// QUALITY 6c — the free-function hint must NOT fire when there is
 /// no `n_<field>` function compatible with the receiver.  Locks the
 /// specificity of the hint: a genuinely-misspelled field produces
@@ -16506,4 +16570,82 @@ fn pln114_alignment_tables_agree() {
             "element_stack_align({name}) — the tuple_def inline table must agree"
         );
     }
+}
+
+// ── #618: an entry function returning a heap value ───────────────────────────
+// `ref_return` promotion makes a returned local BE the caller's hidden return
+// buffer, so the body writes straight into it.  An ordinary call site allocates
+// that buffer before the call; `execute_argv` pushed a bare `DbRef::NULL`, so
+// every element write addressed `stores[u16::MAX]` and aborted with
+// "index out of bounds: the len is 2 but the index is 65535".
+//
+// `ReplSession::value_of` was the reported symptom, but the entry contract is
+// what broke, so guard it directly here: a plain `fn main() -> vector<integer>`
+// reproduced it identically under `--interpret`.  Struct returns always worked
+// (their promoted body opens with its own `OpDatabase`) and are kept as the
+// negative control — a "fix" that regressed them would pass the vector cases.
+//
+// Interpreter only: `--native` cannot yet compile ANY heap-returning entry fn
+// (its generated `main` omits the hidden buffer argument → rustc E0428/E0061),
+// a separate pre-existing gap on the same contract.
+fn run_entry_returning(code: &str) -> (State, loft::data::Data) {
+    let mut p = Parser::new();
+    p.parse_dir("default", true, false).unwrap();
+    p.parse_str(code, "issue618", false);
+    assert!(
+        p.diagnostics.lines().is_empty(),
+        "Parse errors: {:?}",
+        p.diagnostics.lines()
+    );
+    scopes::check(&mut p.data);
+    let mut state = State::new(p.database);
+    byte_code(&mut state, &mut p.data);
+    state.execute_argv("main", &p.data, &[]);
+    (state, p.data)
+}
+
+#[test]
+fn issue618_entry_fn_returns_bare_local_vector() {
+    // Pre-fix: aborted here rather than returning.  The `println` makes the
+    // built value observable even though the entry's return is discarded, so a
+    // silently-empty buffer cannot pass as success.
+    let (state, _) = run_entry_returning(
+        "fn main() -> vector<integer> {\n  v = [1, 2, 3];\n  println(\"{v}\");\n  v\n}",
+    );
+    assert!(
+        state.database.runtime_error.is_none(),
+        "entry returning a bare local vector must not fault"
+    );
+}
+
+#[test]
+fn issue618_entry_fn_returns_vector_shapes() {
+    // One axis per case: element kind, nesting depth, and zero cardinality —
+    // every shape routes through the same hidden-buffer contract.
+    for code in [
+        "fn main() -> vector<text> {\n  v = [\"a\", \"b\"];\n  println(\"{v}\");\n  v\n}",
+        "fn main() -> vector<vector<integer>> {\n  v = [[1, 2], [3]];\n  println(\"{v}\");\n  v\n}",
+        "fn main() -> vector<integer> {\n  v: vector<integer> = [];\n  println(\"{v}\");\n  v\n}",
+        // An element wider than 32 bits — the report's second signature.
+        "fn main() -> vector<integer> {\n  v = [9000000000, 0];\n  println(\"{v}\");\n  v\n}",
+    ] {
+        let (state, _) = run_entry_returning(code);
+        assert!(
+            state.database.runtime_error.is_none(),
+            "entry heap return faulted for: {code}"
+        );
+    }
+}
+
+#[test]
+fn issue618_entry_fn_returning_struct_still_works() {
+    // Negative control: this path allocates from the sentinel itself and was
+    // never broken — it must stay that way.
+    let (state, _) = run_entry_returning(
+        "struct P { x: integer }\nfn main() -> P {\n  p = P { x: 1 };\n  println(\"{p}\");\n  p\n}",
+    );
+    assert!(
+        state.database.runtime_error.is_none(),
+        "entry returning a struct must keep working"
+    );
 }

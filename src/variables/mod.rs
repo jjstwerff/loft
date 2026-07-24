@@ -1051,6 +1051,18 @@ impl Function {
         {
             return;
         }
+        // #625 — the warning below seeks the lexer BACK to the previous write so it
+        // reports there, but `to()` moves only the reporting line/pos and never
+        // rewinds the read cursor: the tokenizer keeps incrementing that line for
+        // every physical line it goes on to pull.  Left unrestored, the seek shifts
+        // EVERY later diagnostic in the file back by its own distance — and, because
+        // `write_source` below is then captured from the seeked position, each further
+        // reassignment stacks another shift (`c = 1; c = 2; c = f();` misreported by
+        // two lines).  Hold the true cursor and put it back; the seek is for REPORTING
+        // only.  `definitions.rs` does the same around the end-of-function warning
+        // passes — this one runs DURING the body parse, which is why it reaches user
+        // code that has not been parsed yet.
+        let here = lexer.at();
         if var.write_source != (0, 0) && var.uses == var.uses_at_write {
             // Variable was written before but not read since — dead assignment
             let name = var.name.clone();
@@ -1062,10 +1074,11 @@ impl Function {
                 "Dead assignment — '{}' is overwritten before being read",
                 name,
             );
+            lexer.to(here);
         }
         let var = &mut self.variables[var_nr as usize];
         var.uses_at_write = var.uses;
-        var.write_source = lexer.at();
+        var.write_source = here;
     }
 
     /// Save write-tracking state for all variables, then clear pending writes.

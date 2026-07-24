@@ -10,6 +10,40 @@ use crate::data::Deps;
 // Lambda and vector expression parsing.
 
 impl Parser {
+    /// The store op that writes one NARROW-integer vector element — a `vector<u8>`,
+    /// `<u16>`, or a 4-byte `integer` subtype, nullable or not.  Returns `None` for
+    /// any other element type, leaving the caller on its wide `set_field` path.
+    ///
+    /// Every site that BUILDS a vector routes its element write through here, so the
+    /// store op is the exact twin of the index READ (`get_val`) for each width and
+    /// nullability: `OpSetByte` / `OpSetShortRaw` / `OpSetInt4` for raw elements,
+    /// `OpSetByteNullable` / `OpSetShort` for nullable ones.  A site that misses it
+    /// emits the wide 8-byte `OpSetInt` into a 1-byte slot, so one write covers eight
+    /// element slots — the slice half of #624, where `v[a..b]` on a `vector<u8>` kept
+    /// only the first element and zero-filled the rest.
+    pub(crate) fn narrow_elm_set(&mut self, elm_tp: &Type, elm: u16, val: &Value) -> Option<Value> {
+        // A nullable narrow element (`vector<u8?>`) reserves a sentinel, so it needs
+        // the nullable store op — a raw `OpSetByte` would write null's low byte `0`,
+        // indistinguishable from the value 0.
+        let (spec, nullable) = match elm_tp {
+            Type::Integer(spec) => (*spec, false),
+            Type::Optional(inner) => match &**inner {
+                Type::Integer(spec) => (*spec, true),
+                _ => return None,
+            },
+            _ => return None,
+        };
+        let n = spec.vector_narrow_width()?;
+        let kind = crate::data::NarrowIntKind::of(n, nullable, true, spec.unsigned_wide());
+        let pos = Value::Int(0);
+        Some(if kind.takes_min() {
+            let m = Value::Int(spec.usable_min(kind.reserves_sentinel()));
+            self.cl(kind.set_op(), &[Value::Var(elm), pos, m, val.clone()])
+        } else {
+            self.cl(kind.set_op(), &[Value::Var(elm), pos, val.clone()])
+        })
+    }
+
     pub(crate) fn parse_append_vector(
         &mut self,
         code: &mut Value,
@@ -2672,36 +2706,10 @@ impl Parser {
                 for l in steps {
                     ls.push(l.clone());
                 }
-            } else if let Some((spec, elem_nullable)) = match in_t {
-                Type::Integer(spec) => Some((spec, false)),
-                // @PLN25 item 2: a `vector<u8?>` element is `Optional(Integer)` —
-                // peel it and emit the NULLABLE narrow write so null encodes the
-                // reserved sentinel (a raw `OpSetByte` would store null's low byte
-                // `0`, indistinguishable from the value 0).
-                Type::Optional(inner) => match &**inner {
-                    Type::Integer(spec) => Some((spec, true)),
-                    _ => None,
-                },
-                _ => None,
-            }
-            .filter(|(spec, _)| spec.vector_narrow_width().is_some())
-            {
-                // narrow integer element write.  Route through the ONE width→op
-                // home (`NarrowIntKind::of`) so the append op is the exact twin of
-                // the index-READ op (`get_val`) for every width and nullability —
-                // `OpSetByte`/`OpSetShortRaw`/`OpSetInt4` for raw elements,
-                // `OpSetByteNullable`/`OpSetShort` for nullable ones.  The fallback
-                // (`n` outside the narrow gate) keeps the wide `set_field` path.
-                let n = spec.vector_narrow_width().unwrap();
-                let kind =
-                    crate::data::NarrowIntKind::of(n, elem_nullable, true, spec.unsigned_wide());
-                let pos = Value::Int(0);
-                let op = if kind.takes_min() {
-                    let m = Value::Int(spec.usable_min(kind.reserves_sentinel()));
-                    self.cl(kind.set_op(), &[Value::Var(elm), pos, m, p.clone()])
-                } else {
-                    self.cl(kind.set_op(), &[Value::Var(elm), pos, p.clone()])
-                };
+            } else if let Some(op) = self.narrow_elm_set(in_t, elm, p) {
+                // @PLN25 item 2 / #624 — narrow integer element write, shared with
+                // the slice-materialise site.  The fallback (an element outside the
+                // narrow gate) keeps the wide `set_field` path below.
                 ls.push(op);
             } else if matches!(in_t, Type::Function(_, _, _)) {
                 // Plan-06 phase 4d.A.2 — fn-ref vector elements store

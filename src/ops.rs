@@ -601,6 +601,30 @@ pub fn op_le_text<A: AsRef<str>, B: AsRef<str>>(a: A, b: B) -> bool {
     a.as_ref() <= b.as_ref()
 }
 
+/// Text equality — the `==` twin of [`op_lt_text`], and for the same reason.
+///
+/// Native codegen hands each operand in whatever shape its provenance produced:
+/// `&String` for a text local, `&str` for an indexed `vector<text>` element, and
+/// an OWNED `String` for a `??` null-coalescing block (which ends in
+/// `.to_string()`).  A bare `@v1 == @v2` only compiles when the two shapes
+/// happen to agree — `String == &String` has no `PartialEq` impl, so
+/// `assert((v[i] ?? "") == t, …)` failed to native-compile with E0277 while the
+/// identical expression bound to a local first compiled fine (#622).  Taking
+/// `AsRef<str>` meets every provenance at `&str` at the call boundary, so the
+/// generator needs no per-operand-shape rule.
+#[inline]
+#[must_use]
+pub fn op_eq_text<A: AsRef<str>, B: AsRef<str>>(a: A, b: B) -> bool {
+    a.as_ref() == b.as_ref()
+}
+
+/// Text inequality — see [`op_eq_text`].  @P347 / #622.
+#[inline]
+#[must_use]
+pub fn op_ne_text<A: AsRef<str>, B: AsRef<str>>(a: A, b: B) -> bool {
+    a.as_ref() != b.as_ref()
+}
+
 #[inline]
 #[must_use]
 pub fn op_shift_left_int(v1: i64, v2: i64) -> i64 {

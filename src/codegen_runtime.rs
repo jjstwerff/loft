@@ -274,7 +274,8 @@ use std::cell::RefCell;
 use std::fs::{File, OpenOptions};
 #[cfg(not(feature = "wasm"))]
 use std::io::{Read, Seek, SeekFrom, Write as _};
-#[cfg(not(target_arch = "wasm32"))]
+// #620 — see `n_now`: `wasm32-wasip2` shares the real-clock path.
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Allocate a database root record for the given type.
@@ -2000,7 +2001,7 @@ pub fn OpAppendCopy(cell: &std::cell::UnsafeCell<Stores>, data: DbRef, count: i6
 /// helper in `src/native.rs` for the full contract; duplicated here so
 /// `--native`-compiled binaries honour the override the same way the
 /// interpreter does.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 fn fake_clock_env(var: &str) -> Option<i64> {
     std::env::var(var).ok()?.parse::<i64>().ok()
 }
@@ -2012,7 +2013,10 @@ fn fake_clock_env(var: &str) -> Option<i64> {
 ///
 /// Plan 09 phase 01 step 1.5: migrated to the no-stores ABI
 /// (`Abi::None`).  Body doesn't touch `Stores` — wall-clock read only.
-#[cfg(not(target_arch = "wasm32"))]
+/// #620 — `wasm32-wasip2` (`--native-wasm`) reaches this arm too.  WASI exposes
+/// a real clock through `wasi:clocks`, which `std`'s `SystemTime` already uses,
+/// so it takes the ordinary host path rather than the browser fallback below.
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 pub fn n_now() -> i64 {
     if let Some(fake) = fake_clock_env("LOFT_FAKE_NOW_MS") {
         return fake;
@@ -2023,15 +2027,21 @@ pub fn n_now() -> i64 {
 }
 
 /// Bytecode equivalent: `n_now` in `src/native.rs`.
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), feature = "wasm"))]
 pub fn n_now() -> i64 {
     crate::wasm::host_time_now()
 }
 
-/// Fallback for the `--html` build (wasm32, no `wasm` feature):
-/// returns 0 because no host time bridge exists.  Mirror of the
+/// Fallback for the `--html` build (`wasm32-unknown-unknown`, no `wasm`
+/// feature): returns 0 because no host time bridge exists.  Mirror of the
 /// `n_ticks` fallback below for the same target.
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+///
+/// #620 — this used to be gated on `target_arch = "wasm32"` alone, which also
+/// caught `wasm32-wasip2` (`--native-wasm`).  That target HAS a working clock,
+/// so the stub was overriding a real reading with 0 rather than standing in for
+/// a missing bridge; `not(target_os = "wasi")` narrows it to the browser build
+/// the comment always described.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 pub fn n_now() -> i64 {
     0
 }
@@ -2040,7 +2050,9 @@ pub fn n_now() -> i64 {
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
 /// Honours `LOFT_FAKE_TICKS_US` when set (deterministic snapshot tests).
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.
-#[cfg(not(target_arch = "wasm32"))]
+/// #620 — see [`n_now`]: `wasm32-wasip2` has a real monotonic clock behind
+/// `std::time::Instant`, so it shares the host path.
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 pub fn n_ticks(cell: &std::cell::UnsafeCell<Stores>) -> i64 {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     if let Some(fake) = fake_clock_env("LOFT_FAKE_TICKS_US") {
@@ -2052,13 +2064,14 @@ pub fn n_ticks(cell: &std::cell::UnsafeCell<Stores>) -> i64 {
 /// Bytecode equivalent: `n_ticks` in `src/native.rs`.  Gated on
 /// target_arch, not the `wasm` feature — the `--html` build (wasm32,
 /// no `wasm` feature) returns 0 because no host time bridge exists.
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), feature = "wasm"))]
 pub fn n_ticks(cell: &std::cell::UnsafeCell<Stores>) -> i64 {
     let stores: &mut Stores = unsafe { &mut *cell.get() };
     (crate::wasm::host_time_ticks() - stores.start_time_ms) * 1000
 }
 
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+/// #620 — browser-only fallback; `wasm32-wasip2` uses the real clock above.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 pub fn n_ticks(_cell: &std::cell::UnsafeCell<Stores>) -> i64 {
     0
 }

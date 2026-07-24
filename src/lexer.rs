@@ -61,6 +61,24 @@ impl Position {
     }
 }
 
+/// `LOFT_TRACE_LEX=1` — narrate the lexer's POSITION bookkeeping to stderr:
+/// each recorded identifier position, each `to()` seek, each `revert`, and each
+/// memory replay.
+///
+/// The reporting cursor is a shared, long-lived thing: any warning pass may seek
+/// it backwards to point at an earlier site, and `to()` moves only that cursor —
+/// the tokenizer keeps counting lines from wherever it was left.  A seek that is
+/// not put back therefore corrupts the line of every LATER diagnostic, and the
+/// symptom shows up far from the cause, in an unrelated message (#625).
+///
+/// Run it over both passes and diff them: the pass that records a token at the
+/// wrong line names the seek that preceded it.
+pub(crate) fn lex_trace(args: std::fmt::Arguments<'_>) {
+    if std::env::var_os("LOFT_TRACE_LEX").is_some() {
+        eprintln!("[lex] {args}");
+    }
+}
+
 impl Debug for Position {
     fn fmt(&self, fmt: &mut Formatter<'_>) -> Result<(), std::fmt::Error> {
         self.format(fmt)
@@ -417,6 +435,10 @@ impl Lexer {
     }
 
     pub fn to(&mut self, scope: (u32, u32)) {
+        lex_trace(format_args!(
+            "to() seek {}:{} -> {}:{}",
+            self.position.line, self.position.pos, scope.0, scope.1
+        ));
         self.position.line = scope.0;
         self.position.pos = scope.1;
     }
@@ -426,6 +448,10 @@ impl Lexer {
         if self.link < self.memory.len() {
             let n = self.memory[self.link].clone();
             self.link += 1;
+            lex_trace(format_args!(
+                "replay {:?} @ {}:{} (cursor stays {}:{})",
+                n.has, n.position.line, n.position.pos, self.position.line, self.position.pos
+            ));
             return Some(n);
         }
         if self.mode != Mode::Formatting {
@@ -1613,6 +1639,10 @@ impl Lexer {
 
     /// Reset to a previously made link position in the source.
     pub fn revert(&mut self, link: Link) {
+        lex_trace(format_args!(
+            "revert link {} -> {} (cursor {}:{})",
+            self.link, link.pos, self.position.line, self.position.pos
+        ));
         self.link = link.pos;
         drop(link);
         self.cont();
@@ -1822,6 +1852,10 @@ impl Lexer {
     pub fn has_identifier_pos(&mut self) -> Option<(String, Position)> {
         if let LexItem::Identifier(n) = self.peek().has {
             let pos = self.peek.position.clone();
+            lex_trace(format_args!(
+                "idpos {n:?} @ {}:{} (cursor {}:{})",
+                pos.line, pos.pos, self.position.line, self.position.pos
+            ));
             self.cont();
             Some((n, pos))
         } else {

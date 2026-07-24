@@ -6,4 +6,5 @@
 #   - a new ignored spec landed for a new QUALITY.md item (add its line here)
 #   - the reason message changed (update the line here)
 # Regenerate with: `python3 tests/dump_ignored_tests.py > tests/ignored_tests.baseline`
+pln102_one_known_operand_forward_float_still_mistyped	@PLN102 open: one-known-operand forward reference still mis-types (see doc comment)
 regen_fill_rs	maintenance: regenerates src/fill.rs — run manually when default/*.loft changes

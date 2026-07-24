@@ -1,0 +1,21 @@
+// #625 — a diagnostic must name the line its token is really on, even when an
+// earlier dead assignment made the lint seek the reporting cursor backwards.
+//
+// `track_write` reports "Dead assignment" at the PREVIOUS write, which means
+// seeking the shared reporting cursor back to it.  `Lexer::to` moves only that
+// cursor, so leaving it there shifted every later diagnostic in the file back by
+// the seek distance — and each further reassignment stacked another shift.  Two
+// dead writes below, so pre-fix the `printt` error was reported two lines early.
+//
+// The two "Dead assignment" warnings are part of the lock: they must point at
+// lines 16 and 17 (the writes that are overwritten), not at a drifted position.
+fn helper() -> integer {
+  42
+}
+fn main() {
+  c = 1;
+  c = 2;
+  c = helper();
+  printt("x");
+  print("c={c}");
+}

@@ -110,10 +110,16 @@ pub fn alloc_vector_from_bytes(store: &mut Store, elem_size: u32, count: u32, da
 /// Sets the vector pointer and length=0.  Subsequent `vector_append` calls
 /// will find enough space and never call `store.resize`.
 pub fn pre_alloc_vector(db: &DbRef, count: u32, elem_size: u32, stores: &mut [Store]) {
-    let store = keys::mut_store(db, stores);
-    if db.rec == 0 {
+    // #618: the null test comes FIRST, before any store deref — the same order
+    // `clear_vector` uses, and the rule `DbRef::is_null` states ("every store
+    // accessor consults it before dereferencing").  A hidden return buffer that
+    // its caller never allocated arrives as the null sentinel, and reserving
+    // capacity in an absent vector is a no-op; testing `rec` after the
+    // `mut_store` indexed `stores[u16::MAX]` and aborted.
+    if db.is_null() || db.rec == 0 {
         return;
     }
+    let store = keys::mut_store(db, stores);
     let vec_rec = store.get_u32_raw(db.rec, db.pos);
     if vec_rec != 0 {
         return; // already allocated — don't overwrite

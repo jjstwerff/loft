@@ -1243,3 +1243,75 @@ fn repl_tracepoint_logs_and_continues() {
         "logged both calls"
     );
 }
+
+/// STATUS: OPEN — these two are `#[ignore]`d reproductions, not passing guards.
+///
+/// @P293's remedy (wrap the value in a one-element vector so it is COPIED into
+/// store-resident memory) does NOT extend one level up to a vector: capturing
+/// `[(v)]` as `vector<vector<τ>>` moves the panic from `keys.rs` to
+/// `database/types.rs:71` — `Double structure type src0::main_vector<vector<integer>>`.
+/// That ties #618's main signature to the "possibly related second signature" in the
+/// report (`v = [9000000000, 0]` faulting at the same `types.rs` site): they are ONE
+/// blocker.  Each REPL capture re-parses a synthetic program into the same `Data`, so
+/// it re-registers the `main_vector<…>` wrapper struct; the collision-qualified name
+/// (`src0::…`) collides too, because both defs live in the same source.  A real fix has
+/// to make those synthetic defs unique per capture generation (or dedup them), which is
+/// the fn-return / borrowed-heap-value substrate the report names — not a call-site wrap.
+///
+/// #618 regression: `ReplSession::value_of` panicked for any **vector** binding.
+///
+/// `capture_typed` runs `fn replmain_N() -> vector<τ> { … v }`, i.e. it returns a
+/// bare heap value that borrows a body local.  The fn-return deep-copy then
+/// targets a store the capture generation never allocated, so the destination
+/// `DbRef` is the null sentinel and `append_vector` indexes `allocations[65535]`
+/// — `index out of bounds: the len is 2 but the index is 65535` at `keys.rs`.
+/// A struct binding was unaffected; a vector faulted on a single bind.
+///
+/// Same family as @P293 (which hit this for `text`), and the same remedy: wrap
+/// the value in a one-element vector so it is COPIED into store-resident memory,
+/// then strip the outer brackets.  The in-tree caller (`frame_value_of`) guards
+/// with `catch_unwind`, but an embedder calling the public `value_of` directly
+/// has no such guard and the process aborts — so this must not merely degrade to
+/// `None`, it must return the value.
+#[test]
+fn value_of_renders_vector_bindings_618() {
+    let mut s = session();
+    assert!(matches!(s.eval("v = [1, 2, 3]"), Eval::Ran));
+    assert_eq!(s.value_of("v").as_deref(), Some("[1,2,3]"));
+
+    // Re-binding was in the reported boundary table too.
+    assert!(matches!(s.eval("v = [4, 5]"), Eval::Ran));
+    assert_eq!(s.value_of("v").as_deref(), Some("[4,5]"));
+
+    // Two separate vector bindings — reading the second used to panic as well.
+    let mut t = session();
+    assert!(matches!(t.eval("a = [1, 2]"), Eval::Ran));
+    assert!(matches!(t.eval("b = [3, 4]"), Eval::Ran));
+    assert_eq!(t.value_of("b").as_deref(), Some("[3,4]"));
+    assert_eq!(t.value_of("a").as_deref(), Some("[1,2]"));
+}
+
+/// #618 — the same capture path for a `vector<text>` and for an element type
+/// wider than 32 bits.  The report's "possibly related second signature" was a
+/// `v = [9000000000, 0]` binding panicking at `database/types.rs` instead of
+/// `keys.rs`; both are the fn-return copy, so guard the wide element here too.
+#[test]
+fn value_of_renders_text_and_wide_vector_bindings_618() {
+    let mut s = session();
+    assert!(matches!(s.eval("vt = [\"a\", \"b\"]"), Eval::Ran));
+    assert_eq!(s.value_of("vt").as_deref(), Some("[\"a\",\"b\"]"));
+
+    let mut w = session();
+    assert!(matches!(w.eval("vw = [9000000000, 0]"), Eval::Ran));
+    assert_eq!(w.value_of("vw").as_deref(), Some("[9000000000,0]"));
+}
+
+/// #618 — a struct binding was already correct; keep it in the guard so the
+/// vector wrap can't be "fixed" by regressing the path that worked.
+#[test]
+fn value_of_struct_binding_still_renders_618() {
+    let mut s = session();
+    assert!(matches!(s.eval("struct P { x: integer }"), Eval::Ran));
+    assert!(matches!(s.eval("p = P { x: 1 }"), Eval::Ran));
+    assert_eq!(s.value_of("p").as_deref(), Some("P{x:1}"));
+}

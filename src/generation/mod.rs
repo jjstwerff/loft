@@ -1377,6 +1377,28 @@ extern crate loft;"
                 if stores_loft_ref || has_ref_arg {
                     continue;
                 }
+                // #623 — a REACHABLE routeless `#native` whose SYMBOL equals the
+                // loft fn's own emitted name (`n_<fn>`, i.e. a bare `#native`)
+                // gets both this host-import declaration and a local wrapper body
+                // under that one name — an unreadable rustc cascade (E0428 plus a
+                // string of E0610/E0061 against generated code, rustc's "remove
+                // the extra argument" pointing nowhere useful).  Skip the extern
+                // so exactly one diagnostic survives: the `compile_error!` the
+                // body site emits, naming the symbol, its library and the fix.
+                //
+                // Two shapes deliberately still get their declaration:
+                //   * an UNREACHABLE routeless native — unused, emits no body, and
+                //     must not reject an otherwise-valid program;
+                //   * a native whose symbol DIFFERS from the fn name
+                //     (`#native "loft_gl_swap_buffers"` on `gl_swap_buffers`) —
+                //     that is the legitimate raw host-import path the browser
+                //     shell supplies, and it never collided.
+                if reachable.contains(&d_nr)
+                    && (def.native() == def.name() || matches!(def.returned(), Type::Text(_)))
+                    && !data.wasm_bridge_routes.contains_key(def.native())
+                {
+                    continue;
+                }
                 declared_natives.insert(def.native().to_string());
                 // Build the C-ABI signature from loft parameter types.
                 use std::fmt::Write as _;
@@ -1775,15 +1797,27 @@ extern crate loft;"
             .any(|d| self.data.def(*d).name().starts_with("n_parallel_"))
     }
 
-    /// @PLN11 Arc N — emit the reachable native program as a **library** cdylib:
-    /// header + `init` + only the reachable functions, with **no `fn main()` /
-    /// `loft_start` bootstrap** even if an `n_main` exists in `data` (it belongs to
-    /// the consuming script, not the library, and isn't reachable from the
-    /// library's exports — emitting it would reference an undefined `n_main`).
+    /// Emit the reachable native program **without any `fn main()` / `loft_start`
+    /// bootstrap**, even when an `n_main` exists in `data`.
+    ///
+    /// Use this whenever the caller owns the crate's entry point.
+    /// [`Self::output_native_reachable`] decides to emit the bootstrap by scanning
+    /// every definition for the name `n_main`, which finds an `n_main` belonging to
+    /// a LINKED PACKAGE just as readily as one in the program being compiled — so
+    /// the caller, not that scan, has to be the authority when it supplies its own
+    /// `main`.  Two callers do:
+    ///
+    ///   * @PLN11 Arc N library cdylibs, where the `n_main` belongs to the
+    ///     consuming script and isn't reachable from the library's exports (the
+    ///     bootstrap would reference an undefined `n_main`);
+    ///   * the `loft test --native` harness, which appends its own `main` calling
+    ///     each `test_*` function — for a package whose `src/` entry is also a
+    ///     runnable CLI, both mains landed in one crate and rustc rejected it with
+    ///     E0428 (#621).
     ///
     /// # Errors
     /// Returns any `io::Error` from writing to `w`.
-    pub fn output_native_library(
+    pub fn output_native_no_bootstrap(
         &mut self,
         w: &mut dyn Write,
         _from: u32,
@@ -1795,6 +1829,21 @@ extern crate loft;"
         let mut buf: Vec<u8> = Vec::new();
         self.emit_native_reachable_body(&mut buf, till, entry_defs)?;
         w.write_all(&scrub_generated_crate_refs(&buf))
+    }
+
+    /// @PLN11 Arc N — emit the reachable native program as a **library** cdylib.
+    /// See [`Self::output_native_no_bootstrap`], which this names for the library case.
+    ///
+    /// # Errors
+    /// Returns any `io::Error` from writing to `w`.
+    pub fn output_native_library(
+        &mut self,
+        w: &mut dyn Write,
+        from: u32,
+        till: u32,
+        entry_defs: &[u32],
+    ) -> std::io::Result<()> {
+        self.output_native_no_bootstrap(w, from, till, entry_defs)
     }
 
     /// Shared prelude of [`Self::output_native_reachable`] /
@@ -3566,9 +3615,63 @@ extern crate loft;"
             if !def.native().is_empty() {
                 // #native "symbol" — emit direct call with type marshalling.
                 if self.wasm_browser {
-                    // wasm host import — unqualified; declared in the preamble via
-                    // `#[link(wasm_import_module = "loft_gl")]`.
-                    self.output_native_direct_call(w, def_nr, def.native())?;
+                    // #623 — on the browser target a `#native` symbol reaches its
+                    // implementation through `[wasm.bridge].routes`.  With no route
+                    // this call has nothing to bind to, and the emitted crate used
+                    // to carry both a host-import declaration and this wrapper under
+                    // one name — a raw rustc E0428/E0610/E0061 cascade that named
+                    // neither the symbol's library nor `[wasm.bridge.routes]`.  Say
+                    // so directly instead; `emit_file_header` drops the colliding
+                    // extern so this is the only error rustc reports.  Reachability-
+                    // scoped, matching P269 / @PLN26: an unused routeless declaration
+                    // must not reject an otherwise-valid program.
+                    let reachable = self.reachable.is_empty() || self.reachable.contains(&def_nr);
+                    let stores_loft_ref =
+                        matches!(def.returned(), Type::Vector(_, _) | Type::Reference(_, _));
+                    let has_ref_arg = def.attributes().iter().any(|a| {
+                        !a.name.starts_with("__")
+                            && a.typedef.heap_dep().is_some()
+                            && !matches!(a.typedef, Type::Vector(_, _))
+                    });
+                    // The store-mutating shapes keep their graceful @P321c stub —
+                    // they never had a host import to collide with.
+                    let host_import_shape = !stores_loft_ref && !has_ref_arg;
+                    // Only a BARE `#native` collides: its symbol is the loft fn's
+                    // own emitted name, so the host-import declaration and this
+                    // wrapper claim one name.  An explicit differing symbol
+                    // (`#native "loft_gl_swap_buffers"`) is the working raw
+                    // host-import path — leave it alone.
+                    let symbol_is_own_name = def.native() == def.name();
+                    // A `text` RETURN cannot cross a raw host import either: the
+                    // extern is declared `-> i32` while the wrapper reads a `Str`
+                    // off it (`_ret_str.ptr` → E0610).  Same missing-bridge cause,
+                    // so it earns the same message rather than that cascade.
+                    let returns_text = matches!(def.returned(), Type::Text(_));
+                    if reachable
+                        && host_import_shape
+                        && (symbol_is_own_name || returns_text)
+                        && !self.data.wasm_bridge_routes.contains_key(def.native())
+                    {
+                        let from = self
+                            .data
+                            .native_symbol_crates
+                            .get(def.native())
+                            .map_or_else(String::new, |k| format!(" (from library `{k}`)"));
+                        // User fns are stored as `n_<name>`; report the name as written.
+                        let loft_name = def.name().strip_prefix("n_").unwrap_or(def.name());
+                        writeln!(
+                            w,
+                            "{{ compile_error!(\"loft --html: `#native \\\"{}\\\"`{} has no [wasm.bridge].routes entry, so `{}` cannot be called from the browser (--html / --native-wasm) target. Add `{} = \\\"<bridge_fn>\\\"` under [wasm.bridge.routes] in that library's loft.toml, or avoid this function on the browser target.\") }}",
+                            def.native(),
+                            from,
+                            loft_name,
+                            def.native()
+                        )?;
+                    } else {
+                        // wasm host import — unqualified; declared in the preamble via
+                        // `#[link(wasm_import_module = "loft_gl")]`.
+                        self.output_native_direct_call(w, def_nr, def.native())?;
+                    }
                 } else if let Some(krate) = self.data.native_symbol_crates.get(def.native()) {
                     if self.native_cabi {
                         // @PLN26 phase 1 — a `#native` symbol exported by 2+ packages

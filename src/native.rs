@@ -10,7 +10,9 @@ use crate::platform::sep;
 use crate::state::{Call, State};
 use crate::vector;
 use std::sync::Arc;
-#[cfg(not(target_arch = "wasm32"))]
+// #620 — `wasm32-wasip2` uses the real `SystemTime` clock too, so the import
+// follows the same gate as the `n_now` host arm below.
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 use std::time::SystemTime;
 
 /// Plan-06 phase 4d.A — typed worker-input dispatch.  Replaces the
@@ -2246,8 +2248,9 @@ fn n_parallel_buf_drop_fn(stores: &mut Stores, _stack: &mut DbRef) {
 /// Used to freeze `ticks()` and `now()` for deterministic snapshot tests —
 /// see `doc/claude/TESTING.md` § "Deterministic snapshots".
 ///
-/// Only compiled on hosts with `std::env` (i.e. not on `wasm32`).
-#[cfg(not(target_arch = "wasm32"))]
+/// Only compiled on targets with `std::env` — every one except the browser
+/// (`wasm32-unknown-unknown`); `wasm32-wasip2` has it (#620).
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 fn fake_clock_env(var: &str) -> Option<i64> {
     std::env::var(var).ok()?.parse::<i64>().ok()
 }
@@ -2255,7 +2258,9 @@ fn fake_clock_env(var: &str) -> Option<i64> {
 /// Return milliseconds since the Unix epoch (1970-01-01T00:00:00 UTC).
 /// Returns `i64::MIN` (null) if the system clock reports a time before the epoch.
 /// Honours `LOFT_FAKE_NOW_MS` when set (deterministic snapshot tests).
-#[cfg(not(target_arch = "wasm32"))]
+/// #620 — `wasm32-wasip2` (`--native-wasm`) reaches this arm too: WASI exposes a
+/// real clock through `wasi:clocks`, which `std`'s `SystemTime` already uses.
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     if let Some(fake) = fake_clock_env("LOFT_FAKE_NOW_MS") {
         stores.put(stack, fake);
@@ -2267,16 +2272,22 @@ fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, millis);
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), feature = "wasm"))]
 fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, crate::wasm::host_time_now());
 }
 
-/// the `--html` build (wasm32, no `wasm` feature)
+/// the `--html` build (`wasm32-unknown-unknown`, no `wasm` feature)
 /// has no host time bridge; return 0 so programs that read `now()`
 /// without the bridge don't trap.  Mirror of the `n_ticks` fallback
 /// for the same target.
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+///
+/// #620 — the gate used to be `target_arch = "wasm32"` alone, which also caught
+/// `wasm32-wasip2` (`--native-wasm`).  That target HAS a working clock, so the
+/// stub was overriding a real reading with 0 instead of standing in for a
+/// missing bridge; `not(target_os = "wasi")` narrows it to the browser build the
+/// comment always described.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 fn n_now(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, 0i64);
 }
@@ -2284,7 +2295,9 @@ fn n_now(stores: &mut Stores, stack: &mut DbRef) {
 /// Return microseconds elapsed since program start (monotonic clock).
 /// Use for frame timing and benchmarks; unaffected by wall-clock adjustments.
 /// Honours `LOFT_FAKE_TICKS_US` when set (deterministic snapshot tests).
-#[cfg(not(target_arch = "wasm32"))]
+/// #620 — see `n_now`: `wasm32-wasip2` has a real monotonic clock behind
+/// `std::time::Instant`, so it shares the host path.
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     if let Some(fake) = fake_clock_env("LOFT_FAKE_TICKS_US") {
         stores.put(stack, fake);
@@ -2294,14 +2307,15 @@ fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     stores.put(stack, micros);
 }
 
-#[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), feature = "wasm"))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     let now_ms = crate::wasm::host_time_ticks();
     let elapsed_micros = (now_ms - stores.start_time_ms) * 1000;
     stores.put(stack, elapsed_micros);
 }
 
-#[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+/// #620 — browser-only fallback; `wasm32-wasip2` uses the real clock above.
+#[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
 fn n_ticks(stores: &mut Stores, stack: &mut DbRef) {
     // no host time bridge on the --html build; return 0.
     stores.put(stack, 0i64);

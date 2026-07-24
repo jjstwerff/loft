@@ -1309,17 +1309,32 @@ use #count instead"
                 // `known_type()`: an enum's row carries the VARIANT NAMES the
                 // format needs, where `db_type` returns the generic byte
                 // storage row.
-                let db_tp = if matches!(*cont, Type::Vector(_, _)) {
-                    self.database.db_type(&cont, &self.data)
+                // #624 — a NARROW element (`u8` / `u16` / a 4-byte `integer`
+                // subtype) is stored packed at 1/2/4 bytes, but the def-level
+                // `known_type()` below resolves the WIDE integer row.  Dumping
+                // through that row strides 8 bytes over packed data: `{v}` on a
+                // `vector<u8>` printed the first eight elements packed into one
+                // i64 followed by zeros.  Resolve the narrow storage row the way
+                // the element READ and the `+=` append already do, and skip
+                // `check_vector` — that registers `vector<integer>`'s own row,
+                // which a narrow element does not own and must not overwrite.
+                let vec_tp = if let Some(narrow) =
+                    self.data.narrow_vector_content(&cont, &mut self.database)
+                {
+                    self.database.vector(narrow)
                 } else {
-                    self.data.def(d_nr).known_type()
-                };
-                let vec_tp = if db_tp == u16::MAX {
-                    0
-                } else {
-                    let v = self.database.vector(db_tp);
-                    self.data.check_vector(d_nr, v, self.lexer.pos());
-                    v
+                    let db_tp = if matches!(*cont, Type::Vector(_, _)) {
+                        self.database.db_type(&cont, &self.data)
+                    } else {
+                        self.data.def(d_nr).known_type()
+                    };
+                    if db_tp == u16::MAX {
+                        0
+                    } else {
+                        let v = self.database.vector(db_tp);
+                        self.data.check_vector(d_nr, v, self.lexer.pos());
+                        v
+                    }
                 };
                 list.push(self.cl(
                     &(start.to_owned() + "Database"),
