@@ -1177,3 +1177,31 @@ fn mock_registry_fixtures_are_valid() {
         );
     }
 }
+
+/// T3.2 — the README invites the reader to "read all N lines" of Brick Buster,
+/// and that number is the hook: it is the proof that the whole game really is
+/// one readable file.  A hardcoded count rots the moment the game is edited, so
+/// pin it — a stale number in the most-read paragraph of the README is exactly
+/// the kind of small lie the link checker exists to prevent elsewhere.
+#[test]
+fn readme_brick_buster_line_count_is_current() {
+    let game = "tools/brick-buster/25-brick-buster.loft";
+    let actual = fs::read_to_string(game)
+        .unwrap_or_else(|e| panic!("{game}: {e}"))
+        .lines()
+        .count();
+    let readme = fs::read_to_string("README.md").expect("README.md");
+    // The claim is written with a thousands separator: "read all 1,983 lines".
+    let claimed = readme
+        .split("read all ")
+        .nth(1)
+        .and_then(|rest| rest.split(" lines").next())
+        .map(|n| n.replace(',', ""))
+        .and_then(|n| n.parse::<usize>().ok())
+        .expect("README must state 'read all <N> lines' for the one-file claim");
+    assert_eq!(
+        claimed, actual,
+        "README says Brick Buster is {claimed} lines but {game} has {actual}. \
+         Update the number in README.md (it is the proof behind the one-file claim)."
+    );
+}

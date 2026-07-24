@@ -20,7 +20,7 @@
 
 **A complete arcade game** — paddle, ball, coloured bricks, 7 different powerups, chiptune music, hand-designed levels, pause, game-over, sound effects, animated paddle explosion — written in loft and running in your browser. Click the image above, press **Space**, play. No install, no sign-up, no download.
 
-And it's one file: [`25-brick-buster.loft`](tools/brick-buster/25-brick-buster.loft).
+The whole game is one file — [read all 1,983 lines](tools/brick-buster/25-brick-buster.loft). No engine, no framework, no build step: that file *is* the game.
 
 ## Three ways to see loft
 
@@ -101,6 +101,17 @@ loft examples/structs.loft      # Structs and methods
 loft examples/match.loft        # Pattern matching on enums
 ```
 
+## How loft is built — and why it can't be orphaned
+
+loft is developed almost entirely by AI coding agents, steered by one person who put
+**documentation and tooling above writing code**. So everything needed to work on loft
+is in this public repo: the full source, ~73k lines of documentation, and ten
+**executable skills** that teach an agent *how* to fix a bug, change code generation, or
+ship a library. Point any capable coding agent at the repo, let it load the skills, and
+it can continue the work — investigate, fix, verify on both backends, and land through
+`make ci`. The project's knowledge lives in the repo, not in a founder, so its **bus
+factor is effectively zero**: [How loft develops itself, and how to prove it yourself](doc/claude/BUS_FACTOR.md).
+
 ## Packages & libraries
 
 `loft install <name>` downloads a library from the registry into `~/.loft/lib/`
@@ -145,17 +156,6 @@ Highest-impact areas today:
 - **Documentation polish** — most reference pages have their code snippets extracted and run as tests; the hand-written comparison and performance pages are checked by hand, so a careful read still catches drift
 
 See [DEVELOPMENT.md](doc/claude/DEVELOPMENT.md) for the workflow and [PLANNING.md](doc/claude/PLANNING.md) for the roadmap.
-
-## How loft is built — and why it can't be orphaned
-
-loft is developed almost entirely by AI coding agents, steered by one person who put
-**documentation and tooling above writing code**. So everything needed to work on loft
-is in this public repo: the full source, ~73k lines of documentation, and ten
-**executable skills** that teach an agent *how* to fix a bug, change code generation, or
-ship a library. Point any capable coding agent at the repo, let it load the skills, and
-it can continue the work — investigate, fix, verify on both backends, and land through
-`make ci`. The project's knowledge lives in the repo, not in a founder, so its **bus
-factor is effectively zero**: [How loft develops itself, and how to prove it yourself](doc/claude/BUS_FACTOR.md).
 
 ## Documentation
 

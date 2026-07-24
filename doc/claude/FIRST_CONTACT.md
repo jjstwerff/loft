@@ -253,18 +253,43 @@ Still without meta: `install`, `roadmap`, `docs`, `examples`, `report`,
 `Loft - Random` format, i.e. `gendoc` no longer regenerates it — likely an
 orphan worth deleting).
 
-### T3.1 / T3.2 / T3.3 / T3.4 — story **[T3.1 + T3.4 need Jurjen]**
-T3.1 provenance paragraph: one statement, no employer, no domain, no adjectives —
-wording approval only. T3.2 is free and independent: move the bus-factor section
-above "Packages & libraries" and add the one-line invitation under the hero
-(*"The whole game is one file — read all 1,983 lines"*). T3.3 animated hero: script
-it if the headless tooling can capture frames, else flag. T3.4 "Why Loft is the way
-it is": draft from `DESIGN.md` + `DESIGN_DECISIONS.md`; entries tracing to previous
-production DSLs stay generic ("in a previous production language I maintained…").
+### ~~T3.2~~ — DONE 2026-07-24
+"How loft is built" moved above "Packages & libraries" (it is the most newsworthy
+section in the file and sat second-from-last). The one-file claim became an
+**invitation**: *"The whole game is one file — read all 1,983 lines."*
 
-### T3.5 — a game-shaped example
-Add one ~40-line graphical example plus an `examples/README.md` routing
-game-seekers to the gallery. The README is the cheaper half and lands first.
+The number is the proof, so it must not rot:
+`doc_hygiene::readme_brick_buster_line_count_is_current` parses the README's
+claim and compares it to `wc -l` on the game. Verified it fails when the number
+is wrong — a guard nobody has seen fail is not a guard.
+
+### T3.1 / T3.4 — DRAFTED, awaiting approval **[needs Jurjen]**
+Both staged under [drafts/](drafts/) rather than published, because both are the
+owner's to approve:
+
+- [drafts/provenance-paragraph.md](drafts/provenance-paragraph.md) — two wordings
+  of the fourth-language paragraph, plus the one judgement call worth making
+  consciously ("forty years of programming" is the only credential-shaped phrase
+  in it). Deliberately **not** placed in the README: unapproved biographical
+  wording about a real person is not an agent's call.
+- [drafts/why-loft-is-the-way-it-is.md](drafts/why-loft-is-the-way-it-is.md) —
+  seven entries written from repo sources (`GOALS.md`, `DESIGN_DECISIONS.md`),
+  each citing where the reason comes from, plus three marked `[needs Jurjen]`
+  where the repo has the mechanism but not the *why* — notably **LGPL**, which
+  the repo never justifies anywhere, and which every evaluator asks about.
+
+### T3.3 — animated hero **[needs Jurjen or headless capture]** — unchanged
+
+### ~~T3.5~~ — DONE 2026-07-24, routed differently than proposed
+`examples/README.md` added. The review suggested routing game-seekers to the
+**gallery**; B2 established the gallery holds one demo and graphics is blocked
+(T1.2), so it routes to **Brick Buster** instead — which demonstrably works, is
+playable in one click, and whose source is the best thing in the repo to read.
+
+Each of the seven CLI examples now links its **playground twin** (every one has an
+`ex_*` key, verified present in `doc/examples.js`), so a reader can run any of
+them without installing anything. The graphical example is deliberately NOT added:
+it would need `loft install graphics`, which the chunk repo says is blocked.
 
 ### ~~T4.1~~ — DONE 2026-07-24
 Deleted the `dz/` and `f8e2e/` strays; `DRAWING.md` → `doc/claude/` (3 inbound
@@ -288,7 +313,7 @@ minutes of CI each for changes that are individually minutes of work. Batch by
 | ~~**B1 — first-run bugs**~~ | ~~T0.1, T0.2, T0.3~~ — **DONE 2026-07-24** (residual loft#625) | Code + tests; the only batch touching the parser |
 | ~~**B2 — truthfulness**~~ | ~~T1.1, T1.3, T4.1~~ — **DONE 2026-07-24**; T1.2 now evidenced and blocked on the owner | Docs, `gendoc` ordering, file moves/deletes |
 | ~~**B3 — discoverability**~~ | ~~T2.1, T2.2~~ — **DONE 2026-07-24**; T2.4 blocked on T1.2 | `gendoc` output; verify a sample `<head>` |
-| **B4 — story** | T3.2, T3.5, plus drafts of T3.1/T3.4 for approval | README + new page, no code |
+| ~~**B4 — story**~~ | ~~T3.2, T3.5~~ — **DONE 2026-07-24**; T3.1/T3.4 drafted for approval | README + new page, no code |
 | **B5 — owner** | T1.2, T2.3, T3.1 wording, T3.3, T4.2 | Outside the repo |
 
 B1 first (two are plain bugs and all three are "first five minutes"). B2 next — a
