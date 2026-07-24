@@ -19,6 +19,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 - [Preset Guide](#preset-guide)
 - [Debugging a Parse Error or Wrong IR](#debugging-a-parse-error-or-wrong-ir)
 - [Debugging a Runtime Crash or Wrong Result](#debugging-a-runtime-crash-or-wrong-result)
+- [Before you believe a fault is RANDOM](#before-you-believe-a-fault-is-random)
 - [The debug-assertions calibration run (`target-da`)](#the-debug-assertions-calibration-run-target-da)
 - [Debugging a validate_slots Panic](#debugging-a-validate_slots-panic)
 - [Debugging a Scope Analysis Bug](#debugging-a-scope-analysis-bug)
@@ -531,6 +532,47 @@ upward in the generated file from the error line to the nearest
    `src/state/codegen.rs` and the `Stack::operator` delta table in `src/stack.rs`.
 
 ---
+
+## Before you believe a fault is RANDOM
+
+A fault that reproduces some runs and not others is usually not random — it is a
+run that starts from different state than you think. Check that *first*, because
+"random" is expensive: it sends you to repeat-run harnesses and mechanism traces
+when a one-line probe would have settled it.
+
+**The tell is the ratio itself.** `1/12` or `1/20` is the signature of *the first
+run differs*, not of randomness — a genuinely random fault lands on a ratio that
+moves when you re-measure. Read the *sequence*, not the count.
+
+Two probes, both cheap, before any theory:
+
+```bash
+# 1. Is it ordered?  A cold/warm split reads ok, BAD, BAD, BAD — not scattered.
+rm -rf ~/.cache/loft/program-*
+for i in 1 2 3 4; do loft --native p.loft; done
+
+# 2. Turn the suspected state off.  If the fault vanishes, you have located it.
+LOFT_NO_CACHE=1 loft --native p.loft
+```
+
+**State a run inherits, none of it cleared by removing `.loft`:** the
+whole-program bundle in `$XDG_CACHE_HOME/loft` (`cache::program_cache_paths`,
+default-ON — `LOFT_NO_CACHE` disables), the stdlib bundle
+(`LOFT_STDLIB_CACHE`), `target/` build artefacts, and an installed
+`$(which loft)` on `PATH`.
+
+This is not hypothetical: the native duplicate-type-mint fault
+([plans/native-type-mint](plans/native-type-mint/README.md)) was recorded as
+"per-process random" for a whole session and a harness was built around that
+belief. Its `repeat.sh` cleared the per-directory `.loft` cache before every run
+but never touched the program bundle, so it measured
+cold-once-then-warm-forever and reported it as 1-in-12. The real fault was
+deterministic: warm load, every time.
+
+**So the rule is about the instrument, not the bug.** Before theorising about a
+random fault, prove each run really starts from the state you believe. A harness
+that clears the wrong cache reports a ratio with total confidence, and the ratio
+is fiction.
 
 ## Debugging store-ownership bugs (leaks, double-frees, non-determinism)
 
