@@ -111,7 +111,7 @@ both backends, not when the demo runs.
 | **B** — value materialization: store-to-store copy of a run's result into the session store, returning a stable `DbRef` | **Primitive built** (`Stores::materialize`, Step 1) — not yet wired to a session |
 | **C** — scalars at rest (`x = 5`): boxed into the store, or a tiny inline tagged env value | **Built** (Step 3) — boxed 1-field record, raw bytes; text included via `TextInVector` |
 | **D** — frame-seed: prior names load from the session store into their slots before a new statement runs | **Built** (Step 4) — `seed_paused_frame`, differential-gated; not on the eval path yet |
-| **E** — observe / `:vars` read from the environment — **no body replay** | Open |
+| **E** — observe / `:vars` read from the environment — **no body replay** | **Built** (Step 5) — behind `LOFT_PLN14_STORE_OBSERVE`, off by default; text display declines to the replay |
 | **F** — resume: mmap the session store + schema-version gating (stale image → fresh fallback) | Open |
 | **G** — lifetime: orphaned records on re-bind (`:reset` wipe first; GC only if it bites) | Open |
 | **H** — in-process result-as-`String` eval API (`eval(line) → rendered value`) for embedding/GUI — absorbed from @PLN12's REPL.T tail; nearly free once values are store-resident (the renderer already exists in `render_capture` / `show_loft`) | Open |
@@ -383,7 +383,41 @@ value the instrument cannot *see* must fail, not pass.
   validated against the still-correct replay; any divergence is a **loud** test failure,
   never a silent wrong value.
 
-- **Step 5 — observe reads the env; replay OFF behind the flag (arc E). Effort M.**
+- **Step 5 — observe reads the env; replay OFF behind the flag (arc E). Effort M.
+  BUILT 2026-07-24.** Behind `LOFT_PLN14_STORE_OBSERVE` / `set_store_observe`
+  (**off by default**). Three observe paths answer from the session store when a
+  bare name has an entry: the REPL echo, `:vars`, and `value_of`. No generation is
+  compiled, so the accumulated body does not re-run.
+  - **The cost win is measured, not asserted.** `ReplSession::generations()`
+    exposes the generation counter; `store_observe_does_not_replay_the_body`
+    shows it advancing with the flag off and *not* advancing with it on. That is a
+    direct proof the body did not replay, rather than an indirect timing argument.
+  - **Two renderings, both needed.** Observing prints loft's *display* form while
+    `value_of` returns the *own-format literal*, and they genuinely differ:
+    `hi` vs `"hi"`, `{x:7,y:9}` vs `P{x:7,y:9}`, `3` vs `3.0`, `2.5` vs `2.5f`,
+    `q` vs `'q'`, `South` vs `Direction.South`. So the store serves both —
+    `env_display` (display) alongside `env_value` (own-format). Reading only one
+    of them from the store would silently change what a session prints.
+  - **Gate:** `a_real_repl_session_prints_identically_with_the_flip` runs the real
+    `loft repl` binary twice over one script, flag off and on, and requires
+    **byte-identical** stdout. That is the gate that must stay green before Step 8
+    can make the flip the default.
+
+  **Two things the flip surfaced.** (1) The first cut gated the echo on
+  `!self.stepping`, which silently disabled the whole flip: the interactive driver
+  turns stepping ON by default. The guard was wrong in principle too — answering
+  from the store runs no code, so there is no breakpoint for stepping to catch;
+  only an active pause is excluded. (2) A `text` binding is physically the
+  1-element `vector<text>` of the @P293 work-around, and the display renderer
+  QUOTES a vector's text elements, so unwrapping gives `"hi"` where the session
+  shows `hi`. Rather than reverse-engineer the vector layout, `env_display`
+  **declines** `TextInVector` and lets the replay answer it; `env_value` is
+  unaffected (quoted is correct there). Closing that — storing the raw text on
+  the wrapped path, or a vector-element accessor — is the one residual before the
+  flip can be the default.
+
+  *Side benefit:* a stored vector read through the flipped `value_of` executes
+  nothing, so it sidesteps loft#618 (which crashes the un-flipped path).
   The flip: observe / `:vars` reads the env; body replay is removed (behind the flag).
   This is where side-effect repetition **and** re-run cost die, and where `random()` /
   `now()` stop recomputing on observe. **Safety:** behind the flag, and Step 4's

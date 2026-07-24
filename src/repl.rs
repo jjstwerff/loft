@@ -40,6 +40,13 @@ use std::path::Path;
 /// without a realloc.
 const SESSION_STORE_WORDS: u32 = 1024;
 
+/// @PLN14 arc E — whether a fresh session starts with store-backed observing on.
+/// Off unless `LOFT_PLN14_STORE_OBSERVE` is set, so Step 5 cannot change how any
+/// existing session behaves.
+fn store_observe_default() -> bool {
+    std::env::var("LOFT_PLN14_STORE_OBSERVE").is_ok()
+}
+
 /// Path to the auto-resume session file (`~/.loft_session`), or `None` if the
 /// home directory can't be located.  Shared by the interactive driver (which
 /// replays it on launch and appends new state-changing inputs to it) and the
@@ -1264,6 +1271,12 @@ struct BpMeta {
 }
 
 /// A live REPL session: stdlib + the statements entered so far.
+// The flags below (`replaying`, `stepping`, `reverse_armed`, `store_observe`) are
+// INDEPENDENT session modes, not the states of one machine: a session can be
+// replaying a saved file while stepping, with reverse armed, reading values from
+// the store.  Folding them into an enum would have to enumerate the product, so
+// the lint's suggested refactor is the worse shape here.
+#[allow(clippy::struct_excessive_bools)]
 pub struct ReplSession {
     pub(crate) parser: Parser,
     /// The standard-library directory this session was built from, kept so the test runner
@@ -1332,6 +1345,12 @@ pub struct ReplSession {
     /// [`env_value`](Self::env_value), which is the differential oracle Step 4's
     /// frame-seed will be checked against.
     env: std::collections::HashMap<String, SessionValue>,
+    /// @PLN14 arc E — **the flip**: when on, observing a store-resident binding
+    /// reads the session store instead of replaying the accumulated body.  Off by
+    /// default (Step 5 ships it behind the flag); `LOFT_PLN14_STORE_OBSERVE` turns
+    /// it on for a real session, and [`set_store_observe`](Self::set_store_observe)
+    /// for a test.
+    store_observe: bool,
     /// @PLN14 arc B — the value the most recent capture materialized, waiting to be
     /// filed under the bound name by [`eval`](Self::eval).  `capture_typed` cannot
     /// name it (only the caller knows the binding name), so it parks it here.
@@ -1418,6 +1437,7 @@ impl ReplSession {
             workspace_file: None,
             game: None,
             session_store: None,
+            store_observe: store_observe_default(),
             env: std::collections::HashMap::new(),
             pending_materialized: None,
             reverse_armed: false,
@@ -1463,6 +1483,7 @@ impl ReplSession {
             workspace_file: None,
             game: None,
             session_store: None,
+            store_observe: store_observe_default(),
             env: std::collections::HashMap::new(),
             pending_materialized: None,
             reverse_armed: false,
@@ -1527,6 +1548,16 @@ impl ReplSession {
     /// those fall through to [`capture_binding`] — scalars render as raw JSON there,
     /// a bare vector has no `.to_json()` and yields `None` (eval its elements instead).
     fn value_of_fmt(&mut self, expr: &str, json: bool) -> Option<String> {
+        // @PLN14 arc E — the own-format read (`value_of`) is answered from the
+        // session store too.  `json` keeps the existing path: the store read
+        // renders own-format, and the wire protocol wants JSON.
+        if !json
+            && self.store_observe
+            && let Some(name) = self.store_resident_name(expr)
+            && let Some(v) = self.env_value(&name)
+        {
+            return Some(v);
+        }
         if json && let Some(j) = self.capture_json(expr) {
             return Some(j);
         }
@@ -2962,6 +2993,23 @@ impl ReplSession {
         // statement (`assert`, `print`) the temp binds to void and this fails to
         // compile — fall back to running the input plain so its side effects
         // still happen.
+        // @PLN14 arc E — THE FLIP: a bare name with a store-resident value is
+        // answered from the session store.  No generation is compiled and the
+        // accumulated body does not re-run, so a side effect in any earlier
+        // binding cannot repeat here and the observe cost stops growing with the
+        // session.  Not gated on `stepping`: answering from the store runs no
+        // code, so there is no breakpoint for stepping to catch — and the
+        // interactive driver turns stepping ON by default, which would otherwise
+        // disable the flip in exactly the session it is meant for.  Only an
+        // active pause is excluded (those inputs belong to the paused sub-mode).
+        if self.store_observe
+            && self.paused.is_none()
+            && let Some(name) = self.store_resident_name(input)
+            && let Some(shown) = self.env_display(&name)
+        {
+            println!("{shown}");
+            return Eval::Ran;
+        }
         let shown = format!(
             "{}__replval = {input};\nprintln(\"{{__replval}}\");\n",
             self.body
@@ -3628,6 +3676,129 @@ impl ReplSession {
         true
     }
 
+    /// @PLN14 arc E — turn store-backed observing on or off for this session.
+    pub fn set_store_observe(&mut self, on: bool) {
+        self.store_observe = on;
+    }
+
+    /// @PLN14 arc E — whether observing currently reads the session store.
+    #[must_use]
+    pub fn store_observe(&self) -> bool {
+        self.store_observe
+    }
+
+    /// How many generations this session has compiled — i.e. how many times the
+    /// accumulated body has been replayed.
+    ///
+    /// This is the instrument Step 5 is measured with: the flip's whole point is
+    /// that observing a store-resident binding no longer advances this counter,
+    /// which is a direct proof that the body did not re-run (rather than an
+    /// indirect one via timing).
+    #[must_use]
+    pub fn generations(&self) -> u32 {
+        self.counter
+    }
+
+    /// `input` as the name of a store-resident binding, if that is all it is.
+    /// A bare identifier only — anything else is a real expression and still goes
+    /// through a generation.
+    fn store_resident_name(&self, input: &str) -> Option<String> {
+        let name = input.trim();
+        if name.is_empty() || !self.env.contains_key(name) {
+            return None;
+        }
+        let mut cs = name.chars();
+        let first = cs.next()?;
+        if !(first.is_ascii_alphabetic() || first == '_')
+            || !cs.all(|c| c.is_alphanumeric() || c == '_')
+        {
+            return None;
+        }
+        Some(name.to_string())
+    }
+
+    /// @PLN14 arc E — a binding's value read from the session store and rendered
+    /// the way loft **displays** it (`hi`, `{x:7,y:9}`, `3`), which is what the
+    /// echo and `:vars` print — as opposed to [`env_value`](Self::env_value)'s
+    /// own-format literal (`"hi"`, `P{x:7,y:9}`, `3.0`), which is what `value_of`
+    /// returns.  The two renderings genuinely differ, so the flip needs both or it
+    /// would change what a session prints.
+    pub fn env_display(&mut self, name: &str) -> Option<String> {
+        let entry = self.env.get(name)?.clone();
+        let store = self.session_store.take()?;
+        let mut state = State::new(self.parser.database.clone());
+        let slot = state.database.adopt_store(store);
+        let db = crate::keys::DbRef {
+            store_nr: slot,
+            rec: entry.rec,
+            pos: entry.pos,
+        };
+        let tp = state.database.name(&entry.type_name);
+        let out = Self::render_session_display(&mut state, &entry, &db, tp);
+        self.session_store = Some(state.database.take_store(slot));
+        out
+    }
+
+    /// The display form of one session-store entry (see [`env_display`]).
+    fn render_session_display(
+        state: &mut State,
+        entry: &SessionValue,
+        db: &crate::keys::DbRef,
+        tp: u16,
+    ) -> Option<String> {
+        let store = state.database.store(db);
+        match entry.shape {
+            SessionShape::Scalar(ScalarKind::Integer) => Some(store.get_int(db.rec, 8).to_string()),
+            // Display drops the own-format decimal point: `3.0` shows as `3`.
+            SessionShape::Scalar(ScalarKind::Float) => Some(store.get_float(db.rec, 8).to_string()),
+            SessionShape::Scalar(ScalarKind::Single) => {
+                Some(store.get_single(db.rec, 8).to_string())
+            }
+            SessionShape::Scalar(ScalarKind::Boolean) => Some(
+                if store.get_int(db.rec, 8) != 0 {
+                    "true"
+                } else {
+                    "false"
+                }
+                .to_string(),
+            ),
+            // Display is the bare character / bare text — no quotes.
+            SessionShape::Scalar(ScalarKind::Character) => {
+                char::from_u32(store.get_u32_raw(db.rec, 8)).map(|c| c.to_string())
+            }
+            SessionShape::Scalar(ScalarKind::Text) => {
+                Some(store.get_str(store.get_u32_raw(db.rec, 8)).to_string())
+            }
+            // Display is the variant alone, without the enum's name.
+            SessionShape::Scalar(ScalarKind::SimpleEnum) => {
+                let disc = u8::try_from(store.get_int(db.rec, 8)).unwrap_or(0);
+                if disc == 0 {
+                    Some("null".to_string())
+                } else if tp == u16::MAX {
+                    None
+                } else {
+                    Some(state.database.enum_val(tp, disc).to_string())
+                }
+            }
+            // A `text` binding is physically a 1-element `vector<text>`, and the
+            // native renderer QUOTES a vector's text elements (`["hi"]`), so
+            // unwrapping it yields `"hi"` where the session displays `hi`.
+            // Recovering the bare characters means either storing the raw text on
+            // this path or reading the element through a vector accessor — neither
+            // is Step 5's slice, so DECLINE and let the replay answer.  The
+            // own-format read (`env_value`) is unaffected: quoted is correct there.
+            SessionShape::TextInVector => None,
+            SessionShape::Heap => {
+                if tp == u16::MAX {
+                    return None;
+                }
+                let mut out = String::new();
+                state.database.show(&mut out, db, tp, false);
+                Some(out)
+            }
+        }
+    }
+
     /// @PLN14 arc A — the names that currently have a store-resident value.
     #[must_use]
     pub fn env_names(&self) -> Vec<String> {
@@ -3871,6 +4042,26 @@ impl ReplSession {
         let names = self.bound_var_names();
         if names.is_empty() {
             return Ok(false);
+        }
+        // @PLN14 arc E — answer from the session store when EVERY bound name has a
+        // value there.  All-or-nothing on purpose: a name the snapshot path
+        // declined has no store entry, and printing a partial list from one source
+        // and the rest from another would be worse than replaying.
+        if self.store_observe {
+            let mut lines = Vec::with_capacity(names.len());
+            for n in &names {
+                let Some(v) = self.env_display(n) else {
+                    lines.clear();
+                    break;
+                };
+                lines.push(format!("{n} = {v}"));
+            }
+            if lines.len() == names.len() {
+                for line in lines {
+                    println!("{line}");
+                }
+                return Ok(true);
+            }
         }
         // Append one `println("name = {name}")` per variable after the body, so
         // a single run renders every current value through the same path a bare

@@ -860,3 +860,130 @@ fn frame_seed_actually_writes_the_slot() {
     );
     s.debug_continue();
 }
+
+// ── Step 5 — the flip: observe reads the env (arc E) ─────────────────────────
+//
+// Behind `LOFT_PLN14_STORE_OBSERVE` / `set_store_observe`.  Two things must
+// hold: what a session PRINTS is unchanged (fidelity), and observing a
+// store-resident binding no longer replays the body (the cost win, measured
+// directly via the generation counter rather than by timing).
+
+/// The cost claim, measured: observing a store-resident name must not compile a
+/// generation, which is a direct proof the accumulated body did not re-run.
+#[test]
+fn store_observe_does_not_replay_the_body() {
+    let mut s = session();
+    assert!(matches!(s.eval("v = [1, 2, 3]"), Eval::Ran));
+    assert!(matches!(s.eval("n = 5"), Eval::Ran));
+
+    // Flag OFF: observing replays — the generation counter advances.
+    s.set_store_observe(false);
+    let before_off = s.generations();
+    let _ = s.value_of("n");
+    let after_off = s.generations();
+    assert!(
+        after_off > before_off,
+        "with the flag off, observing should still replay (counter {before_off} → {after_off})"
+    );
+
+    // Flag ON: observing is answered from the store — nothing is compiled.
+    s.set_store_observe(true);
+    let before_on = s.generations();
+    assert_eq!(s.value_of("n").as_deref(), Some("5"));
+    assert_eq!(s.value_of("v").as_deref(), Some("[1,2,3]"));
+    assert_eq!(
+        s.generations(),
+        before_on,
+        "the body was replayed even though the value is store-resident"
+    );
+}
+
+/// Fidelity of the own-format read: the flipped `value_of` must return exactly
+/// what a fresh evaluation of the same expression returns.
+#[test]
+fn store_observe_value_of_matches_a_fresh_evaluation() {
+    let mut checked = 0;
+    for (_ty, type_name, expr) in heap_cases() {
+        if expr.contains("9000000000") {
+            continue; // declined by the snapshot path (see the Step 3 note)
+        }
+        // The oracle: a fresh evaluation, in its own un-flipped session.
+        let mut oracle = session_with_defs();
+        let Some(expected) = oracle.value_of(&expr) else {
+            continue;
+        };
+
+        let mut s = session_with_defs();
+        assert!(matches!(s.eval(&format!("v = {expr}")), Eval::Ran));
+        s.set_store_observe(true);
+        let got = s
+            .value_of("v")
+            .unwrap_or_else(|| panic!("no store-backed value for `{expr}`"));
+        assert_eq!(
+            got, expected,
+            "flipped value_of diverged for `{expr}` (type {type_name})"
+        );
+        checked += 1;
+    }
+    assert!(checked >= 8, "only {checked} cells covered");
+}
+
+/// The flip is OFF by default — Step 5 ships behind the flag, so an existing
+/// session behaves exactly as before unless it opts in.
+#[test]
+fn store_observe_is_off_by_default() {
+    let s = session();
+    assert!(
+        !s.store_observe(),
+        "store-backed observing must not be on by default"
+    );
+}
+
+/// End-to-end fidelity gate: a real REPL session must print BYTE-IDENTICAL
+/// output with the flip on and off.  This is the gate that has to stay green
+/// before Step 8 can make the flip the default — it covers the echo and `:vars`,
+/// whose display rendering (`hi`, `{x:7,y:9}`, `3`) differs from the own-format
+/// literal (`"hi"`, `P{x:7,y:9}`, `3.0`) the store also has to be able to serve.
+#[test]
+fn a_real_repl_session_prints_identically_with_the_flip() {
+    let script = "struct P { x: integer, y: integer }\n\
+         enum Direction { North, East, South, West }\n\
+         n = 5\nf = 1.5\nw = 3.0\ng = 1.0 / 3.0\nsg = 2.5f\nb = true\nc = 'q'\n\
+         t = \"hi\"\nu = t + \" there\"\nv = [1, 2, 3]\nvt = [\"a\", \"b\"]\n\
+         p = P { x: 7, y: 9 }\nd = Direction.South\n\
+         n\nf\nw\ng\nsg\nb\nc\nt\nu\nv\nvt\np\nd\n:vars\n:quit\n";
+
+    let run = |flip: bool| -> String {
+        let mut cmd = std::process::Command::new(env!("CARGO_BIN_EXE_loft"));
+        cmd.arg("repl")
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        if flip {
+            cmd.env("LOFT_PLN14_STORE_OBSERVE", "1");
+        } else {
+            cmd.env_remove("LOFT_PLN14_STORE_OBSERVE");
+        }
+        let mut child = cmd.spawn().expect("spawn the loft repl");
+        use std::io::Write;
+        child
+            .stdin
+            .as_mut()
+            .expect("stdin")
+            .write_all(script.as_bytes())
+            .expect("write the script");
+        let out = child.wait_with_output().expect("repl exits");
+        String::from_utf8_lossy(&out.stdout).into_owned()
+    };
+
+    let off = run(false);
+    let on = run(true);
+    assert!(
+        off.contains("{x:7,y:9}"),
+        "the baseline run produced no values:\n{off}"
+    );
+    assert_eq!(
+        on, off,
+        "the flip changed what the session prints (left = flipped, right = replay)"
+    );
+}
