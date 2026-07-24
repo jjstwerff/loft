@@ -9,6 +9,22 @@ use super::{
 
 // Variable resolution, struct construction, and object parsing.
 
+/// The ops a struct-literal field parse cannot emit in place, collected for the
+/// caller (`Parser::parse_object`) to splice at a fixed point.  Both exist
+/// because a field's ops are order-sensitive against the record-creation
+/// prelude (`Set(x, Null)` + `OpDatabase`), and the field parse does not know
+/// where that prelude ends.
+#[derive(Default)]
+pub(crate) struct FieldSinks {
+    /// #330 — a field initialiser that READS the in-place target, lifted into a
+    /// temp that must run BEFORE the prelude re-inits the record.
+    hoists: Vec<Value>,
+    /// #437 — the 4-byte header zeroing for each VECTOR field, spliced as one
+    /// block directly AFTER the prelude so no field's header is cleared after
+    /// its contents land.
+    vector_headers: Vec<Value>,
+}
+
 impl Parser {
     /// @P387 / @P383 — the user-facing argument types of a fn used as a
     /// first-class `fn` value.  Excludes the SYNTHETIC return buffer the fn-ref
@@ -2125,7 +2141,7 @@ impl Parser {
         list: &mut Vec<Value>,
         found_fields: &mut HashSet<String>,
         in_place_var: Option<u16>,
-        hoists: &mut Vec<Value>,
+        sinks: &mut FieldSinks,
     ) -> bool {
         // Accept both bare identifiers and JSON-style quoted strings as field names.
         let field = if let Some(id) = self.lexer.has_identifier() {
@@ -2176,10 +2192,32 @@ impl Parser {
             {
                 // Collection/enum-big header is a 4-byte u32 record pointer.
                 // Post-2c `OpSetInt` writes 8 bytes and overflows the field.
-                list.push(self.cl(
+                //
+                // #437 — a VECTOR field's prime goes to `primes`, which the caller
+                // splices as one block directly after the `OpDatabase` prelude, so
+                // every vector header is zeroed before ANY field's value is built.
+                // Emitted inline it sat between the PREVIOUS field's fill and its
+                // own, and a vector local whose literal build is retargeted INTO the
+                // field (the elision that fires for a literal-initialised,
+                // otherwise-unused local) then ran its fill BEFORE this zeroing —
+                // erasing the header it had just written.  Only the first field
+                // mentioned in the literal escaped, because the prelude it rides
+                // along with is hoisted above the retargeted builds.
+                //
+                // KEYED collections (sorted / hash / index / radix) and enum-big keep
+                // the inline prime: their fills are record INSERTS whose ordering
+                // against a sibling's prime is load-bearing (hoisting them merged two
+                // keyed fields' records — `502-keyed-slice-for-only`).  They also do
+                // not take the retarget path, so #437 does not reach them.
+                let prime = self.cl(
                     "OpSetInt4",
                     &[code.clone(), Value::Int(i32::from(pos)), Value::Int(0)],
-                ));
+                );
+                if matches!(td, Type::Vector(_, _)) {
+                    sinks.vector_headers.push(prime);
+                } else {
+                    list.push(prime);
+                }
                 let info = self.type_info(&td);
                 self.cl(
                     "OpGetField",
@@ -2246,7 +2284,7 @@ impl Parser {
                     self.change_var_type(tmp, &exp_tp);
                 }
                 let prev = std::mem::replace(&mut value, Value::Var(tmp));
-                hoists.push(v_set(tmp, prev));
+                sinks.hoists.push(v_set(tmp, prev));
             }
             self.handle_field(td_nr, code, list, &field, &mut value, &exp_tp);
         }
@@ -2316,7 +2354,7 @@ impl Parser {
         let mut list = Vec::new();
         let mut new_object = false;
         let mut in_place_var: Option<u16> = None;
-        let mut hoists: Vec<Value> = Vec::new();
+        let mut sinks = FieldSinks::default();
         let work = self.vars.work_ref();
         if let Value::Var(v_nr) = code {
             let var_tp = self.vars.tp(*v_nr).clone();
@@ -2430,6 +2468,11 @@ impl Parser {
         // INSIDE the shared store (`OpNewRecord`/`OpFinishRecord` against that DbRef) rather than
         // in a throwaway store that is immediately freed (the silent no-op this fixes).
         let mut found_fields = HashSet::new();
+        // #437 — everything pushed so far is the record-creation prelude
+        // (`Set(x, Null)` + `OpDatabase`).  Vector-field headers are zeroed as one
+        // block right after it, before any field value; see the note in
+        // `parse_object_field`.
+        let prelude_len = list.len();
         loop {
             if self.lexer.peek_token("}") {
                 break;
@@ -2440,7 +2483,7 @@ impl Parser {
                 &mut list,
                 &mut found_fields,
                 in_place_var,
-                &mut hoists,
+                &mut sinks,
             ) {
                 self.lexer.revert(link);
                 self.vars.clean_work_refs(work);
@@ -2451,11 +2494,16 @@ impl Parser {
             }
         }
         self.lexer.token("}");
+        // #437 splice: every vector-field header zeroed as one block, directly
+        // after the prelude and before the first field's value.
+        for (i, header) in sinks.vector_headers.drain(..).enumerate() {
+            list.insert(prelude_len + i, header);
+        }
         // #330 splice: run the hoisted self-reading field values BEFORE the
         // in-place `Set(x, Null) + OpDatabase(x)` prelude clears the record.
-        if !hoists.is_empty() {
-            hoists.append(&mut list);
-            list = hoists;
+        if !sinks.hoists.is_empty() {
+            sinks.hoists.append(&mut list);
+            list = std::mem::take(&mut sinks.hoists);
         }
         if !self.first_pass {
             self.object_init(&mut list, td_nr, 0, code, &found_fields);
