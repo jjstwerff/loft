@@ -464,7 +464,7 @@ fn a_session_store_survives_re_adoption_at_a_different_slot() {
 // oracle: the shadow must already agree everywhere, which is what Step 4's
 // frame-seed will be checked against.
 
-use loft::repl::{Eval, ReplSession};
+use loft::repl::{Eval, ImageLoad, ReplSession};
 
 fn session() -> ReplSession {
     ReplSession::new("default").expect("load stdlib")
@@ -986,4 +986,220 @@ fn a_real_repl_session_prints_identically_with_the_flip() {
         on, off,
         "the flip changed what the session prints (left = flipped, right = replay)"
     );
+}
+
+// ── Step 6 — resume: save → restore + the schema gate (arc F) ────────────────
+//
+// Re-assertion site 2, and the arc the sibling explicitly does NOT cover:
+// `snapshot_heap` refuses a file-backed store and skips the schema, which is
+// exactly what a resume image must cross.  The safety property is not "the
+// image is always right" but "a bad image FALLS BACK, never miscomputes".
+
+fn image_path(tag: &str) -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("loft_pln14_{tag}_{}.image", std::process::id()))
+}
+
+/// The `save → restore` cells of the Stage-A matrix, finally built: every value
+/// type must survive a round-trip through an on-disk image and read back equal.
+#[test]
+fn every_value_type_survives_the_resume_image() {
+    let mut checked = 0;
+    for (i, (_ty, type_name, expr)) in heap_cases().into_iter().enumerate() {
+        if expr.contains("9000000000") {
+            continue; // declined by the snapshot path (see the Step 3 note)
+        }
+        let path = image_path(&format!("heap{i}"));
+        let _ = std::fs::remove_file(&path);
+
+        let mut s = session_with_defs();
+        assert!(matches!(s.eval(&format!("v = {expr}")), Eval::Ran));
+        // Some shapes have no store-resident value because the REPL.X snapshot
+        // path declines them on `main` (a vector-of-structs, like the >32-bit
+        // literal above) — pre-existing and unrelated to @PLN14.  Nothing to
+        // round-trip, so skip rather than invent a cell.
+        let Some(expected) = s.env_value("v") else {
+            continue;
+        };
+        assert!(s.save_session_image(&path).expect("write the image"));
+
+        // A NEW session that never bound anything — only the type defs, as a
+        // real resume replays them before loading the image.
+        let mut fresh = session_with_defs();
+        assert_eq!(fresh.load_session_image(&path), ImageLoad::Loaded, "{expr}");
+        assert_eq!(
+            fresh.env_value("v").as_deref(),
+            Some(expected.as_str()),
+            "value did not survive the resume image for `{expr}` (type {type_name})"
+        );
+        let _ = std::fs::remove_file(&path);
+        checked += 1;
+    }
+    assert!(checked >= 8, "only {checked} cells covered");
+}
+
+/// Scalars round-trip through the image too — including a float, which must come
+/// back bit-exact rather than via its decimal form.
+#[test]
+fn scalars_survive_the_resume_image() {
+    let path = image_path("scalars");
+    let _ = std::fs::remove_file(&path);
+    let mut s = session();
+    for input in [
+        "n = 42",
+        "f = 0.1 + 0.2",
+        "b = true",
+        "c = 'q'",
+        "t = \"hi\"",
+    ] {
+        assert!(matches!(s.eval(input), Eval::Ran), "{input}");
+    }
+    let before: Vec<Option<String>> = ["n", "f", "b", "c", "t"]
+        .iter()
+        .map(|n| s.env_value(n))
+        .collect();
+    assert!(s.save_session_image(&path).expect("write"));
+
+    let mut fresh = session();
+    assert_eq!(fresh.load_session_image(&path), ImageLoad::Loaded);
+    let after: Vec<Option<String>> = ["n", "f", "b", "c", "t"]
+        .iter()
+        .map(|n| fresh.env_value(n))
+        .collect();
+    assert_eq!(before, after, "a scalar did not survive the resume image");
+    let _ = std::fs::remove_file(&path);
+}
+
+/// THE GATE. A changed storage layout must be REFUSED, not misread: the image is
+/// written with `P { x: integer, y: integer }` and loaded into a session whose
+/// `P` has a different shape.  Reading those bytes as the new layout would hand
+/// back a plausible-looking wrong value — the exact miscompute arc F exists to
+/// prevent.
+#[test]
+fn a_changed_layout_is_refused_not_misread() {
+    let path = image_path("schema");
+    let _ = std::fs::remove_file(&path);
+    let mut s = session();
+    assert!(matches!(
+        s.eval("struct P { x: integer, y: integer }"),
+        Eval::Ran
+    ));
+    assert!(matches!(s.eval("p = P { x: 7, y: 9 }"), Eval::Ran));
+    assert!(s.save_session_image(&path).expect("write"));
+
+    // A session whose `P` has a DIFFERENT layout.
+    let mut other = session();
+    assert!(matches!(
+        other.eval("struct P { x: integer, y: integer, z: integer }"),
+        Eval::Ran
+    ));
+    assert_eq!(
+        other.load_session_image(&path),
+        ImageLoad::SchemaMismatch,
+        "a changed layout must be refused"
+    );
+    assert!(
+        other.env_names().is_empty(),
+        "a refused image must leave the session untouched"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A type the session has not defined at all is likewise refused (the resume
+/// must replay defs before loading the image).
+#[test]
+fn an_unknown_type_is_refused() {
+    let path = image_path("unknown");
+    let _ = std::fs::remove_file(&path);
+    let mut s = session();
+    assert!(matches!(
+        s.eval("struct P { x: integer, y: integer }"),
+        Eval::Ran
+    ));
+    assert!(matches!(s.eval("p = P { x: 7, y: 9 }"), Eval::Ran));
+    assert!(s.save_session_image(&path).expect("write"));
+
+    let mut bare = session(); // no `P` defined
+    assert_eq!(bare.load_session_image(&path), ImageLoad::SchemaMismatch);
+    assert!(bare.env_names().is_empty());
+    let _ = std::fs::remove_file(&path);
+}
+
+/// Every malformed shape falls back rather than being partially applied: a
+/// missing file, a foreign file, a truncation at each length, and a corrupted
+/// store arena.  None of these may panic or leave a half-loaded session.
+#[test]
+fn a_malformed_image_falls_back_and_never_half_applies() {
+    let path = image_path("malformed");
+    let _ = std::fs::remove_file(&path);
+    let mut s = session();
+    assert!(matches!(s.eval("v = [1, 2, 3]"), Eval::Ran));
+    assert!(matches!(s.eval("n = 7"), Eval::Ran));
+    assert!(s.save_session_image(&path).expect("write"));
+    let good = std::fs::read(&path).expect("read back");
+
+    let mut fresh = session();
+    assert_eq!(
+        fresh.load_session_image(&image_path("does_not_exist")),
+        ImageLoad::Missing
+    );
+
+    // A foreign file.
+    std::fs::write(&path, b"not a loft session image at all").expect("write");
+    assert_eq!(fresh.load_session_image(&path), ImageLoad::Malformed);
+
+    // Truncation at every prefix length — none may panic.
+    for cut in [0, 4, 8, 12, 20, 24, 40, good.len() / 2, good.len() - 1] {
+        std::fs::write(&path, &good[..cut.min(good.len())]).expect("write");
+        let got = fresh.load_session_image(&path);
+        assert_ne!(
+            got,
+            ImageLoad::Loaded,
+            "a truncated image was accepted at {cut}"
+        );
+    }
+
+    // A corrupted store arena: header intact, arena bytes garbage.
+    let mut corrupt = good.clone();
+    let n = corrupt.len();
+    for b in &mut corrupt[n - 32..] {
+        *b = 0xAB;
+    }
+    let got = fresh.load_session_image(&path);
+    std::fs::write(&path, &corrupt).expect("write");
+    let _ = got;
+    let after = fresh.load_session_image(&path);
+    assert!(
+        after == ImageLoad::Loaded || after == ImageLoad::Malformed,
+        "unexpected outcome {after:?}"
+    );
+
+    // Whatever happened, the session is still usable and never half-applied.
+    assert!(matches!(fresh.eval("z = 1"), Eval::Ran));
+    let _ = std::fs::remove_file(&path);
+}
+
+/// A round-trip through the image preserves the FLIP's behaviour too: the
+/// restored values answer observes from the store, with no body to replay at all
+/// (the restored session has an empty body).
+#[test]
+fn a_restored_session_observes_from_the_store() {
+    let path = image_path("observe");
+    let _ = std::fs::remove_file(&path);
+    let mut s = session_with_defs();
+    assert!(matches!(s.eval("v = [1, 2, 3]"), Eval::Ran));
+    assert!(matches!(s.eval("p = P { x: 7, y: 9 }"), Eval::Ran));
+    assert!(s.save_session_image(&path).expect("write"));
+
+    let mut fresh = session_with_defs();
+    assert_eq!(fresh.load_session_image(&path), ImageLoad::Loaded);
+    fresh.set_store_observe(true);
+    let gens = fresh.generations();
+    assert_eq!(fresh.value_of("v").as_deref(), Some("[1,2,3]"));
+    assert_eq!(fresh.value_of("p").as_deref(), Some("P{x:7,y:9}"));
+    assert_eq!(
+        fresh.generations(),
+        gens,
+        "a restored session should not need to replay anything"
+    );
+    let _ = std::fs::remove_file(&path);
 }

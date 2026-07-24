@@ -11,17 +11,18 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **Steps 0–4 landed 2026-07-24**: the matrix instrument (Step 0), the arc-B
-materialize primitive (Step 1), the arc-A session store + env record as a
-**write-only shadow** (Step 2), arc-C scalars at rest (Step 3), and the arc-D
-frame-seed (Step 4). Every binding kind has a store-resident home, and a store
-value can be loaded back into its slot — proven equal to the replayed value.
-The replay model is still the source of truth and the seed is not on the eval
-path, so behaviour is unchanged and nothing in the corpus can regress.
+Open — **Steps 0–6 landed 2026-07-24**: the matrix instrument (Step 0), the arc-B
+materialize primitive (Step 1), the arc-A session store + env (Step 2), arc-C
+scalars at rest (Step 3), the arc-D frame-seed (Step 4), the arc-E **flip**
+(Step 5, behind `LOFT_PLN14_STORE_OBSERVE`, off by default), and arc-F **resume**
+(Step 6, image + schema gate). Every binding kind has a store-resident home,
+observing can read it without replaying the body, and the values survive an
+on-disk round-trip with a fail-closed layout gate.
 
-Next is **Step 5, the flip**: observe reads the env and the body replay is
-removed behind the flag. That is where side-effect repetition and re-run cost
-actually die. Step 4's differential is the evidence it can be taken.
+Remaining: **Step 7** (lifetime — orphaned records on re-bind) and **Step 8**
+(make the flip the default + absorb arc H). Two things block the default:
+the `text` display residual from Step 5, and choosing precedence between the
+resume image and the shipped text-replay resume.
 
 See *Step 0/1 findings* below — the materialize primitive is built on
 `copy_claims`, **not** the `snapshot_copy` this plan originally named — and the
@@ -112,7 +113,7 @@ both backends, not when the demo runs.
 | **C** — scalars at rest (`x = 5`): boxed into the store, or a tiny inline tagged env value | **Built** (Step 3) — boxed 1-field record, raw bytes; text included via `TextInVector` |
 | **D** — frame-seed: prior names load from the session store into their slots before a new statement runs | **Built** (Step 4) — `seed_paused_frame`, differential-gated; not on the eval path yet |
 | **E** — observe / `:vars` read from the environment — **no body replay** | **Built** (Step 5) — behind `LOFT_PLN14_STORE_OBSERVE`, off by default; text display declines to the replay |
-| **F** — resume: mmap the session store + schema-version gating (stale image → fresh fallback) | Open |
+| **F** — resume: mmap the session store + schema-version gating (stale image → fresh fallback) | **Built** (Step 6) — image + `layout_algo_hash` gate, fail-closed; not yet wired to auto-resume |
 | **G** — lifetime: orphaned records on re-bind (`:reset` wipe first; GC only if it bites) | Open |
 | **H** — in-process result-as-`String` eval API (`eval(line) → rendered value`) for embedding/GUI — absorbed from @PLN12's REPL.T tail; nearly free once values are store-resident (the renderer already exists in `render_capture` / `show_loft`) | Open |
 
@@ -425,7 +426,45 @@ value the instrument cannot *see* must fail, not pass.
   binding whose RHS prints runs the print **once**; a non-deterministic value is stable
   across repeated observes.
 
-- **Step 6 — resume via mmap + schema gate (arc F). Effort M–MH.**
+- **Step 6 — resume via mmap + schema gate (arc F). Effort M–MH. BUILT 2026-07-24.**
+  `save_session_image` / `load_session_image` persist the session's store-resident
+  values and restore them into a new session; `ImageLoad` reports the outcome.
+  The Stage-A matrix's **`save → restore` cells finally exist**
+  (`every_value_type_survives_the_resume_image`, `scalars_survive_the_resume_image`).
+  - **The image is one store, not a graph** — the direct payoff of finding 5. A
+    materialized value is self-contained in its store, so the image is a header +
+    the layout key + the env table + that store's raw arena. Nothing has to be
+    walked or rebased on the way out or back in.
+  - **The gate is `Stores::layout_algo_hash`**, which folds record sizes, field
+    byte positions, narrow-int encodings, collection strides **and host
+    endianness** for every type the env references, keyed by type *name* so it is
+    stable across sessions. A changed struct, a different loft build, or another
+    endianness changes the key and the image is refused.
+  - **Fail-closed, and never half-applied.** The env is swapped in only to compute
+    the key against the current schema, and restored on any refusal, so a rejected
+    image leaves the session untouched. `Store::from_bytes` (@PLN97 arc G Phase 2)
+    already validates the arena always-on and rejects crafted buffers, so the
+    untrusted-image hazard was already carried — a real de-risk for this arc.
+  - Refusal paths all tested: missing, foreign file, truncation at every prefix,
+    corrupted arena, changed layout, and a type the session has not defined. The
+    property asserted is not "the image is right" but **"a bad image falls back,
+    never miscomputes"** — and after any refusal the session is still usable.
+  - A restored session observes entirely from the store: with the flip on it
+    answers `value_of` without advancing the generation counter, because there is
+    no body to replay at all.
+
+  **Deliberately not done here:** wiring the image into the auto-resume driver
+  (`~/.loft_session`). The shipped text-replay resume still owns that path; the
+  image is the mechanism plus its gate, and the load API requires the caller to
+  replay type definitions first (an image referencing an undefined type is
+  correctly refused). Choosing the precedence between the two resume paths is
+  Step 8's call, alongside making the flip the default.
+
+  *Not mmap:* the store is read into a heap-owned arena via `Store::from_bytes`
+  rather than mapped in place. `from_bytes` is the validated, fail-closed entry
+  point, and a session image is small; mapping it would trade that validation for
+  a saving that does not matter at this size. `Store::open` remains available if a
+  large session ever justifies it.
   Save the session store and mmap-restore on resume, reusing the startup-cache infra
   (`src/data_store.rs` / `src/cache.rs`); add the **schema-version gate** so a stale or
   cross-build image *falls back to fresh (or to the shipped text-replay resume)*. This

@@ -40,6 +40,68 @@ use std::path::Path;
 /// without a realloc.
 const SESSION_STORE_WORDS: u32 = 1024;
 
+/// @PLN14 arc F — resume-image header: a magic so a foreign file is refused, and
+/// a format version so an older image is refused rather than misread.
+const SESSION_IMAGE_MAGIC: &[u8; 8] = b"LOFTSES1";
+const SESSION_IMAGE_VERSION: u32 = 1;
+
+/// @PLN14 arc F — the outcome of loading a resume image.  Every non-`Loaded`
+/// variant means the session was left **untouched**, so the caller falls back.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ImageLoad {
+    /// The image was accepted; the session now holds its store-resident values.
+    Loaded,
+    /// No image file at that path — a first run.
+    Missing,
+    /// Not a session image, a different format version, truncated, or a store
+    /// arena `Store::from_bytes` refused as structurally invalid.
+    Malformed,
+    /// A valid image from a build whose STORAGE LAYOUT differs (a changed struct,
+    /// a different loft build, another endianness), or one referencing a type this
+    /// session has not defined.  The values cannot be read as they were written,
+    /// so they are refused rather than misread.
+    SchemaMismatch,
+}
+
+/// Encode a [`SessionShape`] as two bytes for the resume image.
+fn shape_tags(shape: SessionShape) -> (u8, u8) {
+    match shape {
+        SessionShape::Heap => (0, 0),
+        SessionShape::TextInVector => (1, 0),
+        SessionShape::Scalar(k) => (
+            2,
+            match k {
+                ScalarKind::Integer => 0,
+                ScalarKind::Float => 1,
+                ScalarKind::Single => 2,
+                ScalarKind::Boolean => 3,
+                ScalarKind::Character => 4,
+                ScalarKind::Text => 5,
+                ScalarKind::SimpleEnum => 6,
+            },
+        ),
+    }
+}
+
+/// Inverse of [`shape_tags`]; `None` on an unknown tag (a malformed image).
+fn shape_from_tags(tag: u8, kind: u8) -> Option<SessionShape> {
+    Some(match tag {
+        0 => SessionShape::Heap,
+        1 => SessionShape::TextInVector,
+        2 => SessionShape::Scalar(match kind {
+            0 => ScalarKind::Integer,
+            1 => ScalarKind::Float,
+            2 => ScalarKind::Single,
+            3 => ScalarKind::Boolean,
+            4 => ScalarKind::Character,
+            5 => ScalarKind::Text,
+            6 => ScalarKind::SimpleEnum,
+            _ => return None,
+        }),
+        _ => return None,
+    })
+}
+
 /// @PLN14 arc E — whether a fresh session starts with store-backed observing on.
 /// Off unless `LOFT_PLN14_STORE_OBSERVE` is set, so Step 5 cannot change how any
 /// existing session behaves.
@@ -3797,6 +3859,161 @@ impl ReplSession {
                 Some(out)
             }
         }
+    }
+
+    /// @PLN14 arc F — the layout key this session's stored values depend on.
+    ///
+    /// `layout_algo_hash` folds the record sizes, field byte positions, narrow-int
+    /// encodings, collection strides AND the host endianness of every type the env
+    /// references.  If any of those move — a different loft build, a changed
+    /// struct, a different-endian machine — the key changes and the image is
+    /// refused.  `None` when a referenced type no longer resolves, which is itself
+    /// a reason to refuse.
+    fn env_layout_key(&self) -> Option<u64> {
+        let mut roots: Vec<u16> = Vec::new();
+        for entry in self.env.values() {
+            let tp = self.parser.database.name(&entry.type_name);
+            if tp == u16::MAX {
+                // A scalar's type name is not a schema type; it carries no layout.
+                if matches!(entry.shape, SessionShape::Scalar(_)) {
+                    continue;
+                }
+                return None;
+            }
+            roots.push(tp);
+        }
+        roots.sort_unstable();
+        roots.dedup();
+        Some(self.parser.database.layout_algo_hash(&roots))
+    }
+
+    /// @PLN14 arc F — write the session's store-resident values to `path` as a
+    /// resume image: a header, the layout key, the binding environment, and the
+    /// session store's raw arena.
+    ///
+    /// Returns `false` (writing nothing) when there is nothing to save.
+    ///
+    /// # Errors
+    /// Returns the I/O error if the image cannot be written.
+    pub fn save_session_image(&self, path: &Path) -> std::io::Result<bool> {
+        let (Some(store), Some(key)) = (self.session_store.as_ref(), self.env_layout_key()) else {
+            return Ok(false);
+        };
+        if self.env.is_empty() {
+            return Ok(false);
+        }
+        let mut out: Vec<u8> = Vec::new();
+        out.extend_from_slice(SESSION_IMAGE_MAGIC);
+        out.extend_from_slice(&SESSION_IMAGE_VERSION.to_le_bytes());
+        out.extend_from_slice(&key.to_le_bytes());
+        let mut names: Vec<&String> = self.env.keys().collect();
+        names.sort(); // deterministic image bytes
+        out.extend_from_slice(&(names.len() as u32).to_le_bytes());
+        for name in names {
+            let e = &self.env[name];
+            for text in [name.as_str(), e.type_name.as_str()] {
+                out.extend_from_slice(&(text.len() as u32).to_le_bytes());
+                out.extend_from_slice(text.as_bytes());
+            }
+            out.extend_from_slice(&e.rec.to_le_bytes());
+            out.extend_from_slice(&e.pos.to_le_bytes());
+            let (tag, kind) = shape_tags(e.shape);
+            out.push(tag);
+            out.push(kind);
+        }
+        let bytes = store.raw_bytes();
+        out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
+        out.extend_from_slice(bytes);
+        std::fs::write(path, &out)?;
+        Ok(true)
+    }
+
+    /// @PLN14 arc F — restore a [`save_session_image`](Self::save_session_image).
+    ///
+    /// **Fail-closed by construction.** Every way the image can be wrong — absent,
+    /// truncated, wrong magic or version, a layout key that does not match this
+    /// build's schema, or a store arena `Store::from_bytes` rejects — returns a
+    /// [`ImageLoad`] refusal and leaves the session **untouched**, so the caller
+    /// falls back to a fresh session (or to the shipped text-replay resume). The
+    /// image is never partially applied and a mismatch never miscomputes.
+    ///
+    /// The caller must have replayed the session's **type definitions** first: the
+    /// layout key is computed against the current schema, so an image referencing
+    /// a struct this session has not defined is correctly refused.
+    pub fn load_session_image(&mut self, path: &Path) -> ImageLoad {
+        let Ok(bytes) = std::fs::read(path) else {
+            return ImageLoad::Missing;
+        };
+        let Some((env, store_bytes, key)) = Self::decode_session_image(&bytes) else {
+            return ImageLoad::Malformed;
+        };
+        // Build the candidate env FIRST so the layout key is computed over exactly
+        // the types the image references, then compare against this build.
+        let saved_env = std::mem::replace(&mut self.env, env);
+        let matches = self.env_layout_key() == Some(key);
+        if !matches {
+            self.env = saved_env; // untouched — nothing was applied
+            return ImageLoad::SchemaMismatch;
+        }
+        let Some(store) = crate::store::Store::from_bytes(&store_bytes) else {
+            self.env = saved_env;
+            return ImageLoad::Malformed;
+        };
+        self.session_store = Some(store);
+        ImageLoad::Loaded
+    }
+
+    /// Parse an image into `(env, store bytes, layout key)`; `None` on anything
+    /// malformed.  Pure decoding — it applies nothing.
+    fn decode_session_image(
+        bytes: &[u8],
+    ) -> Option<(
+        std::collections::HashMap<String, SessionValue>,
+        Vec<u8>,
+        u64,
+    )> {
+        let mut at = 0usize;
+        let take = |at: &mut usize, n: usize| -> Option<&[u8]> {
+            let end = at.checked_add(n)?;
+            let out = bytes.get(*at..end)?;
+            *at = end;
+            Some(out)
+        };
+        if take(&mut at, SESSION_IMAGE_MAGIC.len())? != SESSION_IMAGE_MAGIC {
+            return None;
+        }
+        let version = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?);
+        if version != SESSION_IMAGE_VERSION {
+            return None;
+        }
+        let key = u64::from_le_bytes(take(&mut at, 8)?.try_into().ok()?);
+        let count = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?) as usize;
+        let mut env = std::collections::HashMap::with_capacity(count);
+        for _ in 0..count {
+            let mut text = || -> Option<String> {
+                let n = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?) as usize;
+                String::from_utf8(take(&mut at, n)?.to_vec()).ok()
+            };
+            let name = text()?;
+            let type_name = text()?;
+            let rec = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?);
+            let pos = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?);
+            let tag = *take(&mut at, 1)?.first()?;
+            let kind = *take(&mut at, 1)?.first()?;
+            let shape = shape_from_tags(tag, kind)?;
+            env.insert(
+                name,
+                SessionValue {
+                    type_name,
+                    rec,
+                    pos,
+                    shape,
+                },
+            );
+        }
+        let len = u32::from_le_bytes(take(&mut at, 4)?.try_into().ok()?) as usize;
+        let store_bytes = take(&mut at, len)?.to_vec();
+        Some((env, store_bytes, key))
     }
 
     /// @PLN14 arc A — the names that currently have a store-resident value.

@@ -528,6 +528,18 @@ impl Store {
     /// claiming a size past the arena (a heap over-read) is rejected here with
     /// `None`, never walked.  Interior `DbRef` soundness remains the caller's
     /// `store_verify` backstop.
+    /// @PLN14 arc F — this store's whole arena as raw bytes, the counterpart of
+    /// [`from_bytes`](Self::from_bytes).  Used to persist the REPL's session store
+    /// into a resume image.
+    ///
+    /// The bytes are a **host-endian raw image** (@PLN97 F9), so they are only
+    /// meaningful to a build with the same layout — which is why the image that
+    /// carries them is gated on `Stores::layout_algo_hash`.
+    #[must_use]
+    pub(crate) fn raw_bytes(&self) -> &[u8] {
+        unsafe { std::slice::from_raw_parts(self.ptr, self.size as usize * 8) }
+    }
+
     #[must_use]
     pub fn from_bytes(bytes: &[u8]) -> Option<Store> {
         if bytes.len() < 16 {
