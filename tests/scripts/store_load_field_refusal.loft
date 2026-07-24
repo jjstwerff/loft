@@ -2,35 +2,46 @@
 // SPDX-License-Identifier: LGPL-3.0-or-later
 //
 // #632 — a collection declared as a struct FIELD records the WRAPPER STRUCT as
-// its bound store's type, so the paged working-set loaders cannot find a hash
-// to load and refuse. The refusal itself is the known limitation; what this
-// script pins is that the refusal is AUDIBLE. These loaders report failure as
-// `false` / `0` — byte-identical to "that key isn't in the image" — so a silent
-// refusal sends the caller hunting for missing data instead of an unsupported
-// shape. (That is exactly what happened during the @PLN119 probes.)
+// its bound store's type. The paged working-set loaders now DESCEND the wrapper
+// to the collection field, so a HASH declared as a field loads (the reported
+// bug). A SORTED field still refuses — a promoted/linked `ordered` field's
+// elements sit behind an indirection the positional range reader can't follow
+// yet (@PLN97 arc G) — and that refusal must stay AUDIBLE: these loaders report
+// failure as `false` / `0`, byte-identical to "that key isn't in the image", so
+// a silent refusal sends the caller hunting for missing data.
 //
-// The stdout below says only what loft can see; the driver
-// (`store_persist_loft.rs`) asserts the explanatory warning on stderr.
 // Driven by `store_persist_loft.rs`.
 
 struct FRec { id: integer, n: integer }
 
 struct FWrap { data: hash<FRec[id]> }
+struct SWrap { items: sorted<FRec[id]> }
 
 fn main() {
   path = env_variable("LOFT_PERSIST_TEST_PATH");
   mode = env_variable("LOFT_PERSIST_TEST_MODE");
 
-  w = FWrap { data: [] };
-
   if mode == "write" {
+    w = FWrap { data: [] };
     w.data += [FRec { id: 4207, n: 7717 }];
     if !store_persist_bind(w.data, path) { println("FAIL write-bind"); return }
     println("write ok");
   } else if mode == "loadkey" {
+    // HASH field — now ACCEPTED (#632): descends FWrap to the `data` hash.
+    w = FWrap { data: [] };
     ok = store_load_key(w.data, path, 4207);
-    println("field loadkey={ok}");
-    println("field len={len(w.data)}");
+    e = w.data[4207];
+    println("field loadkey={ok} len={len(w.data)} n={e.n ?? -1} verify={store_verify(w.data)}");
+  } else if mode == "write_sorted" {
+    s = SWrap { items: [] };
+    s.items += FRec { id: 10, n: 100 };
+    if !store_persist_bind(s.items, path) { println("FAIL write-bind"); return }
+    println("write ok");
+  } else if mode == "loadrange_sorted" {
+    // SORTED field — still REFUSED, audibly.
+    s = SWrap { items: [] };
+    cnt = store_load_range(s.items, path, 0, 100);
+    println("sorted loadrange={cnt} len={len(s.items)}");
   } else {
     println("FAIL unknown-mode")
   }

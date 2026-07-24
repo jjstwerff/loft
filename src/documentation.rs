@@ -236,6 +236,24 @@ fn write_index(
     let index_desc = "Loft is a statically typed language for small browser-playable games: write it, \
          share a link, anyone plays. Four execution modes, records with indexes in the \
          language, and a complete arcade game in one readable file.";
+    // schema.org JSON-LD (#635-adjacent SEO): a `WebSite` + a free
+    // `SoftwareApplication`, so a search engine can render a richer result card
+    // and recognise loft as a downloadable developer tool.  `index_desc` carries
+    // no quotes/braces, so it embeds in the JSON string as-is.  Version rides the
+    // same source as the hero, so it never goes stale.
+    let index_jsonld = format!(
+        "  <script type=\"application/ld+json\">\n\
+{{\"@context\":\"https://schema.org\",\"@graph\":[\
+{{\"@type\":\"WebSite\",\"name\":\"Loft\",\"url\":\"{SITE_BASE}\",\"description\":\"{index_desc}\"}},\
+{{\"@type\":\"SoftwareApplication\",\"name\":\"Loft\",\"applicationCategory\":\"DeveloperApplication\",\
+\"operatingSystem\":\"Linux, macOS, Windows, WebAssembly\",\"url\":\"{SITE_BASE}\",\
+\"downloadUrl\":\"{SITE_BASE}install.html\",\"softwareVersion\":\"{version}\",\
+\"image\":\"{SITE_OG_IMAGE}\",\"description\":\"{index_desc}\",\
+\"offers\":{{\"@type\":\"Offer\",\"price\":\"0\",\"priceCurrency\":\"USD\"}},\
+\"author\":{{\"@type\":\"Organization\",\"name\":\"loft-lang\",\"url\":\"https://github.com/loft-lang\"}}}}\
+]}}\n\
+  </script>\n"
+    );
     let index_meta = format!(
         "  <meta name=\"description\" content=\"{index_desc}\">\n\
   <link rel=\"canonical\" href=\"{SITE_BASE}\">\n\
@@ -248,7 +266,8 @@ fn write_index(
   <meta name=\"twitter:card\" content=\"summary_large_image\">\n\
   <meta name=\"twitter:title\" content=\"{SITE_TITLE_INDEX}\">\n\
   <meta name=\"twitter:description\" content=\"{index_desc}\">\n\
-  <meta name=\"twitter:image\" content=\"{SITE_OG_IMAGE}\">\n"
+  <meta name=\"twitter:image\" content=\"{SITE_OG_IMAGE}\">\n\
+{index_jsonld}"
     );
     let html = format!(
         "<!DOCTYPE html>\n\
@@ -968,13 +987,16 @@ pub const SITE_BASE: &str = "https://loft-lang.org/loft/";
 
 /// The pitch that rides after every page title.  Search results and link
 /// previews show the title alone, so the page name comes FIRST and the pitch
-/// second — "Structs — Loft, a language for small browser games".
-pub const SITE_TAGLINE: &str = "Loft, a language for small browser games";
+/// second — "Structs — Loft, a programming language for small browser games".
+/// "programming language" (not just "language") is the phrase people actually
+/// search, and "loft" alone is far too ambiguous to rank for — so every page
+/// title carries the full term.
+pub const SITE_TAGLINE: &str = "Loft, a programming language for small browser games";
 
-/// The landing page's own title.  Sub-pages read "<page> \u{2014} Loft, a language
-/// for small browser games"; on the index that shape stutters ("Loft \u{2014} Loft,
-/// a language\u{2026}"), so the index says it once.
-pub const SITE_TITLE_INDEX: &str = "Loft \u{2014} a language for small browser games";
+/// The landing page's own title.  Sub-pages read "<page> \u{2014} Loft, a programming
+/// language for small browser games"; on the index that shape stutters
+/// ("Loft \u{2014} Loft, a programming language\u{2026}"), so the index says it once.
+pub const SITE_TITLE_INDEX: &str = "Loft \u{2014} a programming language for small browser games";
 
 /// The default share image (the Brick Buster hero).  OpenGraph does not
 /// animate, so this stays a PNG even once an animated hero exists.

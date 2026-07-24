@@ -786,6 +786,46 @@ impl Stores {
                 .unwrap_or_default()
         }
     }
+
+    /// Native backend for the stdlib `temp_dir()` (#635): the OS temporary
+    /// directory, curated so a program does not hand-roll the `TMPDIR` vs
+    /// `TEMP`/`TMP` platform branch (which silently returns the wrong value
+    /// cross-platform, and misses the `/tmp` fallback where those vars are unset).
+    ///
+    /// Empty ONLY where the target has no OS temp dir — the browser, which has no
+    /// filesystem. The `temp_dir()` wrapper maps that empty to `null`, so the
+    /// absence is loud rather than a silently-wrong path (the mistake #620 made
+    /// for the clock). Native and WASI always yield a path.
+    #[must_use]
+    pub fn os_temp_dir_native() -> String {
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        {
+            String::new()
+        }
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        {
+            std::env::temp_dir().to_string_lossy().into_owned()
+        }
+    }
+
+    /// Native backend for the stdlib `cache_dir()` (#635): loft's own per-user
+    /// cache root — `$XDG_CACHE_HOME/loft`, else `$HOME/.cache/loft` — the same
+    /// directory the engine caches into ([`crate::cache::cache_base_dir`]). Empty
+    /// on the browser (no filesystem), mapped to `null` by the `cache_dir()`
+    /// wrapper.
+    #[must_use]
+    pub fn os_cache_dir_native() -> String {
+        #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
+        {
+            String::new()
+        }
+        #[cfg(not(all(target_arch = "wasm32", not(target_os = "wasi"))))]
+        {
+            crate::cache::cache_base_dir()
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
 }
 
 impl Debug for ShowDb<'_> {

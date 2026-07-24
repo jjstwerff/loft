@@ -59,6 +59,10 @@ pub(crate) fn is_text_dest_native(name: &str) -> bool {
             // that "a dest can't represent null" was probe-falsified on both
             // backends.
             | "n_source_dir"
+            // #635 — os_temp_dir / os_cache_dir (the private natives temp_dir /
+            // cache_dir wrap); non-null text, "" only on a filesystem-less target.
+            | "n_os_temp_dir"
+            | "n_os_cache_dir"
             | "n_kernel_event_payload"
             | "n_kernel_sync_payload"
             | "n_kernel_client_event_payload"

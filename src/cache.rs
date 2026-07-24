@@ -309,8 +309,10 @@ pub fn stdlib_cache_path(key: &[u8; 32]) -> std::path::PathBuf {
 
 /// The loft cache directory: `$XDG_CACHE_HOME/loft/` (or `$HOME/.cache/loft/`),
 /// falling back to the system temp dir.
+///
+/// Also the value the stdlib `cache_dir()` returns (`Stores::os_cache_dir_native`).
 #[must_use]
-fn cache_base_dir() -> std::path::PathBuf {
+pub fn cache_base_dir() -> std::path::PathBuf {
     std::env::var_os("XDG_CACHE_HOME")
         .map(std::path::PathBuf::from)
         .or_else(|| std::env::var_os("HOME").map(|h| std::path::PathBuf::from(h).join(".cache")))

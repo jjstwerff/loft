@@ -183,18 +183,27 @@ fn log_family_writes_on_both_backends() {
              a no-op on this backend.\nlog.txt: {log:?}\nstderr: {}",
             String::from_utf8_lossy(&out.stderr)
         );
-        // Strip the timestamp, and the per-backend temp dir from the source path (the two
-        // legs run in separate directories so the native build artifacts cannot collide).
-        // What must agree is severity, source BASENAME + line, and message.
-        let dir_s = dir.to_string_lossy().to_string();
+        // Strip the timestamp, and reduce every path token to its BASENAME. The two
+        // legs run in separate directories (so the native build artifacts can't
+        // collide), and what must agree is severity, source basename + line, and
+        // message. Reducing to the basename — rather than string-replacing the
+        // constructed dir — is deliberate: on Windows the record renders the path in
+        // a form that need not be byte-identical to `dir.to_string_lossy()` (8.3 short
+        // names, separator/casing differences), so the old replace silently failed to
+        // strip and the two legs never compared equal.
         let stripped: Vec<String> = log
             .lines()
             .map(|l| {
                 l.split_whitespace()
-                    .skip(1)
+                    .skip(1) // the leading timestamp token
+                    .map(|tok| match tok.rsplit(['/', '\\']).next() {
+                        // A path token (`<dir>/p.loft:2`) collapses to `p.loft:2`;
+                        // a token with no separator (severity, message) is unchanged.
+                        Some(base) if tok.contains(['/', '\\']) => base.to_string(),
+                        _ => tok.to_string(),
+                    })
                     .collect::<Vec<_>>()
                     .join(" ")
-                    .replace(&dir_s, "<dir>")
             })
             .collect();
         rendered.push(stripped);

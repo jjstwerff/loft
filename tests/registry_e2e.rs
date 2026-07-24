@@ -322,6 +322,7 @@ fn end_to_end_install_against_fixture_server() {
         refresh: true, // skip TTL on first run
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     // `loft.lock` is written into cwd — temporarily move to a fresh
@@ -386,6 +387,94 @@ fn end_to_end_install_against_fixture_server() {
     let _ = fs::remove_dir_all(&install_cwd);
 }
 
+/// A `skip_lockfile` install lands the package but writes NO lockfile — the mode
+/// auto-install uses when a transitive dep is discovered while parsing a file
+/// already inside the registry cache (there is no consumer project to record, and
+/// the walk-up would otherwise write `loft.lock` into the immutable cache: a stray
+/// file on Unix, an ENOENT that aborts resolution on Windows). The install itself
+/// must still succeed so `use <dep>` resolves.
+#[test]
+fn skip_lockfile_installs_without_writing_a_lockfile() {
+    let tmp = tmpdir("skip_lockfile_installs_without_writing_a_lockfile");
+
+    let pkg_dir = make_sample_package("skiplock", "0.1.0", &tmp);
+    let pkg_out = loft::package::package_create(&pkg_dir, Some(&tmp)).expect("package_create");
+    let tarball_bytes = fs::read(&pkg_out.tarball).expect("read tarball");
+
+    let mut files = HashMap::new();
+    files.insert("/placeholder".to_string(), b"placeholder".to_vec());
+    let server = FixtureServer::new(files);
+    let tarball_url = server.url_for("/skiplock-0.1.0.tar.gz");
+    let index_json = format!(
+        r#"{{
+            "schema_version": 1,
+            "updated": "2026-05-24T00:00:00Z",
+            "packages": {{
+                "skiplock": {{
+                    "description": "skip-lockfile fixture",
+                    "categories": ["test"],
+                    "versions": {{
+                        "0.1.0": {{
+                            "url": "{}",
+                            "sha256": "{}",
+                            "size": {},
+                            "loft": ">=0.8",
+                            "published": "2026-05-24T00:00:00Z"
+                        }}
+                    }}
+                }}
+            }}
+        }}"#,
+        tarball_url, pkg_out.sha256, pkg_out.size
+    );
+    {
+        let mut map = server.files.lock().unwrap();
+        map.insert("/index.json".to_string(), index_json.into_bytes());
+        map.insert("/skiplock-0.1.0.tar.gz".to_string(), tarball_bytes);
+    }
+
+    let home_dir = tmpdir("skip_lockfile_home");
+    let (_home, _lh) = HomeGuard::set(&home_dir);
+    let (_reg, _lr) = RegUrlGuard::set(&server.url_for("/index.json"));
+
+    let opts = loft::install::InstallOptions {
+        allow_unsigned: true,
+        refresh: true,
+        offline: false,
+        allow_prerelease: false,
+        skip_lockfile: true,
+        lock_path: None,
+    };
+    let prev_cwd = env::current_dir().expect("cwd");
+    let install_cwd = tmpdir("skip_lockfile_install_cwd");
+    env::set_current_dir(&install_cwd).expect("chdir");
+
+    let report = loft::install::install_one("skiplock", None, &opts).expect("install_one");
+
+    // Restore cwd before any assertion can unwind.
+    env::set_current_dir(&prev_cwd).ok();
+
+    // The package installed…
+    assert_eq!(report.installed.len(), 1, "package should install");
+    assert!(
+        home_dir
+            .join(".loft/registry/skiplock-0.1.0/loft.toml")
+            .exists(),
+        "extracted package missing"
+    );
+    // …but NO lockfile was written, in cwd or anywhere the default path would land.
+    assert!(
+        !install_cwd.join("loft.lock").exists(),
+        "skip_lockfile must not write a lockfile"
+    );
+
+    drop(_reg);
+    drop(_home);
+    let _ = fs::remove_dir_all(&tmp);
+    let _ = fs::remove_dir_all(&home_dir);
+    let _ = fs::remove_dir_all(&install_cwd);
+}
+
 #[test]
 fn install_rejects_tarball_with_wrong_sha256() {
     let tmp = tmpdir("install_rejects_tarball_with_wrong_sha256");
@@ -436,6 +525,7 @@ fn install_rejects_tarball_with_wrong_sha256() {
         refresh: true,
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     let prev_cwd = env::current_dir().expect("cwd");
@@ -477,6 +567,7 @@ fn install_rejects_missing_package_in_index() {
         refresh: true,
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     let prev_cwd = env::current_dir().expect("cwd");
@@ -607,6 +698,7 @@ fn end_to_end_install_with_transitive_dep() {
         refresh: true,
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
     let prev_cwd = env::current_dir().expect("cwd");
@@ -682,6 +774,7 @@ fn load_index_reporting_falls_back_to_cache_when_registry_unreachable() {
         refresh: true, // force a fetch attempt each call (bypass the TTL)
         offline: false,
         allow_prerelease: false,
+        skip_lockfile: false,
         lock_path: None,
     };
 
