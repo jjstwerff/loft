@@ -3,11 +3,11 @@ Copyright (c) 2026 Jurjen Stellingwerff
 SPDX-License-Identifier: LGPL-3.0-or-later
 -->
 
-# Native duplicate-type-mint — a per-process random `--native` panic
+# Native duplicate-type-mint — a warm-cache `--native` panic
 
-**Status — NOT FIXED. Diagnosed to the mechanism, one fix attempted and REVERTED
-(it made things worse, measured).** The tree is clean; only this directory is new.
-The harness in here is the durable part — build on it, do not re-derive it.
+**Status — FIXED.** `install_schema` now restores the constructor lookup key of a
+promoted collection ([`Stores::promoted_lookup_key`], `src/database/types.rs`).
+Guarded by two unit tests + the probe set here.
 
 ```
 thread 'main' panicked at src/database/types.rs:
@@ -18,129 +18,114 @@ index out of bounds: the len is 75 but the index is 75
 
 ---
 
-## 0. READ THIS FIRST — the trap that cost most of the last session
+## 0. The correction that unlocked this — it was never random
 
-**The fault is per-process random. A single run is worthless as evidence.**
+The first investigation recorded the fault as **per-process random** and built the
+repeat harness around that belief. It is not random. It is **deterministic on the
+whole-program cache**:
 
-I called this "fixed" twice on single-run readings and was wrong both times; I
-also once counted a run that produced *no output at all* as a pass. Both are
-recorded here so the next person does not repeat them:
+| run | verdict |
+|---|---|
+| 1st (cold — the cache is being written) | ok |
+| every later run (warm — the cache is read back) | bad |
 
-- a lucky variant reads as a pass → always run **N≥12** and report a ratio;
-- a stale `.loft/cache` binary re-runs an OLD compile → clear it **before every
-  run**;
-- a compile failure prints nothing, and `grep -c` then returns 0 → count
-  **VACUOUS** separately, never as a pass.
+`repeat.sh` cleared the per-directory `.loft` cache before every run, but the
+whole-program bundle lives in `$XDG_CACHE_HOME/loft` (`cache::program_cache_paths`),
+which it never touched. So the harness measured cold-once-then-warm-forever and
+reported it as a 1-in-12 random ratio.
 
-`repeat.sh` does all three, and carries a control probe that must NEVER pass
-(`zz_control`) so a blind harness announces itself.
+Two one-line probes settle it, and either would have been worth more than the
+mechanism trace that came first:
+
+```bash
+rm -rf ~/.cache/loft/program-*   # then 4 runs -> ok, BAD, BAD, BAD   (not random)
+LOFT_NO_CACHE=1                  # 6 runs      -> ok x6               (the cache IS the fault)
+```
+
+**The lesson to carry:** "random" was a conclusion drawn from a ratio, and the ratio
+came from an instrument that was not clearing the state it thought it was. Before
+theorising about a random fault, check that each run really starts from the state
+you believe — `1/N` is the signature of *first run differs*, not of randomness.
+
+## 1. Mechanism
+
+`names` maps a type's **constructor spelling** (what `Stores::vector` / `sorted`
+render) to its id — that is how those calls dedupe. `Stores::finish` then PROMOTES a
+collection whose content type is shared by more than one container and renames it in
+place: `vector<X>` → `array<X>`, `sorted<X[k]>` → `ordered<X[k]>` (`types.rs`,
+`finish_type`). The rename does not touch `names`, so on a **cold** run the
+pre-promotion spelling stays the live lookup key and everything resolves.
+
+`install_schema` (the warm-load path) rebuilt `names` purely from the stored type
+names — which for a promoted collection is the POST-promotion spelling. The
+constructor key was therefore gone, so the next `vector`/`sorted` call missed and
+minted a **second** type for a collection that already existed. That id was baked
+into the emitted native code while `init()` never registered it → the runtime type
+table is shorter than the id it is indexed with → the panic.
+
+`LOFT_TRACE_MINT=1` shows it directly (good run left, bad run right):
+
+```
+vector "vector<Node>"     hit=67  len=74     vector "vector<Node>"     MINT=74 len=74
+sorted "sorted<Node[id]>" hit=71  len=74     sorted "sorted<Node[id]>" MINT=75 len=75
+hash   "hash<Node[id]>"   hit=72  len=74     hash   "hash<Node[id]>"   hit=72  len=77
+```
+
+`hash` and `index` hit in both — they are never renamed. Only the two promoted
+spellings miss, which is the whole fault in one line.
+
+## 2. The fix
+
+`install_schema` registers the constructor spelling as an alias alongside the stored
+name. Promotion rewrites only the leading word and leaves the `<content[key]>` tail
+byte-identical (`key_name` and `create_key` render that tail the same way), so
+recovering the original key is an exact prefix swap, not a re-render. Aliases are
+applied **after** the primary map and never overwrite, so a schema that also holds a
+genuinely unpromoted `vector<X>` keeps its own id.
+
+## 3. Why attempt 1 failed, and why this differs
+
+The earlier attempt put the same string surgery at the **constructors** — if
+`sorted<X[k]>` misses, try `ordered<X[k]>`. Measured: `graph_plus_wide` unchanged at
+1/20 and `keyed_local_promoted` REGRESSED from 12/12 to 1/20. It changed the COLD
+path too, where a genuinely-new unpromoted collection must mint its own type rather
+than resolve onto a promoted one.
+
+This fix is at `install_schema`, which runs only on the warm path, and it restores
+exactly the mapping the cold run had at that point. Lookup and reconstruction both
+read the CURRENT content-type name, so they agree by construction.
+
+## 4. Measurement
+
+`repeat.sh` clears `.loft`, counts VACUOUS runs separately, and carries a control
+probe that must never pass. It does **not** clear `~/.cache/loft` — clear that by
+hand when you want a cold reading.
 
 ```bash
 ./repeat.sh 20                      # working-tree binary
 ./repeat.sh 20 /usr/local/bin/loft  # a pre-change binary, for before/after
 ```
 
-## 1. Baseline (HEAD = 7c08cf0d, N=12–20)
+| probe | shape | before | after |
+|---|---|---|---|
+| `graph_plus_wide` | `Graph{vector,index}` **+** `Wide{sorted,hash}` over one element | ok=1/12 | **ok=20/20** |
+| `keyed_local_promoted` | `Wide{sorted,hash}` + keyed locals | ok=12/12 | ok=20/20 |
+| `keyed_local_only` | one `sorted` local | ok=12/12 | ok=20/20 |
+| `zz_control` | must never pass | ok=0 ✓ | ok=0 ✓ |
 
-| probe | shape | verdict |
-|---|---|---|
-| `graph_plus_wide` | `Graph{vector<Node>, index<Node[id]>}` **+** `Wide{sorted<Node[id]>, hash<Node[id]>}` + keyed locals | **ok=1 bad=11** |
-| `keyed_local_promoted` | `Wide{sorted,hash}` + keyed locals, no `Graph` | ok=12 bad=0 |
-| `keyed_local_only` | one `sorted` local | ok=12 bad=0 |
-| `zz_control` | must never pass | ok=0 ✓ |
-
-So the fault needs **both** a struct minting `array`/`index` types **and** a
-struct minting `sorted`/`hash` types over the same element.
-
-## 2. The mechanism, as far as it is established
-
-Traced by printing every `Stores::sorted()` call (name, whether found, table
-length) across good and bad runs — the diff between them is unambiguous:
-
-```
-GOOD:  [sorted] name="sorted<Node[id]>" found=None      types.len=71   -> mints at 71 (correct)
-BAD:   [sorted] name="sorted<Node[id]>" found=None      types.len=75   -> mints a DUPLICATE at 75
-       [sorted] name="sorted<Node[id]>" found=None      types.len=71
-       [sorted] name="sorted<Node[id]>" found=Some(71)  types.len=74
-```
-
-A bad run makes an **extra** `sorted()` call against a 75-entry table in which
-the name is not registered, so it mints a second type for a collection that
-already exists at 71. That id is then baked into the emitted op while `init()`
-never registers it → the runtime table is shorter than the id → panic.
-
-**Why the name is missing.** `Stores::finish()` PROMOTES a collection whose
-content type is LINKED (shared by more than one container) and renames it in
-place — `sorted<X[k]>` → `ordered<X[k]>`, `vector<X>` → `array<X>`
-(`types.rs` ~396–410). The rename does not touch `self.names`. Separately,
-`install_schema` (`types.rs:65`, the program-cache / schema-load path) rebuilds
-`names` **purely from the current type names**, so after a schema load the
-pre-promotion spelling is gone entirely.
-
-That is a real inconsistency and almost certainly part of the story — but see §3,
-because acting on it directly made things worse.
-
-## 3. Attempt 1 — REVERTED, and why it failed (do not repeat verbatim)
-
-Added an inverse lookup at the two constructors: if `sorted<X[k]>` misses, try
-`ordered<X[k]>`; if `vector<X>` misses, try `array<X>`. The spellings differ only
-in the leading word, so the string surgery was exact.
-
-Measured with the harness:
-
-| probe | before | after |
-|---|---|---|
-| `graph_plus_wide` | ok=1/12 | ok=1/20 (unchanged) |
-| `keyed_local_promoted` | **ok=12/12** | **ok=1/20 — REGRESSED** |
-
-So the two names are **not** interchangeable. Promotion is a property of one
-schema instance, and mapping the old spelling onto the promoted type changes
-which id a context resolves to. Reverted (`git checkout -- src/database/types.rs`).
-
-**The lesson to carry:** the duplicate mint is a SYMPTOM. Two schema instances
-disagree about whether the type is promoted; forcing the name lookup to agree
-just moves the disagreement. Find why one instance is promoted and the other is
-not.
-
-## 4. Where to go next — highest value first
-
-1. **Identify the two callers.** The trace shows `sorted()` hit against tables of
-   length 75, 71 and 74 in one process — those are different `Stores` instances
-   (clones), not one growing table. Put a backtrace (or a caller tag) on each
-   `sorted()` call and find out which pipeline each belongs to: the parse
-   database, the `byte_code` clone, the native emitter's `self.stores`, and the
-   schema-load path are the candidates. **Until you know which instance mints the
-   duplicate, any fix is a guess** — that is exactly how attempt 1 went wrong.
-2. **Find what makes it random.** The variance correlates with a schema load
-   having happened (`install_schema` rebuilding `names`). Confirm that: force the
-   program-cache path on and off and re-measure with `repeat.sh`. If it is the
-   cache, the fault is "a cached schema loses the pre-promotion name", which is a
-   much narrower and more honest target than the whole type table.
-3. **Then fix the disagreement at its source**, not at the lookup — most likely
-   either by making the promotion preserve the lookup key (rename only a display
-   name), or by making the schema round-trip carry `names` rather than
-   reconstructing it (`install_schema`'s own doc comment already flags that
-   reconstruction as approximate: *"P379 library-qualified names would need the
-   names map stored separately"* — the same weakness, already known).
-4. **Re-measure with `repeat.sh` at N≥20 on every probe, both before and after**,
-   and add a probe for any new shape you touch. A fix is only real when
-   `graph_plus_wide` is ok=N and the other two have not moved.
+The Rust guard is `install_schema_keeps_the_lookup_key_of_a_promoted_collection`
+(`src/database/types.rs`), verified non-vacuous: with the alias removed it fails with
+the same duplicate id the panic came from.
 
 ## 5. Related, already fixed (do not confuse with this)
 
-Two defects found in the same area and shipped separately — this one is what is
-left after them:
-
 - `498a7027` — a struct literal emptied every vector field but the first (#437).
-- `6b629e07` — an ordered-field element copy dropped the last field of every
-  record (`sorted` beside `hash`). That one WAS this shape's sibling and is
-  fixed; it is why `keyed_local_promoted` is green at HEAD.
+- `6b629e07` — an ordered-field element copy dropped the last field of every record
+  (`sorted` beside `hash`). That one was this shape's sibling and is why
+  `keyed_local_promoted` was already green.
 
-## 6. Scope note
+## 6. Scope
 
-Reachability is narrow: it needs one struct with `vector` + `index` fields and
-another with `sorted` + `hash` fields over the same element type, compiled with
-`--native`. No consumer has reported it; it was found by widening the Commonstore
-handoff verification. It is a genuine silent-corruption-class hazard though — the
-same "baked id vs runtime table" family as #483 — so it should not be left open
-indefinitely.
+Any program whose schema promotes a collection, run twice with the program cache on
+(the default). Reachability looked narrow because the first run always works — the
+same "baked id vs runtime table" family as #483.
