@@ -1507,10 +1507,11 @@ impl Parser {
                 self.data.rewrite_unknown_refs(stub_nr, resolved_nr);
                 continue;
             }
-            // Case (c): emit the deferred error
-            let msg = if stub_name == "string" {
-                "Undefined type 'string' — did you mean 'text'?".to_string()
-            } else if let Some(s) = self.data.suggest_type_name(&stub_name) {
+            // Case (c): emit the deferred error.  `string` used to be special-cased
+            // here (and in `typedef.rs`); it is now one row of the cross-language
+            // alias table `suggest_type_name` consults, so both deferred and direct
+            // sites word it identically from one home.
+            let msg = if let Some(s) = self.data.suggest_type_name(&stub_name) {
                 format!("Undefined type {stub_name} — did you mean '{s}'?")
             } else {
                 format!("Undefined type {stub_name}")

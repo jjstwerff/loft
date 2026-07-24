@@ -3437,6 +3437,27 @@ impl Write for Into {
 }
 
 #[allow(dead_code)]
+/// @T0.3 — the loft type a newcomer's habit from another language means.
+///
+/// Suggestion only: these names stay **undefined**, they are not aliases you can
+/// write (making `int` legal is a language question, not a diagnostic one — see
+/// `DESIGN_DECISIONS.md`).  Every entry is a name verified to be UNDEFINED in
+/// loft; the width types that ARE legal (`i8`/`i16`/`i32`/`u8`/`u16`/`u32`) are
+/// deliberately absent, since a legal name never reaches an unknown-type error.
+pub(crate) fn builtin_type_alias(name: &str) -> Option<&'static str> {
+    Some(match name {
+        // Rust / C / Java / Go habits for the 64-bit integer loft calls `integer`.
+        "int" | "i64" | "u64" | "long" => "integer",
+        // `float` is 64-bit and `single` is 32-bit, so f64→float and f32→single.
+        "f64" | "double" => "float",
+        "f32" => "single",
+        "str" | "string" => "text",
+        "bool" => "boolean",
+        "char" => "character",
+        _ => return None,
+    })
+}
+
 impl Data {
     /// @PLN11 arc D — serialize this `Data` to a file-backed IR store at
     /// `path` (zero-copy-loadable via [`Data::open`]).  Thin wrapper over
@@ -5271,13 +5292,26 @@ impl Data {
     /// reach it without threading the parser through.
     #[must_use]
     pub fn suggest_type_name(&self, name: &str) -> Option<String> {
+        // A name a newcomer types out of habit from another language resolves by
+        // TABLE, not by edit distance — `int`/`str`/`i64` are 3 characters (below
+        // `suggest_similar_capped`'s floor) and `bool`→`boolean` (3),
+        // `char`→`character` (5) and `string`→`text` (unrelated) all exceed its
+        // distance cap.  Distance can reach none of them, so the table is the
+        // whole mechanism for this class; edit distance below still catches real
+        // typos (`intger`, `bolean`).
+        if let Some(alias) = builtin_type_alias(name) {
+            return Some(alias.to_string());
+        }
         let candidates: Vec<&str> = self
             .definitions
             .iter()
             .filter_map(|d| {
                 if !matches!(
                     d.def_type,
-                    DefType::Struct | DefType::Enum | DefType::EnumValue
+                    // `Type` is the base types (`integer`, `text`, …) — without it
+                    // a mistyped BUILTIN had no candidates at all, which is why
+                    // `intger` used to suggest nothing.
+                    DefType::Struct | DefType::Enum | DefType::EnumValue | DefType::Type
                 ) {
                     return None;
                 }

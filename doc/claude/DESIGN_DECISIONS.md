@@ -2541,3 +2541,78 @@ before they freeze:
   triggers, @I87), grown by adoption and by completing under-covered trigger kinds
   (e.g. operator overloads), **not** bare free-fn resolution (which C97/C98 declined).
 - Owner-directed 2026-07-24. Companion: [C97](#c97--)/[C98](#c98--); closes @PLN13 phase 6.
+
+## C102 — a release binary says nothing when it falls back to the interpreter
+
+### Context
+
+A downloaded release ships no native runtime, so every run without `rustc` on PATH
+printed `Warning: native compilation unavailable (…); falling back to the interpreter.
+To restore native, rebuild from source (`cargo build --release`) …`. The zero-install
+path the README sells hardest therefore opened with a nag telling the user to install
+Rust and rebuild — on a run that was about to succeed.
+
+A per-user state marker (`~/.loft/native-notice-shown`) was proposed and rejected: a
+fresh container has no `~/.loft`, so the marker fires on the first run of *every*
+container — exactly the CI / demo / Docker path where the nag is most visible — and it
+puts writable state on a path that must work with `$HOME` unset or read-only.
+
+### Decision
+
+- **Gate on intent, not on state.** The default path is **silent**: it falls back and
+  runs. An explanation is printed only when native was explicitly asked for
+  (`--native`), where it is an answer to a question the user actually asked.
+- **Rationale, once:** someone who downloaded a release binary chose *not* to install a
+  toolchain, so "install Rust and rebuild" is not an action they want — it reads as a
+  defect report on a successful run. It is a non-sequitur, not a warning.
+- **Nothing diagnostic is lost.** Every fallback still records
+  `native_fallback_reason`, which `LOFT_REQUIRE_NATIVE` surfaces as a hard error for
+  anyone who needs native to have happened. Silence costs no diagnosis.
+- The full explanation stays in `--help` and the release `QUICKSTART.md`.
+- **Not covered:** the source-checkout auto-rebuild notice (a tree with loft's source
+  but no `rustc`) still explains itself — there the message is actionable.
+- Sites: `src/main.rs` (rustc-mismatch, rustc-not-found, rustc-launch-failure,
+  toolchain-not-usable). Owner-directed 2026-07-24; T0.1 of the first-contact work
+  ([FIRST_CONTACT.md](FIRST_CONTACT.md)).
+
+## C103 — `int` / `str` / `bool` are suggested, never legal (no cross-language type aliases)
+
+### Context
+
+Every Python, Rust, Go and C newcomer types `int` in their first hour. loft's type names
+are full words (`integer`, `text`, `boolean`, `character`), and the undefined-type error
+offered no suggestion. The fix could be a *suggestion* (a diagnostic) or an *alias* (a
+language change); this records why it is the former.
+
+Edit distance cannot reach this class at all — `suggest_similar_capped` returns `None`
+at ≤ 3 characters (`int`, `str`, `i64`, `f64`) and caps distance at 2, while
+`bool`→`boolean` is 3, `char`→`character` is 5 and `string`→`text` is unrelated. So the
+suggestion is a table (`data::builtin_type_alias`), not a distance.
+
+### Decision
+
+- **Suggestion only.** `int` / `str` / `string` / `bool` / `i64` / `u64` / `f64` / `f32`
+  / `char` / `double` / `long` stay **undefined**; the error names the loft type. The
+  legal width types (`i8`/`i16`/`i32`/`u8`/`u16`/`u32`) are deliberately absent from the
+  table — a legal name never reaches an unknown-type error.
+- **Why full words, from the author (the two intrinsic reasons):**
+  1. A newcomer *to programming* has fewer acronyms to learn.
+  2. In normal loft code types are already rarely written (inference), and the weight of
+     the full word is an **extra nudge not to introduce a type annotation where it has
+     no purpose**. A cheap `int` would remove exactly that friction and invite the noise
+     the language is shaped to discourage.
+- **Supporting reasons this decision also rests on:**
+  - An alias is **irrevocable**: compatibility is absolute at contract 1 (additive-only),
+    so every alias is a permanent surface commitment bought for a one-time convenience.
+  - The obvious-looking ones are **not even true**. `integer` is
+    `Integer[i64::MIN+1, i64::MAX]` — `i64::MIN` is the null sentinel — so `i64` is not
+    an identity, and `u64` is plainly wrong above `i64::MAX`. That is fine for a
+    *suggestion* (which points and lets the type-checker do its job) and unacceptable
+    for an *alias*, where the mismatch would be silent.
+  - Two spellings tax every **reader** forever to save one **writer** once — the wrong
+    trade for a language whose showcase is one readable file.
+- **What would reopen it:** evidence from the dogfood loop or a real newcomer that the
+  suggestion is not landing — people hitting it *repeatedly* rather than once. The
+  suggestion is the reversible experiment; an alias is not.
+- Owner-directed 2026-07-24; T0.3 of the first-contact work
+  ([FIRST_CONTACT.md](FIRST_CONTACT.md)). Tests: `tests/parse_errors.rs` (`t03_*`).

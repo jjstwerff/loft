@@ -153,9 +153,10 @@ pub fn actual_types_deferred(
                     continue;
                 }
                 let name = &data.def(d).name;
-                let msg = if name == "string" {
-                    "Undefined type 'string' — did you mean 'text'?".to_string()
-                } else if let Some(s) = data.suggest_type_name(name) {
+                // `string` used to be special-cased here; it is now one row of the
+                // cross-language alias table `suggest_type_name` consults, so this
+                // site has one path and the table has one home (Goal E).
+                let msg = if let Some(s) = data.suggest_type_name(name) {
                     format!("Undefined type {name} — did you mean '{s}'?")
                 } else {
                     format!("Undefined type {name}")

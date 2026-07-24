@@ -117,6 +117,76 @@ fn test() {}"
     .error("Undefined type Conter — did you mean 'Counter'? at p07_suggest_undefined_type:2:23");
 }
 
+// ── T0.3 — cross-language type-name habits ───────────────────────
+//
+// A newcomer's first hour is full of `int` / `str` / `bool`.  Edit distance can
+// reach NONE of these: `suggest_similar_capped` returns None at <= 3 characters
+// (`int`, `str`, `i64`, `f64`) and caps distance at 2, while `bool`->`boolean` is
+// 3, `char`->`character` is 5 and `string`->`text` is unrelated.  So the alias
+// table in `data::builtin_type_alias` is the whole mechanism for this class.
+//
+// SUGGESTION ONLY — these names stay undefined.  Making them legal is a language
+// question, declined in DESIGN_DECISIONS.md: loft's full-word type names are
+// deliberate friction, and since inference means a type is rarely written at all,
+// a cheap `int` would invite exactly the pointless annotations the language is
+// shaped to discourage.
+
+/// Every row of the cross-language alias table suggests the right loft type.
+#[test]
+fn t03_cross_language_type_aliases_suggest() {
+    code!(
+        "fn a(x: int) -> integer { 1 }
+fn b(x: i64) -> integer { 1 }
+fn c(x: u64) -> integer { 1 }
+fn d(x: long) -> integer { 1 }
+fn e(x: f64) -> integer { 1 }
+fn g(x: double) -> integer { 1 }
+fn h(x: f32) -> integer { 1 }
+fn i(x: str) -> integer { 1 }
+fn j(x: string) -> integer { 1 }
+fn k(x: bool) -> integer { 1 }
+fn l(x: char) -> integer { 1 }
+fn test() {}"
+    )
+    .error("Undefined type int — did you mean 'integer'? at t03_cross_language_type_aliases_suggest:1:13")
+    .error("Undefined type i64 — did you mean 'integer'? at t03_cross_language_type_aliases_suggest:2:13")
+    .error("Undefined type u64 — did you mean 'integer'? at t03_cross_language_type_aliases_suggest:3:13")
+    .error("Undefined type long — did you mean 'integer'? at t03_cross_language_type_aliases_suggest:4:14")
+    .error("Undefined type f64 — did you mean 'float'? at t03_cross_language_type_aliases_suggest:5:13")
+    .error("Undefined type double — did you mean 'float'? at t03_cross_language_type_aliases_suggest:6:16")
+    .error("Undefined type f32 — did you mean 'single'? at t03_cross_language_type_aliases_suggest:7:13")
+    .error("Undefined type str — did you mean 'text'? at t03_cross_language_type_aliases_suggest:8:13")
+    .error("Undefined type string — did you mean 'text'? at t03_cross_language_type_aliases_suggest:9:16")
+    .error("Undefined type bool — did you mean 'boolean'? at t03_cross_language_type_aliases_suggest:10:14")
+    .error("Undefined type char — did you mean 'character'? at t03_cross_language_type_aliases_suggest:11:14");
+}
+
+/// The alias table did not cost the edit-distance path: a mistyped BUILTIN now
+/// suggests too.  Before T0.3 `suggest_type_name` ranked only user structs/enums,
+/// so a typo'd builtin had no candidates at all and suggested nothing.
+#[test]
+fn t03_mistyped_builtin_suggests() {
+    code!(
+        "fn a(x: intger) -> integer { 1 }
+fn b(x: bolean) -> integer { 1 }
+fn c(x: charater) -> integer { 1 }
+fn test() {}"
+    )
+    .error("Undefined type intger — did you mean 'integer'? at t03_mistyped_builtin_suggests:1:16")
+    .error("Undefined type bolean — did you mean 'boolean'? at t03_mistyped_builtin_suggests:2:16")
+    .error(
+        "Undefined type charater — did you mean 'character'? at t03_mistyped_builtin_suggests:3:18",
+    );
+}
+
+/// An unrelated name still gets NO suggestion — the table must not make the
+/// suggester fire on anything that merely looks unfamiliar.
+#[test]
+fn t03_unrelated_type_gets_no_suggestion() {
+    code!("fn a(x: Nonsuch) -> integer { 1 }\nfn test() {}")
+        .error("Undefined type Nonsuch at t03_unrelated_type_gets_no_suggestion:1:17");
+}
+
 // ── Plan-07 phase 5 anti-suggestion tests ────────────────────────
 // Locks in the rule that suggestions DON'T fire when the candidate
 // would be misleading.  Pre-fix the variable-suggestion site used

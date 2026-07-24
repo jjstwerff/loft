@@ -5902,13 +5902,22 @@ fn main() {
     // `--script` remains an explicit request but is now redundant with auto-detect.
     // A desugared source (auto or `--script`) bypasses the whole-program cache, which is
     // keyed by the file on disk, not the transformed source.
-    let script_desugared: Option<String> = if abs_file.is_empty() {
-        None
-    } else {
-        std::fs::read_to_string(&abs_file)
-            .ok()
-            .and_then(|src| loft::script::script_desugar(&src))
-    };
+    // T0.2 — keep the desugar's line map beside the generated source: the desugar
+    // hoists defs and inserts lines, so a diagnostic carries GENERATED coordinates
+    // until it is mapped back (which also restores the source snippet, since the
+    // renderer then looks up a line the user's file actually has).
+    let (script_desugared, script_line_map): (Option<String>, Option<Vec<u32>>) =
+        if abs_file.is_empty() {
+            (None, None)
+        } else {
+            match std::fs::read_to_string(&abs_file)
+                .ok()
+                .and_then(|src| loft::script::script_desugar_mapped(&src))
+            {
+                Some((out, map)) => (Some(out), Some(map)),
+                None => (None, None),
+            }
+        };
     let program_cache_on =
         loft::cache::program_cache_enabled() && script_desugared.is_none() && !script_mode;
     p.track_sources = program_cache_on;
@@ -5993,6 +6002,12 @@ fn main() {
                 p.parse(&abs_file, false);
             }
         }
+    }
+    // T0.2 — put every diagnostic back into the user's line numbers before anything
+    // reads or renders them.  Done here, right after the parse that produced them,
+    // so no consumer downstream ever sees generated coordinates.
+    if let Some(map) = script_line_map.as_deref() {
+        p.diagnostics.remap_lines(&abs_file, map);
     }
     // @PLN90 W5 — the enforced copy lint: route every Avoidable structure copy
     // through the Warning channel so it surfaces with the other diagnostics.
@@ -7552,12 +7567,13 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 let healed = native_utils::loft_source_tree()
                     .is_some_and(|tree| native_utils::rebuild_runtime(&tree, reason));
                 if !healed && !native_requested {
-                    eprintln!(
-                        "Warning: native compilation unavailable ({reason}); falling \
-                         back to the interpreter. To restore native, rebuild from source \
-                         (`cargo build --release`) — a downloaded release ships no native \
-                         runtime and always runs interpreted."
-                    );
+                    // T0.1 — SILENT on the default path.  The user did not ask for
+                    // native, and a downloaded release ships no native runtime by
+                    // design, so "rebuild from source" is not an action they want:
+                    // it reads as a defect report on a run that is about to succeed.
+                    // The reason is still recorded below and surfaced to whoever DID
+                    // ask (`--native`, or `LOFT_REQUIRE_NATIVE`, which hard-errors
+                    // with it) — silence here costs no diagnosis.
                     native_fallback_reason = Some(format!(
                         "native compilation unavailable ({reason}); rebuild loft"
                     ));
@@ -7689,13 +7705,25 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                     // rather than failing.  This is the moment the old up-front
                     // probe used to fire; doing it here means a warm cache hit
                     // never pays for a `rustc --version` spawn.
-                    eprintln!("Warning: rustc not found, falling back to interpreter mode");
+                    // T0.1 — only explain when native was explicitly asked for.
+                    if native_requested {
+                        eprintln!(
+                            "loft: rustc not found — `--native` needs a Rust toolchain \
+                             on PATH; running interpreted instead."
+                        );
+                    }
                     native_fallback_reason = Some("rustc not found".to_string());
                     let _ = std::fs::remove_file(&emit_path);
                     break 'native;
                 }
                 Err(e) => {
-                    eprintln!("Warning: rustc check failed ({e}), falling back to interpreter");
+                    // T0.1 — as above: explain only on an explicit request.
+                    if native_requested {
+                        eprintln!(
+                            "loft: rustc could not be launched ({e}) — `--native` needs a \
+                             working Rust toolchain; running interpreted instead."
+                        );
+                    }
                     native_fallback_reason = Some(format!("rustc could not be launched ({e})"));
                     let _ = std::fs::remove_file(&emit_path);
                     break 'native;
@@ -7731,13 +7759,7 @@ loftInstantiate(wasmBytes,imports).then(async ({{instance,memory}})=>{{
                 && !native_requested
                 && (crate_resolution_failure || rlib_format_failure)
             {
-                eprintln!(
-                    "Warning: native toolchain not usable here (cached build stale \
-                     after a rustc update, or loft's runtime library unavailable); \
-                     falling back to the interpreter. To restore native, rebuild from \
-                     source (`cargo build --release`) — a downloaded release ships no \
-                     native runtime and always runs interpreted."
-                );
+                // T0.1 — silent on the default path (see the rustc-mismatch arm above).
                 native_fallback_reason = Some(
                     "native toolchain not usable here (cached build stale after a rustc \
                      update, or loft's runtime library unavailable); rebuild loft"

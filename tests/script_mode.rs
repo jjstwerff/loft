@@ -70,3 +70,64 @@ fn semicolon_less_script_runs_on_both_backends() {
     let (nout, nok) = run(&["--native"], &fixture);
     assert!(nok && nout.contains("total=15"), "native ;-less: {nout:?}");
 }
+
+// ── T0.2 — a script's diagnostics use the USER's line numbers ────────────────
+//
+// The desugar hoists defs and inserts lines (the `fn main() {` prologue, a
+// fresh-line `;` after each `;`-less statement), so a diagnostic carried
+// GENERATED coordinates: a 2-line script reported its second statement on line
+// 4.  That also silently dropped the source snippet, because the renderer looked
+// up a line the user's file does not have — one cause, two symptoms, so the
+// snippet returns with the line fix.
+
+/// Run `loft <args> <file>` and return stderr (where diagnostics go).
+fn run_stderr(args: &[&str], file: &Path) -> String {
+    let out = Command::new(loft_bin())
+        .args(args)
+        .arg(file)
+        .current_dir(workspace_root())
+        .output()
+        .expect("invoke loft");
+    String::from_utf8_lossy(&out.stderr).into_owned()
+}
+
+#[test]
+fn t02_script_diagnostic_uses_source_line_and_shows_snippet() {
+    let dir = std::env::temp_dir();
+    let file = dir.join(format!("loft_t02_{}.loft", std::process::id()));
+    // The review's repro verbatim: the misspelled call is on line 2 of 2.
+    std::fs::write(&file, "name = \"world\"\nprintt(\"Hello, {name}!\\n\")\n").expect("write");
+    for backend in ["--interpret", "--native"] {
+        let err = run_stderr(&[backend], &file);
+        assert!(
+            err.contains("Unknown function printt"),
+            "{backend}: expected the unknown-function error; got {err:?}"
+        );
+        assert!(
+            err.contains(".loft:2:"),
+            "{backend}: the error must be reported on SOURCE line 2, not the \
+             generated line; got {err:?}"
+        );
+        // The snippet is the second symptom of the same cause: it renders only
+        // when the reported line actually exists in the user's file.
+        assert!(
+            err.contains("printt(\"Hello, {name}!"),
+            "{backend}: the source snippet must render; got {err:?}"
+        );
+    }
+    let _ = std::fs::remove_file(&file);
+}
+
+/// A one-line script reports line 1 — the prologue must not shift it.
+#[test]
+fn t02_one_line_script_reports_line_one() {
+    let dir = std::env::temp_dir();
+    let file = dir.join(format!("loft_t02_one_{}.loft", std::process::id()));
+    std::fs::write(&file, "printt(\"hi\")\n").expect("write");
+    let err = run_stderr(&["--interpret"], &file);
+    assert!(
+        err.contains(".loft:1:"),
+        "a one-line script must report line 1; got {err:?}"
+    );
+    let _ = std::fs::remove_file(&file);
+}

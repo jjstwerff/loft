@@ -57,10 +57,31 @@ pub fn is_script(src: &str) -> bool {
 /// block (`for i in … { a; b }`) still need their `;` for now; universal `;`-optional is
 /// a later slice. (Line numbers shift in the desugared source — an error-position remap
 /// is a later step.)
-pub fn script_desugar(src: &str) -> Option<String> {
+/// T0.2 — desugar a beginner script AND report where each generated line came
+/// from, so a diagnostic can be shown in the USER's coordinates.
+///
+/// The desugar reorders items (defs hoisted) and inserts lines (the `fn main() {`
+/// prologue, and a fresh-line `;` after every `;`-less statement), so generated
+/// line N is not source line N — a 2-line script reports its second statement on
+/// line 4.  That also silently loses the source snippet, because the renderer
+/// looks up a line the user's file does not have: one cause, two symptoms.
+///
+/// Returns `(desugared_source, map)` where `map[i]` is the 1-based ORIGINAL line
+/// that generated line `i + 1` came from.  A purely synthetic line (the prologue,
+/// an inserted `;`, the closing brace) carries the nearest preceding original
+/// line, so a diagnostic on one still points at the statement it belongs to.
+pub fn script_desugar_mapped(src: &str) -> Option<(String, Vec<u32>)> {
     if !is_script(src) {
         return None;
     }
+    // Original line of a slice OF `src`, from its byte offset — `split_top_level`
+    // returns borrowed slices, so the offset is exact.
+    let base = src.as_ptr() as usize;
+    let line_of = |item: &str| -> u32 {
+        let off = item.as_ptr() as usize - base;
+        // `off` is the start of a token slice, so it is a char boundary.
+        u32::try_from(src[..off].matches('\n').count() + 1).unwrap_or(1)
+    };
     let (mut defs, mut body): (Vec<&str>, Vec<&str>) = (Vec::new(), Vec::new());
     for it in split_top_level(src) {
         if is_def_item(it) {
@@ -70,26 +91,43 @@ pub fn script_desugar(src: &str) -> Option<String> {
         }
     }
     let mut out = String::new();
+    let mut map: Vec<u32> = Vec::new();
+    let mut last = 1u32;
+    // Record `n` generated lines as coming from original line `orig`.
+    let push = |out: &mut String, map: &mut Vec<u32>, text: &str, orig: u32| {
+        out.push_str(text);
+        // A pushed item may itself span several lines; every line it occupies maps
+        // to a successive original line, since the item is a contiguous slice.
+        let lines = text.matches('\n').count() + usize::from(!text.ends_with('\n'));
+        for k in 0..lines.max(1) {
+            map.push(orig + u32::try_from(k).unwrap_or(0));
+        }
+    };
     for d in defs.drain(..) {
-        out.push_str(d);
+        let orig = line_of(d);
+        last = orig;
+        push(&mut out, &mut map, d, orig);
         out.push('\n');
     }
     out.push_str("fn main() {\n");
-    for s in body.drain(..) {
-        out.push_str(s);
-        // loft requires `;` between block statements; a `;`-less script split at newlines
-        // (@PLN13 step 4) supplies them here. A statement that already ends with `;` is
-        // left alone; otherwise the `;` goes on a FRESH line so a trailing `// comment` on
-        // `s` cannot swallow it (loft treats the comment + newline as whitespace, so
-        // `x = 5 // c\n;` lexes as `x = 5 ;`). A redundant `;` (empty statement, e.g. after
-        // a `for { … }` block or a comment-after-`;`) is harmless.
-        if !s.trim_end().ends_with(';') {
+    map.push(last); // synthetic prologue
+    for st in body.drain(..) {
+        let orig = line_of(st);
+        last = orig;
+        push(&mut out, &mut map, st, orig);
+        if !st.trim_end().ends_with(';') {
             out.push_str("\n;");
+            map.push(orig); // the inserted `;` belongs to its statement
         }
         out.push('\n');
     }
     out.push_str("}\n");
-    Some(out)
+    map.push(last); // synthetic closing brace
+    Some((out, map))
+}
+
+pub fn script_desugar(src: &str) -> Option<String> {
+    script_desugar_mapped(src).map(|(out, _)| out)
 }
 
 /// Split `src` into its top-level items (source slices), skipping comments and string
@@ -433,6 +471,37 @@ mod tests {
             None
         );
     }
+    #[test]
+    /// T0.2 — the desugar's line map puts every generated line back on the source
+    /// line it came from, so a diagnostic can be reported in the user's
+    /// coordinates.  The prologue / inserted `;` / closing brace are synthetic and
+    /// carry the nearest preceding original line.
+    fn t02_line_map_tracks_the_source() {
+        // 2 loose statements, no defs — the shape the review's repro uses.
+        let (out, map) =
+            super::script_desugar_mapped("name = \"world\"\nprintt(\"hi\")\n").unwrap();
+        let g: Vec<&str> = out.lines().collect();
+        assert_eq!(g[0], "fn main() {");
+        assert_eq!(map[0], 1); // synthetic prologue -> first source line
+        assert_eq!(g[1], "name = \"world\"");
+        assert_eq!(map[1], 1);
+        assert_eq!(g[2], ";");
+        assert_eq!(map[2], 1); // the inserted `;` belongs to its statement
+        assert_eq!(g[3], "printt(\"hi\")");
+        assert_eq!(map[3], 2); // THE point: generated line 4 is source line 2
+        // A hoisted def is emitted first but still maps to where it was written.
+        let (out2, map2) =
+            super::script_desugar_mapped("a = 1\nfn helper() { 1 }\nb = 2\n").unwrap();
+        let g2: Vec<&str> = out2.lines().collect();
+        assert_eq!(g2[0], "fn helper() { 1 }");
+        assert_eq!(map2[0], 2, "the hoisted def maps back to its source line");
+        let b_at = g2
+            .iter()
+            .position(|l| *l == "b = 2")
+            .expect("b = 2 emitted");
+        assert_eq!(map2[b_at], 3, "a statement after a hoisted def still maps");
+    }
+
     #[test]
     fn desugar_all_loose_into_one_main() {
         let out = super::script_desugar("print(\"a\");\nprint(\"b\");\n").unwrap();

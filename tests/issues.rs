@@ -1920,10 +1920,14 @@ fn p86_lambda_capture_text_mutation() {
 // cascade of "Invalid index key" / "Cannot write unknown" errors.
 
 // Issue 82 / S7: `string` in a struct field must suggest `text`.
+// T0.3 — `string` used to be an ad-hoc special case that quoted the offending name
+// (`Undefined type 'string'`); it is now one row of the cross-language alias table,
+// so it words identically to every other undefined type (`Undefined type Conter — …`).
+// Prose is freely improvable; the frozen handle is the diagnostic's code (@PLN102 arc-E).
 #[test]
 fn issue_82_string_type_is_undefined() {
     code!("struct Bad { x: string }").error(
-        "Undefined type 'string' — did you mean 'text'? at issue_82_string_type_is_undefined:1:25",
+        "Undefined type string — did you mean 'text'? at issue_82_string_type_is_undefined:1:25",
     );
 }
 

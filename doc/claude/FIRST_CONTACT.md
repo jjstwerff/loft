@@ -110,25 +110,43 @@ size is irrelevant to what they see.
 Ordered by the review's tiers. Each entry states the decision; the acceptance test
 is the definition of done.
 
-### T0.1 — silence the native notice on the default path
-Gate the notice on explicit native intent (C1). Delete the "rebuild from source"
-sentence from the default path entirely; keep one plain sentence under `--native`
-naming what a release build can and cannot do. Add a `DESIGN_DECISIONS.md` entry.
-**Accept:** fresh container, unzip, run twice → **zero** notices; `--native` prints
-one clear explanation and exits non-zero only if it cannot proceed.
+### ~~T0.1~~ — DONE 2026-07-24
+Silent on the default path at all four fallback sites; `--native` explains. Recorded
+as [DESIGN_DECISIONS.md C102](DESIGN_DECISIONS.md). Verified in a release-shaped
+layout (no source tree, `rustc` absent): zero notices on two consecutive runs.
+*The first attempt at verifying this was vacuous* — `rustc` was still on the test
+`PATH`, so native simply succeeded; the calibration check (`which rustc` on the
+stripped PATH) is what caught it.
 
-### T0.2 — fix the bare-script span mapping
-One fix at the wrapper (C2). **Accept:** the 2-line `printt` repro reports `:2:`
-*and* renders the `|` snippet; a bare 1-line script reports `:1:`. Regression test
-covering both, on `--interpret` **and** `--native`.
+### ~~T0.2~~ — DONE 2026-07-24 (with a residual, filed)
+`script_desugar_mapped` now returns a line map beside the generated source, and
+`Diagnostics::remap_lines` puts every diagnostic back into the user's coordinates
+right after the parse. Both symptoms fixed by the one change, as predicted: the
+2-line repro reports `:2:` **with** the snippet, a 1-line script reports `:1:`,
+both backends (`tests/script_mode.rs::t02_*`, map unit-tested in
+`script::tests::t02_line_map_tracks_the_source`).
 
-### T0.3 — did-you-mean for type names
-Reuse the existing function-name machinery: edit distance **plus** a small alias
-table for cross-language habits (`int→integer`, `str`/`string→text`,
-`bool→boolean`, `i64`/`i32`/`u64`→ nearest width type, `f64`/`f32→float`).
-Suggestion only — do **not** make them legal (explicit non-goal; a language change
-would need its own decision). **Accept:** `int` → *did you mean 'integer'?*; every
-alias-table row covered by a test.
+**Residual → loft#625.** A script that *hoists a def* still shows a wrong line, but
+through a **different, pre-existing** bug: the desugar map is provably correct
+(unit-tested), and the generated source reproduces the same lag when run directly
+as a plain file with an explicit `fn main()`. Bisected: it needs a call to a def
+**plus** a preceding statement. Not scope-crept into T0.2.
+
+### ~~T0.3~~ — DONE 2026-07-24
+Alias table `data::builtin_type_alias`, consulted before edit distance — which
+**cannot reach this class at all**: `suggest_similar_capped` returns `None` at ≤ 3
+characters (`int`, `str`, `i64`, `f64`) and caps distance at 2, so `bool`→`boolean`
+(3), `char`→`character` (5) and `string`→`text` (unrelated) all fail. The table is
+the whole mechanism.
+
+Two things fell out. `DefType::Type` joined the candidate set, so a mistyped
+**builtin** (`intger`, `bolean`, `charater`) now suggests for the first time — it
+never had candidates before. And the hardcoded `'string'` special case, which
+existed in **three** places, folded into the one table.
+
+Suggestion only; declined as a language change with the author's rationale in
+[DESIGN_DECISIONS.md C103](DESIGN_DECISIONS.md). Note `i32`/`u32`/`i8`/`i16`/`u8`/`u16`
+are **legal** and correctly absent from the table.
 
 ### T1.1 — README truthfulness
 Dynamic version badge (`shields.io/github/v/release/loft-lang/loft`); repoint the
@@ -199,7 +217,7 @@ minutes of CI each for changes that are individually minutes of work. Batch by
 
 | Batch | Contents | Risk |
 |---|---|---|
-| **B1 — first-run bugs** | T0.1, T0.2, T0.3 | Code + tests; the only batch touching the parser |
+| ~~**B1 — first-run bugs**~~ | ~~T0.1, T0.2, T0.3~~ — **DONE 2026-07-24** (residual loft#625) | Code + tests; the only batch touching the parser |
 | **B2 — truthfulness** | T1.1, T1.3, T4.1 | Docs, `gendoc` ordering, file moves/deletes |
 | **B3 — discoverability** | T2.1, T2.2, T2.4 | `gendoc` output; verify a sample `<head>` |
 | **B4 — story** | T3.2, T3.5, plus drafts of T3.1/T3.4 for approval | README + new page, no code |

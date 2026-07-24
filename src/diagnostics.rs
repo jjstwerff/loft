@@ -89,6 +89,25 @@ impl Display for Diagnostics {
 }
 
 impl Diagnostics {
+    /// T0.2 — rewrite line numbers for `file` through a desugar line map, so a
+    /// beginner script's diagnostics are reported in the USER's coordinates
+    /// rather than the generated source's.
+    ///
+    /// `map[i]` is the original line that generated line `i + 1` came from (see
+    /// `script::script_desugar_mapped`).  A line past the map is left alone —
+    /// a wrong-but-unchanged number beats an out-of-range one, and the snippet
+    /// lookup then simply finds nothing rather than the wrong text.
+    pub fn remap_lines(&mut self, file: &str, map: &[u32]) {
+        for e in &mut self.entries {
+            if e.file != file {
+                continue;
+            }
+            if let Some(&orig) = map.get(e.line.saturating_sub(1) as usize) {
+                e.line = orig;
+            }
+        }
+    }
+
     #[must_use]
     pub fn new() -> Diagnostics {
         Diagnostics {
