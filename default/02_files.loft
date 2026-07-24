@@ -586,6 +586,32 @@ pub fn env_variables() -> vector<EnvVariable> env#read;
 pub fn env_variable(name: text) -> text env#read;
 #rust"stores.os_variable(@name)"
 #impure(host_io)
+// --- System directories (#635) ---
+// Private native: the OS temp dir, "" only where there is no filesystem.
+fn os_temp_dir() -> text env#read;
+#rust"Stores::os_temp_dir_native()"
+#impure(host_io)
+// Returns the system temporary directory, or null on a target with no
+// filesystem (the browser). Prefer this over reading TMPDIR / TEMP / TMP
+// directly: those differ by platform (Unix uses TMPDIR, Windows TEMP/TMP) and
+// this also applies the OS fallback (e.g. /tmp) when none is set.
+pub fn temp_dir() -> text?env#read {
+  d = os_temp_dir();
+  if d == "" { return null }
+  return d;
+}
+// Private native: loft's per-user cache dir, "" only where there is no filesystem.
+fn os_cache_dir() -> text env#read;
+#rust"Stores::os_cache_dir_native()"
+#impure(host_io)
+// Returns loft's per-user cache directory ($XDG_CACHE_HOME/loft, else
+// $HOME/.cache/loft) — the same root the engine caches into — or null on a
+// target with no filesystem (the browser).
+pub fn cache_dir() -> text?env#read {
+  d = os_cache_dir();
+  if d == "" { return null }
+  return d;
+}
 // Pops the next pending host message as one text; empty when there is none.
 // The source is per-target: stdin (read once, to EOF) on native and
 // --native-wasm (WASI); the JS host's input QUEUE on --html — seed it with

@@ -130,6 +130,8 @@ pub const FUNCTIONS: &[(&str, Call)] = &[
     // `gen_cdylib_text_dest_call`).  Not a text producer — a setter.
     ("n_set_bridge_dest", n_set_bridge_dest),
     ("n_source_dir_dest", n_source_dir_dest),
+    ("n_os_temp_dir_dest", n_os_temp_dir_dest),
+    ("n_os_cache_dir_dest", n_os_cache_dir_dest),
     ("n_json_errors_dest", n_json_errors_dest),
     ("t_9JsonValue_kind_dest", n_kind_dest),
     ("t_9JsonValue_to_json_dest", n_to_json_dest),
@@ -1372,6 +1374,28 @@ fn n_program_directory(stores: &mut Stores, stack: &mut DbRef) {
 fn n_source_dir_dest(stores: &mut Stores, stack: &mut DbRef) {
     let dest = *stores.get::<DbRef>(stack);
     let v = stores.source_dir.clone();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&v);
+}
+
+// #635 — interpreter backends for the private `os_temp_dir()` / `os_cache_dir()`
+// natives the `temp_dir()` / `cache_dir()` wrappers call. Text dest-passing
+// (routed by `is_text_dest_native`), always non-null ("" only on a filesystem-less
+// target; the loft wrapper maps "" to null).
+fn n_os_temp_dir_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = Stores::os_temp_dir_native();
+    stores
+        .store_mut(&dest)
+        .addr_mut::<String>(dest.rec, dest.pos)
+        .push_str(&v);
+}
+
+fn n_os_cache_dir_dest(stores: &mut Stores, stack: &mut DbRef) {
+    let dest = *stores.get::<DbRef>(stack);
+    let v = Stores::os_cache_dir_native();
     stores
         .store_mut(&dest)
         .addr_mut::<String>(dest.rec, dest.pos)
