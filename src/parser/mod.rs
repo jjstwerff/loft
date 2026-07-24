@@ -8330,18 +8330,35 @@ impl Parser {
             Some(p) => p.version.clone(),
             None => return,
         };
-        let install_dir = crate::registry_index::extract_dir(id, &version);
-        let parent = match install_dir.parent().and_then(std::path::Path::to_str) {
-            Some(p) => p.to_string(),
-            None => return,
+        self.resolve_registry_installed(id, &version, f);
+    }
+
+    /// Point `f` at an installed registry package's extracted source, given the
+    /// resolved `version`. The shared tail of every registry resolve path
+    /// (`extract_dir` → `lib_path_manifest`). Separated (#634) so a transitive
+    /// dep can be resolved straight from the install REPORT — a cache-internal
+    /// auto-install writes no lockfile (it must not mutate the immutable cache),
+    /// so a resolver that could only learn the version by reading a lockfile back
+    /// would leave `use <dep>` unresolved even though the package is installed.
+    #[cfg(feature = "registry")]
+    fn resolve_registry_installed(&mut self, id: &str, version: &str, f: &mut String) {
+        if !f.is_empty() && std::path::Path::new(f).exists() {
+            return;
+        }
+        let install_dir = crate::registry_index::extract_dir(id, version);
+        let Some(parent) = install_dir.parent().and_then(std::path::Path::to_str) else {
+            return;
         };
-        let versioned_name: String = match install_dir.file_name().and_then(std::ffi::OsStr::to_str)
-        {
-            Some(n) => n.to_string(),
-            None => return,
+        let parent = parent.to_string();
+        let Some(versioned_name) = install_dir
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .map(str::to_string)
+        else {
+            return;
         };
         if let Some(entry) = self.lib_path_manifest(&parent, &versioned_name) {
-            self.check_advisory(id, &version);
+            self.check_advisory(id, version);
             *f = entry;
         }
     }
@@ -8433,12 +8450,25 @@ impl Parser {
         // when `id` is pulled transitively by a lib that didn't pin it.
         let pin = self.root_dep_constraint(id);
         match crate::install::auto_install_if_in_catalog(id, pin.as_deref(), &opts) {
-            Ok(Some(_report)) => {
-                // Install succeeded; re-probe via lockfile-based
-                // resolution to populate `f`.  Try project lockfile
-                // first (where we just wrote the new entry); if
-                // that's not active, fall back to cwd's lockfile
-                // (script-mode case where lock_path was None).
+            Ok(Some(report)) => {
+                // Resolve `f` straight from the install report's version — no
+                // lockfile round-trip (#634): a cache-internal install writes no
+                // lockfile, so the lockfile-based probes below would leave a
+                // freshly-installed transitive dep unresolved (`use <dep>` → "not
+                // found") even though it is on disk. The report carries the exact
+                // version, whether newly installed or already cached.
+                if let Some((_, version)) = report
+                    .installed
+                    .iter()
+                    .chain(report.skipped_cached.iter())
+                    .find(|(n, _)| n == id)
+                {
+                    let version = version.clone();
+                    self.resolve_registry_installed(id, &version, f);
+                }
+                // Fallbacks for a normal (non-cache) install that DID write a
+                // lockfile: the project lockfile (where the new entry landed),
+                // then cwd's lockfile (script mode).
                 self.probe_project_lockfile(id, f);
                 self.probe_registry_installed(id, f);
             }
