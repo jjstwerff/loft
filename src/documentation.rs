@@ -88,6 +88,7 @@ pub fn generate_docs<S: std::hash::BuildHasher>(
             let html = render_doc_page(
                 &source,
                 &entry.name,
+                &entry.title,
                 &stem,
                 &nav_info,
                 stdlib_sections,
@@ -228,13 +229,35 @@ fn write_index(
     );
     let title = topics[0].title.clone();
     let intro = index_intro(&topics[0])?;
+    // T2.1 — the landing page is the one a search result and a shared link show
+    // most, and it had no description or card tags at all.  Its title is the
+    // tagline itself (not "<page> — <tagline>"), so the meta block is built
+    // directly rather than through `head_meta`'s page-title shape.
+    let index_desc = "Loft is a statically typed language for small browser-playable games: write it, \
+         share a link, anyone plays. Four execution modes, records with indexes in the \
+         language, and a complete arcade game in one readable file.";
+    let index_meta = format!(
+        "  <meta name=\"description\" content=\"{index_desc}\">\n\
+  <link rel=\"canonical\" href=\"{SITE_BASE}\">\n\
+  <meta property=\"og:title\" content=\"{SITE_TITLE_INDEX}\">\n\
+  <meta property=\"og:description\" content=\"{index_desc}\">\n\
+  <meta property=\"og:type\" content=\"website\">\n\
+  <meta property=\"og:url\" content=\"{SITE_BASE}\">\n\
+  <meta property=\"og:image\" content=\"{SITE_OG_IMAGE}\">\n\
+  <meta property=\"og:site_name\" content=\"Loft\">\n\
+  <meta name=\"twitter:card\" content=\"summary_large_image\">\n\
+  <meta name=\"twitter:title\" content=\"{SITE_TITLE_INDEX}\">\n\
+  <meta name=\"twitter:description\" content=\"{index_desc}\">\n\
+  <meta name=\"twitter:image\" content=\"{SITE_OG_IMAGE}\">\n"
+    );
     let html = format!(
         "<!DOCTYPE html>\n\
 <html lang=\"en\">\n\
 <head>\n\
   <meta charset=\"utf-8\">\n\
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-  <title>Loft Language</title>\n\
+  <title>{SITE_TITLE_INDEX}</title>\n\
+{index_meta}\
   <link rel=\"stylesheet\" href=\"style.css\">\n\
 </head>\n\
 <body>\n\
@@ -938,17 +961,127 @@ pub fn build_nav(
 
 // ─── HTML page renderer ───────────────────────────────────────────────────────
 
+/// T2.1 — where the published site lives.  Absolute URLs are REQUIRED for
+/// OpenGraph: a crawler resolving a share card has no page context, so a
+/// relative `og:image` silently yields no preview.
+pub const SITE_BASE: &str = "https://loft-lang.org/loft/";
+
+/// The pitch that rides after every page title.  Search results and link
+/// previews show the title alone, so the page name comes FIRST and the pitch
+/// second — "Structs — Loft, a language for small browser games".
+pub const SITE_TAGLINE: &str = "Loft, a language for small browser games";
+
+/// The landing page's own title.  Sub-pages read "<page> \u{2014} Loft, a language
+/// for small browser games"; on the index that shape stutters ("Loft \u{2014} Loft,
+/// a language\u{2026}"), so the index says it once.
+pub const SITE_TITLE_INDEX: &str = "Loft \u{2014} a language for small browser games";
+
+/// The default share image (the Brick Buster hero).  OpenGraph does not
+/// animate, so this stays a PNG even once an animated hero exists.
+pub const SITE_OG_IMAGE: &str = "https://loft-lang.org/loft/images/hero-brick-buster.png";
+
+/// T2.2 — emit `sitemap.xml` and `robots.txt` for the generated site.
+///
+/// Written after every page exists, by listing `doc/*.html` — deriving the list
+/// from the directory rather than a hand-kept table means a new page cannot be
+/// silently missing from the sitemap.
+///
+/// # Errors
+/// Returns the I/O error if either file cannot be written.
+pub fn generate_sitemap() -> std::io::Result<usize> {
+    let mut pages: Vec<String> = std::fs::read_dir("doc")?
+        .filter_map(std::result::Result::ok)
+        .filter_map(|e| {
+            let p = e.path();
+            if p.extension().is_some_and(|x| x == "html") {
+                p.file_name().map(|n| n.to_string_lossy().into_owned())
+            } else {
+                None
+            }
+        })
+        // `print.html` is the one-page printable rendering of pages already in
+        // the sitemap — indexing it would offer searchers a duplicate of the
+        // whole site under one URL.
+        .filter(|n| n != "print.html")
+        .collect();
+    pages.sort();
+
+    let mut xml = String::from(
+        "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n\
+         <urlset xmlns=\"http://www.sitemaps.org/schemas/sitemap/0.9\">\n",
+    );
+    for page in &pages {
+        // `index.html` is served at the directory root; list the canonical form.
+        let loc = if page == "index.html" {
+            SITE_BASE.to_string()
+        } else {
+            format!("{SITE_BASE}{page}")
+        };
+        let _ = writeln!(xml, "  <url><loc>{loc}</loc></url>");
+    }
+    xml.push_str("</urlset>\n");
+    std::fs::write("doc/sitemap.xml", xml)?;
+
+    std::fs::write(
+        "doc/robots.txt",
+        format!("User-agent: *\nAllow: /\nSitemap: {SITE_BASE}sitemap.xml\n"),
+    )?;
+    Ok(pages.len())
+}
+
+/// T2.1 — the per-page facts the `<head>` needs beyond the title.
+pub struct PageMeta<'a> {
+    /// File stem of this page (`"05-float"`), used to build the canonical URL.
+    pub slug: &'a str,
+    /// One sentence describing the page, for `meta description` / `og:description`.
+    /// This is what a search result and a shared link actually show.
+    pub description: &'a str,
+}
+
+/// Escape a string for use inside a double-quoted HTML attribute.
+fn attr(v: &str) -> String {
+    v.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+}
+
+/// T2.1 — the discoverability block: description, OpenGraph, Twitter card and a
+/// canonical URL.  Generated pages had none of these, so a search engine had no
+/// summary to show and a shared link rendered as a bare URL.
+fn head_meta(title: &str, meta: &PageMeta) -> String {
+    let desc = attr(meta.description);
+    let full_title = attr(&format!("{title} \u{2014} {SITE_TAGLINE}"));
+    let url = format!("{SITE_BASE}{}.html", meta.slug);
+    format!(
+        "  <meta name=\"description\" content=\"{desc}\">\n\
+  <link rel=\"canonical\" href=\"{url}\">\n\
+  <meta property=\"og:title\" content=\"{full_title}\">\n\
+  <meta property=\"og:description\" content=\"{desc}\">\n\
+  <meta property=\"og:type\" content=\"article\">\n\
+  <meta property=\"og:url\" content=\"{url}\">\n\
+  <meta property=\"og:image\" content=\"{SITE_OG_IMAGE}\">\n\
+  <meta property=\"og:site_name\" content=\"Loft\">\n\
+  <meta name=\"twitter:card\" content=\"summary_large_image\">\n\
+  <meta name=\"twitter:title\" content=\"{full_title}\">\n\
+  <meta name=\"twitter:description\" content=\"{desc}\">\n\
+  <meta name=\"twitter:image\" content=\"{SITE_OG_IMAGE}\">\n"
+    )
+}
+
 /// Use to get consistent page structure for both language topic pages and stdlib
 /// section pages; avoids duplicating the HTML boilerplate in two places.
 #[must_use]
-pub fn page_html(title: &str, nav: &str, h1: &str, body: &str) -> String {
+pub fn page_html(title: &str, nav: &str, h1: &str, body: &str, meta: &PageMeta) -> String {
+    let meta_tags = head_meta(title, meta);
     format!(
         "<!DOCTYPE html>\n\
 <html lang=\"en\">\n\
 <head>\n\
   <meta charset=\"utf-8\">\n\
   <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\n\
-  <title>Loft - {title}</title>\n\
+  <title>{title} \u{2014} {SITE_TAGLINE}</title>\n\
+{meta_tags}\
   <link rel=\"stylesheet\" href=\"style.css\">\n\
   <style>.playground-link{{display:inline-block;margin:0.3em 0 0.8em;padding:4px 12px;\
 background:#2563eb;color:#fff;border-radius:4px;text-decoration:none;font-size:0.85em}}\
@@ -1054,6 +1187,7 @@ pub fn get_topic_sources() -> Vec<TopicSource> {
 fn render_doc_page<S: std::hash::BuildHasher>(
     source: &str,
     name: &str,
+    description: &str,
     active: &str,
     topic_info: &[(String, String)],
     stdlib_sections: &[StdlibSection],
@@ -1061,7 +1195,14 @@ fn render_doc_page<S: std::hash::BuildHasher>(
 ) -> String {
     let nav = build_nav(topic_info, stdlib_sections, active);
     let body = render_topic_body(source, link_map);
-    page_html(name, &nav, name, &body)
+    // The topic's `@TITLE` is already a hand-written one-liner — exactly what a
+    // search result should show — so it is the description rather than a scrape
+    // of the first paragraph.
+    let meta = PageMeta {
+        slug: active,
+        description,
+    };
+    page_html(name, &nav, name, &body, &meta)
 }
 
 // ─── Package documentation generation ────────────────────────────────────────
@@ -1449,7 +1590,11 @@ pub fn generate_pkg_docs(pkg_dir: &std::path::Path) -> std::io::Result<()> {
         }
         index_body.push_str("</ul>\n");
     }
-    let index_html = page_html(&pkg_name, &nav, &pkg_name, &index_body);
+    let index_meta = PageMeta {
+        slug: &pkg_name,
+        description: &format!("The {pkg_name} package for Loft — API reference and guides."),
+    };
+    let index_html = page_html(&pkg_name, &nav, &pkg_name, &index_body, &index_meta);
     std::fs::write(out_dir.join("index.html"), index_html)?;
 
     // Generate topic pages.
@@ -1459,7 +1604,11 @@ pub fn generate_pkg_docs(pkg_dir: &std::path::Path) -> std::io::Result<()> {
         let nav = build_pkg_nav(&pkg_name, &topic_info, &section_names, stem);
         if let Ok(source) = std::fs::read_to_string(&topic.file) {
             let body = render_topic_body(&source, &link_map);
-            let html = page_html(&topic.name, &nav, &topic.name, &body);
+            let topic_meta = PageMeta {
+                slug: &topic.filename,
+                description: &topic.title,
+            };
+            let html = page_html(&topic.name, &nav, &topic.name, &body, &topic_meta);
             std::fs::write(out_dir.join(format!("{stem}.html")), html)?;
         }
     }
@@ -1470,7 +1619,15 @@ pub fn generate_pkg_docs(pkg_dir: &std::path::Path) -> std::io::Result<()> {
         let stem = format!("api-{id}");
         let nav = build_pkg_nav(&pkg_name, &topic_info, &section_names, &stem);
         let body = render_api_section_body(section);
-        let html = page_html(&section.name, &nav, &section.name, &body);
+        let sec_desc = format!(
+            "{} — API reference in the {pkg_name} package.",
+            section.name
+        );
+        let sec_meta = PageMeta {
+            slug: &stem,
+            description: &sec_desc,
+        };
+        let html = page_html(&section.name, &nav, &section.name, &body, &sec_meta);
         std::fs::write(out_dir.join(format!("{stem}.html")), html)?;
     }
 

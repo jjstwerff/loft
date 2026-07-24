@@ -77,6 +77,8 @@ fn main() -> std::io::Result<()> {
     generate_print_page(&topic_sources, &sections, &stdlib_info, &link_map, version)?;
     generate_typst(&topic_sources, &sections, version)?;
 
+    let sitemap_pages = loft::documentation::generate_sitemap()?;
+    println!("Generated doc/sitemap.xml ({sitemap_pages} pages) + doc/robots.txt");
     println!("Generated {} stdlib section pages", sections.len());
     Ok(())
 }
@@ -380,7 +382,18 @@ fn generate_stdlib_section(
             body.push_str("</div>\n");
         }
     }
-    let html = page_html(&section.name, &nav, &section.name, &body);
+    // `stdlib_info` carries the hand-written one-line description for this
+    // section; fall back to the name when a section has none.
+    let desc = stdlib_info.iter().find(|s| s.id == section.id).map_or_else(
+        || format!("{} — the Loft standard library.", section.name),
+        |s| s.description.clone(),
+    );
+    let slug = format!("stdlib-{}", section.id);
+    let meta = loft::documentation::PageMeta {
+        slug: &slug,
+        description: &desc,
+    };
+    let html = page_html(&section.name, &nav, &section.name, &body, &meta);
     fs::create_dir_all("doc")?;
     fs::write(format!("doc/{stem}.html"), html)?;
     println!("Generated doc/{stem}.html");
@@ -406,7 +419,17 @@ fn generate_stdlib_toc(
         ));
     }
     body.push_str("</div>\n");
-    let html = page_html("Standard Library", &nav, "Loft Standard Library", &body);
+    let toc_meta = loft::documentation::PageMeta {
+        slug: "stdlib",
+        description: "The Loft standard library — every built-in function and type, by section.",
+    };
+    let html = page_html(
+        "Standard Library",
+        &nav,
+        "Loft Standard Library",
+        &body,
+        &toc_meta,
+    );
     fs::write("doc/stdlib.html", &html)?;
     println!("Generated doc/stdlib.html");
     Ok(())
