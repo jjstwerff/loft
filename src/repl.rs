@@ -2441,6 +2441,10 @@ impl ReplSession {
         // Force the value above BOTH stores' high-water → its slots are free in live.
         let floor = live_top.max(build.database.high_water());
         build.database.raise_floor(floor);
+        // #629 follow-up — this wrapper RETURNS a value and `render_capture`
+        // reads it off the stack after the run, so claim the hidden return
+        // buffer: the entry teardown must not free what we are about to read.
+        build.keep_entry_return();
         build.execute_argv(&name, &self.parser.data, &[]);
         let root = if build.database.runtime_error.take().is_some() {
             None
@@ -3317,6 +3321,7 @@ impl ReplSession {
         crate::scopes::check(&mut self.parser.data);
         let mut state = State::new(self.parser.database.clone());
         compile::byte_code(&mut state, &mut self.parser.data);
+        state.keep_entry_return();
         state.execute_argv(&name, &self.parser.data, &[]);
         // The RHS just ran (its side effect happened once).  A fault here is a
         // real binding error — surface it, don't fall back to source (which would

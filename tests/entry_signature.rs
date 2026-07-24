@@ -68,6 +68,17 @@ fn both_backends(name: &str, src: &str, expect: &str) {
              still corrupts the run\nstdout:{stdout}\nstderr:{stderr}",
             out.status.code()
         );
+        // The entry's hidden return buffer is caller-allocated, and `execute_argv`
+        // IS that caller — so it must free it, exactly as scope exit frees the
+        // `__work_N` an ordinary call site allocates.  Making the buffer a real
+        // allocation (above) is what turned #629's corruption into a leak of one
+        // store per run for EVERY heap aggregate return; asserting only value and
+        // exit status let that through, so assert it here where every cell above
+        // inherits the check.
+        assert!(
+            !stderr.contains("not freed"),
+            "{name} on {backend}: the entry's return buffer leaked\nstderr:{stderr}"
+        );
     }
 }
 

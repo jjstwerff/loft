@@ -45,6 +45,11 @@ fn build(defs: &[&str], ty: &str, expr: &str) -> (Parser, State) {
     let mut state = State::new(p.database.clone());
     loft::scopes::check(&mut p.data);
     compile::byte_code(&mut state, &mut p.data);
+    // This harness reads the probe's return value off the stack, so it is a
+    // CLAIMING caller in the same sense the REPL's capture wrapper is: without
+    // this the entry teardown frees the hidden return buffer and every heap case
+    // renders empty (#629 follow-up).
+    state.keep_entry_return();
     state.execute_argv("probe", &p.data, &[]);
     assert!(
         state.database.runtime_error.is_none(),
