@@ -1168,3 +1168,185 @@ fn html_debug_one_shared_heap_compiled_and_interpreted_agree_on_wasm() {
         "both flipped fns dispatched over the shared store: {all}"
     );
 }
+
+/// #623 — a `#native` symbol with no `[wasm.bridge].routes` entry must produce
+/// ONE loft-authored diagnostic naming the symbol, its library, and the
+/// `loft.toml` fix — not the raw rustc cascade it used to.
+///
+/// The emitted crate carried both a host-import `extern` declaration and a local
+/// wrapper body under the same name, so the build failed with `E0428` plus a
+/// string of `E0610`/`E0061` against generated code (rustc's "remove the extra
+/// argument" pointing at nothing the author can act on).  Diagnosing one instance
+/// that way cost an hour of bisecting per-native `--html` builds.
+///
+/// Reachability-scoped, matching P269 / @PLN26: a routeless `#native` that is
+/// merely DECLARED must not reject an otherwise-valid program, so this also
+/// asserts the uncalled case still builds.
+#[test]
+fn issue623_routeless_native_reports_missing_wasm_bridge_route() {
+    if !wasm32_target_installed() {
+        eprintln!("SKIP: rustup target wasm32-unknown-unknown not installed");
+        return;
+    }
+    let loft_bin = repo_root().join("target/release/loft");
+    if !loft_bin.exists() {
+        eprintln!("SKIP: target/release/loft not built (run `cargo build --release` first)");
+        return;
+    }
+
+    let tmp = std::env::temp_dir().join("loft_html_issue623");
+    let _ = std::fs::remove_dir_all(&tmp);
+    let lib_src = tmp.join("nobridge/src");
+    std::fs::create_dir_all(&lib_src).expect("create fixture lib dir");
+    std::fs::write(
+        tmp.join("nobridge/loft.toml"),
+        "[package]\nname = \"nobridge\"\nversion = \"0.1.0\"\n\n\
+         [library]\nentry = \"src/nobridge.loft\"\nnative = \"loft_nobridge\"\n",
+    )
+    .expect("write fixture loft.toml");
+    // A `#native` with NO [wasm.bridge].routes entry — the #623 shape.
+    std::fs::write(
+        lib_src.join("nobridge.loft"),
+        "pub fn hash_b64(data: text) -> text;\n#native\n",
+    )
+    .expect("write fixture lib source");
+
+    let build = |name: &str, program: &str| -> String {
+        let src = tmp.join(format!("{name}.loft"));
+        std::fs::write(&src, program).expect("write program");
+        let out = Command::new(&loft_bin)
+            .current_dir(&tmp)
+            .arg(&src)
+            .arg("--lib")
+            .arg(tmp.join("nobridge"))
+            .arg("--html")
+            .arg(tmp.join(format!("{name}.html")))
+            .output()
+            .expect("run loft --html");
+        format!(
+            "{}{}",
+            String::from_utf8_lossy(&out.stdout),
+            String::from_utf8_lossy(&out.stderr)
+        )
+    };
+
+    // CALLED → the clean diagnostic, and none of the old cascade.
+    let called = build(
+        "issue623_called",
+        "use nobridge;\nfn main() {\n  h = hash_b64(\"abc\");\n  println(\"h={h}\");\n}\n",
+    );
+    assert!(
+        called.contains("has no [wasm.bridge].routes entry"),
+        "expected the missing-route diagnostic, got:\n{called}"
+    );
+    assert!(
+        called.contains("hash_b64") && called.contains("n_hash_b64"),
+        "diagnostic must name the loft fn and its #native symbol:\n{called}"
+    );
+    assert!(
+        called.contains("[wasm.bridge.routes]") && called.contains("loft.toml"),
+        "diagnostic must name the fix (loft.toml [wasm.bridge.routes]):\n{called}"
+    );
+    assert!(
+        !called.contains("E0428"),
+        "the duplicate-definition cascade must be gone:\n{called}"
+    );
+
+    // DECLARED BUT NOT CALLED → still builds; an unused routeless native is not
+    // an error (it emits no body, so nothing collides).
+    let uncalled = build(
+        "issue623_uncalled",
+        "use nobridge;\nfn main() {\n  println(\"no native call here\");\n}\n",
+    );
+    assert!(
+        !uncalled.contains("has no [wasm.bridge].routes entry"),
+        "an uncalled routeless #native must not reject the program:\n{uncalled}"
+    );
+    assert!(
+        !uncalled.contains("E0428"),
+        "uncalled routeless #native must still build cleanly:\n{uncalled}"
+    );
+    // Positive proof, so the two `!contains` above cannot pass on a build that
+    // failed for some unrelated reason.
+    assert!(
+        tmp.join("issue623_uncalled.html").exists(),
+        "the uncalled case must actually emit its bundle:\n{uncalled}"
+    );
+
+    // A routeless `#native` whose SYMBOL DIFFERS from the fn name is the
+    // legitimate raw host-import path (`graphics`' `#native
+    // "loft_gl_swap_buffers"` on `gl_swap_buffers`): the declaration and the
+    // wrapper have different names, so nothing collides and the browser shell
+    // supplies the import.  Only the BARE `#native` form — symbol == the fn's own
+    // emitted `n_<name>` — is the #623 shape.  Guard it: an over-broad
+    // "routeless is an error" rule breaks every WebGL `--html` program.
+    std::fs::write(
+        lib_src.join("nobridge.loft"),
+        "pub fn scalar_op(n: integer) -> integer;\n#native \"host_scalar_op\"\n",
+    )
+    .expect("rewrite fixture lib source");
+    let distinct = build(
+        "issue623_distinct_symbol",
+        "use nobridge;\nfn main() {\n  n = scalar_op(2);\n  println(\"n={n}\");\n}\n",
+    );
+    assert!(
+        !distinct.contains("has no [wasm.bridge].routes entry"),
+        "a #native with a DISTINCT symbol is the working host-import path and \
+         must not be rejected:\n{distinct}"
+    );
+    assert!(
+        tmp.join("issue623_distinct_symbol.html").exists(),
+        "the distinct-symbol case must still emit its bundle:\n{distinct}"
+    );
+}
+
+/// #620 regression: `ticks()` and `now()` returned a hard-coded 0 on
+/// `--native-wasm` (wasip2).
+///
+/// The stub was gated on `target_arch = "wasm32"` + `not(feature = "wasm")`,
+/// which the comments described as "the `--html` build" but which equally caught
+/// wasip2 — a target with a REAL clock (`wasi:clocks`, reached through `std`'s
+/// `SystemTime`/`Instant`).  So this was not a missing bridge standing in with a
+/// placeholder; it was a working clock being overridden with 0.  The gate is now
+/// `not(target_os = "wasi")`, i.e. the browser build it always meant.
+///
+/// A stopped clock is invisible from inside the program — `0` is a plausible
+/// elapsed time — so the guard measures a section with real work in it and
+/// asserts the clock MOVED, plus that `now()` is a genuine epoch reading rather
+/// than a small counter.  Self-skips without the wasm toolchain.
+#[test]
+fn issue620_wasip2_clocks_are_real_not_zero() {
+    // ~2M iterations of a dependent arithmetic chain: tens of milliseconds of
+    // real work, so a live clock cannot read 0 across it.
+    let src = "fn burn(seed: integer) -> integer {\n\
+               \x20   h = seed + 1;\n\
+               \x20   for _ in 0..2000000 { h = (h * 1103515245 + 12345) % 2147483647; }\n\
+               \x20   h\n\
+               }\n\
+               fn main() {\n\
+               \x20 t0 = ticks(); n0 = now();\n\
+               \x20 guard = burn(1);\n\
+               \x20 t1 = ticks();\n\
+               \x20 println(\"ticks_moved={t1 - t0 > 0}\");\n\
+               \x20 println(\"now_is_epoch={n0 > 1600000000000}\");\n\
+               \x20 println(\"guard={guard}\");\n\
+               }\n";
+    let Some((out, ok)) = run_wasip2_wasm("issue620_clocks", src, &[]) else {
+        return;
+    };
+    assert!(ok, "wasip2 clock program failed to build/run.\n{out}");
+    // The work demonstrably ran and produced the same value every backend gives,
+    // so a stopped clock cannot be blamed on the section being optimised away.
+    assert!(
+        out.contains("guard=152472650"),
+        "the timed section must actually run (guard value).\nout: {out}"
+    );
+    assert!(
+        out.contains("ticks_moved=true"),
+        "ticks() must advance across real work on wasip2 (#620).\nout: {out}"
+    );
+    assert!(
+        out.contains("now_is_epoch=true"),
+        "now() must return real epoch milliseconds on wasip2, not 0 (#620).\nout: {out}"
+    );
+}

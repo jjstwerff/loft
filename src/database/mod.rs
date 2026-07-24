@@ -49,7 +49,7 @@ fn format_bare_null_enabled() -> bool {
 // `--html loft_start` trap.  Use Instant only on non-wasm32
 // targets; wasm32 (with or without the feature) tracks time in
 // milliseconds through the host bridge.
-#[cfg(not(target_arch = "wasm32"))]
+#[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
 use std::time::Instant;
 
 /// Type alias for a native function callable from loft bytecode.
@@ -475,7 +475,7 @@ pub struct Stores {
     /// Monotonic timestamp captured at `Stores::new()`.  Used by `ticks()` to return
     /// microseconds elapsed since program start; cloned into worker Stores unchanged so
     /// all threads share the same reference point.
-    #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
     pub start_time: Instant,
     /// Under any wasm32 target (both the `wasm` feature's host-bridge
     /// build and the `--html` no-feature build): milliseconds since
@@ -483,7 +483,7 @@ pub struct Stores {
     /// host-imported `time_ticks` to compute elapsed time without
     /// `std::time::Instant`.  Instant is unavailable on wasm32 (for
     /// either feature variant), so we snapshot elapsed ms here.
-    #[cfg(target_arch = "wasm32")]
+    #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
     pub start_time_ms: i64,
     /// TR1.3: snapshot of (`fn_name`, file, line) for each call frame.
     /// Populated by `State::static_call` when `n_stack_trace` is invoked.
@@ -562,9 +562,9 @@ impl Clone for Stores {
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: self.user_args.clone(),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             start_time: self.start_time,
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
@@ -1182,7 +1182,7 @@ impl Stores {
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             start_time: Instant::now(),
             // `Stores::new()` must not call `Instant::now()` or
             // `SystemTime::now()` on wasm32-unknown-unknown — both
@@ -1190,9 +1190,9 @@ impl Stores {
             // `--html` build (wasm32, no `wasm` feature) uses 0 as
             // the epoch stub; the full `wasm` feature build routes
             // through the host bridge.
-            #[cfg(all(target_arch = "wasm32", feature = "wasm"))]
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), feature = "wasm"))]
             start_time_ms: crate::wasm::host_time_now(),
-            #[cfg(all(target_arch = "wasm32", not(feature = "wasm")))]
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi"), not(feature = "wasm")))]
             start_time_ms: 0,
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),

@@ -836,8 +836,28 @@ pub(crate) fn run_tests(
                         let mut out = generation::Output::new(&native_data, &native_db);
                         // Host-native backend: C-ABI cdylib link (NATIVE.md § Resolution).
                         out.native_cabi = native_utils::native_cabi_enabled();
-                        out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)
+                        // #621 — when this harness supplies the crate's `main`
+                        // below, suppress the generator's own bootstrap.
+                        // `output_native_reachable` emits one whenever ANY
+                        // definition is named `n_main`, and that scan is not
+                        // source-scoped: a tested package whose `src/` entry is
+                        // also a runnable CLI contributes an `n_main`, so both
+                        // mains landed in one crate (rustc E0428) and every test
+                        // in an 11-of-48-packages shape was untestable natively.
+                        // `has_main` (source-scoped) is the right authority for
+                        // whose entry point this is — the TEST FILE's, if any.
+                        if has_main {
+                            out.output_native_reachable(&mut buf, start_def, end_def, &entry_defs)
+                                .expect("native codegen write");
+                        } else {
+                            out.output_native_no_bootstrap(
+                                &mut buf,
+                                start_def,
+                                end_def,
+                                &entry_defs,
+                            )
                             .expect("native codegen write");
+                        }
                         // output_native_reachable emits fn main() when n_main
                         // exists.  For test-only files (no n_main) we generate
                         // a main() that calls each test function.

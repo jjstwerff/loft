@@ -724,9 +724,9 @@ fn OpConvBoolFromCharacter(v1: character) -> boolean;
 fn OpClearText(pos: const u16);
 fn OpFreeText(pos: const u16);
 fn OpEqText(v1: text, v2: text) -> boolean;
-#rust"@v1 == @v2"
+#rust"ops::op_eq_text(@v1, @v2)"
 fn OpNeText(v1: text, v2: text) -> boolean;
-#rust"@v1 != @v2"
+#rust"ops::op_ne_text(@v1, @v2)"
 fn OpLtText(v1: text, v2: text) -> boolean;
 #rust"ops::op_lt_text(@v1, @v2)"
 fn OpLeText(v1: text, v2: text) -> boolean;

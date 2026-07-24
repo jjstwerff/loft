@@ -3838,8 +3838,18 @@ use a separate collection or add after the loop"
             // working `s += [a[i]]` append uses); the outer `known`
             // (`database.vector(known_type(vector<T>))`) is one level too DEEP for a vector
             // element (it builds a vector-of-vector), though correct for scalar/struct elements.
+            // #624 — a NARROW element (`u8` / `u16` / a 4-byte `integer` subtype) is
+            // stored packed at 1/2/4 bytes, but `known` above resolves the WIDE
+            // integer row.  Allocating each element through that row reserves 8 bytes
+            // per slot while the index READ strides 1, so `v[a..b]` on a `vector<u8>`
+            // kept only the first element and read zeros for the rest.  Resolve the
+            // narrow storage row the same way the `+=` append does.
             let elm_type_id = if let Type::Vector(content, _) = &elm_tp {
                 Value::Int(i32::from(self.vector_of(content)))
+            } else if let Some(narrow) =
+                self.data.narrow_vector_content(&elm_tp, &mut self.database)
+            {
+                Value::Int(i32::from(self.database.vector(narrow)))
             } else {
                 known.clone()
             };
@@ -3864,6 +3874,11 @@ use a separate collection or add after the loop"
                         elm_type_id.clone(),
                     ],
                 ));
+            } else if let Some(op) = self.narrow_elm_set(&elm_tp, elm_var, &Value::Var(for_var)) {
+                // #624 — a narrow element needs the WIDTH-matched store op; `set_field`
+                // below peels to the wide `OpSetInt`, whose 8-byte write covers eight
+                // 1-byte element slots at once.  Shared with the `+=` append site.
+                lp.push(op);
             } else {
                 lp.push(self.set_field(
                     ed_nr,

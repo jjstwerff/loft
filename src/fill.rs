@@ -1210,14 +1210,14 @@ fn free_text(s: &mut State) {
 fn eq_text(s: &mut State) {
     let v_v2 = s.string();
     let v_v1 = s.string();
-    let new_value = v_v1.str() == v_v2.str();
+    let new_value = ops::op_eq_text(v_v1.str(), v_v2.str());
     s.put_stack(new_value);
 }
 
 fn ne_text(s: &mut State) {
     let v_v2 = s.string();
     let v_v1 = s.string();
-    let new_value = v_v1.str() != v_v2.str();
+    let new_value = ops::op_ne_text(v_v1.str(), v_v2.str());
     s.put_stack(new_value);
 }
 

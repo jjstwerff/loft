@@ -1406,9 +1406,9 @@ impl Stores {
             report_asserts: false,
             assert_results: Vec::new(),
             user_args: Vec::new(),
-            #[cfg(not(target_arch = "wasm32"))]
+            #[cfg(any(not(target_arch = "wasm32"), target_os = "wasi"))]
             start_time: self.start_time,
-            #[cfg(target_arch = "wasm32")]
+            #[cfg(all(target_arch = "wasm32", not(target_os = "wasi")))]
             start_time_ms: self.start_time_ms,
             call_stack_snapshot: Vec::new(),
             variables_snapshot: Vec::new(),
