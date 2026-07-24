@@ -1,4 +1,0 @@
-capability world
-struct Ent { hp: integer wrld#update }
-fn modscript(e: Ent) -> integer { e.hp = 0; e.hp }
-fn main() { log_info("hi") }

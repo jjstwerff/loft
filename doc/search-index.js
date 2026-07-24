@@ -117,6 +117,7 @@ const SEARCH_INDEX=[
 {name:"len",kind:"fn",url:"stdlib-collections.html"},
 {name:"clear",kind:"fn",url:"stdlib-collections.html"},
 {name:"len",kind:"fn",url:"stdlib-collections.html"},
+{name:"size",kind:"fn",url:"stdlib-collections.html"},
 {name:"assert",kind:"fn",url:"stdlib-output-and-diagnostics.html"},
 {name:"panic",kind:"fn",url:"stdlib-output-and-diagnostics.html"},
 {name:"log_info",kind:"fn",url:"stdlib-output-and-diagnostics.html"},

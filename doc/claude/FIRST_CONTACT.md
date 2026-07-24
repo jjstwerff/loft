@@ -148,23 +148,59 @@ Suggestion only; declined as a language change with the author's rationale in
 [DESIGN_DECISIONS.md C103](DESIGN_DECISIONS.md). Note `i32`/`u32`/`i8`/`i16`/`u8`/`u16`
 are **legal** and correctly absent from the table.
 
-### T1.1 — README truthfulness
-Dynamic version badge (`shields.io/github/v/release/loft-lang/loft`); repoint the
-dead "full example list" link at the gallery page and at
-`scripts/build-gallery-examples.loft` as the true source. Add a **`make linkcheck`**
-target. Keep it out of `make ci` initially — an external-link checker makes CI
-depend on the network and on other people's uptime, which buys flakiness for a class
-of rot that moves slowly. Run it in the nightly job instead, where a red run is
-information rather than a blocked merge.
+### ~~T1.1~~ — DONE 2026-07-24, **except one claim that needs Jurjen**
+Dynamic version badge (verified 200). `make linkcheck` / `make linkcheck-external`
+(`scripts/linkcheck.sh`) — relative links are offline and exact; the external pass
+is opt-in and stays OUT of `make ci` (it would make the build depend on other
+people's uptime). It skips inline code spans (`OPERATORS[opcode](state)` is not a
+link) and test fixtures (which hold deliberately dead links). **323/323 links now
+resolve**, including external.
 
-### T1.2 — chunk-repo contradiction **[needs Jurjen]**
-Determine whether `graphics`/`imaging` actually work today; update whichever README
-is stale and fix the `jjstwerff/loft` → `loft-lang/loft` link. Prepare the patch
-here if the push cannot be made from this repo.
+Fixed: the dead "full example list" link; two CHANGELOG links to `v0.1.0`, a
+version that was never tagged; and a stale `lib/server` link (that library moved
+to `loft-libs-net/server` in @PLAN12).
 
-### T1.3 — doc index
-Pick one canonical Time page of the three (C3); move `15-lexer` / `16-parser` out of
-the beginner tour into a "Libraries in depth" group. Both are `gendoc` ordering.
+**BLOCKED, and bigger than a link — see T1.2.** The README's graphics claims are
+not backed by anything in the org (details below); fixing the *link* was safe,
+fixing the *claim* is a status question only the owner can answer.
+
+### T1.2 — chunk-repo contradiction **[needs Jurjen]** — now evidenced
+
+Investigating T1.1 turned this from "two READMEs disagree" into a specific,
+verified gap. The facts:
+
+| claim | where | reality |
+|---|---|---|
+| "24 interactive graphics demos … every one running live in WebGL" | README:30 | — |
+| "The `graphics` library ships 24 progressive examples" | README:124 | — |
+| a table naming `01-hello-window.loft`, `08-basic-lighting.loft`, `18-pbr.loft`, … | README:128-135 | **none of these files exist anywhere in the `loft-lang` org** (org-wide code search finds only the README's own table and a plan doc) |
+| the gallery | `doc/gallery-examples.js` | contains **one** entry: `25-brick-buster` |
+| "Graphics gallery — 25+ live demos" | `doc/gallery.html:141` | the live page renders `00-smoke` |
+| `graphics` installable | README | chunk repo says **"TODO (blocked on `Type::Reference` codegen forwarding)"** for both `graphics` and `imaging` |
+
+So the chunk repo and the main README disagree because the main README is ahead of
+reality, not because the chunk repo is stale. **Decide the true status first** —
+whether the examples exist unpushed, or the claim retires until graphics ships —
+then one edit follows. Also still to fix: the chunk README's `jjstwerff/loft` link.
+
+An agent should NOT rewrite these numbers unilaterally: "do the 24 examples exist
+somewhere I cannot see?" is a fact only the owner holds.
+
+### ~~T1.3~~ — Time DONE 2026-07-24; ordering DEFERRED with a reason
+
+The three Time pages are **not duplicates** — they are different content that
+shared a nav label: `tests/docs/22-time.loft` is the builtin `now`/`ticks`,
+`32-time.loft` is the extracted `time` *library*, and `stdlib-time` is the API
+page. Both `.loft` files declared `@NAME: Time`. Fixed by renaming the library
+one's `@NAME` to `Time library`, so the nav and `<title>` are distinct. No merge,
+no page deleted — merging would have destroyed real content.
+
+**Lexer/parser reordering deferred.** `gather_topics()` orders by the numeric
+filename prefix and `gendoc` has no topic-grouping mechanism, so reordering means
+*renaming* `15-lexer` / `16-parser` — 38 references, many in finished plan
+documents that are historical records and should not be rewritten. The cost is
+wrong for a nav nicety. If it is worth doing, the right shape is a grouping
+mechanism in `gendoc` (T2-shaped code), not a rename.
 
 ### T2.1–T2.2 — meta tags, sitemap, robots
 `gendoc` emits per-page `description`, `og:title`/`description`/`type`/`url`/`image`,
@@ -198,11 +234,11 @@ production DSLs stay generic ("in a previous production language I maintained…
 Add one ~40-line graphical example plus an `examples/README.md` routing
 game-seekers to the gallery. The README is the cheaper half and lands first.
 
-### T4.1 — root surface
-Delete `dz/` and `f8e2e/` (C4 — unreferenced strays). Move `DRAWING.md`,
-`.lint_comments_baseline`, `.feature_coverage_baseline` under `doc/claude/` or
-`.claude/`, updating whatever reads those paths. Leave `Makefile` and the `docs`
-symlink.
+### ~~T4.1~~ — DONE 2026-07-24
+Deleted the `dz/` and `f8e2e/` strays; `DRAWING.md` → `doc/claude/` (3 inbound
+links rewritten, one of which was already broken); both baselines → `scripts/`,
+beside the only scripts that read them (one `BASELINE=` line each; both verified
+`--check` green after the move). Root: **44 → 39** tracked entries.
 
 ### T4.2 — Discussions **[needs Jurjen]**
 Enable before any launch post; link from README + `SUPPORT.md`.
@@ -218,7 +254,7 @@ minutes of CI each for changes that are individually minutes of work. Batch by
 | Batch | Contents | Risk |
 |---|---|---|
 | ~~**B1 — first-run bugs**~~ | ~~T0.1, T0.2, T0.3~~ — **DONE 2026-07-24** (residual loft#625) | Code + tests; the only batch touching the parser |
-| **B2 — truthfulness** | T1.1, T1.3, T4.1 | Docs, `gendoc` ordering, file moves/deletes |
+| ~~**B2 — truthfulness**~~ | ~~T1.1, T1.3, T4.1~~ — **DONE 2026-07-24**; T1.2 now evidenced and blocked on the owner | Docs, `gendoc` ordering, file moves/deletes |
 | **B3 — discoverability** | T2.1, T2.2, T2.4 | `gendoc` output; verify a sample `<head>` |
 | **B4 — story** | T3.2, T3.5, plus drafts of T3.1/T3.4 for approval | README + new page, no code |
 | **B5 — owner** | T1.2, T2.3, T3.1 wording, T3.3, T4.2 | Outside the repo |

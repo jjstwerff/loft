@@ -3,7 +3,7 @@
 
 [![CI](https://github.com/loft-lang/loft/actions/workflows/ci.yml/badge.svg)](https://github.com/loft-lang/loft/actions/workflows/ci.yml)
 [![License: LGPL-3.0](https://img.shields.io/badge/License-LGPL_v3-blue.svg)](LICENSE)
-[![Version](https://img.shields.io/badge/version-2026.7.1-blue.svg)](https://github.com/loft-lang/loft/releases)
+[![Version](https://img.shields.io/github/v/release/loft-lang/loft?label=version&color=blue)](https://github.com/loft-lang/loft/releases)
 [![Gallery](https://img.shields.io/badge/gallery-live-brightgreen)](https://loft-lang.org/loft/gallery.html)
 
 [**▶ Try it in the browser**](https://loft-lang.org/loft/playground.html) · [**🎮 Play Brick Buster**](https://loft-lang.org/loft/brick-buster.html) · [**🖼 Graphics gallery**](https://loft-lang.org/loft/gallery.html) · [**📘 Docs**](https://loft-lang.org/loft/)
@@ -133,7 +133,7 @@ The `graphics` library ships 24 progressive examples — hover each for a live p
 | `24-renderer-demo.loft` | Full scene with PBR + shadows — **no shader code** |
 | **`25-brick-buster.loft`** | **A complete arcade game** |
 
-See the [full example list](https://github.com/loft-lang/loft-libs-graphics/tree/main/graphics/examples) in the graphics chunk repo.
+The graphics library lives in its own repo: [loft-libs-graphics](https://github.com/loft-lang/loft-libs-graphics).
 
 ## Contributing
 

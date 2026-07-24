@@ -124,7 +124,7 @@ works.
 Two scratch scripts from the development session:
 
 - `/tmp/wsclient.mjs` — single raw Node WebSocket client; sends
-  three frames.  Used to prove the wire format against `lib/server`.
+  three frames.  Used to prove the wire format against the `server` library.
 - `/tmp/phase1_test3.mjs` — two parallel headless-Chrome tabs, both
   attach via CDP, A sends a paint, both A + B read back the cell
   state via `window.__phase0.cells`.
@@ -141,4 +141,4 @@ test).
   client (this is what GitHub Pages serves)
 - [`doc/claude/plans/6-audience-generative-art/`](../../doc/claude/plans/6-audience-generative-art)
   — full development plan
-- [`lib/server/`](../../lib/server) — the WebSocket library
+- [`server`](https://github.com/loft-lang/loft-libs-net/tree/main/server) — the WebSocket library

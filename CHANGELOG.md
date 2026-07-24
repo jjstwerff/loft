@@ -997,5 +997,5 @@ The core language, in one place.
 - [0.8.4](https://github.com/loft-lang/loft/compare/v0.8.3...v0.8.4)
 - [0.8.3](https://github.com/loft-lang/loft/compare/v0.8.2...v0.8.3)
 - [0.8.2](https://github.com/loft-lang/loft/compare/v0.8.0...v0.8.2)
-- [0.8.0](https://github.com/loft-lang/loft/compare/v0.1.0...v0.8.0)
-- [0.1.0](https://github.com/loft-lang/loft/releases/tag/v0.1.0)
+- [0.8.0](https://github.com/loft-lang/loft/releases/tag/v0.8.0) — the first tagged release
+- 0.1.0 — pre-dates tagging (no release tag exists)

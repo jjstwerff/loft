@@ -28,9 +28,9 @@ converges, and your judgment of the result *is* the engine.
 The same loop drives **2D drawing** and **3D scene-making**. The method below is
 medium-agnostic; pick the medium at the end and read the matching reference.
 
-> Full rationale and the design journey live in `DRAWING.md` at the repo root
-> ([`../../../DRAWING.md`](../../../DRAWING.md)). This file is the operational
-> recipe — read it to *do*; read DRAWING.md to understand *why*.
+> Full rationale and the design journey live in `doc/claude/DRAWING.md`
+> ([`../../../doc/claude/DRAWING.md`](../../../doc/claude/DRAWING.md)). This file is the operational
+> recipe — read it to *do*; read `doc/claude/DRAWING.md` to understand *why*.
 
 ## The loop
 

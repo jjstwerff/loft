@@ -1610,3 +1610,18 @@ loft-test:
 	else \
 		echo "All loft tests passed."; \
 	fi
+
+# T1.1 — link rot in user-facing Markdown (root + doc/, excluding the
+# agent-facing doc/claude/ which has its own drift checker).
+#   make linkcheck            relative links only — offline, fast, deterministic
+#   make linkcheck-external   also HEAD every http(s) link
+# Deliberately NOT part of `make ci`: an external-link check makes the build
+# depend on other people's uptime, buying flakiness for a class of rot that
+# moves slowly.  Nightly is its home; there a red run is information, not a
+# blocked merge.
+.PHONY: linkcheck linkcheck-external
+linkcheck:
+	scripts/linkcheck.sh
+
+linkcheck-external:
+	scripts/linkcheck.sh --external

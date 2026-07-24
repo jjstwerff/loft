@@ -1,6 +1,6 @@
 # sketch — an iterative drawing tool
 
-A companion to [`../DRAWING.md`](../DRAWING.md) (the design rationale). Drawing here
+A companion to [`../doc/claude/DRAWING.md`](../doc/claude/DRAWING.md) (the design rationale). Drawing here
 is the craft kind — a perceive → mark → see-gap → adjust loop — not generative image
 synthesis. The tool's job is to make the *seeing* cheap and to move metric judgments
 (position / size / composition) off the eye onto exact measurement.
