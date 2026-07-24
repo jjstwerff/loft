@@ -1892,6 +1892,78 @@ extern crate loft;"
         Ok(())
     }
 
+    /// The arguments the generated entry call must supply beyond `&cell`,
+    /// returned as `(prelude, args)`: statements to emit before the call, and
+    /// text to append inside its parentheses.  Both are empty for a plain
+    /// `fn main()`, so the common path stays byte-identical.
+    ///
+    /// #629: every entry template hardcoded `n_main(&cell)`, but `n_main` is
+    /// emitted from its DECLARATION, so any entry taking more than the cell
+    /// produced a rustc `E0061` cascade instead of a loft program.  Two shapes
+    /// reach that: a declared `fn main(args: vector<text>)`, and the HIDDEN
+    /// return buffer `ref_return` promotion adds to a heap-returning entry.
+    ///
+    /// This is the native twin of the interpreter's `State::execute_argv`, and
+    /// it follows the same split — so keep the two in step:
+    ///
+    /// - a declared (non-hidden) `vector<text>` parameter receives argv;
+    /// - a hidden VECTOR attr must be a REAL allocated buffer, because a vector
+    ///   body writes straight into the caller's record (`clear_vector` /
+    ///   `pre_alloc_vector`) and never allocates one itself;
+    /// - a hidden struct / data-enum attr takes the null sentinel, which its
+    ///   body turns into a store via its own `OpDatabase`.
+    ///
+    /// The same vector-vs-reference split is already spelled out for direct
+    /// callers in `generation/emit.rs` (the `vec_hbuf_tp` comment) and
+    /// `generation/dispatch.rs`; the entry is simply another caller.
+    fn entry_call_extra_args(&self) -> (String, String) {
+        use std::fmt::Write as _;
+        let d_nr = self.data.def_nr("n_main");
+        if d_nr == u32::MAX {
+            return (String::new(), String::new());
+        }
+        let mut prelude = String::new();
+        let mut args = String::new();
+        for (i, a) in self.data.def(d_nr).attributes().iter().enumerate() {
+            if !a.hidden {
+                // The only declared entry parameter the runtime supplies is argv.
+                if matches!(a.typedef.base(), Type::Vector(_, _)) {
+                    let v = format!("__entry_argv_{i}");
+                    let _ = writeln!(
+                        prelude,
+                        "    let {v}: DbRef = {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; let a = stores.user_args.clone(); stores.text_vector(&a) }};"
+                    );
+                    let _ = write!(args, ", {v}");
+                }
+                continue;
+            }
+            match a.typedef.base() {
+                Type::Vector(elm_tp, _) => {
+                    let elm_name = elm_tp.name(self.data);
+                    let tp = self.data.name_type(&format!("main_vector<{elm_name}>"), 0);
+                    if tp == u16::MAX {
+                        // No wrapper registered — the sentinel is what a
+                        // pre-#629 build passed, and the body's null guards
+                        // make it a no-op rather than a crash.
+                        args.push_str(", DbRef::NULL");
+                        continue;
+                    }
+                    let v = format!("__entry_ret_{i}");
+                    let _ = write!(
+                        prelude,
+                        "    let mut {v}: DbRef = {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.null_named(\"{v}\") }};\n    {v} = OpDatabase(&cell, {v}, {tp}_i32);\n"
+                    );
+                    let _ = write!(args, ", {v}");
+                }
+                Type::Reference(_, _) | Type::Enum(_, true, _) => {
+                    args.push_str(", DbRef::NULL");
+                }
+                _ => {}
+            }
+        }
+        (prelude, args)
+    }
+
     /// @PLN18 08-S2 — the ONE native `fn main()` template (both program
     /// emission paths).  Under `LOFT_LIVE_FLIP=1` the world comes from
     /// `live_dispatch::boot_stores` (a full parse of the same sources, so the
@@ -1910,6 +1982,7 @@ extern crate loft;"
     ///   the debug NAME the client announces to the server for relay addressing.
     ///   Falls back to `Stores::new()` if the embedded bootstrap fails.
     fn emit_wasm_start(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        let (prelude, args) = self.entry_call_extra_args();
         if self.emit_live {
             let name = self.debug_name.as_deref().unwrap_or("");
             let src = self.program_src.as_deref().unwrap_or("");
@@ -1928,7 +2001,7 @@ extern crate loft;"
                  loft::live_dispatch::bootstrap_from_bytes(LOFT_LIVE_FNS, LOFT_SRC)\n            \
                  .unwrap_or_else(|e| {{ eprintln!(\"loft-debug: {{e}}\"); Stores::new() }}));\n    \
                  if loft::live_dispatch::live_enabled() {{ loft::live_dispatch::flip_all_dispatch_debug(); }} else {{ init(&cell); }}\n    \
-                 n_main(&cell);\n    \
+                 {prelude}    n_main(&cell{args});\n    \
                  loft::live_dispatch::wasm_host_log(&format!(\"loft-debug: dispatched {{}} interp call(s) over the shared store\\n\", loft::live_dispatch::dispatch_count()));\n}}\n\
                  \n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_debug_selftest() -> i32 {{\n    \
                  let r = loft::live_dispatch::wasm_debug_selftest();\n    \
@@ -1947,12 +2020,13 @@ extern crate loft;"
         } else {
             writeln!(
                 w,
-                "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n    n_main(&cell);\n}}"
+                "\n#[unsafe(no_mangle)]\npub extern \"C\" fn loft_start() {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    init(&cell);\n{prelude}    n_main(&cell{args});\n}}"
             )
         }
     }
 
     fn emit_native_main(&self, w: &mut dyn Write) -> std::io::Result<()> {
+        let (prelude, args) = self.entry_call_extra_args();
         // #255 / @PLN9: bake the parse-time `#cwd` path-mode default.
         writeln!(
             w,
@@ -1993,7 +2067,7 @@ extern crate loft;"
             // ~8 MiB OS main-thread stack), then the optional native leak check.
             write!(
                 w,
-                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(loft::live_dispatch::boot_stores(LOFT_LIVE_FNS, LOFT_SRC));\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    if !loft::live_dispatch::live_enabled() {{ init(&cell); }}\n{prelude}    n_main(&cell{args});\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
             )?;
             writeln!(w, "    if !loft::live_dispatch::live_enabled() {{")?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
@@ -2025,7 +2099,7 @@ extern crate loft;"
             // references no `live_dispatch` symbol at all.
             write!(
                 w,
-                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    init(&cell);\n    n_main(&cell);\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
+                "\nfn main() {{\n    loft::timeout::arm(loft::timeout::env_timeout_secs(), loft::timeout::env_grace_secs());\n    loft::database::NATIVE_FAIL_FAST.store(true, std::sync::atomic::Ordering::Relaxed);\n    let __run = || {{\n    let cell = std::cell::UnsafeCell::new(Stores::new());\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.user_args = std::env::args().skip(1).collect(); stores.source_dir = Stores::source_dir_native(); stores.program_relative = LOFT_PROGRAM_RELATIVE; if let Ok(m) = std::env::var(\"LOFT_PATHS\") {{ stores.program_relative = m.eq_ignore_ascii_case(\"program\"); }} }}\n    {{ let stores: &mut Stores = unsafe {{ &mut *cell.get() }}; stores.logger = Some(std::sync::Arc::new(std::sync::Mutex::new(loft::logger::Logger::from_config_file(&loft::logger::Logger::resolve_config_path(std::env::var(\"LOFT_LOG_CONF\").ok().as_deref(), LOFT_MAIN_FILE), LOFT_MAIN_FILE)))); }}\n    init(&cell);\n{prelude}    n_main(&cell{args});\n    {{ let stores: &Stores = unsafe {{ &*cell.get() }}; if stores.had_fatal {{ std::process::exit(1); }} }}\n"
             )?;
             w.write_all(NATIVE_LEAK_CHECK_TAIL.as_bytes())?;
             writeln!(
