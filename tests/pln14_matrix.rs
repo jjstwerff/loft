@@ -401,3 +401,226 @@ fn a_materialized_value_is_self_contained_in_one_store() {
         );
     }
 }
+
+/// The Step-2 crux: can the session store be carried ACROSS runs?  A
+/// materialized value is self-contained, but if its interior references were
+/// absolute (`store_nr` = the slot it was materialized at) it would break the
+/// moment the store is re-adopted at a different slot in the next eval's
+/// throwaway `State`.  So: materialize, take the store OUT, adopt it into a
+/// FRESH state at a deliberately different slot, and render from there.
+///
+/// Equal renders ⇒ interior refs are slot-independent ⇒ the env can key on
+/// `(rec, pos)` and rebuild the `DbRef` from wherever the store currently sits.
+#[test]
+fn a_session_store_survives_re_adoption_at_a_different_slot() {
+    for (ty, type_name, expr) in heap_cases() {
+        let (p, mut state) = build(&[STRUCTS], ty, &expr);
+        let root = *state.get_stack::<DbRef>();
+        assert_readable(&root, &state, &expr);
+        let tp = state.database.name(type_name);
+        let mut before = String::new();
+        state.database.show_loft(&mut before, &root, tp);
+
+        let session = state.database.database(256);
+        let copy = state.database.materialize(&root, tp, session.store_nr);
+        let detached = state.database.take_store(session.store_nr);
+        drop(state); // the whole run heap goes away, as it does between evals
+
+        // A fresh run, with extra stores allocated first so the session store
+        // is forced to land at a DIFFERENT slot than it had.
+        let mut data = p.data.clone();
+        let mut next = State::new(p.database.clone());
+        compile::byte_code(&mut next, &mut data);
+        for _ in 0..3 {
+            let _ = next.database.database(64);
+        }
+        let new_nr = next.database.adopt_store(detached);
+        assert_ne!(
+            new_nr, session.store_nr,
+            "probe is vacuous: the store landed at the SAME slot for `{expr}`"
+        );
+
+        let rebuilt = DbRef {
+            store_nr: new_nr,
+            rec: copy.rec,
+            pos: copy.pos,
+        };
+        let tp2 = next.database.name(type_name);
+        let mut after = String::new();
+        next.database.show_loft(&mut after, &rebuilt, tp2);
+        assert_eq!(
+            before, after,
+            "the session store did NOT survive re-adoption at slot {new_nr} \
+             (was {}) for `{expr}` — interior refs are slot-dependent",
+            session.store_nr
+        );
+    }
+}
+
+// ── Step 2 — the session store + env record, as a write-only shadow ──────────
+//
+// The env is written on every heap-backed bind and read ONLY by `env_value`.
+// The replay model is still the source of truth, so these are the differential
+// oracle: the shadow must already agree everywhere, which is what Step 4's
+// frame-seed will be checked against.
+
+use loft::repl::{Eval, ReplSession};
+
+fn session() -> ReplSession {
+    ReplSession::new("default").expect("load stdlib")
+}
+
+/// The type definitions the session-level tests need, one input per `eval`.
+const REPL_DEFS: &[&str] = &[
+    "struct P { x: integer, y: integer }",
+    "struct Line { a: P, b: P, tag: text }",
+    "struct Bag { items: vector<P>, name: text }",
+    "struct Big { id: integer, note: text }",
+    "enum Shape { Circle { radius: float }, Rect { width: float, height: float }, Tagged { name: text } }",
+];
+
+fn session_with_defs() -> ReplSession {
+    let mut s = session();
+    for def in REPL_DEFS {
+        assert!(
+            matches!(s.eval(def), Eval::Ran),
+            "def failed to eval: {def}"
+        );
+    }
+    s
+}
+
+/// The Step-2 differential: the store-resident shadow must render EXACTLY what a
+/// fresh evaluation of the same expression renders.
+///
+/// The oracle is `value_of(<expr>)`, not `value_of(<name>)`: reading a bound
+/// *vector* by name crashes on `main` (loft#618 — the fn-return copy of a
+/// borrowed local), which is pre-existing and out of @PLN14's scope.  Evaluating
+/// the expression afresh exercises the same render path without that hazard.
+///
+/// The exact claim is a BICONDITIONAL, which is what makes it a real
+/// differential: the shadow holds a value **exactly when** the REPL.X snapshot
+/// path captured one.  A binding the snapshot path declines (it falls back to
+/// storing the RHS as source — e.g. a vector of >32-bit literals, pre-existing)
+/// must have NO env entry, not a stale or half-built one.
+#[test]
+fn env_shadow_agrees_with_a_fresh_evaluation() {
+    let mut checked = 0;
+    for (_ty, type_name, expr) in heap_cases() {
+        // Pre-existing, unrelated to @PLN14 (noted on loft#618): evaluating a
+        // vector-of->32-bit-literals expression TWICE in one session re-registers
+        // its element type and aborts with "Double structure type" from
+        // `types.rs`.  The shadow's fidelity for >32-bit ints is proven at the
+        // `Stores` level instead (`materialize_gives_each_value_its_own_home`).
+        if expr.contains("9000000000") {
+            continue;
+        }
+        let mut s = session_with_defs();
+        assert!(
+            matches!(s.eval(&format!("v = {expr}")), Eval::Ran),
+            "bind failed for `{expr}`"
+        );
+        let shadow = s.env_value("v");
+        let fresh = s.value_of(&expr);
+        match (&shadow, &fresh) {
+            (Some(shadow), Some(fresh)) => {
+                assert_eq!(
+                    shadow, fresh,
+                    "session-store shadow diverged from a fresh evaluation of \
+                     `{expr}` (type {type_name})"
+                );
+                checked += 1;
+            }
+            // The snapshot path declined this shape, so there is nothing to
+            // materialize — and the env must say so rather than hold a stale value.
+            (None, None) => {}
+            _ => panic!(
+                "shadow and snapshot disagree on WHETHER `{expr}` (type \
+                 {type_name}) has a value: env={shadow:?} snapshot={fresh:?}"
+            ),
+        }
+    }
+    assert!(
+        checked >= 8,
+        "oracle covered only {checked} cells — too few to call this a differential"
+    );
+}
+
+/// The store outlives each eval's throwaway `State`: several bindings coexist and
+/// stay readable after later evals have come and gone.
+#[test]
+fn env_entries_survive_across_evals() {
+    let mut s = session_with_defs();
+    assert!(matches!(s.eval("a = [1, 2, 3]"), Eval::Ran));
+    assert!(matches!(s.eval("b = P { x: 7, y: 9 }"), Eval::Ran));
+    assert!(matches!(s.eval("c = [\"one\", \"two\"]"), Eval::Ran));
+    // Unrelated evals in between — each builds and drops its own State.
+    assert!(matches!(s.eval("d = [9, 8]"), Eval::Ran));
+    assert!(matches!(s.eval("n = 41 + 1"), Eval::Ran));
+    assert_eq!(s.env_names(), vec!["a", "b", "c", "d"]);
+    assert_eq!(s.env_value("a").as_deref(), Some("[1,2,3]"));
+    assert_eq!(s.env_value("b").as_deref(), Some("P{x:7,y:9}"));
+    assert_eq!(s.env_value("c").as_deref(), Some("[\"one\",\"two\"]"));
+    assert_eq!(s.env_value("d").as_deref(), Some("[9,8]"));
+}
+
+/// A nested / multi-store value round-trips through the session store too — the
+/// case that motivated materializing with `copy_claims` rather than a store copy.
+#[test]
+fn a_nested_value_round_trips_through_the_session() {
+    let mut s = session_with_defs();
+    assert!(matches!(
+        s.eval("v = Line { a: P{x:1,y:2}, b: P{x:3,y:4}, tag: \"seg\" }"),
+        Eval::Ran
+    ));
+    assert_eq!(
+        s.env_value("v").as_deref(),
+        Some("Line{a:P{x:1,y:2},b:P{x:3,y:4},tag:\"seg\"}")
+    );
+}
+
+/// A re-bind replaces the entry (the old record orphans in the session store
+/// until arc G collects it).
+#[test]
+fn re_bind_replaces_the_env_entry() {
+    let mut s = session_with_defs();
+    assert!(matches!(s.eval("v = [1, 2, 3]"), Eval::Ran));
+    assert_eq!(s.env_value("v").as_deref(), Some("[1,2,3]"));
+    assert!(matches!(s.eval("v = [4, 5]"), Eval::Ran));
+    assert_eq!(s.env_value("v").as_deref(), Some("[4,5]"));
+}
+
+/// Scope boundary, pinned so it is a decision and not a surprise: scalars and
+/// top-level text stay inline-only — no env entry until arc C (Step 3) boxes
+/// them.  Behaviour of the replay model is unchanged for them.
+#[test]
+fn scalars_and_text_have_no_env_entry_yet() {
+    let mut s = session();
+    assert!(matches!(s.eval("n = 5"), Eval::Ran));
+    assert!(matches!(s.eval("t = \"hello\""), Eval::Ran));
+    assert!(matches!(s.eval("f = 1.5"), Eval::Ran));
+    assert!(matches!(s.eval("b = true"), Eval::Ran));
+    assert!(
+        s.env_names().is_empty(),
+        "scalars/text are arc C, not Step 2: {:?}",
+        s.env_names()
+    );
+    // The replay model still has them — the shadow changed nothing.
+    assert_eq!(s.value_of("n").as_deref(), Some("5"));
+    assert_eq!(s.value_of("t").as_deref(), Some("\"hello\""));
+    assert_eq!(s.env_value("n"), None);
+}
+
+/// The shadow is WRITE-ONLY in Step 2: the replay model is still the source of
+/// truth, so a session behaves exactly as before.  (Step 5 is where observing
+/// switches to the env and the body replay goes away.)
+#[test]
+fn the_shadow_does_not_change_session_behaviour() {
+    let mut s = session_with_defs();
+    assert!(matches!(s.eval("a = [1, 2, 3]"), Eval::Ran));
+    assert!(matches!(s.eval("n = 10"), Eval::Ran));
+    assert!(matches!(s.eval("assert(n == 10, \"n\")"), Eval::Ran));
+    assert!(matches!(s.eval("n = n + 5"), Eval::Ran));
+    assert!(matches!(s.eval("assert(n == 15, \"n grew\")"), Eval::Ran));
+    assert_eq!(s.value_of("n").as_deref(), Some("15"));
+}

@@ -11,11 +11,15 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-Open — **Steps 0–1 landed 2026-07-24** (the matrix instrument + the arc-B
-materialize primitive; both are test-only or dead code, so nothing in the corpus
-can regress yet). Next is Step 2: the session store + env record as a write-only
-shadow. See *Step 0/1 findings* below — the materialize primitive is built on
-`copy_claims`, **not** the `snapshot_copy` this plan originally named.
+Open — **Steps 0–2 landed 2026-07-24**: the matrix instrument (Step 0), the arc-B
+materialize primitive (Step 1), and the arc-A session store + env record as a
+**write-only shadow** (Step 2). The replay model is still the source of truth, so
+behaviour is unchanged and nothing in the corpus can regress. Next is Step 3
+(scalars at rest, arc C), which closes the one gap the shadow still has.
+
+See *Step 0/1 findings* below — the materialize primitive is built on
+`copy_claims`, **not** the `snapshot_copy` this plan originally named — and the
+Step 2 notes for the session store's shape and the oracle blocked by loft#618.
 
 Design ready for the rest. **Detailed build design added 2026-07-24**
 (see *Implementation design — small safe steps* below): the *in-memory* store
@@ -97,7 +101,7 @@ both backends, not when the demo runs.
 
 | Item | Status |
 |---|---|
-| **A** — session store + binding-environment record (`name → (Type, handle)`) | Open |
+| **A** — session store + binding-environment record (`name → (Type, handle)`) | **Shadow built** (Step 2) — written on every heap bind, read only by `env_value`; heap values only (scalars/text are arc C) |
 | **B** — value materialization: store-to-store copy of a run's result into the session store, returning a stable `DbRef` | **Primitive built** (`Stores::materialize`, Step 1) — not yet wired to a session |
 | **C** — scalars at rest (`x = 5`): boxed into the store, or a tiny inline tagged env value | Open |
 | **D** — frame-seed: prior names load from the session store into their slots before a new statement runs | Open |
@@ -255,7 +259,35 @@ green-lit two struct-enum cells that never built a value: tuple-style
 `calibration_guard_catches_an_unreadable_root` is its positive control. Cells whose
 value the instrument cannot *see* must fail, not pass.
 
-- **Step 2 — session store + env record (arc A), write-only shadow. Effort M.**
+- **Step 2 — session store + env record (arc A), write-only shadow. Effort M.
+  BUILT 2026-07-24.** `ReplSession` now holds a `session_store: Option<Store>` +
+  `env: name → SessionValue{type_name, rec, pos}`; every heap-backed bind
+  materializes into it and files an entry, and `env_value` / `env_names` are the
+  read side. Shape notes:
+  - The session store is **one detached `Store`**, adopted into each eval's
+    throwaway `State` only for the copy and taken straight back out
+    (`Stores::take_store`, added as `adopt_store`'s inverse). That works because a
+    materialized value is self-contained in one store (finding 5).
+  - `SessionValue` deliberately holds **no `store_nr`** — the store lands at a
+    different slot each run, and a materialized value's interior references are
+    slot-independent. Pinned by
+    `a_session_store_survives_re_adoption_at_a_different_slot`.
+  - **Scope: heap-backed values only.** Scalars and top-level text stay
+    inline-only until arc C. Text is explicitly excluded rather than accidentally
+    included: `capture_binding` wraps a text RHS as `[(rhs)]` to dodge @P293, so
+    materializing it would file a `vector<text>` under a `text` binding and make
+    `t = "hi"` read back as `["hi"]`.
+  - The differential is a **biconditional**: the shadow holds a value exactly
+    when the REPL.X snapshot path captured one, so a bind that falls back to
+    source has no entry rather than a stale one.
+
+  **Blocked oracle → loft#618.** The natural oracle, `value_of(<name>)`, crashes
+  on `main` for any *vector* binding (null `store_nr` 65535 in the fn-return copy
+  of a borrowed local — the @P293 family, filed not fixed: it belongs to the
+  fn-return ownership substrate). Step 2 uses `value_of(<expr>)` instead (a fresh
+  evaluation, which is the path a bind itself uses). A second pre-existing
+  signature is noted on the same issue: evaluating a vector-of->32-bit-literals
+  expression twice in one session aborts with `Double structure type`.
   Add a persistent session `Stores` + `env: name → (Type, DbRef)`. Each REPL bind ALSO
   materializes into the session store and records the env entry — but the **replay model
   stays the source of truth** (the env is written, never read yet). **Safety:** additive

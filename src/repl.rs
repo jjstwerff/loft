@@ -35,6 +35,11 @@ use std::io::{BufRead, Write};
 use std::panic::AssertUnwindSafe;
 use std::path::Path;
 
+/// @PLN14 arc A — initial word size of the session store.  It grows on demand
+/// like any store; this only sets how much room the first few bindings get
+/// without a realloc.
+const SESSION_STORE_WORDS: u32 = 1024;
+
 /// Path to the auto-resume session file (`~/.loft_session`), or `None` if the
 /// home directory can't be located.  Shared by the interactive driver (which
 /// replays it on launch and appends new state-changing inputs to it) and the
@@ -912,7 +917,18 @@ fn escape_loft_text(raw: &str) -> String {
 ///
 /// `None` only on an unresolved type name (a fallback to source, never reached in
 /// practice for a value the session just produced).
-fn render_capture(state: &mut State, ret_ty: &Type, name: &str, json: bool) -> Option<String> {
+///
+/// `root_out` receives the value's `DbRef` for the **heap-backed** arm only — the
+/// stack read consumes it, so this is the one chance to keep it.  @PLN14 arc B
+/// materializes that ref into the session store; the inline arms leave it `None`
+/// (a scalar has no heap home until arc C boxes it).
+fn render_capture(
+    state: &mut State,
+    ret_ty: &Type,
+    name: &str,
+    json: bool,
+    root_out: &mut Option<crate::keys::DbRef>,
+) -> Option<String> {
     match ret_ty {
         Type::Integer(_) => Some(state.get_stack::<i64>().to_string()),
         Type::Float => Some(float_literal(*state.get_stack::<f64>())),
@@ -947,6 +963,7 @@ fn render_capture(state: &mut State, ret_ty: &Type, name: &str, json: bool) -> O
                 return None;
             }
             let db = *state.get_stack::<crate::keys::DbRef>();
+            *root_out = Some(db);
             let mut out = String::new();
             if json {
                 state.database.show_json(&mut out, &db, tp, false);
@@ -1224,6 +1241,39 @@ pub struct ReplSession {
     /// A game is a real `loft` run in its own process — its frame loop (and, once the
     /// graphics library lands, its native window) must not block the serve loop.
     game: Option<GameProc>,
+    /// @PLN14 arc A — **the session store**: one detached `Store` holding a
+    /// materialized copy of every heap-backed binding's value.  It is adopted into
+    /// each eval's throwaway `State` just long enough to materialize into, then
+    /// taken back out, so it outlives the run.  One `Store` suffices because a
+    /// materialized value is self-contained in it (see @PLN14 Step 0/1 findings).
+    session_store: Option<crate::store::Store>,
+    /// @PLN14 arc A — **the binding environment**: name → where that binding's value
+    /// lives in [`session_store`](Self::session_store).
+    ///
+    /// **Write-only for now (Step 2).**  The replay model stays the source of truth;
+    /// this shadow is written on every bind and read only by
+    /// [`env_value`](Self::env_value), which is the differential oracle Step 4's
+    /// frame-seed will be checked against.
+    env: std::collections::HashMap<String, SessionValue>,
+    /// @PLN14 arc B — the value the most recent capture materialized, waiting to be
+    /// filed under the bound name by [`eval`](Self::eval).  `capture_typed` cannot
+    /// name it (only the caller knows the binding name), so it parks it here.
+    pending_materialized: Option<SessionValue>,
+}
+
+/// @PLN14 arc A — one binding's home in the session store.
+///
+/// Deliberately holds **no `store_nr`**: the session store is adopted at whatever
+/// slot is free in each eval's `State`, so the slot is not a stable identity.  A
+/// materialized value's interior references are slot-independent (in-store record
+/// ids), which is what makes this safe — pinned by
+/// `a_session_store_survives_re_adoption_at_a_different_slot`.
+#[derive(Debug, Clone)]
+struct SessionValue {
+    /// The loft-source type name, for the `show_loft` schema lookup on read-back.
+    type_name: String,
+    rec: u32,
+    pos: u32,
 }
 
 /// @PLN16 M5e slice 6 — a launched game: the child process + its drained output.
@@ -1258,6 +1308,9 @@ impl ReplSession {
             paused: None,
             workspace_file: None,
             game: None,
+            session_store: None,
+            env: std::collections::HashMap::new(),
+            pending_materialized: None,
             reverse_armed: false,
         })
     }
@@ -1300,6 +1353,9 @@ impl ReplSession {
             paused: None,
             workspace_file: None,
             game: None,
+            session_store: None,
+            env: std::collections::HashMap::new(),
+            pending_materialized: None,
             reverse_armed: false,
         }
     }
@@ -2758,6 +2814,13 @@ impl ReplSession {
                         let bound = format!("{}{snap};\n", self.body);
                         if self.compile_generation(&bound, false, false).is_ok() {
                             self.body = bound;
+                            // @PLN14 arc A — file the shadow env entry under the
+                            // bound name.  A re-bind (`n = n + 1`) replaces it; the
+                            // old record is orphaned in the session store until
+                            // arc G collects it.
+                            if let Some(v) = self.pending_materialized.take() {
+                                self.env.insert(var.clone(), v);
+                            }
                             self.record_input(&snap); // persist the snapshot, not the RHS
                             return Eval::Ran;
                         }
@@ -2956,13 +3019,19 @@ impl ReplSession {
         // The explicit `vector<text>` element type coerces a borrowed/work text
         // (`text["__work_N"]`, e.g. a concat) to a plain owned element.
         if ty == "text" {
-            return match self.capture_typed(&format!("[({rhs})]"), "vector<text>", json) {
+            let out = match self.capture_typed(&format!("[({rhs})]"), "vector<text>", json) {
                 Capture::Done(lit) => lit
                     .strip_prefix('[')
                     .and_then(|s| s.strip_suffix(']'))
                     .map_or(Capture::Skip, |inner| Capture::Done(inner.to_string())),
                 other => other,
             };
+            // @PLN14 — the wrapper above materialized a `vector<text>`, but the
+            // BINDING is a `text`.  Recording that mismatch would make the env
+            // report `["hi"]` for `t = "hi"`, so drop it: a top-level text value
+            // becomes store-resident in arc C (Step 3) with its own shape.
+            self.pending_materialized = None;
+            return out;
         }
         self.capture_typed(rhs, &ty, json)
     }
@@ -3004,7 +3073,16 @@ impl ReplSession {
             self.rewind(sp);
             return Capture::Failed(vec![err.to_diag_entry()]);
         }
-        let lit = render_capture(&mut state, &ret_ty, ty, json);
+        let mut root = None;
+        let lit = render_capture(&mut state, &ret_ty, ty, json, &mut root);
+        // @PLN14 arc B — SHADOW WRITE: give the value its own home in the session
+        // store.  Nothing reads it yet (the replay literal below is still the
+        // source of truth), so this cannot change behaviour; it is the differential
+        // oracle Step 4's frame-seed gets checked against.
+        self.pending_materialized = None;
+        if let Some(root) = root {
+            self.materialize_into_session(&mut state, root, ty);
+        }
         self.rewind(sp); // discard the throwaway cap gen
         lit.map_or(Capture::Skip, Capture::Done)
     }
@@ -3045,6 +3123,78 @@ impl ReplSession {
             sp.schema,
             "a rewound speculative parse must leave the schema exactly as it found it"
         );
+    }
+
+    /// @PLN14 arc B — copy `root` into the session store and park the resulting
+    /// location in [`pending_materialized`](Self::pending_materialized) for
+    /// [`eval`](Self::eval) to file under the bound name.
+    ///
+    /// The session store is adopted into this run's `State` only for the copy, then
+    /// taken straight back out, so it survives the throwaway `State`.  The slot it
+    /// lands at is not recorded — it differs run to run and a materialized value's
+    /// interior references do not depend on it.
+    fn materialize_into_session(
+        &mut self,
+        state: &mut State,
+        root: crate::keys::DbRef,
+        type_name: &str,
+    ) {
+        let tp = state.database.name(type_name);
+        if tp == u16::MAX {
+            return;
+        }
+        let slot = match self.session_store.take() {
+            Some(store) => state.database.adopt_store(store),
+            // First binding of the session: a fresh store to own every value.
+            None => state.database.database(SESSION_STORE_WORDS).store_nr,
+        };
+        let copy = state.database.materialize(&root, tp, slot);
+        self.session_store = Some(state.database.take_store(slot));
+        if copy.rec != 0 {
+            self.pending_materialized = Some(SessionValue {
+                type_name: type_name.to_string(),
+                rec: copy.rec,
+                pos: copy.pos,
+            });
+        }
+    }
+
+    /// @PLN14 arc A — read a binding back **from the session store** (not from the
+    /// replayed body), rendered own-format.  `None` when the name has no
+    /// store-resident value: an unbound name, or a binding whose value is still
+    /// inline-only (scalars and top-level text — arc C).
+    ///
+    /// This is the shadow's read side: Step 2 uses it purely as the differential
+    /// oracle (`env value == replayed value`); Step 5 is where observing switches
+    /// over to it and the body replay goes away.
+    pub fn env_value(&mut self, name: &str) -> Option<String> {
+        let entry = self.env.get(name)?.clone();
+        let store = self.session_store.take()?;
+        let mut state = State::new(self.parser.database.clone());
+        let slot = state.database.adopt_store(store);
+        let tp = state.database.name(&entry.type_name);
+        let out = if tp == u16::MAX {
+            None
+        } else {
+            let db = crate::keys::DbRef {
+                store_nr: slot,
+                rec: entry.rec,
+                pos: entry.pos,
+            };
+            let mut s = String::new();
+            state.database.show_loft(&mut s, &db, tp);
+            Some(s)
+        };
+        self.session_store = Some(state.database.take_store(slot));
+        out
+    }
+
+    /// @PLN14 arc A — the names that currently have a store-resident value.
+    #[must_use]
+    pub fn env_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self.env.keys().cloned().collect();
+        names.sort();
+        names
     }
 
     /// If `input` is a simple binding `<name> = <expr>` (not `==`/`+=`/…),

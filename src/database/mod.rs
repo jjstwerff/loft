@@ -882,6 +882,26 @@ impl Stores {
         to
     }
 
+    /// @PLN14 arc A — move a `Store` OUT of this table, leaving a freed sentinel
+    /// behind, so it outlives the `Stores` it was running in.  The inverse of
+    /// [`adopt_store`](Self::adopt_store), and the pair that lets the REPL's
+    /// session store survive a throwaway per-eval `State`: adopt it for the run,
+    /// take it back out afterwards.
+    ///
+    /// The returned `Store` keeps its bytes — no copy, no claim translation.
+    ///
+    /// # Panics
+    /// Panics if `slot_nr` is out of range.
+    pub fn take_store(&mut self, slot_nr: u16) -> Store {
+        let pos = slot_nr as usize;
+        assert!(
+            pos < self.allocations.len(),
+            "take_store: slot {slot_nr} out of range"
+        );
+        let sentinel = crate::store::Store::new_freed_sentinel();
+        std::mem::replace(&mut self.allocations[pos], sentinel)
+    }
+
     /// Install an externally-allocated `Store` into this `Stores`'
     /// allocations table.  Returns the parent-side `store_nr`.
     ///
