@@ -69,6 +69,7 @@ tests, but not their consumers', not the future language, not their dep tree's s
 |---|---|---|---|---|---|
 | **own** | a lib version | the lib's own tests + `vet-lib` V1–V6 | "do I pass my own gate" | "was this vetted before I install" | **built** — `scripts/vet-lib.sh` |
 | **forward** | a loft change | every published lib vs the new loft | "am I still green on latest loft" | (as a lib author, same) | **built** — `.github/workflows/revalidate-libs.yml` |
+| ↳ *warning debt* | a loft change | the same run's warnings, published + source | "will my next PR go red on code I didn't touch" | — | **built** — `scripts/lib_warning_scan.py`, reported not gated |
 | **reverse** | a lib version | every consumer's tests vs the new lib | "did I break a consumer" | "will this update break me" | **this doc** |
 
 Reverse is the only axis that catches a **behavioral** break, because the consumer is
