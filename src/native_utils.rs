@@ -1024,6 +1024,20 @@ pub(crate) fn project_dir() -> String {
     let Some(dir) = prog.parent() else {
         return String::new();
     };
+    project_root_for(dir)
+}
+
+/// How far above the binary to look for the stdlib.  `target/<triple>/<profile>`
+/// is the deepest cargo layout (3 hops); the extra headroom costs one `is_dir`
+/// each and keeps a nested workspace target dir working.
+const PROJECT_ROOT_SEARCH_DEPTH: usize = 6;
+
+/// Resolve the project root — the directory holding the stdlib `default/` — from
+/// the directory the running binary sits in.
+///
+/// Split out from [`project_dir`] so every layout can be tested without planting a
+/// binary in each one.
+fn project_root_for(dir: &std::path::Path) -> String {
     // Strip target/release or target/debug to get the project root.
     if (dir.ends_with("target/release") || dir.ends_with("target\\release"))
         && let Some(root) = dir.parent().and_then(|p| p.parent())
@@ -1044,6 +1058,21 @@ pub(crate) fn project_dir() -> String {
             return with_trailing_sep(&share_loft);
         }
         return with_trailing_sep(prefix);
+    }
+    // Any other cargo layout.  `--target <triple>` nests the profile one level
+    // deeper (`target/<triple>/release`), a custom profile renames it
+    // (`target/<profile>`), and `CARGO_TARGET_DIR` renames `target` itself
+    // (`target-da/release`).  Rather than enumerate them, walk up to the first
+    // ancestor that actually HOLDS the stdlib — the question every caller is
+    // really asking.  Without this a `--target` build resolves its own directory
+    // as the project root, so `default/` is never found and every stdlib load
+    // fails with "cannot load default library" (loft-lang/loft#638: the ASan
+    // sweep is the one CI job that builds with `--target`).
+    for ancestor in std::iter::successors(Some(dir), |d| d.parent()).take(PROJECT_ROOT_SEARCH_DEPTH)
+    {
+        if ancestor.join("default").is_dir() {
+            return with_trailing_sep(ancestor);
+        }
     }
     with_trailing_sep(dir)
 }
@@ -1485,6 +1514,109 @@ pub(crate) fn stage_native_dlls(exe_dir: &std::path::Path, data: &crate::data::D
                 }
             }
         }
+    }
+}
+
+/// loft-lang/loft#638 — the stdlib must be findable from EVERY cargo layout, not
+/// just `target/{release,debug}`.  A `--target <triple>` build nests the profile
+/// dir one level deeper; before the fix that resolved the project root to the
+/// binary's own directory, so `default/` was never found and every stdlib load
+/// died with "cannot load default library".  It surfaced as the nightly ASan
+/// sweep (the one job that builds with `--target`) failing a sandbox-admission
+/// test — a symptom three steps removed from the cause.
+#[cfg(test)]
+mod project_root_layouts {
+    use super::*;
+
+    fn chrono_ish_nanos() -> u128 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0, |d| d.as_nanos())
+    }
+
+    /// A throwaway project root that HOLDS a `default/` dir, plus the binary dir
+    /// under it named by `rel`.  Returns (root, binary dir).
+    fn layout(tag: &str, rel: &str) -> (std::path::PathBuf, std::path::PathBuf) {
+        let root = std::env::temp_dir().join(format!(
+            "loft_root_{tag}_{}_{}",
+            std::process::id(),
+            chrono_ish_nanos()
+        ));
+        let _ = std::fs::remove_dir_all(&root);
+        std::fs::create_dir_all(root.join("default")).unwrap();
+        let bin_dir = root.join(rel);
+        std::fs::create_dir_all(&bin_dir).unwrap();
+        (root, bin_dir)
+    }
+
+    #[test]
+    fn plain_release_and_debug_layouts_resolve_to_the_root() {
+        for rel in ["target/release", "target/debug"] {
+            let (root, bin_dir) = layout("plain", rel);
+            assert_eq!(
+                project_root_for(&bin_dir),
+                with_trailing_sep(&root),
+                "{rel} must resolve to the project root"
+            );
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// The regression: `cargo --target <triple>` (how the ASan gate instruments
+    /// the whole build) puts the binary one level deeper.
+    #[test]
+    fn explicit_target_triple_layout_resolves_to_the_root() {
+        for rel in [
+            "target/x86_64-unknown-linux-gnu/release",
+            "target/aarch64-apple-darwin/release",
+            "target/x86_64-unknown-linux-gnu/debug",
+        ] {
+            let (root, bin_dir) = layout("triple", rel);
+            assert_eq!(
+                project_root_for(&bin_dir),
+                with_trailing_sep(&root),
+                "{rel} must resolve to the project root, not the binary's own dir"
+            );
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// `CARGO_TARGET_DIR=target-da` (the debug-assertions calibration build) and
+    /// custom cargo profiles rename the dirs; the stdlib must still be found.
+    #[test]
+    fn renamed_target_dir_and_custom_profile_resolve_to_the_root() {
+        for rel in ["target-da/release", "target/ci", "target-da/x86_64-foo/ci"] {
+            let (root, bin_dir) = layout("renamed", rel);
+            assert_eq!(
+                project_root_for(&bin_dir),
+                with_trailing_sep(&root),
+                "{rel} must resolve to the project root"
+            );
+            let _ = std::fs::remove_dir_all(&root);
+        }
+    }
+
+    /// An unpacked release dir ships the binary NEXT TO `default/` — the walk must
+    /// stop there rather than climbing past it.
+    #[test]
+    fn binary_beside_the_stdlib_resolves_to_its_own_dir() {
+        let (root, _) = layout("beside", "unused");
+        assert_eq!(project_root_for(&root), with_trailing_sep(&root));
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// No stdlib anywhere above: unchanged fallback to the binary's own dir (the
+    /// caller then reports a missing stdlib, which is the honest answer).
+    #[test]
+    fn no_stdlib_above_falls_back_to_the_binary_dir() {
+        let dir = std::env::temp_dir().join(format!(
+            "loft_root_none_{}_{}/deep/deeper",
+            std::process::id(),
+            chrono_ish_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(project_root_for(&dir), with_trailing_sep(&dir));
+        let _ = std::fs::remove_dir_all(dir.parent().unwrap().parent().unwrap());
     }
 }
 

@@ -411,10 +411,32 @@ Options:
 
 ### `project_dir`
 
-Auto-detects the project root from the path of the running executable:
+Auto-detects the project root from the path of the running executable. In order:
 - Strips the `loft` binary name.
 - Strips a `target/release/` or `target/debug/` suffix if present.
+- Installed layout: a binary in `<prefix>/bin/` resolves to `<prefix>/share/loft/`
+  (or `<prefix>/` when that is absent).
+- **Any other layout: walks up to the first ancestor that actually holds a
+  `default/` dir** (at most 6 levels).
 - The result is the project root, and the default library is expected at `<root>/default/`.
+
+That walk is what makes the resolution layout-agnostic, and it is not optional.
+Cargo puts the binary somewhere else in three ordinary situations, none of which
+match the two stripped suffixes: `--target <triple>` nests the profile one level
+deeper (`target/<triple>/release/`), a custom profile renames it (`target/ci/`),
+and `CARGO_TARGET_DIR` renames `target` itself (`target-da/` — the
+debug-assertions calibration build). Before the walk existed, each of those
+resolved the project root to the *binary's own directory*, so `default/` was never
+found and every stdlib load failed with **"cannot load default library"**.
+
+That is a symptom worth recognising, because it surfaces far from its cause: it
+took down the nightly ASan sweep — the one CI job that builds with `--target`
+(ASan only instruments the whole build under an explicit target) — and it showed
+up there as an unrelated *sandbox-admission* test failing, since a file whose
+stdlib never loaded also registers no designated defs
+(`a [sandbox] policy is present but designated nothing here`). See
+loft-lang/loft#638. Regression cover: `native_utils.rs::project_root_layouts`
+asserts every layout above.
 
 ---
 

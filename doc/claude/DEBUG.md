@@ -20,6 +20,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 - [Debugging a Parse Error or Wrong IR](#debugging-a-parse-error-or-wrong-ir)
 - [Debugging a Runtime Crash or Wrong Result](#debugging-a-runtime-crash-or-wrong-result)
 - [Before you believe a fault is RANDOM](#before-you-believe-a-fault-is-random)
+- [When it fails in CI but passes locally](#when-it-fails-in-ci-but-passes-locally)
 - [The debug-assertions calibration run (`target-da`)](#the-debug-assertions-calibration-run-target-da)
 - [Debugging a validate_slots Panic](#debugging-a-validate_slots-panic)
 - [Debugging a Scope Analysis Bug](#debugging-a-scope-analysis-bug)
@@ -573,6 +574,40 @@ deterministic: warm load, every time.
 random fault, prove each run really starts from the state you believe. A harness
 that clears the wrong cache reports a ratio with total confidence, and the ratio
 is fiction.
+
+## When it fails in CI but passes locally
+
+Same commit, same command, opposite result — so the difference is *state*, and the
+suspect list is short. A build tree accumulates artefacts CI never has, and one of
+them can supply exactly the thing the code fails to find, which turns a real bug
+into "works on my machine" indefinitely.
+
+Check, before re-running anything:
+
+```bash
+git status --ignored --short target/ | head     # stray artefacts in the build tree
+find target -maxdepth 3 -type l                 # symlinks — the quiet ones
+```
+
+The worked example: the nightly ASan sweep failed on both runners while the
+identical `cargo +nightly nextest … -Zsanitizer=address --target x86_64-…` command
+passed locally, including the full 1667-test sweep. The reason was a
+`target/x86_64-unknown-linux-gnu/release/default` **symlink to the repo's stdlib**,
+left in the tree weeks earlier. It papered over a real defect — `project_dir()`
+could not resolve the project root for a `--target` build ([INTERNALS.md §
+`project_dir`](INTERNALS.md#project_dir), loft-lang/loft#638) — and it made the
+first three hypotheses *unfalsifiable*, because every local control ran against a
+tree where the missing thing was present.
+
+Two rules follow:
+
+- **Reproduce by construction, not by re-running.** Build the layout the failing
+  environment has (here: copy the binary into a synthetic `<root>/target/<triple>/release/`)
+  and vary ONE axis. That produced the CI failure line character-for-character in
+  seconds, after ~20 minutes of full-sweep runs had proven nothing.
+- **When a local control passes, ask what the local tree is supplying.** A green
+  control is only evidence if you know the environment it ran in — otherwise you
+  have measured the symlink, not the code.
 
 ## Debugging store-ownership bugs (leaks, double-frees, non-determinism)
 
