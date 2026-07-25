@@ -135,6 +135,27 @@ warning count reaches zero.  Chunk CI flips the
 `LOFT_DENY_WARNINGS` env to `0` when the opt-out file is
 present.
 
+**Your warning count moves even when you don't touch the code** —
+loft keeps adding deprecations (`not null`, the `&`-parameter
+lint, null-flow), so a package that was clean at publish time
+warns against a newer loft.  Nothing fails while you leave it
+alone, and then your next PR goes red on code you never edited.
+The nightly `revalidate-libs` job reports this in advance, per
+package, in two columns:
+
+| column | what it measures | how you clear it |
+|---|---|---|
+| **published** | the warnings a *user* of your library sees today | publish a fixed version |
+| **source** | what your own CI will do on your next PR | clean the source on `main` |
+
+Read it in the job summary of the latest `revalidate-libs` run
+(loft repo → Actions), or reproduce a single reading locally:
+
+```
+$ LOFT=target/release/loft \
+  scripts/lib_warning_scan.py scan <pkg-dir> --label source
+```
+
 ## 3. Pre-release checklist
 
 The mechanical `[auto]` core of the full correctness bar — see

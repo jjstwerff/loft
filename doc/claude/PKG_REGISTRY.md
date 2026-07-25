@@ -797,6 +797,32 @@ the publisher's machine), and toolchain-driven native-crate breakage
 (the loft-libs-core#14 class).  A red leg means "publish a fixed
 version", not "edit the registry".
 
+### Warning debt — reported nightly, never gated
+
+Both nightlies are FUNCTIONAL gates, so a library that merely *warns*
+against the newest loft stays green forever — and the debt only surfaces
+as a red check on the next PR to that library's repo, where `library-ci`
+runs `LOFT_DENY_WARNINGS=1` on code the author never touched (gridmesh
+0.1.2: 20 warnings, every nightly green).  `revalidate-libs.yml` closes
+that blind spot with a report, not a gate — warnings are non-contractual,
+so a new deprecation must never fail a shipped artifact.
+
+Each matrix leg runs `scripts/lib_warning_scan.py` twice and the `gate`
+job merges the results into one table in the job summary:
+
+| column | read from | what it means | fix |
+|---|---|---|---|
+| **published** | the suite log the hard gate already captured (free) | what a *user* of the library sees today | republish |
+| **source** | a checkout of the repo's default branch | what that repo's own CI does on its next PR | clean the source |
+
+Warnings raised inside a *dependency* are counted separately and never
+charged to the package — the same rule `loft test --deps` applies.  Run
+one reading locally:
+
+```bash
+LOFT=target/release/loft scripts/lib_warning_scan.py scan <pkg-dir> --label source
+```
+
 Surveyed Debian/apt's ecosystem for prior art.  Decisions:
 
 ### Adopted in the MVP (schema-level)

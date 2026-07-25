@@ -195,6 +195,60 @@ jobs:
         working-directory: lib/${{ matrix.sub }}
         run: LOFT_TIMEOUT=240 loft --native --tests tests
 
+      # WARNINGS — reported, never gated.  The hard gate above deliberately tolerates
+      # warnings (a new deprecation must not fail an already-shipped artifact), which
+      # leaves them invisible: a library accumulates warnings against a moving loft for
+      # weeks, and the first anyone hears of it is a RED check on the next PR to that
+      # library repo, where CI runs LOFT_DENY_WARNINGS=1 on code the author did not
+      # touch.  gridmesh 0.1.2 is the worked example — 20 warnings, every nightly green.
+      # Two readings, because they answer different questions:
+      #   published → what a user of the library sees today   (fix = republish)
+      #   source    → what the library's own CI does next PR  (fix = clean the source)
+      # The published reading re-reads the suite output the gate already captured, so
+      # it costs nothing; the source reading needs its own checkout + parse.
+      - name: Checkout ${{ matrix.repo }} default branch (source reading)
+        if: always()
+        continue-on-error: true
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repo }}
+          path: lib-main
+
+      - name: Warnings — ${{ matrix.name }}  (report only)
+        if: always()
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          scan="$GITHUB_WORKSPACE/loft-src/scripts/lib_warning_scan.py"
+          mkdir -p "$GITHUB_WORKSPACE/warn"
+          tag_log="$GITHUB_WORKSPACE/lib/${{ matrix.sub }}/suite.log"
+          if [ -f "$tag_log" ]; then
+            python3 "$scan" scan --from-log "$tag_log" \
+              --root "$GITHUB_WORKSPACE/lib/${{ matrix.sub }}" \
+              --name '${{ matrix.name }}' --ref '${{ matrix.version }}' --label published \
+              --json "$GITHUB_WORKSPACE/warn/${{ matrix.name }}-published.json"
+          fi
+          src_dir="$GITHUB_WORKSPACE/lib-main/${{ matrix.sub }}"
+          if [ -d "$src_dir/tests" ]; then
+            branch="$(git -C "$GITHUB_WORKSPACE/lib-main" rev-parse --abbrev-ref HEAD 2>/dev/null | head -1)"
+            [ -n "$branch" ] && [ "$branch" != HEAD ] || branch="default branch"
+            LOFT_TIMEOUT=240 python3 "$scan" scan "$src_dir" \
+              --name '${{ matrix.name }}' --ref "$branch" --label source \
+              --json "$GITHUB_WORKSPACE/warn/${{ matrix.name }}-source.json"
+          else
+            echo "no tests/ at ${{ matrix.repo }}:${{ matrix.sub }} — source reading skipped"
+          fi
+
+      - name: Upload the warning report
+        if: always()
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: warnings-${{ matrix.name }}
+          path: warn/
+          if-no-files-found: ignore
+          retention-days: 14
+
   # Fail the workflow if any published library broke — that is a language change
   # retro-breaking a shipped lib, which the freeze forbids.
   gate:
@@ -202,6 +256,23 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
+      - uses: actions/checkout@v4        # for scripts/lib_warning_scan.py
+
+      - name: Collect the per-library warning reports
+        continue-on-error: true
+        uses: actions/download-artifact@v4
+        with:
+          pattern: warnings-*
+          path: warn
+          merge-multiple: true
+
+      # One table for the whole ecosystem: which libraries warn against THIS loft,
+      # in their published artifact and in their source.  Informational — it is the
+      # advance notice that those repos' own CI will go red on their next PR.
+      - name: Warning dashboard
+        continue-on-error: true
+        run: python3 scripts/lib_warning_scan.py collect warn >> "$GITHUB_STEP_SUMMARY"
+
       - name: Verdict
         run: |
           r='${{ needs.revalidate.result }}'
