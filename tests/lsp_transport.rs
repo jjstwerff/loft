@@ -489,7 +489,7 @@ fn tag_hover_and_document_link() {
     .unwrap();
 
     let mut s = Session::start();
-    let root_uri = format!("file://{}", root.display());
+    let root_uri = loft::lsp::path_to_uri(&root);
     s.request(1, "initialize", &format!(r#"{{"rootUri":"{root_uri}"}}"#));
     let init = s.recv();
     let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
@@ -560,7 +560,7 @@ fn broken_tag_publishes_a_warning() {
     s.request(
         1,
         "initialize",
-        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+        &format!(r#"{{"rootUri":"{}"}}"#, loft::lsp::path_to_uri(&root)),
     );
     let _ = s.recv();
     s.notify("initialized", "{}");
@@ -615,7 +615,7 @@ fn find_references_spans_the_workspace() {
         s.request(
             1,
             "initialize",
-            &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+            &format!(r#"{{"rootUri":"{}"}}"#, loft::lsp::path_to_uri(&root)),
         );
         let init = s.recv();
         field(field(&init, "result").unwrap(), "capabilities")
@@ -628,7 +628,7 @@ fn find_references_spans_the_workspace() {
     );
     s.notify("initialized", "{}");
 
-    let a_uri = format!("file://{}/a.loft", root.display());
+    let a_uri = loft::lsp::path_to_uri(&root.join("a.loft"));
     let a_text = "fn area(w: integer) -> integer {\n  w * w\n}\n";
     s.notify("textDocument/didOpen", &open_params(&a_uri, a_text));
     let _ = s.recv(); // publishDiagnostics
@@ -681,7 +681,7 @@ fn did_save_refreshes_the_workspace_index() {
     s.request(
         1,
         "initialize",
-        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+        &format!(r#"{{"rootUri":"{}"}}"#, loft::lsp::path_to_uri(&root)),
     );
     let init = s.recv();
     let sync = field(
@@ -695,7 +695,7 @@ fn did_save_refreshes_the_workspace_index() {
     );
     s.notify("initialized", "{}");
 
-    let a_uri = format!("file://{}/a.loft", root.display());
+    let a_uri = loft::lsp::path_to_uri(&root.join("a.loft"));
     let a_text = "fn area(w: integer) -> integer {\n  w * w\n}\n";
     s.notify("textDocument/didOpen", &open_params(&a_uri, a_text));
     let _ = s.recv();
@@ -760,7 +760,7 @@ fn tag_index_reloads_when_the_index_changes() {
     s.request(
         1,
         "initialize",
-        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+        &format!(r#"{{"rootUri":"{}"}}"#, loft::lsp::path_to_uri(&root)),
     );
     let _ = s.recv();
     s.notify("initialized", "{}");
@@ -825,12 +825,12 @@ fn method_references_span_the_workspace_by_receiver_type() {
     s.request(
         1,
         "initialize",
-        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+        &format!(r#"{{"rootUri":"{}"}}"#, loft::lsp::path_to_uri(&root)),
     );
     let _ = s.recv();
     s.notify("initialized", "{}");
 
-    let a_uri = format!("file://{}/a.loft", root.display());
+    let a_uri = loft::lsp::path_to_uri(&root.join("a.loft"));
     s.notify("textDocument/didOpen", &open_params(&a_uri, a_text));
     let _ = s.recv();
 
@@ -880,7 +880,7 @@ fn rename_produces_a_cross_file_workspace_edit() {
     s.request(
         1,
         "initialize",
-        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+        &format!(r#"{{"rootUri":"{}"}}"#, loft::lsp::path_to_uri(&root)),
     );
     let init = s.recv();
     let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
@@ -890,7 +890,7 @@ fn rename_produces_a_cross_file_workspace_edit() {
     );
     s.notify("initialized", "{}");
 
-    let a_uri = format!("file://{}/a.loft", root.display());
+    let a_uri = loft::lsp::path_to_uri(&root.join("a.loft"));
     s.notify(
         "textDocument/didOpen",
         &open_params(&a_uri, "fn area(w: integer) -> integer {\n  w * w\n}\n"),
@@ -1244,7 +1244,7 @@ fn tag_completion_offers_tracker_tags() {
     .unwrap();
 
     let mut s = Session::start();
-    let root_uri = format!("file://{}", root.display());
+    let root_uri = loft::lsp::path_to_uri(&root);
     s.request(1, "initialize", &format!(r#"{{"rootUri":"{root_uri}"}}"#));
     let init = s.recv();
     let caps = field(field(&init, "result").unwrap(), "capabilities").unwrap();
@@ -1461,11 +1461,11 @@ fn rename_a_local_scopes_to_its_function() {
     s.request(
         1,
         "initialize",
-        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+        &format!(r#"{{"rootUri":"{}"}}"#, loft::lsp::path_to_uri(&root)),
     );
     let _ = s.recv();
     s.notify("initialized", "{}");
-    let uri = format!("file://{}/m.loft", root.display());
+    let uri = loft::lsp::path_to_uri(&root.join("m.loft"));
     s.notify("textDocument/didOpen", &open_params(&uri, prog));
     let _ = s.recv();
 
@@ -1520,11 +1520,11 @@ fn rename_a_parameter_edits_the_signature_and_excludes_a_field() {
     s.request(
         1,
         "initialize",
-        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+        &format!(r#"{{"rootUri":"{}"}}"#, loft::lsp::path_to_uri(&root)),
     );
     let _ = s.recv();
     s.notify("initialized", "{}");
-    let uri = format!("file://{}/m.loft", root.display());
+    let uri = loft::lsp::path_to_uri(&root.join("m.loft"));
     s.notify("textDocument/didOpen", &open_params(&uri, prog));
     let _ = s.recv();
 
@@ -1585,11 +1585,11 @@ fn rename_a_local_excludes_a_same_named_field() {
     s.request(
         1,
         "initialize",
-        &format!(r#"{{"rootUri":"file://{}"}}"#, root.display()),
+        &format!(r#"{{"rootUri":"{}"}}"#, loft::lsp::path_to_uri(&root)),
     );
     let _ = s.recv();
     s.notify("initialized", "{}");
-    let uri = format!("file://{}/m.loft", root.display());
+    let uri = loft::lsp::path_to_uri(&root.join("m.loft"));
     s.notify("textDocument/didOpen", &open_params(&uri, prog));
     let _ = s.recv();
 
