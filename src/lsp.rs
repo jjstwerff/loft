@@ -999,7 +999,12 @@ pub fn path_to_uri(p: &Path) -> String {
 /// A non-`file://` string passes through unchanged.
 #[must_use]
 pub fn uri_to_path(uri: &str) -> String {
-    let rest = uri.strip_prefix("file://").unwrap_or(uri);
+    // Only a `file://` URI names a filesystem path; anything else passes through
+    // UNCHANGED — never rewrite its separators (a Windows `/`→`\` sweep across the
+    // whole string turned `stdin://x` into `stdin:\x`).
+    let Some(rest) = uri.strip_prefix("file://") else {
+        return uri.to_string();
+    };
     // `file:///D:/…` leaves `/D:/…`; the leading slash before a drive is spurious.
     let rest = match rest.strip_prefix('/') {
         Some(after) if drive_prefixed(after) => after,
