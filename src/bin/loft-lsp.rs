@@ -856,12 +856,7 @@ fn stdlib_file_uri(stdlib_dir: &str, rel_file: &str) -> String {
 /// not `file://D:\a.loft`.  A POSIX path already starts with `/`, so it takes the
 /// same branch and is unchanged.
 fn file_uri(abs: &Path) -> String {
-    let plain = loft::lsp::plain_path(abs).replace('\\', "/");
-    if plain.starts_with('/') {
-        format!("file://{plain}")
-    } else {
-        format!("file:///{plain}")
-    }
+    loft::lsp::path_to_uri(abs)
 }
 
 // ── tracker-tag integration (T1 hover / T2 documentLink) ─────────────────────
@@ -870,7 +865,7 @@ fn file_uri(abs: &Path) -> String {
 fn initialize_root(msg: &Parsed) -> Option<String> {
     let params = obj_get(msg, "params")?;
     if let Some(uri) = obj_str(params, "rootUri") {
-        return Some(uri.strip_prefix("file://").unwrap_or(&uri).to_string());
+        return Some(uri_to_path(&uri));
     }
     obj_str(params, "rootPath")
 }
@@ -921,14 +916,15 @@ fn location_of(r: &loft::lsp::Reference, len: u32) -> Parsed {
     let line0 = r.line.saturating_sub(1);
     let col0 = r.col.saturating_sub(1);
     obj(vec![
-        ("uri", Parsed::Str(format!("file://{}", r.file))),
+        ("uri", Parsed::Str(file_uri(Path::new(&r.file)))),
         ("range", range_of(line0, col0, col0 + len)),
     ])
 }
 
-/// A `file://` document uri → its filesystem path.
+/// A `file://` document uri → its filesystem path (platform-agnostic; see
+/// [`loft::lsp::uri_to_path`]).
 fn uri_to_path(uri: &str) -> String {
-    uri.strip_prefix("file://").unwrap_or(uri).to_string()
+    loft::lsp::uri_to_path(uri)
 }
 
 /// The open documents as `(path, content)` overlays — the unsaved editor view that
@@ -997,7 +993,7 @@ fn rename_edit(
 fn build_workspace_edit(refs: &[loft::lsp::Reference], old_len: u32, new: &str) -> Parsed {
     let mut by_uri: Vec<(String, Vec<Parsed>)> = Vec::new();
     for r in refs {
-        let uri = format!("file://{}", r.file);
+        let uri = file_uri(Path::new(&r.file));
         let col0 = r.col.saturating_sub(1);
         let edit = obj(vec![
             (

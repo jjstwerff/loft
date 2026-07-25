@@ -35,3 +35,21 @@ jobs:
           key: winprobe-${{ runner.os }}-${{ hashFiles('Cargo.lock') }}
       - name: Run the probes
         run: cargo test --release --test windows_probe -- --nocapture
+
+      # Verify the platform-agnostic file://-URI abstraction on Windows: the
+      # cfg(windows) branch of uri_to_path, and that the previously-hanging
+      # lsp_transport tests now reply instead of timing out. A short per-test
+      # terminate turns a regression (a hang) into a ~45s failure, not 600s.
+      - name: Install cargo-nextest
+        uses: taiki-e/install-action@nextest
+      - name: URI/path abstraction unit tests (Windows cfg)
+        run: cargo test --release --lib uri_path_tests -- --nocapture
+      - name: LSP transport (was hanging on Windows) — must reply, not time out
+        shell: bash
+        run: |
+          mkdir -p .config
+          cat > .config/nextest.toml <<'TOML'
+          [profile.winprobe]
+          slow-timeout = { period = "45s", terminate-after = 1 }
+          TOML
+          cargo nextest run --release --profile winprobe --test lsp_transport --no-fail-fast

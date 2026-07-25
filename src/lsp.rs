@@ -960,6 +960,58 @@ pub fn plain_path(p: &Path) -> String {
     }
 }
 
+/// `true` when `s` begins with a Windows drive-letter prefix (`C:`).
+fn drive_prefixed(s: &str) -> bool {
+    let b = s.as_bytes();
+    b.len() >= 2 && b[0].is_ascii_alphabetic() && b[1] == b':'
+}
+
+/// The `file://` URI for a filesystem path, in the shape editors accept on EVERY
+/// platform — the counterpart of [`uri_to_path`].
+///
+/// Windows `D:\a\b` → `file:///D:/a/b`; POSIX `/a/b` → `file:///a/b`. It strips the
+/// `\\?\` verbatim prefix (via [`plain_path`]), renders separators as `/`, and adds
+/// the third slash before a drive letter.
+///
+/// The naive `format!("file://{}", p.display())` gets all three wrong on Windows —
+/// and its **backslashes are invalid JSON string escapes** (`\U`, `\r`, `\t`), so
+/// embedding such a URI in an LSP message silently corrupts it: a strict parser
+/// rejects the whole message. That is not a cosmetic bug — it is why an editor (or
+/// a test) that sent a Windows `rootUri` this way got no `initialize` reply and hung.
+/// Every path→URI in the LSP surface MUST go through here.
+#[must_use]
+pub fn path_to_uri(p: &Path) -> String {
+    let plain = plain_path(p).replace('\\', "/");
+    if plain.starts_with('/') {
+        format!("file://{plain}")
+    } else {
+        format!("file:///{plain}")
+    }
+}
+
+/// The filesystem path a `file://` URI denotes — the inverse of [`path_to_uri`] on
+/// every platform.
+///
+/// `file:///D:/a/b` → `D:\a\b` on Windows (drops the spurious leading slash before
+/// the drive letter and uses native `\` separators); `file:///a/b` → `/a/b` on
+/// POSIX. The result matches the form [`WorkspaceIndex`] stores ([`plain_path`] of a
+/// canonicalized path), so a URI and a walked path compare equal for the same file.
+/// A non-`file://` string passes through unchanged.
+#[must_use]
+pub fn uri_to_path(uri: &str) -> String {
+    let rest = uri.strip_prefix("file://").unwrap_or(uri);
+    // `file:///D:/…` leaves `/D:/…`; the leading slash before a drive is spurious.
+    let rest = match rest.strip_prefix('/') {
+        Some(after) if drive_prefixed(after) => after,
+        _ => rest,
+    };
+    if cfg!(windows) {
+        rest.replace('/', "\\")
+    } else {
+        rest.to_string()
+    }
+}
+
 /// Every `.loft` file under `root`, skipping build / VCS / dependency dirs.
 fn loft_files(root: &Path) -> Vec<PathBuf> {
     const SKIP: &[&str] = &[
@@ -2279,4 +2331,45 @@ fn enclosing_block(text: &str, line: u32) -> Option<(u32, u32)> {
         lexer.cont();
     }
     best
+}
+
+#[cfg(test)]
+mod uri_path_tests {
+    use super::{path_to_uri, uri_to_path};
+    use std::path::Path;
+
+    #[test]
+    fn path_to_uri_is_editor_shaped_and_never_has_backslashes() {
+        // A Windows drive path → the triple-slash, forward-slash form editors accept.
+        let u = path_to_uri(Path::new(r"C:\Users\x\a.loft"));
+        assert_eq!(u, "file:///C:/Users/x/a.loft");
+        // The whole point: a `file://` URI must NEVER carry backslashes — they are
+        // invalid JSON escapes (`\U`), which silently corrupts any LSP message the
+        // URI is embedded in — the cause of the Windows-nightly lsp_transport hang.
+        assert!(!u.contains('\\'), "backslash in URI: {u}");
+        // A POSIX absolute path already starts with `/`, so the branches meet at
+        // three slashes.
+        assert_eq!(
+            path_to_uri(Path::new("/home/x/a.loft")),
+            "file:///home/x/a.loft"
+        );
+        assert!(!path_to_uri(Path::new("/home/x/a.loft")).contains('\\'));
+    }
+
+    #[test]
+    fn uri_to_path_inverts_path_to_uri_on_this_platform() {
+        // Round-trips with native separators, whichever platform runs the test.
+        #[cfg(windows)]
+        {
+            assert_eq!(uri_to_path("file:///C:/a/b"), r"C:\a\b");
+            assert_eq!(uri_to_path(&path_to_uri(Path::new(r"C:\a\b"))), r"C:\a\b");
+        }
+        #[cfg(not(windows))]
+        {
+            assert_eq!(uri_to_path("file:///a/b"), "/a/b");
+            assert_eq!(uri_to_path(&path_to_uri(Path::new("/a/b"))), "/a/b");
+        }
+        // A non-file:// string passes through.
+        assert_eq!(uri_to_path("stdin://x"), "stdin://x");
+    }
 }
