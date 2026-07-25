@@ -122,6 +122,22 @@ shape); the full flip/reload/rebuild lifecycle (gated on the virtual-name
 fix); UDP same-port behavior beside the listener.
 
 
+### ~~G5~~ — LSP `file://` URIs built with backslashes are invalid JSON — FIXED 2026-07-25
+
+- **Symptom:** the Windows nightly's 11 `lsp_transport` timeouts (600s), all and
+  only the tests that set a workspace `rootUri`.
+- **Root cause:** `format!("file://{}", path.display())` on Windows yields
+  `file://C:\Users\…` — the backslashes are invalid JSON escapes (`\U`), so loft's
+  strict `json::parse` rejects the whole `initialize` message, the server skips it,
+  never replies, and the client blocks. On POSIX the path is forward-slashed, so it
+  works. The server EMITTED URIs the same broken way, so real Windows editors got
+  malformed `file://C:\…` back — not a test-only bug.
+- **Fix:** the platform-agnostic pair `loft::lsp::path_to_uri` / `uri_to_path`
+  (`src/lsp.rs`). ALWAYS convert a path↔URI through them — never `format!("file://…")`
+  or `strip_prefix("file://")` by hand. `path_to_uri` renders `C:\a\b` as
+  `file:///C:/a/b` (never a backslash → always valid JSON); `uri_to_path` inverts it
+  to native separators. Verified on the `windows-probe` custom CI.
+
 ### ~~G2~~ — `--native` `windows-targets` link search path (`LNK1181`) — FIXED 2026-05-30
 
 - **Root cause:** a diamond dependency pulls TWO versions of
