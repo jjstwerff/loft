@@ -1,0 +1,2 @@
+fn add_i(v: vector<integer>, x: integer) -> vector<integer> { out = v; out += [x]; out }
+fn main() { a: vector<integer> = []; for k in 0..3 { a = add_i(a, k); } println("{len(a)}"); }

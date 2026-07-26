@@ -1,0 +1,1 @@
+fn main() { a: vector<integer> = []; for k in [10,20,30] { a += [k]; } println("{len(a)}"); }
