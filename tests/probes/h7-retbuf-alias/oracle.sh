@@ -28,6 +28,9 @@ CASES="
 15_two_callsites                 6                   OK
 16_while                         3                   BROKEN
 17_struct_field                  3                   OK
+30_text_accum                    abc                 OK
+31_no_self_ref                   3                   OK
+32_read_before_call              3                   BROKEN
 "
 
 fail=0; pass=0; regressed=0

@@ -1,0 +1,2 @@
+fn add_t(s: text, x: text) -> text { out = s; out = "{out}{x}"; out }
+fn main() { s = ""; for k in ["a","b","c"] { s = add_t(s, k); } println("{s}"); }

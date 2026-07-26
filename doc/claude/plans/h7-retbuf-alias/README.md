@@ -122,6 +122,44 @@ variable's type currently depends on. That check would have named this bug from 
 first run, and would catch every sibling — any op that resets a buffer under a live
 alias, not just the return-buffer case.
 
+## The TEXT path already solves this — copy its shape
+
+The strongest lead, found by probing an axis the first matrix missed: **text
+accumulation is CORRECT.**
+
+```loft
+fn add_t(s: text, x: text) -> text { out = s; out = "{out}{x}"; out }
+for k in ["a","b","c"] { s = add_t(s, k); }     // "abc" — right
+```
+
+Identical shape, identical loop, identical self-assignment — and it works. The
+difference is in the signature the compiler generates:
+
+| | hidden buffer param | callee's first act |
+|---|---|---|
+| **vector** (broken) | `out: vector<integer>` — an OWNED buffer | `OpClearVector(out)` then `OpAppendVector(out, v)` |
+| **text** (correct) | `out: &text` — a REFERENCE | `out = s` — rebinds, never clears |
+
+So the text path never destroys its argument because it never clears a buffer the
+argument might alias: it *rebinds* the reference. That is the same move as the
+recommended swap, one level up — which is real evidence the swap is implementable in
+this substrate rather than a novel invention, because the text return path is
+already doing it in production.
+
+**Next reader: start here.** Read how the text retbuf is declared `&text` and
+rebound (`parser/control.rs` § the `__tret` / hidden-`&text` retbuf machinery,
+searchable via `hidden \`&text\` retbuf`), and ask whether a vector retbuf can take
+the same reference-and-rebind treatment. That is a far better starting point than
+the caller-side divert hunt below.
+
+## Two axes the first matrix missed
+
+| probe | result | what it rules in/out |
+|---|---|---|
+| `30_text_accum` — same shape, `text` | **correct** | NOT all heap returns — vector-specific (see above) |
+| `31_no_self_ref` — `a = mk(k)`, target not an argument | **correct** | the fault REQUIRES the target to be an argument, so the fix predicate is exactly P390's `ir_mentions_var` |
+| `32_read_before_call` — `seen += len(a)` before the call | **2, want 3** | an independent observable of the same fault; a fix must flip it |
+
 ## Implementation notes — what is built, and the blocker
 
 **The oracle is built** (`tests/probes/h7-retbuf-alias/oracle.sh`). Expectations are
