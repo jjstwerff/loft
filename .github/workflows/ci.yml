@@ -503,6 +503,23 @@ jobs:
           # mismatch class) STAYS on the PR path — it does not flake.
           if [ "${{ github.event_name }}" = "pull_request" ]; then
             FILTER="$FILTER and not binary(html_render) and not binary(html_asyncify)"
+            # The two exhaustive stdlib round-trips are the single biggest cost in
+            # the suite AND its floor: 379s + 375s on macOS (308s + 308s on ubuntu),
+            # ~65% of the `ir_schema_roundtrip` binary and ~11% of ALL per-test time.
+            # A parallel suite cannot finish faster than its slowest single test, so
+            # while they are here the macOS leg cannot beat ~14m39s (8m20s build +
+            # 6m19s test) however it is scheduled — which is why sharding was
+            # measured not to help (see the matrix comment above).
+            #
+            # What they verify is FORMAT STABILITY: the whole parsed stdlib survives
+            # serialise→deserialise byte-identical.  That breaks when the IR schema
+            # or the serialiser changes — rare, and always deliberate.  The cheap
+            # canary `tests_scripts_round_trip` (83s) STAYS on the PR path and still
+            # fails if round-tripping breaks at all; the exhaustive pair runs on
+            # push-to-main and nightly (step below), so a schema change is caught the
+            # same day, by the run that is nobody's inner loop.
+            FILTER="$FILTER and not test(stdlib_load_compares_equal_to_fresh)"
+            FILTER="$FILTER and not test(stdlib_whole_data_round_trip)"
           fi
           # A PR run is FEEDBACK — stop at the first failure, the author fixes it
           # and pushes again, and the runner minutes go to the next PR.  The
@@ -524,6 +541,18 @@ jobs:
       # so a real WebGL/asyncify regression is visible within a day without the flaky
       # browser render ever blocking a PR.  Self-skips cleanly when the runner has no
       # chrome/node (recorded in the skip ledger surfaced below).
+      # The exhaustive stdlib round-trips demoted off the per-PR path above.  Runs on
+      # push-to-main + the daily schedule, on EVERY platform in the matrix (the
+      # serialiser is layout-sensitive, so an ARM/x86 difference is exactly the kind
+      # of thing this pair exists to catch).  ~6m on macOS, ~5m on ubuntu, in
+      # parallel with nothing else — it is the last thing this job does.
+      - name: Stdlib round-trip (nightly — the exhaustive pair, off the PR path)
+        if: github.event_name != 'pull_request'
+        shell: bash
+        run: >
+          cargo nextest run --profile ci --no-fail-fast
+          -E 'test(stdlib_load_compares_equal_to_fresh) or test(stdlib_whole_data_round_trip)'
+
       - name: Browser render (nightly — off the flaky PR path)
         if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         shell: bash
