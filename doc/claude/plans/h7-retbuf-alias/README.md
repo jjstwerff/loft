@@ -122,6 +122,78 @@ variable's type currently depends on. That check would have named this bug from 
 first run, and would catch every sibling — any op that resets a buffer under a live
 alias, not just the return-buffer case.
 
+## Implementation notes — what is built, and the blocker
+
+**The oracle is built** (`tests/probes/h7-retbuf-alias/oracle.sh`). Expectations are
+hand-computed, not captured from a reference run, so it cannot inherit the bug. It
+separates two failure kinds, which matters for a fix that trades one against the
+other:
+
+- a `BROKEN` cell going correct → **FIXED**
+- an `OK` cell going wrong → **REGRESSION** (exit 2, louder than an unfixed cell)
+
+Baseline on `main`: **7 correct, 7 wrong, 0 regressions**.
+
+**The precedent to copy is @P390** (`parser/expressions.rs`): `v = v[a..b]` is the
+same hazard for slices — the RHS reads the variable the assignment is about to
+`OpClearVector`. It is detected with `ir_mentions_var(code, var_nr)` and resolved by
+routing through a temp. `ir_mentions_var` already exists and already answers exactly
+the question H7 needs.
+
+**The blocker, measured.** Instrumenting the P390 site shows an asymmetry:
+
+| form | reaches `parse_assign_op`? |
+|---|---|
+| `b = add_i(a, k)` (works today) | **yes** — `target=b … mentions_target=false` |
+| `a = add_i(a, k)` (the bug) | **no** — never appears |
+
+So the failing shape is **diverted before the generic assignment path**, onto the
+route that makes the call deliver into the target directly. That divert site is the
+chokepoint the fix belongs at, and it is not `nrvo_collapse_tail_set` (callee-side,
+fn-body tail) — it is a caller-side path I have not yet located in `control.rs`.
+
+Finding it is the next concrete step, and it is a *search*, not a design question:
+instrument the caller-side call-emission path the same way (`LOFT_PROBE_H7`-style,
+one `eprintln` at each candidate) and find where a `Set(target, Call)` acquires the
+retbuf dependency without passing through `parse_assign_op`.
+
+## Efficiency — why the obvious fix is the wrong one, measured
+
+| approach | allocations (N=200) | per-assignment | verdict |
+|---|---|---|---|
+| per-iteration buffer | **N+3** | O(1) | ✗ turns 4 allocs into 200 |
+| copy through a temp (the P390 idiom) | 5 | **O(len)** | ✗ **quadratic** — measured below |
+| **swap the two store handles** | **4** | **O(1)** | ✓ recommended |
+
+Today's broken code already uses **4 stores for 200 iterations** (`LOFT_STORES=timeline`),
+so allocation is O(1) in the loop — any per-iteration allocation is a large regression.
+
+The copy-through-temp idiom is exactly the consumer workaround, and it is quadratic.
+Measured on the interpreter, integer elements:
+
+```
+N=4000   0.13s
+N=8000   0.41s   (3.2x)
+N=16000  1.57s   (3.8x)      ← doubling N ~quadruples the time
+```
+
+For `vector<text>` or struct elements the per-copy cost is higher still, so the copy
+fix would be worse than these numbers suggest.
+
+**The swap:** at the assignment, exchange the store handles instead of binding the
+target as a view. The target takes the buffer's store (the fresh result); the buffer
+takes the target's previous store, which is stale and cleared on the next call
+anyway. The two ping-pong for the life of the loop — zero new allocations, zero
+copies beyond what the callee already performs, O(1) per assignment. It also
+*subtracts* machinery: each name owns whatever handle it holds, so both are freed
+once at scope end and the `skip_free` special-casing the alias needs disappears.
+
+**The claim to falsify first:** the lifetime analysis models the target as statically
+*depending on* the buffer; a swap makes ownership alternate at runtime. Cheapest
+probe — hand-write the swapped IR for the failing loop, run under
+`LOFT_STORES=timeline` + the leak census, and check frees stay at 2 with no leak. If
+that holds, the ownership-pair model is sound and the implementation is mechanical.
+
 ## Why this is not fixed here
 
 The chokepoint sits in the return-buffer machinery spread across
