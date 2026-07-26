@@ -677,7 +677,9 @@ impl Parser {
             let at = bl
                 .operators
                 .iter()
-                .position(|op| matches!(op, Value::Set(s, val) if *s == buf && **val == Value::Null))
+                .position(
+                    |op| matches!(op, Value::Set(s, val) if *s == buf && **val == Value::Null),
+                )
                 .map_or(0, |p| p + 1);
             bl.operators.insert(at, init);
         }
@@ -686,7 +688,12 @@ impl Parser {
     /// Walk one IR node for `rotate_loop_retbufs`, rewriting statement lists in
     /// place.  `in_loop` is true once the walk is inside a `Loop` body — the
     /// re-entry that makes a single per-site buffer unsafe.
-    fn rotate_retbufs_in(&mut self, node: &mut Value, in_loop: bool, partners: &mut Vec<(u16, u16)>) {
+    fn rotate_retbufs_in(
+        &mut self,
+        node: &mut Value,
+        in_loop: bool,
+        partners: &mut Vec<(u16, u16)>,
+    ) {
         match node {
             Value::Loop(bl) => self.rotate_retbufs_list(&mut bl.operators, true, partners),
             Value::Block(bl) => self.rotate_retbufs_list(&mut bl.operators, in_loop, partners),
@@ -720,18 +727,15 @@ impl Parser {
         let mut i = 0;
         while i < ops.len() {
             self.rotate_retbufs_in(&mut ops[i], in_loop, partners);
-            if in_loop
-                && let Some((target, buf)) = self.self_feeding_call(&ops[i])
-            {
-                let partner = match partners.iter().find(|(b, _)| *b == buf) {
-                    Some((_, p)) => *p,
-                    None => {
-                        let tp = self.vars.tp(buf).clone();
-                        let p = self.vars.work_refs(&tp, &mut self.lexer);
-                        self.vars.mark_caller_hidden_buf(p);
-                        partners.push((buf, p));
-                        p
-                    }
+            if in_loop && let Some((target, buf)) = self.self_feeding_call(&ops[i]) {
+                let partner = if let Some((_, p)) = partners.iter().find(|(b, _)| *b == buf) {
+                    *p
+                } else {
+                    let tp = self.vars.tp(buf).clone();
+                    let p = self.vars.work_refs(&tp, &mut self.lexer);
+                    self.vars.mark_caller_hidden_buf(p);
+                    partners.push((buf, p));
+                    p
                 };
                 let park = self.cl("OpPutRef", &[Value::Var(partner), Value::Var(target)]);
                 let rotate = self.cl("OpPutRef", &[Value::Var(buf), Value::Var(partner)]);
@@ -786,7 +790,11 @@ impl Parser {
         let feeds_itself = args.iter().any(|a| {
             !matches!(a.unspan(), Value::Var(w) if *w == buf) && ir_mentions_var(a, target)
         });
-        if feeds_itself { Some((target, buf)) } else { None }
+        if feeds_itself {
+            Some((target, buf))
+        } else {
+            None
+        }
     }
 
     // <expression> ::= <for> | 'continue' | 'break' | 'return' | 'yield' | '{' <block> | <operators>

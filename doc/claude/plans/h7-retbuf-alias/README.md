@@ -5,10 +5,12 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 # H7 — a variable aliases a call's return buffer, and a loop re-enters it
 
-> **Status: LOCALIZED, NOT FIXED (2026-07-26).** Root cause proven with a 17-cell
-> boundary matrix and a working-vs-broken IR differential. The fix is a
-> store-lifetime substrate change and is deliberately **routed, not patched** — see
-> § Why this is not fixed here. Probes: `tests/probes/h7-retbuf-alias/`.
+> **Status: FIXED (2026-07-27).** The oracle is 17/17 on both backends with zero
+> regressions, and the full suite is green. The fix is the **buffer rotation**
+> described in § The fix that shipped — the recommended swap, realised between two
+> BUFFERS rather than between the target and its buffer, which is what keeps the
+> ownership plan unchanged. Probes: `tests/probes/h7-retbuf-alias/`; regression
+> guard: `tests/scripts/h7-loop-retbuf-alias.loft`.
 
 Reported by moros (H7). Both backends agree, so this is the parser, not codegen.
 
@@ -232,7 +234,48 @@ probe — hand-write the swapped IR for the failing loop, run under
 `LOFT_STORES=timeline` + the leak census, and check frees stay at 2 with no leak. If
 that holds, the ownership-pair model is sound and the implementation is mechanical.
 
-## Why this is not fixed here
+## The fix that shipped
+
+`parser/expressions.rs::rotate_loop_retbufs`, a post-pass over each function body
+once it is parsed. It finds, inside a `Loop`, an assignment whose value is a user
+call that both writes into a hidden `__ref_N` buffer AND reads the variable being
+assigned — the two halves the matrix proved necessary (probe 31: without the
+self-read, the alias is harmless). It mints a SECOND buffer for that site and
+rotates the pair after the call:
+
+```
+a = n_add_i(a, k, __ref_1);      // a now holds __ref_1's store
+OpPutRef(__ref_1, __ref_2);      // the site's next call writes the OTHER store
+OpPutRef(__ref_2, a);            // which parks the live one out of reach
+```
+
+Two existing `OpPutRef`s — no new opcode. The stores ping-pong, so a call never
+clears the store the live target holds.
+
+**Why between two buffers, not between the target and its buffer.** The swap this
+document recommended exchanges `a` with `__ref_1`. That fails on the first
+iteration: `a` is a FIELD inside `__vdb_1`, not a whole store, so parking it in a
+buffer makes the scope-exit `OpFreeRef(__ref_1)` free `__vdb_1` a second time. Two
+buffers are the same handle KIND, so rotating them is ownership-symmetric: each is
+an ordinary `__ref_N` work-ref, each gets its usual plain free, and the target —
+still a view — is still freed by nobody. Nothing in the free plan changed, which
+is what the "claim to falsify first" was worried about.
+
+**Measured.** Allocations stay constant (5 for N=200, as before the fix — the
+extra buffer replaces one the old code was reusing); frees balance; no leak on
+either backend. The residual quadratic in the timing is the probe program's own
+`out = v` copy, not the fix: it adds two DbRef copies per iteration.
+
+**Vector targets only.** A struct (`Reference`) target is excluded, and the
+exclusion is load-bearing: native's assignment-from-call FREES the store the
+target held (`{ let _old = var_s; var_s = f(…); if _old != var_s { OpFreeRef(_old) } }`),
+so a parked struct handle is dangling by the next iteration —
+`tests/scripts/303-ref-reassign-free.loft` caught exactly that, going `v=null` on
+native while the interpreter stayed green. That same free is also why structs do
+not NEED the rotation. H6's shape (a struct transform chained through a loop) is
+correct on both backends.
+
+## Why this was not fixed at localization time
 
 The chokepoint sits in the return-buffer machinery spread across
 `parser/control.rs` (12.3k lines), `scopes.rs` (7.9k), `use_analysis.rs` (3.1k) and
