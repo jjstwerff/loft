@@ -83,12 +83,21 @@ jobs:
       - name: Install system build-deps (this package and its resolved deps)
         working-directory: ${{ matrix.package }}
         run: |
-          set -uo pipefail
+          set -u
           loft install > /dev/null 2>&1 || true      # populate ~/.loft/registry for the scan
-          deps=$( { sed -n 's/^ *build-deps *= *"\(.*\)"/\1/p' loft.toml
+          # DISCOVERY is best-effort: "nothing found" is an ordinary answer, not a
+          # failure.  GitHub runs this with `bash -e`, so every component's exit
+          # status matters, and on a normal package THREE of them are non-zero —
+          # the registry glob matches nothing (`cat` → 1) when a package has no
+          # deps, and a filter that removes every line (`grep -v` → 1) when nobody
+          # declares build-deps.  Under `pipefail` any one of those killed the step,
+          # which is what reddened seven of the eight adoption PRs.  So: no
+          # pipefail, `sed` instead of `grep`, and `|| true` on the whole thing.
+          # apt-get below still fails loudly — that one IS a real error.
+          deps=$( { sed -n 's/^ *build-deps *= *"\(.*\)"/\1/p' loft.toml 2>/dev/null
                     cat ~/.loft/registry/*/loft.toml 2>/dev/null \
                       | sed -n 's/^ *build-deps *= *"\(.*\)"/\1/p'
-                  } | tr ',' '\n' | tr -d ' ' | grep -v '^$' | sort -u | tr '\n' ' ')
+                  } | tr ',' '\n' | tr -d ' ' | sed '/^$/d' | sort -u | tr '\n' ' ') || true
           if [ -n "$deps" ]; then
             echo "installing build-deps: $deps"
             sudo apt-get install -y $deps
