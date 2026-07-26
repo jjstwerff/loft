@@ -174,6 +174,35 @@ def cell_safe(value: str) -> str:
     return " ".join(value.split()).replace("|", "/")
 
 
+# `test result: ok. 20 passed; 4 files  [scope note…]` — the runner's last line.
+RESULT_RE = re.compile(r"^\s*test result:.*?(?P<files>\d+)\s+files?", re.MULTILINE)
+
+
+def suite_evidence(text: str):
+    """Did the suite actually run, and over how many files?
+
+    Zero warnings is only good news when something was COMPILED to warn about.  A
+    run that died before parsing — no loft on PATH, a missing dependency, an empty
+    `tests/` — emits no warnings either, and reporting that as `clean` is the same
+    silence-reads-as-coverage failure this report exists to expose.  So the count
+    is published together with the evidence behind it, and a reading with no
+    evidence is INCONCLUSIVE rather than clean.
+    """
+    m = RESULT_RE.search(text)
+    if not m:
+        line = next(
+            (ln.strip() for ln in text.splitlines() if ln.strip().startswith("test result:")),
+            "",
+        )
+        return {"ran": bool(line), "files": 0, "result": cell_safe(line)}
+    files = int(m.group("files"))
+    return {
+        "ran": files > 0,
+        "files": files,
+        "result": cell_safe(m.group(0)),
+    }
+
+
 def cmd_scan(args) -> int:
     root = Path(args.root or args.pkg_dir or ".")
     if args.from_log:
@@ -188,6 +217,18 @@ def cmd_scan(args) -> int:
     for w in own:  # the package's own locations read better relative to it
         w["location"] = relative(w["location"], root)
 
+    evidence = suite_evidence(text)
+    # Did the suite compile THIS directory's source, or the registry's copy?
+    #
+    # A package's own tests say `use <pkg>;`, and loft may satisfy that from the
+    # registry rather than the checkout beside them — the run then prints
+    # `[registry] resolving <pkg> from registry`.  Scanning an OLD version's dir
+    # after a newer one is published therefore reports the NEW source's warnings:
+    # hex_world 0.1.2 has seven `not null` in its src, yet scanned clean once 0.2.0
+    # existed.  Harmless in the nightly (discover always checks out the LATEST tag,
+    # so the two coincide) but true by luck, not construction — so the reading says
+    # which source it measured instead of leaving the reader to assume.
+    self_resolved = f"[registry] resolving {args.name or root.name} from registry" in text
     report = {
         "package": cell_safe(args.name or root.name),
         "label": cell_safe(args.label),
@@ -197,6 +238,11 @@ def cmd_scan(args) -> int:
         "kinds": kind_counts(own),
         "warnings": sorted(own, key=sort_key),
         "dep_kinds": kind_counts(deps),
+        # The evidence behind `count` — see suite_evidence().
+        "ran": evidence["ran"],
+        "files": evidence["files"],
+        "result": evidence["result"],
+        "registry_resolved": self_resolved,
     }
     if args.json:
         out = Path(args.json)
@@ -204,9 +250,21 @@ def cmd_scan(args) -> int:
         out.write_text(json.dumps(report, indent=2) + "\n")
 
     ref = f" {args.ref}" if args.ref else ""
-    head = f"{report['package']}{ref} ({args.label}): {report['count']} warning(s)"
+    if not report["ran"]:
+        print(
+            f"{report['package']}{ref} ({args.label}): INCONCLUSIVE — the suite did not "
+            f"run (no compiled file to warn about), so {report['count']} warning(s) "
+            f"means nothing here"
+        )
+        return 0
+    head = (
+        f"{report['package']}{ref} ({args.label}): {report['count']} warning(s) "
+        f"over {report['files']} file(s)"
+    )
     if report["dep_count"]:
         head += f"  [+{report['dep_count']} in deps — not counted]"
+    if self_resolved:
+        head += "  [resolved from the REGISTRY — reflects the published copy, not this dir]"
     print(head)
     for g in report["kinds"]:
         print(f"  {g['count']:>3}×  {g['example']}")
@@ -242,7 +300,7 @@ def cmd_collect(args) -> int:
     print()
     print("| package | " + " | ".join(labels) + " | top warning kind |")
     print("|---|" + "---|" * (len(labels) + 1))
-    dirty = []
+    dirty, inconclusive, resolved = [], [], []
     for pkg in sorted(by_pkg):
         cells, kinds = [], {}
         for label in labels:
@@ -252,7 +310,17 @@ def cmd_collect(args) -> int:
                 continue
             n = r["count"]
             ref = f" ({r['ref']})" if r.get("ref") else ""
-            cells.append(("clean" if n == 0 else f"**{n}**") + ref)
+            # A reading whose suite never ran is NOT clean — nothing was compiled,
+            # so nothing could warn.  Older reports predate this evidence field;
+            # treat a missing `ran` as ran (they were all real runs).
+            if not r.get("ran", True):
+                cells.append("**n/a**" + ref)
+                inconclusive.append(f"{pkg} ({label})")
+                continue
+            mark = "†" if r.get("registry_resolved") else ""
+            cells.append(("clean" if n == 0 else f"**{n}**") + ref + mark)
+            if mark:
+                resolved.append(f"{pkg} ({label})")
             for g in r["kinds"]:  # sum a kind across the readings, keep one example
                 seen = kinds.setdefault(g["kind"], {"count": 0, "example": g["example"]})
                 seen["count"] += g["count"]
@@ -262,6 +330,29 @@ def cmd_collect(args) -> int:
             dirty.append(pkg)
 
     print()
+    if resolved:
+        print(
+            "† the package's own tests resolved it from the REGISTRY, so this reading "
+            "describes the published copy rather than the scanned directory: "
+            + ", ".join(f"`{x}`" for x in resolved)
+            + ". Identical for the latest version (what the nightly checks out), "
+            + "different for any older one."
+        )
+        print()
+    if inconclusive:
+        print(
+            f"**n/a = INCONCLUSIVE, not clean** — the suite did not run for "
+            + ", ".join(f"`{x}`" for x in inconclusive)
+            + ", so no file was compiled and nothing could warn. Fix the run before "
+            + "reading a zero there as good news."
+        )
+        print()
+        print(
+            "::warning title=warning scan inconclusive::"
+            + f"{len(inconclusive)} reading(s) produced no compiled file: "
+            + ", ".join(inconclusive),
+            file=sys.stderr,
+        )
     if dirty:
         print(f"**{len(dirty)} package(s) carry warnings:** " + ", ".join(f"`{p}`" for p in dirty))
         print()
@@ -291,6 +382,14 @@ def cmd_collect(args) -> int:
             + ", ".join(dirty)
             + " — each fails its own LOFT_DENY_WARNINGS CI on its next PR.",
             file=sys.stderr,
+        )
+    elif inconclusive:
+        # The all-clear is a CLAIM, and it is only true of readings that happened.
+        # Printing ✅ beside an n/a would re-introduce, in the summary line, exactly
+        # the false green the n/a exists to prevent.
+        print(
+            f"No warnings found — but {len(inconclusive)} reading(s) above are "
+            f"INCONCLUSIVE, so this is not an all-clear."
         )
     else:
         print("✅ every scanned library is warning-clean against this loft.")

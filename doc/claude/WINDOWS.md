@@ -137,6 +137,13 @@ fix); UDP same-port behavior beside the listener.
   or `strip_prefix("file://")` by hand. `path_to_uri` renders `C:\a\b` as
   `file:///C:/a/b` (never a backslash → always valid JSON); `uri_to_path` inverts it
   to native separators. Verified on the `windows-probe` custom CI.
+- **Confirmed on the real leg 2026-07-26:** daily run `30190084089` on `d1a5840c` —
+  `Test (windows-latest)` ran the full 53 minutes and PASSED, whole run green. The
+  preceding daily (`30146048916`, sha `06fb917c`) failed and predates this fix, so
+  the red→green transition is unambiguous rather than inferred. Note the real leg
+  only runs on push-to-main and the daily schedule; a PR's "Windows (daily)" check
+  merely mirrors the last scheduled run, so it stays red on a PR until a new one
+  lands.
 
 ### ~~G2~~ — `--native` `windows-targets` link search path (`LNK1181`) — FIXED 2026-05-30
 
