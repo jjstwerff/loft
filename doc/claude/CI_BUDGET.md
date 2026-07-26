@@ -145,7 +145,45 @@ Risk: an IR-schema diff that breaks only the exhaustive pair lands and is caught
 that night rather than on the PR. Acceptable — it is precisely a "format did not
 change by accident" check, and the canary still guards the common case.
 
-### B′. Duration-balanced sharding — IMPLEMENTED (2-way)
+### B′. Duration-balanced sharding — TRIED, MEASURED, REVERTED
+
+**Result: 24m11s versus 24m26s unsharded — fifteen seconds, for double the runner
+minutes.** Reverted. The projection below said ~12.3 min; here is why it was wrong,
+because the reason is more useful than the number.
+
+| shard | tests | work | wall | parallelism |
+|---|---|---|---|---|
+| 1 — the 7 heavy binaries | 871 | 1778s | 526s | **3.38** |
+| 2 — the other 151 | 2608 | 1261s | 733s | **1.72** |
+
+Shard 2 had **less work and took longer**. Two mistakes compounded:
+
+1. **The per-binary work estimates were taken from the pre-phase-1 run** and were
+   ~50 % low: shard 1's real work is 1778s, not the 1183s the split was balanced
+   on. The "perfectly balanced 1183/1083" partition was never balanced.
+2. **Parallelism is a property of the TEST MIX, not the runner.** Splitting
+   scattered the single-slot `heavy-serial` group (`n2_cdylib`, `n3_parity`,
+   `n3_use_native`, `multiplayer_v2/v3`, `wasm_debug_relay`) across both shards
+   while `native` — its biggest member — landed in the other one. The shard left
+   holding the most serial constraints and the least work became the long pole.
+
+The general lesson, now paid for twice: **a split cannot beat the serial structure
+inside the set it is splitting.** Any future attempt has to move the serial group
+as a unit, or fix why those binaries are serial at all — not partition around them.
+
+And sharding multiplies the fixed cost it can never amortise: ~5m build + ~3.5m
+cache restore/save = **~8.5 min per job before a test runs**, paid once per shard.
+
+### What is left, in order of measured size
+
+1. **~8.5 min fixed overhead per job.** `scripts/sccache_env.sh` exists and is
+   unused in CI; the cache restore+save steps are ~3.5 min. This is now the biggest
+   single item on the PR path and it is *not* a placement problem.
+2. **The `heavy-serial` group itself** — not to widen it (measured, see
+   `.config/nextest.toml`), but to reduce why its members must serialise.
+3. Nothing else measured above a couple of minutes.
+
+<details><summary>The original 2-way projection, kept for the record</summary>
 
 The earlier failure (below) was **hash** partitioning, which balances by test
 *count*. Two things changed since: phase 1 removed the two 308s tests, so no single
@@ -165,6 +203,8 @@ partition: 871 + 2608 = 3479 tests, zero overlap.
 
 3-way was computed (~10.3 min) and rejected: it saves 2 further minutes while the
 6m10s build becomes 60 % of each shard.
+
+</details>
 
 Sharding renames the matrix jobs, so a `Test (ubuntu-latest)` **aggregator** carries
 the branch-protection context and passes only when every shard passed — the
