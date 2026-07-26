@@ -48,11 +48,28 @@ jobs:
       - name: List registry packages
         id: list
         run: |
+          set -uo pipefail
           curl -sSfL https://raw.githubusercontent.com/loft-lang/registry/main/index.json -o index.json
           # Every package with at least one non-yanked version.
+          #
+          # `yanked` is TYPE-COERCED here rather than trusted.  The schema says it
+          # is a list, but eleven hand-published packages carried `false`, and the
+          # bare `.yanked | length` died with "boolean (false) has no length" —
+          # which failed `discover` in 3 seconds and SKIPPED the entire validate
+          # matrix.  Every published package then went unvalidated for days while
+          # the run merely looked red, so the gate was not reporting rot, it had
+          # stopped looking.  A malformed field must cost us that one package, not
+          # the whole sweep; loft-lang/registry's validator now rejects the bad
+          # shape at the source (tools/validate.py § gate_schema).
           packages=$(jq -c '[.packages | to_entries[]
-                             | select((.value.versions | keys | length) > (.value.yanked | length))
+                             | select((.value.versions | keys | length)
+                                      > ((.value.yanked | if type == "array" then length else 0 end)))
                              | .key]' index.json)
+          if [ -z "$packages" ] || [ "$packages" = "[]" ]; then
+            echo "::error::discover produced NO packages from the registry index — refusing to report a\
+           green sweep that validated nothing."
+            exit 1
+          fi
           echo "packages=$packages" >> "$GITHUB_OUTPUT"
           echo "validating: $packages"
 
