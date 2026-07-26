@@ -1201,7 +1201,15 @@ impl Parser {
         // strict-index lint below can still recognise a bare loop variable.
         let raw_index = p.unspan().clone();
         if !self.convert(p, index_t, &I32) {
-            diagnostic!(self.lexer, Level::Error, "Invalid index on string");
+            // Name the offending type: the bare "invalid index" this used to
+            // print reads as "indexing text is unsupported" and sent a consumer
+            // hunting for a missing feature instead of at their index expression.
+            diagnostic!(
+                self.lexer,
+                Level::Error,
+                "Cannot index text with '{}' — an index must be an integer (`s[i]`, `s[i..]`, `s[i..j]`)",
+                index_t.name(&self.data)
+            );
         }
         let mut other = Value::Null;
         if self.lexer.has_token("..") {
@@ -1214,7 +1222,12 @@ impl Parser {
             } else {
                 let ot_type = self.expression(&mut other);
                 if !self.convert(&mut other, &ot_type, &I32) {
-                    diagnostic!(self.lexer, Level::Error, "Invalid index on string",);
+                    diagnostic!(
+                        self.lexer,
+                        Level::Error,
+                        "Cannot end a text slice at '{}' — a range end must be an integer (`s[i..j]`)",
+                        ot_type.name(&self.data)
+                    );
                 }
                 if incl {
                     other = self.cl("OpAddInt", &[other.clone(), Value::Int(1)]);

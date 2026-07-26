@@ -614,6 +614,9 @@ impl Parser {
             // (the S22 motivation — par-worker silent-mutation in release —
             // remains addressed by the clone-side lock).
         }
+        if !self.first_pass {
+            self.rotate_loop_retbufs(&mut v);
+        }
         // Plan-22 phase 02a (2026-05-12): also save body in pass 1
         // so the closure mutation walker can run in pass 1 BEFORE
         // synthesize_closure_record sets attribute types.  The body
@@ -631,6 +634,159 @@ impl Parser {
             self.data.definitions[self.context as usize].code = v;
         }
         result
+    }
+
+    /// H7 — give a loop-carried return buffer a partner and rotate the two.
+    ///
+    /// A function returning a heap value takes a caller-allocated return buffer
+    /// as a hidden trailing argument and CLEARS it on entry.  The caller mints
+    /// one buffer per call SITE and binds the assignment target to that buffer
+    /// (`a["__ref_1"] = n_add(a, x, __ref_1)`), so after one execution `a` *is*
+    /// `__ref_1`.  Straight-line code is safe — every statement has its own
+    /// buffer — but a loop runs the one site again: the callee clears the buffer
+    /// that its own `v` argument now aliases, and every append but the last is
+    /// lost, with no diagnostic.
+    ///
+    /// Mint a SECOND buffer for such a site and rotate the pair after each call:
+    ///
+    /// ```text
+    ///   a = n_add(a, x, __ref_1);      // a now holds __ref_1's store
+    ///   OpPutRef(__ref_1, __ref_2);    // the site's next call writes the OTHER store
+    ///   OpPutRef(__ref_2, a);          // which parks the live one out of reach
+    /// ```
+    ///
+    /// The two stores ping-pong for the life of the loop, so the buffer a call
+    /// writes into is never the one the live target holds.  That costs one extra
+    /// store per site and no copy at all — O(1) per iteration, where routing the
+    /// result through a temp (the consumer workaround) is O(len) and so
+    /// quadratic over the loop.  Both buffers are ordinary `__ref_N` work-refs,
+    /// so each is freed once at scope exit and the target, a view, is not freed
+    /// at all — the ownership plan is unchanged.
+    fn rotate_loop_retbufs(&mut self, body: &mut Value) {
+        let mut partners: Vec<(u16, u16)> = Vec::new();
+        self.rotate_retbufs_in(body, false, &mut partners);
+        if partners.is_empty() {
+            return;
+        }
+        // Null-init each partner beside the buffer it rotates with, so the slot
+        // allocator sees a first definition and the two stay adjacent in
+        // `var_order` (scope exit frees in reverse declaration order).
+        let Value::Block(bl) = body else { return };
+        for (buf, partner) in partners {
+            let init = v_set(partner, Value::Null);
+            let at = bl
+                .operators
+                .iter()
+                .position(|op| matches!(op, Value::Set(s, val) if *s == buf && **val == Value::Null))
+                .map_or(0, |p| p + 1);
+            bl.operators.insert(at, init);
+        }
+    }
+
+    /// Walk one IR node for `rotate_loop_retbufs`, rewriting statement lists in
+    /// place.  `in_loop` is true once the walk is inside a `Loop` body — the
+    /// re-entry that makes a single per-site buffer unsafe.
+    fn rotate_retbufs_in(&mut self, node: &mut Value, in_loop: bool, partners: &mut Vec<(u16, u16)>) {
+        match node {
+            Value::Loop(bl) => self.rotate_retbufs_list(&mut bl.operators, true, partners),
+            Value::Block(bl) => self.rotate_retbufs_list(&mut bl.operators, in_loop, partners),
+            Value::Insert(ops) | Value::Call(_, ops) | Value::CallRef(_, ops) => {
+                for op in ops.iter_mut() {
+                    self.rotate_retbufs_in(op, in_loop, partners);
+                }
+            }
+            Value::If(c, t, e) => {
+                self.rotate_retbufs_in(c, in_loop, partners);
+                self.rotate_retbufs_in(t, in_loop, partners);
+                self.rotate_retbufs_in(e, in_loop, partners);
+            }
+            Value::Span(b) => self.rotate_retbufs_in(&mut b.1, in_loop, partners),
+            Value::Set(_, b) | Value::Return(b) | Value::Drop(b) | Value::BreakWith(_, b) => {
+                self.rotate_retbufs_in(b, in_loop, partners);
+            }
+            _ => {}
+        }
+    }
+
+    /// Statement-list half of `rotate_retbufs_in`: recurse into each statement,
+    /// then splice the two rotate ops in after any statement that is a
+    /// loop-carried self-feeding call.
+    fn rotate_retbufs_list(
+        &mut self,
+        ops: &mut Vec<Value>,
+        in_loop: bool,
+        partners: &mut Vec<(u16, u16)>,
+    ) {
+        let mut i = 0;
+        while i < ops.len() {
+            self.rotate_retbufs_in(&mut ops[i], in_loop, partners);
+            if in_loop
+                && let Some((target, buf)) = self.self_feeding_call(&ops[i])
+            {
+                let partner = match partners.iter().find(|(b, _)| *b == buf) {
+                    Some((_, p)) => *p,
+                    None => {
+                        let tp = self.vars.tp(buf).clone();
+                        let p = self.vars.work_refs(&tp, &mut self.lexer);
+                        self.vars.mark_caller_hidden_buf(p);
+                        partners.push((buf, p));
+                        p
+                    }
+                };
+                let park = self.cl("OpPutRef", &[Value::Var(partner), Value::Var(target)]);
+                let rotate = self.cl("OpPutRef", &[Value::Var(buf), Value::Var(partner)]);
+                ops.insert(i + 1, rotate);
+                ops.insert(i + 2, park);
+                i += 2;
+            }
+            i += 1;
+        }
+    }
+
+    /// Is `stmt` an assignment whose value is a user call that both writes into
+    /// a hidden return buffer AND reads the variable being assigned?  Returns
+    /// `(target, buffer)`.  Both halves are required: without the buffer there
+    /// is nothing to alias, and without the self-read (`a = mk(k)`) the target
+    /// aliasing the buffer is harmless.
+    fn self_feeding_call(&self, stmt: &Value) -> Option<(u16, u16)> {
+        let Value::Set(target, value) = stmt.unspan() else {
+            return None;
+        };
+        let target = *target;
+        // A hidden buffer or a parameter as the target is the callee-side NRVO
+        // shape, which owns its storage differently — leave it alone.
+        if self.vars.is_argument(target) || self.vars.is_caller_hidden_buf(target) {
+            return None;
+        }
+        // Vector targets only.  A struct (`Reference`) target is already safe:
+        // native's assignment-from-call frees the store the target held, so the
+        // two handles cannot ping-pong — and it does not need to, because a
+        // struct-returning callee copies its argument by value rather than
+        // clearing the buffer it was handed (tests/scripts/303-ref-reassign-free).
+        if !matches!(self.vars.tp(target), Type::Vector(_, _)) {
+            return None;
+        }
+        let Value::Call(fn_nr, args) = value.unspan() else {
+            return None;
+        };
+        // A loft-defined callee: only those take a caller-allocated buffer.
+        let def = self.data.def(*fn_nr);
+        if !(def.name.starts_with("n_") || def.name.starts_with("t_")) || def.code == Value::Null {
+            return None;
+        }
+        let buf = args.iter().rev().find_map(|a| match a.unspan() {
+            Value::Var(w)
+                if self.vars.is_caller_hidden_buf(*w)
+                    && self.vars.name(*w).starts_with("__ref_") =>
+            {
+                Some(*w)
+            }
+            _ => None,
+        })?;
+        let feeds_itself = args.iter().any(|a| {
+            !matches!(a.unspan(), Value::Var(w) if *w == buf) && ir_mentions_var(a, target)
+        });
+        if feeds_itself { Some((target, buf)) } else { None }
     }
 
     // <expression> ::= <for> | 'continue' | 'break' | 'return' | 'yield' | '{' <block> | <operators>

@@ -1603,6 +1603,19 @@ impl Parser {
     /// (`&self`). Replaces the three inline branches the Reference arm of
     /// `block_result` carried; mirrors `classify_vector_delivery`.
     fn classify_reference_delivery(&self, ls: &[u16], l: &[Value]) -> RefDelivery {
+        if l.last()
+            .is_some_and(|tail| self.return_field_base_is_call(tail))
+        {
+            // #425 sibling at the IMPLICIT tail — `fn get() -> Inner { mk().inn }`
+            // projects a struct field of an inline-call temporary.  That temporary
+            // is lifted to `__lift_N` and freed at scope exit, so returning the
+            // field as-is hands the caller a ref into a freed store: the native
+            // backend discards it and returns null, the interpreter reads the
+            // stale bytes and only looks right.  Copy the field's record into an
+            // owned buffer first — the same thing the EXPLICIT `return mk().inn`
+            // already does through `parse_return`.
+            return RefDelivery::MaterializeView;
+        }
         if ls.is_empty() {
             // Issue #120: deps stripped — recover the tail's hidden work-refs so the
             // site still binds to the one buffer. No work-ref to recover → AsIs.
