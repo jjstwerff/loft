@@ -70,6 +70,32 @@ jobs:
           cargo build --release --lib --bin loft
           echo "$PWD/target/release" >> "$GITHUB_PATH"
 
+      # System libraries the package's native crate links against, declared as
+      # `build-deps` in loft.toml (graphics → libgl-dev, libasound2-dev).  Needed on
+      # BOTH gates: the cdylib is built even under --interpret, because #native fns
+      # are called through it.
+      #
+      # The package's OWN loft.toml is not enough.  `input` declares no build-deps
+      # yet depends on `graphics`, whose cdylib is what actually needs GL/ALSA — so
+      # a scan of the package alone leaves it red for a reason its manifest never
+      # mentions.  Resolving the deps first and scanning THEIR manifests too makes
+      # this correct for the whole tree without hard-coding a package list.
+      - name: Install system build-deps (this package and its resolved deps)
+        working-directory: ${{ matrix.package }}
+        run: |
+          set -uo pipefail
+          loft install > /dev/null 2>&1 || true      # populate ~/.loft/registry for the scan
+          deps=$( { sed -n 's/^ *build-deps *= *"\(.*\)"/\1/p' loft.toml
+                    cat ~/.loft/registry/*/loft.toml 2>/dev/null \
+                      | sed -n 's/^ *build-deps *= *"\(.*\)"/\1/p'
+                  } | tr ',' '\n' | tr -d ' ' | grep -v '^$' | sort -u | tr '\n' ' ')
+          if [ -n "$deps" ]; then
+            echo "installing build-deps: $deps"
+            sudo apt-get install -y $deps
+          else
+            echo "no build-deps declared by this package or its deps"
+          fi
+
       # A library's OWN CI denies warnings on its own code by default (a package may
       # opt out with a `.allow_warnings` file in its dir) — distinct from the loft-side
       # revalidate-libs gate, which tolerates warnings (a new loft warning must not fail
@@ -90,3 +116,13 @@ jobs:
         if: hashFiles(format('{0}/native/tests/*.rs', matrix.package)) != ''
         working-directory: ${{ matrix.package }}/native
         run: cargo test --release
+
+      # Phase 6t Tier 4 — run each declared dependency's own tests against the loft
+      # built here.  Catches "we shipped a dep version that breaks this consumer" at
+      # the consumer, which is the only place it is visible.  The drifted per-repo
+      # copies in graphics/world/game already gated on this; keeping it means the
+      # unified workflow is a SUPERSET of every copy it replaces, so adopting it
+      # cannot quietly lose coverage a repo already had.
+      - name: Transitive dep tests
+        working-directory: ${{ matrix.package }}
+        run: LOFT_TIMEOUT=240 loft test --deps
