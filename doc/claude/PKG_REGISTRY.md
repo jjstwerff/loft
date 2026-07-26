@@ -823,6 +823,30 @@ one reading locally:
 LOFT=target/release/loft scripts/lib_warning_scan.py scan <pkg-dir> --label source
 ```
 
+**A zero is only as good as the evidence behind it**, so every reading carries
+that evidence and the report distinguishes three outcomes rather than two:
+
+| shown | meaning |
+|---|---|
+| `clean` | the suite compiled N files and none warned |
+| `**n/a**` | **inconclusive** — the suite never ran, so nothing could warn; a zero here means nothing |
+| `†` | the reading came from the **registry copy**, not the scanned directory |
+
+The `n/a` case is the one that matters: a run that dies before parsing (no loft on
+`PATH`, an unresolvable dependency, an empty `tests/`) emits no warnings either,
+and printing that as `clean` is the same silence-reads-as-coverage failure the
+report exists to expose.  The summary line withholds its all-clear whenever any
+reading is inconclusive.
+
+The `†` marker records *which source was measured*.  A package's own tests say
+`use <pkg>;`, and loft may satisfy that from the registry rather than the checkout
+beside them (`[registry] resolving <pkg> from registry`).  Scanning an older
+version's directory after a newer one is published therefore reports the NEW
+source: `hex_world` 0.1.2 has seven `not null` in its `src/`, yet scans clean now
+that 0.2.0 exists.  The nightly is unaffected — `discover` always checks out the
+LATEST tag, so the two coincide — but they coincide by luck rather than by
+construction, which is exactly the kind of thing a report should say out loud.
+
 Surveyed Debian/apt's ecosystem for prior art.  Decisions:
 
 ### Adopted in the MVP (schema-level)
