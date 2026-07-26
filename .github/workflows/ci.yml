@@ -92,8 +92,26 @@ jobs:
       - id: osmatrix
         shell: bash
         run: |
+          # @CI_BUDGET — a PR runs the full suite on UBUNTU ONLY.
+          #
+          # macOS moves to the same footing Windows has had: it duplicated ubuntu's
+          # 3481 tests exactly, cost ~50% more to do it (25m35s vs 24m26s AFTER the
+          # phase-1 cut), and was the run's critical path.  Measured asymmetry was
+          # not enough on its own — the platform-AGNOSTIC families total only ~412s,
+          # so trimming them still left ~21m.
+          #
+          # What makes dropping it honest rather than a coverage cut is that the
+          # macOS-specific risk is now gated per-PR by cheaper, targeted jobs: the
+          # founding @P383 incident was ARM-only MEMORY corruption, and #646 put
+          # Miri-macOS (1m29s) and the ASan-macOS UAF/OOB sweep (7m34s) on every PR.
+          # A pure-interpreter test cannot fail on macOS alone; a memory bug can, and
+          # that is exactly what those two catch — for 9 minutes instead of 25.
+          #
+          # The FULL macOS suite still runs on every push-to-main and on the daily
+          # schedule, so a genuine macOS-only functional break surfaces within one
+          # merge, never at release.  Same trade, same reasoning, as Windows.
           if [ "${{ github.event_name }}" = "pull_request" ]; then
-            echo 'os=["ubuntu-latest","macos-latest"]' >> "$GITHUB_OUTPUT"
+            echo 'os=["ubuntu-latest"]' >> "$GITHUB_OUTPUT"
           else
             echo 'os=["ubuntu-latest","macos-latest","windows-latest"]' >> "$GITHUB_OUTPUT"
           fi
@@ -180,6 +198,20 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - run: echo "Windows is validated DAILY (off the PR matrix). Live state in the 'Windows (daily)' check. This required context is a non-blocking placeholder on PRs."
+
+  # Same placeholder, same reason, for macOS (@CI_BUDGET): the full macOS leg left
+  # the PR matrix because it duplicated ubuntu at ~50% higher cost and WAS the
+  # critical path.  The macOS-specific risk it actually carried — ARM-only memory
+  # corruption, the @P383 class — is gated per-PR by Miri-macOS and the ASan-macOS
+  # sweep instead, at 9 minutes rather than 25.  The full suite runs on every
+  # push-to-main and daily.  Left required here so no branch-protection change is
+  # needed; drop the context from the required set to retire this job.
+  macos-pr-placeholder:
+    name: Test (macos-latest)
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "macOS full suite runs on push-to-main + daily (off the PR matrix). Per-PR macOS coverage is Miri-macOS + the ASan-macOS UAF/OOB sweep. This required context is a non-blocking placeholder on PRs."
 
   # Windows is validated DAILY (the 03:00 schedule) + on every push-to-main, NOT
   # per-PR (the Windows leg costs ~30 min — see the `on:` comment).  This job

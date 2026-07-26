@@ -170,7 +170,31 @@ to their own job), because that is balanced by hand against measured time. Note
 each such job re-pays the build floor (~8m macOS), so two jobs cost ~16m of build
 to save ~6m of test — worth it only after A, and only if A alone leaves us over.
 
-### C. Asymmetric platform coverage
+### C′. macOS leaves the PR matrix — IMPLEMENTED
+
+Measured asymmetry (running only the platform-sensitive families on macOS) does
+**not** reach the rule: the platform-agnostic families total only ~412s of the
+~1950s macOS test work, so trimming them leaves ~21m. The build floor alone is
+8m26s — 44 % of a 20-minute budget — before one test runs.
+
+So macOS moves to the footing **Windows has had since the per-PR Windows leg was
+dropped**: full suite on push-to-main and the daily schedule, a non-blocking
+placeholder on PRs. The trade is only honest because of what #646 added — the
+macOS-specific risk is ARM-only *memory* corruption (@P383), and Miri-macOS
+(1m29s) and the ASan-macOS UAF/OOB sweep (7m34s) now gate every PR. **A
+pure-interpreter test cannot fail on macOS alone; a memory bug can, and those two
+catch it — for 9 minutes instead of 25.**
+
+Residual risk, stated plainly: a macOS-only *functional* break (not memory) now
+surfaces on the merge commit rather than the PR. That is one merge of exposure,
+never a release, and it is the same bet already taken for Windows.
+
+**ubuntu then becomes the binding leg at 24m26s** — still over the rule, and its
+own problem: build ~6m10s + test 15m35s, with effective parallelism ~1.9 despite 4
+cores, because the subprocess-heavy tests (each spawning rustc) cannot overlap.
+That is the next thing to attack, and it is a *work* problem, not a placement one.
+
+### C. Asymmetric platform coverage (superseded by C′)
 
 macOS is ~50 % slower than ubuntu for identical work and duplicates it exactly.
 Options, in order of preference:
