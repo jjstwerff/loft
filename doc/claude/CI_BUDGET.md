@@ -76,6 +76,41 @@ And inside `ir_schema_roundtrip`, **two tests are the whole story**:
 Those two are 754s / 616s — about 65 % of the largest binary, and **~11 % of all
 per-test time on their own**.
 
+### MEASURED AFTER PHASE 1 — the model below was wrong, keep reading
+
+Phase 1 landed (#646) and the result contradicted the prediction:
+
+| leg | before | after | predicted |
+|---|---|---|---|
+| macOS | 31m40s | **25m35s** | ~20m ❌ |
+| ubuntu | 21m46s | **24m26s** | ~15m ❌ |
+
+The macOS `Test` step did fall 22m18s → 16m12s — exactly the pair being removed —
+but the leg is still 25m35s, and ubuntu did not improve at all.
+
+**Why the "floor" model misled.** `build + slowest single test` is a true LOWER
+BOUND but not the predictor. The leg is governed by **total work ÷ effective
+parallelism**: ~1950s of remaining test work at ~2 effective threads ≈ 16m15s,
+matching the observed 16m12s almost exactly. Removing the two slow tests lowered a
+floor the leg was never resting on. Use the work÷parallelism model below; the
+slowest-test figure only tells you when sharding is pointless.
+
+**And the serial group is a red herring.** `heavy-serial` (`max-threads = 1`) looks
+like the obvious target — widening it locally takes the `native` binary 32.8s → 9.6s.
+It is not the critical path:
+
+```
+serial chain, all 7 members:  288s
+general pool:                ~1662s at ~2 threads ≈ 831s     ← the binding chain
+```
+
+Widening it buys ≈0 wall-clock on CI and re-opens the builder-vs-victim starvation
+flake it exists to close (a rustc storm starving a websocket test into a timeout).
+The stale claim that `multiplayer_v2` needs a fixed port 7878 is corrected in
+`.config/nextest.toml`: P231 moved v2/v3 to `pick_free_port()`. They still cannot
+leave the group, but for the *starvation* reason — and they would first need v5's
+`JOIN_CAP` bounded drain, which they do not yet have.
+
 ### The floor nobody can shard away
 
 A parallel suite cannot finish faster than its **slowest single test**. Today

@@ -57,9 +57,12 @@ path = "junit.xml"
 # the Rust Mutex can't.  The Mutex remains as belt-and-suspenders for
 # plain `cargo test` / developer loops.
 #
-# Same shape applies to multiplayer_v2: every scenario binds the
-# example v2 server on the fixed port 7878.  Without a single-slot
-# group, two scenarios racing for bind() flake the suite.
+# Same shape applied to multiplayer_v2 when every scenario bound the example v2
+# server on the fixed port 7878.  THAT REASON IS GONE: P231 moved v2 and v3 to
+# `pick_free_port()` (bind 127.0.0.1:0), so two scenarios can no longer race for
+# the same bind.  They stay in the group below for the OTHER reason — starvation
+# under a rustc storm — not for ports.  Do not cite the port race as
+# justification; it no longer exists.
 
 [test-groups]
 html-wasm-serial = { max-threads = 1 }
@@ -88,6 +91,24 @@ html-wasm-serial = { max-threads = 1 }
 # the root instead: drain_with_timeout bounds its wait (JOIN_CAP), so a held-open
 # pipe is a ~45s fail-and-retry, not a 600s hang — keeping v5 parallel without
 # paying the serial cost.
+#
+# MEASURED 2026-07-26 — do NOT widen this group expecting a speedup.  Widening it
+# to 4 locally took the `native` binary 32.8s → 9.6s (3.4×), which looks compelling
+# and is irrelevant: this box has many cores, `macos-latest` has 3.  What decides
+# it is which chain is CRITICAL:
+#
+#   serial chain, all 7 members (macOS):  288s  [native 240 + n3_parity 20 +
+#                                                n3_use_native 14 + n2_cdylib 9 +
+#                                                relay 5 + v2/v3 <1]
+#   general pool:                        ~1662s at ~2 effective threads ≈ 831s
+#
+# The pool is ~3× longer, so this group is NOT the critical path: widening it buys
+# ≈0 wall-clock while re-opening the starvation flake it exists to close.  The leg
+# is bound by TOTAL WORK ÷ PARALLELISM.  See doc/claude/CI_BUDGET.md.
+#
+# If v2/v3 are ever to leave this group the way v5 did, they need v5's JOIN_CAP
+# bounded drain FIRST — they currently carry their own UNBOUNDED copies of
+# drain_with_timeout, so today they would be exposed to the same 600s-TMT hang.
 heavy-serial = { max-threads = 1 }
 
 [[profile.default.overrides]]
