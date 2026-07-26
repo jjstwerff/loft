@@ -213,120 +213,43 @@ jobs:
     steps:
       - run: echo "macOS full suite runs on push-to-main + daily (off the PR matrix). Per-PR macOS coverage is Miri-macOS + the ASan-macOS UAF/OOB sweep. This required context is a non-blocking placeholder on PRs."
 
-  # Sharding renamed the matrix jobs to `Test (ubuntu-latest) shard N`, which would
-  # leave branch protection's required `Test (ubuntu-latest)` context permanently
-  # unreported — the PR would never become mergeable.  This aggregator carries that
-  # name and passes only if EVERY shard passed, so the required context keeps its
-  # exact meaning without a settings change.
-  #
-  # `needs.test.result` is the matrix's rolled-up conclusion: `success` only when
-  # all legs succeeded, `skipped` when the whole job was skipped (a docs-only diff,
-  # which must still be mergeable).  Anything else — failure, cancelled — is a red
-  # gate.  PR-only, because on other events only the shards' own results matter.
-  test-gate:
-    name: Test (ubuntu-latest)
-    needs: test
-    if: always() && github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    steps:
-      - name: All test shards passed
-        run: |
-          r='${{ needs.test.result }}'
-          echo "sharded test matrix: $r"
-          case "$r" in
-            success)  echo "every shard passed" ;;
-            skipped)  echo "test matrix skipped (docs-only diff) — nothing to gate" ;;
-            *) echo "::error::a Test shard did not pass ($r) — open the 'Test (ubuntu-latest) shard N' jobs"; exit 1 ;;
-          esac
-
-  # Windows is validated DAILY (the 03:00 schedule) + on every push-to-main, NOT
-  # per-PR (the Windows leg costs ~30 min — see the `on:` comment).  This job
-  # mirrors the latest daily Windows result onto each PR so its state is visible
-  # without re-validating: green when the last daily Windows leg passed, RED when
-  # it failed.  It is NOT in branch protection's required set, so a red here NEVER
-  # blocks the merge — it is a visible nudge to open a focused Windows-fix
-  # session, not a gate.  Any lookup problem reports green so it can never
-  # false-fail a PR on infrastructure noise.
-  windows-daily-status:
-    name: Windows (daily)
-    if: github.event_name == 'pull_request'
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-      actions: read
-    steps:
-      - name: Mirror the latest daily Windows result
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REPO: ${{ github.repository }}
-        shell: bash
-        run: |
-          set -uo pipefail
-          # Latest COMPLETED scheduled CI run — the daily full-matrix run, which
-          # always runs the real Windows leg (schedule has no docs-only skip).
-          run_id=$(gh run list --repo "$REPO" --workflow CI --event schedule \
-                     --status completed --limit 1 --json databaseId \
-                     --jq '.[0].databaseId // empty' 2>/dev/null || true)
-          if [ -z "${run_id:-}" ]; then
-            echo "::notice title=Windows (daily)::No completed daily Windows run found yet — nothing to mirror (reporting green)."
-            exit 0
-          fi
-          # Two jobs share this name (the real matrix leg + the PR placeholder,
-          # which exists-but-skipped on scheduled runs and can sort first), so
-          # ignore skipped conclusions — only a job that actually ran counts.
-          concl=$(gh run view "$run_id" --repo "$REPO" --json jobs \
-                    --jq 'first(.jobs[] | select(.name=="Test (windows-latest)" and .conclusion != "skipped") | .conclusion) // empty' \
-                    2>/dev/null || true)
-          url="https://github.com/$REPO/actions/runs/$run_id"
-          echo "Latest daily Windows leg: ${concl:-unknown}  ($url)"
-          case "${concl:-}" in
-            success)
-              echo "::notice title=Windows OK (daily)::Last daily Windows run passed — not re-validated on this PR. $url"
-              ;;
-            failure|cancelled|timed_out)
-              echo "::error title=Windows FAILED (daily)::The last daily Windows run was '$concl'. Windows is broken on main as of $url — this PR does not re-validate Windows; fixing it is optional to merge but worth a focused session."
-              exit 1
-              ;;
-            *)
-              echo "::warning title=Windows (daily)::Latest daily Windows conclusion was '${concl:-missing}' — treating as non-failing. $url"
-              ;;
-          esac
-
   test:
-    name: Test (${{ matrix.os }}) shard ${{ matrix.shard }}
+    name: Test (${{ matrix.os }})
     needs: changes
     if: needs.changes.outputs.code == 'true'
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
-      # SHARDED BY DURATION — and note carefully why this is not the thing that
-      # failed before.  The earlier attempt used nextest's HASH partitioning, which
-      # balances by test COUNT: the slow integration tests piled into one shard
-      # (macOS shard1 6m vs shard2 20m), wall-clock stayed at the slow shard, and
-      # runner-minutes doubled for nothing.  That failure is real and the comment
-      # it left behind was right at the time.
+      # UNSHARDED — and this has now been measured TWICE, by two different
+      # splitting strategies.  Do not try a third without reading both results.
       #
-      # Two things changed.  Phase 1 moved the two 308s stdlib round-trips off the
-      # PR path, so no single test is large against a shard any more (biggest is
-      # ~139s vs ~1130s of shard budget) — the "can't split a single slow test"
-      # objection no longer binds.  And this splits on MEASURED DURATION per binary
-      # rather than by count: shard 1 takes the seven heaviest binaries (1183s),
-      # shard 2 takes the other 151 (1083s).  Greedy longest-processing-time over
-      # the real numbers balances to within seconds.
+      # 1. HASH partitioning (nextest --partition): balances by test COUNT, so the
+      #    slow integration tests piled into one shard — macOS shard1 6m vs shard2
+      #    20m.  Wall-clock stayed at the slow shard; runner-minutes doubled.
       #
-      #   measured 2026-07-26, ubuntu: 2266s of PR-path work at ~3.1 effective
-      #   threads → ~6.1 min per shard + 6m10s build ≈ 12.3 min, from 24m26s.
+      # 2. DURATION-balanced split by binary (#647, reverted here).  It fixed the
+      #    count-vs-duration flaw and still failed, for a different reason:
       #
-      # NEW BINARIES LAND IN SHARD 2 automatically (it is the negation), so this
-      # fails safe: a test added tomorrow runs, it does not silently vanish.  Only
-      # the balance drifts, and only slowly.  3-way was measured too and rejected:
-      # it saves 2 further minutes while the 6m10s build becomes 60% of each shard.
+      #      shard 1 (7 heavy binaries, 871 tests): 1778s work / 526s wall = 3.38 threads
+      #      shard 2 (the other 151,   2608 tests): 1261s work / 733s wall = 1.72 threads
+      #
+      #    Shard 2 had LESS work and took LONGER.  Parallelism is a property of the
+      #    TEST MIX, not of the runner: splitting scattered the single-slot
+      #    `heavy-serial` group (n2_cdylib, n3_parity, n3_use_native, multiplayer_v2/v3,
+      #    wasm_debug_relay — see .config/nextest.toml) across shards while `native`,
+      #    its biggest member, went to the other one.  The shard left holding the most
+      #    serial constraints and the least work became the long pole.  Net result:
+      #    24m11s versus 24m26s unsharded — FIFTEEN SECONDS for double the minutes.
+      #
+      # The fixed per-job overhead is what sharding multiplies and never amortises:
+      # ~5m build + ~3.5m cache restore/save = ~8.5 min before a test runs.  THAT is
+      # the lever (sccache, trimming the cache steps), not moving tests between
+      # runners.  See doc/claude/CI_BUDGET.md for the full measurement.
       #
       # OS list comes from `changes.os`: ubuntu per-PR (macOS + Windows are daily +
       # push-to-main, with placeholder contexts on PRs), all three otherwise.
       matrix:
         os: ${{ fromJSON(needs.changes.outputs.os) }}
-        shard: [1, 2]
 
     steps:
       - uses: actions/checkout@v5
@@ -605,19 +528,6 @@ jobs:
           if [ "${{ github.event_name }}" != "pull_request" ]; then
             FAILFAST="--no-fail-fast"
           fi
-          # Duration-balanced shard (see the matrix comment).  HEAVY is the seven
-          # heaviest binaries by measured time (1183s); shard 2 is their negation
-          # (1083s over 151 binaries), so a newly added binary runs in shard 2
-          # without anyone maintaining a list.  Exact-match `binary(=x)` so that
-          # e.g. `native` cannot silently swallow `native_ext` / `native_loader`.
-          HEAVY="binary(=deliver_wasm) or binary(=codegen_emitter) or binary(=exit_codes)"
-          HEAVY="$HEAVY or binary(=native) or binary(=ir_schema_roundtrip)"
-          HEAVY="$HEAVY or binary(=issues) or binary(=html_gl_imports)"
-          if [ "${{ matrix.shard }}" = "1" ]; then
-            FILTER="$FILTER and ($HEAVY)"
-          else
-            FILTER="$FILTER and not ($HEAVY)"
-          fi
           echo "nextest filter: $FILTER${FAILFAST:+ (}${FAILFAST}${FAILFAST:+)}"
           cargo nextest run --profile ci $FAILFAST -E "$FILTER"
 
@@ -633,16 +543,14 @@ jobs:
       # of thing this pair exists to catch).  ~6m on macOS, ~5m on ubuntu, in
       # parallel with nothing else — it is the last thing this job does.
       - name: Stdlib round-trip (nightly — the exhaustive pair, off the PR path)
-        # Shard 1 only: this is an extra step, not part of the sharded set, so running
-        # it in both shards would duplicate ~10 minutes for nothing.
-        if: github.event_name != 'pull_request' && matrix.shard == 1
+        if: github.event_name != 'pull_request'
         shell: bash
         run: >
           cargo nextest run --profile ci --no-fail-fast
           -E 'test(stdlib_load_compares_equal_to_fresh) or test(stdlib_whole_data_round_trip)'
 
       - name: Browser render (nightly — off the flaky PR path)
-        if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest' && matrix.shard == 1
+        if: github.event_name != 'pull_request' && matrix.os == 'ubuntu-latest'
         shell: bash
         run: cargo nextest run --profile ci -E 'binary(html_render) or binary(html_asyncify)'
 
