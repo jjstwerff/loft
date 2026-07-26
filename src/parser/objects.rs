@@ -1981,7 +1981,22 @@ impl Parser {
             till_tp = I32.clone();
             incl = false;
         }
-        let ivar = if name == "$" {
+        // The loop counter is named after the binder — which COLLIDES for `_`, the one
+        // binder people write more than once in a function.  Two `for _ in 0..n` loops
+        // both bind `_#index`, so the inner loop's counter IS the outer's: the inner
+        // runs to its end, the outer sees an exhausted counter and stops after ONE
+        // iteration.  Silently: `for _ in 0..3 { for _ in 0..4 { … } }` counted 4
+        // instead of 12 on both backends, and a two-layer world file saved correctly
+        // then loaded back with one layer, reporting success (moros H5 / H8).
+        //
+        // `_` is exempt from the C61 nested-same-name guard in `parse_for_iter_setup`
+        // — it has to be, since `_` must work across different element types in one
+        // function — so nothing else was left to catch this.
+        //
+        // Give each `_` loop its own counter, the same way `$` already does. The
+        // VISIBLE binding is untouched, so a body that reads `_` is unaffected; only
+        // the hidden companion becomes distinct.
+        let ivar = if name == "$" || name == "_" {
             self.create_unique("index", &in_type.clone())
         } else {
             self.create_var(&format!("{name}#index"), &in_type)
