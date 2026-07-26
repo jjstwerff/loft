@@ -110,18 +110,30 @@ Risk: an IR-schema diff that breaks only the exhaustive pair lands and is caught
 that night rather than on the PR. Acceptable — it is precisely a "format did not
 change by accident" check, and the canary still guards the common case.
 
-### B. Shard the suite with `nextest --partition`
+### B. Sharding — ALREADY TRIED, MEASURED NOT TO WORK
 
-`cargo nextest run --partition count:N/M` splits a suite across runners with no
-source changes. Each shard pays the build floor, so shards are cheap in wall-clock
-and linear in machine minutes (this repo is public — GitHub minutes are free).
+**Do not reach for `nextest --partition`.** It was implemented and reverted, and
+the reason is recorded in `ci.yml`'s matrix comment:
 
-| config | macOS projected | ubuntu projected |
-|---|---|---|
-| today | 31m40s | 21m46s |
-| after **A** only | ~20m | ~15m |
-| after **A** + 2 shards | **~14m** | **~11m** |
-| after **A** + 3 shards (macOS) | **~12m** | — |
+> *Hash-partitioning was measured to NOT help: it balances by test COUNT not
+> duration and can't split a single slow test, so the few slow integration tests
+> piled into one shard (macOS shard1 6m vs shard2 20m) — the wall-clock stayed at
+> the slow shard while runner-minutes doubled.*
+
+This doc's first draft proposed 2–3 shards and projected ~14m/~11m. Those numbers
+assumed **even** splitting; nextest partitions by count, so with a 379s test in the
+set one shard simply inherits it and the wall-clock does not move. The measurement
+above is the counter-example, and it predates this design.
+
+What the prior art actually points at — *"the real long pole is those slow tests,
+attack them directly"* — is section **A**, which is why A is phase 1 and this
+section is a warning rather than a plan.
+
+If duration-balanced splitting is wanted later, it has to be **by binary** (assign
+`ir_schema_roundtrip`, `codegen_emitter`, `exit_codes`, `native`, `deliver_wasm`
+to their own job), because that is balanced by hand against measured time. Note
+each such job re-pays the build floor (~8m macOS), so two jobs cost ~16m of build
+to save ~6m of test — worth it only after A, and only if A alone leaves us over.
 
 ### C. Asymmetric platform coverage
 
@@ -196,15 +208,34 @@ is API calls — well under a minute.
 
 ## Phasing
 
-| phase | change | effect |
-|---|---|---|
-| **1** | move the two stdlib round-trip tests to nightly (A) | macOS ~20m, ubuntu ~15m; floor 379s → 194s |
-| **2** | shard both legs 2× (B) | macOS ~14m, ubuntu ~11m — **under the rule** |
-| **3** | adopt the six cheap gates (D) | large coverage gain, no wall-clock change |
-| **4** | daily digest + narrowed auto-issues | one place to look, no ticket noise |
-| **5** | asymmetric macOS (C) / sccache (E) | headroom for the next thing to adopt |
+| phase | change | effect | status |
+|---|---|---|---|
+| **1** | move the two stdlib round-trip tests to nightly (A) | floor 379s → 194s, frees 754s/616s | **IMPLEMENTED** |
+| **2** | ~~shard both legs~~ | — | **DROPPED** — measured not to work (B) |
+| **3** | adopt the six cheap gates (D) | large coverage gain, no wall-clock change | **IMPLEMENTED** |
+| **4** | daily digest + narrowed auto-issues | one place to look, no ticket noise | **IMPLEMENTED** |
+| **5** | asymmetric macOS (C) / sccache (E) | the next lever, *if* phase 1 leaves us over | measure first |
 
-Phases 1–2 are the ones that satisfy the rule; 3 is what the rule buys us.
+Phase 1 is the one that moves the number; phase 3 is what the headroom buys.
+Phase 5 is deliberately NOT pre-committed: the honest next step is to read the
+macOS leg after phase 1 lands and see whether it is under 20 minutes. If it is,
+nothing more is needed; if it is not, C (asymmetric macOS) is the lever with the
+best ratio, because macOS duplicates ubuntu exactly and costs ~50 % more to do it.
+
+### What "implemented" means here
+
+- **A** — `ci.yml`'s `Test` step excludes the pair on `pull_request` only, and a new
+  `Stdlib round-trip (nightly)` step runs exactly those two on push-to-main and the
+  schedule, on every platform in the matrix. Verified with `nextest list`: the
+  nightly expression selects exactly 2 tests, and the PR filter takes
+  `ir_schema_roundtrip` from 8 tests to 6 with `tests_scripts_round_trip` retained.
+- **D** — `miri.yml` gained a `pull_request` trigger rather than having its jobs
+  copied into `ci.yml`; cadence is per-job via `if: github.event_name != …`. One
+  definition, no drift. (Copying was the alternative and it is exactly the mistake
+  the library-CI unification had just finished undoing.) On a PR the ASan job runs
+  **macOS only** — `ci.yml` already gates every PR with an ubuntu ASan job.
+- **Phase 4** — `notify` now files an issue only for `miri / asan / poison /
+  debug-asserts`, never from a PR; `daily-status` writes the single digest.
 
 ## See also
 

@@ -54,6 +54,29 @@ on:
   schedule:
     - cron: '0 4 * * *'        # nightly 04:00 UTC
   workflow_dispatch:
+  # @CI_BUDGET — the memory-safety gates run PER PR as well as nightly.  The rule
+  # is placement by CAUSE: the PR gate tests what THIS DIFF can break, the nightly
+  # tests what THE WORLD can break.  UB, a store UAF, a data race, a violated
+  # internal invariant — all of those are introduced by a diff, so they must fail
+  # on the PR that introduced them, while the author still has the context.
+  #
+  # They are affordable because they run in PARALLEL with the ~20-minute test legs
+  # and every one is well under that ceiling: Miri 1m15s, TSan 2m57s, POISON 3m43s,
+  # native-ASan 3m57s, debug-assertions 5m46s, ASan-macOS 10m38s.  Adopting them
+  # costs no wall-clock at all.
+  #
+  # The jobs that stay NIGHTLY-ONLY carry `if: github.event_name != 'pull_request'`
+  # below — the leak gate (23-25m, over the ceiling by itself), and everything that
+  # measures the world rather than the diff (toolchain drift, library health, doc
+  # index, stale plans).  See doc/claude/CI_BUDGET.md.
+  pull_request:
+    paths:
+      - 'src/**'
+      - 'default/**'
+      - 'tests/**'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/miri.yml'
 
 permissions:
   contents: read
@@ -65,6 +88,8 @@ env:
 jobs:
   stale-plans-audit:
     name: Stale-plan drift audit (informational)
+    # Nightly-only: measures the WORLD (or exceeds the 20-min PR ceiling), not this diff — @CI_BUDGET.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -183,24 +208,26 @@ jobs:
     # `extra_filter` (see the sweep step).  `fail-fast: false` so one OS's red never
     # hides the other.  Validated on a real Mac before landing (1494 pass / 0 fail
     # + the raw-pointer-OOB positive control fires on arm64).
+    # On a PULL REQUEST this runs the macOS leg ONLY.  ci.yml already gates every PR
+    # with an ubuntu ASan UAF/OOB job (11m39s), so running the ubuntu leg here too
+    # would buy nothing and burn a runner; the macOS-ARM leg is the one a PR has no
+    # other coverage for, and it is the leg the founding @P383 incident needed.
+    # Nightly keeps both.  (The ARM `extra_filter` note below applies either way.)
+    #
+    # ASan pads every stack frame with redzones (~6× on ARM here), which defeats the
+    # 8 MB-stack calibration of the deep-nesting guard test: 128-deep recursion
+    # overflows the thread stack BEFORE the depth guard bails (a pure
+    # ASan-instrumentation artifact — production frames are ~10 KB and the guard
+    # fires at ~1.3 MB).  It is a functional recursion guard test, not UAF/OOB
+    # coverage, and still runs unsanitized on the macOS-ARM full suite
+    # (v2-validation.yml) + the ubuntu ASan leg, so skipping it only here loses no
+    # memory-safety coverage.
     strategy:
       fail-fast: false
       matrix:
-        include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-gnu
-            extra_filter: ''
-          # ASan pads every stack frame with redzones (~6× on ARM here), which
-          # defeats the 8 MB-stack calibration of the deep-nesting guard test:
-          # 128-deep recursion overflows the thread stack BEFORE the depth guard
-          # bails (a pure ASan-instrumentation artifact — production frames are
-          # ~10 KB and the guard fires at ~1.3 MB).  It is a functional recursion
-          # guard test, not UAF/OOB coverage, and still runs unsanitized on the
-          # macOS-ARM full suite (v2-validation.yml) + the ubuntu ASan leg, so
-          # skipping it only here loses no memory-safety coverage.
-          - os: macos-latest
-            target: aarch64-apple-darwin
-            extra_filter: ' | test(deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash)'
+        include: ${{ fromJSON(github.event_name == 'pull_request'
+          && '[{"os":"macos-latest","target":"aarch64-apple-darwin","extra_filter":" | test(deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash)"}]'
+          || '[{"os":"ubuntu-latest","target":"x86_64-unknown-linux-gnu","extra_filter":""},{"os":"macos-latest","target":"aarch64-apple-darwin","extra_filter":" | test(deep_nesting_in_sandboxed_def_is_a_clean_error_not_a_crash)"}]') }}
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v5
@@ -272,6 +299,8 @@ jobs:
   # frame in lsan_suppressions.txt — never raise the baseline off zero for a real leak.
   asan-leak-gate:
     name: ASan interpreter leak gate (${{ matrix.os }})
+    # Nightly-only: measures the WORLD (or exceeds the 20-min PR ceiling), not this diff — @CI_BUDGET.
+    if: github.event_name != 'pull_request'
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     strategy:
@@ -620,6 +649,8 @@ jobs:
 
   toolchain-matrix:
     name: Suite under ${{ matrix.toolchain }}
+    # Nightly-only: measures the WORLD (or exceeds the 20-min PR ceiling), not this diff — @CI_BUDGET.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 40
     # Full interpreter suite under beta + nightly — an early-warning signal for
@@ -695,6 +726,8 @@ jobs:
   # within a day.  Same single-binary check, on stable.
   index-hygiene:
     name: doc index hygiene (nightly)
+    # Nightly-only: measures the WORLD (or exceeds the 20-min PR ceiling), not this diff — @CI_BUDGET.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -741,6 +774,8 @@ jobs:
 
   library-health:
     name: Library health audit (informational)
+    # Nightly-only: measures the WORLD (or exceeds the 20-min PR ceiling), not this diff — @CI_BUDGET.
+    if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
@@ -781,13 +816,25 @@ jobs:
   # tracked issue, not seven (and auto-resolves it when the gates go green again).
   notify:
     name: Nightly gate failure → tracked issue
-    # EVERY gate job belongs here — a gate absent from `needs` is invisible to the
-    # check below, and worse, its silence reads as green and AUTO-CLOSES the tracked
-    # issue.  `asan-leak-gate` was added in #544 after this list was written (#539)
-    # and went unwatched.  When you add a gate job, add it here in the same commit.
-    # (Informational-only jobs — `library-health`, `stale-plans-audit` — stay out.)
-    needs: [miri, asan, asan-leak-gate, poison, tsan, native-asan, debug-asserts, toolchain-matrix, index-hygiene]
-    if: always()
+    # An automatic ISSUE is an interruption, so it is reserved for the case that
+    # actually warrants one: **the language itself is unsound**.  These four say
+    # exactly that — hard UB, a store use-after-free, an out-of-bounds/UAF access,
+    # or a violated internal invariant — and every one of them now also gates each
+    # PR, so a red here means something got past the PR gate, which is precisely
+    # when a human should be pulled in.
+    #
+    # Everything else (toolchain drift, doc index, library health, the leak
+    # baseline) reports in the `daily-status` summary below and files NOTHING.  A
+    # jq crash in a matrix selector became issue #638 under the old any-red rule;
+    # that is noise, and noise is what makes a real alert ignorable.
+    #
+    # The dedup/auto-close contract is unchanged, and the old warning still holds
+    # for THIS list: a gate absent from `needs` is invisible here, and its silence
+    # reads as green and AUTO-CLOSES the issue.  When you add a gate that means
+    # "the language is broken", add it here in the same commit.
+    needs: [miri, asan, poison, debug-asserts]
+    # Never from a PR: a pull request must not be able to open an issue on the repo.
+    if: always() && github.event_name != 'pull_request'
     runs-on: ubuntu-latest
     permissions:
       issues: write
@@ -843,3 +890,73 @@ jobs:
               --label nightly-failure --body "$body"
             echo "opened a new tracking issue"
           fi
+
+  # ── The one place to look ────────────────────────────────────────────────────
+  #
+  # A red nightly used to be UNDIFFERENTIATED: `registry-validation` was dead for
+  # six nights on a jq crash, and that looked exactly like the five nights before
+  # it that failed for unrelated reasons — so nobody reached the cause.  Checking
+  # meant opening the issue list, which is also where the noise was.
+  #
+  # This job answers one question — "is anything wrong, and what?" — in a single
+  # job summary: every gate with its conclusion, plus the sibling nightlies
+  # (registry-validation, revalidate-libs, lib-branch-report) which live in their
+  # own workflows and were previously only visible by hunting through Actions.
+  #
+  # It reports; it does not gate.  `notify` above owns the interrupt, and only for
+  # the unsound-language class.  A badge on this workflow answers the question
+  # without opening anything.
+  daily-status:
+    name: Daily status (the one place to look)
+    needs: [miri, asan, asan-leak-gate, poison, tsan, native-asan, debug-asserts, toolchain-matrix, index-hygiene, library-health]
+    if: always() && github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read
+    steps:
+      - name: Compose the digest
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+        run: |
+          set -uo pipefail
+          # This workflow's own gates, from the needs context.
+          cat > /tmp/gates.json <<'JSON'
+          ${{ toJSON(needs) }}
+          JSON
+          {
+            echo "# Daily status — $(date -u +%Y-%m-%d)"
+            echo
+            echo "## UB / memory-safety gates (this workflow)"
+            echo
+            echo "| gate | result |"
+            echo "|---|---|"
+            python3 - <<'PY'
+          import json
+          g = json.load(open('/tmp/gates.json'))
+          icon = {'success': '✅', 'failure': '❌', 'cancelled': '⚠️ cancelled',
+                  'skipped': '⚠️ skipped (proved nothing)'}
+          for name, v in sorted(g.items()):
+              r = v.get('result', '?')
+              print(f"| `{name}` | {icon.get(r, r)} |")
+          PY
+            echo
+            echo "## The other nightlies"
+            echo
+            echo "| workflow | latest scheduled run | when |"
+            echo "|---|---|---|"
+            for wf in registry-validation.yml revalidate-libs.yml lib-branch-report.yml ci.yml; do
+              row=$(gh run list --repo "$REPO" --workflow "$wf" --limit 1 \
+                      --json conclusion,createdAt,url \
+                      --jq '"\(.[0].conclusion // "running")\t\(.[0].createdAt[0:16])\t\(.[0].url)"' 2>/dev/null || true)
+              [ -z "$row" ] && { echo "| \`$wf\` | – | – |"; continue; }
+              c=$(printf '%s' "$row" | cut -f1); when=$(printf '%s' "$row" | cut -f2); url=$(printf '%s' "$row" | cut -f3)
+              case "$c" in success) mark="✅" ;; failure) mark="❌" ;; *) mark="⚠️ $c" ;; esac
+              echo "| \`$wf\` | [$mark]($url) | $when |"
+            done
+            echo
+            echo "_Gates that FILE an issue when red: miri, asan, poison, debug-asserts —"
+            echo "the language-is-unsound class. Everything else reports here only._"
+          } >> "$GITHUB_STEP_SUMMARY"
+          echo "digest written to the job summary"
