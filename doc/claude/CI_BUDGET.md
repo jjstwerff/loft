@@ -145,7 +145,32 @@ Risk: an IR-schema diff that breaks only the exhaustive pair lands and is caught
 that night rather than on the PR. Acceptable — it is precisely a "format did not
 change by accident" check, and the canary still guards the common case.
 
-### B. Sharding — ALREADY TRIED, MEASURED NOT TO WORK
+### B′. Duration-balanced sharding — IMPLEMENTED (2-way)
+
+The earlier failure (below) was **hash** partitioning, which balances by test
+*count*. Two things changed since: phase 1 removed the two 308s tests, so no single
+test is large against a shard (biggest ~139s vs ~1130s of budget), and this splits
+on **measured duration per binary**.
+
+| | work | projection |
+|---|---|---|
+| shard 1 — the 7 heaviest binaries | 1183s | ~6.1 min test + 6m10s build |
+| shard 2 — the other 151 | 1083s | ~6.1 min test + 6m10s build |
+| **wall** | | **~12.3 min**, from 24m26s |
+
+Shard 2 is the *negation* of shard 1, so a new test binary runs there automatically
+— it fails safe, and only the balance drifts. Exact-match `binary(=x)` keeps
+`native` from swallowing `native_ext`/`native_loader`. Verified as an exact
+partition: 871 + 2608 = 3479 tests, zero overlap.
+
+3-way was computed (~10.3 min) and rejected: it saves 2 further minutes while the
+6m10s build becomes 60 % of each shard.
+
+Sharding renames the matrix jobs, so a `Test (ubuntu-latest)` **aggregator** carries
+the branch-protection context and passes only when every shard passed — the
+required check keeps its exact meaning with no settings change.
+
+### B. Sharding by HASH — tried, measured not to work
 
 **Do not reach for `nextest --partition`.** It was implemented and reverted, and
 the reason is recorded in `ci.yml`'s matrix comment:
