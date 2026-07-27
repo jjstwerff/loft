@@ -23,3 +23,10 @@ version = "0.1.0"
 url = "https://github.com/loft-lang/loft-libs-docs/releases/download/markdown-v0.1.0/markdown-0.1.0.tar.gz"
 sha256 = "5536baf65642e05fe21c1d7a442e31bcb20de98475bc3ea4a174a952ce8f17bc"
 source = "registry"
+
+[[package]]
+name = "html"
+version = "0.1.0"
+url = "https://github.com/loft-lang/loft-libs-docs/releases/download/html-v0.1.0/html-0.1.0.tar.gz"
+sha256 = "f060a41166e69b84da1e84949427e03694024e0cc911f8c9a53c644f4ab2a497"
+source = "registry"
