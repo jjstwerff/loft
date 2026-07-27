@@ -9366,39 +9366,6 @@ impl Parser {
         }
     }
 
-    /// #488 — true when the returned expression is a field VIEW rooted at a
-    /// non-argument LOCAL `Var` (`return r.pts`, `return r.a.b`): the local is
-    /// freed at scope exit, so the view must be element-copied into the
-    /// caller's return buffer.  Argument-rooted views (`return b.v`) are the
-    /// dep-driven case the vector buffer gate already handles; call-rooted
-    /// views are the call-rooted leg of `return_projects_into_local`.  Pure field
-    /// chains only — a
-    /// match/if/vector construction is NOT a view and must keep its NRVO
-    /// delivery (its Insert block cannot sit in OpAppendVector's argument
-    /// position; the 85-store-lifetime-vector-match-return shape).
-    fn return_field_base_is_local_var(&self, tail: &Value) -> bool {
-        match tail.unspan() {
-            Value::Return(inner) | Value::Drop(inner) => self.return_field_base_is_local_var(inner),
-            Value::Block(bl) => bl
-                .operators
-                .last()
-                .is_some_and(|t| self.return_field_base_is_local_var(t)),
-            Value::Insert(ops) => ops
-                .last()
-                .is_some_and(|t| self.return_field_base_is_local_var(t)),
-            Value::Call(d, args) if *d == self.data.def_nr("OpGetField") => {
-                match args.first().map(Value::unspan) {
-                    Some(Value::Var(base)) => !self.vars.is_argument(*base),
-                    Some(inner) if matches!(inner, Value::Call(bd, _) if *bd == self.data.def_nr("OpGetField")) => {
-                        self.return_field_base_is_local_var(inner)
-                    }
-                    _ => false,
-                }
-            }
-            _ => false,
-        }
-    }
-
     /// H12 — true when the returned expression **projects into** something the
     /// callee owns rather than *being* it: a field (`OpGetField`) or element
     /// (`OpGetVector`) read whose base spine reaches a non-argument LOCAL, or an
@@ -10997,7 +10964,18 @@ impl Parser {
                                 // fresh-local return also carries local deps but must keep
                                 // its NRVO delivery (its construction block cannot sit in
                                 // OpAppendVector's argument position).
-                                || self.return_field_base_is_local_var(&v))
+                                //
+                                // The predicate covers a projection rooted at an inline
+                                // CALL's temporary too (`return mk().lines`), which #488's
+                                // Var-only version missed — the third sibling of the same
+                                // defect, after the struct (#425) and element (H12) forms.
+                                // The lift temp is freed at scope exit, so the returned
+                                // vector aliased a freed store: empty on native, and on the
+                                // interpreter a live value that a LATER allocating call in
+                                // the caller transiently clobbered to length 0.  Reported
+                                // by the zero-trust consumer as a one-line accessor that
+                                // silently corrupted its result.
+                                || self.return_projects_into_local(&v))
                         {
                             (a, bv)
                         } else {
