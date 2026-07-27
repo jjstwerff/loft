@@ -178,8 +178,14 @@ which is the surface moros drives.
 **Not fixed here, same class:** `loft repl --lib <dir>` ignores the flag —
 *"Library 'geom' not found"* — so a library function cannot be reached from the plain
 REPL either. That is E.1's defect at a **fourth** entry point, and E.1's own follow-up
-note predicted it: the three entry points want one resolution-context value instead of
+note predicted it: the entry points want one resolution-context value instead of
 parallel parameter lists.
+
+Designed, with the tooling that would have shown both E.1 and E.4 without a compiler
+edit: [`../resolution-context/README.md`](../resolution-context/README.md). It counts
+**six** construction sites, two of them silently wrong, and finds that `:reset` drops
+the libraries too — latent behind the `loft repl --lib` fault, so fixing that one alone
+would expose it.
 
 ---
 
