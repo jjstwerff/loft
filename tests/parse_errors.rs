@@ -2095,3 +2095,19 @@ fn struct_valued_constant_rejected() {
              struct_valued_constant_rejected:1:57",
         );
 }
+
+// A text constant builds its value in ONE work buffer, and a constant is pasted at every
+// reference — so the paste re-points that buffer onto one the using function owns
+// (`rebind_constant_buffer`).  An initialiser that needs more than one buffer, such as a
+// constant referenced twice, has no single buffer to re-point; before this it panicked the
+// parser inside a formatted string and returned a doubled value (`q2qq2q`) through a local.
+// Refuse it at the declaration and name the idiom that does work.
+#[test]
+fn multi_buffer_text_constant_rejected() {
+    code!("B = \"q\"; A = B + \"{1 + 1}\" + B; fn test() { a = A; }").error(
+        "text constant 'A' is assembled in a way that cannot be pasted at a use site — a \
+         constant is inlined at every reference, and this initialiser builds its value \
+         across more than one buffer.  Use a zero-argument function instead: \
+         `fn a() -> text { … }`, then call `a()` at multi_buffer_text_constant_rejected:1:32",
+    );
+}

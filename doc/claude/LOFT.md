@@ -474,10 +474,12 @@ fn font() -> FontTable { … }   // parse on first call, keep the handle, return
 loft warns when a constant's initialiser calls a user function or a stdlib
 function marked `#impure`. Set `LOFT_NO_CONST_EFFECT` to silence it.
 
-Two current limits on what an initialiser may be: a **struct-valued** constant is
-rejected (the record cannot be materialised at each use site — wrap it in a
-zero-argument function), and a **text expression** such as `A = "x" + "y";` is
-unreliable — build text in a function instead.
+One current limit on what an initialiser may be: a **struct-valued** constant is
+rejected, because the record cannot be materialised at each use site — wrap it in
+a zero-argument function.
+
+Text initialisers such as `A = "x" + "y";` and `A = "p{1 + 1}q";` are fine. An
+all-literal one is folded to a single literal, so it is not rebuilt per use.
 
 ### Types and type aliases
 
