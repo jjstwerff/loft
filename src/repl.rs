@@ -2535,8 +2535,8 @@ impl ReplSession {
         if let Some(state) = self.paused.as_deref_mut() {
             if ok {
                 // Push the recorded edit onto the undo stack; refresh the frame view.
-                // @PLN120 F — `name` labels the entry so a later "no longer undoable"
-                // message can say WHICH edit was lost.
+                // `name` labels the entry, so a drop notice at a later pause can say
+                // WHICH edit is no longer undoable.
                 state.commit_edit_journal(name, &self.parser.data);
                 state.refresh_paused_frame(&self.parser.data);
             } else {

@@ -360,6 +360,11 @@ fn emit_json(
         emit_ownership(&mut buf, data, end_def, opts)?;
         fields.push(("ownership".to_string(), 0, as_str(buf)));
     }
+    if opts.sections.contains(&Section::Resolution) {
+        let mut buf = Vec::new();
+        emit_resolution(&mut buf, data, opts)?;
+        fields.push(("resolution".to_string(), 0, as_str(buf)));
+    }
     let mut w = std::io::stdout().lock();
     writeln!(
         w,
@@ -736,7 +741,12 @@ fn emit_resolution<W: Write>(w: &mut W, data: &Data, opts: &Options) -> std::io:
         )?;
         return Ok(());
     }
-    writeln!(w, "aliases ({} import bindings):", aliases.len())?;
+    let n = aliases.len();
+    writeln!(
+        w,
+        "aliases ({n} import binding{}):",
+        if n == 1 { "" } else { "s" }
+    )?;
     for a in &aliases {
         writeln!(
             w,

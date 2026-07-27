@@ -5204,14 +5204,15 @@ impl State {
         let start_depth = self.call_stack.len();
         if let Some(d) = self.debug.as_mut() {
             d.paused = None;
-            // @PLN120 F — the undo/redo history is no longer dropped here.  Stepping
-            // reuses frame slots, so an entry *may* become stale — but most do not (a
-            // long-lived accumulator keeps its slot for the whole function, and a heap
-            // edit's address survives every step), and clearing them all made a correct
-            // edit vanish with the message "nothing to undo".  Each entry is instead
-            // checked at the new pause by `validate_undo_history`, which can decide it
-            // now that a frame's locals can be resolved to their slots.  An edit still
-            // in flight (armed but not committed) has no meaning across a step.
+            // The undo/redo history survives a step; only an edit still in flight
+            // (armed, not committed) is dropped, because a half-recorded edit has no
+            // meaning at the next pause.
+            //
+            // Stepping reuses frame slots, so an entry MAY become stale — but most do
+            // not: a long-lived accumulator keeps its slot for the whole function, and
+            // a heap edit's address survives every step.  So each entry is checked at
+            // the new pause by `validate_undo_history` rather than all of them being
+            // assumed dead.
             d.recording_edit = None;
             // @PLN16 M3 — a fresh resume reports only watch hits it produces.
             d.last_watch = None;

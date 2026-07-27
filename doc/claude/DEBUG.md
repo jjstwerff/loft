@@ -394,8 +394,10 @@ running the program.
 | `--show-slots` | Stack-slot table per fn (name, type, scope, slot, live interval) | Slot conflicts, lifetime bugs |
 | `--show-types` | Per-fn variable type + dep table | **Dep-tracking bugs** — see below |
 | `--show-ownership` | Per-binding store ownership (@PLN103): `Owned` / `Borrowed(base=X)` (a live alias of X — the dangerous case) / `Owned (backing=…)` (owns via a delivery buffer) / `Join(base=X)` (a runtime owned-or-borrow split) / `Borrowed(caller-arg)` / `— (scalar)`, plus a per-return `delivery:` line (materialised / owned / borrows). **Also flags the loft#568 interpreter-orphan class STATICALLY** — `⚠ loft#568: owned text returned by value (…) — no &text retbuf` on a text return backed frame-locally with no delivery buffer (the interpreter orphans the `String`; native RAII drops it). Opt-in. | **Store-lifetime / owned-vs-borrowed bugs AND suspected text-return leaks** — reach for this before ASan: it names the leaker class without a sanitizer run. Verdict is backend-shared. |
+| `--show-resolution` | Which names each source can SEE: one row per source with its `defined` and `visible` counts, then every import alias, and the `context:` line (stdlib dir + `--lib` paths). Opt-in. | **"Unknown function" / "Library not found" on a name that should resolve** — see below |
+| `--why <name>` | The same section narrowed to one name: where it is defined, and every source it is reachable from. Implies `--show-resolution`. | The same, when you already know which name is missing |
 | `--bc-roundtrip` | Re-assemble each fn's bytecode from its own dump and compare (`ok`/`DIFFERS`) | Verify the dump is a faithful, editable bytecode representation — see [Bytecode round-trip](#bytecode-round-trip---bc-roundtrip) |
-| `--json` (INSP.J) | One machine-readable JSON object over the included sections — a string field per section (`bytecode`/`rust`/`slots`/`types`, `ownership` if requested), in canonical order | An editor / agent / the LSP that wants a section by key instead of splitting on `=== header ===` lines; takes precedence over `*-out` / `--diff` |
+| `--json` (INSP.J) | One machine-readable JSON object over the included sections — a string field per section (`bytecode`/`rust`/`slots`/`types`, plus `ownership` / `resolution` if requested), in canonical order | An editor / agent / the LSP that wants a section by key instead of splitting on `=== header ===` lines; takes precedence over `*-out` / `--diff` |
 
 Combine the four dump flags freely; they emit in fixed order, and
 no flags = all four.  `--bc-roundtrip` is **opt-in only** (a
@@ -404,6 +406,58 @@ default).  `--all-fns` includes the default/* stdlib.  `--fn
 <name>` filters to one function.  `--json` renders whichever
 sections are selected as one JSON object (parseable by loft's own
 `json` reader) instead of the text dump.
+
+### `--show-resolution` when a name will not resolve
+
+A name resolves only if the source you are calling it from can **see** it. loft
+numbers sources: `0` is the standard library, `1` is your program, `2` and up are
+the libraries it `use`s. A definition is visible in its own source; a `use` adds an
+**alias**, so the name is also visible in the source that imported it.
+
+When `Unknown function foo` or `Library 'bar' not found` appears for a name you
+believe is there, this section shows which of those steps did not happen:
+
+```sh
+loft introspect prog.loft --show-resolution --lib lib/
+```
+
+```
+context: stdlib="…/default"  lib_dirs=["…/lib"]
+sources:
+  0    defined 650    visible 650    std (…/default/01_code.loft)
+  1    defined 1      visible 2      …/prog.loft
+  2    defined 1      visible 1      geom (…/lib/geom.loft)
+aliases (1 import binding):
+  src 1    <- src 2    #650    n_hex_distance
+```
+
+Read it in three steps:
+
+1. **`context:`** — the paths this run searched. `lib_dirs=[]` when you passed
+   `--lib` means the flag never reached the session, so no library could load. That
+   is a whole class of bug, visible without running the program.
+2. **`defined` vs `visible`** — `defined` counts the source's own definitions,
+   `visible` counts every name it can reach. Source 1 above defines 1 and sees 2:
+   the extra one is the import.
+3. **`aliases`** — one line per imported name. `src 1 <- src 2` reads *"source 1
+   can see this because source 2 defines it"*. An **empty** list in a program that
+   has a `use` means the import never took effect.
+
+To ask about one name instead of reading the table:
+
+```sh
+loft introspect prog.loft --why hex_distance --lib lib/
+```
+
+```
+`hex_distance` is #650, defined in source 2
+  visible in source 1 (import alias)
+  visible in source 2 (its own)
+```
+
+`is not defined in any source` means the library was never parsed — check
+`context:` first. Listed as defined but **not** visible from source 1 means the
+`use` is missing or did not apply.
 
 ### `--show-types` for dep-tracking bugs
 
