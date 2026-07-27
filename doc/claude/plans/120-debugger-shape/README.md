@@ -7,20 +7,21 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Five arcs shipped; one open (2026-07-27).** Reach (**E**), the silent failures
-(**B**, **E3**), discoverability (**C**), the frame's liveness model (**A**) and the
-temp filter (**D1**) are done and gated. **F** — an edit silently stops being undoable
-after one step — is newly opened, designed, and not built.
+**Every arc shipped (2026-07-27).** Reach (**E**), the silent failures (**B**, **E3**),
+discoverability (**C**), the frame's liveness model (**A**), the temp filter (**D1**)
+and undo-across-a-step (**F**) are done and gated. Only **D2** (folding the consumers'
+write-ups back into our docs) is open.
 
 **F came out of re-checking a report this plan had already closed.** The zero-trust
 consumer reported `:undo` answering *"nothing to undo"* after stepping; § D.3 closed
 it as *does not reproduce*, having tested the one sequence that works (edit → `:undo`,
-with no step between). With a step in between the edit is unrecoverable. The cause is
-a **deliberate** blanket — `debug_step` drops the undo history because a `Journal`
+with no step between). With a step in between the edit was unrecoverable. The cause was
+a **deliberate** blanket — `debug_step` dropped the undo history because a `Journal`
 records raw store regions and so could not tell a slot that is still the edited
 local's from one the allocator has re-handed — and **arc A dissolved exactly that
-inability**, which makes F the second consumer of A's fact
-([DESIGN.md § F](DESIGN.md#f--an-edit-silently-stops-being-undoable-after-one-step)).
+inability**, which makes F the second consumer of A's fact. Each entry is now bound to
+what it edited and checked at the next pause; a dropped one says why
+([DESIGN.md § F](DESIGN.md#f--an-edit-silently-stops-being-undoable-after-one-step--shipped-2026-07-27)).
 
 **A**, the arc this plan existed for: a paused frame now shows every local in
 **lexical scope** at that line, each with its own value or an explicit reason it has
@@ -107,8 +108,8 @@ not happen. Discoverability (**C**) only pays off once **E** is true.
 | **C2** — `CLAUDE.md` § Key commands gains one line | [DESIGN.md § C](DESIGN.md#c--discoverability) | **Shipped** 2026-07-27 |
 | **C3** — a bare verb must not shadow a live local | [DESIGN.md § C](DESIGN.md#c--discoverability) | **Shipped** 2026-07-27 |
 | **D1** — `:vars` temp noise | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | **Shipped** 2026-07-27 — `__`- and `#`-names filtered, `:vars all` shows them |
-| **F** — an edit silently stops being undoable after one step | [DESIGN.md § F](DESIGN.md#f--an-edit-silently-stops-being-undoable-after-one-step) | **Open — designed 2026-07-27**, three steps, not built |
-| **D2/D3** — fold the consumers' write-ups back | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | Open — D3's "eval fails on a local not live here" is fixed by A; its `:undo` verdict was **wrong** and is now arc F |
+| **F** — an edit silently stops being undoable after one step | [DESIGN.md § F](DESIGN.md#f--an-edit-silently-stops-being-undoable-after-one-step--shipped-2026-07-27) | **Shipped** 2026-07-27 |
+| **D2/D3** — fold the consumers' write-ups back | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | **D3 closed** — "eval fails on a local not live here" fixed by A (and an out-of-scope name now says so, not "couldn't evaluate"); the `:undo` verdict was **wrong** and shipped as arc F. **D2 open** |
 
 ## Phase ordering
 
@@ -132,7 +133,7 @@ not happen. Discoverability (**C**) only pays off once **E** is true.
    in one file.
 6. **F after A**, necessarily — it validates undo entries with A's `frame_view`, so
    before A there was nothing to validate against and the blanket was the only safe
-   answer. Its three steps are in [DESIGN.md § F.7](DESIGN.md#f7--steps).
+   answer. Its three steps are in [DESIGN.md § F.7](DESIGN.md#f8--steps).
 
 ## Open design questions
 

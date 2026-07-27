@@ -196,6 +196,23 @@ impl Journal {
         self.count as usize
     }
 
+    /// The store regions this journal would write, as `(store_nr, rec, off, len)`.
+    ///
+    /// @PLN120 F — the debugger's undo history needs to know *where* an edit landed,
+    /// not only how to revert it: a region in the stack store is frame storage, whose
+    /// validity ends when the frame does or when the slot is re-handed to another
+    /// local, while a heap region's address survives both.  Deciding that is what lets
+    /// a step keep the entries it cannot invalidate instead of dropping all of them.
+    #[must_use]
+    pub fn regions(&self) -> Vec<(u16, u32, u32, u32)> {
+        (0..self.count)
+            .map(|i| {
+                let e = self.entry(i);
+                (e.store_nr, e.rec, e.off, e.len)
+            })
+            .collect()
+    }
+
     /// Snapshot a record region — the `before` an edit captures *before* it writes.
     /// Pair with [`record_modify`](Self::record_modify) after the write lands.
     #[must_use]

@@ -1666,3 +1666,146 @@ fn file_debugger_refuses_to_edit_an_unset_text_local() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// @PLN120 F — the undo/redo history survives a step exactly as far as its storage
+/// does.  Six cells; the consumer report is cell 1 and the safety property is cell 2.
+///
+/// The probe is the arc-A shape on purpose: `i` and `step` **share** slot 48 (the slot
+/// allocator is scope-blind), so an undo of `i` replayed one line later would write
+/// `step`'s value — which is exactly the hazard that made `debug_step` clear the whole
+/// history, discarding the valid entries with the stale one.
+#[test]
+fn file_debugger_undo_survives_a_step_only_while_its_storage_does() {
+    let path = std::env::temp_dir().join(format!("loft_pln120f_{}.loft", std::process::id()));
+    let prog = "fn main() {\n  \
+                total = 0;\n  \
+                for i in 0..4 {\n    \
+                step = i * 10;\n    \
+                total = total + step;\n  \
+                }\n  \
+                assert(total > 0, \"loop\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let drive = |line: u32, cmds: &str| -> String {
+        let input = std::io::Cursor::new(cmds.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        loft::repl::run_file_debug("default", &[], file, line, input, &mut out).expect("debug run");
+        String::from_utf8_lossy(&out).to_string()
+    };
+
+    // Cell 1 — THE REPORTED CASE.  `total` keeps slot 32 for the whole function, so its
+    // undo entry is still valid after a step; before F this answered "nothing to undo".
+    let c1 = drive(5, "total = 99\n:next\n:undo\n:quit\n");
+    assert!(c1.contains("total = 99"), "the edit lands: {c1}");
+    assert!(
+        c1.matches("total = 0").count() >= 2,
+        "…and `:undo` after a step restores it: {c1}"
+    );
+
+    // Cell 2 — THE SAFETY CONTROL.  Editing `i` on line 4 and stepping to line 5 hands
+    // slot 48 to `step`; the entry must be dropped WITH ITS REASON, and `step`'s value
+    // must be left alone.  Without this cell, "stop clearing the history" passes cell 1
+    // and ships the stale-slot write.
+    let c2 = drive(4, "i = 7\n:next\n:undo\n:quit\n");
+    assert!(
+        c2.contains("no longer undoable") && c2.contains("`i`'s stack slot is now `step`'s"),
+        "the drop names the local that took the slot: {c2}"
+    );
+    assert!(
+        c2.contains("step = 70"),
+        "…and `step` (7 * 10, the edit's own effect) is NOT overwritten by the undo: {c2}"
+    );
+
+    // Cell 5 — no edits at all.  Correct behaviour, previously indistinguishable from a
+    // broken feature: `:undo` is edit-scoped, and it now says so.
+    let c5 = drive(5, ":next\n:undo\n:quit\n");
+    assert!(
+        c5.contains("no edits to undo at this pause") && c5.contains("stepBack"),
+        "an empty stack names the edit/step boundary and the tool that does step back: {c5}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 F — the two classes the blanket clear discarded needlessly.
+///
+/// A **heap** edit's address survives any number of steps, so its entry must too
+/// (cell 3); an edit made in a frame that has since **returned** must be dropped, named
+/// (cell 4).  Cell 3 is what proves the frame/heap split earns its keep rather than
+/// being decoration — with one rule for everything, either heap edits stay lost or
+/// returned-frame edits get replayed into a dead frame.
+#[test]
+fn file_debugger_undo_keeps_heap_edits_and_drops_returned_frames() {
+    let path = std::env::temp_dir().join(format!("loft_pln120f_h_{}.loft", std::process::id()));
+    let prog = "struct Pt { x: integer, y: integer }\n\n\
+                fn bump(p: Pt) -> integer {\n  \
+                inner = p.x + 1;\n  \
+                return inner;\n}\n\n\
+                fn main() {\n  \
+                pt = Pt { x: 5, y: 6 };\n  \
+                a = bump(pt);\n  \
+                b = pt.x + a;\n  \
+                assert(b > 0, \"ok\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let drive = |line: u32, cmds: &str| -> String {
+        let input = std::io::Cursor::new(cmds.as_bytes().to_vec());
+        let mut out: Vec<u8> = Vec::new();
+        loft::repl::run_file_debug("default", &[], file, line, input, &mut out).expect("debug run");
+        String::from_utf8_lossy(&out).to_string()
+    };
+
+    // Cell 3 — a heap field edit, then a step, then undo: restored.  No frame binding is
+    // recorded for it, because no frame change can invalidate a heap record's address.
+    let c3 = drive(10, "pt.x = 40\n:next\n:undo\n:quit\n");
+    assert!(c3.contains("Pt{x:40,y:6}"), "the field edit lands: {c3}");
+    assert!(
+        c3.contains("a = 41"),
+        "…and takes effect in the program (5 → 40, +1): {c3}"
+    );
+    assert!(
+        c3.matches("Pt{x:5,y:6}").count() >= 2,
+        "…and `:undo` after the step restores it: {c3}"
+    );
+
+    // Cell 4 — an edit inside `bump`, then `:finish` back into `main`: the frame it was
+    // made in is gone, so the entry is dropped and says which frame.  Replaying it would
+    // write a dead frame's slot.
+    let c4 = drive(5, "inner = 99\n:finish\n:undo\n:quit\n");
+    assert!(c4.contains("inner = 99"), "the callee edit lands: {c4}");
+    assert!(
+        c4.contains("no longer undoable") && c4.contains("frame it was made in has returned"),
+        "…and returning drops it, naming the reason: {c4}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 A follow-up — a name that IS a local of this function but is not in scope on
+/// the paused line says so, instead of the generic "couldn't evaluate" a typo gets.
+/// The consumer's case verbatim: reading the loop iterator while stopped on the `for`.
+#[test]
+fn file_debugger_names_an_out_of_scope_local() {
+    let path = std::env::temp_dir().join(format!("loft_pln120a_oos_{}.loft", std::process::id()));
+    let prog = "fn main() {\n  \
+                total = 0;\n  \
+                for i in 0..3 {\n    \
+                total = total + i;\n  \
+                }\n  \
+                assert(total == 3, \"loop\")\n}\n";
+    std::fs::write(&path, prog).expect("write temp program");
+    let file = path.to_str().unwrap();
+    let input = std::io::Cursor::new(b"i\nnosuchname\n:quit\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &[], file, 3, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+    assert!(
+        text.contains("not in scope at this line"),
+        "an out-of-scope local explains itself: {text}"
+    );
+    // The control: a name that is not a local at all must still get the generic message,
+    // or the new one would be claiming knowledge it does not have.
+    assert!(
+        text.contains("couldn't evaluate `nosuchname`"),
+        "an unknown name stays a plain failure: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
+}

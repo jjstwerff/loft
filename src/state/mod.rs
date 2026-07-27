@@ -2913,19 +2913,182 @@ impl State {
     /// @PLN16 M2 — finish the armed edit journal: if it recorded anything, push it onto
     /// the undo stack and clear the redo stack (a fresh edit forks the timeline);
     /// otherwise discard it.  Returns whether an undoable edit was recorded.
-    pub fn commit_edit_journal(&mut self) -> bool {
+    ///
+    /// @PLN120 F — `label` is the edit's LHS as typed, and the entry is **bound** to
+    /// what it wrote: which frame, and which locals' slots.  That binding is what lets
+    /// the entry outlive a step (see [`validate_undo_history`](Self::validate_undo_history)).
+    pub fn commit_edit_journal(&mut self, label: &str, data: &crate::data::Data) -> bool {
+        // Classify the recorded regions BEFORE moving the journal into the entry:
+        // anything in the stack store is frame storage, anything else is heap.
+        let (frame, slots) = {
+            let Some(j) = self
+                .debug
+                .as_deref()
+                .and_then(|d| d.recording_edit.as_ref())
+            else {
+                return false;
+            };
+            if j.is_empty() {
+                self.discard_edit_journal();
+                return false;
+            }
+            self.classify_edit_regions(&j.regions(), data)
+        };
         let Some(d) = self.debug.as_deref_mut() else {
             return false;
         };
-        let Some(j) = d.recording_edit.take() else {
+        let Some(journal) = d.recording_edit.take() else {
             return false;
         };
-        if j.is_empty() {
-            return false;
-        }
-        d.undo_stack.push(j);
+        d.undo_stack.push(crate::debugger::UndoEntry {
+            journal,
+            label: label.to_string(),
+            frame,
+            slots,
+        });
         d.redo_stack.clear();
         true
+    }
+
+    /// @PLN120 F — which frame (if any) and which locals' slots a set of journal
+    /// regions wrote.  Classified by **store**, not by the edit's syntax: a bare-name
+    /// edit of a heap local grafts a value into the heap *and* writes the slot's
+    /// `DbRef`, so reading the LHS shape would mis-file it.
+    fn classify_edit_regions(
+        &self,
+        regions: &[(u16, u32, u32, u32)],
+        data: &crate::data::Data,
+    ) -> (Option<crate::debugger::StackWatchFrame>, Vec<(String, u16)>) {
+        let Some(cf) = self.call_stack.last() else {
+            return (None, Vec::new());
+        };
+        let base = self.stack_cur.pos + cf.args_base;
+        let mut slots: Vec<(String, u16)> = Vec::new();
+        let mut touched_frame = false;
+        // The frame's locals at the pause, so a written offset can be attributed to the
+        // local that owns it (name included — a slot alone is ambiguous between two
+        // locals that share it at different lines).
+        let view = self.frame_view(cf.d_nr, self.code_pos, data);
+        for &(store_nr, rec, off, _len) in regions {
+            if store_nr != self.stack_cur.store_nr || rec != self.stack_cur.rec || off < base {
+                continue; // heap (or another store) — no frame binding needed
+            }
+            touched_frame = true;
+            let rel = u16::try_from(off - base).unwrap_or(u16::MAX);
+            for e in &view {
+                let size = crate::variables::size(
+                    &e.tp,
+                    if e.is_argument {
+                        &Context::Argument
+                    } else {
+                        &Context::Variable
+                    },
+                );
+                if rel >= e.slot && u32::from(rel) < u32::from(e.slot) + u32::from(size) {
+                    if !slots.iter().any(|(n, s)| n == &e.name && *s == e.slot) {
+                        slots.push((e.name.clone(), e.slot));
+                    }
+                    break;
+                }
+            }
+        }
+        let frame = touched_frame.then(|| crate::debugger::StackWatchFrame {
+            d_nr: cf.d_nr,
+            args_base: cf.args_base,
+            depth: u32::try_from(self.call_stack.len().saturating_sub(1)).unwrap_or(u32::MAX),
+        });
+        (frame, slots)
+    }
+
+    /// @PLN120 F — keep the undo/redo entries whose storage is still what they wrote,
+    /// drop the rest, and record WHY each was dropped in `dropped_undo`.
+    ///
+    /// Called at every new pause. An entry survives iff it is heap-only (no frame
+    /// binding — a heap address survives any step), or its frame is still live at the
+    /// same depth with the same `(d_nr, args_base)` **and** every local it wrote is
+    /// still `Held` at the same slot here. Anything else would write bytes that are no
+    /// longer that local's, which is the hazard the old blanket clear avoided by
+    /// throwing away the valid entries too.
+    pub fn validate_undo_history(&mut self, data: &crate::data::Data) {
+        if self
+            .debug
+            .as_deref()
+            .is_none_or(|d| d.undo_stack.is_empty() && d.redo_stack.is_empty())
+        {
+            return;
+        }
+        // The live frame's identity + view, computed once for every entry.
+        let live = self.call_stack.last().map(|cf| {
+            (
+                crate::debugger::StackWatchFrame {
+                    d_nr: cf.d_nr,
+                    args_base: cf.args_base,
+                    depth: u32::try_from(self.call_stack.len().saturating_sub(1))
+                        .unwrap_or(u32::MAX),
+                },
+                self.frame_view(cf.d_nr, self.code_pos, data),
+            )
+        });
+        let verdict = |e: &crate::debugger::UndoEntry| -> Result<(), String> {
+            let Some(bound) = e.frame.as_ref() else {
+                return Ok(()); // heap-only — no frame change can invalidate it
+            };
+            let Some((now, view)) = live.as_ref() else {
+                return Err("the frame it was made in has returned".to_string());
+            };
+            if now != bound {
+                return Err("the frame it was made in has returned".to_string());
+            }
+            for (name, slot) in &e.slots {
+                match view
+                    .iter()
+                    .find(|v| &v.name == name && v.slot == *slot)
+                    .map(|v| &v.state)
+                {
+                    Some(LocalState::Held) => {}
+                    Some(LocalState::Reused(by)) => {
+                        return Err(format!("`{name}`'s stack slot is now `{by}`'s"));
+                    }
+                    _ => {
+                        return Err(format!("`{name}` no longer holds that slot here"));
+                    }
+                }
+            }
+            Ok(())
+        };
+        let mut dropped: Vec<(String, String)> = Vec::new();
+        {
+            let Some(d) = self.debug.as_deref_mut() else {
+                return;
+            };
+            for stack in [&mut d.undo_stack, &mut d.redo_stack] {
+                stack.retain(|e| match verdict(e) {
+                    Ok(()) => true,
+                    Err(why) => {
+                        dropped.push((e.label.clone(), why));
+                        false
+                    }
+                });
+            }
+        }
+        if let Some(d) = self.debug.as_deref_mut() {
+            d.dropped_undo = dropped;
+        }
+    }
+
+    /// @PLN120 F — the entries THIS pause dropped, as `(label, reason)`.  Empty when
+    /// nothing was dropped.
+    ///
+    /// Deliberately non-consuming: the list is cleared when the next resume starts, so
+    /// reading it is still once-per-pause, and it stays available for the whole pause —
+    /// which is what lets `:undo` explain an empty stack by naming the edit that was
+    /// dropped instead of falling back to "you made no edits".
+    #[must_use]
+    pub fn dropped_undo(&self) -> Vec<(String, String)> {
+        self.debug
+            .as_deref()
+            .map(|d| d.dropped_undo.clone())
+            .unwrap_or_default()
     }
 
     /// @PLN16 M2 — drop the armed edit journal without recording (a failed edit).
@@ -2939,12 +3102,12 @@ impl State {
     /// to the redo stack.  Returns `false` when the undo stack is empty.  Refresh the
     /// paused frame after, so `:vars` shows the restored value.
     pub fn debug_undo(&mut self) -> bool {
-        let Some(mut j) = self.debug.as_deref_mut().and_then(|d| d.undo_stack.pop()) else {
+        let Some(mut e) = self.debug.as_deref_mut().and_then(|d| d.undo_stack.pop()) else {
             return false;
         };
-        let ok = j.revert(&mut self.database).is_ok();
+        let ok = e.journal.revert(&mut self.database).is_ok();
         if let Some(d) = self.debug.as_deref_mut() {
-            d.redo_stack.push(j);
+            d.redo_stack.push(e);
         }
         ok
     }
@@ -2952,12 +3115,12 @@ impl State {
     /// @PLN16 M2 — redo the last undone edit: re-apply its journal and move it back to
     /// the undo stack.  Returns `false` when the redo stack is empty.
     pub fn debug_redo(&mut self) -> bool {
-        let Some(mut j) = self.debug.as_deref_mut().and_then(|d| d.redo_stack.pop()) else {
+        let Some(mut e) = self.debug.as_deref_mut().and_then(|d| d.redo_stack.pop()) else {
             return false;
         };
-        let ok = j.apply(&mut self.database).is_ok();
+        let ok = e.journal.apply(&mut self.database).is_ok();
         if let Some(d) = self.debug.as_deref_mut() {
-            d.undo_stack.push(j);
+            d.undo_stack.push(e);
         }
         ok
     }
@@ -3704,14 +3867,23 @@ impl State {
             return false;
         }
         let hit = self.capture_break_frame(pc, data);
-        if let Some(d) = self.debug.as_mut() {
+        let suspended = if let Some(d) = self.debug.as_mut() {
             if d.stepping {
                 d.paused = Some(hit);
-                return true; // suspend the loop
+                true // suspend the loop
+            } else {
+                d.hits.push(hit);
+                false
             }
-            d.hits.push(hit);
+        } else {
+            false
+        };
+        if suspended {
+            // @PLN120 F — same decision as the step landing: a breakpoint reached
+            // mid-`:continue` is a new pause, so re-check which edits it still owns.
+            self.validate_undo_history(data);
         }
-        false
+        suspended
     }
 
     /// Read the current (topmost) frame's in-scope variables into a
@@ -3909,6 +4081,9 @@ impl State {
             .into_iter()
             .find(|e| e.name == name)
             .map(|e| e.state)
+        // Note `frame_view` reports OUT-OF-SCOPE locals too, so a caller can tell "not
+        // in scope here" from "no such local" — a distinction the generic
+        // "couldn't evaluate" used to collapse.
     }
 
     /// Capture one frame — function `d_nr`, whose variable region starts at
@@ -5029,14 +5204,19 @@ impl State {
         let start_depth = self.call_stack.len();
         if let Some(d) = self.debug.as_mut() {
             d.paused = None;
-            // @PLN16 M2 — resuming reuses frame stack slots, so an undo recorded at this
-            // suspension could write a stale slot.  Drop the undo/redo history; the next
-            // pause starts a fresh one.
-            d.undo_stack.clear();
-            d.redo_stack.clear();
+            // @PLN120 F — the undo/redo history is no longer dropped here.  Stepping
+            // reuses frame slots, so an entry *may* become stale — but most do not (a
+            // long-lived accumulator keeps its slot for the whole function, and a heap
+            // edit's address survives every step), and clearing them all made a correct
+            // edit vanish with the message "nothing to undo".  Each entry is instead
+            // checked at the new pause by `validate_undo_history`, which can decide it
+            // now that a frame's locals can be resolved to their slots.  An edit still
+            // in flight (armed but not committed) has no meaning across a step.
             d.recording_edit = None;
             // @PLN16 M3 — a fresh resume reports only watch hits it produces.
             d.last_watch = None;
+            // Only THIS resume's drops are worth reporting.
+            d.dropped_undo.clear();
         }
         let bytecode_len = self.bytecode.len() as u32;
         // Skip the pause-check on the very first op — it is the breakpoint/line we
@@ -5064,6 +5244,11 @@ impl State {
                     if let Some(d) = self.debug.as_mut() {
                         d.paused = Some(hit);
                     }
+                    // @PLN120 F — the step landed: decide which undo entries the new
+                    // frame still owns, rather than having dropped them all on the way
+                    // in.  Here, not at the clear above, because the verdict needs the
+                    // pc we stopped AT.
+                    self.validate_undo_history(data);
                     return true;
                 }
             }

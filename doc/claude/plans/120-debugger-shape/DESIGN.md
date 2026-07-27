@@ -11,7 +11,7 @@ the **invariant** it violates, the **design**, what was **rejected**, and how it
 
 Reading order: **E** (nothing else matters if the tool cannot load your program) →
 **B** → **A** → **F** → **D** → **C**.  As of 2026-07-27 everything has shipped
-except **F** (designed, not built) and **D2/D3**.  Two arcs are worth reading for
+except **D2** (folding the consumers' write-ups back).  Two arcs are worth reading for
 their own sake: **A**, for the fact (§ A.1) that falsified the shape A was originally
 given, and **F**, which exists because A's fact dissolved the reason for a blanket
 this plan had accepted — and because a reproduction attempt of the consumer's report
@@ -556,7 +556,7 @@ Each step compiles and is verifiable on its own; the frame does not change until
 
 ---
 
-## F — An edit silently stops being undoable after one step
+## F — An edit silently stops being undoable after one step — **SHIPPED 2026-07-27**
 
 Reported by the **zero-trust** consumer (their `LOFT_WORRIES.md` § 9, 2026-07-27):
 *"`:undo` (advertised time-travel) reported 'nothing to undo' after several `:next`
@@ -719,15 +719,55 @@ slot-sharing is what makes cells 2 and 6 possible at all):
 Cell 2 is the one that matters: without it, "stop clearing the stack" passes cell 1 and
 ships the stale-slot write the blanket existed to prevent.
 
-### F.7 — Steps
+### F.7 — What shipped (2026-07-27)
 
-1. **`UndoEntry`** — wrap the journal with `label` / `frame` / `slots`; build it in
-   `commit_edit_journal`, classifying regions by store. Behaviour unchanged (the clear
-   still fires). *Gate:* a unit test on the classification — a scalar-local edit gets a
-   frame binding, a field edit does not.
-2. **Validate instead of clear** — drop the `debug_step` clear, validate at the next
-   pause, report what was dropped. *Gate:* cells 1–4 + 6.
-3. **The two messages** (F.4). *Gate:* cell 5.
+Built as designed; all six cells of § F.6 verified, cell 6 first so the control was
+known able to fire before cell 2 was trusted. With validation forced to always-keep,
+the undo of `i` wrote slot 48 and **corrupted `step` from 70 to 0** — the exact stale
+write the blanket existed to prevent — and refuses correctly when restored.
+
+What the cells show, on the real prompt:
+
+```
+cell 1  total = 99 → :next → :undo            total = 0 restored   (was "nothing to undo")
+cell 2  i = 7      → :next → :undo            ⤳ the edit to `i` is no longer undoable —
+                                                `i`'s stack slot is now `step`'s
+                                              step = 70 UNTOUCHED
+cell 3  pt.x = 40  → :next → :undo            Pt{x:5,y:6} restored (heap survives a step)
+cell 4  inner = 99 → :finish → :undo          ⤳ … the frame it was made in has returned
+cell 5  :next → :undo                         no edits to undo … `:undo` reverts edits YOU made
+```
+
+**One thing the build corrected in the design.** F.3 said a dropped entry is reported
+once; the first cut reported it on the step's trace channel and then let `:undo` fall
+through to F.4's *"you made no edits"* — which re-loses the edit the notice had just
+explained. `:undo` now consults the drop list for the current pause and names it, so
+the two messages cannot contradict each other. Hence `dropped_undo` is deliberately
+**non-consuming** (cleared at the next resume, so still once-per-pause) rather than
+drained by the first reader.
+
+Also corrected: F.4's message pointed at a `:back` verb. There is none — reverse
+stepping (@PLN63 RX) is exposed on the **RPC** surface as `stepBack`, and the
+interactive prompt has no verb for it. The message says that instead of inventing one.
+(That the prompt lacks a reverse verb while the engine has one is a real gap, filed
+nowhere yet and out of scope here.)
+
+**Guarded by** `tests/repl_session.rs::file_debugger_undo_survives_a_step_only_while_its_storage_does`
+(cells 1, 2, 5) and `…::file_debugger_undo_keeps_heap_edits_and_drops_returned_frames`
+(cells 3, 4). Cell 3 is what proves the frame/heap split earns its keep: with one rule
+for everything, either heap edits stay needlessly lost or returned-frame edits get
+replayed into a dead frame.
+
+### F.8 — Steps
+
+1. `[✓]` **`UndoEntry`** — the journal plus `label` / `frame` / `slots`, built in
+   `commit_edit_journal` and classified by store (`Journal::regions` is the new
+   accessor that makes a region's home visible).
+2. `[✓]` **Validate instead of clear** — `debug_step`'s clear is gone;
+   `validate_undo_history` runs at both pause landings (a step's stop and a breakpoint
+   reached mid-`:continue`), and reports drops on arc B's `trace_output` channel so the
+   interactive prompt and the RPC surface get them from one place.
+3. `[✓]` **The messages** (F.4) — plus the correction above.
 
 ---
 
@@ -850,10 +890,8 @@ before the next begins. `[✓]` = shipped 2026-07-27.
    invocation, the piped-stdin form, pointers to the `loft-debug` skill and
    PROTOCOL.md. Biggest single gap.
 10. `[✓]` **C2** — one line in `CLAUDE.md` § Key commands.
-11. **F — undo across a step.** ← THE ARC LEFT. Three steps in § F.7; the reported
-    case is red today and an edit disappears silently. *Gate:* § F.6, six cells,
-    cell 2 (refuse a stale-slot undo) being the one that stops "just stop clearing"
-    from shipping.
-12. **D2/D3** — fold the consumers' write-ups back. Their "eval fails on a local not
-    live here" is closed by A; their `:undo` report is arc F (D.3's "does not
-    reproduce" was wrong).
+11. `[✓]` **F — undo across a step**, three steps (§ F.8), six cells green, cell 6
+    proving cell 2 can fire. Plus the arc-A residue: an out-of-scope name now says so
+    instead of sharing a typo's message.
+12. **D2** — fold the consumers' write-ups back into our docs. (**D3 is closed**: A
+    fixed the eval report, F fixed the `:undo` one.)

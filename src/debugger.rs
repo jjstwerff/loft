@@ -124,6 +124,34 @@ pub struct StackWatchFrame {
     pub depth: u32,
 }
 
+/// @PLN120 F — one undoable edit: the journal that reverts it, plus what it edited.
+///
+/// The binding is what makes an entry survive a step. A `Journal` alone records raw
+/// store regions, so after a step nothing could tell a slot that is still the edited
+/// local's from one the allocator has re-handed to another local — which is why the
+/// history used to be dropped wholesale at every step, silently discarding edits that
+/// were perfectly valid. Carrying the frame identity and the local names lets each
+/// entry be checked instead of all of them assumed dead.
+#[derive(Debug)]
+pub struct UndoEntry {
+    /// Reverts (`revert`) / re-applies (`apply`) this one edit.
+    pub journal: crate::database::Journal,
+    /// The edit's left-hand side as the user typed it (`total`, `pt.x`, `v[1]`), for
+    /// the message when the entry can no longer be applied.
+    pub label: String,
+    /// `Some` when the journal touched FRAME storage — the frame it was recorded in,
+    /// bound exactly as a stack watchpoint binds (a recursive re-entry of the same
+    /// function is a different frame, hence `args_base` + `depth`, not just `d_nr`).
+    /// `None` for a pure-heap edit: a heap record's address survives frame exit and
+    /// every step, so no frame change can invalidate it.
+    pub frame: Option<StackWatchFrame>,
+    /// The frame slots the journal wrote, as `(local name, slot offset)`.  The NAME is
+    /// load-bearing: two locals share a slot whenever their live ranges do not overlap,
+    /// so "some local is live at this slot" would let an undo of one write the other's
+    /// value.
+    pub slots: Vec<(String, u16)>,
+}
+
 /// @PLN16 M3 — a watchpoint that just fired: the label and the rendered old → new value.
 #[derive(Debug, Clone)]
 pub struct WatchHit {
@@ -162,13 +190,22 @@ pub struct Debugger {
     pub recording_edit: Option<crate::database::Journal>,
     /// @PLN16 M2 — edits made at the current suspension, newest last.  `:undo` reverts
     /// the top entry onto `redo_stack`; a fresh edit forks the timeline (clears redo).
-    /// Per-edit `Journal`s — each a self-contained revert/apply unit — reuse the one
-    /// store change journal engine.  Cleared on resume (`debug_step`): stepping reuses
-    /// frame slots, so an old undo could write a stale slot — undo/redo therefore cover
-    /// edits at the *current* pause point only.
-    pub undo_stack: Vec<crate::database::Journal>,
+    /// Per-edit [`UndoEntry`]s — each a self-contained revert/apply unit — reuse the one
+    /// store change journal engine.
+    ///
+    /// @PLN120 F: **validated** at each new pause rather than cleared. Stepping reuses
+    /// frame slots, so an entry whose slot now belongs to another local (or whose frame
+    /// has returned) is dropped *and reported*; one whose storage is still its own
+    /// survives, which is the common case — a long-lived accumulator keeps its slot for
+    /// the whole function.
+    pub undo_stack: Vec<UndoEntry>,
     /// @PLN16 M2 — undone edits available to `:redo`, newest last (see `undo_stack`).
-    pub redo_stack: Vec<crate::database::Journal>,
+    /// Validated by the same rule: a redo replays the same regions forward.
+    pub redo_stack: Vec<UndoEntry>,
+    /// @PLN120 F — entries the last validation dropped, as `(label, reason)`, for the
+    /// driver to report once.  An edit that silently stops being undoable is the
+    /// failure this arc exists to close, so the drop is never wordless.
+    pub dropped_undo: Vec<(String, String)>,
     /// @PLN16 M3 — active watchpoints, polled after each op of a resumed run.
     pub watchpoints: Vec<Watchpoint>,
     /// @PLN16 M3 — the watchpoint that fired during the most recent resume (for the

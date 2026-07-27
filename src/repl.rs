@@ -869,8 +869,27 @@ fn handle_paused<W: Write>(
         "undo" | "u" => {
             if session.debug_undo() {
                 print_pause(session, chrome)?;
+            } else if let Some((label, why)) = session.dropped_undo_here().first() {
+                // @PLN120 F — an empty stack because an edit was DROPPED is a different
+                // answer from "you made no edits", and saying the generic one here would
+                // re-lose the edit the drop notice just explained.
+                writeln!(
+                    chrome,
+                    "nothing to undo here — the edit to `{label}` is no longer \
+                     undoable ({why})"
+                )?;
             } else {
-                writeln!(chrome, "nothing to undo")?;
+                // @PLN120 F.4 — ":undo" reads as time-travel, so an empty stack after
+                // plain stepping looked like a broken feature (it is correct: stepping
+                // makes no edits).  Name the boundary and point at the tool that does
+                // move the program backwards.
+                writeln!(
+                    chrome,
+                    "no edits to undo at this pause — `:undo` reverts edits YOU made \
+                     (`name = <expr>`), so plain stepping leaves nothing to undo; to move \
+                     the program backwards, use reverse-stepping on the RPC surface \
+                     (`stepBack`, depth via LOFT_REVERSE_DEPTH)"
+                )?;
             }
         }
         "redo" | "r" => {
@@ -883,7 +902,7 @@ fn handle_paused<W: Write>(
         "help" | "h" => writeln!(
             chrome,
             "paused: :step(:s) into  :next(:n) over  :finish(:o) out  :continue(:c)  \
-             :vars  :undo(:u)  :redo(:r)  :watch <expr>  |  `name = <expr>` edits a local \
+             :vars  :undo(:u) an edit  :redo(:r)  :watch <expr>  |  `name = <expr>` edits a local \
              (scalar / text / enum / `pt.x` / `v[i]` / whole struct/vector)  |  any \
              expression is evaluated at the frame  |  :quit"
         )?,
@@ -2443,7 +2462,9 @@ impl ReplSession {
         if let Some(state) = self.paused.as_deref_mut() {
             if ok {
                 // Push the recorded edit onto the undo stack; refresh the frame view.
-                state.commit_edit_journal();
+                // @PLN120 F — `name` labels the entry so a later "no longer undoable"
+                // message can say WHICH edit was lost.
+                state.commit_edit_journal(name, &self.parser.data);
                 state.refresh_paused_frame(&self.parser.data);
             } else {
                 state.discard_edit_journal();
@@ -2588,6 +2609,20 @@ impl ReplSession {
         }
         // @PLN16 rich-bp — honour the condition / tracepoint of whatever we stopped at.
         self.resolve_pause();
+        // @PLN120 F — an edit that stopped being undoable says so, once, on the same
+        // channel as arc B's diagnostics (so the interactive prompt prints it AND the
+        // RPC surface emits it as an `output` event, from one place).  A correct edit
+        // disappearing wordlessly is the failure this arc closes.
+        let dropped = self
+            .paused
+            .as_deref()
+            .map(State::dropped_undo)
+            .unwrap_or_default();
+        for (label, why) in dropped {
+            self.trace_output.push(format!(
+                "the edit to `{label}` is no longer undoable — {why}"
+            ));
+        }
         self.is_debugging()
     }
 
@@ -2691,6 +2726,15 @@ impl ReplSession {
         }
     }
 
+    /// @PLN120 F — the undo entries the current pause dropped, `(label, reason)`.
+    #[must_use]
+    pub fn dropped_undo_here(&self) -> Vec<(String, String)> {
+        self.paused
+            .as_deref()
+            .map(crate::state::State::dropped_undo)
+            .unwrap_or_default()
+    }
+
     /// @PLN16 rich-bp — drain the tracepoint emissions from the most recent resume (the
     /// driver prints them; the wire protocol sends them as `output` events).
     #[must_use]
@@ -2742,9 +2786,17 @@ impl ReplSession {
             .as_deref()?
             .frame_local_state(name, &self.parser.data)?;
         match state {
-            // Held, or not in scope here at all: the failure has another cause, so
-            // the caller's generic message is the right one.
-            crate::state::LocalState::Held | crate::state::LocalState::OutOfScope => None,
+            // Held: the failure has another cause, so the caller's generic message is
+            // the right one.
+            crate::state::LocalState::Held => None,
+            // @PLN120 A follow-up — a name that IS a local of this function but is not
+            // in scope on this line used to get the same "couldn't evaluate" as a typo,
+            // which is what made the consumer read a working debugger as broken (their
+            // case: the loop iterator, read while stopped on the `for` line).
+            crate::state::LocalState::OutOfScope => Some(format!(
+                "`{name}` is a local of this function but is not in scope at this line \
+                 — break inside the block that declares it"
+            )),
             crate::state::LocalState::Unset => Some(format!(
                 "`{name}` is in scope but has no value yet at this line — \
                  its first assignment has not run"
