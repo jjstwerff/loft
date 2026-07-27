@@ -10883,6 +10883,19 @@ impl Parser {
                         let ed = *e_d;
                         let w = self.materialize_view_return(ed, &mut v);
                         self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
+                    } else if self.return_views_local(ls) {
+                        // #306's payload-enum twin.  The predicate above reads the
+                        // returned EXPRESSION, so it sees `return e.value` but not
+                        // `r = e.value; return r` — there the tail is a bare `Var`,
+                        // and the fact that `r` points into the local `e` lives in
+                        // its deps, which is what `return_views_local` reads.  The
+                        // Reference arm has carried this leg since #306; without it
+                        // here the payload-enum twin renamed `r` onto `__retbuf`,
+                        // so the caller got a pointer into a store this function
+                        // frees on the way out and read a corrupt record.
+                        let ed = *e_d;
+                        let w = self.materialize_view_return(ed, &mut v);
+                        self.ref_return(&[w], std::slice::from_mut(&mut v), RetSite::MidReturn);
                     } else {
                         let ls_own: Vec<u16> = ls.to_vec();
                         self.ref_return(&ls_own, std::slice::from_mut(&mut v), RetSite::MidReturn);
