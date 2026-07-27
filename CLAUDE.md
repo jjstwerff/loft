@@ -33,6 +33,9 @@ delete a tracked file of theirs. Report back in our docs, not in their files.
 
 ```bash
 cargo run --bin loft -- prog.loft        # run     |  -- repl  |  -- introspect prog.loft  |  -- --help
+loft debug prog.loft:12 [--lib dir]      # STOP at line 12: read/edit the live frame, step
+                                         #   (pipe commands on stdin; `--rpc` = scripted NDJSON)
+                                         #   reach for this INSTEAD of adding println — DEBUG.md
 cargo run --bin gendoc                   # regenerate doc/*.html
 make ci                                  # fmt → clippy → test (full local gate)
 make test                                # clippy + test → result.txt

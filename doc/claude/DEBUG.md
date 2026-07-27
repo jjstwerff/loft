@@ -16,6 +16,7 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 ---
 
 ## Contents
+- [Interactive debugging (`loft debug`)](#interactive-debugging-loft-debug)
 - [Preset Guide](#preset-guide)
 - [Debugging a Parse Error or Wrong IR](#debugging-a-parse-error-or-wrong-ir)
 - [Debugging a Runtime Crash or Wrong Result](#debugging-a-runtime-crash-or-wrong-result)
@@ -26,6 +27,49 @@ LOFT_LOG=full cargo test -- my_test 2>&1
 - [Debugging a Scope Analysis Bug](#debugging-a-scope-analysis-bug)
 - [Using the Test Framework for Quick Iteration](#using-the-test-framework-for-quick-iteration)
 - [Open work](#open-work)
+
+---
+
+## Interactive debugging (`loft debug`)
+
+**Before adding `println`s to a loft program: there is a debugger.** It stops the
+program at a line and lets you read and change the live frame — which is what
+print-and-re-run is a slow approximation of.
+
+```sh
+loft debug prog.loft:12            # break at line 12, drop into the `(dbg)` prompt
+loft debug prog.loft:12 --lib lib/ # a program whose `use` resolves through --lib
+```
+
+At the prompt: type a **name** (or any expression) to evaluate it at the frame ·
+`name = <expr>` to CHANGE a local and carry on with the new value · `:vars` to
+re-show the frame · `:step` / `:next` / `:finish` (into / over / out) · `:continue`
+· `:watch <expr>` to run until an expression changes · `:undo` / `:redo` to walk
+your edits · `:help` · `:quit`. Verbs also work bare (`step`), except when the
+frame has a local of that name — then the local wins, so `n` and `c` read your
+variables rather than stepping.
+
+It is **driveable non-interactively**, which is what makes it usable from a
+script or an agent rather than only by hand:
+
+```sh
+printf ':vars\ntotal\n:next\ntotal\n:continue\n' | loft debug prog.loft:12
+```
+
+For a scripted session with structured output, use the NDJSON RPC surface
+(`loft debug prog.loft --rpc`) — breakpoints with conditions, `eval`, `setValue`,
+stepping and tracepoints over stdio. The **`loft-debug` skill** § *The agent debug
+surface* is the canonical guide with a worked example; the wire contract is
+[plans/16-debugger/PROTOCOL.md](plans/16-debugger/PROTOCOL.md). Order matters
+there: `launch` loads, `run` starts, and breakpoints go between them.
+
+Known rough edges are tracked in [@PLN120](plans/120-debugger-shape/README.md) —
+the one to know is that a paused frame currently shows only variables whose
+bytecode references bracket the stopped instruction, so a local read later on the
+same line, or one whose last read has passed, is missing from `:vars` even though
+it is in scope.
+
+Editors get the same engine over DAP (`loft-dap`); see [@I91](../features/I91.md).
 
 ---
 

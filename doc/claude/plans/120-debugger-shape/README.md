@@ -7,12 +7,23 @@ SPDX-License-Identifier: LGPL-3.0-or-later
 
 ## Status
 
-**Open — design complete ([DESIGN.md](DESIGN.md)), one arc shipped.** The debugger
-(@PLN16, @F51) works: breakpoints, live frame, expression eval, frame edits,
-stepping, watchpoints, undo/redo, an NDJSON RPC surface, a DAP binary. What it
-lacks is **reach** — it cannot be pointed at a multi-package program at all
-(`--lib` is ignored), and agents do not know it exists — plus three failure modes
-that are **silent**, which is what makes the working parts feel unreliable.
+**Active — every arc shipped except A (2026-07-27).** Reach (**E**), the silent
+failures (**B**, **E3**), discoverability (**C**) and half of the cleanup (**D1**)
+are done and gated; **A** — the frame's liveness model — is the one arc left, and
+its open design question A.3 is now answered with evidence, so it is ready to
+build.
+
+What that changed, concretely: a multi-package program can be debugged
+(`--lib` reaches the interactive path), a call into native code no longer kills
+the session, a failure inside a session names its cause, a breakpoint condition
+can no longer be both `verified` and permanently inert, `DEBUG.md` and `CLAUDE.md`
+finally mention the tool, and typing `c` at the prompt reads your local instead of
+resuming the program.
+
+**Still true, and the reason A matters:** a paused frame shows only variables whose
+bytecode references bracket the stopped instruction, so a local read later on the
+same line — or one whose last read has passed — is missing even though it is in
+scope.
 
 Arc **C3** (bare verb shadowed a live local) shipped 2026-07-27 with its
 regression: `src/repl.rs::handle_paused` + `paused_prompt_tests`. Everything else
@@ -62,15 +73,16 @@ not happen. Discoverability (**C**) only pays off once **E** is true.
 
 | Item | Source | Status |
 |---|---|---|
-| **E1** — `--lib` is ignored, so no multi-package program can be debugged | [DESIGN.md § E.1](DESIGN.md#e1----lib-is-ignored-so-no-multi-package-program-can-be-debugged) | Open — **highest impact** |
-| **E2** — the target argument does not skip flags; the message names the wrong token | [DESIGN.md § E.2](DESIGN.md#e2--the-target-argument-does-not-skip-flags) | Open — XS |
-| **E3** — a native call abandons the session, unnamed (payload discarded) | [DESIGN.md § E.3](DESIGN.md#e3--a-native-call-abandons-the-session-unnamed) | Open |
-| **B** — a condition that cannot be evaluated must say so, never read as `false` | [DESIGN.md § B](DESIGN.md#b--no-silent-lies-breakpoint-conditions) | Open |
-| **A** — frame liveness: show lexical scope, not the bytecode reference span | [DESIGN.md § A](DESIGN.md#a--frame-liveness) | Open — the design arc |
-| **C1** — `DEBUG.md` gains an `## Interactive debugging` section | [DESIGN.md § C](DESIGN.md#c--discoverability) | Open |
-| **C2** — `CLAUDE.md` § Key commands gains one line | [DESIGN.md § C](DESIGN.md#c--discoverability) | Open |
+| **E1** — `--lib` ignored, so no multi-package program could be debugged | [DESIGN.md § E.1](DESIGN.md#e1----lib-ignored--shipped-2026-07-27) | **Shipped** 2026-07-27 |
+| **E2** — the target argument did not skip flags | [DESIGN.md § E.2](DESIGN.md#e2--the-target-argument-does-not-skip-flags--shipped-2026-07-27) | **Shipped** 2026-07-27 |
+| **E3** — a native call abandoned the session, unnamed | [DESIGN.md § E.3](DESIGN.md#e3--a-native-call-abandons-the-session-unnamed) | **Shipped** 2026-07-27 |
+| **B** — a condition that cannot be evaluated must say so, never read as `false` | [DESIGN.md § B](DESIGN.md#b--no-silent-lies-breakpoint-conditions) | **Shipped** 2026-07-27 |
+| **A** — frame liveness: show lexical scope, not the bytecode reference span | [DESIGN.md § A](DESIGN.md#a--frame-liveness) | **Open — the one arc left.** A.3 answered |
+| **C1** — `DEBUG.md` gains an `## Interactive debugging` section | [DESIGN.md § C](DESIGN.md#c--discoverability) | **Shipped** 2026-07-27 |
+| **C2** — `CLAUDE.md` § Key commands gains one line | [DESIGN.md § C](DESIGN.md#c--discoverability) | **Shipped** 2026-07-27 |
 | **C3** — a bare verb must not shadow a live local | [DESIGN.md § C](DESIGN.md#c--discoverability) | **Shipped** 2026-07-27 |
-| **D** — `:vars` temp noise; fold the consumer's write-up back | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | Open — blocked on A |
+| **D1** — `:vars` temp noise | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | **Partly shipped** — `__`-temps filtered + `:vars all`; `i#index` still shown, and must stay until A |
+| **D2/D3** — fold the consumers' write-ups back | [DESIGN.md § D](DESIGN.md#d--cleanup-and-the-consumers-write-up) | Open |
 
 ## Phase ordering
 

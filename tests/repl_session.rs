@@ -1425,3 +1425,119 @@ fn file_debugger_without_lib_dirs_cannot_resolve_the_library() {
     );
     let _ = std::fs::remove_file(&path);
 }
+
+/// @PLN120 E3b — a call crossing into NATIVE code must work under the debugger.
+///
+/// The REPL's execute path ran `compile::byte_code` (which registers native
+/// STUBS) but never loaded the packages' cdylibs, so the first `#native` call
+/// panicked with *"native function not loaded"* and the session was abandoned.
+/// The CLI run path and `loft test` both wired them; the debugger did not — which
+/// is why importing a registry package was harmless and calling the part of it
+/// that is native was fatal (moros H13: `use web; sleep_ms(5)` died while the same
+/// file ran clean under `--interpret`).
+#[test]
+fn file_debugger_can_call_into_a_native_library() {
+    let dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/lib");
+    let lib_dirs = vec![dir.to_string_lossy().into_owned()];
+
+    let path = tmp_session("filedebug_native").with_extension("loft");
+    std::fs::write(
+        &path,
+        "use native_pkg;\nfn main() {\n  v = ext_add_one(41);\n  \
+         assert(v == 42, \"native call under the debugger\")\n}\n",
+    )
+    .expect("write temp program");
+    let file = path.to_str().unwrap();
+
+    let input = std::io::Cursor::new(b":continue\n:quit\n".to_vec());
+    let mut out: Vec<u8> = Vec::new();
+    loft::repl::run_file_debug("default", &lib_dirs, file, 3, input, &mut out).expect("debug run");
+    let text = String::from_utf8_lossy(&out);
+
+    assert!(
+        !text.contains("native function not loaded"),
+        "the cdylib must be wired for the debug run: {text}"
+    );
+    assert!(
+        !text.contains("debug session ended"),
+        "the session must survive the native call: {text}"
+    );
+    // The program's own assert is the value check — reaching the end proves it held.
+    assert!(
+        text.contains("run finished"),
+        "the run must complete past the native call: {text}"
+    );
+    let _ = std::fs::remove_file(&path);
+}
+
+/// @PLN120 B — a breakpoint condition has THREE outcomes, not two.
+///
+/// `resolve_pause` compared `debug_eval(cond) != Some("true")`, so a condition
+/// that could not be EVALUATED (a typo, or a name not in scope at that line) was
+/// indistinguishable from one that evaluated FALSE: the breakpoint reported
+/// `verified: true` and then never fired, silently. The client was promised a
+/// breakpoint that could not exist.
+///
+/// The three cells below are the whole contract. The false-but-valid row is the
+/// control — without it, a "fix" that simply always breaks would pass.
+fn cond_session(cond: &str, file: &std::path::Path) -> (bool, Vec<String>) {
+    let mut s = ReplSession::new("default").expect("stdlib");
+    let src = "fn main() {\n  total = 0;\n  for i in 0..4 {\n    \
+               step = i * 10;\n    total = total + step;\n  }\n  \
+               assert(total == 60, \"ran\")\n}\n";
+    std::fs::write(file, src).expect("write");
+    s.load_program(file.to_str().unwrap())
+        .expect("read")
+        .expect("parse");
+    s.debug_stepping(true);
+    s.add_file_breakpoint_rich(
+        file.to_str().unwrap(),
+        5,
+        Some(cond.to_string()),
+        Vec::new(),
+        true,
+    );
+    let paused = matches!(s.eval("main()"), Eval::Paused);
+    (paused, s.take_trace_output())
+}
+
+#[test]
+fn an_unevaluable_breakpoint_condition_is_reported_and_stops() {
+    let f = tmp_session("cond_bad").with_extension("loft");
+    // `i` is not in the frame at line 5, so the condition cannot be evaluated.
+    let (paused, trace) = cond_session("i == 2", &f);
+    assert!(
+        paused,
+        "an unevaluable condition must STOP — silently never firing is the bug"
+    );
+    assert!(
+        trace.iter().any(|t| t.contains("cannot be evaluated")),
+        "and must say so: {trace:?}"
+    );
+    let _ = std::fs::remove_file(&f);
+}
+
+#[test]
+fn a_false_breakpoint_condition_stays_silent_and_does_not_stop() {
+    let f = tmp_session("cond_false").with_extension("loft");
+    // `total` IS in the frame; the condition is simply never true.
+    let (paused, trace) = cond_session("total == 999", &f);
+    assert!(!paused, "a false condition must not stop: {trace:?}");
+    assert!(
+        !trace.iter().any(|t| t.contains("cannot be evaluated")),
+        "and must not be reported as unevaluable: {trace:?}"
+    );
+    let _ = std::fs::remove_file(&f);
+}
+
+#[test]
+fn a_true_breakpoint_condition_stops_without_a_diagnostic() {
+    let f = tmp_session("cond_true").with_extension("loft");
+    let (paused, trace) = cond_session("total == 10", &f);
+    assert!(paused, "a true condition must stop: {trace:?}");
+    assert!(
+        !trace.iter().any(|t| t.contains("cannot be evaluated")),
+        "a valid condition draws no complaint: {trace:?}"
+    );
+    let _ = std::fs::remove_file(&f);
+}

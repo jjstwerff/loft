@@ -46,6 +46,28 @@ pub struct BreakHit {
     pub line: u32,
 }
 
+impl BreakHit {
+    /// The locals worth SHOWING — everything except the compiler's own scratch
+    /// (`__work_N` format buffers, `__ref_N` return buffers, `___`-prefixed
+    /// internals).  @PLN120 D1.
+    ///
+    /// Deliberately keeps `i#index` and friends: while @PLN120 A is unbuilt the
+    /// loop iteration variable itself is missing from the frame, so the `#`-suffixed
+    /// counter is the ONLY signal about loop position — hiding it would make the
+    /// frame strictly less useful, not cleaner. Filter it together with A, not
+    /// before.
+    ///
+    /// This is display-only: `debug_eval` still resolves any name, so a compiler
+    /// temp remains readable by typing it, and `:vars all` shows the lot.
+    #[must_use]
+    pub fn user_locals(&self) -> Vec<&(String, String)> {
+        self.locals
+            .iter()
+            .filter(|(n, _)| !n.starts_with("__"))
+            .collect()
+    }
+}
+
 /// @PLN16 M3 — a **watchpoint** (data breakpoint): a fixed heap region whose bytes are
 /// re-read after each op of a resumed run; when they differ from `last`, execution
 /// pauses.  `content` is the scalar primitive type number (the `ShowDb` map) for

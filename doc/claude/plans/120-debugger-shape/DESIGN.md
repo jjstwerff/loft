@@ -10,7 +10,8 @@ the **invariant** it violates, the **design**, what was **rejected**, and how it
 **verified**. Every mechanism below is VERIFIED unless the row says HYPOTHESIZED.
 
 Reading order: **E** (nothing else matters if the tool cannot load your program) →
-**B** → **A** → **D** → **C** (independent, cheapest).
+**B** → **A** → **D** → **C**.  As of 2026-07-27 everything except **A** has
+shipped; A is the one arc left and § A.3 now says what it needs.
 
 ---
 
@@ -68,9 +69,9 @@ a value-taking flag **and its value** (`--lib` / `--path` / `--port`). Verified 
 both orders plus two controls: a genuinely missing `:<line>` still says so, and no
 target at all still prints the usage.
 
-### E.3 — a native call abandons the session, unnamed
+### E.3 — a native call abandoned the session, unnamed — **SHIPPED 2026-07-27**
 
-**Mechanism (VERIFIED, cause HYPOTHESIZED).** A resumed run is wrapped in
+**Mechanism (VERIFIED).** A resumed run is wrapped in
 `catch_unwind` (`src/repl.rs`); on `Err` the session is aborted and the message is
 the fixed string *"runtime error in the paused run — debug session abandoned
 (session preserved)"*. **The panic payload is discarded** — nothing prints the
@@ -90,35 +91,46 @@ rather than a guess, and the starred rows were re-run here:
 
 So a registry package is fine until you call the part of it that is `#native`, and
 a registry package whose functions are ordinary loft is fine throughout. Every row
-runs correctly under `--interpret`. **Why the native call panics is not yet
-pinned** — that is the first task of this arc, and step 1 below is what will name
-it. Working hypothesis (HYPOTHESIZED): the debug run executes as an *observing
-REPL eval*, and that path does not carry whatever the direct-run path sets up for
-native dispatch (the registry cdylib's store/registration).
+runs correctly under `--interpret`. The bisection was the consumer's; naming the
+cause took surfacing the panic payload first — see *What shipped* below.
 
-**Consequence worth stating plainly:** a loft server with a live websocket cannot
-be debugged at all today — it needs `server` + `web` (E.3) and a local `lib/`
-(E.1), so the breakpoint is never reached. That is the shape of program most in
-need of a debugger.
+**Consequence, before the fix:** a loft server with a live websocket could not be
+debugged at all — it needs `server` + `web` (E.3) and a local `lib/` (E.1), so the
+breakpoint was never reached. That is the shape of program most in need of a
+debugger, and it is the one that could not be reached.
 
 **Invariant.** *A failure inside a debug session names its cause.* The debugger
 exists to explain failures; one that cannot explain its own is self-defeating.
 
-**Design, in two independent steps:**
+**What shipped — and the method is the point.** Step 1 (surface the payload) was
+done first *because* the cause was unknown, and it named it on the very first run:
 
-1. **Print the payload** (small, do first, independent of the cause). Downcast to
-   `&str` / `String` and include it. This is worth doing even if step 2 removes
-   every current trigger, because it converts the whole *class* from silent to
-   diagnosed — and it is what will tell us the cause.
-2. **Fix the native dispatch** under debug control, once step 1 names it.
+```
+runtime error in the paused run: native function not loaded: its library's
+native cdylib is missing or stale …
+```
 
-**Also:** after `abort_debug()` the prompt silently reverts from `(dbg)` to `loft>`
-and `:continue` answers *"unknown command"*, which reads as a typo. Say the session
-ended and what state the user is in.
+Root cause (VERIFIED from there): the REPL's execute path ran `compile::byte_code`
+— which registers native **stubs** — but never called
+`extensions::load_all` + `wire_native_fns`. The CLI run path and `loft test` both
+did. So an unwired stub panicked on the first `#native` call, which is exactly why
+importing a registry package was harmless and calling the native part of it was
+fatal. Fixed by a `wire_natives` helper on the session, called after `byte_code` on
+the run path, with the hazard written at the helper so the next `byte_code` site
+does not repeat it.
+
+The abandon message now carries the payload and says the session ENDED and that
+step/continue no longer apply — the old text left the user at a `loft>` prompt
+where `:continue` answers "unknown command", which reads as a typo.
+
+**Verified by** `file_debugger_can_call_into_a_native_library` (the `native_pkg`
+fixture, a real cdylib the suite rebuilds) and the `panic_message` unit test.
+moros's five-row matrix: all four re-runnable rows green, outputs checked by value
+(`r=6`, `web ok 2`), not merely "resumed".
 
 ---
 
-## B — No silent lies (breakpoint conditions)
+## B — No silent lies (breakpoint conditions) — **SHIPPED 2026-07-27**
 
 **Mechanism (VERIFIED).** `ReplSession::frame_holds` is
 
@@ -154,9 +166,20 @@ conditions and still miss the real ones.
 symptom the user brought us is "my breakpoint does not fire" — a message they may
 not see does not answer it.
 
-**Verified by.** A probe pair: an unevaluable condition must produce a diagnostic
-AND a stop; a false-but-valid condition must stay silent and not stop. The second
-half is the control — without it the fix could simply break always.
+**What shipped.** The live site turned out to be `resolve_pause`, not
+`frame_holds`: `self.debug_eval(cond).as_deref() != Some("true")` folded `None`
+(unevaluable) into "false". It is now a three-way `match`; the unevaluable arm
+pushes a diagnostic into `trace_output` (so the interactive prompt prints it AND
+the RPC surface emits it as an `output` event, from one place) and then stops.
+Reported once per breakpoint offset via `cond_unevaluable`.
+
+*Left as-is:* the public `frame_holds` — a post-run hit filter with no callers in
+the tree — has the same conflation. Worth folding into the same three-way result
+if it ever gains one.
+
+**Verified by** three tests in `tests/repl_session.rs`: unevaluable ⇒ diagnostic
+AND stop; false-but-valid ⇒ silent and no stop; true ⇒ stop and no diagnostic. The
+middle one is the control — without it a "fix" that simply always breaks passes.
 
 ---
 
@@ -200,22 +223,35 @@ sub-decisions:
   noise and can be filtered by the existing compiler-generated test — see § D. They
   must not be filtered before A lands.
 
-### A.3 — where the scope fact comes from
+### A.3 — where the scope fact comes from — **ANSWERED 2026-07-27**
 
-The open question. `Variables` already carries per-variable scope and the IR
-carries block structure, but `capture_frame_at` reconstructs from `State::vars`
-instead — a bc→var map with no scope in it. Two candidates:
+The open question was whether to precompute a per-function scope table or walk the
+IR at pause time. **Neither is optional: the fact does not exist yet, so it has to
+be built.** What the tree actually has:
 
-1. **Precomputed per-function scope table** (pc range → visible slots), built once
-   at compile time beside the existing line table. Costs a little memory per
-   function; makes the frame a lookup.
-2. **Walk the IR at pause time** from the function's block tree to the pc. No
-   memory cost, but it happens per pause and per frame in a stack walk.
+| candidate source | verdict |
+|---|---|
+| `Variables::scope(var_nr)` → `u16` | **exists and is meaningful** — the IR dump's `name(N)` is this number, correctly nested for the probe (`total(1)` ⊃ `i#index(2)` ⊃ `i(3)` ⊃ `step(5)`) |
+| a scope → **pc range** | **does not exist** |
+| a scope → **parent** relation | **does not exist** (no `scope_parent` / scope tree) |
+| `Variables::loop_seq_ranges` | a per-scope `(start, end)` — but **loop scopes only**, and in statement-SEQUENCE units, not bytecode pc |
 
-**Recommendation: (1)**, because the same table is what a DAP `scopes` request
-wants (@I91) and because a stack walk builds N frames at once. **The measurement
-that settles it:** the added table size for the largest function in the stdlib, and
-a paused-frame capture timing on a deep stack. Take it before building.
+The tempting shortcut — derive each scope's extent as the union of its own
+variables' reference positions — **does not work**, and the probe says why: scope 3
+holds only `i`, whose sole reference is on line 4, so its derived extent is a
+single point and `i` would still vanish at line 5. A correct extent must cover a
+scope's DESCENDANTS, which needs the parent relation that is missing.
+
+**So: candidate (1), a per-function scope table (pc range → visible slots) emitted
+at compile time beside the existing line table.** The cost question that was going
+to decide between (1) and (2) is moot — (2) needs the same missing tree — and (1)
+is independently what a DAP `scopes` request wants (@I91) and what a stack walk
+building N frames at once should read.
+
+**Implementation note for whoever takes it:** keep `first[v]` from the existing
+scan alongside the new table. Scope answers *"is `v` visible here"*; `first[v] > pc`
+answers *"has it been assigned yet"*, which is what A.1 renders as `<unset>` — the
+two facts are different and the frame needs both.
 
 **Rejected.** *Suppressing the optimiser under a debug tier so every local
 survives.* `--lean` shows the tier machinery exists, so it is available — but the
@@ -303,20 +339,20 @@ before the next begins. `[✓]` = shipped 2026-07-27.
    passes them. *Gate:* the E1 test + its no-lib control.
 2. `[✓]` **E2** — the target walk skips a flag and its value. *Gate:* both flag
    orders, plus "missing `:<line>`" and "no target" controls.
-3. **E3a — print the discarded panic payload.** At the `catch_unwind` in
+3. `[✓]` **E3a — print the discarded panic payload.** At the `catch_unwind` in
    `src/repl.rs`, downcast the `Box<dyn Any>` to `&str` / `String` and include it in
    the abandon message; say the session ENDED and which prompt the user is now at.
    *Do this before diagnosing E3b — it is what names the cause.* *Gate:* a probe
    that triggers the abandon and asserts the message carries a cause, not a
    category.
-4. **E3b — fix native dispatch under debug control.** With E3a's message in hand,
+4. `[✓]` **E3b — fix native dispatch under debug control.** With E3a's message in hand,
    pin why a `#native` call panics in an observing run (hypothesis: the registry
    cdylib's store/registration is not carried on that path). *Gate:* moros's matrix
    — the three ❌ rows go green and the two ✅ rows stay green.
 
 ### Next (stop lying)
 
-5. **B — three-valued conditions.** Give `frame_holds` a
+5. `[✓]` **B — three-valued conditions.** Give `frame_holds` a
    `true | false | unevaluable(diag)` result; report the third once per breakpoint,
    then break. Mirror it on the RPC surface as an event, since a scripted client
    cannot read a console line. *Gate:* the probe pair — unevaluable ⇒ diagnostic AND
@@ -325,24 +361,20 @@ before the next begins. `[✓]` = shipped 2026-07-27.
 
 ### Then (the design arc)
 
-6. **A.3 measurement first.** Table size for the largest stdlib function, and
-   paused-frame capture timing on a deep stack. Take it *before* choosing between
-   the precomputed scope table and the pause-time IR walk; write the numbers into
-   this doc.
-7. **A — scope-based frame.** Replace the reference-span filter with declaring
+6. `[✓]` **A.3 — answered.** No scope→pc range and no scope-parent relation exist, so the table must be built; see § A.3.
+7. **A — scope-based frame.** ← THE ONE ARC LEFT. Replace the reference-span filter with declaring
    scope; show an in-scope-but-unassigned local as `<unset>`. *Gate:* the three-row
    probe table in § A, as a scripted RPC session asserting the exact local set —
    including the after-the-loop row, which must NOT gain `i`/`step`.
-8. **D1 — filter compiler temps** from `:vars` and RPC frames, with `:vars all` to
-   see them. Only after 7; before it, `i#index` is the sole signal about loop
-   position.
+8. `[~]` **D1 — compiler temps.** `__`-prefixed filtered, `:vars all` shows them, `i#index` deliberately kept until A lands: it is the sole signal about
+   loop position while the user's own `i` is missing. Finish this step with 7.
 
 ### Any time (cheapest first, independent)
 
-9. **C1** — `## Interactive debugging` in `DEBUG.md`: what it is, the one-line
+9. `[✓]` **C1** — `## Interactive debugging` in `DEBUG.md`: what it is, the one-line
    invocation, the piped-stdin form, pointers to the `loft-debug` skill and
    PROTOCOL.md. Biggest single gap.
-10. **C2** — one line in `CLAUDE.md` § Key commands.
+10. `[✓]` **C2** — one line in `CLAUDE.md` § Key commands.
 11. **D2/D3** — fold the consumers' write-ups back; close their `:undo` report
     (does not reproduce) and re-check "eval fails on a local not live here" against
     step 7.

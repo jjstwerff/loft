@@ -640,14 +640,26 @@ fn process_line<W: Write>(
     if pending.is_empty() && session.is_debugging() {
         let outcome =
             std::panic::catch_unwind(AssertUnwindSafe(|| handle_paused(trimmed, session, chrome)));
-        let Ok(res) = outcome else {
-            session.abort_debug();
-            writeln!(
-                chrome,
-                "runtime error in the paused run — debug session abandoned \
-                 (session preserved)"
-            )?;
-            return Ok(false);
+        let res = match outcome {
+            Ok(res) => res,
+            Err(payload) => {
+                session.abort_debug();
+                // @PLN120 E3a — SAY WHAT HAPPENED.  This used to print a fixed
+                // string and drop the payload, so every distinct cause looked
+                // identical and the one failure the debugger exists to explain —
+                // its own — was the one it could not.  It also left the user at a
+                // `loft>` prompt where `:continue` answers "unknown command",
+                // which reads as a typo rather than as "the session is over".
+                writeln!(
+                    chrome,
+                    "runtime error in the paused run: {}\n  \
+                     the debug session ended (the REPL session is preserved) — \
+                     step/continue no longer apply; re-run `loft debug <file>:<line>` \
+                     to start a new one",
+                    panic_message(&payload)
+                )?;
+                return Ok(false);
+            }
         };
         return res;
     }
@@ -770,6 +782,21 @@ fn process_line<W: Write>(
     Ok(false)
 }
 
+/// The text of a caught panic.  `catch_unwind` hands back a `Box<dyn Any>` whose
+/// payload is a `&'static str` for `panic!("literal")` and a `String` for a
+/// formatted one; anything else has no readable text.  Discarding it — which is
+/// what the debugger's abandon path used to do — collapses every distinct runtime
+/// fault into one message (@PLN120 E3a).
+fn panic_message(payload: &Box<dyn std::any::Any + Send>) -> String {
+    if let Some(s) = payload.downcast_ref::<&'static str>() {
+        (*s).to_string()
+    } else if let Some(s) = payload.downcast_ref::<String>() {
+        s.clone()
+    } else {
+        "a panic with no message".to_string()
+    }
+}
+
 /// @PLN16 G1 — handle one input while **suspended** at a breakpoint.  Step verbs
 /// resume execution (`:step`/`:s` into, `:next`/`:n` over, `:finish`/`:o` out,
 /// `:continue`/`:c` to the next breakpoint or the end); `name = <expr>` edits the
@@ -838,6 +865,7 @@ fn handle_paused<W: Write>(
         "finish" | "o" => step_and_report(session, StepMode::Out, chrome)?,
         "continue" | "c" => step_and_report(session, StepMode::Continue, chrome)?,
         "vars" => print_pause(session, chrome)?,
+        "vars all" => print_pause_filtered(session, chrome, true)?,
         "undo" | "u" => {
             if session.debug_undo() {
                 print_pause(session, chrome)?;
@@ -888,9 +916,38 @@ fn handle_paused<W: Write>(
 /// Print the current paused frame (function + its in-scope variables), or nothing
 /// when no longer paused.
 fn print_pause<W: Write>(session: &ReplSession, chrome: &mut W) -> std::io::Result<()> {
+    print_pause_filtered(session, chrome, false)
+}
+
+/// `print_pause`, with `all` to include the compiler's scratch variables
+/// (`:vars all`).  @PLN120 D1 — the default frame is the user's own locals; the
+/// temps are still there for compiler work, one word away.
+fn print_pause_filtered<W: Write>(
+    session: &ReplSession,
+    chrome: &mut W,
+    all: bool,
+) -> std::io::Result<()> {
     if let Some(f) = session.paused_frame() {
-        let vars: Vec<String> = f.locals.iter().map(|(n, v)| format!("{n} = {v}")).collect();
-        writeln!(chrome, "⏸ paused in {} | {}", f.function, vars.join(", "))?;
+        let vars: Vec<String> = if all {
+            f.locals.iter().map(|(n, v)| format!("{n} = {v}")).collect()
+        } else {
+            f.user_locals()
+                .into_iter()
+                .map(|(n, v)| format!("{n} = {v}"))
+                .collect()
+        };
+        let hidden = f.locals.len() - vars.len();
+        let note = if hidden > 0 && !all {
+            format!("   (+{hidden} compiler temp(s) — `:vars all`)")
+        } else {
+            String::new()
+        };
+        writeln!(
+            chrome,
+            "⏸ paused in {} | {}{note}",
+            f.function,
+            vars.join(", ")
+        )?;
     }
     Ok(())
 }
@@ -1398,6 +1455,10 @@ pub struct ReplSession {
     /// @PLN16 rich-bp — tracepoint emissions from the most recent resume, drained by the
     /// driver (printed at the prompt, an `output` event over the wire protocol).
     trace_output: Vec<String>,
+    /// @PLN120 B — breakpoint offsets whose condition could not be evaluated and has
+    /// already been reported.  The complaint is worth making once; on a hot line,
+    /// once per hit would bury the frame the user was sent to look at.
+    cond_unevaluable: std::collections::HashSet<u32>,
     /// Frames captured at breakpoints during the most recent observing run
     /// (record-and-continue mode — when `stepping` is off).
     last_hits: Vec<crate::debugger::BreakHit>,
@@ -1521,6 +1582,7 @@ impl ReplSession {
             replaying: false,
             breakpoints: Vec::new(),
             bp_meta: std::collections::HashMap::new(),
+            cond_unevaluable: std::collections::HashSet::new(),
             trace_output: Vec::new(),
             last_hits: Vec::new(),
             stepping: false,
@@ -1549,6 +1611,22 @@ impl ReplSession {
         Ok(session)
     }
 
+    /// Load and wire the native cdylibs of every `#native` package the session has
+    /// parsed.  **Call this after `byte_code` on any State that will RUN user
+    /// code** — `byte_code` registers native STUBS, and a stub that is never wired
+    /// panics with *"native function not loaded"* the moment it is called.
+    ///
+    /// @PLN120 E3b: the CLI run path and `loft test` did this; the REPL's own
+    /// execute path did not, so the debugger died on the first call that crossed
+    /// into native code — `use web; sleep_ms(5)` — while the same file ran fine
+    /// under `--interpret`. Importing the package was harmless; calling the part
+    /// of it that is native was not, which is why it looked like a package problem.
+    fn wire_natives(&self, state: &mut State) {
+        let pending = self.parser.pending_native_libs.clone();
+        crate::extensions::load_all(state, pending);
+        crate::extensions::wire_native_fns(state, &self.parser.data);
+    }
+
     /// Build a session over an existing `parser` already loaded with a program's
     /// definitions — used by the @PLN16 debugger to evaluate at a paused frame with
     /// the program's types + functions in scope.  The accumulated body starts
@@ -1567,6 +1645,7 @@ impl ReplSession {
             replaying: false,
             breakpoints: Vec::new(),
             bp_meta: std::collections::HashMap::new(),
+            cond_unevaluable: std::collections::HashSet::new(),
             trace_output: Vec::new(),
             last_hits: Vec::new(),
             stepping: false,
@@ -2560,14 +2639,34 @@ impl ReplSession {
             let Some(meta) = self.bp_meta.get(&off).cloned() else {
                 return; // a plain breakpoint with no metadata: stop
             };
-            // Conditional break: a false condition auto-resumes.
-            if let Some(cond) = &meta.condition
-                && self.debug_eval(cond).as_deref() != Some("true")
-            {
-                if !self.resume_continue_with(crate::debugger::StepMode::Continue) {
-                    return;
+            // Conditional break — THREE outcomes, not two (@PLN120 B).  `debug_eval`
+            // returns `None` when the condition cannot be evaluated at this frame (a
+            // typo, or a name that is not in scope here).  Treating that as "false"
+            // is what made a breakpoint report `verified: true` at setBreakpoints and
+            // then never fire, with nothing said: the client was promised a
+            // breakpoint that could not exist.  Say so — once, because a hot line
+            // would bury the frame — and STOP, so a user who typo'd a condition
+            // lands at the line instead of reading a warning they may never see.
+            if let Some(cond) = &meta.condition {
+                let cond = cond.clone();
+                match self.debug_eval(&cond).as_deref() {
+                    Some("true") => {}
+                    Some(_) => {
+                        if !self.resume_continue_with(crate::debugger::StepMode::Continue) {
+                            return;
+                        }
+                        continue;
+                    }
+                    None => {
+                        if self.cond_unevaluable.insert(off) {
+                            self.trace_output.push(format!(
+                                "breakpoint condition `{cond}` cannot be evaluated here \
+                                 — stopping anyway so it is not silently never hit; \
+                                 check the names are in scope at this line (`:vars`)"
+                            ));
+                        }
+                    }
                 }
-                continue;
             }
             // Tracepoint (stop = false): emit the actions and continue.
             if !meta.stop {
@@ -3198,6 +3297,7 @@ impl ReplSession {
             crate::scopes::check(&mut self.parser.data);
             let mut state = State::new(self.parser.database.clone());
             compile::byte_code(&mut state, &mut self.parser.data);
+            self.wire_natives(&mut state);
             // @PLN16 G1 — apply the session's breakpoints to this run.  In stepping
             // mode a hit *suspends* execution; otherwise it records-and-continues.
             // Only on a real observing run (`debug`), not the value-render re-runs
@@ -4633,7 +4733,31 @@ mod completion_tests {
 
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod paused_prompt_tests {
-    use super::{Eval, ReplSession, handle_paused};
+    use super::{Eval, ReplSession, handle_paused, panic_message};
+
+    /// @PLN120 E3a — the abandon path must SURFACE the panic payload.
+    ///
+    /// It used to print a fixed category line and drop the `Box<dyn Any>`, so every
+    /// distinct runtime fault read identically and the debugger could not explain
+    /// its own failure. Recovering the text is what named E3b's cause ("native
+    /// function not loaded: its library's native cdylib is missing or stale") on
+    /// the first run after this landed.
+    #[test]
+    fn a_caught_panic_keeps_its_message() {
+        let from_literal =
+            std::panic::catch_unwind(|| panic!("a literal cause")).expect_err("must unwind");
+        assert_eq!(panic_message(&from_literal), "a literal cause");
+
+        let n = 7;
+        let from_format =
+            std::panic::catch_unwind(|| panic!("a formatted cause: {n}")).expect_err("must unwind");
+        assert_eq!(panic_message(&from_format), "a formatted cause: 7");
+
+        // A payload with no readable text still says something, never nothing.
+        let from_value =
+            std::panic::catch_unwind(|| std::panic::panic_any(42u8)).expect_err("must unwind");
+        assert!(!panic_message(&from_value).is_empty());
+    }
 
     /// @PLN120 E3 — a bare verb must not shadow a live local of the same name.
     ///
